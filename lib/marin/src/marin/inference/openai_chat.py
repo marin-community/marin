@@ -8,6 +8,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from http.client import HTTPException, IncompleteRead
 from typing import Any
 
 
@@ -37,6 +38,10 @@ class OpenAIChatClient:
             raise ConnectionError(f"Chat request returned HTTP {error.code}") from None
         except urllib.error.URLError as error:
             raise ConnectionError("Chat request failed before a response was available") from error
+        except IncompleteRead:
+            raise ConnectionError("Chat response ended before its body was complete") from None
+        except HTTPException:
+            raise ConnectionError("Chat response was not valid HTTP") from None
         if not isinstance(result, dict):
             raise ValueError("Chat response must be a JSON object")
         return result

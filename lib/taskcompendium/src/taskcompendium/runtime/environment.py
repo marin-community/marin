@@ -7,6 +7,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import replace
 
+from shellbox.image import DockerfileSource
 from shellbox.machine import (
     Backend,
     HostImage,
@@ -16,6 +17,7 @@ from shellbox.machine import (
 )
 
 from taskcompendium.models import EnvironmentRequirements, require_resolved_environment
+from taskcompendium.runtime.docker_build import require_original_docker_build
 from taskcompendium.runtime.local import local_runtime
 
 _TEMPLATE_PATTERN = re.compile(r"\$\{([^}:]+)(?::-(.*))?\}")
@@ -44,19 +46,21 @@ def resolve_env_vars(environment: Mapping[str, str], host_environment: Mapping[s
     return resolved
 
 
-def bound_machine_spec(requirements: EnvironmentRequirements, factory: MachineFactory, spec: MachineSpec) -> MachineSpec:
-    """Bind package requirements and omit advisory local memory before feature checks."""
+def bound_machine_spec(requirements: EnvironmentRequirements, spec: MachineSpec) -> MachineSpec:
+    """Bind package requirements while preserving the selected resource declarations."""
     return replace(
         spec,
         source=requirements.package_spec if requirements.package_spec is not None else spec.source,
-        memory_mb=None if factory.backend == Backend.LOCAL else spec.memory_mb,
     )
 
 
 def validate_machine_spec(requirements: EnvironmentRequirements, factory: MachineFactory, spec: MachineSpec) -> None:
     """Ask the selected factory to reject unsupported requirements before preparation."""
-    require_resolved_environment(requirements)
-    factory.check_environment(requirements, bound_machine_spec(requirements, factory, spec))
+    if requirements.docker_build is not None and isinstance(spec.source, DockerfileSource):
+        require_original_docker_build(requirements.docker_build, spec.source)
+    else:
+        require_resolved_environment(requirements)
+    factory.check_environment(requirements, bound_machine_spec(requirements, spec))
 
 
 def prepare_machine_spec(
@@ -70,7 +74,7 @@ def prepare_machine_spec(
     Lock preparation performs I/O. Async callers run it off-thread under their startup deadline.
     Resource installation, setup commands, machine creation and cleanup remain with the caller.
     """
-    spec = bound_machine_spec(requirements, factory, spec)
+    spec = bound_machine_spec(requirements, spec)
     validate_machine_spec(requirements, factory, spec)
     required_variables = resolve_env_vars(requirements.environment_variables, host_environment)
     variables: Mapping[str, str] = {}

@@ -16,6 +16,7 @@ from collections.abc import Iterable, Mapping, Sequence
 
 import shellsim
 from shellbox.backends.docker.machine import DockerMachineFactory
+from shellbox.backends.docker_gvisor.machine import DockerGvisorMachineFactory
 from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, MachineFactory
@@ -67,7 +68,7 @@ def local_factory() -> MachineFactory:
     return LocalMachineFactory(system_directories=SystemDirectories.COPY_ON_WRITE)
 
 
-CONTAINER_BACKENDS = (Backend.GVISOR, Backend.DOCKER)
+CONTAINER_BACKENDS = (Backend.IRIS, Backend.DOCKER)
 
 
 def container_backend(backends: Iterable[str]) -> Backend:
@@ -95,7 +96,7 @@ def machine_factories(backends: Sequence[Backend], controller_url: str | None) -
     only when Docker is requested; local sandbox construction propagates its availability error.
     ShellSim reads ``SHELLSIM_CATALOG`` when a machine first requests catalog packages.
     """
-    if Backend.GVISOR in backends and controller_url is None:
+    if Backend.IRIS in backends and controller_url is None:
         raise ValueError("A controller URL is required when the gvisor backend is selected")
     factories: dict[str, MachineFactory] = {}
     for backend in backends:
@@ -104,11 +105,13 @@ def machine_factories(backends: Sequence[Backend], controller_url: str | None) -
                 factory = ShellSimMachineFactory(context=shellsim.Context(pypi_catalog=SHELLSIM_CATALOG))
             case Backend.LOCAL:
                 factory = local_factory()
-            case Backend.GVISOR:
+            case Backend.IRIS:
                 assert controller_url is not None
                 factory = IrisMachineFactory(
                     controller_url=controller_url, scheduling_timeout=SANDBOX_SCHEDULING_TIMEOUT
                 )
+            case Backend.DOCKER_GVISOR:
+                factory = DockerGvisorMachineFactory()
             case Backend.DOCKER:
                 unavailable = docker_unavailable_reason()
                 if unavailable is not None:

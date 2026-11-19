@@ -38,3 +38,6 @@ class EnvironmentResourceCapabilities(BaseModel):
 
     memory_request: bool = False
     """Whether memory resources can be applied as a resource request/reservation."""
+
+    storage_limit: bool = False
+    """Whether the execution route enforces the declared disk budget."""

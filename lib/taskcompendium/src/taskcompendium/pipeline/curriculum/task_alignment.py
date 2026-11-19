@@ -5,7 +5,7 @@
 
 import json
 from collections import Counter
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 
@@ -151,7 +151,8 @@ def _matched_descriptions(embedding_key: str, records: Iterator[dict]) -> Iterat
         yield {**row, "matches": matches}
 
 
-def _task_alignment(row: dict) -> dict:
+def _task_alignment(row: dict, *, source_id_replacements: Mapping[str, str]) -> dict:
+    row = {**row, "source_id": source_id_replacements.get(row["source_id"], row["source_id"])}
     public = json.loads(row["public_input"])
     instructions = format_conversation(ConversationInput.model_validate(public["context"]).events)
     result = TaskAlignment(
@@ -192,6 +193,7 @@ def align_tasks(
     curriculum_key: str,
     spec: EmbeddingSpec,
     output_root: str,
+    source_id_replacements: Mapping[str, str],
     batch_size: int = 256,
 ) -> list[str]:
     """Score each task vector once, then join scores to descriptions and task instances."""
@@ -241,7 +243,7 @@ def align_tasks(
             reducer=_described_tasks,
             num_output_shards=context.max_workers,
         )
-        .map(_task_alignment)
+        .map(partial(_task_alignment, source_id_replacements=source_id_replacements))
         .write_parquet(
             str(StoragePath(output_root) / "assignments/part-{shard:05d}.parquet"), schema=arrow_schema(TaskAlignment)
         ),

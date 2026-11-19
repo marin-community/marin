@@ -9,6 +9,7 @@ item, numbers and coordinates with the symbolic math comparator, and other answe
 
 import json
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.answers import answer_task, source_defect, unsupported
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
 from taskcompendium.models import TaskSpec
@@ -24,7 +25,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.archives import 
 )
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import archive_file
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 PUZZLES_CONFIG = "laion__all-puzzles-v2"
 
@@ -79,15 +80,23 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
-                id=f"Task Trove:{PUZZLES_CONFIG}",
-                title="laion/all-puzzles-v2",
-                origin="Task Trove",
+                data_restriction=DataRestriction.OPEN,
+                id=f"TaskTrove:{PUZZLES_CONFIG}",
+                upstream_dataset=PUZZLES_CONFIG,
+                upstream_name=PUZZLES_CONFIG,
+                subset=None,
+                build_path="TaskTrove",
+                origin=SourceOrigin.TASKTROVE,
                 family="math-answer",
-                tags=("agentic", "multi-turn"),
+                tags=("single-turn",),
                 count=6926,
                 notes=(
                     "Numeric compare on real puzzles. Gold lives in /tests, which the harness must hide; "
-                    "fine under the new grader."
+                    "fine under the new grader. QA-format repair published separately as "
+                    "TaskTrove:tasktrove-puzzles-qa: the same archives converted to non-agentic one-message "
+                    "tasks graded by the pinned Verifyit grader against the reference extracted from each "
+                    "task's original solution/solve.sh oracle; private pin "
+                    "open-athena/tasktrove-puzzles-taskcompendium-20261114."
                 ),
                 task_format=TaskFormat.TASKCOMPENDIUM,
             ),

@@ -5,6 +5,10 @@
 
 import asyncio
 import json
+import os
+import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -24,16 +28,20 @@ from daytona import (
     CreateSandboxFromImageParams,
     CreateSnapshotParams,
     DaytonaNotFoundError,
+    DaytonaTimeoutError,
     Resources,
 )
 from daytona_api_client_async import SnapshotState
 from shellbox.backends.daytona.connection import DaytonaConnection, DEFAULT_DAYTONA_API_URL
+from shellbox.backends.daytona.provider import ProviderWaitPolicy, retry_provider_call
+from shellbox.backends.daytona.provisioning import DaytonaProvisioning
 from harbor.agents.terminus_2.tmux_session import (
     TmuxCommandError,
     TmuxKeystrokeBatch,
     TmuxSession,
 )
 from harbor.environments import model_relay
+from harbor.environments.execution import execute_shellbox_command
 from harbor.environments.daytona import DaytonaEnvironment, task_snapshot_source
 from harbor.environments.local import LocalEnvironment
 from harbor.environments.model_relay import ModelRelay
@@ -42,11 +50,53 @@ from harbor.environments.shellsim import ShellSimEnvironment
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.task.task import Task
 from harbor.models.trial.paths import TrialPaths
+from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
+from harbor.models.trial.config import EnvironmentConfig as TrialEnvironmentConfig
+from harbor.models.environment_type import EnvironmentType
+from harbor.trial.trial import Trial
+from harbor.trial.queue import TrialQueue
+from harbor.environments.factory import EnvironmentFactory
+import harbor.environments.factory as environment_factory
 from harbor.verifier.verifier import Verifier
 from shellbox.http_service import HttpRequest, serve_http
+from tests.unit.environments.transport import ChrootProcessMachine, ProcessMachine, available_port
+
+
+@pytest.mark.skipif(sys.platform != "linux" or os.geteuid() != 0, reason="Real Linux chroot needs root")
+@pytest.mark.parametrize("with_bash", [False, True])
+async def test_large_setup_command_runs_in_selected_shell_with_original_environment(tmp_path, with_bash):
+    root = tmp_path / "guest"
+    for binary in ("/bin/sh", "/bin/bash") if with_bash else ("/bin/sh",):
+        libraries = subprocess.check_output(["ldd", binary], text=True)
+        for source in {binary, *re.findall(r"/\S+", libraries)}:
+            target = root / source.lstrip("/")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+    (root / "workspace").mkdir()
+    machine = ChrootProcessMachine(root, MachineSpec(PackageSpec(), workdir="/workspace"))
+    # The source's 72 KB setup fits one Linux argument; duplicating it exceeds MAX_ARG_STRLEN.
+    command = (
+        "#" + "x" * 72_000 + "\n"
+        "printf '%s\\n' \"$SETUP_VALUE\" \"$PWD\" \"${BASH_VERSION:+bash}\"\n"
+        "printf '%s\\n' 'source stderr' >&2\n"
+        "exit 23\n"
+    )
+    try:
+        result = await execute_shellbox_command(
+            machine,
+            command,
+            cwd="/workspace",
+            env={"SETUP_VALUE": "quotes'\" and unicode λ"},
+            timeout_sec=10,
+            user="root",
+        )
+        assert result.return_code == 23
+        assert result.stdout.splitlines() == ["quotes'\" and unicode λ", "/workspace", "bash" if with_bash else ""]
+        assert result.stderr == "source stderr\n"
+    finally:
+        await machine.close()
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import Command, MachineSpec, NetworkPolicy, PackageSpec, UnsupportedMachineSpec
-from tests.unit.environments.transport import ProcessMachine, available_port
 
 
 class ProcessFactory:
@@ -674,7 +724,9 @@ class RecordingSnapshotClient:
     def __init__(self):
         self.snapshot_params = None
         self.sandbox_params = None
-        self.sandbox = SimpleNamespace(process=SimpleNamespace(exec=_provider_exec))
+        self.sandbox = SimpleNamespace(
+            id="11111111-1111-4111-8111-111111111111", process=SimpleNamespace(exec=_provider_exec)
+        )
         self.closed = False
         self.snapshot = self
 
@@ -751,7 +803,7 @@ def test_declarative_adapter_builds_the_sandbox_image_without_a_snapshot(tmp_pat
         override_cpus=2,
         override_memory_mb=2049,
         override_storage_mb=1025,
-        image_build="declarative",
+        provisioning=DaytonaProvisioning.DECLARATIVE,
         client_factory=lambda: client,
     )
 
@@ -782,3 +834,146 @@ def test_task_snapshot_source_selects_and_validates_the_task_environment(tmp_pat
 
     with pytest.raises(UnsupportedMachineSpec, match="registry image or Dockerfile"):
         task_snapshot_source(None, tmp_path / "absent")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("attempt_timeout", "cleanup_recovery"), [(None, False), (60.0, False), (5.0, False), (600.0, True)])
+async def test_daytona_trial_resource_probe_wait_preserves_source_budget_and_verdict(tmp_path, monkeypatch, attempt_timeout, cleanup_recovery):
+    loop = asyncio.get_running_loop()
+    now = loop.time
+    offset = [0.0]
+    monkeypatch.setattr(loop, "time", lambda: now() + offset[0])
+
+    async def backoff(delay):
+        offset[0] += delay
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr("shellbox.backends.daytona.provider.sleep", backoff)
+    counters = tmp_path / "cgroup"
+    counters.mkdir()
+    (counters / "cpu.stat").write_text("usage_usec 1500000\n")
+    (counters / "memory.events").write_text("oom_kill 2\n")
+
+    class ProbeTransport(ProcessMachine):
+        failed = False
+
+        def argument(self, value):
+            return super().argument(value.replace("/sys/fs/cgroup", str(counters)))
+
+        async def run(self, command):
+            if any("cpu.stat" in arg for arg in command.argv) and not self.failed:
+                self.failed = True
+                raise DaytonaTimeoutError("Provider resource probe timed out", headers={"Retry-After": "17"})
+            return await super().run(command)
+
+        async def close(self):
+            failures = 0
+
+            async def delete():
+                nonlocal failures
+                if cleanup_recovery and failures < 3:
+                    failures += 1
+                    raise DaytonaTimeoutError("Provider deletion timed out", headers={"Retry-After": "120"})
+                await super(ProbeTransport, self).close()
+
+            await retry_provider_call("sandbox.delete", delete, wait_policy=ProviderWaitPolicy.JOB)
+
+    class ProbeFactory:
+        async def create(self, spec):
+            return ProbeTransport(tmp_path / "guest", spec)
+
+    class ProbeEnvironment(DaytonaEnvironment):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.factory = ProbeFactory()
+
+    monkeypatch.setattr(environment_factory, "_load_environment_class", lambda _: ProbeEnvironment)
+    task = tmp_path / "task"
+    for name in ("environment", "solution", "tests"):
+        (task / name).mkdir(parents=True)
+    (task / "instruction.md").write_text("Write done to answer.txt.")
+    (task / "task.toml").write_text(
+        '[agent]\ntimeout_sec=2\n[verifier]\ntimeout_sec=2\n'
+        '[environment]\ndocker_image="fixture"\nworkdir="/workspace"\n'
+    )
+    (task / "solution/solve.sh").write_text("printf done > answer.txt; printf 'once\\n' >> runs\n")
+    (task / "tests/test.sh").write_text(
+        f'test "$(cat answer.txt)" = done && printf 1 > {tmp_path / "guest/logs/verifier/reward.txt"}\n'
+    )
+    config = TrialConfig(
+        task=TaskConfig(path=task), trials_dir=tmp_path / "trials",
+        trial_attempt_timeout_sec=attempt_timeout,
+        environment=TrialEnvironmentConfig(type=EnvironmentType.DAYTONA),
+        agent=AgentConfig(name="oracle", kwargs={"resource_usage_filename": "resource-usage.json"}),
+    )
+    # Queue supervision is the real, non-pausable overall attempt boundary.
+    queue = TrialQueue(n_concurrent=1)
+    result = await queue.submit(config)
+    if attempt_timeout == 5.0:
+        assert result.exception_info.exception_type == "TrialTimeoutError"
+        assert result.verifier_result is None
+        return
+    if attempt_timeout is None:
+        assert result.exception_info is not None
+        assert result.verifier_result is None
+        return
+    assert result.exception_info is None
+    assert result.verifier_result.rewards == {"reward": 1.0}
+    assert (tmp_path / "guest/workspace/runs").read_text().splitlines() == ["once"]
+    exit_code, = (tmp_path / "trials").rglob("agent/exit-code.txt")
+    assert exit_code.read_text() == "0"
+    assert json.loads((exit_code.parent / "resource-usage.json").read_text())["oom_kills"] == 0
+
+
+async def test_declarative_harbor_starts_and_deletes_without_a_snapshot_service(tmp_path):
+    class Provider:
+        def __init__(self):
+            self.id = "22222222-2222-4222-8222-222222222222"
+            self.created = None
+            self.deleted = False
+            self.process = SimpleNamespace(exec=self.exec)
+
+        async def exec(self, *args, **kwargs):
+            return SimpleNamespace(exit_code=0, result="/usr/bin/setsid")
+
+        async def get_work_dir(self):
+            return "/testbed"
+
+        async def create(self, params, *, timeout):
+            self.created = params
+            return self
+
+        async def get(self, name):
+            assert name == self.created.name
+            return self
+
+        async def delete(self, sandbox, *, wait=False):
+            assert sandbox is self
+            self.deleted = True
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+    provider = Provider()
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text("FROM python:3.12-slim\nWORKDIR /testbed\n")
+    environment = EnvironmentFactory.create_environment(
+        type=EnvironmentType.DAYTONA,
+        environment_dir=tmp_path,
+        environment_name="eval-task",
+        session_id="eval-trial",
+        trial_paths=TrialPaths(tmp_path / "trial"),
+        task_env_config=EnvironmentConfig(cpus=2, memory_mb=4096, storage_mb=10240),
+        provisioning="declarative",
+        client_factory=lambda: provider,
+    )
+    async with asyncio.TaskGroup() as service_tasks:
+        await environment.start(False, service_tasks=service_tasks)
+        assert isinstance(provider.created, CreateSandboxFromImageParams)
+        assert provider.created.image.dockerfile() == dockerfile.read_text()
+        assert provider.created.resources.cpu == 2
+        await environment.stop(True)
+    assert provider.deleted

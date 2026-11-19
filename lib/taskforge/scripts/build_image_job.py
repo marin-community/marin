@@ -3,7 +3,8 @@
 
 """Build a directory's Dockerfile with ``taskforge.sandbox.image_builder.IrisImageBuilder`` and print the pinned image.
 
-    uv run scripts/build_image_job.py --context DIR --repository capability-infra/taskforge-smoke
+    uv run scripts/build_image_job.py --context DIR --repository capability-infra/example \
+        --priority batch --timeout 259200 --scheduling-timeout 259200
 
 The jobs go through the named cluster's controller (``--cluster``, default ``marin``) and run on
 ``--target-cluster``. The script reads the registry credential from Secret Manager with this
@@ -16,9 +17,12 @@ import logging
 from pathlib import Path
 
 import click
+from iris.rpc import job_pb2
+from rigging.timing import Duration
 
 from taskforge.sandbox.image_builder import (
     TARGET_CLUSTER,
+    ImageJobPolicy,
     IrisImageBuilder,
     RegistryCredential,
     registry_credential_json,
@@ -36,12 +40,28 @@ from taskforge.sandbox.images import BUILD_LIMITS, docker_build_from_directory
 @click.option("--repository", required=True, help="repository under the registry, e.g. capability-infra/x")
 @click.option("--cluster", default="marin", show_default=True)
 @click.option("--target-cluster", default=TARGET_CLUSTER, show_default=True)
-def main(context: Path, repository: str, cluster: str, target_cluster: str) -> None:
+@click.option("--priority", type=click.Choice(["batch", "production", "interactive"]), required=True)
+@click.option("--timeout", type=click.IntRange(min=1), required=True, help="Execution deadline in seconds")
+@click.option("--scheduling-timeout", type=click.IntRange(min=1), required=True, help="Scheduling deadline in seconds")
+def main(
+    context: Path,
+    repository: str,
+    cluster: str,
+    target_cluster: str,
+    priority: str,
+    timeout: int,
+    scheduling_timeout: int,
+) -> None:
     logging.basicConfig(level=logging.INFO)
     logging.getLogger("httpx").setLevel(logging.WARNING)  # blob redirects carry presigned object-store URLs
     build = docker_build_from_directory(context, BUILD_LIMITS)
     credential = RegistryCredential.from_json(registry_credential_json())
-    builder = IrisImageBuilder(cluster=cluster, target_cluster=target_cluster, credential=credential)
+    policy = ImageJobPolicy(
+        priority_band=job_pb2.PriorityBand.Value(f"PRIORITY_BAND_{priority.upper()}"),
+        timeout=Duration.from_seconds(timeout),
+        scheduling_timeout=Duration.from_seconds(scheduling_timeout),
+    )
+    builder = IrisImageBuilder(cluster=cluster, target_cluster=target_cluster, credential=credential, policy=policy)
     published = builder.publish_with_timings(build, repository)
     print(
         json.dumps(

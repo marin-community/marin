@@ -1,0 +1,300 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""The declaration audit pairs every Atlas receipt family with the canonical layer."""
+
+import json
+import sys
+from dataclasses import replace
+
+import pytest
+
+from experiments.post_training.task_curation import declaration_audit, ensure_current_projections
+from experiments.post_training.task_curation.declaration_audit import (
+    CanonicalLayer,
+    DeclaredPin,
+    ReleasePin,
+    audit_families,
+)
+
+
+def pin(source_id, dataset_id="open-athena/example-source", revision="1" * 40, version="2026.11.13.1"):
+    return DeclaredPin(source_id=source_id, dataset_id=dataset_id, dataset_revision=revision, converter_version=version)
+
+
+def release(repo="open-athena/example-release", revision="2" * 40):
+    return ReleasePin(repo=repo, revision=revision)
+
+
+def layer(**overrides) -> CanonicalLayer:
+    base = dict(
+        source_ids=frozenset({"Test:declared-source"}),
+        declared={"Test:declared-source": pin("Test:declared-source")},
+        selected={"Test:declared-source": release()},
+        retired=frozenset(),
+        archived_releases={},
+    )
+    base.update(overrides)
+    return CanonicalLayer(**base)
+
+
+def test_a_receipt_at_the_declared_pin_binds():
+    findings, notes = audit_families(
+        {
+            "census receipts": {"Test:declared-source": pin("Test:declared-source")},
+            "within-source dedup": {"Test:declared-source": pin("Test:declared-source")},
+            "lexical receipts": {"Test:declared-source": pin("Test:declared-source")},
+        },
+        layer=layer(),
+        releases={"Test:declared-source": release()},
+    )
+    assert findings == []
+    assert notes == []
+
+
+def test_a_registry_only_receipt_fails():
+    findings, _ = audit_families(
+        {"census receipts": {"Test:undeclared-source": pin("Test:undeclared-source")}},
+        layer=layer(),
+    )
+    assert findings == [
+        "census receipts: Test:undeclared-source names a source the declaration layer does not declare "
+        "(registry-only receipt at " + "1" * 40 + ")"
+    ]
+
+
+def test_a_stale_declaration_pin_fails():
+    findings, _ = audit_families(
+        {
+            "census receipts": {"Test:declared-source": pin("Test:declared-source", revision="9" * 40)},
+            "within-source dedup": {"Test:declared-source": pin("Test:declared-source", version="2026.11.12.1")},
+        },
+        layer=layer(),
+    )
+    assert len(findings) == 2
+    assert all("but the canonical layer declares" in finding for finding in findings)
+
+
+def test_a_lexical_receipt_at_neither_declared_nor_selected_pin_fails():
+    findings, _ = audit_families(
+        {"lexical receipts": {"Test:declared-source": pin("Test:declared-source", revision="8" * 40)}},
+        layer=layer(),
+    )
+    assert findings == [
+        "lexical receipts: Test:declared-source receipt pin open-athena/example-source@"
+        + "8" * 40
+        + " (2026.11.13.1) matches no declared or selected pin"
+    ]
+
+
+def test_a_retained_receipt_must_match_the_selected_release():
+    findings, _ = audit_families(
+        {},
+        layer=layer(),
+        releases={"Test:declared-source": release(repo="open-athena/other-release")},
+    )
+    assert findings == [
+        "retained release receipts: Test:declared-source selects open-athena/example-release@"
+        + "2" * 40
+        + " but its receipt publishes open-athena/other-release@"
+        + "2" * 40
+    ]
+
+
+def test_a_receipt_for_a_retired_source_is_history_not_drift():
+    retired_layer = layer(source_ids=frozenset(), retired=frozenset({"Test:retired-source"}))
+    findings, _ = audit_families(
+        {
+            "census receipts": {"Test:retired-source": pin("Test:retired-source", revision="9" * 40)},
+            "within-source dedup": {"Test:retired-source": pin("Test:retired-source")},
+        },
+        layer=retired_layer,
+        releases={"Test:retired-source": release()},
+    )
+    assert findings == []
+
+
+def test_a_filtration_superseded_retained_receipt_binds():
+    superseded = layer(
+        source_ids=frozenset({"Test:declared-source", "Test:filtered-source"}),
+        declared={
+            "Test:declared-source": pin("Test:declared-source"),
+            "Test:filtered-source": pin("Test:filtered-source"),
+        },
+        selected={
+            "Test:declared-source": release(),
+            "Test:filtered-source": release(repo="open-athena/filtered-release", revision="3" * 40),
+        },
+        superseded_by_filtration=frozenset({"Test:filtered-source"}),
+    )
+    findings, notes = audit_families(
+        {},
+        layer=superseded,
+        releases={"Test:filtered-source": release(revision="4" * 40)},
+    )
+    assert findings == []
+    assert notes == []
+
+
+def test_a_pending_source_retained_release_is_reported_staged_for_intake():
+    pending = layer(
+        source_ids=frozenset({"Test:declared-source", "Test:pending-source"}),
+        declared={
+            "Test:declared-source": pin("Test:declared-source"),
+            "Test:pending-source": pin("Test:pending-source"),
+        },
+        superseded_by_filtration=frozenset(),
+        pending=frozenset({"Test:pending-source"}),
+    )
+    findings, notes = audit_families(
+        {
+            "census receipts": {"Test:pending-source": pin("Test:pending-source")},
+            "within-source dedup": {"Test:pending-source": pin("Test:pending-source")},
+        },
+        layer=pending,
+        releases={"Test:pending-source": release(repo="open-athena/pending-remediated-release")},
+    )
+    assert findings == []
+    assert notes == [
+        "retained release receipts: Test:pending-source is pending intake; its receipt for "
+        "open-athena/pending-remediated-release@" + "2" * 40 + " stays staged until adoption selects it"
+    ]
+
+
+def test_an_archived_original_record_counts_as_declared():
+    archived = layer(
+        source_ids=frozenset({"Test:archived-source"}),
+        declared={
+            "Test:archived-source": pin("Test:archived-source", dataset_id="open-athena/original-conversion"),
+        },
+        selected={"Test:archived-source": release(repo="open-athena/admitted-release", revision="5" * 40)},
+        archived_releases={"Test:archived-source": release(repo="open-athena/archived-retained", revision="6" * 40)},
+    )
+    findings, notes = audit_families(
+        {
+            "census receipts": {
+                "Test:archived-source": pin("Test:archived-source", dataset_id="open-athena/original-conversion")
+            }
+        },
+        layer=archived,
+        releases={"Test:archived-source": release(repo="open-athena/archived-retained", revision="6" * 40)},
+    )
+    assert findings == []
+    assert notes == []
+
+
+@pytest.fixture
+def waived_audit_cli(monkeypatch, tmp_path):
+    waivers = ensure_current_projections.ProjectionWaivers(
+        marina_url="https://marina.example",
+        applet_id="preview",
+        rule="stale-or-missing-serving-projection-without-declaration-drift",
+        reason=ensure_current_projections.PROJECTION_WAIVER_REASON,
+    )
+    path = tmp_path / "waivers.json"
+    path.write_text(waivers.model_dump_json())
+    monkeypatch.setattr(sys, "argv", ["declaration_audit", "--waivers", str(path)])
+    monkeypatch.setattr(
+        declaration_audit,
+        "canonical_layer",
+        lambda: (
+            layer(),
+            {
+                "census receipts": {"Test:declared-source": pin("Test:declared-source", revision="9" * 40)},
+                "lexical receipts": {},
+                "grading census receipts": {},
+                "within-source dedup": {},
+            },
+            {},
+            {},
+        ),
+    )
+    monkeypatch.setattr("experiments.post_training.task_curation.sources.configured_sources", lambda: [])
+    monkeypatch.setattr(
+        declaration_audit,
+        "atlas_catalog_selection",
+        lambda: (
+            ensure_current_projections.CatalogSelection(
+                "https://marina.example", "preview", "lagging", refresh_sealed=False
+            )
+        ),
+    )
+    monkeypatch.setattr(declaration_audit, "atlas_contract_receipts", lambda: {})
+    monkeypatch.setattr(declaration_audit, "atlas_curriculum_rows", lambda: {})
+    monkeypatch.setattr(declaration_audit, "served_declaration_pins", lambda selection: [])
+    return declaration_audit.main
+
+
+def test_projection_waivers_cannot_clear_declaration_drift(waived_audit_cli, capsys):
+    with pytest.raises(SystemExit, match="1 mismatches"):
+        waived_audit_cli()
+    assert "but the canonical layer declares" in capsys.readouterr().out
+
+
+def test_projection_waivers_cannot_clear_a_served_query_failure(waived_audit_cli, monkeypatch):
+    def failed_query():
+        raise RuntimeError("served query failed")
+
+    monkeypatch.setattr(declaration_audit, "atlas_contract_receipts", failed_query)
+    with pytest.raises(RuntimeError, match="served query failed"):
+        waived_audit_cli()
+
+
+def test_a_same_source_drift_leaves_its_projection_gap_blocking():
+    result = declaration_audit.audit_declarations(
+        {
+            "census receipts": {"Test:declared-source": pin("Test:declared-source", revision="9" * 40)},
+            "within-source dedup": {},
+        },
+        layer=layer(),
+        releases={},
+        configured_ids=frozenset(),
+    )
+    rule = ensure_current_projections.ProjectionWaivers(
+        marina_url="https://marina.example",
+        applet_id="preview",
+        rule="stale-or-missing-serving-projection-without-declaration-drift",
+        reason=ensure_current_projections.PROJECTION_WAIVER_REASON,
+    )
+    gap = ensure_current_projections.ProjectionGap("Test:declared-source", "curriculum", "missing", None)
+    waived = ensure_current_projections.apply_projection_waivers(
+        [gap],
+        rule,
+        ensure_current_projections.CatalogSelection(
+            "https://marina.example", "preview", "lagging", refresh_sealed=False
+        ),
+        result.drift_sources,
+    )
+    assert result.findings
+    assert result.drift_sources == {"Test:declared-source"}
+    assert waived.blocking == [gap]
+    assert waived.waived == []
+
+
+def test_only_a_passing_strict_finalizer_records_the_refresh_seal(waived_audit_cli, monkeypatch, tmp_path):
+    path = tmp_path / "strict.json"
+    monkeypatch.setattr(sys, "argv", ["declaration_audit", "--seal-refresh", "--output", str(path)])
+    monkeypatch.setattr(declaration_audit, "PROJECTION_WAIVER_CONFIG", tmp_path / "waivers.json")
+    calls = []
+
+    def record(selection, scope, audit):
+        calls.append(audit)
+        return replace(selection, refresh_sealed=True)
+
+    monkeypatch.setattr(declaration_audit, "record_projection_refresh_seal", record)
+    with pytest.raises(SystemExit, match="1 mismatches"):
+        waived_audit_cli()
+    assert calls == []
+    families = {
+        "census receipts": {},
+        "lexical receipts": {},
+        "grading census receipts": {},
+        "within-source dedup": {},
+    }
+    monkeypatch.setattr(declaration_audit, "canonical_layer", lambda: (layer(), families, {}, {}))
+    waived_audit_cli()
+    receipt = json.loads(path.read_text())
+    assert len(calls) == 1
+    assert receipt["refresh_sealed"] is True
+    assert receipt["waived_projection_count"] == 0
+    assert receipt["waiver_scope"] is None

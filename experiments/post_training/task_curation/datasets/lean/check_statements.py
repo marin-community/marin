@@ -53,6 +53,10 @@ from experiments.post_training.task_curation.datasets.lean.lean_grade import (
     without_comments,
 )
 from experiments.post_training.task_curation.datasets.lean.proofs import PROOFNET_VERIFIED_REVISION, proofnet_contract
+from experiments.post_training.task_curation.reference_data import commit_reference_documents
+
+DERIVED_INDEX = Path(__file__).resolve().parents[1] / "derived" / "index.json"
+DERIVED_PROOFS_TARGET = Path(__file__).with_name("numina_proofs.json")
 
 EXPECTED_REJECTIONS = {35: "no_sorry_proof", 351: "repeated_exercise"}
 SORRY_WARNING = "declaration uses 'sorry'"
@@ -192,7 +196,12 @@ def main() -> None:
 
 
 def write_proofs(args: argparse.Namespace, provenance: dict) -> None:
-    """Check every converted row's human proof and write the keys of those that pass to ``args.write_proofs``."""
+    """Check every converted row's human proof and publish the keys of those that pass.
+
+    The passing keys land in the referenced derived-data registry: the write creates a
+    new immutable dataset revision and stages the committed index bump for the next
+    landing. A local ``--write-proofs PATH`` still works as a dry-run staging output.
+    """
     passing = []
     with ThreadPoolExecutor(args.jobs) as pool:
         for result in pool.map(
@@ -203,7 +212,14 @@ def write_proofs(args: argparse.Namespace, provenance: dict) -> None:
                 passing.append(result["key"])
             print(json.dumps(result), flush=True)
     record = {"checked": {key: provenance[key] for key in ("revision", "sha256", "lean", "mathlib")}}
-    args.write_proofs.write_text(json.dumps({**record, "passing": sorted(passing)}, indent=1) + "\n")
+    payload = json.dumps({**record, "passing": sorted(passing)}, indent=1) + "\n"
+    if str(args.write_proofs) == str(DERIVED_PROOFS_TARGET):
+        revision = commit_reference_documents(
+            DERIVED_INDEX, {"lean/numina_proofs.json": payload.encode()}, message="Refresh the passing Numina proofs"
+        )
+        print(f"published lean/numina_proofs.json at {revision}", flush=True)
+        return
+    args.write_proofs.write_text(payload)
 
 
 if __name__ == "__main__":

@@ -23,6 +23,7 @@ from harbor.models.trial.config import (
     TrialConfig,
 )
 from rich.console import Console
+from shellbox.backends.daytona.lifecycle import process_lifecycle_log
 from typer import Argument, Option, Typer
 from upath import UPath
 
@@ -393,6 +394,14 @@ def start(
             show_default=False,
         ),
     ] = None,
+    sandbox_lifecycle_log: Annotated[
+        Path | None,
+        Option(
+            "--sandbox-lifecycle-log",
+            help="Write this trial process's owned Daytona sandbox lifecycle as fresh JSONL.",
+            rich_help_panel="Trial Settings",
+        ),
+    ] = None,
 ):
     """Start a single trial."""
     from harbor.models.trial.result import TrialResult
@@ -545,7 +554,8 @@ def start(
         )
         return await trial.run()
 
-    result = run_async(_create_and_run())
+    with process_lifecycle_log(sandbox_lifecycle_log):
+        result = run_async(_create_and_run())
 
     console.print("\n[bold green]Trial completed![/bold green]")
     console.print(f"Trial name: {result.trial_name}")

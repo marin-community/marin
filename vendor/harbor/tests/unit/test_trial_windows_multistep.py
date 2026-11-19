@@ -76,6 +76,7 @@ def _make_trial_for_step_verification(
     )
     trial._archive_step_outputs = MagicMock()
     trial.config = SimpleNamespace(
+        agent=SimpleNamespace(kwargs={}),
         timeout_multiplier=1,
         verifier_timeout_multiplier=None,
         verifier=SimpleNamespace(

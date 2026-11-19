@@ -1,0 +1,9 @@
+{
+  "source_id": "TaskTrove:smartie-swesmith-admitted",
+  "authority": "Coordinator ruling received2026-11-14T11:20:02Z",
+  "decision": "A producer-interrupted nop with a structured source RuntimeError but no host/provider trace gets one identical-budget diagnostic repeat. If the same source error reproduces, it is non-passing with the source-error annotation; otherwise follow the repeat outcome.",
+  "source_error_policy": "Source-local runtime errors are non-passing; provider/host/setup failures remain pending for recovery.",
+  "maximum_interrupted_producer_diagnostic_repeats": 1,
+  "source_oracles_replayed": 0,
+  "budget_changes": 0
+}

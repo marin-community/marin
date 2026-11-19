@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from functools import partial
 
+from finestore.rl.curation import SourceQualityResult
 from pydantic import BaseModel, ConfigDict
 
 from taskcompendium.identity import canonical_sha256
@@ -26,7 +27,7 @@ from taskcompendium.pipeline.models import (
 from taskcompendium.pipeline.sampling import merge_sample_rows, seeded_order, seeded_sample
 from taskcompendium.runtime.resources import resource_bytes
 
-SOURCE_QUALITY_REVISION = "8"
+SOURCE_QUALITY_REVISION = "10"
 MAX_SOURCE_QUALITY_SAMPLE_SIZE = 100
 SOURCE_QUALITY_SAMPLE_SIZE = MAX_SOURCE_QUALITY_SAMPLE_SIZE
 
@@ -35,20 +36,16 @@ SOURCE_QUALITY_SAMPLE_SIZE = MAX_SOURCE_QUALITY_SAMPLE_SIZE
 class SourceQualityPolicy:
     sample_size: int = SOURCE_QUALITY_SAMPLE_SIZE
     seed: int = 0
-    reject_above: float = 0.50
 
     def __post_init__(self):
         if self.sample_size < 1:
             raise ValueError("Sampling requires a positive size")
-        if not 0 < self.reject_above <= 1:
-            raise ValueError("The source rejection threshold must satisfy 0 < reject <= 1")
 
 
 class SourceQualityStatus(StrEnum):
     UNREVIEWED = "unreviewed"
     CENSUS = "census"
     TRUST = "trust"
-    REJECT = "reject"
     INCOMPLETE = "incomplete"
 
 
@@ -84,6 +81,7 @@ class SourceQualityReport(BaseModel):
     defect_fraction: float | None
     status: SourceQualityStatus
     reason: str
+    result: SourceQualityResult
 
 
 def assessment(record: ReviewRecord) -> Assessment:
@@ -202,11 +200,7 @@ def source_quality_report(
     *,
     coverage: QualitySampleCoverage,
 ) -> SourceQualityReport:
-    """Gate the whole source once on the fixed panel; rows outside the panel are never reviewed.
-
-    Known defects above ``reject_above`` reject the source. Unavailable responses leave it
-    incomplete only while resolving them could still push defects above that threshold.
-    """
+    """Report sample issues separately from review transport availability."""
     if (
         len(sample.task_ids) != min(sample.eligible_count, policy.sample_size)
         or len(reviews) != len(sample.task_ids)
@@ -214,71 +208,55 @@ def source_quality_report(
     ):
         raise ValueError("Quality observations must cover the sampled tasks exactly once")
     counts = Counter(assessment(record) for record in reviews)
-    census = coverage == QualitySampleCoverage.CENSUS
-    raw_panel = coverage in {QualitySampleCoverage.RAW_SAMPLE, QualitySampleCoverage.CENSUS}
-    panel_size = sample.input_count if raw_panel else len(reviews)
-    if raw_panel:
-        source_defects = sample.exclusions.get("normalization:source_defect", 0) + sample.exclusions.get(
-            "check:failed", 0
-        )
-        counts[Assessment.DEFECT] += source_defects
-        counts[Assessment.UNUSABLE] += sum(sample.exclusions.values()) - source_defects
-    defect_fraction = None
-    unresolved = counts[Assessment.UNAVAILABLE] + counts[Assessment.UNCERTAIN] + counts[Assessment.UNUSABLE]
-    if not unresolved and panel_size:
-        defect_fraction = counts[Assessment.DEFECT] / panel_size
-    # The raw draw supplies the denominator even when conversion excludes rows.
-    # Source defects are observed failures; unsupported conversion and duplicates
-    # provide neither good judgments nor evidence of bad source content.
-    known_defects = counts[Assessment.DEFECT] / panel_size if panel_size else 0.0
-    # Only unavailable responses change on resume; uncertain judgments and unusable rows stay as they are.
-    resolvable = counts[Assessment.UNAVAILABLE]
-    if known_defects > policy.reject_above:
-        status, reason = SourceQualityStatus.REJECT, "Known defects exceed the rejection threshold over the whole panel"
-    elif not reviews:
-        status, reason = SourceQualityStatus.INCOMPLETE, "No usable tasks in the fixed raw panel; no source inference"
-    elif census:
-        status, reason = SourceQualityStatus.CENSUS, "Review attempted for every eligible unique task; no extrapolation"
-    elif (counts[Assessment.DEFECT] + resolvable) / panel_size > policy.reject_above:
-        status, reason = (
-            SourceQualityStatus.INCOMPLETE,
-            "Missing or invalid model responses could still reject the source; resume the same sample",
-        )
-    else:
-        status, reason = (
-            SourceQualityStatus.TRUST,
-            "Known defects stay within the rejection threshold over the whole panel; "
-            "uncertain judgments and unusable rows are not defects",
-        )
+    reviewed = counts[Assessment.GOOD] + counts[Assessment.DEFECT]
+    issue_count = counts[Assessment.DEFECT]
+    issues = [
+        f"{record.task_id}: {record.verdict.evidence}"
+        for record in reviews
+        if assessment(record) is Assessment.DEFECT and record.verdict is not None
+    ]
+    result = SourceQualityResult(
+        reviewed=reviewed,
+        issue_count=issue_count,
+        unavailable_count=counts[Assessment.UNAVAILABLE],
+        uncertain_count=counts[Assessment.UNCERTAIN],
+        issues=issues,
+        repair_recommendation=(
+            "Review the recorded issues and qualify any repaired release with SAMPLE or FULL QA."
+            if issue_count
+            else "No repair indicated by the reviewed sample."
+        ),
+    )
+    unavailable = bool(reviews) and counts[Assessment.UNAVAILABLE] == len(reviews)
     return SourceQualityReport(
         policy=policy,
         population=sample,
         coverage=coverage,
         assessments=dict(counts),
-        defect_fraction=defect_fraction,
-        status=status,
-        reason=reason,
+        defect_fraction=result.issue_rate,
+        status=(
+            SourceQualityStatus.INCOMPLETE
+            if unavailable
+            else SourceQualityStatus.CENSUS if coverage == QualitySampleCoverage.CENSUS else SourceQualityStatus.TRUST
+        ),
+        reason="Sample QC is informational; mechanical exclusions and execution qualification remain separate.",
+        result=result,
     )
 
 
 def unreviewed_quality_report(
     sample: QualitySample, policy: SourceQualityPolicy, *, coverage: QualitySampleCoverage
 ) -> SourceQualityReport:
-    """Decide on a source without a rubric from observed conversion and check failures alone."""
-    defects = sample.exclusions.get("normalization:source_defect", 0) + sample.exclusions.get("check:failed", 0)
-    defect_fraction = defects / sample.input_count if sample.input_count else None
-    if defect_fraction is not None and defect_fraction > policy.reject_above:
-        status, reason = SourceQualityStatus.REJECT, "Known defects exceed the rejection threshold over the whole panel"
-    elif not sample.eligible_count:
-        status, reason = SourceQualityStatus.INCOMPLETE, "No usable tasks in the fixed raw panel; no source inference"
-    else:
-        status, reason = SourceQualityStatus.UNREVIEWED, "The source declares no rubric; model review is skipped"
+    """Record mechanical exclusions without inventing reviewed quality observations."""
     return SourceQualityReport(
         policy=policy,
         population=sample,
         coverage=coverage,
-        assessments={Assessment.DEFECT: defects} if defects else {},
-        defect_fraction=defect_fraction,
-        status=status,
-        reason=reason,
+        assessments={},
+        defect_fraction=None,
+        status=SourceQualityStatus.UNREVIEWED,
+        reason="The source declares no rubric; model review is skipped",
+        result=SourceQualityResult(
+            reviewed=0, issue_count=0, issues=[], repair_recommendation="Run SAMPLE or FULL review to assess quality."
+        ),
     )

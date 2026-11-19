@@ -49,6 +49,7 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     ExitCodeReward,
     FileReward,
+    ReplyStatus,
     RewardFile,
     RewardFileFormat,
     ScriptGrader,
@@ -646,10 +647,21 @@ async def test_driver_judge_identity_pins_explicit_and_default_models_across_fai
         }
     )
     model_requests = []
+    reply_status = ReplyStatus(
+        origin="provider", finish_reason="stop", truncated=False, provider_refusal=False, tool_events=()
+    )
 
     async def model(request):
         model_requests.append(request)
-        return ModelTurn({"role": "assistant", "content": r"\boxed{4}"}, (), (), None, "stop", usage=TokenUsage(10, 1))
+        return ModelTurn(
+            {"role": "assistant", "content": r"\boxed{4}"},
+            (),
+            (),
+            None,
+            "stop",
+            usage=TokenUsage(10, 1),
+            reply_status=reply_status,
+        )
 
     output = str(tmp_path / "results")
     for unpaired_config, unpaired_connection in ((run_config, connection), (config, None)):
@@ -686,7 +698,12 @@ async def test_driver_judge_identity_pins_explicit_and_default_models_across_fai
     assert len(graded) == 2
     retry = next(row for row in graded if row["retry"] == 1)
     assert retry["prompt_tokens"] == retry["completion_tokens"] == 0
-    assert json.loads(final_reader.read_blob(retry["result_blob"]))["reused_response_from_retry"] == 0
+    retry_raw = json.loads(final_reader.read_blob(retry["result_blob"]))
+    assert retry_raw["reused_response_from_retry"] == 0
+    assert retry_raw["conversations"][0]["steps"][0]["turn"]["reply_status"] == (
+        failed_raw["conversations"][0]["steps"][0]["turn"]["reply_status"]
+    )
+    assert retry_raw["conversations"][0]["steps"][0]["turn"]["reply_status"]["origin"] == "provider"
     grade_details = [json.loads(final_reader.read_blob(row["result_blob"]))["grade"]["detail"] for row in graded]
     assert {detail["requested_model"] for detail in grade_details} == {"source-judge", "run-default"}
     assert {detail["response_model"] for detail in grade_details} == {"judge-served-revision"}

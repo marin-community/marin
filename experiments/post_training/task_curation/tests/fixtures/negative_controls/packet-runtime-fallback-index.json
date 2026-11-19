@@ -1,0 +1,29 @@
+{
+  "archive_sha256": "1c78ceafb84b80576c2a26668883fa12f703f8cdf2d1deb7a66ee63889cb6284",
+  "original_archive": {
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.120-qualified-1485-physical-nop/execution/4e46190654f9df9c72cc/trial-artifacts/e7f4fadce06d1acdf83dd06937579fd9da8550b22ea5b02d863bca486998b608.tar.gz",
+    "sha256": "1c78ceafb84b80576c2a26668883fa12f703f8cdf2d1deb7a66ee63889cb6284"
+  },
+  "source": {
+    "task_id": "tasktrove-unitsyn-003f79917efc2e4e8b8184a0511260372855b649c69d5694cb679b2757c64ce3",
+    "source_task_sha256": "f2d874253828aa2ca7e18f417f31dda2773d6f1395c2aa4850740185ddb65018",
+    "source_task_checksum": "6be9b1790dc51e09494032b6ee14f60a4f9eb05ac63685537e66df31e56d8775",
+    "task_sha256": "1cbcd2441d321a0f021c509c023d46e49b14805ad5a9a3d5bc63c489c4951d90",
+    "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+    "task_checksum": "6be9b1790dc51e09494032b6ee14f60a4f9eb05ac63685537e66df31e56d8775",
+    "execution_requirements": {
+      "cpus": 1,
+      "memory_mb": 2048,
+      "storage_mb": 2048,
+      "agent_timeout_sec": 900.0,
+      "verifier_timeout_sec": 720.0
+    },
+    "verifier_execution_requirements": {
+      "cpus": 1,
+      "memory_mb": 2048,
+      "storage_mb": 2048,
+      "agent_timeout_sec": 900.0,
+      "verifier_timeout_sec": 720.0
+    }
+  }
+}

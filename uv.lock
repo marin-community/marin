@@ -4694,6 +4694,7 @@ dev = [
     { name = "mkdocs-minify-plugin" },
     { name = "mkdocstrings" },
     { name = "mkdocstrings-python" },
+    { name = "openapi-schema-validator" },
     { name = "plotly" },
     { name = "pymdown-extensions" },
     { name = "pyrefly" },
@@ -4731,6 +4732,7 @@ lint = [
 test = [
     { name = "cloud-sql-python-connector", extra = ["pg8000"] },
     { name = "marin-verifyit", extra = ["math", "reasoning-gym", "schema"] },
+    { name = "openapi-schema-validator" },
     { name = "plotly" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -4836,6 +4838,7 @@ dev = [
     { name = "mkdocs-minify-plugin", specifier = ">=0.7.0" },
     { name = "mkdocstrings", specifier = ">=0.24.0" },
     { name = "mkdocstrings-python", specifier = ">=1.7.0" },
+    { name = "openapi-schema-validator", specifier = "==0.6.3" },
     { name = "plotly" },
     { name = "pymdown-extensions", specifier = ">=10.0.0" },
     { name = "pyrefly", specifier = ">=1.0.0,<1.1.0" },
@@ -4873,6 +4876,7 @@ lint = [
 test = [
     { name = "cloud-sql-python-connector", extras = ["pg8000"], specifier = ">=1.9" },
     { name = "marin-verifyit", extras = ["math", "reasoning-gym", "schema"], editable = "lib/verifyit" },
+    { name = "openapi-schema-validator", specifier = "==0.6.3" },
     { name = "plotly" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-asyncio" },
@@ -5987,14 +5991,18 @@ dependencies = [
     { name = "marin-taskcompendium" },
     { name = "openai" },
     { name = "pydantic" },
+    { name = "universal-pathlib" },
 ]
 
 [package.dev-dependencies]
 test = [
+    { name = "jinja2" },
     { name = "marin-shellbox", extra = ["daytona", "shellsim"] },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
+    { name = "tokenizers" },
+    { name = "transformers" },
 ]
 
 [package.metadata]
@@ -6003,14 +6011,18 @@ requires-dist = [
     { name = "marin-taskcompendium", editable = "lib/taskcompendium" },
     { name = "openai", specifier = ">=1.59.9" },
     { name = "pydantic", specifier = ">=2" },
+    { name = "universal-pathlib", specifier = ">=0.2" },
 ]
 
 [package.metadata.requires-dev]
 test = [
+    { name = "jinja2", specifier = ">=3.1.6" },
     { name = "marin-shellbox", extras = ["daytona", "shellsim"], editable = "lib/shellbox" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
+    { name = "tokenizers" },
+    { name = "transformers", specifier = ">=5.10.0,<6.0" },
 ]
 
 [[package]]
@@ -7893,6 +7905,20 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/2b/32/0c9bd3e4e847cd6117b64dbef4cf810faa9cdbd6689323b811569cc8a1b8/openapi_pydantic-0.6.0.tar.gz", hash = "sha256:11f3ac6ad41521fc156381ec587246b0c0ecea523bd9565ed74d3e7fac9d91cd", size = 1667049, upload-time = "2026-10-02T12:20:00.508Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/31/57/9d3eb823a03c33e9d4c810e6a3276e3a6dc820a7fdc0961db2c04e613817/openapi_pydantic-0.6.0-py3-none-any.whl", hash = "sha256:8bd6d548a250da37db96f461bcd52b3468e8834ad7d6db14b00a6b2ebbd163a3", size = 96931, upload-time = "2026-10-02T12:19:58.917Z" },
+]
+
+[[package]]
+name = "openapi-schema-validator"
+version = "0.6.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "jsonschema" },
+    { name = "jsonschema-specifications" },
+    { name = "rfc3339-validator" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/8b/f3/5507ad3325169347cd8ced61c232ff3df70e2b250c49f0fe140edb4973c6/openapi_schema_validator-0.6.3.tar.gz", hash = "sha256:f37bace4fc2a5d96692f4f8b31dc0f8d7400fd04f3a937798eaf880d425de6ee", size = 11550, upload-time = "2025-01-10T18:08:22.268Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/21/c6/ad0fba32775ae749016829dace42ed80f4407b171da41313d1a3a5f102e4/openapi_schema_validator-0.6.3-py3-none-any.whl", hash = "sha256:f3b9870f4e556b5a62a1c39da72a6b4b16f3ad9c73dc80084b1b11e74ba148a3", size = 8755, upload-time = "2025-01-10T18:08:19.758Z" },
 ]
 
 [[package]]

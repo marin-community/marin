@@ -5,6 +5,8 @@
 
 from enum import StrEnum
 
+SANDBOX_STORAGE_LIMIT_CAPABILITY = "sandbox-storage-limit"
+
 
 class ResourceLimitReason(StrEnum):
     DISK = "RESOURCE_LIMIT_DISK"

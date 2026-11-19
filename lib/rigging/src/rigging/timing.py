@@ -1,17 +1,77 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import contextlib
 import logging
 import math
 import random
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TypeVar
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _ActiveTimeout:
+    timer: asyncio.Timeout
+    paused: int = 0
+    remaining: float | None = None
+    closed: bool = False
+
+    def pause(self) -> None:
+        if self.closed or self.timer.expired():
+            return
+        if self.paused == 0:
+            when = self.timer.when()
+            self.remaining = None if when is None else max(0, when - asyncio.get_running_loop().time())
+            self.timer.reschedule(None)
+        self.paused += 1
+
+    def resume(self) -> None:
+        if self.closed or self.paused == 0:
+            return
+        self.paused -= 1
+        if self.paused == 0 and self.remaining is not None:
+            self.timer.reschedule(asyncio.get_running_loop().time() + self.remaining)
+
+
+_ACTIVE_TIMEOUTS: ContextVar[tuple[_ActiveTimeout, ...]] = ContextVar("active_timeouts", default=())
+
+
+@contextlib.asynccontextmanager
+async def active_timeout(seconds: float | None) -> AsyncIterator[asyncio.Timeout]:
+    """Bound active work while allowing explicitly suspended waits in child tasks.
+
+    External cancellation remains active during a suspension. Overlapping and
+    nested suspensions count as one interval for each enclosing timeout.
+    """
+    async with asyncio.timeout(seconds) as timer:
+        scope = _ActiveTimeout(timer)
+        token = _ACTIVE_TIMEOUTS.set((*_ACTIVE_TIMEOUTS.get(), scope))
+        try:
+            yield timer
+        finally:
+            scope.closed = True
+            _ACTIVE_TIMEOUTS.reset(token)
+
+
+@contextlib.contextmanager
+def suspend_active_time() -> Iterator[None]:
+    """Exclude this wait from enclosing active_timeout budgets."""
+    scopes = _ACTIVE_TIMEOUTS.get()
+    for scope in scopes:
+        scope.pause()
+    try:
+        yield
+    finally:
+        for scope in reversed(scopes):
+            scope.resume()
 
 
 @contextlib.contextmanager

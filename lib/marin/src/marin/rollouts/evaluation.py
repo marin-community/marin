@@ -28,7 +28,7 @@ from finestore.reader import ReadView
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
 from openai import APIError, APIStatusError
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.exact_chat import EXACT_CHAT_HARNESS, ExactChatHarness
 from rolloutengine.likelihood import InvalidLikelihoodRequest, LikelihoodScorer, LikelihoodTransportError
@@ -43,7 +43,6 @@ from rolloutengine.models import (
     RolloutLimits,
     RolloutOperation,
     TaskRolloutSpec,
-    TokenUsage,
     TraceMode,
 )
 from shellbox.machine import MachineFactory, MachineTerminated, NetworkPolicy
@@ -220,17 +219,7 @@ def _grading_retry_turn(reader: ReadView, old: Attempt | None) -> ModelTurn | No
     if len(conversations) != 1 or len(conversations[0]["steps"]) != 1:
         return None
     turn = conversations[0]["steps"][0]["turn"]
-    usage = turn["usage"]
-    return ModelTurn(
-        message=turn["message"],
-        prompt_token_ids=tuple(turn["prompt_token_ids"]),
-        response_token_ids=tuple(turn["response_token_ids"]),
-        logprobs=tuple(turn["logprobs"]) if turn["logprobs"] is not None else None,
-        stop_reason=turn["stop_reason"],
-        text=turn["text"],
-        metadata=turn["metadata"],
-        usage=TokenUsage(**usage) if usage is not None else None,
-    )
+    return TypeAdapter(ModelTurn).validate_python(turn)
 
 
 async def _saved_model_turn(_request: ModelRequest, turn: ModelTurn) -> ModelTurn:

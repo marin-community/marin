@@ -33,6 +33,38 @@ def _write_task(tmp_path: Path, task_toml: str) -> Path:
     return task_dir
 
 
+@pytest.mark.asyncio
+async def test_trial_cannot_replace_task_agent_environment(tmp_path):
+    task_dir = _write_task(
+        tmp_path,
+        '[agent.env]\nHOME = "/home/task-owner"\n[environment]\n',
+    )
+    config = TrialConfig(
+        task=TaskConfig(path=task_dir),
+        trial_name="conflicting-environment",
+        trials_dir=tmp_path / "trials",
+        agent=AgentConfig(name="nop", env={"HOME": "/home/replacement"}),
+        environment=EnvironmentConfig(type="local"),
+    )
+    with patch("harbor.trial.trial.EnvironmentFactory.create_environment_from_config"):
+        with pytest.raises(ValueError, match=r"contradicts task.toml: HOME"):
+            await Trial.create(config)
+
+
+@pytest.mark.asyncio
+async def test_native_trial_rejects_configured_taskspec_runtime_before_environment_allocation(tmp_path):
+    task_dir = _write_task(tmp_path, "[environment]\n")
+    config = TrialConfig(
+        task=TaskConfig(path=task_dir, source_runtime={"runtime": {}}),
+        trial_name="native-runtime-mismatch",
+        trials_dir=tmp_path / "trials",
+        agent=AgentConfig(name="nop"),
+        environment=EnvironmentConfig(type="local"),
+    )
+    with pytest.raises(ValueError, match="requires a TaskSpec workload"):
+        await Trial.create(config)
+
+
 async def _persisted_timeout_resolution(
     tmp_path: Path,
     task_toml: str,

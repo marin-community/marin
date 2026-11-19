@@ -18,13 +18,35 @@ class NetworkPolicy(StrEnum):
     ALLOW = "allow"
 
 
+class DeploymentClass(StrEnum):
+    """Whether a backend is a production deployment target or a dev-only tool."""
+
+    PRODUCTION = "production"
+    DEV_ONLY = "dev_only"
+
+
 class Backend(StrEnum):
     DOCKER = "docker"
-    GVISOR = "gvisor"
+    DOCKER_GVISOR = "docker-gvisor"
+    IRIS = "iris"
     QEMU = "qemu"
     SHELLSIM = "shellsim"
     DAYTONA = "daytona"
     LOCAL = "local"
+
+
+# Iris gVisor sandboxes, Daytona sandboxes and LOCAL sandboxes on cluster
+# workers run real admission traffic. Docker and Docker+runsc exist only for
+# local development and the unit suites; QEMU and shellsim are test simulators.
+BACKEND_DEPLOYMENT: dict[Backend, DeploymentClass] = {
+    Backend.IRIS: DeploymentClass.PRODUCTION,
+    Backend.DAYTONA: DeploymentClass.PRODUCTION,
+    Backend.LOCAL: DeploymentClass.PRODUCTION,
+    Backend.DOCKER: DeploymentClass.DEV_ONLY,
+    Backend.DOCKER_GVISOR: DeploymentClass.DEV_ONLY,
+    Backend.QEMU: DeploymentClass.DEV_ONLY,
+    Backend.SHELLSIM: DeploymentClass.DEV_ONLY,
+}
 
 
 class CommandSemantics(StrEnum):
@@ -217,6 +239,25 @@ def check_execution_requirements(
 
 class MachineTerminated(RuntimeError):
     """The machine ended before ``close``: killed, expired, preempted, or lost with its host."""
+
+
+class ResourceLimit(StrEnum):
+    DISK = "disk"
+
+
+class ResourceLimitExceeded(MachineTerminated):
+    """The task exceeded an enforced resource limit."""
+
+    def __init__(self, resource: ResourceLimit, message: str):
+        self.resource = resource
+        super().__init__(message)
+
+
+class DiskLimitExceeded(ResourceLimitExceeded):
+    """The sandbox exceeded its enforced disk allocation."""
+
+    def __init__(self, message: str):
+        super().__init__(ResourceLimit.DISK, message)
 
 
 class Machine(Protocol):

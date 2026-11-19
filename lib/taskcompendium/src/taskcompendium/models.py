@@ -20,15 +20,25 @@ from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import Annotated, ClassVar, Literal, NoReturn
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    SerializationInfo,
+    TypeAdapter,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 from rigging.filesystem.path_validation import validate_relative_file_path, validate_relative_file_paths
 from shellbox.machine import CommandSemantics as CommandSemantics
 from shellbox.machine import PackageSpec, UnsupportedMachineSpec
 from verifyit.candidate import candidate_spec
 from verifyit.grade import InvalidTask
 from verifyit.json_objects import unique_object
+from verifyit.judge_contract import validate_judge_spec
 from verifyit.modes.extract import extract_boxed
-from verifyit.modes.grade_judge import validate_judge_spec
 from verifyit.spec import (
     DEFAULT_OUTPUT,
     DEFAULT_WORKSPACE,
@@ -43,9 +53,18 @@ from verifyit.spec import (
     spec_from_table,
 )
 
+from taskcompendium.integrity import MultiSweDeliveryContract, RootDeliveryContract, SharedIntegrityContract
+
 SCHEMA_VERSION = "0.30"
 DOCKER_IMAGE_PATTERN = r"^[^\s@]+@sha256:[0-9a-f]{64}$"
 TOOL_ARGUMENTS_OBJECT_ERROR = "Tool arguments must be a JSON object"
+
+
+class DockerBuildExecution(StrEnum):
+    """How an exported task's unresolved Docker build context reaches an executor."""
+
+    REJECT = "reject"
+    DECLARATIVE = "declarative"
 
 
 class AnswerType(StrEnum):
@@ -396,6 +415,31 @@ class EnvironmentRequirements(BaseModel):
         return self
 
 
+def missing_environment(spec: Mapping) -> str | None:
+    """Explain a missing task environment before conversion or cohort admission.
+
+    Conversation-only tasks need no machine.
+    """
+    requirements = spec.get("environment_requirements") or {}
+    if any(
+        requirements.get(name) is not None for name in ("docker_image", "docker_build", "packages_lock", "package_spec")
+    ):
+        return None
+    needs_machine = (
+        spec.get("answer_type") in {"file", "state", "workspace_state"}
+        or bool(requirements.get("capabilities"))
+        or requirements.get("command_semantics") is not None
+        or bool(requirements.get("tool_providers"))
+        or bool(requirements.get("setup_commands"))
+        or bool(requirements.get("working_directory"))
+        or bool(requirements.get("environment_variables"))
+        or bool(spec.get("tool_bindings"))
+        or bool(spec.get("output_paths"))
+        or bool((spec.get("resources") or {}).get("worker"))
+    )
+    return "agentic task declares no environment" if needs_machine else None
+
+
 def require_resolved_environment(requirements: EnvironmentRequirements) -> None:
     """Reject an unbuilt recipe before choosing or creating an execution environment."""
     if requirements.docker_build is not None:
@@ -601,6 +645,17 @@ def verifyit_spec(grader: VerifyitGrader) -> Spec:
         raise ValueError(f"Invalid {grader.mode!r} verifier parameters: {error}") from error
 
 
+@dataclass(frozen=True)
+class ReplyStatus:
+    """Host-captured completion status, distinct from the model's answer text."""
+
+    origin: Literal["provider", "control"]
+    finish_reason: str | None
+    truncated: bool
+    provider_refusal: bool
+    tool_events: tuple[str, ...]
+
+
 class ScriptGrader(BaseModel):
     """A command run in a fresh machine built from ``environment``; ``reward`` says how it scores.
 
@@ -625,8 +680,11 @@ class ScriptGrader(BaseModel):
     artifacts: tuple[VerifierArtifact, ...] = ()
     answer_path: str | None = "/app/answer.txt"
     conversation_path: str = "/tests/conversation.json"
+    reply_status_path: str | None = Field(default=None, exclude_if=lambda value: value is None)
     reward: Annotated[StdoutReward | ExitCodeReward | FileReward, Field(discriminator="kind")] = StdoutReward()
-    timeout: float = Field(default=600.0, gt=0)
+    # A source that declares no verifier deadline carries None: the grading
+    # command waits unbounded under the same outer enforcement the source uses.
+    timeout: float | None = Field(default=600.0, gt=0)
     empty_output: EmptyOutputPolicy = EmptyOutputPolicy.ZERO
     judge: JudgeSpec | None = None
 
@@ -637,6 +695,10 @@ class ScriptGrader(BaseModel):
             validate_judge_spec(self.judge)
         normalized_absolute_path(self.cwd)
         normalized_absolute_path(self.conversation_path)
+        if self.reply_status_path is not None:
+            normalized_absolute_path(self.reply_status_path)
+            if self.reply_status_path in {self.answer_path, self.conversation_path}:
+                raise ValueError("Reply status, answer and conversation paths must differ")
         if self.answer_path is not None:
             normalized_absolute_path(self.answer_path)
             if under_grader_root(self.answer_path):
@@ -731,6 +793,7 @@ class GradingAttempt:
     files: Mapping[str, bytes] = field(default_factory=dict)
     state: StateSubmission | None = None
     stop_reason: str | None = None
+    reply_status: ReplyStatus | None = None
 
 
 JSON_VALUE = TypeAdapter(JsonValue, config=ConfigDict(strict=True, allow_inf_nan=False))
@@ -905,6 +968,18 @@ AnswerFormat = Annotated[
 ]
 
 
+class ExecutionRequirements(BaseModel):
+    """Task-declared machine capacity and phase deadlines, in MiB and seconds."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    cpus: int = Field(gt=0)
+    memory_mb: int = Field(gt=0)
+    storage_mb: int = Field(gt=0)
+    agent_timeout_sec: float = Field(gt=0)
+    verifier_timeout_sec: float = Field(gt=0)
+
+
 class TaskSpec(BaseModel):
     """The complete semantic definition of one task, its grader, and its final result."""
 
@@ -913,7 +988,10 @@ class TaskSpec(BaseModel):
     id: str
     context: ConversationInput
     environment_requirements: EnvironmentRequirements
+    execution_requirements: ExecutionRequirements | None = None
+    verifier_execution_requirements: ExecutionRequirements | None = None
     final_tools: tuple[FunctionDefinition, ...] = ()
+    completion_protocol: Literal["tool_free_single"] | None = None
     interaction_tools: tuple[FunctionDefinition, ...] = ()
     tool_bindings: dict[str, ShellToolBinding] = Field(default_factory=dict)
     output_paths: tuple[str, ...] = ()
@@ -926,11 +1004,64 @@ class TaskSpec(BaseModel):
     resources: ResourceGroups = Field(default_factory=ResourceGroups)
     tags: tuple[str, ...] = ()
     labels: dict[str, str] = Field(default_factory=dict)
+    integrity_contract: SharedIntegrityContract | RootDeliveryContract | MultiSweDeliveryContract | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize_with_explicit_nulls(self, handler, info: SerializationInfo) -> dict:
+        """Keep explicit nulls, omit absent execution-requirement fields.
+
+        The execution-requirement fields joined the schema after many
+        populations were frozen: an absent field must stay absent so
+        re-serializations stay byte-identical to the frozen packets, while an
+        explicitly serialized null or a value is real evidence and must round
+        trip unchanged.
+        """
+        payload = handler(self)
+        json_mode = info.mode_is_json()
+        for name in ("execution_requirements", "verifier_execution_requirements", "completion_protocol"):
+            if name not in self.model_fields_set:
+                payload.pop(name, None)
+                continue
+            # honor the caller's serialization arguments: an excluded or
+            # default-dropped field stays out even when explicitly set
+            if info.exclude and name in info.exclude:
+                continue
+            if info.exclude_defaults and getattr(self, name) is None:
+                continue
+            value = getattr(self, name)
+            if value is None:
+                payload[name] = None
+            elif isinstance(value, BaseModel):
+                payload[name] = value.model_dump(mode="json") if json_mode else value.model_dump()
+            else:
+                payload[name] = value
+        return payload
 
     @model_validator(mode="after")
     def validate_specification(self) -> "TaskSpec":
+        if self.verifier_execution_requirements is not None:
+            if self.execution_requirements is None or any(
+                getattr(self.verifier_execution_requirements, name) != getattr(self.execution_requirements, name)
+                for name in ("agent_timeout_sec", "verifier_timeout_sec")
+            ):
+                raise ValueError("Actor and verifier allocations must share the same phase deadlines")
         if self.schema_version != SCHEMA_VERSION:
             raise ValueError(f"Unsupported TaskSpec schema: {self.schema_version}")
+        if self.completion_protocol == "tool_free_single":
+            if self.final_tools or self.interaction_tools or self.tool_bindings:
+                raise ValueError("Tool-free completion cannot advertise or bind tools")
+            events = self.context.events
+            if len(events) != 2:
+                raise ValueError("Tool-free completion requires the source's system and user text")
+            system, user = events
+            if not isinstance(system, TextMessage) or not isinstance(user, TextMessage):
+                raise ValueError("Tool-free completion requires the source's system and user text")
+            if (system.role, user.role) != ("system", "user"):
+                raise ValueError("Tool-free completion requires exactly one system and one user message")
+            if self.environment_requirements != EnvironmentRequirements():
+                raise ValueError("Tool-free completion cannot provide an actor capability")
+            if self.resources.worker or self.resources.all or self.output_paths:
+                raise ValueError("Tool-free completion cannot expose workspace resources or outputs")
         if not self.id:
             raise ValueError("A task id is required")
         if len({function.name for function in self.final_tools}) != len(self.final_tools):
@@ -955,4 +1086,6 @@ class TaskSpec(BaseModel):
             installed = {f"/tests/{resource.path}" for resource in self.resources.verifier}
             if self.grader.conversation_path in installed:
                 raise ValueError("The conversation path collides with a verifier resource")
+            if self.grader.reply_status_path in installed:
+                raise ValueError("The reply status path collides with a verifier resource")
         return self

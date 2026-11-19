@@ -388,7 +388,7 @@ def test_answer_grader_refuses_the_grader_base_image_which_has_no_verifyit():
         answer_grader(PytestSpec(paths=("test_answer.py",)), environment=grader_environment(None))
 
 
-@pytest.mark.parametrize("backend", [Backend.DOCKER, Backend.GVISOR])
+@pytest.mark.parametrize("backend", [Backend.DOCKER, Backend.DOCKER_GVISOR])
 def test_docker_task_lowers_both_machines_onto_the_selected_container_backend(backend):
     grader = docker_grader(
         collect=(VerifierCommand(argv=("cp", "-r", "/app", "/tmp/app")),),
@@ -594,7 +594,7 @@ def test_lower_propagates_rolloutengines_rejections():
     "factories",
     [
         {"shellsim": ShellSimMachineFactory()},
-        {"docker": RecordingFactory(Backend.DOCKER), "gvisor": RecordingFactory(Backend.GVISOR)},
+        {"docker": RecordingFactory(Backend.DOCKER), "gvisor": RecordingFactory(Backend.DOCKER_GVISOR)},
     ],
     ids=["none", "both"],
 )
@@ -609,7 +609,7 @@ def test_lower_puts_a_shellsim_task_on_shellsim_and_its_grader_on_the_selected_c
         task_machine=SHELLSIM,
         verifier_machine=VERIFIER,
         limits=LIMITS,
-        factories={"shellsim": ShellSimMachineFactory(), "gvisor": RecordingFactory(Backend.GVISOR)},
+        factories={"shellsim": ShellSimMachineFactory(), "gvisor": RecordingFactory(Backend.DOCKER_GVISOR)},
     )
 
     assert lowered.task_machine is not None and lowered.verifier_machine is not None
@@ -690,14 +690,14 @@ def machine_sources(lowered: TaskRolloutSpec) -> tuple[tuple[str, object], tuple
 
 
 def test_grader_base_machines_run_a_local_cpython_when_the_host_has_the_local_backend():
-    lowered = lower_on_iris(cpython_task(), (Backend.GVISOR, Backend.LOCAL))
+    lowered = lower_on_iris(cpython_task(), (Backend.DOCKER_GVISOR, Backend.LOCAL))
 
     assert machine_sources(lowered) == (("local", LOCAL_CPYTHON), ("local", LOCAL_CPYTHON))
     assert TaskRolloutSpec.model_validate_json(lowered.model_dump_json()) == lowered
 
 
 def test_grader_base_machines_stay_on_the_container_backend_without_the_local_backend():
-    lowered = lower_on_iris(cpython_task(), (Backend.GVISOR,))
+    lowered = lower_on_iris(cpython_task(), (Backend.DOCKER_GVISOR,))
 
     image = RegistryImage(GRADER_BASE_IMAGE)
     assert machine_sources(lowered) == (("gvisor", image), ("gvisor", image))
@@ -705,7 +705,7 @@ def test_grader_base_machines_stay_on_the_container_backend_without_the_local_ba
 
 
 def test_a_task_image_stays_on_the_container_backend_beside_the_local_backend():
-    lowered = lower_on_iris(docker_task(docker_grader()), (Backend.GVISOR, Backend.LOCAL))
+    lowered = lower_on_iris(docker_task(docker_grader()), (Backend.DOCKER_GVISOR, Backend.LOCAL))
 
     assert machine_sources(lowered) == (("gvisor", RegistryImage(IMAGE)), ("gvisor", RegistryImage(IMAGE)))
 
@@ -717,7 +717,7 @@ def package_task() -> TaskSpec:
 
 
 def test_a_package_machine_installs_its_packages_on_the_local_backend():
-    lowered = lower_on_iris(package_task(), (Backend.GVISOR, Backend.LOCAL))
+    lowered = lower_on_iris(package_task(), (Backend.DOCKER_GVISOR, Backend.LOCAL))
 
     packages = PackageSpec(pypi_packages=("numpy", "pandas"))
     assert machine_sources(lowered) == (("local", packages), ("local", LOCAL_CPYTHON))
@@ -726,7 +726,7 @@ def test_a_package_machine_installs_its_packages_on_the_local_backend():
 
 def test_a_package_machine_is_refused_on_a_host_without_the_local_backend():
     with pytest.raises(ValueError, match="Unknown Shellbox factory: 'local'"):
-        lower_on_iris(package_task(), (Backend.GVISOR,))
+        lower_on_iris(package_task(), (Backend.DOCKER_GVISOR,))
 
 
 def test_a_package_machine_takes_no_image_and_one_requirement_per_package():
@@ -761,7 +761,7 @@ def lower_beside_local(task: TaskSpec, local: RecordingFactory) -> TaskRolloutSp
         task_machine=SHELLSIM,
         verifier_machine=VERIFIER,
         limits=LIMITS,
-        factories={Backend.GVISOR.value: RecordingFactory(Backend.GVISOR), Backend.LOCAL.value: local},
+        factories={Backend.DOCKER_GVISOR.value: RecordingFactory(Backend.DOCKER_GVISOR), Backend.LOCAL.value: local},
     )
 
 
@@ -799,7 +799,7 @@ def test_a_grader_base_task_whose_output_lies_under_a_read_only_root_keeps_its_i
 def test_a_grader_base_verifier_staging_its_answer_under_a_read_only_root_keeps_its_image(answer_path, backend):
     grader = python_grader(TEXT_GRADER, {}, environment=BASE, answer_path=answer_path, timeout=20)
     factories = {
-        Backend.GVISOR.value: RecordingFactory(Backend.GVISOR),
+        Backend.DOCKER_GVISOR.value: RecordingFactory(Backend.DOCKER_GVISOR),
         Backend.LOCAL.value: LocalRecordingFactory(Backend.LOCAL, LOCAL_READ_ONLY),
     }
     lowered = lower(

@@ -40,8 +40,10 @@ from taskcompendium.models import (
 from taskcompendium.pipeline.controls import answer_reply, control_suite, reference_reply
 from taskcompendium.pipeline.models import CheckStatus, Controls, OracleCommand, RawRow, Reply, WorkspaceFiles
 from taskcompendium.runtime.local import LocalGraderMachines
+from taskcompendium.runtime.oracle import read_oracle_answer, run_oracle_command
 from taskcompendium.runtime.resources import inline_resource
 
+from .grading_machines import LocalGradingMachine
 from .pipeline_stages import (
     GRADER_IMAGE,
     FixtureGradingMachines,
@@ -322,3 +324,30 @@ def test_lock_backed_oracle_rejects_image_only_provider_before_acquisition():
     with pytest.raises(UnsupportedMachineSpec):
         suite.run(task)
     assert images.created == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("answer_file", ["/app/answer.txt", "results/answer.txt"])
+@pytest.mark.parametrize("exit_code", [0, 7])
+async def test_original_oracle_creates_declared_answer_parent_and_preserves_cwd_and_exit(
+    tmp_path, answer_file, exit_code
+):
+    solution = tmp_path / "solution"
+    solution.mkdir()
+    (solution / "answer.json").write_bytes(b"[]\n")
+    output = tmp_path / answer_file.lstrip("/")
+    machine = LocalGradingMachine(
+        root=tmp_path,
+        workdir="/",
+        env={"SOURCE_ROOT": str(tmp_path), "SOURCE_OUTPUT": str(output)},
+    )
+    original = OracleCommand(
+        'set -e\ntest "$PWD" = "$SOURCE_ROOT"\n'
+        'cp "$SOURCE_ROOT/solution/answer.json" "$SOURCE_OUTPUT"\n'
+        f'printf "original-command\\n"\nexit {exit_code}',
+        answer_file=answer_file,
+    )
+    result = await run_oracle_command(machine, original, cwd="/", timeout=10, output_limit_bytes=1024)
+    assert result.exit_code == exit_code
+    assert result.stdout == b"original-command\n"
+    assert await read_oracle_answer(machine, answer_file, cwd="/", timeout=10, output_limit_bytes=1024) == b"[]\n"

@@ -79,6 +79,19 @@ def test_apt_packages_beyond_the_worker_image_push_an_image_and_record_its_diges
     assert parameters["force-compression"] == "true"
 
 
+def test_content_pinned_dependency_reaches_the_lock_and_a_new_hash_changes_the_artifact(docker_log):
+    url = "https://files.pythonhosted.org/packages/fixture/source.tar.gz#sha256="
+    requirement = "multi-swe-bench @ " + url + "a" * 64
+    environment = Environment(requirements=(requirement,))
+    (built,) = run(environment_artifact(environment, REPOSITORY))
+    assert requirement in StoragePath(built.lock_url).read_text()
+    changed_requirement = "multi-swe-bench @ " + url + "b" * 64
+    changed = replace(environment, requirements=(changed_requirement,))
+    (rebuilt,) = run(environment_artifact(changed, REPOSITORY))
+    assert rebuilt.lock_url != built.lock_url
+    assert changed_requirement in StoragePath(rebuilt.lock_url).read_text()
+
+
 def test_image_serialization_changes_invalidate_built_images_but_preserve_worker_environments(monkeypatch):
     worker = Environment(requirements=REQUIREMENTS)
     image = replace(worker, apt=("jq",))
@@ -267,7 +280,7 @@ def test_build_from_a_gitless_source_bundle_records_the_environment(docker_log, 
 def test_an_image_build_requires_repository_credentials(docker_log, tmp_path):
     (tmp_path / "docker-config" / "config.json").write_text(json.dumps({"auths": {}}))
     environment = Environment(requirements=REQUIREMENTS, apt=("jq",))
-    with pytest.raises(RuntimeError, match=re.escape("docker login registry.invalid")):
+    with pytest.raises(RuntimeError, match=re.escape("docker login ghcr.io")):
         build_environment(environment, EnvironmentBuild(identity_digest(environment), REPOSITORY, str(tmp_path / "out")))
 
 

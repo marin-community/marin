@@ -1,0 +1,38 @@
+{
+  "version": 2,
+  "as_of": "2026-11-15T13:24:36.199405+00:00",
+  "sources": [
+    {
+      "source_id": "TaskTrove:laion__all-puzzles-v2",
+      "candidate_source_id": "TaskTrove:tasktrove-puzzles-qa",
+      "release": {
+        "repo": "open-athena/tasktrove-puzzles-taskcompendium-20261114",
+        "revision": "adfcbd4a8ddefc9e69febc91931c08ba03372bad",
+        "url": "https://huggingface.co/datasets/open-athena/tasktrove-puzzles-taskcompendium-20261114/tree/adfcbd4a8ddefc9e69febc91931c08ba03372bad"
+      },
+      "original_tasks": 6921,
+      "filtered_tasks": 6921,
+      "qualification_pending": [
+        "complete retained grading census",
+        "clean or remediated decontamination publication receipt",
+        "current-pin admission receipt"
+      ],
+      "sample": {
+        "receipt": {
+          "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.14.1/ac2a4f24b9a765b71fbc/attempts/a9da2b1a00a0462bb2a983bccfdbcd62/.artifact.json",
+          "sha256": "4e7295632a8cbb74c2b9f32105bb52eb531f57561aab40015eefd88d3116a161"
+        },
+        "selected": 100,
+        "reviewed": 97,
+        "unavailable": 3,
+        "uncertain": 0,
+        "issues": 22
+      },
+      "verification": {
+        "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.154-puzzles-qa-replacement-verification/seal.json",
+        "sha256": "0e882dac5804628bcd90ed406cae935c6e8fc7b3d492fe0cfab006eacf910102"
+      },
+      "original_harbor_trials_claimed": 0
+    }
+  ]
+}

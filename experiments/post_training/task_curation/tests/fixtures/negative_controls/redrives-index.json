@@ -1,0 +1,66 @@
+[
+  {
+    "signal": -6,
+    "parent_archive": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-swe/smartie-full-negatives/2026.11.14.1/worker-03/attempt-000/trials/a2143023e514e6a4a3b620d0b594ff6c6c53417dbc94dfd85c96c444fc93d91f.tar.zst",
+      "sha256": "08a1ec7441e471887dfeca9c5781cf3d947f73c5e6de7e278b3ae063cd0919e7"
+    },
+    "repeat_archive": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-swe/smartie-negative-signal-redrives/2026.11.14.1/trials/a2143023e514e6a4a3b620d0b594ff6c6c53417dbc94dfd85c96c444fc93d91f.tar.zst",
+      "sha256": "3d285afaa9e96a60fee67f6140bc6efd23721564d25e90f1ac17546be4a58fa3"
+    },
+    "control_member": "a2143023e514e6a4a3b620d0b594ff6c6c53417dbc94dfd85c96c444fc93d91f/negative-control.json",
+    "redrive_decision": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-swe/smartie-negative-signal-redrives/2026.11.14.1/decision.json",
+      "sha256": "a2dc4274cdec8bfaf47bf0697a7c79ed78fb6415247e577d9a55c5a424fb381c"
+    }
+  },
+  {
+    "signal": -9,
+    "parent_archive": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-swe/smartie-full-negatives/2026.11.14.1/worker-07/attempt-004/trials/79201c77f45f8478c9bced814fb5f80380bad95d8b7c08ade1903b638ce624b5.tar.zst",
+      "sha256": "02aeca8c40e2ea766fbcdc0af55ef8d0189ab4e6dc2c1edfaab3aeba0cc83cc7"
+    },
+    "repeat_archive": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-swe/smartie-negative-signal-redrives/2026.11.14.1/trials/79201c77f45f8478c9bced814fb5f80380bad95d8b7c08ade1903b638ce624b5.tar.zst",
+      "sha256": "fdefa88ee7af2a10d32d2058264e48c3aa9864c05a1667e136eda93fba0fc11e"
+    },
+    "control_member": "79201c77f45f8478c9bced814fb5f80380bad95d8b7c08ade1903b638ce624b5/negative-control.json",
+    "redrive_decision": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-swe/smartie-negative-signal-redrives/2026.11.14.1/decision.json",
+      "sha256": "a2dc4274cdec8bfaf47bf0697a7c79ed78fb6415247e577d9a55c5a424fb381c"
+    }
+  },
+  {
+    "signal": -11,
+    "parent_archive": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-swe/smartie-full-negatives/2026.11.14.1/worker-11/attempt-002/trials/6d7c246bc9380f8fe2ee153ee2f015aaecc9f9dd138158a40c292e87f5c6d573.tar.zst",
+      "sha256": "f9894694fd7856c73c285ded2ca141197c7b04d8aafb94895ac5464b6dccdbc7"
+    },
+    "repeat_archive": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-swe/smartie-negative-signal-redrives/2026.11.14.1/trials/6d7c246bc9380f8fe2ee153ee2f015aaecc9f9dd138158a40c292e87f5c6d573.tar.zst",
+      "sha256": "71624bece79bd8f271fcc3409c15436d7bc633fdb3d123222b154af1c680407e"
+    },
+    "control_member": "6d7c246bc9380f8fe2ee153ee2f015aaecc9f9dd138158a40c292e87f5c6d573/negative-control.json",
+    "redrive_decision": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-swe/smartie-negative-signal-redrives/2026.11.14.1/decision.json",
+      "sha256": "a2dc4274cdec8bfaf47bf0697a7c79ed78fb6415247e577d9a55c5a424fb381c"
+    }
+  },
+  {
+    "signal": -9,
+    "parent_archive": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-swe/smartie-full-negatives/2026.11.14.1/worker-13/attempt-003/trials/9d333e1d3caa8948125e83d2099c317fd105736a4a0ee0e9c890bf9795de12a7.tar.zst",
+      "sha256": "d4f95ea243b64a63d1d813ffb604a61e640660658b16380f3b048f891dcf6d53"
+    },
+    "repeat_archive": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-swe/smartie-negative-signal-redrives/2026.11.14.1/trials/9d333e1d3caa8948125e83d2099c317fd105736a4a0ee0e9c890bf9795de12a7.tar.zst",
+      "sha256": "ed719969eaaf4bef4884c463254020979a325d015e52567ade3a0a954240aacf"
+    },
+    "control_member": "9d333e1d3caa8948125e83d2099c317fd105736a4a0ee0e9c890bf9795de12a7/negative-control.json",
+    "redrive_decision": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-swe/smartie-negative-signal-redrives/2026.11.14.1/decision.json",
+      "sha256": "a2dc4274cdec8bfaf47bf0697a7c79ed78fb6415247e577d9a55c5a424fb381c"
+    }
+  }
+]

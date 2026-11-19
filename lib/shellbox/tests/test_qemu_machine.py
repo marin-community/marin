@@ -112,6 +112,8 @@ async def stalled_upload(tmp_path):
 
 def test_stalled_guest_reports_boot_tail_and_cleans_up_process(tmp_path, monkeypatch):
     # Exercise the real subprocess pipes and timeout with a stalled emulator.
+    ready = tmp_path / "output-ready"
+    os.mkfifo(ready)
     executable = tmp_path / "qemu-system-x86_64"
     executable.write_text(
         "#!/bin/sh\n"
@@ -119,12 +121,22 @@ def test_stalled_guest_reports_boot_tail_and_cleans_up_process(tmp_path, monkeyp
         "printf '%s\\n' 'early-output-discarded'\n"
         f"printf '%s\\n' '{'x' * 6000}'\n"
         "printf '%s\\n' 'mounting-rootfs-stalled'\n"
+        f"echo ready > '{ready}'\n"
         "exec sleep 60\n"
     )
     executable.chmod(0o755)
     (tmp_path / "vmlinuz").touch()
     (tmp_path / "initramfs.cpio.gz").touch()
     monkeypatch.setattr("shellbox.backends.qemu.machine.BOOT_IDLE_TIMEOUT", 0.25)
+    create_process = asyncio.create_subprocess_exec
+
+    async def emulator_with_output(*args, **kwargs):
+        process = await create_process(*args, **kwargs)
+        # Exercise an idle emulator after boot output exists, independent of host startup time.
+        assert await asyncio.to_thread(ready.read_text) == "ready\n"
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", emulator_with_output)
 
     with pytest.raises(TimeoutError) as failure:
         asyncio.run(QemuMachineFactory(Acceleration.TCG).create(MachineSpec(QemuBundle(tmp_path))))

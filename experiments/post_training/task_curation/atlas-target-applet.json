@@ -1,0 +1,5 @@
+{
+  "comment": "The served-catalog projection checks read this applet. While the production catalog is on the coordinator's hold, the preview applet is the integration surface the landing lanes keep current. Production is the default once the hold lifts.",
+  "marina_url": "https://marina.oa.dev",
+  "applet_id": "c9742a15-fb46-4d56-bc88-aa916351ebd3"
+}

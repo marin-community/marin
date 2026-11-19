@@ -3,6 +3,7 @@
 
 """TaskTrove math, question-answering, instruction-following and judged-response declarations."""
 
+import hashlib
 import io
 import json
 import tarfile
@@ -12,6 +13,7 @@ from typing import cast
 
 import pytest
 from taskcompendium.grading_result import Outcome
+from taskcompendium.identity import canonical_sha256, task_identity
 from taskcompendium.models import (
     ConversationTrace,
     EnvironmentRequirements,
@@ -35,7 +37,8 @@ from taskcompendium.runtime.task_grading import grade_task
 from verifyit.candidate import grade_candidate
 from verifyit.execution.worker import call_bounded
 from verifyit.grade import Status
-from verifyit.spec import RUBRIC_CHECKLIST, RUBRIC_REFERENCE, ExactSpec, JudgeSpec, MathSpec, McqSpec
+from verifyit.modes.grade_judge import JudgeConnection
+from verifyit.spec import RUBRIC_CHECKLIST, RUBRIC_LABELS, RUBRIC_REFERENCE, ExactSpec, JudgeSpec, MathSpec, McqSpec
 
 from experiments.post_training.task_curation.datasets.tasktrove import calendar as calendar_sources
 from experiments.post_training.task_curation.datasets.tasktrove import (
@@ -43,6 +46,7 @@ from experiments.post_training.task_curation.datasets.tasktrove import (
     judged,
     multichallenge,
     puzzles,
+    puzzles_qa,
     qa,
 )
 from experiments.post_training.task_curation.datasets.tasktrove import math as math_sources
@@ -53,12 +57,22 @@ from experiments.post_training.task_curation.tests.conversion import (
     fixture_context,
     tasktrove_row,
 )
+from experiments.post_training.task_curation.tests.review_server import JudgeReply
 
 FIXTURES = Path(__file__).parent / "fixtures"
 RECIPES = {
     source.name: cast(CurationRecipe, source.config)
-    for module in (math_sources, judged, qa, calendar_sources, instruction_following, multichallenge, puzzles)
-    for source in module.sources()
+    for candidates in (
+        math_sources.sources,
+        judged.candidate_sources,
+        qa.sources,
+        calendar_sources.sources,
+        instruction_following.sources,
+        multichallenge.sources,
+        puzzles.sources,
+        puzzles_qa.sources,
+    )
+    for source in candidates()
 }
 
 
@@ -228,6 +242,29 @@ def puzzle_row(gold: dict) -> dict:
     return tasktrove_row({"instruction.md": instruction.encode(), "tests/gold.json": json.dumps(gold).encode()})
 
 
+def puzzle_qa_row(
+    gold: dict,
+    answer: str,
+    *,
+    instruction: str | None = None,
+    script: bytes | None = None,
+) -> dict:
+    """A puzzle archive whose original oracle writes a literal answer to /app/answer.txt."""
+    instruction = instruction or (
+        "# Alphabetical Sorting Puzzle\n\nWrite ONLY your final answer to **`/app/answer.txt`** (a single line). "
+        "The verifier reads that file and compares it to the gold answer.\n\n"
+        "Sort these words in ascending ASCII order as a comma-separated list: chair, Defect, Salt"
+    )
+    solve_sh = script or (f"#!/usr/bin/env bash\nmkdir -p /app\nprintf '%s\\n' '{answer}' > /app/answer.txt\n").encode()
+    return tasktrove_row(
+        {
+            "instruction.md": instruction.encode(),
+            "tests/gold.json": json.dumps(gold).encode(),
+            "solution/solve.sh": solve_sh,
+        }
+    )
+
+
 ROWS: dict[str, dict] = {
     "tasktrove-math_gym": tasktrove_row(MATH_GYM),
     "tasktrove-math_prism": tasktrove_row(MATH_PRISM),
@@ -392,11 +429,40 @@ def test_judged_task_keeps_source_criteria_question_and_judge_files():
     assert isinstance(task.grader, VerifyitGrader)
     spec = verifyit_spec(task.grader)
     assert isinstance(spec, JudgeSpec)
-    assert (spec.rubric, spec.criteria, spec.question) == (RUBRIC_CHECKLIST, STACK_CRITERIA, STACK_QUESTION)
+    assert spec.rubric == RUBRIC_LABELS
+    assert json.loads(spec.references[0]) == stack_data()["rubric"]
+    assert spec.question == prompt_of(task)
     verifier = verifier_files(task)
     assert verifier["source/judge.toml"] == JUDGE_TOML.encode()
     assert json.loads(verifier["source/verifier_data.json"])["score_threshold"] == 0.5
     assert prompt_of(task) == f"{STACK_QUESTION}\nReturn your final, comprehensive assistant response."
+
+
+def test_tiered_source_grades_through_the_remote_boundary_without_a_grader_image(review_server):
+    task = task_of("tasktrove-unix", ROWS["tasktrove-unix"])
+    assert isinstance(task.grader, VerifyitGrader)
+    assert task.grader.environment is None
+    connection = JudgeConnection(f"http://127.0.0.1:{review_server.server_port}/v1", "fixture-key")
+    review_server.judge_replies = [JudgeReply("CORRECT"), JudgeReply("INCORRECT")]
+    results = []
+    for candidate in ("A complete answer.", "An unrelated answer.", ""):
+        attempt = GradingAttempt(
+            ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=candidate)))
+        )
+        results.append(grade_task(task, attempt, judge_connection=connection))
+
+    assert [(result.status, result.reward) for result in results] == [
+        (Outcome.GRADED, 1.0),
+        (Outcome.GRADED, 0.0),
+        (Outcome.SUBMISSION_FAILURE, 0.0),
+    ]
+    assert len(review_server.requests) == 2
+    for request in review_server.requests:
+        assert request["model"] == "MiniMaxAI/MiniMax-M3-MXFP8"
+        assert request["temperature"] == 0.7
+        assert request["chat_template_kwargs"] == {"thinking_mode": "adaptive"}
+        assert prompt_of(task) in request["messages"][-1]["content"]
+        assert all(criterion in request["messages"][-1]["content"] for criterion in STACK_CRITERIA)
 
 
 def test_judged_principles_become_criteria_without_numbering():
@@ -688,6 +754,89 @@ def test_puzzles_grade_by_answer_type_and_pass_their_reference(gold, expected):
 @pytest.mark.parametrize("gold", [{"gold": "", "answer_type": "exact"}, {"gold": "x", "answer_type": "regex"}])
 def test_puzzles_reject_unusable_keys(gold):
     assert rejection_of("tasktrove-puzzles", puzzle_row(gold)).reason == "invalid_puzzle_key"
+
+
+@pytest.mark.parametrize(
+    "gold,answer,expected",
+    [
+        (
+            {"gold": "Defect, Salt, chair", "answer_type": "ordered_list"},
+            "Defect, Salt, chair",
+            ExactSpec(("Defect", "Salt", "chair")),
+        ),
+        ({"gold": "41.634", "answer_type": "number"}, "41.634", MathSpec("41.634")),
+        ({"gold": "undetermined", "answer_type": "choice"}, "undetermined", ExactSpec(("undetermined",))),
+        ({"gold": "(6.105, 1.474)", "answer_type": "coords"}, "(6.105, 1.474)", MathSpec("(6.105, 1.474)")),
+    ],
+)
+def test_puzzle_qa_grades_the_extracted_oracle_reference(gold, answer, expected):
+    task = task_of("tasktrove-puzzles-qa", puzzle_qa_row(gold, answer))
+    assert isinstance(task.grader, VerifyitGrader)
+    assert verifyit_spec(task.grader) == expected
+    assert "Return ONLY your final answer in the assistant response" in prompt_of(task)
+    assert task.environment_requirements == EnvironmentRequirements()
+    golden = reference_reply(task)
+    assert golden is not None
+    assert grade_reply(task, golden) == 1.0
+    assert grade_reply(task, answer_reply(task, "__incorrect_answer__")) == 0.0
+
+
+def test_puzzle_qa_keeps_oracle_lineage_and_declared_contract():
+    script = b"#!/usr/bin/env bash\nmkdir -p /app\nprintf '%s\\n' 'Defect, Salt, chair' > /app/answer.txt\n"
+    row = puzzle_qa_row(
+        {"gold": "Defect, Salt, chair", "answer_type": "ordered_list"}, "Defect, Salt, chair", script=script
+    )
+    task = task_of("tasktrove-puzzles-qa", row)
+    assert task.labels["oracle_extraction"] == "literal_printf_template"
+    assert task.labels["original_solve_sh_sha256"] == hashlib.sha256(script).hexdigest()
+    origin = task.source.model_copy(update={"importer_revision": puzzles_qa.ORIGINAL_RECIPE_VERSION})
+    assert task.labels["original_task_id"] == (
+        f"{puzzles_qa.ORIGINAL_RECIPE_NAME}-{canonical_sha256(origin.model_dump())}"
+    )
+    # Lineage stays out of the contract identity: repeated archives still deduplicate.
+    relabeled = task.model_copy(update={"id": "other", "labels": {**task.labels, "original_task_id": "other"}})
+    assert task_identity(task) == task_identity(relabeled)
+
+
+def test_puzzle_qa_rejects_a_computed_oracle():
+    script = b"#!/usr/bin/env bash\nmkdir -p /app\n" b"printf '%s\\n' \"$(python3 -c 'print(6*7)')\" > /app/answer.txt\n"
+    rejection = rejection_of(
+        "tasktrove-puzzles-qa",
+        puzzle_qa_row({"gold": "42", "answer_type": "number"}, "42", script=script),
+    )
+    assert (rejection.kind, rejection.reason) == (ImportFailureKind.UNSUPPORTED, "oracle_answer_not_extractable")
+
+
+def test_puzzle_qa_rejects_a_missing_oracle():
+    instruction = "# Puzzle\n\nWrite ONLY your final answer to **`/app/answer.txt`** (a single line).\n"
+    row = tasktrove_row(
+        {
+            "instruction.md": instruction.encode(),
+            "tests/gold.json": json.dumps({"gold": "42", "answer_type": "number"}).encode(),
+        }
+    )
+    rejection = rejection_of("tasktrove-puzzles-qa", row)
+    assert (rejection.kind, rejection.reason) == (ImportFailureKind.SOURCE_DEFECT, "missing_input")
+
+
+def test_puzzle_qa_rejects_an_answer_that_disagrees_with_the_declared_key():
+    rejection = rejection_of(
+        "tasktrove-puzzles-qa",
+        puzzle_qa_row({"gold": "40", "answer_type": "number"}, "42"),
+    )
+    assert (rejection.kind, rejection.reason) == (
+        ImportFailureKind.SOURCE_DEFECT,
+        "oracle_answer_disagrees_with_declared_key",
+    )
+    assert "42" in rejection.detail and "40" in rejection.detail
+
+
+def test_puzzle_qa_accepts_member_normalized_list_joins():
+    task = task_of(
+        "tasktrove-puzzles-qa",
+        puzzle_qa_row({"gold": "Defect, Salt, chair", "answer_type": "ordered_list"}, "Defect,Salt,chair"),
+    )
+    assert verifyit_spec(task.grader) == ExactSpec(("Defect", "Salt", "chair"))
 
 
 def test_multichallenge_judges_each_source_requirement_against_the_conversation():

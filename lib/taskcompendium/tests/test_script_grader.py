@@ -39,6 +39,7 @@ from taskcompendium.models import (
     CommandSemantics,
     ConversationInput,
     ConversationTrace,
+    EmptyOutputPolicy,
     EnvironmentRequirements,
     ExitCodeReward,
     FileReward,
@@ -47,6 +48,7 @@ from taskcompendium.models import (
     JsonAnswer,
     MissingArtifactPolicy,
     PlainText,
+    ReplyStatus,
     ResourceGroups,
     RewardFile,
     RewardFileFormat,
@@ -60,13 +62,14 @@ from taskcompendium.models import (
 )
 from taskcompendium.runtime.grading import grade_in_sandbox
 from taskcompendium.runtime.resources import inline_resource
+from taskcompendium.runtime.verifyit_runtime import ENTRY_PATH
 
 FIXTURE_IMAGE = "fixture@sha256:" + "0" * 64
 GRADER_ENVIRONMENT = EnvironmentRequirements(
     docker_image=FIXTURE_IMAGE, command_semantics=CommandSemantics.LINUX_PROCESS
 )
 GRADER_MACHINE = MachineSpec(RegistryImage(FIXTURE_IMAGE))
-VERIFYIT_ENTRYPOINT = ("python3", "-c", "from verifyit.grade import main; raise SystemExit(main())")
+VERIFYIT_ENTRYPOINT = ("python3", "-I", ENTRY_PATH)
 REWARD_TXT = "/logs/verifier/reward.txt"
 REWARD_JSON = "/logs/verifier/reward.json"
 
@@ -84,7 +87,7 @@ class VerifyitImageMachine:
     async def run(self, command: Command) -> Result:
         if command.argv[:3] != VERIFYIT_ENTRYPOINT:
             return await self.machine.run(command)
-        spec_path, workspace_flag, workspace = command.argv[3:]
+        spec_path, workspace_flag, workspace = command.argv[4:]
         assert workspace_flag == "--workspace"
         spec = PurePosixPath(spec_path)
         with TemporaryDirectory() as directory:
@@ -262,6 +265,7 @@ def local_artifact_factory(tmp_path):
         "tar_failed",
     ],
 )
+@pytest.mark.asyncio
 async def test_artifact_transfer_grades_valid_files_and_rejects_invalid_submissions(
     local_artifact_factory, artifact_case, monkeypatch
 ):
@@ -446,6 +450,26 @@ async def test_script_grader_reads_extracted_answer_and_conversation_at_declared
     }
 
 
+@pytest.mark.asyncio
+async def test_captured_files_cannot_replace_host_reply_status():
+    path = "/app/answer_status.json"
+    grader = ScriptGrader(
+        argv=("jq", "if .truncated == true then 0 else 1 end", path),
+        environment=GRADER_ENVIRONMENT,
+        reply_status_path=path,
+    )
+    task = arithmetic_task(grader).model_copy(update={"output_paths": (path,)})
+    attempt = replace(
+        answered(task, "12"),
+        files={path: b'{"truncated":false}'},
+        reply_status=ReplyStatus(
+            origin="provider", finish_reason="length", truncated=True, provider_refusal=False, tool_events=()
+        ),
+    )
+    result = await grade_in_sandbox(task, attempt, FixtureImageFactory(), GRADER_MACHINE)
+    assert (result.status, result.reward) == (Outcome.GRADED, 0.0), result
+
+
 NUMBER_FILE = (RewardFile(path=REWARD_TXT, format=RewardFileFormat.NUMBER),)
 JSON_FILE = (RewardFile(path=REWARD_JSON, format=RewardFileFormat.JSON),)
 DETAIL = {"cases": [{"passed": True}]}
@@ -608,11 +632,68 @@ async def test_script_grader_reward_kinds(reward, script, expected):
 
 
 @pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
+@pytest.mark.parametrize("answer_format", [PlainText(), JsonAnswer()])
 @pytest.mark.asyncio
-async def test_verifyit_grader_with_environment_runs_verifyit_cli_in_grading_machine(answer, reward):
+async def test_verifyit_grader_receives_extracted_conversation_answer_without_actor_files(answer, reward, answer_format):
     package = verifyit_package(NumericSpec("12", tolerance_abs=0, tolerance_rel=0), environment=GRADER_ENVIRONMENT)
-    task = arithmetic_task(package.grader)
+    task = arithmetic_task(package.grader).model_copy(update={"answer_format": answer_format})
+    response = json.dumps({"answer": answer}) if isinstance(answer_format, JsonAnswer) else answer
 
-    result = await grade_in_sandbox(task, answered(task, answer), FixtureImageFactory(), GRADER_MACHINE)
+    result = await grade_in_sandbox(task, answered(task, response), FixtureImageFactory(), GRADER_MACHINE)
 
     assert (result.status, result.reward) == (Outcome.GRADED, reward), result.error
+
+
+@pytest.mark.asyncio
+async def test_setup_commands_see_the_candidate_answer_before_setup(tmp_path: Path):
+    """Script graders that read the answer in a setup command get it before setup.
+
+    The Evalchemy code graders' prepare.py builds the candidate program from
+    /app/answer.txt inside a setup command; staging the answer only after setup
+    crashed every attempt (infrastructure loop) regardless of the submission.
+    """
+    grader = ScriptGrader(
+        argv=(
+            "sh",
+            "-c",
+            "mkdir -p /logs/verifier && printf '{\"reward\": 1.0}' > /logs/verifier/reward.json",
+        ),
+        environment=GRADER_ENVIRONMENT.model_copy(update={"setup_commands": ("cat /app/answer.txt",)}),
+        answer_path="/app/answer.txt",
+        reward=FileReward(files=(RewardFile(path=REWARD_JSON, format=RewardFileFormat.JSON),)),
+        empty_output=EmptyOutputPolicy.GRADE,
+    )
+    task = arithmetic_task(grader)
+    result = await grade_in_sandbox(
+        task,
+        answered(task, "12"),
+        FixtureImageFactory(),
+        GRADER_MACHINE,
+    )
+    assert result.status == Outcome.GRADED, result.error
+
+
+@pytest.mark.asyncio
+async def test_setup_fixture_at_the_answer_path_is_replaced_after_setup(tmp_path: Path):
+    """A setup that writes fixtures at the answer path keeps replace-afterward semantics."""
+    grader = ScriptGrader(
+        argv=(
+            "sh",
+            "-c",
+            'mkdir -p /logs/verifier && grep -q "^12$" /app/answer.txt '
+            "&& printf '{\"reward\": 1.0}' > /logs/verifier/reward.json "
+            "|| printf '{\"reward\": 0.0}' > /logs/verifier/reward.json",
+        ),
+        environment=GRADER_ENVIRONMENT.model_copy(update={"setup_commands": ("echo fixture > /app/answer.txt",)}),
+        answer_path="/app/answer.txt",
+        reward=FileReward(files=(RewardFile(path=REWARD_JSON, format=RewardFileFormat.JSON),)),
+        empty_output=EmptyOutputPolicy.GRADE,
+    )
+    task = arithmetic_task(grader)
+    result = await grade_in_sandbox(
+        task,
+        answered(task, "12"),
+        FixtureImageFactory(),
+        GRADER_MACHINE,
+    )
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0), result.error

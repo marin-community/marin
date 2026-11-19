@@ -5,7 +5,6 @@
 
 import asyncio
 import json
-import logging
 import math
 import re
 import shlex
@@ -13,11 +12,11 @@ import stat
 import tarfile
 import tempfile
 import uuid
-from asyncio import sleep
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, replace
 from enum import StrEnum
+from functools import partial
 from pathlib import Path, PurePosixPath
 
 from daytona import (
@@ -28,13 +27,22 @@ from daytona import (
     DaytonaConflictError,
     DaytonaError,
     DaytonaNotFoundError,
-    DaytonaRateLimitError,
+    Image,
 )
-from rigging.timing import ExponentialBackoff
+from daytona_api_client_async import SandboxState
 
+from shellbox.backends.daytona.lifecycle import SandboxLifecycleEvent, record_sandbox_lifecycle
 from shellbox.backends.daytona.process import DaytonaProcessSession
+from shellbox.backends.daytona.provider import (
+    PENDING_SANDBOX_IP_MESSAGE,
+    PROVIDER_REQUEST_TIMEOUT,
+    ProviderWaitPolicy,
+    cancel_provider_waits,
+    provider_wait_scope,
+    read_provider_call,
+    retry_provider_call,
+)
 from shellbox.backends.daytona.snapshot import (
-    TRANSIENT_DAYTONA_STATUS,
     daytona_image,
     ensure_snapshot,
     snapshot_request_for_spec,
@@ -49,6 +57,7 @@ from shellbox.machine import (
     ExecutionRequirements,
     ExitReason,
     MachineSpec,
+    MachineTerminated,
     NetworkPolicy,
     ProcessScope,
     Result,
@@ -58,8 +67,20 @@ from shellbox.machine import (
 from shellbox.process_session import finish_owned, own_cleanup
 
 DEFAULT_SANDBOX_TTL_MINUTES = 360
-DEFAULT_OUTPUT_COLLECTION_TIMEOUT = 60
-logger = logging.getLogger(__name__)
+TERMINAL_SANDBOX_STATES = frozenset(
+    {
+        SandboxState.STOPPED,
+        SandboxState.STOPPING,
+        SandboxState.DESTROYED,
+        SandboxState.DESTROYING,
+        SandboxState.ERROR,
+        SandboxState.BUILD_FAILED,
+        SandboxState.ARCHIVED,
+        SandboxState.ARCHIVING,
+        SandboxState.PAUSED,
+        SandboxState.PAUSING,
+    }
+)
 CONTROL_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
 CONTROL_CWD = "/"
 COUNT_PREFIX = "SHELLBOX_COUNT="
@@ -88,49 +109,43 @@ def _control_command(script: str) -> str:
 
 
 async def _create_sandbox(
-    client: AsyncDaytona, params: CreateSandboxFromSnapshotParams | CreateSandboxFromImageParams, timeout: float
+    client: AsyncDaytona,
+    params: CreateSandboxFromSnapshotParams | CreateSandboxFromImageParams,
+    timeout: float,
+    *,
+    wait_policy: ProviderWaitPolicy = ProviderWaitPolicy.PHASE,
 ) -> AsyncSandbox:
-    """Retry throttling using a caller-owned name to recover an accepted creation."""
+    """Create once; resolve an explicit name conflict through read-only calls."""
     assert params.name is not None
-    backoff = ExponentialBackoff(initial=1, maximum=30, factor=2, jitter=0.5)
-    while True:
+    try:
+        with wait_policy.wait():
+            return await client.create(params, timeout=timeout)
+    except DaytonaConflictError:
+        sandbox = await read_provider_call("sandbox.get", partial(client.get, params.name), wait_policy=wait_policy)
+        await read_provider_call(
+            "sandbox.status", partial(sandbox.wait_for_sandbox_start, timeout=timeout), wait_policy=wait_policy
+        )
+        return sandbox
+
+
+async def _delete_named_sandbox(
+    client: AsyncDaytona, name: str, wait_policy: ProviderWaitPolicy = ProviderWaitPolicy.PHASE
+) -> None:
+    async with wait_policy.timeout(INTERRUPT_TIMEOUT):
         try:
-            try:
-                return await client.create(params, timeout=timeout)
-            except DaytonaConflictError:
-                sandbox = await client.get(params.name)
-                await sandbox.wait_for_sandbox_start(timeout=timeout)
-                return sandbox
-        except DaytonaRateLimitError as error:
-            retry_after = max(
-                (
-                    int(value)
-                    for name, value in (error.headers or {}).items()
-                    if name.lower().startswith("retry-after") and str(value).isdecimal()
-                ),
-                default=0,
+            sandbox = await read_provider_call("sandbox.get", partial(client.get, name), wait_policy=wait_policy)
+        except DaytonaNotFoundError:
+            record_sandbox_lifecycle(SandboxLifecycleEvent.ABSENT, name)
+            return
+        record_sandbox_lifecycle(SandboxLifecycleEvent.DELETE_REQUESTED, name, sandbox.id)
+        # A timeout or 5xx response is ambiguous: reconciliation checks this exact ID.
+        # Deletion is idempotent, so transient gateway errors retry under the same budget
+        # instead of leaving an orphaned sandbox behind (#11735).
+        with wait_policy.wait():
+            await retry_provider_call(
+                "sandbox.delete", partial(client.delete, sandbox, wait=True), wait_policy=wait_policy
             )
-            delay = max(retry_after, backoff.next_interval())
-            logger.warning("Retrying throttled Daytona creation: delay=%.3f", delay)
-            await sleep(delay)
-
-
-async def _delete_named_sandbox(client: AsyncDaytona, name: str) -> None:
-    """Delete the sandbox, retrying transient gateway errors until the interrupt deadline."""
-    backoff = ExponentialBackoff(initial=1, maximum=4, factor=2, jitter=0)
-    async with asyncio.timeout(INTERRUPT_TIMEOUT):
-        while True:
-            try:
-                sandbox = await client.get(name)
-                await client.delete(sandbox)
-                return
-            except DaytonaNotFoundError:
-                return
-            except DaytonaError as error:
-                if error.status_code not in TRANSIENT_DAYTONA_STATUS:
-                    raise
-                logger.warning("Retrying Daytona sandbox deletion after HTTP %s: %s", error.status_code, name)
-            await sleep(backoff.next_interval())
+        record_sandbox_lifecycle(SandboxLifecycleEvent.DELETED, name, sandbox.id)
 
 
 class DaytonaImageBuild(StrEnum):
@@ -177,6 +192,12 @@ class DaytonaNetworkPolicy:
         return {"network_block_all": mode == DaytonaNetworkMode.BLOCK_ALL}
 
 
+@dataclass(frozen=True)
+class _Closing:
+    task: asyncio.Task[None]
+    cancel_provider_waits: Callable[[], None]
+
+
 class DaytonaMachine:
     """One Daytona sandbox. Each command gets a fresh process and shared files."""
 
@@ -185,30 +206,54 @@ class DaytonaMachine:
         sandbox: AsyncSandbox,
         spec: MachineSpec,
         resources: AsyncExitStack,
-        *,
-        output_collection_timeout: float = DEFAULT_OUTPUT_COLLECTION_TIMEOUT,
+        provider_wait_policy: ProviderWaitPolicy = ProviderWaitPolicy.PHASE,
     ):
         self.sandbox = sandbox
         self.spec = spec
         self.resources = resources
-        self.output_collection_timeout = output_collection_timeout
+        self.provider_wait_policy = provider_wait_policy
         self._closed = False
         self._sessions: set[DaytonaProcessSession] = set()
         self._acquisitions: set[asyncio.Task[None]] = set()
-        self._closing: asyncio.Task[None] | None = None
+        self._closing: _Closing | None = None
+
+    async def _provider_request[T](self, operation: str, request: Callable[[], Awaitable[T]]) -> T:
+        # Transfers use the SDK's size-appropriate timeout, including healthy large artifacts.
+        timeout = None if operation.startswith("artifact.") else PROVIDER_REQUEST_TIMEOUT
+        return await self.provider_wait_policy.request(operation, request, request_timeout=timeout)
+
+    async def _control_exec(self, command: str, *, cwd: str = CONTROL_CWD, timeout: float | None = None):
+        timeout = self.provider_wait_policy.control_timeout(timeout)
+
+        async def execute():
+            try:
+                return await self.sandbox.process.exec(command, cwd=cwd, timeout=timeout)
+            except DaytonaError as error:
+                if error.status_code != 400 or PENDING_SANDBOX_IP_MESSAGE not in str(error).lower():
+                    raise
+                await read_provider_call(
+                    "sandbox.status",
+                    partial(self.sandbox.refresh_data, request_timeout=PROVIDER_REQUEST_TIMEOUT),
+                    wait_policy=self.provider_wait_policy,
+                )
+                if self.sandbox.state in TERMINAL_SANDBOX_STATES:
+                    raise MachineTerminated(
+                        f"Daytona sandbox {self.sandbox.id} cannot execute controls in state {self.sandbox.state.value}"
+                    ) from error
+                raise
+
+        return await self._provider_request("sandbox.control", execute)
 
     async def _user_argv(self, argv: tuple[str, ...], user: str | None) -> tuple[str, ...]:
         if user in (None, "root", "0"):
             return argv
         assert user is not None
         if user.isdecimal():
-            account = await self.sandbox.process.exec(
-                _control_command(f"getent passwd {shlex.quote(user)}"), cwd=CONTROL_CWD
-            )
+            account = await self._control_exec(_control_command(f"getent passwd {shlex.quote(user)}"), cwd=CONTROL_CWD)
             if account.exit_code or not account.result.strip():
                 raise ValueError(f"Execution user {user} has no guest account")
             user = account.result.split(":", 1)[0]
-        capabilities = await self.sandbox.process.exec(_control_command("su --help"), cwd=CONTROL_CWD)
+        capabilities = await self._control_exec(_control_command("su --help"), cwd=CONTROL_CWD)
         if capabilities.exit_code or "--session-command" not in capabilities.result:
             raise UnsupportedMachineSpec("Non-root Daytona commands require util-linux su --session-command")
         return ("su", "-s", "/bin/sh", "-m", user, "--session-command", shlex.join(argv))
@@ -236,7 +281,7 @@ class DaytonaMachine:
         self._sessions.add(session)
 
         async def start() -> None:
-            async with asyncio.timeout(INTERRUPT_TIMEOUT):
+            async with self.provider_wait_policy.timeout(INTERRUPT_TIMEOUT):
                 argv = await self._user_argv(command.argv, command.user)
                 await session.start(argv, command.cwd or self.spec.workdir or None, {**self.spec.env, **command.env})
 
@@ -262,7 +307,7 @@ class DaytonaMachine:
             self._acquisitions.discard(acquisition)
 
     async def _read_output(self, path: str, limit: int) -> tuple[bytes, bool]:
-        count = await self.sandbox.process.exec(
+        count = await self._control_exec(
             _control_command(f"size=$(wc -c < {shlex.quote(path)}) || exit; printf '{COUNT_PREFIX}%s\\n' \"$size\""),
             cwd=CONTROL_CWD,
         )
@@ -273,23 +318,28 @@ class DaytonaMachine:
             raise RuntimeError(f"Invalid command output size: {count.result!r}")
         size = int(match.group(1))
         if size <= limit:
-            data = await self.sandbox.fs.download_file(path)
+            data = await self._provider_request("artifact.read", partial(self.sandbox.fs.download_file, path))
             assert isinstance(data, bytes)
             return data, False
         clipped = f"{path}.limited"
-        result = await self.sandbox.process.exec(
+        result = await self._control_exec(
             _control_command(f"head -c {limit} {shlex.quote(path)} > {shlex.quote(clipped)}"), cwd=CONTROL_CWD
         )
         if result.exit_code:
             raise RuntimeError(f"Failed to limit command output: {result.result}")
         try:
-            data = await self.sandbox.fs.download_file(clipped)
+            data = await self._provider_request("artifact.read", partial(self.sandbox.fs.download_file, clipped))
             assert isinstance(data, bytes)
             return data, True
         finally:
-            await self.sandbox.process.exec(_control_command(f"rm -f {shlex.quote(clipped)}"), cwd=CONTROL_CWD)
+            await self._control_exec(_control_command(f"rm -f {shlex.quote(clipped)}"), cwd=CONTROL_CWD)
 
     async def _stop_command(self, pidfile: str, completed_path: str) -> None:
+        with self.provider_wait_policy.wait():
+            await self._stop_command_once(pidfile, completed_path)
+
+    async def _stop_command_once(self, pidfile: str, completed_path: str) -> None:
+        # An ambiguous kill response requires sandbox teardown because the PID may be reused.
         async with asyncio.timeout(INTERRUPT_TIMEOUT):
             stopped = await self.sandbox.process.exec(
                 _control_command(shlex.join(("/bin/sh", "-c", STOP_COMMAND, "stop-command", pidfile, completed_path))),
@@ -299,8 +349,8 @@ class DaytonaMachine:
                 raise RuntimeError(stopped.result)
 
     async def _remove_command_files(self, prefix: str) -> None:
-        async with asyncio.timeout(INTERRUPT_TIMEOUT):
-            removed = await self.sandbox.process.exec(_control_command(f"rm -rf {shlex.quote(prefix)}"), cwd=CONTROL_CWD)
+        async with self.provider_wait_policy.timeout(INTERRUPT_TIMEOUT):
+            removed = await self._control_exec(_control_command(f"rm -rf {shlex.quote(prefix)}"), cwd=CONTROL_CWD)
             if removed.exit_code:
                 raise RuntimeError("Cannot remove Daytona command files")
 
@@ -329,6 +379,7 @@ class DaytonaMachine:
     async def open_process_scope(self) -> ProcessScope:
         raise UnsupportedMachineSpec("Daytona does not provide confirmed scoped descendant teardown")
 
+    @provider_wait_scope()
     async def run(self, command: Command) -> Result:
         if self._closed:
             raise RuntimeError("Machine is closed")
@@ -345,7 +396,7 @@ class DaytonaMachine:
         response = None
         environment = {**self.spec.env, **command.env}
         try:
-            async with asyncio.timeout(command.timeout) as deadline:
+            async with self.provider_wait_policy.timeout(command.timeout) as deadline:
                 argv = (
                     "/bin/sh",
                     "-c",
@@ -371,16 +422,20 @@ class DaytonaMachine:
                     f"{shlex.join(argv)} < {shlex.quote(stdin_path) if command.stdin else '/dev/null'} "
                     f"> {shlex.quote(stdout_path)} 2> {shlex.quote(stderr_path)}"
                 )
-                prepared = await self.sandbox.process.exec(
-                    _control_command(f"umask 077; mkdir {shlex.quote(prefix)}"), cwd=CONTROL_CWD
+                prepared = await self._control_exec(
+                    _control_command(f"umask 077; mkdir -p {shlex.quote(prefix)}"), cwd=CONTROL_CWD
                 )
                 if prepared.exit_code:
                     raise RuntimeError(f"Cannot create private command directory: {prepared.result}")
                 if command.stdin:
-                    await self.sandbox.fs.upload_file_stream(command.stdin, stdin_path)
+                    await self._provider_request(
+                        "artifact.write", partial(self.sandbox.fs.upload_file_stream, command.stdin, stdin_path)
+                    )
                 # Nested shell quoting can exceed execve's single-argument limit
                 # even when every original command argument fits.
-                await self.sandbox.fs.upload_file_stream(script.encode(), script_path)
+                await self._provider_request(
+                    "artifact.write", partial(self.sandbox.fs.upload_file_stream, script.encode(), script_path)
+                )
                 started = True
                 response = await self.sandbox.process.exec(
                     _control_command(shlex.join(("/bin/sh", script_path))),
@@ -388,7 +443,7 @@ class DaytonaMachine:
                     env=environment,
                     timeout=math.ceil(command.timeout + 10) if command.timeout is not None else None,
                 )
-            async with asyncio.timeout(self.output_collection_timeout):
+            async with self.provider_wait_policy.timeout(INTERRUPT_TIMEOUT):
                 limit = command.output_limit_bytes
                 try:
                     stdout, stdout_truncated = await self._read_output(stdout_path, limit)
@@ -426,6 +481,7 @@ class DaytonaMachine:
             try:
                 await self._stop_command(pidfile, completed_path)
             except asyncio.CancelledError as cancellation:
+                cancel_provider_waits()
                 primary_error = cancellation
                 await self._cleanup_cancelled_command(prefix, pidfile, completed_path, started, cancellation)
                 raise
@@ -435,6 +491,7 @@ class DaytonaMachine:
                 raise primary_error from error
             return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
         except asyncio.CancelledError as cancellation:
+            cancel_provider_waits()
             primary_error = cancellation
             await self._cleanup_cancelled_command(prefix, pidfile, completed_path, started, cancellation)
             raise
@@ -446,6 +503,7 @@ class DaytonaMachine:
                 try:
                     await self._remove_command_files(prefix)
                 except asyncio.CancelledError as cancellation:
+                    cancel_provider_waits()
                     await self._close_preserving_failure(cancellation)
                     raise
                 except Exception as error:
@@ -456,6 +514,7 @@ class DaytonaMachine:
                     primary_error.add_note(f"Daytona command cleanup failed: {error}")
                     await self._close_preserving_failure(primary_error)
 
+    @provider_wait_scope()
     async def upload(self, source: Path, target: str) -> None:
         if self._closed:
             raise RuntimeError("Machine is closed")
@@ -464,42 +523,49 @@ class DaytonaMachine:
                 with tarfile.open(archive.name, "w:gz") as tar:
                     tar.add(source, arcname=".")
                 remote_archive = f"/tmp/.shellbox-{uuid.uuid4().hex}.tar.gz"
-                await self.sandbox.fs.upload_file_stream(Path(archive.name).read_bytes(), remote_archive)
-            result = await self.sandbox.process.exec(
-                _control_command(
-                    f"mkdir -p {shlex.quote(target)} && tar xzf {shlex.quote(remote_archive)} -C {shlex.quote(target)}"
-                    f"; status=$?; rm -f {shlex.quote(remote_archive)}; exit $status"
-                ),
-                cwd=CONTROL_CWD,
-            )
+                await self._provider_request(
+                    "artifact.write",
+                    partial(self.sandbox.fs.upload_file_stream, Path(archive.name).read_bytes(), remote_archive),
+                )
+            try:
+                result = await self._control_exec(
+                    _control_command(
+                        f"mkdir -p {shlex.quote(target)} && "
+                        f"tar xzf {shlex.quote(remote_archive)} -C {shlex.quote(target)}"
+                    ),
+                    cwd=CONTROL_CWD,
+                )
+            finally:
+                await self._control_exec(_control_command(f"rm -f {shlex.quote(remote_archive)}"))
         else:
             parent = str(PurePosixPath(target).parent)
-            result = await self.sandbox.process.exec(
-                _control_command(f"mkdir -p {shlex.quote(parent)}"), cwd=CONTROL_CWD
-            )
+            result = await self._control_exec(_control_command(f"mkdir -p {shlex.quote(parent)}"), cwd=CONTROL_CWD)
             if result.exit_code:
                 raise RuntimeError(f"Failed to create {parent}: {result.result}")
-            await self.sandbox.fs.upload_file_stream(source.read_bytes(), target)
-            mode = stat.S_IMODE(source.stat().st_mode)
-            result = await self.sandbox.process.exec(
-                _control_command(f"chmod {mode:o} {shlex.quote(target)}"), cwd=CONTROL_CWD
+            await self._provider_request(
+                "artifact.write", partial(self.sandbox.fs.upload_file_stream, source.read_bytes(), target)
             )
+            mode = stat.S_IMODE(source.stat().st_mode)
+            result = await self._control_exec(_control_command(f"chmod {mode:o} {shlex.quote(target)}"), cwd=CONTROL_CWD)
         if result.exit_code:
             raise RuntimeError(f"Failed to upload {source}: {result.result}")
 
+    @provider_wait_scope()
     async def download(self, source: str, target: Path) -> None:
         if self._closed:
             raise RuntimeError("Machine is closed")
-        probe = await self.sandbox.process.exec(_control_command(f"test -d {shlex.quote(source)}"), cwd=CONTROL_CWD)
+        probe = await self._control_exec(_control_command(f"test -d {shlex.quote(source)}"), cwd=CONTROL_CWD)
         if probe.exit_code == 0:
             remote_archive = f"/tmp/.shellbox-{uuid.uuid4().hex}.tar.gz"
-            result = await self.sandbox.process.exec(
+            result = await self._control_exec(
                 _control_command(f"tar czf {shlex.quote(remote_archive)} -C {shlex.quote(source)} ."), cwd=CONTROL_CWD
             )
             if result.exit_code:
                 raise RuntimeError(f"Failed to archive {source}: {result.result}")
             try:
-                data = await self.sandbox.fs.download_file(remote_archive)
+                data = await self._provider_request(
+                    "artifact.read", partial(self.sandbox.fs.download_file, remote_archive)
+                )
                 assert isinstance(data, bytes)
                 target.mkdir(parents=True, exist_ok=True)
                 with tempfile.NamedTemporaryFile(suffix=".tar.gz") as archive:
@@ -507,11 +573,9 @@ class DaytonaMachine:
                     with tarfile.open(archive.name, "r:gz") as tar:
                         tar.extractall(target, filter="data")
             finally:
-                await self.sandbox.process.exec(
-                    _control_command(f"rm -f {shlex.quote(remote_archive)}"), cwd=CONTROL_CWD
-                )
+                await self._control_exec(_control_command(f"rm -f {shlex.quote(remote_archive)}"), cwd=CONTROL_CWD)
             return
-        data = await self.sandbox.fs.download_file(source)
+        data = await self._provider_request("artifact.read", partial(self.sandbox.fs.download_file, source))
         assert isinstance(data, bytes)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
@@ -519,13 +583,17 @@ class DaytonaMachine:
     async def close(self) -> None:
         if self._closing is None:
             self._closed = True
-            self._closing = own_cleanup(self._close())
+            async with provider_wait_scope() as cancel_waits:
+                self._closing = _Closing(own_cleanup(self._close()), cancel_waits)
+        closing = self._closing
         try:
-            await asyncio.shield(self._closing)
+            await asyncio.shield(closing.task)
         except asyncio.CancelledError as error:
+            closing.cancel_provider_waits()
+            closing.task.cancel()
             try:
-                await finish_owned(self._closing)
-            except Exception as cleanup_error:
+                await finish_owned(closing.task, timeout=INTERRUPT_TIMEOUT)
+            except BaseException as cleanup_error:
                 error.add_note(f"Daytona cleanup failed ({type(cleanup_error).__name__})")
             raise
 
@@ -535,6 +603,9 @@ class DaytonaMachine:
             results = await asyncio.gather(
                 *(session.close() for session in tuple(self._sessions)), return_exceptions=True
             )
+        except asyncio.CancelledError:
+            cancel_provider_waits()
+            raise
         finally:
             await self.resources.aclose()
         for result in results:
@@ -553,15 +624,15 @@ class DaytonaMachineFactory:
         *,
         ttl_minutes: int = DEFAULT_SANDBOX_TTL_MINUTES,
         create_timeout: float = 600,
-        output_collection_timeout: float = DEFAULT_OUTPUT_COLLECTION_TIMEOUT,
         network_policy: DaytonaNetworkPolicy | None = None,
+        provider_wait_policy: ProviderWaitPolicy = ProviderWaitPolicy.PHASE,
         image_build: DaytonaImageBuild = DaytonaImageBuild.SNAPSHOT,
     ):
         self.client_factory = client_factory
         self.ttl_minutes = ttl_minutes
         self.create_timeout = create_timeout
-        self.output_collection_timeout = output_collection_timeout
         self.network_policy = network_policy
+        self.provider_wait_policy = ProviderWaitPolicy(provider_wait_policy)
         self.image_build = image_build
 
     def _clients(self) -> Callable[[], AsyncDaytona]:
@@ -598,6 +669,22 @@ class DaytonaMachineFactory:
             image_reference=reference,
         )
 
+    async def _prepare(self, client: AsyncDaytona, spec: MachineSpec, deadline: float | None) -> str:
+        self._check_spec(spec)
+        return await retry_provider_call(
+            "snapshot.prepare",
+            partial(
+                ensure_snapshot,
+                client,
+                snapshot_request_for_spec(spec),
+                deadline=deadline,
+                wait_policy=self.provider_wait_policy,
+            ),
+            deadline=deadline,
+            wait_policy=self.provider_wait_policy,
+        )
+
+    @provider_wait_scope()
     async def prepare(self, spec: MachineSpec) -> str:
         """Prepare the snapshot used by create without starting a sandbox.
 
@@ -607,42 +694,65 @@ class DaytonaMachineFactory:
             raise ValueError(f"{self.image_build} image builds create no snapshot to prepare")
         client_factory = self._clients()
         timeout = self.create_timeout if spec.startup_timeout is None else spec.startup_timeout
-        self._check_spec(spec)
-        request = snapshot_request_for_spec(spec)
-        async with client_factory() as client, asyncio.timeout(timeout):
-            return await ensure_snapshot(client, request)
+        async with client_factory() as client, self.provider_wait_policy.timeout(timeout) as deadline:
+            return await self._prepare(client, spec, self.provider_wait_policy.startup_deadline(deadline))
 
-    async def create(self, spec: MachineSpec) -> DaytonaMachine:
+    def _sandbox_parameters(self, spec: MachineSpec, name: str) -> dict:
         network = (
             {"network_block_all": spec.network is NetworkPolicy.DENY}
             if self.network_policy is None
             else self.network_policy.parameters()
         )
+        return dict(
+            name=name,
+            os_user="root",
+            env_vars=spec.env,
+            **network,
+            auto_stop_interval=0,
+            ttl_minutes=self.ttl_minutes,
+        )
+
+    async def _create_parameters(
+        self,
+        client: AsyncDaytona,
+        spec: MachineSpec,
+        name: str,
+        deadline: float | None,
+    ) -> CreateSandboxFromSnapshotParams | CreateSandboxFromImageParams:
+        if self.image_build != DaytonaImageBuild.SNAPSHOT:
+            request = snapshot_request_for_spec(spec)
+            return CreateSandboxFromImageParams(
+                image=daytona_image(request.source), resources=request.resources, **self._sandbox_parameters(spec, name)
+            )
+        snapshot = await self._prepare(client, spec, self.provider_wait_policy.startup_deadline(deadline))
+        return CreateSandboxFromSnapshotParams(snapshot=snapshot, **self._sandbox_parameters(spec, name))
+
+    @provider_wait_scope()
+    async def create(self, spec: MachineSpec) -> DaytonaMachine:
         async with AsyncExitStack() as lifetime:
             client = await lifetime.enter_async_context(self._clients()())
             timeout = self.create_timeout if spec.startup_timeout is None else spec.startup_timeout
-            async with asyncio.timeout(timeout):
-                self._check_spec(spec)
-                request = snapshot_request_for_spec(spec)
+            async with self.provider_wait_policy.timeout(timeout) as deadline:
                 name = f"shellbox-{uuid.uuid4().hex}"
-                sandbox_fields = dict(
-                    name=name, os_user="root", env_vars=spec.env, **network, ttl_minutes=self.ttl_minutes
+                params = await self._create_parameters(client, spec, name, deadline)
+                record_sandbox_lifecycle(SandboxLifecycleEvent.CREATE_REQUESTED, name)
+
+                async def delete_sandbox(_error_type, error, _traceback):
+                    try:
+                        await _delete_named_sandbox(client, name, self.provider_wait_policy)
+                    except Exception as cleanup_error:
+                        if error is None:
+                            raise
+                        error.add_note(f"Daytona sandbox cleanup failed: {cleanup_error!r}")
+
+                lifetime.push_async_exit(delete_sandbox)
+                sandbox = await _create_sandbox(
+                    client,
+                    params,
+                    timeout=timeout,
+                    wait_policy=self.provider_wait_policy,
                 )
-                if self.image_build == DaytonaImageBuild.SNAPSHOT:
-                    params = CreateSandboxFromSnapshotParams(
-                        snapshot=await ensure_snapshot(client, request), **sandbox_fields
-                    )
-                else:
-                    params = CreateSandboxFromImageParams(
-                        image=daytona_image(request.source), resources=request.resources, **sandbox_fields
-                    )
-                lifetime.push_async_callback(_delete_named_sandbox, client, name)
-                sandbox = await _create_sandbox(client, params, timeout=timeout)
-            prepared = await sandbox.process.exec(
-                _control_command("command -v setsid"), cwd=CONTROL_CWD, timeout=INTERRUPT_TIMEOUT
-            )
-            if prepared.exit_code:
-                raise UnsupportedMachineSpec("Daytona task images require setsid for command timeout recovery")
+                record_sandbox_lifecycle(SandboxLifecycleEvent.CREATED, name, sandbox.id)
             effective_spec = spec
             if not spec.workdir:
                 default_cwd = await sandbox.process.exec(_control_command("pwd -L"), timeout=INTERRUPT_TIMEOUT)
@@ -650,12 +760,37 @@ class DaytonaMachineFactory:
                 if default_cwd.exit_code or not PurePosixPath(image_workdir).is_absolute():
                     raise RuntimeError(f"Cannot resolve Daytona image workdir: {default_cwd.result!r}")
                 effective_spec = replace(spec, workdir=image_workdir)
-            machine = DaytonaMachine(
-                sandbox, effective_spec, lifetime, output_collection_timeout=self.output_collection_timeout
+            machine = DaytonaMachine(sandbox, effective_spec, lifetime, self.provider_wait_policy)
+            prepared = await machine._control_exec(
+                _control_command("command -v setsid"), cwd=CONTROL_CWD, timeout=INTERRUPT_TIMEOUT
             )
+            if prepared.exit_code:
+                raise UnsupportedMachineSpec("Daytona task images require setsid for command timeout recovery")
             if spec.workdir:
-                result = await machine.run(Command(("mkdir", "-p", spec.workdir), cwd="/", env={"PATH": CONTROL_PATH}))
+                result = await machine._control_exec(_control_command(shlex.join(("mkdir", "-p", spec.workdir))))
                 if result.exit_code:
-                    raise RuntimeError(f"Failed to create workdir {spec.workdir}: {result.stderr!r}")
+                    raise RuntimeError(f"Failed to create workdir {spec.workdir}: {result.result!r}")
             machine.resources = lifetime.pop_all()
             return machine
+
+
+class DaytonaDeclarativeMachineFactory(DaytonaMachineFactory):
+    """Create directly from the task image without creating named snapshots."""
+
+    async def prepare(self, spec: MachineSpec) -> str:
+        raise UnsupportedMachineSpec("Declarative builds run during sandbox creation; no snapshot can be prepared")
+
+    async def _create_parameters(
+        self,
+        _client: AsyncDaytona,
+        spec: MachineSpec,
+        name: str,
+        _deadline: float | None,
+    ) -> CreateSandboxFromImageParams:
+        self._check_spec(spec)
+        request = snapshot_request_for_spec(spec)
+        source = request.source
+        image = source.reference if isinstance(source, RegistryImage) else Image.from_dockerfile(source.dockerfile)
+        return CreateSandboxFromImageParams(
+            image=image, resources=request.resources, **self._sandbox_parameters(spec, name)
+        )

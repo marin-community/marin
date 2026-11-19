@@ -14,6 +14,7 @@ from upath import UPath
 
 from experiments.post_training.task_curation.datasets.tasktrove import nl2bash
 from experiments.post_training.task_curation.pipeline import CurationRecipe
+from experiments.post_training.task_curation.source import SourceOrigin
 from experiments.post_training.task_curation.tasktrove.export import harbor_export_step
 from experiments.post_training.task_curation.tasktrove.harbor_export import VerifierPayloadIdentity
 from experiments.post_training.task_curation.tests.conversion import converted_task, tasktrove_row
@@ -58,7 +59,19 @@ def test_export_artifact_preserves_rows_and_verifier_identity(normalized_rows, t
     with (input_root / "normalize/part-00000.parquet").open("wb") as output:
         pq.write_table(pa.Table.from_pylist(rows), output)
     normalized = ArtifactStep.adopt("tests/normalized", "2026.10.09", str(input_root))
-    bound = replace(declaration, info=replace(declaration.info, id="fixture-atlas-id", family="fixture-family"))
+    bound = replace(
+        declaration,
+        info=replace(
+            declaration.info,
+            id="Marin:fixture-atlas-id",
+            origin=SourceOrigin.MARIN,
+            upstream_dataset="fixture-atlas-id",
+            upstream_name="fixture-atlas-id",
+            subset=None,
+            title=None,
+            family="fixture-family",
+        ),
+    )
     export = harbor_export_step(
         normalized, source=bound, name="tests/export", version="2026.10.09", grader_image=GRADER_IMAGE
     )
@@ -69,7 +82,7 @@ def test_export_artifact_preserves_rows_and_verifier_identity(normalized_rows, t
     manifest = json.loads((UPath(output_root) / "manifest.json").read_text())
     with (UPath(output_root) / "tasks.parquet").open("rb") as exported_file:
         exported = pq.read_table(exported_file).to_pylist()
-    assert manifest["source_id"] == "fixture-atlas-id"
+    assert manifest["source_id"] == "Marin:fixture-atlas-id"
     assert exported[0]["family"] == "fixture-family"
     identity = VerifierPayloadIdentity()
     identity.add(exported[0]["task_binary"])
@@ -81,7 +94,19 @@ def test_export_artifact_preserves_rows_and_verifier_identity(normalized_rows, t
 def test_source_metadata_changes_export_fingerprint(field, tmp_path):
     normalized = ArtifactStep.adopt("tests/normalized", "2026.10.09", str(tmp_path / "not-materialized"))
     source = nl2bash.sources()[0]
-    changed = replace(source, info=replace(source.info, **{field: "changed"}))
+    changes = (
+        {
+            "id": "Marin:changed",
+            "origin": SourceOrigin.MARIN,
+            "upstream_dataset": "changed",
+            "upstream_name": "changed",
+            "subset": None,
+            "title": None,
+        }
+        if field == "id"
+        else {field: "changed"}
+    )
+    changed = replace(source, info=replace(source.info, **changes))
     before = harbor_export_step(
         normalized, source=source, name="tests/export", version="2026.10.09", grader_image=GRADER_IMAGE
     )

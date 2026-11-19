@@ -14,7 +14,6 @@ from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.datasets.environments import VERIFYIT_PACKAGE
 from experiments.post_training.task_curation.environment import PINNED_IMAGE
-from experiments.post_training.task_curation.images.build import BASE_IMAGE
 from experiments.post_training.task_curation.source import RlDataSource
 from experiments.post_training.task_curation.sources import all_sources
 from experiments.post_training.task_curation.tasktrove import harbor_export as harbor
@@ -32,7 +31,6 @@ class HarborExportConfig:
     input_root: str
     output_root: str
     grader_image: str | None
-    fallback_actor_image: str
     verifyit_package_root: Path
     source: HarborSourceMetadata
 
@@ -43,7 +41,6 @@ def run_harbor_export(config: HarborExportConfig) -> HarborExportArtifact:
         StoragePath(config.output_root),
         grader_image=config.grader_image,
         source=config.source,
-        fallback_actor_image=config.fallback_actor_image,
         verifyit_package_root=config.verifyit_package_root,
     )
     return HarborExportArtifact(
@@ -73,7 +70,6 @@ def harbor_export_step(
             ctx.artifact_path(normalized),
             ctx.output_path,
             grader_image,
-            BASE_IMAGE,
             verifyit_package_root,
             metadata,
         )
@@ -110,7 +106,6 @@ def main(input_root: Path, output_root: Path, grader_image: str | None, verifyit
         StoragePath(str(output_root)),
         grader_image=grader_image,
         source=HarborSourceMetadata(source.name, source.info.id, source.info.family),
-        fallback_actor_image=BASE_IMAGE,
         verifyit_package_root=verifyit_package_root,
     )
     click.echo(json.dumps({key: value for key, value in result.items() if key != "rejections"}))

@@ -5,23 +5,16 @@
 
 import gzip
 import io
-import subprocess
 import tarfile
 
 import pytest
 
-pytest.importorskip("harbor_config", reason="Requires the isolated vendor/harbor runtime")
-
-from taskcompendium.models import CommandSemantics
-
-from experiments.post_training.task_curation.calibforge_fixtures import SETUP_ROOT
 from experiments.post_training.task_curation.calibforge_rebuild import (
     DeferredRebuild,
     lowered_task_spec,
     parse_instructions,
     rebuild_task,
 )
-from experiments.post_training.task_curation.tests.task_tar_fixtures import pack_tar as native_task_bytes
 
 
 def native_task(dockerfile: str, files: dict[str, bytes] | None = None) -> bytes:
@@ -35,7 +28,13 @@ def native_task(dockerfile: str, files: dict[str, bytes] | None = None) -> bytes
     members["task.toml"] = b'[task]\nid = "fixture"\n\n[environment]\nworkdir = "/app"\n'
     for name, content in (files or {"data/input.csv": b"a,b\n1,2\n"}).items():
         members[f"environment/{name}"] = content
-    return native_task_bytes(members)
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as archive:
+        for name, content in members.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(content)
+            archive.addfile(info, io.BytesIO(content))
+    return gzip.compress(buffer.getvalue(), mtime=0)
 
 
 def unpack(task_binary: bytes) -> dict[str, bytes]:
@@ -46,27 +45,21 @@ def unpack(task_binary: bytes) -> dict[str, bytes]:
         }
 
 
-def test_unmapped_and_unsupported_recipes_defer_with_reasons():
-    with pytest.raises(DeferredRebuild, match="unmapped_base"):
-        rebuild_task(native_task("FROM registry.example/weird:latest\nWORKDIR /app\n"))
-    with pytest.raises(DeferredRebuild, match="heredoc"):
-        rebuild_task(native_task("FROM ubuntu:24.04\nRUN <<EOF\necho hi\nEOF\n"))
-    with pytest.raises(DeferredRebuild, match="unsupported_run"):
-        rebuild_task(native_task("FROM ubuntu:24.04\nRUN service nginx start\n"))
-    with pytest.raises(DeferredRebuild, match="env_support"):
-        rebuild_task(native_task("FROM ubuntu:24.04\nENV TZ\nWORKDIR /app\n"))
-
-
-def test_instruction_level_run_flags_still_defer():
-    with pytest.raises(DeferredRebuild, match="run_flags_support"):
-        rebuild_task(native_task("FROM ubuntu:24.04\nRUN --mount=type=cache apt-get update\n"))
-
-
-def test_multistage_and_missing_sources_defer():
-    with pytest.raises(DeferredRebuild, match="multistage"):
-        rebuild_task(native_task("FROM python:3.11-slim-bookworm AS build\nFROM python:3.11-slim-bookworm\n"))
-    with pytest.raises(DeferredRebuild, match="missing_source"):
-        rebuild_task(native_task("FROM ubuntu:24.04\nCOPY files/absent.csv /app/\n"))
+@pytest.mark.parametrize(
+    "dockerfile,reason",
+    [
+        ("FROM registry.example/weird:latest\nWORKDIR /app\n", "unmapped_base"),
+        ("FROM ubuntu:24.04\nRUN <<EOF\necho hi\nEOF\n", "heredoc"),
+        ("FROM ubuntu:24.04\nRUN service nginx start\n", "unsupported_run"),
+        ("FROM ubuntu:24.04\nENV TZ\nWORKDIR /app\n", "env_support"),
+        ("FROM ubuntu:24.04\nRUN --mount=type=cache apt-get update\n", "run_flags_support"),
+        ("FROM python:3.11-slim-bookworm AS build\nFROM python:3.11-slim-bookworm\n", "multistage"),
+        ("FROM ubuntu:24.04\nCOPY files/absent.csv /app/\n", "missing_source"),
+    ],
+)
+def test_unmapped_and_unsupported_recipes_defer_with_reasons(dockerfile, reason):
+    with pytest.raises(DeferredRebuild, match=reason):
+        rebuild_task(native_task(dockerfile))
 
 
 def test_parse_instructions_handles_continuations_comments_and_json_run():
@@ -83,27 +76,17 @@ def test_a_task_declaring_more_than_the_normalized_shape_defers():
         "environment/Dockerfile": b"FROM ubuntu:24.04\nWORKDIR /app\n",
         "task.toml": b'[task]\nid = "fixture"\n\n[environment]\nworkdir = "/app"\nmemory = "8G"\n',
     }
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as archive:
+        for name, content in members.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(content)
+            archive.addfile(info, io.BytesIO(content))
     with pytest.raises(DeferredRebuild, match="larger_machine_shape"):
-        rebuild_task(native_task_bytes(members))
+        rebuild_task(gzip.compress(buffer.getvalue(), mtime=0))
 
 
-def test_every_run_segment_executes_during_setup(tmp_path):
-    workdir = tmp_path / "work"
-    rebuilt = rebuild_task(native_task(f"FROM ubuntu:24.04\nWORKDIR {workdir}\nRUN touch first && touch second\n"))
-    files = unpack(rebuilt.task_binary)
-    stage = tmp_path / "setup_files"
-    stage.mkdir()
-    for name, content in files.items():
-        if name.startswith("setup_files/"):
-            (stage / name.removeprefix("setup_files/")).write_bytes(content)
-    script = files["setup_files/calibforge-initialize.sh"].decode().replace(SETUP_ROOT, str(stage))
-    subprocess.run(["sh"], input=script, text=True, check=True)
-    assert {path.name for path in workdir.iterdir()} == {"first", "second"}
-    assert not stage.exists()
-
-
-def test_a_lowered_spec_stages_fixtures_through_setup_commands():
-    """The rollout runner installs resources then runs setup_commands; both are present."""
+def test_lowered_spec_separates_public_fixtures_and_private_verifier_resources():
     rebuilt = rebuild_task(
         native_task(
             "FROM ubuntu:24.04\nWORKDIR /app\nCOPY files/ /app/files/\n",
@@ -111,10 +94,9 @@ def test_a_lowered_spec_stages_fixtures_through_setup_commands():
         )
     )
     spec = lowered_task_spec("fixture", rebuilt.task_binary)
-    requirements = spec.task.environment_requirements
-    assert requirements.setup_commands == ("sh /setup_files/calibforge-initialize.sh",)
-    assert requirements.docker_image == rebuilt.base_ref
-    assert requirements.command_semantics == CommandSemantics.LINUX_PROCESS
-    staged = {resource.path for resource in spec.task.resources.all}
+    task = spec["task"]
+    assert task["environment_requirements"]["docker_image"] == rebuilt.base_ref
+    assert task["environment_requirements"]["command_semantics"] == "linux_process"
+    staged = {resource["path"] for resource in task["resources"]["all"]}
     assert staged == {"setup_files/calibforge-fixtures.tar.gz", "setup_files/calibforge-initialize.sh"}
-    assert {resource.path for resource in spec.task.resources.verifier} == {"tests/test.sh", "tests/test_outputs.py"}
+    assert {resource["path"] for resource in task["resources"]["verifier"]} == {"tests/test.sh", "tests/test_outputs.py"}

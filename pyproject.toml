@@ -425,6 +425,11 @@ ignore = ["F722", "B008", "UP015", "UP046", "UP047", "A005", "E741"]
 # The decon report renderer embeds CSS/JS/HTML as long string literals; wrapping
 # those lines hurts readability far more than the length limit helps.
 "experiments/datakit/decontam/viewer/report.py" = ["E501"]
+# The protected SHARED guest controller must run on task images whose best
+# interpreter is 3.9, where `datetime.UTC` (3.11+) does not exist; the module
+# docstring's lazy-annotation contract covers the PEP 604 unions. UP017's
+# auto-fix would reintroduce the ImportError caught by the freeze-v3 QA.
+"lib/taskcompendium/src/taskcompendium/runtime/shared_source.py" = ["UP017"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["experiments"]

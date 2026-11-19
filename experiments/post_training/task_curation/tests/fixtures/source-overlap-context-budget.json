@@ -1,0 +1,50 @@
+{
+  "pairs": 745,
+  "max_prompt_tokens": 41012,
+  "total_prompt_tokens": 16441968,
+  "generation_tokens": 2048,
+  "model_context": 65536,
+  "original_context_exceeded_pairs": [
+    {
+      "left": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_nvarc_inductive",
+      "right": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_nvarc_transductive",
+      "tokens": 31087
+    },
+    {
+      "left": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_nvarc_inductive",
+      "right": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_nvarc_transductive",
+      "tokens": 30863
+    },
+    {
+      "left": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_nvarc_inductive",
+      "right": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_nvarc_transductive",
+      "tokens": 31040
+    },
+    {
+      "left": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_nvarc_transductive",
+      "right": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_nvarc_inductive",
+      "tokens": 31045
+    },
+    {
+      "left": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_nvarc_transductive",
+      "right": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_nvarc_transductive",
+      "tokens": 40835
+    },
+    {
+      "left": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_nvarc_transductive",
+      "right": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_nvarc_inductive",
+      "tokens": 31013
+    },
+    {
+      "left": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_nvarc_transductive",
+      "right": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_nvarc_transductive",
+      "tokens": 41012
+    },
+    {
+      "left": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_nvarc_transductive",
+      "right": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_nvarc_transductive",
+      "tokens": 40788
+    }
+  ],
+  "revision": "37561816e66b5b9153b1b64c10968c18c1e6f4a0"
+}

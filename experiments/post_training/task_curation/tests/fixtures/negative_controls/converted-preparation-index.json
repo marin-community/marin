@@ -1,0 +1,62 @@
+{
+  "language-mixing-missing-lock": {
+    "archive_sha256": "653d60de344096e598e1586c2117a4c7aeee3304d5bef222738de70365e02c0a",
+    "conclusive": false,
+    "control_member": "control/negative-control.json",
+    "execution_requirements": {
+      "agent_timeout_sec": 300.0,
+      "cpus": 1,
+      "memory_mb": 2048,
+      "storage_mb": 2048,
+      "verifier_timeout_sec": 60.0
+    },
+    "source_task_checksum": "2ce858acd7a24820f635567f367bba1dd2e3416d09a5224390807a1544bf7c01",
+    "source_task_sha256": "7cefb99146f95131cd9e49b900ab94afcb4cf53d8ba85abc7f390c954f1a9488",
+    "task_id": "nemotron_ultra_rlvr1_language_mixing_hs3_ultra_genrm_fmt-007a6f8d12116106f951f34c5b0dceed236ca9195852119a15fbdfbf0dd196b5"
+  },
+  "language-mixing-prepared": {
+    "archive_sha256": "cd13b445a3722c1ceacae0a72c1a1f22555f38d991659046d3c298f293ec16e2",
+    "conclusive": true,
+    "control_member": "control/negative-control.json",
+    "execution_requirements": {
+      "agent_timeout_sec": 300.0,
+      "cpus": 1,
+      "memory_mb": 2048,
+      "storage_mb": 2048,
+      "verifier_timeout_sec": 60.0
+    },
+    "source_task_checksum": "2ce858acd7a24820f635567f367bba1dd2e3416d09a5224390807a1544bf7c01",
+    "source_task_sha256": "7cefb99146f95131cd9e49b900ab94afcb4cf53d8ba85abc7f390c954f1a9488",
+    "task_id": "nemotron_ultra_rlvr1_language_mixing_hs3_ultra_genrm_fmt-007a6f8d12116106f951f34c5b0dceed236ca9195852119a15fbdfbf0dd196b5"
+  },
+  "tau-missing-lock": {
+    "archive_sha256": "cde087aa19d1c0bacee01caed5af597a558d28ef8dec7d2914648ce2dbdaac70",
+    "conclusive": false,
+    "control_member": "control/negative-control.json",
+    "execution_requirements": {
+      "agent_timeout_sec": 300.0,
+      "cpus": 1,
+      "memory_mb": 2048,
+      "storage_mb": 2048,
+      "verifier_timeout_sec": 60.0
+    },
+    "source_task_checksum": "2569d8753953dcd3ef9e0ebf5205f22093ae8c06b3e01c56bea74dd6a6faaa37",
+    "source_task_sha256": "73407f1c5bedcda312fd951b8e0cb1b8b88ca7bc0dc21a22c85b4fc4a4126953",
+    "task_id": "nemotron_ultra_rlvr1_ultra_sft_step3200_tau_pivot-000ce0aaa29fbfab8b7f783798bf0cadd0cb27a522afc9576937e1d8715f939e"
+  },
+  "tau-prepared": {
+    "archive_sha256": "6ff95ddf0665e45745bf791181bc35e0f85954a8d12340db12032586811ddca2",
+    "conclusive": true,
+    "control_member": "control/negative-control.json",
+    "execution_requirements": {
+      "agent_timeout_sec": 300.0,
+      "cpus": 1,
+      "memory_mb": 2048,
+      "storage_mb": 2048,
+      "verifier_timeout_sec": 60.0
+    },
+    "source_task_checksum": "2569d8753953dcd3ef9e0ebf5205f22093ae8c06b3e01c56bea74dd6a6faaa37",
+    "source_task_sha256": "73407f1c5bedcda312fd951b8e0cb1b8b88ca7bc0dc21a22c85b4fc4a4126953",
+    "task_id": "nemotron_ultra_rlvr1_ultra_sft_step3200_tau_pivot-000ce0aaa29fbfab8b7f783798bf0cadd0cb27a522afc9576937e1d8715f939e"
+  }
+}

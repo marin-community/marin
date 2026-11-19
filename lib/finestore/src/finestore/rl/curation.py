@@ -856,6 +856,9 @@ class SourceDeclaration(CatalogRecord):
     name: str
     display_name: str
     origin: str
+    build_path: str = "unmeasured"
+    upstream_dataset: str = "unmeasured"
+    upstream_name: str = "unmeasured"
     family: str
     tags: list[str]
     task_count: int | None
@@ -884,10 +887,14 @@ class SourceDeclaration(CatalogRecord):
     # The weakest review behind the admission, with the pointers that establish it.
     oversight: OversightLevel = OversightLevel.NONE
     oversight_evidence: OversightEvidence | None = None
+    # The Atlas admission flow binds license evidence on the declaration itself.
+    license_receipt: LicenseReceipt | None = None
 
 
-class QualifiedSourceDeclaration(CatalogRecord):
-    """Measured source contract with exact-pin checks, separate from legacy catalog rows."""
+class QualifiedSourceDeclaration(SourceDeclaration):
+    """Measured source contract with exact-pin checks, layered over the legacy
+    declaration: subclassing keeps every ``SourceDeclaration``-typed field and
+    reader accepting the strict contract without touching main's legacy model."""
 
     id: str
     name: str
@@ -925,7 +932,9 @@ class QualifiedSourceDeclaration(CatalogRecord):
     pipeline: PipelineReference | None
     license_receipt: LicenseReceipt | None = None
     independent_qc: IndependentQC | None = None
-    daytona_safety: DaytonaSafety | None
+    # Widens the legacy default (UNASSESSED) to an explicit tri-state: a grandfathered
+    # exempt source stores None, distinct from a taken-but-unassessed measurement.
+    daytona_safety: DaytonaSafety | None  # pyrefly: ignore[bad-override]
     daytona_exemption: str | None = Field(default=None, min_length=1)
     daytona_snapshot_count: int | None = None
     daytona_snapshot_threshold: int | None = None
@@ -1162,13 +1171,31 @@ class AssessmentItem(CatalogRecord):
 class SnapshotSource(CatalogRecord):
     snapshot_id: str
     id: str
-    declaration: SourceDeclaration
+    declaration: QualifiedSourceDeclaration | SourceDeclaration
     assessment_key: str | None
     latest_attempt_key: str | None
     latest_attempt_status: AssessmentStatus
     reason: str | None
     curation: CurationSummary | None = None
     diagnostics: list[ArchivedFile] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _era_declaration_columns(cls, value: Any) -> Any:
+        """Drop the struct-fill nulls the qualified schema writes over legacy declarations.
+
+        The inventory table pins the qualified declaration struct, so a legacy-era
+        declaration round-trips with explicit nulls in qualified-only columns. Those
+        nulls are storage fill, not data: dropping them lets each row validate against
+        its own era's contract instead of failing both union members.
+        """
+        if not isinstance(value, dict) or not isinstance(value.get("declaration"), dict):
+            return value
+        qualified_only = QualifiedSourceDeclaration.model_fields.keys() - SourceDeclaration.model_fields.keys()
+        declaration = {
+            name: item for name, item in value["declaration"].items() if not (item is None and name in qualified_only)
+        }
+        return {**value, "declaration": declaration}
 
 
 class CatalogSnapshot(CatalogRecord):

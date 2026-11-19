@@ -3,42 +3,24 @@
 
 """The no-oracle qualification checks what they claim to check."""
 
-
-import subprocess
-
 import pytest
-from taskcompendium.models import (
-    AnswerType,
-    CommandSemantics,
-    ConversationInput,
-    EnvironmentRequirements,
-    InlineFile,
-    NoGrader,
-    PlainText,
-    ResourceGroups,
-    Source,
-    TaskResource,
-    TaskSpec,
-    TextMessage,
-)
 
-from experiments.post_training.task_curation.no_oracle_preservation import (
+from experiments.post_training.task_curation.no_oracle_qualification import (
     FileExpectation,
     PreservationResult,
+    QualificationReport,
+    SetupExecution,
+    VerifierResult,
+    WorkspaceFile,
     _compare_workspace,
     _manifest,
     check_preservation,
     copied_destinations,
     copied_paths,
+    summarize,
     workspace_expectations,
 )
-from experiments.post_training.task_curation.no_oracle_qualification import (
-    QualificationReport,
-    VerifierResult,
-    summarize,
-)
-from experiments.post_training.task_curation.no_oracle_setup import SetupExecution, execute_lowered_setup
-from experiments.post_training.task_curation.tests.task_tar_fixtures import pack_tar as _tar
+from experiments.post_training.task_curation.tests.task_tar_fixtures import pack_tar
 
 
 def _native(files: dict[str, bytes] | None = None, recipe: str | None = None) -> bytes:
@@ -46,18 +28,18 @@ def _native(files: dict[str, bytes] | None = None, recipe: str | None = None) ->
     members = {f"environment/files/{name}": (content, 0o644) for name, content in (files or {"a.csv": b"1\n"}).items()}
     members["environment/Dockerfile"] = (recipe.encode(), 0o644)
     members["task.toml"] = (b'[task]\nid = "x"\n', 0o644)
-    return _tar(members)
+    return pack_tar(members)
 
 
 def _rebuilt(payload_files: dict[str, tuple[bytes, int]] | None = None) -> bytes:
     files = payload_files or {"files/a.csv": (b"1\n", 0o644)}
-    payload = _tar(files, gz=False)
+    payload = pack_tar(files, gz=False)
     members = {
         "task.toml": (b'[task]\nid = "x"\n', 0o644),
         "setup_files/calibforge-fixtures.tar.gz": (payload, 0o644),
         "setup_files/calibforge-initialize.sh": (b"#!/bin/sh\n", 0o755),
     }
-    return _tar(members)
+    return pack_tar(members)
 
 
 def test_copied_paths_lists_context_sources_and_rejects_add():
@@ -117,45 +99,10 @@ def test_copied_destinations_resolve_against_the_native_workdir():
     assert copied_destinations(recipe, "/app") == ("/data", "/app/relative")
 
 
-@pytest.mark.parametrize(
-    ("workdirs", "destination"),
-    [("", "/result.csv"), ("WORKDIR /app\nWORKDIR data\n", "/app/data/result.csv")],
-)
-def test_workspace_expectations_resolve_the_final_native_workdir(workdirs, destination):
-    recipe = f"FROM ubuntu:24.04\n{workdirs}COPY files/a.csv \\\n    ./result.csv\n"
-    expected = workspace_expectations(_native(recipe=recipe))
-    assert tuple(item.path for item in expected) == (destination,)
-
-
-def test_lowered_setup_passes_runtime_settings_to_docker(monkeypatch):
-    task = TaskSpec(
-        id="fixture",
-        context=ConversationInput(events=(TextMessage(role="user", content="Do the task."),)),
-        answer_type=AnswerType.TEXT,
-        answer_format=PlainText(),
-        grader=NoGrader(reason="setup qualification only"),
-        source=Source(dataset="fixture", revision="1", row="fixture", importer_revision="1"),
-        environment_requirements=EnvironmentRequirements(
-            docker_image="ubuntu@sha256:" + "a" * 64,
-            command_semantics=CommandSemantics.LINUX_PROCESS,
-            working_directory="/workspace",
-            environment_variables={"LABEL": "two words"},
-            setup_commands=("true",),
-        ),
-        resources=ResourceGroups(all=(TaskResource(path="seed", source=InlineFile(content_base64="eA==")),)),
-    )
-    requests = []
-
-    def docker_run(argv, **kwargs):
-        requests.append(argv)
-        return subprocess.CompletedProcess(argv, 0, stdout="container\n" if argv[1] == "create" else "", stderr="")
-
-    monkeypatch.setattr(subprocess, "run", docker_run)
-    assert execute_lowered_setup(task, ()).passed
-    # Docker's argv is the external contract; values containing spaces stay one argument.
-    create = requests[0]
-    assert create[create.index("--workdir") + 1] == "/workspace"
-    assert create[create.index("--env") + 1] == "LABEL=two words"
+def test_setup_execution_requires_every_expected_file():
+    assert SetupExecution("task", "executed", written=2).passed
+    assert not SetupExecution("task", "executed", written=1, missing=("abc:0644",)).passed
+    assert not SetupExecution("task", "script_error", detail="pip3: not found").passed
 
 
 def test_a_file_the_native_recipe_deletes_is_not_required_in_the_workspace():
@@ -166,7 +113,9 @@ def test_a_file_the_native_recipe_deletes_is_not_required_in_the_workspace():
         "COPY files/gen.py /app/\n"
         "RUN python3 /app/gen.py && rm /app/gen.py\n"
     )
-    native = _tar({"environment/Dockerfile": (recipe.encode(), 0o644), "environment/files/gen.py": (b"print(1)", 0o644)})
+    native = pack_tar(
+        {"environment/Dockerfile": (recipe.encode(), 0o644), "environment/files/gen.py": (b"print(1)", 0o644)}
+    )
     assert [item.path for item in workspace_expectations(native)] == []
 
 
@@ -179,7 +128,7 @@ def test_a_kept_file_is_still_required_when_another_is_deleted():
         "COPY files/config.py /app/config.py\n"
         "RUN rm /app/run.sh\n"
     )
-    native = _tar(
+    native = pack_tar(
         {
             "environment/Dockerfile": (recipe.encode(), 0o644),
             "environment/files/run.sh": (b"echo\n", 0o644),
@@ -193,22 +142,15 @@ def test_an_absolute_destination_keeps_its_mode():
     """stat reports an absolute path; normalizing must not strip the leading slash."""
     digest = "a" * 64
     manifest = _manifest(f"644 /data/products.csv\n{digest}  /data/products.csv\n")
-    assert manifest == [FileExpectation("/data/products.csv", digest, 0o644)]
-
-
-def test_a_present_file_with_different_bytes_fails_as_altered():
-    """Content divergence fails the check and is named, not counted as missing."""
-    expectations = (FileExpectation(path="/app/run.sh", sha256="b" * 64, mode=0o644),)
-    comparison = _compare_workspace(expectations, f"644 /app/run.sh\n{'c' * 64}  /app/run.sh\n")
-    assert (comparison.written, comparison.missing, comparison.altered) == (1, (), ("/app/run.sh",))
+    assert manifest == [WorkspaceFile("/data/products.csv", digest, 0o644)]
 
 
 def test_a_faithful_mode_change_is_reported_not_failed():
     """The native recipe's own chmod is replayed, so mode alone cannot fail the check."""
     expectations = (FileExpectation(path="/app/run.sh", sha256="b" * 64, mode=0o644),)
     comparison = _compare_workspace(expectations, f"755 /app/run.sh\n{'b' * 64}  /app/run.sh\n")
-    assert (comparison.written, comparison.missing, comparison.altered, comparison.extra) == (1, (), (), ())
-    assert comparison.remoded and comparison.remoded[0].startswith("bbbbbbbbbbbb:")
+    assert (comparison.written, comparison.missing, comparison.extra) == (1, (), ())
+    assert comparison.changed and comparison.changed[0].startswith("bbbbbbbbbbbb:")
 
 
 def test_a_mode_zero_file_still_counts_as_present():

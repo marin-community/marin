@@ -66,6 +66,7 @@ marin-serve = "marin.inference.serve_cli:main"
 [dependency-groups]
 test = [
     "cloud-sql-python-connector[pg8000]>=1.9",
+    "openapi-schema-validator==0.6.3",
     "pytest>=8.3.2",
     "pytest-asyncio",
     "pytest-json-report>=1.5",

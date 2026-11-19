@@ -19,6 +19,10 @@ TASK_SCHEMA = pa.schema(
         ("source_revision", pa.string()),
         ("source_row", pa.string()),
         ("original_path", pa.string()),
+        (
+            "grading_environment",
+            pa.struct([(name, pa.string()) for name in ("required", "declared", "reason", "status")]),
+        ),
         ("intended_use", pa.string()),
         (
             "normalization_changes",
@@ -56,7 +60,7 @@ TASK_SCHEMA = pa.schema(
         ("grader_readiness", pa.string()),
         ("admission", pa.string()),
     ],
-    metadata={b"taskcompendium.curation_schema": b"11"},
+    metadata={b"taskcompendium.curation_schema": b"12"},
 )
 
 
@@ -73,6 +77,7 @@ NORMALIZED_COLUMNS = (
     "source_revision",
     "source_row",
     "original_path",
+    "grading_environment",
     "task_json",
     "tags",
     "labels",

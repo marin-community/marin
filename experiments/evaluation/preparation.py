@@ -9,36 +9,33 @@ from dataclasses import dataclass, replace
 from functools import partial
 
 from marin.execution.lazy import ArtifactStep, StepContext
-from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.evaluation.corpus import MANIFEST_FILENAME, ItemBuilder, chat_variant_item
+from taskcompendium.evaluation.corpus import ItemBuilder, chat_variant_item
 from taskcompendium.evaluation.spec import EvaluationProtocol, OperationKind
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
 from taskcompendium.pipeline.fingerprints import callable_identity
-from taskcompendium.pipeline.models import SourceStatus
+from taskcompendium.pipeline.models import IntendedUse
 from taskcompendium.pipeline.sources import source_files_identity
 
-from experiments.post_training.task_curation.campaign import CampaignArtifact, PipelineResult
+from experiments.post_training.task_curation.campaign import CampaignArtifact
 from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.environment import Placement, placement
+from experiments.post_training.task_curation.evaluation import publish_dataset_corpus
 from experiments.post_training.task_curation.images.build import (
     EnvironmentArtifact,
     built_environment,
     environment_artifact,
     identity_digest,
 )
+from experiments.post_training.task_curation.license_binding import licensed_source
 from experiments.post_training.task_curation.pipeline import (
     CurationRecipe,
     HfSource,
     RecipeSource,
     download_identity,
     environment_record,
-    environment_requirements,
-    input_file_overrides,
     input_overrides_identity,
     source_downloads,
     source_recipe,
-    validate_input_identity,
 )
 from experiments.post_training.task_curation.source import RlDataSource
 
@@ -75,6 +72,10 @@ class EvaluationCorpusRecipe:
     @property
     def files(self) -> tuple[str, ...]:
         return self.recipe.files
+
+    @property
+    def intended_use(self) -> IntendedUse:
+        return self.recipe.intended_use
 
 
 def chat_source(
@@ -121,41 +122,15 @@ def _build_run(
 def _publish(
     dataset: EvaluationCorpusRecipe, options: PipelineOptions, identity: dict, run: EvaluationRun
 ) -> CampaignArtifact:
-    validate_input_identity(dataset.recipe, options.inputs, identity)
-    grader_environment = None
-    if dataset.recipe.grader is not None:
-        built = EnvironmentArtifact.raw_load(run.grader_artifact) if run.grader_artifact is not None else None
-        grader_environment = environment_requirements(dataset.recipe.grader, built)
-    publish_evaluation_corpus(
-        source_recipe(dataset.recipe, run.inputs, grader_environment),
+    return publish_dataset_corpus(
+        dataset.recipe,
         dataset.protocol,
         dataset.item_builder,
-        options.runtime.context,
-        run.source_input,
-        run.output_path,
-        source_overrides=input_file_overrides(options.inputs.files),
+        options=options,
+        identity=identity,
+        run=run,
         curation_identity=canonical_sha256(identity),
         protocol_name=dataset.protocol_name,
-    )
-    validated = False
-    try:
-        validate_input_identity(dataset.recipe, options.inputs, identity)
-        validated = True
-    finally:
-        if not validated:
-            (StoragePath(run.output_path) / MANIFEST_FILENAME).rm()
-    return CampaignArtifact(
-        path=run.output_path,
-        status=SourceStatus.COMPLETED,
-        result=PipelineResult(
-            SourceStatus.COMPLETED,
-            {
-                "normalize": str(StoragePath(run.output_path) / "normalize"),
-                "evaluation": str(StoragePath(run.output_path) / "evaluation"),
-            },
-            {"manifest": str(StoragePath(run.output_path) / MANIFEST_FILENAME)},
-            ("normalize", "evaluation"),
-        ),
     )
 
 
@@ -163,6 +138,8 @@ def prepare_evaluation(
     source: RlDataSource[EvaluationCorpusRecipe], options: PipelineOptions
 ) -> ArtifactStep[CampaignArtifact]:
     """Publish the complete evaluation population without RL admission or model review."""
+    source = licensed_source(source)
+    options = replace(options, license_receipt=source.info.license_receipt)
     dataset = source.config
     assert dataset is not None
     downloaded, auxiliary = source_downloads(dataset.recipe, options)
@@ -178,7 +155,9 @@ def prepare_evaluation(
             else EnvironmentArtifact(path=grader.path(), identity=identity_digest(dataset.recipe.grader))
         )
     recipe = source_recipe(dataset.recipe, {}, None)
+    assert source.info.license_receipt is not None
     identity = {
+        "license_receipt": source.info.license_receipt.model_dump(mode="json"),
         "source": {
             **download_identity(dataset.recipe.source),
             "reader": source_files_identity(recipe.source),

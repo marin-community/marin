@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bounded raw sampling, source review, and gated conversion on an entered worker pool."""
+"""Source conversion, mandatory deduplication, and bounded quality review on an entered worker pool."""
 
 import hashlib
 import json
@@ -11,11 +11,12 @@ from collections.abc import Callable, Iterator, Mapping
 from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from functools import partial
-from itertools import batched
 from typing import Any
+from uuid import uuid4
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from finestore.rl.curation import LexicalContaminationEvidence, require_decontamination
 from rigging.filesystem.storage_path import StoragePath
 from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.spec import Mode
@@ -25,6 +26,11 @@ from zephyr.dataset import Dataset, ShardInfo, format_shard_path
 from zephyr.readers import load_parquet
 from zephyr.writers import write_parquet_file
 
+from taskcompendium.grading_environment import (
+    count_grading_environment,
+    grading_environment_census,
+    shared_integrity_issue,
+)
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import Grader, NoGrader, TaskSpec, VerifyitGrader, grades_in_process
 from taskcompendium.pipeline.audit_schema import (
@@ -42,6 +48,11 @@ from taskcompendium.pipeline.conversion import (
     row_source,
     row_task_id,
 )
+from taskcompendium.pipeline.deduplication import (
+    DeduplicatedPopulation,
+    DeduplicationEvidence,
+    deduplicate_population,
+)
 from taskcompendium.pipeline.execution_telemetry import (
     TELEMETRY_FILENAME,
     PhaseTelemetry,
@@ -51,11 +62,19 @@ from taskcompendium.pipeline.execution_telemetry import (
 from taskcompendium.pipeline.inputs import SourceFileOverride
 from taskcompendium.pipeline.models import (
     Admission,
+    Decision,
     Disposition,
-    FilterPolicy,
     GraderReadiness,
+    ImportFailureKind,
+    ImportRejection,
+    NormalizedTask,
     SourceRecipe,
     SourceStatus,
+)
+from taskcompendium.pipeline.oracle_filter import (
+    OracleFilterReceipt,
+    oracle_recipe_identity,
+    require_oracle_filter,
 )
 from taskcompendium.pipeline.sampling import merge_sample_rows, seeded_order, seeded_sample
 from taskcompendium.pipeline.shard_outputs import ShardOutput, write_shard_outputs
@@ -81,16 +100,13 @@ from taskcompendium.pipeline.sources import (
     conversion_context,
     conversion_shards,
     raw_input_sha256,
-    row_locator,
     source_files_identity,
-    source_shards,
     staged_files,
     staged_raw_file_rows,
 )
 from taskcompendium.pipeline.stages import (
     AUDIT_INPUT_PATTERN,
     AuditExecution,
-    CheckedRow,
     ReviewConfig,
     _read_json,
     _write_json,
@@ -102,10 +118,10 @@ from taskcompendium.pipeline.stages import (
     prepare_source,
     skip_source_review,
 )
+from taskcompendium.pipeline.static_retention import NoOracleSourceContext
 from taskcompendium.pipeline.transforms import admit_converted_row
 
-SOURCE_PIPELINE_REVISION = "14"
-PANEL_ROWS_PER_SHARD = 16
+SOURCE_PIPELINE_REVISION = "20"
 ROWS_PER_SHARD = 1000
 MAX_PREPARATION_SHARDS = 64
 OUTPUT_VIEWS = ("download", "normalize", "review", "verify", "final")
@@ -131,7 +147,7 @@ class SourcePipelineConfig:
 
     ``machines`` runs sandbox grader controls. Remote judge controls use ``judge_connection``
     without a grading machine; other external graders require ``machines``.
-    ``review=None`` supports recipes without a model-review rubric.
+    SAMPLE/FULL require a reviewer spec even when the recipe has no model-review rubric.
     ``normalized_shards`` caps the export partitions; small populations use fewer shards.
     """
 
@@ -140,10 +156,12 @@ class SourcePipelineConfig:
     verification_policy: SourceVerificationPolicy
     review: ReviewConfig | None
     execution: AuditExecution
-    filter_policy: FilterPolicy
     normalized_shards: int
     machines: GradingMachines | None
     judge_connection: JudgeConnection | None = None
+    oracle_filter: OracleFilterReceipt | None = None
+    no_oracle_source_context: NoOracleSourceContext | None = None
+    lexical_contamination: LexicalContaminationEvidence | None = None
 
 
 @dataclass(frozen=True)
@@ -154,6 +172,8 @@ class ConversionResult:
     converted_rows: int
     rejections: dict[str, int]
     elapsed_seconds: float
+    grading_environment: dict[str, Any]
+    within_source_dedup: DeduplicationEvidence
 
 
 @dataclass(frozen=True)
@@ -210,27 +230,58 @@ def _raw_dataset(
     return Dataset.from_list(list(shards)).flat_map(rows)
 
 
-def _admit_conversion(converted: ConvertedRow, *, recipe: SourceRecipe) -> dict[str, Any]:
+def _admit_conversion(
+    converted: ConvertedRow,
+    *,
+    recipe: SourceRecipe,
+    oracle_filter: OracleFilterReceipt,
+    source_context: NoOracleSourceContext | None = None,
+) -> dict[str, Any]:
+    if isinstance(converted.result, NormalizedTask) and (issue := shared_integrity_issue(converted.result.task)):
+        converted = replace(
+            converted,
+            result=ImportRejection(
+                kind=ImportFailureKind.SOURCE_DEFECT,
+                reason=issue,
+                detail="SHARED admission requires a versioned typed integrity contract",
+            ),
+        )
     result = admit_converted_row(converted, recipe)
+    if (
+        isinstance(converted.result, NormalizedTask)
+        and not isinstance(converted.result.task.grader, NoGrader)
+        and not require_oracle_filter(converted.result.task, oracle_filter, source_context=source_context)
+    ):
+        entry = oracle_filter.tasks[converted.raw.id]
+        result["audit"]["decision"] = Decision(
+            task_id=converted.raw.id,
+            disposition=Disposition.REJECT,
+            reasons=[f"oracle_filter: {entry.exclusion_reason}"],
+        ).model_dump(mode="json")
     result["audit"]["raw"]["raw_input_sha256"] = raw_input_sha256(converted.original_data)
     result["audit"]["raw"]["source_locator"] = converted.raw.source.row
     return result
 
 
-def _convert_selected(row: dict[str, Any], *, recipe: SourceRecipe, cached: Mapping[str, ConvertedRow]) -> ConvertedRow:
-    previous = cached.get(row["locator"])
-    return previous if previous is not None else convert_source_row(row, recipe)
+def conversion_stage(rows: Dataset, recipe: SourceRecipe) -> Dataset[ConvertedRow]:
+    """Convert the complete population once before mechanical within-source exclusion."""
+    return rows.map(partial(convert_source_row, recipe=recipe))
 
 
-def conversion_stage(
-    rows: Dataset, recipe: SourceRecipe, *, cached: Mapping[str, ConvertedRow] | None = None
-) -> Dataset[ConvertedRow]:
-    """Convert selected raw rows once, reusing a reviewed panel during full expansion."""
-    return rows.map(partial(_convert_selected, recipe=recipe, cached=cached or {}))
-
-
-def _checked_conversion(converted: ConvertedRow, *, recipe: SourceRecipe) -> tuple[ConvertedRow, CheckedRow]:
-    return converted, checked_row(_admit_conversion(converted, recipe=recipe))
+def _preqa_record(
+    converted: ConvertedRow,
+    *,
+    recipe: SourceRecipe,
+    oracle_filter: OracleFilterReceipt,
+    source_context: NoOracleSourceContext | None = None,
+) -> dict[str, Any]:
+    return {
+        "locator": converted.raw.source.row,
+        "data": converted.original_data,
+        "normalized": _admit_conversion(
+            converted, recipe=recipe, oracle_filter=oracle_filter, source_context=source_context
+        ),
+    }
 
 
 def _locator_identity(locator: str, raw_input_sha256: str | None, recipe: SourceRecipe) -> dict[str, Any]:
@@ -309,7 +360,7 @@ def _unprocessed_review(
     counters.current_stage().update_counter("source/output/review/rows", 1)
     yield {
         **{column: None for column in REVIEW_COLUMNS},
-        **identity,
+        **{name: identity.get(name) for name, _ in IDENTITY_FIELDS},
         "source_dataset": recipe.source.dataset,
         "source_revision": recipe.source.revision,
         "source_row": identity["source_locator"],
@@ -345,7 +396,31 @@ def row_admission(row: dict[str, Any], verification: SourceVerificationStatus) -
     return Admission.UNVERIFIED
 
 
-def _admit(row: dict[str, Any], *, verification: SourceVerificationStatus) -> dict[str, Any]:
+def _admit(
+    row: dict[str, Any],
+    *,
+    verification: SourceVerificationStatus,
+    oracle_filter: OracleFilterReceipt | None = None,
+    source_context: NoOracleSourceContext | None = None,
+) -> dict[str, Any]:
+    if row["task_json"] is not None:
+        task = TaskSpec.model_validate_json(row["task_json"])
+        if issue := shared_integrity_issue(task):
+            row = {
+                **row,
+                "filter_status": Disposition.REJECT.value,
+                "filter_reasons": [*(row["filter_reasons"] or []), issue],
+            }
+        elif not isinstance(task.grader, NoGrader) and not require_oracle_filter(
+            task, oracle_filter, source_context=source_context
+        ):
+            assert oracle_filter is not None
+            entry = oracle_filter.tasks[task.id]
+            row = {
+                **row,
+                "filter_status": Disposition.REJECT.value,
+                "filter_reasons": [*(row["filter_reasons"] or []), f"oracle_filter: {entry.exclusion_reason}"],
+            }
     admission = row_admission(row, verification)
     counters.current_stage().update_counter(f"source/admission/{admission.value}", 1)
     return {**row, "admission": admission.value}
@@ -413,6 +488,7 @@ class _SourceRun:
     telemetry: SourceTelemetry
     source_overrides: Mapping[str, SourceFileOverride] | None
     parquet_shard_bytes: int
+    population: DeduplicatedPopulation | None = None
 
     def scratch(self, phase: str) -> StoragePath:
         """The working directory of one of ``SCRATCH_PHASES``."""
@@ -424,7 +500,6 @@ class _Panel:
     """The bounded raw panel, its converted rows, and whether it covers the whole population."""
 
     sample: RawSample
-    converted: list[ConvertedRow]
     coverage: QualitySampleCoverage
 
     @property
@@ -432,103 +507,38 @@ class _Panel:
         return self.coverage == QualitySampleCoverage.CENSUS
 
 
-def _indexed_raw_sample(run: _SourceRun, telemetry: PhaseTelemetry) -> RawSample:
-    """Draw a parted source's panel by row index, then produce only the panel's rows.
-
-    The parts report each file's row count, so the seeded sample of locators picks the rows a scan
-    of every row would pick. The ledger lists every locator; rows the sample did not produce have
-    no raw input hash.
-    """
-    spec, policy, recipe = run.recipe.source, run.config.quality_policy, run.recipe
-    assert spec.parts is not None
-    context = conversion_context(recipe)
-    sizes = {
-        file: spec.parts.size(
-            (
-                StoragePath(run.source_overrides[file].path)
-                if run.source_overrides
-                else StoragePath(run.source_input) / file
-            ),
-            context,
-        )
-        for file in staged_files(run.source_input, spec, run.source_overrides)
-    }
-    population_count, chosen = seeded_sample(
-        ((file, index) for file, size in sizes.items() for index in range(size)),
-        size=policy.sample_size,
-        key=lambda row: seeded_order(row_locator(*row), policy.seed),
-    )
-    indices = {file: frozenset(index for chosen_file, index in chosen if chosen_file == file) for file in sizes}
-    shards = [
-        replace(shard, indices=indices[shard.file])
-        for shard in source_shards(run.source_input, spec, run.source_overrides)
-        if indices[shard.file]
-    ]
-    rows = execute_phase(
-        run.context,
-        Dataset.from_list(shards).flat_map(partial(staged_raw_file_rows, run.source_input, spec=spec, context=context)),
-        telemetry=telemetry,
-    ).results
-    if sorted(row["locator"] for row in rows) != sorted(row_locator(file, index) for file, index in chosen):
-        raise ValueError("The source parts did not produce exactly the sampled rows")
-    hashes = {row["locator"]: raw_input_sha256(row["data"]) for row in rows}
-    for file, size in sizes.items():
-        write_parquet_file(
-            (
-                _locator_identity(locator, hashes.get(locator), recipe)
-                for locator in (row_locator(file, index) for index in range(size))
-            ),
-            str(_ledger_path(run.output, file)),
-            schema=RAW_SCHEMA,
-        )
-    return RawSample(population_count, sorted(rows, key=partial(_raw_order, seed=policy.seed)))
-
-
 def _sample_panel(run: _SourceRun) -> _Panel:
-    """Draw the raw panel while writing the locator ledger, then normalize, check and prepare only the panel."""
+    """Sample the complete converted, deduplicated population before SAMPLE/FULL QA."""
+    assert run.population is not None
+    oracle_filter = run.config.oracle_filter
+    assert oracle_filter is not None
     policy = run.config.quality_policy
-    # An earlier run may have written the ledger under other shard names.
-    ledger = run.output / "download" / "locators"
-    if ledger.exists():
-        ledger.rmtree()
     with run.telemetry.phase("raw_sample") as phase:
-        if run.config.mode == SourceProcessingMode.SAMPLE and run.recipe.source.parts is not None:
-            sample = _indexed_raw_sample(run, phase)
-        else:
-            sample = execute_phase(
-                run.context,
-                _raw_dataset(
-                    run.source_input,
-                    run.recipe,
-                    run.source_overrides,
-                    parquet_shard_bytes=run.parquet_shard_bytes,
-                    ledger=run.output,
-                ).reduce(
-                    partial(sample_raw_rows, size=policy.sample_size, seed=policy.seed),
-                    partial(merge_raw_samples, size=policy.sample_size, seed=policy.seed),
-                ),
-                telemetry=phase,
-            ).results[0]
+        sample = execute_phase(
+            run.context,
+            run.population.rows()
+            .map(
+                partial(
+                    _preqa_record,
+                    recipe=run.recipe,
+                    oracle_filter=oracle_filter,
+                    source_context=run.config.no_oracle_source_context,
+                )
+            )
+            .reduce(
+                partial(sample_raw_rows, size=policy.sample_size, seed=policy.seed),
+                partial(merge_raw_samples, size=policy.sample_size, seed=policy.seed),
+            ),
+            telemetry=phase,
+        ).results[0]
     if not sample.rows:
         raise ValueError("No selected source rows are available for the quality panel")
-    with run.telemetry.phase("panel_normalize") as phase:
-        converted_and_checked = execute_phase(
-            run.context,
-            conversion_stage(
-                Dataset.from_list(list(batched(sample.rows, PANEL_ROWS_PER_SHARD))).flat_map(iter), run.recipe
-            ).map(partial(_checked_conversion, recipe=run.recipe)),
-            telemetry=phase,
-        ).results
-    checked = [checked for _, checked in converted_and_checked]
-    # The panel is a few dozen rows: deduplicating it on the driver costs less than an execution.
+    with run.telemetry.phase("panel_normalize"):
+        checked = [checked_row(row["normalized"]) for row in sample.rows]
     with run.telemetry.phase("sample_prepare"):
         prepare_panel(checked, str(run.scratch("sample")), run.recipe, run.config.execution)
     census = sample.population_count <= policy.sample_size
-    return _Panel(
-        sample,
-        [converted for converted, _ in converted_and_checked],
-        QualitySampleCoverage.CENSUS if census else QualitySampleCoverage.RAW_SAMPLE,
-    )
+    return _Panel(sample, QualitySampleCoverage.CENSUS if census else QualitySampleCoverage.RAW_SAMPLE)
 
 
 def _gate_quality(run: _SourceRun, panel: _Panel, review: ReviewConfig | None) -> SourceQualityReport:
@@ -537,7 +547,14 @@ def _gate_quality(run: _SourceRun, panel: _Panel, review: ReviewConfig | None) -
     config = run.config
     with run.telemetry.phase("quality_review") as phase:
         if review is None:
-            decision = skip_source_review(str(prepared), str(quality), config.quality_policy, coverage=panel.coverage)
+            assert config.review is not None
+            decision = skip_source_review(
+                str(prepared),
+                str(quality),
+                config.quality_policy,
+                reviewer_spec=config.review.spec,
+                coverage=panel.coverage,
+            )
         else:
             decision = assess_source_quality(
                 str(prepared),
@@ -556,8 +573,10 @@ def _gate_quality(run: _SourceRun, panel: _Panel, review: ReviewConfig | None) -
 
 
 def _expand_full(run: _SourceRun, panel: _Panel) -> StoragePath:
-    """Prepare every raw row, reusing the panel's normalized rows, and point the quality manifest at them."""
-    cached = {row.raw.source.row: row for row in panel.converted}
+    """Prepare every retained converted task and point the quality manifest at its audits."""
+    assert run.population is not None
+    oracle_filter = run.config.oracle_filter
+    assert oracle_filter is not None
     prepared, quality = run.scratch("full"), run.scratch("quality")
     with run.telemetry.phase("full_prepare") as phase:
         prepare_source(
@@ -568,13 +587,14 @@ def _expand_full(run: _SourceRun, panel: _Panel) -> StoragePath:
             run.config.execution,
             num_output_shards=_population_shard_count(panel.sample.population_count, MAX_PREPARATION_SHARDS),
             context=run.context,
-            normalized_rows=conversion_stage(
-                _raw_dataset(
-                    run.source_input, run.recipe, run.source_overrides, parquet_shard_bytes=run.parquet_shard_bytes
-                ),
-                run.recipe,
-                cached=cached,
-            ).map(partial(_admit_conversion, recipe=run.recipe)),
+            normalized_rows=run.population.rows().map(
+                partial(
+                    _admit_conversion,
+                    recipe=run.recipe,
+                    oracle_filter=oracle_filter,
+                    source_context=run.config.no_oracle_source_context,
+                )
+            ),
             telemetry=phase,
         )
     manifest = _read_json(quality / "manifest.json")
@@ -586,11 +606,6 @@ def _expand_full(run: _SourceRun, panel: _Panel) -> StoragePath:
 def _audit(run: _SourceRun, prepared: StoragePath, review: ReviewConfig | None) -> int:
     """Review the prepared rows and return how many reviews are invalid or unavailable."""
     audited = run.scratch("audited")
-    # Rebuild incomplete audit shards while retaining exact-request journals and
-    # evidence. Successful requests are reconciled by the reviewer cache.
-    previous_audit = audited / "audit"
-    if previous_audit.exists():
-        previous_audit.rmtree()
     with run.telemetry.phase("audit_review") as phase:
         return audit_prepared_source(
             str(prepared),
@@ -609,7 +624,6 @@ def _filter(run: _SourceRun) -> None:
         filter_source(
             str(run.scratch("audited")),
             str(run.scratch("filtered")),
-            run.config.filter_policy,
             run.config.execution.max_workers,
             run.config.execution.worker_resources,
             context=run.context,
@@ -663,9 +677,15 @@ def _write_download_manifest(run: _SourceRun, population_count: int) -> None:
     )
 
 
-def _export_row(row: dict[str, Any], *, verification: SourceVerificationStatus) -> dict[str, Any]:
+def _export_row(
+    row: dict[str, Any],
+    *,
+    verification: SourceVerificationStatus,
+    oracle_filter: OracleFilterReceipt | None = None,
+    source_context: NoOracleSourceContext | None = None,
+) -> dict[str, Any]:
     """Admit one checked audit row and carry its raw identity in place of the raw payload no view publishes."""
-    admitted = _admit(row, verification=verification)
+    admitted = _admit(row, verification=verification, oracle_filter=oracle_filter, source_context=source_context)
     raw = json.loads(admitted.pop("raw_json"))
     return {**admitted, **{name: raw[name] for name, _ in IDENTITY_FIELDS[1:]}}
 
@@ -676,10 +696,14 @@ class _CheckedAudit:
 
     path: str
     verification: SourceVerificationStatus
+    oracle_filter: OracleFilterReceipt | None
+    source_context: NoOracleSourceContext | None = None
 
     def export_rows(self) -> Iterator[dict[str, Any]]:
         for row in load_parquet(self.path):
-            yield _export_row(row, verification=self.verification)
+            yield _export_row(
+                row, verification=self.verification, oracle_filter=self.oracle_filter, source_context=self.source_context
+            )
 
 
 @dataclass(frozen=True)
@@ -700,13 +724,21 @@ class _UnprocessedLocators:
         return iter(())
 
 
-def _write_export_shard(rows: Iterator[dict[str, Any]], shard: ShardInfo, *, output: str) -> Iterator[Counter[str]]:
+@dataclass(frozen=True)
+class _ExportCounts:
+    admissions: Counter[str]
+    grading_environment: Counter[str]
+
+
+def _write_export_shard(rows: Iterator[dict[str, Any]], shard: ShardInfo, *, output: str) -> Iterator[_ExportCounts]:
     """Write one shard of the normalize, review, verify and final views; return its admission counts."""
     admissions: Counter[str] = Counter()
+    grading: Counter[str] = Counter()
 
     def counted() -> Iterator[dict[str, Any]]:
         for row in rows:
             admissions[row["admission"]] += 1
+            count_grading_environment(grading, row.get("grading_environment"))
             yield row
 
     root = StoragePath(output)
@@ -719,7 +751,7 @@ def _write_export_shard(rows: Iterator[dict[str, Any]], shard: ShardInfo, *, out
     outputs["final"] = ShardOutput(str(root / "final" / SIDECAR_SHARD), _sidecar_schema(NORMALIZED_COLUMNS), _final_row)
     for view, path in zip(outputs, write_shard_outputs(counted(), shard, list(outputs.values())), strict=True):
         _written_output(path, view)
-    yield admissions
+    yield _ExportCounts(admissions, grading)
 
 
 def _population_shard_count(population_count: int, maximum: int) -> int:
@@ -730,33 +762,30 @@ def _population_shard_count(population_count: int, maximum: int) -> int:
 def _export_sidecars(
     run: _SourceRun,
     panel: _Panel,
-    decision: SourceQualityReport,
     checked: StoragePath,
     verification: SourceVerificationStatus,
     *,
     expanded: bool,
-) -> dict[str, int]:
+) -> tuple[dict[str, int], dict[str, Any]]:
     """Publish the normalize, review, verify and final views in one execution; return admission counts.
 
     Every view takes its rows from one shuffle by task ID into the canonical normalized shards.
     Locator files of an unexpanded sample write their unprocessed review rows alongside.
     """
     output = run.output
-    # A recovered panel can expand a formerly deferred source. Remove old
-    # derived shards, including unprocessed locators, before publishing that view.
-    for name in OUTPUT_VIEWS[1:]:
-        previous_output = output / name
-        if previous_output.exists():
-            previous_output.rmtree()
     audits = sorted(str(path) for path in (checked / AUDIT_INPUT_PATTERN).glob())
-    inputs: list[_CheckedAudit | _UnprocessedLocators] = [_CheckedAudit(path, verification) for path in audits]
+    inputs: list[_CheckedAudit | _UnprocessedLocators] = [
+        _CheckedAudit(path, verification, run.config.oracle_filter, run.config.no_oracle_source_context)
+        for path in audits
+    ]
     if not expanded and not panel.census:
-        locators = sorted(str(path) for path in (output / "download/locators/*.parquet").glob())
+        assert run.population is not None
+        locators = sorted(str(path) for path in (StoragePath(run.population.path) / "retained/*.parquet").glob())
         unprocessed = partial(
             _unprocessed_review,
             recipe=run.recipe,
             processed=frozenset(_source_identity(row, run.recipe)["task_id"] for row in panel.sample.rows),
-            disposition="reject" if decision.status == SourceQualityStatus.REJECT else "defer",
+            disposition="defer",
         )
         inputs.extend(
             _UnprocessedLocators(path, str(output), ShardInfo(index, len(locators)), unprocessed)
@@ -776,7 +805,11 @@ def _export_sidecars(
             telemetry=phase,
             operation="export",
         ).results
-    return dict(_merge_admissions(iter(shard_admissions)))
+    shards = list(shard_admissions)
+    return (
+        dict(_merge_admissions(iter(shard.admissions for shard in shards))),
+        grading_environment_census(_merge_admissions(iter(shard.grading_environment for shard in shards))),
+    )
 
 
 def _source_status(
@@ -789,8 +822,6 @@ def _source_status(
     # Per-task validation defers unavailable rows without blocking the whole source.
     if quality == SourceQualityStatus.INCOMPLETE or verification == SourceVerificationStatus.INCONCLUSIVE:
         return SourceStatus.INCOMPLETE
-    if quality == SourceQualityStatus.REJECT:
-        return SourceStatus.GATED
     if processed_all:
         return SourceStatus.COMPLETED
     return SourceStatus.SAMPLED if mode == SourceProcessingMode.SAMPLE else SourceStatus.GATED
@@ -802,6 +833,7 @@ def _write_manifest(
     decision: SourceQualityReport,
     verification: dict[str, Any],
     admissions: dict[str, int],
+    grading_environment: dict[str, Any],
     *,
     expanded: bool,
     unavailable_reviews: int,
@@ -830,7 +862,15 @@ def _write_manifest(
         "mode": config.mode.value,
         "source": recipe.name,
         "intended_use": recipe.intended_use.value,
-        "raw_population_count": panel.sample.population_count,
+        "oracle_filter": config.oracle_filter.model_dump(mode="json") if config.oracle_filter else None,
+        "no_oracle_source_context": (
+            config.no_oracle_source_context.model_dump(mode="json") if config.no_oracle_source_context else None
+        ),
+        "lexical_contamination": (
+            config.lexical_contamination.model_dump(mode="json") if config.lexical_contamination else None
+        ),
+        "raw_population_count": run.population.input_rows if run.population else panel.sample.population_count,
+        "within_source_dedup": run.population.evidence() if run.population else None,
         "raw_sample_count": len(panel.sample.rows),
         "raw_population_census": panel.census,
         "full_expansion": expanded,
@@ -839,6 +879,7 @@ def _write_manifest(
         "verification": report,
         "admission": source_admission(admissions),
         "admission_counts": admissions,
+        "grading_environment": grading_environment,
         "processed_rows": verification["input_rows"],
         "unprocessed_rows": panel.sample.population_count - verification["input_rows"],
     }
@@ -867,16 +908,8 @@ def _write_manifest(
     _write_json(output / "manifest.json", manifest)
 
 
-def _finish_scratch(run: _SourceRun, status: SourceStatus) -> None:
-    """Dispose of a finished run's redundant task payloads and point phase manifests at the normalize view."""
-    # Keep request/response evidence and decision manifests. Only the completed
-    # procedure's redundant task payloads are disposable; failures retain them.
-    if status != SourceStatus.INCOMPLETE:
-        for phase in SCRATCH_PHASES:
-            for view in ("audit", "accepted", "review-inputs"):
-                path = run.scratch(phase) / view
-                if path.exists():
-                    path.rmtree()
+def _finish_scratch(run: _SourceRun) -> None:
+    """Point phase manifests at the normalize view while retaining all phase evidence."""
     for phase in SCRATCH_PHASES:
         path = run.scratch(phase) / "manifest.json"
         if path.exists():
@@ -888,18 +921,37 @@ def _finish_scratch(run: _SourceRun, status: SourceStatus) -> None:
 
 
 def _run_source_pipeline(run: _SourceRun) -> SourcePipelineResult:
-    """Review bounded raw tasks, gate full conversion, and persist joined source sidecars.
-
-    The caller owns the entered context and reviewer. Reading the raw
-    population scans selected raw records with bounded memory, but does not
-    execute task converters or controls. Successful outputs retain request
-    evidence and decisions while disposing of redundant intermediate task payloads.
-    """
+    """Convert and deduplicate the full source, then qualify a bounded QA panel and export sidecars."""
     config = run.config
     if config.normalized_shards < 1:
         raise ValueError("Canonical normalized shard count must be positive")
     if config.quality_policy.sample_size > MAX_SOURCE_QUALITY_SAMPLE_SIZE:
         raise ValueError(f"The initial raw task panel is capped at {MAX_SOURCE_QUALITY_SAMPLE_SIZE}")
+    with run.telemetry.phase("within_source_dedup") as phase:
+        population = deduplicate_population(
+            conversion_stage(
+                _raw_dataset(
+                    run.source_input,
+                    run.recipe,
+                    run.source_overrides,
+                    parquet_shard_bytes=run.parquet_shard_bytes,
+                    ledger=run.output,
+                ),
+                run.recipe,
+            ),
+            run.context,
+            str(run.output / "within-source-dedup"),
+            telemetry=phase,
+        )
+    run = replace(run, population=population)
+    oracle_filter = config.oracle_filter
+    if oracle_filter is None:
+        raise ValueError("SAMPLE/FULL admission requires a full-population Harbor oracle filter receipt")
+    if (
+        oracle_filter.recipe_identity != oracle_recipe_identity(run.recipe)
+        or oracle_filter.input_rows != population.input_rows - population.within_source_duplicates
+    ):
+        raise ValueError("Oracle filter receipt belongs to a different recipe or input population")
     panel = _sample_panel(run)
     review = config.review if run.recipe.rubric is not None else None
     decision = _gate_quality(run, panel, review)
@@ -909,8 +961,8 @@ def _run_source_pipeline(run: _SourceRun) -> SourcePipelineResult:
     _filter(run)
     verification, checked = _verify(run)
     verification_status = SourceVerificationStatus(verification["verification"]["status"])
-    _write_download_manifest(run, panel.sample.population_count)
-    admissions = _export_sidecars(run, panel, decision, checked, verification_status, expanded=expanded)
+    _write_download_manifest(run, population.input_rows)
+    admissions, grading_environment = _export_sidecars(run, panel, checked, verification_status, expanded=expanded)
     verification["verification"]["source_path"] = str(run.output / "normalize")
     verification["verification"]["review_path"] = str(run.output / "review")
     status = _source_status(
@@ -925,11 +977,12 @@ def _run_source_pipeline(run: _SourceRun) -> SourcePipelineResult:
         decision,
         verification,
         admissions,
+        grading_environment,
         expanded=expanded,
         unavailable_reviews=unavailable_reviews,
         status=status,
     )
-    _finish_scratch(run, status)
+    _finish_scratch(run)
     return SourcePipelineResult(
         *(str(run.output / name) for name in OUTPUT_VIEWS),
         manifest_path=str(run.output / "manifest.json"),
@@ -963,12 +1016,17 @@ def run_source_pipeline(
         )
     if config is None or config.mode != mode:
         raise ValueError("Reviewed modes require a matching source pipeline configuration")
-    if recipe.rubric is not None and config.review is None:
-        raise ValueError("A recipe with a rubric requires review configuration")
-    telemetry = SourceTelemetry(canonical_source, output_path)
-    run = _SourceRun(
-        recipe, context, source_input, StoragePath(output_path), config, telemetry, source_overrides, parquet_shard_bytes
-    )
+    require_decontamination(config.lexical_contamination, recipe.source.dataset, recipe.source.revision)
+    if config.review is None:
+        raise ValueError("SAMPLE/FULL require a ReviewerSpec")
+    output = StoragePath(output_path)
+    if any(
+        (output / name).exists()
+        for name in (*OUTPUT_VIEWS, "work", "within-source-dedup", "manifest.json", TELEMETRY_FILENAME)
+    ):
+        output = output / "attempts" / uuid4().hex
+    telemetry = SourceTelemetry(canonical_source, str(output))
+    run = _SourceRun(recipe, context, source_input, output, config, telemetry, source_overrides, parquet_shard_bytes)
     with telemetry.record():
         return _run_source_pipeline(run)
 
@@ -978,6 +1036,9 @@ def _write_conversion(rows: Iterator[dict[str, Any]], shard: ShardInfo, *, outpu
 
     def counted() -> Iterator[dict[str, Any]]:
         for row in rows:
+            grading: Counter[str] = Counter()
+            count_grading_environment(grading, row.get("grading_environment"))
+            counts.update({"grading:" + key: value for key, value in grading.items()})
             counts["input_rows"] += 1
             if row["task_json"] is not None:
                 counts["converted_rows"] += 1
@@ -1009,19 +1070,28 @@ def write_conversion(
     if (output / "normalize").exists() or (output / "manifest.json").exists():
         raise FileExistsError(f"Conversion output already exists: {output_path}")
     started = time.monotonic()
-    dataset = rows.map(converted_columns).map_shard(partial(_write_conversion, output_path=str(output / "normalize")))
+    population = deduplicate_population(rows, context, str(output / "within-source-dedup"), telemetry=telemetry)
+    dataset = (
+        population.rows()
+        .map(converted_columns)
+        .map_shard(partial(_write_conversion, output_path=str(output / "normalize")))
+    )
     counts: Counter[str] = Counter()
     for shard_counts in execute_phase(context, dataset, telemetry=telemetry, operation="conversion").results:
         counts.update(shard_counts)
     result = ConversionResult(
         normalized_path=str(output / "normalize"),
         manifest_path=str(output / "manifest.json"),
-        input_rows=counts["input_rows"],
-        converted_rows=counts["converted_rows"],
+        input_rows=population.input_rows,
+        converted_rows=population.unique_count,
         rejections={
             key.removeprefix("rejection:"): count for key, count in counts.items() if key.startswith("rejection:")
         },
         elapsed_seconds=time.monotonic() - started,
+        within_source_dedup=population.evidence(),
+        grading_environment=grading_environment_census(
+            Counter({key.removeprefix("grading:"): value for key, value in counts.items() if key.startswith("grading:")})
+        ),
     )
     _write_json(output / "manifest.json", {**asdict(result), "reviewed": False, "verified": False})
     return result
@@ -1038,7 +1108,8 @@ def _run_quick(
 ) -> ConversionResult:
     """Convert every selected staged row, retaining tasks and typed conversion rejections.
 
-    Model review, resource budgets, deduplication, mechanical checks and grader controls do not run.
+    Exact within-source deduplication runs before output. Model review, resource budgets,
+    mechanical checks and grader controls do not run.
     The output is unreviewed and has no production admission or ``final/`` view.
     Existing conversion payloads are rejected so a failed rerun cannot mix old and new shards.
     The artifact executor may create its bookkeeping files before this stage begins.
@@ -1062,6 +1133,7 @@ def _run_quick(
                 "source_dataset": recipe.source.dataset,
                 "source_revision": recipe.source.revision,
                 "recipe_revision": recipe.version,
+                "oracle_recipe_identity": oracle_recipe_identity(recipe),
                 "intended_use": recipe.intended_use.value,
                 "source_input": source_input,
                 "source_file_overrides": {name: asdict(file) for name, file in (source_overrides or {}).items()},

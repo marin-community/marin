@@ -64,7 +64,8 @@ def _execute_python(code: str, input_grid: list[list[int]], timeout_seconds: int
         + code
         + "\n"
         + f"_arc_result = transform({input_grid!r})\n"
-        + "print(json.dumps(_arc_result.tolist() if isinstance(_arc_result, __import__('numpy').ndarray) else _arc_result))"
+        + "print(json.dumps("
+        + "_arc_result.tolist() if isinstance(_arc_result, __import__('numpy').ndarray) else _arc_result))"
     )
     result = sandbox.execute(
         script, language="python", timeout_seconds=timeout_seconds, max_output_characters=MAX_VERIFIER_OUTPUT_CHARACTERS

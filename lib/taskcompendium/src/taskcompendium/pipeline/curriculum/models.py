@@ -6,8 +6,10 @@
 from enum import StrEnum
 from typing import Literal
 
-from finestore.rl.curation import SourceDeclaration
+from finestore.rl.curation import QualifiedSourceDeclaration
 from pydantic import BaseModel, ConfigDict, Field
+
+LEGACY_COVERAGE_VERSION = "2026.10.15.1"
 
 
 class _Record(BaseModel):
@@ -67,7 +69,7 @@ class AlignmentRelease(_Record):
     ready_count: int
     insufficient_context_count: int
     sources: list[AlignmentSource]
-    inventory: list[SourceDeclaration]
+    inventory: list[QualifiedSourceDeclaration]
     nodes: list[CurriculumNode]
     paths: list[str]
     lineage: dict[str, str]
@@ -93,6 +95,20 @@ class CurriculumStatistic(_Record):
     instances: int
 
 
+class CurriculumConfidenceStatistic(_Record):
+    source_id: str
+    metric: CoverageMetric
+    subject_id: str
+    node_id: str
+    instances: list[int]
+
+
+class CurriculumConfidenceLevel(_Record):
+    label: str
+    subject_min_similarity: float
+    capability_min_similarity: float
+
+
 class CurriculumCoverage(_Record):
     coverage_id: str
     alignment_release_id: str
@@ -105,3 +121,6 @@ class CurriculumCoverage(_Record):
     sample_task_count: int
     source_sample_size: int
     area_sample_size: int
+    version: str = LEGACY_COVERAGE_VERSION
+    confidence_levels: list[CurriculumConfidenceLevel] = Field(default_factory=list)
+    confidence_paths: list[str] = Field(default_factory=list)

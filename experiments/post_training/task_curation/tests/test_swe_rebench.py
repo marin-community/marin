@@ -3,23 +3,32 @@
 
 """Patched repository graders preserve private tests and reject unresolved source results."""
 
+import io
 import json
+import random
+import shutil
 import subprocess
 import sys
+import tarfile
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import cast
 
 import pytest
-from taskcompendium.models import DockerBuildContext
+import tomlkit
+from taskcompendium.grading_environment import SharedGradingPolicy
+from taskcompendium.integrity import SharedDependencyState, SharedIntegrityContract, shared_preamble
+from taskcompendium.models import DockerBuildContext, TaskSpec
 from taskcompendium.pipeline.models import ImportRejection
-from taskcompendium.runtime.resources import resource_bytes
+from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from verifyit.modes import grade_pytest
-from verifyit.spec import PytestSpec, parse_spec
+from verifyit.spec import PytestSpec, parse_spec, render_spec
 
 from experiments.post_training.task_curation.datasets.tasktrove import repositories
 from experiments.post_training.task_curation.pipeline import CurationRecipe
+from experiments.post_training.task_curation.tasktrove.harbor_export import archive_bytes, harbor_payload
 from experiments.post_training.task_curation.tests.conversion import convert_row, converted_task, tasktrove_row
+from experiments.post_training.task_curation.tests.local_grader import LOCAL_GRADER_IMAGE
 
 RECIPES = {source.name: cast(CurationRecipe, source.config) for source in repositories.sources()}
 
@@ -92,6 +101,66 @@ def elixir_source() -> dict[str, bytes]:
     )
     files["tests/config.json"] = json.dumps(config).encode()
     return files
+
+
+@pytest.mark.parametrize(
+    "language, command, family",
+    [
+        ("go", "go test -v ./...", "go"),
+        ("rust", "cargo test --all", "rust"),
+        ("java", "mvn test --settings ci/settings.xml", "jvm"),
+        ("kotlin", "./gradlew test --no-daemon", "jvm"),
+        ("scala", "sbt test", "jvm"),
+        ("julia", "julia --project -e 'using Pkg; Pkg.test()'", "julia"),
+        ("swift", "swift test", "swift"),
+        ("cpp", "cmake --build build && ctest --test-dir build", "cpp"),
+        ("dart", "dart test", "dart"),
+        ("php", "vendor/bin/phpunit", "php"),
+        ("elixir", "mix test", "elixir"),
+        ("csharp", "dotnet test", "dotnet"),
+        ("lua", "busted", "lua"),
+        ("ocaml", "dune runtest", "ocaml"),
+    ],
+)
+def test_native_shared_lowering_preserves_source_command_parser_and_contract(language, command, family):
+    files = go_source()
+    config = json.loads(files["tests/config.json"])
+    config.update(language=language, base_commit="abcdef0")
+    config["install_config"]["test_cmd"] = command
+    files["tests/config.json"] = json.dumps(config).encode()
+    files["tests/test.sh"] += f"\n{command} > /logs/verifier/test_output.log 2>&1\n".encode()
+    task = converted_task(RECIPES["tasktrove-swe_rebench"], tasktrove_row(files))
+    package = harbor_payload(
+        {"task_json": task.model_dump_json(), "source_row": "swe_rebench/fixture", "original_path": "fixture"},
+        grader_image=None,
+        family="tasktrove",
+        shared_policy=SharedGradingPolicy(dependency_state=SharedDependencyState.AGENT_MUTABLE),
+    )
+    metadata = tomlkit.parse(package.files["task.toml"].decode())["metadata"]
+    contract = SharedIntegrityContract.model_validate(metadata["integrity_contract"])
+    assert contract.native is not None
+    assert (contract.native.family, contract.native.command) == (family, command)
+    assert package.files["instruction.md"].decode().startswith(shared_preamble(contract))
+    private = {resource.path: resource_bytes(resource) for resource in task.resources.verifier}
+    assert package.files["tests/test_state.py"] == private["test_state.py"]
+
+
+def test_shared_export_keeps_pre_agent_setup_files_in_native_package(tmp_path):
+    task = converted_task(RECIPES["tasktrove-swe_rebench"], tasktrove_row(python_source("abcdef0")))
+    content = b"source-dependency==1.2.3\n"
+    resource = inline_resource("setup_files/requirements.txt", content).model_copy(update={"mode": "640"})
+    task = task.model_copy(update={"resources": task.resources.model_copy(update={"worker": (resource,)})})
+    package = harbor_payload(
+        {"task_json": task.model_dump_json(), "source_row": "swe_rebench/fixture", "original_path": "fixture"},
+        grader_image=None,
+        family="tasktrove",
+        shared_policy=SharedGradingPolicy(dependency_state=SharedDependencyState.AGENT_MUTABLE),
+    )
+    with tarfile.open(fileobj=io.BytesIO(archive_bytes(package.files, package.modes))) as archive:
+        archive.extractall(tmp_path, filter="data")
+    requirements = tmp_path / "setup_files/requirements.txt"
+    assert requirements.read_bytes() == content
+    assert requirements.stat().st_mode & 0o777 == 0o640
 
 
 @pytest.mark.parametrize("language", ["python", "go"])
@@ -211,6 +280,7 @@ class PatchedRepository:
     private: Path
     spec: PytestSpec
     expected_tests: str
+    task: TaskSpec
 
 
 @pytest.fixture
@@ -251,6 +321,83 @@ def patched_repository(tmp_path) -> PatchedRepository:
         private=private,
         spec=replace(spec, workspace=str(workspace), python=sys.executable, timeout=30),
         expected_tests=patched,
+        task=task,
+    )
+
+
+def shared_python_package(repository: PatchedRepository, destination: Path, *, absolute_manifests: bool) -> None:
+    task = repository.task
+    if absolute_manifests:
+        original = cast(PytestSpec, parse_spec((repository.private / "taskcompendium-verifier.toml").read_text()))
+        spec = replace(
+            original, protected_paths_files=tuple(f"/tests/{path}" for path in original.protected_paths_files)
+        )
+        replacement = inline_resource("taskcompendium-verifier.toml", render_spec(spec).encode())
+        task = task.model_copy(
+            update={
+                "resources": task.resources.model_copy(
+                    update={
+                        "verifier": tuple(
+                            replacement if resource.path == replacement.path else resource
+                            for resource in task.resources.verifier
+                        )
+                    }
+                )
+            }
+        )
+    package = harbor_payload(
+        {"task_json": task.model_dump_json(), "source_row": "swe_rebench/fixture", "original_path": "fixture"},
+        grader_image=None,
+        family="tasktrove",
+        shared_policy=SharedGradingPolicy(dependency_state=SharedDependencyState.AGENT_MUTABLE),
+    )
+    for name, content in package.files.items():
+        target = destination / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+    shutil.copytree(repository.workspace, destination / "repository")
+    (destination / "expected-tests.txt").write_text(repository.expected_tests)
+    shutil.copy2(Path(__file__).with_name("shared_harbor_guest.py"), destination / "guest.py")
+
+
+@pytest.mark.docker
+@pytest.mark.parametrize("reference_size", [0, 160000], ids=["ordinary", "large-metadata"])
+@pytest.mark.parametrize("absolute_manifests", [False, True])
+@pytest.mark.parametrize("repair", [False, True])
+def test_generated_shared_python_harbor_payload_restores_private_manifests(
+    patched_repository, tmp_path, machines, absolute_manifests, repair, reference_size
+):
+    if reference_size:
+        task = patched_repository.task
+        reference = inline_resource("large-reference.bin", random.Random(0).randbytes(reference_size))
+        patched_repository = replace(
+            patched_repository,
+            task=task.model_copy(
+                update={
+                    "resources": task.resources.model_copy(update={"verifier": (*task.resources.verifier, reference)})
+                }
+            ),
+        )
+    package = tmp_path / "package"
+    shared_python_package(patched_repository, package, absolute_manifests=absolute_manifests)
+    subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--network=none",
+            "--user=0:0",
+            "--mount",
+            f"type=bind,source={package},target=/payload,readonly",
+            LOCAL_GRADER_IMAGE,
+            "python",
+            "/payload/guest.py",
+            str(int(repair)),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=180,
     )
 
 

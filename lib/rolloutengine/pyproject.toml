@@ -12,6 +12,7 @@ dependencies = [
     "marin-taskcompendium",
     "marin-shellbox",
     "openai>=1.59.9",
+    "universal-pathlib>=0.2",
 ]
 
 [dependency-groups]
@@ -20,6 +21,9 @@ test = [
     "pytest-asyncio",
     "pytest-timeout",
     "marin-shellbox[daytona,shellsim]",
+    "tokenizers",
+    "jinja2>=3.1.6",
+    "transformers>=5.10.0,<6.0",
 ]
 
 [tool.hatch.build.targets.wheel]

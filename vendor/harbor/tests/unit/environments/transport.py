@@ -8,6 +8,8 @@ import os
 import shutil
 import signal
 import socket
+import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 from shellbox.machine import Command, ExitReason, MachineSpec, Result
@@ -18,6 +20,21 @@ def available_port() -> int:
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         return listener.getsockname()[1]
+
+
+def kill_process_group(group: int) -> None:
+    try:
+        os.killpg(group, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except PermissionError:
+        # Darwin can report EPERM as the final group member exits. Confirm
+        # disappearance before accepting it as completed teardown.
+        result = subprocess.run(
+            ["ps", "-axo", "pgid="], capture_output=True, text=True, check=True
+        )
+        if str(group) in result.stdout.split():
+            raise
 
 
 class ProcessMachine:
@@ -39,6 +56,7 @@ class ProcessMachine:
             "/workspace",
             "/tests",
             "/setup_files",
+            "/solution",
         ):
             value = value.replace(prefix, str(self.path(prefix)))
         return value.replace("tau3-runtime", "127.0.0.1")
@@ -63,10 +81,7 @@ class ProcessMachine:
             )
 
             async def stop() -> None:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+                kill_process_group(process.pid)
 
             session = SubprocessSession(
                 process, stop=stop, stderr_limit=command.output_limit_bytes
@@ -98,10 +113,7 @@ class ProcessMachine:
             async with asyncio.timeout(command.timeout):
                 stdout, stderr = await process.communicate(command.stdin)
         except BaseException:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            kill_process_group(process.pid)
             await process.wait()
             raise
         return Result(
@@ -110,10 +122,7 @@ class ProcessMachine:
 
     async def quiesce_commands(self) -> None:
         for process in self.commands:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            kill_process_group(process.pid)
             await process.wait()
 
     async def upload(self, source: Path, target: str) -> None:
@@ -135,3 +144,28 @@ class ProcessMachine:
         self.closed = True
         await self.quiesce_commands()
         await asyncio.gather(*(session.close() for session in self.sessions))
+
+
+class ChrootProcessMachine(ProcessMachine):
+    """Execute commands in a real minimal Linux filesystem with its own shells."""
+
+    def argument(self, value: str) -> str:
+        return value
+
+    async def run(self, command: Command) -> Result:
+        return await super().run(
+            replace(
+                command,
+                argv=(
+                    "/usr/sbin/chroot",
+                    str(self.root),
+                    "/bin/sh",
+                    "-c",
+                    'cd "$1"; shift; exec "$@"',
+                    "chroot-transport",
+                    command.cwd or self.spec.workdir,
+                    *command.argv,
+                ),
+                cwd="/",
+            )
+        )

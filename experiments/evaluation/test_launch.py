@@ -95,8 +95,9 @@ def harbor_task_workspace():
         yield root
 
 
+@pytest.mark.parametrize("hosted_judge", [False, True], ids=["missing-judge", "hosted-judge"])
 def test_launch_preflights_prepared_task_with_hosted_judge(
-    tmp_path, submitted_batches, monkeypatch, harbor_task_workspace
+    tmp_path, submitted_batches, monkeypatch, harbor_task_workspace, hosted_judge
 ):
     monkeypatch.setattr(launch_module, "_capability_origin", lambda _cluster: "https://iris.example")
     for key in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "TOGETHER_API_KEY", "CUSTOM_API_KEY"):
@@ -137,14 +138,15 @@ def test_launch_preflights_prepared_task_with_hosted_judge(
         str(tmp_path),
         "--no-wait",
     ]
-    runner = CliRunner()
-    rejected = runner.invoke(cli, command)
-    assert rejected.exit_code != 0
-    assert submitted_batches == []
+    if hosted_judge:
+        command.extend(["--judge-model", "qwen3-0.6b", "--judge-accelerator", "H100x1"])
+    result = CliRunner().invoke(cli, command)
+    if not hosted_judge:
+        assert result.exit_code != 0
+        assert submitted_batches == []
+        return
 
-    accepted = runner.invoke(cli, [*command, "--judge-model", "qwen3-0.6b", "--judge-accelerator", "H100x1"])
-
-    assert accepted.exit_code == 0, accepted.output
+    assert result.exit_code == 0, result.output
     batch = submitted_batches[0]
     config = batch.evaluations[0].executor.config
     assert config.benchmark.n_benchmark == 1

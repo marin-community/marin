@@ -70,12 +70,13 @@ def tau3_environment(tmp_path):
     return tmp_path
 
 
+@pytest.mark.parametrize("allow_internet", [False, True])
 def test_tau3_import_preserves_prepared_services_and_private_model_capability(
-    tau3_environment, monkeypatch
+    tau3_environment, monkeypatch, allow_internet
 ):
     monkeypatch.setenv("OPENAI_API_KEY", "real-provider-key")
     task = EnvironmentConfig(
-        allow_internet=False,
+        allow_internet=allow_internet,
         env={
             "OPENAI_API_KEY": "${OPENAI_API_KEY}",
             "OPENAI_BASE_URL": "${OPENAI_BASE_URL}",
@@ -96,7 +97,8 @@ def test_tau3_import_preserves_prepared_services_and_private_model_capability(
     assert plan.task.primary == main.name == "main"
     assert main.machine.source.reference == MAIN_IMAGE
     assert runtime.machine.source.reference == RUNTIME_IMAGE
-    assert main.machine.network is runtime.machine.network is NetworkPolicy.DENY
+    expected_network = NetworkPolicy.ALLOW if allow_internet else NetworkPolicy.DENY
+    assert main.machine.network is runtime.machine.network is expected_network
     assert (
         main.machine.env["OPENAI_API_KEY"]
         == runtime.machine.env["OPENAI_API_KEY"]

@@ -1,9 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Qualify a source that ships no oracle solutions.
 
 A source whose tasks carry no oracle solution (``has_solution`` false, or an
@@ -23,13 +20,11 @@ shared environments. Empty-submission grading runs separately through
    payload-only diagnostic and does not establish dependency provisioning.
 3. **Empty-submission grading** (separate command). ``no_oracle_liveness``
    samples the grader on a fresh machine. Qualification requires a successful
-   verifier exit, a reward below 1.0, and a positive structured executed-test
-   count.
+   verifier exit, a reward below one, and a positive structured executed-test count.
 
-Preservation always runs; setup execution runs with ``--docker`` (locally in Docker or,
-with ``--lowered``, against the lowered specs). The report records pass rates by base
-and overall. Verifier results require an explicit ``--liveness`` receipt file. A
-reward-only sample is insufficient to establish ``oracle_validation=verifier_executed``.
+The offline report breaks preservation rates down by base and records setup and verifier
+rates overall. Verifier results require an explicit ``--liveness`` receipt file. A reward-only
+sample is insufficient to establish ``oracle_validation=verifier_executed``.
 
 Run the offline phase with::
 
@@ -44,20 +39,74 @@ Use ``no_oracle_liveness`` through the procedure in
 """
 
 import argparse
+import base64
+import gzip
+import hashlib
+import io
 import json
+import re
+import shlex
+import subprocess
+import tarfile
+import tempfile
+import tomllib
 from collections import Counter, defaultdict
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from experiments.post_training.task_curation.no_oracle_liveness import (
-    UNKNOWN_BASE,
-    LivenessOutcome,
-    load_specs,
-    manifest_bases,
-)
-from experiments.post_training.task_curation.no_oracle_preservation import PreservationResult, check_preservation
-from experiments.post_training.task_curation.no_oracle_setup import SetupExecution, _execute_lowered, _execute_setups
-from experiments.post_training.task_curation.task_tars import iter_task_payloads
+import pyarrow.parquet as pq
+
+from experiments.post_training.task_curation.calibforge_fixtures import FIXTURE_ARCHIVE, SETUP_ROOT
+
+ENVIRONMENT_PREFIX = "environment/"
+COPY_SOURCE = re.compile(r"^\s*COPY\s+(?:--\S+\s+)*(?P<sources>.+)$", re.IGNORECASE | re.MULTILINE)
+ADD_SOURCE = re.compile(r"^\s*ADD\s", re.IGNORECASE | re.MULTILINE)
+
+PASSING_VERIFIER_OUTCOMES = ("negative_verdict",)
+
+
+@dataclass(frozen=True)
+class FileExpectation:
+    """One file the native recipe copies, with the bytes it must keep."""
+
+    path: str
+    sha256: str
+    mode: int
+
+
+@dataclass(frozen=True)
+class PreservationResult:
+    """Whether the rebuilt payload preserved every copied file."""
+
+    task_id: str
+    expected: tuple[FileExpectation, ...]
+    missing: tuple[str, ...] = ()
+    changed: tuple[str, ...] = ()
+    remoded: tuple[str, ...] = ()
+
+    @property
+    def passed(self) -> bool:
+        return not (self.missing or self.changed or self.remoded)
+
+
+@dataclass(frozen=True)
+class SetupExecution:
+    """One rebuilt setup script executed in its base image."""
+
+    task_id: str
+    outcome: str
+    written: int = 0
+    missing: tuple[str, ...] = ()
+    extra: tuple[str, ...] = ()
+    changed: tuple[str, ...] = ()
+    detail: str = ""
+
+    @property
+    def passed(self) -> bool:
+        """Require an executed setup and every expected output file."""
+        return self.outcome == "executed" and not self.missing
 
 
 @dataclass(frozen=True)
@@ -72,8 +121,7 @@ class VerifierResult:
 
     @property
     def passed(self) -> bool:
-        # Receipts carry plain strings from JSON, so compare by value.
-        return self.outcome == LivenessOutcome.NEGATIVE_VERDICT and self.exit_code == 0 and self.tests_executed > 0
+        return self.outcome in PASSING_VERIFIER_OUTCOMES and self.exit_code == 0 and self.tests_executed > 0
 
 
 @dataclass
@@ -105,7 +153,7 @@ class QualificationReport:
     def by_base(self) -> dict[str, dict[str, float | int | None]]:
         grouped: dict[str, list[PreservationResult]] = defaultdict(list)
         for result in self.preservation:
-            grouped[self.bases.get(result.task_id, UNKNOWN_BASE)].append(result)
+            grouped[self.bases.get(result.task_id, "<unknown>")].append(result)
         return {
             base: {"tasks": len(results), "preservation_rate": self._rate(results)}
             for base, results in sorted(grouped.items())
@@ -143,9 +191,7 @@ class QualificationReport:
                     "outcome": result.outcome,
                     "written": result.written,
                     "missing": list(result.missing),
-                    "altered": list(result.altered),
                     "extra": list(result.extra),
-                    "remoded": list(result.remoded),
                     "passed": result.passed,
                     "detail": result.detail,
                 }
@@ -165,6 +211,363 @@ class QualificationReport:
         }
 
 
+def _read_tar(payload: bytes) -> tarfile.TarFile:
+    raw = gzip.decompress(payload) if payload[:2] == b"\x1f\x8b" else payload
+    return tarfile.open(fileobj=io.BytesIO(raw))
+
+
+def copied_paths(dockerfile: str) -> list[str]:
+    """The context-relative sources a native recipe copies into the workspace."""
+    if ADD_SOURCE.search(dockerfile):
+        raise ValueError("ADD recipes have no preservation contract")
+    paths: list[str] = []
+    for match in COPY_SOURCE.finditer(dockerfile):
+        *sources, _destination = match.group("sources").split()
+        for source in sources:
+            if source.startswith("--") or "$" in source or "*" in source or "?" in source:
+                continue
+            paths.append(source.rstrip("/"))
+    return paths
+
+
+def copied_destinations(dockerfile: str, workdir: str) -> tuple[str, ...]:
+    """Absolute destinations the native recipe writes, resolved against its workdir."""
+    roots: list[str] = []
+    for match in COPY_SOURCE.finditer(dockerfile):
+        destination = match.group("sources").split()[-1]
+        if "$" in destination or "*" in destination or "?" in destination:
+            continue
+        absolute = destination if destination.startswith("/") else f"{workdir.rstrip('/')}/{destination}"
+        roots.append(absolute.rstrip("/") or "/")
+    return tuple(dict.fromkeys(roots))
+
+
+def preservation_expectations(native_payload: bytes) -> tuple[FileExpectation, ...]:
+    """Files and modes the native recipe copies, read from its own tar."""
+    with _read_tar(native_payload) as archive:
+        members = {member.name: member for member in archive.getmembers() if member.isfile()}
+        dockerfile_member = members.get(f"{ENVIRONMENT_PREFIX}Dockerfile")
+        if dockerfile_member is None:
+            raise ValueError("native task has no environment/Dockerfile")
+        dockerfile = archive.extractfile(dockerfile_member).read().decode(errors="replace")
+        expectations: list[FileExpectation] = []
+        for source in copied_paths(dockerfile):
+            source_path = f"{ENVIRONMENT_PREFIX}{source}"
+            prefix = source_path + "/"
+            matches = [name for name in members if name == source_path or name.startswith(prefix)]
+            for name in sorted(matches):
+                content = archive.extractfile(members[name]).read()
+                expectations.append(
+                    FileExpectation(
+                        path=name,
+                        sha256=hashlib.sha256(content).hexdigest(),
+                        mode=members[name].mode & 0o7777,
+                    )
+                )
+    return tuple(expectations)
+
+
+def removed_workspace_paths(dockerfile: str, workdir: str) -> tuple[str, ...]:
+    """Absolute paths the native recipe deletes from the workspace.
+
+    A recipe that generates data with a copied script and then removes the script
+    leaves no such file behind, so a faithful rebuild must not be required to keep it.
+    """
+    removed: list[str] = []
+    for line in dockerfile.splitlines():
+        stripped = line.strip()
+        if not stripped.upper().startswith("RUN "):
+            continue
+        for segment in re.split(r"&&|\|\||;", stripped[4:]):
+            try:
+                tokens = shlex.split(segment, comments=False)
+            except ValueError as error:
+                raise ValueError(f"cannot parse native RUN segment: {segment!r}") from error
+            while tokens and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=\S*", tokens[0]):
+                tokens = tokens[1:]
+            if not tokens or tokens[0] != "rm":
+                continue
+            for token in tokens[1:]:
+                if token.startswith("-") or any(character in token for character in "$*?"):
+                    continue
+                removed.append(token if token.startswith("/") else f"{workdir.rstrip('/')}/{token}")
+    return tuple(dict.fromkeys(removed))
+
+
+@dataclass(frozen=True)
+class CopyMapping:
+    source: str
+    destination: str
+    directory: bool
+
+
+def copy_mappings(dockerfile: str, workdir: str) -> list[CopyMapping]:
+    """Each copied source with its absolute destination and whether that is a directory."""
+    mappings: list[CopyMapping] = []
+    for match in COPY_SOURCE.finditer(dockerfile):
+        tokens = [token for token in match.group("sources").split() if not token.startswith("--")]
+        if len(tokens) < 2:
+            continue
+        *sources, destination = tokens
+        is_directory = len(sources) > 1 or destination.endswith("/")
+        absolute = destination if destination.startswith("/") else f"{workdir.rstrip('/')}/{destination}"
+        absolute = absolute.rstrip("/") or "/"
+        for source in sources:
+            if any(character in source for character in "$*?"):
+                continue
+            mappings.append(CopyMapping(source.rstrip("/"), absolute, is_directory))
+    return mappings
+
+
+def workspace_expectations(native_payload: bytes) -> tuple[FileExpectation, ...]:
+    """The copied files the native recipe leaves in the workspace, read from its own tar."""
+    expectations = preservation_expectations(native_payload)
+    with _read_tar(native_payload) as archive:
+        member = next((item for item in archive.getmembers() if item.name == f"{ENVIRONMENT_PREFIX}Dockerfile"), None)
+        if member is None:
+            return expectations
+        dockerfile = archive.extractfile(member).read().decode(errors="replace")
+    workdir_match = re.search(r"^\s*WORKDIR\s+(\S+)", dockerfile, re.IGNORECASE | re.MULTILINE)
+    workdir = workdir_match.group(1) if workdir_match else "/app"
+    removed = removed_workspace_paths(dockerfile, workdir)
+    mappings = copy_mappings(dockerfile, workdir)
+    kept: dict[str, FileExpectation] = {}
+    for item in expectations:
+        relative = item.path[len(ENVIRONMENT_PREFIX) :]
+        for mapping in mappings:
+            if relative == mapping.source:
+                destination = (
+                    f"{mapping.destination}/{relative.rsplit('/', 1)[-1]}" if mapping.directory else mapping.destination
+                )
+            elif relative.startswith(mapping.source + "/"):
+                destination = f"{mapping.destination}/{relative[len(mapping.source) + 1:]}"
+            else:
+                continue
+            if any(destination == path or destination.startswith(path.rstrip("/") + "/") for path in removed):
+                continue
+            kept[destination] = replace(item, path=destination)
+    return tuple(kept.values())
+
+
+def check_preservation(task_id: str, native_payload: bytes, rebuilt_payload: bytes) -> PreservationResult:
+    """Compare the native recipe's copied files with the rebuilt setup payload."""
+    expected = preservation_expectations(native_payload)
+    payload_member = f"{SETUP_ROOT.lstrip(chr(47))}/{FIXTURE_ARCHIVE}"
+    with _read_tar(rebuilt_payload) as archive:
+        member = next((item for item in archive.getmembers() if item.name == payload_member), None)
+        if member is None:
+            return PreservationResult(task_id=task_id, expected=expected, missing=tuple(item.path for item in expected))
+        payload = archive.extractfile(member).read()
+    staged = {}
+    with tarfile.open(fileobj=io.BytesIO(payload)) as archive:
+        for item in archive.getmembers():
+            if item.isfile():
+                staged[f"{ENVIRONMENT_PREFIX}{item.name}"] = (archive.extractfile(item).read(), item.mode & 0o7777)
+    missing, changed, remoded = [], [], []
+    for item in expected:
+        found = staged.get(item.path)
+        if found is None:
+            missing.append(item.path)
+            continue
+        if hashlib.sha256(found[0]).hexdigest() != item.sha256:
+            changed.append(item.path)
+        if found[1] != item.mode:
+            remoded.append(item.path)
+    return PreservationResult(
+        task_id=task_id, expected=expected, missing=tuple(missing), changed=tuple(changed), remoded=tuple(remoded)
+    )
+
+
+DOCKER_SETUP_TIMEOUT = 300
+"""Seconds one rebuilt setup script may run in its base image."""
+
+APT_SHIM = """#!/bin/sh
+# Skip package installation during payload-only diagnostics.
+exit 0
+"""
+
+
+def _docker(*arguments: str, **kwargs) -> subprocess.CompletedProcess:
+    return subprocess.run(["docker", *arguments], capture_output=True, text=True, **kwargs)
+
+
+def _normalized_path(path: str) -> str:
+    """A reported path with one relative prefix removed; absolute paths keep their root."""
+    return path[2:] if path.startswith("./") else path
+
+
+@dataclass(frozen=True)
+class WorkspaceFile:
+    path: str
+    sha256: str
+    mode: int
+
+
+def _manifest(stdout: str) -> list[WorkspaceFile]:
+    """Parse paired absolute-path mode and SHA-256 records from a container scan."""
+    entries: dict[str, int] = {}
+    digests: dict[str, str] = {}
+    for line in stdout.splitlines():
+        parts = line.split(None, 1)
+        if len(parts) != 2:
+            continue
+        first, second = parts
+        path = _normalized_path(second.strip())
+        # stat prints a mode without leading zeros ("0" for a file a task
+        # deliberately made unreadable), so accept one to four octal digits.
+        if re.fullmatch(r"[0-7]{1,4}", first):
+            entries[path] = int(first, 8)
+        elif re.fullmatch(r"[0-9a-f]{64}", first):
+            digests[path] = first
+    return [WorkspaceFile(path, digest, entries[path]) for path, digest in digests.items() if path in entries]
+
+
+def _execute_container_setup(
+    task_id: str,
+    image: str,
+    command: str,
+    copies: tuple[tuple[Path, str], ...],
+    dns: tuple[str, ...],
+    timeout: int,
+) -> SetupExecution | str:
+    resolvers = tuple(part for server in dns for part in ("--dns", server))
+    created = _docker("create", *resolvers, image, "sh", "-c", command)
+    if created.returncode:
+        return SetupExecution(task_id=task_id, outcome="docker_error", detail=created.stderr[-500:])
+    container = created.stdout.strip()
+    try:
+        for source, destination in copies:
+            copied = _docker("cp", str(source), f"{container}:{destination}")
+            if copied.returncode:
+                return SetupExecution(task_id=task_id, outcome="docker_error", detail=copied.stderr[-500:])
+        started = _docker("start", "-a", container, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return SetupExecution(task_id=task_id, outcome="timeout", detail=f"{timeout}s")
+    finally:
+        removed = _docker("rm", "-f", container)
+        if removed.returncode:
+            raise RuntimeError(f"cannot remove Docker setup container {container}: {removed.stderr[-500:]}")
+    if started.returncode:
+        return SetupExecution(task_id=task_id, outcome="script_error", detail=started.stderr[-500:])
+    return started.stdout
+
+
+def _workspace_scan(roots: tuple[str, ...]) -> str:
+    paths = " ".join(shlex.quote(path) for path in dict.fromkeys(roots))
+    return (
+        f'for root in {paths}; do if [ -d "$root" ]; then '
+        '(find "$root" -type f -printf \'%m %p\\n\' && find "$root" -type f -exec sha256sum {} +); '
+        'elif [ -e "$root" ]; then (stat -c \'%a %n\' "$root" && sha256sum "$root"); fi; done'
+    )
+
+
+def _setup_comparison(task_id: str, expectations: tuple[FileExpectation, ...], stdout: str) -> SetupExecution:
+    comparison = _compare_workspace(expectations, stdout)
+    return SetupExecution(
+        task_id=task_id,
+        outcome="executed",
+        written=comparison.written,
+        missing=comparison.missing,
+        extra=comparison.extra,
+        changed=comparison.changed,
+    )
+
+
+def execute_setup_in_docker(
+    task_id: str,
+    native_payload: bytes,
+    rebuilt_payload: bytes,
+    *,
+    image: str,
+    workdir: str,
+    setup_script: str,
+    destinations: tuple[str, ...] = (),
+    stub_apt: bool = False,
+    dns: tuple[str, ...] = (),
+    timeout: int = DOCKER_SETUP_TIMEOUT,
+) -> SetupExecution:
+    """Run one rebuilt setup script in its base image and compare the written files."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        with _read_tar(rebuilt_payload) as archive:
+            archive.extractall(root, filter="data")
+        setup = root / SETUP_ROOT.lstrip("/")
+        script = setup / setup_script
+        if not script.exists():
+            return SetupExecution(task_id=task_id, outcome="missing_setup_script")
+        shim = root / "shim"
+        shim.mkdir()
+        for tool in ("apt-get", "apt"):
+            (shim / tool).write_text(APT_SHIM)
+            (shim / tool).chmod(0o755)
+        command = (
+            ("PATH=/shim:$PATH; " if stub_apt else "")
+            + f"sh {SETUP_ROOT}/{setup_script} && "
+            + _workspace_scan((workdir, *destinations))
+        )
+        result = _execute_container_setup(task_id, image, command, ((setup, SETUP_ROOT), (shim, "/shim")), dns, timeout)
+    if isinstance(result, SetupExecution):
+        return result
+    return _setup_comparison(task_id, workspace_expectations(native_payload), result)
+
+
+@dataclass(frozen=True)
+class WorkspaceComparison:
+    written: int
+    missing: tuple[str, ...]
+    extra: tuple[str, ...]
+    changed: tuple[str, ...]
+
+
+def _compare_workspace(expectations: tuple[FileExpectation, ...], stdout: str) -> WorkspaceComparison:
+    """Require the native bytes at each native COPY destination, including duplicate contents."""
+    observed = {item.path: item for item in _manifest(stdout)}
+    expected = {item.path: item for item in expectations}
+    missing = tuple(
+        path for path, item in sorted(expected.items()) if path not in observed or observed[path].sha256 != item.sha256
+    )
+    extra = tuple(sorted(observed.keys() - expected.keys()))
+    changed = tuple(
+        f"{item.sha256[:12]}:{path}:{oct(observed[path].mode)}->{oct(item.mode)}"
+        for path, item in sorted(expected.items())
+        if path in observed and observed[path].mode != item.mode
+    )
+    return WorkspaceComparison(len(observed), missing, extra, changed)
+
+
+def execute_lowered_setup(
+    spec: Mapping,
+    expectations: tuple[FileExpectation, ...],
+    *,
+    destinations: tuple[str, ...] = (),
+    timeout: int = DOCKER_SETUP_TIMEOUT,
+    dns: tuple[str, ...] = (),
+) -> SetupExecution:
+    """Run the lowered spec's declared setup and verify its native file bytes and modes."""
+    task = spec["task"]
+    requirements = task["environment_requirements"]
+    commands = tuple(requirements.get("setup_commands") or ())
+    if not commands:
+        return SetupExecution(task_id=task["id"], outcome="no_setup_commands")
+    workdir = requirements.get("working_directory") or "/app"
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        for resource in task["resources"].get("all") or ():
+            target = root / "setup_files" / Path(resource["path"]).name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(base64.b64decode(resource["source"]["content_base64"], validate=True))
+            mode = resource.get("mode")
+            if mode is not None:
+                target.chmod(int(mode, 8))
+        command = " && ".join(commands) + " && " + _workspace_scan((workdir, *destinations))
+        result = _execute_container_setup(
+            task["id"], requirements["docker_image"], command, ((root / "setup_files", SETUP_ROOT),), dns, timeout
+        )
+    if isinstance(result, SetupExecution):
+        return result
+    return _setup_comparison(task["id"], expectations, result)
+
+
 def summarize(report: QualificationReport) -> dict:
     """Admission summary with the pass rates and the recorded verdict."""
     return {
@@ -182,32 +585,98 @@ def summarize(report: QualificationReport) -> dict:
     }
 
 
-def _wanted_task_ids(args: argparse.Namespace, rebuilt: dict[str, bytes]) -> set[str]:
-    """The task ids this run should cover: explicit ids plus a previous report's failures."""
-    wanted = set(args.task)
-    if args.retry_failed is not None:
-        previous = json.loads(args.retry_failed.read_text())
-        wanted |= {row["task_id"] for row in previous["execution"] if not row["passed"]}
-        wanted |= {row["task_id"] for row in previous["preservation"] if not row["passed"]}
-    return wanted & set(rebuilt)
+def _native_tasks(path: Path):
+    parquet = pq.ParquetFile(path)
+    for batch in parquet.iter_batches(batch_size=64, columns=["path", "task_binary"]):
+        columns = batch.to_pydict()
+        for task_id, blob in zip(columns["path"], columns["task_binary"], strict=True):
+            yield task_id, bytes(blob)
 
 
-def _merge_liveness_receipts(report: QualificationReport, path: Path, native: dict[str, bytes]) -> None:
-    """Append each liveness receipt as a verifier result; every task must be known once."""
-    seen: set[str] = set()
-    for row in (json.loads(line) for line in path.read_text().splitlines() if line.strip()):
-        if row["task_id"] not in native or row["task_id"] in seen:
-            raise ValueError(f"unknown or duplicate liveness task: {row['task_id']}")
-        seen.add(row["task_id"])
-        report.verifier.append(
-            VerifierResult(
-                row["task_id"], row["outcome"], row["exit_code"], row.get("detail", ""), row.get("tests_executed", 0)
-            )
+@dataclass(frozen=True)
+class RebuiltMetadata:
+    image: str
+    workdir: str
+    setup_script: str
+
+
+def _rebuilt_metadata(rebuilt_payload: bytes) -> RebuiltMetadata:
+    """The image, workdir and setup script a rebuilt task declares."""
+    with _read_tar(rebuilt_payload) as archive:
+        member = next((item for item in archive.getmembers() if item.name == "task.toml"), None)
+        if member is None:
+            raise ValueError("rebuilt task has no task.toml")
+        document = tomllib.loads(archive.extractfile(member).read().decode(errors="replace"))
+    environment = document.get("environment") or {}
+    setup = environment.get("setup") or {}
+    command = str(setup.get("command") or "")
+    script = command.split()[-1].rsplit("/", 1)[-1]
+    workdir = environment.get("workdir") or "/app"
+    return RebuiltMetadata(environment["docker_image"], workdir, script)
+
+
+def _native_destinations(native_payload: bytes, workdir: str) -> tuple[str, ...]:
+    """Absolute destinations the native recipe writes, resolved against its own workdir."""
+    with _read_tar(native_payload) as archive:
+        member = next((item for item in archive.getmembers() if item.name == "environment/Dockerfile"), None)
+        if member is None:
+            return (workdir,)
+        dockerfile = archive.extractfile(member).read().decode(errors="replace")
+    native_workdir = "/app"
+    match = re.search(r"^\s*WORKDIR\s+(\S+)", dockerfile, re.IGNORECASE | re.MULTILINE)
+    if match:
+        native_workdir = match.group(1)
+    return copied_destinations(dockerfile, native_workdir)
+
+
+def _execute_setups(
+    native: dict[str, bytes],
+    rebuilt: dict[str, bytes],
+    workers: int,
+    *,
+    stub_apt: bool = False,
+    dns: tuple[str, ...] = (),
+) -> list[SetupExecution]:
+    def run(task_id: str) -> SetupExecution:
+        try:
+            metadata = _rebuilt_metadata(rebuilt[task_id])
+        except (KeyError, ValueError) as error:
+            return SetupExecution(task_id=task_id, outcome="invalid_task", detail=str(error))
+        return execute_setup_in_docker(
+            task_id,
+            native[task_id],
+            rebuilt[task_id],
+            image=metadata.image,
+            workdir=metadata.workdir,
+            setup_script=metadata.setup_script,
+            destinations=_native_destinations(native[task_id], metadata.workdir),
+            stub_apt=stub_apt,
+            dns=dns,
         )
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return list(pool.map(run, sorted(native)))
+
+
+def _execute_lowered(
+    lowered: dict[str, Mapping], native: dict[str, bytes], workers: int, *, dns: tuple[str, ...] = ()
+) -> list[SetupExecution]:
+    def run(task_id: str) -> SetupExecution:
+        expectations = workspace_expectations(native[task_id])
+        workdir = lowered[task_id]["task"]["environment_requirements"].get("working_directory") or "/app"
+        return execute_lowered_setup(
+            lowered[task_id],
+            expectations,
+            destinations=_native_destinations(native[task_id], workdir),
+            dns=dns,
+        )
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return list(pool.map(run, sorted(lowered)))
 
 
 def main() -> None:
-    """Check preservation, execute setup in Docker or the lowered runtime, and merge liveness receipts."""
+    """Report payload preservation, optional Docker setup checks and supplied liveness evidence."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cohort", type=Path, required=True, help="native cohort parquet (path, task_binary)")
     parser.add_argument("--rebuild-out", type=Path, required=True, help="rebuild output directory")
@@ -221,25 +690,39 @@ def main() -> None:
     parser.add_argument("--task", action="append", default=[], help="limit to these task ids")
     parser.add_argument("--liveness", type=Path, help="JSONL receipts from no_oracle_liveness")
     args = parser.parse_args()
-    if args.stub_apt and (not args.docker or args.lowered):
-        parser.error("--stub-apt requires --docker without --lowered")
 
-    bases = manifest_bases(args.rebuild_out / "manifest.json")
-    rebuilt = dict(iter_task_payloads(args.rebuild_out / "pending-tasks.parquet"))
+    rebuilt_path = args.rebuild_out / "pending-tasks.parquet"
+    manifest = json.loads((args.rebuild_out / "manifest.json").read_text())
+    bases = {row["task_id"]: row["base_ref"] for row in manifest["tasks"] if row.get("status", "").startswith("rebuilt")}
+
+    rebuilt = {}
+    for batch in pq.ParquetFile(rebuilt_path).iter_batches(batch_size=64, columns=["path", "task_binary"]):
+        columns = batch.to_pydict()
+        for task_id, blob in zip(columns["path"], columns["task_binary"], strict=True):
+            rebuilt[task_id] = bytes(blob)
 
     report = QualificationReport(bases=bases)
-    wanted = _wanted_task_ids(args, rebuilt)
+    wanted = set(args.task)
+    if args.retry_failed is not None:
+        previous = json.loads(args.retry_failed.read_text())
+        wanted |= {row["task_id"] for row in previous["execution"] if not row["passed"]}
+        wanted |= {row["task_id"] for row in previous["preservation"] if not row["passed"]}
     native = {
         task_id: payload
-        for task_id, payload in iter_task_payloads(args.cohort)
+        for task_id, payload in _native_tasks(args.cohort)
         if task_id in rebuilt and (not wanted or task_id in wanted)
     }
     for task_id, native_payload in native.items():
         report.preservation.append(check_preservation(task_id, native_payload, rebuilt[task_id]))
 
     if args.docker and args.lowered:
+        lowered = {}
         lowered_path = args.rebuild_out / "lowered-tasks.parquet"
-        lowered = {task_id: spec for task_id, spec in load_specs(lowered_path).items() if task_id in native}
+        for batch in pq.ParquetFile(lowered_path).iter_batches(batch_size=32, columns=["path", "lowered_task_spec"]):
+            columns = batch.to_pydict()
+            for task_id, spec in zip(columns["path"], columns["lowered_task_spec"], strict=True):
+                if task_id in native:
+                    lowered[task_id] = json.loads(spec)
         report.execution = _execute_lowered(lowered, native, args.workers, dns=tuple(args.docker_dns))
     elif args.docker:
         report.execution = _execute_setups(
@@ -247,7 +730,17 @@ def main() -> None:
         )
 
     if args.liveness is not None:
-        _merge_liveness_receipts(report, args.liveness, native)
+        receipts = [json.loads(line) for line in args.liveness.read_text().splitlines() if line.strip()]
+        seen = set()
+        for row in receipts:
+            if row["task_id"] not in native or row["task_id"] in seen:
+                raise ValueError(f"unknown or duplicate liveness task: {row['task_id']}")
+            seen.add(row["task_id"])
+            report.verifier.append(
+                VerifierResult(
+                    row["task_id"], row["outcome"], row["exit_code"], row.get("detail", ""), row.get("tests_executed", 0)
+                )
+            )
 
     summary = summarize(report)
     args.output.write_text(json.dumps({"summary": summary, **report.to_dict()}, indent=1) + "\n")

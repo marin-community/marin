@@ -131,6 +131,40 @@ def test_catalog_imports_saved_attempt_without_loading_current_artifact(tmp_path
     assert ReadView(root).point("sources", run_id="historic", name="historic")["processed_rows"] == 100
 
 
+def test_catalog_archives_manifest_larger_than_transaction_buffer(tmp_path):
+    manifest = json.dumps(
+        {
+            "mode": "sample",
+            "status": "completed",
+            "admission_counts": {"admitted": 1130},
+            "oracle_evidence": "x" * (101 * 1024 * 1024),
+        }
+    ).encode()
+    report = {
+        "status": "completed",
+        "mode": "sample",
+        "updated_at": "2026-11-17T14:53:30+00:00",
+        "counts": {"completed": 1},
+        "sources": [{"name": "large", "path": "s3://unused/frozen", "status": "completed"}],
+    }
+    root = str(tmp_path / "catalog")
+    token = append_curation_catalog(
+        root,
+        json.dumps(report).encode(),
+        run_id="large",
+        report_path="report.json",
+        source_ids={"large": "fixture:large"},
+        documents=(SourceDocuments("large", {"manifest.json": manifest}, ManifestEvidence.SAVED_SNAPSHOT),),
+    )
+    view = ReadView(root)
+    assert view.token == token
+    assert view.point("runs", run_id="large")["status"] == "completed"
+    row = view.point("sources", run_id="large", name="large")
+    assert row["admitted"] == 1130
+    assert row["manifest_sha256"] == hashlib.sha256(manifest).hexdigest()
+    assert view.resolve(json.loads(row["evidence_snapshots_json"])["manifest.json"]) == manifest
+
+
 @pytest.mark.parametrize("status", ["failed", "running"])
 def test_failed_retry_retains_old_manifest_without_attributing_its_counts_to_retry(tmp_path, status):
     artifact = tmp_path / "artifact"

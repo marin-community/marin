@@ -8,13 +8,15 @@ meets the final event constraints. It needs only the Python standard library (th
 ``python:3.11-slim``), so it runs as archived with the grader packages (``GRADER_PACKAGES``). The
 archive asks for the calendar in ``/app/answer.txt``; the task asks for it in the reply, which the
 runtime writes to that file for the verifier. A source witness (``solution/answer.json``) is the
-golden control; an archive whose witness is not a nonempty JSON list of events is a source defect.
+golden control, run through the archive's original solution when it ships one. An archive whose
+witness is not a nonempty JSON list of events is a source defect.
 """
 
 import json
 from dataclasses import replace
 from typing import Any
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.answers import source_defect
 from taskcompendium.convert.delivery import rewritten_task
 from taskcompendium.models import (
@@ -29,11 +31,12 @@ from taskcompendium.pipeline.controls import answer_reply
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import (
     Controls,
+    ControlSubmission,
     ImportRejection,
     IntendedUse,
     NormalizedTask,
+    OracleCommand,
     RawRow,
-    Reply,
 )
 from taskcompendium.runtime.resources import resource_bytes
 from verifyit.spec import DEFAULT_OUTPUT
@@ -47,7 +50,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
     archive_script_grader,
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 WITNESS_PATH = "solution/answer.json"
 GRADER_FILES = ("tests/verifier.py", VERIFIER_DATA)
@@ -153,8 +156,10 @@ def witness_text(task: TaskSpec) -> str | None:
     return None if witness is None else resource_bytes(witness).decode(errors="replace")
 
 
-def calendar_golden(task: TaskSpec) -> Reply | None:
-    """The source witness schedule, when the archive ships one."""
+def calendar_golden(task: TaskSpec) -> ControlSubmission | None:
+    """Run the original solution when present, otherwise submit its witness schedule."""
+    if any(resource.path == "solution/solve.sh" for resource in task.resources.oracle):
+        return OracleCommand("bash /solution/solve.sh", answer_file=DEFAULT_OUTPUT)
     witness = witness_text(task)
     return None if witness is None else answer_reply(task, witness)
 
@@ -166,11 +171,15 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             "laion__nemotron-gym-agent-calendar-v2",
             CALENDAR_RUBRIC,
             SourceInfo(
-                id="Task Trove:laion__nemotron-gym-agent-calendar-v2",
-                title="laion/nemotron-gym-agent-calendar-v2",
-                origin="Task Trove",
+                data_restriction=DataRestriction.OPEN,
+                id="TaskTrove:laion__nemotron-gym-agent-calendar-v2",
+                upstream_dataset="laion__nemotron-gym-agent-calendar-v2",
+                upstream_name="laion__nemotron-gym-agent-calendar-v2",
+                subset=None,
+                build_path="Task Trove",
+                origin=SourceOrigin.TASKTROVE,
                 family="tool-use",
-                tags=("agentic", "multi-turn"),
+                tags=(),
                 count=2699,
                 notes="Deterministic schedule check. Templated; dedupe against calendar-v3.",
             ),
@@ -180,11 +189,15 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             "laion__nemotron-gym-instruction-following-calendar-v3",
             IF_CALENDAR_RUBRIC,
             SourceInfo(
-                id="Task Trove:laion__nemotron-gym-instruction-following-calendar-v3",
-                title="laion/nemotron-gym-instruction-following-calendar-v3",
-                origin="Task Trove",
+                data_restriction=DataRestriction.OPEN,
+                id="TaskTrove:laion__nemotron-gym-instruction-following-calendar-v3",
+                upstream_dataset="laion__nemotron-gym-instruction-following-calendar-v3",
+                upstream_name="laion__nemotron-gym-instruction-following-calendar-v3",
+                subset=None,
+                build_path="Task Trove",
+                origin=SourceOrigin.TASKTROVE,
                 family="instruction-following",
-                tags=("agentic", "multi-turn"),
+                tags=(),
                 count=5673,
                 notes=(
                     "Deterministic overlap and constraint check. Synthetic and templated; dedupe against "

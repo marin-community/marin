@@ -10,7 +10,6 @@ identity for paired comparisons independently of task IDs and sampled order.
 import ast
 import csv
 import random
-from collections.abc import Callable
 
 from rigging.filesystem.storage_path import StoragePath
 from verifyit.spec import JudgeSpec
@@ -60,19 +59,22 @@ def read_simpleqa_verified(file: StoragePath, _context: ConversionContext):
             }
 
 
-def convert_simpleqa(row: RawRow, _context: ConversionContext, *, benchmark: str) -> TaskSpec:
-    return _simpleqa_task(row, benchmark, simpleqa_spec)
+def convert_simpleqa(
+    row: RawRow, _context: ConversionContext, *, benchmark: str, judge_model: str | None = None
+) -> TaskSpec:
+    spec = simpleqa_spec(row.data["question"], row.data["answer"], model=judge_model)
+    return _simpleqa_task(row, benchmark, spec)
 
 
 def convert_simpleqa_verified(row: RawRow, _context: ConversionContext, *, benchmark: str) -> TaskSpec:
-    return _simpleqa_task(row, benchmark, simpleqa_verified_spec)
+    return _simpleqa_task(row, benchmark, simpleqa_verified_spec(row.data["question"], row.data["answer"]))
 
 
-def _simpleqa_task(row: RawRow, benchmark: str, judge_spec: Callable[[str, str], JudgeSpec]) -> TaskSpec:
+def _simpleqa_task(row: RawRow, benchmark: str, spec: JudgeSpec) -> TaskSpec:
     task = answer_task(
         row,
         prompt=row.data["question"],
-        spec=judge_spec(row.data["question"], row.data["answer"]),
+        spec=spec,
         evidence=dict(row.data),
     )
     return task.model_copy(update={"tags": ("eval", "source:evalchemy", "benchmark:" + benchmark)})

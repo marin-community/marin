@@ -13,6 +13,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from finestore.rl.status_taxonomy import DataRestriction
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.answers import math_answer_task, numeric_answer_task, source_defect, unsupported
 from taskcompendium.models import ConversationInput, TaskSpec, TextMessage
@@ -20,9 +21,10 @@ from taskcompendium.pipeline.controls import reference_reply
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import Controls, Converter, ImportRejection, IntendedUse, RawRow
 from verifyit.modes.extract import extract_boxed
+from verifyit.modes.grade_math import parses_reference
 
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 MATH_CONTROLS = Controls(golden=reference_reply)
 SOLUTION_FIELDS = ("solution", "answer_type", "extracted_answer", "source")
@@ -44,8 +46,7 @@ Check whether the premises specify a unique answer. Difficulty alone is not a qu
 """
 
 AIME_1983_2024_RUBRIC = f"""
-Historical AIME answers are integers; contest year and problem number are kept as reference evidence. Reserve this
-benchmark for evaluation.
+Historical AIME answers are integers; contest year and problem number are kept as reference evidence.
 
 {REFERENCE_CHECK}
 """
@@ -215,6 +216,83 @@ def convert_hardmath(row: RawRow, _context: ConversionContext) -> TaskSpec | Imp
     )
 
 
+HARDMATH_RHS_TOKENS = ("\\approx", "\\sim", "\\equiv", "\\propto")
+
+
+def hardmath_rhs_reference(reference: str) -> str:
+    """The right-hand side of one equation reference, keeping relation chains whole.
+
+    The measured remediation rule (#11511): left-hand sides make math-verify compare
+    two equations, and that comparison follows the reply. Stripping the left-hand side
+    of an equality (or the compared side of a proportionality) removes the
+    reply-dependent deadline without changing any grading outcome.
+    """
+    stripped = reference.strip()
+    for token in HARDMATH_RHS_TOKENS:
+        index = stripped.find(token)
+        if index != -1:
+            return stripped[index + len(token) :].strip()
+    index = stripped.find("=")
+    return stripped[index + 1 :].strip() if index != -1 else stripped
+
+
+def split_top_level_members(reference: str) -> list[str]:
+    """Split a bracketed reference list into its top-level members."""
+    inner = reference.strip()
+    if inner.startswith("[") and inner.endswith("]"):
+        inner = inner[1:-1]
+    members: list[str] = []
+    depth = 0
+    current: list[str] = []
+    for character in inner:
+        if character in "{([":
+            depth += 1
+        elif character in "})]":
+            depth -= 1
+        if character == "," and depth == 0:
+            members.append("".join(current).strip())
+            current = []
+        else:
+            current.append(character)
+    if "".join(current).strip():
+        members.append("".join(current).strip())
+    return [member for member in members if member]
+
+
+def convert_hardmath_rhs(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
+    """Remediated HARDMath conversion: equation references keep only the right-hand side.
+
+    ODE list references become LIST references with the per-member right-hand sides, so
+    both solution branches stay graded; a member that fails the reference parse excludes
+    the row as a typed source defect.
+    """
+    problem, reference = row.data.get("question"), row.data.get("ground_truths")
+    if not isinstance(problem, str) or not problem.strip():
+        return source_defect("missing_prompt", "A nonempty question is required")
+    text = reference if isinstance(reference, str) else str(reference)
+    expected = extract_boxed(text) or text
+    members = split_top_level_members(expected)
+    if len(members) > 1:
+        rhs_members = [hardmath_rhs_reference(member) for member in members]
+        if not all(parses_reference(member) for member in rhs_members):
+            return source_defect("invalid_reference", "A right-hand-side ODE member is not a parseable math target")
+        return math_answer_task(
+            row,
+            prompt=problem,
+            answer="[" + ", ".join(rhs_members) + "]",
+            evidence={"ground_truths": reference, "remediation": "rhs_only_list"},
+        )
+    rhs = hardmath_rhs_reference(expected)
+    if not parses_reference(rhs):
+        return source_defect("invalid_reference", "The right-hand-side reference is not a parseable math target")
+    return math_answer_task(
+        row,
+        prompt=problem,
+        answer=rhs,
+        evidence={"ground_truths": reference, "remediation": "rhs_only"},
+    )
+
+
 def convert_hendrycks_math(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
     solution = row.data.get("solution")
     if isinstance(solution, str) and r"\boxed" not in solution:
@@ -243,6 +321,9 @@ def convert_numina_math(row: RawRow, _context: ConversionContext) -> TaskSpec | 
         return unsupported(
             "unsupported_proof_contract", "The requested inequality proof is outside the answer comparator"
         )
+    if not parses_reference(expected):
+        # A boxed prose sentence is not a math target; the comparator would reject it as invalid_task.
+        return source_defect("invalid_reference", "The boxed conclusion is not a parseable math target")
     return math_answer_task(
         row, prompt=problem, answer=expected, evidence={"solution": solution, "source": row.data.get("source")}
     )
@@ -295,9 +376,13 @@ SOURCES = (
         AIME24_RUBRIC,
         controls=None,
         info=SourceInfo(
-            id="MarinSkyRL:aime24",
-            title="HuggingFaceH4/aime_2024",
-            origin="MarinSkyRL",
+            data_restriction=DataRestriction.OPEN,
+            id="HuggingFaceH4:aime24",
+            upstream_dataset="aime24",
+            upstream_name="aime24",
+            subset=None,
+            build_path="MarinSkyRL",
+            origin=SourceOrigin.HUGGINGFACEH4,
             family="math-answer",
             tags=("rlvr", "single-turn", "benchmark", "gym/aime"),
         ),
@@ -311,14 +396,18 @@ SOURCES = (
             SourceFormat.CSV,
         ),
         convert_aime_1983_2024,
-        IntendedUse.EVAL,
+        IntendedUse.TRAIN,
         AIME_1983_2024_RUBRIC,
         info=SourceInfo(
-            id="MarinSkyRL:aime_1983_2024",
-            title="di-zhang-fdu/AIME_1983_2024",
-            origin="MarinSkyRL",
+            data_restriction=DataRestriction.OPEN,
+            id="di-zhang-fdu:aime_1983_2024",
+            upstream_dataset="aime_1983_2024",
+            upstream_name="aime_1983_2024",
+            subset=None,
+            build_path="MarinSkyRL",
+            origin=SourceOrigin.DI_ZHANG_FDU,
             family="math-answer",
-            tags=("rlvr", "single-turn", "benchmark", "license:mit", "gym/aime"),
+            tags=("rlvr", "single-turn", "license:mit", "gym/aime"),
         ),
     ),
     MathSource(
@@ -334,9 +423,13 @@ SOURCES = (
         IntendedUse.TRAIN,
         ASDIV_RUBRIC,
         info=SourceInfo(
-            id="MarinSkyRL:asdiv",
-            title="chaochun/nlu-asdiv-dataset",
-            origin="MarinSkyRL",
+            data_restriction=DataRestriction.OPEN,
+            id="ASDiv:asdiv",
+            upstream_dataset="asdiv",
+            upstream_name="asdiv",
+            subset=None,
+            build_path="MarinSkyRL",
+            origin=SourceOrigin.ASDIV,
             family="math-answer",
             tags=("rlvr", "single-turn", "gym/aime"),
         ),
@@ -353,9 +446,13 @@ SOURCES = (
         IntendedUse.TRAIN,
         DAPO_MATH_RUBRIC,
         info=SourceInfo(
-            id="MarinSkyRL:dapo_math",
-            title="BytedTsinghua-SIA/DAPO-Math-17k",
-            origin="MarinSkyRL",
+            data_restriction=DataRestriction.OPEN,
+            id="BytedTsinghua-SIA:dapo_math",
+            upstream_dataset="dapo_math",
+            upstream_name="dapo_math",
+            subset=None,
+            build_path="MarinSkyRL",
+            origin=SourceOrigin.BYTEDTSINGHUA_SIA,
             family="math-answer",
             tags=("rlvr", "single-turn", "license:apache-2.0", "gym/aime"),
         ),
@@ -372,9 +469,13 @@ SOURCES = (
         IntendedUse.TRAIN,
         DEEPSCALER_RUBRIC,
         info=SourceInfo(
-            id="MarinSkyRL:deepscaler",
-            title="agentica-org/DeepScaleR-Preview-Dataset",
-            origin="MarinSkyRL",
+            data_restriction=DataRestriction.OPEN,
+            id="agentica-org:deepscaler",
+            upstream_dataset="deepscaler",
+            upstream_name="deepscaler",
+            subset=None,
+            build_path="MarinSkyRL",
+            origin=SourceOrigin.AGENTICA_ORG,
             family="math-answer",
             tags=("rlvr", "single-turn", "license:mit", "gym/aime"),
         ),
@@ -391,9 +492,13 @@ SOURCES = (
         IntendedUse.TRAIN,
         GSM8K_RUBRIC,
         info=SourceInfo(
-            id="MarinSkyRL:gsm8k",
-            title="openai/gsm8k",
-            origin="MarinSkyRL",
+            data_restriction=DataRestriction.OPEN,
+            id="OpenAI:gsm8k",
+            upstream_dataset="gsm8k",
+            upstream_name="gsm8k",
+            subset=None,
+            build_path="MarinSkyRL",
+            origin=SourceOrigin.OPENAI,
             family="math-answer",
             tags=("rlvr", "single-turn", "benchmark", "license:mit", "gym/gsm8k"),
         ),
@@ -410,11 +515,38 @@ SOURCES = (
         IntendedUse.TRAIN,
         HARDMATH_RUBRIC,
         info=SourceInfo(
-            id="MarinSkyRL:hardmath",
-            title="pafitis/HARDMath_processed_training",
-            origin="MarinSkyRL",
+            data_restriction=DataRestriction.OPEN,
+            id="pafitis:hardmath",
+            upstream_dataset="hardmath",
+            upstream_name="hardmath",
+            subset=None,
+            build_path="MarinSkyRL",
+            origin=SourceOrigin.PAFITIS,
             family="math-answer",
             tags=("rlvr", "single-turn", "gym/aime"),
+        ),
+    ),
+    MathSource(
+        "hardmath_rhs",
+        HfSource(
+            "pafitis/HARDMath_processed_training",
+            "937e9f10356e31e854f6efb9a2507f1e200c8b25",
+            ("data/train-00000-of-00001.parquet",),
+            SourceFormat.PARQUET,
+        ),
+        convert_hardmath_rhs,
+        IntendedUse.TRAIN,
+        HARDMATH_RUBRIC,
+        info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="hardmath",
+            upstream_name="hardmath",
+            subset=None,
+            variant="rhs",
+            build_path="MarinSkyRL",
+            origin=SourceOrigin.PAFITIS,
+            family="math-answer",
+            tags=("rlvr", "single-turn", "private", "remediated", "gym/aime"),
         ),
     ),
     MathSource(
@@ -429,9 +561,13 @@ SOURCES = (
         IntendedUse.TRAIN,
         HENDRYCKS_MATH_RUBRIC,
         info=SourceInfo(
-            id="MarinSkyRL:hendrycks_math",
-            title="EleutherAI/hendrycks_math",
-            origin="MarinSkyRL",
+            data_restriction=DataRestriction.OPEN,
+            id="EleutherAI:hendrycks_math",
+            upstream_dataset="hendrycks_math",
+            upstream_name="hendrycks_math",
+            subset=None,
+            build_path="MarinSkyRL",
+            origin=SourceOrigin.ELEUTHERAI,
             family="math-answer",
             tags=("rlvr", "single-turn", "license:mit", "gym/aime"),
         ),
@@ -445,9 +581,13 @@ SOURCES = (
         IntendedUse.EVAL,
         MATH500_RUBRIC,
         info=SourceInfo(
-            id="MarinSkyRL:math500",
-            title="HuggingFaceH4/MATH-500",
-            origin="MarinSkyRL",
+            data_restriction=DataRestriction.OPEN,
+            id="HuggingFaceH4:math500",
+            upstream_dataset="math500",
+            upstream_name="math500",
+            subset=None,
+            build_path="MarinSkyRL",
+            origin=SourceOrigin.HUGGINGFACEH4,
             family="math-answer",
             tags=("rlvr", "single-turn", "benchmark", "gym/aime"),
         ),
@@ -464,9 +604,13 @@ SOURCES = (
         IntendedUse.TRAIN,
         NUMINA_MATH_RUBRIC,
         info=SourceInfo(
-            id="MarinSkyRL:numina_math",
-            title="AI-MO/NuminaMath-CoT",
-            origin="MarinSkyRL",
+            data_restriction=DataRestriction.OPEN,
+            id="AI-MO:numina_math",
+            upstream_dataset="numina_math",
+            upstream_name="numina_math",
+            subset=None,
+            build_path="MarinSkyRL",
+            origin=SourceOrigin.AI_MO,
             family="math-answer",
             tags=("rlvr", "single-turn", "license:apache-2.0", "gym/aime"),
         ),
@@ -483,9 +627,13 @@ SOURCES = (
         IntendedUse.TRAIN,
         RLVR_MATH_RUBRIC,
         info=SourceInfo(
-            id="MarinSkyRL:rlvr_math",
-            title="allenai/RLVR-MATH",
-            origin="MarinSkyRL",
+            data_restriction=DataRestriction.OPEN,
+            id="AllenAI:rlvr_math",
+            upstream_dataset="rlvr_math",
+            upstream_name="rlvr_math",
+            subset=None,
+            build_path="MarinSkyRL",
+            origin=SourceOrigin.ALLENAI,
             family="math-answer",
             tags=("rlvr", "single-turn", "gym/aime"),
         ),
@@ -500,9 +648,13 @@ SOURCES = (
         SVAMP_RUBRIC,
         controls=None,
         info=SourceInfo(
-            id="MarinSkyRL:svamp",
-            title="ChilleD/SVAMP",
-            origin="MarinSkyRL",
+            data_restriction=DataRestriction.OPEN,
+            id="ChilleD:svamp",
+            upstream_dataset="svamp",
+            upstream_name="svamp",
+            subset=None,
+            build_path="MarinSkyRL",
+            origin=SourceOrigin.CHILLED,
             family="math-answer",
             tags=("rlvr", "single-turn", "license:mit", "gym/aime"),
         ),

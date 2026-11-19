@@ -18,7 +18,7 @@ SPOOL_MEMORY_BYTES = 64 * 1024 * 1024
 
 
 @dataclass(frozen=True)
-class ShardOutput:
+class ShardOutput[Row]:
     """One Parquet file per shard: the rows ``project`` keeps, in ``schema``.
 
     ``template`` names the file with ``{shard}`` and ``{total}`` placeholders, as in
@@ -27,10 +27,10 @@ class ShardOutput:
 
     template: str
     schema: pa.Schema
-    project: Callable[[dict[str, Any]], dict[str, Any] | None]
+    project: Callable[[Row], dict[str, Any] | None]
 
 
-def _spooled(spool: IO[bytes]) -> Iterator[dict[str, Any]]:
+def _spooled(spool: IO[bytes]) -> Iterator[Any]:
     spool.seek(0)
     while True:
         try:
@@ -39,7 +39,7 @@ def _spooled(spool: IO[bytes]) -> Iterator[dict[str, Any]]:
             return
 
 
-def write_shard_outputs(rows: Iterable[dict[str, Any]], shard: ShardInfo, outputs: Sequence[ShardOutput]) -> list[str]:
+def write_shard_outputs[Row](rows: Iterable[Row], shard: ShardInfo, outputs: Sequence[ShardOutput[Row]]) -> list[str]:
     """Write every output of one shard with Zephyr's Parquet writer and return their paths.
 
     ``rows`` is consumed once into a local spool, so a lazy upstream transform, such as a

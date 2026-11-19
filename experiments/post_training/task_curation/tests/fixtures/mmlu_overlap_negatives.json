@@ -1,0 +1,151 @@
+{
+  "provenance": {
+    "survey_sha256": "bb490e2dc0bd361f6a697878702c6b227acc2aebeadc3826a39bd13821b96dc4"
+  },
+  "sources": {
+    "algebra": [
+      {
+        "task_id": "evalchemy-mmlu-abstract_algebra-0802fcf0829b0aa73de5efc960faf34f58ba8c5fb583fda49112f6371981bd00",
+        "text": "The following are multiple choice questions (with answers) about abstract algebra.\n\nFind all c in Z_3 such that Z_3[x]/(x^2 + c) is a field.\nA. 0\nB. 1\nC. 2\nD. 3\nAnswer: B\n\nStatement 1 | If aH is an element of a factor group, then |aH| divides |a|. Statement 2 | If H and K are subgroups of G then HK is a subgroup of G.\nA. True, True\nB. False, False\nC. True, False\nD. False, True\nAnswer: B\n\nStatement 1 | Every element of a group generates a cyclic subgroup of the group. Statement 2 | The symmetric group S_10 has 10 elements.\nA. True, True\nB. False, False\nC. True, False\nD. False, True\nAnswer: C\n\nStatement 1| Every function from a finite set onto itself must be one to one. Statement 2 | Every subgroup of an abelian group is abelian.\nA. True, True\nB. False, False\nC. True, False\nD. False, True\nAnswer: A\n\nFind the characteristic of the ring 2Z.\nA. 0\nB. 3\nC. 12\nD. 30\nAnswer: A\n\nLet A and B be sets, f: A -> B and g: B -> A be functions such that for all a \\in A, g(f(a)) = a. Statement 1 | The function f must necessarily be injective. Statement 2 | The function f must necessarily be surjective.\nA. True, True\nB. False, False\nC. True, False\nD. False, True\nAnswer:",
+        "expected": [
+          "C"
+        ]
+      },
+      {
+        "task_id": "evalchemy-mmlu-abstract_algebra-0b8a33b2862021c3111354e3929d5ed7497563a6bbd48bb2fcabee0bc0a5dfd0",
+        "text": "The following are multiple choice questions (with answers) about abstract algebra.\n\nFind all c in Z_3 such that Z_3[x]/(x^2 + c) is a field.\nA. 0\nB. 1\nC. 2\nD. 3\nAnswer: B\n\nStatement 1 | If aH is an element of a factor group, then |aH| divides |a|. Statement 2 | If H and K are subgroups of G then HK is a subgroup of G.\nA. True, True\nB. False, False\nC. True, False\nD. False, True\nAnswer: B\n\nStatement 1 | Every element of a group generates a cyclic subgroup of the group. Statement 2 | The symmetric group S_10 has 10 elements.\nA. True, True\nB. False, False\nC. True, False\nD. False, True\nAnswer: C\n\nStatement 1| Every function from a finite set onto itself must be one to one. Statement 2 | Every subgroup of an abelian group is abelian.\nA. True, True\nB. False, False\nC. True, False\nD. False, True\nAnswer: A\n\nFind the characteristic of the ring 2Z.\nA. 0\nB. 3\nC. 12\nD. 30\nAnswer: A\n\nStatement 1 | If H and K are subgroups of G and one of H or K is normal subgroup of G, then HK is a subgroup of G. Statement 2 | All groups of order p^2 where p is prime are Abelian.\nA. True, True\nB. False, False\nC. True, False\nD. False, True\nAnswer:",
+        "expected": [
+          "A"
+        ]
+      },
+      {
+        "task_id": "evalchemy-mmlu-abstract_algebra-0c68d78b4acab51323436b25794f6335e99c57cbce80a331c7fac541c9d19918",
+        "text": "The following are multiple choice questions (with answers) about abstract algebra.\n\nFind all c in Z_3 such that Z_3[x]/(x^2 + c) is a field.\nA. 0\nB. 1\nC. 2\nD. 3\nAnswer: B\n\nStatement 1 | If aH is an element of a factor group, then |aH| divides |a|. Statement 2 | If H and K are subgroups of G then HK is a subgroup of G.\nA. True, True\nB. False, False\nC. True, False\nD. False, True\nAnswer: B\n\nStatement 1 | Every element of a group generates a cyclic subgroup of the group. Statement 2 | The symmetric group S_10 has 10 elements.\nA. True, True\nB. False, False\nC. True, False\nD. False, True\nAnswer: C\n\nStatement 1| Every function from a finite set onto itself must be one to one. Statement 2 | Every subgroup of an abelian group is abelian.\nA. True, True\nB. False, False\nC. True, False\nD. False, True\nAnswer: A\n\nFind the characteristic of the ring 2Z.\nA. 0\nB. 3\nC. 12\nD. 30\nAnswer: A\n\nStatement 1| Every group of order p^2 where p is prime is Abelian. Statement 2 | For a fixed prime p a Sylow p-subgroup of a group G is a normal subgroup of G if and only if it is the only Sylow p-subgroup of G.\nA. True, True\nB. False, False\nC. True, False\nD. False, True\nAnswer:",
+        "expected": [
+          "A"
+        ]
+      },
+      {
+        "task_id": "evalchemy-mmlu-abstract_algebra-0ea40574540cf7b31d681ecc6e10645ea074786da47f030d04743af85d7e202d",
+        "text": "The following are multiple choice questions (with answers) about abstract algebra.\n\nFind all c in Z_3 such that Z_3[x]/(x^2 + c) is a field.\nA. 0\nB. 1\nC. 2\nD. 3\nAnswer: B\n\nStatement 1 | If aH is an element of a factor group, then |aH| divides |a|. Statement 2 | If H and K are subgroups of G then HK is a subgroup of G.\nA. True, True\nB. False, False\nC. True, False\nD. False, True\nAnswer: B\n\nStatement 1 | Every element of a group generates a cyclic subgroup of the group. Statement 2 | The symmetric group S_10 has 10 elements.\nA. True, True\nB. False, False\nC. True, False\nD. False, True\nAnswer: C\n\nStatement 1| Every function from a finite set onto itself must be one to one. Statement 2 | Every subgroup of an abelian group is abelian.\nA. True, True\nB. False, False\nC. True, False\nD. False, True\nAnswer: A\n\nFind the characteristic of the ring 2Z.\nA. 0\nB. 3\nC. 12\nD. 30\nAnswer: A\n\nFor T: Z x Z -> Z where T(1, 0) = 3 and T(0, 1) = -5, find T(-3,2).\nA. -19\nB. -10\nC. 19\nD. 10\nAnswer:",
+        "expected": [
+          "A"
+        ]
+      },
+      {
+        "task_id": "evalchemy-mmlu-abstract_algebra-0f3cafabd4d0f29342ed9e3a0402529074a9a432733b97b714e94a57e6a5aacb",
+        "text": "The following are multiple choice questions (with answers) about abstract algebra.\n\nFind all c in Z_3 such that Z_3[x]/(x^2 + c) is a field.\nA. 0\nB. 1\nC. 2\nD. 3\nAnswer: B\n\nStatement 1 | If aH is an element of a factor group, then |aH| divides |a|. Statement 2 | If H and K are subgroups of G then HK is a subgroup of G.\nA. True, True\nB. False, False\nC. True, False\nD. False, True\nAnswer: B\n\nStatement 1 | Every element of a group generates a cyclic subgroup of the group. Statement 2 | The symmetric group S_10 has 10 elements.\nA. True, True\nB. False, False\nC. True, False\nD. False, True\nAnswer: C\n\nStatement 1| Every function from a finite set onto itself must be one to one. Statement 2 | Every subgroup of an abelian group is abelian.\nA. True, True\nB. False, False\nC. True, False\nD. False, True\nAnswer: A\n\nFind the characteristic of the ring 2Z.\nA. 0\nB. 3\nC. 12\nD. 30\nAnswer: A\n\nFind the maximum possible order for some element of Z_8 x Z_10 x Z_24.\nA. 8\nB. 120\nC. 240\nD. 24\nAnswer:",
+        "expected": [
+          "B"
+        ]
+      },
+      {
+        "task_id": "evalchemy-mmlu-abstract_algebra-1325542b9f0123137cd6a6c36bb3cbd28e94773f0b82a57ce1d9010f8a527ed4",
+        "text": "The following are multiple choice questions (with answers) about abstract algebra.\n\nFind all c in Z_3 such that Z_3[x]/(x^2 + c) is a field.\nA. 0\nB. 1\nC. 2\nD. 3\nAnswer: B\n\nStatement 1 | If aH is an element of a factor group, then |aH| divides |a|. Statement 2 | If H and K are subgroups of G then HK is a subgroup of G.\nA. True, True\nB. False, False\nC. True, False\nD. False, True\nAnswer: B\n\nStatement 1 | Every element of a group generates a cyclic subgroup of the group. Statement 2 | The symmetric group S_10 has 10 elements.\nA. True, True\nB. False, False\nC. True, False\nD. False, True\nAnswer: C\n\nStatement 1| Every function from a finite set onto itself must be one to one. Statement 2 | Every subgroup of an abelian group is abelian.\nA. True, True\nB. False, False\nC. True, False\nD. False, True\nAnswer: A\n\nFind the characteristic of the ring 2Z.\nA. 0\nB. 3\nC. 12\nD. 30\nAnswer: A\n\nStatement 1 | S_n is non-Abelian for all n >= 3. Statement 2 | If a is a permutation that is an m-cycle and b is a permutation that is an n-cycle, then |ab| = lcm(m,n).\nA. True, True\nB. False, False\nC. True, False\nD. False, True\nAnswer:",
+        "expected": [
+          "C"
+        ]
+      },
+      {
+        "task_id": "evalchemy-mmlu-abstract_algebra-14b4d86d3a2ce9dfd6595352e59e16e7601f4ec0653eb282353cf948a1c720de",
+        "text": "The following are multiple choice questions (with answers) about abstract algebra.\n\nFind all c in Z_3 such that Z_3[x]/(x^2 + c) is a field.\nA. 0\nB. 1\nC. 2\nD. 3\nAnswer: B\n\nStatement 1 | If aH is an element of a factor group, then |aH| divides |a|. Statement 2 | If H and K are subgroups of G then HK is a subgroup of G.\nA. True, True\nB. False, False\nC. True, False\nD. False, True\nAnswer: B\n\nStatement 1 | Every element of a group generates a cyclic subgroup of the group. Statement 2 | The symmetric group S_10 has 10 elements.\nA. True, True\nB. False, False\nC. True, False\nD. False, True\nAnswer: C\n\nStatement 1| Every function from a finite set onto itself must be one to one. Statement 2 | Every subgroup of an abelian group is abelian.\nA. True, True\nB. False, False\nC. True, False\nD. False, True\nAnswer: A\n\nFind the characteristic of the ring 2Z.\nA. 0\nB. 3\nC. 12\nD. 30\nAnswer: A\n\nStatement 1 | Every integral domain with characteristic 0 is infinite. Statement 2 | Every integral domain with prime characteristic is finite.\nA. True, True\nB. False, False\nC. True, False\nD. False, True\nAnswer:",
+        "expected": [
+          "C"
+        ]
+      },
+      {
+        "task_id": "evalchemy-mmlu-abstract_algebra-1d48b98a2377d7f976894682f5aa2b1d071410e7a9fc8b2468733ee5608e40f0",
+        "text": "The following are multiple choice questions (with answers) about abstract algebra.\n\nFind all c in Z_3 such that Z_3[x]/(x^2 + c) is a field.\nA. 0\nB. 1\nC. 2\nD. 3\nAnswer: B\n\nStatement 1 | If aH is an element of a factor group, then |aH| divides |a|. Statement 2 | If H and K are subgroups of G then HK is a subgroup of G.\nA. True, True\nB. False, False\nC. True, False\nD. False, True\nAnswer: B\n\nStatement 1 | Every element of a group generates a cyclic subgroup of the group. Statement 2 | The symmetric group S_10 has 10 elements.\nA. True, True\nB. False, False\nC. True, False\nD. False, True\nAnswer: C\n\nStatement 1| Every function from a finite set onto itself must be one to one. Statement 2 | Every subgroup of an abelian group is abelian.\nA. True, True\nB. False, False\nC. True, False\nD. False, True\nAnswer: A\n\nFind the characteristic of the ring 2Z.\nA. 0\nB. 3\nC. 12\nD. 30\nAnswer: A\n\nStatement 1 | A ring homomorphism is one to one if and only if the kernel is {0}. Statement 2 | Q is an ideal in R.\nA. True, True\nB. False, False\nC. True, False\nD. False, True\nAnswer:",
+        "expected": [
+          "D"
+        ]
+      },
+      {
+        "task_id": "evalchemy-mmlu-abstract_algebra-20274c8afa9e5f97e9bb6facea1a8db00152534aa1b9705f8798c4489e693313",
+        "text": "The following are multiple choice questions (with answers) about abstract algebra.\n\nFind all c in Z_3 such that Z_3[x]/(x^2 + c) is a field.\nA. 0\nB. 1\nC. 2\nD. 3\nAnswer: B\n\nStatement 1 | If aH is an element of a factor group, then |aH| divides |a|. Statement 2 | If H and K are subgroups of G then HK is a subgroup of G.\nA. True, True\nB. False, False\nC. True, False\nD. False, True\nAnswer: B\n\nStatement 1 | Every element of a group generates a cyclic subgroup of the group. Statement 2 | The symmetric group S_10 has 10 elements.\nA. True, True\nB. False, False\nC. True, False\nD. False, True\nAnswer: C\n\nStatement 1| Every function from a finite set onto itself must be one to one. Statement 2 | Every subgroup of an abelian group is abelian.\nA. True, True\nB. False, False\nC. True, False\nD. False, True\nAnswer: A\n\nFind the characteristic of the ring 2Z.\nA. 0\nB. 3\nC. 12\nD. 30\nAnswer: A\n\nLet G denoted the set of all n x n non-singular matrices with rational numbers as entries. Then under multiplication G is a/an\nA. subgroup\nB. finite abelian group\nC. infinite, non abelian group\nD. ininite, abelian\nAnswer:",
+        "expected": [
+          "C"
+        ]
+      },
+      {
+        "task_id": "evalchemy-mmlu-abstract_algebra-222eb53b28c44cec187306fe3051a7adddc8dfa4a06952494defc16fa1c0c1db",
+        "text": "The following are multiple choice questions (with answers) about abstract algebra.\n\nFind all c in Z_3 such that Z_3[x]/(x^2 + c) is a field.\nA. 0\nB. 1\nC. 2\nD. 3\nAnswer: B\n\nStatement 1 | If aH is an element of a factor group, then |aH| divides |a|. Statement 2 | If H and K are subgroups of G then HK is a subgroup of G.\nA. True, True\nB. False, False\nC. True, False\nD. False, True\nAnswer: B\n\nStatement 1 | Every element of a group generates a cyclic subgroup of the group. Statement 2 | The symmetric group S_10 has 10 elements.\nA. True, True\nB. False, False\nC. True, False\nD. False, True\nAnswer: C\n\nStatement 1| Every function from a finite set onto itself must be one to one. Statement 2 | Every subgroup of an abelian group is abelian.\nA. True, True\nB. False, False\nC. True, False\nD. False, True\nAnswer: A\n\nFind the characteristic of the ring 2Z.\nA. 0\nB. 3\nC. 12\nD. 30\nAnswer: A\n\nFind all zeros in the indicated finite field of the given polynomial with coefficients in that field. x^2 + 1 in Z_2\nA. 0\nB. 1\nC. 0,1\nD. 2\nAnswer:",
+        "expected": [
+          "B"
+        ]
+      }
+    ],
+    "anatomy": [
+      {
+        "task_id": "evalchemy-mmlu-anatomy-050f08367a2588164440373d6d86fbb926d6197bca96458d2c9eabaa9ee31766",
+        "text": "The following are multiple choice questions (with answers) about anatomy.\n\nWhat is the embryological origin of the hyoid bone?\nA. The first pharyngeal arch\nB. The first and second pharyngeal arches\nC. The second pharyngeal arch\nD. The second and third pharyngeal arches\nAnswer: D\n\nWhich of these branches of the trigeminal nerve contain somatic motor processes?\nA. The supraorbital nerve\nB. The infraorbital nerve\nC. The mental nerve\nD. None of the above\nAnswer: D\n\nThe pleura\nA. have no sensory innervation.\nB. are separated by a 2 mm space.\nC. extend into the neck.\nD. are composed of respiratory epithelium.\nAnswer: C\n\nIn Angle's Class II Div 2 occlusion there is\nA. excess overbite of the upper lateral incisors.\nB. negative overjet of the upper central incisors.\nC. excess overjet of the upper lateral incisors.\nD. excess overjet of the upper central incisors.\nAnswer: C\n\nWhich of the following is the body cavity that contains the pituitary gland?\nA. Abdominal\nB. Cranial\nC. Pleural\nD. Spinal\nAnswer: B\n\nWhich of the following closes and seals off the lower airway during swallowing?\nA. Alveoli\nB. Epiglottis\nC. Larynx\nD. Uvula\nAnswer:",
+        "expected": [
+          "B"
+        ]
+      },
+      {
+        "task_id": "evalchemy-mmlu-anatomy-0589f1442ebf0003baf294e08bb4f75b5360500ed53a69de2518d4e80c295da7",
+        "text": "The following are multiple choice questions (with answers) about anatomy.\n\nWhat is the embryological origin of the hyoid bone?\nA. The first pharyngeal arch\nB. The first and second pharyngeal arches\nC. The second pharyngeal arch\nD. The second and third pharyngeal arches\nAnswer: D\n\nWhich of these branches of the trigeminal nerve contain somatic motor processes?\nA. The supraorbital nerve\nB. The infraorbital nerve\nC. The mental nerve\nD. None of the above\nAnswer: D\n\nThe pleura\nA. have no sensory innervation.\nB. are separated by a 2 mm space.\nC. extend into the neck.\nD. are composed of respiratory epithelium.\nAnswer: C\n\nIn Angle's Class II Div 2 occlusion there is\nA. excess overbite of the upper lateral incisors.\nB. negative overjet of the upper central incisors.\nC. excess overjet of the upper lateral incisors.\nD. excess overjet of the upper central incisors.\nAnswer: C\n\nWhich of the following is the body cavity that contains the pituitary gland?\nA. Abdominal\nB. Cranial\nC. Pleural\nD. Spinal\nAnswer: B\n\nWhich of the following muscles are derived from the first brachial arch?\nA. The muscles of mastication\nB. The muscles of mastication and anterior belly of digastric\nC. The muscles of mastication and anterior and posterior bellies of digastric\nD. The muscles of mastication, anterior and posterior bellies of digastric and geniohyoid\nAnswer:",
+        "expected": [
+          "B"
+        ]
+      },
+      {
+        "task_id": "evalchemy-mmlu-anatomy-065ebabdcfad96cfbe9bb892dd4f6ce3ff063c9afef8a3165fe739c85bbd0b74",
+        "text": "The following are multiple choice questions (with answers) about anatomy.\n\nWhat is the embryological origin of the hyoid bone?\nA. The first pharyngeal arch\nB. The first and second pharyngeal arches\nC. The second pharyngeal arch\nD. The second and third pharyngeal arches\nAnswer: D\n\nWhich of these branches of the trigeminal nerve contain somatic motor processes?\nA. The supraorbital nerve\nB. The infraorbital nerve\nC. The mental nerve\nD. None of the above\nAnswer: D\n\nThe pleura\nA. have no sensory innervation.\nB. are separated by a 2 mm space.\nC. extend into the neck.\nD. are composed of respiratory epithelium.\nAnswer: C\n\nIn Angle's Class II Div 2 occlusion there is\nA. excess overbite of the upper lateral incisors.\nB. negative overjet of the upper central incisors.\nC. excess overjet of the upper lateral incisors.\nD. excess overjet of the upper central incisors.\nAnswer: C\n\nWhich of the following is the body cavity that contains the pituitary gland?\nA. Abdominal\nB. Cranial\nC. Pleural\nD. Spinal\nAnswer: B\n\nProprioceptive nerve endings in synovial joints are located in\nA. articular cartilage and synovial membrane.\nB. synovial membrane and capsule.\nC. capsule and ligaments.\nD. ligaments and articular discs.\nAnswer:",
+        "expected": [
+          "D"
+        ]
+      },
+      {
+        "task_id": "evalchemy-mmlu-anatomy-0731e5e41a9ff6ca5532c44e3e14037fbeeddc11a1457399f3c40ebdefa5ffdb",
+        "text": "The following are multiple choice questions (with answers) about anatomy.\n\nWhat is the embryological origin of the hyoid bone?\nA. The first pharyngeal arch\nB. The first and second pharyngeal arches\nC. The second pharyngeal arch\nD. The second and third pharyngeal arches\nAnswer: D\n\nWhich of these branches of the trigeminal nerve contain somatic motor processes?\nA. The supraorbital nerve\nB. The infraorbital nerve\nC. The mental nerve\nD. None of the above\nAnswer: D\n\nThe pleura\nA. have no sensory innervation.\nB. are separated by a 2 mm space.\nC. extend into the neck.\nD. are composed of respiratory epithelium.\nAnswer: C\n\nIn Angle's Class II Div 2 occlusion there is\nA. excess overbite of the upper lateral incisors.\nB. negative overjet of the upper central incisors.\nC. excess overjet of the upper lateral incisors.\nD. excess overjet of the upper central incisors.\nAnswer: C\n\nWhich of the following is the body cavity that contains the pituitary gland?\nA. Abdominal\nB. Cranial\nC. Pleural\nD. Spinal\nAnswer: B\n\nIn which of the following positions does a patient lie face down?\nA. Dorsal\nB. Erect\nC. Lateral\nD. Prone\nAnswer:",
+        "expected": [
+          "B"
+        ]
+      },
+      {
+        "task_id": "evalchemy-mmlu-anatomy-089b468848d77665e4e76c273db96eb9cfcb265ea2aa8da50e74b7881fcef0ec",
+        "text": "The following are multiple choice questions (with answers) about anatomy.\n\nWhat is the embryological origin of the hyoid bone?\nA. The first pharyngeal arch\nB. The first and second pharyngeal arches\nC. The second pharyngeal arch\nD. The second and third pharyngeal arches\nAnswer: D\n\nWhich of these branches of the trigeminal nerve contain somatic motor processes?\nA. The supraorbital nerve\nB. The infraorbital nerve\nC. The mental nerve\nD. None of the above\nAnswer: D\n\nThe pleura\nA. have no sensory innervation.\nB. are separated by a 2 mm space.\nC. extend into the neck.\nD. are composed of respiratory epithelium.\nAnswer: C\n\nIn Angle's Class II Div 2 occlusion there is\nA. excess overbite of the upper lateral incisors.\nB. negative overjet of the upper central incisors.\nC. excess overjet of the upper lateral incisors.\nD. excess overjet of the upper central incisors.\nAnswer: C\n\nWhich of the following is the body cavity that contains the pituitary gland?\nA. Abdominal\nB. Cranial\nC. Pleural\nD. Spinal\nAnswer: B\n\nThe head of the sixth rib articulates with\nA. The inferior articular facet of T5 and superior articular facet of T6.\nB. The inferior articular demifacet of T5 and superior articular facet of T6.\nC. The inferior articular demifacet of T5 and the superior articular demifacet of T6.\nD. The superior and inferior demifacets of T6.\nAnswer:",
+        "expected": [
+          "C"
+        ]
+      },
+      {
+        "task_id": "evalchemy-mmlu-anatomy-0e5453e5caa6220db869c8d7e56e5452e559c6b4ec16d572ce25e4b207eae91c",
+        "text": "The following are multiple choice questions (with answers) about anatomy.\n\nWhat is the embryological origin of the hyoid bone?\nA. The first pharyngeal arch\nB. The first and second pharyngeal arches\nC. The second pharyngeal arch\nD. The second and third pharyngeal arches\nAnswer: D\n\nWhich of these branches of the trigeminal nerve contain somatic motor processes?\nA. The supraorbital nerve\nB. The infraorbital nerve\nC. The mental nerve\nD. None of the above\nAnswer: D\n\nThe pleura\nA. have no sensory innervation.\nB. are separated by a 2 mm space.\nC. extend into the neck.\nD. are composed of respiratory epithelium.\nAnswer: C\n\nIn Angle's Class II Div 2 occlusion there is\nA. excess overbite of the upper lateral incisors.\nB. negative overjet of the upper central incisors.\nC. excess overjet of the upper lateral incisors.\nD. excess overjet of the upper central incisors.\nAnswer: C\n\nWhich of the following is the body cavity that contains the pituitary gland?\nA. Abdominal\nB. Cranial\nC. Pleural\nD. Spinal\nAnswer: B\n\nA pulse may be felt on a patient's face where the\nA. facial artery crosses the mandible.\nB. facial artery crosses the maxilla.\nC. superficial temporal artery crosses the maxilla.\nD. superficial temporal artery crosses the orbital rim.\nAnswer:",
+        "expected": [
+          "A"
+        ]
+      },
+      {
+        "task_id": "evalchemy-mmlu-anatomy-0e7616ede7925024f77fc561b2ba429eb9809ce691109f7cb3918d2fdb865a32",
+        "text": "The following are multiple choice questions (with answers) about anatomy.\n\nWhat is the embryological origin of the hyoid bone?\nA. The first pharyngeal arch\nB. The first and second pharyngeal arches\nC. The second pharyngeal arch\nD. The second and third pharyngeal arches\nAnswer: D\n\nWhich of these branches of the trigeminal nerve contain somatic motor processes?\nA. The supraorbital nerve\nB. The infraorbital nerve\nC. The mental nerve\nD. None of the above\nAnswer: D\n\nThe pleura\nA. have no sensory innervation.\nB. are separated by a 2 mm space.\nC. extend into the neck.\nD. are composed of respiratory epithelium.\nAnswer: C\n\nIn Angle's Class II Div 2 occlusion there is\nA. excess overbite of the upper lateral incisors.\nB. negative overjet of the upper central incisors.\nC. excess overjet of the upper lateral incisors.\nD. excess overjet of the upper central incisors.\nAnswer: C\n\nWhich of the following is the body cavity that contains the pituitary gland?\nA. Abdominal\nB. Cranial\nC. Pleural\nD. Spinal\nAnswer: B\n\nA patient sustains severe blunt trauma to the left upper abdomen and requires surgery. Which one of the following organs is most likely to be involved?\nA. Appendix\nB. Gallbladder\nC. Spleen\nD. Urinary bladder\nAnswer:",
+        "expected": [
+          "C"
+        ]
+      },
+      {
+        "task_id": "evalchemy-mmlu-anatomy-11b58cc0be28d6e7bc252d865a6913745285ba300247da8d0767ea62ce3386ba",
+        "text": "The following are multiple choice questions (with answers) about anatomy.\n\nWhat is the embryological origin of the hyoid bone?\nA. The first pharyngeal arch\nB. The first and second pharyngeal arches\nC. The second pharyngeal arch\nD. The second and third pharyngeal arches\nAnswer: D\n\nWhich of these branches of the trigeminal nerve contain somatic motor processes?\nA. The supraorbital nerve\nB. The infraorbital nerve\nC. The mental nerve\nD. None of the above\nAnswer: D\n\nThe pleura\nA. have no sensory innervation.\nB. are separated by a 2 mm space.\nC. extend into the neck.\nD. are composed of respiratory epithelium.\nAnswer: C\n\nIn Angle's Class II Div 2 occlusion there is\nA. excess overbite of the upper lateral incisors.\nB. negative overjet of the upper central incisors.\nC. excess overjet of the upper lateral incisors.\nD. excess overjet of the upper central incisors.\nAnswer: C\n\nWhich of the following is the body cavity that contains the pituitary gland?\nA. Abdominal\nB. Cranial\nC. Pleural\nD. Spinal\nAnswer: B\n\nWhen you examine a patient who has suffered an unfavourable fracture of the body of the mandible, you would expect the\nA. anterior fragment to be displaced downwards by the action of the digastric muscle.\nB. posterior fragment to be displaced anteriorly by the action of the lateral pterygoid muscle.\nC. anterior fragment to be displaced backwards by action of the temporalis muscle.\nD. posterior fragment to be displaced medially by action of the medial pterygoid muscle.\nAnswer:",
+        "expected": [
+          "A"
+        ]
+      },
+      {
+        "task_id": "evalchemy-mmlu-anatomy-11e17c6a4c9f4add9167c4fdbb54217cbb305b8eec0416e3c175427f47086e53",
+        "text": "The following are multiple choice questions (with answers) about anatomy.\n\nWhat is the embryological origin of the hyoid bone?\nA. The first pharyngeal arch\nB. The first and second pharyngeal arches\nC. The second pharyngeal arch\nD. The second and third pharyngeal arches\nAnswer: D\n\nWhich of these branches of the trigeminal nerve contain somatic motor processes?\nA. The supraorbital nerve\nB. The infraorbital nerve\nC. The mental nerve\nD. None of the above\nAnswer: D\n\nThe pleura\nA. have no sensory innervation.\nB. are separated by a 2 mm space.\nC. extend into the neck.\nD. are composed of respiratory epithelium.\nAnswer: C\n\nIn Angle's Class II Div 2 occlusion there is\nA. excess overbite of the upper lateral incisors.\nB. negative overjet of the upper central incisors.\nC. excess overjet of the upper lateral incisors.\nD. excess overjet of the upper central incisors.\nAnswer: C\n\nWhich of the following is the body cavity that contains the pituitary gland?\nA. Abdominal\nB. Cranial\nC. Pleural\nD. Spinal\nAnswer: B\n\nBlood flows from the right ventricle of the heart into which of the following structures?\nA. Inferior vena cava\nB. Left ventricle\nC. Pulmonary arteries\nD. Pulmonary veins\nAnswer:",
+        "expected": [
+          "C"
+        ]
+      },
+      {
+        "task_id": "evalchemy-mmlu-anatomy-13dd92f0e86a18427d68cd2647687cabe9ce67497f2d7d3be31c726530cdecb5",
+        "text": "The following are multiple choice questions (with answers) about anatomy.\n\nWhat is the embryological origin of the hyoid bone?\nA. The first pharyngeal arch\nB. The first and second pharyngeal arches\nC. The second pharyngeal arch\nD. The second and third pharyngeal arches\nAnswer: D\n\nWhich of these branches of the trigeminal nerve contain somatic motor processes?\nA. The supraorbital nerve\nB. The infraorbital nerve\nC. The mental nerve\nD. None of the above\nAnswer: D\n\nThe pleura\nA. have no sensory innervation.\nB. are separated by a 2 mm space.\nC. extend into the neck.\nD. are composed of respiratory epithelium.\nAnswer: C\n\nIn Angle's Class II Div 2 occlusion there is\nA. excess overbite of the upper lateral incisors.\nB. negative overjet of the upper central incisors.\nC. excess overjet of the upper lateral incisors.\nD. excess overjet of the upper central incisors.\nAnswer: C\n\nWhich of the following is the body cavity that contains the pituitary gland?\nA. Abdominal\nB. Cranial\nC. Pleural\nD. Spinal\nAnswer: B\n\nWhere is the sinoatrial node located?\nA. Between the left atrium and the left ventricle\nB. Between the right atrium and the right ventricle\nC. In the upper wall of the right atrium\nD. In the upper wall of the left ventricle\nAnswer:",
+        "expected": [
+          "C"
+        ]
+      }
+    ]
+  }
+}

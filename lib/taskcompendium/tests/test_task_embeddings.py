@@ -368,6 +368,7 @@ def test_zephyr_descriptions_embeddings_and_alignment_preserve_instances_and_reu
         vector_paths=vectors,
         curriculum=reference,
         curriculum_key="fixture",
+        source_id_replacements={"source-a": "source-b"},
         spec=spec,
         output_root=str(tmp_path / "aligned"),
     )
@@ -376,6 +377,7 @@ def test_zephyr_descriptions_embeddings_and_alignment_preserve_instances_and_reu
     assert len(assigned) <= context.max_workers
     output = {row["task_id"]: row for row in rows(assigned)}
     assert set(output) == {"a", "b", "c", "d"}
+    assert {row["source_id"] for row in output.values()} == {"source-b"}
     assert output["a"]["description"] == "Elementary arithmetic: count apples."
     assert output["a"]["matches"] == output["b"]["matches"]
     assert output["a"]["matches"] == output["d"]["matches"]

@@ -1,0 +1,1944 @@
+{
+  "producer_revision": "1485f1b6c64640b5c15a1bffc113d49eefdc60b6",
+  "input_partition_sha256": "a04fb06ee33390bd85675eea0a4c7e978465e5a57e1330fee3501b8d65c21d7b",
+  "inspector_sha256": "627509eecf20f070cdd9ffae47cfc5daa20b3744729552a3c24b6588df8a7bca",
+  "batch_driver_sha256": "2b3aefe5156e8cbae672004d6d4b1ba5c2c4ff60f005912e691056da06a9b978",
+  "counts": {
+    "compatible_completed_pass": 18
+  },
+  "rows": [
+    {
+      "source_id": "TaskTrove:DCAgent__exp_rpt_unitsyn-python-v4",
+      "source_key": "4e46190654f9df9c72cc",
+      "task_id": "tasktrove-unitsyn-023dae80022953fad986cf4a151a3b320347853b5937f92ba01dbc09623b5e03",
+      "task_sha256": "80bd9fb5c15a1d59ffcd2b2941b1e2e80bad932c9d438d15c4a7b4dbcf67c527",
+      "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+      "source_task_checksum": "f2b2d6336ee3346c9d095ed5da2710a2b792ac553e7c0fc18fc9007e75e125f2",
+      "task_checksum": "f2b2d6336ee3346c9d095ed5da2710a2b792ac553e7c0fc18fc9007e75e125f2",
+      "receipt_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/4e46190654f9df9c72cc/tasks/538fa256050d2d4b1993cbef21348695059b47470770f6aad6423d1ef2d28f3b.json",
+      "receipt_sha256": "ad7cf5829022c710bdc22a48f6090565ba824fb03dfe4da8767fb5c349c2a41d",
+      "task_proof_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/4e46190654f9df9c72cc/task-proofs/538fa256050d2d4b1993cbef21348695059b47470770f6aad6423d1ef2d28f3b.json",
+      "task_proof_sha256": "2cd22cc26b27a5d394097488cef3676c33af1e302d061106b9dfbfdef6bfc29c",
+      "trial_archive_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/4e46190654f9df9c72cc/trial-artifacts/538fa256050d2d4b1993cbef21348695059b47470770f6aad6423d1ef2d28f3b.tar.gz",
+      "trial_archive_sha256": "6dff8ba0e1dc25842927fed6c2475dea5616a4ff1a63d6eb11389d3497f9a32f",
+      "passed": true,
+      "scored": true,
+      "parent_result_sha256": "092cf5b8632fb8421d86076dd3bbff8a4eaccd70f5c4064f54091cdab132fd25",
+      "dataset_id": "open-athena/task-trove-dcagent-exp-rpt-unitsyn-python-v4-4e461906-oracle-repair-20261113-v1",
+      "dataset_revision": "7686fdad94fbe420c9a71edae6215e4953c9c99c",
+      "cohort_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.13.3/candidates/4e46190654f9df9c72cc/population/specs/part-000000.parquet",
+      "cohort_sha256": "ee526f6019bf7845045c345f2c2ddc674d23589a384a12501ce3e1ca40f8062c",
+      "role_qualification_status": "pending separate exact-producer offline audit; not covered by 2c5 qualification",
+      "oracle_replay_authorized": false,
+      "outcome": "compatible_completed_pass",
+      "observation": {
+        "archive_sha256": "6dff8ba0e1dc25842927fed6c2475dea5616a4ff1a63d6eb11389d3497f9a32f",
+        "raw_result_sha256": "092cf5b8632fb8421d86076dd3bbff8a4eaccd70f5c4064f54091cdab132fd25",
+        "actor": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "gpus": 0,
+          "network": "allow",
+          "workdir": "/app",
+          "source_type": "RegistryImage",
+          "source": {
+            "reference": "python:3.10-slim@sha256:7b6bd969dda3ecfca0655524e338b57a8b8cd692a9362e3d55b5a3ef49b07256"
+          },
+          "startup_timeout": 600.0
+        },
+        "source_runtime": {
+          "task_sha256": "80bd9fb5c15a1d59ffcd2b2941b1e2e80bad932c9d438d15c4a7b4dbcf67c527",
+          "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+          "runtime": {
+            "task_machine": {
+              "cpus": null,
+              "memory_mb": null,
+              "storage_mb": null,
+              "gpus": 0,
+              "network": "allow"
+            },
+            "verifier_machine": {
+              "cpus": null,
+              "memory_mb": null,
+              "storage_mb": null,
+              "gpus": 0,
+              "network": "allow"
+            }
+          }
+        },
+        "packet_task_sha256": "80bd9fb5c15a1d59ffcd2b2941b1e2e80bad932c9d438d15c4a7b4dbcf67c527",
+        "packet_checksum": "f2b2d6336ee3346c9d095ed5da2710a2b792ac553e7c0fc18fc9007e75e125f2",
+        "raw_task_checksum": "f2b2d6336ee3346c9d095ed5da2710a2b792ac553e7c0fc18fc9007e75e125f2",
+        "oracle_helper": null,
+        "verifier": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "gpus": 0,
+          "network": "allow",
+          "workdir": "/workspace",
+          "source_type": "HostImage",
+          "source": {
+            "read_only": [],
+            "bin_dirs": [],
+            "mounts": []
+          },
+          "startup_timeout": 600.0
+        },
+        "phase_deadlines": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "agent_timeout_sec": 900.0,
+          "verifier_timeout_sec": 720.0
+        },
+        "module_files": {
+          "harbor.trial.taskcompendium": {
+            "path": "/Users/benfeuer/Documents/marin-worktrees/atlas-oracle-code-runtime-v4/vendor/harbor/src/harbor/trial/taskcompendium.py",
+            "sha256": "7589575a54779f32260541ea86d661710ff52e46863214e3ccf26c5b48d0c910"
+          },
+          "rolloutengine.machines": {
+            "path": "/Users/benfeuer/Documents/marin-worktrees/atlas-oracle-code-runtime-v4/lib/rolloutengine/src/rolloutengine/machines.py",
+            "sha256": "ee719cbb7f10a9f6086167228d4e8e8ad60839a307a7a775d31409234fe2bd73"
+          }
+        },
+        "source_commands": 0,
+        "provider_creations": 0
+      },
+      "hold_reasons": [],
+      "archived_source_runtime": {
+        "original_member": "original-packet/source-runtime.json",
+        "consumed_member": "trials/attempt-00/tasktrove-unitsyn-023dae80022953fad986cf4a151a3b320347853b5937f92ba01dbc09623b5e03/source-runtime.json",
+        "sha256": "a8481abed04a4f18d826164dc987817c7437232e222079eb4345541691c926c6",
+        "original_and_consumed_bytes_equal": true
+      }
+    },
+    {
+      "source_id": "TaskTrove:DCAgent__exp_rpt_unitsyn-python-v4",
+      "source_key": "4e46190654f9df9c72cc",
+      "task_id": "tasktrove-unitsyn-01b0f8e9c10e46462f2ecd949da30d6c09fac758b60aeeada6810882f3bbe16f",
+      "task_sha256": "fa59116329c01c21a494916452efbcefd60fec1b811b34014cfc6f4df1e5125f",
+      "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+      "source_task_checksum": "6b93e36638d9760eb51e2fbd629b1332e05aba8c6626f838958a60877c7c7d82",
+      "task_checksum": "6b93e36638d9760eb51e2fbd629b1332e05aba8c6626f838958a60877c7c7d82",
+      "receipt_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/4e46190654f9df9c72cc/tasks/6e2667d6f413dece6a1ed8fd366623f072c2cf66032817d2a8ce34ac70d7d5c9.json",
+      "receipt_sha256": "82d0e6de50e3bce0f7adcaaa17a90fb7ab01d49e6acd96f705fdef020a9f56be",
+      "task_proof_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/4e46190654f9df9c72cc/task-proofs/6e2667d6f413dece6a1ed8fd366623f072c2cf66032817d2a8ce34ac70d7d5c9.json",
+      "task_proof_sha256": "68e13289b6e49958ceb7f51ba637e6a0d9589236954c58ef4017326f4565a94e",
+      "trial_archive_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/4e46190654f9df9c72cc/trial-artifacts/6e2667d6f413dece6a1ed8fd366623f072c2cf66032817d2a8ce34ac70d7d5c9.tar.gz",
+      "trial_archive_sha256": "3ea8834357e69527f3a6f1fd0f30c1e408be85d067cf16ccb52cbfe311a51103",
+      "passed": true,
+      "scored": true,
+      "parent_result_sha256": "6afef19ad6664d388b430fbe2fc0c616528bc9c6d3377a98fa8e5dbec8f41b83",
+      "dataset_id": "open-athena/task-trove-dcagent-exp-rpt-unitsyn-python-v4-4e461906-oracle-repair-20261113-v1",
+      "dataset_revision": "7686fdad94fbe420c9a71edae6215e4953c9c99c",
+      "cohort_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.13.3/candidates/4e46190654f9df9c72cc/population/specs/part-000000.parquet",
+      "cohort_sha256": "ee526f6019bf7845045c345f2c2ddc674d23589a384a12501ce3e1ca40f8062c",
+      "role_qualification_status": "pending separate exact-producer offline audit; not covered by 2c5 qualification",
+      "oracle_replay_authorized": false,
+      "outcome": "compatible_completed_pass",
+      "observation": {
+        "archive_sha256": "3ea8834357e69527f3a6f1fd0f30c1e408be85d067cf16ccb52cbfe311a51103",
+        "raw_result_sha256": "6afef19ad6664d388b430fbe2fc0c616528bc9c6d3377a98fa8e5dbec8f41b83",
+        "actor": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "gpus": 0,
+          "network": "allow",
+          "workdir": "/app",
+          "source_type": "RegistryImage",
+          "source": {
+            "reference": "python:3.10-slim@sha256:7b6bd969dda3ecfca0655524e338b57a8b8cd692a9362e3d55b5a3ef49b07256"
+          },
+          "startup_timeout": 600.0
+        },
+        "source_runtime": {
+          "task_sha256": "fa59116329c01c21a494916452efbcefd60fec1b811b34014cfc6f4df1e5125f",
+          "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+          "runtime": {
+            "task_machine": {
+              "cpus": null,
+              "memory_mb": null,
+              "storage_mb": null,
+              "gpus": 0,
+              "network": "allow"
+            },
+            "verifier_machine": {
+              "cpus": null,
+              "memory_mb": null,
+              "storage_mb": null,
+              "gpus": 0,
+              "network": "allow"
+            }
+          }
+        },
+        "packet_task_sha256": "fa59116329c01c21a494916452efbcefd60fec1b811b34014cfc6f4df1e5125f",
+        "packet_checksum": "6b93e36638d9760eb51e2fbd629b1332e05aba8c6626f838958a60877c7c7d82",
+        "raw_task_checksum": "6b93e36638d9760eb51e2fbd629b1332e05aba8c6626f838958a60877c7c7d82",
+        "oracle_helper": null,
+        "verifier": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "gpus": 0,
+          "network": "allow",
+          "workdir": "/workspace",
+          "source_type": "HostImage",
+          "source": {
+            "read_only": [],
+            "bin_dirs": [],
+            "mounts": []
+          },
+          "startup_timeout": 600.0
+        },
+        "phase_deadlines": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "agent_timeout_sec": 900.0,
+          "verifier_timeout_sec": 720.0
+        },
+        "module_files": {
+          "harbor.trial.taskcompendium": {
+            "path": "/Users/benfeuer/Documents/marin-worktrees/atlas-oracle-code-runtime-v4/vendor/harbor/src/harbor/trial/taskcompendium.py",
+            "sha256": "7589575a54779f32260541ea86d661710ff52e46863214e3ccf26c5b48d0c910"
+          },
+          "rolloutengine.machines": {
+            "path": "/Users/benfeuer/Documents/marin-worktrees/atlas-oracle-code-runtime-v4/lib/rolloutengine/src/rolloutengine/machines.py",
+            "sha256": "ee719cbb7f10a9f6086167228d4e8e8ad60839a307a7a775d31409234fe2bd73"
+          }
+        },
+        "source_commands": 0,
+        "provider_creations": 0
+      },
+      "hold_reasons": [],
+      "archived_source_runtime": {
+        "original_member": "original-packet/source-runtime.json",
+        "consumed_member": "trials/attempt-00/tasktrove-unitsyn-01b0f8e9c10e46462f2ecd949da30d6c09fac758b60aeeada6810882f3bbe16f/source-runtime.json",
+        "sha256": "e9318f90d8f8213dd71a749e863ea89c7957c1a5a5aa1015716ee65419db8646",
+        "original_and_consumed_bytes_equal": true
+      }
+    },
+    {
+      "source_id": "TaskTrove:DCAgent__exp_rpt_unitsyn-python-v4",
+      "source_key": "4e46190654f9df9c72cc",
+      "task_id": "tasktrove-unitsyn-02ecef8fc4efb082452a9b46d762c784086e261155c772dccd004c1d30a14a13",
+      "task_sha256": "0a7d31b65c07ca56d6870de253a9bc62dac473a0bed28dfbbc918ef9888be331",
+      "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+      "source_task_checksum": "1e0ff58c2dc99499260dab87930a8e947a0280b6a4e77d9818b2b39be40302f3",
+      "task_checksum": "1e0ff58c2dc99499260dab87930a8e947a0280b6a4e77d9818b2b39be40302f3",
+      "receipt_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/4e46190654f9df9c72cc/tasks/92ae9078dec83db6389e9baf085da3159bc58e025fe0d36d7cd386b37d3cca62.json",
+      "receipt_sha256": "a69a10fccada792a99b88c5d7c53b99e137c3d1605df43b2d078fcb72b3a4cbe",
+      "task_proof_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/4e46190654f9df9c72cc/task-proofs/92ae9078dec83db6389e9baf085da3159bc58e025fe0d36d7cd386b37d3cca62.json",
+      "task_proof_sha256": "533cf918d862e7e265a247cbddee6f20acd1d4f202f62fc78b20dbd48bd147af",
+      "trial_archive_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/4e46190654f9df9c72cc/trial-artifacts/92ae9078dec83db6389e9baf085da3159bc58e025fe0d36d7cd386b37d3cca62.tar.gz",
+      "trial_archive_sha256": "ce7e215135d54df6c6be9ddb44081887c2a3b9b16230ed685993b36060251e2c",
+      "passed": true,
+      "scored": true,
+      "parent_result_sha256": "1d87facbbb2c158ac3b2c845435a86de9836f60b3b182fd1384f6ffc92b74919",
+      "dataset_id": "open-athena/task-trove-dcagent-exp-rpt-unitsyn-python-v4-4e461906-oracle-repair-20261113-v1",
+      "dataset_revision": "7686fdad94fbe420c9a71edae6215e4953c9c99c",
+      "cohort_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.13.3/candidates/4e46190654f9df9c72cc/population/specs/part-000000.parquet",
+      "cohort_sha256": "ee526f6019bf7845045c345f2c2ddc674d23589a384a12501ce3e1ca40f8062c",
+      "role_qualification_status": "pending separate exact-producer offline audit; not covered by 2c5 qualification",
+      "oracle_replay_authorized": false,
+      "outcome": "compatible_completed_pass",
+      "observation": {
+        "archive_sha256": "ce7e215135d54df6c6be9ddb44081887c2a3b9b16230ed685993b36060251e2c",
+        "raw_result_sha256": "1d87facbbb2c158ac3b2c845435a86de9836f60b3b182fd1384f6ffc92b74919",
+        "actor": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "gpus": 0,
+          "network": "allow",
+          "workdir": "/app",
+          "source_type": "RegistryImage",
+          "source": {
+            "reference": "python:3.10-slim@sha256:7b6bd969dda3ecfca0655524e338b57a8b8cd692a9362e3d55b5a3ef49b07256"
+          },
+          "startup_timeout": 600.0
+        },
+        "source_runtime": {
+          "task_sha256": "0a7d31b65c07ca56d6870de253a9bc62dac473a0bed28dfbbc918ef9888be331",
+          "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+          "runtime": {
+            "task_machine": {
+              "cpus": null,
+              "memory_mb": null,
+              "storage_mb": null,
+              "gpus": 0,
+              "network": "allow"
+            },
+            "verifier_machine": {
+              "cpus": null,
+              "memory_mb": null,
+              "storage_mb": null,
+              "gpus": 0,
+              "network": "allow"
+            }
+          }
+        },
+        "packet_task_sha256": "0a7d31b65c07ca56d6870de253a9bc62dac473a0bed28dfbbc918ef9888be331",
+        "packet_checksum": "1e0ff58c2dc99499260dab87930a8e947a0280b6a4e77d9818b2b39be40302f3",
+        "raw_task_checksum": "1e0ff58c2dc99499260dab87930a8e947a0280b6a4e77d9818b2b39be40302f3",
+        "oracle_helper": null,
+        "verifier": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "gpus": 0,
+          "network": "allow",
+          "workdir": "/workspace",
+          "source_type": "HostImage",
+          "source": {
+            "read_only": [],
+            "bin_dirs": [],
+            "mounts": []
+          },
+          "startup_timeout": 600.0
+        },
+        "phase_deadlines": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "agent_timeout_sec": 900.0,
+          "verifier_timeout_sec": 720.0
+        },
+        "module_files": {
+          "harbor.trial.taskcompendium": {
+            "path": "/Users/benfeuer/Documents/marin-worktrees/atlas-oracle-code-runtime-v4/vendor/harbor/src/harbor/trial/taskcompendium.py",
+            "sha256": "7589575a54779f32260541ea86d661710ff52e46863214e3ccf26c5b48d0c910"
+          },
+          "rolloutengine.machines": {
+            "path": "/Users/benfeuer/Documents/marin-worktrees/atlas-oracle-code-runtime-v4/lib/rolloutengine/src/rolloutengine/machines.py",
+            "sha256": "ee719cbb7f10a9f6086167228d4e8e8ad60839a307a7a775d31409234fe2bd73"
+          }
+        },
+        "source_commands": 0,
+        "provider_creations": 0
+      },
+      "hold_reasons": [],
+      "archived_source_runtime": {
+        "original_member": "original-packet/source-runtime.json",
+        "consumed_member": "trials/attempt-00/tasktrove-unitsyn-02ecef8fc4efb082452a9b46d762c784086e261155c772dccd004c1d30a14a13/source-runtime.json",
+        "sha256": "d75914882d2d505c6cb1829b0053bd7066d6ea01ecfdca3b2f1dc7d30a17615a",
+        "original_and_consumed_bytes_equal": true
+      }
+    },
+    {
+      "source_id": "TaskTrove:DCAgent__exp_rpt_unitsyn-python-v4",
+      "source_key": "4e46190654f9df9c72cc",
+      "task_id": "tasktrove-unitsyn-003f79917efc2e4e8b8184a0511260372855b649c69d5694cb679b2757c64ce3",
+      "task_sha256": "f2d874253828aa2ca7e18f417f31dda2773d6f1395c2aa4850740185ddb65018",
+      "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+      "source_task_checksum": "6be9b1790dc51e09494032b6ee14f60a4f9eb05ac63685537e66df31e56d8775",
+      "task_checksum": "6be9b1790dc51e09494032b6ee14f60a4f9eb05ac63685537e66df31e56d8775",
+      "receipt_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/4e46190654f9df9c72cc/tasks/e7f4fadce06d1acdf83dd06937579fd9da8550b22ea5b02d863bca486998b608.json",
+      "receipt_sha256": "2023706017abe9982dbab8047e67f1b65601a0144ad74c505fa9eea9851eacaa",
+      "task_proof_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/4e46190654f9df9c72cc/task-proofs/e7f4fadce06d1acdf83dd06937579fd9da8550b22ea5b02d863bca486998b608.json",
+      "task_proof_sha256": "f39e3889f1e067e2d6d488f4f80880a5fcc84de3189d84f78f959775b8d27ad5",
+      "trial_archive_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/4e46190654f9df9c72cc/trial-artifacts/e7f4fadce06d1acdf83dd06937579fd9da8550b22ea5b02d863bca486998b608.tar.gz",
+      "trial_archive_sha256": "57944275c8fff85d0eed9c349cce881aa02b4a38fb73aa61d56679719cb7f11d",
+      "passed": true,
+      "scored": true,
+      "parent_result_sha256": "f6304041ced5211bf4c0d78c2c63c26264cd36bccf0637ba460a576d633a2761",
+      "dataset_id": "open-athena/task-trove-dcagent-exp-rpt-unitsyn-python-v4-4e461906-oracle-repair-20261113-v1",
+      "dataset_revision": "7686fdad94fbe420c9a71edae6215e4953c9c99c",
+      "cohort_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.13.3/candidates/4e46190654f9df9c72cc/population/specs/part-000000.parquet",
+      "cohort_sha256": "ee526f6019bf7845045c345f2c2ddc674d23589a384a12501ce3e1ca40f8062c",
+      "role_qualification_status": "pending separate exact-producer offline audit; not covered by 2c5 qualification",
+      "oracle_replay_authorized": false,
+      "outcome": "compatible_completed_pass",
+      "observation": {
+        "archive_sha256": "57944275c8fff85d0eed9c349cce881aa02b4a38fb73aa61d56679719cb7f11d",
+        "raw_result_sha256": "f6304041ced5211bf4c0d78c2c63c26264cd36bccf0637ba460a576d633a2761",
+        "actor": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "gpus": 0,
+          "network": "allow",
+          "workdir": "/app",
+          "source_type": "RegistryImage",
+          "source": {
+            "reference": "python:3.10-slim@sha256:7b6bd969dda3ecfca0655524e338b57a8b8cd692a9362e3d55b5a3ef49b07256"
+          },
+          "startup_timeout": 600.0
+        },
+        "source_runtime": {
+          "task_sha256": "f2d874253828aa2ca7e18f417f31dda2773d6f1395c2aa4850740185ddb65018",
+          "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+          "runtime": {
+            "task_machine": {
+              "cpus": null,
+              "memory_mb": null,
+              "storage_mb": null,
+              "gpus": 0,
+              "network": "allow"
+            },
+            "verifier_machine": {
+              "cpus": null,
+              "memory_mb": null,
+              "storage_mb": null,
+              "gpus": 0,
+              "network": "allow"
+            }
+          }
+        },
+        "packet_task_sha256": "f2d874253828aa2ca7e18f417f31dda2773d6f1395c2aa4850740185ddb65018",
+        "packet_checksum": "6be9b1790dc51e09494032b6ee14f60a4f9eb05ac63685537e66df31e56d8775",
+        "raw_task_checksum": "6be9b1790dc51e09494032b6ee14f60a4f9eb05ac63685537e66df31e56d8775",
+        "oracle_helper": null,
+        "verifier": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "gpus": 0,
+          "network": "allow",
+          "workdir": "/workspace",
+          "source_type": "HostImage",
+          "source": {
+            "read_only": [],
+            "bin_dirs": [],
+            "mounts": []
+          },
+          "startup_timeout": 600.0
+        },
+        "phase_deadlines": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "agent_timeout_sec": 900.0,
+          "verifier_timeout_sec": 720.0
+        },
+        "module_files": {
+          "harbor.trial.taskcompendium": {
+            "path": "/Users/benfeuer/Documents/marin-worktrees/atlas-oracle-code-runtime-v4/vendor/harbor/src/harbor/trial/taskcompendium.py",
+            "sha256": "7589575a54779f32260541ea86d661710ff52e46863214e3ccf26c5b48d0c910"
+          },
+          "rolloutengine.machines": {
+            "path": "/Users/benfeuer/Documents/marin-worktrees/atlas-oracle-code-runtime-v4/lib/rolloutengine/src/rolloutengine/machines.py",
+            "sha256": "ee719cbb7f10a9f6086167228d4e8e8ad60839a307a7a775d31409234fe2bd73"
+          }
+        },
+        "source_commands": 0,
+        "provider_creations": 0
+      },
+      "hold_reasons": [],
+      "archived_source_runtime": {
+        "original_member": "original-packet/source-runtime.json",
+        "consumed_member": "trials/attempt-00/tasktrove-unitsyn-003f79917efc2e4e8b8184a0511260372855b649c69d5694cb679b2757c64ce3/source-runtime.json",
+        "sha256": "d5cd97956dea386c568a9a68be4703f7adc04b15906c2103dca8c74140b7106a",
+        "original_and_consumed_bytes_equal": true
+      }
+    },
+    {
+      "source_id": "TaskTrove:DCAgent__exp_rpt_pymethods2test-v3",
+      "source_key": "6c371a420a064bef5946",
+      "task_id": "tasktrove-pymethods-0254900d6b1784d4193ae6439c03d462ed6bf6ff898129787d68d4d675ba4399",
+      "task_sha256": "db513225b7f8ad7d10cf0ceafe522c1f6b09e88c1ac41bf8751bec5850e7c01c",
+      "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+      "source_task_checksum": "222561fc92b542d739323033baace599ff334960ebca6c760e12a49f4a8127ac",
+      "task_checksum": "222561fc92b542d739323033baace599ff334960ebca6c760e12a49f4a8127ac",
+      "receipt_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/6c371a420a064bef5946/tasks/79f6022648c0d51ccdf2c70dc8afccd79b3142d6ad78691592a435e57bb4ab4e.json",
+      "receipt_sha256": "b82a5c57d8f4bd1fd2eb4e0c873357b7938b1e9f6aea4755d3367209a3bd64e3",
+      "task_proof_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/6c371a420a064bef5946/task-proofs/79f6022648c0d51ccdf2c70dc8afccd79b3142d6ad78691592a435e57bb4ab4e.json",
+      "task_proof_sha256": "f7c823c90664b429bd295f1b7e1bca4e83873a1fd8ce1033f5a074027f4bdf0f",
+      "trial_archive_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/6c371a420a064bef5946/trial-artifacts/79f6022648c0d51ccdf2c70dc8afccd79b3142d6ad78691592a435e57bb4ab4e.tar.gz",
+      "trial_archive_sha256": "36857c18915668250226e5a2fc046023b9a845fd01446ac1ed4fc4188f5a4b1b",
+      "passed": true,
+      "scored": true,
+      "parent_result_sha256": "829bb84efd1a2cc835e468af27808dd90710922ba6c9f1df0b17f10bf006c2b9",
+      "dataset_id": "open-athena/task-trove-dcagent-exp-rpt-pymethods2test-v3-6c371a42-oracle-repair-20261113-v1",
+      "dataset_revision": "859e17f4c2893a038ecd5bb727c86f66eb090d92",
+      "cohort_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.13.3/candidates/6c371a420a064bef5946/population/specs/part-000000.parquet",
+      "cohort_sha256": "c3c7d0aad78f923a373f852ca2bfec2c918798bc21412179853c363d7feab4a2",
+      "role_qualification_status": "pending separate exact-producer offline audit; not covered by 2c5 qualification",
+      "oracle_replay_authorized": false,
+      "outcome": "compatible_completed_pass",
+      "observation": {
+        "archive_sha256": "36857c18915668250226e5a2fc046023b9a845fd01446ac1ed4fc4188f5a4b1b",
+        "raw_result_sha256": "829bb84efd1a2cc835e468af27808dd90710922ba6c9f1df0b17f10bf006c2b9",
+        "actor": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "gpus": 0,
+          "network": "allow",
+          "workdir": "/app",
+          "source_type": "RegistryImage",
+          "source": {
+            "reference": "python:3.10-slim@sha256:7b6bd969dda3ecfca0655524e338b57a8b8cd692a9362e3d55b5a3ef49b07256"
+          },
+          "startup_timeout": 600.0
+        },
+        "source_runtime": {
+          "task_sha256": "db513225b7f8ad7d10cf0ceafe522c1f6b09e88c1ac41bf8751bec5850e7c01c",
+          "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+          "runtime": {
+            "task_machine": {
+              "cpus": null,
+              "memory_mb": null,
+              "storage_mb": null,
+              "gpus": 0,
+              "network": "allow"
+            },
+            "verifier_machine": {
+              "cpus": null,
+              "memory_mb": null,
+              "storage_mb": null,
+              "gpus": 0,
+              "network": "allow"
+            }
+          }
+        },
+        "packet_task_sha256": "db513225b7f8ad7d10cf0ceafe522c1f6b09e88c1ac41bf8751bec5850e7c01c",
+        "packet_checksum": "222561fc92b542d739323033baace599ff334960ebca6c760e12a49f4a8127ac",
+        "raw_task_checksum": "222561fc92b542d739323033baace599ff334960ebca6c760e12a49f4a8127ac",
+        "oracle_helper": null,
+        "verifier": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "gpus": 0,
+          "network": "allow",
+          "workdir": "/workspace",
+          "source_type": "HostImage",
+          "source": {
+            "read_only": [],
+            "bin_dirs": [],
+            "mounts": []
+          },
+          "startup_timeout": 600.0
+        },
+        "phase_deadlines": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "agent_timeout_sec": 900.0,
+          "verifier_timeout_sec": 720.0
+        },
+        "module_files": {
+          "harbor.trial.taskcompendium": {
+            "path": "/Users/benfeuer/Documents/marin-worktrees/atlas-oracle-code-runtime-v4/vendor/harbor/src/harbor/trial/taskcompendium.py",
+            "sha256": "7589575a54779f32260541ea86d661710ff52e46863214e3ccf26c5b48d0c910"
+          },
+          "rolloutengine.machines": {
+            "path": "/Users/benfeuer/Documents/marin-worktrees/atlas-oracle-code-runtime-v4/lib/rolloutengine/src/rolloutengine/machines.py",
+            "sha256": "ee719cbb7f10a9f6086167228d4e8e8ad60839a307a7a775d31409234fe2bd73"
+          }
+        },
+        "source_commands": 0,
+        "provider_creations": 0
+      },
+      "hold_reasons": [],
+      "archived_source_runtime": {
+        "original_member": "original-packet/source-runtime.json",
+        "consumed_member": "trials/attempt-00/tasktrove-pymethods-0254900d6b1784d4193ae6439c03d462ed6bf6ff898129787d68d4d675ba4399/source-runtime.json",
+        "sha256": "ad364fbd064f47a9dd7123ea6517659dda7ff8427f66c8fac6ca8b4a4ac01bdb",
+        "original_and_consumed_bytes_equal": true
+      }
+    },
+    {
+      "source_id": "TaskTrove:DCAgent__exp_rpt_pymethods2test-v3",
+      "source_key": "6c371a420a064bef5946",
+      "task_id": "tasktrove-pymethods-00b20396eb15c54862b196ce689ed23e08b18e36fe3f1130c60316368bc77557",
+      "task_sha256": "f6e01e41d86bfdaffc3f9ecb7aa49e6765bc2675272a6dc2c9f94e136cfa265c",
+      "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+      "source_task_checksum": "5d95c945b055f7a7d08e4a7130705e8c9c104ca6fb36a789f6ab6273e5e404b4",
+      "task_checksum": "5d95c945b055f7a7d08e4a7130705e8c9c104ca6fb36a789f6ab6273e5e404b4",
+      "receipt_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/6c371a420a064bef5946/tasks/a08feffaae57eae0b76d0c23a58a940a108d491bacd74a423c754e75d4347b04.json",
+      "receipt_sha256": "a31f572b1d6c24115b9a44ca07b9763f91f89419584b1728464e947418af10ae",
+      "task_proof_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/6c371a420a064bef5946/task-proofs/a08feffaae57eae0b76d0c23a58a940a108d491bacd74a423c754e75d4347b04.json",
+      "task_proof_sha256": "5b18f34d4f296fc5ba4218058bd2b579f905aec8ccda6f7270776365f946d9b0",
+      "trial_archive_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/6c371a420a064bef5946/trial-artifacts/a08feffaae57eae0b76d0c23a58a940a108d491bacd74a423c754e75d4347b04.tar.gz",
+      "trial_archive_sha256": "7bfd7567538edd15cd04a2f99847e67d7a9a86e78b65464d7660c5333720ed94",
+      "passed": true,
+      "scored": true,
+      "parent_result_sha256": "2703e2c28565a9b50f817aaebc1d85c45c32139b83a693a49d0d6ed9746c5ca8",
+      "dataset_id": "open-athena/task-trove-dcagent-exp-rpt-pymethods2test-v3-6c371a42-oracle-repair-20261113-v1",
+      "dataset_revision": "859e17f4c2893a038ecd5bb727c86f66eb090d92",
+      "cohort_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.13.3/candidates/6c371a420a064bef5946/population/specs/part-000000.parquet",
+      "cohort_sha256": "c3c7d0aad78f923a373f852ca2bfec2c918798bc21412179853c363d7feab4a2",
+      "role_qualification_status": "pending separate exact-producer offline audit; not covered by 2c5 qualification",
+      "oracle_replay_authorized": false,
+      "outcome": "compatible_completed_pass",
+      "observation": {
+        "archive_sha256": "7bfd7567538edd15cd04a2f99847e67d7a9a86e78b65464d7660c5333720ed94",
+        "raw_result_sha256": "2703e2c28565a9b50f817aaebc1d85c45c32139b83a693a49d0d6ed9746c5ca8",
+        "actor": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "gpus": 0,
+          "network": "allow",
+          "workdir": "/app",
+          "source_type": "RegistryImage",
+          "source": {
+            "reference": "python:3.10-slim@sha256:7b6bd969dda3ecfca0655524e338b57a8b8cd692a9362e3d55b5a3ef49b07256"
+          },
+          "startup_timeout": 600.0
+        },
+        "source_runtime": {
+          "task_sha256": "f6e01e41d86bfdaffc3f9ecb7aa49e6765bc2675272a6dc2c9f94e136cfa265c",
+          "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+          "runtime": {
+            "task_machine": {
+              "cpus": null,
+              "memory_mb": null,
+              "storage_mb": null,
+              "gpus": 0,
+              "network": "allow"
+            },
+            "verifier_machine": {
+              "cpus": null,
+              "memory_mb": null,
+              "storage_mb": null,
+              "gpus": 0,
+              "network": "allow"
+            }
+          }
+        },
+        "packet_task_sha256": "f6e01e41d86bfdaffc3f9ecb7aa49e6765bc2675272a6dc2c9f94e136cfa265c",
+        "packet_checksum": "5d95c945b055f7a7d08e4a7130705e8c9c104ca6fb36a789f6ab6273e5e404b4",
+        "raw_task_checksum": "5d95c945b055f7a7d08e4a7130705e8c9c104ca6fb36a789f6ab6273e5e404b4",
+        "oracle_helper": null,
+        "verifier": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "gpus": 0,
+          "network": "allow",
+          "workdir": "/workspace",
+          "source_type": "HostImage",
+          "source": {
+            "read_only": [],
+            "bin_dirs": [],
+            "mounts": []
+          },
+          "startup_timeout": 600.0
+        },
+        "phase_deadlines": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "agent_timeout_sec": 900.0,
+          "verifier_timeout_sec": 720.0
+        },
+        "module_files": {
+          "harbor.trial.taskcompendium": {
+            "path": "/Users/benfeuer/Documents/marin-worktrees/atlas-oracle-code-runtime-v4/vendor/harbor/src/harbor/trial/taskcompendium.py",
+            "sha256": "7589575a54779f32260541ea86d661710ff52e46863214e3ccf26c5b48d0c910"
+          },
+          "rolloutengine.machines": {
+            "path": "/Users/benfeuer/Documents/marin-worktrees/atlas-oracle-code-runtime-v4/lib/rolloutengine/src/rolloutengine/machines.py",
+            "sha256": "ee719cbb7f10a9f6086167228d4e8e8ad60839a307a7a775d31409234fe2bd73"
+          }
+        },
+        "source_commands": 0,
+        "provider_creations": 0
+      },
+      "hold_reasons": [],
+      "archived_source_runtime": {
+        "original_member": "original-packet/source-runtime.json",
+        "consumed_member": "trials/attempt-00/tasktrove-pymethods-00b20396eb15c54862b196ce689ed23e08b18e36fe3f1130c60316368bc77557/source-runtime.json",
+        "sha256": "975c708f10f55ff57bec334e1ca4a54b9b854f7c55c29c12b8bd0da30494d751",
+        "original_and_consumed_bytes_equal": true
+      }
+    },
+    {
+      "source_id": "TaskTrove:DCAgent__exp_rpt_pymethods2test-v3",
+      "source_key": "6c371a420a064bef5946",
+      "task_id": "tasktrove-pymethods-035ef869544850572804cd98d7e5c8e7e034d06f6d7d931f68e9cf69f4bda885",
+      "task_sha256": "bba837b6ff17a5350e23b92b4deb74ca8bf48aa96f401714b82e7ff6f2d3e94c",
+      "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+      "source_task_checksum": "11095a8f9e5d3c6a83d2a954cd12502d47ed1fcd27a11065751338371afc1a51",
+      "task_checksum": "11095a8f9e5d3c6a83d2a954cd12502d47ed1fcd27a11065751338371afc1a51",
+      "receipt_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/6c371a420a064bef5946/tasks/b77155b71892fa63701e4ebd5f4e2b5553544e759b257f55d3da89e8b89e4eb4.json",
+      "receipt_sha256": "e2f4c410a19116411dae326f907d9b6d2001f5b8a46abfd3cc1f4f83708a3396",
+      "task_proof_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/6c371a420a064bef5946/task-proofs/b77155b71892fa63701e4ebd5f4e2b5553544e759b257f55d3da89e8b89e4eb4.json",
+      "task_proof_sha256": "2fdcad37a5e8c2ecb6d45a413d96e6e34a4b4438cdfd726b987d3de6312e0507",
+      "trial_archive_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/6c371a420a064bef5946/trial-artifacts/b77155b71892fa63701e4ebd5f4e2b5553544e759b257f55d3da89e8b89e4eb4.tar.gz",
+      "trial_archive_sha256": "f07ac965189f42dbaa2ce8fd8a3e890a982f6d3f1fc1144a801b3aa59c000b21",
+      "passed": true,
+      "scored": true,
+      "parent_result_sha256": "940c03984a8fcc08eaabb076c8e38870f685b869eec84bfa15735c6c2f39b35f",
+      "dataset_id": "open-athena/task-trove-dcagent-exp-rpt-pymethods2test-v3-6c371a42-oracle-repair-20261113-v1",
+      "dataset_revision": "859e17f4c2893a038ecd5bb727c86f66eb090d92",
+      "cohort_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.13.3/candidates/6c371a420a064bef5946/population/specs/part-000000.parquet",
+      "cohort_sha256": "c3c7d0aad78f923a373f852ca2bfec2c918798bc21412179853c363d7feab4a2",
+      "role_qualification_status": "pending separate exact-producer offline audit; not covered by 2c5 qualification",
+      "oracle_replay_authorized": false,
+      "outcome": "compatible_completed_pass",
+      "observation": {
+        "archive_sha256": "f07ac965189f42dbaa2ce8fd8a3e890a982f6d3f1fc1144a801b3aa59c000b21",
+        "raw_result_sha256": "940c03984a8fcc08eaabb076c8e38870f685b869eec84bfa15735c6c2f39b35f",
+        "actor": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "gpus": 0,
+          "network": "allow",
+          "workdir": "/app",
+          "source_type": "RegistryImage",
+          "source": {
+            "reference": "python:3.10-slim@sha256:7b6bd969dda3ecfca0655524e338b57a8b8cd692a9362e3d55b5a3ef49b07256"
+          },
+          "startup_timeout": 600.0
+        },
+        "source_runtime": {
+          "task_sha256": "bba837b6ff17a5350e23b92b4deb74ca8bf48aa96f401714b82e7ff6f2d3e94c",
+          "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+          "runtime": {
+            "task_machine": {
+              "cpus": null,
+              "memory_mb": null,
+              "storage_mb": null,
+              "gpus": 0,
+              "network": "allow"
+            },
+            "verifier_machine": {
+              "cpus": null,
+              "memory_mb": null,
+              "storage_mb": null,
+              "gpus": 0,
+              "network": "allow"
+            }
+          }
+        },
+        "packet_task_sha256": "bba837b6ff17a5350e23b92b4deb74ca8bf48aa96f401714b82e7ff6f2d3e94c",
+        "packet_checksum": "11095a8f9e5d3c6a83d2a954cd12502d47ed1fcd27a11065751338371afc1a51",
+        "raw_task_checksum": "11095a8f9e5d3c6a83d2a954cd12502d47ed1fcd27a11065751338371afc1a51",
+        "oracle_helper": null,
+        "verifier": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "gpus": 0,
+          "network": "allow",
+          "workdir": "/workspace",
+          "source_type": "HostImage",
+          "source": {
+            "read_only": [],
+            "bin_dirs": [],
+            "mounts": []
+          },
+          "startup_timeout": 600.0
+        },
+        "phase_deadlines": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "agent_timeout_sec": 900.0,
+          "verifier_timeout_sec": 720.0
+        },
+        "module_files": {
+          "harbor.trial.taskcompendium": {
+            "path": "/Users/benfeuer/Documents/marin-worktrees/atlas-oracle-code-runtime-v4/vendor/harbor/src/harbor/trial/taskcompendium.py",
+            "sha256": "7589575a54779f32260541ea86d661710ff52e46863214e3ccf26c5b48d0c910"
+          },
+          "rolloutengine.machines": {
+            "path": "/Users/benfeuer/Documents/marin-worktrees/atlas-oracle-code-runtime-v4/lib/rolloutengine/src/rolloutengine/machines.py",
+            "sha256": "ee719cbb7f10a9f6086167228d4e8e8ad60839a307a7a775d31409234fe2bd73"
+          }
+        },
+        "source_commands": 0,
+        "provider_creations": 0
+      },
+      "hold_reasons": [],
+      "archived_source_runtime": {
+        "original_member": "original-packet/source-runtime.json",
+        "consumed_member": "trials/attempt-00/tasktrove-pymethods-035ef869544850572804cd98d7e5c8e7e034d06f6d7d931f68e9cf69f4bda885/source-runtime.json",
+        "sha256": "bbf7ffb123ac847a074f1e69b3c4bb851c04f7b251ea1dae7fc2f32edfc17ac1",
+        "original_and_consumed_bytes_equal": true
+      }
+    },
+    {
+      "source_id": "TaskTrove:DCAgent__exp_rpt_pymethods2test-v3",
+      "source_key": "6c371a420a064bef5946",
+      "task_id": "tasktrove-pymethods-043784f1617b9e3369cd1fb9bfc6a6860fb074794dfc377f17069280603604d5",
+      "task_sha256": "c0cf01caaff8d331628e00311641bdc72341825208b35ccb89bc9b635c4f03fc",
+      "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+      "source_task_checksum": "f2e3823baedf28d94d32df0e4c6518ce5fc0cb8c463ca456d6a01d91d8e9f1c1",
+      "task_checksum": "f2e3823baedf28d94d32df0e4c6518ce5fc0cb8c463ca456d6a01d91d8e9f1c1",
+      "receipt_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/6c371a420a064bef5946/tasks/cda4d4f0d0dbfc1ccd8bc455414445411942ee86a165f62d82b83746989da065.json",
+      "receipt_sha256": "c0f40a3f9e756bb04e9f3a8e4e2d6244b235af42c84a09c67160a907329b54df",
+      "task_proof_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/6c371a420a064bef5946/task-proofs/cda4d4f0d0dbfc1ccd8bc455414445411942ee86a165f62d82b83746989da065.json",
+      "task_proof_sha256": "bd199cf1f42fe37b01fa49d1795cc712d761516cca3ad161639c7cc69a731bbf",
+      "trial_archive_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/6c371a420a064bef5946/trial-artifacts/cda4d4f0d0dbfc1ccd8bc455414445411942ee86a165f62d82b83746989da065.tar.gz",
+      "trial_archive_sha256": "4b2a253363688d64d2b659e4084ce53671fe2cb566455191a3ccc30098ba8756",
+      "passed": true,
+      "scored": true,
+      "parent_result_sha256": "e39e36e9228df7a628b4293b03be9043d9a0926d8decac7746c3d9d4f3f17ef4",
+      "dataset_id": "open-athena/task-trove-dcagent-exp-rpt-pymethods2test-v3-6c371a42-oracle-repair-20261113-v1",
+      "dataset_revision": "859e17f4c2893a038ecd5bb727c86f66eb090d92",
+      "cohort_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.13.3/candidates/6c371a420a064bef5946/population/specs/part-000000.parquet",
+      "cohort_sha256": "c3c7d0aad78f923a373f852ca2bfec2c918798bc21412179853c363d7feab4a2",
+      "role_qualification_status": "pending separate exact-producer offline audit; not covered by 2c5 qualification",
+      "oracle_replay_authorized": false,
+      "outcome": "compatible_completed_pass",
+      "observation": {
+        "archive_sha256": "4b2a253363688d64d2b659e4084ce53671fe2cb566455191a3ccc30098ba8756",
+        "raw_result_sha256": "e39e36e9228df7a628b4293b03be9043d9a0926d8decac7746c3d9d4f3f17ef4",
+        "actor": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "gpus": 0,
+          "network": "allow",
+          "workdir": "/app",
+          "source_type": "RegistryImage",
+          "source": {
+            "reference": "python:3.10-slim@sha256:7b6bd969dda3ecfca0655524e338b57a8b8cd692a9362e3d55b5a3ef49b07256"
+          },
+          "startup_timeout": 600.0
+        },
+        "source_runtime": {
+          "task_sha256": "c0cf01caaff8d331628e00311641bdc72341825208b35ccb89bc9b635c4f03fc",
+          "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+          "runtime": {
+            "task_machine": {
+              "cpus": null,
+              "memory_mb": null,
+              "storage_mb": null,
+              "gpus": 0,
+              "network": "allow"
+            },
+            "verifier_machine": {
+              "cpus": null,
+              "memory_mb": null,
+              "storage_mb": null,
+              "gpus": 0,
+              "network": "allow"
+            }
+          }
+        },
+        "packet_task_sha256": "c0cf01caaff8d331628e00311641bdc72341825208b35ccb89bc9b635c4f03fc",
+        "packet_checksum": "f2e3823baedf28d94d32df0e4c6518ce5fc0cb8c463ca456d6a01d91d8e9f1c1",
+        "raw_task_checksum": "f2e3823baedf28d94d32df0e4c6518ce5fc0cb8c463ca456d6a01d91d8e9f1c1",
+        "oracle_helper": null,
+        "verifier": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "gpus": 0,
+          "network": "allow",
+          "workdir": "/workspace",
+          "source_type": "HostImage",
+          "source": {
+            "read_only": [],
+            "bin_dirs": [],
+            "mounts": []
+          },
+          "startup_timeout": 600.0
+        },
+        "phase_deadlines": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "agent_timeout_sec": 900.0,
+          "verifier_timeout_sec": 720.0
+        },
+        "module_files": {
+          "harbor.trial.taskcompendium": {
+            "path": "/Users/benfeuer/Documents/marin-worktrees/atlas-oracle-code-runtime-v4/vendor/harbor/src/harbor/trial/taskcompendium.py",
+            "sha256": "7589575a54779f32260541ea86d661710ff52e46863214e3ccf26c5b48d0c910"
+          },
+          "rolloutengine.machines": {
+            "path": "/Users/benfeuer/Documents/marin-worktrees/atlas-oracle-code-runtime-v4/lib/rolloutengine/src/rolloutengine/machines.py",
+            "sha256": "ee719cbb7f10a9f6086167228d4e8e8ad60839a307a7a775d31409234fe2bd73"
+          }
+        },
+        "source_commands": 0,
+        "provider_creations": 0
+      },
+      "hold_reasons": [],
+      "archived_source_runtime": {
+        "original_member": "original-packet/source-runtime.json",
+        "consumed_member": "trials/attempt-00/tasktrove-pymethods-043784f1617b9e3369cd1fb9bfc6a6860fb074794dfc377f17069280603604d5/source-runtime.json",
+        "sha256": "7ebeb338739895f2659d51a7d5c7423f6d032e77afe7a8002cb0bbdf0cefd3b4",
+        "original_and_consumed_bytes_equal": true
+      }
+    },
+    {
+      "source_id": "TaskTrove:DCAgent__exp_rpt_pymethods2test-v3",
+      "source_key": "6c371a420a064bef5946",
+      "task_id": "tasktrove-pymethods-040afa747d054830bf6f840ce10d9e545a11779d251ad56e561e511106ee32b0",
+      "task_sha256": "f15b4c563aabdcecf1e2d05d146a3f0bc64e597dcf38d9d8545319dacc4399e0",
+      "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+      "source_task_checksum": "bc88dfc6a6328cad2f72f630e7064ccbea74ae6a9f21be2695257a3b132082e7",
+      "task_checksum": "bc88dfc6a6328cad2f72f630e7064ccbea74ae6a9f21be2695257a3b132082e7",
+      "receipt_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/6c371a420a064bef5946/tasks/da35d5f3b143d1aa39f3efff97edb61401673d9a7d2fc54fcd1f60ee38f1e2fd.json",
+      "receipt_sha256": "3970282eac3a996cd49b81e35706d370e141da5761c316fddc2d1270d8bcc448",
+      "task_proof_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/6c371a420a064bef5946/task-proofs/da35d5f3b143d1aa39f3efff97edb61401673d9a7d2fc54fcd1f60ee38f1e2fd.json",
+      "task_proof_sha256": "218e9348dc6d0609b3bb5be363a841afa70023fd26a54fe82c4f718601cc837b",
+      "trial_archive_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/6c371a420a064bef5946/trial-artifacts/da35d5f3b143d1aa39f3efff97edb61401673d9a7d2fc54fcd1f60ee38f1e2fd.tar.gz",
+      "trial_archive_sha256": "16593bd7a59bef9a9236bdcfb9bb6860a2c3a3e3a23258078b39cdf8bca8da8f",
+      "passed": true,
+      "scored": true,
+      "parent_result_sha256": "d50b119f28bdddcfba27024a380db00afcb93445bc504c903b5c50f01248fee2",
+      "dataset_id": "open-athena/task-trove-dcagent-exp-rpt-pymethods2test-v3-6c371a42-oracle-repair-20261113-v1",
+      "dataset_revision": "859e17f4c2893a038ecd5bb727c86f66eb090d92",
+      "cohort_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.13.3/candidates/6c371a420a064bef5946/population/specs/part-000000.parquet",
+      "cohort_sha256": "c3c7d0aad78f923a373f852ca2bfec2c918798bc21412179853c363d7feab4a2",
+      "role_qualification_status": "pending separate exact-producer offline audit; not covered by 2c5 qualification",
+      "oracle_replay_authorized": false,
+      "outcome": "compatible_completed_pass",
+      "observation": {
+        "archive_sha256": "16593bd7a59bef9a9236bdcfb9bb6860a2c3a3e3a23258078b39cdf8bca8da8f",
+        "raw_result_sha256": "d50b119f28bdddcfba27024a380db00afcb93445bc504c903b5c50f01248fee2",
+        "actor": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "gpus": 0,
+          "network": "allow",
+          "workdir": "/app",
+          "source_type": "RegistryImage",
+          "source": {
+            "reference": "python:3.10-slim@sha256:7b6bd969dda3ecfca0655524e338b57a8b8cd692a9362e3d55b5a3ef49b07256"
+          },
+          "startup_timeout": 600.0
+        },
+        "source_runtime": {
+          "task_sha256": "f15b4c563aabdcecf1e2d05d146a3f0bc64e597dcf38d9d8545319dacc4399e0",
+          "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+          "runtime": {
+            "task_machine": {
+              "cpus": null,
+              "memory_mb": null,
+              "storage_mb": null,
+              "gpus": 0,
+              "network": "allow"
+            },
+            "verifier_machine": {
+              "cpus": null,
+              "memory_mb": null,
+              "storage_mb": null,
+              "gpus": 0,
+              "network": "allow"
+            }
+          }
+        },
+        "packet_task_sha256": "f15b4c563aabdcecf1e2d05d146a3f0bc64e597dcf38d9d8545319dacc4399e0",
+        "packet_checksum": "bc88dfc6a6328cad2f72f630e7064ccbea74ae6a9f21be2695257a3b132082e7",
+        "raw_task_checksum": "bc88dfc6a6328cad2f72f630e7064ccbea74ae6a9f21be2695257a3b132082e7",
+        "oracle_helper": null,
+        "verifier": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "gpus": 0,
+          "network": "allow",
+          "workdir": "/workspace",
+          "source_type": "HostImage",
+          "source": {
+            "read_only": [],
+            "bin_dirs": [],
+            "mounts": []
+          },
+          "startup_timeout": 600.0
+        },
+        "phase_deadlines": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "agent_timeout_sec": 900.0,
+          "verifier_timeout_sec": 720.0
+        },
+        "module_files": {
+          "harbor.trial.taskcompendium": {
+            "path": "/Users/benfeuer/Documents/marin-worktrees/atlas-oracle-code-runtime-v4/vendor/harbor/src/harbor/trial/taskcompendium.py",
+            "sha256": "7589575a54779f32260541ea86d661710ff52e46863214e3ccf26c5b48d0c910"
+          },
+          "rolloutengine.machines": {
+            "path": "/Users/benfeuer/Documents/marin-worktrees/atlas-oracle-code-runtime-v4/lib/rolloutengine/src/rolloutengine/machines.py",
+            "sha256": "ee719cbb7f10a9f6086167228d4e8e8ad60839a307a7a775d31409234fe2bd73"
+          }
+        },
+        "source_commands": 0,
+        "provider_creations": 0
+      },
+      "hold_reasons": [],
+      "archived_source_runtime": {
+        "original_member": "original-packet/source-runtime.json",
+        "consumed_member": "trials/attempt-00/tasktrove-pymethods-040afa747d054830bf6f840ce10d9e545a11779d251ad56e561e511106ee32b0/source-runtime.json",
+        "sha256": "035c5e0a9f9f1b37eafc29793f76818eba8a8052697155ba9b0efd6dead88779",
+        "original_and_consumed_bytes_equal": true
+      }
+    },
+    {
+      "source_id": "TaskTrove:DCAgent__exp_rpt_pymethods2test-v3",
+      "source_key": "6c371a420a064bef5946",
+      "task_id": "tasktrove-pymethods-03999424b383952e3123eab2fe6dc7042e56018b5907d1f542624dda983bc18c",
+      "task_sha256": "efae62d88107981a4220efe97984885eb8d3e451946c301109c72091beaa15fe",
+      "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+      "source_task_checksum": "c08617054f22ed63db4ff11e96ed8224e33910890631c10948b4b562afd5413c",
+      "task_checksum": "c08617054f22ed63db4ff11e96ed8224e33910890631c10948b4b562afd5413c",
+      "receipt_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/6c371a420a064bef5946/tasks/e6d742cb9fecba2cc7c728c92ef33a5fdb21b9bae55ff096cac32640818ae5a9.json",
+      "receipt_sha256": "112be4ccee15b14825042f35c4d3f0b975c2da0d1b6d2a61c2dc0a1f993a2fde",
+      "task_proof_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/6c371a420a064bef5946/task-proofs/e6d742cb9fecba2cc7c728c92ef33a5fdb21b9bae55ff096cac32640818ae5a9.json",
+      "task_proof_sha256": "1e5171bb9d331bbb1d12942e815b30ad5271b78ce9a42ad0960c714916129c1f",
+      "trial_archive_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/6c371a420a064bef5946/trial-artifacts/e6d742cb9fecba2cc7c728c92ef33a5fdb21b9bae55ff096cac32640818ae5a9.tar.gz",
+      "trial_archive_sha256": "7f186f74599d30937dee86c7b0b9c323779eed8ab4851e36748fb350306fab2e",
+      "passed": true,
+      "scored": true,
+      "parent_result_sha256": "f26cc25f8065c8cae73f5af3b9d1e8c8371dcfa06c2ee90216fcabdd2586049a",
+      "dataset_id": "open-athena/task-trove-dcagent-exp-rpt-pymethods2test-v3-6c371a42-oracle-repair-20261113-v1",
+      "dataset_revision": "859e17f4c2893a038ecd5bb727c86f66eb090d92",
+      "cohort_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.13.3/candidates/6c371a420a064bef5946/population/specs/part-000000.parquet",
+      "cohort_sha256": "c3c7d0aad78f923a373f852ca2bfec2c918798bc21412179853c363d7feab4a2",
+      "role_qualification_status": "pending separate exact-producer offline audit; not covered by 2c5 qualification",
+      "oracle_replay_authorized": false,
+      "outcome": "compatible_completed_pass",
+      "observation": {
+        "archive_sha256": "7f186f74599d30937dee86c7b0b9c323779eed8ab4851e36748fb350306fab2e",
+        "raw_result_sha256": "f26cc25f8065c8cae73f5af3b9d1e8c8371dcfa06c2ee90216fcabdd2586049a",
+        "actor": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "gpus": 0,
+          "network": "allow",
+          "workdir": "/app",
+          "source_type": "RegistryImage",
+          "source": {
+            "reference": "python:3.10-slim@sha256:7b6bd969dda3ecfca0655524e338b57a8b8cd692a9362e3d55b5a3ef49b07256"
+          },
+          "startup_timeout": 600.0
+        },
+        "source_runtime": {
+          "task_sha256": "efae62d88107981a4220efe97984885eb8d3e451946c301109c72091beaa15fe",
+          "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+          "runtime": {
+            "task_machine": {
+              "cpus": null,
+              "memory_mb": null,
+              "storage_mb": null,
+              "gpus": 0,
+              "network": "allow"
+            },
+            "verifier_machine": {
+              "cpus": null,
+              "memory_mb": null,
+              "storage_mb": null,
+              "gpus": 0,
+              "network": "allow"
+            }
+          }
+        },
+        "packet_task_sha256": "efae62d88107981a4220efe97984885eb8d3e451946c301109c72091beaa15fe",
+        "packet_checksum": "c08617054f22ed63db4ff11e96ed8224e33910890631c10948b4b562afd5413c",
+        "raw_task_checksum": "c08617054f22ed63db4ff11e96ed8224e33910890631c10948b4b562afd5413c",
+        "oracle_helper": null,
+        "verifier": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "gpus": 0,
+          "network": "allow",
+          "workdir": "/workspace",
+          "source_type": "HostImage",
+          "source": {
+            "read_only": [],
+            "bin_dirs": [],
+            "mounts": []
+          },
+          "startup_timeout": 600.0
+        },
+        "phase_deadlines": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "agent_timeout_sec": 900.0,
+          "verifier_timeout_sec": 720.0
+        },
+        "module_files": {
+          "harbor.trial.taskcompendium": {
+            "path": "/Users/benfeuer/Documents/marin-worktrees/atlas-oracle-code-runtime-v4/vendor/harbor/src/harbor/trial/taskcompendium.py",
+            "sha256": "7589575a54779f32260541ea86d661710ff52e46863214e3ccf26c5b48d0c910"
+          },
+          "rolloutengine.machines": {
+            "path": "/Users/benfeuer/Documents/marin-worktrees/atlas-oracle-code-runtime-v4/lib/rolloutengine/src/rolloutengine/machines.py",
+            "sha256": "ee719cbb7f10a9f6086167228d4e8e8ad60839a307a7a775d31409234fe2bd73"
+          }
+        },
+        "source_commands": 0,
+        "provider_creations": 0
+      },
+      "hold_reasons": [],
+      "archived_source_runtime": {
+        "original_member": "original-packet/source-runtime.json",
+        "consumed_member": "trials/attempt-00/tasktrove-pymethods-03999424b383952e3123eab2fe6dc7042e56018b5907d1f542624dda983bc18c/source-runtime.json",
+        "sha256": "a64cedf2fb00b6b7b994ac4ff42fe35005e582d3a9cacc08140c28ad28ffba88",
+        "original_and_consumed_bytes_equal": true
+      }
+    },
+    {
+      "source_id": "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2",
+      "source_key": "72ea16180a238d201038",
+      "task_id": "tasktrove-pymethods_large-01386906090ed83dc120fb86ce0a896a8c6b6753f1d78de240995dd0d097941d",
+      "task_sha256": "b35a0386aee00a7670f43127587110f1c2e13dcd903df4e7de826cd98912a2a0",
+      "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+      "source_task_checksum": "6ac799d749925f089f1a3917fb80ea85896da52249c50e3d4d512b4b5cf841c9",
+      "task_checksum": "6ac799d749925f089f1a3917fb80ea85896da52249c50e3d4d512b4b5cf841c9",
+      "receipt_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/72ea16180a238d201038/tasks/1f2e82065b5c2864c901a04334b97c26b33c9db721275c23a0e4d373276bf4f6.json",
+      "receipt_sha256": "6e010ea14e31c6ff4d71a95161d65a613dd9c4571fa330f52e3743be3dfbf087",
+      "task_proof_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/72ea16180a238d201038/task-proofs/1f2e82065b5c2864c901a04334b97c26b33c9db721275c23a0e4d373276bf4f6.json",
+      "task_proof_sha256": "c8ef64697929e68da484956940d91dd09764ba9e9d9452005f8959995da74fed",
+      "trial_archive_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/72ea16180a238d201038/trial-artifacts/1f2e82065b5c2864c901a04334b97c26b33c9db721275c23a0e4d373276bf4f6.tar.gz",
+      "trial_archive_sha256": "3c57b7b846f772714c9da96b488e00c20b7148bc0955aa74bd4cfc65aafff5d0",
+      "passed": true,
+      "scored": true,
+      "parent_result_sha256": "ee957c172a8d7fdc90b6504ae0d233106b699b9485239a8528b347eb578ea5bb",
+      "dataset_id": "open-athena/task-trove-dcagent-exp-rpt-pymethods2test-large-72ea1618-oracle-repair-20261113-v1",
+      "dataset_revision": "a6ac7e7a5c37fe75637213a81367eb70ca639555",
+      "cohort_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.13.3/candidates/72ea16180a238d201038/population/specs/part-000000.parquet",
+      "cohort_sha256": "69a482bb0c3a92e3a402b3f20504c2605ac3dbeb0bf61cec70518f1e5c2704b4",
+      "role_qualification_status": "pending separate exact-producer offline audit; not covered by 2c5 qualification",
+      "oracle_replay_authorized": false,
+      "outcome": "compatible_completed_pass",
+      "observation": {
+        "archive_sha256": "3c57b7b846f772714c9da96b488e00c20b7148bc0955aa74bd4cfc65aafff5d0",
+        "raw_result_sha256": "ee957c172a8d7fdc90b6504ae0d233106b699b9485239a8528b347eb578ea5bb",
+        "actor": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "gpus": 0,
+          "network": "allow",
+          "workdir": "/app",
+          "source_type": "RegistryImage",
+          "source": {
+            "reference": "python:3.10-slim@sha256:7b6bd969dda3ecfca0655524e338b57a8b8cd692a9362e3d55b5a3ef49b07256"
+          },
+          "startup_timeout": 600.0
+        },
+        "source_runtime": {
+          "task_sha256": "b35a0386aee00a7670f43127587110f1c2e13dcd903df4e7de826cd98912a2a0",
+          "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+          "runtime": {
+            "task_machine": {
+              "cpus": null,
+              "memory_mb": null,
+              "storage_mb": null,
+              "gpus": 0,
+              "network": "allow"
+            },
+            "verifier_machine": {
+              "cpus": null,
+              "memory_mb": null,
+              "storage_mb": null,
+              "gpus": 0,
+              "network": "allow"
+            }
+          }
+        },
+        "packet_task_sha256": "b35a0386aee00a7670f43127587110f1c2e13dcd903df4e7de826cd98912a2a0",
+        "packet_checksum": "6ac799d749925f089f1a3917fb80ea85896da52249c50e3d4d512b4b5cf841c9",
+        "raw_task_checksum": "6ac799d749925f089f1a3917fb80ea85896da52249c50e3d4d512b4b5cf841c9",
+        "oracle_helper": null,
+        "verifier": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "gpus": 0,
+          "network": "allow",
+          "workdir": "/workspace",
+          "source_type": "HostImage",
+          "source": {
+            "read_only": [],
+            "bin_dirs": [],
+            "mounts": []
+          },
+          "startup_timeout": 600.0
+        },
+        "phase_deadlines": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "agent_timeout_sec": 900.0,
+          "verifier_timeout_sec": 720.0
+        },
+        "module_files": {
+          "harbor.trial.taskcompendium": {
+            "path": "/Users/benfeuer/Documents/marin-worktrees/atlas-oracle-code-runtime-v4/vendor/harbor/src/harbor/trial/taskcompendium.py",
+            "sha256": "7589575a54779f32260541ea86d661710ff52e46863214e3ccf26c5b48d0c910"
+          },
+          "rolloutengine.machines": {
+            "path": "/Users/benfeuer/Documents/marin-worktrees/atlas-oracle-code-runtime-v4/lib/rolloutengine/src/rolloutengine/machines.py",
+            "sha256": "ee719cbb7f10a9f6086167228d4e8e8ad60839a307a7a775d31409234fe2bd73"
+          }
+        },
+        "source_commands": 0,
+        "provider_creations": 0
+      },
+      "hold_reasons": [],
+      "archived_source_runtime": {
+        "original_member": "original-packet/source-runtime.json",
+        "consumed_member": "trials/attempt-00/tasktrove-pymethods_large-01386906090ed83dc120fb86ce0a896a8c6b6753f1d78de240995dd0d097941d/source-runtime.json",
+        "sha256": "a76273a627d431379ce9ddbd96cf653ece923e78a863da3725fa8c72b72b6715",
+        "original_and_consumed_bytes_equal": true
+      }
+    },
+    {
+      "source_id": "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2",
+      "source_key": "72ea16180a238d201038",
+      "task_id": "tasktrove-pymethods_large-01e77067460b747324c204d0aa4fba61897237f484d94d991c0aaae522dfc7e6",
+      "task_sha256": "b66f68b3dca6d4d51429a695d75d76b946bb6eea6340abff66f639adecf94791",
+      "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+      "source_task_checksum": "7684cddf037527cc1e2b9bb57e6a253c50ecba6cc501416e1b4d2bc4decd232d",
+      "task_checksum": "7684cddf037527cc1e2b9bb57e6a253c50ecba6cc501416e1b4d2bc4decd232d",
+      "receipt_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/72ea16180a238d201038/tasks/64b97539506488d5672899ac7d6d55856d298d9332136d8a191a32392d440e77.json",
+      "receipt_sha256": "7ee65120d44fbe575eb2181e3dd75c9de2ceb9cf32b9128823520bd5a59cade7",
+      "task_proof_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/72ea16180a238d201038/task-proofs/64b97539506488d5672899ac7d6d55856d298d9332136d8a191a32392d440e77.json",
+      "task_proof_sha256": "eac248185ee2f1a63d2cc454bcdad7220cb2dac0acaf77ab1137c27621894615",
+      "trial_archive_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/72ea16180a238d201038/trial-artifacts/64b97539506488d5672899ac7d6d55856d298d9332136d8a191a32392d440e77.tar.gz",
+      "trial_archive_sha256": "3ece857974250d6c2eec8d5d7f2c8ca111abcdbef4cfe9119ac0d5895f941743",
+      "passed": true,
+      "scored": true,
+      "parent_result_sha256": "87d4cc5e1367b5fed072265d64ff7ddb1b35a67448193b073549b0939fc84c42",
+      "dataset_id": "open-athena/task-trove-dcagent-exp-rpt-pymethods2test-large-72ea1618-oracle-repair-20261113-v1",
+      "dataset_revision": "a6ac7e7a5c37fe75637213a81367eb70ca639555",
+      "cohort_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.13.3/candidates/72ea16180a238d201038/population/specs/part-000000.parquet",
+      "cohort_sha256": "69a482bb0c3a92e3a402b3f20504c2605ac3dbeb0bf61cec70518f1e5c2704b4",
+      "role_qualification_status": "pending separate exact-producer offline audit; not covered by 2c5 qualification",
+      "oracle_replay_authorized": false,
+      "outcome": "compatible_completed_pass",
+      "observation": {
+        "archive_sha256": "3ece857974250d6c2eec8d5d7f2c8ca111abcdbef4cfe9119ac0d5895f941743",
+        "raw_result_sha256": "87d4cc5e1367b5fed072265d64ff7ddb1b35a67448193b073549b0939fc84c42",
+        "actor": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "gpus": 0,
+          "network": "allow",
+          "workdir": "/app",
+          "source_type": "RegistryImage",
+          "source": {
+            "reference": "python:3.10-slim@sha256:7b6bd969dda3ecfca0655524e338b57a8b8cd692a9362e3d55b5a3ef49b07256"
+          },
+          "startup_timeout": 600.0
+        },
+        "source_runtime": {
+          "task_sha256": "b66f68b3dca6d4d51429a695d75d76b946bb6eea6340abff66f639adecf94791",
+          "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+          "runtime": {
+            "task_machine": {
+              "cpus": null,
+              "memory_mb": null,
+              "storage_mb": null,
+              "gpus": 0,
+              "network": "allow"
+            },
+            "verifier_machine": {
+              "cpus": null,
+              "memory_mb": null,
+              "storage_mb": null,
+              "gpus": 0,
+              "network": "allow"
+            }
+          }
+        },
+        "packet_task_sha256": "b66f68b3dca6d4d51429a695d75d76b946bb6eea6340abff66f639adecf94791",
+        "packet_checksum": "7684cddf037527cc1e2b9bb57e6a253c50ecba6cc501416e1b4d2bc4decd232d",
+        "raw_task_checksum": "7684cddf037527cc1e2b9bb57e6a253c50ecba6cc501416e1b4d2bc4decd232d",
+        "oracle_helper": null,
+        "verifier": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "gpus": 0,
+          "network": "allow",
+          "workdir": "/workspace",
+          "source_type": "HostImage",
+          "source": {
+            "read_only": [],
+            "bin_dirs": [],
+            "mounts": []
+          },
+          "startup_timeout": 600.0
+        },
+        "phase_deadlines": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "agent_timeout_sec": 900.0,
+          "verifier_timeout_sec": 720.0
+        },
+        "module_files": {
+          "harbor.trial.taskcompendium": {
+            "path": "/Users/benfeuer/Documents/marin-worktrees/atlas-oracle-code-runtime-v4/vendor/harbor/src/harbor/trial/taskcompendium.py",
+            "sha256": "7589575a54779f32260541ea86d661710ff52e46863214e3ccf26c5b48d0c910"
+          },
+          "rolloutengine.machines": {
+            "path": "/Users/benfeuer/Documents/marin-worktrees/atlas-oracle-code-runtime-v4/lib/rolloutengine/src/rolloutengine/machines.py",
+            "sha256": "ee719cbb7f10a9f6086167228d4e8e8ad60839a307a7a775d31409234fe2bd73"
+          }
+        },
+        "source_commands": 0,
+        "provider_creations": 0
+      },
+      "hold_reasons": [],
+      "archived_source_runtime": {
+        "original_member": "original-packet/source-runtime.json",
+        "consumed_member": "trials/attempt-00/tasktrove-pymethods_large-01e77067460b747324c204d0aa4fba61897237f484d94d991c0aaae522dfc7e6/source-runtime.json",
+        "sha256": "2fda35faca6e0a0278034a86b12837072b89202b2f2844219407cea3ae33c372",
+        "original_and_consumed_bytes_equal": true
+      }
+    },
+    {
+      "source_id": "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2",
+      "source_key": "72ea16180a238d201038",
+      "task_id": "tasktrove-pymethods_large-0296b4c330263851e7e8d654e529f94c73ca4763aa41e2377a2193bf7d2d121d",
+      "task_sha256": "d73910378e7d12eb5bb150f11d790def21dec1e56fbb5c4101fcf28e588a00f4",
+      "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+      "source_task_checksum": "832d287e7c60c91196778df8e620c2281442a70f20767bfca562375b57a8159d",
+      "task_checksum": "832d287e7c60c91196778df8e620c2281442a70f20767bfca562375b57a8159d",
+      "receipt_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/72ea16180a238d201038/tasks/c8dec7cde39310861df930cdbc1e7ced317b942eaf5dc701c923167d7ae69415.json",
+      "receipt_sha256": "88e32dfc924759f6af2e15394f11d74773af00087347c478247e819342485071",
+      "task_proof_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/72ea16180a238d201038/task-proofs/c8dec7cde39310861df930cdbc1e7ced317b942eaf5dc701c923167d7ae69415.json",
+      "task_proof_sha256": "ed972aa06c423c30dab0281493819f28651cd75f12e606113c9a12d660a5f527",
+      "trial_archive_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/72ea16180a238d201038/trial-artifacts/c8dec7cde39310861df930cdbc1e7ced317b942eaf5dc701c923167d7ae69415.tar.gz",
+      "trial_archive_sha256": "2d469ff5591ebb0b18bc3488a6c46e6bdc9d5ff1e0c016db1cb02b91332fccb9",
+      "passed": true,
+      "scored": true,
+      "parent_result_sha256": "b3e20f9c5ef63ada03f311124ffaad98e103c936746aca57e4e85ce619092d04",
+      "dataset_id": "open-athena/task-trove-dcagent-exp-rpt-pymethods2test-large-72ea1618-oracle-repair-20261113-v1",
+      "dataset_revision": "a6ac7e7a5c37fe75637213a81367eb70ca639555",
+      "cohort_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.13.3/candidates/72ea16180a238d201038/population/specs/part-000000.parquet",
+      "cohort_sha256": "69a482bb0c3a92e3a402b3f20504c2605ac3dbeb0bf61cec70518f1e5c2704b4",
+      "role_qualification_status": "pending separate exact-producer offline audit; not covered by 2c5 qualification",
+      "oracle_replay_authorized": false,
+      "outcome": "compatible_completed_pass",
+      "observation": {
+        "archive_sha256": "2d469ff5591ebb0b18bc3488a6c46e6bdc9d5ff1e0c016db1cb02b91332fccb9",
+        "raw_result_sha256": "b3e20f9c5ef63ada03f311124ffaad98e103c936746aca57e4e85ce619092d04",
+        "actor": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "gpus": 0,
+          "network": "allow",
+          "workdir": "/app",
+          "source_type": "RegistryImage",
+          "source": {
+            "reference": "python:3.10-slim@sha256:7b6bd969dda3ecfca0655524e338b57a8b8cd692a9362e3d55b5a3ef49b07256"
+          },
+          "startup_timeout": 600.0
+        },
+        "source_runtime": {
+          "task_sha256": "d73910378e7d12eb5bb150f11d790def21dec1e56fbb5c4101fcf28e588a00f4",
+          "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+          "runtime": {
+            "task_machine": {
+              "cpus": null,
+              "memory_mb": null,
+              "storage_mb": null,
+              "gpus": 0,
+              "network": "allow"
+            },
+            "verifier_machine": {
+              "cpus": null,
+              "memory_mb": null,
+              "storage_mb": null,
+              "gpus": 0,
+              "network": "allow"
+            }
+          }
+        },
+        "packet_task_sha256": "d73910378e7d12eb5bb150f11d790def21dec1e56fbb5c4101fcf28e588a00f4",
+        "packet_checksum": "832d287e7c60c91196778df8e620c2281442a70f20767bfca562375b57a8159d",
+        "raw_task_checksum": "832d287e7c60c91196778df8e620c2281442a70f20767bfca562375b57a8159d",
+        "oracle_helper": null,
+        "verifier": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "gpus": 0,
+          "network": "allow",
+          "workdir": "/workspace",
+          "source_type": "HostImage",
+          "source": {
+            "read_only": [],
+            "bin_dirs": [],
+            "mounts": []
+          },
+          "startup_timeout": 600.0
+        },
+        "phase_deadlines": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "agent_timeout_sec": 900.0,
+          "verifier_timeout_sec": 720.0
+        },
+        "module_files": {
+          "harbor.trial.taskcompendium": {
+            "path": "/Users/benfeuer/Documents/marin-worktrees/atlas-oracle-code-runtime-v4/vendor/harbor/src/harbor/trial/taskcompendium.py",
+            "sha256": "7589575a54779f32260541ea86d661710ff52e46863214e3ccf26c5b48d0c910"
+          },
+          "rolloutengine.machines": {
+            "path": "/Users/benfeuer/Documents/marin-worktrees/atlas-oracle-code-runtime-v4/lib/rolloutengine/src/rolloutengine/machines.py",
+            "sha256": "ee719cbb7f10a9f6086167228d4e8e8ad60839a307a7a775d31409234fe2bd73"
+          }
+        },
+        "source_commands": 0,
+        "provider_creations": 0
+      },
+      "hold_reasons": [],
+      "archived_source_runtime": {
+        "original_member": "original-packet/source-runtime.json",
+        "consumed_member": "trials/attempt-00/tasktrove-pymethods_large-0296b4c330263851e7e8d654e529f94c73ca4763aa41e2377a2193bf7d2d121d/source-runtime.json",
+        "sha256": "96acbe0fc18af80da5e931fed09e7e7e9d46c5f121aed2437d5f77f688d6893c",
+        "original_and_consumed_bytes_equal": true
+      }
+    },
+    {
+      "source_id": "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2",
+      "source_key": "72ea16180a238d201038",
+      "task_id": "tasktrove-pymethods_large-020ffed891a3ce5b89fd6e9be18d05a539197ad0229f144c3125766146bef768",
+      "task_sha256": "186cc3ff865e56b44980d8335f127c2c37d770486421033de45bb79fedf52abb",
+      "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+      "source_task_checksum": "22d6a56ad877a2bcf3551902097a0d56ef4e7ecb454064b29732db8a5c9e47ad",
+      "task_checksum": "22d6a56ad877a2bcf3551902097a0d56ef4e7ecb454064b29732db8a5c9e47ad",
+      "receipt_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/72ea16180a238d201038/tasks/fae48144e57174a3b204f153c0249f06dca35fa2200fd77a679e1b65e241e27c.json",
+      "receipt_sha256": "6f8a27ab71a8b34c184a76495ccb7d28501591a439c1c5554e1e0d4e491fe572",
+      "task_proof_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/72ea16180a238d201038/task-proofs/fae48144e57174a3b204f153c0249f06dca35fa2200fd77a679e1b65e241e27c.json",
+      "task_proof_sha256": "64b3c453f6717ad1cf95f7ee1d8b94e9c41f3396c83f33209f52dc707cb64e7f",
+      "trial_archive_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/72ea16180a238d201038/trial-artifacts/fae48144e57174a3b204f153c0249f06dca35fa2200fd77a679e1b65e241e27c.tar.gz",
+      "trial_archive_sha256": "cecb24fb18830139f3c14fcd9fed1c97d6bab3c62b7e90b66560b71bc07d3def",
+      "passed": true,
+      "scored": true,
+      "parent_result_sha256": "140390ef94c7c8813a91bbc9910e6ae683f8444b75c93a8405b7f86e98995482",
+      "dataset_id": "open-athena/task-trove-dcagent-exp-rpt-pymethods2test-large-72ea1618-oracle-repair-20261113-v1",
+      "dataset_revision": "a6ac7e7a5c37fe75637213a81367eb70ca639555",
+      "cohort_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.13.3/candidates/72ea16180a238d201038/population/specs/part-000000.parquet",
+      "cohort_sha256": "69a482bb0c3a92e3a402b3f20504c2605ac3dbeb0bf61cec70518f1e5c2704b4",
+      "role_qualification_status": "pending separate exact-producer offline audit; not covered by 2c5 qualification",
+      "oracle_replay_authorized": false,
+      "outcome": "compatible_completed_pass",
+      "observation": {
+        "archive_sha256": "cecb24fb18830139f3c14fcd9fed1c97d6bab3c62b7e90b66560b71bc07d3def",
+        "raw_result_sha256": "140390ef94c7c8813a91bbc9910e6ae683f8444b75c93a8405b7f86e98995482",
+        "actor": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "gpus": 0,
+          "network": "allow",
+          "workdir": "/app",
+          "source_type": "RegistryImage",
+          "source": {
+            "reference": "python:3.10-slim@sha256:7b6bd969dda3ecfca0655524e338b57a8b8cd692a9362e3d55b5a3ef49b07256"
+          },
+          "startup_timeout": 600.0
+        },
+        "source_runtime": {
+          "task_sha256": "186cc3ff865e56b44980d8335f127c2c37d770486421033de45bb79fedf52abb",
+          "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+          "runtime": {
+            "task_machine": {
+              "cpus": null,
+              "memory_mb": null,
+              "storage_mb": null,
+              "gpus": 0,
+              "network": "allow"
+            },
+            "verifier_machine": {
+              "cpus": null,
+              "memory_mb": null,
+              "storage_mb": null,
+              "gpus": 0,
+              "network": "allow"
+            }
+          }
+        },
+        "packet_task_sha256": "186cc3ff865e56b44980d8335f127c2c37d770486421033de45bb79fedf52abb",
+        "packet_checksum": "22d6a56ad877a2bcf3551902097a0d56ef4e7ecb454064b29732db8a5c9e47ad",
+        "raw_task_checksum": "22d6a56ad877a2bcf3551902097a0d56ef4e7ecb454064b29732db8a5c9e47ad",
+        "oracle_helper": null,
+        "verifier": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "gpus": 0,
+          "network": "allow",
+          "workdir": "/workspace",
+          "source_type": "HostImage",
+          "source": {
+            "read_only": [],
+            "bin_dirs": [],
+            "mounts": []
+          },
+          "startup_timeout": 600.0
+        },
+        "phase_deadlines": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "agent_timeout_sec": 900.0,
+          "verifier_timeout_sec": 720.0
+        },
+        "module_files": {
+          "harbor.trial.taskcompendium": {
+            "path": "/Users/benfeuer/Documents/marin-worktrees/atlas-oracle-code-runtime-v4/vendor/harbor/src/harbor/trial/taskcompendium.py",
+            "sha256": "7589575a54779f32260541ea86d661710ff52e46863214e3ccf26c5b48d0c910"
+          },
+          "rolloutengine.machines": {
+            "path": "/Users/benfeuer/Documents/marin-worktrees/atlas-oracle-code-runtime-v4/lib/rolloutengine/src/rolloutengine/machines.py",
+            "sha256": "ee719cbb7f10a9f6086167228d4e8e8ad60839a307a7a775d31409234fe2bd73"
+          }
+        },
+        "source_commands": 0,
+        "provider_creations": 0
+      },
+      "hold_reasons": [],
+      "archived_source_runtime": {
+        "original_member": "original-packet/source-runtime.json",
+        "consumed_member": "trials/attempt-00/tasktrove-pymethods_large-020ffed891a3ce5b89fd6e9be18d05a539197ad0229f144c3125766146bef768/source-runtime.json",
+        "sha256": "b90193b71fd250f0e3d0e3808af14bbd92d63844941bd445dd27aed145cf24dd",
+        "original_and_consumed_bytes_equal": true
+      }
+    },
+    {
+      "source_id": "TaskTrove:DCAgent__exp_rpt_unitsyn-python-large-v2",
+      "source_key": "bc301818cccd454da3de",
+      "task_id": "tasktrove-unitsyn_large-0122a2dfbd33b79b29ca0eb414efecf404286b652b82c6b5c702efabd6a848fd",
+      "task_sha256": "2e28738a794dda17b7cef43172b2348fcbfd522d45f9bb858098da280edee711",
+      "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+      "source_task_checksum": "94c837e2a6c59709d6c5e99bbc54fb368a9391c686f7a12805e8940e1a921ad6",
+      "task_checksum": "94c837e2a6c59709d6c5e99bbc54fb368a9391c686f7a12805e8940e1a921ad6",
+      "receipt_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/bc301818cccd454da3de/tasks/09cb3ad395a3557074e4d3aee6408d48c5901e033e53b89acba569a930e2e31e.json",
+      "receipt_sha256": "6b7b3772d4b06fb48d1fe540ac38f9bde9c28e722f97648112efa904fbf0a74e",
+      "task_proof_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/bc301818cccd454da3de/task-proofs/09cb3ad395a3557074e4d3aee6408d48c5901e033e53b89acba569a930e2e31e.json",
+      "task_proof_sha256": "9f46108671c5594cdc9f0c1bfc06b086624398a3c4408af3b6cbe012b9d24a8b",
+      "trial_archive_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/bc301818cccd454da3de/trial-artifacts/09cb3ad395a3557074e4d3aee6408d48c5901e033e53b89acba569a930e2e31e.tar.gz",
+      "trial_archive_sha256": "dc07ed83f9c754be53181df7e57ad7097217e93962a4afad02cd85ac89d290c2",
+      "passed": true,
+      "scored": true,
+      "parent_result_sha256": "6417a606e90d47b32a0a09c818b8ed62bd692fab4b21f245f8ff7f02ff83779f",
+      "dataset_id": "open-athena/task-trove-dcagent-exp-rpt-unitsyn-python-large-bc301818-oracle-repair-20261113-v1",
+      "dataset_revision": "9d8e67fe52abc33d5595fd91505bea3b121a06aa",
+      "cohort_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.13.3/candidates/bc301818cccd454da3de/population/specs/part-000000.parquet",
+      "cohort_sha256": "c5c7c47655057c8dafa78ea9795abe8a063b091dd38e35a7c247f94e033c36f3",
+      "role_qualification_status": "pending separate exact-producer offline audit; not covered by 2c5 qualification",
+      "oracle_replay_authorized": false,
+      "outcome": "compatible_completed_pass",
+      "observation": {
+        "archive_sha256": "dc07ed83f9c754be53181df7e57ad7097217e93962a4afad02cd85ac89d290c2",
+        "raw_result_sha256": "6417a606e90d47b32a0a09c818b8ed62bd692fab4b21f245f8ff7f02ff83779f",
+        "actor": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "gpus": 0,
+          "network": "allow",
+          "workdir": "/app",
+          "source_type": "RegistryImage",
+          "source": {
+            "reference": "python:3.10-slim@sha256:7b6bd969dda3ecfca0655524e338b57a8b8cd692a9362e3d55b5a3ef49b07256"
+          },
+          "startup_timeout": 600.0
+        },
+        "source_runtime": {
+          "task_sha256": "2e28738a794dda17b7cef43172b2348fcbfd522d45f9bb858098da280edee711",
+          "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+          "runtime": {
+            "task_machine": {
+              "cpus": null,
+              "memory_mb": null,
+              "storage_mb": null,
+              "gpus": 0,
+              "network": "allow"
+            },
+            "verifier_machine": {
+              "cpus": null,
+              "memory_mb": null,
+              "storage_mb": null,
+              "gpus": 0,
+              "network": "allow"
+            }
+          }
+        },
+        "packet_task_sha256": "2e28738a794dda17b7cef43172b2348fcbfd522d45f9bb858098da280edee711",
+        "packet_checksum": "94c837e2a6c59709d6c5e99bbc54fb368a9391c686f7a12805e8940e1a921ad6",
+        "raw_task_checksum": "94c837e2a6c59709d6c5e99bbc54fb368a9391c686f7a12805e8940e1a921ad6",
+        "oracle_helper": null,
+        "verifier": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "gpus": 0,
+          "network": "allow",
+          "workdir": "/workspace",
+          "source_type": "HostImage",
+          "source": {
+            "read_only": [],
+            "bin_dirs": [],
+            "mounts": []
+          },
+          "startup_timeout": 600.0
+        },
+        "phase_deadlines": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "agent_timeout_sec": 900.0,
+          "verifier_timeout_sec": 720.0
+        },
+        "module_files": {
+          "harbor.trial.taskcompendium": {
+            "path": "/Users/benfeuer/Documents/marin-worktrees/atlas-oracle-code-runtime-v4/vendor/harbor/src/harbor/trial/taskcompendium.py",
+            "sha256": "7589575a54779f32260541ea86d661710ff52e46863214e3ccf26c5b48d0c910"
+          },
+          "rolloutengine.machines": {
+            "path": "/Users/benfeuer/Documents/marin-worktrees/atlas-oracle-code-runtime-v4/lib/rolloutengine/src/rolloutengine/machines.py",
+            "sha256": "ee719cbb7f10a9f6086167228d4e8e8ad60839a307a7a775d31409234fe2bd73"
+          }
+        },
+        "source_commands": 0,
+        "provider_creations": 0
+      },
+      "hold_reasons": [],
+      "archived_source_runtime": {
+        "original_member": "original-packet/source-runtime.json",
+        "consumed_member": "trials/attempt-00/tasktrove-unitsyn_large-0122a2dfbd33b79b29ca0eb414efecf404286b652b82c6b5c702efabd6a848fd/source-runtime.json",
+        "sha256": "3e3b5c043cc0d4f3c49af90102f79bdc816372db5491948b1463a7ccad0fe9f2",
+        "original_and_consumed_bytes_equal": true
+      }
+    },
+    {
+      "source_id": "TaskTrove:DCAgent__exp_rpt_unitsyn-python-large-v2",
+      "source_key": "bc301818cccd454da3de",
+      "task_id": "tasktrove-unitsyn_large-0094b092ff3db5e3561e467b2717da603da8a19559137d77c5605d142ccce56f",
+      "task_sha256": "efe947a3dd8a9b5a997981964ee7c982f334c67d67f421a4c2685c21c5f0c871",
+      "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+      "source_task_checksum": "d72266c41cb26b3a2501ab8104e0774b46e8a797c5eade5c1398b5960d1b5096",
+      "task_checksum": "d72266c41cb26b3a2501ab8104e0774b46e8a797c5eade5c1398b5960d1b5096",
+      "receipt_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/bc301818cccd454da3de/tasks/0daf11322529dbf0973dbb4489e0a7fadfeb8db3e0e741b311f9c52da2573013.json",
+      "receipt_sha256": "af920e52b0e0a09fe0cef522f6beb7b05f6146648f235448ccaf531d769fdce0",
+      "task_proof_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/bc301818cccd454da3de/task-proofs/0daf11322529dbf0973dbb4489e0a7fadfeb8db3e0e741b311f9c52da2573013.json",
+      "task_proof_sha256": "f5eee5b48534c4b0348c2bb888f6601aff951f3dcc6c19305d03d565237aba24",
+      "trial_archive_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/bc301818cccd454da3de/trial-artifacts/0daf11322529dbf0973dbb4489e0a7fadfeb8db3e0e741b311f9c52da2573013.tar.gz",
+      "trial_archive_sha256": "54580d1feae8aa809a72e6c6f23f5117f7a90bc5929901427cd5f2e94eaab3ec",
+      "passed": true,
+      "scored": true,
+      "parent_result_sha256": "ef2b31e5df063555f1d2782d8f995b7e21f473ca752ec073cf086b4a7dcb5036",
+      "dataset_id": "open-athena/task-trove-dcagent-exp-rpt-unitsyn-python-large-bc301818-oracle-repair-20261113-v1",
+      "dataset_revision": "9d8e67fe52abc33d5595fd91505bea3b121a06aa",
+      "cohort_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.13.3/candidates/bc301818cccd454da3de/population/specs/part-000000.parquet",
+      "cohort_sha256": "c5c7c47655057c8dafa78ea9795abe8a063b091dd38e35a7c247f94e033c36f3",
+      "role_qualification_status": "pending separate exact-producer offline audit; not covered by 2c5 qualification",
+      "oracle_replay_authorized": false,
+      "outcome": "compatible_completed_pass",
+      "observation": {
+        "archive_sha256": "54580d1feae8aa809a72e6c6f23f5117f7a90bc5929901427cd5f2e94eaab3ec",
+        "raw_result_sha256": "ef2b31e5df063555f1d2782d8f995b7e21f473ca752ec073cf086b4a7dcb5036",
+        "actor": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "gpus": 0,
+          "network": "allow",
+          "workdir": "/app",
+          "source_type": "RegistryImage",
+          "source": {
+            "reference": "python:3.10-slim@sha256:7b6bd969dda3ecfca0655524e338b57a8b8cd692a9362e3d55b5a3ef49b07256"
+          },
+          "startup_timeout": 600.0
+        },
+        "source_runtime": {
+          "task_sha256": "efe947a3dd8a9b5a997981964ee7c982f334c67d67f421a4c2685c21c5f0c871",
+          "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+          "runtime": {
+            "task_machine": {
+              "cpus": null,
+              "memory_mb": null,
+              "storage_mb": null,
+              "gpus": 0,
+              "network": "allow"
+            },
+            "verifier_machine": {
+              "cpus": null,
+              "memory_mb": null,
+              "storage_mb": null,
+              "gpus": 0,
+              "network": "allow"
+            }
+          }
+        },
+        "packet_task_sha256": "efe947a3dd8a9b5a997981964ee7c982f334c67d67f421a4c2685c21c5f0c871",
+        "packet_checksum": "d72266c41cb26b3a2501ab8104e0774b46e8a797c5eade5c1398b5960d1b5096",
+        "raw_task_checksum": "d72266c41cb26b3a2501ab8104e0774b46e8a797c5eade5c1398b5960d1b5096",
+        "oracle_helper": null,
+        "verifier": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "gpus": 0,
+          "network": "allow",
+          "workdir": "/workspace",
+          "source_type": "HostImage",
+          "source": {
+            "read_only": [],
+            "bin_dirs": [],
+            "mounts": []
+          },
+          "startup_timeout": 600.0
+        },
+        "phase_deadlines": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "agent_timeout_sec": 900.0,
+          "verifier_timeout_sec": 720.0
+        },
+        "module_files": {
+          "harbor.trial.taskcompendium": {
+            "path": "/Users/benfeuer/Documents/marin-worktrees/atlas-oracle-code-runtime-v4/vendor/harbor/src/harbor/trial/taskcompendium.py",
+            "sha256": "7589575a54779f32260541ea86d661710ff52e46863214e3ccf26c5b48d0c910"
+          },
+          "rolloutengine.machines": {
+            "path": "/Users/benfeuer/Documents/marin-worktrees/atlas-oracle-code-runtime-v4/lib/rolloutengine/src/rolloutengine/machines.py",
+            "sha256": "ee719cbb7f10a9f6086167228d4e8e8ad60839a307a7a775d31409234fe2bd73"
+          }
+        },
+        "source_commands": 0,
+        "provider_creations": 0
+      },
+      "hold_reasons": [],
+      "archived_source_runtime": {
+        "original_member": "original-packet/source-runtime.json",
+        "consumed_member": "trials/attempt-00/tasktrove-unitsyn_large-0094b092ff3db5e3561e467b2717da603da8a19559137d77c5605d142ccce56f/source-runtime.json",
+        "sha256": "27cb2261d70eb924f9227f7de4b8642a545ac445f14410389ff6560030c32a1b",
+        "original_and_consumed_bytes_equal": true
+      }
+    },
+    {
+      "source_id": "TaskTrove:DCAgent__exp_rpt_unitsyn-python-large-v2",
+      "source_key": "bc301818cccd454da3de",
+      "task_id": "tasktrove-unitsyn_large-00d46a163caf14e7a9a9ad4d72d23fe84bbc5f37beb1459d341d66fe0022fdd1",
+      "task_sha256": "99eb82ea5d1b7f9ee7616681a888eb1ff3c906de4c5d459d4965b6df71de5fd0",
+      "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+      "source_task_checksum": "9482b917211252d7175d25206fc5b1e4727061223532303ee40d2ff95a05f313",
+      "task_checksum": "9482b917211252d7175d25206fc5b1e4727061223532303ee40d2ff95a05f313",
+      "receipt_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/bc301818cccd454da3de/tasks/4507fa9e6a5cc1897c7069e1823f56f582fa44a38c323b84ce4242ecc3a739f7.json",
+      "receipt_sha256": "6a8d2c00b55b123318f8f84f19872ff0b797350a10f672c9994167868df9dad4",
+      "task_proof_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/bc301818cccd454da3de/task-proofs/4507fa9e6a5cc1897c7069e1823f56f582fa44a38c323b84ce4242ecc3a739f7.json",
+      "task_proof_sha256": "fe636ca763b30a1fefa893eee4a1b0db61a9eabf4714e436b42e49a8086939df",
+      "trial_archive_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/bc301818cccd454da3de/trial-artifacts/4507fa9e6a5cc1897c7069e1823f56f582fa44a38c323b84ce4242ecc3a739f7.tar.gz",
+      "trial_archive_sha256": "a437deb25f896eea08ba3082b6c1bfa988d11473e035a6e8e7009b4b1176814a",
+      "passed": true,
+      "scored": true,
+      "parent_result_sha256": "0d837a1c6a7d95500d34fb05981775e74ac19e18735f832f6453cfca6f2f24ad",
+      "dataset_id": "open-athena/task-trove-dcagent-exp-rpt-unitsyn-python-large-bc301818-oracle-repair-20261113-v1",
+      "dataset_revision": "9d8e67fe52abc33d5595fd91505bea3b121a06aa",
+      "cohort_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.13.3/candidates/bc301818cccd454da3de/population/specs/part-000000.parquet",
+      "cohort_sha256": "c5c7c47655057c8dafa78ea9795abe8a063b091dd38e35a7c247f94e033c36f3",
+      "role_qualification_status": "pending separate exact-producer offline audit; not covered by 2c5 qualification",
+      "oracle_replay_authorized": false,
+      "outcome": "compatible_completed_pass",
+      "observation": {
+        "archive_sha256": "a437deb25f896eea08ba3082b6c1bfa988d11473e035a6e8e7009b4b1176814a",
+        "raw_result_sha256": "0d837a1c6a7d95500d34fb05981775e74ac19e18735f832f6453cfca6f2f24ad",
+        "actor": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "gpus": 0,
+          "network": "allow",
+          "workdir": "/app",
+          "source_type": "RegistryImage",
+          "source": {
+            "reference": "python:3.10-slim@sha256:7b6bd969dda3ecfca0655524e338b57a8b8cd692a9362e3d55b5a3ef49b07256"
+          },
+          "startup_timeout": 600.0
+        },
+        "source_runtime": {
+          "task_sha256": "99eb82ea5d1b7f9ee7616681a888eb1ff3c906de4c5d459d4965b6df71de5fd0",
+          "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+          "runtime": {
+            "task_machine": {
+              "cpus": null,
+              "memory_mb": null,
+              "storage_mb": null,
+              "gpus": 0,
+              "network": "allow"
+            },
+            "verifier_machine": {
+              "cpus": null,
+              "memory_mb": null,
+              "storage_mb": null,
+              "gpus": 0,
+              "network": "allow"
+            }
+          }
+        },
+        "packet_task_sha256": "99eb82ea5d1b7f9ee7616681a888eb1ff3c906de4c5d459d4965b6df71de5fd0",
+        "packet_checksum": "9482b917211252d7175d25206fc5b1e4727061223532303ee40d2ff95a05f313",
+        "raw_task_checksum": "9482b917211252d7175d25206fc5b1e4727061223532303ee40d2ff95a05f313",
+        "oracle_helper": null,
+        "verifier": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "gpus": 0,
+          "network": "allow",
+          "workdir": "/workspace",
+          "source_type": "HostImage",
+          "source": {
+            "read_only": [],
+            "bin_dirs": [],
+            "mounts": []
+          },
+          "startup_timeout": 600.0
+        },
+        "phase_deadlines": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "agent_timeout_sec": 900.0,
+          "verifier_timeout_sec": 720.0
+        },
+        "module_files": {
+          "harbor.trial.taskcompendium": {
+            "path": "/Users/benfeuer/Documents/marin-worktrees/atlas-oracle-code-runtime-v4/vendor/harbor/src/harbor/trial/taskcompendium.py",
+            "sha256": "7589575a54779f32260541ea86d661710ff52e46863214e3ccf26c5b48d0c910"
+          },
+          "rolloutengine.machines": {
+            "path": "/Users/benfeuer/Documents/marin-worktrees/atlas-oracle-code-runtime-v4/lib/rolloutengine/src/rolloutengine/machines.py",
+            "sha256": "ee719cbb7f10a9f6086167228d4e8e8ad60839a307a7a775d31409234fe2bd73"
+          }
+        },
+        "source_commands": 0,
+        "provider_creations": 0
+      },
+      "hold_reasons": [],
+      "archived_source_runtime": {
+        "original_member": "original-packet/source-runtime.json",
+        "consumed_member": "trials/attempt-00/tasktrove-unitsyn_large-00d46a163caf14e7a9a9ad4d72d23fe84bbc5f37beb1459d341d66fe0022fdd1/source-runtime.json",
+        "sha256": "85b843a99ae5c08045fc6a5fc20ae6b5caedac848d9f72a0d1a619494a50e93e",
+        "original_and_consumed_bytes_equal": true
+      }
+    },
+    {
+      "source_id": "TaskTrove:DCAgent__exp_rpt_unitsyn-python-large-v2",
+      "source_key": "bc301818cccd454da3de",
+      "task_id": "tasktrove-unitsyn_large-00195e7a48914cf2471e7f5b448cc45aa7f775e98cb02becadbca7a7f768e283",
+      "task_sha256": "8fceaca4916a95e2c24f1b14cf19417195c2d6f41cf8b052928f4e0000e5e2bc",
+      "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+      "source_task_checksum": "46a4654fabf79fd21aa5d0cd0358c27f66ec2c38c1822d87793bdf6cf9fe9a25",
+      "task_checksum": "46a4654fabf79fd21aa5d0cd0358c27f66ec2c38c1822d87793bdf6cf9fe9a25",
+      "receipt_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/bc301818cccd454da3de/tasks/9930838b5728ab88f8d9a4c7dd2ac66a18f0773853481e1e18d2abadb0cff27e.json",
+      "receipt_sha256": "81d7237f5bf027adf9286cceff77efa400886da4f281e8bc1244d5082b880fa8",
+      "task_proof_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/bc301818cccd454da3de/task-proofs/9930838b5728ab88f8d9a4c7dd2ac66a18f0773853481e1e18d2abadb0cff27e.json",
+      "task_proof_sha256": "ee222727a2ec5a4e5f3c0ae86198d6ea051a06cb393a6e40750453214489b71f",
+      "trial_archive_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/bc301818cccd454da3de/trial-artifacts/9930838b5728ab88f8d9a4c7dd2ac66a18f0773853481e1e18d2abadb0cff27e.tar.gz",
+      "trial_archive_sha256": "85a4cbd0baa1802b788c768636773567ff51b32e11f163e06a209b3658950790",
+      "passed": true,
+      "scored": true,
+      "parent_result_sha256": "84d2a3dd20a8b6af01742ab58e44e96bbc2fac22b1a1fbf2f41b2187dc4dd60c",
+      "dataset_id": "open-athena/task-trove-dcagent-exp-rpt-unitsyn-python-large-bc301818-oracle-repair-20261113-v1",
+      "dataset_revision": "9d8e67fe52abc33d5595fd91505bea3b121a06aa",
+      "cohort_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.13.3/candidates/bc301818cccd454da3de/population/specs/part-000000.parquet",
+      "cohort_sha256": "c5c7c47655057c8dafa78ea9795abe8a063b091dd38e35a7c247f94e033c36f3",
+      "role_qualification_status": "pending separate exact-producer offline audit; not covered by 2c5 qualification",
+      "oracle_replay_authorized": false,
+      "outcome": "compatible_completed_pass",
+      "observation": {
+        "archive_sha256": "85a4cbd0baa1802b788c768636773567ff51b32e11f163e06a209b3658950790",
+        "raw_result_sha256": "84d2a3dd20a8b6af01742ab58e44e96bbc2fac22b1a1fbf2f41b2187dc4dd60c",
+        "actor": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "gpus": 0,
+          "network": "allow",
+          "workdir": "/app",
+          "source_type": "RegistryImage",
+          "source": {
+            "reference": "python:3.10-slim@sha256:7b6bd969dda3ecfca0655524e338b57a8b8cd692a9362e3d55b5a3ef49b07256"
+          },
+          "startup_timeout": 600.0
+        },
+        "source_runtime": {
+          "task_sha256": "8fceaca4916a95e2c24f1b14cf19417195c2d6f41cf8b052928f4e0000e5e2bc",
+          "runtime_sha256": "6d10d17965435771bc1fd2ff54a15912dd9595336193c6150fc00eef22872ebd",
+          "runtime": {
+            "task_machine": {
+              "cpus": null,
+              "memory_mb": null,
+              "storage_mb": null,
+              "gpus": 0,
+              "network": "allow"
+            },
+            "verifier_machine": {
+              "cpus": null,
+              "memory_mb": null,
+              "storage_mb": null,
+              "gpus": 0,
+              "network": "allow"
+            }
+          }
+        },
+        "packet_task_sha256": "8fceaca4916a95e2c24f1b14cf19417195c2d6f41cf8b052928f4e0000e5e2bc",
+        "packet_checksum": "46a4654fabf79fd21aa5d0cd0358c27f66ec2c38c1822d87793bdf6cf9fe9a25",
+        "raw_task_checksum": "46a4654fabf79fd21aa5d0cd0358c27f66ec2c38c1822d87793bdf6cf9fe9a25",
+        "oracle_helper": null,
+        "verifier": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "gpus": 0,
+          "network": "allow",
+          "workdir": "/workspace",
+          "source_type": "HostImage",
+          "source": {
+            "read_only": [],
+            "bin_dirs": [],
+            "mounts": []
+          },
+          "startup_timeout": 600.0
+        },
+        "phase_deadlines": {
+          "cpus": 1,
+          "memory_mb": 2048,
+          "storage_mb": 2048,
+          "agent_timeout_sec": 900.0,
+          "verifier_timeout_sec": 720.0
+        },
+        "module_files": {
+          "harbor.trial.taskcompendium": {
+            "path": "/Users/benfeuer/Documents/marin-worktrees/atlas-oracle-code-runtime-v4/vendor/harbor/src/harbor/trial/taskcompendium.py",
+            "sha256": "7589575a54779f32260541ea86d661710ff52e46863214e3ccf26c5b48d0c910"
+          },
+          "rolloutengine.machines": {
+            "path": "/Users/benfeuer/Documents/marin-worktrees/atlas-oracle-code-runtime-v4/lib/rolloutengine/src/rolloutengine/machines.py",
+            "sha256": "ee719cbb7f10a9f6086167228d4e8e8ad60839a307a7a775d31409234fe2bd73"
+          }
+        },
+        "source_commands": 0,
+        "provider_creations": 0
+      },
+      "hold_reasons": [],
+      "archived_source_runtime": {
+        "original_member": "original-packet/source-runtime.json",
+        "consumed_member": "trials/attempt-00/tasktrove-unitsyn_large-00195e7a48914cf2471e7f5b448cc45aa7f775e98cb02becadbca7a7f768e283/source-runtime.json",
+        "sha256": "82cf83a11e5ac94b6aa5f35708879933601e89dea1b811c4b0b0720906b7c601",
+        "original_and_consumed_bytes_equal": true
+      }
+    }
+  ],
+  "source_commands": 0,
+  "provider_creations": 0,
+  "oracle_replays": 0,
+  "admitted": 0,
+  "scope": "Offline exact-producer constructor evidence only; separate bounded typed qualification and adoption required",
+  "actual_archived_source_runtime_checked": 18,
+  "prior_constructor_audit_sha256": "c4a1fd3455c195a6332f0cbce56082eb37515b3935549fd61501e167bb78b681"
+}

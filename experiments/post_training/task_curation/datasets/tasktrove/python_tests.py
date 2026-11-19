@@ -7,30 +7,36 @@ Each source ships one pytest file and, usually, a ``solution/solution.py`` oracl
 files under ``/app``; unitsyn's agent writes the fixed solution file instead. The hidden tests run
 with the grader packages (``GRADER_PACKAGES``). The sources differ only by
 configuration and rubric. Each agent environment replays its archived Dockerfile on its pinned base;
-the grader runs separately with ``GRADER_PACKAGES``.
+the grader runs in the same workspace image, with the grader packages installed after its setup.
 """
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
+from finestore.rl.status_taxonomy import DataRestriction
+from taskcompendium.models import EnvironmentRequirements, TaskResource
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, Converter, ImportRejection, IntendedUse, NormalizedTask, RawRow
 
-from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
+from experiments.post_training.task_curation.datasets.environments import (
+    GRADER_PACKAGES,
+    PYTHON_TEST_GRADERS,
+)
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.code import ANSWERABILITY_CRITERIA
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
-    archive_requirements,
-)
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.executable import (
     SOLUTION_PATHS,
+    PinnedInstall,
     solve_script,
     tasktrove_archive_task,
+    workspace_grader_environment,
 )
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.python_unit_tests import (
     convert as convert_unit_tests,
 )
+from experiments.post_training.task_curation.environment_fidelity import archive_environment
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 PYTHON_TESTS_CONTROLS = Controls(golden=solve_script)
 
@@ -164,25 +170,137 @@ tests.
 {PYMETHODS_COMMON_CRITERIA}"""
 
 
+PYTHON_TEST_GRADER_INSTALL = "python3 -m pip install --no-cache-dir --break-system-packages " + " ".join(
+    PYTHON_TEST_GRADERS
+)
+"""The declared pytest grader packages, installed after the workspace setup on an inherited-image
+grader that carries no compiled lock (the synthetic fixtures and the sources without locks)."""
+
+LOCKS_PACKAGE = Path(__file__).resolve().parent / "locks"
+"""The compiled hashed requirement locks, one actor and one grader lock per source."""
+
+
+def python_tests_grader_environment(
+    context: ConversionContext, environment: EnvironmentRequirements
+) -> EnvironmentRequirements:
+    """The unpinned grader image for a hidden-pytest task: the workspace image with the declared
+    grader packages after it. The compiled-lock path supersedes this for the sources that carry
+    locks; the synthetic test fixtures and the sources without locks keep this construction.
+    """
+    return workspace_grader_environment(
+        environment, required_grader_environment(context), extra_setup=PYTHON_TEST_GRADER_INSTALL
+    )
+
+
+LOCK_RESOURCE_PREFIX = "locks"
+ACTOR_LOCK_RESOURCE = f"{LOCK_RESOURCE_PREFIX}/actor.lock"
+GRADER_LOCK_RESOURCE = f"{LOCK_RESOURCE_PREFIX}/grader.lock"
+"""The compiled hashed requirement locks, one actor and one grader lock per source, staged as
+task resources: the actor lock rides as a worker resource (both machines replay the actor setup)
+and the grader lock as a verifier resource (grader only)."""
+
+LOCK_INSTALL = "python3 -m pip install --no-cache-dir --break-system-packages --require-hashes -r {lock}"
+"""--break-system-packages rides unconditionally: the Stack Overflow apt base marks its
+interpreter externally managed (PEP 668) and every other pinned base accepts the flag."""
+
+
+def _lock_resource(path: Path, resource_path: str) -> TaskResource:
+    from taskcompendium.runtime.resources import inline_resource  # noqa: PLC0415
+
+    return inline_resource(resource_path, path.read_bytes())
+
+
+def pinned_setup(
+    config: str, actor_environment: EnvironmentRequirements
+) -> tuple[EnvironmentRequirements, EnvironmentRequirements | None, PinnedInstall | None]:
+    """The pinned actor and grader environments for one source, with the lock resources.
+
+    Every floating ``pip install`` the archive's Dockerfile ships is replaced by the
+    hashed-lock install compiled for that source's base interpreter (ruling 2026-11-19:
+    a task's environment spec must fully determine its behavior). The grader environment
+    inherits the pinned actor setup and appends the grader lock's install. Sources whose
+    archive installs nothing (the Stack Overflow apt base) keep their steps and only the
+    grader lock applies.
+    """
+    directory = LOCKS_PACKAGE / config
+    if not directory.exists():
+        # No compiled locks for this config: the unpinned path applies (the campaign's nine
+        # sources carry locks; other TaskTrove configs keep their floating installs until
+        # their own locks compile).
+        return actor_environment, None, None
+    actor_lock = directory / "actor.lock"
+    grader_lock = directory / "grader.lock"
+    actor_command = LOCK_INSTALL.format(lock=f"/{ACTOR_LOCK_RESOURCE}")
+    grader_command = LOCK_INSTALL.format(lock=f"/tests/{GRADER_LOCK_RESOURCE}")
+    if not actor_lock.exists():
+        # Nothing in the actor setup floats; only the grader lock applies.
+        grader_environment = actor_environment.model_copy(
+            update={"setup_commands": (*actor_environment.setup_commands, grader_command)}
+        )
+        pinned = PinnedInstall(
+            command=None,
+            grader_command=grader_command,
+            actor_lock=None,
+            grader_lock=_lock_resource(grader_lock, GRADER_LOCK_RESOURCE),
+            requirements=(),
+        )
+        return actor_environment, grader_environment, pinned
+    pinned_actor = actor_environment.model_copy(
+        update={
+            "setup_commands": tuple(
+                actor_command if "pip install" in step else step for step in actor_environment.setup_commands
+            )
+        }
+    )
+    grader_environment = pinned_actor.model_copy(
+        update={"setup_commands": (*pinned_actor.setup_commands, grader_command)}
+    )
+    requirements = tuple(
+        line.split("==")[0].strip()
+        for line in actor_lock.read_text().splitlines()
+        if line and not line.startswith(("#", " ", "-"))
+    )
+    pinned = PinnedInstall(
+        command=actor_command,
+        grader_command=grader_command,
+        actor_lock=_lock_resource(actor_lock, ACTOR_LOCK_RESOURCE),
+        grader_lock=_lock_resource(grader_lock, GRADER_LOCK_RESOURCE),
+        requirements=requirements,
+    )
+    return pinned_actor, grader_environment, pinned
+
+
 def convert_python_tests(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
     """Capture the implementation and assets under the source workspace."""
+    environment = archive_environment(row.data["files"])
+    config = row.source.row.split("/", 1)[0]
+    pinned_actor, grader_environment, pinned = pinned_setup(config, environment)
+    if pinned is None:
+        grader_environment = python_tests_grader_environment(context, environment)
     return tasktrove_archive_task(
         row,
         convert=convert_unit_tests,
-        environment=archive_requirements(row.data),
-        grader_environment=required_grader_environment(context),
+        environment=pinned_actor,
+        grader_environment=grader_environment,
         output_paths=("/app",),
+        pinned=pinned,
     )
 
 
 def convert_unitsyn(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
     """Capture the fixed solution files, as the source's grader did."""
+    environment = archive_environment(row.data["files"])
+    config = row.source.row.split("/", 1)[0]
+    pinned_actor, grader_environment, pinned = pinned_setup(config, environment)
+    if pinned is None:
+        grader_environment = python_tests_grader_environment(context, environment)
     return tasktrove_archive_task(
         row,
         convert=convert_unit_tests,
-        environment=archive_requirements(row.data),
-        grader_environment=required_grader_environment(context),
+        environment=pinned_actor,
+        grader_environment=grader_environment,
         output_paths=SOLUTION_PATHS,
+        pinned=pinned,
     )
 
 
@@ -201,11 +319,15 @@ SOURCES = {
         convert_python_tests,
         CURRICULUM_EASY_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:DCAgent__exp_rpt_curriculum-easy",
-            title="DCAgent/exp_rpt_curriculum-easy",
-            origin="Task Trove",
+            data_restriction=DataRestriction.OPEN,
+            id="TaskTrove:DCAgent__exp_rpt_curriculum-easy",
+            upstream_dataset="DCAgent__exp_rpt_curriculum-easy",
+            upstream_name="DCAgent__exp_rpt_curriculum-easy",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
-            tags=("agentic", "multi-turn", "language:python"),
+            tags=("agentic", "language:python"),
             count=509,
             notes=(
                 "Self-contained pytest tasks. In a 10-task sample, empty and trivial submissions "
@@ -220,11 +342,15 @@ SOURCES = {
         CURRICULUM_MEDIUM_RUBRIC,
         version="6",
         info=SourceInfo(
-            id="Task Trove:DCAgent__exp_rpt_curriculum-medium-v2",
-            title="DCAgent/exp_rpt_curriculum-medium-v2",
-            origin="Task Trove",
+            data_restriction=DataRestriction.OPEN,
+            id="TaskTrove:DCAgent__exp_rpt_curriculum-medium-v2",
+            upstream_dataset="DCAgent__exp_rpt_curriculum-medium-v2",
+            upstream_name="DCAgent__exp_rpt_curriculum-medium-v2",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
-            tags=("agentic", "multi-turn", "language:python"),
+            tags=("agentic", "language:python"),
             count=492,
             notes=(
                 "Self-contained pytest tasks. In a 10-task sample, empty and trivial submissions "
@@ -239,11 +365,15 @@ SOURCES = {
         E2EGIT_RUBRIC,
         version="8",
         info=SourceInfo(
-            id="Task Trove:DCAgent__exp_rpt_e2egit-v2",
-            title="DCAgent/exp_rpt_e2egit-v2",
-            origin="Task Trove",
+            data_restriction=DataRestriction.OPEN,
+            id="TaskTrove:DCAgent__exp_rpt_e2egit-v2",
+            upstream_dataset="DCAgent__exp_rpt_e2egit-v2",
+            upstream_name="DCAgent__exp_rpt_e2egit-v2",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
-            tags=("agentic", "multi-turn", "language:python", "language:javascript"),
+            tags=("agentic", "language:python", "language:javascript"),
             count=487,
             notes=(
                 "Self-contained pytest tasks. Empty and trivial submissions failed all 10 sampled "
@@ -257,11 +387,15 @@ SOURCES = {
         convert_python_tests,
         E2EGIT_LARGE_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:DCAgent__exp_rpt_e2egit-large",
-            title="DCAgent/exp_rpt_e2egit-large",
-            origin="Task Trove",
+            data_restriction=DataRestriction.OPEN,
+            id="TaskTrove:DCAgent__exp_rpt_e2egit-large",
+            upstream_dataset="DCAgent__exp_rpt_e2egit-large",
+            upstream_name="DCAgent__exp_rpt_e2egit-large",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
-            tags=("agentic", "multi-turn", "language:python"),
+            tags=("agentic", "language:python"),
             count=4998,
             notes=(
                 "Self-contained pytest tasks. Empty and trivial submissions failed all 10 sampled "
@@ -275,11 +409,15 @@ SOURCES = {
         convert_python_tests,
         MULTIFILE_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:DCAgent__exp_rpt_multifile-v3",
-            title="DCAgent/exp_rpt_multifile-v3",
-            origin="Task Trove",
+            data_restriction=DataRestriction.OPEN,
+            id="TaskTrove:DCAgent__exp_rpt_multifile-v3",
+            upstream_dataset="DCAgent__exp_rpt_multifile-v3",
+            upstream_name="DCAgent__exp_rpt_multifile-v3",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
-            tags=("agentic", "multi-turn", "language:python"),
+            tags=("agentic", "language:python"),
             count=4843,
             notes=(
                 "Self-contained multi-file pytest tasks. In a 10-task sample, empty and trivial "
@@ -293,11 +431,15 @@ SOURCES = {
         convert_python_tests,
         PYMETHODS_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:DCAgent__exp_rpt_pymethods2test-v3",
-            title="DCAgent/exp_rpt_pymethods2test-v3",
-            origin="Task Trove",
+            data_restriction=DataRestriction.OPEN,
+            id="TaskTrove:DCAgent__exp_rpt_pymethods2test-v3",
+            upstream_dataset="DCAgent__exp_rpt_pymethods2test-v3",
+            upstream_name="DCAgent__exp_rpt_pymethods2test-v3",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
-            tags=("agentic", "multi-turn", "language:python"),
+            tags=("agentic", "language:python"),
             count=500,
             notes=(
                 "Self-contained pytest katas with shipped Python oracles. All 10 sampled oracles "
@@ -311,11 +453,15 @@ SOURCES = {
         convert_python_tests,
         PYMETHODS_LARGE_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:DCAgent__exp_rpt_pymethods2test-large-v2",
-            title="DCAgent/exp_rpt_pymethods2test-large-v2",
-            origin="Task Trove",
+            data_restriction=DataRestriction.OPEN,
+            id="TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2",
+            upstream_dataset="DCAgent__exp_rpt_pymethods2test-large-v2",
+            upstream_name="DCAgent__exp_rpt_pymethods2test-large-v2",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
-            tags=("agentic", "multi-turn", "language:python"),
+            tags=("agentic", "language:python"),
             count=4991,
             notes=(
                 "Self-contained pytest katas with shipped Python oracles. All 10 sampled oracles "
@@ -329,11 +475,15 @@ SOURCES = {
         convert_unitsyn,
         UNITSYN_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:DCAgent__exp_rpt_unitsyn-python-v4",
-            title="DCAgent/exp_rpt_unitsyn-python-v4",
-            origin="Task Trove",
+            data_restriction=DataRestriction.OPEN,
+            id="TaskTrove:DCAgent__exp_rpt_unitsyn-python-v4",
+            upstream_dataset="DCAgent__exp_rpt_unitsyn-python-v4",
+            upstream_name="DCAgent__exp_rpt_unitsyn-python-v4",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
-            tags=("agentic", "multi-turn", "language:python"),
+            tags=("agentic", "language:python"),
             count=491,
             notes=(
                 "Self-contained pytest katas with shipped Python oracles. The standardized mode "
@@ -347,11 +497,15 @@ SOURCES = {
         convert_python_tests,
         UNITSYN_LARGE_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:DCAgent__exp_rpt_unitsyn-python-large-v2",
-            title="DCAgent/exp_rpt_unitsyn-python-large-v2",
-            origin="Task Trove",
+            data_restriction=DataRestriction.OPEN,
+            id="TaskTrove:DCAgent__exp_rpt_unitsyn-python-large-v2",
+            upstream_dataset="DCAgent__exp_rpt_unitsyn-python-large-v2",
+            upstream_name="DCAgent__exp_rpt_unitsyn-python-large-v2",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
-            tags=("agentic", "multi-turn", "language:python"),
+            tags=("agentic", "language:python"),
             count=4991,
             notes=(
                 "Self-contained pytest katas with shipped Python oracles. All 10 sampled oracles "
@@ -365,11 +519,15 @@ SOURCES = {
         convert_python_tests,
         STACK_PYTEST_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:DCAgent__exp_rpt_stack-pytest-v2",
-            title="DCAgent/exp_rpt_stack-pytest-v2",
-            origin="Task Trove",
+            data_restriction=DataRestriction.OPEN,
+            id="TaskTrove:DCAgent__exp_rpt_stack-pytest-v2",
+            upstream_dataset="DCAgent__exp_rpt_stack-pytest-v2",
+            upstream_name="DCAgent__exp_rpt_stack-pytest-v2",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
-            tags=("agentic", "multi-turn", "language:python"),
+            tags=("agentic", "language:python"),
             count=500,
             notes=(
                 "Self-contained pytest tasks. In a 10-task sample, empty and trivial submissions "
@@ -394,6 +552,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 intended_use=IntendedUse.TRAIN,
                 rubric=source.rubric,
                 controls=PYTHON_TESTS_CONTROLS,
+                oracle_solutions=True,
                 grader=GRADER_PACKAGES,
             ),
         )

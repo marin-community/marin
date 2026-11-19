@@ -4,8 +4,8 @@
 """Precompute Atlas statistics without scanning task rows while serving views."""
 
 from collections import Counter
-from collections.abc import Iterator, Sequence
-from dataclasses import dataclass
+from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass, field
 from functools import partial
 
 from finestore.schema import arrow_schema
@@ -13,12 +13,24 @@ from rigging.filesystem.storage_path import StoragePath
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
 
-from taskcompendium.pipeline.curriculum.models import CurriculumNode, CurriculumStatistic
+from taskcompendium.pipeline.curriculum.models import (
+    CurriculumConfidenceStatistic,
+    CurriculumNode,
+    CurriculumStatistic,
+)
 from taskcompendium.pipeline.curriculum.task_alignment import TaskAlignment
 from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
 
-SUBJECT_DISTANCE = 0.45
-CAPABILITY_DISTANCE = 0.25
+# Approximate nearest-node coverage; retained scores remain available for review.
+SUBJECT_DISTANCE = 0.70
+CAPABILITY_DISTANCE = 0.70
+CONFIDENCE_LEVELS = (
+    ("All (nearest)", 0.30, 0.30),
+    ("Broad", 0.55, 0.60),
+    ("Moderate", 0.55, 0.65),
+    ("Strict", 0.55, 0.70),
+    ("Original (#10157)", 0.55, 0.75),
+)
 SOURCE_SAMPLE_SIZE = 100
 AREA_SAMPLE_SIZE = 10
 STATISTIC_FIELDS = ("source_id", "metric", "subject_id", "node_id")
@@ -29,6 +41,7 @@ class AtlasData:
     paths: list[str]
     sample_paths: list[str]
     sample_task_count: int
+    confidence_paths: list[str] = field(default_factory=list)
 
 
 def _task_coverage(
@@ -55,13 +68,17 @@ def _task_coverage(
     }
 
 
+def _task_metrics(row: dict) -> Iterator[tuple[str, str, str]]:
+    yield "denominator", "", ""
+    yield row["outcome"], "", ""
+    yield from (("placement", subject, node) for subject, node in row["placements"])
+    yield from (("capability", subject, "subject:" + subject) for subject in row["capabilities"])
+
+
 def _partition_statistics(records: Iterator[dict], _shard: ShardInfo) -> Iterator[dict]:
     counts = Counter()
     for row in records:
-        metrics = [("denominator", "", ""), (row["outcome"], "", "")]
-        metrics.extend(("placement", subject, node) for subject, node in row["placements"])
-        metrics.extend(("capability", subject, "subject:" + subject) for subject in row["capabilities"])
-        counts.update((row["source_id"], *metric) for metric in metrics)
+        counts.update((row["source_id"], *metric) for metric in _task_metrics(row))
     for key, count in counts.items():
         yield dict(zip(STATISTIC_FIELDS, key, strict=True), instances=count)
 
@@ -77,21 +94,71 @@ def _sum_statistics(key: tuple, records: Iterator[dict]) -> dict:
     return dict(zip(STATISTIC_FIELDS, key, strict=True), instances=instances)
 
 
+def _partition_confidence_statistics(
+    records: Iterator[dict],
+    _shard: ShardInfo,
+    *,
+    ancestors: dict[tuple[str, str], list[str]],
+    levels: Sequence[tuple[str, float, float]],
+) -> Iterator[dict]:
+    counts: dict[tuple, list[int]] = {}
+    for row in records:
+        for index, (_, subject_similarity, capability_similarity) in enumerate(levels):
+            coverage = _task_coverage(
+                row,
+                ancestors=ancestors,
+                subject_distance=1 - subject_similarity,
+                capability_distance=1 - capability_similarity,
+            )
+            for metric in _task_metrics(coverage):
+                key = row["source_id"], *metric
+                if key not in counts:
+                    counts[key] = [0] * len(levels)
+                counts[key][index] += 1
+    for key, instances in counts.items():
+        yield dict(zip(STATISTIC_FIELDS, key, strict=True), instances=instances)
+
+
+def _sum_confidence_statistics(key: tuple, records: Iterator[dict]) -> dict:
+    first = next(records)
+    instances = first["instances"].copy()
+    for row in records:
+        instances = [left + right for left, right in zip(instances, row["instances"], strict=True)]
+    return dict(zip(STATISTIC_FIELDS, key, strict=True), instances=instances)
+
+
 def _sample_groups(
-    row: dict, *, ancestors: dict[tuple[str, str], list[str]], subject_distance: float, capability_distance: float
+    row: dict,
+    *,
+    ancestors: dict[tuple[str, str], list[str]],
+    subject_distance: float,
+    capability_distance: float,
+    confidence_levels: Sequence[tuple[str, float, float]],
 ) -> Iterator[dict]:
     yield {"kind": "source", "scope_id": row["source_id"], "task": row}
-    for subject, node in _task_coverage(
-        row, ancestors=ancestors, subject_distance=subject_distance, capability_distance=capability_distance
-    )["placements"]:
-        yield {"kind": "area", "scope_id": subject + "/" + node, "task": row}
+    levels = confidence_levels or (("", 1 - subject_distance, 1 - capability_distance),)
+    for index, (_, subject_similarity, capability_similarity) in enumerate(levels):
+        for subject, node in _task_coverage(
+            row,
+            ancestors=ancestors,
+            subject_distance=1 - subject_similarity,
+            capability_distance=1 - capability_similarity,
+        )["placements"]:
+            yield {"kind": "area", "scope_id": f"{index}/{subject}/{node}", "task": row}
 
 
-def _sample_tasks(key: tuple[str, str], rows: Iterator[dict], *, source_size: int, area_size: int) -> Iterator[dict]:
+def _sample_tasks(
+    key: tuple[str, str],
+    rows: Iterator[dict],
+    *,
+    source_size: int,
+    area_size: int,
+    sampling_source_ids: Mapping[str, str],
+) -> Iterator[dict]:
     _, selected = seeded_sample(
         rows,
         size=source_size if key[0] == "source" else area_size,
-        key=lambda row: seeded_order(row["task"]["source_id"] + "\0" + row["task"]["task_id"], 0),
+        key=lambda row: seeded_order(sampling_source_ids[row["task"]["source_id"]] + "\0" + row["task"]["task_id"], 0),
     )
     yield from selected
 
@@ -106,6 +173,8 @@ def build_curriculum_coverage(
     capability_distance: float,
     source_sample_size: int,
     area_sample_size: int,
+    sampling_source_ids: Mapping[str, str],
+    confidence_levels: Sequence[tuple[str, float, float]] = (),
 ) -> AtlasData:
     """Export full-population counts and bounded, overlapping task samples."""
     by_id = {(node.subject_id, node.node_id): node for node in nodes}
@@ -136,7 +205,26 @@ def build_curriculum_coverage(
         ),
         name="curriculum-coverage-statistics",
     )
-    sample = partial(_sample_tasks, source_size=source_sample_size, area_size=area_sample_size)
+    confidence_paths = []
+    if confidence_levels:
+        confidence = context.execute(
+            Dataset.from_list(list(task_paths))
+            .load_parquet(columns=["source_id", "description_status", "matches"])
+            .map_shard(partial(_partition_confidence_statistics, ancestors=ancestors, levels=confidence_levels))
+            .group_by(key=_statistic_key, reducer=_sum_confidence_statistics, num_output_shards=context.max_workers)
+            .write_parquet(
+                str(StoragePath(output_root) / "confidence/part-{shard:05d}.parquet"),
+                schema=arrow_schema(CurriculumConfidenceStatistic),
+            ),
+            name="curriculum-confidence-statistics",
+        )
+        confidence_paths = confidence.results
+    sample = partial(
+        _sample_tasks,
+        source_size=source_sample_size,
+        area_size=area_sample_size,
+        sampling_source_ids=sampling_source_ids,
+    )
     samples = context.execute(
         Dataset.from_list(list(task_paths))
         .load_parquet()
@@ -146,6 +234,7 @@ def build_curriculum_coverage(
                 ancestors=ancestors,
                 subject_distance=subject_distance,
                 capability_distance=capability_distance,
+                confidence_levels=confidence_levels,
             )
         )
         .group_by(
@@ -162,4 +251,4 @@ def build_curriculum_coverage(
         name="curriculum-review-samples",
     )
     sample_count = context.execute(Dataset.from_list(samples.results).load_parquet(columns=["task_id"]).count())
-    return AtlasData(result.results, samples.results, sample_count.results[0])
+    return AtlasData(result.results, samples.results, sample_count.results[0], confidence_paths)

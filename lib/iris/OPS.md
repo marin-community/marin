@@ -649,6 +649,17 @@ Changing defaults affects new jobs; stored policies and existing Pods have
 separate lifetimes. Follow the [allowlist rollback order](docs/coreweave.md#rolling-back-the-egress-allowlist)
 and [container profile semantics](docs/container-profiles.md).
 
+## Cross-Region Data Movement
+
+- CoreWeave S3 region-to-region transfers are fine; no budget applies.
+- Never read or move bulk data across GCS regions. The shared transfer budget
+  (`lib/rigging/src/rigging/filesystem/cross_region.py`, default 10 GB, GCS-only)
+  raises `TransferBudgetExceeded` on cross-region GCS reads and copies. Do not use
+  Storage Transfer Service to move files between GCS regions.
+- Stage large artifacts in-region: run the job in the data's region, or read
+  through `mirror://` so the artifact is copied once into the local region and
+  referenced locally thereafter.
+
 ## CI Workflows
 
 | Workflow | Purpose |

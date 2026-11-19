@@ -1,0 +1,8 @@
+{
+  "source_id": "TaskTrove:smartie-swesmith-admitted",
+  "decision": "A -9, -6 or -11 nop verifier producer signal receives one identical-budget control re-drive. A reproduced signal is a non-passing source-runtime control, with raw error annotation.",
+  "authority": "Coordinator ruling received 2026-11-14T09:01:44Z",
+  "maximum_control_repeats": 1,
+  "source_original_oracles_replayed": 0,
+  "budgets_changed": false
+}

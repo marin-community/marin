@@ -13,7 +13,7 @@ import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
 from fray.local_backend import LocalClient
-from marin.execution.lazy import ArtifactStep, run
+from marin.execution.lazy import ArtifactStep, StepContext, run
 from taskcompendium.convert.answers import source_evidence
 from taskcompendium.evaluation.corpus import evaluation_cases
 from taskcompendium.grader import verifyit_package
@@ -60,9 +60,15 @@ from experiments.post_training.task_curation.inventory import (
     SelectionRecipe,
     task_selection_step,
     validation_task,
+    write_training,
 )
 from experiments.post_training.task_curation.pipeline import source_recipe
+from experiments.post_training.task_curation.tests.admission_fixtures import with_admission_census
 from experiments.post_training.task_curation.tests.conversion import converted_task
+from experiments.post_training.task_curation.tests.resource_receipts import resource_recipe, write_fixture_receipt
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, original_source_id
+from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
+from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 FAMILIES = (*HELDOUT_FAMILIES.values(), STRUCTURAL_FAMILY)
 
@@ -364,12 +370,48 @@ def test_selection_does_not_publish_for_invalid_source_or_grader(tmp_path, failu
     assert not (Path(step.path()) / TRAIN_FILENAME).exists()
 
 
+@pytest.mark.parametrize("language", ["python-v2", "typescript-v2", "java-v3", "csharp-v4"])
+@pytest.mark.parametrize("origin", ["TaskTrove", "Task Trove"])
+def test_crosscode_evaluation_policy_blocks_stale_admitted_training_artifacts(tmp_path, language, origin):
+    source_id = f"{origin}:laion__exp_rpt_crosscodeeval-{language}"
+    settings = recipe(tmp_path).model_copy(update={"sources": {source_id: "calendar"}})
+    # The archived artifact predates the EVAL ruling and still claims TRAIN/FULL.
+    source = admitted_source(tmp_path / "source", [source_task("training-a")], "train", "full")
+    with pytest.raises(ValueError, match="Evaluation-only CrossCodeEval"):
+        task_selection_step({source_id: source}, settings)
+    assert not list((tmp_path / "artifacts").rglob(TRAIN_FILENAME))
+
+
 def test_full_cli_appends_selection_and_saved_corpus_can_reselect(tmp_path, monkeypatch):
     declared = next(source for source in skyrl_math.sources() if source.name == "math500")
     assert declared.config is not None
     source = replace(
-        declared, config=replace(declared.config, rubric=None, controls=None, intended_use=IntendedUse.TRAIN)
+        declared,
+        config=resource_recipe(
+            replace(
+                declared.config,
+                source=replace(declared.config.source, repo="open-athena/math500-fixture"),
+                rubric=None,
+                controls=None,
+                intended_use=IntendedUse.TRAIN,
+            )
+        ),
+        info=replace(
+            declared.info,
+            daytona_machine_slots=0,
+            daytona_snapshot_count=0,
+            daytona_execution_failures=0,
+            daytona_count_basis="Fixture numeric rows use a local reply grader and create no actor.",
+        ),
     )
+    source = replace(
+        source,
+        info=replace(
+            source.info,
+            within_source_dedup=deduplication_evidence(source.dataset.name, source.dataset.revision, source.version),
+        ),
+    )
+    source = with_admission_census(source)
     monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
     staged = tmp_path / "input"
     staged.mkdir()
@@ -388,7 +430,12 @@ def test_full_cli_appends_selection_and_saved_corpus_can_reselect(tmp_path, monk
     selection_file = tmp_path / "selection.json"
     selection_file.write_text(settings.model_dump_json())
     cache = tmp_path / "cache"
+    receipt = tmp_path / "decontamination.json"
+    receipt.write_text(decontamination_evidence(source.dataset.name, source.dataset.revision, 1).model_dump_json())
     options = [
+        *write_fixture_receipt(source.config, staged, tmp_path / "oracle-filter.json"),
+        "--decontamination-receipt",
+        str(receipt),
         "--mode",
         "full",
         "--skip-assessment",
@@ -418,7 +465,7 @@ def test_full_cli_appends_selection_and_saved_corpus_can_reselect(tmp_path, monk
     assert len(tasks) == 1
     assert tasks[0].context.events[-1].content == "Two plus three?"
     summary = json.loads((output / "summary.json").read_text())
-    assert summary["source_counts"][source.info.id]["heldout_overlap"] == 1
+    assert summary["source_counts"][original_source_id(source.info.id)]["heldout_overlap"] == 1
     heldout_ids = {json.loads(row["lowered_task_spec"])["task"]["id"] for row in heldout_rows()}
     assert {task.id for task in read_tasks(output / FULL_VALIDATION_FILENAME)} == heldout_ids
     input_file.unlink()
@@ -437,6 +484,34 @@ def test_full_cli_appends_selection_and_saved_corpus_can_reselect(tmp_path, monk
     )
     assert resumed.exit_code == 0, resumed.output
     assert tasks == read_tasks(cache / "rl-data/task-selection/fixture/2026.10.23.2" / TRAIN_FILENAME)
+
+
+def test_source_alias_migration_preserves_selected_parquet_bytes_and_duplicate_owner(tmp_path):
+    old_ids = ("Campaign Release:tasktrove-codeforces-rebuilt-v1", "MarinSkyRL:svamp")
+    new_ids = tuple(map(canonical_source_id, old_ids))
+    assert sorted(new_ids) == list(reversed(new_ids))
+    shared = source_task("shared-first")
+    roots = [
+        admitted_source(tmp_path / "first", [shared, source_task("unique-first")]),
+        admitted_source(
+            tmp_path / "second", [shared.model_copy(update={"id": "shared-second"}), source_task("unique-second")]
+        ),
+    ]
+    settings = recipe(tmp_path).model_copy(
+        update={"sources": dict.fromkeys(old_ids, "calendar"), "family_limits": {"calendar": 3}}
+    )
+    outputs = []
+    fingerprints = []
+    for index, identifiers in enumerate((old_ids, new_ids)):
+        step = task_selection_step(dict(zip(identifiers, roots, strict=True)), settings)
+        config = step.build_config(StepContext.for_run(str(tmp_path / "output"), str(tmp_path), deps=step.deps))
+        output = tmp_path / f"selected-{index}.parquet"
+        write_training(config, (), (), output)
+        outputs.append(output)
+        fingerprints.append(step.fingerprint())
+    assert {task.id for task in read_tasks(outputs[0])} == {"shared-first", "unique-first", "unique-second"}
+    assert outputs[0].read_bytes() == outputs[1].read_bytes()
+    assert fingerprints[0] == fingerprints[1]
 
 
 NEMO_FIXTURE = Path(__file__).parents[4] / "lib/taskcompendium/tests/fixtures/nemo/predicted-action.json"
@@ -463,7 +538,10 @@ def nemo_row(request: str) -> dict:
 
 
 def write_corpus(tmp_path: Path) -> None:
-    roots = {"Evalchemy:questions": tmp_path / "general", "NeMo:predicted-action": tmp_path / "agents"}
+    roots = {
+        "Evalchemy:questions": tmp_path / "general",
+        "Nemotron:nvidia/Nemotron-RL-Agentic-Conversational-Tool-Use-Pivot-v1/predicted-action": tmp_path / "agents",
+    }
     sources = [
         {
             "source_id": source,
@@ -584,7 +662,7 @@ def eval_lite_recipe(tmp_path: Path, benchmark: str = "mmlu") -> EvalLiteRecipe:
                 "count": 5,
             },
             {
-                "source_id": "NeMo:predicted-action",
+                "source_id": "Nemotron:nvidia/Nemotron-RL-Agentic-Conversational-Tool-Use-Pivot-v1/predicted-action",
                 "rows": len(tasks),
                 "format": "normalized",
                 "family": "agents",
@@ -679,17 +757,30 @@ def test_eval_lite_publication_preserves_untouched_strata_and_joins_initializer_
             "aaii_category": "agents" if agent else questions.aaii_category,
             "agentic": agent,
             "grader_kind": "in_process" if agent else "package",
-            "part": "nemo-predicted-action" if agent else "evalchemy-questions",
+            "part": (
+                "nemotron-nvidia/nemotron-rl-agentic-conversational-tool-use-pivot-v1/predicted-action"
+                if agent
+                else "evalchemy-questions"
+            ),
             "source": (agents[task.id] if agent else originals[task.id]).source.model_dump_json(),
             "license": "fixture-agents" if agent else "fixture-general",
             "difficulty": None,
         }
-    assert Counter(row["part"] for row in annotations) == {"evalchemy-questions": 5, "nemo-predicted-action": 3}
+    assert Counter(row["part"] for row in annotations) == {
+        "evalchemy-questions": 5,
+        "nemotron-nvidia/nemotron-rl-agentic-conversational-tool-use-pivot-v1/predicted-action": 3,
+    }
     families = {row["task_id"]: row["family"] for row in annotations}
     assert Counter(families[task.id] for task in fast) == {questions.family: 3, "agents": 1}
     counts = json.loads((provisional / "summary.json").read_text())["source_counts"]
-    assert counts["Evalchemy:questions"]["overlap"] == counts["NeMo:predicted-action"]["overlap"] == 1
-    assert counts["NeMo:predicted-action"].get("duplicate", 0) == 1 + (benchmark == "mmlu")
+    assert (
+        counts["Evalchemy:questions"]["overlap"]
+        == counts["Nemotron:nvidia/Nemotron-RL-Agentic-Conversational-Tool-Use-Pivot-v1/predicted-action"]["overlap"]
+        == 1
+    )
+    assert counts["Nemotron:nvidia/Nemotron-RL-Agentic-Conversational-Tool-Use-Pivot-v1/predicted-action"].get(
+        "duplicate", 0
+    ) == 1 + (benchmark == "mmlu")
     assert {next(iter(originals)), "agent-0", "agent-2-copy"}.isdisjoint(families)
     measured = measured_eval_lite_recipe(settings, tmp_path, full)
     final = publish_eval_lite(measured, tmp_path)
@@ -717,7 +808,10 @@ def test_eval_lite_publication_preserves_untouched_strata_and_joins_initializer_
         publish_eval_lite(measured.model_copy(update={"version": "2026.11.04.3"}), tmp_path)
 
 
-LOCAL_GRADER, AGENT_SHORTFALL = "EvalLite requires a local grader", "EvalLite part shortfall: NeMo:predicted-action"
+LOCAL_GRADER, AGENT_SHORTFALL = (
+    "EvalLite requires a local grader",
+    "EvalLite part shortfall: Nemotron:nvidia/Nemotron-RL-Agentic-Conversational-Tool-Use-Pivot-v1/predicted-action",
+)
 PROXY = ("eval", "tool-call-proxy")
 TASK_EDITS: dict[str, Callable[[TaskSpec], TaskSpec]] = {
     "judge": (

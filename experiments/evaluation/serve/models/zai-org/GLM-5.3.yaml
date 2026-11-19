@@ -1,0 +1,31 @@
+name: glm-5.3-atlas-reviewer-fp8
+location: zai-org/GLM-5.3
+revision: aca966e4e02791568aa6a4ced368624b3d897f42
+apply_chat_template: true
+resource_hint:
+  gpu:
+    GB200: 4
+  cpu: 64
+  memory: 850g
+  disk: 1600g
+serve:
+  tensor_parallel_size: 4
+  pipeline_parallel_size: 2
+  max_model_len: 262144
+  max_num_batched_tokens: 8192
+  max_num_seqs: 32
+  gpu_memory_utilization: 0.9
+  reasoning_parser: glm45
+  tool_call_parser: glm47
+  object_store_load_mode: stage_local
+  vllm_source: upstream
+  vllm_version: 0.28.0
+  vllm_extra_args:
+    - --block-size
+    - '64'
+    - --enable-auto-tool-choice
+    - --enable-prefix-caching
+    - --kv-cache-dtype
+    - fp8_e4m3
+    - --max-parallel-loading-workers
+    - '2'

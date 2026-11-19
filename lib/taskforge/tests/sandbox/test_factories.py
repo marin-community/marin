@@ -10,6 +10,7 @@ import pytest
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.machines import _machine_spec, _prepare_machine
 from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
+from shellbox.backends.docker_gvisor.machine import DockerGvisorMachineFactory
 from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.machine import (
     Backend,
@@ -153,11 +154,11 @@ def test_requested_local_backend_propagates_its_availability_failure(monkeypatch
     monkeypatch.setattr(factories, "local_factory", unavailable)
     with pytest.raises(RuntimeError, match="no bwrap here"):
         machine_factories((Backend.LOCAL,), controller_url=None)
-    built = machine_factories((Backend.GVISOR,), controller_url="http://controller.example:10000")
-    assert set(built) == {Backend.GVISOR.value}
+    built = machine_factories((Backend.DOCKER_GVISOR,), controller_url="http://controller.example:10000")
+    assert set(built) == {Backend.DOCKER_GVISOR.value}
 
 
-@pytest.mark.parametrize("backends", [(Backend.SHELLSIM,), (Backend.LOCAL, Backend.GVISOR), (Backend.DOCKER,)])
+@pytest.mark.parametrize("backends", [(Backend.SHELLSIM,), (Backend.LOCAL, Backend.DOCKER_GVISOR), (Backend.DOCKER,)])
 def test_factories_construct_exactly_the_selected_backends(monkeypatch, backends):
     monkeypatch.setattr(factories, "docker_unavailable_reason", lambda: None)
     monkeypatch.setattr(factories, "local_factory", lambda: FakeFactory(Backend.LOCAL))
@@ -166,10 +167,12 @@ def test_factories_construct_exactly_the_selected_backends(monkeypatch, backends
 
     assert set(built) == {backend.value for backend in backends}
     assert all(factory.backend.value == key for key, factory in built.items())
-    if Backend.GVISOR in backends:
-        iris = built[Backend.GVISOR.value]
+    if Backend.IRIS in backends:
+        iris = built[Backend.IRIS.value]
         assert isinstance(iris, IrisMachineFactory)
         assert iris.controller_url == controller
+    if Backend.DOCKER_GVISOR in backends:
+        assert isinstance(built[Backend.DOCKER_GVISOR.value], DockerGvisorMachineFactory)
 
 
 @pytest.mark.manual

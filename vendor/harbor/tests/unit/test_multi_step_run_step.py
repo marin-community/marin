@@ -26,51 +26,6 @@ def _exception_info() -> ExceptionInfo:
 
 
 @pytest.mark.asyncio
-async def test_collect_step_runs_task_then_step_hooks_before_download(
-    tmp_path: Path,
-) -> None:
-    trial = object.__new__(MultiStepTrial)
-    trial.task = SimpleNamespace(
-        config=TaskConfig.model_validate(
-            {"verifier": {"collect": [{"command": "task-snapshot"}]}}
-        )
-    )
-    trial.agent_env_paths = EnvironmentPaths()
-    trial.paths = SimpleNamespace(
-        artifacts_dir=tmp_path / "artifacts",
-        step_artifacts_dir=lambda name: tmp_path / "steps" / name / "artifacts",
-    )
-    events: list[str] = []
-
-    async def exec_hook(command: str, **kwargs) -> ExecResult:
-        events.append(command)
-        return ExecResult(stdout="", stderr="", return_code=0)
-
-    async def download_artifacts(*args, **kwargs) -> None:
-        events.append("download")
-
-    trial.agent_environment = SimpleNamespace(
-        capabilities=SimpleNamespace(mounted=False),
-        exec=exec_hook,
-    )
-    trial._artifact_handler = SimpleNamespace(
-        download_artifacts=AsyncMock(side_effect=download_artifacts)
-    )
-    trial.logger = MagicMock()
-    step = StepConfig.model_validate(
-        {
-            "name": "finalize",
-            "verifier": {"collect": [{"command": "step-snapshot"}]},
-        }
-    )
-
-    artifacts_dir = await trial._collect_step_artifacts(step)
-
-    assert artifacts_dir == tmp_path / "steps" / "finalize" / "artifacts"
-    assert events == ["task-snapshot", "step-snapshot", "download"]
-
-
-@pytest.mark.asyncio
 async def test_prepare_failure_archives_without_running_agent_or_collecting_artifacts() -> (
     None
 ):

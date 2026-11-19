@@ -3,6 +3,7 @@
 import asyncio
 import json
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 
@@ -143,6 +144,10 @@ async def test_run_after_cleanup_starts_a_new_terminal_and_retains_phase_files(
 
 @pytest.mark.parametrize(
     "foreground_kind", ["external", "builtin", "zombie-descendant"]
+)
+@pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="The process transport runs Linux guest /proc foreground control on the host",
 )
 async def test_cancelled_run_stops_foreground_job_and_preserves_background_service(
     tmp_path, monkeypatch, foreground_kind

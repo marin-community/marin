@@ -13,7 +13,7 @@ Read only the material needed for the request:
 - Zephyr pipeline babysitting: [references/monitor-zephyr.md](references/monitor-zephyr.md).
 - Infrastructure faults: [references/troubleshooting.md](references/troubleshooting.md).
 - Controller deploy or rollback: [references/controller-rollout.md](references/controller-rollout.md).
-- Interactive GPU or TPU: [references/dev-accelerators.md](references/dev-accelerators.md).
+- Interactive GPU, TPU or CPU dev box: [references/dev-accelerators.md](references/dev-accelerators.md).
 - Stuck terminating CoreWeave pod: [references/stuck-pod.md](references/stuck-pod.md).
 - Temporary task outputs: `lib/iris/docs/task-outputs.md`.
 - Logs or measurements: use `query-finelog`.

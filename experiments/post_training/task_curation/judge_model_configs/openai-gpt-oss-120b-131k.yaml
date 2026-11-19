@@ -1,0 +1,19 @@
+name: gpt-oss-120b-answer-equivalence-judge-131k
+location: openai/gpt-oss-120b
+revision: b5c939de8f754692c1647ca79fbf85e8c1e70f8a
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 2
+  cpu: 32
+  memory: 200g
+  disk: 300g
+serve:
+  tensor_parallel_size: 2
+  max_model_len: 131072
+  max_num_batched_tokens: 8192
+  max_num_seqs: 16
+  limit_mm_per_prompt: '{"image":0,"video":0}'
+  object_store_load_mode: stage_local
+  vllm_extra_args:
+    - --enable-prefix-caching

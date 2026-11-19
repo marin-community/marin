@@ -3,14 +3,21 @@
 
 """TaskTrove sources: archived Harbor tasks from the original ``open-thoughts/TaskTrove`` release."""
 
+import tomllib
 from dataclasses import dataclass, replace
 
+from taskcompendium.convert.tasks import shell_environment
+from taskcompendium.harbor.execution import native_execution_limits, task_with_declared_execution_requirements
 from taskcompendium.models import CONVERSATION_ANSWERS, EnvironmentRequirements, TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import Converter, ImportFailureKind, ImportRejection, NormalizedTask, RawRow
 
+from experiments.post_training.task_curation.datasets.tasktrove.built_images import (
+    BUILT_IMAGES,
+    archive_build_environment,
+)
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
-    DOCKERFILE,
+    TASK_TOML,
     TASKS_FILE,
     TASKTROVE_REPO,
     archive_file,
@@ -18,7 +25,11 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
     unpack_task_binary,
 )
 from experiments.post_training.task_curation.datasets.tasktrove.source_defects import SOURCE_DEFECTS
-from experiments.post_training.task_curation.environment_fidelity import UnlowerableRecipe, environment_unused
+from experiments.post_training.task_curation.environment_fidelity import (
+    UnlowerableRecipe,
+    environment_unused,
+    missing_environment,
+)
 from experiments.post_training.task_curation.pipeline import HfSource
 
 TASKTROVE_REVISION = "02923004846e4e73862c20962f823a6d05100e7a"
@@ -50,24 +61,43 @@ class TaskTroveConverter:
         if isinstance(converted, ImportRejection):
             return converted
         task = converted.task if isinstance(converted, NormalizedTask) else converted
-        # Reply-only conversions have no agent machine. Keep the archive as oracle
-        # evidence, while enforcing environment fidelity for tasks that use a machine.
+        missing = missing_environment(task.model_dump(mode="json"))
+        if missing is not None:
+            return ImportRejection(kind=ImportFailureKind.SOURCE_DEFECT, reason="missing_environment", detail=missing)
+        # Reply-only tasks have no agent machine; their archive remains oracle evidence.
         reply_only = (
             task.answer_type in CONVERSATION_ANSWERS and task.environment_requirements == EnvironmentRequirements()
         )
-        substituted = None if reply_only else environment_unused(task, archive_file(row.data, DOCKERFILE))
-        if substituted is not None:
+        if reply_only:
+            reused = None
+        elif task.environment_requirements.docker_image in BUILT_IMAGES.values():
+            # Reconstruct source files, modes and the verifier-install recipe before
+            # accepting the registry output, which retains its frozen bundled verifier.
+            expected = archive_build_environment(row.data)
+            reused = (
+                None
+                if task.environment_requirements == shell_environment(expected)
+                else "spec does not use its archived build"
+            )
+        else:
+            reused = environment_unused(task.model_dump(mode="json"), row.data["files"])
+        if reused is not None:
             return ImportRejection(
-                kind=ImportFailureKind.CONVERTER_ERROR, reason="environment_substituted", detail=substituted
+                kind=ImportFailureKind.CONVERTER_ERROR, reason="environment_substituted", detail=reused
             )
         existing = {resource.path for resource in (*task.resources.all, *task.resources.oracle)}
         # Oracle controls may upload these files through runtimes without timestamp support.
-        oracle = task.resources.oracle + tuple(
+        oracle = tuple(resource.model_copy(update={"mtime_ns": None}) for resource in task.resources.oracle) + tuple(
             archive_resource(row.data, path).model_copy(update={"mtime_ns": None})
             for path in row.data["files"]
             if path not in existing and not path.startswith(("tests/", "setup_files/"))
         )
         task = task.model_copy(update={"resources": task.resources.model_copy(update={"oracle": oracle})})
+        native_config = archive_file(row.data, TASK_TOML)
+        if native_config is not None:
+            task = task_with_declared_execution_requirements(
+                task, native_execution_limits(tomllib.loads(native_config.decode()))
+            )
         return replace(converted, task=task) if isinstance(converted, NormalizedTask) else task
 
 

@@ -4,6 +4,7 @@
 import json
 import shutil
 from collections import Counter
+from dataclasses import replace
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -13,7 +14,12 @@ from finestore.rl.curation import CurationCatalog
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV
 from experiments.post_training.task_curation.count_inputs import parquet_counts
+from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.driver import main
+from experiments.post_training.task_curation.tests.admission_fixtures import with_admission_census
+from experiments.post_training.task_curation.tests.resource_receipts import resource_recipe, write_fixture_receipt
+from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
+from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 
 def test_parquet_count_export_identifies_the_counted_input(tmp_path):
@@ -28,7 +34,9 @@ def test_parquet_count_export_identifies_the_counted_input(tmp_path):
         parquet_counts(snapshot, "another-revision", "*.parquet")
 
 
-def test_cli_catalog_preserves_archived_packets_and_reuses_curation_for_new_rubric(tmp_path, monkeypatch, review_server):
+def test_cli_catalog_preserves_archived_packets_and_reuses_curation_for_new_rubric(
+    tmp_path, monkeypatch, review_server, qa_reviewer
+):
     monkeypatch.setenv(GLM_BULK_TOKEN_ENV, "fixture-token")
     staged = tmp_path / "input"
     staged.mkdir()
@@ -36,7 +44,34 @@ def test_cli_catalog_preserves_archived_packets_and_reuses_curation_for_new_rubr
         "\n".join(json.dumps({"problem": f"What is {value} plus one?", "answer": str(value + 1)}) for value in range(3))
     )
     cache = tmp_path / "cache"
+    source = next(s for s in skyrl_math.sources() if s.name == "math500")
+    source = replace(
+        source,
+        config=resource_recipe(
+            replace(source.config, source=replace(source.config.source, repo="open-athena/math500-fixture"))
+        ),
+        info=replace(
+            source.info,
+            within_source_dedup=deduplication_evidence(
+                "open-athena/math500-fixture", source.dataset.revision, source.version, 3
+            ),
+            daytona_machine_slots=0,
+            daytona_snapshot_count=0,
+            daytona_execution_failures=0,
+            daytona_count_basis="Fixture numeric rows use a local reply grader and create no actor.",
+        ),
+    )
+    source = with_admission_census(source)
+    monkeypatch.setattr(
+        "experiments.post_training.task_curation.driver.runnable_sources",
+        lambda declared_source=source: {declared_source.name: declared_source},
+    )
+    receipt = tmp_path / "decontamination.json"
+    receipt.write_text(decontamination_evidence(source.dataset.name, source.dataset.revision, 3).model_dump_json())
     args = [
+        *write_fixture_receipt(source.config, staged, tmp_path / "oracle-filter.json"),
+        "--decontamination-receipt",
+        str(receipt),
         "--mode",
         "full",
         "--cache-dir",
@@ -51,14 +86,8 @@ def test_cli_catalog_preserves_archived_packets_and_reuses_curation_for_new_rubr
         "2",
         "--assessment-sample-size",
         "2",
-        "--review-mode",
-        "chat",
-        "--model-revision",
-        "fixture",
         "--review-concurrency",
         "1",
-        "--base-url",
-        f"http://127.0.0.1:{review_server.server_address[1]}/v1",
         "--run",
     ]
     runner = CliRunner()
@@ -73,10 +102,7 @@ def test_cli_catalog_preserves_archived_packets_and_reuses_curation_for_new_rubr
     items = list(catalog.items(key))
     assert len(items) == 2 and all(item.verdict == "good" for item in items)
     assert source.curation.admission_counts.admitted == 3
-    inventories = [row for row in catalog.sources(snapshot.snapshot_id) if row.declaration.pipeline is None]
-    assert inventories and all(
-        row.assessment_key is None and row.latest_attempt_status == "skipped" for row in inventories
-    )
+    assert all(row.declaration.pipeline is not None for row in catalog.sources(snapshot.snapshot_id))
     packet = catalog.packet(key, items[0].task_id)
     assert packet["task"]["id"] == items[0].task_id
 
@@ -106,8 +132,10 @@ def test_cli_catalog_preserves_archived_packets_and_reuses_curation_for_new_rubr
     failed_source = next(
         row for row in failed_catalog.sources(failed_catalog.current().snapshot_id) if row.id == source.id
     )
-    assert failed_source.assessment_key is None
-    assert failed_source.latest_attempt_status == "failed"
+    # The missing SAMPLE Result prevents publication; the selected prior evidence remains intact.
+    assert failed_catalog.current().snapshot_id == changed_catalog.current().snapshot_id
+    assert failed_source.assessment_key == changed_source.assessment_key
+    assert failed_source.latest_attempt_status == "complete"
     assert catalog.packet(key, items[0].task_id) == packet
 
     attempt = next(catalog.attempts(snapshot.snapshot_id))

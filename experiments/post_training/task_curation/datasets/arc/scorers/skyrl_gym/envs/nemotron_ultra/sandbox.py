@@ -4,12 +4,11 @@
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from typing import Any
 
 import requests
-import threading
-
 
 MAX_VERIFIER_OUTPUT_CHARACTERS = 65536
 # Share the limit across clients so increasing Gym workers cannot exhaust the sandbox.

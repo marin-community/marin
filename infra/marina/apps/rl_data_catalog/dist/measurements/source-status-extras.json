@@ -1,0 +1,459 @@
+{
+  "pending": [
+    {
+      "id": "FWeindel:validated-tasks/facet_v2",
+      "name": "facet-v2",
+      "display_name": "FACET terminal tasks",
+      "status": "Pending",
+      "origin": "FWeindel",
+      "upstream_dataset": "validated-tasks",
+      "upstream_url": "https://huggingface.co/datasets/FWeindel/validated-tasks/tree/317659ac88c8b706d318020c5fc3813a931fb6ec/facet_v2",
+      "notes": "Original native task and verifier contents; pending current-pin controls and admission.",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": []
+    },
+    {
+      "id": "FWeindel:validated-tasks/facet_v3",
+      "name": "facet-v3",
+      "display_name": "FACET terminal tasks",
+      "status": "Pending",
+      "origin": "FWeindel",
+      "upstream_dataset": "validated-tasks",
+      "upstream_url": "https://huggingface.co/datasets/FWeindel/validated-tasks/tree/317659ac88c8b706d318020c5fc3813a931fb6ec/facet_v3",
+      "notes": "Original native task and verifier contents; pending current-pin controls and admission.",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": []
+    },
+    {
+      "id": "OpenAthena:pdbthink-coordinate-tasks",
+      "name": "pdbthink-coordinate-train",
+      "display_name": "PDBThink v1.3.0 coordinate tasks",
+      "status": "Pending",
+      "origin": "OpenAthena",
+      "upstream_dataset": "pdbthink-coordinate-tasks",
+      "upstream_url": "https://huggingface.co/datasets/open-athena/pdbthink-coordinate-tasks",
+      "notes": "Original train split only; exact native budgets and provider status required; original verifiers and oracles preserved.",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": []
+    },
+    {
+      "id": "Nemotron:Nemotron-Cascade-2-RL-data/IF-RL",
+      "name": "nemotron-cascade-2-if-rl",
+      "display_name": "Nemotron Cascade-2 RL data",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "Nemotron-Cascade-2-RL-data",
+      "upstream_url": null,
+      "notes": "Original NeMo terminal graders 39d2bde61e426f93e4bc00c0255fc1d839f859e6; unsupported components retain typed rejections.",
+      "stage": "Intake queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": []
+    },
+    {
+      "id": "Nemotron:Nemotron-Cascade-2-RL-data/SWE-RL",
+      "name": "nemotron-cascade-2-swe-rl",
+      "display_name": "Nemotron Cascade-2 RL data",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "Nemotron-Cascade-2-RL-data",
+      "upstream_url": null,
+      "notes": "Original NeMo terminal graders 39d2bde61e426f93e4bc00c0255fc1d839f859e6; unsupported components retain typed rejections.",
+      "stage": "Intake queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": []
+    },
+    {
+      "id": "marcusm117:ProofNet-Verified",
+      "name": "lean-proofnet-verified",
+      "display_name": "ProofNet-Verified",
+      "status": "Pending",
+      "origin": "marcusm117",
+      "upstream_dataset": "ProofNet-Verified",
+      "upstream_url": null,
+      "notes": "Audited ProofNet statements for Lean and Mathlib v4.34; proofs are not public.",
+      "stage": "Intake queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": []
+    },
+    {
+      "id": "project-numina:NuminaMath-LEAN",
+      "name": "lean-numina-human",
+      "display_name": "NuminaMath-LEAN",
+      "status": "Pending",
+      "origin": "project-numina",
+      "upstream_dataset": "NuminaMath-LEAN",
+      "upstream_url": null,
+      "notes": "Competition problems with human Lean statements and proofs; the proofs are golden controls.",
+      "stage": "Intake queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": []
+    },
+    {
+      "id": "PrimeIntellect:PrimeIntellect/Scale-SWE-Verified",
+      "name": "scale-swe-verified",
+      "display_name": "Scale-SWE-Verified",
+      "status": "Pending",
+      "origin": "PrimeIntellect",
+      "upstream_dataset": "PrimeIntellect/Scale-SWE-Verified",
+      "upstream_url": null,
+      "notes": "Digest-pinned source image and original scoring contract; taskset code b41d8759070715dc102000e06fba0d73ebce9955. Versioned shared-source protection with agent-mutable dependencies. Pending qualification.",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": []
+    },
+    {
+      "id": "PrimeIntellect:PrimeIntellect/SWE-Lego-Real-Data-Verified",
+      "name": "swe-lego-real-data-verified",
+      "display_name": "SWE-Lego-Real-Data-Verified",
+      "status": "Pending",
+      "origin": "PrimeIntellect",
+      "upstream_dataset": "PrimeIntellect/SWE-Lego-Real-Data-Verified",
+      "upstream_url": null,
+      "notes": "Digest-pinned source image and original scoring contract; taskset code b41d8759070715dc102000e06fba0d73ebce9955. Versioned shared-source protection with agent-mutable dependencies. Pending qualification.",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": []
+    }
+  ],
+  "stages": {
+    "di-zhang-fdu:aime_1983_2024": "Lexical remediation queued"
+  },
+  "remediation_queue": [
+    {
+      "id": "di-zhang-fdu:aime_1983_2024",
+      "name": "aime_1983_2024",
+      "display_name": "aime_1983_2024",
+      "status": "Pending",
+      "origin": "di-zhang-fdu",
+      "upstream_dataset": "aime_1983_2024",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Lexical remediation queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": [
+        {
+          "reason": "lexical-remediation-required",
+          "evidence": {
+            "kind": "check-output",
+            "message": "Decontamination measurement and private-release admission receipt are missing",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    }
+  ],
+  "metadata_exclusions": [
+    {
+      "id": "GPUMODE:kernelbot-data",
+      "name": "kernelbot-data",
+      "display_name": "GPUMODE \u00b7 kernelbot-data",
+      "status": "Excluded",
+      "origin": "GPUMODE",
+      "upstream_dataset": "GPUMODE/kernelbot-data",
+      "upstream_url": "https://huggingface.co/datasets/GPUMODE/kernelbot-data",
+      "notes": "Known-but-rejected upstream; declaration metadata only. The dataset is never downloaded, converted, hosted or mirrored.",
+      "stage": null,
+      "dataset_id": "GPUMODE/kernelbot-data",
+      "dataset_revision": "4159cf6b2c6bab208be6dda885d6d87631cc16df",
+      "reasons": [
+        {
+          "reason": "license-ban",
+          "evidence": {
+            "kind": "receipt",
+            "message": "Ban registry 2026.11.16.1 at pin 4159cf6b2c6bab208be6dda885d6d87631cc16df: user rejected the required model-license reciprocity condition for plain OpenMDW-1.1 releases; checker rule E1 ESCALATE, LICENSE quote \"June 9 Researcher Reciprocity License\"; issue 11497.",
+            "uri": "https://huggingface.co/datasets/GPUMODE/kernelbot-data/blob/4159cf6b2c6bab208be6dda885d6d87631cc16df/LICENSE",
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "CyBench:andyzorigin-cybench",
+      "name": "andyzorigin-cybench",
+      "display_name": "CyBench \u00b7 andyzorigin/cybench",
+      "status": "Excluded",
+      "origin": "CyBench",
+      "upstream_dataset": "andyzorigin/cybench",
+      "upstream_url": "https://github.com/andyzorigin/cybench",
+      "notes": "Known-but-rejected upstream; declaration metadata only. The dataset is never downloaded, converted, hosted or mirrored.",
+      "stage": null,
+      "dataset_id": "andyzorigin/cybench",
+      "dataset_revision": "ca483c6443f17a20ba7d6bac3d274859a1721e51",
+      "reasons": [
+        {
+          "reason": "license-ban",
+          "evidence": {
+            "kind": "receipt",
+            "message": "Checker receipt F1 FAIL at pin ca483c6443f17a20ba7d6bac3d274859a1721e51: the harness is Apache-2.0 but the benchmark/project-sekai-ctf/sekaictf-2022 task content is CC BY-NC-SA 4.0 (quoted from its LICENSE.content.md); issue 11497.",
+            "uri": "https://github.com/andyzorigin/cybench/blob/ca483c6443f17a20ba7d6bac3d274859a1721e51/benchmark/project-sekai-ctf/sekaictf-2022/LICENSE.content.md",
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "HAL:princeton-pli-hal-harness",
+      "name": "princeton-pli-hal-harness",
+      "display_name": "HAL harness \u00b7 princeton-pli/hal-harness",
+      "status": "Excluded",
+      "origin": "HAL",
+      "upstream_dataset": "princeton-pli/hal-harness",
+      "upstream_url": "https://github.com/princeton-pli/hal-harness",
+      "notes": "Known-but-rejected upstream; declaration metadata only. The dataset is never downloaded, converted, hosted or mirrored.",
+      "stage": null,
+      "dataset_id": "princeton-pli/hal-harness",
+      "dataset_revision": "16bb03ebc11577fb5ea6dc8bb6c968387085e6aa",
+      "reasons": [
+        {
+          "reason": "license-missing",
+          "evidence": {
+            "kind": "receipt",
+            "message": "Checker receipt F2 FAIL at pin 16bb03ebc11577fb5ea6dc8bb6c968387085e6aa: no LICENSE or COPYING file in the pinned repository tree; issue 11497.",
+            "uri": "https://api.github.com/repos/princeton-pli/hal-harness/git/trees/16bb03ebc11577fb5ea6dc8bb6c968387085e6aa?recursive=1",
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "MiroVerse:miromind-ai-MiroVerse-v0.1",
+      "name": "miromind-ai-MiroVerse-v0.1",
+      "display_name": "MiroVerse \u00b7 miromind-ai/MiroVerse-v0.1",
+      "status": "Excluded",
+      "origin": "MiroVerse",
+      "upstream_dataset": "miromind-ai/MiroVerse-v0.1",
+      "upstream_url": "https://huggingface.co/datasets/miromind-ai/MiroVerse-v0.1",
+      "notes": "Known-but-rejected upstream; declaration metadata only. The dataset is never downloaded, converted, hosted or mirrored.",
+      "stage": null,
+      "dataset_id": "miromind-ai/MiroVerse-v0.1",
+      "dataset_revision": "11fbf325f6eda37b34f519d1ba7268f40f469ac6",
+      "reasons": [
+        {
+          "reason": "license-ban",
+          "evidence": {
+            "kind": "receipt",
+            "message": "Checker receipt F1 FAIL at pin 11fbf325f6eda37b34f519d1ba7268f40f469ac6: dataset card declares license cc-by-nc-4.0; issue 11497.",
+            "uri": "https://huggingface.co/datasets/miromind-ai/MiroVerse-v0.1/resolve/11fbf325f6eda37b34f519d1ba7268f40f469ac6/README.md",
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "MAI-Gym:tasks",
+      "name": "MAI-Gym-tasks",
+      "display_name": "MAI-Gym \u00b7 tasks",
+      "status": "Excluded",
+      "origin": "MAI-Gym",
+      "upstream_dataset": "Tongyi-MAI/MAI-Gym",
+      "upstream_url": "https://github.com/Tongyi-MAI/MAI-Gym",
+      "notes": "Known-but-rejected upstream; declaration metadata only. The dataset is never downloaded, converted, hosted or mirrored.",
+      "stage": null,
+      "dataset_id": "Tongyi-MAI/MAI-Gym",
+      "dataset_revision": "dc279a3735f0d59f9b9b9806f1fc8cd99c28e6f9",
+      "reasons": [
+        {
+          "reason": "license-ban",
+          "evidence": {
+            "kind": "receipt",
+            "message": "Ban registry 2026.11.16.1 at pin dc279a3735f0d59f9b9b9806f1fc8cd99c28e6f9 (classification missing): no license grant for the apps or task data at the pinned repository; issue 11497 and issue 10231 discussion.",
+            "uri": "https://github.com/Tongyi-MAI/MAI-Gym/tree/dc279a3735f0d59f9b9b9806f1fc8cd99c28e6f9",
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "OpenGCUA:trajectories",
+      "name": "OpenGCUA-trajectories",
+      "display_name": "OpenGCUA \u00b7 trajectories",
+      "status": "Excluded",
+      "origin": "OpenGCUA",
+      "upstream_dataset": "https://tongyi-mai.github.io/OpenGCUA/trajectories.html",
+      "upstream_url": "https://tongyi-mai.github.io/OpenGCUA/trajectories.html",
+      "notes": "Known-but-rejected upstream; declaration metadata only. The dataset is never downloaded, converted, hosted or mirrored.",
+      "stage": null,
+      "dataset_id": "https://tongyi-mai.github.io/OpenGCUA/trajectories.html",
+      "dataset_revision": "no published trajectory pin",
+      "reasons": [
+        {
+          "reason": "not-rl-task-data",
+          "evidence": {
+            "kind": "receipt",
+            "message": "Upstream has no RL task data; harness/trajectories only. CANDIDATES STATE.md (new-rl-data-ingest): no RL task data to ingest. The code is an Apache-2.0 GUI agent harness, not a task set. Its trajectories are unlicensed (ROADMAP: licensing 'will be documented') and are mostly closed-model outputs, so they carry provider output terms. Don't train on them.",
+            "uri": "https://github.com/Tongyi-MAI/OpenGCUA",
+            "sha256": null,
+            "expected": null
+          }
+        },
+        {
+          "reason": "license-ban",
+          "evidence": {
+            "kind": "receipt",
+            "message": "Ban registry 2026.11.16.1: no trajectory-data license; Apache-2.0 applies to the harness code; issue 11497.",
+            "uri": "https://github.com/Tongyi-MAI/OpenGCUA/tree/55c33aea792b48b9c1330a514bfcc8f6d3ecc704",
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
+    }
+  ],
+  "reason_explanations": {
+    "license-ban": {
+      "label": "License ban",
+      "meaning": "The pinned upstream or publisher license is banned for training use.",
+      "clears": "A license receipt the ban registry accepts, with the registry updated off the ban list."
+    },
+    "license-missing": {
+      "label": "License missing",
+      "meaning": "No license declaration exists in the pinned upstream primary evidence.",
+      "clears": "A recorded permissive grant or license receipt established at the pin."
+    },
+    "not-rl-task-data": {
+      "label": "Not RL task data",
+      "meaning": "The upstream provides no RL task data; it ships harness code or trajectories only.",
+      "clears": "A republished upstream that contains usable RL task data."
+    },
+    "oracle-filtration-retained-zero": {
+      "label": "Oracle filtration retained zero",
+      "meaning": "Oracle filtration over the full population admitted zero tasks.",
+      "clears": "A republished conversion whose filtration admits more than zero tasks, with a publication-seal receipt."
+    },
+    "actor-census-missing": {
+      "label": "Actor census missing",
+      "meaning": "No actor census evidence exists for the source at all.",
+      "clears": "The QUICK actor-census receipt bound at the current pin."
+    },
+    "actor-census-stale": {
+      "label": "Actor census stale",
+      "meaning": "The actor census measured a different dataset pin or converter than the configured input.",
+      "clears": "A re-measured census receipt at the current dataset pin and converter version."
+    },
+    "retained-population-empty": {
+      "label": "Retained population empty",
+      "meaning": "The retained population at the current pin is empty.",
+      "clears": "A nonempty retained population at the current pin."
+    },
+    "grading-census-incomplete": {
+      "label": "Grading census incomplete",
+      "meaning": "The grading census does not cover the complete retained population.",
+      "clears": "A grading census receipt covering every retained task."
+    },
+    "grading-census-counts-incomplete": {
+      "label": "Grading census counts incomplete",
+      "meaning": "The grading census's typed counts do not sum to the retained population.",
+      "clears": "A grading census receipt whose required, declared, status and reason counts cover the population."
+    },
+    "grader-missing": {
+      "label": "Grader missing",
+      "meaning": "Admitted tasks lack runnable graders.",
+      "clears": "A grading census receipt with zero missing-grader tasks."
+    },
+    "lexical-receipt-missing": {
+      "label": "Lexical receipt missing",
+      "meaning": "Evaluation use lacks a measured lexical receipt at the current dataset pin.",
+      "clears": "A lexical receipt measured at the current pin for the declared use."
+    },
+    "lexical-remediation-required": {
+      "label": "Lexical remediation required",
+      "meaning": "Training use lacks a clean or remediated private-release receipt at the current pin.",
+      "clears": "A remediated private-release decontamination receipt bound to the current pin."
+    },
+    "oversight-missing": {
+      "label": "Oversight missing",
+      "meaning": "No oversight evidence exists at all: neither a QUICK conversion receipt nor a SAMPLE or FULL review receipt with recorded verification.",
+      "clears": "A QUICK conversion receipt, or a SAMPLE or FULL review receipt with recorded verification."
+    },
+    "agentic-task-format-missing": {
+      "label": "Agentic task format missing",
+      "meaning": "An agentic source declares no accepted task format.",
+      "clears": "A declared TaskCompendium or Harbor task format (or grandfathered registration)."
+    },
+    "snapshot-identity-missing": {
+      "label": "Snapshot identity missing",
+      "meaning": "No production snapshot identity measurement exists.",
+      "clears": "The snapshot identity measurement receipt at the current pin."
+    },
+    "execution-requirement-missing": {
+      "label": "Execution requirement missing",
+      "meaning": "No execution-requirement measurement exists for the population.",
+      "clears": "The execution-requirement measurement receipt."
+    },
+    "eval-only-benchmark": {
+      "label": "Eval only",
+      "meaning": "The source is admitted for evaluation only; its training use is excluded by a recorded benchmark rule.",
+      "clears": "A user ruling that admits training use, recorded with the benchmark evidence."
+    },
+    "superseded-by-replacement": {
+      "label": "Superseded",
+      "meaning": "A repaired or re-pinned cohort replaces this source's population.",
+      "clears": "Retiring the replacement claim, or restoring this pin as the current cohort."
+    },
+    "grader-defect": {
+      "label": "Grader defect",
+      "meaning": "A recorded grader or oracle defect makes the population's reward untrustworthy.",
+      "clears": "A republished grader that passes the recorded defect check."
+    },
+    "contamination-risk": {
+      "label": "Contamination risk",
+      "meaning": "A known canary or contamination exposure is present in the source.",
+      "clears": "A decontamination receipt that removes the recorded exposure."
+    },
+    "duplicate-of-source": {
+      "label": "Duplicate",
+      "meaning": "The population duplicates another admitted source's population.",
+      "clears": "A distinct-population ruling recorded against the other source."
+    },
+    "snapshot-budget-exceeded": {
+      "label": "Snapshot budget exceeded",
+      "meaning": "Provisioning the cohort needs more machine-snapshot variants than the budget allows.",
+      "clears": "A rebuilt payload whose provisioning fits the budget, with a snapshot-capacity-check receipt."
+    },
+    "unspecified-legacy": {
+      "label": "Needs ruling",
+      "meaning": "A legacy exclusion tag with no recoverable typed reason; transitional.",
+      "clears": "A user ruling recorded as a typed reason; this reason must not persist."
+    },
+    "environment-artifact-missing": {
+      "label": "Environment artifact missing",
+      "meaning": "A declared environment artifact does not exist in any region.",
+      "clears": "Rebuilding the artifact in-region and binding its receipt; exclusion applies only when it is unrebuildable."
+    },
+    "no-supported-backend": {
+      "label": "No supported backend",
+      "meaning": "No available backend can run the population's contracts, per the backend survey's per-source capabilities.",
+      "clears": "A backend survey recording supported execution for at least one backend at the current pin."
+    },
+    "grader-judge-unavailable": {
+      "label": "Judge unavailable",
+      "meaning": "The population's judge route is unqualified: no judge-model tier or judge API qualifies.",
+      "clears": "Re-pinning to a JUDGE_TIERS tier through private remediation and running that version; exclusion applies only when no tier qualifies."
+    },
+    "invalid-reference": {
+      "label": "Invalid reference",
+      "meaning": "The population references an expected target that does not exist in its frozen sample.",
+      "clears": "A faithfully repaired private remediation version whose references resolve."
+    }
+  }
+}

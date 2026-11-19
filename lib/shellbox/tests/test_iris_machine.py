@@ -7,10 +7,12 @@ import asyncio
 import json
 import os
 import pwd
+import shutil
 import subprocess
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -23,23 +25,65 @@ from connectrpc.errors import ConnectError
 from iris.client.workload_codec import task_status_from_proto
 from iris.cluster.types import JobName
 from iris.resources.state import TaskState
-from iris.rpc import job_pb2
+from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import ExponentialBackoff
 from shellbox.backends.iris import machine as iris_backend
-from shellbox.backends.iris.machine import IrisMachine, IrisMachineFactory
+from shellbox.backends.iris.machine import IrisMachine, IrisMachineFactory, KubernetesIrisMachineFactory
 from shellbox.image import RegistryImage
-from shellbox.machine import Command, MachineSpec, MachineTerminated, NetworkPolicy, UnsupportedMachineSpec
+from shellbox.machine import (
+    Command,
+    ExitReason,
+    MachineSpec,
+    MachineTerminated,
+    NetworkPolicy,
+    ResourceLimit,
+    ResourceLimitExceeded,
+    UnsupportedMachineSpec,
+)
+from shellbox.process_session import PROBE_PROCESS_GROUP_COMMAND, PROCESS_GROUP_ABSENT_EXIT_CODE
+from shellbox.task import ContainerSpec, TaskSpec
 
 # Linux MAX_ARG_STRLEN: the worker passes the exec command as argv to `docker exec` or `kubectl exec`.
 LINUX_ARGUMENT_LIMIT_BYTES = 128 * 1024
 
 
+@pytest.fixture(autouse=True)
+def guest_process_tools(tmp_path, monkeypatch):
+    # The fake RPC runs Linux guest commands on the test host. macOS has setsid(2)
+    # but no setsid executable; supply the same session boundary there.
+    if shutil.which("setsid") is None:
+        executable = tmp_path / "bin" / "setsid"
+        executable.parent.mkdir()
+        executable.write_text(f"#!{sys.executable}\nimport os, sys\nos.setsid()\nos.execvp(sys.argv[1], sys.argv[1:])\n")
+        executable.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{executable.parent}:{os.environ['PATH']}")
+
+
 class LocalRpc:
+    def list_backends(self, request):
+        return controller_pb2.Controller.ListBackendsResponse(
+            backends=[
+                controller_pb2.Controller.BackendSummary(kind="kubernetes", capabilities=["sandbox-storage-limit"])
+            ]
+        )
+
     def exec_in_container(self, request, timeout_ms):
         del timeout_ms
         if max(len(argument.encode()) + 1 for argument in request.command) > LINUX_ARGUMENT_LIMIT_BYTES:
             return SimpleNamespace(exit_code=0, stdout="", stderr="", error="[Errno 7] Argument list too long: 'docker'")
-        result = subprocess.run(request.command, capture_output=True, text=True, timeout=30)
+        command = list(request.command)
+        if sys.platform != "linux" and command == ["sh", "-c", "command -v setsid && test -r /proc/1/stat"]:
+            command = ["sh", "-c", "command -v setsid"]
+        if sys.platform != "linux" and len(command) > 2 and command[2] == PROBE_PROCESS_GROUP_COMMAND:
+            # Emulate Linux /proc at the remote OS boundary, observing real host processes.
+            rows = subprocess.check_output(["ps", "-axo", "pgid=,stat="], text=True)
+            alive = any(
+                group == command[-1] and not state.startswith("Z") for group, state in map(str.split, rows.splitlines())
+            )
+            return SimpleNamespace(
+                exit_code=0 if alive else PROCESS_GROUP_ABSENT_EXIT_CODE, stdout="", stderr="", error=""
+            )
+        result = subprocess.run(command, capture_output=True, text=True, timeout=30)
         return SimpleNamespace(exit_code=result.returncode, stdout=result.stdout, stderr=result.stderr, error="")
 
 
@@ -262,7 +306,7 @@ def test_exec_refused_by_a_full_controller_pool_is_retried(tmp_path: Path, monke
     result = asyncio.run(machine.run(Command(("echo", "ran"))))
 
     assert result.stdout == b"ran\n"
-    assert rpc.sent("echo ran") == 3
+    assert rpc.sent("echo ran") == 1
 
 
 def test_exec_failing_after_the_controller_accepted_it_is_not_repeated(tmp_path: Path) -> None:
@@ -271,7 +315,7 @@ def test_exec_failing_after_the_controller_accepted_it_is_not_repeated(tmp_path:
 
     with pytest.raises(ConnectError):
         asyncio.run(machine.run(Command(("echo", "once"))))
-    assert rpc.sent("echo once") == 1
+    assert rpc.sent("echo once") == 0
 
 
 class ClosingRpc(RefusingRpc):
@@ -305,7 +349,7 @@ def test_exec_retry_stops_once_the_machine_is_closed(tmp_path: Path, monkeypatch
     rpc.closer.join(timeout=10)
     assert not rpc.closer.is_alive()
     assert job.cancelled
-    assert rpc.sent("echo late") == 1
+    assert rpc.sent("echo late") == 0
 
 
 class HeldRpc:
@@ -440,6 +484,207 @@ def test_commands_may_name_the_container_user_but_no_other(tmp_path: Path) -> No
             with pytest.raises(UnsupportedMachineSpec, match="cannot run as 65534"):
                 await machine.run(Command(("id", "-u"), user="65534"))
         finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "backend,capabilities", [("kubernetes", ["sandbox-storage-limit"]), ("worker-daemon", []), ("kubernetes", [])]
+)
+def test_declared_storage_requires_kubernetes_before_submission(monkeypatch, backend, capabilities):
+    client = RecordingClient()
+    rpc = LocalRpc()
+    rpc.list_backends = lambda _: controller_pb2.Controller.ListBackendsResponse(
+        backends=[controller_pb2.Controller.BackendSummary(kind=backend, capabilities=capabilities)]
+    )
+    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
+    monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: client)
+    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: rpc)
+    factory = IrisMachineFactory(
+        controller_url="http://controller", pool="cpu-fixture", priority_band=job_pb2.PRIORITY_BAND_BATCH
+    )
+    spec = MachineSpec(RegistryImage("fixture@sha256:" + "a" * 64), storage_mb=2305)
+    if backend == "kubernetes" and capabilities:
+        with pytest.raises(SubmissionRecorded):
+            asyncio.run(factory.create(spec))
+        assert client.submitted["resources"].disk == 2305 * 1024**2
+        assert client.submitted["replicas"] == 1
+        assert client.submitted["priority_band"] == job_pb2.PRIORITY_BAND_BATCH
+        [constraint] = client.submitted["constraints"]
+        assert constraint.to_proto().key == "pool"
+        assert constraint.to_proto().value.string_value == "cpu-fixture"
+        assert client.submitted["max_retries_failure"] == 0
+        assert client.submitted["max_retries_preemption"] == 0
+    else:
+        with pytest.raises(UnsupportedMachineSpec, match="Kubernetes"):
+            asyncio.run(factory.create(spec))
+        assert not client.submitted
+
+
+def test_iris_task_rejects_shared_sandbox_budget_before_submission():
+    factory = IrisMachineFactory(controller_url="http://controller.invalid")
+    spec = MachineSpec(RegistryImage("fixture"), storage_mb=2048)
+    task = TaskSpec((ContainerSpec("task", spec), ContainerSpec("peer", spec)))
+    with pytest.raises(UnsupportedMachineSpec, match="one sandbox"):
+        asyncio.run(factory.create_task(task))
+
+
+def test_disk_limit_terminal_reason_raises_typed_resource_limit(tmp_path):
+    status = task_status_from_proto(
+        job_pb2.TaskStatus(
+            task_id="/user/shellbox/0",
+            state=job_pb2.TASK_STATE_FAILED,
+            error="RESOURCE_LIMIT_DISK: Pod ephemeral local storage usage exceeds the total limit of containers 2Gi.",
+        )
+    )
+    task = LocalTask(TaskState.FAILED)
+    task.status = lambda: status
+    machine, _ = local_machine(tmp_path, FailingRpc(), task)
+    with pytest.raises(ResourceLimitExceeded) as raised:
+        asyncio.run(machine.run(Command(("true",))))
+    assert raised.value.resource is ResourceLimit.DISK
+
+
+def test_disk_eviction_waits_for_controller_terminal_evidence(tmp_path):
+    statuses = [
+        task_status_from_proto(job_pb2.TaskStatus(task_id="/user/shellbox/0", state=job_pb2.TASK_STATE_RUNNING)),
+        task_status_from_proto(
+            job_pb2.TaskStatus(
+                task_id="/user/shellbox/0",
+                state=job_pb2.TASK_STATE_FAILED,
+                error="RESOURCE_LIMIT_DISK: Container task exceeded its local ephemeral storage limit.",
+            )
+        ),
+    ]
+    task = LocalTask(TaskState.RUNNING)
+    task.status = lambda: statuses.pop(0) if len(statuses) > 1 else statuses[0]
+    machine, _ = local_machine(tmp_path, FailingRpc(), task)
+    machine.spec = replace(machine.spec, storage_mb=2048)
+    with pytest.raises(ResourceLimitExceeded) as raised:
+        asyncio.run(machine.run(Command(("true",))))
+    assert raised.value.resource is ResourceLimit.DISK
+
+
+class DelayedCommandRpc(LocalRpc):
+    """Admit a remote exec only after the caller has requested interruption."""
+
+    def __init__(self):
+        self.admitted = threading.Event()
+        self.release = threading.Event()
+
+    def exec_in_container(self, request, timeout_ms):
+        script = request.command[-1]
+        if script.startswith("setsid ") and not self.release.is_set():
+            self.admitted.set()
+            assert self.release.wait(timeout=10)
+        result = super().exec_in_container(request, timeout_ms)
+        if script.startswith("touch ") and script.endswith("/stop"):
+            self.release.set()
+        return result
+
+
+@pytest.mark.parametrize("interruption", ["timeout", "cancel"])
+@pytest.mark.parametrize("pending", [False, True])
+def test_interrupted_iris_command_retains_files_and_can_run_verifier(tmp_path, interruption, pending):
+    async def scenario():
+        rpc = DelayedCommandRpc() if pending else LocalRpc()
+        machine, job = local_machine(tmp_path, rpc)
+        artifact = tmp_path / "artifact"
+        ready = tmp_path / "ready"
+        try:
+            # Files from an earlier agent action must remain available to grading.
+            artifact.write_text("agent answer")
+            command = Command(
+                ("sh", "-c", f"echo $$ > {ready}; sleep 3600 & wait"),
+                timeout=0.3 if interruption == "timeout" else None,
+            )
+            running = asyncio.create_task(machine.run(command))
+            if interruption == "cancel":
+                if pending:
+                    assert await asyncio.to_thread(rpc.admitted.wait, 5)
+                else:
+                    assert await asyncio.to_thread(
+                        ExponentialBackoff(initial=0.001, maximum=0.01).wait_until,
+                        ready.exists,
+                        iris_backend.Duration.from_seconds(5),
+                    )
+                running.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await running
+            else:
+                assert (await running).reason is ExitReason.TIMED_OUT
+            assert not job.cancelled
+            verifier = await machine.run(Command(("cat", str(artifact))))
+            assert (verifier.exit_code, verifier.stdout) == (0, b"agent answer")
+            if pending:
+                assert not ready.exists()
+            elif ready.exists():
+                rows = subprocess.check_output(["ps", "-axo", "pgid=,stat="], text=True)
+                group = ready.read_text().strip()
+                assert not any(
+                    pgid == group and not state.startswith("Z") for pgid, state in map(str.split, rows.splitlines())
+                )
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "backend,capabilities",
+    [("kubernetes", ["sandbox-image-workdir"]), ("kubernetes", []), ("worker-daemon", ["sandbox-image-workdir"])],
+)
+def test_prepared_iris_task_requires_image_workdir_contract_even_without_disk(monkeypatch, backend, capabilities):
+    client = RecordingClient()
+    rpc = LocalRpc()
+    rpc.list_backends = lambda _: controller_pb2.Controller.ListBackendsResponse(
+        backends=[controller_pb2.Controller.BackendSummary(kind=backend, capabilities=capabilities)]
+    )
+    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
+    monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: client)
+    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: rpc)
+    factory = KubernetesIrisMachineFactory(controller_url="http://controller")
+    spec = MachineSpec(RegistryImage("fixture@sha256:" + "a" * 64))
+    if backend == "kubernetes" and capabilities:
+        with pytest.raises(SubmissionRecorded):
+            asyncio.run(factory.create(spec))
+        assert client.submitted["container_profile"] == job_pb2.CONTAINER_PROFILE_SANDBOX
+    else:
+        with pytest.raises(UnsupportedMachineSpec, match="Kubernetes"):
+            asyncio.run(factory.create(spec))
+        assert not client.submitted
+
+
+class HeldCleanupRpc(LocalRpc):
+    def __init__(self):
+        self.cleaning = threading.Event()
+        self.release = threading.Event()
+
+    def exec_in_container(self, request, timeout_ms):
+        if request.command[-1].startswith("rm -rf "):
+            self.cleaning.set()
+            assert self.release.wait(timeout=10)
+        return super().exec_in_container(request, timeout_ms)
+
+
+def test_cancellation_during_iris_command_cleanup_propagates_and_retains_machine(tmp_path):
+    async def scenario():
+        rpc = HeldCleanupRpc()
+        machine, job = local_machine(tmp_path, rpc)
+        artifact = tmp_path / "answer"
+        try:
+            running = asyncio.create_task(machine.run(Command(("sh", "-c", f"echo answer > {artifact}"))))
+            assert await asyncio.to_thread(rpc.cleaning.wait, 5)
+            running.cancel()
+            rpc.release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await running
+            assert not job.cancelled
+            verifier = await machine.run(Command(("cat", str(artifact))))
+            assert verifier.stdout == b"answer\n"
+        finally:
+            rpc.release.set()
             await machine.close()
 
     asyncio.run(scenario())

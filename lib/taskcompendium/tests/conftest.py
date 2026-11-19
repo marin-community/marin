@@ -12,6 +12,19 @@ from shellbox.backends.local.machine import LocalMachineFactory, SandboxUnavaila
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--shared-source-python",
+        type=Path,
+        help="Interpreter with installed pytest dependencies for the Linux SHARED guest fixture",
+    )
+    parser.addoption(
+        "--shared-verifyit-source",
+        type=Path,
+        help="Pinned Verifyit src directory for the single-manifest Linux SHARED regression",
+    )
+
+
 class JudgeServer(ThreadingHTTPServer):
     """Record requests to a local OpenAI-compatible judge endpoint."""
 

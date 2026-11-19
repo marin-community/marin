@@ -67,3 +67,10 @@ def test_database() -> Iterator[str]:
         return
     with docker_database() as url:
         yield url
+
+
+@contextmanager
+def test_database_environment() -> Iterator[dict[str, str]]:
+    """Keep test database ownership outside a child that can exit without teardown."""
+    with test_database() as url:
+        yield {**os.environ, TEST_DATABASE_URL_ENV: url}

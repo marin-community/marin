@@ -3,7 +3,6 @@
 
 """Storage-backed curation stages; experiment modules bind their artifact graph."""
 
-import hashlib
 import json
 import time
 from collections import Counter
@@ -31,13 +30,11 @@ from zephyr.writers import DEFAULT_TARGET_BUFFER_BYTES, write_jsonl_file
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.audit_schema import TASK_SCHEMA, audit_columns
 from taskcompendium.pipeline.execution_telemetry import PhaseTelemetry, execute_phase
-from taskcompendium.pipeline.filtering import task_decision
 from taskcompendium.pipeline.models import (
     REJECTING_CHECK_STATUSES,
     CheckResult,
     Decision,
     Disposition,
-    FilterPolicy,
     QualityBasis,
     ReviewRecord,
     ReviewRubric,
@@ -46,11 +43,6 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.pipeline.query_cache import CachedRequests
 from taskcompendium.pipeline.review import (
-    BASE_RUBRIC,
-    DEFAULT_PROMPT_CHARACTERS,
-    DEFAULT_REVIEW_MAX_ATTEMPTS,
-    DEFAULT_REVIEW_MAX_TOKENS,
-    DEFAULT_REVIEW_RETRY_MAX_TOKENS,
     BatchReviewer,
     ChatReviewer,
     ReviewBatchResult,
@@ -59,6 +51,7 @@ from taskcompendium.pipeline.review import (
     review_tasks,
 )
 from taskcompendium.pipeline.review_requests import DEFAULT_MAX_BATCH_BYTES
+from taskcompendium.pipeline.reviewer_spec import ReviewerSpec
 from taskcompendium.pipeline.shard_outputs import ShardOutput, write_shard_outputs
 from taskcompendium.pipeline.source_quality import (
     QualitySampleCoverage,
@@ -78,7 +71,7 @@ from taskcompendium.pipeline.transforms import (
     normalize_row,
     public_group_key,
     review_record,
-    source_locator_order,
+    task_id_order,
 )
 from taskcompendium.pipeline.verification import verify_task
 
@@ -102,16 +95,13 @@ class ReviewMode(StrEnum):
 
 @dataclass(frozen=True)
 class ReviewConfig:
-    model: str
-    model_revision: str
+    spec: ReviewerSpec
     mode: ReviewMode = field(kw_only=True)
-    prompt_budget: int = DEFAULT_PROMPT_CHARACTERS
-    max_tokens: int = DEFAULT_REVIEW_MAX_TOKENS
-    max_attempts: int = DEFAULT_REVIEW_MAX_ATTEMPTS
-    retry_max_tokens: int = DEFAULT_REVIEW_RETRY_MAX_TOKENS
-    retry_prompt_budget: int = DEFAULT_PROMPT_CHARACTERS
-    base_rubric_sha256: str = hashlib.sha256(BASE_RUBRIC.encode()).hexdigest()
     max_batch_bytes: int = DEFAULT_MAX_BATCH_BYTES
+
+    @property
+    def identity(self) -> dict[str, Any]:
+        return {"spec": self.spec.identity, "mode": self.mode, "max_batch_bytes": self.max_batch_bytes}
 
 
 @dataclass(frozen=True)
@@ -319,17 +309,11 @@ def _executing_reviewer(execution: AuditExecution, review: ReviewConfig) -> Revi
     _check_execution(execution)
     if isinstance(reviewer, (BatchReviewer, ChatReviewer)):
         actual = ReviewConfig(
-            reviewer.model,
-            reviewer.model_revision,
-            reviewer.max_prompt_characters,
-            reviewer.max_tokens,
-            reviewer.max_attempts,
-            reviewer.retry_max_tokens,
-            reviewer.retry_max_prompt_characters,
+            reviewer.spec,
             mode=ReviewMode(reviewer.identity["mode"]),
             max_batch_bytes=reviewer.max_batch_bytes,
         )
-        if actual != review:
+        if actual.identity != review.identity:
             raise ValueError("Review configuration differs from the executing reviewer")
     return reviewer
 
@@ -414,7 +398,7 @@ def prepare_source(
         normalized_rows.group_by(
             public_group_key,
             reducer=deduplicate_group,
-            sort_by=source_locator_order,
+            sort_by=task_id_order,
             num_output_shards=num_output_shards,
         )
         .map(_check_prepared_audit)
@@ -465,7 +449,7 @@ def prepare_panel(
     output = StoragePath(output_path)
     checks = {row.normalized["audit"]["task_id"]: row.checks for row in rows}
     groups: dict[str, list[dict[str, Any]]] = {}
-    for row in sorted((row.normalized for row in rows), key=source_locator_order):
+    for row in sorted((row.normalized for row in rows), key=task_id_order):
         groups.setdefault(public_group_key(row), []).append(row)
     records = []
     for key, group in groups.items():
@@ -570,8 +554,9 @@ def assess_source_quality(
         output / "manifest.json",
         {
             "source_quality": report.model_dump(mode="json"),
-            "review": asdict(review),
+            "review": review.identity,
             "reviewer": reviewer.identity,
+            "reviewer_spec": review.spec.identity,
             "rubric": asdict(rubric),
             "prepared_source": str(prepared),
         },
@@ -580,7 +565,12 @@ def assess_source_quality(
 
 
 def skip_source_review(
-    prepared_path: str, output_path: str, policy: SourceQualityPolicy, *, coverage: QualitySampleCoverage
+    prepared_path: str,
+    output_path: str,
+    policy: SourceQualityPolicy,
+    *,
+    reviewer_spec: ReviewerSpec,
+    coverage: QualitySampleCoverage,
 ) -> SourceQualityReport:
     """Gate a source that declares no rubric on its conversion and check failures alone.
 
@@ -592,7 +582,12 @@ def skip_source_review(
     _write_json(output / "report.json", report.model_dump(mode="json"))
     _write_json(
         output / "manifest.json",
-        {"source_quality": report.model_dump(mode="json"), "review": None, "prepared_source": str(prepared)},
+        {
+            "source_quality": report.model_dump(mode="json"),
+            "review": None,
+            "reviewer_spec": reviewer_spec.identity,
+            "prepared_source": str(prepared),
+        },
     )
     return report
 
@@ -614,24 +609,26 @@ def _complete_audit_batch(
                 audit.model_copy(
                     update={
                         "review": sampled[audit.task_id],
+                        "decision": (
+                            audit.decision
+                            or Decision(
+                                task_id=audit.task_id, disposition=Disposition.KEEP, reasons=["sample_qc:informational"]
+                            )
+                        ),
                         "source_quality_report": quality_path,
                     }
                 )
             )
-            if report is not None and report.status == SourceQualityStatus.REJECT:
+            if (
+                report is not None
+                and report.status == SourceQualityStatus.INCOMPLETE
+                and row["filter_status"] != "reject"
+            ):
                 row.update(
-                    quality_basis=QualityBasis.SOURCE_REJECTED.value,
-                    filter_status="reject",
-                    filter_reasons=["source_quality:reject"],
+                    quality_basis=QualityBasis.SOURCE_INCOMPLETE.value,
+                    filter_status="defer",
+                    filter_reasons=["source_review:unavailable"],
                 )
-            elif report is not None and report.status == SourceQualityStatus.INCOMPLETE:
-                decision = task_decision(audit.task_id, audit.checks, review_record(row), FilterPolicy())
-                if decision.disposition != Disposition.REJECT:
-                    row.update(
-                        quality_basis=QualityBasis.SOURCE_INCOMPLETE.value,
-                        filter_status="defer",
-                        filter_reasons=["source_quality:incomplete"],
-                    )
             yield row
             continue
         if quality_exclusion(audit) is not None:
@@ -647,7 +644,6 @@ def _complete_audit_batch(
         disposition, basis = {
             SourceQualityStatus.UNREVIEWED: (Disposition.KEEP, QualityBasis.UNREVIEWED),
             SourceQualityStatus.TRUST: (Disposition.KEEP, QualityBasis.INFERRED_FROM_SOURCE),
-            SourceQualityStatus.REJECT: (Disposition.REJECT, QualityBasis.SOURCE_REJECTED),
             SourceQualityStatus.INCOMPLETE: (Disposition.DEFER, QualityBasis.SOURCE_INCOMPLETE),
         }[report.status]
         yield audit_columns(
@@ -746,7 +742,7 @@ def audit_prepared_source(
         report = SourceQualityReport.model_validate(_read_json(quality / "report.json"))
         quality_manifest = _read_json(quality / "manifest.json")
         if StoragePath(quality_manifest["prepared_source"]) != prepared or quality_manifest["review"] != (
-            asdict(review) if review is not None else None
+            review.identity if review is not None else None
         ):
             raise ValueError("Source quality evidence belongs to different prepared data or review configuration")
         sampled = _sampled_reviews(quality, report.population.task_ids if review is not None else ())
@@ -782,7 +778,7 @@ def audit_prepared_source(
         **counts,
         "recipe": recipe.name,
         "recipe_version": recipe.version,
-        "review": asdict(review) if review is not None else None,
+        "review": review.identity if review is not None else None,
         "reviewer": reviewer.identity if reviewer is not None else None,
         "rubric": asdict(recipe.rubric) if recipe.rubric is not None else None,
         "source_quality": report.model_dump(mode="json") if report else None,
@@ -815,7 +811,6 @@ def write_filtered_shard(
 def filter_source(
     audit_path: str,
     output_path: str,
-    policy: FilterPolicy,
     max_workers: int,
     worker_resources: ResourceConfig | None = None,
     *,
@@ -828,7 +823,7 @@ def filter_source(
     filtered = (
         Dataset.from_files(str(source / AUDIT_INPUT_PATTERN))
         .load_parquet()
-        .map(partial(filter_row, policy=policy))
+        .map(filter_row)
         .map_shard(partial(write_filtered_shard, output=output))
     )
     with (
@@ -839,7 +834,7 @@ def filter_source(
         counts = combine_manifest_counts(
             execute_phase(context, filtered, telemetry=telemetry, operation="filter").results
         )
-    manifest: dict[str, Any] = {**counts, "policy": asdict(policy), "audited_source": str(source)}
+    manifest: dict[str, Any] = {**counts, "audited_source": str(source)}
     audited_manifest = _read_json(source / "manifest.json")
     manifest["source_quality"] = audited_manifest.get("source_quality")
     if manifest["input_rows"] != audited_manifest["input_rows"]:

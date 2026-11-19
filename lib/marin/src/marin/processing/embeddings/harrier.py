@@ -77,7 +77,17 @@ class HarrierEmbedder:
             lengths = inputs["attention_mask"].sum(dim=1)
             inputs = inputs.to(config.device)
             positions = (lengths - 1).to(config.device)
-            with torch.inference_mode():
+            # cuDNN SDPA rejects some padded GB200 batches without trying another backend.
+            with (
+                torch.inference_mode(),
+                torch.nn.attention.sdpa_kernel(
+                    [
+                        torch.nn.attention.SDPBackend.FLASH_ATTENTION,
+                        torch.nn.attention.SDPBackend.EFFICIENT_ATTENTION,
+                        torch.nn.attention.SDPBackend.MATH,
+                    ]
+                ),
+            ):
                 hidden = self.model(**inputs, use_cache=False).last_hidden_state
                 pooled = hidden[torch.arange(len(lengths), device=config.device), positions].float()
                 vectors.append(torch.nn.functional.normalize(pooled, dim=1).cpu().numpy())

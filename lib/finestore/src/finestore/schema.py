@@ -67,7 +67,13 @@ def _arrow_type(annotation: object) -> pa.DataType:
     if origin is Union or origin is types.UnionType:
         non_none = [arg for arg in args if arg is not type(None)]
         if len(non_none) != 1:
-            raise TypeError(f"unsupported union type for an arrow schema: {annotation!r}")
+            # A parent|child model union stores under the child's struct: the child
+            # carries every parent field, and a parent-shaped row leaves the
+            # child-only columns null on write.
+            derived = _most_derived_model(non_none)
+            if derived is None:
+                raise TypeError(f"unsupported union type for an arrow schema: {annotation!r}")
+            return _arrow_type(derived)
         return _arrow_type(non_none[0])
     if origin is list:
         (element,) = args
@@ -83,6 +89,19 @@ def _arrow_type(annotation: object) -> pa.DataType:
         if annotation in _SCALARS:
             return _SCALARS[annotation]
     raise TypeError(f"unsupported type for an arrow schema: {annotation!r}")
+
+
+def _most_derived_model(args: list[object]) -> object | None:
+    """The single union member that is a subclass of every other member, if one exists."""
+    models = [
+        arg for arg in args if isinstance(arg, type) and (issubclass(arg, BaseModel) or dataclasses.is_dataclass(arg))
+    ]
+    if len(models) != len(args):
+        return None
+    for candidate in models:
+        if all(issubclass(candidate, other) for other in models):
+            return candidate
+    return None
 
 
 def _enum_type(enum_cls: type) -> pa.DataType:

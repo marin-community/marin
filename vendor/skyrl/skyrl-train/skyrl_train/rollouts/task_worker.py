@@ -219,6 +219,7 @@ async def _model_turn(
             REASONING_VIOLATION_TOKEN_METADATA_KEY: (output.get(REASONING_VIOLATION_TOKENS_KEY) or [None])[0],
         },
         reasoning_violation=(output.get(REASONING_VIOLATIONS_KEY) or [None])[0],
+        reply_status=(output.get("reply_statuses") or [None])[0],
     )
 
 

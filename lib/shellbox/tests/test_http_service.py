@@ -14,7 +14,7 @@ import httpx
 import pytest
 import shellbox.http_service as http_service
 from shellbox.backends.docker.machine import DockerMachineFactory, docker
-from shellbox.backends.gvisor.machine import GvisorMachineFactory
+from shellbox.backends.docker_gvisor.machine import DockerGvisorMachineFactory
 from shellbox.http_service import MAX_BODY, HttpRequest, HttpResponse, serve_http
 from shellbox.machine import Command, DockerImage, MachineSpec, NetworkPolicy, Result
 from shellbox.process_session import SubprocessSession
@@ -383,7 +383,7 @@ def test_http_capability_close_cancels_pending_host_work():
     "factory_type",
     [
         pytest.param(DockerMachineFactory, marks=pytest.mark.docker),
-        pytest.param(GvisorMachineFactory, marks=pytest.mark.manual),
+        pytest.param(DockerGvisorMachineFactory, marks=pytest.mark.manual),
     ],
 )
 def test_denied_container_relay_limits_host_authority_and_reclaims_listener(tmp_path, monkeypatch, factory_type):

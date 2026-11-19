@@ -1,0 +1,11 @@
+{
+  "benchmark_version": "1.1.2",
+  "benchmark_sdist_sha256": "44944bc6608d7d9b8d4390f3ce0a3b2c69122ea6be6e35766c6fde2328f50392",
+  "requirements_lock_sha256": "07508ed0e81b6d363ba1e4d102c67b34d73429fe80666f61bf995859f17143c2",
+  "exclude_newer": "2026-10-14",
+  "python": "3.12",
+  "platform": "x86_64-unknown-linux-gnu",
+  "base_image": "ghcr.io/marin-community/iris-task@sha256:c646ef8b571571edfc96c75fd9c8cc712ad286b61b33781070bdc29ab9f9a6ab",
+  "upstream_revision": "b41d8759070715dc102000e06fba0d73ebce9955",
+  "scope": "fresh host parser dependency context; source actor unchanged; no execution qualification"
+}

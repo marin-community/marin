@@ -59,11 +59,7 @@ class SingleStepTrial(Trial):
             return
 
         await self._run_collect_hooks(self.task.config.verifier.collect)
-        await self._artifact_handler.download_artifacts(
-            self.agent_environment,
-            self.paths.artifacts_dir,
-            source_artifacts_dir=self.agent_env_paths.artifacts_dir,
-        )
+        await self._download_artifacts(self.paths.artifacts_dir)
         self._are_artifacts_collected = True
 
     async def _run_agent(self) -> None:

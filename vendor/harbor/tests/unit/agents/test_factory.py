@@ -57,8 +57,6 @@ def test_create_agent_from_config_passes_agent_kwargs(monkeypatch, tmp_path):
     [
         AgentConfig(name="acp:opencode@1.3.9"),
         AgentConfig(name="claude-code"),
-        AgentConfig(name="oracle"),
-        AgentConfig(name="nop"),
         AgentConfig(),
     ],
 )

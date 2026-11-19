@@ -12,7 +12,7 @@ image, and the pipeline places each one:
   `task` stage of `lib/iris/Dockerfile`), runs in a sandbox of an image built
   for the environment;
 - every other environment runs in the Zephyr worker, in a uv environment built
-  from its lock ([`../environment_runtime.py`](../environment_runtime.py)).
+  from its lock ([`taskcompendium.runtime.local`](../../../../lib/taskcompendium/src/taskcompendium/runtime/local.py)).
 
 Agent environments name their image. Iris workers and training pull images
 anonymously, so new agent images use the public
@@ -64,7 +64,7 @@ generated package steps, or change the grader container. `ENV` persists into the
 image on purpose: it is how a fragment puts its toolchain on `PATH`.
 
 Each requirement is an exact `name==version` pin or a `name @ https://...`
-URL that names a commit; the build compiles them to a hash lock, so there is no
+URL pinned by a commit or a `#sha256=<64 hex digits>` fragment; the build compiles them to a hash lock, so there is no
 checked-in lock to regenerate. Each `files` entry names an https archive (zip or
 tar) by URL and SHA-256 and the member, a file or directory inside it, to place
 at the absolute path. The path is the same in a built image and in the worker,

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Difficulty · RL Data Atlas</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="common.js" defer></script><script src="difficulty.js" defer></script><script src="difficulty-coverage.js" defer></script>
+</head>
+<body>
+<header class="masthead"><a class="brand" href="./"><span class="brandmark">a<span>•</span></span><span>open athena <b>/</b> research tools</span></a><span class="private-label">MARINA APP <span class="live-dot"></span> CURATED CATALOG</span></header>
+<main>
+  <section class="hero">
+    <div><p class="eyebrow">POST-TRAINING / DIFFICULTY COVERAGE</p><h1 class="hero-title">Difficulty coverage<span>.</span></h1><p id="coverage-meta" class="hero-sub" role="status" aria-live="polite">Computing over the current catalog…</p></div>
+  </section>
+  <nav class="atlas-tabs" aria-label="Atlas views"></nav>
+  <style>
+    .status-metrics { display:flex; gap:.5rem; flex-wrap:wrap; margin:0 0 .75rem; }
+    .status-metric { display:flex; flex-direction:column; padding:.5rem .75rem; border:1px solid var(--line); border-radius:.5rem; background:var(--surface); min-width:9rem; }
+    .status-metric strong { font-size:1.4rem; }
+    .status-metric span { color:var(--muted); font-size:.8rem; }
+    .coverage-solver { display:inline-block; margin-right:.75rem; overflow-wrap:anywhere; }
+    .table-scroller { max-height:60vh; overflow:auto; }
+  </style>
+  <section aria-label="Coverage counts">
+    <div id="coverage-counts" class="status-metrics" role="list"></div>
+  </section>
+  <section aria-label="Sources needing measurement">
+    <h2>Needs measurement</h2>
+    <p class="hero-sub">Sources with at least one solver unmeasured at the current pin — the next campaign queue, computed from the catalog.</p>
+    <div class="table-scroller"><table id="needs-table" class="source-table"><caption class="sr-only">Sources needing a difficulty measurement at the current pin, with the missing solvers</caption><thead><tr><th scope="col">Source</th><th scope="col">Measured</th><th scope="col">Missing solvers</th></tr></thead><tbody id="needs-rows"></tbody></table></div>
+  </section>
+  <section aria-label="Blocked sources">
+    <h2>Blocked</h2>
+    <p class="hero-sub">Sources whose current reasons carry open typed gaps, with the gap evidence.</p>
+    <div class="table-scroller"><table id="blocked-table" class="source-table"><caption class="sr-only">Sources blocked by an open typed difficulty gap, with evidence</caption><thead><tr><th scope="col">Source</th><th scope="col">Gaps</th><th scope="col">Evidence</th></tr></thead><tbody id="blocked-rows"></tbody></table></div>
+  </section>
+  <section aria-label="Measured sources">
+    <h2>Measured</h2>
+    <div class="table-scroller"><table id="measured-table" class="source-table"><caption class="sr-only">Sources measured on the current pin, with measurement identifiers</caption><thead><tr><th scope="col">Source</th><th scope="col">Solve rates</th></tr></thead><tbody id="measured-rows"></tbody></table></div>
+  </section>
+</main>
+<footer class="atlas-footer"><span id="coverage-stamp"></span></footer>
+</body>
+</html>

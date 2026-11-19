@@ -31,6 +31,7 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
+from finestore.rl.status_taxonomy import DataRestriction
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.answers import EVIDENCE_PATH, source_defect, unsupported
 from taskcompendium.models import TaskSpec
@@ -48,7 +49,8 @@ from experiments.post_training.task_curation.datasets.lean.proofs import (
     statement_contract,
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.reference_data import load_referenced_document
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 NUMINA_REVISION = "51fa67f1f647ae1ecd81eef9f19306aa8a7b3a94"
 NUMINA_FILE = "data/train-00000-of-00001.parquet"
@@ -90,7 +92,19 @@ EVAL_OVERLAP = frozenset(json.loads(EVAL_OVERLAP_FILE.read_text())["overlapping"
 an eval set changes."""
 
 PROOFS_FILE = Path(__file__).resolve().parent / "numina_proofs.json"
-PASSING_PROOFS = frozenset(json.loads(PROOFS_FILE.read_text())["passing"])
+DERIVED_INDEX = Path(__file__).resolve().parents[1] / "derived" / "index.json"
+
+
+@cache
+def passing_proofs() -> frozenset[str]:
+    """Proof keys whose human proof compiles as the golden control submits it.
+
+    A row becomes a task only when its key is in this set, so every task has a
+    working golden control.
+    """
+    return frozenset(load_referenced_document(DERIVED_INDEX, "lean/numina_proofs.json").get("passing", ()))
+
+
 """Rows whose human proof, as the golden control submits it, compiles without ``sorry`` with the grader's
 toolchain, by ``proof_key``. ``check_statements.py numina --write-proofs`` writes the file; rerun it, and
 bump the recipe's ``version``, when the toolchain or the revision moves."""
@@ -181,7 +195,7 @@ def row_contract(
     if UNUSABLE_STATEMENT.search(without_comments(statement)):
         return unsupported("unusable_statement", "The statement runs code, which the reference would run as root")
     contract = numina_contract(statement)
-    if not isinstance(contract, ImportRejection) and require_passing_proof and proof_key(data) not in PASSING_PROOFS:
+    if not isinstance(contract, ImportRejection) and require_passing_proof and proof_key(data) not in passing_proofs():
         return unsupported("proof_does_not_compile", "The human proof does not compile with the grader's toolchain")
     return contract
 
@@ -219,9 +233,11 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
-                id="Hugging Face:project-numina/NuminaMath-LEAN",
-                title="project-numina/NuminaMath-LEAN",
-                origin="Hugging Face",
+                data_restriction=DataRestriction.OPEN,
+                origin=SourceOrigin.PROJECT_NUMINA,
+                upstream_dataset="NuminaMath-LEAN",
+                upstream_name="NuminaMath-LEAN",
+                build_path="Lean kernel replay",
                 family="math-proof",
                 tags=("lean", "theorem-proving", "single-turn", "license:apache-2.0"),
                 count=9475,

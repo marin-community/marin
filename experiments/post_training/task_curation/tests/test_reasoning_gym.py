@@ -345,7 +345,6 @@ def test_tasktrove_reasoning_gym_exports_its_source_environment():
         },
         grader_image=None,
         family="reasoning-gym",
-        fallback_actor_image="unused",
         verifyit_package_root=VERIFYIT_PACKAGE,
     )
     config = tomllib.loads(payload.files["task.toml"].decode())

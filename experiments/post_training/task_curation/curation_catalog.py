@@ -246,7 +246,9 @@ def append_curation_catalog(
         store.table("sources", primary_key=("run_id", "name"), schema=arrow_schema(CurationSource))
         store.table("phases", primary_key=("run_id", "name", "ordinal"), schema=arrow_schema(CurationPhase))
         register_catalog(store)
-        with store.transaction() as transaction:
+        # Exact manifests can exceed the ordinary transaction buffer limit. Keep
+        # their chunked blobs and the campaign rows in the same atomic commit.
+        with store.unbounded_transaction() as transaction:
             report_uri = transaction.write_object(f"runs/{run_id}/report.json", report_bytes)
             transaction.table(RUNS).add(
                 asdict(

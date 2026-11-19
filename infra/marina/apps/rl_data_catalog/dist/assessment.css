@@ -2,14 +2,71 @@
 .assessment-page { max-width: 1200px; padding-bottom: 60px; }
 .assessment-page h1 { overflow-wrap: anywhere; }
 .assessment-page p { line-height: 1.7; }
-.assessment-page pre { max-height: 65vh; overflow: auto; font: 12px/1.65 ui-monospace, monospace; background: #eef2ee; padding: 16px; border-radius: 5px; }
+.assessment-page pre { max-height: 65vh; overflow: auto; font: max(var(--type-min), 12px)/1.65 ui-monospace, monospace; background: var(--soft); padding: 16px; border-radius: 5px; }
 .assessment-page details { margin: 14px 0; }
 .assessment-page summary { overflow-wrap: anywhere; }
-.assessment-note { font-size: 13px; color: var(--muted); margin: 0 0 22px; }
-.assessment-card { border: 1px solid var(--line); border-radius: 7px; background: #fff; padding: 18px 22px; margin: 16px 0; font-size: 13px; }
-.assessment-card h2 { font-size: 17px; margin-top: 0; }
+.assessment-note { font-size: max(var(--type-min), 13px); color: var(--muted); margin: 0 0 22px; }
+.assessment-card { border: 1px solid var(--line); border-radius: 7px; background: var(--surface); padding: 18px 22px; margin: 16px 0; font-size: max(var(--type-min), 13px); }
+.assessment-card h2 { font-size: max(var(--type-min), 17px); margin-top: 0; }
 .assessment-card > div { padding-top: 12px; }
 #reviews { margin-top: 20px; }
-#reviews p { border-bottom: 1px solid var(--line); padding: 10px 0; margin: 0; font-size: 13px; overflow-wrap: anywhere; }
-#selected { font-size: 13px; }
+#reviews p { border-bottom: 1px solid var(--line); padding: 10px 0; margin: 0; font-size: max(var(--type-min), 14px); overflow-wrap: anywhere; }
+#selected { font-size: max(var(--type-min), 13px); }
 @media (max-width: 650px) { .assessment-card { padding: 16px; } }
+.review-filters { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; margin: 10px 0 4px; }
+.review-filter { display: flex; flex-direction: column; gap: 4px; font-size: max(var(--type-min), 12px); }
+.review-filter select { max-width: 220px; }
+.review-filter input[type="search"] { max-width: min(220px, 58vw); min-width: 0; }
+.review-filter > span, .review-defects > span { color: var(--muted); font-size: max(var(--type-min), 11px); text-transform: uppercase; letter-spacing: 0.04em; }
+.review-defects { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.review-defect { display: inline-flex; gap: 5px; align-items: center; font-size: max(var(--type-min), 12px); }
+.review-defect input { accent-color: var(--green); }
+.review-pager { display: flex; gap: 10px; align-items: center; margin: 10px 0; }
+.review-pager button {
+  background: var(--soft);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 6px 14px;
+}
+.review-pager button:disabled { opacity: 0.55; cursor: not-allowed; }
+.defect-chip { font-size: max(var(--type-min), 11px); }
+.audit-draw { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; margin: 10px 0; }
+.audit-draw label { display: flex; flex-direction: column; gap: 4px; font-size: max(var(--type-min), 12px); }
+.audit-draw input, .audit-draw select { max-width: 240px; }
+/* Submit buttons must carry house colors: the UA default in dark scheme measures 5.3:1. */
+.audit-draw button[type="submit"], .audit-judgment button[type="submit"] {
+  background: var(--soft);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 6px 14px;
+}
+.audit-judgment fieldset { border: 1px solid var(--line); border-radius: 5px; margin: 10px 0; padding: 10px; }
+.audit-judgment .audit-agree { display: inline-flex; gap: 8px; }
+.audit-judgment button.chip { cursor: pointer; }
+.audit-judgment textarea { width: 100%; min-height: 56px; margin-top: 8px; }
+.audit-status { margin-left: 10px; color: var(--muted); }
+.audit-agreement { margin: 10px 0; font-size: max(var(--type-min), 12px); }
+.audit-agreement th, .audit-agreement td { border-bottom: 1px solid var(--line); padding: 5px 10px 5px 0; text-align: left; }
+.audit-task > summary { cursor: pointer; }
+.evidence-labels { max-width: 100%; overflow-x: auto; display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 8px; }
+.evidence-labels .chip { flex-shrink: 0; font-size: max(var(--type-min), 12px); padding: 6px 9px; }
+.card-intro { color: var(--muted); margin: -4px 0 6px; }
+.pointer code { font-size: max(var(--type-min), 12px); overflow-wrap: anywhere; }
+.field dd code { overflow-wrap: anywhere; white-space: pre-wrap; }
+
+
+.assessment-page { overflow-wrap: anywhere; }
+
+.evidence-labels .chip { white-space: normal; max-width: 100%; overflow-wrap: anywhere; }
+
+.review-metadata { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; font-size: var(--type-min); }
+.review-metadata > span { overflow-wrap: anywhere; }
+.review-metadata .chip { white-space: normal; }
+.review-metadata a { text-decoration: underline; }
+#content { min-width: 0; }
+#content pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.measurement-picker { display: grid; gap: 6px; width: min(100%, 50rem); min-width: 0; }
+.measurement-picker select { width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; }

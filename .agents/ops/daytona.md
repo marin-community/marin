@@ -22,6 +22,23 @@ permission failure, not a model failure or a zero reward. Inline validation buil
 images into snapshots; the Harbor evaluation callback rejects
 `image_build: declarative`, which only standalone eval launches may set.
 
+For eval-account validation without named snapshots, explicitly select
+`environment: {type: daytona, kwargs: {provisioning: declarative}}` in the
+Harbor TrialConfig. This uses `DaytonaDeclarativeMachineFactory` and
+`CreateSandboxFromImageParams` to build from the original registry image or
+Dockerfile context during sandbox creation. It preserves task resources and
+shares the normal command, provider-retry and sandbox-cleanup path. The default
+`snapshot` mode still resolves named snapshots. Select the eval credential
+separately; provisioning mode does not change accounts. Bound concurrency to the
+eval sandbox quota, retain the actual provisioning mode in launch receipts, and
+leave other campaigns' snapshots and sandboxes alone. The ten-snapshot RL
+suitability census remains a measurement of the source's training configuration.
+
+Shellbox rejects Dockerfile `ADD` instructions before creating a sandbox. This
+check follows instruction continuations and `RUN`/`COPY` heredoc boundaries:
+an assembly `add` instruction inside a heredoc is passed through unchanged.
+Retain the original Dockerfile when diagnosing a preflight rejection.
+
 The keys live in Google Secret Manager in project `hai-gcp-models`:
 `DAYTONA_RL_API_KEY` for training and `DAYTONA_EVAL_API_KEY` for validation.
 Load them into the correspondingly named environment variables before submission.
@@ -70,6 +87,42 @@ private secret files into launch records or source control. The legacy
 OpenThoughts-Agent Jupiter launcher also uses `DC_AGENT_SECRET_ENV` to identify
 its private secrets file. That is a launcher-specific setting, not an Iris
 requirement. See the source Jupiter runbook below for that workflow.
+
+## Sandbox ownership evidence
+
+For a single-trial subprocess started by your campaign, preserve its trial
+configuration, job/task ID and complete lifecycle log. The native oracle-filter
+launcher passes `--sandbox-lifecycle-log ATTEMPT/sandbox-lifecycle.jsonl` to
+`harbor trials start`. This writes a fresh local file and explicitly enables
+ownership logging, independent of the process's default log level. The file
+contains events from that trial process; do not combine other campaigns' logs.
+
+The `shellbox.backends.daytona.lifecycle` logger emits JSON message payloads with
+`kind: daytona_sandbox_lifecycle` and `schema_version: 1`. `create_requested`
+records the generated `requested_name`; `created` binds it to the returned
+`sandbox_id`. `delete_requested` records the exact ID before deletion, and
+`deleted` follows the awaited provider deletion. A failed creation can still
+emit deletion events when the provider accepted the request before returning an
+error. An `absent` event has no ID: it means only that the generated name was
+not found.
+
+Collect IDs only from `created` or `delete_requested` events tied to a preceding
+`create_requested` in that owned subprocess. After the trial subprocess and its
+normal awaited cleanup finish, use the same account's read-only
+`AsyncDaytona.get(id)` on each exact ID. Only `DaytonaNotFoundError` establishes
+absence; authorization errors, timeouts and other lookup failures leave it
+unverified. Do not infer ownership from status, age or account-wide lists.
+Every `create_requested` without a bound ID remains unresolved, including when
+there is an `absent` event. An interrupted subprocess or unresolved request keeps
+its slots held pending ledger-owner review; an empty ID list cannot release them.
+
+Before returning reserved sandbox concurrency slots to the campaign's capacity
+ledger, store an immutable receipt containing the trial/job identity, complete
+log URI and SHA-256, exact IDs, check time and each lookup result. Publish the
+receipt URI and SHA-256 to the ledger owner. Presence or an unverified lookup
+keeps those slots held. These lifecycle records do not establish correct
+scoring; run the [grader controls](../../docs/references/task-curation.md#graders-and-controls)
+separately.
 
 ## Snapshot preflight and reclamation
 
@@ -267,6 +320,10 @@ snapshot change, run the campaign's end-to-end smoke before scaling collection.
 
 ## Sandbox lifecycle and idle cleanup
 
+Shellbox waits for provider destruction before sandbox cleanup returns. The pinned
+SDK's `delete(wait=True)` is required; its default only acknowledges the deletion
+request. Preserve cleanup failures as infrastructure evidence.
+
 Hard termination can orphan in-flight sandboxes. Reap only sandboxes proven idle
 and covered by cleanup authority. Correlate provider IDs/labels with the owning
 trial and job; a quiet agent can still be waiting for model inference or tool
@@ -302,6 +359,12 @@ failure. Very short or empty attempts suggest a broken request path or agent
 loop. Incoherent output following weight synchronization requires correlation
 with reload logs and importance-ratio metrics before concluding learning failed.
 
+When command-output capture fails, Shellbox retains the exception and adds a
+`Daytona exec response:` JSON note with the provider's `exit_code`, the first
+4,096 diagnostic characters, and `diagnostic_truncated`. Inspect that response
+before attributing a missing `/tmp/.shellbox-*/out` file to the task. A capture
+failure supplies no task score.
+
 Fresh inference heartbeats, trace counts, and a running controller job can
 coexist with a stalled trainer. Require advancing trainer phases/steps and
 durable artifacts for training progress. Report dispatched, completed, scored,
@@ -323,6 +386,84 @@ Aggregate large trial sets near the running workload and transfer bounded
 summaries. Compare timezone-aware timestamps in UTC. Resolved configurations,
 logs, and trial metadata can contain capability JWTs inside model ingress URLs;
 redact those as well as named API keys before publication.
+
+## Transient provider errors
+
+Read-only sandbox get/status/absence calls use `read_provider_call`: at most five
+attempts with exponential backoff capped at 120 seconds and a 60-second request
+timeout. HTTP 5xx, 408/429, SDK connection errors and timeouts are retryable.
+Snapshot preparation retains its existing caller deadline. Other 4xx errors and
+terminal image-build failures propagate.
+
+Sandbox creation and deletion are single-shot. An explicit creation conflict can
+resolve the caller's unique name through read-only calls. An ambiguous mutation
+must be reconciled from its lifecycle evidence; it is never blindly replayed.
+
+Each retry emits `DAYTONA_PROVIDER_RETRY` with operation, attempt, status and
+delay fields. Count these events separately from task outcomes. Provider errors
+remain infrastructure evidence and receive no oracle score. Command
+execution is not replayed after an ambiguous response.
+
+Harbor selects `ProviderWaitPolicy.JOB` only when the trial has an explicit
+`trial_attempt_timeout_sec`. Queue supervision enforces that overall bound on
+wall-clock time; standalone trials without it retain phase-bound behavior.
+Task-curation calibration and approved retries set a 72-hour overall attempt
+bound without changing the native task or environment kwargs.
+
+Under JOB, safe harness controls, artifact reads/writes and resource probes retry
+within the overall bound. Controls use a 60-second
+per-call timeout; artifact transfers, snapshot operations and sandbox acquisition
+retain SDK operation settings, allowing healthy large transfers to complete.
+Request duration and retry backoff pause phase and command clocks; source-command
+limits remain active during source execution. Normal cleanup also permits these
+provider waits. Cancellation cleanup and grace use wall-clock bounds and disable
+recovery retries. Retain retry events separately from task verdicts.
+
+Retryable controls include read-only metadata/resource probes, private staging-file
+operations and fixed-content artifact transfers.
+Source execution remains single-shot after an ambiguous response. An ambiguous
+process-group termination falls back to sandbox teardown; it cannot safely be
+replayed after PID reuse. Private-file cleanup is idempotent. External cancellation disables recovery retries during cancellation
+cleanup and retains its existing cleanup deadline and primary exception.
+
+
+### Quarantined control rows
+
+`run_quarantined_trials` seals each attempt through its caller before continuing
+other rows. A row with ambiguous sandbox ownership has the typed status
+`unresolved_cleanup`, exact known IDs, unknown create requests, lifecycle hashes
+and its immutable evidence reference. It is not a scored oracle outcome.
+
+At the end of the pass, `resolve_ownership` revalidates the frozen lifecycle
+files, gets each exact ID, deletes a present owned sandbox once with `wait=True`,
+and checks absence. NotFound clears the ID. Read exhaustion or an ambiguous
+cleanup keeps the row quarantined. Only resolved rows are requeued, once; both
+attempts remain archived. Unknown create requests are never resolved by account
+lists, labels, statuses or time windows.
+
+The caller must declare physical capacity including quarantined sandboxes.
+Unresolved IDs and unknown create requests retain slots. When that capacity is
+full, unstarted rows remain explicitly deferred for a later cleared pass.
+
+A configured `QuarantineReserveConfig` adds a shared pool through
+`QuarantineReservePool` and `RootQuarantineReserve`. Record the typed pool size,
+allocation receipt URI and SHA, logical root keys, and one-extra-slot-per-root
+limit in campaign receipts. Initialize the CAS object once before dispatch.
+The B campaign's granted reserve is six slots shared by its twelve roots.
+
+Reserve claims use the maintained conditional-object backend (local file lock,
+GCS generation or S3 ETag). A claim belongs to a logical root and its exact
+producer attempt. It never expires or transfers to a replacement producer by
+age. Missing state fails closed; it must not recreate apparently free capacity.
+
+A root with one unresolved sandbox can claim one reserve slot to continue other
+rows. At two retained sandboxes, or when the shared pool is full, it processes
+ownership evidence and waits without creating a third sandbox. Capacity-induced
+pass boundaries reconcile exact owned IDs so a full pool cannot deadlock all
+roots before their final pass. Each resolved row is requeued once. If that retry
+also fails technically, its evidence remains unscored; clearing cleanup cannot
+turn it into a completed oracle outcome. Release a reserve claim only when
+absence proofs cover all quarantines tracked by that claim.
 
 ## Making a dataset Daytona-safe
 
@@ -349,13 +490,14 @@ re-measurement; none changes a task's own instruction, files or grader.
    declare one shape (for example 2 CPU / 4096 MB / 10240 MB) for task and
    verifier machines. Differing shapes multiply snapshot names without changing
    the environment.
-3. **Keep the archive's environment in the converted task.** A converted task
-   runs in the environment its archive specifies:
-   `environment_fidelity.environment_unused` rejects a spec that replaces the
-   archive's recipe with another image, and a replayed recipe must lower onto the
-   digest-pinned base with the archive's steps, working directory and variables.
-   A conversion that changes the environment is a rewrite, so it ships as a new
-   dataset version whose declaration records the basis.
+3. **Prove a no-op before re-declaring the agent image.** A task may declare
+   `iris-task` only when
+   `experiments/post_training/task_curation/environment_fidelity.py` proves its
+   recipe changes nothing: a single `FROM` equal to the digest-pinned agent
+   image, no `RUN`/`COPY`/`ADD`/`ENV`/`ARG`/`USER`/`ENTRYPOINT`/`CMD` step, and
+   no copied fixtures. That rewrite is a conversion, so it ships as a new dataset
+   version whose declaration records the basis. Anything unproven keeps its own
+   environment and is built.
 4. **Build the archived environment as the task image.** When lowering cannot
    express the recipe and the image is available to the RL org, build it, pin the
    resulting digest, and count each distinct image as one identity.
@@ -394,3 +536,10 @@ instruction to purge every snapshot unused for more than one hour on every
 check. This threshold was supplied separately from the source runbooks. The
 cancellation incident is additional operational evidence, not cross-account
 cleanup authority.
+
+When reconciliation confirms an exact sandbox ID is absent, exclude that ID
+from occupied capacity while retaining the original ownership ledger. Each
+unbound create request still consumes one slot. A replacement producer must
+carry unresolved quarantine records forward and transfer the stopped producer's
+reserve claim without releasing it. Verify the old producer and pod are terminal
+before the handoff; never replay an ownership-ambiguous row as a new trial.

@@ -16,6 +16,7 @@ from typing import Any
 
 from fray.types import CpuConfig, EnvironmentConfig, GpuConfig, ResourceConfig, TpuConfig
 from rigging.filesystem.storage_path import StoragePath
+from rigging.timing import Duration
 
 # Worker and isolated vLLM environments use one Python version so cloudpickle
 # and the launched callable stay compatible.
@@ -403,6 +404,7 @@ class IrisConfig:
     priority: int = 0
     max_retries_failure: int = 1
     max_retries_preemption: int = 10
+    worker_timeout: Duration | None = None
 
     def __post_init__(self) -> None:
         if self.cache_ttl_days < 0:

@@ -19,6 +19,7 @@ from taskcompendium.convert.answers import numeric_answer_task, source_defect
 from taskcompendium.models import (
     CommandSemantics,
     EnvironmentRequirements,
+    ExecutionRequirements,
     ExitCodeReward,
     ScriptGrader,
     Source,
@@ -28,7 +29,6 @@ from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles, Sourc
 from taskcompendium.pipeline.models import (
     Controls,
     Converter,
-    FilterPolicy,
     ImportRejection,
     IntendedUse,
     RawRow,
@@ -82,7 +82,7 @@ def response(task_id: str, confidence: str = "high", quality: str = "good") -> d
     }
 
 
-SOURCE_FILES = SourceFiles("fixture/tasks", "1", ("source.jsonl",), SourceFormat.JSONL)
+SOURCE_FILES = SourceFiles("open-athena/fixture-tasks", "a" * 40, ("source.jsonl",), SourceFormat.JSONL)
 SVAMP_RUBRIC = ReviewRubric(
     id="arithmetic-word-problems",
     version="1",
@@ -93,6 +93,9 @@ SVAMP_RUBRIC = ReviewRubric(
 )
 GRADER_IMAGE = "fixture@sha256:" + "b" * 64
 GRADER_ENVIRONMENT = EnvironmentRequirements(docker_image=GRADER_IMAGE, command_semantics=CommandSemantics.LINUX_PROCESS)
+EXECUTION_REQUIREMENTS = ExecutionRequirements(
+    cpus=1, memory_mb=2048, storage_mb=2048, agent_timeout_sec=300, verifier_timeout_sec=60
+)
 
 
 def svamp_row_task(row: RawRow) -> TaskSpec | ImportRejection:
@@ -100,8 +103,13 @@ def svamp_row_task(row: RawRow) -> TaskSpec | ImportRejection:
     body, question = row.data.get("Body"), row.data.get("Question")
     if not isinstance(body, str) or not isinstance(question, str):
         return source_defect("missing_prompt", "Body and Question must be strings")
-    return numeric_answer_task(
+    task = numeric_answer_task(
         row, prompt=f"{body.strip()} {question.strip()}", answer=row.data.get("Answer"), tolerance_abs=0, tolerance_rel=0
+    )
+    return (
+        task.model_copy(update={"execution_requirements": EXECUTION_REQUIREMENTS})
+        if isinstance(task, TaskSpec)
+        else task
     )
 
 
@@ -149,17 +157,7 @@ def fixture_recipe(
 
 
 def review_config(reviewer: BatchReviewer) -> ReviewConfig:
-    return ReviewConfig(
-        reviewer.model,
-        reviewer.model_revision,
-        reviewer.max_prompt_characters,
-        reviewer.max_tokens,
-        reviewer.max_attempts,
-        reviewer.retry_max_tokens,
-        reviewer.retry_max_prompt_characters,
-        max_batch_bytes=reviewer.max_batch_bytes,
-        mode=ReviewMode.BATCH,
-    )
+    return ReviewConfig(reviewer.spec, max_batch_bytes=reviewer.max_batch_bytes, mode=ReviewMode.BATCH)
 
 
 def review_source(
@@ -178,7 +176,6 @@ def run_stages(
     output_path: Path,
     limit: int,
     reviewer: BatchReviewer,
-    policy: FilterPolicy = FilterPolicy(),
 ) -> dict[str, Any]:
     staged, audited, filtered = (output_path / name for name in ("staged", "audited", "filtered"))
     source = staged / "source.jsonl"
@@ -187,7 +184,7 @@ def run_stages(
         source.write_text("".join(json.dumps(dict(row)) + "\n" for row in rows))
     if not (audited / "manifest.json").exists():
         review_source(str(staged), str(audited), recipe, AuditExecution(reviewer=reviewer), limit)
-    return filter_source(str(audited), str(filtered), policy, max_workers=1)
+    return filter_source(str(audited), str(filtered), max_workers=1)
 
 
 def stage_table(output_path: Path, view: str = "audit") -> pa.Table:

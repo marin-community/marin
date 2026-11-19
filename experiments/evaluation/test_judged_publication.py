@@ -27,6 +27,7 @@ from experiments.evaluation.benchmarks.simpleqa import simpleqa_source, simpleqa
 from experiments.evaluation.preparation import prepare_evaluation
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions
+from experiments.post_training.task_curation.tests.license_fixtures import with_license
 
 
 def write_simpleqa(file, rows):
@@ -70,7 +71,7 @@ def judged_corpus(tmp_path, monkeypatch):
         "name": "SimpleQA",
         "rows": [{"question": "What is the revenue?", "answer": "$7", "evidence_text": "Revenue: $7", "metadata": {}}],
     }
-    source = simpleqa_source("SimpleQA", mini=False)
+    source = with_license(simpleqa_source("SimpleQA", mini=False))
     cases = published_cases(
         source,
         lambda file: write_simpleqa(file, reference["rows"]),

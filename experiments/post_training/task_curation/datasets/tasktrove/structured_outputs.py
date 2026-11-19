@@ -5,6 +5,7 @@
 
 import json
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.answers import source_defect
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
 from taskcompendium.convert.json_schema import required_object_conflicts
@@ -29,8 +30,8 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.struc
     MISSING_INSTRUCTION,
     convert_nemotron_structured_outputs,
 )
-from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
+from experiments.post_training.task_curation.pipeline import CurationRecipe
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 CONFIG = "laion__nemotron-gym-structured-outputs-v4"
 FILE_DELIVERY = (
@@ -109,18 +110,27 @@ def convert_structured_outputs(row: RawRow, context: ConversionContext) -> TaskS
     return rewritten_task(task, original=original, reason=REWRITE_REASON)
 
 
-def sources() -> list[RlDataSource[CurationRecipe]]:
+def candidate_sources() -> list[RlDataSource[CurationRecipe]]:
+    """Keep the unqualified grounding recipe available to explicit QA."""
     return [
         RlDataSource(
-            pipeline=process_rows,
+            pipeline=None,
             info=SourceInfo(
-                id="Task Trove:laion__nemotron-gym-structured-outputs-v4",
-                title="laion/nemotron-gym-structured-outputs-v4",
-                origin="Task Trove",
+                data_restriction=DataRestriction.OPEN,
+                id="TaskTrove:laion__nemotron-gym-structured-outputs-v4",
+                upstream_dataset="laion__nemotron-gym-structured-outputs-v4",
+                upstream_name="laion__nemotron-gym-structured-outputs-v4",
+                subset=None,
+                build_path="Task Trove",
+                origin=SourceOrigin.TASKTROVE,
                 family="instruction-following",
                 tags=("agentic", "multi-turn"),
                 count=53870,
-                notes="All formats require both a format check and a source-grounding judge.",
+                notes=(
+                    "All formats require both a format check and a source-grounding judge. "
+                    "Inventory: the grounding judge model is unspecified. Pin the judge contract and "
+                    "complete grounding-verifier QA before admission."
+                ),
                 task_format=TaskFormat.TASKCOMPENDIUM,
             ),
             config=CurationRecipe(
@@ -134,3 +144,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             ),
         )
     ]
+
+
+def sources() -> list[RlDataSource[CurationRecipe]]:
+    return []

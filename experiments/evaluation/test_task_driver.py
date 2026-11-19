@@ -22,6 +22,7 @@ from iris.rpc import controller_pb2, job_pb2
 from marin.evaluation import task_worker
 from marin.rollouts.evaluation import EvaluationInfrastructureError, EvaluationRunConfig, ModelIdentity
 from rolloutengine.models import RolloutLimits
+from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from taskcompendium.convert.answers import exact_answer_task
 from taskcompendium.evaluation.corpus import chat_item
 from taskcompendium.evaluation.spec import EvaluationProtocol, Metric, MetricKind, Sampling, SummaryKind, TrialPolicy
@@ -155,6 +156,7 @@ def recovery_endpoint(monkeypatch):
         )
 
     monkeypatch.setattr(task_worker, "AsyncOpenAI", client)
+    monkeypatch.setattr(task_worker, "LocalMachineFactory", ShellSimMachineFactory)
     monkeypatch.setattr("rigging.timing.time.sleep", lambda _delay: None)
     return endpoint
 

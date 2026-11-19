@@ -1,0 +1,17 @@
+{
+  "negative": {
+    "sha256": "0bc36e1304b9718d142f2f70a837b8809a5dd56847c2adaa5570ca8ee0ea6f08",
+    "source_task_sha256": "cdda8a1e9aa1ac7eff49f5345339a804e67ce0c80167465e34435e50c712c04d",
+    "source_task_checksum": "7c8d331c046493c17c6ad4fac4769203964a91ecec2f2c5cf47b575d72c682ef"
+  },
+  "sqlfluff": {
+    "sha256": "bee791fe98b1cad84e663b7e620643216c39f11a49acdf12c0f093751505e803",
+    "source_task_sha256": "65717a5642d18703ceffbbb180bf0818864446669e2c8727954da243ca27c2f6",
+    "source_task_checksum": "5345f5784100e9d491e3fdd73e1df9eb533888f08eb2fe1aba45f6abc2a4a977"
+  },
+  "patsy": {
+    "sha256": "5a7b1d0d8019268878f5856cb73241e009cf24afacfe409ae941c0410ee48ddb",
+    "source_task_sha256": "26bf0015e722e4001ed091272fd5a07e19b23268407b856cd67c96e1a1f806ec",
+    "source_task_checksum": "c6fa1a35981c4c95a0682fcd32e800b53eda928bd2f7f03ff091c49811a063d8"
+  }
+}

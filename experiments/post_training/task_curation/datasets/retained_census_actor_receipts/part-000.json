@@ -1,0 +1,6 @@
+{
+  "repo": "open-athena/marin-rl-data-atlas-registry",
+  "revision": "bdfad950719d0a7daa245b27e4580f953ed66e36",
+  "path": "experiments/post_training/task_curation/datasets/retained_census_actor_receipts/part-000.json",
+  "sha256": "2cb57d8752121a78a5279c214d7fb388783893dbb18432494718fc76cc249193"
+}

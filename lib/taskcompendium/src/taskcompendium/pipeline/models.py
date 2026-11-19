@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+from finestore.rl.curation import Confidence, Defect, ReferenceStatus
 from pydantic import BaseModel, ConfigDict, Field
 
 from taskcompendium.models import AssistantToolCalls, EnvironmentRequirements, Source, TaskSpec, TextMessage
@@ -152,6 +153,7 @@ class SourceRecipe:
     inputs: Mapping[str, str] = field(default_factory=dict)
     grader_environment: EnvironmentRequirements | None = None
     resource_budget_bytes: int = RESOURCE_BUDGET_BYTES
+    oracle_solutions: bool = False
 
 
 class CheckStatus(StrEnum):
@@ -234,27 +236,6 @@ class Quality(StrEnum):
     UNKNOWN = "unknown"
 
 
-class Confidence(StrEnum):
-    HIGH = "high"
-    MEDIUM = "medium"
-    LOW = "low"
-
-
-class ReferenceStatus(StrEnum):
-    CONSISTENT = "consistent"
-    CONFLICT = "conflict"
-    UNKNOWN = "unknown"
-
-
-class Defect(StrEnum):
-    MISSING_CONTEXT = "missing_context"
-    AMBIGUITY = "ambiguity"
-    WRONG_REFERENCE = "wrong_reference"
-    ANSWER_LEAKAGE = "answer_leakage"
-    MALFORMED = "malformed"
-    RUBRIC_MISMATCH = "rubric_mismatch"
-
-
 class ReviewVerdict(BaseModel):
     """Quality findings; a model's key assessment is advisory evidence."""
 
@@ -293,14 +274,7 @@ class QualityBasis(StrEnum):
     UNREVIEWED = "unreviewed"
     DIRECT_REVIEW = "direct_review"
     INFERRED_FROM_SOURCE = "inferred_from_source"
-    SOURCE_REJECTED = "source_rejected"
     SOURCE_INCOMPLETE = "source_incomplete"
-
-
-@dataclass(frozen=True)
-class FilterPolicy:
-    id: str = "evidence-static-v2"
-    minimum_confidence: Confidence = Confidence.MEDIUM
 
 
 class Decision(BaseModel):

@@ -1,0 +1,11 @@
+# PDBThink coordinate training tasks
+
+This recipe selects the original train split of open-athena/pdbthink-coordinate-tasks@3734406cb97b1702844319f9a5d860cbbf8fe660:91,154 tasks. Validation4,411 and test4,435 remain held out; the released source_group identifiers do not cross those splits. The dataset-level license checker passes Apache-2.0 without an exception.
+
+The model receives the original prompt.json system and user text in one tool-free completion. The original verifier, coordinate_scoring modules, hidden contract and solution files remain private and byte-identical. The grader writes the complete host-captured answer and status, then runs the original tests/test.sh. Its exact-correct reward remains authoritative; partial-credit details are diagnostic. Truncation, provider refusal and recorded tool events score zero even for correct answer text.
+
+The source's pinned Python3.12 image, setup commands and declared allocations are preserved. Original solution/solve.sh is the golden control; every retained task with an original solution must pass that solution control. Full-population oracle failures must be excluded through a new private filtered release before admission. This recipe declares no actor environment, workspace tools or public setup files. The [workspace nop empty-submission negative-control requirement](../../../../../docs/references/task-curation.md) does not apply to this conversation-only task.
+
+Harbor's task-spec-chat agent requires the source's typed tool_free_single protocol and a supplied exact per-prompt native budget manifest. Tokenizer/template/backend identity must match the request. Released cl100k counts are reference metadata, not runtime model budgets. Missing budgets and incompatible context windows fail technically; conversion does not drop tasks to fit a chosen model. See [native tool-free completions](../../../../../lib/taskcompendium/README.md#native-tool-free-completions) for configuration.
+
+The pending recipe adds no selectable catalog population. Its original raw files and final private releases remain separate immutable artifacts. The small G02 fixture in the curation tests retains one training package for converter and original-verifier regressions; the complete dataset is staged regionally.

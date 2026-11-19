@@ -1,72 +1,74 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Native Snowball structural tasks with ordinary assistant prefills."""
+"""Published Snowball structural-closure cohorts at their first retained pins.
 
-import json
-
-from taskcompendium.convert.structure_closure import structure_closure_task
-from taskcompendium.pipeline.controls import reference_reply
-from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
-from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow
-from verifyit.json_objects import unique_object
-
-from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
-
-REPOSITORY = "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data"
-REVISION = "cb728a7636caad3fc6fa6b6ba85a49194d9d69a3"
-
-RUBRIC = """
-These tasks complete an unfinished assistant message. Present its text as an assistant prefill and
-grade the generated continuation. Historical prompt tokens are provenance, not a model requirement.
-
-The native config.json extras.prefix is the supplied assistant prefix, and extras.expected is the required
-completed reference. Check that the reference extends the prefix, preserves required content and closes one
-outer structure. The reference is deliberately part of these reproduction tasks; do not flag its presence
-as accidental answer leakage. The grader scores the first completed outer region, permitting later output.
-
-Keep the native development validation split for evaluation. It was repeatedly used during development;
-it is not an independent final benchmark. Static closure checks and controls do not establish RL efficacy.
+The 2026.11.13.1 retained releases are the declared conversion inputs: the
+original Snowball-Smartie conversion produced them, and the 2026.11.17.1 census
+repair re-measured both populations with every TaskSpec byte identical. The
+2026.11.18.1-r1 re-publications select these pins through retained-release
+receipts; ``import_prebuilt`` admits the pinned published tasks without
+repeating conversion. The original converter lives in
+``taskcompendium.convert.structure_closure`` and the historical review rubric in
+the retained releases' publication evidence.
 """
 
+from finestore.rl.status_taxonomy import DataRestriction
+from taskcompendium.pipeline.models import IntendedUse
 
-def is_structural_row(row: dict, _context: ConversionContext) -> bool:
-    native = json.loads(row["lowered_task_spec"], object_pairs_hook=unique_object)
-    return native["task"]["source"]["dataset"] == "structure-closure"
+from experiments.post_training.task_curation.prebuilt import PrebuiltCohort, import_prebuilt
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
+
+CONVERTER_VERSION = "2026.11.13.1"
+
+RELEASES = {
+    "train": (
+        "open-athena/snowballv01-structure-closure-d9e5f81a-retained-20261113-v1",
+        "0062f4f286d4e4f1568436f5e9c7749fcdd8fa69",
+        57_312,
+        IntendedUse.TRAIN,
+    ),
+    "validation": (
+        "open-athena/snowballv01-structure-closure-validation-abaae0c5-retained-20261113-v1",
+        "787917a504e14d59e2c4532ae7da083f6868c529",
+        238,
+        IntendedUse.EVAL,
+    ),
+}
 
 
-def convert(row: RawRow, _context: ConversionContext) -> NormalizedTask | ImportRejection:
-    return structure_closure_task(row)
-
-
-def sources() -> list[RlDataSource[CurationRecipe]]:
+def sources() -> list[RlDataSource[PrebuiltCohort]]:
     return [
         RlDataSource(
+            pipeline=import_prebuilt,
+            config=PrebuiltCohort(
+                intended_use=intended_use,
+                name=f"snowball-v01-structure-closure-{split}",
+                version=CONVERTER_VERSION,
+                repo=release,
+                revision=revision,
+                expected_rows=rows,
+            ),
             info=SourceInfo(
-                id="SnowballV01:structure-closure" + ("/validation" if intended_use == IntendedUse.EVAL else ""),
-                title=f"Snowball v0.1 structural closure · {split}",
-                origin="SnowballV01",
+                data_restriction=DataRestriction.OPEN,
+                id="OpenAthena:structure-closure" + ("/validation" if intended_use == IntendedUse.EVAL else ""),
+                upstream_dataset="structure-closure",
+                upstream_name="structure-closure",
+                subset="validation" if intended_use == IntendedUse.EVAL else None,
+                build_path="SnowballV01",
+                origin=SourceOrigin.OPENATHENA,
                 family="structural",
                 tags=("rlvr", "single-turn", "structural-closure", "assistant-prefill"),
-                count=count,
-                notes="Text assistant prefills; validation is a reused development panel.",
-            ),
-            config=CurationRecipe(
-                name=f"snowball-v01-structure-closure-{split}",
-                version="2",
-                source=HfSource(
-                    REPOSITORY, REVISION, (f"{split}.parquet",), SourceFormat.PARQUET, select=is_structural_row
+                task_format=TaskFormat.TASKCOMPENDIUM,
+                count=rows,
+                notes=(
+                    "Text assistant prefills; validation is a reused development panel. Declared cohort is the "
+                    f"{split} retained release published from the Snowball-Smartie-RL-2026.10.15.32-Data "
+                    "conversion; the 2026.11.17.1 census repair re-measured the same pin with every TaskSpec "
+                    "byte identical to the original conversion (content-identity receipts), and the "
+                    "2026.11.18.1-r1 retained re-publication selects this pin."
                 ),
-                convert=convert,
-                intended_use=intended_use,
-                rubric=RUBRIC,
-                controls=Controls(golden=reference_reply),
             ),
-            pipeline=process_rows,
         )
-        for split, intended_use, count in (
-            ("train", IntendedUse.TRAIN, 57_364),
-            ("validation", IntendedUse.EVAL, 243),
-        )
+        for split, (release, revision, rows, intended_use) in RELEASES.items()
     ]

@@ -100,14 +100,15 @@ def publish(corpus, tmp_path, item_builder=chat_item):
         client.shutdown()
 
 
-def test_evaluation_publication_retains_duplicate_source_positions_and_detects_changed_files(corpus, tmp_path):
+def test_evaluation_publication_drops_duplicates_and_detects_changed_files(corpus, tmp_path):
     manifest = publish(corpus, tmp_path)
     output = corpus[1]
     cases = list(evaluation_cases(str(output)))
-    assert manifest.rows == 3
-    assert [case.item.source_row for case in cases] == ["rows.jsonl:0", "rows.jsonl:1", "rows.jsonl:2"]
-    assert cases[0].task.context == cases[1].task.context
-    assert cases[0].task.id != cases[1].task.id
+    assert manifest.rows == 2
+    assert len(cases) == 2
+    assert cases[0].item.source_row in {"rows.jsonl:0", "rows.jsonl:1"}
+    assert cases[1].item.source_row == "rows.jsonl:2"
+    assert cases[0].task.context != cases[1].task.context
     assert all("eval" in case.task.tags for case in cases)
     (output / manifest.shards[0].items.path).write_bytes(b"changed after publication")
     with pytest.raises(ValueError, match="changed after publication"):
@@ -126,8 +127,10 @@ def test_evaluation_publication_withholds_release_for_changed_population_or_prom
         publish(corpus, tmp_path)
     assert not (output / MANIFEST_FILENAME).exists()
     (source / "rows.jsonl").write_bytes(original)
-    assert publish(corpus, tmp_path).rows == 3
-    assert len(list(evaluation_cases(str(output)))) == 3
+    output = output.with_name("retry")
+    corpus = (source, output, corpus[2], corpus[3])
+    assert publish(corpus, tmp_path).rows == 2
+    assert len(list(evaluation_cases(str(output)))) == 2
 
 
 def test_evaluation_publication_requires_reference_text_for_reference_budget(corpus, tmp_path):
@@ -138,11 +141,13 @@ def test_evaluation_publication_requires_reference_text_for_reference_budget(cor
     with pytest.raises((ValueError, ZephyrWorkerError), match="requires reference text"):
         publish((source, output, recipe, selected), tmp_path)
     assert not (output / MANIFEST_FILENAME).exists()
-    assert publish(corpus, tmp_path).rows == 3
-    assert len(list(evaluation_cases(str(output)))) == 3
+    output = output.with_name("retry")
+    corpus = (source, output, recipe, protocol)
+    assert publish(corpus, tmp_path).rows == 2
+    assert len(list(evaluation_cases(str(output)))) == 2
 
 
-def test_evaluation_publication_retries_preempted_outputs_without_mixing_stale_shards(corpus, tmp_path):
+def test_evaluation_publication_requires_new_version_and_preserves_preempted_outputs(corpus, tmp_path):
     output = corpus[1]
     for directory in ("normalize", "evaluation"):
         path = output / directory
@@ -151,12 +156,17 @@ def test_evaluation_publication_retries_preempted_outputs_without_mixing_stale_s
     (output / "manifest.json").write_text("incomplete conversion manifest")
     (output / "protocol.json").write_text("incomplete protocol")
     (output / "worker.log").write_text("executor evidence")
+    with pytest.raises(FileExistsError):
+        publish(corpus, tmp_path)
+    prior = output
+    output = output.with_name("retry")
+    corpus = (corpus[0], output, corpus[2], corpus[3])
     manifest = publish(corpus, tmp_path)
-    assert manifest.rows == 3
-    assert len(list(evaluation_cases(str(output)))) == 3
-    assert (output / "worker.log").read_text() == "executor evidence"
-    assert not (output / "normalize" / "stale.parquet").exists()
-    assert not (output / "evaluation" / "stale.parquet").exists()
+    assert manifest.rows == 2
+    assert len(list(evaluation_cases(str(output)))) == 2
+    assert (prior / "worker.log").read_text() == "executor evidence"
+    assert (prior / "normalize" / "stale.parquet").read_bytes() == b"preempted partial shard"
+    assert (prior / "evaluation" / "stale.parquet").read_bytes() == b"preempted partial shard"
     with pytest.raises(FileExistsError):
         publish(corpus, tmp_path)
 
@@ -193,7 +203,6 @@ def test_evaluation_metadata_scan_and_selected_rows_avoid_unselected_task_decodi
     marker.write_text(json.dumps(committed))
     assert [item.source_row for item in evaluation_items(str(output))] == [
         "rows.jsonl:0",
-        "rows.jsonl:1",
         "rows.jsonl:2",
     ]
     selected = list(evaluation_cases(str(output), source_rows={"rows.jsonl:2"}))
@@ -223,15 +232,16 @@ def test_raw_publication_withholds_release_for_multimessage_task(corpus, tmp_pat
     with pytest.raises((ValueError, ZephyrWorkerError), match="requires one canonical user text message"):
         publish((source, output, replace(recipe, convert=convert_multimessage), raw_protocol), tmp_path, raw_item)
     assert not (output / MANIFEST_FILENAME).exists()
-    assert publish((source, output, recipe, raw_protocol), tmp_path, raw_item).rows == 3
-    assert len(list(evaluation_cases(str(output)))) == 3
+    output = output.with_name("retry")
+    assert publish((source, output, recipe, raw_protocol), tmp_path, raw_item).rows == 2
+    assert len(list(evaluation_cases(str(output)))) == 2
 
 
 def test_raw_reader_rejects_committed_multimessage_task(corpus, tmp_path):
     source, output, recipe, protocol = corpus
     raw_protocol = protocol.model_copy(update={"operation": OperationKind.TEXT_GENERATION})
     manifest = publish((source, output, recipe, raw_protocol), tmp_path, raw_item)
-    assert len(list(evaluation_cases(str(output)))) == 3
+    assert len(list(evaluation_cases(str(output)))) == 2
     shard = manifest.shards[0]
     file = output / shard.tasks.path
     table = pq.read_table(file)
@@ -264,7 +274,6 @@ def test_task_annotation_query_uses_projected_metadata_without_payload_decoding(
     marker.write_text(json.dumps(committed))
     assert [row.source_row for row in task_rows(str(output), tags=("eval",), labels={"color": "red"})] == [
         "rows.jsonl:0",
-        "rows.jsonl:1",
         "rows.jsonl:2",
     ]
     assert list(task_rows(str(output), labels={"color": "blue"})) == []

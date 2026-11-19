@@ -24,6 +24,7 @@ class _EnvEntry(NamedTuple):
 
 # Optional Shellbox backends load only when selected.
 _ENVIRONMENT_REGISTRY: dict[EnvironmentType, _EnvEntry] = {
+    EnvironmentType.IRIS_SANDBOX: _EnvEntry("harbor.environments.iris_sandbox", "IrisSandboxEnvironment"),
     EnvironmentType.LOCAL: _EnvEntry("harbor.environments.local", "LocalEnvironment"),
     EnvironmentType.DAYTONA: _EnvEntry(
         "harbor.environments.daytona", "DaytonaEnvironment"
@@ -109,6 +110,7 @@ class EnvironmentFactory:
         logger: logging.Logger | None = None,
         host_capabilities: HostCapabilities = HostCapabilities(),
         guest_environment: Mapping[str, str] = {},
+        trial_attempt_timeout_sec: float | None = None,
         **kwargs,
     ) -> BaseEnvironment:
         """Create the selected Shellbox adapter with its resource policy."""
@@ -123,6 +125,8 @@ class EnvironmentFactory:
             **config.kwargs,
             **kwargs,
         }
+        if config.type is EnvironmentType.DAYTONA:
+            env_constructor_kwargs["trial_attempt_timeout_sec"] = trial_attempt_timeout_sec
         if config.cpu_enforcement_policy != ResourceMode.AUTO:
             env_constructor_kwargs["cpu_enforcement_policy"] = (
                 config.cpu_enforcement_policy

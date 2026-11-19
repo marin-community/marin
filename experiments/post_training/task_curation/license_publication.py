@@ -1,0 +1,272 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Preserve a checked upstream dataset grant in new private publication cards."""
+
+import hashlib
+import json
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from urllib.parse import quote, urlsplit
+
+import yaml
+from finestore.rl.licenses import (
+    LicenseCheckVerdict,
+    LicenseDecision,
+    LicenseDecisionKind,
+    LicenseEvidence,
+    LicenseReceipt,
+    LicenseVerdict,
+    check_license,
+    license_verdict,
+    require_license,
+)
+from huggingface_hub import DatasetCard, HfApi, hf_hub_download
+from huggingface_hub.hf_api import RepoFile
+
+from experiments.post_training.task_curation.license_binding import (
+    LICENSE_RECEIPT_INDEX,
+    read_license_receipts,
+)
+from experiments.post_training.task_curation.license_resolution import (
+    LICENSE_FILENAME,
+    MAX_EVIDENCE_BYTES,
+    LicenseTarget,
+    _fetch,
+    resolve_license,
+)
+from infra.marina.apps.rl_data_catalog.server.licensing import require_unbanned, source_license_ban
+
+NOTICE_FILENAME = re.compile(r"^(?:notice|attribution|copyright)(?:[._-].*)?$", re.IGNORECASE)
+LICENSE_FIELDS = ("license", "license_name", "license_link")
+
+
+@dataclass(frozen=True)
+class LicensePublication:
+    metadata: dict
+    notice_files: tuple[Path, ...]
+    attribution: str
+
+
+def _package_wheel_url(receipt: LicenseReceipt, evidence: LicenseEvidence) -> tuple[str, bytes]:
+    """Locate the checked wheel's release URL inside the pinned package metadata."""
+    content = _fetch(evidence.url)
+    if hashlib.sha256(content).hexdigest() != evidence.sha256:
+        raise ValueError(f"Checked package metadata changed since its license check: {evidence.url}")
+    document = json.loads(content)
+    release = next(
+        (
+            item
+            for item in document["urls"]
+            if item["filename"] == receipt.dataset_id and item["digests"]["sha256"] == receipt.revision
+        ),
+        None,
+    )
+    if release is None:
+        raise ValueError(f"Package metadata does not bind the checked wheel: {receipt.dataset_id}")
+    url = release["url"]
+    parts = urlsplit(url)
+    if parts.hostname != "files.pythonhosted.org" or not parts.path.endswith(".whl"):
+        raise ValueError(f"Checked package release is not a pythonhosted wheel: {url}")
+    return url, content
+
+
+def _prepare_package_publication(receipt: LicenseReceipt, evidence: LicenseEvidence, output: Path) -> LicensePublication:
+    """Carry a checked package grant into the release card without reinterpreting it.
+
+    A package grant's checked evidence is the pinned PyPI metadata document bound to the
+    wheel SHA-256. The release card declares the same package pin, so the new pin's
+    exact check resolves the identical grant; the checked document is preserved beside
+    the card.
+    """
+    identifiers = sorted(set(evidence.license_ids) - {"missing"})
+    if license_verdict(tuple(identifiers)) is not LicenseVerdict.ALLOWED:
+        raise ValueError("Checked package grant supplies no publishable permissive license identifier")
+    wheel_url, content = _package_wheel_url(receipt, evidence)
+    # HF's card schema accepts its own lowercase identifier spellings.
+    identifiers = [identifier.lower() for identifier in identifiers]
+    metadata = {
+        "license": identifiers[0] if len(identifiers) == 1 else identifiers,
+        "license_source": {"dataset_id": receipt.dataset_id, "revision": receipt.revision, "url": wheel_url},
+        "license_evidence_urls": [evidence.url],
+        "license_input": {"dataset_id": receipt.dataset_id, "revision": receipt.revision},
+    }
+    output.mkdir(parents=True, exist_ok=True)
+    destination = output / "UPSTREAM_PACKAGE_METADATA.json"
+    destination.write_bytes(content)
+    provenance = [{"filename": destination.name, "source_url": evidence.url, "sha256": evidence.sha256}]
+    record = output / "publication-provenance.json"
+    record.write_text(
+        json.dumps({"metadata": metadata, "documents": provenance, "receipt": receipt.model_dump(mode="json")}, indent=2)
+        + "\n"
+    )
+    attribution = (
+        f"License source: [{receipt.dataset_id}@{receipt.revision}]({wheel_url}). "
+        "The checked package metadata is preserved in the accompanying upstream file.\n"
+    )
+    return LicensePublication(metadata, (destination, record), attribution)
+
+
+def prepare_license_publication(receipt: LicenseReceipt, output: Path, *, use: str) -> LicensePublication:
+    """Archive the pinned grant and notices after validating the exact input receipt."""
+    require_license(receipt, receipt.source_id, receipt.dataset_id, receipt.revision, use, ban=None)
+    require_unbanned(receipt.source_id, receipt.dataset_id, receipt)
+    package_evidence = [
+        item
+        for item in receipt.evidence
+        if item.kind == "package_metadata" and urlsplit(item.url).hostname == "pypi.org"
+    ]
+    if receipt.resolved_source is None and package_evidence:
+        if len(package_evidence) != 1:
+            raise ValueError("Package grants require exactly one checked package metadata document")
+        return _prepare_package_publication(receipt, package_evidence[0], output)
+    source = receipt.resolved_source
+    dataset_id = source.dataset_id if source is not None else receipt.dataset_id
+    revision = source.revision if source is not None else receipt.revision
+    url = source.url if source is not None else f"https://huggingface.co/datasets/{dataset_id}/tree/{revision}"
+    prefix = f"https://huggingface.co/datasets/{dataset_id}/resolve/{revision}/"
+    source_evidence = [
+        item for item in receipt.evidence if item.url.startswith(prefix) and item.kind != "task_license_file"
+    ]
+    evidence_urls = {item.url for item in source_evidence}
+    if not source_evidence:
+        raise ValueError("Publication has no checked evidence for its upstream license source")
+    output.mkdir(parents=True, exist_ok=True)
+    metadata, notices, provenance = {}, [], []
+    for entry in HfApi().list_repo_tree(dataset_id, repo_type="dataset", revision=revision, recursive=False):
+        if not isinstance(entry, RepoFile):
+            continue
+        filename = entry.path
+        if (
+            filename != "README.md"
+            and not LICENSE_FILENAME.fullmatch(filename)
+            and not NOTICE_FILENAME.fullmatch(filename)
+        ):
+            continue
+        if entry.size > MAX_EVIDENCE_BYTES:
+            raise ValueError(f"Upstream license metadata exceeds the bounded read: {filename}")
+        downloaded = Path(hf_hub_download(dataset_id, filename, repo_type="dataset", revision=revision))
+        content = downloaded.read_bytes()
+        digest = hashlib.sha256(content).hexdigest()
+        evidence_url = prefix + quote(filename, safe="/")
+        if any(item.sha256 != digest for item in source_evidence if item.url == evidence_url):
+            raise ValueError(f"Upstream license metadata differs from its checked receipt: {filename}")
+        destination = output / ("UPSTREAM_README.md" if filename == "README.md" else filename)
+        if destination.exists() and destination.read_bytes() != content:
+            raise ValueError(f"Publication notice destination already contains different bytes: {destination}")
+        destination.write_bytes(content)
+        notices.append(destination)
+        provenance.append({"filename": destination.name, "source_url": evidence_url, "sha256": digest})
+        if filename == "README.md":
+            card = DatasetCard(content.decode()).data.to_dict()
+            metadata.update({field: card[field] for field in LICENSE_FIELDS if field in card})
+    observed = {item["source_url"] for item in provenance}
+    if evidence_urls - observed:
+        raise ValueError("Publication did not preserve every checked upstream license document")
+    check = check_license(receipt)
+    if check.verdict is LicenseCheckVerdict.PASS:
+        # The published card states the license the checker verified at the resolved
+        # source, not the upstream card's own declared field, which stays archived.
+        citation = next(
+            (item for item in source_evidence if license_verdict(tuple(item.license_ids)) is LicenseVerdict.ALLOWED),
+            None,
+        )
+        if citation is None:
+            raise ValueError("Publication has no checked permissive license evidence for its resolved source")
+        identifiers = sorted(set(citation.license_ids) - {"missing"})
+        metadata["license"] = identifiers[0] if len(identifiers) == 1 else identifiers
+    elif "license" not in metadata:
+        identifiers = sorted({identifier for item in source_evidence for identifier in item.license_ids} - {"missing"})
+        if license_verdict(tuple(identifiers)) is not LicenseVerdict.ALLOWED:
+            raise ValueError("Checked grant supplies no publishable permissive license identifier")
+        metadata["license"] = identifiers[0] if len(identifiers) == 1 else identifiers
+    # HF's card schema accepts its own lowercase identifier spellings.
+    if isinstance(metadata.get("license"), str):
+        metadata["license"] = metadata["license"].lower()
+    elif isinstance(metadata.get("license"), list):
+        metadata["license"] = [str(item).lower() for item in metadata["license"]]
+    metadata["license_source"] = {"dataset_id": dataset_id, "revision": revision, "url": url}
+    metadata["license_evidence_urls"] = sorted(
+        {
+            item.url
+            for item in source_evidence
+            if item.license_ids and license_verdict(tuple(item.license_ids)) is LicenseVerdict.ALLOWED
+        }
+    )
+    if not metadata["license_evidence_urls"]:
+        raise ValueError("Publication must retain pinned evidence URLs for its dataset grant")
+    metadata["license_input"] = {"dataset_id": receipt.dataset_id, "revision": receipt.revision}
+    record = output / "publication-provenance.json"
+    record.write_text(
+        json.dumps({"metadata": metadata, "documents": provenance, "receipt": receipt.model_dump(mode="json")}, indent=2)
+        + "\n"
+    )
+    notices.append(record)
+    attribution = (
+        f"License source: [{dataset_id}@{revision}]({url}). "
+        "Original notices and attribution are preserved in the accompanying upstream files.\n"
+    )
+    return LicensePublication(metadata, tuple(notices), attribution)
+
+
+def licensed_dataset_card(body: str, publication: LicensePublication, *, pretty_name: str) -> str:
+    metadata = {"pretty_name": pretty_name, **publication.metadata}
+    return (
+        "---\n"
+        + yaml.safe_dump(metadata, sort_keys=False)
+        + "---\n\n"
+        + body.rstrip()
+        + "\n\n"
+        + publication.attribution
+    )
+
+
+def recorded_lineage_exception(source_id: str, dataset_id: str, revision: str, use: str) -> LicenseDecision | None:
+    """The user-cleared parent exception bound to this exact pin in the receipts registry.
+
+    A lineage receipt binds one source identity at one resolved upstream pin; its typed
+    exception decision records the user's clearance for a scoped use. Only that exact
+    combination rescues a card-check escalation: the receipt must sit at the published
+    pin, carry the resolved upstream, and hold an approved exception for this use.
+    """
+    receipt = read_license_receipts(LICENSE_RECEIPT_INDEX).get(source_id)
+    if receipt is None or (receipt.dataset_id, receipt.revision) != (dataset_id, revision):
+        return None
+    if receipt.resolved_source is None:
+        return None
+    return next(
+        (
+            decision
+            for decision in receipt.decisions
+            if decision.kind is LicenseDecisionKind.EXCEPTION and decision.approved and use in decision.scope
+        ),
+        None,
+    )
+
+
+def check_publication(source_id: str, dataset_id: str, revision: str, use: str) -> dict:
+    """Require the new private pin's own checker result before returning publication evidence.
+
+    A card-check escalation stays blocked unless the receipts registry binds this exact
+    repo@revision to a user-cleared parent lineage exception covering the publication's
+    use; the recorded decision then carries the pass and stays in the evidence. Fail
+    verdicts never clear: a restricted or banned pin fails its own publication.
+    """
+    target = LicenseTarget(
+        source_id, dataset_id, revision, f"https://huggingface.co/datasets/{dataset_id}/tree/{revision}"
+    )
+    receipt = resolve_license(target)
+    result = check_license(receipt, source_license_ban(source_id, dataset_id, receipt))
+    evidence = {**result.model_dump(mode="json"), "receipt": receipt.model_dump(mode="json")}
+    if result.verdict is LicenseCheckVerdict.PASS:
+        return evidence
+    if result.verdict is LicenseCheckVerdict.ESCALATE:
+        exception = recorded_lineage_exception(source_id, dataset_id, revision, use)
+        if exception is not None:
+            return {
+                **evidence,
+                "verdict": LicenseCheckVerdict.PASS.value,
+                "lineage_exception": exception.model_dump(mode="json"),
+            }
+    raise ValueError(f"Published pin failed its exact-pin license check: {json.dumps(evidence)}")

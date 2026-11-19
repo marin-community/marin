@@ -16,9 +16,18 @@ uv run pytest <test path>
 uv run --no-project infra/ci/run_tests.py
 ```
 
+Rigging, Iris, root, and experiment tests share
+`rigging.pytest_config.hermetic_cluster_config` through their `conftest.py`
+files. It excludes per-user cluster-config overrides and clears discovery
+caches so storage-layout assertions use the checked-in configuration.
+
 The affected-test runner checks Harbor's standalone lock and runs its offline
 runtime suite when vendored Harbor or its local Rigging or FineStore dependencies
 change. Run those checks directly with `uv run --no-project infra/ci/run_harbor_tests.py`.
+That entry point also runs curation census and rebuild tests in the Marin workspace
+with the local Harbor package and Daytona SDK available; their production imports
+require both environments. Snapshot identity and acquisition tests remain in the
+standalone Harbor environment.
 
 The repository defaults exclude `slow`, `integration`, `data_integration`,
 `cluster`, `requires_cluster`, `docker`, and `manual` tests. Do not pass a

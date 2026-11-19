@@ -174,6 +174,11 @@ uv run marina journey evaldash
 ```
 
 `dev` uses disposable Postgres and explicitly installs built source packages.
+Local Postgres containers and their anonymous volumes are removed on normal
+completion, failure, or SIGTERM to the owning process. Cleanup errors fail the
+command. `journey` owns the database outside its pytest child, so abrupt child
+exit still triggers removal. The `marina.local-postgres.owner-pid` Docker label
+records ownership for diagnosis; cleanup uses the exact container name.
 Production `serve` has no source-directory option and never installs packages.
 Journeys explicitly install packages into their local test database as well.
 

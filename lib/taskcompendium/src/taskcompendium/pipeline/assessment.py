@@ -13,7 +13,7 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
-from finestore.rl.curation import Cohort, ModelReference, Verdict
+from finestore.rl.curation import Cohort, Confidence, Defect, ModelReference, ReferenceStatus, Verdict
 from finestore.schema import arrow_schema
 from pydantic import BaseModel, ConfigDict, Field
 from rigging.filesystem.storage_path import StoragePath
@@ -61,6 +61,10 @@ class TaskJudgment(BaseModel):
     verdict: Verdict
     explanation: str = Field(min_length=1)
     evidence_ids: tuple[str, ...] = Field(min_length=1)
+    # Optional so older cached judgments stay valid; fresh judgments record all three.
+    confidence: Confidence | None = None
+    reference_status: ReferenceStatus | None = None
+    defects: tuple[Defect, ...] = ()
 
 
 @dataclass(frozen=True)

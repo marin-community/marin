@@ -33,6 +33,30 @@ dataset (or dataset family), built with the lazy data builders in
 - `__init__.py` stays docstring-only (no re-exports); import catalogs directly, e.g.
   `from experiments.datasets.nemotron import nemotron_datasets`.
 
+## RL Source Status
+
+Atlas source status lives in code, never in hand edits. Follow
+[task curation: source status](../docs/references/task-curation.md#source-status-and-exclusion-taxonomy).
+
+- Each source has one `SourceStatus` (`Pending`, `Available`, `Excluded`,
+  `Deprecated`) from `finestore.rl.status_taxonomy`.
+- Excluding a source requires at least one `ExclusionReason` with typed
+  `ExclusionEvidence`. Record user policy exclusions in
+  `experiments/post_training/task_curation/exclusion_registry.py`, with the ruling as
+  evidence, and known-but-rejected upstreams in `metadata_exclusions.py`. Never keep a
+  private exclusion or hold list.
+- `Deprecated` means trainable but not recommended. A source that is not trainable is
+  `Excluded`.
+- A source becomes `Available` only when its receipts clear every claimed reason.
+- `UNSPECIFIED_LEGACY` is allowed only on sources in `NEEDS_RULING_SOURCES`.
+- After changing the pending queue, metadata exclusions, or reason explanations,
+  regenerate and commit the status extras:
+
+  ```bash
+  uv run python -m experiments.post_training.task_curation.source_status \
+    --output infra/marina/apps/rl_data_catalog/dist/measurements/source-status-extras.json
+  ```
+
 ## Artifact Path Rules
 
 - Do not hardcode `gs://...` paths in experiment configs unless there is no viable alternative.

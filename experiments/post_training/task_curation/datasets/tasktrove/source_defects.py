@@ -134,6 +134,14 @@ SOURCE_DEFECTS: dict[tuple[str, str], str] = {
         "taco-4675",
     ): "bundled expected output disagrees with the bundled golden solution",
     (
+        "laion__exp_rpt_taco-v2",
+        "taco-3410",
+    ): "golden program indexes beyond its Bell-number array at the allowed N=1000 boundary",
+    (
+        "laion__exp_rpt_taco-v2",
+        "taco-4434",
+    ): "displayed functional equation contradicts the examples and the supplied solution",
+    (
         "laion__nemotron-gym-competitive-coding-v2",
         "comp-coding-dd2a13b32896.tar.gz",
     ): "problem permits any valid witness but has no special judge",

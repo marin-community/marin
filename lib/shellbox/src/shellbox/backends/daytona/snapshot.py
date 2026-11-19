@@ -13,10 +13,12 @@ import hashlib
 import json
 import math
 import re
+import shlex
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +26,6 @@ from daytona import (
     AsyncDaytona,
     CreateSnapshotParams,
     DaytonaConflictError,
-    DaytonaError,
     DaytonaNotFoundError,
     Image,
     Resources,
@@ -33,12 +34,16 @@ from daytona.common.snapshot import Snapshot
 from daytona_api_client_async import SnapshotState
 from rigging.timing import ExponentialBackoff
 
+from shellbox.backends.daytona.provider import ProviderWaitPolicy, retry_provider_call
 from shellbox.image import DockerfileSource, RegistryImage, image_source_key
 from shellbox.machine import MachineSpec, UnsupportedMachineSpec
 
 SNAPSHOT_PREFIX = "shellbox-"
 SNAPSHOT_STALE_AFTER = timedelta(hours=1)
 SNAPSHOT_PAGE_SIZE = 100
+DOCKERFILE_WORD = re.compile(r"""(?:<<[ \t]*|[^\s'"\\]|\\.|'[^']*'|"(?:\\.|[^"\\])*")+""")
+HEREDOC_WORD = re.compile(r"^\d*<<(-?)\s*([^<]*)$")
+PARSER_DIRECTIVE = re.compile(r"^#\s*(syntax|escape|check)\s*=\s*(\S+)\s*$", re.IGNORECASE)
 # Gateway and availability statuses a Daytona API request may return transiently.
 TRANSIENT_DAYTONA_STATUS = frozenset({502, 503, 504})
 FAILED_SNAPSHOT_STATES = frozenset({SnapshotState.ERROR, SnapshotState.BUILD_FAILED, SnapshotState.INACTIVE})
@@ -106,20 +111,67 @@ class SnapshotPurgeReport:
     referenced: tuple[str, ...]
 
 
+def _dockerfile_has_add(contents: str) -> bool:
+    """Inspect instruction headers while leaving heredoc payloads uninterpreted."""
+    lines = iter(contents.splitlines())
+    escape = "\\"
+    directives = True
+    for line in lines:
+        stripped = line.lstrip()
+        if not stripped or stripped.startswith("#"):
+            directive = PARSER_DIRECTIVE.fullmatch(stripped) if directives else None
+            if directive and directive[1].lower() == "escape":
+                if directive[2] not in {"\\", "`"}:
+                    raise UnsupportedMachineSpec("Invalid Dockerfile escape directive")
+                escape = directive[2]
+            directives = directives and directive is not None
+            continue
+        directives = False
+        header = stripped
+        while True:
+            trimmed = header.rstrip(" \t")
+            continued = trimmed.endswith(escape) and not trimmed.endswith(escape * 2)
+            if not continued:
+                break
+            header = trimmed[:-1]
+            for continuation in lines:
+                if continuation.strip() and not continuation.lstrip().startswith("#"):
+                    header += continuation
+                    break
+            else:
+                raise UnsupportedMachineSpec("Unterminated Dockerfile continuation")
+        command = header.split(maxsplit=1)[0].upper()
+        if command == "ADD":
+            return True
+        if command not in {"RUN", "COPY", "ONBUILD"}:
+            continue
+        if command == "ONBUILD" and header.split(maxsplit=2)[1].upper() not in {"RUN", "COPY"}:
+            continue
+        # Preserve quotes when identifying << words: an echo of "<<EOF" is not a heredoc.
+        for word in DOCKERFILE_WORD.findall(header):
+            marker = HEREDOC_WORD.fullmatch(word)
+            if marker is None or not marker[2]:
+                continue
+            (delimiter,) = shlex.split(marker[2])
+            for body in lines:
+                candidate = body.lstrip("\t") if marker[1] else body
+                if candidate == delimiter:
+                    break
+            else:
+                raise UnsupportedMachineSpec("Unterminated Dockerfile heredoc")
+    return False
+
+
 def validate_source(
     source: RegistryImage | DockerfileSource,
 ) -> RegistryImage | DockerfileSource:
-    """Reject Daytona build inputs the provider cannot use."""
+    """Reject Daytona build inputs it cannot snapshot."""
     if isinstance(source, RegistryImage):
         return source
     source = DockerfileSource(source.context.resolve(), source.dockerfile.resolve())
     if source.dockerfile.parent != source.context:
         raise UnsupportedMachineSpec("Daytona requires the Dockerfile at the build context root")
-    if re.search(
-        r"^\s*ADD(?:\s|$)",
-        source.dockerfile.read_text(),
-        re.IGNORECASE | re.MULTILINE,
-    ):
+    if _dockerfile_has_add(source.dockerfile.read_text()):
         raise UnsupportedMachineSpec("Daytona Dockerfiles with ADD require a prebuilt registry image")
     return source
 
@@ -144,13 +196,8 @@ def snapshot_name(source: RegistryImage | DockerfileSource, resources: Resources
     return f"{SNAPSHOT_PREFIX}{hashlib.sha256(identity.encode()).hexdigest()[:40]}"
 
 
-def daytona_image(source: RegistryImage | DockerfileSource) -> str | Image:
-    """Convert a validated source to the image argument Daytona builds from."""
-    return source.reference if isinstance(source, RegistryImage) else Image.from_dockerfile(source.dockerfile)
-
-
 def snapshot_request_for_spec(spec: MachineSpec) -> SnapshotRequest:
-    """Derive a machine spec's validated image source and provider resources."""
+    """Derive the snapshot a machine spec will create."""
     source = spec.source
     if not isinstance(source, (RegistryImage, DockerfileSource)):
         raise UnsupportedMachineSpec("Daytona requires a registry image or Docker build context")
@@ -165,39 +212,56 @@ def snapshot_request_for_spec(spec: MachineSpec) -> SnapshotRequest:
     )
 
 
-async def _snapshot_metadata(client: AsyncDaytona, name: str) -> Snapshot:
-    """Retry transient snapshot metadata reads within the caller's deadline."""
-    backoff = ExponentialBackoff(initial=1, maximum=2, factor=2, jitter=0)
-    attempts = 0
-    while True:
-        try:
-            return await client.snapshot.get(name)
-        except DaytonaError as error:
-            attempts += 1
-            if error.status_code not in TRANSIENT_DAYTONA_STATUS or attempts == 3:
-                raise
-            await asyncio.sleep(backoff.next_interval())
+async def _snapshot_metadata(
+    client: AsyncDaytona, name: str, deadline: float | None, wait_policy: ProviderWaitPolicy
+) -> Snapshot:
+    return await retry_provider_call(
+        "snapshot.get", partial(client.snapshot.get, name), deadline=deadline, wait_policy=wait_policy
+    )
 
 
-async def ensure_snapshot(client: AsyncDaytona, request: SnapshotRequest) -> str:
-    """Create or await the active snapshot identified by ``request``."""
+def daytona_image(source: RegistryImage | DockerfileSource) -> str | Image:
+    """Convert a validated source to the image argument Daytona builds from."""
+    return source.reference if isinstance(source, RegistryImage) else Image.from_dockerfile(source.dockerfile)
+
+
+async def _resolve_snapshot(client: AsyncDaytona, request: SnapshotRequest) -> Snapshot:
     name = request.name
     try:
-        snapshot = await _snapshot_metadata(client, name)
+        return await client.snapshot.get(name)
     except DaytonaNotFoundError:
+        image = (
+            request.source.reference
+            if isinstance(request.source, RegistryImage)
+            else Image.from_dockerfile(request.source.dockerfile)
+        )
         try:
-            snapshot = await client.snapshot.create(
-                CreateSnapshotParams(name=name, image=daytona_image(request.source), resources=request.resources)
+            return await client.snapshot.create(
+                CreateSnapshotParams(name=name, image=image, resources=request.resources)
             )
         except DaytonaConflictError:
             # Another rollout can create this image through a separate client.
-            snapshot = await _snapshot_metadata(client, name)
+            return await client.snapshot.get(name)
+
+
+async def ensure_snapshot(
+    client: AsyncDaytona,
+    request: SnapshotRequest,
+    *,
+    deadline: float | None = None,
+    wait_policy: ProviderWaitPolicy = ProviderWaitPolicy.PHASE,
+) -> str:
+    """Create or recover the active snapshot under its deterministic name."""
+    name = request.name
+    snapshot = await retry_provider_call(
+        "snapshot.resolve", partial(_resolve_snapshot, client, request), deadline=deadline, wait_policy=wait_policy
+    )
     backoff = ExponentialBackoff(initial=1, maximum=10)
     while snapshot.state != SnapshotState.ACTIVE:
         if snapshot.state in FAILED_SNAPSHOT_STATES:
             raise RuntimeError(f"Daytona snapshot {name} is {snapshot.state}: {snapshot.error_reason}")
         await asyncio.sleep(backoff.next_interval())
-        snapshot = await _snapshot_metadata(client, name)
+        snapshot = await _snapshot_metadata(client, name, deadline, wait_policy)
     return name
 
 
@@ -206,7 +270,9 @@ async def list_snapshots(client: AsyncDaytona) -> list[Snapshot]:
     snapshots: list[Snapshot] = []
     page = 1
     while True:
-        result = await client.snapshot.list(page=page, limit=SNAPSHOT_PAGE_SIZE)
+        result = await retry_provider_call(
+            "snapshot.list", partial(client.snapshot.list, page=page, limit=SNAPSHOT_PAGE_SIZE)
+        )
         snapshots.extend(result.items)
         if not result.items or page >= max(result.total_pages, 1):
             return snapshots
@@ -313,7 +379,7 @@ async def purge_stale_snapshots(
             referenced_kept.append(name)
             continue
         try:
-            current = await _snapshot_metadata(client, name)
+            current = await _snapshot_metadata(client, name, None, ProviderWaitPolicy.PHASE)
         except DaytonaNotFoundError:
             continue
         current_class = classify_snapshot(current, now=observed_at, minimum_idle=minimum_idle)

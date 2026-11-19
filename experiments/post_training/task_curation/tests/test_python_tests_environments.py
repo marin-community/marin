@@ -3,6 +3,7 @@
 
 """Python-test sources retain their archived agent environments and separate graders."""
 
+import os
 import subprocess
 
 import pytest
@@ -29,23 +30,28 @@ def python_archive(dockerfile: bytes) -> dict:
 @pytest.mark.parametrize("source", SOURCES, ids=lambda source: source.name)
 def test_python_test_sources_keep_recipe_steps_and_runtime_variables(source, tmp_path):
     recipe = source.config
-    workdir = tmp_path / "workspace"
     task = converted_task(
         recipe,
         python_archive(
-            (
-                "FROM python:3.11-slim-bookworm\n"
-                "ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1\n"
-                f"WORKDIR {workdir}\n"
-                'RUN mkdir -p dependency && printf "%s:%s" "$PYTHONDONTWRITEBYTECODE" '
-                '"$PYTHONUNBUFFERED" > dependency/runtime.txt\n'
-            ).encode()
+            b"FROM python:3.11-slim-bookworm\n"
+            b"ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1\n"
+            b"RUN pip install --no-cache-dir pytest==8.3.5 numpy==2.1.3\n"
+            b"WORKDIR /app\n"
         ),
     )
     environment = task.environment_requirements
     assert environment.docker_image == PINNED_BASES["python:3.11-slim-bookworm"]
-    subprocess.run(["sh", "-c", " && ".join(environment.setup_commands)], check=True)
-    assert (workdir / "dependency/runtime.txt").read_text() == "1:1"
+    assert environment.working_directory == "/app"
+    capture = tmp_path / "pip-call.txt"
+    pip = tmp_path / "pip"
+    pip.write_text('#!/bin/sh\nprintf "%s\\n" "$PYTHONDONTWRITEBYTECODE|$PYTHONUNBUFFERED|$PWD|$*" > "$PIP_CAPTURE"\n')
+    pip.chmod(0o755)
+    subprocess.run(
+        ["sh", "-c", environment.setup_commands[0]],
+        env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}", "PIP_CAPTURE": str(capture)},
+        check=True,
+    )
+    assert capture.read_text().strip() == "1|1|/|install --no-cache-dir pytest==8.3.5 numpy==2.1.3"
     assert environment.environment_variables == {"PYTHONDONTWRITEBYTECODE": "1", "PYTHONUNBUFFERED": "1"}
 
 

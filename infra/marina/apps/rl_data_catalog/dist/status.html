@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Status · RL Data Atlas</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="common.js" defer></script><script src="status.js" defer></script>
+</head>
+<body>
+<header class="masthead"><a class="brand" href="./"><span class="brandmark">a<span>•</span></span><span>open athena <b>/</b> research tools</span></a><span class="private-label">MARINA APP <span class="live-dot"></span> CURATED CATALOG</span></header>
+<main>
+  <section class="hero">
+    <div><p class="eyebrow">POST-TRAINING / SOURCE STATUS</p><h1 class="hero-title">Source status<span>.</span></h1></div>
+    <div class="hero-actions"><a class="secondary" href="guide.html#status">How status works</a></div>
+  </section>
+  <nav class="atlas-tabs" aria-label="Atlas views"></nav>
+  <style>
+    .status-metrics { display:flex; gap:.5rem; flex-wrap:wrap; margin:0 0 .75rem; }
+    /* Filter chips need house colors: the UA default measures 5.3:1 in the dark scheme. */
+    .status-metrics button { cursor:pointer; background:var(--soft); color:var(--muted); border:0; }
+    /* The inner .table-scroller owns scrolling (max-height + overflow:auto); a hidden outer
+       box only double-clips the open reason panels. */
+    .catalog { overflow:visible; }
+    /* Fixed layout keeps the Reasons column from starving Source and Last change:
+       the reason chips' intrinsic width otherwise claims most of the table. */
+    #status-table { table-layout: fixed; }
+    #status-table th:nth-child(1) { width: 30%; }
+    #status-table th:nth-child(2) { width: 15%; }
+    #status-table th:nth-child(3) { width: 35%; }
+    #status-table th:nth-child(4) { width: 14%; }
+    #status-table th:nth-child(5) { width: 12%; }
+    #status-table td, #status-table th { overflow-wrap: break-word; }
+    .status-reasons details { display:inline-block; margin:0 .25rem .25rem 0; max-width:100%; }
+    .status-reasons summary { cursor:pointer; list-style:none; }
+    .status-reasons summary::-webkit-details-marker { display:none; }
+    .status-explanation { max-width:100%; padding:.5rem .75rem; margin-top:.25rem; border:1px solid var(--line); border-radius:.5rem; background:var(--surface); font-size:.85rem; }
+    .status-explanation p { margin:.15rem 0; overflow-wrap:anywhere; }
+    .status-explanation .meaning { font-weight:600; }
+    .status-evidence a { display:inline-block; margin-right:.75rem; overflow-wrap:anywhere; }
+    .status-needs-ruling { margin:.5rem 0 0; }
+    /* Fixed layout with a floor: the reason chips define their own wrap, and narrow
+       viewports scroll the table instead of crushing Source and Last change. */
+    #status-table { table-layout:fixed; min-width:960px; }
+    #status-table td { overflow-wrap:anywhere; }
+    /* Long reason options make the selects unbreakably wide on phones; give each
+       filter its own row so the select tracks the form width, not its option text. */
+    @media (max-width: 480px) {
+      .filters > label { flex: 1 1 100%; min-width: 0; white-space: normal; }
+      .filters select { width: 100%; min-width: 0; max-width: 100%; }
+    }
+  </style>
+  <section class="metrics" aria-label="Status totals">
+    <div class="status-metrics" id="status-counts" role="group" aria-label="Counts per status"></div>
+    <div class="freshness"><span class="metric-label">DATE</span><strong id="metric-date">—</strong></div>
+  </section>
+  <p id="message" class="sync-banner" role="status" aria-live="polite">Loading source status…</p>
+  <section class="catalog">
+    <div class="catalog-top">
+      <div id="origin-tabs" class="tabs" role="group" aria-label="Origin"></div>
+      <label class="search"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="Search sources…" aria-label="Search sources"></label>
+    </div>
+    <form id="filters" class="filters" role="search">
+      <label>Status<select id="status-filter"><option value="all">All statuses</option><option value="Pending">Pending</option><option value="Available">Available</option><option value="Excluded">Excluded</option><option value="Deprecated">Deprecated</option></select></label>
+      <label>Reason<select id="reason-filter"><option value="all">All reasons</option></select></label>
+      <button id="clear-filters" class="text-button" type="button">Reset</button>
+    </form>
+    <div class="table-scroller" tabindex="0" aria-label="Source status">
+      <table id="status-table" class="source-table"><caption class="sr-only">Every source with status, exclusion reasons and evidence, and last change</caption><colgroup><col style="width:26%"><col style="width:11%"><col style="width:42%"><col style="width:11%"><col style="width:10%"></colgroup><thead><tr><th scope="col">Source</th><th scope="col">Status</th><th scope="col">Reasons</th><th scope="col">Evidence</th><th scope="col">Last change</th></tr></thead><tbody id="rows"></tbody></table>
+      <div id="empty" class="empty" hidden><h2>No matching sources</h2><p>Try another search or reset the filters.</p></div>
+    </div>
+    <footer class="table-footer"><span id="visible-count"></span><span>Open a reason for what it means and what clears it</span></footer>
+    <div id="needs-ruling" class="status-needs-ruling" hidden>
+      <details><summary>Sources whose exclusion needs a ruling</summary><ul id="needs-ruling-list"></ul></details>
+    </div>
+  </section>
+  <footer class="page-footer"><span>OPEN ATHENA / RL DATA ATLAS</span><span id="snapshot-info"></span></footer>
+</main>
+</body>
+</html>

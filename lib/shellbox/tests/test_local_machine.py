@@ -23,6 +23,7 @@ from pathlib import Path, PurePosixPath
 from typing import cast
 
 import pytest
+from shellbox.backends.local import machine as machine_module
 from shellbox.backends.local.launch import COMMAND_NICENESS
 from shellbox.backends.local.machine import (
     NPROC_HEADROOM,
@@ -1471,36 +1472,6 @@ def test_repeated_download_preserves_existing_host_directory_permissions(
     assert (downloaded / "unrelated").read_text() == "host-owned"
 
 
-@pytest.fixture
-def executable_oci_image(oci_image):
-    busybox = shutil.which("busybox")
-    if busybox is None:
-        pytest.skip("The offline executable image requires busybox-static; the Shellbox CI lane installs it")
-    archive = io.BytesIO()
-    with tarfile.open(fileobj=archive, mode="w") as output:
-        binary = Path(busybox).read_bytes()
-        entry = tarfile.TarInfo("bin/busybox")
-        entry.mode, entry.size = 0o755, len(binary)
-        output.addfile(entry, io.BytesIO(binary))
-        for applet in ("sh", "sleep", "mkdir", "cat", "tar", "httpd", "wget", "dirname", "basename", "id"):
-            entry = tarfile.TarInfo(f"bin/{applet}")
-            entry.type, entry.linkname = tarfile.SYMTYPE, "busybox"
-            output.addfile(entry)
-        entry = tarfile.TarInfo("etc")
-        entry.type, entry.mode = tarfile.DIRTYPE, 0o755
-        output.addfile(entry)
-    return oci_image(
-        (archive.getvalue(),),
-        {
-            "Env": ["IMAGE_VALUE=from-image"],
-            "WorkingDir": "/app",
-            "Entrypoint": ["/bin/sh", "-c"],
-            "Cmd": ['printf "%s" "$IMAGE_VALUE" >index.html; exec httpd -f -p 8123 -h .'],
-            "User": "0:0",
-        },
-    )
-
-
 @pytest.mark.parametrize(
     "entrypoint,arguments,expected",
     [
@@ -1571,3 +1542,40 @@ def test_prepared_local_task_applies_startup_overrides_with_private_writable_roo
     assert {
         path.relative_to(image.layout): path.read_bytes() for path in image.layout.rglob("*") if path.is_file()
     } == original
+
+
+def test_apply_sandbox_apt_config_writes_the_no_sandbox_configuration(tmp_path):
+    """Image machines get apt configured to run as root inside the capability-less sandbox."""
+    (tmp_path / "etc" / "apt" / "apt.conf.d").mkdir(parents=True)
+    machine_module._apply_sandbox_apt_config(tmp_path)
+    config = tmp_path / machine_module.SANDBOX_APT_CONFIG_RELATIVE
+    assert 'APT::Sandbox::User "root";' in config.read_text()
+
+
+def test_apply_sandbox_apt_config_skips_images_without_apt(tmp_path):
+    machine_module._apply_sandbox_apt_config(tmp_path)
+    assert not (tmp_path / machine_module.SANDBOX_APT_CONFIG_RELATIVE).exists()
+
+
+def test_apply_sandbox_apt_config_never_clobbers_an_existing_config(tmp_path):
+    config = tmp_path / machine_module.SANDBOX_APT_CONFIG_RELATIVE
+    config.parent.mkdir(parents=True)
+    config.write_text('APT::Sandbox::User "_apt";\n')
+    machine_module._apply_sandbox_apt_config(tmp_path)
+    assert config.read_text() == 'APT::Sandbox::User "_apt";\n'
+
+
+def test_apply_sandbox_apt_config_makes_the_apt_state_trees_writable(tmp_path):
+    """Root without CAP_DAC_OVERRIDE must be able to write the image's _apt-owned state."""
+    (tmp_path / "etc" / "apt" / "apt.conf.d").mkdir(parents=True)
+    partial = tmp_path / "var" / "lib" / "apt" / "lists" / "partial"
+    partial.mkdir(parents=True)
+    os.chmod(partial, 0o700)
+    machine_module._apply_sandbox_apt_config(tmp_path)
+    assert (partial.stat().st_mode & 0o777) == 0o777
+
+
+def test_apply_sandbox_apt_config_ignores_missing_state_trees(tmp_path):
+    (tmp_path / "etc" / "apt" / "apt.conf.d").mkdir(parents=True)
+    machine_module._apply_sandbox_apt_config(tmp_path)
+    assert (tmp_path / machine_module.SANDBOX_APT_CONFIG_RELATIVE).exists()

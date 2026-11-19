@@ -13,6 +13,7 @@ import signal
 import stat
 import subprocess
 import sys
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AsyncExitStack
 from dataclasses import replace
@@ -30,17 +31,24 @@ from daytona import (
     AsyncDaytona,
     CreateSandboxFromImageParams,
     CreateSandboxFromSnapshotParams,
+    DaytonaAuthorizationError,
     DaytonaConfig,
     DaytonaConflictError,
+    DaytonaConnectionError,
     DaytonaError,
     DaytonaNotFoundError,
+    DaytonaTimeoutError,
+    DaytonaValidationError,
     Image,
     Resources,
 )
-from daytona_api_client_async import SnapshotState
+from daytona_api_client_async import SandboxState, SnapshotState
+from rigging.timing import ExponentialBackoff, active_timeout
 from shellbox.backends.daytona.connection import DaytonaConnection
+from shellbox.backends.daytona.lifecycle import process_lifecycle_log
 from shellbox.backends.daytona.machine import (
     PROVIDER_DIAGNOSTIC_CHAR_LIMIT,
+    DaytonaDeclarativeMachineFactory,
     DaytonaImageBuild,
     DaytonaMachine,
     DaytonaMachineFactory,
@@ -49,8 +57,10 @@ from shellbox.backends.daytona.machine import (
     _create_sandbox,
     _delete_named_sandbox,
 )
+from shellbox.backends.daytona.provider import ProviderWaitPolicy
 from shellbox.backends.daytona.snapshot import (
     SnapshotRequest,
+    ensure_snapshot,
     list_snapshots,
     purge_stale_snapshots,
     snapshot_name,
@@ -64,73 +74,19 @@ from shellbox.machine import (
     DockerImage,
     ExitReason,
     MachineSpec,
+    MachineTerminated,
     UnsupportedMachineSpec,
 )
 
 
-@pytest.mark.parametrize("failure", ["rejected_post", "late_get", "prolonged_throttle", "deadline", "cancelled"])
-def test_daytona_creation_recovers_named_sandbox_after_throttling(monkeypatch, failure):
+@pytest.mark.parametrize("status", [429, 502])
+def test_daytona_creation_is_not_replayed_after_an_ambiguous_post(status):
     async def scenario():
         requests = []
-        delays = []
-        waiting = asyncio.Event()
-
-        async def wait(delay):
-            delays.append(delay)
-            waiting.set()
-            if failure in {"deadline", "cancelled"}:
-                await asyncio.Future()
-
-        monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", wait)
-
-        created = False
 
         async def endpoint(request):
-            nonlocal created
-            if request.headers.get("Upgrade", "").lower() == "websocket":
-                websocket = web.WebSocketResponse()
-                await websocket.prepare(request)
-                async for _ in websocket:
-                    pass
-                return websocket
             requests.append(request.method)
-            if request.method == "POST" and created:
-                return web.json_response({"message": "name already exists"}, status=409)
-            if (request.method == "GET" and created and requests.count("GET") > 1) or (
-                request.method == "POST"
-                and (
-                    failure == "late_get"
-                    or (failure == "rejected_post" and requests.count("POST") == 2)
-                    or (failure == "prolonged_throttle" and requests.count("POST") == 10)
-                )
-            ):
-                created = True
-                return web.json_response(
-                    {
-                        "id": "created-once",
-                        "organizationId": "fixture",
-                        "name": "fixture",
-                        "user": "root",
-                        "env": {},
-                        "labels": {},
-                        "public": False,
-                        "networkBlockAll": False,
-                        "target": "us",
-                        "cpu": 2,
-                        "gpu": 0,
-                        "memory": 4,
-                        "disk": 10,
-                        "state": "started",
-                        "toolboxProxyUrl": (
-                            ""
-                            if failure == "late_get" and request.method == "POST"
-                            else "https://fixture.invalid/toolbox"
-                        ),
-                    }
-                )
-            return web.json_response(
-                {"message": "rate limited"}, status=429, headers={"Retry-After-sandbox-create": "17"}
-            )
+            return web.json_response({"message": "ambiguous creation"}, status=status)
 
         app = web.Application()
         app.router.add_route("*", "/{path:.*}", endpoint)
@@ -138,49 +94,153 @@ def test_daytona_creation_recovers_named_sandbox_after_throttling(monkeypatch, f
             async with AsyncDaytona(
                 DaytonaConfig(api_key="fixture", api_url=str(server.make_url("")).rstrip("/"))
             ) as client:
-                params = CreateSandboxFromSnapshotParams(name="fixture", snapshot="fixture")
-                if failure in {"rejected_post", "prolonged_throttle"}:
-                    sandbox = await _create_sandbox(client, params, 60)
-                    assert sandbox.id == "created-once"
-                    attempts = 2 if failure == "rejected_post" else 10
-                    assert requests == ["POST"] * attempts
-                    assert len(delays) == attempts - 1 and all(delay >= 17 for delay in delays)
-                elif failure == "deadline":
-                    with pytest.raises(TimeoutError):
-                        async with asyncio.timeout(None) as deadline:
-
-                            async def expire_when_waiting():
-                                await waiting.wait()
-                                deadline.reschedule(asyncio.get_running_loop().time())
-
-                            expiration = asyncio.create_task(expire_when_waiting())
-                            try:
-                                await _create_sandbox(client, params, 60)
-                            finally:
-                                await expiration
-                    assert requests == ["POST"]
-                elif failure == "cancelled":
-                    task = asyncio.create_task(_create_sandbox(client, params, 60))
-                    await waiting.wait()
-                    task.cancel()
-                    with pytest.raises(asyncio.CancelledError):
-                        await task
-                    assert requests == ["POST"]
-                else:
-                    sandbox = await _create_sandbox(client, params, 60)
-                    assert sandbox.id == "created-once"
-                    assert requests == ["POST", "GET", "POST", "GET"]
-                    assert len(delays) == 1 and delays[0] >= 17
+                with pytest.raises(DaytonaError):
+                    await _create_sandbox(client, CreateSandboxFromSnapshotParams(name="owned", snapshot="fixture"), 60)
+        assert requests.count("POST") == 1 and "DELETE" not in requests
 
     asyncio.run(scenario())
 
 
-def command_script(command: str) -> str:
-    script = shlex.split(command)[2].partition("export PATH; ")[2]
-    argv = shlex.split(script)
-    if len(argv) == 2 and argv[0] == "/bin/sh" and argv[1].endswith("/command.sh"):
-        return Path(argv[1]).read_text()
-    return script
+@pytest.mark.parametrize(
+    "failure", ["rejected_create", "accepted_create", "metadata", "list", "transport", "forbidden", "invalid_shape"]
+)
+def test_daytona_snapshot_recovers_transient_http_without_duplicate_images(monkeypatch, failure):
+    async def scenario():
+        # Advance the backoff clock without real waiting.
+        monkeypatch.setattr(ExponentialBackoff, "next_interval", lambda self: 0)
+        request = SnapshotRequest(
+            RegistryImage("fixture.invalid/image@sha256:" + "0" * 64), Resources(cpu=2, memory=4, disk=10)
+        )
+        snapshots = {}
+        attempts = Counter()
+
+        def snapshot():
+            return {
+                "id": request.name,
+                "name": request.name,
+                "general": False,
+                "state": SnapshotState.ACTIVE.value,
+                "size": None,
+                "entrypoint": None,
+                "cpu": 2,
+                "gpu": 0,
+                "mem": 4,
+                "disk": 10,
+                "errorReason": None,
+                "createdAt": "2026-11-13T15:00:00Z",
+                "updatedAt": "2026-11-13T15:00:00Z",
+                "lastUsedAt": None,
+            }
+
+        async def endpoint(http):
+            operation = "create" if http.method == "POST" else "list" if http.path.endswith("/snapshots") else "get"
+            attempts[operation] += 1
+            if failure in {"forbidden", "invalid_shape"}:
+                return web.json_response(
+                    {"message": "Invalid CPU request" if failure == "invalid_shape" else "forbidden"},
+                    status=400 if failure == "invalid_shape" else 403,
+                )
+            if failure == "transport" and operation == "get" and attempts[operation] == 1:
+                assert http.transport is not None
+                http.transport.close()
+                return web.Response()
+            if (failure == "metadata" and operation == "get" and attempts[operation] <= 5) or (
+                failure == "list" and operation == "list" and attempts[operation] <= 5
+            ):
+                return web.Response(text="<html>Bad Gateway</html>", status=502)
+            if operation == "create":
+                name = (await http.json())["name"]
+                if failure == "rejected_create" and attempts[operation] == 1:
+                    return web.Response(text="Unavailable", status=503)
+                if name in snapshots:
+                    return web.json_response({"message": "name already exists"}, status=409)
+                snapshots[name] = snapshot()
+                if failure == "accepted_create" and attempts[operation] == 1:
+                    return web.Response(text="<html>Bad Gateway</html>", status=502)
+                return web.json_response(snapshots[name])
+            if operation == "list":
+                return web.json_response(
+                    {"items": list(snapshots.values()), "total": len(snapshots), "page": 1, "totalPages": 1}
+                )
+            name = http.path.rsplit("/", 1)[-1]
+            if name not in snapshots:
+                return web.json_response({"message": "missing"}, status=404)
+            return web.json_response(snapshots[name])
+
+        app = web.Application()
+        app.router.add_route("*", "/{path:.*}", endpoint)
+        async with TestServer(app) as server:
+            async with AsyncDaytona(
+                DaytonaConfig(api_key="fixture", api_url=str(server.make_url("")).rstrip("/"))
+            ) as client:
+                if failure in {"forbidden", "invalid_shape"}:
+                    with pytest.raises(
+                        DaytonaValidationError if failure == "invalid_shape" else DaytonaAuthorizationError
+                    ):
+                        await ensure_snapshot(client, request)
+                    assert not snapshots
+                    return
+                assert await ensure_snapshot(client, request) == request.name
+                assert [row.name for row in await list_snapshots(client)] == [request.name]
+        assert set(snapshots) == {request.name}
+        if failure == "accepted_create":
+            assert attempts["create"] == 1
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("operation", ["prepare", "create_snapshot", "create_sandbox"])
+@pytest.mark.parametrize("status", [429, 502])
+def test_daytona_startup_retry_deadline_preserves_provider_diagnostics(operation, status):
+    async def scenario():
+        request = SnapshotRequest(RegistryImage("ubuntu:24.04"), Resources(cpu=1, memory=1, disk=1))
+
+        async def endpoint(http):
+            if http.path.startswith("/snapshots") and operation == "create_sandbox":
+                return web.json_response(
+                    {
+                        "id": request.name,
+                        "name": request.name,
+                        "general": False,
+                        "state": "active",
+                        "cpu": 1,
+                        "gpu": 0,
+                        "mem": 1,
+                        "disk": 1,
+                        "createdAt": "2026-11-13T15:00:00Z",
+                        "updatedAt": "2026-11-13T15:00:00Z",
+                    }
+                )
+            if http.method == "GET" and not http.path.startswith("/snapshots"):
+                return web.json_response({"message": "not created"}, status=404)
+            return web.json_response(
+                {"message": "provider outage"},
+                status=status,
+                headers={"Retry-After": "120", "X-RateLimit-Remaining": "0"},
+            )
+
+        app = web.Application()
+        app.router.add_route("*", "/{path:.*}", endpoint)
+        async with TestServer(app) as server:
+            factory = DaytonaMachineFactory(
+                lambda: AsyncDaytona(
+                    DaytonaConfig(
+                        api_key="fixture",
+                        api_url=str(server.make_url("")).rstrip("/"),
+                    )
+                )
+            )
+            spec = MachineSpec(request.source, startup_timeout=1)
+            with pytest.raises(DaytonaError) as failure:
+                if operation == "prepare":
+                    await factory.prepare(spec)
+                else:
+                    await factory.create(spec)
+            assert failure.value.status_code == status
+            assert failure.value.headers["X-RateLimit-Remaining"] == "0"
+            assert failure.value.headers["Retry-After"] == "120"
+
+    asyncio.run(scenario())
 
 
 class LocalFiles:
@@ -191,6 +251,14 @@ class LocalFiles:
 
     async def download_file(self, source: str) -> bytes:
         return Path(source).read_bytes()
+
+
+def command_script(command: str) -> str:
+    script = shlex.split(command)[2].partition("export PATH; ")[2]
+    argv = shlex.split(script)
+    if len(argv) == 2 and argv[0] == "/bin/sh" and argv[1].endswith("/command.sh"):
+        return Path(argv[1]).read_text()
+    return script
 
 
 class LocalProcess:
@@ -218,21 +286,6 @@ class LocalProcess:
                 except ProcessLookupError:
                     pass
             await process.wait()
-
-
-class LocalSnapshots:
-    def __init__(self):
-        self.snapshots = {}
-
-    async def get(self, name):
-        if name not in self.snapshots:
-            raise DaytonaNotFoundError("Snapshot does not exist", status_code=404)
-        return self.snapshots[name]
-
-    async def create(self, params):
-        snapshot = SimpleNamespace(name=params.name, state=SnapshotState.ACTIVE, params=params)
-        self.snapshots[params.name] = snapshot
-        return snapshot
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux execve per-argument limit regression")
@@ -278,9 +331,26 @@ def test_daytona_large_argument_preserves_process_contract(tmp_path: Path, shell
     asyncio.run(scenario())
 
 
+class LocalSnapshots:
+    def __init__(self):
+        self.snapshots = {}
+
+    async def get(self, name):
+        if name not in self.snapshots:
+            raise DaytonaNotFoundError("Snapshot does not exist", status_code=404)
+        return self.snapshots[name]
+
+    async def create(self, params):
+        snapshot = SimpleNamespace(name=params.name, state=SnapshotState.ACTIVE, params=params)
+        self.snapshots[params.name] = snapshot
+        return snapshot
+
+
 class LocalDaytona:
     def __init__(self):
-        self.sandbox = SimpleNamespace(fs=LocalFiles(), process=LocalProcess())
+        self.sandbox = SimpleNamespace(
+            id="11111111-1111-4111-8111-111111111111", fs=LocalFiles(), process=LocalProcess()
+        )
         self.deleted = False
         self.closed = False
         self.params = None
@@ -301,7 +371,7 @@ class LocalDaytona:
             raise DaytonaNotFoundError("Sandbox does not exist", status_code=404)
         return self.sandbox
 
-    async def delete(self, sandbox):
+    async def delete(self, sandbox, *, wait=False):
         assert sandbox is self.sandbox
         await sandbox.process.close()
         self.deleted = True
@@ -313,18 +383,191 @@ class LocalDaytona:
         self.closed = True
 
 
+def test_daytona_close_waits_until_provider_destruction_and_records_owned_id(tmp_path):
+    lifecycle = tmp_path / "sandbox-lifecycle.jsonl"
+
+    def events():
+        return [json.loads(line) for line in lifecycle.read_text().splitlines()]
+
+    async def scenario():
+        delete_requested = asyncio.Event()
+        destruction_allowed = asyncio.Event()
+
+        class DelayedDeletion(LocalDaytona):
+            async def delete(self, sandbox, *, wait=False):
+                delete_requested.set()
+                if wait:
+                    await destruction_allowed.wait()
+                    await super().delete(sandbox, wait=wait)
+
+        class ControlProcess(LocalProcess):
+            async def exec(self, *args, **kwargs):
+                return SimpleNamespace(exit_code=0, result="/usr/bin/setsid")
+
+        client = DelayedDeletion()
+        client.sandbox.process = ControlProcess()
+        machine = await DaytonaMachineFactory(lambda: client).create(MachineSpec(RegistryImage("fixture")))
+        closing = asyncio.create_task(machine.close())
+        try:
+            await delete_requested.wait()
+            assert not closing.done()
+            assert not client.deleted
+            recorded = events()
+            assert [row["event"] for row in recorded] == ["create_requested", "created", "delete_requested"]
+            assert {row["requested_name"] for row in recorded} == {client.params.name}
+            assert {row["sandbox_id"] for row in recorded[1:]} == {client.sandbox.id}
+        finally:
+            destruction_allowed.set()
+            await closing
+        assert client.deleted and client.closed
+        assert events()[-1] == {
+            "kind": "daytona_sandbox_lifecycle",
+            "schema_version": 1,
+            "event": "deleted",
+            "requested_name": client.params.name,
+            "sandbox_id": client.sandbox.id,
+        }
+
+    with process_lifecycle_log(lifecycle):
+        asyncio.run(scenario())
+
+
 class FailedDeletion(LocalDaytona):
     def __init__(self, failure):
         super().__init__()
         self.failure = failure
 
-    async def delete(self, sandbox):
+    async def delete(self, sandbox, *, wait=False):
         await sandbox.process.close()
         raise self.failure
 
 
+def test_daytona_factory_disables_idle_stop_without_removing_ttl():
+    async def scenario():
+        created = {}
+        deleted = []
+        request = SnapshotRequest(RegistryImage("fixture@sha256:" + "a" * 64), Resources())
+
+        async def endpoint(http):
+            if http.headers.get("Upgrade", "").lower() == "websocket":
+                websocket = web.WebSocketResponse()
+                await websocket.prepare(http)
+                async for _ in websocket:
+                    pass
+                return websocket
+            if http.path.startswith("/snapshots"):
+                return web.json_response(
+                    {
+                        "id": request.name,
+                        "name": request.name,
+                        "state": "active",
+                        "cpu": 1,
+                        "gpu": 0,
+                        "mem": 1,
+                        "disk": 1,
+                        "general": False,
+                        "createdAt": "2026-11-14T00:00:00Z",
+                        "updatedAt": "2026-11-14T00:00:00Z",
+                    }
+                )
+            if http.method == "DELETE":
+                deleted.append(http.path)
+            if (http.method == "POST" and http.path == "/sandbox") or (
+                http.method in {"GET", "DELETE"} and http.path.startswith("/sandbox/")
+            ):
+                if http.method == "POST":
+                    created.update(await http.json())
+                return web.json_response(
+                    {
+                        "id": "owned",
+                        "organizationId": "fixture",
+                        "name": created["name"],
+                        "user": "root",
+                        "env": {},
+                        "labels": {},
+                        "public": False,
+                        "networkBlockAll": True,
+                        "target": "us",
+                        "cpu": 1,
+                        "gpu": 0,
+                        "memory": 1,
+                        "disk": 1,
+                        "state": "destroyed" if deleted else "started",
+                        "toolboxProxyUrl": str(server.make_url("/toolbox")),
+                    }
+                )
+            return web.json_response({"exitCode": 0, "result": "/usr/bin/setsid"})
+
+        app = web.Application()
+        app.router.add_route("*", "/{path:.*}", endpoint)
+        async with TestServer(app) as server:
+            factory = DaytonaMachineFactory(
+                lambda: AsyncDaytona(DaytonaConfig(api_key="fixture", api_url=str(server.make_url("")).rstrip("/")))
+            )
+            machine = await factory.create(MachineSpec(request.source))
+            try:
+                assert created["autoStopInterval"] == 0
+                assert created["ttlMinutes"] == 360
+            finally:
+                await machine.close()
+            assert deleted == ["/sandbox/owned"]
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux process and setsid contract")
+@pytest.mark.parametrize("state", [SandboxState.STARTING, SandboxState.STOPPED])
+def test_daytona_control_ip_failure_distinguishes_startup_from_stopped_host(tmp_path, monkeypatch, state):
+    async def scenario():
+        blocked = False
+
+        async def backoff(_delay):
+            await asyncio.sleep(0)
+
+        monkeypatch.setattr("shellbox.backends.daytona.provider.sleep", backoff)
+
+        class Process(LocalProcess):
+            async def exec(self, command, cwd=None, env=None, timeout=None):
+                nonlocal blocked
+                if "SHELLBOX_COUNT=" in command_script(command) and not blocked:
+                    blocked = True
+                    raise DaytonaError("failed to resolve container IP after 3 attempts", status_code=400)
+                if blocked and state is SandboxState.STOPPED:
+                    raise DaytonaError("failed to resolve container IP after 3 attempts", status_code=400)
+                return await super().exec(command, cwd=cwd, env=env, timeout=timeout)
+
+        client = LocalDaytona()
+
+        async def refresh_data(request_timeout=None):
+            client.sandbox.state = state
+
+        client.sandbox.process = Process()
+        client.sandbox.id = "owned"
+        client.sandbox.refresh_data = refresh_data
+        machine = await DaytonaMachineFactory(lambda: client, provider_wait_policy=ProviderWaitPolicy.JOB).create(
+            MachineSpec(RegistryImage("fixture"), workdir=str(tmp_path))
+        )
+        try:
+            async with asyncio.timeout(5):
+                command = Command(("/bin/sh", "-c", "printf 'one\n' >> candidate-runs; printf result; exit 23"))
+                if state is SandboxState.STOPPED:
+                    with pytest.raises(MachineTerminated):
+                        await machine.run(command)
+                else:
+                    result = await machine.run(command)
+                    assert (result.exit_code, result.stdout) == (23, b"result")
+            assert (tmp_path / "candidate-runs").read_text().splitlines() == ["one"]
+        finally:
+            await machine.close()
+        assert client.deleted and client.closed
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("error_type", [RuntimeError, asyncio.CancelledError])
-def test_daytona_failed_creation_deletes_an_accepted_sandbox(error_type):
+def test_daytona_failed_creation_deletes_an_accepted_sandbox(error_type, tmp_path):
+    lifecycle = tmp_path / "sandbox-lifecycle.jsonl"
+
     class AcceptedThenFailed(LocalDaytona):
         async def create(self, params, *, timeout):
             await super().create(params, timeout=timeout)
@@ -337,8 +580,13 @@ def test_daytona_failed_creation_deletes_an_accepted_sandbox(error_type):
             await factory.create(MachineSpec(source=RegistryImage("fixture@sha256:" + "a" * 64), cpus=2))
         assert client.deleted
         assert client.closed
+        events = [json.loads(line) for line in lifecycle.read_text().splitlines()]
+        assert [event["event"] for event in events] == ["create_requested", "delete_requested", "deleted"]
+        assert {event["requested_name"] for event in events} == {client.params.name}
+        assert {event["sandbox_id"] for event in events[1:]} == {client.sandbox.id}
 
-    asyncio.run(scenario())
+    with process_lifecycle_log(lifecycle):
+        asyncio.run(scenario())
 
 
 def test_snapshot_preflight_builds_without_starting_sandbox_and_reuses_image():
@@ -417,8 +665,7 @@ def test_daytona_binary_command_and_files(tmp_path: Path, policy) -> None:
 
 
 @pytest.mark.requires_host_setsid
-@pytest.mark.parametrize("inherit_image_workdir", [False, True])
-def test_daytona_recreated_workdir_reopens_path_for_next_command(tmp_path: Path, inherit_image_workdir: bool) -> None:
+def test_daytona_recreated_workdir_preserves_command_output(tmp_path: Path) -> None:
     workdir = tmp_path / "work"
     workdir.mkdir()
     original_inode = workdir.stat().st_ino
@@ -429,10 +676,8 @@ def test_daytona_recreated_workdir_reopens_path_for_next_command(tmp_path: Path,
             self.workdir_replaced = False
 
         async def exec(self, command, cwd=None, env=None, timeout=None):
-            if cwd is None:
-                if self.workdir_replaced:
-                    raise OSError("Provider process retained the deleted working directory")
-                cwd = str(workdir)
+            if self.workdir_replaced and cwd is None:
+                raise OSError("Provider process retained the deleted working directory")
             result = await super().exec(command, cwd=cwd, env=env, timeout=timeout)
             self.workdir_replaced = workdir.stat().st_ino != original_inode
             return result
@@ -441,13 +686,13 @@ def test_daytona_recreated_workdir_reopens_path_for_next_command(tmp_path: Path,
         client = LocalDaytona()
         client.sandbox.process = StaleWorkdirProcess()
         machine = await DaytonaMachineFactory(lambda: client).create(
-            MachineSpec(RegistryImage("ubuntu:24.04"), workdir="" if inherit_image_workdir else str(workdir))
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(workdir))
         )
         try:
             replaced = await machine.run(Command(("sh", "-c", 'rm -rf "$PWD" && mkdir -p "$PWD" && printf recreated')))
             assert (replaced.exit_code, replaced.stdout) == (0, b"recreated")
-            following = await machine.run(Command((sys.executable, "-c", "import os; print(os.getcwd())")))
-            assert (following.exit_code, following.stdout) == (0, f"{workdir}\n".encode())
+            following = await machine.run(Command(("printf", "ready")))
+            assert (following.exit_code, following.stdout) == (0, b"ready")
             assert workdir.stat().st_ino != original_inode
         finally:
             await machine.close()
@@ -472,34 +717,6 @@ def test_daytona_output_count_ignores_provider_diagnostics(tmp_path: Path) -> No
         try:
             result = await machine.run(Command(("printf", "output"), output_limit_bytes=3))
             assert (result.exit_code, result.stdout, result.stdout_truncated) == (0, b"out", True)
-        finally:
-            await machine.close()
-
-    asyncio.run(scenario())
-
-
-@pytest.mark.skipif(shutil.which("setsid") is None, reason="Daytona command execution needs setsid")
-@pytest.mark.parametrize("collection_timeout, succeeds", [(0.01, False), (1.0, True)])
-def test_daytona_output_collection_uses_its_own_deadline(collection_timeout: float, succeeds: bool):
-    class SlowFiles(LocalFiles):
-        async def download_file(self, source: str) -> bytes:
-            await asyncio.sleep(0.1)
-            return await super().download_file(source)
-
-    async def scenario():
-        client = LocalDaytona()
-        client.sandbox.fs = SlowFiles()
-        machine = await DaytonaMachineFactory(lambda: client, output_collection_timeout=collection_timeout).create(
-            MachineSpec(RegistryImage("ubuntu:24.04"), workdir="")
-        )
-        try:
-            command = Command(("sh", "-c", "printf out; printf err >&2"))
-            if succeeds:
-                result = await machine.run(command)
-                assert (result.stdout, result.stderr) == (b"out", b"err")
-            else:
-                with pytest.raises(RuntimeError, match="Cannot collect Daytona command output"):
-                    await machine.run(command)
         finally:
             await machine.close()
 
@@ -893,10 +1110,10 @@ def test_daytona_completion_between_probe_and_stop_preserves_the_machine(tmp_pat
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_host_setsid
 @pytest.mark.parametrize("primary_failure", [False, True])
 @pytest.mark.parametrize("cleanup_failure", ["timeout", "exit"])
 @pytest.mark.parametrize("deletion_failure", [False, True])
-@pytest.mark.requires_host_setsid
 def test_daytona_file_cleanup_failure_closes_machine_and_preserves_primary_error(
     primary_failure, cleanup_failure, deletion_failure
 ):
@@ -1167,7 +1384,19 @@ def test_daytona_reuses_snapshot_until_build_inputs_or_resources_change(tmp_path
 
 
 @pytest.mark.parametrize("image_build", list(DaytonaImageBuild))
-@pytest.mark.parametrize("instruction", ["ADD payload.tar /opt/", 'add ["payload.tar", "/opt/"]'])
+@pytest.mark.parametrize(
+    "instruction",
+    [
+        "ADD payload.tar /opt/",
+        'add ["payload.tar", "/opt/"]',
+        "  AdD payload.tar /opt/",
+        "RUN cat <<'EOF'\nadd x0, x1, x2\nEOF\nADD payload.tar /opt/",
+        "RUN cat << 'EOF'\nadd x0, x1, x2\nEOF\nADD payload.tar /opt/",
+        'RUN echo "<<EOF"\nADD payload.tar /opt/',
+        'RUN echo "<< EOF"\nADD payload.tar /opt/',
+        "RUN cat <<ADD\nassembly\nADD\nADD payload.tar /opt/",
+    ],
+)
 def test_daytona_rejects_add_inputs_before_building(tmp_path, instruction, image_build):
     dockerfile = tmp_path / "Dockerfile"
     dockerfile.write_text(f"FROM ubuntu:24.04\n{instruction}\n")
@@ -1180,6 +1409,41 @@ def test_daytona_rejects_add_inputs_before_building(tmp_path, instruction, image
     assert client.params is None
 
 
+@pytest.mark.parametrize(
+    "instructions",
+    [
+        "RUN cat <<'EOF' > /code.s\nadd x0, x1, x2\nEOF\n",
+        "RUN cat > /code.s << 'EOF'\nadd x5, x5, #'0'\nEOF\n",
+        'RUN cat <<"EOF" > /code.s\nADD r0, r1, r2\nEOF\n',
+        "RUN cat <<E'OF' > /code.s\nadd x0, x1, x2\nEOF\n",
+        "RUN cat <<-'EOF' > /code.s\n\tadd x0, x1, x2\n\tEOF\n",
+        "RUN cat <<ONE <<TWO\nadd x0, x1, x2\nONE\nADD r0, r1, r2\nTWO\n",
+        "COPY <<EOF /code.s\nadd x0, x1, x2\nEOF\n",
+        "RUN printf '%s' \\\n# continuation comment\n\nADD\n",
+    ],
+)
+def test_daytona_accepts_dockerfile_payload_add_without_changing_source(tmp_path, instructions):
+    # Assembly and continued shell arguments must reach Daytona unchanged, rather
+    # than being mistaken for unsupported Dockerfile ADD instructions.
+    dockerfile = tmp_path / "Dockerfile"
+    original = f"# syntax=docker/dockerfile:1\nFROM ubuntu:24.04\n{instructions}".encode()
+    dockerfile.write_bytes(original)
+    request = snapshot_request_for_spec(MachineSpec(DockerfileSource(tmp_path, dockerfile)))
+    assert isinstance(request.source, DockerfileSource)
+    assert request.source.dockerfile.read_bytes() == original
+
+
+def test_daytona_honors_dockerfile_escape_directive(tmp_path):
+    # Windows-style escape directives change which lines form one RUN header.
+    dockerfile = tmp_path / "Dockerfile"
+    original = b"# escape=`\nFROM ubuntu:24.04\nRUN echo `\nADD\n"
+    dockerfile.write_bytes(original)
+    request = snapshot_request_for_spec(MachineSpec(DockerfileSource(tmp_path, dockerfile)))
+    assert isinstance(request.source, DockerfileSource)
+    assert request.source.dockerfile.read_bytes() == original
+
+
+@pytest.mark.requires_host_setsid
 @pytest.mark.parametrize("source_kind", ["registry", "dockerfile"])
 def test_declarative_build_starts_sandbox_from_image_without_snapshot(tmp_path, source_kind):
     context = tmp_path / "context"
@@ -1520,7 +1784,292 @@ def test_snapshot_request_interchange_rejects_a_mismatched_name(tmp_path) -> Non
     assert SnapshotRequest.from_dict(spec) == request
 
 
-def test_sandbox_deletion_retries_a_gateway_error(monkeypatch) -> None:
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux process and setsid contract")
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "setsid",
+        "output_size",
+        "output_read",
+        "upload_pending_ip",
+        "command_cleanup",
+        "sandbox_cleanup",
+        "slow_read",
+        "slow_write",
+        "source_ambiguous",
+    ],
+)
+def test_daytona_job_wait_recovers_controls_without_replaying_source(tmp_path, monkeypatch, failure):
+    async def scenario():
+        loop = asyncio.get_running_loop()
+        now = loop.time
+        offset = [0.0]
+        monkeypatch.setattr(loop, "time", lambda: now() + offset[0])
+        failed = set()
+        staged = set()
+        delete_requests = []
+
+        async def backoff(delay):
+            offset[0] += delay
+            await asyncio.sleep(0)
+
+        monkeypatch.setattr("shellbox.backends.daytona.provider.sleep", backoff)
+
+        class Process(LocalProcess):
+            async def exec(self, command, cwd=None, env=None, timeout=None):
+                script = command_script(command)
+                target = (
+                    (failure == "setsid" and script == "command -v setsid")
+                    or (failure == "output_size" and "SHELLBOX_COUNT=" in script)
+                    or (failure == "command_cleanup" and script.startswith("rm -rf "))
+                )
+                if target and failure not in failed:
+                    failed.add(failure)
+                    raise DaytonaTimeoutError("Transient control timeout")
+                result = await super().exec(command, cwd=cwd, env=env, timeout=timeout)
+                if failure == "source_ambiguous" and "candidate-runs" in script and failure not in failed:
+                    failed.add(failure)
+                    raise DaytonaConnectionError("Source exec response lost")
+                return result
+
+        class Files(LocalFiles):
+            async def upload_file_stream(self, data, target):
+                staged.add(Path(target).parent)
+                if failure == "slow_write":
+                    failed.add(failure)
+                    offset[0] += 90
+                    for _ in range(3):
+                        await asyncio.sleep(0)
+                if failure == "upload_pending_ip" and failure not in failed:
+                    failed.add(failure)
+                    # SDK multipart uploads expose this response as the base exception class.
+                    raise DaytonaError(
+                        "Failed to upload file: 400: failed to resolve container IP after 3 attempts",
+                        status_code=400,
+                    )
+                await super().upload_file_stream(data, target)
+
+            async def download_file(self, source):
+                if failure == "output_read" and failure not in failed:
+                    failed.add(failure)
+                    raise DaytonaError("Transient read failure", status_code=502)
+                if failure == "slow_read":
+                    failed.add(failure)
+                    offset[0] += 90
+                    for _ in range(3):
+                        await asyncio.sleep(0)
+                return await super().download_file(source)
+
+        class Client(LocalDaytona):
+            async def delete(self, sandbox, *, wait=False):
+                delete_requests.append(sandbox.id)
+                if failure == "sandbox_cleanup" and failure not in failed:
+                    failed.add(failure)
+                    raise DaytonaError("Transient delete failure", status_code=503)
+                await super().delete(sandbox, wait=wait)
+
+        client = Client()
+        client.sandbox.process, client.sandbox.fs = Process(), Files()
+        factory = DaytonaMachineFactory(lambda: client, provider_wait_policy=ProviderWaitPolicy.JOB)
+        async with active_timeout(2):
+            machine = await factory.create(MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path)))
+            try:
+                command = Command(
+                    (
+                        "/bin/sh",
+                        "-c",
+                        "printf 'one\\n' >> candidate-runs; printf 'result'; printf 'diagnostic' >&2; exit 23",
+                    ),
+                    timeout=2,
+                )
+                if failure == "source_ambiguous":
+                    with pytest.raises(DaytonaConnectionError):
+                        await machine.run(command)
+                else:
+                    result = await machine.run(command)
+                    assert (result.exit_code, result.stdout, result.stderr) == (23, b"result", b"diagnostic")
+            finally:
+                if failure == "sandbox_cleanup":
+                    with pytest.raises(DaytonaError):
+                        await machine.close()
+                else:
+                    await machine.close()
+        assert (tmp_path / "candidate-runs").read_text().splitlines() == ["one"]
+        assert failed == {failure}
+        assert client.closed
+        if failure == "sandbox_cleanup":
+            assert not client.deleted and delete_requests == [client.sandbox.id]
+        else:
+            assert client.deleted
+        assert all(not path.exists() for path in staged)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux process and setsid contract")
+@pytest.mark.parametrize("failure", ["stalled_delete", "concurrent_close"])
+def test_daytona_job_wait_close_cancellation_has_wall_clock_cleanup_bound(tmp_path, monkeypatch, failure):
+    async def scenario():
+        loop = asyncio.get_running_loop()
+        now = loop.time
+        offset = [0.0]
+        monkeypatch.setattr(loop, "time", lambda: now() + offset[0])
+        entered = asyncio.Event()
+        interrupted = asyncio.Event()
+        release = asyncio.Event()
+        finish = asyncio.Event()
+        closed = asyncio.Event()
+
+        class Client(LocalDaytona):
+            async def delete(self, sandbox, *, wait=False):
+                entered.set()
+                while not release.is_set():
+                    try:
+                        await release.wait()
+                    except asyncio.CancelledError:
+                        # Model an SDK request that does not finish when cancelled.
+                        interrupted.set()
+                if failure == "concurrent_close" and not finish.is_set():
+                    raise DaytonaError("Provider deletion unavailable", status_code=503)
+                await super().delete(sandbox, wait=wait)
+
+            async def __aexit__(self, *args):
+                await super().__aexit__(*args)
+                closed.set()
+
+        client = Client()
+        machine = await DaytonaMachineFactory(lambda: client, provider_wait_policy=ProviderWaitPolicy.JOB).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
+        owner = asyncio.create_task(machine.close())
+        await entered.wait()
+        pending = asyncio.create_task(machine.close()) if failure == "concurrent_close" else owner
+        if failure == "concurrent_close":
+            await asyncio.sleep(0)  # Let the second caller join the already-running close.
+        pending.cancel("shutdown requested")
+        owner_error = None
+        owner_finished_before_recovery = True
+        try:
+            if failure in {"stalled_delete", "concurrent_close"}:
+                # A plain asyncio.wait is the watchdog; active phase clocks cannot pause it.
+                interruption = asyncio.create_task(interrupted.wait())
+                done, _ = await asyncio.wait({interruption}, timeout=1)
+                if done:
+                    pending.cancel("shutdown repeated")
+                    offset[0] += 10
+                else:
+                    interruption.cancel()
+                    await asyncio.gather(interruption, return_exceptions=True)
+            done, _ = await asyncio.wait({pending}, timeout=1)
+            completed_before_release = bool(done)
+        finally:
+            # Release the fake service even on the old backend, so a failed regression cannot hang pytest.
+            release.set()
+            if failure == "concurrent_close":
+                done, _ = await asyncio.wait({owner}, timeout=1)
+                owner_finished_before_recovery = bool(done)
+                finish.set()
+                try:
+                    await owner
+                except BaseException as error:
+                    owner_error = error
+            with pytest.raises(asyncio.CancelledError, match="shutdown requested"):
+                await pending
+            await asyncio.wait_for(closed.wait(), timeout=1)
+        assert completed_before_release
+        assert owner_finished_before_recovery
+        if failure == "concurrent_close":
+            assert isinstance(owner_error, DaytonaError)
+        assert client.closed
+
+    asyncio.run(scenario())
+
+
+def test_daytona_job_wait_preserves_external_cancellation_when_acquisition_cleanup_fails():
+    async def scenario():
+        entered = asyncio.Event()
+
+        class Process(LocalProcess):
+            async def exec(self, command, **kwargs):
+                entered.set()
+                await asyncio.Future()
+
+        class Client(LocalDaytona):
+            async def delete(self, sandbox, *, wait=False):
+                raise DaytonaError("Provider cleanup unavailable", status_code=503)
+
+        client = Client()
+        client.sandbox.process = Process()
+        factory = DaytonaMachineFactory(lambda: client, provider_wait_policy=ProviderWaitPolicy.JOB)
+        task = asyncio.create_task(factory.create(MachineSpec(RegistryImage("ubuntu:24.04"))))
+        await entered.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert client.closed
+        assert not client.deleted
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("source_kind", ["registry", "dockerfile"])
+@pytest.mark.parametrize("accepted_then_failed", [False, True])
+def test_declarative_daytona_preserves_task_image_and_cleans_up_without_snapshots(
+    tmp_path, source_kind, accepted_then_failed
+):
+    class DeclarativeClient(LocalDaytona):
+        def __init__(self):
+            super().__init__()
+            # No snapshot service exists on this account. Any access is a regression.
+            del self.snapshot
+            self.sandbox.process = SimpleNamespace(exec=self.exec, close=self.close)
+
+        async def exec(self, *args, **kwargs):
+            return SimpleNamespace(exit_code=0, result="/usr/bin/setsid")
+
+        async def close(self):
+            pass
+
+        async def create(self, params, *, timeout):
+            assert isinstance(params, CreateSandboxFromImageParams)
+            self.params = params
+            self.timeout = timeout
+            if accepted_then_failed:
+                raise RuntimeError("Connection lost after provider accepted creation")
+            return self.sandbox
+
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text("FROM python:3.12-slim\nCOPY fixture.txt /fixture.txt\nWORKDIR /task\n")
+    (tmp_path / "fixture.txt").write_text("original task fixture")
+    source = (
+        RegistryImage("task@sha256:" + "a" * 64) if source_kind == "registry" else DockerfileSource(tmp_path, dockerfile)
+    )
+
+    async def scenario():
+        client = DeclarativeClient()
+        factory = DaytonaDeclarativeMachineFactory(lambda: client)
+        spec = MachineSpec(source, workdir="", cpus=2, memory_mb=4096, storage_mb=10240, env={"TASK_ENV": "kept"})
+        if accepted_then_failed:
+            with pytest.raises(RuntimeError):
+                await factory.create(spec)
+        else:
+            machine = await factory.create(spec)
+            assert machine.spec.source == source
+            await machine.close()
+        params = client.params
+        assert params.resources == Resources(cpu=2, memory=4, disk=10, gpu=None)
+        assert params.env_vars == {"TASK_ENV": "kept"}
+        assert params.network_block_all is True
+        if source_kind == "registry":
+            assert params.image == source.reference
+        else:
+            assert params.image.dockerfile() == dockerfile.read_text()
+        assert client.deleted and client.closed
+
+    asyncio.run(scenario())
+
+
+def test_sandbox_deletion_retries_a_gateway_error() -> None:
     class FlakyGateway:
         def __init__(self):
             self.gets = 0
@@ -1530,15 +2079,12 @@ def test_sandbox_deletion_retries_a_gateway_error(monkeypatch) -> None:
             self.gets += 1
             if self.gets == 1:
                 raise DaytonaError("Failed to get sandbox: 502 Bad Gateway", status_code=502)
-            return SimpleNamespace(name=name)
+            return SimpleNamespace(name=name, id=name)
 
-        async def delete(self, sandbox):
+        async def delete(self, sandbox, *, wait=False):
             self.deleted.append(sandbox.name)
 
-    async def no_wait(delay):
-        pass
-
-    monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", no_wait)
+    # The merged machine retries through the provider-wait machinery, not a bare sleep.
     client = FlakyGateway()
 
     asyncio.run(_delete_named_sandbox(client, "fixture"))

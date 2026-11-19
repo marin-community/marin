@@ -41,7 +41,7 @@ credentials or workspace bundle. `NetworkPolicy.ALLOW` permits public internet
 addresses; `DENY` denies external traffic. Neither grants cluster access.
 
 Iris commands and file transfer use the existing `ExecInContainer` RPC and require
-`/bin/sh`, `base64`, `tar`, `head`, `tail` and `wc` in the task image.
+`/bin/sh`, `setsid`, `base64`, `tar`, `head`, `tail`, `wc` and readable `/proc` in the task image.
 Daytona uses its filesystem API and requires `/bin/sh`, `tar`, `head` and `wc`
 for commands and directory transfer; `open_process` also needs Python 3.8 or newer.
 Daytona uploads each control wrapper into a private command directory before execution,
@@ -55,6 +55,14 @@ raises an error.
 Daytona sandboxes and Iris jobs default to a six-hour lifetime. Iris scans for
 expired jobs about once a minute. An expired, killed or preempted machine raises
 `MachineTerminated`; uncertain command failures are not replayed.
+Daytona disables the provider's inactivity auto-stop while retaining the wall-clock
+TTL and caller-owned teardown. If a container-IP control failure reveals a stopped,
+paused, archived, failed or destroyed sandbox, the command raises `MachineTerminated`.
+Pending startup keeps the existing control retries.
+The Daytona logger records generated sandbox names, returned provider IDs and
+awaited deletion events as versioned JSON message payloads. Keep these records
+with owned trial logs; see [sandbox ownership evidence](../../.agents/ops/daytona.md#sandbox-ownership-evidence)
+before releasing leased capacity.
 
 ```python
 from shellbox.backends.daytona.machine import DaytonaMachineFactory
@@ -69,6 +77,14 @@ finally:
 ```
 
 ### Daytona snapshots
+
+Eval-account callers can opt into `DaytonaDeclarativeMachineFactory` to create
+sandboxes directly from the original registry image or Dockerfile context,
+without named snapshots. Harbor selects it with environment kwargs
+`{"provisioning": "declarative"}`. Task resources, command execution, provider
+retries and sandbox cleanup use the same path as the default snapshot factory.
+Credential selection is independent; use the dedicated eval account described
+in the [Daytona runbook](../../.agents/ops/daytona.md#credentials-and-account-selection).
 
 One snapshot corresponds to one image source and one CPU, memory, disk and GPU
 request. Registry images are identified by reference; Docker build contexts by
@@ -86,7 +102,7 @@ set, creates missing snapshots and reclaims stale ones. See the
 [Daytona operations runbook](../../.agents/ops/daytona.md#snapshot-preflight-and-reclamation)
 for the account-wide one-hour purge policy.
 
-Use `GvisorMachineFactory()` in place of `DockerMachineFactory()` for a local
+Use `DockerGvisorMachineFactory()` in place of `DockerMachineFactory()` for a local
 Docker daemon with `runsc` registered. Use `IrisMachineFactory(cluster="cw-rno2a")`
 for the existing Iris command and file-transfer backend. Host-side Terminus-2
 uses machine commands.
@@ -128,8 +144,33 @@ UTS namespaces. Container names resolve to `127.0.0.1` inside the group.
 address. Concurrent groups may use the same ports. Every member must request
 `NetworkPolicy.DENY`; the group never falls back to host networking.
 
-The Iris adapter supports single-container machine commands and file transfer;
-it provides neither `create_task` nor process sessions.
+The Iris adapter supports singleton `create_task`, machine commands and file
+transfer. It rejects multi-container tasks and provides no process sessions.
+Each command runs in a new process group. Timeout or caller cancellation stops
+that group, waits for its live members and remote exec to finish, and preserves
+the machine's files for verification. Failure to confirm the stop closes the
+machine. A stop marker fences commands admitted after cancellation.
+
+Declared storage requires a direct Kubernetes controller advertising
+`sandbox-storage-limit`. The candidate manifest sets exact-byte ephemeral-storage
+limits with zero harness allowance, including command files. Only newly marked
+sandbox pods' explicit own-limit evictions raise `DiskLimitExceeded`; ordinary
+jobs and node disk pressure retain their prior classification. SANDBOX writable
+layer accounting is unqualified, so no controller currently advertises this
+capability. Restricted-profile overflow evidence is insufficient.
+
+Prepared-image submission requires the separate `sandbox-image-workdir` backend
+capability, even without declared disk. Older controllers are rejected before
+submission because they hide the image's `/app` under an empty volume. This
+capability describes image preservation and does not qualify storage enforcement.
+
+Harbor selects this backend through `--environment iris-sandbox` with `cluster`,
+`pool`, `priority` and `ttl` kwargs. It reports no storage capability and rejects
+declared disk until a real SANDBOX overflow qualifies the pinned pool and its
+`runsc.toml` `overlay2` setting. Sandbox startup is currently blocked on
+[cpu-genoa](https://github.com/marin-community/marin/issues/11343) and
+[H100](https://github.com/marin-community/marin/issues/10090). The environment
+supports only single-container tasks without process-session model relays.
 
 Creation starts the containers and returns handles without waiting for health.
 Start host capabilities before readiness when a container needs them:
@@ -189,7 +230,7 @@ transports text. HTTP request/response messages sit above this byte-stream API.
 QEMU, ShellSim and Iris do not expose process sessions; online relays require a supported
 backend and fail explicitly otherwise.
 
-The same API works with `DockerMachineFactory` and `GvisorMachineFactory`.
+The same API works with `DockerMachineFactory` and `DockerGvisorMachineFactory`.
 Create the machine with `NetworkPolicy.DENY`, then enter `serve_http` before
 running the application and close the relay before closing the machine:
 
@@ -317,6 +358,18 @@ runtime. Daytona applies CPU, memory, storage, and GPU settings through its SDK.
 It rounds memory and storage up to whole GiB. Iris applies CPU, memory, and storage settings. QEMU applies CPU and
 memory settings. Backends reject resource overrides that they cannot apply.
 
+LOCAL can enforce declared storage inside the existing privileged worker with
+`LocalMachineFactory(disk_pool=LocalDiskPool(Path("/cache/shellbox-disks")))`.
+Import `LocalDiskPool` from `shellbox.backends.local.disk`. Construction probes
+ext4 loop mounts, OverlayFS, ENOSPC and cleanup on that host; ordinary factories
+continue rejecting `storage_mb`. The exact-size filesystem charges writable
+image layers, scratch, workdirs, `/dev/shm` and command spools, while shared
+read-only image layers remain outside it. See the [LOCAL route](../../docs/references/task-curation.md#full-population-oracle-filter)
+for prerequisites, accounting, crash recovery and explicit correctness tests.
+Async callers can await `verified_local_disk_pool(root)` from the same module;
+it runs the probe off the event loop and reuses the pool within a worker process
+and mount namespace. Harbor uses this path before acquiring LOCAL sandboxes.
+
 `Command.user` selects the execution user for one command. Docker accepts a
 username or UID string. An omitted user retains the image's user. ShellSim and
 QEMU accept only root overrides. Iris rejects user overrides. Daytona starts its
@@ -359,7 +412,7 @@ machine = await QemuMachineFactory(
 ).create(spec)
 ```
 
-The QEMU factory uses `ImageCache` to prepare each source once per process. Preparation selects `linux/amd64`, copies it to a local OCI layout and caches the layout by its selected manifest digest. Registry references remain snapshots within one process. For a private registry, pass a Skopeo `authfile` path to the factory. The default Skopeo policy accepts unsigned images over verified TLS; pass a Skopeo policy file path as `policy` for signature verification.
+The QEMU factory uses `ImageCache` to prepare each source once per process. Preparation selects `linux/amd64`, copies it to a local OCI layout and caches the layout by its selected manifest digest. Digest-pinned registry references also reuse verified layouts across processes when conversion from Docker manifest format to OCI format changes the manifest digest. The cache retains the source manifest chain and checks the source pin, index links, both configuration blob hashes, complete decoded configuration values, ordered layer digests, and prepared blobs before reuse. Original configuration bytes are retained even when the conversion changes their JSON serialization. When OCI conversion drops only Docker build metadata (`container`, `docker_version`, or `config.Image`), the prepared image retains the original configuration blob and its manifest references that blob. Other configuration differences and changed layer digests fail verification. Mutable registry references remain snapshots within one process. For a private registry, pass a Skopeo `authfile` path to the factory. The default Skopeo policy accepts unsigned images over verified TLS; a configured `policy` requires a fresh signature-verified copy from the registry.
 
 For QEMU, `DockerfileSource(context=..., dockerfile=...)` builds with a local Docker daemon and exports the result through Skopeo into the OCI cache. The cache fingerprints the Dockerfile and every path in its build context on each call. An unchanged context builds once per Python process; a changed context triggers a new build. Pin `FROM` by digest for repeatable builds. `QemuMachineFactory` accepts `PreparedImage` and needs `QemuAssets` and a `bundle_cache` to construct a guest bundle. `tests/manual/check_prepared_image.py` compares command output in Docker and QEMU for one registry image. The QEMU bundle cache key includes the prepared image digest, disk size, and caller-supplied `runtime_id`; change `runtime_id` when QEMU, kernel, BusyBox, firmware, or libraries change.
 
@@ -502,7 +555,7 @@ The Harbor QEMU adapter accepts a prebuilt `guest_bundle` or prepares a task ima
 from `docker_image` or `environment/Dockerfile`. Harbor jobs must select a
 [supported agent](../../vendor/harbor/README.md).
 
-The task must specify exactly one source: `docker_image` or `environment/Dockerfile`. The first trial in a Harbor process prepares the image. Later trials with the same source reuse it; concurrent trials wait for the same preparation. Each new process resolves registry references and rebuilds Dockerfile contexts; the OCI and QEMU bundle caches on disk reuse matching digests. For fully offline trials, prepare the image ahead of time and use a prebuilt guest bundle. Image preparation requires `skopeo` on `PATH`, `umoci`, `mkfs.ext4`, and `cpio` on the host. Dockerfile preparation also requires a working Docker builder. `registry_authfile` and `signature_policy` are optional environment kwargs for private registries and signed images; private registry authentication has not been tested end to end.
+The task must specify exactly one source: `docker_image` or `environment/Dockerfile`. The first trial in a Harbor process prepares the image. Later trials with the same source reuse it; concurrent trials wait for the same preparation. Each new process resolves mutable registry references and rebuilds Dockerfile contexts; verified digest-pinned images can be reused offline, and the QEMU bundle cache reuses matching digests. For fully offline trials, prepare the image ahead of time and use a prebuilt guest bundle. Image preparation requires `skopeo` on `PATH`, `umoci`, `mkfs.ext4`, and `cpio` on the host. Dockerfile preparation also requires a working Docker builder. `registry_authfile` and `signature_policy` are optional environment kwargs for private registries and signed images; private registry authentication has not been tested end to end.
 
 The 0.1 QEMU extra supplies the emulator but does not supply the guest kernel, BusyBox, firmware, or OCI staging tools, so task-image preparation needs the explicit paths above. A prebuilt `guest_bundle` needs no staging tools on the trial host. Skopeo is available through Linux distribution packages; its upstream project does not publish a portable standalone release binary and recommends distribution packages or its container image. We therefore leave Skopeo outside the wheel for now.
 
@@ -539,3 +592,37 @@ The guest has persistent files for a trial. A minimal bundle uses BusyBox `ash` 
 The QEMU image must contain the task tools and verifier dependencies needed without guest internet. `Bash` runs through a guest PTY on a separate virtio-serial channel. One `Bash` tool returns JSON with `output`, `status`, `exit_code`, and `truncated`. Pass `command` to start a command; omit it to read a running command, pass `input` to send text, or set `signal` to `interrupt` to send Ctrl-C. Use at most one of `command`, `input`, and `signal` per call. `Bash` waits at most 30 seconds per call; a longer command remains active for later reads or interruption. PTY stdout and stderr are combined. A tool result retains at most 128 KiB and marks excess output as truncated; excess output cannot be retrieved later. Agents can redirect large output to a file and inspect a smaller excerpt. `exit` or shell failure resets Bash while files remain. The one-shot serial protocol still buffers setup and verifier output in guest files. Each machine writes to a private temporary overlay over the read-only ext4 base; writes persist until close and are then discarded. Extended attributes, Linux capabilities, device nodes outside `/dev`, and volume semantics have not been checked against an OCI runtime.
 
 The guest is isolated by QEMU's emulated machine boundary, but this prototype has not been security audited. It is intended for nonhostile agents on an already controlled compute node.
+
+## Preserving SIF images as OCI
+
+The `shellbox.sif` API converts a digest-pinned primary amd64 Squashfs partition from a Singularity Image Format (SIF) file into a single-layer Open Container Initiative (OCI) layout on Linux. The caller pins the versions and supplies paths for `siftool`, `unsquashfs`, GNU tar, `umoci` and Bubblewrap. No Dockerfile build runs. The converter unpacks the OCI layer and compares every path, inode type, mode, owner, timestamp, file hash, symbolic link, hard link, device number and extended attribute against the original filesystem. A mismatch aborts conversion.
+
+The [SIF environment scripts](https://apptainer.org/docs/user/main/environment_and_metadata.html) run in an isolated Bubblewrap guest with a read-only root, an empty inherited environment and no network. Their exports become OCI environment values. The original scripts, runscript and labels remain in the filesystem. `sif_runtime` supports the source runscript form `cd ABSOLUTE_PATH; exec "$@"`. Other forms require the caller to establish an `OciRuntime` containing the source's environment, entrypoint, command, working directory, user and labels, then pass it directly to `oci_from_filesystem`. The metadata timeout applies to inspection, separately from task execution budgets.
+
+```python
+from pathlib import Path
+
+from shellbox.sif import OciTools, SifTools, oci_from_filesystem, sif_runtime, unpack_sif
+
+
+def convert_source(image_path: Path, expected_sif_sha256: str):
+    # The calling experiment supplies the local SIF path and its trusted input SHA-256.
+    source = unpack_sif(
+        image_path,
+        expected_sif_sha256,
+        Path("/private/conversion/source"),
+        SifTools(Path("/opt/tools/siftool"), Path("/usr/bin/unsquashfs")),
+        processors=4,
+    )
+    runtime = sif_runtime(source.root, Path("/usr/bin/bwrap"), metadata_timeout=60)
+    return oci_from_filesystem(
+        source.root,
+        runtime,
+        Path("/private/conversion/result"),
+        OciTools(Path("/usr/bin/tar"), Path("/usr/bin/umoci")),
+    )
+```
+
+The returned `OciFilesystem` exposes `layout`, `manifest_digest`, `config_digest`, `entries` and `tree_sha256`. `entries` is a path-ordered tuple of `FilesystemEntry` dataclasses; serialize each with `dataclasses.asdict`. `tree_sha256` is the SHA-256 of their UTF-8 JSON list, using sorted object keys, compact separators and `ensure_ascii=False`.
+
+The calling experiment's artifact step owns persistence and registry publication. Record the source SIF SHA, OCI digests, `OciRuntime`, filesystem entries and tree SHA. Publish the layout through an authenticated registry client and verify the pushed manifest digest. Registry visibility and task execution qualification require their own checks. Large image inputs and outputs stay on the regional worker.

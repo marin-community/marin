@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 from shellbox.backends.docker.machine import DockerCommandResult, DockerMachine, DockerMachineFactory, docker
-from shellbox.backends.gvisor.machine import GvisorMachineFactory
+from shellbox.backends.docker_gvisor.machine import DockerGvisorMachineFactory
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import Command, DockerImage, ExitReason, MachineSpec
 
@@ -24,7 +24,7 @@ from shellbox.machine import Command, DockerImage, ExitReason, MachineSpec
     [
         pytest.param(DockerMachineFactory, marks=pytest.mark.docker),
         # Requires a Docker host with runsc registered.
-        pytest.param(GvisorMachineFactory, marks=pytest.mark.manual),
+        pytest.param(DockerGvisorMachineFactory, marks=pytest.mark.manual),
     ],
 )
 def test_image_build_and_registry_cache_work_with_only_docker_on_path(tmp_path, monkeypatch, factory_type):
@@ -265,8 +265,18 @@ def test_docker_wire_preserves_resource_limits_and_per_command_users(monkeypatch
 
     asyncio.run(scenario())
     launch = requests[0]
-    limits = {flag: launch[launch.index(flag) + 1] for flag in ("--cpus", "--memory", "--storage-opt", "--gpus")}
-    assert limits == {"--cpus": "2", "--memory": "1536m", "--storage-opt": "size=1024M", "--gpus": "1"}
+    limits = {
+        flag: launch[launch.index(flag) + 1]
+        for flag in ("--cpus", "--memory", "--memory-swap", "--storage-opt", "--gpus")
+    }
+    # swapless enforcement: the memory cap must not be doubled by swap
+    assert limits == {
+        "--cpus": "2",
+        "--memory": "1536m",
+        "--memory-swap": "1536m",
+        "--storage-opt": "size=1024M",
+        "--gpus": "1",
+    }
     assert requests[2][requests[2].index("--user") + 1] == "1001"
     assert requests[3][requests[3].index("--user") + 1] == "1002"
     assert "--user" not in requests[4]

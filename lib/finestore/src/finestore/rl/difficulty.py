@@ -70,7 +70,29 @@ PROTOCOLS = MappingProxyType(
             ),
             0.7,
             (65536, 49152, 16384, 0.95, 20, 0.0, 1.0, 0.0, 0.0),
-        )
+        ),
+        # Legacy and read-only: the v2 protocol's recorded contract, kept so historical
+        # measurements stay readable now that unknown protocols fail closed (ruling
+        # 2026-11-19). PROTOCOL_ID stays v3; nothing writes new measurements under this id.
+        # Snowball postdates v2, so the entry carries only the three documented arms.
+        "atlas-difficulty-v2-65k16k": DifficultyProtocol(
+            MappingProxyType(
+                {
+                    Solver.SMALL: "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+                    Solver.LARGE: "Qwen/Qwen3.5-122B-A10B",
+                    Solver.HOSTED: "zai-org/GLM-5.3",
+                }
+            ),
+            MappingProxyType(
+                {
+                    Solver.SMALL: ThinkingPolicy.OFF,
+                    Solver.LARGE: ThinkingPolicy.ON,
+                    Solver.HOSTED: ThinkingPolicy.LOW,
+                }
+            ),
+            0.7,
+            (65536, 49152, 16384, 0.95, 20, 0.0, 1.0, 0.0, 0.0),
+        ),
     }
 )
 SOLVER_MODELS = PROTOCOLS[PROTOCOL_ID].models
@@ -691,6 +713,8 @@ class AttemptTally:
     """Task ids whose attempts ended blocked."""
     blocked_reasons: frozenset[str]
     """Distinct blocked-attempt reasons."""
+    unscored_reasons: frozenset[str]
+    """Typed gaps carried by the final attempt of tasks that never scored."""
 
 
 def _tally_attempts(measurement: DifficultyMeasurement, attempts: Sequence[DifficultyAttempt]) -> AttemptTally:
@@ -702,6 +726,7 @@ def _tally_attempts(measurement: DifficultyMeasurement, attempts: Sequence[Diffi
     scored: dict[str, float] = {}
     blocked: set[str] = set()
     blocked_reasons: set[str] = set()
+    last_reason: dict[str, str | None] = {}
     for attempt in attempts:
         if attempt.task_id not in selected:
             raise ValueError(f"Attempt is outside the selected sample: {attempt.task_id}")
@@ -718,11 +743,19 @@ def _tally_attempts(measurement: DifficultyMeasurement, attempts: Sequence[Diffi
         if attempt.status == AttemptStatus.SCORED:
             assert attempt.reward is not None
             scored[attempt.task_id] = attempt.reward
+        last_reason[attempt.task_id] = attempt.reason
+    # Unscored tasks whose final attempt carries a typed gap keep that gap on the
+    # measurement: a comparison-deadline task that exhausts the attempt budget stays
+    # deadline-stalled, so the source never reads as a complete measurement.
+    unscored_reasons = {
+        reason for task_id in selected - scored.keys() - blocked if (reason := last_reason.get(task_id)) is not None
+    }
     return AttemptTally(
         scored=scored,
         excluded=excluded,
         blocked=frozenset(blocked),
         blocked_reasons=frozenset(blocked_reasons),
+        unscored_reasons=frozenset(unscored_reasons),
     )
 
 
@@ -750,6 +783,7 @@ def measurement_from_attempts(
     solved = sum(reward == 1.0 for reward in tally.scored.values())
     interval = _wilson_interval(solved, n) if n else None
     pending = len(measurement.sample.tasks) - n - len(tally.blocked)
+    gap_reasons = set(tally.blocked_reasons) | set(tally.unscored_reasons)
     status = MeasurementStatus.PENDING
     if not pending:
         status = MeasurementStatus.BLOCKED if tally.blocked else MeasurementStatus.MEASURED
@@ -761,8 +795,8 @@ def measurement_from_attempts(
                 None
                 if status is MeasurementStatus.MEASURED
                 else (
-                    join_difficulty_gap_reasons(sorted(tally.blocked_reasons))
-                    if status is MeasurementStatus.BLOCKED
+                    join_difficulty_gap_reasons(sorted(gap_reasons))
+                    if gap_reasons
                     else DifficultyGap.AWAITING_SCORED_COVERAGE.value
                 )
             ),

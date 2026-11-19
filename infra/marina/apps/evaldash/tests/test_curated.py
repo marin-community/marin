@@ -70,6 +70,10 @@ from experiments.post_training.task_curation.images.build import (
 )
 from experiments.post_training.task_curation.local import artifact_prefix
 from experiments.post_training.task_curation.pipeline import HfSource
+from experiments.post_training.task_curation.tests.license_fixtures import (
+    isolated_license_bans as isolated_license_bans,
+)
+from experiments.post_training.task_curation.tests.license_fixtures import with_license
 
 
 @pytest.fixture
@@ -217,13 +221,15 @@ def test_regional_curation_builds_compare_and_grader_changes_remain_separate(raw
     (inputs / "test.jsonl").write_text(
         "\n".join(json.dumps({"problem": f"{index} + 1?", "answer": str(index + 1)}) for index in range(2)) + "\n"
     )
-    source = math_dataset(
-        name="colors",
-        benchmark="colors",
-        source=HfSource("fixture/colors", "a" * 40, ("test.jsonl",), SourceFormat.JSONL),
-        answer_field="answer",
-        population=2,
-        trials=1,
+    source = with_license(
+        math_dataset(
+            name="colors",
+            benchmark="colors",
+            source=HfSource("fixture/colors", "a" * 40, ("test.jsonl",), SourceFormat.JSONL),
+            answer_field="answer",
+            population=2,
+            trials=1,
+        )
     )
     dataset = source.config
     assert dataset is not None and dataset.recipe.grader is not None

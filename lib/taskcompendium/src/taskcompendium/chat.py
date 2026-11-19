@@ -15,11 +15,50 @@ from taskcompendium.models import (
     ConversationInput,
     ConversationToolCall,
     ConversationTrace,
+    ReplyStatus,
     TextMessage,
     ToolResult,
 )
 
 TEXT_BLOCKS = frozenset({"input_text", "output_text", "text"})
+TOOL_EVENT_KEYS = frozenset({"tool_calls", "function_call", "annotations"})
+TOOL_EVENT_TYPES = frozenset({"tool_use", "tool_result", "function_call", "web_search_call"})
+CONTROL_REPLY_STATUS = ReplyStatus(
+    origin="control",
+    finish_reason="control",
+    truncated=False,
+    provider_refusal=False,
+    tool_events=(),
+)
+
+
+def tool_event_paths(value: Any, path: str = "response") -> tuple[str, ...]:
+    """Locate tool calls and tool-derived annotations throughout a provider reply."""
+    events: list[str] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in TOOL_EVENT_KEYS and item:
+                events.append(f"{path}.{key}")
+            if key == "type" and isinstance(item, str) and item in TOOL_EVENT_TYPES:
+                events.append(f"{path}.type:{item}")
+            events.extend(tool_event_paths(item, f"{path}.{key}"))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            events.extend(tool_event_paths(item, f"{path}[{index}]"))
+    return tuple(events)
+
+
+def chat_reply_status(response: dict[str, Any]) -> ReplyStatus:
+    """Capture one chat completion's status before discarding provider-only fields."""
+    (choice,) = response["choices"]
+    finish_reason = choice.get("finish_reason")
+    return ReplyStatus(
+        origin="provider",
+        finish_reason=finish_reason,
+        truncated=finish_reason == "length",
+        provider_refusal=bool(choice["message"].get("refusal")),
+        tool_events=tool_event_paths(response),
+    )
 
 
 def message_text(content: Any) -> str:

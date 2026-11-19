@@ -5,13 +5,14 @@
 
 import asyncio
 import os
+import shlex
 from collections.abc import AsyncIterator, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from shellbox.image import RegistryImage
+from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import (
     Backend,
     Command,
@@ -32,6 +33,7 @@ from taskcompendium.models import (
     TaskSpec,
     require_resolved_environment,
 )
+from taskcompendium.repository_shell import repository_shell_environment
 from taskcompendium.runtime.environment import prepare_machine_spec
 from taskcompendium.runtime.resources import resource_bytes
 
@@ -68,12 +70,33 @@ async def _install_resources(machine: Machine, resources: tuple[TaskResource, ..
             source.chmod(0o644 if resource.mode is None else int(resource.mode, 8))
             if resource.mtime_ns is not None:
                 os.utime(source, ns=(resource.mtime_ns, resource.mtime_ns))
-            await machine.upload(source, f"/{resource.path}")
+            target = f"/{resource.path}"
+            await machine.upload(source, target)
+            # Single-file uploads on some backends write bytes only; restore the
+            # declared metadata inside the guest so every backend receives the
+            # same state. On archive-transfer backends this re-asserts the
+            # values the upload already preserved.
+            restore = []
+            if resource.mode is not None:
+                restore.append(f"chmod {int(resource.mode, 8):o} {shlex.quote(target)}")
+            if resource.mtime_ns is not None:
+                seconds, nanoseconds = divmod(resource.mtime_ns, 1_000_000_000)
+                restore.append(f"touch -d @{seconds}.{nanoseconds:09d} {shlex.quote(target)}")
+            if restore:
+                await machine.run(Command(("sh", "-c", " && ".join(restore)), user="0"))
 
 
-def _machine_spec(requirements: EnvironmentRequirements, runtime: MachineRuntimeSpec) -> MachineSpec:
-    require_resolved_environment(requirements)
-    if requirements.docker_image is not None:
+def _machine_spec(
+    requirements: EnvironmentRequirements,
+    runtime: MachineRuntimeSpec,
+    docker_build_source: DockerfileSource | None = None,
+) -> MachineSpec:
+    if requirements.docker_build is None or docker_build_source is None:
+        require_resolved_environment(requirements)
+    repository = repository_shell_environment(requirements)
+    if requirements.docker_build is not None and docker_build_source is not None:
+        source = docker_build_source
+    elif requirements.docker_image is not None:
         source = RegistryImage(requirements.docker_image)
     elif requirements.packages_lock is not None:
         source = HostImage()
@@ -83,13 +106,16 @@ def _machine_spec(requirements: EnvironmentRequirements, runtime: MachineRuntime
         source = PackageSpec()
     else:
         raise UnsupportedMachineSpec("Machine execution requires explicit semantics and native dependencies")
+    workdir = requirements.working_directory
+    if workdir is None:
+        workdir = (
+            repository.workspace
+            if repository is not None
+            else "" if requirements.docker_image or requirements.docker_build else "/workspace"
+        )
     return MachineSpec(
         source=source,
-        workdir=(
-            requirements.working_directory
-            if requirements.working_directory is not None
-            else "" if requirements.docker_image else "/workspace"
-        ),
+        workdir=workdir,
         network=runtime.network,
         memory_mb=runtime.memory_mb,
         cpus=runtime.cpus,
@@ -141,6 +167,7 @@ async def _prepare_machine(
     factories: Mapping[str, MachineFactory],
     cleanup: _Cleanup,
     owned: AsyncExitStack,
+    docker_build_source: DockerfileSource | None = None,
 ) -> Machine | None:
     """Prepare a task machine with its resources and setup commands."""
     if runtime is None:
@@ -150,7 +177,7 @@ async def _prepare_machine(
             prepare_machine_spec,
             requirements,
             factories[runtime.backend],
-            _machine_spec(requirements, runtime),
+            _machine_spec(requirements, runtime, docker_build_source),
             dict(os.environ),
         )
         machine = await _acquire_machine(runtime, prepared, factories, cleanup, owned)
@@ -215,8 +242,40 @@ class _AttemptMachineFactory:
 
 
 @asynccontextmanager
+async def _machine_ownership(cleanup_timeout: float) -> AsyncIterator[tuple[_Cleanup, AsyncExitStack]]:
+    cleanup = _Cleanup(cleanup_timeout)
+    try:
+        async with AsyncExitStack() as owned:
+            yield cleanup, owned
+    except BaseException as error:
+        if cleanup.errors:
+            error.add_note(f"Machine cleanup failed: {[failure.operation for failure in cleanup.errors]}")
+        raise
+    if cleanup.errors:
+        raise RuntimeError(f"Machine cleanup failed: {[error.operation for error in cleanup.errors]}")
+
+
+@asynccontextmanager
+async def grading_machine_factory(
+    factory: MachineFactory, runtime: MachineRuntimeSpec, *, cleanup_timeout: float
+) -> AsyncIterator[MachineFactory]:
+    """Own grading machines until exit and enforce their declared startup and cleanup deadlines.
+
+    Cleanup failures raise after a successful body or attach a note to its exception.
+    A runtime cleanup deadline overrides the caller's fallback deadline.
+    """
+    async with _machine_ownership(cleanup_timeout) as (cleanup, owned):
+        yield _AttemptMachineFactory(runtime, {runtime.backend: factory}, cleanup, owned)
+
+
+@asynccontextmanager
 async def task_machine(
-    task: TaskSpec, factory: MachineFactory, runtime: MachineRuntimeSpec, *, cleanup_timeout: float
+    task: TaskSpec,
+    factory: MachineFactory,
+    runtime: MachineRuntimeSpec,
+    *,
+    cleanup_timeout: float,
+    docker_build_source: DockerfileSource | None = None,
 ) -> AsyncIterator[Machine]:
     """Start a machine for ``task``: install its resources and run its setup commands. Close it on exit.
 
@@ -231,6 +290,7 @@ async def task_machine(
         factory,
         runtime,
         cleanup_timeout=cleanup_timeout,
+        docker_build_source=docker_build_source,
     ) as machine:
         yield machine
 
@@ -243,23 +303,16 @@ async def prepare_machine(
     runtime: MachineRuntimeSpec,
     *,
     cleanup_timeout: float,
+    docker_build_source: DockerfileSource | None = None,
 ) -> AsyncIterator[Machine]:
     """Install resources and run setup on a machine, closing it when the context exits.
 
     Cleanup failures propagate after a successful body, or are attached to its exception as a note.
     ``runtime.cleanup_timeout`` overrides the supplied cleanup deadline when set.
     """
-    cleanup = _Cleanup(cleanup_timeout)
-    try:
-        async with AsyncExitStack() as owned:
-            machine = await _prepare_machine(
-                requirements, runtime, resources, {runtime.backend: factory}, cleanup, owned
-            )
-            assert machine is not None
-            yield machine
-    except BaseException as error:
-        if cleanup.errors:
-            error.add_note(f"Machine cleanup failed: {[failure.operation for failure in cleanup.errors]}")
-        raise
-    if cleanup.errors:
-        raise RuntimeError(f"Machine cleanup failed: {[error.operation for error in cleanup.errors]}")
+    async with _machine_ownership(cleanup_timeout) as (cleanup, owned):
+        machine = await _prepare_machine(
+            requirements, runtime, resources, {runtime.backend: factory}, cleanup, owned, docker_build_source
+        )
+        assert machine is not None
+        yield machine

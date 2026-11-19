@@ -1,0 +1,18 @@
+{
+  "upstream": "https://github.com/ChenxinAn-fdu/POLARIS",
+  "revision": "eda12fe22dd83aca59ec46a67147240dc483f62b",
+  "files": [
+    {
+      "upstream_path": "deepscaler/rewards/math_utils/utils.py",
+      "shipped_path": "polaris_math.py",
+      "sha256": "9bdc85ecb9c9255c387c04df5ae2d9a858a44d169418f05c262b78d2c33c963b",
+      "bytes": 14248
+    },
+    {
+      "upstream_path": "LICENSE",
+      "shipped_path": "LICENSE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "bytes": 11357
+    }
+  ]
+}

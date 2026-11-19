@@ -3,6 +3,7 @@
 
 """SkyRL declarations turn source-shaped rows into tasks with the right graders."""
 
+import hashlib
 import json
 from copy import deepcopy
 from typing import cast
@@ -10,6 +11,8 @@ from typing import cast
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from finestore.rl.curation import SourceOrigin
+from finestore.rl.status_taxonomy import DataRestriction
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.answers import EVIDENCE_PATH
 from taskcompendium.grader import grader_config
@@ -22,24 +25,59 @@ from taskcompendium.models import (
     TextMessage,
     VerifyitGrader,
 )
-from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection
-from taskcompendium.pipeline.sources import SourceShard, staged_raw_file_rows
+from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, IntendedUse
+from taskcompendium.pipeline.sources import SourceFormat, SourceShard, staged_raw_file_rows
 from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.runtime.task_grading import grade_task
 
 from experiments.post_training.task_curation.datasets.skyrl import code, ifeval, math, mcq, preference
+from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
+from experiments.post_training.task_curation.lexical_policy import source_lexical_use
 from experiments.post_training.task_curation.pipeline import CurationRecipe, source_files
+from experiments.post_training.task_curation.source import SourceInfo
 from experiments.post_training.task_curation.tests.conversion import (
     convert_row,
     converted_task,
     fixture_context,
 )
+from experiments.post_training.task_curation.within_source_census import census_source
 
 RECIPES = {
     source.name: cast(CurationRecipe, source.config)
     for module in (math, code, ifeval, mcq, preference)
     for source in module.sources()
 }
+# The HARDMath rhs remediation variant is registered separately (its registry receipts
+# are pending); the tests exercise its converter through the same recipe shape.
+HARDMATH_RHS_RECIPE = cast(
+    CurationRecipe,
+    math.math_source(
+        math.MathSource(
+            "hardmath_rhs",
+            math.HfSource(
+                "pafitis/HARDMath_processed_training",
+                "937e9f10356e31e854f6efb9a2507f1e200c8b25",
+                ("data/train-00000-of-00001.parquet",),
+                SourceFormat.PARQUET,
+            ),
+            math.convert_hardmath_rhs,
+            IntendedUse.TRAIN,
+            math.HARDMATH_RUBRIC,
+            info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
+                upstream_dataset="hardmath",
+                upstream_name="hardmath",
+                subset=None,
+                variant="rhs",
+                build_path="MarinSkyRL",
+                origin=SourceOrigin.PAFITIS,
+                family="math-answer",
+                tags=("rlvr", "single-turn", "private", "remediated", "gym/aime"),
+            ),
+        )
+    ).config,
+)
+RECIPES["hardmath_rhs"] = HARDMATH_RHS_RECIPE
 
 SUM_TESTS = {"inputs": ["1 2\n"], "outputs": ["3\n"]}
 SUM_SOLUTION = "a, b = map(int, input().split())\nprint(a + b)"
@@ -240,6 +278,42 @@ def verifier_file(task: TaskSpec, path: str) -> bytes:
     return resource_bytes(next(resource for resource in task.resources.verifier if resource.path == path))
 
 
+def test_historical_aime_excludes_matched_evaluation_rows(tmp_path):
+    source = next(source for source in math.sources() if source.name == "aime_1983_2024")
+    task = converted_task(source.config, ROWS["aime_1983_2024"])
+    encoded = task.model_dump_json()
+    specs = tmp_path / "specs"
+    specs.mkdir()
+    pq.write_table(pa.table({"id": [task.id], "task_spec": [encoded]}), specs / "part-000000.parquet")
+    pq.write_table(pa.table({"id": [task.id]}), tmp_path / "drop_manifest.parquet")
+    population = SourceTextPopulation(
+        path=str(tmp_path),
+        source_id=source.info.id,
+        dataset_id=source.dataset.name,
+        dataset_revision=source.dataset.revision,
+        source_version=source.version,
+        converter_revision="a" * 40,
+        text_renderer_version="fixture",
+        task_count=1,
+        text_sha256="0" * 64,
+        task_specs_sha256=hashlib.sha256(encoded.encode()).hexdigest(),
+        main_output_dir=str(tmp_path),
+        specs_output_dir=str(specs),
+        converter_rejections={},
+        admission_rejections={},
+    )
+    plan = census_source(
+        population,
+        {"measured_tasks": 1, "contaminated_tasks": 1, "evidence_url": str(tmp_path / "measurement.json")},
+        str(tmp_path / "retention"),
+        lexical_use=source_lexical_use(source),
+    )
+    assert plan["retained_count"] == 0 and plan["combined_drop_count"] == 1
+    assert pq.read_table(plan["combined_drop_manifest_uri"]).to_pylist() == [
+        {"task_id": task.id, "kept_id": task.id, "reasons": ["LEXICAL_CONTAMINATION"]}
+    ]
+
+
 @pytest.mark.parametrize("name", sorted(ANSWERS))
 def test_in_process_grader_scores_the_known_answer(name):
     task = converted_task(RECIPES[name], ROWS[name])
@@ -396,6 +470,18 @@ REJECTIONS = [
         ImportFailureKind.UNSUPPORTED,
         "unsupported_proof_contract",
     ),
+    (
+        "numina_math",
+        {
+            "problem": "Describe the geometric locus stated by the configuration.",
+            "solution": (
+                "The boxed conclusion: $\\boxed{The intersection points of the midlines of the triangle "
+                "formed by the centers of the excircles of a triangle lie on a single circle.}$"
+            ),
+        },
+        ImportFailureKind.SOURCE_DEFECT,
+        "invalid_reference",
+    ),
     ("hendrycks_math", {"solution": "The answer is 5."}, ImportFailureKind.UNSUPPORTED, "missing_final_answer"),
     ("gpqa", {"Incorrect Answer 3": " Neutron "}, ImportFailureKind.SOURCE_DEFECT, "duplicate_options"),
     (
@@ -536,3 +622,74 @@ def test_kto_join_failure_releases_no_component_row(tmp_path, failure):
     expected = ImportFailureKind.SOURCE_DEFECT if failure == "malformed_label" else ImportFailureKind.UNSUPPORTED
     assert error.value.kind == expected
     assert "Valid request" not in str(error.value)
+
+
+# Real HARDMath rows (pafitis/HARDMath_processed_training@937e9f10356e31e854f6efb9a2507f1e200c8b25).
+HARDMATH_ODE_ROW = {
+    "question": (
+        "Consider the following third-order ordinary differential equation "
+        "$$y''' = \\frac{y}{\\sin{\\left(x \\right)} + 2} + y'^{4} + \\frac{y''}{\\cos{\\left(x \\right)} + 4} "
+        "- \\frac{1}{x - 1}$$\nwith initial conditions at $x = 0: y(0) = 2.00, y'(0) = 3.00, y''(0) = 0.00.$\n"
+        "Find analytical expressions that approximate the solution of $y(x)$ in the small and large $x$ regimes.\n\n"
+    ),
+    "ground_truths": (
+        "$\\boxed{[y = x^{3} \\cdot \\left(\\frac{41}{3} + \\frac{1}{3 \\left(\\sin{\\left(x \\right)}"
+        " + 2\\right)}\\right)"
+        " + 3 x + 2, y = - \\sqrt[3]{30}(0.27 - x)^{\\frac{1}{3}}+4.01]}$"
+    ),
+}
+HARDMATH_NONDIM_ROW = {
+    "question": (
+        "Nondimensionalize the polynomial\\[a_{1} x^{21} + a_{2} x^{7} + a_{3}\\]"
+        "into one of the form $\\epsilon y^{21} + y^{7} + 1. $Express $\\epsilon$ as a function of "
+        "$a_1$, $a_2$, and $a_3.$"
+    ),
+    "ground_truths": "$\\boxed{\\epsilon=\\frac{a_{1} a_{3}^{2}}{a_{2}^{3}}}$",
+}
+HARDMATH_SCALAR_ROW = {
+    "question": "Find the limit of $x/(2x+1)$ as $x \\to \\infty$.",
+    "ground_truths": "\\frac{1}{2}",
+}
+
+
+def test_convert_hardmath_rhs_strips_left_hand_sides_from_real_rows():
+    ode = convert_row(RECIPES["hardmath_rhs"], HARDMATH_ODE_ROW)
+    assert not isinstance(ode, ImportRejection)
+    expected_ode = (
+        "[x^{3} \\cdot \\left(\\frac{41}{3} + \\frac{1}{3 \\left(\\sin{\\left(x \\right)} + 2\\right)}\\right) "
+        "+ 3 x + 2, "
+        "- \\sqrt[3]{30}(0.27 - x)^{\\frac{1}{3}}+4.01]"
+    )
+    assert ode.grader.parameters["expected"] == expected_ode
+
+    nondim = convert_row(RECIPES["hardmath_rhs"], HARDMATH_NONDIM_ROW)
+    assert not isinstance(nondim, ImportRejection)
+    assert nondim.grader.parameters["expected"] == "\\frac{a_{1} a_{3}^{2}}{a_{2}^{3}}"
+
+    # A reference without a left-hand side is already canonical: the rule is a no-op.
+    scalar = convert_row(RECIPES["hardmath_rhs"], HARDMATH_SCALAR_ROW)
+    assert not isinstance(scalar, ImportRejection)
+    assert scalar.grader.parameters["expected"] == "\\frac{1}{2}"
+
+
+def test_convert_hardmath_rhs_differs_from_the_original_only_in_the_reference():
+    original = convert_row(RECIPES["hardmath"], HARDMATH_NONDIM_ROW)
+    remediated = convert_row(RECIPES["hardmath_rhs"], HARDMATH_NONDIM_ROW)
+    assert not isinstance(original, ImportRejection) and not isinstance(remediated, ImportRejection)
+    assert original.grader.parameters["expected"] == "\\epsilon=\\frac{a_{1} a_{3}^{2}}{a_{2}^{3}}"
+    assert original.grader.parameters["expected"] != remediated.grader.parameters["expected"]
+    # The grading machinery stays the math grader: only the reference text (and the
+    # math_type it derives) is normalized.
+    assert original.grader.mode == remediated.grader.mode == "math"
+
+
+def test_convert_hardmath_rhs_excludes_unparseable_members():
+    row = {
+        "question": "Solve the differential equation and state both branches.",
+        "ground_truths": "$\\boxed{[y = \\unknownmacro{1}, y = 2]}$",
+    }
+    rejection = convert_row(RECIPES["hardmath_rhs"], row)
+    assert isinstance(rejection, ImportRejection)
+    assert rejection.kind is ImportFailureKind.SOURCE_DEFECT
+    assert rejection.reason == "invalid_reference"
+    assert "parseable math target" in rejection.detail

@@ -12,6 +12,7 @@ from verifyit.spec import ExactSpec, JudgeSpec
 
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading import grade_answer
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import (
     AnswerType,
     CommandSemantics,
@@ -19,6 +20,7 @@ from taskcompendium.models import (
     ConversationTrace,
     DockerBuildContext,
     EnvironmentRequirements,
+    ExecutionRequirements,
     GradingAttempt,
     PlainText,
     ResourceGroups,
@@ -52,6 +54,29 @@ def specification():
         grader=EXACT_DONE,
         source=Source(dataset="org/project", revision="pinned-revision", row="0", importer_revision="1"),
     )
+
+
+def test_absent_execution_requirements_serialize_without_the_null_key(specification):
+    """Populations frozen before the field existed must re-serialize byte-identically.
+
+    ``execution_requirements`` joined the schema after many populations were
+    frozen. Serializing its default ``None`` as an explicit ``null`` key would
+    change every re-normalization's TaskSpec digest and break the exact-input
+    bindings against the frozen measurements.
+    """
+    wire = specification.model_dump_json()
+    assert '"execution_requirements"' not in wire
+    assert TaskSpec.model_validate_json(wire).model_dump_json() == wire
+    payload = specification.model_dump(mode="json")
+    assert "execution_requirements" not in payload
+    declared = specification.model_copy(
+        update={
+            "execution_requirements": ExecutionRequirements(
+                cpus=2, memory_mb=4096, storage_mb=10240, agent_timeout_sec=600, verifier_timeout_sec=600
+            )
+        }
+    )
+    assert '"execution_requirements"' in declared.model_dump_json()
 
 
 @pytest.mark.parametrize("answer_type", [AnswerType.FILE, AnswerType.WORKSPACE_STATE])
@@ -225,19 +250,17 @@ def test_grader_configuration_rejects_nested_nonfinite_json_numbers(specificatio
     "base_path,alias",
     [("foo", "foo."), ("foo", "foo "), ("inputs/answer", "inputs/answer:backup"), ("foo", "FOO"), ("a/b", "a\\b")],
 )
-def test_resource_groups_preserve_distinct_linux_files(tmp_path, specification, base_path, alias):
+def test_resource_groups_preserve_distinct_linux_files(specification, base_path, alias):
     wire = specification.model_dump(mode="json")
     wire["resources"] = {
         "all": [{"path": base_path, "source": {"kind": "inline_file", "content_base64": "cHVibGlj"}}],
         "worker": [{"path": alias, "source": {"kind": "inline_file", "content_base64": "b3ZlcndyaXRl"}}],
     }
     task = TaskSpec.model_validate(wire)
-    for resource in task.resources.all + task.resources.worker:
-        target = tmp_path / resource.path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(base64.b64decode(resource.source.content_base64))
-    assert (tmp_path / base_path).read_bytes() == b"public"
-    assert (tmp_path / alias).read_bytes() == b"overwrite"
+    assert {
+        resource.path: base64.b64decode(resource.source.content_base64)
+        for resource in task.resources.all + task.resources.worker
+    } == {base_path: b"public", alias: b"overwrite"}
 
 
 @pytest.mark.parametrize("candidate,reward", [("done", 1.0), ("incorrect", 0.0)])
@@ -315,7 +338,10 @@ VERIFYIT_ENVIRONMENT = {"kind": "verifyit", "environment": {"docker_image": IMAG
             {
                 "grader": (
                     VERIFYIT_ENVIRONMENT
-                    | {"mode": "exact", "parameters": {"expected": ["done"], "output": "/tests/answer.txt"}}
+                    | {
+                        "mode": "exact",
+                        "parameters": {"expected": ["done"], "output": "/tests/answer.txt"},
+                    }
                 )
             },
             id="verifyit-answer-file-under-tests",
@@ -333,3 +359,55 @@ def test_task_json_rejects_prior_schema_version(specification):
     payload["schema_version"] = "0.26"
     with pytest.raises(ValidationError):
         TaskSpec.model_validate_json(json.dumps(payload))
+
+
+def test_explicit_null_execution_requirements_round_trip(specification):
+    """A frozen packet carrying an explicit null keeps the key and its identity."""
+    wire = specification.model_dump_json()
+    injected = wire.replace(
+        '"environment_requirements":', '"execution_requirements":null,"environment_requirements":', 1
+    )
+    spec = TaskSpec.model_validate_json(injected)
+    assert '"execution_requirements":null' in spec.model_dump_json()
+    assert TaskSpec.model_validate_json(spec.model_dump_json()).model_dump_json() == spec.model_dump_json()
+    # the explicit null is real evidence: it digests differently from the
+    # absent field, and both stay stable across re-serialization
+    assert canonical_sha256(spec.model_dump(mode="json")) != canonical_sha256(specification.model_dump(mode="json"))
+    assert canonical_sha256(spec.model_dump(mode="json")) == canonical_sha256(
+        TaskSpec.model_validate_json(spec.model_dump_json()).model_dump(mode="json")
+    )
+
+
+def test_explicit_literal_completion_protocol_round_trip(specification):
+    """A str-typed late-joining field survives the explicit-null serializer.
+
+    The serializer must not assume every late-joining field is a model: the
+    str-typed completion_protocol crashed value.model_dump() when explicitly
+    set (B's regional validation on baf6327d53).
+    """
+    spec = specification.model_copy(update={"completion_protocol": "tool_free_single"})
+    assert spec.model_dump(mode="json")["completion_protocol"] == "tool_free_single"
+    assert spec.model_dump()["completion_protocol"] == "tool_free_single"
+    assert '"completion_protocol":"tool_free_single"' in spec.model_dump_json()
+    # and the explicit null case still round trips
+    null_spec = specification.model_copy(update={"completion_protocol": None})
+    assert null_spec.model_dump(mode="json")["completion_protocol"] is None
+    absent = specification.model_dump(mode="json")
+    assert "completion_protocol" not in absent
+
+
+def test_serializer_honors_caller_exclude_arguments(specification):
+    """model_dump(exclude=...) drops the field even when it is explicitly set."""
+    spec = specification.model_copy(update={"verifier_execution_requirements": None})
+    payload = spec.model_dump(mode="json", exclude={"verifier_execution_requirements"})
+    assert "verifier_execution_requirements" not in payload
+    payload_python = spec.model_dump(exclude={"verifier_execution_requirements"})
+    assert "verifier_execution_requirements" not in payload_python
+    # exclude_defaults keeps an explicitly-set None out as well
+    assert "verifier_execution_requirements" not in spec.model_dump(mode="json", exclude_defaults=True)
+    # a field set to a real value survives exclude_defaults and honors exclude
+    valued = specification.model_copy(update={"completion_protocol": "tool_free_single"})
+    assert "completion_protocol" not in valued.model_dump(mode="json", exclude={"completion_protocol"})
+    assert valued.model_dump(mode="json", exclude_defaults=True)["completion_protocol"] == "tool_free_single"
+    # absent fields stay absent with no arguments
+    assert "execution_requirements" not in specification.model_dump(mode="json")

@@ -12,7 +12,7 @@ from typing import Any, Protocol
 from pydantic import BaseModel, ConfigDict, Field
 from shellbox.machine import NetworkPolicy
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
-from taskcompendium.models import TaskSpec
+from taskcompendium.models import ReplyStatus, TaskSpec
 from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.reasoning_markup import ReasoningViolation
 
@@ -119,6 +119,8 @@ class ModelTurn:
     """Token counts that the transport reports. The token budget counts them instead of the token IDs."""
     reasoning_violation: ReasoningViolation | None = None
     """The malformed reasoning span that the transport found in the reply, if any."""
+    reply_status: ReplyStatus | None = None
+    """Provider completion evidence for graders whose contract depends on more than answer text."""
 
     @property
     def request_tokens(self) -> int:

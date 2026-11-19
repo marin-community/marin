@@ -26,6 +26,18 @@ flowchart LR
     G --> R[Typed grade result]
 ```
 
+## Native tool-free completions
+
+A TaskSpec with `completion_protocol="tool_free_single"` requires its original system and user messages, one completion, and no actor environment or tools. Harbor's `task-spec-chat` agent serves this protocol directly. Generic shell and direct-chat harnesses reject it. Hidden verifier resources and original solutions stay outside the model request.
+
+Configure the Harbor agent with `budget_manifest`, `budget_manifest_sha256`, `backend_identity_sha256` and `tokenization_identity`. The manifest is a JSON object keyed by the lowercase hexadecimal SHA-256 of UTF-8 `system_content + "\n" + user_content`. Each value validates as [`PromptBudget`](src/taskcompendium/request_budget.py). Its exact fields are `prompt_sha256`, `model`, `endpoint`, `backend_identity_sha256`, `tokenization`, `endpoint_limit_source`, `limits` and `prompt_tokens`. `tokenization` contains the tokenizer name, immutable Hugging Face `revision`, `chat_template_sha256` and `template_arguments`. `limits` is the shared `RequestBudget` with `context_tokens`, `input_tokens` and `output_tokens`.
+
+Supply the expected backend identity SHA independently from the manifest, using the pinned serving receipt recorded by the launch. Supply the tokenizer identity from the same launch. The runtime compares these configured identities, the model name and endpoint to the manifest, loads the immutable tokenizer revision, verifies the template SHA, and recounts the unchanged request. These checks bind the request to supplied serving evidence; they do not independently qualify the server's weights or hardware.
+
+`endpoint_limit_source` identifies the evidence for the endpoint's native context and output limits. For this protocol, `input_tokens` must equal `context_tokens - 1`; no additional input cap filters the population. Request `max_tokens` is the smaller of `output_tokens` and the context remaining after the exact prompt count. The agent's configured output and total-token caps must permit that full capacity. Missing or mismatched evidence, and prompts leaving no output capacity, fail technically before inference. Reference-token estimates never replace native counts.
+
+Requests disable tools and web plugins explicitly. Sampling options cannot override the protocol or budget. `<agent logs_dir>/tool-free/` retains `budget.json`, `request.json`, `wire_request.json`, `raw_response.json`, `response_status.json` and `answer_status.json`. Returned tool calls are never parsed or executed: their text and tool-event evidence reach the source's original verifier. Endpoint token-count mismatches fail technically with the raw response retained. An original-oracle control executes the preserved source solution; an empty control submits no answer text. Both record `origin="control"` with explicit truncation, refusal and tool-event fields. Unknown provider status is never replaced by false flags.
+
 ## Evaluation corpora
 
 `taskcompendium.evaluation.spec` defines `EvaluationProtocol` (schema version 3),
@@ -150,7 +162,9 @@ to build each context and replace it with a digest-pinned image. All three
 dependency forms require `LINUX_PROCESS` semantics. TaskCompendium supplies no
 build resolver; runtimes and SAMPLE/FULL controls reject unresolved contexts.
 Native requirements without packaging remain representable but cannot execute
-through the current adapters. Memory settings are advisory sizing hints.
+through the current adapters. Memory allocations remain attached to machine specifications. LOCAL enforces
+them with delegated cgroup v2; workers without delegation report unenforced limits. Execution qualification
+requires resource enforcement.
 
 The [Harbor exporter](../../experiments/post_training/task_curation/tasktrove/harbor_export.py) emits build inputs;
 see the [campaign quickstart](../../experiments/post_training/task_curation/README.md#harbor-compatibility-view)
@@ -244,12 +258,26 @@ A `ScriptGrader` declares:
 | `artifacts` | Files and directories copied from the agent's machine into the grading machine, with exclusions and a missing-file policy. |
 | `answer_path` | Where the extracted answer is written (default `/app/answer.txt`): text as text, JSON as JSON, and a final action as the final assistant message's JSON. |
 | `conversation_path` | Where the conversation is written as OpenAI-style chat messages in JSON (default `/tests/conversation.json`). |
+| `reply_status_path` | Optional host-written JSON completion status; declaring it requires `GradingAttempt.reply_status`. |
 | `reward` | `StdoutReward` (default), `ExitCodeReward`, or `FileReward`. |
 | `empty_output` | `ZERO` rejects an empty extracted answer; `GRADE` passes it to the script. |
 | `judge` | Optional `JudgeSpec` declaring the model service required by the script. |
 | `timeout` | Deadline in seconds for each grading command (default 600). |
 
+`ScriptGrader.reply_status_path` opts into a host-written JSON status file. The `GradingAttempt.reply_status` value records whether evidence came from the provider or an explicit control, the provider finish reason, truncation and provider-refusal flags, and JSON field paths identifying tool events (for example, `response.choices[0].message.tool_calls`). Chat transports record nonempty `tool_calls`, `function_call`, and `annotations` fields, plus entries whose `type` is `tool_use`, `tool_result`, `function_call`, or `web_search_call`, throughout the provider response. Any nonempty annotations field counts as tool evidence, including in provider metadata. The model's workspace cannot supply this evidence. Missing required status raises a grading error instead of assuming a complete, tool-free response.
+
+RolloutEngine's ChatModel, Harbor's TaskSpecChatAgent, and SkyRL direct chat preserve this status through grading. The rollout record and evaluation grading retries retain it. A transport that does not capture reply status cannot run a grader that requires it; graders without reply_status_path keep their existing behavior.
+
 `StdoutReward` requires exit code 0 and one finite number on standard output; anything else is `infra_error`. `ExitCodeReward` scores 1.0 for exit code 0 and 0.0 otherwise. `FileReward.files` lists candidate reward files in priority order; the first that exists supplies the score. Each `RewardFile` holds a number, or a JSON object whose `key` (default `reward`) holds the score and whose optional `detail` object becomes the grade detail. `FileReward.pass_above` sets `GradeResult.passed`; `ExitCodeReward` sets it from the exit code. A missing, empty, or invalid reward file is `infra_error`. A timed-out command is `infra_error` for every reward source.
+
+Sandbox Verifyit grading stages the producer's framework source under
+`/tests/.taskcompendium-runtime`. The declared image's `python3` verifies its
+manifest and imports that source in an isolated wrapper. The manifest digest
+appears as `verifyit_runtime_sha256` in grading diagnostics. Source scripts keep
+their declared environment, interpreter lookup, setup commands, and verdict
+contract; wrapper imports do not change their `PATH` or `PYTHONPATH`. The image
+must provide Verifyit's dependencies, including `tomli-w`; the harness installs
+no packages. Resources colliding with the private runtime directory are rejected.
 
 `RewardFileFormat.VERDICT_JSON` reads Verifyit's structured `reward`, `status`
 and `detail` fields. It preserves unscored infrastructure failures and invalid

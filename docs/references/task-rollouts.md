@@ -86,8 +86,9 @@ rewrite the task Parquet.
 factory identifiers, the supported requirements, and the machines that engine grading needs: task resources,
 and a `file` or `workspace_state` answer that the engine grades, need a task machine. It rejects a graded
 `state` task, because the engine does not capture state. Then it calls the harness's own `check(task, limits)`.
-The selected factory applies network and hardware settings. Memory is advisory on Local;
-preparation omits that allocation because bubblewrap cannot enforce it.
+The selected factory applies network and hardware settings. Preparation preserves memory allocations for
+RolloutEngine task and grading machines, including LOCAL. LOCAL enforces them through delegated cgroup v2;
+workers without delegation report unenforced limits. Execution qualification requires resource enforcement.
 
 An environment with `docker_image` uses that prebuilt image. The reference must contain a SHA-256 digest.
 An environment with `packages_lock` and no image requires a `LocalMachineFactory`.
@@ -590,6 +591,10 @@ A `VerifyitGrader` with an environment cannot grade a `native_action` answer.
 A `ScriptGrader` declares a command, collect commands, artifacts, an answer path, a conversation path, and a reward source.
 The verifier machine receives the extracted answer at `answer_path`.
 It receives the conversation as OpenAI-style chat-message JSON at `conversation_path`, by default `/tests/conversation.json`.
+An optional `reply_status_path` receives host-captured completion status after candidate files are installed, so candidate outputs cannot overwrite it. The JSON records origin, finish reason, truncation, provider refusal and tool-event JSON field paths. ChatModel and SkyRL direct chat capture it; Harbor and evaluation grading retries preserve it. A grader requiring status fails when it is missing. See the [ScriptGrader fields](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/README.md#what-is-a-grader) for the response fields counted as tool evidence.
+
+Sources requiring one native-budgeted, tool-free completion declare `completion_protocol="tool_free_single"`. Harbor's `task-spec-chat` agent requires a SHA-bound per-prompt budget manifest and independently configured tokenizer/backend identities. It recounts the exact source messages before inference, disables tools and web plugins, saves raw traffic, and forwards any returned tool-event status to the source verifier without execution. See [native tool-free completions](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/README.md#native-tool-free-completions) for fields and artifact locations. Generic shell and direct-chat harnesses reject this protocol.
+
 The verifier deadline controls the full grading phase.
 
 | Reward source | Result | Origin / reason |

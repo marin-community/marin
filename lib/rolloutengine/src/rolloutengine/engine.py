@@ -213,6 +213,7 @@ class RolloutEngine:
                     attempt.cleanup,
                     resources,
                     stop_reason=recorder.stop_reason,
+                    reply_status=recorder.graded_reply_status(),
                 )
         except TimeoutError as error:
             attempt.grade = GradeResult(

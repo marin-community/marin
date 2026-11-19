@@ -59,6 +59,7 @@ dev = [{ include-group = "test" }]
 packages = ["src/marina"]
 
 [tool.pytest.ini_options]
+markers = ["docker: requires a local Docker daemon and creates only owned disposable resources"]
 pythonpath = ["../.."]
 testpaths = ["tests", "apps"]
 timeout = 30

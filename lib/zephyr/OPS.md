@@ -217,6 +217,18 @@ In a dedicated pipeline's final stage, the coordinator releases idle workers as 
 
 **"Terminated by user"** does not necessarily mean a human killed the job. The system uses this message for various internal termination reasons. Always check the actual logs at each level (parent job, coordinator, workers) to determine the real cause.
 
+## Cross-Region Data Movement
+
+Zephyr pipelines inherit the shared storage rules:
+
+- CoreWeave S3 region-to-region transfers are fine; no budget applies.
+- Never read or move bulk data across GCS regions. The shared transfer budget
+  (`lib/rigging/src/rigging/filesystem/cross_region.py`, default 10 GB, GCS-only)
+  raises `TransferBudgetExceeded`, which Zephyr treats as a deterministic
+  non-retryable failure. Do not use Storage Transfer Service between GCS regions.
+- Stage large artifacts in-region: run the pipeline in the data's region or read
+  through `mirror://` so the artifact is copied once into the local region.
+
 ## Requesting New Tools
 
 If debugging reveals a need for capabilities not exposed by the existing API or CLI — e.g. you find yourself wanting to SSH into a worker — do not work around it. File an issue requesting the capability as a proper RPC endpoint or CLI command.

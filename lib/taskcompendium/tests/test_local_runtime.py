@@ -6,13 +6,23 @@
 import hashlib
 import io
 import json
+import os
+import subprocess
+import sys
 import tarfile
+import venv
 from dataclasses import replace
 from pathlib import PurePosixPath
 
 import pytest
 from shellbox.machine import Mount
 
+from taskcompendium.harbor.protected_runtime import (
+    RUNTIME_OBSERVATION_SCRIPT,
+    ExpectedRuntime,
+    RuntimeFile,
+    RuntimeObservation,
+)
 from taskcompendium.runtime.local import EnvironmentManifest, LocalRuntime, extract_files, local_runtime
 
 
@@ -62,3 +72,39 @@ def test_files_archive_members_cannot_escape_the_files_directory(tmp_path):
     with pytest.raises(ValueError, match="escapes"):
         extract_files(files_tar({"../outside.txt": b"x"}), tmp_path / "files")
     assert not (tmp_path / "outside.txt").exists()
+
+
+def test_protected_observation_reads_the_lock_beside_the_managed_environment(tmp_path):
+    contents = b"frozen-dependency==1.0\n"
+    runtime = LocalRuntime("unused", hashlib.sha256(contents).hexdigest(), parent=tmp_path)
+    runtime.root.mkdir()
+    lock = runtime.root / "requirements.lock"
+    lock.write_bytes(contents)
+    venv.create(runtime.environment.bin_dir.parent, with_pip=False)
+    package = runtime.root / "runtime" / "verifyit"
+    package.mkdir(parents=True)
+    files = (package / "__init__.py", package / "grade.py")
+    for path in files:
+        path.write_text("")
+    expected = ExpectedRuntime(
+        python_version=(sys.version_info.major, sys.version_info.minor),
+        verifyit_root=str(package),
+        files={
+            str(path): RuntimeFile(
+                sha256=hashlib.sha256(path.read_bytes()).hexdigest(), mode=path.stat().st_mode & 0o777
+            )
+            for path in files
+        },
+        lock_sha256=runtime.lock_sha256,
+    )
+    command = [str(runtime.environment.python), "-c", RUNTIME_OBSERVATION_SCRIPT, json.dumps(sorted(expected.files))]
+    environment = {**os.environ, "PYTHONPATH": str(package.parent)}
+    result = subprocess.run(command, env=environment, capture_output=True, text=True, check=True)
+    observation = RuntimeObservation.model_validate_json(result.stdout)
+    expected.require_observation(observation)
+    assert observation.lock_path == str(lock)
+
+    lock.write_bytes(b"changed-dependency==2.0\n")
+    result = subprocess.run(command, env=environment, capture_output=True, text=True, check=True)
+    with pytest.raises(ValueError, match="package lock"):
+        expected.require_observation(RuntimeObservation.model_validate_json(result.stdout))
