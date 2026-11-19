@@ -86,6 +86,7 @@ V1_ETA = 1 / 2048
 V1_LAMBDA = 1e-5
 V1_LOGIT_LR = 5e-4
 V1_DURATION = timedelta(hours=5)
+V1_STARTUP_TIMEOUT = timedelta(hours=2)
 # The Exp3 guard convention: H100-hour ceiling = devices x deadline (5120 = 256 x 20h).
 V1_H100_HOUR_LIMIT = 256 * int(V1_DURATION.total_seconds() // 3600)
 
@@ -138,6 +139,11 @@ def v1_recipe(production_recipe: dict) -> dict:
     trainer = recipe["trainer"]
     trainer["num_train_steps"] = V1_UPDATES
     trainer["training_budget"]["duration"] = draccus.encode(V1_DURATION)
+    # the Deletion calibration (64 forward-only batches, roughly half an hour)
+    # runs after the base load and before the first step, so the startup
+    # watchdog budget scales with it (the Exp3 budget covered load + first
+    # compile only)
+    trainer["progress_watchdog"]["startup_timeout"] = draccus.encode(V1_STARTUP_TIMEOUT)
     recipe["stop_after_steps"] = V1_UPDATES
     recipe["task_timeout_seconds"] = int(V1_DURATION.total_seconds())
     recipe["target_positions"] = V1_UPDATES * GEOMETRY.global_batch * GEOMETRY.sequence_length

@@ -110,8 +110,8 @@ def capture_wanda_norms(model, batches, *, num_layers: int, mp) -> tuple[np.ndar
     capture = mp.cast_to_compute(_capture_model(model))
 
     @jax.jit
-    def capture_step(tokens):
-        result = capture.transformer._forward(tokens, None, return_routes=False)
+    def capture_step(capture_model, tokens):
+        result = capture_model.transformer._forward(tokens, None, return_routes=False)
         wanda = result.wanda
         assert wanda is not None
         return (
@@ -125,7 +125,9 @@ def capture_wanda_norms(model, batches, *, num_layers: int, mp) -> tuple[np.ndar
     seen = 0
     for batch in batches:
         tokens = np.asarray(batch.tokens.array).reshape(-1, batch.tokens.array.shape[-1])
-        sums, counts, channel_sums, channel_counts = capture_step(jnp.asarray(tokens))
+        # the model rides as an argument: closing over it would lower the whole
+        # 134GB parameter tree as compile-time constants
+        sums, counts, channel_sums, channel_counts = capture_step(capture, jnp.asarray(tokens))
         sums_host = np.asarray(sums, dtype=np.float64)
         counts_host = np.asarray(counts, dtype=np.float64)
         sums_total = sums_host if sums_total is None else sums_total + sums_host

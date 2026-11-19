@@ -93,7 +93,9 @@ def _smoke_spec(release, output_path: Path) -> SFTSpec:
     trainer["mesh"] = draccus.encode(mesh)
     trainer["progress_watchdog"] = draccus.encode(
         ProgressWatchdogConfig(
-            startup_timeout=timedelta(minutes=45),
+            # mirrors the V1 production override: the calibration runs before the
+            # first step, so the startup budget covers load + calibration
+            startup_timeout=timedelta(hours=2),
             step_timeout=timedelta(minutes=30),
             process_timeout=timedelta(minutes=30),
             startup_grace_period=timedelta(0),
