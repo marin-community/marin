@@ -13,8 +13,10 @@ import tempfile
 import tomllib
 import uuid
 from collections import deque
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, fields, replace
 from enum import StrEnum
+from functools import partial
 from pathlib import Path, PurePosixPath
 from typing import Literal, cast
 
@@ -753,10 +755,10 @@ def _launcher_command(config_path: str) -> list[str]:
     return skyrl_cpu_command("marinskyrl", "iris", "launch", "--config", config_path)
 
 
-def _run_launcher(command: list[str]) -> subprocess.CompletedProcess[str]:
+def _run_launcher(command: list[str], *, env_vars: Mapping[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     """Run the launcher, forwarding its live logs and keeping a tail to explain a failure."""
     tail: deque[str] = deque(maxlen=_LAUNCHER_DIAGNOSTIC_LINES)
-    environment = dict(os.environ)
+    environment = {**os.environ, **(env_vars or {})}
     for key in ("PYTHONPATH", "PYTHONHOME", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"):
         environment.pop(key, None)
     with (
@@ -779,14 +781,14 @@ def _run_launcher(command: list[str]) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(command, returncode, response.read(), "".join(tail))
 
 
-def run_skyrl(config: SkyRLRunConfig) -> SkyRLRun:
+def run_skyrl(config: SkyRLRunConfig, *, env_vars: Mapping[str, str]) -> SkyRLRun:
     """Run the nested SkyRL executable and return its validated result."""
     response: _SkyRLLaunchResponse | None = None
     try:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", encoding="utf-8") as launch_file:
             launch_file.write(config.launch_config_yaml)
             launch_file.flush()
-            completed = _run_launcher(_launcher_command(launch_file.name))
+            completed = _run_launcher(_launcher_command(launch_file.name), env_vars=env_vars)
         if not completed.stdout.strip():
             raise RuntimeError(
                 f"MarinSkyRL launcher exited {completed.returncode} without a terminal response:\n"
@@ -1038,7 +1040,7 @@ def skyrl_step(
         name=step_name,
         version=spec.version,
         artifact_type=SkyRLRun,
-        run=run_skyrl,
+        run=partial(run_skyrl, env_vars={}),
         build_config=build_config,
         deps=deps,
         runtime_args={_EXECUTION: execution},

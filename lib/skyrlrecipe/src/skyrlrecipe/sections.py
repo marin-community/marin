@@ -777,21 +777,25 @@ class TrajectoryRetention(Section):
     phases: tuple[Literal["train", "eval"], ...] = field(["train"])
     sample_count_per_step: int = field(1)
     sample_fraction: int | float = field(0.0)
+    eval_sample_fraction: Annotated[int | float, Field(ge=0, le=1)] | None = field(None)
+    "null uses sample_fraction for evaluation as well."
     always_retain_failures: bool = field(True)
     always_retain_non_terminating: bool = field(True)
     always_retain_loops: bool = field(True)
     accepted_stop_reasons: tuple[str, ...] = unset_field()
     reward_below: int | float | None = field(None)
     reward_above: int | float | None = field(None)
-    max_bytes_per_step: int = field(838860800)
+    max_bytes_per_step: int | None = field(838860800)
     "Set either bound to null to make that dimension unlimited."
-    max_bytes_per_run: int = field(26843545600)
+    max_bytes_per_run: int | None = field(26843545600)
     required: bool = field(False)
     publish_timeout_seconds: int = field(120)
     shutdown_timeout_seconds: int = field(30)
     redact_fields: tuple[str, ...] = field([])
     model_path: str = unset_field()
     model_source_identity: str = unset_field()
+    model_checkpoint_step: NonNegativeInt | None = field(None)
+    "Evaluation-only runs have no optimizer step; retain the bound checkpoint provenance."
     resume_path: str = unset_field()
     inference_backend: Literal["vllm"] = unset_field()
 
