@@ -66,7 +66,7 @@ class DaytonaProcessSession(StreamProcessSession):
         self._command: str | None = None
         self._output = BoundedByteBuffer(CHUNK_BYTES * 2)
         self._stdout_frames = FrameDecoder()
-        self._stderr_frames = FrameDecoder()
+        self._stderr_lines = FrameDecoder()
         self._finished = asyncio.Event()
         self._code: int | None = None
         self._error: BaseException | None = None
@@ -102,7 +102,7 @@ class DaytonaProcessSession(StreamProcessSession):
                 self.name, self._command, self._receive_stdout, self._receive_stderr
             )
             self._stdout_frames.finish()
-            self._stderr_frames.finish()
+            self._stderr_lines.finish()
             if self._code is None:
                 raise RuntimeError("Daytona process stream ended without a complete exit frame")
         except asyncio.CancelledError:
@@ -134,7 +134,7 @@ class DaytonaProcessSession(StreamProcessSession):
 
     async def _receive_stderr(self, text: str) -> None:
         # Only the image shell and Python write here, before the bridge starts.
-        for line in self._stderr_frames.feed(text.encode("ascii")):
+        for line in self._stderr_lines.feed(text.encode("ascii")):
             self.capture_stderr(line + b"\n")
 
     async def _send(self, data: bytes) -> None:
