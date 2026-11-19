@@ -52,24 +52,17 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join  # noqa: E4
 
 logger = logging.getLogger("levanter.data.image")
 
-ConversationMessage = TypedDict(
-    "ConversationMessage",
-    {
-        "role": str,  # "user", "assistant", "system"
-        "content": List[Dict[str, Any]],  # [{"type": "image"}, {"type": "text", "text": "..."}]
-    },
-)
 
-ConversationDict = TypedDict(
-    "ConversationDict",
-    {
-        "messages": List[ConversationMessage],
-        "images": list[Any],
-        "audio": list[Any],
-        "videos": list[Any],
-    },
-    total=False,
-)
+class ConversationMessage(TypedDict):
+    role: str
+    content: list[dict[str, Any]]
+
+
+class ConversationDict(TypedDict, total=False):
+    messages: list[ConversationMessage]
+    images: list[Any]
+    audio: list[Any]
+    videos: list[Any]
 
 
 def image_source_urls(urls: Sequence[str]) -> list[str]:
@@ -131,14 +124,7 @@ def _image_text_cache_exemplar(tile_size: int) -> ImageTextDict:
 
 
 def load_image_from_path_or_url(path_or_url: str) -> Image.Image:
-    """Load an image from a local path, URL, or cloud storage.
-
-    Args:
-        path_or_url: Local file path, URL, or cloud storage path (gs://, s3://) to the image
-
-    Returns:
-        PIL Image in RGB format
-    """
+    """Read an RGB image from a local path, HTTP URL, or storage URL."""
     if path_or_url.startswith(("http://", "https://")):
         response = requests.get(path_or_url, timeout=30)
         response.raise_for_status()
@@ -154,14 +140,7 @@ def load_image_from_path_or_url(path_or_url: str) -> Image.Image:
 
 
 def load_image(image_data: Any) -> Image.Image:
-    """Load an image from various formats.
-
-    Args:
-        image_data: Can be PIL Image, numpy array, path string, URL, or HF dict with bytes
-
-    Returns:
-        PIL Image in RGB format
-    """
+    """Decode an RGB image from a path, array, PIL image, or Hugging Face image record."""
     match image_data:
         case Image.Image():
             return image_data.convert("RGB")
@@ -214,14 +193,12 @@ def _extract_anyres_params(processor: ProcessorMixin) -> AnyResolutionParams:
     if not isinstance(tile_size, int):
         raise ValueError("The image processor must specify a tile height or shortest_edge")
     vision_feature_height = None
+    max_num_patches = None
     if grid_pinpoints:
         encoder_patch_size = processor.patch_size
         if not isinstance(encoder_patch_size, int):
             raise ValueError("Any-resolution processing requires the encoder patch size")
         vision_feature_height = tile_size // encoder_patch_size
-    max_num_patches = None
-
-    if grid_pinpoints:
         # Size the cache for raw image tiles. OneVision's aspect-ratio limit
         # applies to features after vision encoding.
         max_num_patches = max((h // tile_size) * (w // tile_size) for h, w in grid_pinpoints)
@@ -237,66 +214,7 @@ def _pad_or_trim_image_tiles(pixel_values: np.ndarray, num_tiles: int) -> np.nda
 
 
 class BatchMultimodalProcessor(BatchProcessor[ConversationDict, ImageTextDict]):
-    """
-    A batch processor that converts conversation-format data into model-ready inputs.
-
-    This processor handles the conversation format used by VLMs like LLaVA:
-    - Applies chat template to convert messages to text with image placeholders
-    - Processes images using the HuggingFace processor
-    - Creates loss_mask for training (1.0 for assistant tokens, 0.0 for others)
-
-    Input format:
-    {
-        "messages": [
-            {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "..."}]},
-            {"role": "assistant", "content": [{"type": "text", "text": "..."}]}
-        ],
-        "images": [<image_data>]  # PIL, path, URL, or HF bytes dict
-    }
-
-    Output format (ImageTextDict):
-    {
-        "pixel_values": np.ndarray or None,
-            # Shape: (TOTAL_PATCHES, C, H, W) where TOTAL_PATCHES = max_num_patches + 1
-            # Preprocessed image patches ready for the vision encoder. Padded to fixed size
-            # for JIT compatibility. For single image: includes base patch + anyres grid patches.
-            # For multiple images: only base patches (one per image). None for text-only examples.
-
-        "input_ids": np.ndarray,
-            # Shape: (seq_len,) dtype: int32
-            # Tokenized text sequence with image placeholder tokens inserted where images appear.
-            # The image placeholder token (e.g., <|image_pad|>) is repeated for each image feature.
-
-        "attention_mask": np.ndarray,
-            # Shape: (seq_len,) dtype: int32
-            # Binary mask indicating valid tokens (1) vs padding tokens (0).
-            # Used to prevent attention to padding positions.
-
-        "image_sizes": np.ndarray,
-            # Shape: (num_images, 2) dtype: int32
-            # Original image dimensions as (height, width) for each image.
-            # Used by the model for spatial unpadding in anyres processing. Empty for text-only.
-
-        "loss_mask": np.ndarray,
-            # Shape: (seq_len,) dtype: float32
-            # Training loss mask for causal language modeling. 1.0 for assistant response
-            # tokens that should contribute to the loss; 0.0 for all other tokens
-            # (system, user, padding). Assistant terminators contribute to the loss.
-
-        "grid_mask": np.ndarray or None,
-            # Shape: (TOTAL_PATCHES,) dtype: bool
-            # Boolean mask indicating which patches are real (True) vs padding (False).
-            # Enables fixed-shape tensors for JIT while tracking actual patch count.
-            # None if max_num_patches is not configured.
-
-        "unpad_indices": np.ndarray or None,
-            # Shape: (max_features,) with a patch limit, otherwise (num_image_tokens,); dtype: int32.
-            # Entries after the unpadded feature count are zero padding.
-            # Index mapping from HuggingFace's unpadded feature order to Levanter's padded order.
-            # Used to reorder vision features after encoding to match HF's spatial unpadding.
-            # Only computed for single-image anyres case; None otherwise.
-    }
-    """
+    """Apply a chat template and image processor to produce ImageTextDict training examples."""
 
     def __init__(
         self,
@@ -354,104 +272,40 @@ class BatchMultimodalProcessor(BatchProcessor[ConversationDict, ImageTextDict]):
         height, width = select_best_resolution(image_size, self.grid_pinpoints)
         return height // self.tile_size, width // self.tile_size
 
-    def _compute_unpad_indices_for_image(
-        self,
-        orig_height: int,
-        orig_width: int,
-        patches_height: int,
-        patches_width: int,
-        scale_height: int,
-        scale_width: int,
-        features_per_patch: int,
-    ) -> np.ndarray:
-        """Compute indices to reorder Levanter's padded features to HF's unpadded order.
-
-        HF's pack_image_features applies spatial unpadding based on original image aspect ratio.
-        This function computes the mapping from HF's feature positions to Levanter's sequential
-        feature layout.
-
-        Args:
-            orig_height: Original image height
-            orig_width: Original image width
-            patches_height: Number of patches per tile in height (e.g., 27)
-            patches_width: Number of patches per tile in width (e.g., 27)
-            scale_height: Number of tiles in height (e.g., 3 for 3x3 grid)
-            scale_width: Number of tiles in width (e.g., 3 for 3x3 grid)
-            features_per_patch: Features per patch/tile (e.g., 729)
-
-        Returns:
-            unpad_indices: Array of shape (num_unpadded_features,) where
-                          unpad_indices[i] = Levanter index for HF position i
-        """
-        base_indices = np.arange(features_per_patch, dtype=np.int32)
-
-        curr_height = patches_height * scale_height
-        curr_width = patches_width * scale_width
-
-        # Compute unpadding bounds based on original aspect ratio
-        # This matches HF's unpad_image logic
-        original_aspect_ratio = orig_width / orig_height
-        current_aspect_ratio = curr_width / curr_height
-
-        if original_aspect_ratio > current_aspect_ratio:
-            scale_factor = curr_width / orig_width
-            new_height = int(round(orig_height * scale_factor, 7))
-            padding = (curr_height - new_height) // 2
-            row_start = padding
-            row_end = curr_height - padding
-            col_start = 0
-            col_end = curr_width
+    def _unpad_indices(self, height: int, width: int, tile_side: int) -> np.ndarray:
+        """Map spatially ordered features to tile-major indices, with the base tile first."""
+        grid_height, grid_width = self._compute_grid_shape((height, width))
+        rows, cols = grid_height * tile_side, grid_width * tile_side
+        row_pad = col_pad = 0
+        # Match Hugging Face's symmetric crop, including its rounding for odd dimensions.
+        if width / height > cols / rows:
+            row_pad = (rows - int(round(height * (cols / width), 7))) // 2
         else:
-            scale_factor = curr_height / orig_height
-            new_width = int(round(orig_width * scale_factor, 7))
-            padding = (curr_width - new_width) // 2
-            row_start = 0
-            row_end = curr_height
-            col_start = padding
-            col_end = curr_width - padding
+            col_pad = (cols - int(round(width * (rows / height), 7))) // 2
 
-        # Build mapping from HF grid position to Levanter grid index (vectorized)
-        # HF order: row-major through unpadded region
-        # Levanter order: patch-by-patch (tile-by-tile), then row-major within each patch
+        row = np.arange(row_pad, rows - row_pad, dtype=np.int32)[:, None]
+        col = np.arange(col_pad, cols - col_pad, dtype=np.int32)
+        tile_row, local_row = np.divmod(row, tile_side)
+        tile_col, local_col = np.divmod(col, tile_side)
+        tile_index = 1 + tile_row * grid_width + tile_col
+        features_per_tile = tile_side**2
+        grid_indices = tile_index * features_per_tile + local_row * tile_side + local_col
+        indices = np.concatenate([np.arange(features_per_tile, dtype=np.int32), grid_indices.ravel()])
+        if self.max_num_patches is None:
+            return indices
+        capacity = (self.max_num_patches + 1) * features_per_tile
+        return np.pad(indices, (0, capacity - indices.size))
 
-        rows = np.arange(row_start, row_end, dtype=np.int32)
-        cols = np.arange(col_start, col_end, dtype=np.int32)
-        row_grid, col_grid = np.meshgrid(rows, cols, indexing="ij")
-        row_flat = row_grid.ravel()
-        col_flat = col_grid.ravel()
-
-        tile_rows = row_flat // patches_height
-        tile_cols = col_flat // patches_width
-        local_rows = row_flat % patches_height
-        local_cols = col_flat % patches_width
-
-        tile_indices = tile_rows * scale_width + tile_cols
-        local_indices = local_rows * patches_width + local_cols
-        grid_indices = features_per_patch + tile_indices * features_per_patch + local_indices
-
-        return np.concatenate([base_indices, grid_indices])
-
-    def _pad_pixel_values(self, pixel_values: np.ndarray, valid_patches: int) -> Tuple[np.ndarray, np.ndarray]:
-        """Pad pixel_values to fixed TOTAL_PATCHES size and create grid_mask.
-
-        Args:
-            pixel_values: Image patches array of shape (actual_patches, C, H, W)
-            valid_patches: Number of patches to mark as valid in grid_mask
-
-        Returns:
-            Tuple of (padded_pixel_values, grid_mask)
-        """
+    def _pad_pixel_values(self, pixel_values: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """Pad to the configured tile budget and mark the occupied slots."""
         assert self.max_num_patches is not None
         total_patches = self.max_num_patches + 1  # +1 for base patch
         actual_patches = pixel_values.shape[0]
 
-        grid_mask = np.zeros(total_patches, dtype=np.bool_)
-        grid_mask[:valid_patches] = True
-
         if actual_patches > total_patches:
             raise ValueError(f"Example has {actual_patches} image tiles but the cache holds {total_patches}")
 
-        return _pad_or_trim_image_tiles(pixel_values, total_patches), grid_mask
+        return _pad_or_trim_image_tiles(pixel_values, total_patches), np.arange(total_patches) < actual_patches
 
     def _create_loss_mask(self, input_ids: np.ndarray) -> np.ndarray:
         """Select assistant content and its terminator, including truncated responses."""
@@ -529,7 +383,6 @@ class BatchMultimodalProcessor(BatchProcessor[ConversationDict, ImageTextDict]):
     def __call__(self, batch: Sequence[Mapping[str, Any]]) -> Sequence[ImageTextDict]:
         """Process conversations into token targets and image inputs."""
         all_texts, all_images, images_per_example = self._prepare_conversations(batch)
-        batch_size = len(batch)
 
         if self.grid_pinpoints and any(count > 1 for count in images_per_example):
             if not isinstance(self.processor, LlavaOnevisionProcessor):
@@ -570,9 +423,8 @@ class BatchMultimodalProcessor(BatchProcessor[ConversationDict, ImageTextDict]):
         input_ids_batch = processed["input_ids"].astype(np.int32)
         attention_mask_batch = processed["attention_mask"].astype(np.int32)
 
-        has_pixel_values = "pixel_values" in processed
         has_image_sizes = "image_sizes" in processed
-        pixel_values_batch = processed["pixel_values"] if has_pixel_values else None
+        pixel_values_batch = processed.get("pixel_values")
         if pixel_values_batch is not None and pixel_values_batch.ndim == 4:
             # Single-crop processors return (images, channels, height, width).
             pixel_values_batch = pixel_values_batch[:, None, ...]
@@ -585,58 +437,29 @@ class BatchMultimodalProcessor(BatchProcessor[ConversationDict, ImageTextDict]):
         cum_images = np.cumsum(images_per_example)
 
         out: list[ImageTextDict] = []
-        for i in range(batch_size):
+        for i, num_images in enumerate(images_per_example):
             input_ids = input_ids_batch[i]
-            num_images = images_per_example[i]
 
             pv_end = cum_images[i]
             pv_start = pv_end - num_images
 
             grid_mask = None
             unpad_indices = None
-            if num_images > 0 and has_pixel_values:
-                assert pixel_values_batch is not None
+            pixel_values = None
+            if num_images and pixel_values_batch is not None:
                 if num_images == 1:
-                    # Single image: use anyres with all patches
                     pixel_values = pixel_values_batch[pv_start]
-                    if self.max_num_patches is not None:
-                        pixel_values, grid_mask = self._pad_pixel_values(
-                            pixel_values, valid_patches=pixel_values.shape[0]
-                        )
                 else:
-                    # Multiple images: only use base patch (first patch) from each image
-                    # This matches HF behavior where multi-image doesn't use anyres
-                    base_patches = [pixel_values_batch[j][0] for j in range(pv_start, pv_end)]
-                    pixel_values = np.stack(base_patches, axis=0)  # (num_images, C, H, W)
-                    if self.max_num_patches is not None:
-                        pixel_values, grid_mask = self._pad_pixel_values(pixel_values, valid_patches=num_images)
-            else:
-                pixel_values = None
+                    # Multi-image examples use the base tile of each image.
+                    pixel_values = pixel_values_batch[pv_start:pv_end, 0].copy()
+                if self.max_num_patches is not None:
+                    pixel_values, grid_mask = self._pad_pixel_values(pixel_values)
 
             image_sizes = img_sizes[pv_start:pv_end].reshape(-1, 2)
 
-            # Compute unpad_indices only for single-image anyres case
-            # Multi-image doesn't use anyres (each image is just 1 base patch)
             if num_images == 1 and has_image_sizes and self.grid_pinpoints and self.vision_feature_height:
-                orig_height, orig_width = int(image_sizes[0, 0]), int(image_sizes[0, 1])
-                gh, gw = self._compute_grid_shape((orig_height, orig_width))
-                patches_height = patches_width = self.vision_feature_height
-                features_per_patch = patches_height * patches_width
-                unpad_indices_raw = self._compute_unpad_indices_for_image(
-                    orig_height=orig_height,
-                    orig_width=orig_width,
-                    patches_height=patches_height,
-                    patches_width=patches_width,
-                    scale_height=gh,
-                    scale_width=gw,
-                    features_per_patch=features_per_patch,
-                )
-                if self.max_num_patches is not None:
-                    max_features = (self.max_num_patches + 1) * features_per_patch
-                    unpad_indices = np.zeros(max_features, dtype=np.int32)
-                    unpad_indices[: len(unpad_indices_raw)] = unpad_indices_raw
-                else:
-                    unpad_indices = unpad_indices_raw
+                height, width = image_sizes[0]
+                unpad_indices = self._unpad_indices(int(height), int(width), self.vision_feature_height)
 
             result: ImageTextDict = {
                 "pixel_values": pixel_values,
@@ -759,46 +582,7 @@ class ImageDatasetSourceConfig:
 
 @dataclass
 class ConversationDatasetSourceConfig:
-    """Configuration for a conversation-format image-text dataset source.
-
-    This is used for VLM training data with conversation format like LLaVA.
-    Supports single image, multiple images, and interleaved image/text content.
-
-    1. Single image:
-    {
-        "messages": [
-            {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "Describe this image."}]},
-            {"role": "assistant", "content": [{"type": "text", "text": "..."}]}
-        ],
-        "images": ["path/to/image.jpg"]
-    }
-
-    2. Multiple images:
-    {
-        "messages": [
-            {"role": "user", "content": [{"type": "image"}, {"type": "image"}, {"type": "text", "text": "Compare these two images."}]},
-            {"role": "assistant", "content": [{"type": "text", "text": "..."}]}
-        ],
-        "images": ["path/to/image1.jpg", "path/to/image2.jpg"]
-    }
-
-    3. Interleaved image and text:
-    {
-        "messages": [
-            {"role": "user", "content": [
-                {"type": "text", "text": "First image:"},
-                {"type": "image"},
-                {"type": "text", "text": "Second image:"},
-                {"type": "image"},
-                {"type": "text", "text": "What are the differences?"}
-            ]},
-            {"role": "assistant", "content": [{"type": "text", "text": "..."}]}
-        ],
-        "images": ["path/to/image1.jpg", "path/to/image2.jpg"]
-    }
-
-    Note: {"type": "image"} placeholders are replaced with images from the "images" list in order.
-    """
+    """Read conversations whose image placeholders consume image references in order."""
 
     id: Optional[str] = None  # HuggingFace dataset id or path
     name: Optional[str] = None  # Dataset configuration name
@@ -988,15 +772,7 @@ class ImageTextExample(eqx.Module):
         grid_mask: NamedArray | None = None,
         unpad_indices: NamedArray | None = None,
     ) -> "ImageTextExample":
-        """Initialize an ImageTextExample with optional loss masking.
-
-        Args:
-            pixel_values: Image pixel values (FIXED shape, padded), or None for text-only
-            input_ids: Token IDs
-            loss_mask: Loss mask (float32) with 1.0 for valid tokens, 0.0 for masked.
-            grid_mask: Boolean mask indicating valid patches (TOTAL_PATCHES,)
-            unpad_indices: Indices for unpadding image features (num_image_tokens,)
-        """
+        """Build a training example with float32 loss weights."""
         result_loss_mask = None
         if loss_mask is not None:
             result_loss_mask = loss_mask.astype(np.float32)
@@ -1024,20 +800,7 @@ class ImageTextDataset(MappedAsyncDataset[ImageTextDict, ImageTextExample]):
         pixel_dtype: Optional[np.dtype] = None,
         NumImageTokens: Optional[Axis] = None,
     ) -> None:
-        """
-        Args:
-            dataset: Source dataset providing ImageTextDict
-            Position: Axis for sequence position
-            NumPatches: Axis for number of image patches
-            Channels: Axis for image channels
-            Height: Axis for image height
-            Width: Axis for image width
-            pixel_dtype: dtype for pixel values when moving to device.
-                        If None, uses the original dtype (float32).
-                        Set to jnp.bfloat16 to save memory on TPU.
-            NumImageTokens: Axis for unpad_indices. If provided, unpad_indices
-                           will be included with this size.
-        """
+        """Wrap host arrays with named axes. NumImageTokens sets the length of the optional unpadding indices."""
         self.dataset = dataset
         self.Position = Position
         self.NumPatches = NumPatches
@@ -1086,17 +849,9 @@ class ImageTextDataset(MappedAsyncDataset[ImageTextDict, ImageTextExample]):
                 loss_mask = NamedArray(inputs["loss_mask"], (self.Position,))
 
             grid_mask_array = inputs.get("grid_mask")
-            if grid_mask_array is not None:
-                grid_mask = NamedArray(grid_mask_array, (self.NumPatches,))
-            else:
-                # No grid_mask from preprocessing: all-True if image present, all-False if text-only
-                has_image = inputs.get("pixel_values") is not None
-                grid_mask_array = (
-                    np.ones(self.NumPatches.size, dtype=np.bool_)
-                    if has_image
-                    else np.zeros(self.NumPatches.size, dtype=np.bool_)
-                )
-                grid_mask = NamedArray(grid_mask_array, (self.NumPatches,))
+            if grid_mask_array is None:
+                grid_mask_array = np.full(self.NumPatches.size, inputs.get("pixel_values") is not None, dtype=np.bool_)
+            grid_mask = NamedArray(grid_mask_array, (self.NumPatches,))
 
             unpad_indices = None
             if self.NumImageTokens is not None:
@@ -1113,14 +868,13 @@ class ImageTextDataset(MappedAsyncDataset[ImageTextDict, ImageTextExample]):
                     unpad_indices_array = np.zeros(self.NumImageTokens.size, dtype=np.int32)
                 unpad_indices = NamedArray(unpad_indices_array, (self.NumImageTokens,))
 
-            out = ImageTextExample.init(
+            return ImageTextExample.init(
                 pixel_values,
                 input_ids,
                 loss_mask=loss_mask,
                 grid_mask=grid_mask,
                 unpad_indices=unpad_indices,
             )
-            return out
 
         super().__init__(self.dataset, _convert_example)
 
