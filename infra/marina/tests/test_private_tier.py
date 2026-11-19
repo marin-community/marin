@@ -59,11 +59,13 @@ from taskcompendium.backend_requirements import (
 )
 from taskcompendium.source_fingerprints import SourceIdentitySurvey
 
+from infra.marina.apps.rl_data_catalog.load import insert_rows
 from infra.marina.apps.rl_data_catalog.load import load_catalog as load_surveyed_catalog
 from infra.marina.apps.rl_data_catalog.load_curriculum import atlas_source_restrictions, load_curriculum
 from infra.marina.apps.rl_data_catalog.load_rollouts import stage_rollouts
 from infra.marina.apps.rl_data_catalog.server import licensing, restriction_registry
 from infra.marina.apps.rl_data_catalog.server.app import create_api, migrate
+from infra.marina.apps.rl_data_catalog.server.catalog_text import decode_catalog_value, encode_catalog_value
 from infra.marina.apps.rl_data_catalog.server.evidence_content import pack_content
 from infra.marina.apps.rl_data_catalog.server.restrictions import (
     declaration_restriction,
@@ -949,3 +951,26 @@ def test_curriculum_policy_read_is_compact_and_preserves_fail_closed_tags(catalo
     else:
         with pytest.raises(ValueError, match="PRIVATE_ALWAYS"):
             load_curriculum(str(release), str(coverage), bounded_query)
+
+
+def test_binary_curriculum_text_roundtrips_through_real_postgres(catalog_query):
+    original = {
+        "source_id": "Marin:fixture",
+        "task_id": "binary-task",
+        "description": "res_1vs99.rds\n\x1f\x8b\x08\x00payload",
+        "detail": {"task_preview": "raw\x00data", "instruction_characters": 8},
+    }
+    catalog_query(
+        "CREATE TABLE binary_curriculum_probe (load_id TEXT,source_id TEXT,task_id TEXT,description TEXT,detail JSONB)",
+        {},
+    )
+    count = insert_rows(
+        catalog_query,
+        "binary_curriculum_probe",
+        "source_id TEXT,task_id TEXT,description TEXT,detail JSONB",
+        "fixture-load",
+        [encode_catalog_value(original)],
+    )
+    stored = catalog_query("SELECT source_id,task_id,description,detail FROM binary_curriculum_probe", {})["rows"]
+    assert count == 1
+    assert decode_catalog_value(stored[0]) == original
