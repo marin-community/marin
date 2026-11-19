@@ -117,7 +117,7 @@ def test_mixed_candidate_uses_the_selected_tasks_and_preserves_authored_concurre
     }
 
 
-def test_snowball_plan_requires_route_capture(selection):
+def test_snowball_plan_derives_route_capture_and_refuses_explicit_disable(selection):
     args = ("--preset", "train-medium-agentic", "--version", "dev", "--plan", "--tasks", SELECTION_IDENTITY)
     runner = CliRunner()
     valid = runner.invoke(rl.command(SNOWBALL, argv=args), args)

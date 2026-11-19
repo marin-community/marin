@@ -192,6 +192,8 @@ def parse_rl_config(document: Mapping[str, Any] | DictConfig) -> ParsedRLConfig:
     materialized_raw = _materialize_context_budget(raw, recipe.context_budget)
     trainer = materialized_raw["trainer"]
     generator = materialized_raw["generator"]
+    if recipe.trainer.policy.megatron_config.moe_router_replay:
+        generator.setdefault("engine_init_kwargs", {}).setdefault("enable_return_routed_experts", True)
     terminal_bench = materialized_raw.get("terminal_bench")
     data = dict(raw.get("data", {}))
     data.pop("kind", None)

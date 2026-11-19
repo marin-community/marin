@@ -164,7 +164,6 @@ _ONE_TURN = RecipePatch(
             "tool_parser": "hermes",
             "model_loader_extra_config": {"distributed": False, "concurrency": 4, "memory_limit": 8 * 1024**3},
             "compilation_config": {"mode": 3, "cudagraph_mode": "PIECEWISE", "splitting_ops": _SPLITTING_OPS},
-            "enable_return_routed_experts": True,
         },
         trajectory_retention=sections.TrajectoryRetention(
             phases=("train", "eval"),
