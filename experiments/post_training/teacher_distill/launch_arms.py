@@ -71,8 +71,10 @@ def runtime_env(profile: dict) -> dict:
     flags = [f for f in env.get("XLA_FLAGS", "").split() if f.partition("=")[0] not in profile["xla_flags"]]
     flags.extend(name + "=" + value for name, value in profile["xla_flags"].items() if value is not None)
     env["XLA_FLAGS"] = " ".join(flags)
-    env["MARIN_PREFIX"] = "s3://marin-us-east-02a/marin"
-    env["MARIN_TEMP_PREFIX"] = "s3://marin-us-east-02a"
+    # resolve_training_env picks the JAX compilation cache from this process's MARIN_TEMP_PREFIX.
+    # A local cache path makes Iris skip the per-fusion autotune cache, and the GEMMs run untuned.
+    os.environ["MARIN_PREFIX"] = env["MARIN_PREFIX"] = "s3://marin-us-east-02a/marin"
+    os.environ["MARIN_TEMP_PREFIX"] = env["MARIN_TEMP_PREFIX"] = "s3://marin-us-east-02a"
     return env
 
 
@@ -82,6 +84,8 @@ def worker(config, output, settings):
     configure_jax_compilation_cache()
     if int(os.environ["IRIS_MULTIGPU_PROCESS_INDEX"]) == 0:
         print("worker XLA_FLAGS:", os.environ.get("XLA_FLAGS", ""), flush=True)
+    if "--xla_gpu_per_fusion_autotune_cache_dir=" not in os.environ.get("XLA_FLAGS", ""):
+        raise RuntimeError("Iris did not enable a node-local per-fusion autotune cache")
     if int(os.environ["IRIS_MULTIGPU_PROCESS_INDEX"]) == 0:
         (StoragePath(output) / "consumed-config.json").write_text(json.dumps(draccus.encode(config), indent=2))
     _run_grug_local(config)
@@ -126,6 +130,8 @@ def build(template: Path, arm: str, date: str, length: str = "1h", profile_steps
         inline_watch_enabled=True, processes_per_task=8, moe_implementation="sonic", remat_mode=config.model.remat_mode
     )
     env = resolve_training_env(base_env=runtime_env(profile), resources=config.resources)
+    if "://" not in env["JAX_COMPILATION_CACHE_DIR"]:
+        raise RuntimeError(f"JAX compilation cache must be remote: {env['JAX_COMPILATION_CACHE_DIR']}")
     output = str(raw["native_timing_root"]).removesuffix("/timing")
     resource = convert_resources(config.resources)
     entry = wrap_multiprocess(
