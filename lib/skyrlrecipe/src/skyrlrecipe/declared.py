@@ -96,7 +96,6 @@ class CheckpointCallback(Section):
     save_steps: int = unset_field()
     save_on_train_end: bool = unset_field()
     save_after_fraction: int | float = unset_field()
-    save_interval_seconds: PositiveInt | None = unset_field()
 
 
 class BestCheckpointCallback(Section):

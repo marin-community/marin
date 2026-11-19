@@ -43,7 +43,13 @@ def run_with_existing_judge(config: SkyRLRunConfig) -> SkyRLRun:
     previous = os.environ.get("OPENAI_API_KEY")
     os.environ["OPENAI_API_KEY"] = os.environ["TOGETHER_API_KEY"]
     try:
-        return run_skyrl(config)
+        return run_skyrl(
+            config,
+            env_vars={
+                "OPENAI_API_KEY": os.environ["TOGETHER_API_KEY"],
+                "JUDGE_API_KEY": os.environ.get("JUDGE_API_KEY", "EMPTY"),
+            },
+        )
     finally:
         if previous is None:
             del os.environ["OPENAI_API_KEY"]

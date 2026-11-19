@@ -219,7 +219,10 @@ def _canonical_task_prompt(row: dict, _index: int, *, environment_configs: Mappi
         )
         verifier = MachineRuntimeSpec.model_validate(machine)
     lowered = rollout_spec(task, session, task_machine=task_machine, verifier_machine=verifier)
-    return _stored_prompt(lowered)
+    prepared = _stored_prompt(lowered)
+    if "teacher_route" in row:
+        prepared["teacher_route"] = row["teacher_route"]
+    return prepared
 
 
 def write_tasks(path: Path, records: Iterable[TaskRolloutSpec]) -> None:

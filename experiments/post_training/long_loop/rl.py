@@ -8,6 +8,7 @@ from dataclasses import replace
 import yaml
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.namespacing import user_owned_name
+from marin.rl.curriculum import RlCurriculum
 from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
@@ -38,6 +39,7 @@ def configured_rl_step(
     retained: int,
     seed: int,
     ray_timeouts: dict[str, int],
+    curriculum: RlCurriculum | None = None,
 ) -> ArtifactStep[SkyRLRun]:
     """Bind supplied training settings to admitted model/data artifacts and runtime paths."""
     validate_stage_config(config, "rl")
@@ -63,6 +65,7 @@ def configured_rl_step(
             ),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=retained),
             seed=seed,
+            curriculum=curriculum,
         ),
         execution,
         export_hf=True,

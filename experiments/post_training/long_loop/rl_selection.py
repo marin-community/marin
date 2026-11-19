@@ -12,6 +12,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from vendor.skyrl.marinskyrl.checkpoint_paths import (
     BEST_CHECKPOINT_FILENAME,
     ValidationObservation,
+    selected_export_step,
     trailing_validation_ema,
 )
 
@@ -55,7 +56,21 @@ def validate_selection_receipts(best: dict, history: list[dict], selected_step: 
 def validate_full_selection(run: SkyRLRun) -> dict:
     """Read the durable native selection before admitting its HF export to eval."""
     root = run.checkpoint_root
-    best = json.loads((StoragePath(root) / BEST_CHECKPOINT_FILENAME).read_bytes())
+    best_path = StoragePath(root) / BEST_CHECKPOINT_FILENAME
+    if run.global_step is None or not run.hf_model_uri:
+        raise ValueError("Full RL result has no selected HF export")
+    if not str(StoragePath(run.hf_model_uri)).endswith(f"/global_step_{run.global_step}/policy"):
+        raise ValueError("HF export step differs from selected native checkpoint")
+    best = json.loads(best_path.read_bytes()) if best_path.exists() else None
+    if best is None or best["model_format"] != "native":
+        selected = selected_export_step(root, "best", run.global_step)
+        if selected != run.global_step:
+            raise ValueError("Final native export does not match its committed checkpoint")
+        return {
+            "selection": "final_native_not_best",
+            "step": selected,
+            "model_uri": prefix_join(root, f"global_step_{selected}/policy"),
+        }
     history = json.loads((StoragePath(root) / "validation_selection_history.json").read_bytes())
     if run.global_step is None or not run.hf_model_uri:
         raise ValueError("Full RL result has no selected HF export")

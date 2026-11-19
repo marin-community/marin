@@ -1,6 +1,8 @@
 import json
 import os
 import pytest
+import pyarrow as pa
+import pyarrow.parquet as pq
 from omegaconf import OmegaConf
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.dataset.tasks import SourceTaskDataset, TaskDataset, source_row_task, write_tasks
@@ -12,7 +14,7 @@ class _StubTokenizer:
         return messages if isinstance(messages, str) else "".join(message["content"] for message in messages)
 
 
-@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("native", [False, True, "task_spec"])
 @pytest.mark.parametrize("row_count", [3, 8])
 def test_task_preprocessing_preserves_filtered_rows_and_forks_only_large_inputs(
     tmp_path, monkeypatch, fork_records, native, row_count
@@ -34,8 +36,13 @@ def test_task_preprocessing_preserves_filtered_rows_and_forks_only_large_inputs(
         tasks = [
             source_row_task(row, i, source_name="fixture", environment_configs=configs) for i, row in enumerate(rows)
         ]
-        write_tasks(path, tasks)
-        dataset = TaskDataset([str(path)], _StubTokenizer(), 100, num_workers=2)
+        if native == "task_spec":
+            pq.write_table(pa.table({"task_spec": [task.task.model_dump_json() for task in tasks],
+                                     "teacher_route": ["math"] * len(tasks)}), path)
+            dataset = SourceTaskDataset([str(path)], _StubTokenizer(), 100, environment_configs=configs, num_workers=2)
+        else:
+            write_tasks(path, tasks)
+            dataset = TaskDataset([str(path)], _StubTokenizer(), 100, num_workers=2)
     else:
         path.write_text("\n".join(json.dumps(row) for row in rows))
         dataset = SourceTaskDataset([str(path)], _StubTokenizer(), 100, environment_configs=configs, num_workers=2)

@@ -24,6 +24,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.secrets import require_secret
 
+from experiments.evaluation.micro210 import Micro210Run
 from experiments.post_training.long_loop.eval_runtime.judge import JudgedEvaluation
 from experiments.post_training.long_loop.launch_validation import validate_launch
 from experiments.post_training.long_loop.nvl72 import PROFILES, NVL72RunSpec, run_from_spec, validate_model_geometry
@@ -47,7 +48,7 @@ def validate_graph(
         # Future checkpoint selection is unavailable before training. Use the
         # builder's identity branch, retaining actual runtime config and paths.
         config = step.build_config(replace(context, is_fingerprint=True))
-        launch = config.skyrl if isinstance(config, JudgedEvaluation) else config
+        launch = config.skyrl if isinstance(config, (JudgedEvaluation, Micro210Run)) else config
         row = {"stage": step.name, "status": "constructed; not a SkyRL launch"}
         if isinstance(launch, SkyRLRunConfig):
             digest = hashlib.sha256(launch.launch_config_yaml.encode()).hexdigest()

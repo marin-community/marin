@@ -10,16 +10,17 @@ from dataclasses import replace
 import draccus
 from fray.types import DeviceConfig, GpuConfig, ResourceConfig
 from iris.rpc import job_pb2
-from marin.evaluation.model_config import ModelConfig
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.execution.remote import remote
+from marin.rl.curriculum import RlCurriculum
 from marin.rl.skyrl import ArtifactDataSource, ArtifactHfModel, IrisSkyRLExecution, SkyRLRolePlan
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.timing import Duration
 
+from experiments.evaluation.micro210 import PREPARED_INPUTS, micro210_artifact_step
 from experiments.post_training.long_loop.adopted_sft import verify_adopted_sft
 from experiments.post_training.long_loop.archive_stage import archive_graph_run
-from experiments.post_training.long_loop.evaluation import configured_evaluation_step, prepare_micro
+from experiments.post_training.long_loop.evaluation import TerminalPolicy
 from experiments.post_training.long_loop.execution_policy import COORDINATOR_TIMEOUT_SECONDS, STAGE_TIMEOUT_SECONDS
 from experiments.post_training.long_loop.finalization import after_checkpoint, record_finalization
 from experiments.post_training.long_loop.rl import configured_rl_step
@@ -68,7 +69,15 @@ def verify_inputs(*, output: str, manifests: dict) -> None:
     (StoragePath(output) / "verified.json").write_text(json.dumps(verified, indent=2))
 
 
-def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactStep:
+def build_spec_graph(
+    resolved: dict,
+    version: str,
+    *,
+    through: str,
+    data_artifacts: dict[str, ArtifactStep] | None = None,
+    curriculum: RlCurriculum | None = None,
+    sft_release: ArtifactStep | None = None,
+) -> ArtifactStep:
     blockers = stage_blockers(resolved, through)
     if blockers:
         raise ValueError("Run is not admitted: " + "; ".join(blockers))
@@ -94,6 +103,10 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
             ),
         )
     )
+    if data_artifacts:
+        verified = replace(verified, deps=(*verified.deps, *data_artifacts.values()))
+    if sft_release is not None:
+        verified = replace(verified, deps=(*verified.deps, sft_release))
     sft_evidence = [verified]
     recipe = {**resolved["sft"], "task_timeout_seconds": timeouts["sft"]}
     sft_pin = resolved.get("adopted_sft")
@@ -199,7 +212,10 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
         )
         endpoint = replace(endpoint, deps=(*endpoint.deps, exported, checked_endpoint))
     adopted = {
-        key: ArtifactStep.adopt(f"{name}/data-{key}", version, datasets[key]["uri"], config=datasets[key])
+        key: (
+            (data_artifacts or {}).get(key)
+            or ArtifactStep.adopt(f"{name}/data-{key}", version, datasets[key]["uri"], config=datasets[key])
+        )
         for key in ("agentic", "nonagentic", "heldout")
     }
     rl = resolved["rl"]
@@ -251,6 +267,7 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
         ),
         validation_data=(ArtifactDataSource(adopted["heldout"], relative_path=datasets["heldout"]["data_file"]),),
         ray_timeouts=rl["ray_timeouts"],
+        curriculum=curriculum,
         config=rl_config,
         plan=draccus.decode(SkyRLRolePlan, rl["role_plan"]),
         execution=rl_execution,
@@ -268,46 +285,28 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
         trained=learned,
     )
     evaluation = resolved["evaluation"]
-    data = datasets["evaluation"]
-    eval_inputs = timed(
-        apply(
-            f"{name}/eval-inputs",
-            remote(
-                prepare_micro,
-                resources=resources["eval_inputs"],
-                timeout=Duration.from_seconds(timeouts["eval_inputs"]),
+    eval_inputs = ArtifactStep.adopt(
+        "evaluation/micro210/prepared",
+        "2026.11.18",
+        PREPARED_INPUTS,
+        config={"policy": "canonical; no launch overrides"},
+    )
+    canonical = micro210_artifact_step(
+        TerminalPolicy(learned, expected_step=None), name=evaluation["name"], version=version
+    )
+    canonical_execution = canonical.runtime_args["skyrl_execution"]
+    canonical = replace(
+        canonical,
+        runtime_args={
+            **canonical.runtime_args,
+            "skyrl_execution": replace(
+                canonical_execution,
+                coordinator_name=coordinator.coordinator_name,
+                coordinator_timeout_hours=coordinator.coordinator_timeout_hours,
             ),
-            version=version,
-            output=OUT,
-            dataset=data["repo"],
-            revision=data["revision"],
-            wheels_revision=data["wheels_revision"],
-            tasks_per_benchmark=evaluation["tasks_per_benchmark"],
-        )
+        },
     )
-    eval_inputs = after_checkpoint(replace(eval_inputs, deps=(*eval_inputs.deps, finalized)), learned)
-    evaluated = after_checkpoint(
-        timed(
-            configured_evaluation_step(
-                version,
-                learned,
-                eval_inputs,
-                name=evaluation["name"],
-                config=evaluation["config"],
-                role_plan=draccus.decode(SkyRLRolePlan, evaluation["role_plan"]),
-                execution=stage_execution(evaluation["execution"], coordinator),
-                judge=draccus.decode(ModelConfig, evaluation["judge"]),
-                seed=evaluation["seed"],
-                expected_step=None,
-                gpu_variant=evaluation["gpu_variant"],
-                capability_origin=evaluation["capability_origin"],
-                data_relative_path=evaluation["data_relative_path"],
-                judge_gpu_count=evaluation["judge_gpu_count"],
-                ray_timeouts=evaluation["ray_timeouts"],
-            )
-        ),
-        learned,
-    )
+    evaluated = after_checkpoint(timed(replace(canonical, deps=(*canonical.deps, finalized))), learned)
     report = after_checkpoint(
         report_step(
             version,

@@ -21,6 +21,7 @@ from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
+    ArtifactModel,
     IrisSkyRLExecution,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
@@ -118,11 +119,28 @@ def run_micro210(config: Micro210Run) -> SkyRLRun:
 def micro210_step(model: Micro210Model, *, name: str, version: str, **overrides) -> ArtifactStep[SkyRLRun]:
     """Build the canonical evaluation graph; reject all policy override fields."""
     binding = micro210_evaluation(model, run_id=f"{name}@{version}", output_uri="<resolved-at-build>", **overrides)
-    frozen = binding.policy()
-    policy = frozen["evaluation"]
+    binding.policy()
     model_artifact = ArtifactStep.adopt(
         f"{name}/model", version, model.uri, kind=LevanterCheckpoint, config=asdict(model)
     )
+    return micro210_artifact_step(
+        ArtifactHfModel(model_artifact, model.tokenizer_uri, model.tokenizer_revision, relative_path=""),
+        name=name,
+        version=version,
+    )
+
+
+def micro210_artifact_step(model: ArtifactModel, *, name: str, version: str) -> ArtifactStep[SkyRLRun]:
+    """Bind a future committed model to the same frozen evaluator as a static export."""
+    fingerprint_model = Micro210Model(
+        "s3://unresolved/terminal-export",
+        MODEL_IDENTITY_PREFIX + "0" * 64,
+        "marin-community/marin-tokenizer-tools",
+        "3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09",
+    )
+    binding = micro210_evaluation(fingerprint_model, run_id=f"{name}@{version}", output_uri="<resolved-at-build>")
+    frozen = binding.policy()
+    policy = frozen["evaluation"]
     inputs = ArtifactStep.adopt(
         "evaluation/micro210/prepared",
         "2026.11.18",
@@ -139,7 +157,7 @@ def micro210_step(model: Micro210Model, *, name: str, version: str, **overrides)
             name=name,
             version=version,
             config_yaml=yaml.safe_dump(policy["config"]),
-            model=ArtifactHfModel(model_artifact, model.tokenizer_uri, model.tokenizer_revision, relative_path=""),
+            model=model,
             train_data=(),
             validation_data=(ArtifactDataSource(inputs, relative_path=policy["data_relative_path"]),),
             topology=SkyRLTopology(roles.num_nodes, roles.policy_num_gpus_per_node, policy["gpu_variant"], roles),
@@ -157,9 +175,19 @@ def micro210_step(model: Micro210Model, *, name: str, version: str, **overrides)
         document["ray"].update(policy["ray_timeouts"])
         document["skyrl"]["generator"]["trajectory_retention"]["run_id"] = binding.run_id
         rendered = yaml.safe_dump(document)
+        if context.is_fingerprint:
+            bound_model = fingerprint_model
+        else:
+            manifest = (StoragePath(run.model.uri) / MODEL_MANIFEST_FILENAME).read_bytes()
+            bound_model = Micro210Model(
+                run.model.uri,
+                MODEL_IDENTITY_PREFIX + hashlib.sha256(manifest).hexdigest(),
+                run.model.tokenizer_uri,
+                run.model.tokenizer_revision,
+            )
         return Micro210Run(
             replace(run, launch_config_yaml=rendered),
-            replace(binding, output_uri=context.output_path),
+            replace(binding, model=bound_model, output_uri=context.output_path),
             hashlib.sha256(rendered.encode()).hexdigest(),
             ("env:TOGETHER_API_KEY",),
         )
