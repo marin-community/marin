@@ -35,7 +35,7 @@ def test_prompt_matches_reference_rendering():
         # A letter-pattern match in lowercase is kept as is and scored wrong.
         ("answer: c", 0, "c"),
         ("a total of 7", 0, "a"),
-        # Without a letter, quoted option text maps back to its letter.
+        # Without a letter, option text maps back to its letter.
         ("So the answer is 7.", 1, "C"),
         ("The correct option is 7", 1, "C"),
         ("no idea", 0, None),

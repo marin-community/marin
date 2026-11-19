@@ -7,7 +7,7 @@ Ported from SuperGPQA/SuperGPQA (ODC-By) at e31e8bf3e7089aef808be5ddecafd4538dee
 ``extract_option_labels``, ``extract_option_content`` and the zero-shot branch of
 ``calculate_accuracy`` in ``eval/eval.py``. Each letter pattern is tried case-insensitively on the
 last line, then on the whole response, and the first match wins; when no letter matches, the
-option-text patterns map a quoted option back to its letter. A lowercase match such as ``a`` is
+option-text patterns map matched option text back to its letter. A lowercase match such as ``a`` is
 returned as is and scored wrong, as in the reference. Each search stops after ``SEARCH_TIMEOUT`` seconds
 and counts as no match, as the reference's ``safe_regex_search`` does; some patterns backtrack
 exponentially on runs of characters such as ``*``, ``(`` or ``\\``.
