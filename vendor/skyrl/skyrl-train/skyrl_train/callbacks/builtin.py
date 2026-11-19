@@ -313,6 +313,7 @@ class BestCheckpointCallback(TrainerCallback):
         self.expected_tasks = expected_tasks
         self.minimum_scored_tasks = minimum_scored_tasks
         self.best_score: float | None = None
+        self.best_step: int | None = None
         self.selection_metric = selection_metric
         self.save_after_fraction = save_after_fraction
         self.preservation_max_drop = dict(preservation_max_drop or {})
@@ -359,6 +360,7 @@ class BestCheckpointCallback(TrainerCallback):
                 raise ValueError("Checkpoint selection window, cadence or cohort threshold changed on resume")
             if previous["model_format"] == "native":
                 self.best_score = previous["accuracy"]
+                self.best_step = previous["step"]
             self.preservation_baseline = previous.get("preservation_baseline", {})
         attempted = int(metrics["eval/all/num_attempted"])
         scored = int(metrics["eval/all/num_scored"])
@@ -439,7 +441,20 @@ class BestCheckpointCallback(TrainerCallback):
             metrics["eval/selection_ema"] = score
             receipt = replace(receipt, ema_score=score)
         if self.best_score is not None and score <= self.best_score:
-            self._record_validation(root, replace(receipt, reason="not_improved"))
+            if self.best_step == state.global_step:
+                self._record_validation(
+                    root,
+                    replace(
+                        receipt,
+                        reason="best_checkpoint_committed",
+                        improved=True,
+                        checkpoint_uri=join_resource_path(
+                            root, f"global_step_{state.global_step}", POLICY_CHECKPOINT_SUBDIRECTORY
+                        ),
+                    ),
+                )
+            else:
+                self._record_validation(root, replace(receipt, reason="not_improved"))
             return control
         if state.global_step and not checkpoint_save_allowed(state, self.save_after_fraction):
             self._record_validation(root, replace(receipt, reason="save_deferred"))
@@ -488,6 +503,7 @@ class BestCheckpointCallback(TrainerCallback):
         )
         if state.global_step:
             self.best_score = score
+            self.best_step = state.global_step
         return control
 
 

@@ -303,6 +303,58 @@ async def test_validation_coverage_receipt_and_checkpoint_commit(tmp_path, score
     assert selected_export_step(str(tmp_path), "best", 20) == 2
 
 
+@pytest.mark.asyncio
+async def test_retry_repairs_receipt_after_best_pointer_commits(tmp_path, monkeypatch):
+    saved = []
+
+    async def save_checkpoints():
+        checkpoint = tmp_path / "global_step_2"
+        checkpoint.mkdir()
+        (checkpoint / "trainer_state.pt").write_bytes(b"committed-after-upload")
+        saved.append(2)
+
+    trainer = SimpleNamespace(
+        cfg=SimpleNamespace(trainer=SimpleNamespace(ckpt_path=str(tmp_path))), save_checkpoints=save_checkpoints
+    )
+    config = OmegaConf.create(
+        {
+            "trainer": {
+                "callbacks": [
+                    {
+                        "type": "best_checkpoint",
+                        "initial_model_uri": "base",
+                        "expected_tasks": 120,
+                        "minimum_scored_tasks": 108,
+                        "ema_window": 5,
+                        "evaluation_interval": 2,
+                    }
+                ]
+            }
+        }
+    )
+    callback = create_callbacks_from_config(config)[0]
+    writer = callback._record_validation
+    fail = [True]
+
+    def record(root, receipt):
+        if receipt.improved and fail[0]:
+            fail[0] = False
+            raise OSError("receipt publication failed after best pointer")
+        writer(root, receipt)
+
+    monkeypatch.setattr(callback, "_record_validation", record)
+    metrics = {"eval/all/num_attempted": 120, "eval/all/num_scored": 108, "eval/all/avg_verifier_score": 0.5}
+    state = TrainerState(2, 0, 20, 20)
+    with pytest.raises(OSError, match="receipt publication failed"):
+        await callback.on_evaluate_async(state, TrainerControl(), trainer=trainer, metrics=dict(metrics))
+    assert (tmp_path / "best_checkpoint.json").exists()
+    await callback.on_evaluate_async(state, TrainerControl(), trainer=trainer, metrics=dict(metrics))
+    (receipt,) = json.loads((tmp_path / VALIDATION_RECEIPTS_FILENAME).read_text())
+    assert saved == [2]
+    assert receipt["improved"] and receipt["ema_score"] == 0.5
+    assert receipt["checkpoint_uri"] == str(tmp_path / "global_step_2/policy")
+
+
 def test_final_fallback_is_loud_and_refused_if_eligible_selection_is_missing(tmp_path, caplog):
     final = tmp_path / "global_step_7"
     final.mkdir()
