@@ -105,6 +105,7 @@ class EvaluationRunConfig(RunModel):
     concurrency: int = Field(default=DEFAULT_EVALUATION_CONCURRENCY, gt=0)
     limits: RolloutLimits
     source_limit: int | None = Field(default=None, gt=0)
+    source_rows: tuple[str, ...] | None = Field(default=None, min_length=1, exclude_if=lambda value: value is None)
     seed: int | None = None
     task_machine: MachineRuntimeSpec | None = None
     verifier_machine: MachineRuntimeSpec | None = None
@@ -623,6 +624,7 @@ async def run_evaluation(
                     context_window=config.model.context_window,
                     max_tokens=config.max_tokens,
                     limit=config.source_limit,
+                    source_rows=config.source_rows,
                     tokenizer=tokenizer,
                     chat_template_kwargs=(
                         protocol.sampling.chat_template_kwargs if protocol.sampling is not None else None
