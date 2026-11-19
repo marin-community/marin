@@ -144,11 +144,23 @@ def harbor_machine(environment: EnvironmentConfig, user: str | int | None) -> Ma
 
 
 def lower_harbor_task(directory: Path, task: TaskSpec, *, session: Mapping[str, Any]) -> TaskRolloutSpec:
-    """Use package machine settings and phase deadlines, with other limits from the caller."""
+    """Use the package's machine settings and phase deadlines, with other limits from the caller.
+
+    Full Harbor trials bind the task.toml-declared agent and verifier deadlines into the row
+    limits: the trial runtime turns row limits into Harbor ``override_timeout_sec`` values, so a
+    session default here would replace the task's own deadlines.
+    """
     config = TaskConfig.model_validate_toml((directory / "task.toml").read_text())
 
     if session["task_session"] == HARBOR_TRIAL_SESSION:
-        return rollout_spec(task, session)
+        return rollout_spec(
+            task,
+            {
+                **session,
+                "total_turn_timeout": config.agent.timeout_sec,
+                "verifier_timeout": config.verifier.timeout_sec,
+            },
+        )
 
     task_machine = harbor_machine(config.environment, config.agent.user)
     verifier_machine = (
