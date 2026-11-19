@@ -4,7 +4,7 @@ name: AdamC router/embed decay 0.3
 category: Optimizers
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: approved
+status: running
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-7020794352
@@ -12,3 +12,18 @@ intake:
   approved_by: armorfaye (trusted)
 code_commits:
 - ff2946d7ad731e42d3b87d2429d458a6321e875e
+trials:
+- id: t001
+  variant: X0245 with router/embed AdamC decay 0.3
+  rung: speedrun
+  protocol: equal_steps
+  batch: X0248
+  date: '2026-11-19'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0248
+  wandb: []
+  settings:
+    muonc_decay_mult: '12.5'
+    adamc_head_router_embed: 'true'
+    adamc_adam_decay: '0.3'
+  commit: 33c8015240
+  priority: interactive
