@@ -10,10 +10,13 @@ paper's SFT recipe (arXiv 2611.10866) and the plan-of-record decisions fixed on
 - Data: the Exp3 V5 release exactly as the Exp3 production run consumed it
   (``release-complete-v5.json``), consumed through the same
   ``production_sft_recipe`` / ``prepared_supervision_data`` machinery, seed 0.
-- Length: 10 percent of the Exp3 SFT update count (75 of 746 updates), same
-  global batch (256) and context (262,144).
+- Length: the fixed token budget (~5.03B positions) on the 64-GPU plan: 300
+  updates at batch 64 x 262,144 (8 nodes, EP=8 per node, CP=8 across nodes,
+  one sequence per device-slot — the production per-device load), per the
+  user's efficiency decision; the original 75 x 256 plan had the same product.
 - Mask: routed-expert ``gate_proj`` only; eta 1/2048; lambda 1e-5; alpha ramp
-  1e2 -> 1e3; AdamW lr 5e-4 constant on the gate logits only.
+  1e2 -> 1e3 over the actual run (horizon == steps); AdamW lr 5e-4 constant on
+  the gate logits only.
 - Wanda calibration on the first 64 training batches.
 
 Decisions the fixed plan does not determine are recorded here and in the plan
@@ -68,7 +71,7 @@ from experiments.sft.launcher import SFTSpec, levanter_train_request, sft_step
 logger = logging.getLogger(__name__)
 
 NAME = "deletion-tuning/v1-sft"
-VERSION = "2026.11.18.1"
+VERSION = "2026.11.19.1"
 OUTPUT_PREFIX = "s3://marin-us-east-02a/marin/users/benfeuer/snowball-deletion-tuning"
 
 DATA_RELEASE_URI = (
@@ -78,26 +81,41 @@ DATA_RELEASE_URI = (
 DATA_RELEASE_SHA256 = "3e2161945e1adc60c9edcdb6b0d7395946966dc4e0d16b88660fbc38989603f5"
 
 EXP3_UPDATES = GEOMETRY.updates
-V1_UPDATES = round(EXP3_UPDATES / 10)
+# The 64-GPU V1 plan (the user's efficiency decision): 8 nodes x 8 H100, EP=8
+# per node, CP=8 across nodes, batch 64 (one sequence per device-slot, the
+# production per-device token load), and 300 steps so the token budget equals
+# the original 75 x 256 x 262,144 plan exactly.
+V1_DEVICES = 64
+V1_NODES = 8
+V1_BATCH = 64
+V1_UPDATES = 300
+V1_TARGET_POSITIONS = V1_UPDATES * V1_BATCH * GEOMETRY.sequence_length
+assert (
+    V1_TARGET_POSITIONS == EXP3_UPDATES * 256 * GEOMETRY.sequence_length
+), "the 64-GPU plan must preserve the original token budget"
+# the release freezes mixture_block_size at the production 256-sequence phase
+# geometry (64,000 = 250 updates x 256); the schedule boundaries rescale with
+# the batch, so the block follows the rescaled phase length (250 x 64)
+V1_MIXTURE_BLOCK = 250 * V1_BATCH
 V1_CALIBRATION_BATCHES = 64
 V1_ALPHA_START = 1e2
 V1_ALPHA_END = 1e3
 V1_ETA = 1 / 2048
 V1_LAMBDA = 1e-5
 V1_LOGIT_LR = 5e-4
-V1_DURATION = timedelta(hours=5)
+V1_DURATION = timedelta(hours=12)
 V1_STARTUP_TIMEOUT = timedelta(hours=2)
-# The Exp3 guard convention: H100-hour ceiling = devices x deadline (5120 = 256 x 20h).
-V1_H100_HOUR_LIMIT = 256 * int(V1_DURATION.total_seconds() // 3600)
+# The guard convention: H100-hour ceiling = devices x deadline.
+V1_H100_HOUR_LIMIT = V1_DEVICES * int(V1_DURATION.total_seconds() // 3600)
 
-# H100-hour estimate factors, derived from the Exp3 production row (746 updates
-# in 20 h wall on 256 H100): startup+compile reserve, forward-only calibration
-# cost (a third of a train step), the 75 updates, and final export.
-ESTIMATE_STARTUP_HOURS = 1.0
-ESTIMATE_FINALIZATION_HOURS = 0.33
+# H100-hour estimate factors: per-step wall stays at the Exp3 per-device rate
+# (each device still processes one sequence-equivalent per step), with the
+# startup, calibration, and export phases measured from the production row.
+ESTIMATE_STARTUP_HOURS = 1.5
+ESTIMATE_FINALIZATION_HOURS = 0.4
 EXP3_WALL_HOURS = 20.0
 EXP3_STARTUP_HOURS = 1.0
-EXP3_SECONDS_PER_UPDATE = (EXP3_WALL_HOURS - EXP3_STARTUP_HOURS) * 3600 / EXP3_UPDATES
+EXP3_SECONDS_PER_STEP = (EXP3_WALL_HOURS - EXP3_STARTUP_HOURS) * 3600 / EXP3_UPDATES
 CALIBRATION_FRACTION_OF_STEP = 1 / 3
 
 
@@ -127,28 +145,34 @@ def v1_recipe(production_recipe: dict) -> dict:
     controls (mesh, resources, packing, gates) carry over untouched except for
     the recorded overrides.
     """
-    assert (
-        EXP3_UPDATES == 746 and V1_UPDATES == 75
-    ), f"the V1 length decision assumes 746 Exp3 updates -> 75, got {EXP3_UPDATES} -> {V1_UPDATES}"
+    assert EXP3_UPDATES == 746, f"the token-budget equivalence assumes 746 Exp3 updates, got {EXP3_UPDATES}"
     recipe = copy.deepcopy(production_recipe)
     if recipe["format"] != "sft_spec" or recipe["profile"] != "snowball_exp3":
         raise ValueError("V1 must build on the Exp3 production SFT recipe")
-    if recipe["batch_size"] != GEOMETRY.global_batch or recipe["seq_len"] != GEOMETRY.sequence_length:
-        raise ValueError("V1 keeps the Exp3 batch and context")
+    if recipe["seq_len"] != GEOMETRY.sequence_length:
+        raise ValueError("V1 keeps the Exp3 context")
 
     trainer = recipe["trainer"]
     trainer["num_train_steps"] = V1_UPDATES
+    trainer["train_batch_size"] = V1_BATCH
     trainer["training_budget"]["duration"] = draccus.encode(V1_DURATION)
     # the Deletion calibration (64 forward-only batches, roughly half an hour)
     # runs after the base load and before the first step, so the startup
     # watchdog budget scales with it (the Exp3 budget covered load + first
     # compile only)
     trainer["progress_watchdog"]["startup_timeout"] = draccus.encode(V1_STARTUP_TIMEOUT)
+    # the 64-GPU mesh: EP=8 within a node, CP=8 across the 8 nodes
+    trainer["mesh"]["dcn_axes"]["context"] = V1_NODES
+    trainer["mesh"]["dcn_axes"]["replica_dcn"] = 1
     recipe["stop_after_steps"] = V1_UPDATES
+    recipe["batch_size"] = V1_BATCH
     recipe["task_timeout_seconds"] = int(V1_DURATION.total_seconds())
-    recipe["target_positions"] = V1_UPDATES * GEOMETRY.global_batch * GEOMETRY.sequence_length
+    recipe["target_positions"] = V1_TARGET_POSITIONS
     recipe["stage_guard"]["h100_hour_limit"] = V1_H100_HOUR_LIMIT
-    # The Deletion init deliberately perturbs the masked weights, so the Exp3
+    resources = recipe["resources"]
+    assert resources["device"]["count"] == 8 and resources["replicas"] == 2 * V1_NODES, resources["replicas"]
+    resources["replicas"] = V1_NODES
+    # the Deletion init deliberately perturbs the masked weights, so the Exp3
     # identity gate against the unmodified base would reject a correct init.
     recipe["initial_eval_match"] = None
 
@@ -171,9 +195,16 @@ def deletion_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
     settings = draccus.decode(SnowballConfig, recipe["model"]).deletion_tuning
     if settings is None:
         raise ValueError("the V1 recipe must carry the deletion_tuning block")
+    # the release freezes mixture_block_size at the production phase geometry;
+    # the schedule boundaries rescale with the batch, so the block follows the
+    # rescaled phase length (the shuffle granularity is a recorded override)
+    prepared = spec.prepared_data
+    if prepared is not None:
+        prepared = dataclasses.replace(prepared, mixture_block_size=V1_MIXTURE_BLOCK)
     model = spec.model
     return dataclasses.replace(
         spec,
+        prepared_data=prepared,
         optimizer=v1_optimizer(),
         optimizer_num_train_steps=None,
         model=DeletionHFModel(
@@ -204,10 +235,14 @@ def v1_step(release: DataRelease) -> tuple:
 
 
 def estimated_h100_hours() -> float:
-    """The point estimate: startup + Wanda calibration + 75 updates + finalization."""
-    calibration_hours = V1_CALIBRATION_BATCHES * EXP3_SECONDS_PER_UPDATE * CALIBRATION_FRACTION_OF_STEP / 3600
-    update_hours = V1_UPDATES * EXP3_SECONDS_PER_UPDATE / 3600
-    return ESTIMATE_STARTUP_HOURS + calibration_hours + update_hours + ESTIMATE_FINALIZATION_HOURS
+    """The point estimate: startup + Wanda calibration + 300 steps + finalization.
+
+    Each device still processes one sequence-equivalent per step (batch 64 over
+    64 devices), so the per-step wall stays at the Exp3 per-device rate.
+    """
+    calibration_hours = V1_CALIBRATION_BATCHES * EXP3_SECONDS_PER_STEP * CALIBRATION_FRACTION_OF_STEP / 3600
+    step_hours = V1_UPDATES * EXP3_SECONDS_PER_STEP / 3600
+    return ESTIMATE_STARTUP_HOURS + calibration_hours + step_hours + ESTIMATE_FINALIZATION_HOURS
 
 
 def _resolve_dispatch(spec: SFTSpec, resources: ResourceConfig, task_timeout_seconds: int, output_path: str):

@@ -128,21 +128,27 @@ def _production_recipe() -> dict:
 
 def test_v1_recipe_overlays_the_fixed_decisions():
     recipe = v1_recipe(_production_recipe())
-    assert recipe["stop_after_steps"] == V1_UPDATES == 75
-    assert recipe["trainer"]["num_train_steps"] == 75
-    assert recipe["task_timeout_seconds"] == 5 * 3600
-    assert recipe["trainer"]["training_budget"]["duration"] == "5h"
+    assert recipe["stop_after_steps"] == V1_UPDATES == 300
+    assert recipe["trainer"]["num_train_steps"] == 300
+    assert recipe["trainer"]["train_batch_size"] == 64
+    assert recipe["batch_size"] == 64
+    assert recipe["task_timeout_seconds"] == 12 * 3600
+    assert recipe["trainer"]["training_budget"]["duration"] == "12h"
     assert recipe["trainer"]["progress_watchdog"]["startup_timeout"] == "2h"
-    assert recipe["trainer"]["training_budget"]["finalization_reserve"] == "40m"
-    assert recipe["target_positions"] == 75 * 256 * 262144
-    assert recipe["stage_guard"]["h100_hour_limit"] == V1_H100_HOUR_LIMIT == 1280
+    assert recipe["trainer"]["mesh"]["dcn_axes"]["context"] == 8
+    assert recipe["trainer"]["mesh"]["dcn_axes"]["replica_dcn"] == 1
+    assert recipe["trainer"]["mesh"]["axes"]["expert"] == 8
+    assert recipe["resources"]["replicas"] == 8
+    # the token budget equals the original 75 x 256 plan exactly
+    assert recipe["target_positions"] == 300 * 64 * 262144 == 75 * 256 * 262144
+    assert recipe["stage_guard"]["h100_hour_limit"] == V1_H100_HOUR_LIMIT == 768
     assert recipe["initial_eval_match"] is None
     model = v1_sft_module.draccus.decode(SnowballConfig, recipe["model"])
     assert model.deletion_tuning == v1_deletion_config()
     assert model.deletion_tuning.scope == DeletionTuningScope.ROUTED_GATE
     assert model.deletion_tuning.calibration_sequences == 64
     # the Exp3 controls carry over untouched
-    assert recipe["batch_size"] == 256 and recipe["seq_len"] == 262144
+    assert recipe["seq_len"] == 262144
 
 
 def test_v1_recipe_rejects_a_foreign_recipe():
@@ -160,8 +166,8 @@ def test_v1_optimizer_and_estimate():
     assert optimizer.warmup == 0
     # the point estimate sits below the guard with headroom for the 75 updates
     hours = estimated_h100_hours()
-    assert 3.0 < hours < 4.5, hours
-    assert V1_H100_HOUR_LIMIT == 256 * 5
+    assert 9.0 < hours < 11.5, hours
+    assert V1_H100_HOUR_LIMIT == 64 * 12
 
 
 def test_deletion_sft_spec_swaps_optimizer_and_dispatch(monkeypatch):
@@ -173,7 +179,7 @@ def test_deletion_sft_spec_swaps_optimizer_and_dispatch(monkeypatch):
         chat_template="unused",
         datasets=(),
         optimizer=AdamConfig(learning_rate=3e-4),
-        num_train_steps=75,
+        num_train_steps=300,
     )
     monkeypatch.setattr(v1_sft_module, "exp3_sft_spec", lambda name, version, recipe: spec)
 
@@ -183,6 +189,7 @@ def test_deletion_sft_spec_swaps_optimizer_and_dispatch(monkeypatch):
     assert isinstance(built.optimizer, AdamConfig)
     assert built.optimizer.learning_rate == 5e-4 and built.optimizer.weight_decay == 0.0
     assert built.optimizer_num_train_steps is None
+    assert built.prepared_data is None  # the stub carries none; the block override guards on it
     assert isinstance(built.model, DeletionHFModel)
     assert built.model.model_ref == base_model.model_ref
     assert built.model.task_timeout_seconds == base_model.task_timeout_seconds
@@ -199,11 +206,11 @@ def test_deletion_hf_model_run_targets_the_dt_main():
 def test_deletion_settings_derive_from_the_model_config():
     config = SimpleNamespace(
         model=_tiny_snowball(v1_deletion_config()),
-        trainer=SimpleNamespace(num_train_steps=75),
+        trainer=SimpleNamespace(num_train_steps=300),
     )
     settings = deletion_settings_from_config(config)
     assert settings == DeletionTrainSettings(
-        total_steps=75,
+        total_steps=300,
         alpha_start=1e2,
         alpha_end=1e3,
         eta=1 / 2048,
@@ -232,7 +239,7 @@ def test_run_deletion_train_lm_installs_and_restores_the_seam(monkeypatch):
 
     model_config = _tiny_snowball(v1_deletion_config())
     pod_config = SimpleNamespace(
-        train_config=SimpleNamespace(model=model_config, trainer=SimpleNamespace(num_train_steps=75))
+        train_config=SimpleNamespace(model=model_config, trainer=SimpleNamespace(num_train_steps=300))
     )
     run_deletion_train_lm(pod_config)
 
