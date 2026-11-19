@@ -732,6 +732,10 @@ def test_license_ban_redacts_existing_content_and_invalidates_inventory_cache(
     with catalog_database.begin() as connection:
         load_id = connection.execute(text("SELECT load_id FROM atlas_current WHERE name='latest'")).scalar_one()
         connection.execute(
+            text("UPDATE curriculum_sources SET declaration=declaration-'id' WHERE source_id=:source"),
+            {"source": OPEN_SOURCE_ID},
+        )
+        connection.execute(
             text(
                 "UPDATE atlas_sources SET source_fingerprint=CAST(:fingerprint AS JSONB) "
                 "WHERE load_id=:load AND id=:source"
@@ -767,6 +771,7 @@ def test_license_ban_redacts_existing_content_and_invalidates_inventory_cache(
         assert client.get("/sources").status_code == 200
         assert canary in client.get("/source-fingerprint", params={"source_id": OPEN_SOURCE_ID}).text
         assert canary in client.get("/curriculum/tasks").text
+        assert canary in client.get("/curriculum/task", params={"source_id": OPEN_SOURCE_ID, "task_id": "one"}).text
         assert canary in client.get("/archive/reviews/license-review/artifacts/raw.txt").text
         registry = json.loads(licensing.LICENSE_BANS)
         ban = {

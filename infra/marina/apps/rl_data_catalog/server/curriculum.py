@@ -650,7 +650,8 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
                 connection.execute(
                     text(
                         """
-                SELECT t.detail, s.alignment->>'intended_use' AS intended_use, s.declaration AS source_declaration
+                SELECT t.detail, s.alignment->>'intended_use' AS intended_use,
+                    s.declaration || jsonb_build_object('id',s.source_id) AS source_declaration
                 FROM curriculum_tasks t JOIN curriculum_sources s USING(load_id, source_id)
                 WHERE t.load_id=:load_id AND t.source_id IN (:source_id, :original_source_id) AND t.task_id=:task_id
             """
