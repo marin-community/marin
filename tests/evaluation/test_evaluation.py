@@ -553,6 +553,43 @@ def test_evaluation_steps_prepare_cold_judge_before_serving_warm_candidate(tmp_p
     assert events[2:] == ["serve candidate", "serve judge"]
 
 
+def test_evaluation_steps_prepare_evaluation_judges_with_the_candidate_and_serve_only_the_candidate(
+    tmp_path, monkeypatch
+):
+    events: list[str] = []
+    judge_prepare_started = threading.Event()
+
+    def prepare(config):
+        model = config.model.model_id
+        if model == "policy-judge":
+            judge_prepare_started.set()
+        else:
+            assert judge_prepare_started.wait(timeout=5)
+        events.append(f"prepared {model}")
+        return PreparedInference(config)
+
+    def serve(prepared):
+        events.append(f"serve {prepared.config.model.model_id}")
+        return nullcontext(_remote_session(f"https://{prepared.config.model.model_id}.example/v1"))
+
+    _patch_inference_runtime(monkeypatch, lambda _config: pytest.fail("serve_inference is patched below"))
+    monkeypatch.setattr("marin.evaluation.runner.prepare_inference", prepare)
+    monkeypatch.setattr("marin.evaluation.runner.serve_inference", serve)
+    monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
+    hosted = _hosted_judge_batch(tmp_path, (_evaluation(tmp_path, "one", _successful_evaluation),))
+    policy_judge = HostedJudge(
+        model=ModelConfig(name="policy-judge", location="org/policy-judge", resource_hint=ResourceHint(hbm_gb=3)),
+        accelerator=hosted.accelerator,
+        api_model="org/policy-judge",
+    )
+    batch = replace(hosted, judge=None, prepared_judges=(policy_judge,))
+
+    _run_test_batch(batch)
+
+    assert sorted(events[:2]) == ["prepared candidate", "prepared policy-judge"]
+    assert events[2:] == ["serve candidate"]
+
+
 @dataclass(frozen=True)
 class _PrepareJob:
     job_id: str

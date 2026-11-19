@@ -785,7 +785,11 @@ def serve_inference(prepared: PreparedInference) -> Iterator[RemoteInferenceSess
 
 @contextlib.contextmanager
 def remote_inference(config: RemoteInferenceConfig) -> Iterator[RemoteInferenceSession]:
-    """Prepare and serve one model. Callers serving several models prepare them all first instead."""
+    """Prepare and serve one model.
+
+    Callers serving several models prepare them all first instead. Preparing an already-cached model is
+    a cache check, so this is also the call for a model whose weights a caller prepared earlier.
+    """
     with serve_inference(prepare_inference(config)) as session:
         yield session
 

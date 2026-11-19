@@ -69,6 +69,7 @@ logger = logging.getLogger(__name__)
 _INFERENCE_ROLE = "inference"
 _ORCHESTRATOR_ROLE = "orchestrator"
 _JUDGE_ROLE = "judge"
+_PREPARED_JUDGE_ROLE = "prepared-judge"
 _UNCONSTRAINED = "unconstrained"
 _REPORT_TAIL_LINES = 15
 
@@ -255,6 +256,9 @@ class EvaluationBatch:
     max_concurrent: int
     instances: int = 1
     judge: HostedJudge | None = None
+    # Judges an evaluation serves for itself. The batch only prepares their weights, alongside the
+    # candidate, so no evaluation downloads a judge while the candidate's accelerators are reserved.
+    prepared_judges: tuple[HostedJudge, ...] = ()
     secret_env: Mapping[str, SecretSpec] = field(default_factory=dict)
     egress_allow: tuple[str, ...] = ()
     """Egress rules the orchestrator job and its children need beyond the cluster allowlist."""
@@ -586,7 +590,7 @@ def _record_startup_failure(
     jobs = {_ORCHESTRATOR_ROLE: orchestrator_job_id, **(existing_jobs or {}), **failed_jobs}
     error = f"{type(exc).__name__}: {exc}"
     _record(batch, evaluation.identity, RunStatus.INFRA_FAILED, error, {}, jobs, tails)
-    subject = "judge inference" if role == _JUDGE_ROLE else "inference"
+    subject = "judge inference" if role.startswith((_JUDGE_ROLE, _PREPARED_JUDGE_ROLE)) else "inference"
     raise RuntimeError(f"{evaluation.identity.eval_ref.name} {subject} failed: {exc}") from exc
 
 
@@ -656,7 +660,7 @@ def run_evaluation_steps(
 
 
 def _inference_configs(batch: EvaluationBatch, runtime_env: Mapping[str, str]) -> dict[str, RemoteInferenceConfig]:
-    """The candidate's inference config and, with a hosted judge, the judge's, keyed by job role."""
+    """Inference configs keyed by job role: the candidate, the hosted judge, and judges prepared for evaluations."""
     configs = {
         _INFERENCE_ROLE: inference_config_for_model(
             batch.model,
@@ -687,6 +691,14 @@ def _inference_configs(batch: EvaluationBatch, runtime_env: Mapping[str, str]) -
             env_vars=runtime_env,
             capability_origin=batch.capability_origin,
             api_model=batch.judge.api_model,
+            priority=batch.priority_band,
+        )
+    for index, judge in enumerate(batch.prepared_judges):
+        configs[f"{_PREPARED_JUDGE_ROLE}-{index}"] = inference_config_for_model(
+            judge.model,
+            judge.accelerator,
+            env_vars=runtime_env,
+            api_model=judge.api_model,
             priority=batch.priority_band,
         )
     return configs
