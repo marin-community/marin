@@ -13,7 +13,7 @@
     }
   ],
   "family_limits": {
-    "agentic": 8025,
+    "agentic": 5608,
     "nonagentic": 100000
   },
   "heldout": [
@@ -24,17 +24,17 @@
       "version": "2026.10.23.1"
     }
   ],
-  "name": "snowball-100k-agentic",
+  "name": "users/ahmad/snowball-100k-agentic",
   "released": [
     {
       "agentic": true,
       "family": "agentic",
       "format": "task_spec",
       "license": "unverified",
-      "rows": 8025,
-      "sha256": "22a8ff921f6e9ed288f18337aedc730117993806c82ee5442410d8f0e6ee229e",
-      "uri": "s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-pi-taskpython-20261111-v3/swe-pi-taskpython-20261111-v3/agentic-train.parquet",
-      "version": "swe-pi-taskpython-20261111-v3"
+      "rows": 5608,
+      "sha256": "ae53e7a3678a3ef05c5364834644d8eefb5bdc258f78f3b4c4d316fa956a0192",
+      "uri": "s3://marin-us-east-08a/marin/users/ahmad/rl-data/swe-verified-task-spec-setup/2026.11.19.1/agentic-train.parquet",
+      "version": "2026.11.19.1"
     }
   ],
   "seed": 20261019,
@@ -51,7 +51,7 @@
     "Task Trove:laion__nemotron-gym-agent-calendar-v2": 2699,
     "Task Trove:laion__nemotron-gym-instruction-following-calendar-v3": 5673,
     "Task Trove:laion__nemotron-gym-instruction-following-structured-v3": 9008,
-    "s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-pi-taskpython-20261111-v3/swe-pi-taskpython-20261111-v3/agentic-train.parquet": 8025
+    "s3://marin-us-east-08a/marin/users/ahmad/rl-data/swe-verified-task-spec-setup/2026.11.19.1/agentic-train.parquet": 5608
   },
   "sources": {
     "MarinSkyRL:eurus2_code": "nonagentic",
@@ -68,5 +68,5 @@
     "Task Trove:laion__nemotron-gym-instruction-following-structured-v3": "nonagentic"
   },
   "validation_per_family": 20,
-  "version": "2026.11.19.1"
+  "version": "2026.11.19.2"
 }
