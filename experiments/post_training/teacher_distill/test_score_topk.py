@@ -10,6 +10,8 @@ from experiments.post_training.teacher_distill import score_topk
 
 
 class _Response:
+    status_code = 200
+
     def __init__(self, payload):
         self.payload = payload
 

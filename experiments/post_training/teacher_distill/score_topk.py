@@ -57,6 +57,7 @@ logger = logging.getLogger(__name__)
 MARIN_ROOT = Path(__file__).resolve().parents[3]
 HUB_CLUSTER = "marin"
 CLUSTER = "cw-us-east-08a"
+REQUEST_ATTEMPTS = 6
 MODEL_CONFIG = "experiments/evaluation/mochi/model-mochi-sft-step400407.yaml"
 TOP = 20
 MAX_MODEL_LEN = 73728
@@ -74,21 +75,26 @@ def score_doc(task: tuple[str, str, dict, dict]) -> dict:
     ids, weights = doc["input_ids"], doc["loss_weights"]
     if len(ids) != len(weights) or weights[-1] or len(ids) > MAX_MODEL_LEN - 1:
         raise ValueError(f"doc {doc['row']}: bad weights or too long")
-    response = requests.post(
-        url,
-        json={
-            "model": api_model,
-            "prompt": ids,
-            "add_special_tokens": False,
-            "temperature": 0.0,
-            "max_tokens": 1,
-            "prompt_logprobs": TOP,
-            "return_tokens_as_token_ids": True,
-            "return_token_ids": True,
-        },
-        headers=headers,
-        timeout=REQUEST_TIMEOUT,
-    )
+    body = {
+        "model": api_model,
+        "prompt": ids,
+        "add_special_tokens": False,
+        "temperature": 0.0,
+        "max_tokens": 1,
+        "prompt_logprobs": TOP,
+        "return_tokens_as_token_ids": True,
+        "return_token_ids": True,
+    }
+    # The serve's front proxy returns an occasional 502 while vLLM keeps running; retry those, not 4xx.
+    for attempt in range(REQUEST_ATTEMPTS):
+        try:
+            response = requests.post(url, json=body, headers=headers, timeout=REQUEST_TIMEOUT)
+            if response.status_code < 500:
+                break
+        except requests.ConnectionError:
+            if attempt == REQUEST_ATTEMPTS - 1:
+                raise
+        time.sleep(2**attempt)
     response.raise_for_status()
     (choice,) = response.json()["choices"]
     if [_token_id(t) for t in choice["prompt_token_ids"]] != ids:
@@ -191,7 +197,11 @@ def run_job(
         api_model="teacher",
     )
     # The coordinator already runs on 08a, so the serving child stays there without a cluster pin.
-    summaries = []
+    # A rerun of the same shard resumes: cells its summary already lists are not scored again.
+    summaries = json.loads(summary_path.read_text())["cells"] if summary_path.exists() else []
+    done = {c["cell"] for c in summaries}
+    cells = [c for c in cells if c.removeprefix(cells_root).lstrip("/").removesuffix(".jsonl.gz") not in done]
+    logger.info("%d cells already scored; %d to go", len(done), len(cells))
     serve_started = time.monotonic()
     with remote_inference(inference) as session:
         session.wait_until_ready()
