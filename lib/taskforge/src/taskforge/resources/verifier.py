@@ -20,7 +20,8 @@ class RoundVerifier:
     Callers use it through one of two engines. ``rollouts`` leases the machine when the engine starts grading, so
     solver rollouts overlap each other; the wait for the lease counts against the engine's verifier and startup
     deadlines. ``grades`` leases it before the attempt starts, for attempts that only replay a candidate, so their
-    wait is outside every engine deadline.
+    wait is outside every engine deadline. Either lease is held until the engine returns the attempt, including
+    its task machine's start (``grades`` only) and its cleanup.
     """
 
     def __init__(self, engine: RolloutEngine, cleanup_timeout: float) -> None:

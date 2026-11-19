@@ -165,8 +165,9 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   reverting to the earlier submission if the hardening broke something.
 - **Budgets**: `budget.max_modify_rounds`, `budget.max_validation_retries`.
 - **Adversary**: `adversary.roster` (names of adversary harnesses; empty by default),
-  `adversary.image`. A finding is a demonstrated claim with a candidate and an expected grade;
-  the review counts only claims the grader confirms, re-graded on a fresh machine.
+  `adversary.image`, `adversary.max_findings` (the most findings one report may carry). A finding
+  is a demonstrated claim with a candidate and an expected grade; the review counts only claims
+  the grader confirms, re-graded on a fresh machine.
 - **Sandboxes**: `author.image`, `author.workdir`, `sandbox.memory_mb`, `grader.timeout`,
   `solver.*` timeouts (the turn and attempt timeouts are raised to cover `provider.unavailable_wait`).
 - **Provider**: `provider.unavailable_wait` (a busy provider is waited out, with
