@@ -21,6 +21,7 @@ of scoring has passed no new cell starts, so a cap drops whole cells (whole pack
 
 import argparse
 import gzip
+import importlib
 import io
 import json
 import logging
@@ -212,7 +213,10 @@ def main() -> None:
         raise ValueError("outputs go under s3://marin-us-east-08a/tmp/ttl=<N>d/")
     request = JobRequest(
         name=f"task504-mochi-top20-{os.urandom(4).hex()}",
-        entrypoint=Entrypoint.from_callable(run_job, args=[args.cells_root, args.output, args.budget_seconds]),
+        # Reference the importable module, not __main__, so worker processes in the job can find score_doc.
+        entrypoint=Entrypoint.from_callable(
+            importlib.import_module(__spec__.name).run_job, args=[args.cells_root, args.output, args.budget_seconds]
+        ),
         resources=ResourceConfig.with_cpu(cpu=64, ram="192g", disk="64g", target_cluster=CLUSTER),
         environment=create_environment(setup_scripts=[default_setup_script(packages=["marin-core"])]),
         priority=job_pb2.PRIORITY_BAND_PRODUCTION,
