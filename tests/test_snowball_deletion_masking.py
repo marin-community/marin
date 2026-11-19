@@ -301,7 +301,7 @@ def test_hard_mask_export_reloads_to_the_hard_mask_forward(mesh, tmp_path):
             flipped = eqx.tree_at(lambda mm: mm.transformer.deletion_hard, m, jnp.asarray(1.0))
             return np.asarray(flipped.activations(tokens, key=None).array)
 
-        expected = hard_forward(model).array
+        expected = hard_forward(model)
         hard_model = apply_hard_mask(model)
         export_config = dataclasses.replace(config, deletion_tuning=None)
         converter = export_config.hf_checkpoint_converter()
