@@ -125,7 +125,6 @@ def _print_plan(spec: LaunchSpec, batch: EvaluationBatch) -> None:
     geometry = batch.accelerator.geometry
     serving = geometry.label if geometry is not None else "worker-resolved"
     serving = f"{serving} instances={batch.instances}"
-    task_count = batch.accelerator.tasks_per_instance * batch.instances
     click.echo(
         f"model: {spec.model.name}  platform: {spec.platform.value}  "
         f"controller_cluster={EVALUATION_CONTROLLER_CLUSTER}  "
@@ -149,7 +148,7 @@ def _print_plan(spec: LaunchSpec, batch: EvaluationBatch) -> None:
         click.echo(
             f"  eval={eval_ref.name}  location={batch.model.location}  "
             f"backend={batch.model.serve.backend.value}  accel={batch.accelerator.label}  "
-            f"serve={serving} serving_tasks={task_count}  "
+            f"serve={serving} serving_tasks={batch.serving_task_count}  "
             f"region_or_cluster={batch.accelerator.target_cluster or batch.accelerator.region}  "
             f"tasks={tasks}  "
             f"{agent_context}"

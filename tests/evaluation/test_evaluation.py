@@ -475,7 +475,7 @@ def test_evaluation_steps_refresh_direct_endpoint_between_evaluations(tmp_path, 
     assert set(observed_urls) == {"http://10.0.0.1:8000/v1", "http://10.0.0.2:8000/v1"}
 
 
-def test_candidate_startup_failure_records_the_requested_workers(tmp_path, monkeypatch):
+def test_candidate_startup_failure_records_resolved_task_count(tmp_path, monkeypatch):
     evaluation = _evaluation(tmp_path, "candidate", _successful_evaluation)
     batch = _hosted_judge_batch(tmp_path, (evaluation,))
     model = replace(

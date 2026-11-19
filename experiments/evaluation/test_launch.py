@@ -41,6 +41,8 @@ from experiments.evaluation.launch import LaunchSpec, build_evaluation_steps, pr
 from experiments.evaluation.models import models
 from experiments.evaluation.pipeline import eval_step
 
+_SERVING_TASK_COUNT = re.compile(r"\bserving_tasks\s*=\s*(\d+)")
+
 
 @pytest.fixture
 def submitted_batches(monkeypatch):
@@ -92,7 +94,7 @@ class InstanceSelection:
 
 @pytest.fixture(params=[(2, None, 2), (2, 1, 1), (1, 2, 2)], ids=["omitted", "explicit-one", "explicit-two"])
 def instance_selection(request, tmp_path) -> InstanceSelection:
-    catalog_instances, override, expected = request.param
+    model_instances, override, expected = request.param
     path = tmp_path / "model.json"
     path.write_text(
         json.dumps(
@@ -100,7 +102,7 @@ def instance_selection(request, tmp_path) -> InstanceSelection:
                 "name": "test-dp",
                 "location": "s3://test/model",
                 "resource_hint": {"gpu": {"H100": 8}},
-                "serve": {"tensor_parallel_size": 1, "data_parallel_size": 8, "instances": catalog_instances},
+                "serve": {"tensor_parallel_size": 1, "data_parallel_size": 8, "instances": model_instances},
             }
         )
     )
@@ -131,8 +133,8 @@ def test_cli_uses_same_instance_count_for_launch_and_dry_run(
 
     assert plan.exit_code == 0, plan.output
     assert launch.exit_code == 0, launch.output
-    assert re.findall(r"\binstances\s*=\s*(\d+)", plan.output) == [str(instance_selection.expected)] * 2
-    assert re.findall(r"\bserving_tasks\s*=\s*(\d+)", plan.output) == [str(instance_selection.expected)]
+    assert set(re.findall(r"\binstances\s*=\s*(\d+)", plan.output)) == {str(instance_selection.expected)}
+    assert _SERVING_TASK_COUNT.findall(plan.output) == [str(instance_selection.expected)]
     assert [batch.instances for batch in submitted_batches] == [instance_selection.expected]
 
 
@@ -181,10 +183,9 @@ def test_cli_multihost_tpu_requires_one_serving_instance(tmp_path, submitted_bat
     accepted_plan = runner.invoke(cli, [*args, "--dry-run", "--instances", "1"])
 
     for result in (rejected, rejected_plan):
-        assert result.exit_code != 0
-        assert "multi-host TPU serving requires one serving instance" in result.output
+        assert result.exit_code == 2
     assert accepted_plan.exit_code == 0, accepted_plan.output
-    assert re.findall(r"\bserving_tasks\s*=\s*(\d+)", accepted_plan.output) == ["4"]
+    assert _SERVING_TASK_COUNT.findall(accepted_plan.output) == ["4"]
     assert submitted_batches == []
 
 

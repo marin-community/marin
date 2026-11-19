@@ -256,6 +256,11 @@ class EvaluationBatch:
     """Egress rules the orchestrator job and its children need beyond the cluster allowlist."""
     source_model_config: ModelConfigRef | None = None
 
+    @property
+    def serving_task_count(self) -> int:
+        """Number of Iris tasks requested for candidate serving."""
+        return self.accelerator.tasks_per_instance * self.instances
+
 
 @dataclass(frozen=True)
 class SubmittedEvaluation:
@@ -295,7 +300,7 @@ def _record(
             tensor_parallel_size=serve.tensor_parallel_size,
             data_parallel_size=serve.data_parallel_size,
             pipeline_parallel_size=serve.pipeline_parallel_size,
-            task_count=batch.accelerator.tasks_per_instance * batch.instances,
+            task_count=batch.serving_task_count,
             max_model_len=serve.max_model_len,
         )
     evalchemy = identity.eval_ref.evalchemy
