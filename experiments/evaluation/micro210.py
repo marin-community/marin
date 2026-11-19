@@ -61,9 +61,9 @@ class Micro210Run:
 
 def validate_inputs(evaluation: Micro210Evaluation, inputs: str) -> None:
     """Reject changed prepared tasks or export metadata before GPU allocation."""
-    policy = evaluation.policy()
-    table = (StoragePath(inputs) / policy["evaluation"]["data_relative_path"]).read_bytes()
-    if hashlib.sha256(table).hexdigest() != policy["prepared_rollouts_sha256"]:
+    protocol = evaluation.policy()
+    table = (StoragePath(inputs) / protocol["evaluation"]["data_relative_path"]).read_bytes()
+    if hashlib.sha256(table).hexdigest() != protocol["prepared_rollouts_sha256"]:
         raise ValueError("Canonical Micro210 prepared task bytes changed")
     manifest = (StoragePath(evaluation.model.uri) / MODEL_MANIFEST_FILENAME).read_bytes()
     if MODEL_IDENTITY_PREFIX + hashlib.sha256(manifest).hexdigest() != evaluation.model.identity:
@@ -71,7 +71,7 @@ def validate_inputs(evaluation: Micro210Evaluation, inputs: str) -> None:
     tokenizer = AutoTokenizer.from_pretrained(
         evaluation.model.tokenizer_uri, revision=evaluation.model.tokenizer_revision, trust_remote_code=False
     )
-    generator = policy["evaluation"]["config"]["generator"]
+    generator = protocol["evaluation"]["config"]["generator"]
     for sampling in ("sampling_params", "eval_sampling_params"):
         for token_id in generator[sampling]["stop_token_ids"]:
             if tokenizer.convert_ids_to_tokens(token_id) != STOP_TOKEN_CONTENT[token_id]:
@@ -86,20 +86,20 @@ def run_micro210(config: Micro210Run) -> SkyRLRun:
     (StoragePath(config.evaluation.output_uri) / "canonical-evaluation.json").write_text(
         json.dumps(asdict(config.evaluation.record()), indent=2)
     )
-    policy = config.evaluation.policy()["evaluation"]
-    judge = draccus.decode(ModelConfig, policy["judge"])
+    evaluation_policy = config.evaluation.policy()["evaluation"]
+    judge = draccus.decode(ModelConfig, evaluation_policy["judge"])
     launch = yaml.safe_load(config.skyrl.launch_config_yaml)
     inference = inference_config_for_model(
         judge,
         AcceleratorChoice(
             platform=Platform.GPU,
-            gpu_type=policy["gpu_variant"],
-            gpu_count=policy["judge_gpu_count"],
+            gpu_type=evaluation_policy["gpu_variant"],
+            gpu_count=evaluation_policy["judge_gpu_count"],
             target_cluster=None,
         ),
         env_vars={},
         priority=priority_band_value(launch["iris"]["priority"]),
-        capability_origin=policy["capability_origin"],
+        capability_origin=evaluation_policy["capability_origin"],
         api_model=judge.location,
     )
     with remote_inference(inference) as served:
@@ -119,7 +119,7 @@ def micro210_step(model: Micro210Model, *, name: str, version: str) -> ArtifactS
     """Build the canonical evaluation graph for a model and run identity."""
     binding = micro210_evaluation(model, run_id=f"{name}@{version}", output_uri="<resolved-at-build>")
     frozen = binding.policy()
-    policy = frozen["evaluation"]
+    evaluation_policy = frozen["evaluation"]
     model_artifact = ArtifactStep.adopt(
         f"{name}/model", version, model.uri, kind=LevanterCheckpoint, config=asdict(model)
     )
@@ -129,22 +129,27 @@ def micro210_step(model: Micro210Model, *, name: str, version: str) -> ArtifactS
         PREPARED_INPUTS,
         config={"sha256": frozen["prepared_rollouts_sha256"]},
     )
-    roles = draccus.decode(SkyRLRolePlan, policy["role_plan"])
+    roles = draccus.decode(SkyRLRolePlan, evaluation_policy["role_plan"])
     execution = IrisSkyRLExecution(
-        **{**policy["execution"], "required_env_vars": tuple(policy["execution"]["required_env_vars"])},
-        coordinator_timeout_hours=policy["execution"]["job_timeout_seconds"] // 3600 + 1,
+        **{
+            **evaluation_policy["execution"],
+            "required_env_vars": tuple(evaluation_policy["execution"]["required_env_vars"]),
+        },
+        coordinator_timeout_hours=evaluation_policy["execution"]["job_timeout_seconds"] // 3600 + 1,
     )
     step = skyrl_step(
         SkyRLSpec(
             name=name,
             version=version,
-            config_yaml=yaml.safe_dump(policy["config"]),
+            config_yaml=yaml.safe_dump(evaluation_policy["config"]),
             model=ArtifactHfModel(model_artifact, model.tokenizer_uri, model.tokenizer_revision, relative_path=""),
             train_data=(),
-            validation_data=(ArtifactDataSource(inputs, relative_path=policy["data_relative_path"]),),
-            topology=SkyRLTopology(roles.num_nodes, roles.policy_num_gpus_per_node, policy["gpu_variant"], roles),
+            validation_data=(ArtifactDataSource(inputs, relative_path=evaluation_policy["data_relative_path"]),),
+            topology=SkyRLTopology(
+                roles.num_nodes, roles.policy_num_gpus_per_node, evaluation_policy["gpu_variant"], roles
+            ),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=1),
-            seed=policy["seed"],
+            seed=evaluation_policy["seed"],
         ),
         execution,
         export_hf=False,
@@ -154,7 +159,7 @@ def micro210_step(model: Micro210Model, *, name: str, version: str) -> ArtifactS
     def build(context: StepContext) -> Micro210Run:
         run = builder(context)
         document = yaml.safe_load(run.launch_config_yaml)
-        document["ray"].update(policy["ray_timeouts"])
+        document["ray"].update(evaluation_policy["ray_timeouts"])
         document["skyrl"]["generator"]["trajectory_retention"]["run_id"] = binding.run_id
         rendered = yaml.safe_dump(document)
         return Micro210Run(
