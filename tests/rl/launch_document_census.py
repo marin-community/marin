@@ -9,6 +9,8 @@ from itertools import product
 from pathlib import Path
 from typing import Any, ClassVar
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 from fsspec import get_filesystem_class, register_implementation
 from fsspec.implementations.memory import MemoryFileSystem
 from marin.execution.artifact import write_artifact
@@ -25,7 +27,7 @@ from experiments.post_training.cat_count_canary import launcher as canary
 from experiments.post_training.curriculum_rl import launch as curriculum
 from experiments.post_training.mismatch_probe import launch as mismatch
 from experiments.post_training.skyrl_test_support import selection_summary
-from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, SUMMARY_FILENAME
+from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, SUMMARY_FILENAME, TRAIN_FILENAME
 from experiments.post_training.task_sessions import validation
 
 VERSION = "2026.10.24"
@@ -61,6 +63,12 @@ def _snowball_step(preset: rl_presets.Preset, settings: tuple[str, ...] = ()) ->
         ]
         path = StoragePath(source.path()) / SUMMARY_FILENAME
         path.parent.mkdirs()
+        if source is selection and preset.batch_mix is not None:
+            counts = dict.fromkeys(preset.batch_mix.shares, 256)
+            summary["training_family_counts"] = counts
+            families = [family for family, count in counts.items() for _ in range(count)]
+            with (path.parent / TRAIN_FILENAME).open("wb") as stream:
+                pq.write_table(pa.table({"family": families}), stream)
         path.write_text(json.dumps(summary))
     return rl.build_run(
         preset,

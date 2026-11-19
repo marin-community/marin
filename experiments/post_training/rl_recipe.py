@@ -471,7 +471,9 @@ def run_spec(
     if preset.batch_mix is not None:
         assert isinstance(workload, presets.Training)
         try:
-            groups = preset.batch_mix.groups(workload.plan.train_batch_size, set(summary["training_family_counts"]))
+            groups = preset.batch_mix.groups(
+                workload.plan.train_batch_size, set(summary.get("training_family_counts", {}))
+            )
         except ValueError as error:
             raise click.BadParameter(str(error)) from error
         config = config.merge(
