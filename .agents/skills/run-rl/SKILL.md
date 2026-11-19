@@ -28,16 +28,20 @@ Use `use-iris` for job inspection and `use-fsutil` for object-store reads.
 
    Check inputs, allocation, guards, budget estimate and output paths.
    `--version dev` satisfies the launcher; step versions use each preset's `revision`.
+   Use the same plan and inputs to read status for a saved run.
 4. Before submission, tell the person the preset, estimated budget and replicate count. Submit
    train-long or multiple 40-H100 replicates only when the person asked. Set `WANDB_API_KEY`.
    `WANDB_ENTITY` chooses the team, defaulting to `marin-community`.
-5. Pass `--issue ISSUE_NUMBER` when the experimenter links the run to an issue. Add `--run` to submit and `--wait`
-   for the final report. Use a background process and record its process and job IDs so a yielded tool call
+5. Pass the optional `--issue ISSUE_NUMBER` when the experimenter links the run to an issue.
+   Replace `--plan` with `--run` to submit and add `--wait` for the final report.
+   Use a background process and record its process and job IDs so a yielded tool call
    does not cause a second submission.
    Record the finishing status's `rl_progress_url` with the verdict; the launcher publishes using
    the caller's Marina login. Follow the recipe's [publication procedure](../../../docs/recipes/rl-experiments.md#dashboard-publication)
    for retries and pinned controls.
    Use `--url ORIGIN` when publication targets a local Marina stack.
+   Repeat the original `--run --wait` invocation with the same source and inputs to resume
+   train-long from its latest retained checkpoint.
 
 Follow the recipe's [input and flag contracts](../../../docs/recipes/rl-experiments.md#change-one-input),
 [comparison rules](../../../docs/recipes/rl-experiments.md#compare-with-controls) and
