@@ -61,7 +61,7 @@ def printed_status(output):
     return yaml.safe_load(output[marker + 1 if marker >= 0 else 0 :].split("\n# ", 1)[0])
 
 
-def test_all_presets_plan_with_their_declared_controls(selection, tmp_path):
+def test_all_presets_plan_with_their_declared_controls(selection):
     table = snowball_model.SNOWBALL
     for preset in table.presets:
         arguments = ["--preset", preset.name, "--version", preset.revision, "--plan"]
@@ -79,6 +79,9 @@ def test_all_presets_plan_with_their_declared_controls(selection, tmp_path):
     assert result.exit_code == 4 and "no control pin" in result.output, (result.output, result.exception)
     assert "--issue ISSUE_NUMBER --run" in result.output
 
+
+def test_generation_presets_accept_init_only_for_eval_short(selection, tmp_path):
+    table = snowball_model.SNOWBALL
     name, version = "tests/evaluation-init", "2026.11.17"
     root = tmp_path / name / version
     _json(
@@ -98,6 +101,7 @@ def test_all_presets_plan_with_their_declared_controls(selection, tmp_path):
             status = printed_status(result.stdout.partition("\nStepSpec(")[0])
             assert status["inputs"]["model"].partition(":")[0] == f"{name}@{version}"
             assert status["updates"] == 0
+            assert status["guards"] == []
         else:
             assert result.exit_code == 4 and "does not accept --init" in result.output, result.output
 
@@ -302,7 +306,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
         "data-medium": {"2026.11.12.1": "ba638a12", "2026.11.17.1": "2be6e5e2", "2026.11.19.1": "4aa3aed9"},
         "speed-long": {"2026.11.11.1": "cd0a5f4e", "2026.11.17.1": "f29155cc", "2026.11.19.1": "9edc7b70"},
         "train-long": {"2026.11.11.1": "4945b701", "2026.11.17.1": "b411c765", "2026.11.19.1": "e56a62fa"},
-        "eval-short": {"2026.11.19.1": "226272d0"},
+        "eval-short": {"2026.11.19.1": "8144570a"},
     }
     configs = assert_revisioned_native_configs(
         snowball_model.SNOWBALL, revisions, tmp_path=tmp_path, monkeypatch=monkeypatch
@@ -342,6 +346,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
                 assert not config["inputs"].get("evaluation_data")
                 assert not config["inputs"]["train_data"]
                 assert generator["eval_n_samples_per_prompt"] == 1
+                assert trainer["max_prompt_length"] == 16384
         else:
             assert generator["apply_overlong_filtering"] is False
         assert (trainer["bf16"], generator["model_dtype"], trainer["algorithm"]["batch_invariant"]) == (

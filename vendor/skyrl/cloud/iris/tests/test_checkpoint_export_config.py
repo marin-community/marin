@@ -30,6 +30,7 @@ from skyrl_train.hf_export import read_hf_export_request, write_hf_export_reques
 from skyrl_train.trainer import RayPPOTrainer
 from skyrl_train.hf_export_schema import HFExportRequest, HFExportStatus
 from marinskyrl.checkpoint_paths import policy_export_path, selected_export_step
+from skyrlrecipe import RecipePatch
 from skyrlrecipe.sections import Trainer
 
 
@@ -137,9 +138,9 @@ def test_checkpoint_export_config_carries_request_fields_as_data(tmp_path: Path,
 
 
 def test_checkpoint_export_request_uses_private_trainer_default(tmp_path: Path) -> None:
-    trainer = Trainer(hf_hub_repo_id="org/model")
     raw = raw_launch_config()
-    raw["skyrl"]["trainer"].update(trainer.model_dump(include={"hf_hub_repo_id", "hf_hub_private"}))
+    recipe = RecipePatch(trainer=Trainer(hf_hub_repo_id="org/model"))
+    raw["skyrl"]["trainer"].update(recipe.to_skyrl()["trainer"])
     path = tmp_path / "training.yaml"
     OmegaConf.save(OmegaConf.create(raw), path)
     training = load_launch_config(path)
@@ -297,6 +298,7 @@ def test_trainer_records_export_request_for_selected_checkpoint(tmp_path: Path, 
     config.trainer.export_path = str(tmp_path / "exports")
     config.trainer.hf_export_checkpoint = selection
     config.trainer.export_hf_artifact = True
+    OmegaConf.update(config.trainer, "hf_hub_repo_id", "org/model", force_add=True)
     config.trainer.policy.model.path = "org/policy"
     root = Path(config.trainer.ckpt_path)
     for step in (15, 20):
@@ -315,6 +317,8 @@ def test_trainer_records_export_request_for_selected_checkpoint(tmp_path: Path, 
     assert request.step == expected_step
     assert request.checkpoint_path == str(selected)
     assert request.model_path == "org/policy"
+    assert request.hf_hub_repo_id == "org/model"
+    assert request.hf_hub_private is True
     other_step = 20 if expected_step == 15 else 15
     assert read_hf_export_request(str(root / f"global_step_{other_step}")) is None
 

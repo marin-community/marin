@@ -155,12 +155,8 @@ from marinskyrl.runtime_options import WeightSyncTransport
 from skyrl_train.utils.logging_utils import log_exception_as_text
 from skyrl_train.weight_sync.expert_block.driver import ExpertBlockSync
 from skyrl_train.hf_export_schema import (
-    DEFAULT_HF_HUB_PRIVATE,
-    DEFAULT_HF_HUB_REVISION,
-    DEFAULT_HF_UPLOAD_MODE,
     HFExportRequest,
     HFExportStatus,
-    HFUploadMode,
     TRAINER_STATE_FILENAME,
 )
 from skyrl_train.trajectory_runners.trajectory_reward_shaping import refresh_trajectory_reward_shaping_metrics
@@ -3203,22 +3199,12 @@ class RayPPOTrainer:
                 f"completed checkpoint marker is missing at {trainer_state_path}"
             )
 
-        placement = self.cfg.trainer.placement
-        model = self.cfg.trainer.policy.model
-        request = HFExportRequest(
+        request = HFExportRequest.from_trainer(
+            self.cfg.trainer,
             step=export_step,
             checkpoint_base_path=self.cfg.trainer.ckpt_path,
             checkpoint_path=checkpoint_path,
             export_path=self.cfg.trainer.export_path,
-            model_path=model.path,
-            num_nodes=placement.policy_num_nodes,
-            gpus_per_node=placement.policy_num_gpus_per_node,
-            model_source_uri=model.source_uri,
-            model_source_identity=model.source_identity,
-            hf_hub_repo_id=self.cfg.trainer.get("hf_hub_repo_id"),
-            hf_hub_private=self.cfg.trainer.get("hf_hub_private", DEFAULT_HF_HUB_PRIVATE),
-            hf_hub_revision=self.cfg.trainer.get("hf_hub_revision", DEFAULT_HF_HUB_REVISION),
-            hf_upload_mode=HFUploadMode(self.cfg.trainer.get("hf_upload_mode", DEFAULT_HF_UPLOAD_MODE)),
         )
         existing = read_hf_export_request(checkpoint_path)
         if existing is not None:

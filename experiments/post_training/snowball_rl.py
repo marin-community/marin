@@ -535,9 +535,13 @@ SNOWBALL = ModelPresets(
         replace(
             next(preset for preset in _PRESETS if preset.name == "speed-short"),
             name="eval-short",
+            recipe=_GENERATING,
             accepts_init=True,
             controls=None,
             evaluations=(EVALUATIONS["eval_lite"],),
+            guards=(),
+            objectives=(),
+            budget="8 H100s, runtime unmeasured",
         ),
     ),
     namespace="snowball-rl",

@@ -2,6 +2,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 
 from marinskyrl.resource_locator import validate_replayable_model_reference
+from omegaconf import DictConfig
 
 HF_EXPORT_REQUEST_SCHEMA_VERSION = 1
 TRAINER_STATE_FILENAME = "trainer_state.pt"
@@ -47,6 +48,34 @@ class HFExportRequest:
 
     def __post_init__(self) -> None:
         validate_replayable_model_reference(self.model_path, self.model_source_uri, self.model_source_identity)
+
+    @classmethod
+    def from_trainer(
+        cls,
+        trainer: DictConfig,
+        *,
+        step: int,
+        checkpoint_base_path: str,
+        checkpoint_path: str,
+        export_path: str,
+    ) -> "HFExportRequest":
+        """Build a policy export request from the training document."""
+        model, placement = trainer.policy.model, trainer.placement
+        return cls(
+            step=step,
+            checkpoint_base_path=checkpoint_base_path,
+            checkpoint_path=checkpoint_path,
+            export_path=export_path,
+            model_path=model.path,
+            num_nodes=placement.policy_num_nodes,
+            gpus_per_node=placement.policy_num_gpus_per_node,
+            model_source_uri=model.source_uri,
+            model_source_identity=model.source_identity,
+            hf_hub_repo_id=trainer.get("hf_hub_repo_id"),
+            hf_hub_private=trainer.get("hf_hub_private", DEFAULT_HF_HUB_PRIVATE),
+            hf_hub_revision=trainer.get("hf_hub_revision", DEFAULT_HF_HUB_REVISION),
+            hf_upload_mode=HFUploadMode(trainer.get("hf_upload_mode", DEFAULT_HF_UPLOAD_MODE)),
+        )
 
     def with_status(
         self,
