@@ -20,6 +20,7 @@ from experiments.post_training.cat_count_canary import launcher as canary
 from experiments.post_training.curriculum_rl import launch as curriculum
 from experiments.post_training.inventory import train_quick_loop as inventory
 from experiments.post_training.mismatch_probe import launch as mismatch
+from experiments.post_training.mismatch_probe import snowball_head
 from experiments.post_training.task_sessions import validation
 
 VERSION = "2026.10.24"
@@ -131,6 +132,22 @@ def launch_builders(
             reuse_probe=str(artifact_root / "probe-archive") if reuse else None,
             resume_path=str(artifact_root / "checkpoints") if resume else None,
             extra_trainer_modes=replay,
+        )
+    head_builder = inspect.unwrap(snowball_head.main.callback)
+    for arm, cp in product(snowball_head.HEAD_PRECISION, ("1", "5")):
+        builders[f"snowball-head/{arm}/cp{cp}"] = partial(
+            head_builder,
+            arm=arm,
+            cluster="cw-us-east-02a",
+            context_parallel_size=cp,
+            model_uri=str(artifact_root / "snowball-hf"),
+            tokenizer="marin-community/marin-tokenizer-tools",
+            tokenizer_revision="pinned",
+            data_uri=str(artifact_root / "snowball-probe-data"),
+            data_file="validation-tasks.parquet",
+            input_version=VERSION,
+            prompt_count=256,
+            reuse_probe=None if arm == "bf16" else str(artifact_root / "snowball-probe-archive"),
         )
     return builders
 
