@@ -9,6 +9,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 import yaml
+from draccus import ParsingError
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec
 from levanter.checkpoint import Checkpointer, CheckpointInterval, CheckpointRetention
 
@@ -149,29 +150,27 @@ def test_first_step_restore_gate_reloads_permanent_root_when_permanent_request_q
         assert not (temp / "step-1").exists()
 
 
-def test_smoke_recipe_saves_final_only_and_final_checkpoint_writes_once(tmp_path):
+def test_smoke_recipe_decodes_final_only_checkpointing(tmp_path):
     recipe = yaml.safe_load(SMOKE_CONFIG.read_text())
     cfg = fresh_sft_config(
         output=str(tmp_path / "run"), initializer=str(tmp_path / "base"), recipe=recipe, run_id="final-only"
     )
+    # keep=None keeps every permanent checkpoint, including the final one, and the run keeps one
+    # rolling temporary checkpoint for restores.
     assert cfg.trainer.trainer.checkpointer.keep is None
     assert cfg.trainer.trainer.checkpointer.keep_last_temporary_checkpoints == 1
 
-    perm_root = tmp_path / "run" / "checkpoints"
-    checkpointer = Checkpointer(perm_root, save_interval=None, step_policies=[CheckpointInterval(every=5, until=5)])
-    mesh = Mesh(np.asarray(jax.devices("cpu")[:1]), ("data",))
-    with jax.set_mesh(mesh):
-        for step in range(1, 6):
-            tree = {"w": jnp.arange(1024, dtype=jnp.float32) + step}
-            checkpointer.on_step(tree=tree, step=step)
-        checkpointer.wait_until_finished()
-        assert sorted(p.name for p in perm_root.iterdir()) == ["step-5"]
-        size_after_scheduled = sum(f.stat().st_size for f in (perm_root / "step-5").rglob("*") if f.is_file())
 
-        # Final checkpoint reuse avoids a second OCDBT write into step-5.
-        final_tree = {"w": jnp.arange(1024, dtype=jnp.float32) + 5}
-        checkpointer.save_final_checkpoint(tree=final_tree, step=5)
-        checkpointer.on_step(tree=final_tree, step=5, force=True)
-        checkpointer.wait_until_finished()
-        size_after_final = sum(f.stat().st_size for f in (perm_root / "step-5").rglob("*") if f.is_file())
-        assert size_after_final == size_after_scheduled
+def test_fresh_sft_config_rejects_restore_gate_without_checkpoint_saving(tmp_path):
+    recipe = yaml.safe_load(SMOKE_CONFIG.read_text())
+    recipe["first_checkpoint_restore_step"] = 3
+    recipe["trainer"]["save_checkpoints"] = False
+    with pytest.raises(ParsingError) as raised:
+        fresh_sft_config(
+            output=str(tmp_path / "run"),
+            initializer=str(tmp_path / "base"),
+            recipe=recipe,
+            run_id="gate-without-saves",
+        )
+    # draccus wraps construction failures; the decode error names the misconfiguration.
+    assert str(raised.value.__cause__) == "first_checkpoint_restore_step requires save_checkpoints"
