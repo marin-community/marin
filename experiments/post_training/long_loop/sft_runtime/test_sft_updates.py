@@ -20,6 +20,7 @@ from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.grug.attention import AttentionMask
+from levanter.grug.sharding import compact_grug_mesh
 from levanter.testing.devices import use_cpu_devices
 
 from experiments.post_training.long_loop.sft_runtime.model import (
@@ -39,32 +40,34 @@ from experiments.post_training.long_loop.sft_runtime.train import (
 )
 
 
+def _tiny_grug_config() -> GrugModelConfig:
+    return GrugModelConfig(
+        vocab_size=32,
+        hidden_dim=16,
+        intermediate_dim=8,
+        shared_expert_intermediate_dim=8,
+        num_shared_experts=1,
+        num_experts=4,
+        num_experts_per_token=2,
+        num_layers=2,
+        num_heads=2,
+        num_kv_heads=1,
+        local_kv_heads=1,
+        global_kv_heads=1,
+        head_dim=8,
+        max_seq_len=8,
+        sliding_window=4,
+        global_every=2,
+        capacity_factor=4.0,
+        attention_implementation="reference",
+        moe_implementation="fixed_all_to_all",
+    )
+
+
 def test_tagged_eval_loss_is_invariant_to_uniform_weight_scaling():
     with use_cpu_devices(1):
-        mesh = Mesh(
-            np.asarray(jax.devices()).reshape(1, 1, 1, 1, 1),
-            ("replica_dcn", "data", "context", "expert", "model"),
-            axis_types=(AxisType.Explicit,) * 5,
-        )
-        config = GrugModelConfig(
-            vocab_size=32,
-            hidden_dim=16,
-            intermediate_dim=8,
-            shared_expert_intermediate_dim=8,
-            num_shared_experts=1,
-            num_experts=4,
-            num_experts_per_token=2,
-            num_layers=1,
-            num_heads=2,
-            num_kv_heads=1,
-            local_kv_heads=1,
-            global_kv_heads=1,
-            head_dim=8,
-            max_seq_len=8,
-            sliding_window=4,
-            attention_implementation="reference",
-            moe_implementation="fixed_all_to_all",
-        )
+        mesh = compact_grug_mesh(expert_axis_size=1)
+        config = _tiny_grug_config()
         example = GrugLmExample.causal(jnp.arange(1, 9, dtype=jnp.int32))
         data = LmDataConfig(
             components={
@@ -95,27 +98,7 @@ def test_tagged_eval_loss_is_invariant_to_uniform_weight_scaling():
 @pytest.mark.timeout(300)
 def test_sft_update_preserves_router_and_scales_selected_rows():
     with use_cpu_devices(1):
-        config = GrugModelConfig(
-            vocab_size=32,
-            hidden_dim=16,
-            intermediate_dim=8,
-            shared_expert_intermediate_dim=8,
-            num_shared_experts=1,
-            num_experts=4,
-            num_experts_per_token=2,
-            num_layers=2,
-            num_heads=2,
-            num_kv_heads=1,
-            local_kv_heads=1,
-            global_kv_heads=1,
-            head_dim=8,
-            max_seq_len=8,
-            sliding_window=4,
-            global_every=2,
-            capacity_factor=4.0,
-            attention_implementation="reference",
-            moe_implementation="fixed_all_to_all",
-        )
+        config = _tiny_grug_config()
         mesh = Mesh(
             np.asarray(jax.devices()).reshape(1, 1, 1, 1, 1),
             ("replica_dcn", "data", "context", "expert", "model"),
