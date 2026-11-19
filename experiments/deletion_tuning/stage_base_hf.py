@@ -120,6 +120,18 @@ def _copy_verified_file(
 
 
 def main(dry_run: bool = False, destination: str = DEFAULT_DESTINATION) -> None:
+    try:
+        _stage(dry_run=dry_run, destination=destination)
+    except Exception:
+        # the direct-cluster log path is not always fetchable; the failure
+        # lands beside the destination either way
+        import traceback
+
+        StoragePath(prefix_join(destination, "staging-error.txt")).write_text(traceback.format_exc())
+        raise
+
+
+def _stage(dry_run: bool, destination: str) -> None:
     configure_coreweave_s3()
     receipt = json.loads(StoragePath(SOURCE_RECEIPT_URI).read_bytes())
     if receipt["repo"] != "open-athena/snowball-67b-a2b-base-262k-qk175-skew8":
