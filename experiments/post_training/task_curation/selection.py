@@ -29,6 +29,7 @@ from finestore.rl.strata import (
 )
 from finestore.schema import arrow_schema
 from marin.execution.artifact import Artifact
+from marin.execution.fingerprint import register_fingerprint
 from marin.execution.lazy import ArtifactStep, StepContext
 from pydantic import BaseModel, ConfigDict, PositiveInt
 from rigging.filesystem.storage_path import StoragePath
@@ -104,7 +105,7 @@ class GraderKind(StrEnum):
     IN_PROCESS = "in_process"
 
 
-LOCAL_GRADERS = (GraderKind.IN_PROCESS, GraderKind.PACKAGE)
+LOCAL_GRADERS = frozenset((GraderKind.IN_PROCESS, GraderKind.PACKAGE))
 
 
 class PanelFormat(StrEnum):
@@ -137,6 +138,19 @@ class SelectionRecipe(BaseModel):
     exclusions: tuple[HeldoutSource, ...] = ()
     validation_per_family: PositiveInt
     seed: int
+    admitted_graders: frozenset[GraderKind] = LOCAL_GRADERS
+
+
+def _selection_recipe_fingerprint(recipe: SelectionRecipe) -> dict[str, Any]:
+    """Keep the serialized recipe shape of published local-grader selections."""
+    fields = vars(recipe).copy()
+    if recipe.admitted_graders == LOCAL_GRADERS:
+        fields.pop("admitted_graders")
+    recipe_type = type(recipe)
+    return {"__repr__": f"{recipe_type.__module__}.{recipe_type.__qualname__}", "vars": fields}
+
+
+register_fingerprint(SelectionRecipe, _selection_recipe_fingerprint)
 
 
 @dataclass(frozen=True)
@@ -457,7 +471,7 @@ def _grader_counts(path: Path) -> dict[str, int]:
 def write_training(
     config: SelectionConfig, heldout: tuple[TaskSpec, ...], exclusions: tuple[TaskSpec, ...], destination: Path
 ) -> dict[str, SourceCounts]:
-    """Sample admitted local tasks after excluding panel overlaps and duplicates."""
+    """Sample admitted training tasks after excluding panel overlaps and duplicates."""
     excluded_keys = {key for task in (*heldout, *exclusions) for key in _panel_keys(task).exclusion}
     selected_ids: set[str] = set()
     selected_contracts: set[str] = set()
@@ -471,8 +485,9 @@ def write_training(
                 task = TaskSpec.model_validate_json(row[TASK_JSON_COLUMN])
                 source_counts = counts[source.source_id]
                 source_counts.input += 1
-                if _grader_kind(task) not in LOCAL_GRADERS:
-                    raise ValueError(f"Training selection requires local graders: {task.id}")
+                grader = _grader_kind(task)
+                if grader not in config.recipe.admitted_graders:
+                    raise ValueError(f"Training selection does not admit {grader} graders: {task.id}")
                 if not excluded_keys.isdisjoint(_panel_keys(task).exclusion):
                     source_counts.heldout_overlap += 1
                     continue
@@ -557,6 +572,9 @@ def prepare(config: SelectionConfig) -> None:
                     yield _selection_row(task, tags, state=MembershipState.ACTIVE).model_dump(mode="json")
 
         write_parquet_file(manifest_rows(), str(directory / TASK_MANIFEST_FILENAME), schema=TASK_MANIFEST_SCHEMA)
+        recipe_document = config.recipe.model_dump(mode="json", exclude={"admitted_graders"})
+        if config.recipe.admitted_graders != LOCAL_GRADERS:
+            recipe_document["admitted_graders"] = sorted(config.recipe.admitted_graders)
         summary = {
             "selection_strata": (
                 SelectionDefinition(
@@ -567,7 +585,7 @@ def prepare(config: SelectionConfig) -> None:
                     active_files=(TRAIN_FILENAME, VALIDATION_FILENAME),
                 ).model_dump(mode="json")
             ),
-            "recipe": config.recipe.model_dump(mode="json"),
+            "recipe": recipe_document,
             "sources": [asdict(source) for source in config.sources],
             "source_counts": {source: asdict(count) for source, count in counts.items()},
             "training_rows": sum(count.selected for count in counts.values()),

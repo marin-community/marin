@@ -9,6 +9,7 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from enum import StrEnum
+from fractions import Fraction
 from typing import Annotated, ClassVar, Literal
 
 from finestore.rl.rl_progress import Invariant
@@ -21,7 +22,7 @@ from marin.rl.skyrl import (
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PositiveInt
 from skyrlrecipe import RecipePatch, sections
 from skyrlrecipe.declared import (
     BestCheckpointCallback,
@@ -32,6 +33,7 @@ from skyrlrecipe.declared import (
     HarborEvaluationCallback,
     HFModelSaveCallback,
 )
+from skyrlrecipe.locality import RoleTopologyMode
 
 from experiments.post_training.task_curation.selection import (
     TRAIN_FILENAME,
@@ -83,6 +85,7 @@ class Evaluation:
 @dataclass(frozen=True)
 class Training:
     plan: SkyRLRolePlan
+    epochs_follow_updates: bool = False
     completion_metric: ClassVar[str] = "timing/step_wall/unaccounted"
     outcome_prefix: ClassVar[str] = "generate/outcome/"
     named_schedule: ClassVar[Literal["final"]] = "final"
@@ -170,28 +173,27 @@ class Training:
                 count = len(cohort["job"]["tasks"])
                 expected_tasks += count
                 minimum_scored_tasks += math.ceil(preset.harbor.minimum_coverage * count)
-        if preset.checkpoint_every:
+        if preset.checkpoint_every and evaluation is not None:
             assert initial_model_uri is not None
-            callbacks.extend(
-                (
-                    BestCheckpointCallback(
-                        type="best_checkpoint",
-                        initial_model_uri=initial_model_uri,
-                        expected_tasks=expected_tasks,
-                        minimum_scored_tasks=minimum_scored_tasks,
-                    ),
-                    HFModelSaveCallback(
-                        type="hf_model_save",
-                        save_steps=((preset.updates // preset.checkpoint_every) + 1) * preset.checkpoint_every,
-                        save_on_train_end=True,
-                    ),
+            callbacks.append(
+                BestCheckpointCallback(
+                    type="best_checkpoint",
+                    initial_model_uri=initial_model_uri,
+                    expected_tasks=expected_tasks,
+                    minimum_scored_tasks=minimum_scored_tasks,
                 )
             )
-        if preset.export_hf and not preset.checkpoint_every:
-            callbacks.extend(
-                (
-                    CheckpointCallback(type="checkpoint", save_steps=preset.updates + 1, save_on_train_end=True),
-                    HFModelSaveCallback(type="hf_model_save", save_steps=-1, save_on_train_end=True),
+        if preset.export != "none":
+            every = preset.checkpoint_every
+            if every is None:
+                callbacks.append(
+                    CheckpointCallback(type="checkpoint", save_steps=preset.updates + 1, save_on_train_end=True)
+                )
+            callbacks.append(
+                HFModelSaveCallback(
+                    type="hf_model_save",
+                    save_steps=(preset.updates // every + 1) * every if every else -1,
+                    save_on_train_end=True,
                 )
             )
         return tuple(callbacks)
@@ -200,6 +202,7 @@ class Training:
 @dataclass(frozen=True)
 class Generation:
     plan: SkyRLGenerationPlan
+    training_reference_plan: SkyRLRolePlan | None = None
     completion_metric: ClassVar[str] = GENERATE_WALL_SECONDS_METRIC
     outcome_prefix: ClassVar[str] = "eval/all/outcome/"
     named_schedule: ClassVar[Literal["every_evaluation"]] = "every_evaluation"
@@ -269,6 +272,7 @@ class Layout:
     priority: str
     coordinator_timeout_hours: int
     job_timeout_seconds: int
+    role_topology: RoleTopologyMode | None = None
 
 
 @dataclass(frozen=True)
@@ -283,6 +287,59 @@ class Metric:
     key: str
     higher_is_better: bool
     window: WindowStatistic = WindowStatistic.MEAN
+
+
+@dataclass(frozen=True)
+class BatchMix:
+    """Exact shares of prompt groups per training update."""
+
+    shares: Mapping[str, Fraction]
+
+    def __post_init__(self) -> None:
+        if any(not family or share <= 0 for family, share in self.shares.items()) or sum(self.shares.values()) != 1:
+            raise ValueError("batch mix needs named families with positive shares that sum to 1")
+
+    def groups(self, batch_size: int, selection_families: set[str]) -> dict[str, int]:
+        if self.shares.keys() != selection_families:
+            raise ValueError(
+                f"batch mix names {sorted(self.shares)}, but the training selection has {sorted(selection_families)}"
+            )
+        counts = {family: share * batch_size for family, share in sorted(self.shares.items())}
+        if any(count.denominator != 1 for count in counts.values()):
+            raise ValueError(f"batch mix needs a whole number of groups per family at batch size {batch_size}")
+        return {family: int(count) for family, count in counts.items()}
+
+
+def validate_agentic_recipe(config: RecipePatch) -> None:
+    document = config.to_skyrl()
+    terminal = document.get("terminal_bench")
+    if terminal is None:
+        return
+    harbor = terminal.get("harbor", {})
+    daytona = document.get("environment", {}).get("task_sessions", {}).get("daytona", {})
+    attempt_timeout = harbor.get("trial_attempt_timeout_sec")
+    if attempt_timeout is not None and "ttl_minutes" in daytona and daytona["ttl_minutes"] * 60 < attempt_timeout:
+        raise ValueError("Daytona ttl_minutes must cover trial_attempt_timeout_sec")
+    stall = config.trainer.algorithm.group_admission.stall_timeout
+    if (
+        stall is not None
+        and attempt_timeout is not None
+        and harbor.get("max_retries", 0)
+        and stall < 2 * attempt_timeout
+    ):
+        raise ValueError("group_admission.stall_timeout must cover one Harbor attempt and retry")
+    agent = terminal.get("installed_agent", {}).get("agent", {})
+    if agent.get("name") == "pi":
+        allowed = {
+            "version",
+            "mcp_adapter_version",
+            "thinking",
+            "thinking_format",
+            "compaction_reserve_tokens",
+            "http_idle_timeout",
+        }
+        if unknown := sorted(agent.get("kwargs", {}).keys() - allowed):
+            raise ValueError(f"Unknown Pi recipe kwargs: {', '.join(unknown)}")
 
 
 @dataclass(frozen=True)
@@ -308,7 +365,9 @@ class Preset:
     sample_namespace: str
     wandb_entity: str
     retention: SkyRLRetentionPolicy
-    export_hf: bool
+    export: Literal["none", "latest", "best"]
+    batch_mix: BatchMix | None = None
+    runtime_env: tuple[str, ...] = ()
     harbor: HarborEvaluationCallback | None = None
     guards: tuple[Metric, ...] = ()
     objectives: tuple[Metric, ...] = ()
@@ -320,8 +379,19 @@ class Preset:
             raise ValueError("measured window must lie within the planned steps")
         if self.gated and not self.guards:
             raise ValueError("gated presets require guards")
-        if self.checkpoint_every is not None and (self.checkpoint_every <= 0 or not self.evaluations):
-            raise ValueError("checkpoint export requires a positive checkpoint interval and an evaluation")
+        if self.batch_mix is not None and not isinstance(self.recipe.layout.workload, Training):
+            raise ValueError("batch mix requires a training workload")
+        if self.checkpoint_every is not None and self.checkpoint_every <= 0:
+            raise ValueError("checkpoint_every must be positive")
+        if isinstance(self.recipe.layout.workload, Generation) and (self.checkpoint_every or self.export != "none"):
+            raise ValueError("checkpointing and export require a training workload")
+        if self.export == "best" and (self.checkpoint_every is None or not self.evaluations):
+            raise ValueError("best export requires checkpointing and an evaluation")
+        if self.export == "best" and self.evaluations[0].every:
+            assert self.checkpoint_every is not None
+            if self.evaluations[0].every % self.checkpoint_every:
+                raise ValueError("scheduled evaluations for best export must fall on checkpoint steps")
+        validate_agentic_recipe(self.recipe.config)
         for evaluation in self.evaluations[1:]:
             if evaluation.every is not None or evaluation.at_start:
                 raise ValueError(f"non-primary evaluation {evaluation.name} accepts neither every nor at_start")
@@ -386,3 +456,10 @@ class PolicyInitializer(BaseModel, frozen=True):
 
 
 type StoredInitializer = Annotated[HfInitializer | PolicyInitializer, Field(discriminator="kind")]
+
+
+class StoredResume(BaseModel, frozen=True):
+    artifact_name: str
+    artifact_version: str
+    step: PositiveInt
+    checkpoint: str

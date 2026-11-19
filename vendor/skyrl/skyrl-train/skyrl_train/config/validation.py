@@ -1,5 +1,7 @@
 """Configuration-only training checks shared by launch composition and GPU entrypoints."""
 
+from collections.abc import Mapping
+
 from omegaconf import DictConfig
 from marinskyrl.inference_placement import validate_expert_block_transport
 from marinskyrl.runtime_options import GDNBackend, R3Transport, reference_model_required
@@ -20,12 +22,30 @@ def validate_batch_invariant_config(cfg: DictConfig) -> None:
         )
 
 
+def validate_muonh_geometry(tensor_parallel: int, expert_tensor_parallel: int | None) -> None:
+    if tensor_parallel != 1:
+        raise ValueError("Grug MuonH fused-matrix updates require tensor parallel size 1")
+    if expert_tensor_parallel not in (None, 1):
+        raise ValueError("Grug MuonH whole-matrix updates require expert tensor parallel size 1")
+
+
+def validate_muonh_weight_decay(optimizer: Mapping, overrides: Mapping) -> None:
+    if float(optimizer.get("weight_decay", 0.0)) != 0.0:
+        raise ValueError("MuonH requires weight_decay=0")
+    if float(overrides.get("weight_decay", optimizer.get("weight_decay", 0.01))) != 0.0:
+        raise ValueError("MuonH requires weight_decay=0, including Megatron overrides")
 
 
 def validate_megatron_config(cfg: DictConfig):
     # not yet supported + tested features
     assert cfg.generator.weight_sync_backend == "nccl", "only nccl is supported for megatron weight sync"
     assert cfg.trainer.critic.model.path is None, "only GRPO training is currently supported for megatron"
+
+    policy = cfg.trainer.policy
+    if str(policy.optimizer_config.optimizer).lower() == "muonh":
+        megatron = policy.megatron_config
+        validate_muonh_geometry(megatron.tensor_model_parallel_size, megatron.expert_tensor_parallel_size)
+        validate_muonh_weight_decay(policy.optimizer_config, megatron.optimizer_config_kwargs)
 
     worker_configs = [(cfg.trainer.policy, "policy"), (cfg.trainer.ref, "ref")]
     for config, worker_type in worker_configs:

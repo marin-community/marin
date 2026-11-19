@@ -263,6 +263,36 @@ def test_export_selection_does_not_substitute_training_for_best_initializer(tmp_
         selected_export_step(str(tmp_path), "best", 20)
 
 
+def test_recovery_exports_the_best_checkpoint_without_a_terminal_request(tmp_path, monkeypatch):
+    checkpoints, exports = tmp_path / "checkpoints", tmp_path / "exports"
+    for step in (15, 20):
+        checkpoint = checkpoints / f"global_step_{step}"
+        checkpoint.mkdir(parents=True)
+        (checkpoint / "trainer_state.pt").write_bytes(b"complete")
+    (checkpoints / CHECKPOINT_MARKER_FILENAME).write_text("20")
+    (checkpoints / "best_checkpoint.json").write_text(json.dumps({"step": 15, "model_format": "native"}))
+    document = raw_launch_config()
+    document["artifacts"].update(checkpoint_root=str(checkpoints), export_root=str(exports))
+    path = tmp_path / "training.yaml"
+    OmegaConf.save(OmegaConf.create(document), path)
+
+    def child_export(command, *, stdout):
+        args = launch.create_parser().parse_args(command[3:])
+        config = load_launch_config(args.config)
+        policy = Path(policy_export_path(config.artifacts.export_root, config.skyrl.checkpoint_export.step))
+        policy.mkdir(parents=True)
+        (policy / "model.safetensors").write_bytes(save({"weight": np.ones(1, dtype=np.float32)}))
+        for name in ("config.json", "tokenizer.json", "tokenizer_config.json"):
+            (policy / name).write_text("{}")
+        write_local_model_manifest(policy)
+        return 0
+
+    monkeypatch.setattr(export_hf_checkpoint.subprocess, "call", child_export)
+    export_hf_checkpoint.export_terminal_policy(path, recover_best=True)
+    assert read_hf_export_request(str(checkpoints / "global_step_15")).status is HFExportStatus.COMPLETE
+    assert not (exports / "global_step_20").exists()
+
+
 @pytest.mark.parametrize(("selection", "expected_step"), [("best", 15), ("latest", 20)])
 def test_trainer_records_export_request_for_selected_checkpoint(tmp_path: Path, selection, expected_step) -> None:
     config = get_default_config()

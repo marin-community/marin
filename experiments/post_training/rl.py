@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
+import tempfile
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
@@ -32,6 +34,7 @@ from marin.execution.artifact import is_mutable_version
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.lazy import run as build_artifacts
+from marin.execution.step_runner import step_is_built
 from marin.execution.step_status import get_status_path
 from marin.experiment.cli import build_options_with_runner
 from marin.experiment.namespacing import user_owned_name
@@ -40,15 +43,18 @@ from marin.rl.skyrl import (
     IRIS_HUB_CLUSTER_CONFIG,
     IrisSkyRLExecution,
     SkyRLModelSource,
+    SkyRLPolicyModel,
     SkyRLReceiptLookupError,
     SkyRLRun,
     SkyRLRunConfig,
     read_skyrl_attempt,
     run_skyrl,
+    skyrl_cpu_command,
 )
 from marin.rl.skyrl_records import (
     RecordedLaunch,
     attempt_tracking,
+    read_skyrl_launch_config,
     read_skyrl_metrics,
     read_stored_skyrl_attempt,
     recorded_launch,
@@ -130,6 +136,7 @@ def build_run(
     table: presets.ModelPresets,
     tasks: ArtifactStep | None = None,
     init: SkyRLModelSource | None = None,
+    resume: presets.StoredResume | None = None,
     settings: tuple[str, ...] = (),
     replicates: int = 1,
     control: bool = False,
@@ -145,14 +152,16 @@ def build_run(
         raise click.BadParameter("this preset accepts no --set")
     if preset.tasks_input == "required":
         if tasks is None and not control:
-            raise click.BadParameter("data presets require --tasks and accept no --set")
+            raise click.BadParameter(f"{preset.name} requires --tasks")
     elif preset.tasks_input == "forbidden" and tasks is not None:
         raise click.BadParameter("this preset does not accept --tasks")
     if not preset.accepts_init and init is not None:
         raise click.BadParameter("this preset does not accept --init")
+    if resume is not None and (init is not None or preset.checkpoint_every is None):
+        raise click.BadParameter("--resume requires checkpointing and cannot be combined with --init")
     if (not preset.gated and replicates != 1) or (control and preset.controls != preset.name):
         raise click.BadParameter(f"{preset.name} does not accept this replicate or control selection")
-    if control and (settings or tasks is not None or init is not None):
+    if control and (settings or tasks is not None or init is not None or resume is not None):
         raise click.BadParameter("controls use only the preset's pinned default inputs")
     default, selection = recipe.task_selections(preset, tasks)
     if is_mutable_version(selection.version):
@@ -173,7 +182,15 @@ def build_run(
         if not any(row["uri"] == expected and row["version"] == task_set.version for row in excluded):
             raise click.BadParameter("candidate tasks must record the full EvalLite in recipe.exclusions")
     initializer = recipe.stored_initializer(init, preset=preset) if init is not None else None
-    spec = recipe.run_spec(preset, name="rl-config", tasks=tasks, init=init, settings=settings, model_name=table.model)
+    if init is not None and init.step.adopt_source is None:
+        prefix = recipe.artifact_prefix(preset.recipe.layout.cluster)
+        if init.step.path() != init.step.path(prefix):
+            raise click.BadParameter("the initial model must build under the RL layout's storage prefix")
+        if preset.gated and not step_is_built(init.step.lower()):
+            raise click.BadParameter("gated presets require an initial model that is already built")
+    spec = recipe.run_spec(
+        preset, name="rl-config", tasks=tasks, init=init, resume=resume, settings=settings, model_name=table.model
+    )
     evaluation_inputs = [
         (evaluation.name, source.name, source.version)
         for evaluation in preset.evaluations
@@ -186,6 +203,8 @@ def build_run(
         "settings": sorted(recipe.override_document(settings).items()),
         "evaluations": sorted(evaluation_inputs),
     }
+    if resume is not None:
+        changes["resume"] = resume.model_dump(mode="json")
     rl_gate.validate_requirements(preset, requirements, table=table, control=control)
     provenance = _provenance(control=control)
     inputs_hash = fingerprint_hash(json.dumps(changes, sort_keys=True, default=str))
@@ -195,6 +214,7 @@ def build_run(
         f"{tasks.name}@{tasks.version}" if tasks is not None else None,
         initializer,
         requirements,
+        resume=resume,
     )
     runs = []
     for replicate in range(replicates):
@@ -442,6 +462,7 @@ def _run_command(
     table: presets.ModelPresets,
     argv: tuple[str, ...],
     entry_module: str | None,
+    then: Callable[[SkyRLPolicyModel], tuple[ArtifactStep, ...]] | None,
     function: Callable,
 ) -> click.Command:
     @wraps(function)
@@ -453,6 +474,7 @@ def _run_command(
     def runner(handles: list[ArtifactStep], max_concurrent: int) -> None:
         options = click.get_current_context().params
         preset = table.by_name[options["preset_name"]]
+        rl_handles = handles[:1] if then is not None else handles
         if get_job_info() is None:
             module = entry_module
             if module is None:
@@ -463,7 +485,7 @@ def _run_command(
             submitted_at = datetime.now(UTC).isoformat()
             job = submit_or_run(module, handles, max_concurrent, os.environ, argv=argv)
             submitted = []
-            for step in _from_handles(handles).runs:
+            for step in _from_handles(rl_handles).runs:
                 config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
                 execution = next(value for value in step.runtime_args.values() if isinstance(value, IrisSkyRLExecution))
                 submitted.append(
@@ -482,10 +504,12 @@ def _run_command(
             _print_status({"coordinator_job_id": str(job), "submitted_at": submitted_at, "runs": submitted})
         else:
             validate_coordinator_graph(handles)
-            _run_graph(handles, max_concurrent)
+            _run_graph(rl_handles, max_concurrent)
+            if then is not None and handles[1:]:
+                build_artifacts(*handles[1:], max_concurrent=max_concurrent)
             job = None
         if options["wait"] and job is not None:
-            _wait_for_run(job, handles, preset, table=table, service_url=options["url"])
+            _wait_for_run(job, rl_handles, preset, table=table, service_url=options["url"])
 
     return click.command(
         cls=RLCommand, help=__doc__ + "\n\n" + "\n".join(f"{preset.name}: {preset.budget}" for preset in table.presets)
@@ -497,10 +521,11 @@ def command(
     *,
     argv: tuple[str, ...],
     init: SkyRLModelSource | None = None,
+    then: Callable[[SkyRLPolicyModel], tuple[ArtifactStep, ...]] | None = None,
     entry_module: str | None = None,
     forward_env: tuple[str, ...] = (),
 ) -> click.Command:
-    @partial(_run_command, table, argv, entry_module)
+    @partial(_run_command, table, argv, entry_module, then)
     @click.option("--issue", type=click.IntRange(min=1), help="GitHub experiment issue for this launch.")
     @click.option("--no-issue", is_flag=True, help="Record an explicit opt-out of the experiment issue.")
     @click.option("--plan", is_flag=True, help="Print the plan without submission (the default).")
@@ -564,6 +589,12 @@ def command(
         "mean with the controls; more copies narrow the tolerance. Only gated presets.",
     )
     @click.option(
+        "--resume",
+        "resume_name",
+        metavar="NAME@VERSION",
+        help="Continue from a stored run's native checkpoint. Temporary checkpoints usually expire after 14 days.",
+    )
+    @click.option(
         "--control",
         is_flag=True,
         help="Run the preset's control replicates from a clean checkout with only its pinned default "
@@ -575,6 +606,7 @@ def command(
         settings: tuple[str, ...],
         tasks_name: str | None,
         init_name: str | None,
+        resume_name: str | None,
         replicates: int,
         control: bool,
         requirements: tuple[str, ...],
@@ -591,8 +623,12 @@ def command(
             raise click.UsageError("--run requires --issue N or --no-issue")
         recorded_issue: RunIssue | None = "opted_out" if no_issue else issue
         preset = table.by_name[preset_name]
+        if then is not None and (preset.export == "none" or preset.gated or replicates != 1):
+            raise click.UsageError("a stage after RL requires one ungated run with a model export")
         if init is not None and init_name is not None:
             raise click.UsageError("Python init and --init cannot be used together")
+        if resume_name is not None and (init is not None or init_name is not None or preset.checkpoint_every is None):
+            raise click.UsageError("--resume requires checkpointing and cannot be combined with --init")
         missing = [name for name in forward_env if name not in os.environ]
         if missing:
             raise click.UsageError(f"missing required environment variables: {', '.join(missing)}")
@@ -603,12 +639,16 @@ def command(
             settings=settings,
             tasks=recipe.selection_artifact(tasks_name) if tasks_name else None,
             init=init if init is not None else recipe.published_model(init_name, preset=preset) if init_name else None,
+            resume=recipe.published_checkpoint(resume_name, preset=preset) if resume_name is not None else None,
             replicates=replicates,
             control=control,
             requirements=requirements,
             issue=recorded_issue,
         )
-        if do_run and get_job_info() is None:
+        if not do_run:
+            assert run.inputs is not None
+            rl_gate.validate_plan(preset, run.inputs)
+        elif get_job_info() is None:
             assert run.inputs is not None
             validated = rl_gate.validate_candidate(
                 preset,
@@ -625,7 +665,8 @@ def command(
             raise click.exceptions.Exit(EXIT_CODES[Verdict.FAIL])
         if not do_run and "verdict" in snapshot:
             raise click.exceptions.Exit(EXIT_CODES[snapshot["verdict"]])
-        return (*run.runs, *((run.gate,) if run.gate else ()))
+        following = then(SkyRLPolicyModel(run.runs[0])) if then is not None else ()
+        return (*run.runs, *((run.gate,) if run.gate else ()), *following)
 
     return run_command
 
@@ -638,24 +679,55 @@ def _run_graph(handles: list[ArtifactStep], max_concurrent: int) -> None:
         build_artifacts(gate, max_concurrent=max_concurrent)
 
 
+def _export_best_command(table: presets.ModelPresets) -> click.Command:
+    @click.command(cls=RLCommand)
+    @click.option("--preset", "preset_name", type=click.Choice(sorted(table.by_name)), required=True)
+    @click.argument("run_name", metavar="NAME@VERSION")
+    def command(preset_name: str, run_name: str) -> None:
+        """Export a stored run's best committed native checkpoint to Hugging Face format."""
+        name, version = recipe.run_reference(run_name)
+        layout = table.by_name[preset_name].recipe.layout
+        config = read_skyrl_launch_config(recipe.run_path(layout.cluster, name, version))
+        program = (
+            "import sys\nfrom pathlib import Path\n"
+            "from cloud.iris.export_hf_checkpoint import export_terminal_policy\n"
+            "export_terminal_policy(Path(sys.argv[1]), recover_best=True)"
+        )
+        with tempfile.TemporaryDirectory(prefix="skyrl-export-best-") as directory:
+            path = Path(directory) / "launch.yaml"
+            path.write_text(yaml.safe_dump(config))
+            try:
+                subprocess.run(skyrl_cpu_command("python", "-c", program, str(path)), check=True)
+            except subprocess.CalledProcessError as error:
+                raise click.ClickException("SkyRL could not export the best checkpoint") from error
+
+    return command
+
+
 def main(
     table: presets.ModelPresets,
     *,
     argv: Sequence[str] | None = None,
     init: SkyRLModelSource | None = None,
+    then: Callable[[SkyRLPolicyModel], tuple[ArtifactStep, ...]] | None = None,
     entry_module: str | None = None,
     forward_env: tuple[str, ...] = (),
 ) -> int:
     """Run the selected model table's CLI, retaining Click's exit status."""
     args = list(sys.argv[1:] if argv is None else argv)
     try:
-        if args and args[0] in {"rescore", "publish"}:
+        if args and args[0] == "export-best":
+            selected = _export_best_command(table)
+            args = args[1:]
+        elif args and args[0] in {"rescore", "publish"}:
             if init is not None and args[0] == "rescore":
                 raise click.UsageError("Python init cannot be used with rescore")
             selected = (rl_gate if args[0] == "rescore" else rl_publication).command(table)
             args = args[1:]
         else:
-            selected = command(table, argv=tuple(args), init=init, entry_module=entry_module, forward_env=forward_env)
+            selected = command(
+                table, argv=tuple(args), init=init, then=then, entry_module=entry_module, forward_env=forward_env
+            )
         result = selected.main(args=args, standalone_mode=False)
         return result if isinstance(result, int) else 0
     except click.ClickException as error:

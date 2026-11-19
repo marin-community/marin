@@ -53,12 +53,14 @@ from experiments.post_training.task_curation.selection import (
     FULL_VALIDATION_FILENAME,
     HELDOUT_BLEND,
     HELDOUT_FAMILIES,
+    LOCAL_GRADERS,
     PASS_RATE_ATTEMPTS,
     STRUCTURAL_FAMILY,
     TASK_MANIFEST_FILENAME,
     TRAIN_FILENAME,
     VALIDATION_FILENAME,
     EvalLiteRecipe,
+    GraderKind,
     HeldoutSource,
     PanelFormat,
     SelectionRecipe,
@@ -280,14 +282,20 @@ def test_selection_imports_image_graders_from_admitted_components(tmp_path):
     }
     settings = recipe(tmp_path).model_copy(
         update={
-            "sources": {BLENDS[HELDOUT_BLEND][dataset].id: family for dataset, family in HELDOUT_FAMILIES.items()},
-            "family_limits": {family: 1 for family in HELDOUT_FAMILIES.values()},
+            "sources": {
+                **{BLENDS[HELDOUT_BLEND][dataset].id: family for dataset, family in HELDOUT_FAMILIES.items()},
+                "fixture:image": "agents",
+            },
+            "family_limits": {family: 1 for family in (*HELDOUT_FAMILIES.values(), "agents")},
+            "admitted_graders": LOCAL_GRADERS | {GraderKind.IMAGE},
         }
     )
     curated = {}
     for component, family in settings.sources.items():
-        task = source_task(f"training-{family}")
-        task = task.model_copy(update={"grader": task.grader.model_copy(update={"environment": environments[family]})})
+        task = source_task(f"training-{family}", image=family == "agents")
+        if family != "agents":
+            grader = task.grader.model_copy(update={"environment": environments[family]})
+            task = task.model_copy(update={"grader": grader})
         curated[component] = admitted_source(tmp_path / family, [task])
     originals = {}
     for row in rows:
@@ -332,10 +340,29 @@ def test_selection_imports_image_graders_from_admitted_components(tmp_path):
         }
     summary = json.loads((output / "summary.json").read_text())
     assert summary["grader_kind_counts"] == {
-        "train": {"package": 4, "image": 0, "remote_judge": 0, "in_process": 0},
+        "train": {"package": 4, "image": 1, "remote_judge": 0, "in_process": 0},
         "validation": {"package": 80, "image": 0, "remote_judge": 0, "in_process": 20},
         "full_validation": {"package": 84, "image": 0, "remote_judge": 0, "in_process": 21},
     }
+
+
+def test_grader_admission_preserves_published_selection_fingerprints():
+    recipes = Path(__file__).parents[1] / "recipes"
+    training = SelectionRecipe.model_validate_json((recipes / "snowball-100k.json").read_text())
+    evaluation = EvalLiteRecipe.model_validate_json((recipes / "eval-lite.json").read_text())
+
+    def curated(sources):
+        return {
+            name: ArtifactStep.adopt(f"inputs/source-{index}", "2026.11.19.1", f"/fixtures/corpus/source-{index}")
+            for index, name in enumerate(sorted(set(sources)))
+        }
+
+    training_sources = curated(training.sources)
+    assert task_selection_step(training_sources, training).fingerprint() == "7fb51836"
+    explicit = training.model_copy(update={"admitted_graders": LOCAL_GRADERS | {GraderKind.IMAGE}})
+    assert task_selection_step(training_sources, explicit).fingerprint() != "7fb51836"
+    evaluation_sources = curated(part.source_id for part in evaluation.sources)
+    assert eval_lite_step(evaluation_sources, evaluation).fingerprint() == "4fd3f893"
 
 
 @pytest.mark.parametrize("shared_id", ["shared-unsampled", "shared-alias"])
@@ -382,8 +409,8 @@ def test_source_shortfall_cannot_be_filled_from_another_source(tmp_path):
     [
         ("evaluation-source", "not a training population"),
         ("development-image", "Development panel requires local graders"),
-        ("training-image", "Training selection requires local graders"),
-        ("training-judge", "Training selection requires local graders"),
+        ("training-image", "Training selection does not admit image graders"),
+        ("training-judge", "Training selection does not admit remote_judge graders"),
     ],
 )
 def test_selection_does_not_publish_for_invalid_source_or_grader(tmp_path, failure, cause):

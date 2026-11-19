@@ -107,6 +107,8 @@ def gate_inputs(
     tasks: str | None = None,
     init: presets.StoredInitializer | None = None,
     requirements: Sequence[str] = (),
+    *,
+    resume: presets.StoredResume | None = None,
 ) -> GateInputs:
     values = recipe.override_document(tuple(settings))
     return GateInputs(
@@ -114,6 +116,7 @@ def gate_inputs(
         settings=tuple(f"{key}={json.dumps(value, sort_keys=True)}" for key, value in sorted(values.items())),
         tasks=tasks.removeprefix(recipe.SELECTION_PREFIX + "/") if tasks else None,
         init=init,
+        resume=resume,
         requirements=tuple(dict.fromkeys(requirements)),
     )
 
@@ -485,16 +488,30 @@ def comparison_config(launch: dict, recorded: RecordedLaunch | None = None) -> d
 def _current_configs(
     preset: presets.Preset, inputs: GateInputs, *, model: ResolvedModelLocator | None = None
 ) -> tuple[dict, dict]:
+    defaults, candidate = _compose_plans(preset, (GateInputs(preset_name=preset.name), inputs), model=model)
+    return defaults, candidate
+
+
+def validate_plan(preset: presets.Preset, inputs: GateInputs) -> dict:
+    """Compose the candidate without loading gate receipts."""
+    (candidate,) = _compose_plans(preset, (inputs,))
+    return candidate
+
+
+def _compose_plans(
+    preset: presets.Preset, inputs: Sequence[GateInputs], *, model: ResolvedModelLocator | None = None
+) -> list[dict]:
     with tempfile.TemporaryDirectory(prefix="rl-current-config-") as directory:
         root = Path(directory)
         paths = []
-        for index, candidate in enumerate((GateInputs(preset_name=preset.name), inputs)):
+        for index, candidate in enumerate(inputs):
             try:
                 spec = recipe.run_spec(
                     preset,
                     name=f"current-config-{index}",
                     tasks=recipe.selection_artifact(candidate.tasks) if candidate.tasks else None,
                     init=(recipe.model_from_reference(candidate.init, resolved=model) if candidate.init else None),
+                    resume=candidate.resume,
                     settings=candidate.settings,
                 )
                 if isinstance(spec.model, ArtifactHfModel) and spec.model.relative_path is None:
@@ -508,7 +525,7 @@ def _current_configs(
             except (ValueError, click.BadParameter) as error:
                 raise InvalidComparison(f"recorded inputs cannot build the current preset: {error}") from error
 
-        return tuple(compose_configs(paths))
+        return compose_configs(paths)
 
 
 def _native_json(program: str, *arguments: str):

@@ -25,10 +25,10 @@ from skyrlrecipe.declared import (
     EvaluationSampling,
     HarborEvaluationCallback,
 )
-from skyrlrecipe.documents import set_path
 from skyrlrecipe.sampling import EvalSamplingParams
 
 from experiments.post_training import rl
+from experiments.post_training.rl_agentic_recipe import AGENTIC_BATCH_MIX, AGENTIC_RECIPE, agentic_limits
 from experiments.post_training.rl_presets import (
     MINIMUM_SCORED_FRACTION,
     UPDATE_SECONDS_METRIC,
@@ -125,8 +125,6 @@ _DEFAULT_PATCH = RecipePatch(
             ),
         ),
         rollout_buffer=sections.RolloutBuffer(object_store_root=None),
-        ckpt_interval=0,
-        hf_save_interval=-1,
     ),
     generator=sections.Generator(
         backend="vllm",
@@ -265,17 +263,10 @@ E8 = replace(
             inference_engine_data_parallel_size=8,
             inference_engine_expert_parallel_size=8,
             n_samples_per_prompt=4,
-        )
+        ),
+        training_reference_plan=_P40_PLAN,
     ),
 )
-
-_GENERATION_DOCUMENT = {}
-
-for _key, _value in _P40_PLAN.config_values().items():
-    if _key.startswith("trainer."):
-        set_path(_GENERATION_DOCUMENT, _key, _value)
-
-_GENERATION_NATIVE_DEFAULTS = RecipePatch.from_document(_GENERATION_DOCUMENT)
 
 _ASYNC_P40 = Recipe(
     layout=P40,
@@ -290,7 +281,7 @@ _ASYNC_P40 = Recipe(
     ),
 )
 
-_GENERATING = Recipe(layout=E8, fixed_reply_tokens=None, config=_DEFAULT_PATCH.merge(_GENERATION_NATIVE_DEFAULTS))
+_GENERATING = Recipe(layout=E8, fixed_reply_tokens=None, config=_DEFAULT_PATCH)
 
 _GAPS = (
     "aaii-coverage",
@@ -302,23 +293,7 @@ _TASK_SET = EVALUATIONS["eval_lite_100"]
 
 _BATCH_KEYS = frozenset(BATCH_SETTINGS)
 
-_OWNED_KEYS = (
-    frozenset(
-        {
-            "entrypoint",
-            "trainer.resume_mode",
-            "trainer.dump_eval_results",
-            "trainer.placement",
-            "generator.trajectory_retention",
-            "generator.run_engines_locally",
-            "trainer.callbacks",
-            "trainer.ckpt_interval",
-            "trainer.hf_save_interval",
-        }
-    )
-    | (frozenset(_P40_PLAN.config_values()) - _BATCH_KEYS)
-    | frozenset(_MODE_KEYS)
-)
+_OWNED_KEYS = frozenset({"generator.run_engines_locally", *_MODE_KEYS})
 
 _GATED_KEYS = frozenset(
     {
@@ -343,7 +318,7 @@ _LEARNING_MEDIUM = Preset(
     sample_namespace="datasets/snowball-rl",
     wandb_entity="marin-community",
     retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
-    export_hf=True,
+    export="latest",
     name="learning-medium",
     revision="2026.11.19.1",
     recipe=_ASYNC_P40,
@@ -402,7 +377,7 @@ _TRAIN_LONG = Preset(
     sample_namespace="datasets/snowball-rl",
     wandb_entity="marin-community",
     retention=SkyRLRetentionPolicy(resume_checkpoint_count=5),
-    export_hf=True,
+    export="latest",
     name="train-long",
     revision="2026.11.19.1",
     recipe=_ASYNC_P40,
@@ -420,6 +395,74 @@ _TRAIN_LONG = Preset(
     gaps=_GAPS,
 )
 
+_CAMPAIGN_PLAN = replace(
+    _P40_PLAN,
+    policy_num_nodes=10,
+    num_inference_engines=22,
+    train_batch_size=64,
+    policy_mini_batch_size=64,
+    n_samples_per_prompt=8,
+    entrypoint="taskcompendium",
+)
+_CAMPAIGN_LAYOUT = replace(
+    P40,
+    name="rno2a-256",
+    workload=Training(_CAMPAIGN_PLAN),
+    megatron=replace(P40.megatron, context_parallel_size=5),
+    cluster="cw-rno2a",
+    priority="production",
+    job_timeout_seconds=12 * 3600,
+)
+_CAMPAIGN_PATCH = RecipePatch(
+    context_budget=ContextBudget(request_window_tokens=102_400, max_new_tokens_per_turn=16_384, max_turns=128),
+    trainer=sections.Trainer(
+        rollout_buffer=sections.RolloutBuffer(max_in_flight=32),
+        policy=sections.Policy(
+            megatron_config=sections.PolicyMegatronConfig(
+                transformer_config_kwargs={"cp_comm_type": "a2a", "moe_router_fusion": False},
+                moe_router_replay=True,
+            )
+        ),
+        ref=sections.Ref(megatron_config=sections.RefMegatronConfig(transformer_config_kwargs={"cp_comm_type": "a2a"})),
+        algorithm=sections.Algorithm(tis_splice=True),
+    ),
+)
+_TRAIN_LONG_AGENTIC = replace(
+    _TRAIN_LONG.with_updates(10_000),
+    name="train-long-agentic",
+    tasks_input="required",
+    data_settings=frozenset({"shuffle"}),
+    export="best",
+    evaluations=(replace(_TASK_SET, every=2),),
+    checkpoint_every=2,
+    batch_mix=AGENTIC_BATCH_MIX,
+    runtime_env=("DAYTONA_TARGET",),
+    harbor=_harbor_evaluation(),
+    gaps=("harbor-on-daytona",),
+    recipe=replace(
+        _TRAIN_LONG.recipe,
+        layout=_CAMPAIGN_LAYOUT,
+        config=(
+            _TRAIN_LONG.recipe.config.merge(AGENTIC_RECIPE)
+            .merge(agentic_limits(attempt_timeout=5400, model_turn_timeout=1800, ttl_minutes=120, stall_timeout=11_000))
+            .merge(_CAMPAIGN_PATCH)
+        ),
+    ),
+)
+_TRAIN_MEDIUM_AGENTIC = replace(
+    _TRAIN_LONG_AGENTIC.with_updates(10),
+    name="train-medium-agentic",
+    recipe=replace(
+        _TRAIN_LONG_AGENTIC.recipe,
+        layout=replace(
+            _CAMPAIGN_LAYOUT,
+            name="rno2a-88",
+            workload=Training(replace(_CAMPAIGN_PLAN, num_inference_engines=1)),
+            priority="interactive",
+        ),
+    ),
+)
+
 _PRESETS = (
     Preset(
         tasks=_DEFAULT_TASKS,
@@ -429,7 +472,7 @@ _PRESETS = (
         sample_namespace="datasets/snowball-rl",
         wandb_entity="marin-community",
         retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
-        export_hf=False,
+        export="none",
         name="speed-short",
         revision="2026.11.19.1",
         recipe=replace(_GENERATING, fixed_reply_tokens=4096),
@@ -457,7 +500,7 @@ _PRESETS = (
         sample_namespace="datasets/snowball-rl",
         wandb_entity="marin-community",
         retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
-        export_hf=False,
+        export="none",
         name="data-short",
         revision="2026.11.19.1",
         recipe=_GENERATING,
@@ -485,7 +528,7 @@ _PRESETS = (
         sample_namespace="datasets/snowball-rl",
         wandb_entity="marin-community",
         retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
-        export_hf=False,
+        export="none",
         evaluations=(),
         name="speed-medium",
         revision="2026.11.19.1",
@@ -524,7 +567,7 @@ _PRESETS = (
         sample_namespace="datasets/snowball-rl",
         wandb_entity="marin-community",
         retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
-        export_hf=False,
+        export="none",
         evaluations=(),
         name="speed-long",
         revision="2026.11.19.1",
@@ -558,6 +601,8 @@ _PRESETS = (
         data_settings=frozenset(),
     ),
     _TRAIN_LONG,
+    _TRAIN_MEDIUM_AGENTIC,
+    _TRAIN_LONG_AGENTIC,
     replace(
         _TRAIN_LONG,
         name="train-long-harbor",

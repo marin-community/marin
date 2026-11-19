@@ -402,6 +402,7 @@ class GateInputs(BaseModel, frozen=True):
     settings: tuple[str, ...] = ()
     tasks: str | None = None
     init: presets.StoredInitializer | None = None
+    resume: presets.StoredResume | None = None
     requirements: tuple[str, ...] = ()
 
 

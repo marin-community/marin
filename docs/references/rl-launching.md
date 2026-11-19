@@ -50,6 +50,28 @@ Iris forwards available HF/W&B/CoreWeave credentials and the current application
 bundle as read-only files; ordinary child jobs inherit that bundle by default.
 See [secret delivery](https://github.com/marin-community/marin/blob/main/lib/iris/docs/secrets.md).
 
+The Snowball SFT-to-RL module composes the supervised mixture and an RL preset
+that accepts initial weights. Use the RL layout's storage prefix for both stages.
+
+```bash
+MARIN_PREFIX=s3://marin-us-east-02a/marin uv run python -m experiments.post_training.snowball_sft_then_rl \
+  --preset train-long --version 2026.11.19.1
+```
+
+The Snowball and Mochi preset commands use `--resume NAME@VERSION` to start from
+another run's latest committed native checkpoint. Use a checkpointing preset and
+an immutable version. The source checkpoint stays in temporary storage for the
+retention period recorded by its run.
+
+Use `export-best` to export a stored run's best committed native checkpoint,
+including after an early stop. The command reads the checkpoint selected by the
+run's evaluation and uses its recorded launch configuration for conversion.
+
+```bash
+uv run python -m experiments.post_training.snowball_rl export-best \
+  --preset train-long-agentic checkpoints/snowball-rl/my-run@2026.11.19.1
+```
+
 ## One Hydra launch document
 
 Marin and MarinSkyRL share one `SkyRLLaunchConfig` YAML document. There is no parallel request

@@ -185,12 +185,17 @@ def selection(tmp_path, monkeypatch):
         write_json(Path(recipe.selection_artifact(binding).path()) / "summary.json", summary)
     candidate = recipe.selection_artifact(SELECTION_IDENTITY)
     candidate_summary = deepcopy(summary)
+    candidate_summary["training_family_counts"] = {"agentic": 256, "nonagentic": 256}
     candidate_summary["recipe"]["exclusions"] = [
         {"uri": str(Path(task_set.path()) / FULL_VALIDATION_FILENAME), "version": task_set.version}
         for binding in sorted(task_sets)
         for task_set in (recipe.selection_artifact(binding),)
     ]
     write_json(Path(candidate.path()) / "summary.json", candidate_summary)
+    pq.write_table(
+        pa.table({"family": ["agentic"] * 256 + ["nonagentic"] * 256}),
+        Path(candidate.path()) / "train.parquet",
+    )
     for binding in task_sets:
         write_json(
             Path(recipe.selection_artifact(binding).path()) / "summary.json",

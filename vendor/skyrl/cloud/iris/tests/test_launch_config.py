@@ -1050,6 +1050,26 @@ def test_first_train_submission_validates_recipe_and_resolved_reload(tmp_path):
         load_launch_config(path)
 
 
+@pytest.mark.parametrize(
+    ("geometry", "weight_decay", "error"),
+    [
+        ({"tensor_model_parallel_size": 2}, 0.0, "require tensor parallel size 1"),
+        ({"expert_tensor_parallel_size": 2}, 0.0, "require expert tensor parallel size 1"),
+        ({}, 0.1, "requires weight_decay=0"),
+    ],
+)
+def test_launch_rejects_invalid_muonh_geometry_or_weight_decay(tmp_path, geometry, weight_decay, error):
+    document = raw_launch_config()
+    document["skyrl"]["trainer"]["policy"] = {
+        "optimizer_config": {"optimizer": "MuonH", "weight_decay": weight_decay},
+        "megatron_config": geometry,
+    }
+    path = tmp_path / "muonh.yaml"
+    path.write_text(yaml.safe_dump(document))
+    with pytest.raises(ValueError, match=error):
+        load_launch_config(path)
+
+
 def test_source_launch_rejects_conflicting_author_values(tmp_path):
     cases = []
     for recipe_key, envelope_key in (("train_data", "train_data"), ("val_data", "validation_data")):

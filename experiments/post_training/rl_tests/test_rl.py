@@ -108,9 +108,10 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
         planned = snowball.build_run(train, init=own_model, table=snowball_model.SNOWBALL)
         assert producer in planned.runs[0].deps
         planned.runs[0].lower()
+        cloud_model = replace(own_model, step=replace(producer, override_path="s3://fixture-models/computed-init"))
         assert (
             snowball.main(
-                snowball_model.SNOWBALL, argv=["--preset", train.name, "--version", train.revision], init=own_model
+                snowball_model.SNOWBALL, argv=["--preset", train.name, "--version", train.revision], init=cloud_model
             )
             == 0
         )

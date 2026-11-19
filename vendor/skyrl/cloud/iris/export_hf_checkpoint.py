@@ -43,6 +43,7 @@ from marinskyrl.checkpoint_paths import GLOBAL_STEP_PREFIX, policy_export_path, 
 from marinskyrl.resource_locator import ModelLocatorError
 from marinskyrl.resource_locator import join_resource_path
 from omegaconf import DictConfig, OmegaConf
+from rigging.filesystem.storage_path import StoragePath
 from skyrl_train.hf_export_schema import (
     DEFAULT_HF_EXPORT_TIMEOUT,
     DEFAULT_HF_HUB_REVISION,
@@ -50,6 +51,7 @@ from skyrl_train.hf_export_schema import (
     HFExportRequest,
     HFExportStatus,
     HFUploadMode,
+    TRAINER_STATE_FILENAME,
 )
 
 
@@ -427,13 +429,11 @@ def _export_job_spec(training_config: DictConfig, request: HFExportRequest) -> E
     )
 
 
-def validate_checkpoint_export(training_config: DictConfig) -> None:
-    """Validate the derived policy export without reading a checkpoint or submitting a job."""
+def _training_export_request(training_config: DictConfig, step: int) -> HFExportRequest:
     trainer = training_config.skyrl.trainer
     model, placement = trainer.policy.model, trainer.placement
-    step = trainer.max_steps if trainer.max_steps is not None else 0
     checkpoint_root = str(training_config.artifacts.checkpoint_root)
-    request = HFExportRequest(
+    return HFExportRequest(
         step=step,
         checkpoint_base_path=checkpoint_root,
         checkpoint_path=join_resource_path(checkpoint_root, f"{GLOBAL_STEP_PREFIX}{step}"),
@@ -448,21 +448,31 @@ def validate_checkpoint_export(training_config: DictConfig) -> None:
         hf_hub_revision=trainer.get("hf_hub_revision", DEFAULT_HF_HUB_REVISION),
         hf_upload_mode=HFUploadMode(trainer.get("hf_upload_mode", DEFAULT_HF_UPLOAD_MODE)),
     )
+
+
+def validate_checkpoint_export(training_config: DictConfig) -> None:
+    """Validate the derived policy export without reading a checkpoint or submitting a job."""
+    step = training_config.skyrl.trainer.max_steps
+    request = _training_export_request(training_config, step if step is not None else 0)
     export = checkpoint_export_launch_config(training_config, request, _export_job_spec(training_config, request))
     validate_launch_config(export)
 
 
-def export_terminal_policy(training_config_path: Path, *, forward_env: tuple[str, ...] = ()) -> None:
+def export_terminal_policy(
+    training_config_path: Path, *, forward_env: tuple[str, ...] = (), recover_best: bool = False
+) -> None:
     """Derive and run the terminal policy export from one training launch document."""
     training_config = load_launch_config(training_config_path)
     checkpoint_root = str(training_config.artifacts.checkpoint_root)
     step = selected_export_step(
         checkpoint_root,
-        str(training_config.skyrl.trainer.hf_export_checkpoint),
-        terminal_checkpoint_step(checkpoint_root),
+        "best" if recover_best else str(training_config.skyrl.trainer.hf_export_checkpoint),
+        0 if recover_best else terminal_checkpoint_step(checkpoint_root),
     )
     checkpoint_path = join_resource_path(checkpoint_root, f"{GLOBAL_STEP_PREFIX}{step}")
     request = _read_hf_export_request(checkpoint_path)
+    if request is None and recover_best and (StoragePath(checkpoint_path) / TRAINER_STATE_FILENAME).exists():
+        request = _training_export_request(training_config, step)
     if request is None:
         raise ValueError(f"checkpoint {checkpoint_path} has no hf_export_request.json")
     if request.status is HFExportStatus.COMPLETE:
