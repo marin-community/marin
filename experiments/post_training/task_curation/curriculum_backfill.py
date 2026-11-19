@@ -7,7 +7,6 @@ import argparse
 import hashlib
 import json
 import logging
-from collections.abc import Iterator
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict
 from functools import partial
@@ -43,6 +42,7 @@ from experiments.post_training.task_curation.embedding import (
     SemanticArtifact,
     curation_embedding_pipeline,
 )
+from experiments.post_training.task_curation.frozen_task_specs import FrozenTaskSpecStream, verified_task_spec_rows
 from experiments.post_training.task_curation.harrier_parity import accepted_cuda_parity, accepted_parity
 from experiments.post_training.task_curation.local import artifact_prefix, local_client
 from experiments.post_training.task_curriculum.catalog_artifact import TASK_CURRICULUM
@@ -69,22 +69,15 @@ class FrozenCoverageSource(BaseModel):
     drop_manifest_sha256: str | None = None
     drop_count: int = 0
 
-
-def verified_task_spec_rows(source: FrozenCoverageSource) -> Iterator[str]:
-    """Verify exact stored JSON cells in sorted Parquet-path and physical row order."""
-    digest = hashlib.sha256()
-    count = 0
-    for path in sorted((StoragePath(source.specs_dir) / "*.parquet").glob(), key=str):
-        with path.open("rb") as stream:
-            for batch in pq.ParquetFile(stream).iter_batches(batch_size=16, columns=[source.task_column]):
-                for encoded in batch.column(0).to_pylist():
-                    if encoded is None:
-                        raise ValueError(f"Frozen converted population contains a rejected row: {source.declaration.id}")
-                    digest.update(encoded.encode())
-                    count += 1
-                    yield encoded
-    if digest.hexdigest() != source.task_spec_scan_sha256 or count != source.raw_count:
-        raise ValueError(f"Frozen TaskSpec scan changed: {source.declaration.id}")
+    @property
+    def task_spec_stream(self) -> FrozenTaskSpecStream:
+        return FrozenTaskSpecStream(
+            source_id=self.declaration.id,
+            specs_dir=self.specs_dir,
+            task_column=self.task_column,
+            raw_count=self.raw_count,
+            task_spec_scan_sha256=self.task_spec_scan_sha256,
+        )
 
 
 def prepare_source(source: FrozenCoverageSource, output_root: str) -> dict:
@@ -110,7 +103,7 @@ def prepare_source(source: FrozenCoverageSource, output_root: str) -> dict:
         manifest = json.loads(manifest_path.read_text())
         if manifest["input"] != source.model_dump(mode="json"):
             raise ValueError("Completed public input differs from its frozen source")
-        for _ in verified_task_spec_rows(source):
+        for _ in verified_task_spec_rows(source.task_spec_stream):
             pass
         public = json.loads((root / "public-inputs.json").read_text())
         if public["stored_stream_sha256"] != source.task_spec_scan_sha256 or public["source_key"] != canonical_sha256(
@@ -141,7 +134,7 @@ def prepare_source(source: FrozenCoverageSource, output_root: str) -> dict:
         paths.append(str(path))
         rows.clear()
 
-    for encoded in verified_task_spec_rows(source):
+    for encoded in verified_task_spec_rows(source.task_spec_stream):
         task = TaskSpec.model_validate_json(encoded)
         if task.id in seen:
             raise ValueError(f"Repeated task ID: {source.declaration.id}/{task.id}")

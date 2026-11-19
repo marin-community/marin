@@ -4,7 +4,6 @@
 """Project an archived curriculum onto an exact current catalog without rescoring."""
 
 import argparse
-import hashlib
 import json
 import logging
 from collections import Counter
@@ -36,6 +35,7 @@ from zephyr.dataset import Dataset
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.catalog_identity import canonical_declaration
 from experiments.post_training.task_curation.embedding import COVERAGE_VERSION, SemanticArtifact
+from experiments.post_training.task_curation.frozen_task_specs import FrozenTaskSpecStream, verified_task_spec_rows
 from experiments.post_training.task_curation.lexical_policy import LexicalInputUse
 from experiments.post_training.task_curation.local import artifact_prefix, local_client
 from experiments.post_training.task_curation.source_duplicate_ci import fingerprint_input
@@ -214,7 +214,7 @@ def _public_tasks(reference: ManifestReference) -> tuple[dict, dict[str, TaskSem
 def public_task_correspondence(
     old: dict[str, TaskSemanticInput], new: dict[str, TaskSemanticInput], upstream_rows: dict[str, str]
 ) -> dict[str, str]:
-    """Match stable IDs first, then require a unique public-content bijection for changed IDs."""
+    """Match stable IDs and unique public content, using verified upstream rows for repeats."""
     matches = {identifier: identifier for identifier in old.keys() & new.keys()}
     unmatched_old = old.keys() - matches.keys()
     unmatched_new = new.keys() - matches.values()
@@ -245,37 +245,29 @@ def pinned_upstream_rows(
 ) -> dict[tuple[str, str, str], tuple[str, str]]:
     """Bind upstream row identities to exact TaskSpecs from the complete frozen stream."""
     frozen = manifest["input"]
-    if not {"specs_dir", "task_column", "raw_count", "task_spec_scan_sha256"} <= frozen.keys():
-        raise ValueError("Repeated public inputs require their original frozen TaskSpec streams")
-    digest = hashlib.sha256()
-    count = 0
+    stream = FrozenTaskSpecStream.model_validate(
+        {
+            "source_id": frozen["declaration"]["id"],
+            **{key: frozen.get(key) for key in FrozenTaskSpecStream.model_fields if key != "source_id"},
+        }
+    )
     rows = {}
     upstream_counts = Counter()
-    for path in sorted((StoragePath(frozen["specs_dir"]) / "*.parquet").glob(), key=str):
-        with path.open("rb") as stream:
-            for batch in pq.ParquetFile(stream).iter_batches(batch_size=16, columns=[frozen["task_column"]]):
-                for encoded in batch.column(0).to_pylist():
-                    digest.update(encoded.encode())
-                    count += 1
-                    document = json.loads(encoded)
-                    source = document["source"]
-                    key = (source["dataset"], source["revision"], source["row"])
-                    upstream_counts[key] += 1
-                    if document["id"] not in selected:
-                        continue
-                    task = TaskSpec.model_validate(document)
-                    if canonical_sha256(task.model_dump(mode="json")) != semantic_tasks[task.id].task_hash:
-                        raise ValueError(f"Upstream identity TaskSpec differs from its public manifest: {task.id}")
-                    if key in rows:
-                        raise ValueError("Repeated public input has no unique pinned upstream row")
-                    rows[key] = (task.id, canonical_sha256(key))
-    if (
-        count != frozen["raw_count"]
-        or digest.hexdigest() != frozen["task_spec_scan_sha256"]
-        or {row[0] for row in rows.values()} != selected
-        or any(upstream_counts[key] != 1 for key in rows)
-    ):
-        raise ValueError("Upstream identity scan differs from the complete frozen TaskSpec stream")
+    for encoded in verified_task_spec_rows(stream):
+        document = json.loads(encoded)
+        source = document["source"]
+        key = (source["dataset"], source["revision"], source["row"])
+        upstream_counts[key] += 1
+        if document["id"] not in selected:
+            continue
+        task = TaskSpec.model_validate(document)
+        if canonical_sha256(task.model_dump(mode="json")) != semantic_tasks[task.id].task_hash:
+            raise ValueError(f"Upstream identity TaskSpec differs from its public manifest: {task.id}")
+        if key in rows:
+            raise ValueError("Repeated public input has no unique pinned upstream row")
+        rows[key] = (task.id, canonical_sha256(key))
+    if {row[0] for row in rows.values()} != selected or any(upstream_counts[key] != 1 for key in rows):
+        raise ValueError("Upstream rows do not uniquely cover the selected frozen tasks")
     return rows
 
 
