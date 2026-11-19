@@ -20,7 +20,7 @@ from iris.cluster.controller.observability_rows import ObservabilityRowTables
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.federation.store import HandoffAdmission, HandoffSpec
-from iris.cluster.stats.tables import IrisJob, IrisJobConfig, IrisJobTask, IrisTaskAttempt
+from iris.cluster.stats.tables import IrisJob, IrisJobConfig, IrisTask, IrisTaskAttempt
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from iris.test_util import FakeStatsTable
@@ -58,8 +58,8 @@ class RecordedRows:
         return self._rows(self.tables.job_config_table)
 
     @property
-    def tasks(self) -> list[IrisJobTask]:
-        return self._rows(self.tables.job_task_table)
+    def tasks(self) -> list[IrisTask]:
+        return self._rows(self.tables.task_table)
 
     @property
     def attempts(self) -> list[IrisTaskAttempt]:
@@ -71,7 +71,7 @@ def _attach(state: ControllerTestState, cluster: str) -> RecordedRows:
         cluster=cluster,
         job_table=FakeStatsTable(),
         job_config_table=FakeStatsTable(),
-        job_task_table=FakeStatsTable(),
+        task_table=FakeStatsTable(),
         task_attempt_table=FakeStatsTable(),
     )
     state._db.attach_observability_rows(tables)
@@ -241,7 +241,7 @@ def test_failed_write_commits_and_runs_later_post_commit_hooks(state):
             cluster="marin",
             job_table=_ClosedTable(),
             job_config_table=FakeStatsTable(),
-            job_task_table=FakeStatsTable(),
+            task_table=FakeStatsTable(),
             task_attempt_table=FakeStatsTable(),
         )
     )
@@ -551,7 +551,7 @@ _COLUMNS: dict[str, _Classified] = {
         | {"provenance_base_commit", "provenance_tree_hash", "provenance_dirty", "provenance_branch"},
     ),
     "tasks": _Classified(
-        IrisJobTask,
+        IrisTask,
         {
             "task_id": "task_id",
             "job_id": "job_id",

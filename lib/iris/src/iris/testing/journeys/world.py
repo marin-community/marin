@@ -99,8 +99,6 @@ class JourneyWorld:
         db = ControllerDB(db_dir=self._db_dir)
         monkeypatch.setattr(Timestamp, "now", classmethod(lambda cls: self.clock.now()))
         self.controller, self.backend = self._build_controller(db)
-        # Controller.__init__ attaches its own row tables; check this DB's rows instead.
-        observability_rows_check.install(db)
 
     def _build_controller(self, db: ControllerDB) -> tuple[Controller, ScriptedTaskBackend]:
         self._incarnation += 1
@@ -134,6 +132,8 @@ class JourneyWorld:
             federation_peers=self._federation_peers,
         )
         controller.register_backend(backend)
+        # Controller.__init__ attaches its own row tables; check this DB's rows instead.
+        observability_rows_check.install(db)
         return controller, backend
 
     def close(self) -> None:
@@ -146,8 +146,6 @@ class JourneyWorld:
         self.controller.stop()
         db = ControllerDB(db_dir=self._db_dir)
         self.controller, self.backend = self._build_controller(db)
-        # Controller.__init__ attaches its own row tables; check this DB's rows instead.
-        observability_rows_check.install(db)
         self._check_invariants()
 
     def checkpoint(self) -> tuple[str, CheckpointResult]:
@@ -180,8 +178,6 @@ class JourneyWorld:
         }
         db = ControllerDB(db_dir=self._db_dir)
         self.controller, self.backend = self._build_controller(db)
-        # Controller.__init__ attaches its own row tables; check this DB's rows instead.
-        observability_rows_check.install(db)
         self._check_invariants()
 
     def submit(

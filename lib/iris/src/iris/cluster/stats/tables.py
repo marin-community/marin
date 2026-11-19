@@ -49,7 +49,7 @@ TASK_STATE_NAMESPACE = "iris.task_state"
 JOB_NAMESPACE = "iris.controller_db__jobs"
 JOB_CONFIG_NAMESPACE = "iris.controller_db__job_config"
 TASK_ATTEMPT_NAMESPACE = "iris.controller_db__task_attempts"
-JOB_TASK_NAMESPACE = "iris.controller_db__tasks"
+TASK_NAMESPACE = "iris.controller_db__tasks"
 
 
 class TaskEventSeverity(StrEnum):
@@ -85,7 +85,7 @@ _OBSERVABILITY_ROWS_MAX_AGE = 5 * 365 * 24 * 60 * 60
 JOB_STORAGE_POLICY = StoragePolicy(max_bytes=4 * 1024**3, max_age_seconds=_OBSERVABILITY_ROWS_MAX_AGE)
 JOB_CONFIG_STORAGE_POLICY = StoragePolicy(max_bytes=4 * 1024**3, max_age_seconds=_OBSERVABILITY_ROWS_MAX_AGE)
 TASK_ATTEMPT_STORAGE_POLICY = StoragePolicy(max_bytes=8 * 1024**3, max_age_seconds=_OBSERVABILITY_ROWS_MAX_AGE)
-JOB_TASK_STORAGE_POLICY = StoragePolicy(max_bytes=8 * 1024**3, max_age_seconds=_OBSERVABILITY_ROWS_MAX_AGE)
+TASK_STORAGE_POLICY = StoragePolicy(max_bytes=8 * 1024**3, max_age_seconds=_OBSERVABILITY_ROWS_MAX_AGE)
 
 
 def stats_timestamp() -> datetime:
@@ -341,7 +341,7 @@ class IrisJobConfig:
 
 
 @dataclass
-class IrisJobTask:
+class IrisTask:
     """A snapshot of one controller ``tasks`` row, plus the job key.
 
     Every column except the scheduler's queue order (``priority_neg_depth``,

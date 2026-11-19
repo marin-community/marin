@@ -45,7 +45,7 @@ from iris.cluster.constraints import get_device_variant
 from iris.cluster.controller.codec import proto_from_json
 from iris.cluster.controller.schema import job_config_table, jobs_table, task_attempts_table, tasks_table
 from iris.cluster.redaction import redact_string
-from iris.cluster.stats.tables import IrisJob, IrisJobConfig, IrisJobTask, IrisTaskAttempt, stats_timestamp
+from iris.cluster.stats.tables import IrisJob, IrisJobConfig, IrisTask, IrisTaskAttempt, stats_timestamp
 from iris.cluster.types import LOCAL_CLUSTER, JobName, WorkerId, get_gpu_count, get_tpu_count
 from iris.rpc import job_pb2
 
@@ -66,7 +66,7 @@ class ObservabilityRowTables:
     cluster: str
     job_table: FinelogTable
     job_config_table: FinelogTable
-    job_task_table: FinelogTable
+    task_table: FinelogTable
     task_attempt_table: FinelogTable
 
 
@@ -95,7 +95,7 @@ class _Marked:
     removed_workers: dict[tuple[JobName, int], WorkerId] = field(default_factory=dict)
     job_rows: list[IrisJob] = field(default_factory=list)
     config_rows: list[IrisJobConfig] = field(default_factory=list)
-    task_rows: list[IrisJobTask] = field(default_factory=list)
+    task_rows: list[IrisTask] = field(default_factory=list)
     attempt_rows: list[IrisTaskAttempt] = field(default_factory=list)
 
 
@@ -171,7 +171,7 @@ def _write(tables: ObservabilityRowTables, marked: _Marked) -> None:
     for table, rows in (
         (tables.job_table, marked.job_rows),
         (tables.job_config_table, marked.config_rows),
-        (tables.job_task_table, marked.task_rows),
+        (tables.task_table, marked.task_rows),
         (tables.task_attempt_table, marked.attempt_rows),
     ):
         if not rows:
@@ -199,10 +199,6 @@ def _accelerator(device_json: str | None) -> _Accelerator:
     if device.HasField("tpu"):
         return _Accelerator("tpu", get_device_variant(device), get_tpu_count(device))
     return _Accelerator(None, get_device_variant(device), 0)
-
-
-def _dt_from_ms(epoch_ms: int | None) -> datetime | None:
-    return Timestamp.from_ms(epoch_ms).as_naive_utc() if epoch_ms is not None else None
 
 
 def _launch_provenance(environment_json: str) -> Provenance | None:
@@ -279,7 +275,11 @@ def _snapshot_jobs(cur: RowCursor, tables: ObservabilityRowTables, marked: _Mark
                     exit_code=r.exit_code,
                     error=_free_text(r.error),
                     num_tasks=r.num_tasks,
-                    scheduling_deadline_at=_dt_from_ms(r.scheduling_deadline_epoch_ms),
+                    scheduling_deadline_at=(
+                        _dt(Timestamp.from_ms(r.scheduling_deadline_epoch_ms))
+                        if r.scheduling_deadline_epoch_ms is not None
+                        else None
+                    ),
                     backend_id=r.backend_id,
                     placement=r.cluster,
                     ts=ts,
@@ -349,7 +349,7 @@ def _snapshot_tasks(cur: RowCursor, tables: ObservabilityRowTables, marked: _Mar
         )
         for r in cur.execute(query):
             marked.task_rows.append(
-                IrisJobTask(
+                IrisTask(
                     cluster=tables.cluster,
                     root_job_id=r.root_job_id,
                     root_submitted_at_ms=r.root_submitted_at_ms.epoch_ms(),
