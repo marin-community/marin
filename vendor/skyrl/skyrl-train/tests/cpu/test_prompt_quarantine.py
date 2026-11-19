@@ -1,6 +1,7 @@
 """Quarantine of prompts whose groups training can never use."""
 
 import pytest
+from loguru import logger
 
 from skyrl_train.group_admission import AdmissionRejection
 from skyrl_train.rollouts.loader import QUARANTINE_STEPS, QUARANTINED_PROMPTS_METRIC, PromptLoader, SeededPasses
@@ -20,6 +21,9 @@ class Prompts:
 
     def uid(self, index: int) -> str:
         return str(index)
+
+    def label(self, index: int) -> str:
+        return f"task-{index}"
 
     def collate_fn(self, items: list[int]) -> list[dict]:
         return [{"uid": str(item)} for item in items]
@@ -50,6 +54,15 @@ def test_unusable_prompt_sits_out_then_returns(max_unusable_groups: int):
         assert prompts.observe([])[QUARANTINED_PROMPTS_METRIC] == 1.0
     assert prompts.observe([])[QUARANTINED_PROMPTS_METRIC] == 0.0
     assert "0" in offered(prompts, 4)
+
+
+def test_quarantine_warning_names_the_task(caplog):
+    handler = logger.add(caplog.handler, format="{message}")
+    prompts = loader(num_rows=4, batch_size=3, max_unusable_groups=1)
+    prompts.record_disposition("2", UNUSABLE)
+    logger.remove(handler)
+
+    assert "Quarantined prompt 2 (task-2)" in caplog.text
 
 
 def test_usable_group_resets_the_count():

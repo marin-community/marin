@@ -34,6 +34,10 @@ class PromptGroupDataset(Protocol):
         """The uid of row ``index``'s prompt group, without loading the row."""
         ...
 
+    def label(self, index: int) -> str:
+        """A name for row ``index`` that identifies its source in logs, such as a task id; the uid when it has none."""
+        ...
+
     def collate_fn(self, items: list[Any]) -> list[dict]: ...
 
 
@@ -141,7 +145,8 @@ class PromptLoader:
             raise ValueError(f"max_stale_retries must be non-negative, got {max_stale_retries}")
         if max_unusable_groups < 1:
             raise ValueError(f"max_unusable_groups must be positive, got {max_unusable_groups}")
-        self._uid_count = len({dataset.uid(index) for index in range(len(dataset))})
+        self._uid_rows = {dataset.uid(index): index for index in reversed(range(len(dataset)))}
+        self._uid_count = len(self._uid_rows)
         if self._uid_count < batch_size:
             raise ValueError(
                 f"the training dataset has {self._uid_count} distinct prompt uids, fewer than one batch of "
@@ -216,7 +221,7 @@ class PromptLoader:
             logger.warning(
                 "Prompt {} produced {} unusable groups in a row (last: {}) and stays in rotation: a batch of {} needs "
                 "all {} usable prompts",
-                uid,
+                self._log_name(uid),
                 count,
                 disposition,
                 self._batch_size,
@@ -226,7 +231,7 @@ class PromptLoader:
         self._quarantined[uid] = self._step + QUARANTINE_STEPS
         logger.warning(
             "Quarantined prompt {} for {} steps after {} unusable groups in a row (last: {}); {} usable prompts remain",
-            uid,
+            self._log_name(uid),
             QUARANTINE_STEPS,
             count,
             disposition,
@@ -255,6 +260,10 @@ class PromptLoader:
     def load_state_dict(self, state: PromptLoaderState) -> None:
         self._order.load_state_dict(state.order)
         self._retries = collections.deque(state.retries)
+
+    def _log_name(self, uid: str) -> str:
+        label = self._dataset.label(self._uid_rows[uid])
+        return uid if label == uid else f"{uid} ({label})"
 
     def _available(self, uid: str, live: Collection[str]) -> bool:
         return uid not in live and uid not in self._quarantined
