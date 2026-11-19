@@ -25,6 +25,7 @@ import dataclasses
 import json
 import logging
 import tempfile
+import traceback
 from datetime import timedelta
 from pathlib import Path
 
@@ -54,7 +55,7 @@ from experiments.sft.launcher import SFTSpec, _levanter_train_config
 logger = logging.getLogger(__name__)
 
 SMOKE_NAME = "deletion-tuning/v1-production-smoke"
-BASE_02A = "s3://marin-us-east-02a/marin/users/benfeuer/snowball-deletion-tuning/inputs/base-hf/2026.11.18.1"
+DEFAULT_BASE = "s3://marin-rno2a/marin/users/benfeuer/snowball-deletion-tuning/inputs/base-hf/2026.11.19.1"
 TOKENIZER = "s3://marin-us-east-02a/marin/grug_sft/tokenizer/2026.09.18"
 SMOKE_STEPS = 3
 SMOKE_BATCH = 8
@@ -72,7 +73,7 @@ _SCALE_NOTE = (
 )
 
 
-def _smoke_spec(release, output_path: Path) -> SFTSpec:
+def _smoke_spec(release, output_path: Path, base: str) -> SFTSpec:
     """The V1 production recipe with the one-node scale overrides applied."""
     recipe = production_sft_recipe(release)
     trainer = recipe["trainer"]
@@ -134,7 +135,7 @@ def _smoke_spec(release, output_path: Path) -> SFTSpec:
         name=SMOKE_NAME,
         version=VERSION,
         model=DeletionHFModel(
-            model_ref=BASE_02A,
+            model_ref=base,
             tokenizer_path=TOKENIZER,
             model_type="snowball",
             eos_token_ids=(128001, 128009),
@@ -168,20 +169,26 @@ def _smoke_spec(release, output_path: Path) -> SFTSpec:
     )
 
 
-def run_production_smoke(output_root: Path | None = None) -> dict:
+def run_production_smoke(output_root: Path | None = None, base: str = DEFAULT_BASE) -> dict:
     """Run the real-model V1 smoke on this node and report what ran."""
     configure_coreweave_s3()
     release = v1_data_release(require_ready=False)
     with tempfile.TemporaryDirectory(prefix="v1-production-smoke-") as tmp:
         output_path = Path(tmp) / "run"
-        spec = _smoke_spec(release, output_path)
+        spec = _smoke_spec(release, output_path, base)
         pod_config = TrainLmOnPodConfig(
             output_path=str(output_path),
             resources=_gpu_resources(),
             env_vars={"WANDB_MODE": "disabled", "JAX_TRACEBACK_FILTERING": "off"},
             train_config=_pod_train_config(spec),
         )
-        run_deletion_train_lm(pod_config)
+        try:
+            run_deletion_train_lm(pod_config)
+        except Exception:
+            # the direct-cluster log path is not always fetchable; the failure
+            # lands in storage either way
+            StoragePath(f"{SMOKE_PREFIX}/last-error.txt").write_text(traceback.format_exc())
+            raise
 
         exports = sorted(str(path) for path in output_path.rglob("*.safetensors"))
         assert exports, "the production smoke must produce the end-of-run HF export"
@@ -201,6 +208,7 @@ def run_production_smoke(output_root: Path | None = None) -> dict:
             "mask_artifact": {"entries": len(keep_masks), "kept": kept, "total": total},
         }
         logger.info("production smoke complete: %s", json.dumps(summary, indent=2))
+        StoragePath(f"{SMOKE_PREFIX}/last-summary.json").write_text(json.dumps(summary, indent=2) + "\n")
         if output_root is not None:
             output_root.mkdir(parents=True, exist_ok=True)
             (output_root / "v1-production-smoke-summary.json").write_text(json.dumps(summary, indent=2) + "\n")

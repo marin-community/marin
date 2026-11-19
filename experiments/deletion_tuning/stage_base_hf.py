@@ -32,7 +32,7 @@ logger = logging.getLogger("stage_base_hf")
 SOURCE_RECEIPT_URI = (
     "s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp3/evidence/initializer-hf/2026.11.15.32.source.json"
 )
-DESTINATION = "s3://marin-us-east-02a/marin/users/benfeuer/snowball-deletion-tuning/inputs/base-hf/2026.11.18.1"
+DEFAULT_DESTINATION = "s3://marin-us-east-02a/marin/users/benfeuer/snowball-deletion-tuning/inputs/base-hf/2026.11.18.1"
 WORKERS = 16
 SIDECARS = (
     "config.json",
@@ -119,7 +119,7 @@ def _copy_verified_file(
     return "copied"
 
 
-def main(dry_run: bool = False) -> None:
+def main(dry_run: bool = False, destination: str = DEFAULT_DESTINATION) -> None:
     configure_coreweave_s3()
     receipt = json.loads(StoragePath(SOURCE_RECEIPT_URI).read_bytes())
     if receipt["repo"] != "open-athena/snowball-67b-a2b-base-262k-qk175-skew8":
@@ -136,7 +136,7 @@ def main(dry_run: bool = False) -> None:
         receipt["revision"],
         f"{total_bytes:,}",
         len(files),
-        DESTINATION,
+        destination,
     )
     source_fs, _ = filesystem_for(source)
     source_names = sorted(entry.rsplit("/", 1)[-1] for entry in source_fs.ls(source))
@@ -162,7 +162,7 @@ def main(dry_run: bool = False) -> None:
     # manifest is reserved and the copy tool refuses it as a source. Copy
     # per-file instead, verifying every byte against the certified receipt's
     # SHA-256s, then publish a completion manifest in the same schema.
-    dest_fs, _ = filesystem_for(DESTINATION)
+    dest_fs, _ = filesystem_for(destination)
     outcomes: dict[str, str] = {}
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
         futures = {}
@@ -174,7 +174,7 @@ def main(dry_run: bool = False) -> None:
                     source_fs,
                     source,
                     dest_fs,
-                    DESTINATION,
+                    destination,
                     entry["path"],
                     entry["sha256"],
                     size,
@@ -199,12 +199,12 @@ def main(dry_run: bool = False) -> None:
     completion = {
         "schema_version": 1,
         "source": source,
-        "destination": DESTINATION,
+        "destination": destination,
         "total_files": len(verified_files),
         "total_bytes": sum(item["size"] for item in verified_files),
         "files": verified_files,
     }
-    completion_path = prefix_join(DESTINATION, ".verified-copy-manifest.json")
+    completion_path = prefix_join(destination, ".verified-copy-manifest.json")
     dest_fs.pipe_file(completion_path, json.dumps(completion, sort_keys=True).encode())
     logger.info("wrote %s", completion_path)
 
@@ -214,18 +214,18 @@ def main(dry_run: bool = False) -> None:
             if name != "generation_config.json":
                 raise ValueError(f"cannot synthesize sidecar {name}")
             payload = json.dumps(SYNTHESIZED_GENERATION_CONFIG, indent=2, sort_keys=True) + "\n"
-            StoragePath(prefix_join(DESTINATION, name)).write_text(payload)
+            StoragePath(prefix_join(destination, name)).write_text(payload)
             synthesized[name] = hashlib.sha256(payload.encode()).hexdigest()
         logger.info("synthesized sidecars: %s", sorted(synthesized))
 
-    destination = StoragePath(DESTINATION)
+    destination = StoragePath(destination)
     entries = [str(entry) for entry in destination.ls()]
     shard_pins = []
     sidecar_pins = {}
-    fs, _ = filesystem_for(DESTINATION)
+    fs, _ = filesystem_for(destination)
     for entry in entries:
         name = entry.rsplit("/", 1)[-1]
-        key = prefix_join(DESTINATION, name)
+        key = prefix_join(destination, name)
         info = fs.info(key)
         if name in SIDECARS:
             sidecar_pins[name] = hashlib.sha256(StoragePath(key).read_bytes()).hexdigest()
@@ -239,7 +239,7 @@ def main(dry_run: bool = False) -> None:
         raise ValueError("no safetensors shards found at the destination")
 
     binding_inputs = {
-        "hf_uri": DESTINATION,
+        "hf_uri": destination,
         "repo": receipt["repo"],
         "revision": receipt["revision"],
         "source_receipt": SOURCE_RECEIPT_URI,
@@ -257,12 +257,19 @@ def main(dry_run: bool = False) -> None:
             else None
         ),
     }
-    receipt_uri = prefix_join(DESTINATION, "model-binding-inputs.json")
+    receipt_uri = prefix_join(destination, "model-binding-inputs.json")
     StoragePath(receipt_uri).write_text(json.dumps(binding_inputs, indent=2, sort_keys=True) + "\n")
     logger.info("wrote %s (%d shards)", receipt_uri, len(shard_pins))
 
 
 if __name__ == "__main__":
-    import sys
 
-    main(dry_run="--dry-run" in sys.argv)
+    import click
+
+    @click.command(help=__doc__)
+    @click.option("--dry-run", is_flag=True)
+    @click.option("--destination", default=DEFAULT_DESTINATION, show_default=True)
+    def _cli(dry_run: bool, destination: str) -> None:
+        main(dry_run=dry_run, destination=destination)
+
+    _cli()
