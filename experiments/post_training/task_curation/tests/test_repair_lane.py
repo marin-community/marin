@@ -1354,6 +1354,35 @@ def test_oracle_campaign_with_actor_image_creates_its_work_root_for_the_registry
     assert calls["calibration_kwargs"]["registry_authfile"] == str(authfile)
 
 
+def test_bwrap_command_keeps_the_build_writable_for_apt_and_the_executor_certified():
+    """The sandbox mounts /tmp world-writable (apt's _apt worker) and binds the executor's
+    certificates at a side path, because the base image's own /etc/ssl/certs must stay
+    writable for update-ca-certificates; the executor finds them through SSL_CERT_DIR."""
+    arguments = lane.bwrap_command(
+        Path("/rootfs"),
+        Path("/scratch/context"),
+        Path("/scratch/out"),
+        Path("/scratch/docker-config"),
+        ["/kaniko/executor", "--no-push", "--tar-path=/out/actor.tar"],
+        bwrap="/usr/bin/bwrap",
+    )
+    assert arguments[0] == "/usr/bin/bwrap"
+    assert arguments[1:4] == ["--bind", "/rootfs", "/"]
+    tmpfs = arguments.index("--tmpfs")
+    assert arguments[tmpfs - 2 : tmpfs] == ["--perms", "1777"]
+    assert arguments[tmpfs + 1] == "/tmp"
+    certs = arguments.index("/kaniko/ssl-certs")
+    assert arguments[certs - 2 : certs] == ["--ro-bind", "/etc/ssl/certs"]
+    assert arguments[certs + 1 : certs + 3] == ["--setenv", "SSL_CERT_DIR"]
+    assert arguments[certs + 3] == "/kaniko/ssl-certs"
+    docker = arguments.index("/docker-config")
+    assert arguments[docker + 1 : docker + 4] == ["--setenv", "DOCKER_CONFIG", "/docker-config"]
+    assert arguments[docker + 4] == "/kaniko/executor"
+    assert arguments[-3] == "/kaniko/executor"
+    assert arguments[-2:] == ["--no-push", "--tar-path=/out/actor.tar"]
+    assert "/context" in arguments and "/out" in arguments
+
+
 class TestSubprocessCredentials:
     """The harbor trial subprocess reads s3 credentials from the AWS_* environment."""
 

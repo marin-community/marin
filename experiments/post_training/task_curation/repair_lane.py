@@ -1110,6 +1110,57 @@ def cohort_actor_environment(rows: Mapping[str, Mapping[str, Any]]) -> Environme
     return next(iter(environments.values()))
 
 
+def bwrap_command(
+    rootfs: Path, context: Path, out: Path, docker_config: Path, arguments: list[str], *, bwrap: str
+) -> list[str]:
+    """The ephemeral sandbox command around the kaniko executor.
+
+    Three fixtures keep the build inside its own root: the /tmp tmpfs is world-writable
+    because apt's fetch worker runs as ``_apt`` and the kaniko image carries no /tmp of its
+    own; the executor's certificates bind at /kaniko/ssl-certs (SSL_CERT_DIR) because the
+    base image's own /etc/ssl/certs must stay writable for update-ca-certificates; and the
+    registry credential lives outside the unpacked root with DOCKER_CONFIG pointing at it.
+    """
+    return [
+        bwrap,
+        "--bind",
+        str(rootfs),
+        "/",
+        "--dev",
+        "/dev",
+        "--proc",
+        "/proc",
+        "--perms",
+        "1777",
+        "--tmpfs",
+        "/tmp",
+        "--tmpfs",
+        "/run",
+        "--ro-bind",
+        "/etc/resolv.conf",
+        "/etc/resolv.conf",
+        "--ro-bind",
+        "/etc/ssl/certs",
+        "/kaniko/ssl-certs",
+        "--setenv",
+        "SSL_CERT_DIR",
+        "/kaniko/ssl-certs",
+        "--bind",
+        str(context),
+        "/context",
+        "--bind",
+        str(out),
+        "/out",
+        "--ro-bind",
+        str(docker_config),
+        "/docker-config",
+        "--setenv",
+        "DOCKER_CONFIG",
+        "/docker-config",
+        *arguments,
+    ]
+
+
 def build_and_push_actor_image(
     environment: EnvironmentRequirements,
     repository: str,
@@ -1157,39 +1208,14 @@ def build_and_push_actor_image(
         if no_push:
             arguments += ["--no-push", "--tar-path=/out/actor.tar"]
         subprocess.run(
-            [
-                shutil.which("bwrap"),
-                "--bind",
-                str(executor_rootfs),
-                "/",
-                "--dev",
-                "/dev",
-                "--proc",
-                "/proc",
-                "--tmpfs",
-                "/tmp",
-                "--tmpfs",
-                "/run",
-                "--ro-bind",
-                "/etc/resolv.conf",
-                "/etc/resolv.conf",
-                "--ro-bind",
-                "/etc/ssl/certs",
-                "/etc/ssl/certs",
-                "--bind",
-                str(context),
-                "/context",
-                "--bind",
-                str(out),
-                "/out",
-                "--ro-bind",
-                str(docker_config),
-                "/docker-config",
-                "--setenv",
-                "DOCKER_CONFIG",
-                "/docker-config",
-                *arguments,
-            ],
+            bwrap_command(
+                executor_rootfs,
+                context,
+                out,
+                docker_config,
+                arguments,
+                bwrap=shutil.which("bwrap"),
+            ),
             check=True,
         )
         tar = out / "actor.tar"
