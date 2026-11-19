@@ -32,7 +32,7 @@ def test_sft_recipe_identities(monkeypatch):
         axes={"data": 1, "replica": 1, "model": 1, "context": 4, "expert": -1},
         compute_mapping={"batch": ["replica_dcn", "data", "expert"], "position": "context"},
     )
-    old_snowball = replace(OPENTHOUGHTS_SFT.recipe, version="2026.09.23", mesh=old_mesh)
+    old_snowball = replace(OPENTHOUGHTS_SFT.recipe, version="2026.09.23", mesh=old_mesh, pack=False)
     tpu = resources_from_accelerator("v6e-64")
     steps = (
         sft_step(old_snowball, OPENTHOUGHTS_SFT.resources),
@@ -46,7 +46,7 @@ def test_sft_recipe_identities(monkeypatch):
 
     assert [(step.name, step.version, step.fingerprint()) for step in steps] == [
         ("checkpoints/snowball-openthoughts-agent-sft", "2026.09.23", "bf7978a7"),
-        ("checkpoints/snowball-openthoughts-agent-sft", "2026.11.19.1", "734e0b40"),
+        ("checkpoints/snowball-openthoughts-agent-sft", "2026.11.19.1", "752359a5"),
         ("checkpoints/delphi-1e22-magpie-warmup-levanter-sft", "2026.07.15", "681c760f"),
         ("checkpoints/delphi-1e22-wc50m-warmup-levanter-sft", "2026.07.15", "cb1e1554"),
         ("checkpoints/iceball-micro-sft", "2026.11.19.1", "03dbbead"),

@@ -6,9 +6,13 @@ import sys
 from dataclasses import replace
 
 import draccus
+import numpy as np
 import pytest
-from levanter.data.text.datasets import LmDataConfig
+from haliax import Axis
+from levanter.data.text.datasets import LmDataConfig, dataset_for_component
 from levanter.data.text.formats import SerializedChatLmDatasetFormat
+from levanter.store.cache import SerialCacheWriter
+from levanter.utils.thread_utils import blocking_wait
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, materialized_config
 from marin.training.levanter import GPU_NCCL_TERMINATION_TIMEOUT_FLAG
@@ -48,6 +52,27 @@ def test_grug_rejects_levanter_runtime_settings(overrides, error):
     spec = replace(OPENTHOUGHTS_SFT.recipe, model=grug, **overrides)
     with pytest.raises(ValueError, match=error):
         launcher.sft_step(spec, OPENTHOUGHTS_SFT.resources).fingerprint()
+
+
+def test_openthoughts_keeps_one_conversation_per_context_window(tmp_path):
+    training = materialized_config(OPENTHOUGHTS_SFT.model().step, str(tmp_path)).train_config
+    [component] = training.data.components.values()
+    conversations = [
+        {"input_ids": np.arange(10, 22, dtype=np.int32), "assistant_masks": np.arange(12) >= 2},
+        {"input_ids": np.array([31, 32, 33], dtype=np.int32), "assistant_masks": np.array([False, True, True])},
+        {"input_ids": np.array([41, 42, 43], dtype=np.int32), "assistant_masks": np.array([False, True, True])},
+    ]
+    with SerialCacheWriter(str(tmp_path / "cache"), conversations[0]) as writer:
+        writer.write_batch(conversations)
+    dataset = dataset_for_component(
+        component, Axis("position", 8), writer.result(), eos_id=None, block_cross_document_attention=True
+    )
+    assert blocking_wait(dataset.async_len()) == 3
+    long, first_short, second_short = blocking_wait(dataset.get_batch([0, 1, 2]))
+    np.testing.assert_array_equal(long.tokens, np.arange(10, 18))
+    np.testing.assert_array_equal(np.flatnonzero(long.loss_weight), np.arange(1, 7))
+    np.testing.assert_array_equal(first_short.tokens, [31, 32, 33, 0, 0, 0, 0, 0])
+    np.testing.assert_array_equal(second_short.tokens, [41, 42, 43, 0, 0, 0, 0, 0])
 
 
 @pytest.mark.parametrize(
