@@ -8,6 +8,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from finestore.rl.curation import LexicalUse, SourceDeclaration, SourceOrigin, SourceUse, source_identifier
+from finestore.rl.licenses import LicenseReceipt
 from finestore.schema import arrow_schema
 from marin.execution.lazy import run
 from rigging.filesystem.storage_path import StoragePath
@@ -291,8 +292,20 @@ def test_projection_rebinds_only_provenance_and_rebuilds_selected_samples(tmp_pa
         source_manifest=reference(tmp_path / "repaired/manifest.json"),
         public_inputs=reference(tmp_path / "repaired/public-inputs.json"),
     )
+    metadata_receipt = LicenseReceipt(
+        source_id=declarations[0].id,
+        dataset_id=declarations[0].dataset_id,
+        revision=declarations[0].dataset_revision,
+        resolved_at="2026-11-19T00:00:00+00:00",
+        resolver_version="fixture",
+        evidence=[],
+        bundled_third_party=False,
+        model_generated_outputs=False,
+    )
     current = [
-        declarations[0].model_copy(update={"notes": "New content review", "intended_use": SourceUse.TRAIN}),
+        declarations[0].model_copy(
+            update={"notes": "New content review", "intended_use": SourceUse.TRAIN, "license_receipt": metadata_receipt}
+        ),
         changed,
     ]
     (tmp_path / "uses.json").write_text(json.dumps([row.model_dump(mode="json") for row in use_bindings(current)]))
