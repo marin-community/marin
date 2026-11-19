@@ -3,6 +3,8 @@
 
 """Resolve host credentials and project model access into guest environments."""
 
+from __future__ import annotations
+
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -10,7 +12,6 @@ from types import MappingProxyType
 from harbor.utils.env import protected_environment_values
 from harbor_config.env import get_required_host_vars, resolve_env_vars
 
-DAYTONA_API_URL = "https://app.daytona.io/api"
 OPENAI_API_URL = "https://api.openai.com/v1"
 MODEL_RELAY_PORT = 8787
 CANDIDATE_MODEL_RELAY_PORT = 8788
@@ -127,13 +128,6 @@ def task_model_environment(model: str) -> dict[str, str]:
 
 
 @dataclass(frozen=True)
-class DaytonaConnection:
-    api_key: str | None = field(repr=False)
-    api_url: str
-    target: str | None
-
-
-@dataclass(frozen=True)
 class HostCapabilities:
     """Host authority passed outside serialized job and task configuration."""
 
@@ -155,10 +149,15 @@ def host_capabilities_from_environment(
     model_authentication: Mapping[str, str],
 ) -> HostCapabilities:
     """Resolve backend and model authority from one executable-owned snapshot."""
+    # Shellbox is an optional Harbor extra; DaytonaConnection travels in its own
+    # module so a Harbor install without the Daytona extra can still import this
+    # core capability type.
+    from shellbox.backends.daytona.connection import DEFAULT_DAYTONA_API_URL, DaytonaConnection
+
     return HostCapabilities(
         daytona=DaytonaConnection(
             api_key=environment.get("DAYTONA_API_KEY"),
-            api_url=environment.get("DAYTONA_API_URL", DAYTONA_API_URL),
+            api_url=environment.get("DAYTONA_API_URL", DEFAULT_DAYTONA_API_URL),
             target=environment.get("DAYTONA_TARGET"),
         ),
         model_authentication=model_authentication,

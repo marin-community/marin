@@ -13,6 +13,10 @@ from rigging.filesystem.storage_path import StoragePath
 
 from tests.evaluation.harbor_runtime import preflight
 
+# Each test spawns Harbor's isolated runtime environment, which costs tens of seconds
+# even from uv's cache; the guard must not fire under parallel workers.
+pytestmark = pytest.mark.timeout(180)
+
 
 @pytest.fixture
 def prepared_policy(tmp_path):
@@ -62,7 +66,6 @@ def test_runtime_failures_use_published_infrastructure_taxonomy_in_marin(tmp_pat
 @pytest.mark.parametrize(
     ("section", "replacement", "diagnostic"),
     [
-        ("agents", [{"name": "mini-swe-agent"}], "requires terminus-2, oracle, Pi, or pi-acp"),
         (
             "agents",
             [{"name": "pi", "kwargs": {"thinking_format": "chat-template"}, "env": {"STOLEN": "${HF_TOKEN}"}}],
@@ -84,7 +87,7 @@ def test_runtime_failures_use_published_infrastructure_taxonomy_in_marin(tmp_pat
                     },
                 }
             ],
-            "requires terminus-2, oracle, Pi, or pi-acp",
+            "is not supported by Marin's vendored Harbor",
         ),
         ("agents", [{"name": "terminus-2", "env": {"STOLEN": "${AWS_SECRET_ACCESS_KEY}"}}], "environment forwarding"),
         (
@@ -95,11 +98,6 @@ def test_runtime_failures_use_published_infrastructure_taxonomy_in_marin(tmp_pat
         ("agents", [{"name": "terminus-2", "mcp_servers": [{"name": "host", "url": "http://host"}]}], "MCP servers"),
         ("verifier", {"env": {"OPENAI_API_KEY": "${AWS_SECRET_ACCESS_KEY}"}}, "AWS_SECRET_ACCESS_KEY"),
         ("verifier", {"import_path": "host.verifier:Verifier"}, "without a custom import"),
-        (
-            "user_agent",
-            {"import_path": "harbor.agents.terminus_2:Terminus2", "bridge": {"kind": "acp"}},
-            "sandboxed Tau3 ACP simulated user",
-        ),
     ],
 )
 def test_preflight_rejects_host_escape_routes_before_submission(

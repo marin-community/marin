@@ -100,7 +100,7 @@ function gateChip(g, more = null) {
   })
   return cell
 }
-const checklistView = { sort: 'potential', query: '' }
+const checklistView = { sort: 'date', descending: true, query: '', liveOnly: false }
 const openRows = new Set() // checklist rows expanded to their thread, by registry id
 const logView = { query: '' }
 const openPosts = new Set() // agent log entries expanded, by registry id
@@ -207,7 +207,7 @@ function renderRunning() {
       const idea = state.ideas.find((i) => i.registry_id && i.registry_id === r.registry_id)
       const time = eta(r)
       const cells = [
-        el('span', { class: 'xid mono' }, r.registry_id ?? ''),
+        el('span', { class: 'xid mono' }, r.experiment ?? ''),
         el('span', { class: 'nm' }, el('b', {}, idea?.title ?? r.name), el('small', {}, r.name)),
         progress(r),
         el('span', { class: 'eta mono' }, r.state === 'pending' ? 'queued' : time ? `${time} left` : '—'),
@@ -285,7 +285,8 @@ function approvalDate(idea, pageIdea) {
 }
 
 function checklistRows(cfg) {
-  const live = new Map(state.runs.filter((r) => !TERMINAL.has(r.state)).map((r) => [r.registry_id, r]))
+  // The speedrun gate's run in flight: a live run of the idea itself, not of one of its ladder rungs.
+  const live = new Map(state.runs.filter((r) => !TERMINAL.has(r.state) && r.experiment === r.registry_id).map((r) => [r.registry_id, r]))
   return registry.ideas.map((idea) => {
     const pageIdea = state.ideas.find((i) => i.registry_id === idea.xid)
     // A link from before the agent log: an idea's post on the old running issue, kept in place there.
@@ -307,26 +308,65 @@ function checklistRows(cfg) {
   })
 }
 
-const SORTS = {
-  potential: (a, b) => a.accepted - b.accepted || (b.score ?? -1) - (a.score ?? -1) || b.date.localeCompare(a.date),
-  date: (a, b) => b.date.localeCompare(a.date),
-  accepted: (a, b) => b.accepted - a.accepted || b.date.localeCompare(a.date),
+// Gate verdicts, best first: a descending sort puts wins on top.
+const GATE_RANK = { win: 5, running: 4, noise: 3, loss: 2, na: 1, none: 0 }
+const RECIPE_RANK = { adopted: 2, removed: 1 }
+// The checklist columns, each with the ascending order a click on its header sorts by; ties go newest first. A first
+// click sorts descending (newest, best or highest first), except on Author, which starts A to Z.
+const COLUMNS = [
+  { label: 'Idea', key: 'idea', order: (a, b) => a.idea.xid.localeCompare(b.idea.xid) },
+  { label: 'Author', key: 'author', ascendingFirst: true, order: (a, b) => (a.author ?? '').localeCompare(b.author ?? '') },
+  { label: 'Date', key: 'date', order: (a, b) => a.date.localeCompare(b.date) },
+  { label: 'Dense', key: 'dense', order: (a, b) => GATE_RANK[a.dense.kind] - GATE_RANK[b.dense.kind] },
+  { label: 'Speedrun', key: 'speedrun', order: (a, b) => GATE_RANK[a.speedrun.kind] - GATE_RANK[b.speedrun.kind] },
+  { label: 'Hero MFU', key: 'hero', order: (a, b) => GATE_RANK[a.hero.kind] - GATE_RANK[b.hero.kind] },
+  { label: 'Projection', key: 'scaling', order: (a, b) => GATE_RANK[a.scaling.kind] - GATE_RANK[b.scaling.kind] },
+  {
+    label: 'Recipe',
+    key: 'recipe',
+    order: (a, b) => (RECIPE_RANK[recipeEvent(a.idea, config.recipe_tag)?.type] ?? 0) - (RECIPE_RANK[recipeEvent(b.idea, config.recipe_tag)?.type] ?? 0),
+  },
+  { label: 'Potential', key: 'potential', order: (a, b) => (a.score ?? -1) - (b.score ?? -1) },
+]
+
+function checklistOrder() {
+  const column = COLUMNS.find((c) => c.key === checklistView.sort)
+  const sign = checklistView.descending ? -1 : 1
+  return (a, b) => sign * column.order(a, b) || b.date.localeCompare(a.date)
+}
+
+// A click on the sorted column flips its direction; a click on another sorts by it in its first direction.
+function sortBy(key) {
+  const column = COLUMNS.find((c) => c.key === key)
+  checklistView.descending = checklistView.sort === key ? !checklistView.descending : !column.ascendingFirst
+  checklistView.sort = key
+  renderChecklist()
+}
+
+function columnHeader(column) {
+  const sorted = checklistView.sort === column.key
+  const arrow = sorted ? (checklistView.descending ? ' ▼' : ' ▲') : ''
+  return el(
+    'span',
+    { role: 'columnheader', 'aria-sort': sorted ? (checklistView.descending ? 'descending' : 'ascending') : 'none' },
+    el('button', { type: 'button', class: `ck-sort${sorted ? ' on' : ''}`, dataset: { sort: column.key }, onclick: () => sortBy(column.key) }, column.label, arrow),
+  )
 }
 
 function renderChecklist() {
   if (!registry) return
   const q = checklistView.query.toLowerCase()
   const rows = checklistRows(config)
+    .filter((r) => !checklistView.liveOnly || r.accepted)
     .filter((r) => !q || `${r.idea.xid} ${r.idea.name} ${r.author ?? ''} ${r.idea.category} ${recipeEvent(r.idea, config.recipe_tag)?.type === 'removed' ? 'retest' : ''}`.toLowerCase().includes(q))
-    .sort(SORTS[checklistView.sort])
+    .sort(checklistOrder())
   document.getElementById('checklist-n').textContent = String(rows.length)
   const registryUrl = (x) => `${REGISTRY_BLOB}/registry/${x.xid}-${x.id}.yaml`
-  const head = el(
-    'div',
-    { class: 'ck-row ck-head', role: 'row' },
-    ['Idea', 'Author', 'Date', 'Dense', 'Speedrun', 'Hero MFU', 'Projection', 'Recipe', 'Potential'].map((h) => el('span', { role: 'columnheader' }, h)),
-  )
+  const head = el('div', { class: 'ck-row ck-head', role: 'row' }, COLUMNS.map(columnHeader))
+  // Rebuilding the header drops a keyboard user's focus on its sort button (on a sort and on each refresh): restore it.
+  const focused = document.activeElement?.dataset?.sort
   setChildren('checklist', head, rows.map((r) => checklistRow(r, registryUrl)))
+  if (focused) head.querySelector(`[data-sort="${focused}"]`).focus({ preventScroll: true })
 }
 
 // The analysis reports of the idea's Track trials (one per trial, on the registry branch).
@@ -428,8 +468,8 @@ function checklistRow(r, registryUrl) {
 }
 
 function wireChecklist() {
-  document.getElementById('ck-sort').addEventListener('change', (e) => {
-    checklistView.sort = e.target.value
+  document.getElementById('ck-live').addEventListener('change', (e) => {
+    checklistView.liveOnly = e.target.checked
     renderChecklist()
   })
   document.getElementById('ck-filter').addEventListener('input', (e) => {

@@ -173,9 +173,7 @@ async def _run_trial(
                 to_agent_info=lambda: AgentInfo(name="oracle", version="1.0"),
             ),
         ),
-        patch("harbor.trial.trial.AgentName") as agent_name,
     ):
-        agent_name.ORACLE.value = "oracle"
         trial = await Trial.create(config)
         # Simulate the reward file being written into the verifier env's
         # mounted dir.

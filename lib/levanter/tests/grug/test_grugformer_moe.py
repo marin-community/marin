@@ -2439,3 +2439,27 @@ def test_transport_buffer_sites_prevent_cse():
     assert (
         _optimized_hlo_opcode_count(repeated_site, MINIMUM_OPCODE) == 1
     ), "the CSE probe no longer merges repeated sites, so this test can no longer detect a site collision"
+
+
+def test_routing_counts_stay_exact_past_the_float32_integer_range():
+    # 2**24 + 1 is the first count float32 cannot hold; a frozen-bias hot expert passes it on 11 hero racks.
+    num_tokens = 2**24 + 1
+    selected_experts = jnp.zeros((num_tokens, 1), dtype=jnp.int32)
+    router_scores = jnp.zeros((num_tokens, 1), dtype=jnp.float32)
+    token_valid = jnp.ones((num_tokens,), dtype=jnp.bool_)
+    mesh = Mesh(np.asarray(jax.devices()[:1]), axis_names=("data",), axis_types=(AxisType.Explicit,))
+
+    @jax.jit
+    def reduced_counts(selected, scores, valid):
+        selected, scores = (jax.sharding.reshard(x, P("data", None)) for x in (selected, scores))
+        valid = jax.sharding.reshard(valid, P("data"))
+        local = grug_moe.moe_routing_stats_local(
+            selected, scores, scores, valid, mesh.abstract_mesh, batch_axes=("data",), num_experts=1
+        )
+        stacked = {**jax.tree.map(lambda x: x[None], local), "qb_beta": jnp.zeros((1, 1))}
+        return grug_moe.reduce_moe_routing_stats(stacked, num_experts=1, num_experts_per_token=1)["routing_counts"]
+
+    with jax.set_mesh(mesh):
+        counts = reduced_counts(selected_experts, router_scores, token_valid)
+
+    assert int(np.asarray(counts)[0, 0]) == num_tokens

@@ -104,9 +104,10 @@ def test_write_jsonl_file_zstd_compresses(tmp_path, ext):
 
     result = write_jsonl_file(records, output_path)
 
-    assert result["count"] == 5
+    assert result == {"path": output_path, "count": len(records)}
     with open(output_path, "rb") as f:
         assert f.read(4) == _ZSTD_MAGIC
+    assert list(load_jsonl(output_path)) == records
 
 
 def test_write_jsonl_file_xz_round_trips(tmp_path):

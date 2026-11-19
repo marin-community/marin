@@ -4,6 +4,7 @@
 """Canonical tagged content hashes and ordinary JSON for human-readable files."""
 
 import base64
+import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import fields, is_dataclass
@@ -12,7 +13,6 @@ from pathlib import PurePath
 
 from pydantic import BaseModel
 from pydantic_core import to_jsonable_python
-from taskcompendium.identity import canonical_sha256
 
 BYTES_TAG = "__forge_bytes__"
 MAPPING_TAG = "__forge_mapping__"
@@ -48,8 +48,14 @@ def json_value(value: object) -> object:
 
 
 def digest(value: object) -> str:
-    """Adapt typed event values to the shared TaskCompendium canonical hash."""
-    return canonical_sha256({"value": json_value(value)}, allow_nan=True)
+    """TaskCompendium's ``canonical_sha256`` encoding of ``{"value": json_value(value)}``, also accepting NaN.
+
+    Event values may carry NaN; for NaN-free values the hash equals ``canonical_sha256``'s.
+    """
+    document = json.dumps(
+        {"value": json_value(value)}, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=True
+    )
+    return hashlib.sha256(document.encode()).hexdigest()
 
 
 def pretty_json(value: object) -> str:

@@ -175,6 +175,38 @@ def test_k8s_collection_without_dcgm_exports_unavailable_source(monkeypatch: pyt
     assert available["attributes"]["source_temporality"] == telemetry.CURRENT_SNAPSHOT
 
 
+@pytest.mark.parametrize("tmp_available", [None, 800])
+def test_k8s_collection_reports_full_root_beside_healthy_cache_disk(monkeypatch, tmp_available):
+    transport = _transport(monkeypatch)
+    text = """
+node_filesystem_size_bytes{mountpoint="/"} 15000
+node_filesystem_avail_bytes{mountpoint="/"} 0
+node_filesystem_size_bytes{mountpoint="/mnt/local"} 30000000
+node_filesystem_avail_bytes{mountpoint="/mnt/local"} 24000000
+"""
+    if tmp_available is not None:
+        text += f"""
+node_filesystem_size_bytes{{mountpoint="/tmp"}} 1000
+node_filesystem_avail_bytes{{mountpoint="/tmp"}} {tmp_available}
+"""
+    scraper = kubernetes.NodeStatsScraper(
+        InMemoryK8sService(namespace="iris"),
+        fetch=_fetch_from({"http://127.0.0.1:9100/metrics": text}),
+    )
+    target = NodeTarget(name="g83d142", node_uid="node-uid-1", internal_ip="127.0.0.1")
+
+    kubernetes.collect_once(scraper, target)
+
+    assert transport.record("node_disk_total_bytes", {"node_uid": "node-uid-1"})["value"] == 30000000
+    root = {"node_uid": "node-uid-1", "mountpoint": "/"}
+    assert transport.record("node_filesystem_total_bytes", root)["value"] == 15000
+    assert transport.record("node_filesystem_available_bytes", root)["value"] == 0
+    if tmp_available is not None:
+        tmp = {"node_uid": "node-uid-1", "mountpoint": "/tmp"}
+        assert transport.record("node_filesystem_available_bytes", tmp)["value"] == 800
+        assert transport.record("node_filesystem_total_bytes", tmp)["value"] == 1000
+
+
 def test_gcp_collection_uses_host_boot_identity_and_publishes_tpu_inventory(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

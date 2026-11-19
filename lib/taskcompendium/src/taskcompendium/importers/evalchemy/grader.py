@@ -26,11 +26,15 @@ from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
 SCORERS = Path(__file__).parent / "scorers"
 DEPENDENCIES = {
+    "gsm8k_cot": ("math.py", "minerva.py", "amc.py"),
+    "minerva_math": ("math.py", "minerva.py", "amc.py"),
+    "bbh_cot": ("choices.py",),
     "boxed_math": ("math.py", "amc.py", "minerva.py"),
     "amc": ("amc.py",),
     "olympiad": ("olympiad.py", "minerva.py"),
     "gpqa": ("choices.py",),
     "mmlu_pro": ("choices.py",),
+    "zeroeval_mcqa": ("zeroeval.py",),
     "mrcr": ("long_context.py",),
     "graphwalks": ("long_context.py",),
     "nupa": ("nupa.py", "nupa_preparation.py"),

@@ -143,7 +143,7 @@ def create_workspace_zip(
     extra_includes: Sequence[str] = (),
     max_size_bytes: int | None = MAX_BUNDLE_SIZE_BYTES,
 ) -> bytes:
-    """Create a zip of the workspace and return the raw bytes.
+    """Create a zip of the workspace and return the raw bytes, or b"" if empty.
 
     Suitable for Iris bundle uploads where the caller sends bytes directly.
     ``extra_includes`` re-includes caller-specified required files (see
@@ -151,6 +151,8 @@ def create_workspace_zip(
     """
     workspace = Path(workspace)
     files = collect_workspace_files(workspace, exclude=exclude, extra_includes=extra_includes)
+    if not files:
+        return b""
 
     fd, tmp_path = tempfile.mkstemp(suffix=".zip", prefix="workspace_")
     os.close(fd)

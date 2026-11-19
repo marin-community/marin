@@ -146,8 +146,10 @@ def verification_identity(suite: CheckSuite, policy: SourceVerificationPolicy) -
             "suite": {"id": suite.id, "revision": suite.revision, "parameters": suite.parameters},
             "function": callable_identity(function),
             "python": sys.version,
+            # A distribution can report no name or version (an editable or partly
+            # removed install), and sorting compares those against strings.
             "dependencies": sorted(
-                (distribution.metadata["Name"], distribution.version) for distribution in distributions()
+                ((distribution.metadata["Name"] or ""), (distribution.version or "")) for distribution in distributions()
             ),
             "policy": asdict(policy),
         }
