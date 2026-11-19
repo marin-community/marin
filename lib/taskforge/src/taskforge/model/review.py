@@ -142,10 +142,18 @@ class AdversaryFinding:
     cause: Cause | None = None
 
 
+class AdversaryStatus(StrEnum):
+    """How an adversary search ended. ``EXHAUSTED`` counts as passed: a full budget found no defect."""
+
+    REPORTED = "reported"
+    EXHAUSTED = "exhausted"
+    FAILED = "failed"
+
+
 @dataclass(frozen=True, slots=True)
 class AdversaryResult:
     name: str
-    completed: bool
+    status: AdversaryStatus
     findings: tuple[AdversaryFinding, ...]
     reasons: tuple[str, ...] = ()
 

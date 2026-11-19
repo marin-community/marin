@@ -11,6 +11,7 @@ from taskcompendium.grading_result import GradeResult, Outcome
 
 from taskforge.model.review import (
     Accept,
+    AdversaryStatus,
     BandOutcome,
     BandRules,
     Budget,
@@ -37,6 +38,16 @@ def passed(grade: GradeResult) -> bool:
     return reward >= score_max or math.isclose(reward, score_max, rel_tol=1e-9, abs_tol=1e-9)
 
 
+def exhausted_notes(result: ValidationResult) -> tuple[str, ...]:
+    """Why acceptance stands without an adversary report; never author-facing findings."""
+    return tuple(
+        f"{trial.name}: {reason}"
+        for trial in result.adversary
+        if trial.status is AdversaryStatus.EXHAUSTED
+        for reason in trial.reasons
+    )
+
+
 def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Decision:
     result = workpiece.evidence[-1]
     decision = assess(result, band)
@@ -56,9 +67,10 @@ def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Dec
             reasons = ("accepted_with: too_easy",)
             if revert:
                 reasons += ("Hardening regressed; reverted to the previously validated submission", *decision.findings)
-            return Accept(BandOutcome.TOO_EASY, reasons, revert=revert)
+            return Accept(BandOutcome.TOO_EASY, (*reasons, *exhausted_notes(result)), revert=revert)
         if decision.placement is BandOutcome.TOO_EASY and workpiece.round >= budget.max_modify_rounds:
-            return Accept(BandOutcome.TOO_EASY, ("accepted_with: too_easy", "Shared modification budget exhausted"))
+            reasons = ("accepted_with: too_easy", "Shared modification budget exhausted", *exhausted_notes(result))
+            return Accept(BandOutcome.TOO_EASY, reasons)
     return decision
 
 
@@ -82,7 +94,7 @@ def assess(result: ValidationResult, band: BandRules) -> Decision:
     unavailable += tuple(
         f"{trial.name}: {reason}"
         for trial in result.adversary
-        if not trial.completed
+        if trial.status is AdversaryStatus.FAILED
         for reason in trial.reasons or ("Adversary search is incomplete (reason unavailable)",)
     )
     if unavailable:
@@ -115,7 +127,7 @@ def assess(result: ValidationResult, band: BandRules) -> Decision:
     )
     place = band.place(solved / len(result.solver))
     if place is BandOutcome.IN_BAND and place in band.accepted:
-        return Accept(place)
+        return Accept(place, exhausted_notes(result))
     finding = f"{solved} of {len(result.solver)} trials solved: {place}"
     if place is BandOutcome.TOO_EASY:
         finding += (
