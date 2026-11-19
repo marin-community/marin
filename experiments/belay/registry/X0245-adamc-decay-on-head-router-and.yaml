@@ -1,0 +1,12 @@
+id: X0245
+slug: adamc-decay-on-head-router-and
+name: AdamC decay on head, router and embeddings
+category: Optimizers
+summary: 🤖 Posted on behalf of @armorfaye.
+source: intake
+status: approved
+track: speedrun
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-6998574819
+  author: armorfaye
+  approved_by: armorfaye (trusted)
