@@ -21,7 +21,7 @@ from skyrl_gym.answer_tasks import grade_gsm8k
 from skyrl_gym.task_sessions import AnswerTaskSession
 
 from cloud.iris.tests.launch_config_fixtures import raw_launch_config
-from finestore.rl.run_records import read_attempt, read_attempt_metrics
+from finestore.rl.run_records import read_attempt, read_attempt_metrics, read_evaluations
 from cloud.iris import launch, skyrl_entrypoint, task_runtime, training_driver
 from cloud.iris.launch_config import LaunchTopology, load_launch_config, validate_launch_config
 from cloud.iris.role_plan import derive_num_nodes, derive_role_plan
@@ -36,6 +36,9 @@ from skyrl_train.callbacks.base import TrainerControl, TrainerState
 from skyrl_train.callbacks.builtin import HFModelSaveCallback, create_default_callbacks
 from skyrl_train.distributed.step_policy import NonfiniteStepPolicy, nonfinite_step_policy
 from skyrl_train.dataset.tasks import source_row_task
+from skyrl_train.evaluate import _EvaluationRollouts, _persist_evaluation
+from skyrl_train.task_inputs import TrajectoryMetadata
+from taskcompendium.grading_result import Outcome
 from marinskyrl.runtime_options import reference_model_required
 from marinskyrl.inference_placement import validate_expert_block_transport
 from skyrl_train.config.utils import get_default_config
@@ -549,11 +552,17 @@ def test_qwen_smoke_hugging_face_model_input_reaches_the_runner_without_a_model_
 
 
 @pytest.mark.parametrize(
-    ("entrypoint", "own_tokenizer", "records_enabled"),
-    [("standard", False, True), ("generate", False, True), ("standard", True, True), ("generate", False, False)],
+    ("entrypoint", "own_tokenizer", "records_enabled", "resume"),
+    [
+        ("standard", False, True, False),
+        ("generate", False, True, False),
+        ("standard", True, True, False),
+        ("generate", False, False, False),
+        ("standard", False, True, True),
+    ],
 )
 def test_forwarded_launch_metadata_reaches_attempt_startup_record(
-    tmp_path: Path, monkeypatch, entrypoint, own_tokenizer, records_enabled
+    tmp_path: Path, monkeypatch, entrypoint, own_tokenizer, records_enabled, resume
 ) -> None:
     destination = tmp_path / "launch.yaml"
     document = raw_launch_config()
@@ -561,11 +570,16 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(
     document["run"]["model"] = "test-policy"
     if own_tokenizer:
         document["inputs"]["model"].update(tokenizer_uri=None, tokenizer_revision=None)
+    if resume:
+        document["inputs"]["starting_checkpoint"] = {
+            "uri": "s3://seed/checkpoints/global_step_2",
+            "identity": "checkpoints/seed/resume/step-2@2026.11.13:abc",
+        }
     document["iris"]["max_retries"] = 0
     backends = ["console"]
     if records_enabled:
         backends.append("records")
-        if entrypoint == "generate":
+        if entrypoint == "generate" or resume:
             backends.append("wandb")
     document["skyrl"]["trainer"]["logger"] = backends
     document["skyrl"]["entrypoint"] = entrypoint
@@ -609,6 +623,12 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(
                     with pytest.raises(ValueError, match="active execution|reserved for metric provenance"):
                         tracker.log(invalid, step=9)
             tracker.log({"startup/ready": 1}, step=0)
+            if resume:
+                batch = {"task_ids": ["task"], "response_ids": [[1]], "rewards": [1.0], "task_outcomes": [Outcome.GRADED]}
+                rollouts = _EvaluationRollouts(
+                    batch, ["answer"], [TrajectoryMetadata("task", "fixture")], [0], [], batch
+                )
+                _persist_evaluation(config, 3, None, rollouts, export_root)
 
     monkeypatch.setattr(skyrl_entrypoint, "get_job_info", lambda: SimpleNamespace(job_id="/tests/bootstrap-trainer"))
 
@@ -661,6 +681,14 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(
         assert [(run["id"], run["group"], run["resume"]) for run in wandb_runs] == [("attempt-1", "smoke", "allow")]
         assert wandb_runs[0]["tags"] == ["test-policy"]
         assert wandb_runs[0]["config"]["model"] == "test-policy"
+    if resume:
+        (evaluation,) = read_evaluations(export_root, attempt_id="attempt-1", evaluation="eval/")
+        for field, expected in (
+            ("model_source_identity", document["inputs"]["model"]["identity"]),
+            ("starting_checkpoint_identity", document["inputs"]["starting_checkpoint"]["identity"]),
+        ):
+            assert getattr(evaluation, field) == expected
+            assert wandb_runs[0]["config"]["runtime"][field] == expected
 
 
 def test_evaluation_metric_names_survive_iris_path_resolution(tmp_path: Path) -> None:

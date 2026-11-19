@@ -65,12 +65,8 @@ from experiments.post_training.rl_command import (
     attempt_grafana_url,
     grafana_url,
 )
-from experiments.post_training.rl_scoring import (
-    GATE_INPUTS_FILENAME,
-    GateInputs,
-    evaluation_status,
-    read_recorded_launch,
-)
+from experiments.post_training.rl_recipe import GATE_INPUTS_FILENAME, GateInputs
+from experiments.post_training.rl_scoring import evaluation_status, read_recorded_launch
 from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME
 
 _WANDB_ENTITY_ENV = "WANDB_ENTITY"
@@ -193,6 +189,9 @@ def build_run(
             raise click.BadParameter("the initial model must build under the RL layout's storage prefix")
         if preset.gated and not step_is_built(init.step.lower()):
             raise click.BadParameter("gated presets require an initial model that is already built")
+    if resume is not None and resume.model is not None:
+        initializer = resume.model
+        init = recipe.model_from_reference(initializer)
     spec = recipe.run_spec(
         preset, name="rl-config", tasks=tasks, init=init, resume=resume, settings=settings, model_name=table.model
     )
@@ -209,7 +208,7 @@ def build_run(
         "evaluations": sorted(evaluation_inputs),
     }
     if resume is not None:
-        changes["resume"] = resume.model_dump(mode="json")
+        changes["resume"] = resume.model_dump(mode="json", exclude_none=True)
     rl_gate.validate_requirements(preset, requirements, table=table, control=control)
     provenance = _provenance(control=control)
     inputs_hash = fingerprint_hash(json.dumps(changes, sort_keys=True, default=str))
@@ -353,15 +352,21 @@ def _status(
                 "iris_job_id": crashed["iris_job_id"],
             }
     preset = preset.with_updates(planned[0]["skyrl"]["trainer"]["max_steps"])
+    launch_inputs = planned[0]["inputs"]
     return {
         "preset": preset.name,
         "code": asdict(Provenance.capture(recipe.REPO_ROOT)),
         "inputs": {
-            "model": planned[0]["inputs"]["model"]["identity"],
+            "model": launch_inputs["model"]["identity"],
             **{
-                name: [source["identity"] for source in planned[0]["inputs"][name]]
+                name: [source["identity"] for source in launch_inputs[name]]
                 for name in ("train_data", "validation_data")
             },
+            **(
+                {"starting_checkpoint": launch_inputs["starting_checkpoint"]["identity"]}
+                if "starting_checkpoint" in launch_inputs
+                else {}
+            ),
         },
         "context_budget": planned[0]["skyrl"]["context_budget"],
         "updates": preset.recipe.layout.workload.update_count(preset.updates),
@@ -573,7 +578,8 @@ def command(
         "--resume",
         "resume_name",
         metavar="NAME@VERSION",
-        help="Continue from a finished run's native checkpoint within the source run's retention period.",
+        help="Continue from a finished run's native checkpoint within its retention period, "
+        "using that run's starting model.",
     )
     @click.option(
         "--control",
@@ -620,11 +626,10 @@ def command(
             requirements=requirements,
             issue=issue,
         )
+        assert run.inputs is not None
         if not do_run:
-            assert run.inputs is not None
             rl_gate.validate_plan(preset, run.inputs)
         elif get_job_info() is None:
-            assert run.inputs is not None
             validated = rl_gate.validate_candidate(
                 preset,
                 run.inputs,
@@ -634,8 +639,7 @@ def command(
             click.get_current_context().meta["rl_training_type"] = validated["runtime"]["training_type"]
         model = preset.model
         if (
-            init is None
-            and init_name is None
+            run.inputs.init is None
             and isinstance(model, ArtifactHfModel)
             and model.step.adopt_source is not None
             and model.tokenizer_uri is None

@@ -14,7 +14,7 @@ import yaml
 from click.testing import CliRunner
 from iris.cluster.types import JobName
 from marin.execution.artifact import Artifact
-from marin.execution.lazy import OUT, ArtifactStep, apply, materialized_config
+from marin.execution.lazy import OUT, ArtifactStep, apply, artifact_identity, materialized_config
 from marin.rl.skyrl import ArtifactHfModel, IrisSkyRLExecution
 from marin.rl.skyrl_records import RESOLVED_LAUNCH_FILENAME
 from skyrlrecipe import RecipePatch
@@ -23,7 +23,8 @@ from skyrlrecipe.documents import set_path
 from experiments.post_training import rl, rl_gate, rl_recipe
 from experiments.post_training.mochi_rl import MOCHI
 from experiments.post_training.rl_presets import BatchMix
-from experiments.post_training.rl_tests.fixtures import SELECTION_IDENTITY
+from experiments.post_training.rl_recipe import GATE_INPUTS_FILENAME, GateInputs, read_gate_inputs
+from experiments.post_training.rl_tests.fixtures import SELECTION_IDENTITY, write_published_artifact
 from experiments.post_training.skyrl_test_support import assert_revisioned_native_configs
 from experiments.post_training.snowball_rl import SNOWBALL
 from experiments.post_training.snowball_sft import MIXTURE_262K_32NODE
@@ -252,8 +253,71 @@ def test_resume_pins_the_native_checkpoint(selection, tmp_path, stored_checkpoin
     args = ("--preset", preset.name, "--version", preset.revision, "--resume", "checkpoints/previous@2026.11.19.1")
     planned = CliRunner().invoke(rl.command(SNOWBALL, argv=args), args)
     assert planned.exit_code == 0 and "-resume-step-4" in planned.output, (planned.output, planned.exception)
+    assert f"  model: {artifact_identity(preset.model.step)}\n" in planned.output
     with pytest.raises(click.BadParameter, match="cannot be combined with --init"):
         rl.build_run(preset, table=SNOWBALL, resume=resume, init=preset.model)
+
+
+@pytest.mark.parametrize("table", ("snowball", "mochi"), indirect=True)
+def test_resume_inherits_the_source_runs_initializer(selection, table, tmp_path, monkeypatch):
+    preset = table.by_name["train-long"]
+    model_name = "models/alternative"
+    model_uri = "gs://fixture-models/alternative"
+    tokenizer = {"tokenizer_uri": "gs://fixture-models/tokenizer", "tokenizer_revision": "tokenizer-pin"}
+    write_published_artifact(tmp_path, model_name, preset.revision, Artifact, source=model_uri, config=tokenizer)
+    monkeypatch.setattr("marin.rl.skyrl.discover_hf_checkpoints", lambda path: [f"{path}/hf"])
+    monkeypatch.setattr(rl, "run_skyrl", lambda _config, **_kwargs: None)
+    runner = CliRunner()
+    runs = []
+
+    def collect(model):
+        runs.append(model.step)
+        return ()
+
+    args = ("--preset", preset.name, "--version", preset.revision, "--plan")
+    start_args = (*args, "--init", f"{model_name}@{preset.revision}")
+    started = runner.invoke(rl.command(table, argv=start_args, then=collect), start_args)
+    assert started.exit_code == 0, (started.output, started.exception)
+    (source,) = runs
+    source_config = materialized_config(source, str(tmp_path))
+    source.run(source_config)
+    launch_file = Path(source_config.output.resolved_config_uri)
+    source_launch = yaml.safe_load(source_config.launch_config_yaml)
+    source_model = source_launch["inputs"]["model"]
+    assert source_model["uri"] == f"{model_uri}/hf"
+    checkpoint_root = tmp_path / "checkpoints-from-source"
+    checkpoint = checkpoint_root / "global_step_4"
+    checkpoint.mkdir(parents=True)
+    (checkpoint / "trainer_state.pt").write_bytes(b"trainer checkpoint")
+    (checkpoint_root / "latest_ckpt_global_step.txt").write_text("4")
+    source_launch["artifacts"]["checkpoint_root"] = str(checkpoint_root)
+    launch_file.write_text(yaml.safe_dump({"config": source_launch}))
+
+    resume_args = (*args, "--resume", f"{source.name}@{source.version}")
+    planned = runner.invoke(rl.command(table, argv=resume_args, then=collect), resume_args)
+    assert planned.exit_code == 0, (planned.output, planned.exception)
+    assert f"  model: {source_model['identity']}\n" in planned.output
+    assert f"  starting_checkpoint: {source.name}/resume/step-4@{source.version}:" in planned.output
+    _, resumed = runs
+    resumed_config = materialized_config(resumed, str(tmp_path))
+    assert yaml.safe_load(resumed_config.launch_config_yaml)["inputs"]["model"] == source_model
+    resumed.run(resumed_config)
+    inputs = read_gate_inputs(str(Path(resumed_config.output.resolved_config_uri).parent))
+    assert inputs.init.model_dump(include=set(tokenizer)) == tokenizer
+    assert (inputs.resume.artifact_name, inputs.resume.artifact_version, inputs.resume.step) == (
+        source.name,
+        source.version,
+        4,
+    )
+
+    if table is SNOWBALL:
+        # Compare the run name for the same source and step with a default-model launch.
+        source_model["identity"] = artifact_identity(preset.model.step)
+        launch_file.write_text(yaml.safe_dump({"config": source_launch}))
+        (launch_file.parent / GATE_INPUTS_FILENAME).write_text(GateInputs(preset_name=preset.name).model_dump_json())
+        default = runner.invoke(rl.command(table, argv=resume_args, then=collect), resume_args)
+        assert default.exit_code == 0, (default.output, default.exception)
+        assert runs[-1].name != resumed.name
 
 
 @pytest.mark.parametrize("resume", (False, True), ids=("fresh", "resume"))
@@ -269,6 +333,8 @@ def test_mochi_plan_refuses_an_incomplete_default_export(selection, tmp_path, st
     args = ("--preset", preset.name, "--version", preset.revision, "--plan")
     if resume:
         (stored_checkpoint / "trainer_state.pt").write_bytes(b"trainer checkpoint")
+        source = tmp_path / "checkpoints" / "previous" / "2026.11.19.1"
+        (source / GATE_INPUTS_FILENAME).write_text(GateInputs(preset_name=preset.name).model_dump_json())
         args += ("--resume", "checkpoints/previous@2026.11.19.1")
     result = CliRunner().invoke(rl.command(table, argv=args), args)
     assert result.exit_code == 4, (result.output, result.exception)

@@ -464,3 +464,4 @@ class StoredResume(BaseModel, frozen=True):
     artifact_version: str
     step: PositiveInt
     checkpoint: str
+    model: HfInitializer | None = None

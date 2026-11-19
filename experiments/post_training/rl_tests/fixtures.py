@@ -65,7 +65,7 @@ from experiments.post_training import rl_gate as gate
 from experiments.post_training import rl_presets as presets
 from experiments.post_training import rl_recipe as recipe
 from experiments.post_training import snowball_rl as snowball_model
-from experiments.post_training.rl_scoring import GATE_INPUTS_FILENAME, GateInputs
+from experiments.post_training.rl_recipe import GATE_INPUTS_FILENAME, GateInputs
 from experiments.post_training.skyrl_test_support import (
     selection_summary,
     with_current_control_revisions,

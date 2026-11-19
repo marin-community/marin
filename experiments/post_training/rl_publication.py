@@ -24,11 +24,10 @@ from experiments.post_training import rl_gate as gate
 from experiments.post_training import rl_presets as presets
 from experiments.post_training import rl_recipe as recipe
 from experiments.post_training.rl_command import attempt_grafana_url
+from experiments.post_training.rl_recipe import GateInputs, read_gate_inputs
 from experiments.post_training.rl_scoring import (
-    GateInputs,
     InvalidComparison,
     evaluation_status,
-    read_gate_inputs,
     training_invariants,
 )
 

@@ -20,7 +20,7 @@ from finestore.schema import arrow_schema
 from iris.rpc import job_pb2
 from marin.execution.artifact import Artifact, is_mutable_version, read_record, result_type_name, validate_path_segment
 from marin.execution.fingerprint import fingerprint_hash
-from marin.execution.lazy import OUT, ArtifactStep, apply
+from marin.execution.lazy import OUT, ArtifactStep, apply, artifact_identity
 from marin.rl.skyrl import (
     IRIS_HUB_CLUSTER_CONFIG,
     ArtifactDataSource,
@@ -35,6 +35,7 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from marin.rl.skyrl_records import RESOLVED_LAUNCH_FILENAME, read_skyrl_launch_config
+from pydantic import BaseModel
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
@@ -58,6 +59,21 @@ from experiments.post_training.task_curation.selection import (
 
 REPO_ROOT = find_project_root(Path(__file__))
 SELECTION_ROOT = str(StoragePath(CANONICAL_ARTIFACT_ROOT) / SELECTION_PREFIX)
+GATE_INPUTS_FILENAME = "gate_inputs.json"
+
+
+class GateInputs(BaseModel, frozen=True):
+    preset_name: str
+    settings: tuple[str, ...] = ()
+    tasks: str | None = None
+    init: StoredInitializer | None = None
+    resume: presets.StoredResume | None = None
+    requirements: tuple[str, ...] = ()
+
+
+def read_gate_inputs(run_output: str) -> GateInputs:
+    """Read the typed RL inputs saved beside a native launch receipt."""
+    return GateInputs.model_validate_json((StoragePath(run_output) / GATE_INPUTS_FILENAME).read_text())
 
 
 def override_document(settings: tuple[str, ...]) -> dict:
@@ -263,7 +279,7 @@ def published_model(value: str, *, preset: Preset) -> SkyRLModelSource:
 
 
 def published_checkpoint(value: str, *, preset: Preset) -> presets.StoredResume:
-    """Pin the latest committed native checkpoint of a finished run."""
+    """Pin the latest committed native checkpoint and its starting model."""
     name, separator, version = value.rpartition("@")
     if not name or not separator or is_mutable_version(version):
         raise click.BadParameter("use NAME@VERSION with an immutable run version")
@@ -272,20 +288,45 @@ def published_checkpoint(value: str, *, preset: Preset) -> presets.StoredResume:
         validate_path_segment("version", version)
     except ValueError as error:
         raise click.BadParameter(str(error)) from error
+    output = run_path(preset.recipe.layout.cluster, name, version)
     try:
-        config = read_skyrl_launch_config(run_path(preset.recipe.layout.cluster, name, version))
+        config = read_skyrl_launch_config(output)
         root = StoragePath(config["artifacts"]["checkpoint_root"])
         step = int((root / "latest_ckpt_global_step.txt").read_text().strip())
         checkpoint = root / f"global_step_{step}"
-        if step > 0 and (checkpoint / "trainer_state.pt").exists():
-            return presets.StoredResume(
-                artifact_name=name, artifact_version=version, step=step, checkpoint=str(checkpoint)
-            )
+        committed = step > 0 and (checkpoint / "trainer_state.pt").exists()
     except (FileNotFoundError, KeyError, ValueError):
-        pass
-    raise click.BadParameter(
-        f"no committed native checkpoint for {name}@{version}. "
-        "Checkpoint availability follows the source run's retention period."
+        committed = False
+    if not committed:
+        raise click.BadParameter(
+            f"no committed native checkpoint for {name}@{version}. "
+            "Checkpoint availability follows the source run's retention period."
+        )
+    recorded = config.get("inputs", {}).get("model", {})
+    recorded_identity = recorded.get("identity")
+    try:
+        initializer = read_gate_inputs(output).init
+    except FileNotFoundError:
+        if recorded_identity is not None and recorded_identity != artifact_identity(preset.model.step):
+            raise click.BadParameter(f"{value} has a non-default starting model and no saved initializer") from None
+        initializer = None
+    model = None
+    if initializer is not None:
+        identity = f"{initializer.artifact_name}@{initializer.artifact_version}:"
+        identity += fingerprint_hash(initializer.fingerprint_payload)
+        if recorded_identity != identity:
+            raise click.BadParameter(f"{value} has a starting model that differs from its saved initializer")
+        model = HfInitializer(
+            artifact_name=initializer.artifact_name,
+            artifact_version=initializer.artifact_version,
+            artifact_root=recorded["uri"],
+            fingerprint_payload=initializer.fingerprint_payload,
+            relative_path="",
+            tokenizer_uri=recorded.get("tokenizer_uri"),
+            tokenizer_revision=recorded.get("tokenizer_revision"),
+        )
+    return presets.StoredResume(
+        artifact_name=name, artifact_version=version, step=step, checkpoint=str(checkpoint), model=model
     )
 
 
