@@ -101,7 +101,7 @@ def reference(path):
     return ManifestReference(uri=str(path), sha256=file_sha256(StoragePath(str(path))))
 
 
-def public_source(root, declaration, *, public="same-public-instruction", task_hash="old-task"):
+def public_source(root, declaration, *, public="same-public-instruction", task_hash="old-task", task_id="same-id"):
     root.mkdir()
     manifest = {
         "intended_use": "train",
@@ -115,7 +115,7 @@ def public_source(root, declaration, *, public="same-public-instruction", task_h
     row = TaskSemanticInput(
         source_id=declaration.id,
         source_key=source_key,
-        task_id="same-id",
+        task_id=task_id,
         task_hash=task_hash,
         content_hash=canonical_sha256(public),
         intended_use="train",
@@ -298,10 +298,12 @@ def archived(tmp_path):
     return release, declarations, rows, manifests
 
 
-def test_projection_rebinds_only_provenance_and_rebuilds_selected_samples(tmp_path, archived):
+@pytest.mark.parametrize("task_id", ["same-id", "current-task-id"])
+def test_projection_rebinds_only_provenance_and_rebuilds_selected_samples(tmp_path, archived, task_id):
     archive, declarations, original_rows, manifests = archived
     changed = declaration("Marin:rebound", "2")
-    new_source, _ = public_source(tmp_path / "repaired", changed, task_hash="repaired-task")
+    replacement_hash = "repaired-task"
+    new_source, _ = public_source(tmp_path / "repaired", changed, task_hash=replacement_hash, task_id=task_id)
     replacement = SourceReplacement(
         source_id=changed.id,
         source_manifest=reference(tmp_path / "repaired/manifest.json"),
@@ -365,7 +367,7 @@ def test_projection_rebinds_only_provenance_and_rebuilds_selected_samples(tmp_pa
     coverage = CurriculumCoverage.model_validate_json((projected_root / "coverage.json").read_text())
     projected = [row for path in release.paths for row in load_parquet(path)]
     expected = [dict(row) for row in original_rows[:2]]
-    expected[1].update(source_key=new_source.source_key, task_hash="repaired-task")
+    expected[1].update(source_key=new_source.source_key, task_hash=replacement_hash, task_id=task_id)
     assert projected == expected
     assert release.task_count == coverage.task_count == 2
     assert [row.id for row in release.inventory] == [row.id for row in current]
@@ -381,6 +383,18 @@ def test_projection_rebinds_only_provenance_and_rebuilds_selected_samples(tmp_pa
     }
     assert release.lineage["task_vectors_root"] == "unchanged-vectors"
     assert (tmp_path / "archive-assignments.parquet").read_bytes() == saved
+    receipt = json.loads((projected_root / "projection-receipt.json").read_text())
+    mapping = receipt["rebound_sources"][0]["task_identity_mapping"]
+    assert file_sha256(StoragePath(mapping["uri"])) == mapping["sha256"]
+    assert pq.read_table(mapping["uri"]).to_pylist() == [
+        {
+            "old_task_id": "same-id",
+            "new_task_id": task_id,
+            "old_task_sha256": "old-task",
+            "new_task_sha256": replacement_hash,
+            "public_content_sha256": canonical_sha256("same-public-instruction"),
+        }
+    ]
 
 
 def test_changed_pin_requires_rebinding_and_changed_public_content_rejects_reuse(tmp_path, archived):
@@ -402,6 +416,61 @@ def test_changed_pin_requires_rebinding_and_changed_public_content_rejects_reuse
     )
     with pytest.raises(ValueError, match="Public task content changed"):
         task_rebinding(archive.sources[1], replacement)
+
+
+def test_changed_task_ids_require_full_public_input_equality_even_with_matching_hashes(tmp_path, archived):
+    archive, _, _, _ = archived
+    changed = declaration("Marin:rebound", "2")
+    public_source(tmp_path / "repaired", changed, task_id="new-task-id", task_hash="new-task")
+    path = tmp_path / "repaired/tasks.parquet"
+    rows = pq.read_table(path).to_pylist()
+    rows[0]["public_input"] = "different public instructions behind the same claimed hash"
+    pq.write_table(pa.Table.from_pylist(rows, schema=arrow_schema(TaskSemanticInput)), path)
+    replacement = SourceReplacement(
+        source_id=changed.id,
+        source_manifest=reference(tmp_path / "repaired/manifest.json"),
+        public_inputs=reference(tmp_path / "repaired/public-inputs.json"),
+    )
+    with pytest.raises(ValueError):
+        task_rebinding(archive.sources[1], replacement)
+
+
+def test_changed_task_ids_with_ambiguous_public_inputs_refuse_score_reuse(tmp_path, archived):
+    archive, _, _, _ = archived
+    changed = declaration("Marin:rebound", "2")
+    public_source(tmp_path / "repaired", changed, task_id="new-task-id", task_hash="new-task")
+    for root, second_id in (
+        (Path(archive.sources[1].curation_root), "old-second"),
+        (tmp_path / "repaired", "new-second"),
+    ):
+        manifest_path = root / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["input_rows"] = manifest["converted_rows"] = 2
+        manifest_path.write_text(json.dumps(manifest))
+        source_key = canonical_sha256(manifest)
+        rows = pq.read_table(root / "tasks.parquet").to_pylist()
+        rows[0]["source_key"] = source_key
+        rows.append({**rows[0], "task_id": second_id})
+        pq.write_table(pa.Table.from_pylist(rows, schema=arrow_schema(TaskSemanticInput)), root / "tasks.parquet")
+        public_path = root / "public-inputs.json"
+        public = json.loads(public_path.read_text())
+        public["source_key"] = source_key
+        public_path.write_text(json.dumps(public))
+    original = archive.sources[1].model_copy(
+        update={
+            "source_key": canonical_sha256(
+                json.loads((Path(archive.sources[1].curation_root) / "manifest.json").read_text())
+            ),
+            "task_count": 2,
+        }
+    )
+    replacement = SourceReplacement(
+        source_id=changed.id,
+        source_manifest=reference(tmp_path / "repaired/manifest.json"),
+        public_inputs=reference(tmp_path / "repaired/public-inputs.json"),
+    )
+    with pytest.raises(ValueError):
+        task_rebinding(original, replacement)
 
 
 def test_projection_cannot_silently_drop_a_live_source_or_restore_a_retired_source(archived):

@@ -440,22 +440,28 @@ def publication_preflight(
 
 
 def atlas_curriculum_rows() -> dict[str, dict]:
-    """The served curriculum rows from the live atlas applet (the current release)."""
+    """Read the consumed pin fields in bounded pages from one selected curriculum load."""
     query = atlas_applet_query()
-    rows: list[dict] = []
-    after = ""
+    selected = query("SELECT load_id FROM curriculum_current WHERE name='latest'", {})["rows"]
+    if not selected:
+        return {}
+    load_id = selected[0]["load_id"]
+    rows = {}
+    cursor = ""
     while True:
         page = query(
-            "SELECT source_id, declaration, alignment IS NOT NULL AS has_alignment FROM curriculum_sources "
-            "WHERE load_id=(SELECT load_id FROM curriculum_current WHERE name='latest') "
-            "AND source_id > :after ORDER BY source_id LIMIT :batch",
-            {"after": after, "batch": APPLET_PAGE_SIZE},
+            "SELECT source_id, jsonb_build_object("
+            "'dataset_id', declaration->'dataset_id', "
+            "'dataset_revision', declaration->'dataset_revision', "
+            "'pipeline', declaration->'pipeline') AS declaration, "
+            "alignment IS NOT NULL AS has_alignment FROM curriculum_sources "
+            "WHERE load_id=:load_id AND source_id>:cursor ORDER BY source_id LIMIT :limit",
+            {"load_id": load_id, "cursor": cursor, "limit": DECLARATION_PIN_PAGE_SIZE},
         )["rows"]
-        rows.extend(page)
-        if len(page) < APPLET_PAGE_SIZE:
-            break
-        after = page[-1]["source_id"]
-    return {row["source_id"]: row for row in rows}
+        rows.update((row["source_id"], row) for row in page)
+        if len(page) < DECLARATION_PIN_PAGE_SIZE:
+            return rows
+        cursor = page[-1]["source_id"]
 
 
 def atlas_contract_receipts() -> dict[str, list[DerivedContractReceipt]]:
