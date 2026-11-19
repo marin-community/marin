@@ -4,7 +4,7 @@ name: MuonC with 25x stronger decay
 category: Optimizers
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: done
+status: running
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6995649952
@@ -31,3 +31,15 @@ trials:
   steps: 3030
   baseline: belay-X0244-control 3.0460 (same commit, seed 0)
   step_time_change: -1%
+- id: t002
+  variant: MuonC, lambda = 25 * lr_max / 2
+  rung: speedrun
+  protocol: fixed_time
+  batch: X0244
+  date: '2026-11-19'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0244
+  wandb: []
+  settings:
+    muonc_decay_mult: '12.5'
+  commit: 4d0d620f2d
+  priority: interactive
