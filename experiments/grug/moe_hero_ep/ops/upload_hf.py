@@ -22,6 +22,9 @@ import draccus
 from huggingface_hub import CommitInfo, CommitOperationAdd, HfApi, RepoFile, hf_hub_download, snapshot_download
 from huggingface_hub.errors import HfHubHTTPError
 from levanter.compat.hf_export import HFShardRecord
+from levanter.compat.hf_generation_config import export_generation_config, write_generation_config
+from levanter.tokenizers import load_tokenizer
+from marin.inference.generation_config import MARIN_GENERATION_CONFIG_DEFAULTS
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
@@ -461,6 +464,15 @@ def _complete_upload(
         token=api.token,
         local_dir=metadata,
         allow_patterns=["tokenizer*", "special_tokens_map.json", "added_tokens.json", "chat_template*"],
+    )
+    tokenizer = load_tokenizer(str(metadata))
+    write_generation_config(
+        str(metadata),
+        export_generation_config(
+            tokenizer,
+            chat_template=tokenizer.chat_template,
+            sampling_defaults=MARIN_GENERATION_CONFIG_DEFAULTS,
+        ),
     )
     (metadata / "README.md").write_bytes(card)
     (metadata / "LICENSE").write_bytes(license_text)

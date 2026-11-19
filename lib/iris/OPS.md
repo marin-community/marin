@@ -120,20 +120,20 @@ Kubernetes rejects `EXISTING_JOB_POLICY_RECREATE` for an active job. Cancel it
 and verify its Pods are gone before submitting the replacement; a terminal job
 state alone does not prove process death.
 
-To list root jobs active for more than a week, with owner and the resources
-their active tasks hold, run the report that the `old-iris-jobs` Loom watch
-posts to Slack:
+The `old-iris-jobs` Loom watch lists root jobs active for more than a week in a
+Google Sheet, with owner and the resources their active tasks hold, and cancels
+the jobs that owners mark `Kill` there (see the
+[watch description](../../infra/loom/README.md#scheduled-watches)). To print the
+rows of the next run without a change to the sheet or to a job:
 
 ```bash
-WORK=$(mktemp -d)
 uv run python scripts/ops/old_iris_jobs.py --min-age-days 7 --cluster marin \
-  --state $WORK/state.json --messages-dir $WORK/messages
-cat $WORK/messages/*
+  --sheet-id <sheet-id> --impersonate <service-account-with-sheet-access> --dry-run
 ```
 
 The `marin` hub covers the jobs it federates. For jobs submitted directly to a
 CoreWeave controller, use `--cluster <cw-cluster>`; this needs CoreWeave
-kubeconfig access. The script omits the jobs that the `--state` file names.
+kubeconfig access.
 
 ### Submitting a GPU gang from a workstation
 
