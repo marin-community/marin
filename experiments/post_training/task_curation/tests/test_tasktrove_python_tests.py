@@ -89,7 +89,7 @@ def test_real_dcagent_row_grades_in_its_workspace_image(dcagent_row):
     # lock rides as a worker resource), and the grader lock's install appends after it.
     assert actor.setup_commands == (
         "mkdir -p /app",
-        f"python3 -m pip install --no-cache-dir --require-hashes -r /{python_tests.ACTOR_LOCK_RESOURCE}",
+        python_tests.LOCK_INSTALL.format(lock=f"/{python_tests.ACTOR_LOCK_RESOURCE}"),
     )
     assert grader.setup_commands == (*actor.setup_commands, grader.setup_commands[-1])
     grader_path = python_tests.GRADER_LOCK_RESOURCE

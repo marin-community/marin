@@ -199,7 +199,9 @@ GRADER_LOCK_RESOURCE = f"{LOCK_RESOURCE_PREFIX}/grader.lock"
 task resources: the actor lock rides as a worker resource (both machines replay the actor setup)
 and the grader lock as a verifier resource (grader only)."""
 
-LOCK_INSTALL = "python3 -m pip install --no-cache-dir --require-hashes -r {lock}"
+LOCK_INSTALL = "python3 -m pip install --no-cache-dir --break-system-packages --require-hashes -r {lock}"
+"""--break-system-packages rides unconditionally: the Stack Overflow apt base marks its
+interpreter externally managed (PEP 668) and every other pinned base accepts the flag."""
 
 
 def _lock_resource(path: Path, resource_path: str) -> TaskResource:
