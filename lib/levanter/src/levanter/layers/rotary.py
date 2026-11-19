@@ -269,3 +269,45 @@ class YarnRotaryEmbeddingsConfig(RotaryEmbeddingsConfig):
 
 
 RotaryEmbeddingsConfig.register_subclass("yarn", YarnRotaryEmbeddingsConfig)
+
+
+class PartialRotaryEmbeddings(RotaryEmbeddings):
+    """Rotates the leading slice of each head and passes the remaining dimensions through."""
+
+    HeadDim: Axis = eqx.field(static=True)
+    rotated: DefaultRotaryEmbeddings
+
+    def __call__(self, q: NamedArray, position_ids: NamedArray) -> NamedArray:
+        rotated_size = self.rotated.HeadDim.size
+        rotated = self.rotated(q[self.HeadDim, :rotated_size], position_ids)
+        return hax.concatenate(self.HeadDim, (rotated, q[self.HeadDim, rotated_size:]))
+
+
+@dataclass(frozen=True)
+class PartialRotaryEmbeddingsConfig(RotaryEmbeddingsConfig):
+    """RoPE over the first `partial_rotary_factor` of each head, as in Qwen3.5 and Qwen3.6."""
+
+    theta: float = 10_000_000
+    partial_rotary_factor: float = 0.25
+
+    def build(self, HeadSize: Axis) -> RotaryEmbeddings:
+        rotated_size = int(HeadSize.size * self.partial_rotary_factor)
+        if rotated_size <= 0 or rotated_size % 2 != 0:
+            raise ValueError(
+                f"partial_rotary_factor={self.partial_rotary_factor} rotates {rotated_size} of {HeadSize.size} "
+                "head dimensions; the rotated size must be positive and even."
+            )
+        inner = DefaultRotaryEmbeddings(HeadSize.resize(rotated_size), DefaultRotaryEmbeddingsConfig(theta=self.theta))
+        return PartialRotaryEmbeddings(HeadSize, inner)
+
+    @classmethod
+    def make_from_hf_config(cls, rope_theta: float, config: dict) -> "RotaryEmbeddingsConfig":
+        return PartialRotaryEmbeddingsConfig(
+            theta=rope_theta, partial_rotary_factor=config.get("partial_rotary_factor", 1.0)
+        )
+
+    def to_hf_config(self) -> tuple[float, dict | None]:
+        return self.theta, {"rope_type": "default", "partial_rotary_factor": self.partial_rotary_factor}
+
+
+RotaryEmbeddingsConfig.register_subclass("partial", PartialRotaryEmbeddingsConfig)
