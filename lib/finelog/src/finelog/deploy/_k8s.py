@@ -147,7 +147,7 @@ def _build_env_secret_manifest(cfg: FinelogConfig) -> str | None:
     return json.dumps(manifest)
 
 
-def _kube_flags(cfg: FinelogConfig) -> list[str]:
+def kube_flags(cfg: FinelogConfig) -> list[str]:
     """Global kubectl flags binding this deploy to its configured kubeconfig/context.
 
     Empty when the config sets neither — kubectl then falls back to its own
@@ -171,7 +171,7 @@ def _kubectl(
     capture_output: bool = False,
 ) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["kubectl", *_kube_flags(cfg), *args],
+        ["kubectl", *kube_flags(cfg), *args],
         input=stdin,
         text=True,
         check=check,
