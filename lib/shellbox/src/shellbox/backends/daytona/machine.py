@@ -45,6 +45,7 @@ from shellbox.machine import (
     LINUX_PROCESS_CAPABILITIES,
     Backend,
     Command,
+    CommandOutputLost,
     CommandSemantics,
     ExecutionRequirements,
     ExitReason,
@@ -314,7 +315,7 @@ class DaytonaMachine:
             cwd=CONTROL_CWD,
         )
         if count.exit_code:
-            raise RuntimeError(f"Failed to measure command output: {count.result}")
+            raise CommandOutputLost(f"Failed to measure command output: {count.result}")
         match = re.search(rf"(?m)^{COUNT_PREFIX}([0-9]+) ([0-9]+)$", count.result)
         if match is None:
             raise RuntimeError(f"Invalid command output sizes: {count.result!r}")

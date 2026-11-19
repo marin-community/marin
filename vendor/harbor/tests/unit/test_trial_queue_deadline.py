@@ -16,6 +16,7 @@ from harbor.models.trial.paths import TrialPaths
 from harbor.models.trial.result import AgentInfo, ExceptionInfo, TrialResult
 from harbor.models.verifier.result import VerifierResult
 from harbor.trial.errors import (
+    AgentCommandOutputLostError,
     AgentDiskFullError,
     AgentTimeoutError,
     PhaseCancellationError,
@@ -30,6 +31,7 @@ from harbor.utils.artifact_writer import (
 )
 from harbor_config import ErrorCategory, error_category
 from harbor_config.errors import is_resume_retryable
+from shellbox.machine import CommandOutputLost
 
 from tests.unit.agents.terminus_2.bare_agent import make_bare_terminus2
 
@@ -191,9 +193,19 @@ def _phase_trial(cleanup_grace: float) -> PhaseTrial:
 
 
 @pytest.mark.unit
-async def test_agent_disk_exhaustion_is_a_model_failure(tmp_path: Path) -> None:
-    original = SandboxDiskFullError("no space left on device")
-
+@pytest.mark.parametrize(
+    ("original", "expected"),
+    [
+        (SandboxDiskFullError("no space left on device"), AgentDiskFullError),
+        (
+            CommandOutputLost("cannot open /tmp/.shellbox-1/out"),
+            AgentCommandOutputLostError,
+        ),
+    ],
+)
+async def test_agent_damage_to_its_sandbox_is_a_model_failure(
+    tmp_path: Path, original: Exception, expected: type[Exception]
+) -> None:
     async def run_agent(**kwargs):
         raise original
 
@@ -213,7 +225,7 @@ async def test_agent_disk_exhaustion_is_a_model_failure(tmp_path: Path) -> None:
         requires_agent_quiescence_for_verifier=False,
     )
 
-    with pytest.raises(AgentDiskFullError) as raised:
+    with pytest.raises(expected) as raised:
         await trial._run_agent_phase(
             target=trial.result,
             instruction="write a compressor",

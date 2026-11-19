@@ -7,6 +7,7 @@ import asyncio
 import json
 import math
 import os
+import re
 import shlex
 import shutil
 import signal
@@ -62,6 +63,7 @@ from shellbox.backends.docker.machine import DockerMachineFactory, docker
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import (
     Command,
+    CommandOutputLost,
     DockerImage,
     ExitReason,
     MachineSpec,
@@ -588,6 +590,34 @@ def test_daytona_output_count_ignores_provider_diagnostics(tmp_path: Path) -> No
         try:
             result = await machine.run(Command(("printf", "output"), output_limit_bytes=3))
             assert (result.exit_code, result.stdout, result.stdout_truncated) == (0, b"out", True)
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.requires_host_setsid
+def test_daytona_output_removed_by_the_guest_is_reported_as_lost(tmp_path: Path) -> None:
+    class ClearedTmpProcess(LocalProcess):
+        async def exec(self, command, **kwargs):
+            if "wc -c" in command:
+                # Stands in for a guest process (e.g. systemd starting) that clears /tmp.
+                prefix = re.search(r"/tmp/\.shellbox-[0-9a-f]+", command)
+                assert prefix is not None
+                shutil.rmtree(prefix.group(0), ignore_errors=True)
+            return await super().exec(command, **kwargs)
+
+    async def scenario():
+        client = LocalDaytona()
+        client.sandbox.process = ClearedTmpProcess()
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
+        try:
+            with pytest.raises(CommandOutputLost):
+                await machine.run(Command(("printf", "output")))
+            following = await machine.run(Command(("printf", "ready")))
+            assert (following.exit_code, following.stdout) == (0, b"ready")
         finally:
             await machine.close()
 

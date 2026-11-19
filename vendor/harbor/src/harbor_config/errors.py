@@ -106,6 +106,7 @@ _ERROR_CATEGORIES: dict[str, ErrorCategory] = {
     # --- Agent-attributable failures (reward zero) ---
     "AgentTimeoutError": ErrorCategory.AGENT,
     "AgentDiskFullError": ErrorCategory.AGENT,
+    "AgentCommandOutputLostError": ErrorCategory.AGENT,
     "ContextLengthExceededError": ErrorCategory.AGENT,
     "NonZeroAgentExitCodeError": ErrorCategory.AGENT,
     "ModelInitiatedTmuxFailure": ErrorCategory.AGENT,
