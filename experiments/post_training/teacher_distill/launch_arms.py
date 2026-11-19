@@ -91,7 +91,9 @@ def worker(config, output, settings):
     _run_grug_local(config)
 
 
-def build(template: Path, arm: str, date: str, length: str = "1h", profile_steps: int = 0):
+def build(
+    template: Path, arm: str, date: str, length: str = "1h", profile_steps: int = 0, autotune_level: int | None = None
+):
     label, alpha = ARMS[arm]
     spec = LENGTHS[length]
     run_id = f"task504-distill-{length}-{arm}-{label}-{date}" + ("-profile" if profile_steps else "")
@@ -126,6 +128,9 @@ def build(template: Path, arm: str, date: str, length: str = "1h", profile_steps
         teacher_validation_cache=f"{ROWS}/heldout",
     )
     profile = json.loads((template / "runtime-profile.json").read_text())
+    if autotune_level is not None:
+        # A fresh compile at level 0 gets untuned GEMM tiles; the template loads a cached program.
+        profile["xla_flags"]["--xla_gpu_autotune_level"] = str(autotune_level)
     _apply_hero_ep_runtime_defaults(
         inline_watch_enabled=True, processes_per_task=8, moe_implementation="sonic", remat_mode=config.model.remat_mode
     )
@@ -168,11 +173,12 @@ def main():
     parser.add_argument("--scheduling-hours", type=float, default=3.0)
     parser.add_argument("--length", choices=sorted(LENGTHS), default="1h")
     parser.add_argument("--profile-steps", type=int, default=0, help="run a short job that profiles this many steps")
+    parser.add_argument("--autotune-level", type=int, help="override the template's XLA GPU autotune level")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     os.chdir(ROOT)
     configure_coreweave_s3()
-    kwargs, plan = build(args.template, args.arm, args.date, args.length, args.profile_steps)
+    kwargs, plan = build(args.template, args.arm, args.date, args.length, args.profile_steps, args.autotune_level)
     kwargs["scheduling_timeout"] = Duration.from_seconds(args.scheduling_hours * 3600)
     print(json.dumps(plan, indent=2))
     if args.dry_run:
