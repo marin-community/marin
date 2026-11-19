@@ -26,6 +26,7 @@ from .content_access import (
     fingerprint_metadata,
     withheld_declaration_projection,
 )
+from .contract_selection import contract_registry_key
 from .count_evidence import SOURCE_COUNTS
 from .curriculum import register_curriculum_routes, source_coverage
 from .daytona import daytona
@@ -422,8 +423,11 @@ def create_api(services: AppletServices) -> FastAPI:
     register_rollout_routes(api, engine)
 
     def inventory_cache_key(connection: Connection, load_id: str) -> str:
-        """Cache identity includes SQL row versions and both content-policy registries."""
-        return f"{inventory_input_key(connection, load_id)}|{restriction_registry_key()}|{license_registry_key()}"
+        """Cache identity includes SQL row versions and the embedded projection policies."""
+        return (
+            f"{inventory_input_key(connection, load_id)}|{restriction_registry_key()}"
+            f"|{license_registry_key()}|{contract_registry_key()}"
+        )
 
     @api.get("/source-labels")
     def source_labels() -> dict[str, Any]:

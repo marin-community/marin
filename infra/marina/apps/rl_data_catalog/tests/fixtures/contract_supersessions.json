@@ -1,0 +1,430 @@
+[
+  {
+    "source_id": "Nemotron:nemotron_ultra_mopd/makeshn_ultra_v3_ipi_train",
+    "previous": {
+      "input": {
+        "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/8e4c4d11beab791fdf89/2026.11.12.4/.artifact.json",
+        "measured_tasks": 2000,
+        "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "converter_version": "3",
+        "task_specs_sha256": "36d108bcf76cf41a2633053853520cb2193759fb5b946d34b746c06ec46eab84",
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31"
+      },
+      "summary": {
+        "task_count": 2000,
+        "agentic_count": 2000,
+        "reply_only_count": 2000,
+        "single_turn_count": 0,
+        "grader_type_counts": {
+          "none": 2000
+        },
+        "judge_rubric_counts": {},
+        "judge_reference_count": 0,
+        "workspace_graded_count": 0,
+        "judge_no_reference_count": 0
+      },
+      "source_id": "Nemotron:nemotron_ultra_mopd/makeshn_ultra_v3_ipi_train",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/derived-contract/2026.11.14.1/d10b2d2aa3e0b485a550/receipt.json",
+      "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/8e4c4d11beab791fdf89/2026.11.12.2",
+      "scanned_task_specs_sha256": "36d3d5aee1c84eb4a9d5300bd002f4e41be3993aa0c4cad15594861cc0d09dc4"
+    },
+    "selected": {
+      "source_id": "Nemotron:nemotron_ultra_mopd/makeshn_ultra_v3_ipi_train",
+      "input": {
+        "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "converter_version": "3",
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "measured_tasks": 2000,
+        "task_specs_sha256": "36d108bcf76cf41a2633053853520cb2193759fb5b946d34b746c06ec46eab84",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/8e4c4d11beab791fdf89/2026.11.12.4/.artifact.json",
+        "carry_forward": null
+      },
+      "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/8e4c4d11beab791fdf89/2026.11.12.2",
+      "scanned_task_specs_sha256": "36d3d5aee1c84eb4a9d5300bd002f4e41be3993aa0c4cad15594861cc0d09dc4",
+      "summary": {
+        "task_count": 2000,
+        "grader_type_counts": {
+          "none": 2000
+        },
+        "agentic_count": 2000,
+        "single_turn_count": 2000,
+        "reply_only_count": 2000,
+        "workspace_graded_count": 0,
+        "judge_rubric_counts": {},
+        "judge_reference_count": 0,
+        "judge_no_reference_count": 0
+      },
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/derived-contract/2026.11.18.2/d10b2d2aa3e0b485a550/receipt.json"
+    }
+  },
+  {
+    "source_id": "Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/SWE-Gym/SWE-Gym",
+    "previous": {
+      "input": {
+        "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/2801eb628187b42fcb02/2026.11.12.4/.artifact.json",
+        "measured_tasks": 860,
+        "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "converter_version": "3",
+        "task_specs_sha256": "ace30cc9f93b4013f5415c58ff63d59b23cd303cc0b73860766ca688ba33c546",
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31"
+      },
+      "summary": {
+        "task_count": 860,
+        "agentic_count": 860,
+        "reply_only_count": 0,
+        "single_turn_count": 0,
+        "grader_type_counts": {
+          "none": 860
+        },
+        "judge_rubric_counts": {},
+        "judge_reference_count": 0,
+        "workspace_graded_count": 0,
+        "judge_no_reference_count": 0
+      },
+      "source_id": "Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/SWE-Gym/SWE-Gym",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/derived-contract/2026.11.14.1/449f65753d610f85f4c8/receipt.json",
+      "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/2801eb628187b42fcb02/2026.11.12.2",
+      "scanned_task_specs_sha256": "35357f593d8a76d0b22a88d939fdc9bd6011a21b0fa81ae1d38368aa7884bc18"
+    },
+    "selected": {
+      "source_id": "Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/SWE-Gym/SWE-Gym",
+      "input": {
+        "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "converter_version": "3",
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "measured_tasks": 860,
+        "task_specs_sha256": "ace30cc9f93b4013f5415c58ff63d59b23cd303cc0b73860766ca688ba33c546",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/2801eb628187b42fcb02/2026.11.12.4/.artifact.json",
+        "carry_forward": null
+      },
+      "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/2801eb628187b42fcb02/2026.11.12.2",
+      "scanned_task_specs_sha256": "35357f593d8a76d0b22a88d939fdc9bd6011a21b0fa81ae1d38368aa7884bc18",
+      "summary": {
+        "task_count": 860,
+        "grader_type_counts": {
+          "none": 860
+        },
+        "agentic_count": 860,
+        "single_turn_count": 33,
+        "reply_only_count": 0,
+        "workspace_graded_count": 0,
+        "judge_rubric_counts": {},
+        "judge_reference_count": 0,
+        "judge_no_reference_count": 0
+      },
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/derived-contract/2026.11.18.2/449f65753d610f85f4c8/receipt.json"
+    }
+  },
+  {
+    "source_id": "Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/nebius/SWE-rebench-V2",
+    "previous": {
+      "input": {
+        "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/0f5a5918ef89d504cc72/2026.11.12.4/.artifact.json",
+        "measured_tasks": 3903,
+        "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "converter_version": "3",
+        "task_specs_sha256": "c74d21b80dd1804f985f43f421302fe706d98f618646fc7494651e238b2b976f",
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31"
+      },
+      "summary": {
+        "task_count": 3903,
+        "agentic_count": 3903,
+        "reply_only_count": 0,
+        "single_turn_count": 0,
+        "grader_type_counts": {
+          "none": 3903
+        },
+        "judge_rubric_counts": {},
+        "judge_reference_count": 0,
+        "workspace_graded_count": 0,
+        "judge_no_reference_count": 0
+      },
+      "source_id": "Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/nebius/SWE-rebench-V2",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/derived-contract/2026.11.14.1/a97805d1a6ba745f1b98/receipt.json",
+      "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/0f5a5918ef89d504cc72/2026.11.12.2",
+      "scanned_task_specs_sha256": "2816b08421b21fed4bab9e91054dff6a7460ea442d14cc98a42310d9cf7402a9"
+    },
+    "selected": {
+      "source_id": "Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/nebius/SWE-rebench-V2",
+      "input": {
+        "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "converter_version": "3",
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "measured_tasks": 3903,
+        "task_specs_sha256": "c74d21b80dd1804f985f43f421302fe706d98f618646fc7494651e238b2b976f",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/0f5a5918ef89d504cc72/2026.11.12.4/.artifact.json",
+        "carry_forward": null
+      },
+      "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/0f5a5918ef89d504cc72/2026.11.12.2",
+      "scanned_task_specs_sha256": "2816b08421b21fed4bab9e91054dff6a7460ea442d14cc98a42310d9cf7402a9",
+      "summary": {
+        "task_count": 3903,
+        "grader_type_counts": {
+          "none": 3903
+        },
+        "agentic_count": 3903,
+        "single_turn_count": 153,
+        "reply_only_count": 0,
+        "workspace_graded_count": 0,
+        "judge_rubric_counts": {},
+        "judge_reference_count": 0,
+        "judge_no_reference_count": 0
+      },
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/derived-contract/2026.11.18.2/a97805d1a6ba745f1b98/receipt.json"
+    }
+  },
+  {
+    "source_id": "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym",
+    "previous": {
+      "input": {
+        "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/3f465a6ff9bd77b94d61/2026.11.12.4/.artifact.json",
+        "measured_tasks": 246,
+        "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "converter_version": "3",
+        "task_specs_sha256": "83007c0a1b03a2b8a04a93efe6509c8d32bba9d622ff5370e06265851476d88b",
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31"
+      },
+      "summary": {
+        "task_count": 246,
+        "agentic_count": 246,
+        "reply_only_count": 0,
+        "single_turn_count": 0,
+        "grader_type_counts": {
+          "none": 246
+        },
+        "judge_rubric_counts": {},
+        "judge_reference_count": 0,
+        "workspace_graded_count": 0,
+        "judge_no_reference_count": 0
+      },
+      "source_id": "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/derived-contract/2026.11.14.1/e37c824be1fd83257d67/receipt.json",
+      "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/3f465a6ff9bd77b94d61/2026.11.12.2",
+      "scanned_task_specs_sha256": "d34f7c37ebb21ae8630cf479ceac75dc8764211d4d27bf08de8b1e91d99046f0"
+    },
+    "selected": {
+      "source_id": "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym",
+      "input": {
+        "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "converter_version": "3",
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "measured_tasks": 246,
+        "task_specs_sha256": "83007c0a1b03a2b8a04a93efe6509c8d32bba9d622ff5370e06265851476d88b",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/3f465a6ff9bd77b94d61/2026.11.12.4/.artifact.json",
+        "carry_forward": null
+      },
+      "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/3f465a6ff9bd77b94d61/2026.11.12.2",
+      "scanned_task_specs_sha256": "d34f7c37ebb21ae8630cf479ceac75dc8764211d4d27bf08de8b1e91d99046f0",
+      "summary": {
+        "task_count": 246,
+        "grader_type_counts": {
+          "none": 246
+        },
+        "agentic_count": 246,
+        "single_turn_count": 14,
+        "reply_only_count": 0,
+        "workspace_graded_count": 0,
+        "judge_rubric_counts": {},
+        "judge_reference_count": 0,
+        "judge_no_reference_count": 0
+      },
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/derived-contract/2026.11.18.2/e37c824be1fd83257d67/receipt.json"
+    }
+  },
+  {
+    "source_id": "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2",
+    "previous": {
+      "input": {
+        "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/dab3b5f24ff023011b6b/2026.11.12.4/.artifact.json",
+        "measured_tasks": 932,
+        "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "converter_version": "3",
+        "task_specs_sha256": "d0f5dd7ac2a461e8337531dc530b321f0c5f6748365bb88c1c4ba0dac2c3aa6c",
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31"
+      },
+      "summary": {
+        "task_count": 932,
+        "agentic_count": 932,
+        "reply_only_count": 0,
+        "single_turn_count": 0,
+        "grader_type_counts": {
+          "none": 932
+        },
+        "judge_rubric_counts": {},
+        "judge_reference_count": 0,
+        "workspace_graded_count": 0,
+        "judge_no_reference_count": 0
+      },
+      "source_id": "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/derived-contract/2026.11.14.1/364aa2f60fa29d076d58/receipt.json",
+      "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/dab3b5f24ff023011b6b/2026.11.12.2",
+      "scanned_task_specs_sha256": "453bf812e3e5d1bf960b340fb37ea9f93bac79c4de16e1c8ef4c1f449e31f96c"
+    },
+    "selected": {
+      "source_id": "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2",
+      "input": {
+        "dataset_id": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "dataset_revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "converter_version": "3",
+        "converter_revision": "1509fc8638f6be3840b5c82b53348f93152a9c31",
+        "measured_tasks": 932,
+        "task_specs_sha256": "d0f5dd7ac2a461e8337531dc530b321f0c5f6748365bb88c1c4ba0dac2c3aa6c",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/dab3b5f24ff023011b6b/2026.11.12.4/.artifact.json",
+        "carry_forward": null
+      },
+      "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/dab3b5f24ff023011b6b/2026.11.12.2",
+      "scanned_task_specs_sha256": "453bf812e3e5d1bf960b340fb37ea9f93bac79c4de16e1c8ef4c1f449e31f96c",
+      "summary": {
+        "task_count": 932,
+        "grader_type_counts": {
+          "none": 932
+        },
+        "agentic_count": 932,
+        "single_turn_count": 40,
+        "reply_only_count": 0,
+        "workspace_graded_count": 0,
+        "judge_rubric_counts": {},
+        "judge_reference_count": 0,
+        "judge_no_reference_count": 0
+      },
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/derived-contract/2026.11.18.2/364aa2f60fa29d076d58/receipt.json"
+    }
+  },
+  {
+    "source_id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_tau_pivot",
+    "previous": {
+      "input": {
+        "dataset_id": "open-athena/tau-pivot-rlvr1-taskcompendium-20261113",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/tau-repair/2026.11.13.1/retained-census/27c428049451f36ede81/actor/.artifact.json",
+        "measured_tasks": 20035,
+        "dataset_revision": "1c274f93ce0dde4b2697108f5242ecdeb80f4092",
+        "converter_version": "2026.11.13.1",
+        "task_specs_sha256": "f77bd92bba70123ac72f2ba814e688e37178591865c116aabc9d76bea0714065",
+        "converter_revision": "7659f318f343603c069f48acfaed2b4ec2b5c2bb"
+      },
+      "summary": {
+        "task_count": 20035,
+        "agentic_count": 0,
+        "reply_only_count": 0,
+        "single_turn_count": 0,
+        "grader_type_counts": {
+          "llm-judge": 20035
+        },
+        "judge_rubric_counts": {
+          "labels": 20035
+        },
+        "judge_reference_count": 20035,
+        "workspace_graded_count": 20035,
+        "judge_no_reference_count": 0
+      },
+      "source_id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_tau_pivot",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/derived-contract/2026.11.14.1/60953febea09837219f3/receipt.json",
+      "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/tau-repair/2026.11.13.1/retained-census/27c428049451f36ede81/population",
+      "scanned_task_specs_sha256": "f77bd92bba70123ac72f2ba814e688e37178591865c116aabc9d76bea0714065"
+    },
+    "selected": {
+      "source_id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_tau_pivot",
+      "input": {
+        "dataset_id": "open-athena/tau-pivot-rlvr1-taskcompendium-20261113",
+        "dataset_revision": "1c274f93ce0dde4b2697108f5242ecdeb80f4092",
+        "converter_version": "2026.11.13.1",
+        "converter_revision": "7659f318f343603c069f48acfaed2b4ec2b5c2bb",
+        "measured_tasks": 20035,
+        "task_specs_sha256": "f77bd92bba70123ac72f2ba814e688e37178591865c116aabc9d76bea0714065",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/tau-repair/2026.11.13.1/retained-census/27c428049451f36ede81/actor/.artifact.json",
+        "carry_forward": null
+      },
+      "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/tau-repair/2026.11.13.1/retained-census/27c428049451f36ede81/population",
+      "scanned_task_specs_sha256": "f77bd92bba70123ac72f2ba814e688e37178591865c116aabc9d76bea0714065",
+      "summary": {
+        "task_count": 20035,
+        "grader_type_counts": {
+          "llm-judge": 20035
+        },
+        "agentic_count": 0,
+        "single_turn_count": 4144,
+        "reply_only_count": 0,
+        "workspace_graded_count": 20035,
+        "judge_rubric_counts": {
+          "labels": 20035
+        },
+        "judge_reference_count": 20035,
+        "judge_no_reference_count": 0
+      },
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/derived-contract/2026.11.18.2/60953febea09837219f3/receipt.json"
+    }
+  },
+  {
+    "source_id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_tau_pivot",
+    "previous": {
+      "input": {
+        "dataset_id": "open-athena/tau-pivot-rlvr2-taskcompendium-20261113",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/tau-repair/2026.11.13.1/retained-census/818bba4ee034a6f8f50b/actor/.artifact.json",
+        "measured_tasks": 20035,
+        "dataset_revision": "b290f14c7cda51bd398b6964e184f2cb83b11f66",
+        "converter_version": "2026.11.13.1",
+        "task_specs_sha256": "118beb3f9d51c863b2ee7f166aceef8666077b5d49b9d3394323fb89a994b679",
+        "converter_revision": "7659f318f343603c069f48acfaed2b4ec2b5c2bb"
+      },
+      "summary": {
+        "task_count": 20035,
+        "agentic_count": 0,
+        "reply_only_count": 0,
+        "single_turn_count": 0,
+        "grader_type_counts": {
+          "llm-judge": 20035
+        },
+        "judge_rubric_counts": {
+          "labels": 20035
+        },
+        "judge_reference_count": 20035,
+        "workspace_graded_count": 20035,
+        "judge_no_reference_count": 0
+      },
+      "source_id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_tau_pivot",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/derived-contract/2026.11.14.1/9bf311959b023ddb7a61/receipt.json",
+      "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/tau-repair/2026.11.13.1/retained-census/818bba4ee034a6f8f50b/population",
+      "scanned_task_specs_sha256": "118beb3f9d51c863b2ee7f166aceef8666077b5d49b9d3394323fb89a994b679"
+    },
+    "selected": {
+      "source_id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_tau_pivot",
+      "input": {
+        "dataset_id": "open-athena/tau-pivot-rlvr2-taskcompendium-20261113",
+        "dataset_revision": "b290f14c7cda51bd398b6964e184f2cb83b11f66",
+        "converter_version": "2026.11.13.1",
+        "converter_revision": "7659f318f343603c069f48acfaed2b4ec2b5c2bb",
+        "measured_tasks": 20035,
+        "task_specs_sha256": "118beb3f9d51c863b2ee7f166aceef8666077b5d49b9d3394323fb89a994b679",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/tau-repair/2026.11.13.1/retained-census/818bba4ee034a6f8f50b/actor/.artifact.json",
+        "carry_forward": null
+      },
+      "population_path": "s3://marin-us-east-02a/marin/rl-data/atlas/tau-repair/2026.11.13.1/retained-census/818bba4ee034a6f8f50b/population",
+      "scanned_task_specs_sha256": "118beb3f9d51c863b2ee7f166aceef8666077b5d49b9d3394323fb89a994b679",
+      "summary": {
+        "task_count": 20035,
+        "grader_type_counts": {
+          "llm-judge": 20035
+        },
+        "agentic_count": 0,
+        "single_turn_count": 4144,
+        "reply_only_count": 0,
+        "workspace_graded_count": 20035,
+        "judge_rubric_counts": {
+          "labels": 20035
+        },
+        "judge_reference_count": 20035,
+        "judge_no_reference_count": 0
+      },
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/derived-contract/2026.11.18.2/9bf311959b023ddb7a61/receipt.json"
+    }
+  }
+]

@@ -9,17 +9,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from .contract_selection import INPUT_FIELDS, select_contract_receipts
 from .source_identity import canonical_source_id
-
-INPUT_FIELDS = (
-    "dataset_id",
-    "dataset_revision",
-    "converter_version",
-    "converter_revision",
-    "measured_tasks",
-    "task_specs_sha256",
-)
-
 
 PROFILE_FIELDS = (
     "grader_type",
@@ -79,8 +70,7 @@ def contract_projection(declaration: dict[str, Any], receipts: list[dict]) -> di
         result = {**declaration, **fields}
         result.pop("derived_contract_receipt", None)
         return result
-    if any(row["summary"] != matches[0]["summary"] for row in matches):
-        raise ValueError(f"Conflicting derived contract summaries: {declaration['id']}")
+    matches = select_contract_receipts(declaration["id"], matches)
     receipt = matches[0]
     summary = receipt["summary"]
     count = summary["task_count"]
