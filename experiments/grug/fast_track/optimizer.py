@@ -295,6 +295,75 @@ def scale_with_grug_muonh(
     return optax.GradientTransformation(muon_transform.init, update_fn)
 
 
+class InitRemovalMuonHState(NamedTuple):
+    muon: optax.OptState
+    count: jax.Array
+    init_params: optax.Params
+    init_coeff: optax.Params
+
+
+def scale_with_grug_muonh_init_removal(
+    momentum: float,
+    nesterov: bool,
+    steps: int,
+    muon_eps: float,
+    learning_rate,
+    coefficient_type: CoefficientType,
+    pre_norm: str,
+    window_start: int,
+    window_end: int,
+) -> optax.GradientTransformation:
+    """MuonH that removes each sphere's initial weights ``W0`` linearly over steps ``[window_start, window_end)``.
+
+    ``b`` (one per sphere, 1 at init) is the coefficient of ``W0`` in ``W``. Each step is
+    ``W' = W - lr V - d W0`` projected back to the radius ``R``, with ``a = R / |W'|`` and ``b <- a (b - d)``. In the
+    window ``d = b / (window_end - t)``, so ``b`` reaches 0 at ``window_end`` (``d`` shrinks by each step's ``a``);
+    outside it ``d = 0`` and the step is plain MuonH. ``W0`` is kept in the state.
+    """
+    muon_transform = _grug_scale_with_muon(
+        momentum=momentum,
+        nesterov=nesterov,
+        steps=steps,
+        muon_eps=muon_eps,
+        coefficient_type=coefficient_type,
+        pre_norm=pre_norm,
+    )
+
+    def init_fn(params):
+        return InitRemovalMuonHState(
+            muon=muon_transform.init(params),
+            count=jnp.zeros([], jnp.int32),
+            init_params=jax.tree.map(jnp.copy, params),
+            init_coeff=jax.tree.map(lambda p: jnp.ones_like(_slice_norm(p)), params),
+        )
+
+    def update_fn(updates, state, params=None):
+        if params is None:
+            raise ValueError("scale_with_grug_muonh_init_removal requires params")
+        directions, muon_state = muon_transform.update(updates, state.muon, params)
+        directions = _match_named_sharding_to_params(directions, params)
+        remaining = window_end - state.count
+        in_window = (state.count >= window_start) & (remaining > 0)
+
+        def step(p, v, w0, b):
+            p32 = p.astype(jnp.float32)
+            radius = _slice_norm(p32)
+            d = jnp.where(in_window, b / jnp.maximum(remaining, 1).astype(jnp.float32), 0.0)
+            v32 = v.astype(jnp.float32)
+            stepped = p32 - learning_rate * v32 * radius / jnp.maximum(_slice_norm(v32), 1e-10) - d * w0
+            stepped = _pin_sharding(stepped, p)  # correct the sharded norm reduction (issue #8073)
+            a = radius / jnp.maximum(_slice_norm(stepped), 1e-10)
+            return (stepped * a - p32).astype(p.dtype), a * (b - d)
+
+        stepped = jax.tree.map(step, params, directions, state.init_params, state.init_coeff)
+        new_updates = jax.tree.map(lambda _, s: s[0], params, stepped)
+        init_coeff = jax.tree.map(lambda _, s: s[1], params, stepped)
+        count = optax.safe_increment(state.count)
+        return new_updates, InitRemovalMuonHState(muon_state, count, state.init_params, init_coeff)
+
+    return optax.GradientTransformation(init_fn, update_fn)
+
+
 class RadialMuonHState(NamedTuple):
     muon: optax.OptState
     count: jax.Array
@@ -620,6 +689,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     ``scale_by_adamc`` at ``lr_h = lr_max s(t)^2`` with decay mult ``muonc_anneal_adamc``, so its decay is
     ``(lr_h^2 / lr_max) lambda_h`` with ``lambda_h = muonc_anneal_adamc * lr_max``. The MoE router weights and
     ``token_embed`` move to the ``adamc_adam`` group, as with ``adamc_head_router_embed``. 0: off."""
+    muonh_init_removal: bool = False
+    """Linear init removal on every MuonH sphere (``scale_with_grug_muonh_init_removal``): the coefficient of the initial
+    weights in each matrix is driven to 0 over the middle third of training, ``[N / 3, 2N / 3)``."""
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -663,6 +735,21 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             )
 
         def muonh_at(lr):
+            if self.muonh_init_removal:
+                return optax.chain(
+                    scale_with_grug_muonh_init_removal(
+                        momentum=self.momentum,
+                        nesterov=self.nesterov,
+                        steps=self.backend_steps,
+                        muon_eps=self.muon_epsilon,
+                        learning_rate=lr,
+                        coefficient_type=self.coefficient_type,
+                        pre_norm=self.muon_pre_norm,
+                        window_start=round(num_train_steps / 3),
+                        window_end=round(2 * num_train_steps / 3),
+                    ),
+                    _match_named_update_sharding(),
+                )
             return optax.chain(
                 scale_with_grug_muonh(
                     momentum=self.momentum,
@@ -883,6 +970,13 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             self.muonc_anneal_adamc and (not self.muonc_anneal_decay or self.router_lr_mult != 1.0)
         ):
             raise ValueError("muonc_anneal_adamc must be non-negative and needs muonc_anneal_decay and router_lr_mult 1")
+        if self.muonh_init_removal and (
+            self.muonh_radial_softcap or self.muonc_decay_mult or self.muonh_nonsi_anneal or self.muonc_anneal_decay
+        ):
+            raise ValueError(
+                "muonh_init_removal excludes muonh_radial_softcap, muonc_decay_mult, muonh_nonsi_anneal and "
+                "muonc_anneal_decay"
+            )
 
     def create_mask(self, params):
         paths = leaf_key_paths(params)
