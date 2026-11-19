@@ -7,7 +7,8 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from finestore.rl.curation import LexicalUse, SourceDeclaration, SourceOrigin, SourceUse, source_identifier
+from finestore.rl.curation import LexicalUse, SourceOrigin, SourceUse, source_identifier
+from finestore.rl.curation import QualifiedSourceDeclaration as SourceDeclaration
 from finestore.rl.licenses import LicenseReceipt
 from finestore.schema import arrow_schema
 from marin.execution.lazy import run

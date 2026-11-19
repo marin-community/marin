@@ -6,6 +6,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from finestore.rl.curation import QualifiedSourceDeclaration
 from zephyr.context import ZephyrContext
 from zephyr.readers import load_parquet
 
@@ -15,8 +16,91 @@ from taskcompendium.pipeline.curriculum.coverage import (
     SUBJECT_DISTANCE,
     build_curriculum_coverage,
 )
-from taskcompendium.pipeline.curriculum.models import CurriculumNode
+from taskcompendium.pipeline.curriculum.models import AlignmentRelease, CurriculumNode
 from taskcompendium.pipeline.curriculum.task_alignment import TaskAlignment
+
+
+def test_curriculum_release_retains_qualified_pins_and_private_tier():
+    revision = "a" * 40
+    declaration = QualifiedSourceDeclaration(
+        id="Marin:curriculum",
+        name="curriculum",
+        display_name="Curriculum",
+        origin="Marin",
+        upstream_dataset="curriculum",
+        upstream_name="Curriculum",
+        build_path="Pipeline",
+        current_release={"repo": "fixture", "revision": revision, "url": "https://example.org/source"},
+        within_source_dedup={
+            "raw_count": 3,
+            "unique_count": 3,
+            "within_source_duplicates": 0,
+            "source_dataset_id": "fixture",
+            "source_revision": revision,
+            "converter_revision": "fixture-converter",
+            "converter_version": "1",
+            "drop_manifest_uri": "memory://fixture/drops",
+            "evidence_url": "memory://fixture/dedup",
+        },
+        family="fixture",
+        tags=[],
+        task_count=3,
+        notes="",
+        dataset_id="fixture",
+        dataset_revision=revision,
+        intended_use="train",
+        data_restriction="private_always",
+        url=None,
+        type="RLVR",
+        turns="Single-turn",
+        is_benchmark=False,
+        kind="Dataset",
+        status="Pending",
+        pipeline={"name": "fixture", "version": "1", "source": "fixture", "revision": "fixture-converter", "files": []},
+        daytona_safety="not_applicable",
+    )
+    release = {
+        "release_id": "fixture-release",
+        "created_at": "2026-11-19T00:00:00Z",
+        "curriculum_key": "fixture-curriculum",
+        "population": "converted",
+        "sample_size": None,
+        "task_count": 3,
+        "ready_count": 3,
+        "insufficient_context_count": 0,
+        "sources": [
+            {
+                "source_id": declaration.id,
+                "source_key": "fixture",
+                "population": "converted",
+                "intended_use": "train",
+                "task_count": 3,
+                "ready_count": 3,
+                "insufficient_context_count": 0,
+                "basis": "matched",
+                "curation_root": "memory://fixture",
+                "input_rows": 3,
+                "converted_rows": 3,
+            }
+        ],
+        "inventory": [declaration.model_dump(mode="json")],
+        "nodes": [],
+        "paths": [],
+        "lineage": {},
+        "embedding_spec": {
+            "model": "fixture",
+            "revision": "1",
+            "tokenizer_revision": "1",
+            "dimensions": 2,
+            "max_tokens": 16,
+            "compute_dtype": "float32",
+        },
+    }
+    restored = AlignmentRelease.model_validate(release)
+    roundtrip = AlignmentRelease.model_validate_json(restored.model_dump_json())
+    assert roundtrip.inventory[0].current_release.revision == revision
+    assert roundtrip.inventory[0].within_source_dedup.unique_count == roundtrip.task_count == 3
+    assert roundtrip.inventory[0].data_restriction.value == "private_always"
 
 
 def test_atlas_counts_full_instances_and_keeps_bounded_overlapping_samples(tmp_path: Path):
