@@ -5832,12 +5832,10 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "marin-core" },
-    { name = "marin-iac", extra = ["deploy"] },
     { name = "marin-iris", extra = ["controller"] },
 ]
 test = [
     { name = "marin-core" },
-    { name = "marin-iac", extra = ["deploy"] },
     { name = "marin-iris", extra = ["controller"] },
 ]
 
@@ -5875,12 +5873,10 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "marin-core", editable = "lib/marin" },
-    { name = "marin-iac", extras = ["deploy"], editable = "infra/pulumi" },
     { name = "marin-iris", extras = ["controller"], editable = "lib/iris" },
 ]
 test = [
     { name = "marin-core", editable = "lib/marin" },
-    { name = "marin-iac", extras = ["deploy"], editable = "infra/pulumi" },
     { name = "marin-iris", extras = ["controller"], editable = "lib/iris" },
 ]
 

@@ -403,7 +403,9 @@ stops public service through the hostname without a deployment. The hostname doe
 fall back to the authenticated service. To serve a private app on that hostname, move
 the hostname to `applet_domains`. Domain mappings ignore changes to their route, so
 remove the hostname in one deployment and add it to the other list in the next.
-A hostname cannot be in both lists.
+The mapping's Pulumi name includes its service, so a move in one deployment fails
+with a duplicate domain mapping instead of keeping the old route. A hostname cannot
+be in both lists.
 
 Pulumi passes the provisioned hostname list as `MARINA_APPLET_DOMAINS`, without
 app UUIDs. The authenticated service receives both lists so that operators can bind
