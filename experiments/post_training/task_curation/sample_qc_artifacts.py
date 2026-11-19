@@ -12,11 +12,20 @@ from pydantic import BaseModel, ConfigDict, Field
 SAMPLE_SIZE = 100
 SAMPLE_SEED = 0
 PINNED_REVIEWER_SHA256 = "cad081d2e6c013e083ee1737ea42d65a175117ebaae9b56dfacbc8fb1cd2489a"
+PINNED_REVIEWER_V4_SHA256 = "9c0d83d65755be99ec382ac5c061c05db36ade8a2a800d3d48ddd82f7a88f3dc"
+# The pinned reviewer identities each payload revision may produce. Payload
+# revision 6 admits both the V3 and the V4 profile; V4 receipts keep the V4
+# identity verbatim and V3 receipts stay untouched.
 SAMPLE_REVIEWER_SHA256_BY_PAYLOAD_REVISION = {
-    "4": "a3e17ee0607a1bf59bdbb8e0b9bffda2e8788390aaf41c7ab73c20b68325c9ea",
-    "5": "0a00cdd8682fe13ae169d724cb630c73ebab9be1dab3b4d6d971eca04fa0e308",
-    "6": PINNED_REVIEWER_SHA256,
+    "4": frozenset({"a3e17ee0607a1bf59bdbb8e0b9bffda2e8788390aaf41c7ab73c20b68325c9ea"}),
+    "5": frozenset({"0a00cdd8682fe13ae169d724cb630c73ebab9be1dab3b4d6d971eca04fa0e308"}),
+    "6": frozenset({PINNED_REVIEWER_SHA256, PINNED_REVIEWER_V4_SHA256}),
 }
+SAMPLE_REVIEWER_SHAS = {
+    "v3": PINNED_REVIEWER_SHA256,
+    "v4": PINNED_REVIEWER_V4_SHA256,
+}
+"""The pinned reviewer identity per SAMPLE profile version."""
 
 
 class SamplePanel(BaseModel):

@@ -396,7 +396,14 @@ weakness documented, as with Terminal-Pivot's original weak grader. A FULL
 review may be finalized under a pinned waiver when at most 1% of retained tasks
 are unreviewed; both the final binding and the Atlas display refuse a waiver above
 that bound. LLM judges run at temperature 0.7 through the production judge
-service. Every recorded review carries typed defects from the shared `Defect`
+service. The pinned SAMPLE reviewer profile for new campaigns is V4
+(`glm-5.3`, payload revision 6, max_tokens 16384 — V3 with a doubled review
+budget; user ruling 2026-11-19 after the long-fixture truncation evidence).
+`local_reviewer(SAMPLE_REVIEWER_VERSION)` builds it; every new SAMPLE campaign
+qualifies the profile with one canary review (`qualify_reviewer`) before it
+serves. V3 receipts stay untouched; payload revision 6 admits both the V3 and
+the V4 identities, and past reviews are never re-run under V4. Every recorded
+review carries typed defects from the shared `Defect`
 enum (`missing_context`, `ambiguity`, `wrong_reference`, `answer_leakage`,
 `malformed`, `rubric_mismatch`) beside its verdict, confidence and reference
 status; the Atlas assessment page shows one chip per defect with its count and

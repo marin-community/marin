@@ -28,9 +28,10 @@ from taskcompendium.models import TaskSpec
 from experiments.post_training.task_curation.full_qc import (
     REVIEW_REQUEST_TIMEOUTS,
     REVIEW_RUBRIC,
+    SAMPLE_REVIEWER_VERSION,
     ReadyChatReviewer,
-    ReviewerVersion,
     local_reviewer,
+    qualify_reviewer,
 )
 from experiments.post_training.task_curation.full_qc_inputs import task_contract
 from experiments.post_training.task_curation.full_qc_review import (
@@ -42,7 +43,7 @@ from experiments.post_training.task_curation.judges import PinnedLocalJudgeEndpo
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.published_census import population_documents
 from experiments.post_training.task_curation.review_quality import quality_result
-from experiments.post_training.task_curation.sample_qc_artifacts import PINNED_REVIEWER_SHA256
+from experiments.post_training.task_curation.sample_qc_artifacts import SAMPLE_REVIEWER_SHAS
 from infra.marina.apps.rl_data_catalog.server.source_identity import SourceId
 
 logger = logging.getLogger(__name__)
@@ -156,9 +157,9 @@ def main() -> None:
     if not args.run:
         print(json.dumps({"targets": len(queue.targets), "tasks": sum(len(t.task_ids) for t in queue.targets)}))
         return
-    spec = local_reviewer(ReviewerVersion.V3)
-    if spec.cache_revision != PINNED_REVIEWER_SHA256:
-        raise ValueError("Completion reviews require the reviewed literal v3 profile")
+    spec = local_reviewer(SAMPLE_REVIEWER_VERSION)
+    if spec.cache_revision != SAMPLE_REVIEWER_SHAS[SAMPLE_REVIEWER_VERSION]:
+        raise ValueError("Completion reviews require the pinned default reviewer profile for new campaigns (V4)")
     endpoint = spec.endpoint
     assert isinstance(endpoint, PinnedLocalJudgeEndpoint)
     logger.info("Reviewer: %s", json.dumps(spec.identity, sort_keys=True))
@@ -169,8 +170,9 @@ def main() -> None:
             spec,
             args.review_cache,
             max_concurrent=32,
-            request_timeout=REVIEW_REQUEST_TIMEOUTS[ReviewerVersion.V3],
+            request_timeout=REVIEW_REQUEST_TIMEOUTS[SAMPLE_REVIEWER_VERSION],
         )
+        qualify_reviewer(reviewer)
         for target in queue.targets:
             receipt = complete_target(target, args.output_root, reviewer)
             receipts[receipt.source_id] = receipt.model_dump(mode="json")

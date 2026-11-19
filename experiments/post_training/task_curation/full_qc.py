@@ -22,10 +22,19 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import TaskSpec
-from taskcompendium.pipeline.models import ReviewRubric
+from taskcompendium.models import (
+    AnswerType,
+    ConversationInput,
+    EnvironmentRequirements,
+    NoGrader,
+    PlainText,
+    Source,
+    TaskSpec,
+    TextMessage,
+)
+from taskcompendium.pipeline.models import ReviewRecord, ReviewRubric
 from taskcompendium.pipeline.query_cache import CachedRequests
-from taskcompendium.pipeline.review import ChatReviewer, ReviewBatchResult
+from taskcompendium.pipeline.review import ChatReviewer, ReviewBatchResult, review_tasks
 from taskcompendium.pipeline.reviewer_spec import REVIEW_PAYLOAD_REVISION, JudgeTier, ReviewerSpec
 
 from experiments.post_training.task_curation.full_qc_review import load_inputs, review_inputs
@@ -35,6 +44,7 @@ from experiments.post_training.task_curation.judges import (
     LocalJudgeModel,
     PinnedLocalJudgeEndpoint,
 )
+from experiments.post_training.task_curation.review_quality import is_conclusive
 
 logger = logging.getLogger(__name__)
 MODEL_CONFIG = Path("experiments/evaluation/serve/models/zai-org/GLM-5.3.yaml")
@@ -56,10 +66,20 @@ REVIEW_RUBRIC = ReviewRubric(
 class ReviewerVersion(StrEnum):
     V2 = "v2"
     V3 = "v3"
+    V4 = "v4"
+
+
+SAMPLE_REVIEWER_VERSION = ReviewerVersion.V4
+"""The pinned default SAMPLE reviewer profile for new campaigns (user ruling
+2026-11-19: V4 = V3 with max_tokens 16384; V3 receipts stay untouched)."""
 
 
 LONG_REQUEST_TIMEOUT = 1200
-REVIEW_REQUEST_TIMEOUTS = {ReviewerVersion.V2: 300, ReviewerVersion.V3: LONG_REQUEST_TIMEOUT}
+REVIEW_REQUEST_TIMEOUTS = {
+    ReviewerVersion.V2: 300,
+    ReviewerVersion.V3: LONG_REQUEST_TIMEOUT,
+    ReviewerVersion.V4: LONG_REQUEST_TIMEOUT,
+}
 
 
 class ReviewWork(BaseModel):
@@ -105,6 +125,39 @@ class ReadyChatReviewer:
         return self._reviewer(current).review(tasks, rubric, originals=originals, cached=cached)
 
 
+SAMPLE_REVIEWER_VERSION = ReviewerVersion.V4
+"""The pinned default SAMPLE reviewer profile for new campaigns (user ruling
+2026-11-19: V4 = V3 with max_tokens 16384; V3 receipts stay untouched)."""
+
+QUALIFICATION_TASK = TaskSpec(
+    id="sample-profile-qualification",
+    context=ConversationInput(events=(TextMessage(role="user", content="Return the single word: ready."),)),
+    environment_requirements=EnvironmentRequirements(),
+    answer_type=AnswerType.TEXT,
+    answer_format=PlainText(),
+    grader=NoGrader(reason="profile qualification fixture"),
+    source=Source(dataset="profile-qualification", revision="fixture", row="qualification", importer_revision="1"),
+)
+"""The fixed canary task a new reviewer profile reviews before it serves a campaign."""
+
+
+def qualify_reviewer(reviewer) -> ReviewRecord:
+    """Qualify a reviewer profile before it serves: one canary review must conclude.
+
+    The standard profile qualification: the pinned identity is already
+    validated by the caller's literal-profile check; this proves the serving
+    session produces a usable conclusive verdict — the shared ``is_conclusive``
+    rule — before any campaign task is attempted.
+    """
+    result = review_tasks([QUALIFICATION_TASK], REVIEW_RUBRIC, reviewer, cached=None)
+    if len(result.reviews) != 1:
+        raise ValueError("Profile qualification must observe exactly one canary review")
+    review = result.reviews[0]
+    if not is_conclusive(review):
+        raise ValueError(f"Profile qualification failed: the canary review did not conclude: {review.detail}")
+    return review
+
+
 def _local_endpoint(model_config: Path, context_window_tokens: int) -> LocalJudgeEndpoint:
     return LocalJudgeEndpoint(
         tier=JudgeTier.HEAVY,
@@ -122,6 +175,12 @@ def _local_endpoint(model_config: Path, context_window_tokens: int) -> LocalJudg
 
 
 def local_reviewer(version: ReviewerVersion, *, payload_revision: str = REVIEW_PAYLOAD_REVISION) -> ReviewerSpec:
+    if version is ReviewerVersion.V4:
+        # User ruling 2026-11-19: V4 is V3 with max_tokens 16384, everything
+        # else identical, so long-fixture reviews stop truncating. V4 is the
+        # default for new SAMPLE campaigns; V3 receipts stay untouched.
+        v4 = local_reviewer(ReviewerVersion.V3, payload_revision=payload_revision)
+        return replace(v4, max_tokens=16384)
     if version is ReviewerVersion.V3:
         pin = LocalJudgeModel(
             model_identity="zai-org/GLM-5.3",

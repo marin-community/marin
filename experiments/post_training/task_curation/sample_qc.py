@@ -22,9 +22,10 @@ from taskcompendium.pipeline.review import Reviewer
 from experiments.post_training.task_curation.full_qc import (
     REVIEW_REQUEST_TIMEOUTS,
     REVIEW_RUBRIC,
+    SAMPLE_REVIEWER_VERSION,
     ReadyChatReviewer,
-    ReviewerVersion,
     local_reviewer,
+    qualify_reviewer,
 )
 from experiments.post_training.task_curation.full_qc_inputs import task_contract
 from experiments.post_training.task_curation.full_qc_review import (
@@ -37,7 +38,7 @@ from experiments.post_training.task_curation.judges import PinnedLocalJudgeEndpo
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.review_quality import quality_result
 from experiments.post_training.task_curation.sample_qc_artifacts import (
-    PINNED_REVIEWER_SHA256,
+    SAMPLE_REVIEWER_SHAS,
     SAMPLE_SEED,
     SAMPLE_SIZE,
     SampleInventory,
@@ -142,9 +143,9 @@ def main() -> None:
     panels = [SampleInventory.model_validate(row).qc_panel() for row in json.loads(queue.read_text())]
     if not panels or len({row.source_id for row in panels}) != len(panels):
         raise ValueError("Sample queue requires distinct source populations")
-    spec = local_reviewer(ReviewerVersion.V3)
-    if spec.cache_revision != PINNED_REVIEWER_SHA256:
-        raise ValueError("SAMPLE QC requires the reviewed literal v3 profile")
+    spec = local_reviewer(SAMPLE_REVIEWER_VERSION)
+    if spec.cache_revision != SAMPLE_REVIEWER_SHAS[SAMPLE_REVIEWER_VERSION]:
+        raise ValueError("SAMPLE QC requires the pinned default reviewer profile for new campaigns (V4)")
     endpoint = spec.endpoint
     assert isinstance(endpoint, PinnedLocalJudgeEndpoint)
     LOGGER.info("Reviewer: %s", json.dumps(spec.identity, sort_keys=True))
@@ -158,8 +159,9 @@ def main() -> None:
             spec,
             args.review_cache,
             max_concurrent=32,
-            request_timeout=REVIEW_REQUEST_TIMEOUTS[ReviewerVersion.V3],
+            request_timeout=REVIEW_REQUEST_TIMEOUTS[SAMPLE_REVIEWER_VERSION],
         )
+        qualify_reviewer(reviewer)
         for panel in panels:
             result = review_panel(panel, reviewer, args.output_root)
             (campaign / f"{canonical_sha256(panel.source_id)[:20]}.json").write_text(

@@ -41,7 +41,7 @@ def sample_qc_receipt(path: str) -> SampleQCReceipt:
     if (
         result.reviewer.get("mode") != "chat"
         or canonical_sha256(reviewer_spec)
-        != SAMPLE_REVIEWER_SHA256_BY_PAYLOAD_REVISION.get(reviewer_spec.get("payload_revision"))
+        not in SAMPLE_REVIEWER_SHA256_BY_PAYLOAD_REVISION.get(reviewer_spec.get("payload_revision"), frozenset())
         or canonical_sha256(result.rubric) != canonical_sha256(asdict(REVIEW_RUBRIC))
     ):
         raise ValueError("Sample Result uses another reviewer or rubric")
