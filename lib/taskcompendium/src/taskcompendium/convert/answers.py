@@ -12,7 +12,9 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
+from verifyit.grade import InvalidTask
 from verifyit.modes.extract import extract_boxed
+from verifyit.modes.grade_math import grade_math_candidate
 from verifyit.numeric import numeric_literal
 from verifyit.spec import (
     Constraint,
@@ -113,9 +115,12 @@ def math_answer_task(
     if reference is None:
         return source_defect("invalid_reference", "The reference answer must be a nonempty string")
     expected = extract_boxed(reference) or reference
-    return answer_task(
-        row, prompt=problem, spec=MathSpec(expected=expected, math_type=math_type(expected)), evidence=evidence
-    )
+    spec = MathSpec(expected=expected, math_type=math_type(expected))
+    try:
+        grade_math_candidate(spec, "")
+    except InvalidTask as error:
+        return source_defect("invalid_reference", str(error))
+    return answer_task(row, prompt=problem, spec=spec, evidence=evidence)
 
 
 def numeric_answer_task(

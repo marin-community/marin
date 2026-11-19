@@ -37,7 +37,7 @@ class NodePoolSpec:
     target_racks: int | None = None
 
 
-def derive_nodepools(config: IrisClusterConfig) -> list[NodePoolSpec]:
+def derive_nodepools(config: IrisClusterConfig, *, cpu_scale_group: str | None = None) -> list[NodePoolSpec]:
     """Return one NodePoolSpec per scale group that defines a CoreWeave slice_template.
 
     Scale groups without a CoreWeave `instance_type` are skipped, not errored.
@@ -65,7 +65,9 @@ def derive_nodepools(config: IrisClusterConfig) -> list[NodePoolSpec]:
                     min_nodes=min_nodes,
                     topology_node_labels=(
                         CPU_TOPOLOGY_NODE_LABELS
-                        if scale_group.resources is not None and scale_group.resources.device_type == AcceleratorType.CPU
+                        if name != cpu_scale_group
+                        and scale_group.resources is not None
+                        and scale_group.resources.device_type == AcceleratorType.CPU
                         else ()
                     ),
                 ),

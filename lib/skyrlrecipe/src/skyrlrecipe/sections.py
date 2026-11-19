@@ -218,9 +218,9 @@ class Policy(Section):
     sequence_parallel_size: int = field(1)
     use_torch_compile: bool = field(False)
     record_memory: bool = field(False)
-    nccl_buffer_size_bytes: PositiveInt | None = field(None)
-    """Limit per-peer NCCL buffers before Megatron policy process-group initialization. Null preserves NCCL's
-    default; useful when a reference actor shares each GPU."""
+    nccl_buffer_size_bytes: PositiveInt | None = field(4194304)
+    """Pin the standard 4-MiB SIMPLE buffer before process-group initialization. Smaller buffers can corrupt NVLSTree
+    reductions in NCCL 2.30.7 (https://github.com/marin-community/marin/issues/11649)."""
     megatron_config: PolicyMegatronConfig = Field(default_factory=PolicyMegatronConfig)
 
 
@@ -278,9 +278,12 @@ class RefMegatronConfig(Section):
 
 
 class Ref(Section):
-    nccl_buffer_size_bytes: PositiveInt | None = field(262144)
-    """Colocated Megatron reference workers retain NCCL buffers after model offload. Reduce their per-peer buffer
-    before process-group initialization; null keeps NCCL's default."""
+    nccl_buffer_size_bytes: PositiveInt | None = field(4194304)
+    """Keep the standard buffer even when reference workers share a GPU. Null delegates sizing to the process
+    environment and NCCL config. The explicit 4-MiB buffer works around NCCL 2.30.7's NVLSTree chunk exceeding the
+    SIMPLE FIFO slot (https://github.com/marin-community/marin/issues/11649). The NVLSTree chunk tuning in NCCL
+    2.32.6 (https://github.com/NVIDIA/nccl/commit/b89a40883e4868c6bb44610c3c75d4a8b7a40530) is a possible path
+    back to smaller buffers once an upgrade is validated."""
     model: RefModel = Field(default_factory=RefModel)
     sequence_parallel_size: int = field(1)
     megatron_config: RefMegatronConfig = Field(default_factory=RefMegatronConfig)
@@ -494,6 +497,10 @@ class RolloutBuffer(Section):
     max_stale_retries: int = field(1)
     """How many times in a row rolling regenerates a prompt whose group missed the staleness window; after that the
     prompt waits until the prompt order offers it again."""
+    max_unusable_groups: PositiveInt = field(3)
+    """How many unusable groups in a row (every sample masked, or too few graded samples for the group baseline) a
+    prompt may produce before it sits out 10 training steps. A prompt stays in rotation when one batch needs every
+    prompt still offered."""
     max_in_flight: PositiveInt | None = field(None)
     """Cap on prompt groups generating at once. An Iris launch replaces null with 1.5 training batches, rounded up;
     in a run with a terminal_bench_config, at most its Harbor n_concurrent_trials (16 when unset) divided by
@@ -556,6 +563,8 @@ class Trainer(Section):
     hf_export_checkpoint: Literal["latest", "best"] = field("latest")
     """Best selection queues only the final export, after the last evaluation. latest or best native checkpoint for
     HF export"""
+    batch_builder: Literal["driver", "worker"] = field("driver")
+    "driver, worker"
     evaluation_runner: Literal["training", "task", "harbor"] = field("training")
     "task or harbor selects generated validation for offline preference training"
     trajectory_selector: TrajectorySelector = Field(default_factory=TrajectorySelector)
@@ -884,9 +893,8 @@ class RolloutWorkers(Section):
     "Default thread pool for blocking task operations."
     progress_timeout_seconds: int = field(21600)
     "fail a worker's requests when none of them completes for this long"
-    start_interval_seconds: int | float = field(2.0)
-    """Workers start one at a time, this long after the previous one is up, so their imports and tokenizer loads from
-    a shared filesystem do not overlap; zero starts them all at once."""
+    start_interval_seconds: int | float = field(0.0)
+    "Zero starts workers together; a positive interval staggers their imports and tokenizer loads."
 
 
 class TrajectoryRunner(Section):

@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import asyncio
 import pickle
-from collections.abc import Sequence
+from collections.abc import Sequence, AsyncIterator
+from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Protocol
@@ -26,11 +27,15 @@ from marinskyrl.resource_locator import join_resource_path
 from skyrl_train.io import io
 from skyrl_train.rollouts.buffer import (
     PayloadReference,
+    AdmittedRollout,
     RolloutContentPolicy,
     RolloutGroup,
     RolloutLease,
     RolloutWriter,
 )
+
+from skyrl_train.group_admission import GroupAdmissionStalledError
+from skyrl_train.telemetry import GeneratedWork
 
 PAYLOAD_IO_THREADS = 16
 ROLLOUT_OBJECT_SUFFIX = ".pkl"
@@ -56,6 +61,8 @@ class PayloadStore(Protocol):
 
     async def fetch(self, payloads: Sequence) -> list[RolloutGroup]: ...
 
+    async def shared_refs(self, payloads: Sequence) -> tuple[ray.ObjectRef, ...]: ...
+
     async def checkpoint(self, payload: object | None) -> object | None:
         """The durable form of one payload for a checkpoint."""
         ...
@@ -63,6 +70,63 @@ class PayloadStore(Protocol):
     def restore(self, payload: object | None) -> object | None:
         """One reference for a new buffer from a checkpoint's durable payload."""
         ...
+
+
+@dataclass(frozen=True)
+class RolloutReader:
+    """Read selected rollout payloads with their admitted identity and size checks."""
+
+    buffer: ActorHandle
+    payloads: PayloadStore
+    selected: tuple[AdmittedRollout, ...]
+    stall_timeout: float
+
+    async def read(self, batch_id: int, indices: tuple[int, ...]) -> list[RolloutGroup]:
+        """Fetch selected groups through the configured store and validate their admitted facts."""
+        async with self._read_timeout(batch_id, indices):
+            refs = await self.buffer.payload_refs.remote(batch_id, indices)
+            groups = await self.payloads.fetch(refs)
+        return self._validate(indices, groups)
+
+    async def share(self, batch_id: int, indices: tuple[int, ...]) -> tuple[ray.ObjectRef, ...]:
+        """Share existing memory references or publish object-store groups on the calling actor."""
+        async with self._read_timeout(batch_id, indices):
+            refs = await self.buffer.payload_refs.remote(batch_id, indices)
+            return await self.payloads.shared_refs(refs)
+
+    async def read_shared(
+        self, batch_id: int, indices: tuple[int, ...], references: tuple[ray.ObjectRef, ...]
+    ) -> list[RolloutGroup]:
+        """Resolve shared group references with the same checks as a direct store read."""
+        async with self._read_timeout(batch_id, indices):
+            groups = list(await asyncio.gather(*references))
+        return self._validate(indices, groups)
+
+    @asynccontextmanager
+    async def _read_timeout(self, batch_id: int, indices: tuple[int, ...]) -> AsyncIterator[None]:
+        try:
+            async with asyncio.timeout(self.stall_timeout):
+                yield
+        except TimeoutError as error:
+            raise GroupAdmissionStalledError(
+                f"{len(indices)} selected rollout payloads did not arrive within "
+                f"{self.stall_timeout:.0f}s: batch_id={batch_id} indices={list(indices)}"
+            ) from error
+
+    def _validate(self, indices: tuple[int, ...], groups: list[RolloutGroup]) -> list[RolloutGroup]:
+        by_index = {group.index: group for group in self.selected}
+        selected = tuple(by_index[index] for index in indices)
+        if len(groups) != len(selected):
+            raise ValueError("payload store returned the wrong number of selected rollout groups")
+        for expected, group in zip(selected, groups, strict=True):
+            if group.uid != expected.uid or group.policy_step != expected.policy_step:
+                raise ValueError(f"selected rollout payload does not match batch metadata for {expected.uid}")
+            work = GeneratedWork.from_batch(
+                group.trajectory_batch["response_ids"], group.trajectory_batch.get("is_last_step")
+            )
+            if work.sample_count != expected.sample_count or work.generated_token_count != expected.response_tokens:
+                raise ValueError(f"selected rollout payload size does not match batch metadata for {expected.uid}")
+        return groups
 
 
 @dataclass(frozen=True)
@@ -93,6 +157,9 @@ class MemoryPayloads:
 
     async def fetch(self, payloads: Sequence) -> list[RolloutGroup]:
         return list(await asyncio.gather(*payloads))
+
+    async def shared_refs(self, payloads: Sequence) -> tuple[ray.ObjectRef, ...]:
+        return tuple(payloads)
 
     async def checkpoint(self, payload: object | None) -> object | None:
         if payload is None:
@@ -140,6 +207,11 @@ class ObjectStorePayloads:
     async def fetch(self, payloads: Sequence) -> list[RolloutGroup]:
         loop = asyncio.get_running_loop()
         return list(await asyncio.gather(*(loop.run_in_executor(_reads, _read_group, uri) for uri in payloads)))
+
+    async def shared_refs(self, payloads: Sequence) -> tuple[ray.ObjectRef, ...]:
+        groups = await self.fetch(payloads)
+        loop = asyncio.get_running_loop()
+        return tuple([await loop.run_in_executor(_writes, ray.put, group) for group in groups])
 
     async def checkpoint(self, payload: object | None) -> object | None:
         return payload

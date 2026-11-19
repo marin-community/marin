@@ -64,6 +64,14 @@ column to every row; producers do not declare it, but SQL queries can select it.
 
 ## Diagnosing query latency
 
+SQL and FetchLogs have separate caps of two and four concurrent requests and a
+read pool sized to the available CPU count, including affinity and cgroup limits
+(`GET /api/server`: `readWorkers`). On Linux, async and blocking read workers run
+at process nice + 10, capped at 19, with all CPUs available; ingestion, cloud HTTP
+I/O, flushes, and maintenance keep the existing Tokio runtime and priority. This
+gives scheduling preference without a hard CPU reservation; non-Linux platforms
+use separate pools without changing priority.
+
 Start with the server's stage timings when unrelated log and SQL requests slow
 down together. For the GCE hub:
 
@@ -301,11 +309,18 @@ Source Parquet remains authoritative throughout cleanup.
 Object-backed maintenance treats all unpartitioned files at one nonterminal
 level as a sparse stream. Sequence gaps and overlapping footer ranges therefore
 cannot split a level into sub-threshold runs and strand aggregate debt. The
-planner promotes the shortest prefix reaching either the level's compressed-byte
-target or its 32-segment cap; L3 is terminal. Partitioned table specs still form
-one independent stream per exact partition. Each cycle executes at most one
-object compaction and resumes after 100 ms while progress remains, returning to
-the 30-second cadence at quiescence. Publication atomically replaces exact input
+planner promotes a level once it reaches the level's compressed-byte target or
+32 segments; L3 is terminal. An L1 or L2 job takes at most 32 inputs. An L0 job
+takes up to 512, because each job pays a fixed upload, index build, and catalog
+commit, and L0s are single flushes of a few hundred KB. Partitioned table specs
+still form one independent stream per exact partition. A cycle repeats object
+compaction while work remains, for up to 20 seconds, and resumes after 100 ms
+while progress remains, returning to the 30-second cadence at quiescence. The
+resumed cycle queues for the same `QueryServing` slots as every other table,
+so on a hub with many busy tables one visit's 20 seconds is what bounds L0
+growth. A cycle that ends with compaction work remaining skips index backfill
+and runs object collection at most once an hour, so the slot returns to the
+queue sooner. Publication atomically replaces exact input
 paths under the table's writer fence, so concurrent flushes can rebase and a
 failed commit leaves all inputs live.
 
@@ -648,6 +663,8 @@ up to four namespace turns concurrently, and starts another round immediately
 while work remains. A log turn reads up to one million rows; other tables read
 up to 200,000. Requests retain their byte limit, and log chunks ship serially
 to preserve order. Independent tables can overlap their durable hub writes.
+Scan results remain separate Arrow batches until byte-bounded coalescing, so
+large log reads do not exceed the 2 GiB Utf8 offset limit before request chunking.
 Hub or network failures get three attempts, then leave the affected cursor in place and yield to
 the next namespace. The same batch is retried on the next sweep; exhaustion does
 not discard it.
@@ -704,6 +721,17 @@ settlement, and total milliseconds. A settlement line also reports removed
 segment, row, and byte counts. Maintenance lines report resource class, queue
 wait, run time, and the requested follow-up class. Object-backed relays use the
 `RelayIo` class; `SpecMigration` and `QueryServing` have independent limits.
+
+An object-backed cycle of at least 5 seconds logs `slow maintenance cycle step
+breakdown` with `total_ms`, `compaction_attempts`, and `steps_ms` for
+`flush_and_publish`, `compaction`, `state_gc`, `object_collection`, `segment_bounds`,
+and `index_artifacts`. While compaction still has runs left, the cycle skips the
+`segment_bounds` and `index_artifacts` backfills. Compare it with `object compaction rewrite finished`
+(`merge_ms`, `upload_ms`) to separate merge time from the cycle's other steps.
+A growing `segment_count` in `finelog namespaces <name>`, with `maintenance cycle
+waited for a slot` reporting waits of many minutes, means compaction is falling
+behind flushes. Reads then open every L0 because an L0
+spans the whole key range.
 
 `slow batch stage breakdown` reports `read_ms`, `chunk_encode_ms`, and `push_ms`
 for one turn, with its source cursor range, row count, chunk count, and encoded

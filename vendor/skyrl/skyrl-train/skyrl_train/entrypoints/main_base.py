@@ -219,6 +219,9 @@ def create_ray_wrapped_inference_engines_from_config(
         role,
         engine_init_kwargs=engine_init_kwargs,
     )
+    selectors = OmegaConf.select(cfg, "runtime.placement.engines", default=None)
+    if selectors:
+        engine_kwargs["node_label_selectors"] = [dict(selector) for selector in selectors]
     if cfg.generator.weight_sync_transport == WeightSyncTransport.EXPERT_BLOCK:
         engine_kwargs["require_verified_placements"] = True
     if cfg.trainer.strategy == "megatron":
@@ -473,7 +476,8 @@ class BasePPOExp:
         )  # noqa: PLC0415
 
         timeout = int(self.cfg.trainer.distributed.placement_group_timeout_seconds) if timeout is None else timeout
-        if not policy_strict_spread_eligible(self.cfg):
+        selector = dict(OmegaConf.select(self.cfg, "runtime.placement.policy", default={}))
+        if not policy_strict_spread_eligible(self.cfg) and not selector:
             return None
 
         from ray.util.placement_group import placement_group as _placement_group
@@ -488,7 +492,9 @@ class BasePPOExp:
         # reservation ordering, not from the spread strategy. Whole-node bundles
         # keep STRICT_SPREAD (one whole-node bundle per node) as before.
         strategy = "PACK" if per_gpu else "STRICT_SPREAD"
-        pg = _placement_group(bundles, strategy=strategy)
+        pg = _placement_group(
+            bundles, strategy=strategy, bundle_label_selector=[selector] * len(bundles) if selector else None
+        )
         get_ray_pg_ready_with_timeout(pg, timeout=timeout)
         logger.info(
             f"Reserved dedicated policy placement group (strategy={strategy}, "
