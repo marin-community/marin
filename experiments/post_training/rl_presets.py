@@ -347,6 +347,7 @@ class ControlPin:
 
 @dataclass(frozen=True)
 class ModelPresets:
+    model: str
     presets: tuple[Preset, ...]
     namespace: str
     controls: Mapping[str, ControlPin]

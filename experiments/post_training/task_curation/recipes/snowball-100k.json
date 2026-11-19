@@ -46,5 +46,5 @@
     "Task Trove:laion__nemotron-gym-instruction-following-structured-v3": "structural"
   },
   "validation_per_family": 20,
-  "version": "2026.11.17.1"
+  "version": "2026.11.19.1"
 }

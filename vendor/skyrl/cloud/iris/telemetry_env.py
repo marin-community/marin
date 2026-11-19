@@ -14,6 +14,7 @@ from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, TELEMETRY_ENDPOINT_
 from marinskyrl.environment_contract import (
     EXECUTION_UID_ENV,
     RUN_ID_ENV,
+    RUN_MODEL_ENV,
     TELEMETRY_ENDPOINT_ENV,
     TRAINING_TYPE_ENV,
     TrainingType,
@@ -22,11 +23,14 @@ from marinskyrl.environment_contract import (
 logger = logging.getLogger(__name__)
 
 
-def telemetry_environment(*, run_id: str | None = None, training_type: TrainingType | None = None) -> dict[str, str]:
+def telemetry_environment(
+    *, run_id: str | None = None, model: str | None = None, training_type: TrainingType | None = None
+) -> dict[str, str]:
     """Return the telemetry variables for this task, or nothing outside a cluster.
 
     Args:
         run_id: Experiment identity.
+        model: Model name declared by the launcher.
         training_type: The trainer the run uses; SKYRL_TRAINING_TYPE supplies it when this is None.
     """
     job_info = get_job_info()
@@ -46,6 +50,8 @@ def telemetry_environment(*, run_id: str | None = None, training_type: TrainingT
         RUN_ID_ENV: run_id or os.environ.get(RUN_ID_ENV) or str(job_info.job_id),
         EXECUTION_UID_ENV: os.environ.get(EXECUTION_UID_ENV) or f"iris:{job_info.attempt_uid}",
     }
+    if model is not None:
+        resolved[RUN_MODEL_ENV] = model
     if value := training_type or os.environ.get(TRAINING_TYPE_ENV):
         resolved[TRAINING_TYPE_ENV] = TrainingType(value).value
     return resolved

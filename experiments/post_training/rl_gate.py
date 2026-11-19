@@ -462,6 +462,7 @@ def comparison_config(launch: dict, recorded: RecordedLaunch | None = None) -> d
     for path in (
         "run.id",
         "run.attempt_id",
+        "run.model",
         "run.coordinator_iris_job_id",
         "iris.job_name",
         "iris.wandb_entity",
@@ -474,7 +475,7 @@ def comparison_config(launch: dict, recorded: RecordedLaunch | None = None) -> d
         "<run-identity>",
     )
     runtime = config["skyrl"].get("runtime", {})
-    for field in ("run_id", "attempt_id", "coordinator_iris_job_id", "iris_job_id"):
+    for field in ("run_id", "model", "attempt_id", "coordinator_iris_job_id", "iris_job_id"):
         runtime.pop(field, None)
     if not runtime:
         config["skyrl"].pop("runtime", None)
@@ -712,7 +713,7 @@ def _pin_error(preset: presets.Preset, pin: ControlPin | None) -> InvalidCompari
         f"no control pin for {preset.name} at {preset.revision}; "
         f"recorded control revision={pin.revision if pin else None}; "
         f"collect current controls with --preset {name} "
-        f"--version {preset.revision} --control --replicates {replicas} --run"
+        f"--version {preset.revision} --control --replicates {replicas} --issue ISSUE_NUMBER --run"
     )
 
 

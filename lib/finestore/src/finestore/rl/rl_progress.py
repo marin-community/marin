@@ -71,6 +71,7 @@ class Comparison(BaseModel):
 
 Count = Annotated[StrictInt, Field(ge=0)]
 Identity = Annotated[str, Field(min_length=1)]
+RunIssue = StrictInt | Literal["opted_out"]
 
 
 class GateResult(BaseModel):
@@ -90,7 +91,9 @@ class RunSummary(BaseModel):
     attempt_id: Identity
     label: Identity
     series: str | None = None
-    issue: StrictInt | None = None
+    model: Identity | None = None
+    issue: RunIssue | None = None
+    evaldash_run_ids: list[Identity] | None = None
     iris_job_id: str | None = None
     wandb_url: str | None = None
     grafana_url: str | None = None

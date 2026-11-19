@@ -260,7 +260,7 @@ def _calculate_eval_metrics(
 
 
 def _evaluation_task_rows(
-    rollouts: _EvaluationRollouts, *, attempt_id: str, step: int, evaluation: str
+    rollouts: _EvaluationRollouts, *, attempt_id: str, step: int, evaluation: str, model: str | None
 ) -> list[EvaluationTaskRow]:
     batch = rollouts.batch
     count = len(batch["response_ids"])
@@ -314,11 +314,12 @@ def _evaluation_task_rows(
                 task_id=task_id,
                 data_source=sources[task_id],
                 strata=identity.strata,
-                agentic=identity.agentic,
+                task_digest=identity.task_digest,
                 score=float(np.mean(scores)) if scores else None,
                 outcome=next(iter(outcomes)) if len(outcomes) == 1 else "mixed",
                 error_type=next(iter(errors)) if len(errors) == 1 else "multiple",
                 answers=answers,
+                model=model,
             )
         )
     return rows
@@ -334,6 +335,7 @@ def _persist_evaluation(
     rows = _evaluation_task_rows(
         rollouts,
         attempt_id=str(cfg.runtime.attempt_id),
+        model=cfg.runtime.get("model"),
         step=global_step if global_step is not None else -1,
         evaluation="eval/" if val_set_name is None else f"eval/{val_set_name}/",
     )

@@ -16,9 +16,9 @@ const comparison = (row) => `${row.metric}: ${number(row.control)} → ${number(
 const invariant = (row) => `r${row.replicate} ${row.name}: ${row.value} ${row.comparator ?? '(comparator unknown)'} ${row.limit} · ${row.holds ? 'PASS' : 'FAIL'}`;
 const hours = (run) => run.elapsed_seconds == null ? null : run.elapsed_seconds / 3600;
 const attemptTime = (run) => Date.parse(run.started_at ?? run.run_date ?? run.completed_at) || 0;
-function groupedRuns() {
+function groupedRuns(records = runs) {
   const groups = new Map();
-  for (const run of runs) {
+  for (const run of records) {
     if (!groups.has(run.run_id)) groups.set(run.run_id, []);
     groups.get(run.run_id).push(run);
   }
@@ -47,11 +47,15 @@ function showDetails(run) {
   if (explicitWandb && /^https:\/\/wandb\.ai\//.test(explicitWandb)) links.append(element('a', 'W&B run ↗', { href: explicitWandb, target: '_blank', rel: 'noopener noreferrer' }));
   const grafana = grafanaLink(run);
   if (grafana) links.append(grafana);
-  if (run.issue) links.append(element('a', `Experiment #${run.issue} ↗`, { href: `https://github.com/marin-community/marin/issues/${run.issue}`, target: '_blank', rel: 'noopener noreferrer' }));
+  if (typeof run.issue === 'number') links.append(element('a', `Experiment #${run.issue} ↗`, { href: `https://github.com/marin-community/marin/issues/${run.issue}`, target: '_blank', rel: 'noopener noreferrer' }));
+  for (const id of run.evaldash_run_ids ?? []) {
+    links.append(element('a', `EvalDash ${id} ↗`, { href: `https://marina.oa.dev/evaldash/runs/${encodeURIComponent(id)}`, target: '_blank', rel: 'noopener noreferrer' }));
+  }
   links.append(element('a', 'Link to this run', { href: route(run) }));
   body.append(links);
   const fields = element('dl', null, { class: 'detail-grid' });
   const facts = [
+    ['Model', run.model], ['Issue', run.issue === 'opted_out' ? 'Opted out at launch' : run.issue],
     ['Series', series(run)], ['Run ID', run.run_id], ['Attempt ID', run.attempt_id], ['Iris job', run.iris_job_id],
     ['Verdict', run.gate_result?.verdict], ['Label', run.gate_result?.label], ['Gate', run.gate], ['Failed facts', (run.failed_facts ?? []).join(', ') || null],
     ['Status', `${run.status} · ${run.optimizer_steps ?? 'Unknown'} optimizer updates`],
@@ -89,8 +93,10 @@ function followHash() {
 }
 
 function render() {
-  const groups = groupedRuns(), selected = visibleRuns(groups);
-  $('count').textContent = `${selected.length} runs · ${runs.length} recorded attempts`;
+  const model = $('model-filter').value;
+  const matching = model ? runs.filter((run) => run.model === model) : runs;
+  const groups = groupedRuns(matching), selected = visibleRuns(groups);
+  $('count').textContent = `${selected.length} runs · ${matching.length} recorded attempts`;
   $('attempts').replaceChildren(...[...selected].sort((a, b) => attemptTime(b) - attemptTime(a)).map((run) => {
     const tr = element('tr');
     const name = element('td'), button = element('button', run.label); button.onclick = () => { location.hash = route(run); }; name.append(button);
@@ -120,7 +126,7 @@ function render() {
       constraints.textContent = '—';
       verdict.textContent = '—';
     }
-    tr.append(name, objectives, constraints, verdict);
+    tr.append(name, element('td', run.model ?? 'Not recorded'), objectives, constraints, verdict);
     return tr;
   }));
 }
@@ -130,6 +136,10 @@ async function refresh() {
     const response = await fetch('./api/runs');
     if (!response.ok) throw new Error(`Could not load runs (${response.status}).`);
     const data = await response.json(); runs = data.runs;
+    const filter = $('model-filter'), previous = filter.value;
+    const models = [...new Set(runs.map((run) => run.model).filter(Boolean))].sort();
+    filter.replaceChildren(element('option', 'All models', { value: '' }), ...models.map((model) => element('option', model, { value: model })));
+    if (models.includes(previous)) filter.value = previous;
     $('warnings').hidden = !(data.skipped_records?.length);
     $('warnings').textContent = (data.skipped_records ?? []).map((record) => `Skipped malformed record ${record.run_id}/${record.attempt_id}: ${record.error}`).join('\n');
     followHash();
@@ -137,6 +147,7 @@ async function refresh() {
   finally { $('refresh').disabled = false; }
 }
 $('refresh').onclick = refresh;
+$('model-filter').onchange = render;
 function closeDetails() {
   if (location.hash.startsWith('#run=')) history.replaceState(null, '', location.pathname + location.search);
   $('run-detail').close();

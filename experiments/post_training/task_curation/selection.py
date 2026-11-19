@@ -371,7 +371,7 @@ def _chat_panel_task(case: EvaluationCase) -> TaskSpec:
     return task
 
 
-def task_records(tasks: Iterator[TaskSpec], strata: Mapping[str, TaskStrata]) -> Iterator[dict[str, str]]:
+def task_records(tasks: Iterator[TaskSpec], strata: Mapping[str, TaskStrata]) -> Iterator[dict[str, Any]]:
     for task in tasks:
         tags = strata[task.id]
         yield {TASK_SPEC_COLUMN: task.model_dump_json(), **tags.model_dump()}
@@ -381,8 +381,7 @@ def _selection_row(task: TaskSpec, strata: TaskStrata, *, state: MembershipState
     return SelectionTaskRow(
         task_id=task.id,
         task_digest=canonical_sha256(task.model_dump(mode="json")),
-        **strata.model_dump(),
-        agentic="agentic" in task.tags,
+        **strata.model_copy(update={"agentic": "agentic" in task.tags}).model_dump(),
         grader_kind=_grader_kind(task),
         raw_source=task.source.model_dump_json(),
         state=state,
@@ -491,7 +490,7 @@ def write_training(
                 source_counts.eligible += 1
                 yield Candidate(task.id, row[TASK_JSON_COLUMN], source.source_id, contract)
 
-    def selected_records() -> Iterator[dict[str, str]]:
+    def selected_records() -> Iterator[dict[str, Any]]:
         groups = (
             [(source.source_id, config.recipe.source_limits[source.source_id], (source,)) for source in config.sources]
             if config.recipe.source_limits is not None
@@ -515,7 +514,10 @@ def write_training(
                 yield {
                     TASK_SPEC_COLUMN: row.task_json,
                     **TaskStrata(
-                        family=family, aai_category=AAII_CATEGORIES.get(family, "untagged"), source=task.source.dataset
+                        family=family,
+                        aai_category=AAII_CATEGORIES.get(family, "untagged"),
+                        source=task.source.dataset,
+                        agentic="agentic" in task.tags,
                     ).model_dump(),
                 }
 
@@ -779,7 +781,9 @@ def prepare_eval_lite(config: EvalLiteConfig) -> None:
             raw = value[TASK_SPEC_COLUMN]
             task = TaskSpec.model_validate_json(raw)
             raw_tasks[task.id] = raw
-            rows[task.id] = parent.tasks[task.id].model_copy(update={"task_digest": canonical_sha256(json.loads(raw))})
+            rows[task.id] = parent.tasks[task.id].model_copy(
+                update={"task_digest": canonical_sha256(json.loads(raw)), "agentic": "agentic" in task.tags}
+            )
     selection = (
         select_eval_lite(
             recipe,

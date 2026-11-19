@@ -39,8 +39,9 @@ against control r0 even during planning. Gated execution and re-scoring require 
 the preset; a mismatch returns exit 4 before submission or INVALID during gate execution. Controls are collected
 after merge; `--control` and `train-long` need no pin.
 
-Without `--run`, the command prints the graph and saved status. Add `--run` to submit an Iris
-coordinator, or `--run --wait` to poll every 60 seconds and print the final report.
+The default command and `--plan` print the graph and saved status. Add `--run` to submit an Iris
+coordinator, or `--run --wait` to poll every 60 seconds and print the final report. Submission
+requires `--issue ISSUE_NUMBER` or `--no-issue` and records that choice on the native attempt.
 Repeating the same command reuses completed artifacts. Track or stage source files under
 `experiments/`, `lib/` and `vendor/`: their working-tree hash forms part of the run name.
 `--version dev` satisfies the standard launcher interface; each preset's steps use its `revision`.
@@ -68,15 +69,18 @@ uv run python -m experiments.post_training.snowball_rl publish --preset train-lo
 ```
 
 Without `--output` and `--attempt`, that command publishes the selected preset's pinned controls.
-Both selectors are required together. Historical attempts retain their own native identity and
-window. Unattributed historical JSONL dumps do not supply per-attempt evaluation summaries.
+Both selectors are required together. Pass the complete `EvaluationResult.run_ids` tuple with one
+`--evaldash-run-id RUN_ID` per evaluation definition. Providing IDs sets the entire list for the
+selected attempt. Publishing without IDs preserves its saved links. Historical attempts retain their
+own native identity and window. Unattributed historical JSONL dumps do not supply per-attempt
+evaluation summaries.
 The dashboard's detail view shows each evaluation step's counts and strata means, including
 family, AAII category and difficulty, and links to the run's Grafana window.
 
 
 After `--run --wait` observes the coordinator finish, the launcher publishes learning-medium,
-data-medium and train-long attempts using the caller's Marina login. Pass `--issue ISSUE_NUMBER`
-and record the finishing status's `rl_progress_url` with the verdict.
+data-medium and train-long attempts using the caller's Marina login. The row shows the model and
+the launch's issue link or explicit opt-out. Record the finishing status's `rl_progress_url` with the verdict.
 Use `--url ORIGIN` to publish to a local Marina stack; the default is the Marina service.
 
 Repeat the original command with `--wait` from the same source and inputs. The executor reuses
@@ -205,6 +209,29 @@ by task ID and count as scored only after successful verification without an exc
 Equal-family mean averages answers per task, tasks per family, then families. Slices use family, AAII
 category and agentic status. Task selection versions are immutable; follow the EvalLite reference to change one.
 
+To compute each EvalLite version for a run, read the stored task rows for one attempt, evaluation
+and checkpoint step. Load each version's selection with `read_selection_strata` and pass it to
+`score_eval_lite_version`.
+
+```python
+from finestore.rl.run_records import read_evaluations
+from finestore.rl.strata import read_selection_strata
+from experiments.post_training.rl_scoring import score_eval_lite_version
+
+rows = read_evaluations(export_root, attempt_id=attempt_id, evaluation="eval/eval_lite_100/", step=step)
+for root in version_roots:
+    panel = read_selection_strata(root)
+    if panel is None:
+        raise ValueError(f"Missing selection manifest: {root}")
+    print(panel.definition.version, score_eval_lite_version(rows, panel))
+```
+
+Use the evaluation name stored on the rows. A primary evaluation uses `eval/`. The result reports
+how many active tasks scored, which are missing verified answers, and which have missing or different
+content digests. A version has a score only when every active task has verified answers with matching
+content. To compare earlier versions whose active tasks have since retired, evaluate the retained
+pool so the run includes those tasks.
+
 ## What a run writes
 
 The status block names the run's artifact output and native job. Submission prints an open-ended
@@ -219,7 +246,7 @@ best checkpoint step, or `none eligible`.
 | `resolved-launch.yaml`, `terminal.json` | Native configuration and result; `read_stored_skyrl_attempt(output)` in `marin.rl.skyrl_records` reads the retained attempt without Iris. |
 | `gate_inputs.json` | The runner's declared task, initializer, settings and requirements. |
 | `exports/run-records/` | FineStore attempt receipts, numeric metrics and per-task evaluations. `read_skyrl_metrics(output, attempt_id=...)` reads a selected attempt. |
-| FineStore `evaluations` table | One task per attempt, evaluation and step, with ordered answers, native rewards, verifier bounds, normalized verifier scores, outcomes and canonical strata. `finestore.rl.run_records.read_evaluations(export_root, attempt_id=...)` reads it; `rl_scoring.evaluation_scores` joins a selected panel's membership and content to these rows. |
+| FineStore `evaluations` table | One task per attempt, evaluation and step, with task content digest, ordered answers, native rewards, verifier bounds, normalized verifier scores, outcomes and canonical strata. `finestore.rl.run_records.read_evaluations` reads it. |
 | `exports/dumped_evals/<attempt_id>/...` | JSONL answers carrying attempt, step and final-turn identity; named evaluations also have their own export subtree. |
 | Native checkpoint root | Recovery checkpoints in the 14-day TTL bucket. The receipt records their location and lineage; they are separate from durable exports. |
 | `exports/best_checkpoint.json` | The selected native checkpoint step and its evaluation evidence, written when a checkpoint is eligible. |

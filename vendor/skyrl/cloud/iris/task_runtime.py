@@ -814,8 +814,8 @@ def pin_socket_ifname() -> str | None:
     return iface
 
 
-def export_telemetry_environment(run_id: str | None, training_type: TrainingType | None) -> None:
-    resolved = telemetry_environment(run_id=run_id, training_type=training_type)
+def export_telemetry_environment(run_id: str | None, training_type: TrainingType | None, model: str | None) -> None:
+    resolved = telemetry_environment(run_id=run_id, training_type=training_type, model=model)
     if not resolved:
         _log("[telemetry] no telemetry environment resolved; MarinSkyRL telemetry stays inert")
         return
@@ -2327,7 +2327,7 @@ def main() -> None:
     # would otherwise broadcast the head's name to every node.
     derived_gloo_ifname = pin_socket_ifname()
     # Resolve before Ray starts so its actors inherit this task's telemetry settings.
-    export_telemetry_environment(args.run_id, args.training_type)
+    export_telemetry_environment(args.run_id, args.training_type, launch_config.run.get("model"))
     # Ensure the NCCL flight-recorder dump dir exists on THIS node BEFORE any torch/NCCL
     # init, so a collective-timeout FR dump actually writes. See ensure_fr_dump_dir.
     ensure_fr_dump_dir()

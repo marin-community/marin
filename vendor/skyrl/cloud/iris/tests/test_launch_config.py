@@ -31,6 +31,7 @@ from cloud.iris.rl_config_translation import (
     materialize_launch_config,
     parse_rl_config,
 )
+from skyrl_train import trainer as trainer_module
 from skyrl_train.callbacks.base import TrainerControl, TrainerState
 from skyrl_train.callbacks.builtin import HFModelSaveCallback, create_default_callbacks
 from skyrl_train.distributed.step_policy import NonfiniteStepPolicy, nonfinite_step_policy
@@ -41,7 +42,10 @@ from skyrl_train.config.utils import get_default_config
 from skyrl_train.utils.tracking import Tracking
 from skyrl_train.config.rollout_validation import EntrypointOperation, validate_rollout_launch
 from skyrl_train.inference_engines import placement as inference_placement
-from skyrl_train.inference_engines.ray_wrapped_inference_engine import should_verify_inference_workers
+from skyrl_train.inference_engines.ray_wrapped_inference_engine import (
+    _build_inference_engine_runtime_env,
+    should_verify_inference_workers,
+)
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 
 
@@ -489,6 +493,17 @@ def test_object_store_uris_in_skyrl_config_reach_the_task_unchanged(tmp_path: Pa
     assert config.skyrl.trainer.rollout_buffer.object_store_root == "s3://runs/smoke/rollouts"
 
 
+@pytest.mark.parametrize("model", ["", " policy "])
+def test_launch_rejects_a_noncanonical_model_label(tmp_path: Path, model: str) -> None:
+    raw = raw_launch_config()
+    raw["run"]["model"] = model
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw))
+
+    with pytest.raises(ValueError, match=r"run\.model must be a non-empty name"):
+        load_launch_config(path)
+
+
 def test_qwen_smoke_hugging_face_model_input_reaches_the_runner_without_a_model_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -539,6 +554,7 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(
     destination = tmp_path / "launch.yaml"
     document = raw_launch_config()
     document["run"]["coordinator_iris_job_id"] = "/tests/coordinator"
+    document["run"]["model"] = "test-policy"
     if own_tokenizer:
         document["inputs"]["model"].update(tokenizer_uri=None, tokenizer_revision=None)
     document["iris"]["max_retries"] = 0
@@ -621,6 +637,8 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(
     assert final.native.result.iris_job_id == "/tests/bootstrap-trainer"
     if entrypoint == "generate":
         assert [(run["id"], run["group"], run["resume"]) for run in wandb_runs] == [("attempt-1", "smoke", "allow")]
+        assert wandb_runs[0]["tags"] == ["test-policy"]
+        assert wandb_runs[0]["config"]["model"] == "test-policy"
 
 
 def test_evaluation_metric_names_survive_iris_path_resolution(tmp_path: Path) -> None:
@@ -1029,3 +1047,52 @@ def test_source_launch_rejects_conflicting_author_values(tmp_path):
         OmegaConf.save(raw, path)
         with pytest.raises(ValueError, match=error):
             load_launch_config(path)
+
+
+@pytest.mark.parametrize(
+    ("colocate_all", "colocate_policy_ref"), [(True, False), (False, True), (False, False)]
+)
+def test_resolved_nccl_buffers_override_inherited_small_buffer(
+    tmp_path, monkeypatch, colocate_all, colocate_policy_ref
+):
+    # A stale driver environment must not restore the NVLSTree corruption setting.
+    monkeypatch.setenv("NCCL_BUFFSIZE", "262144")
+    raw = raw_launch_config()
+    raw["skyrl"]["trainer"]["algorithm"]["use_kl_loss"] = True
+    raw["skyrl"]["trainer"]["placement"].update(
+        colocate_all=colocate_all, colocate_policy_ref=colocate_policy_ref
+    )
+    raw["iris"]["allocation"]["num_nodes"] = 1 if colocate_all else 2 if colocate_policy_ref else 3
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    config = load_launch_config(path).skyrl
+    actor_environments = {}
+
+    def record_actor_group(cfg, nodes, gpus, worker, **kwargs):
+        actor_environments[worker] = kwargs["actor_env_vars"]
+        return object()
+
+    # Replace the remote allocation boundary, then run the actual role wiring.
+    monkeypatch.setattr(trainer_module, "PPORayActorGroup", record_actor_group)
+    trainer = trainer_module.RayPPOTrainer.__new__(trainer_module.RayPPOTrainer)
+    trainer.cfg = config
+    trainer.colocate_pg = None
+    monkeypatch.setattr(trainer, "_initialize_model_actors", lambda *_args: None)
+    trainer.build_models("policy", "critic", "ref", policy_pg=object())
+    assert actor_environments == {
+        "policy": {"NCCL_BUFFSIZE": "4194304"},
+        "ref": {"NCCL_BUFFSIZE": "4194304"},
+    }
+    runtime_env = _build_inference_engine_runtime_env(
+        nccl_buffer_size_bytes=config.trainer.policy.nccl_buffer_size_bytes
+    )
+    assert runtime_env["env_vars"]["NCCL_BUFFSIZE"] == "4194304"
+
+    # Keep explicit per-role tuning representable for diagnostic controls.
+    raw["skyrl"]["trainer"].setdefault("policy", {})["nccl_buffer_size_bytes"] = 8388608
+    path.write_text(yaml.safe_dump(raw))
+    resolved = load_launch_config(path).skyrl
+    runtime_env = _build_inference_engine_runtime_env(
+        nccl_buffer_size_bytes=resolved.trainer.policy.nccl_buffer_size_bytes
+    )
+    assert runtime_env["env_vars"]["NCCL_BUFFSIZE"] == "8388608"
