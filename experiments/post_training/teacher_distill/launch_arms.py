@@ -83,9 +83,9 @@ def worker(config, output, settings):
     _run_grug_local(config)
 
 
-def build(template: Path, arm: str, date: str):
+def build(template: Path, arm: str, date: str, profile_steps: int = 0):
     label, alpha = ARMS[arm]
-    run_id = f"task504-distill-{arm}-{label}-{date}"
+    run_id = f"task504-distill-{arm}-{label}-{date}" + ("-profile" if profile_steps else "")
     text = (template / "config.json").read_text()
     text = text.replace(TEMPLATE_PREFIX, f"tmp/ttl=14d/teacher-distill-504/runs/{run_id}").replace(TEMPLATE_ID, run_id)
     raw = json.loads(text)
@@ -93,6 +93,10 @@ def build(template: Path, arm: str, date: str):
     trainer["distill_alpha"] = alpha
     trainer["trainer"]["tracker"]["group"] = "task504-mochi-distill"
     trainer["trainer"]["tracker"]["tags"] = ["task504", "mochi-distill", f"alpha-{alpha}"]
+    if profile_steps:
+        # A short run that traces a few steady-state steps; start after the first-step restore gate.
+        raw["stop_after_steps"] = 5 + profile_steps + 2
+        trainer["trainer"]["profiler"].update(enabled=True, start_step=5, num_steps=profile_steps)
     config = draccus.decode(GrugRunConfig, raw)
     settings = json.loads((template / "data-settings.json").read_text())
     # A scoring time cap drops whole cells, so substitute exactly the rows that were assembled.
@@ -147,11 +151,12 @@ def main():
     parser.add_argument("--arm", choices=sorted(ARMS), required=True)
     parser.add_argument("--date", default="20261119")
     parser.add_argument("--scheduling-hours", type=float, default=3.0)
+    parser.add_argument("--profile-steps", type=int, default=0, help="run a short job that profiles this many steps")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     os.chdir(ROOT)
     configure_coreweave_s3()
-    kwargs, plan = build(args.template, args.arm, args.date)
+    kwargs, plan = build(args.template, args.arm, args.date, args.profile_steps)
     kwargs["scheduling_timeout"] = Duration.from_seconds(args.scheduling_hours * 3600)
     print(json.dumps(plan, indent=2))
     if args.dry_run:
