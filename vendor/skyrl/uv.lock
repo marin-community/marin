@@ -3189,6 +3189,7 @@ requires-dist = [
     { name = "pyyaml", marker = "extra == 'schema'", specifier = ">=6.0" },
     { name = "reasoning-gym", marker = "extra == 'reasoning-gym'", specifier = ">=0.1.25" },
     { name = "sympy", marker = "extra == 'math'", specifier = ">=1.12" },
+    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0.1" },
     { name = "tomli-w", specifier = ">=1.2" },
 ]
 provides-extras = ["math", "schema", "judge", "reasoning-gym", "all"]
