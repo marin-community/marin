@@ -5,11 +5,7 @@
 """Image and conversation sources, preprocessing, batching, and caching."""
 
 import abc
-import asyncio
 import logging
-import threading
-import weakref
-from collections import OrderedDict
 from dataclasses import dataclass
 from functools import cached_property, partial
 from typing import Any, Dict, Iterator, List, Mapping, Optional, Protocol, Sequence, Tuple, Union, cast
@@ -28,7 +24,7 @@ from typing_extensions import TypedDict
 from levanter.compat.hf_checkpoints import load_processor
 from levanter.data.dataset import AsyncDataset
 from levanter.data._preprocessor import BatchProcessor
-from levanter.data.dataset import MappedAsyncDataset
+from levanter.data.dataset import MappedAsyncDataset, RepeatedDataset
 from levanter.data.sharded_datasource import (
     ShardedDataSource,
     UrlDataSource,
@@ -54,9 +50,6 @@ from PIL import Image  # noqa: E402
 from rigging.filesystem.storage_path import StoragePath, prefix_join  # noqa: E402
 
 logger = logging.getLogger("levanter.data.image")
-
-PREFETCH_WAIT_TIMEOUT = 0.05
-
 
 ConversationMessage = TypedDict(
     "ConversationMessage",
@@ -682,7 +675,7 @@ class BatchMultimodalProcessor(BatchProcessor[ConversationDict, ImageTextDict]):
 
     @property
     def num_cpus(self) -> int:
-        return 2  # Image processing can benefit from multiple CPUs
+        return 2
 
     @property
     def num_gpus(self) -> int:
@@ -870,222 +863,12 @@ class ImageTaskConfig(abc.ABC):
     def train_set(
         self,
         options: CacheOptions = CacheOptions.default(),
-        *,
-        key: Optional[PRNGKeyArray] = None,
     ) -> AsyncDataset[ImageTextDict]:
         pass
 
     @abc.abstractmethod
     def validation_sets(self) -> Mapping[str, AsyncDataset[ImageTextDict]]:
         pass
-
-
-class OnDemandImageDataset(AsyncDataset[ImageTextDict]):
-    """Indexed dataset that keeps raw records in memory and processes images on demand.
-
-    HF source iteration can stream, but random access materializes those records.
-    Use the raw source's doc_iterator for bounded, sequential HF streaming.
-    """
-
-    DEFAULT_CACHE_SIZE = 256  # ~256 examples * ~2MB each = ~512MB
-
-    # Per-processor locks - each processor instance gets its own lock
-    # This allows different processors to run in parallel while ensuring
-    # thread-safety for each individual processor (HF tokenizers are not thread-safe)
-    _processor_locks: Optional[weakref.WeakKeyDictionary] = None  # Lazy init
-    _processor_locks_lock: Optional[threading.Lock] = None  # Lazy init
-
-    @classmethod
-    def _init_class_locks(cls) -> None:
-        """Initialize class-level locks lazily."""
-        if cls._processor_locks is None:
-            cls._processor_locks = weakref.WeakKeyDictionary()
-            cls._processor_locks_lock = threading.Lock()
-
-    @classmethod
-    def _get_processor_lock(cls, processor: ProcessorMixin) -> threading.Lock:
-        """Get or create a lock for a specific processor instance."""
-        cls._init_class_locks()
-        assert cls._processor_locks_lock is not None
-        assert cls._processor_locks is not None
-        with cls._processor_locks_lock:
-            if processor not in cls._processor_locks:
-                cls._processor_locks[processor] = threading.Lock()
-            return cls._processor_locks[processor]
-
-    def __init__(
-        self,
-        source: ShardedDataSource[ConversationDict],
-        processor: ProcessorMixin,
-        max_length: int,
-        padding: bool = True,
-        messages_key: str = "messages",
-        images_key: str = "images",
-        cache_size: int = DEFAULT_CACHE_SIZE,
-        max_num_patches: Optional[int] = None,
-    ) -> None:
-        super().__init__()
-        self.source = source
-        self.processor = processor
-        self.max_length = max_length
-        self.padding = padding
-        self.messages_key = messages_key
-        self.images_key = images_key
-        self.cache_size = cache_size
-
-        self._batch_processor = BatchMultimodalProcessor(
-            processor,
-            max_length=max_length,
-            padding=padding,
-            messages_key=messages_key,
-            images_key=images_key,
-            max_num_patches=max_num_patches,
-        )
-
-        self._processor_lock = self._get_processor_lock(processor)
-
-        # Raw records may include decoded images as well as paths or encoded bytes.
-        self._raw_data: Optional[List[ConversationDict]] = None
-        self._length: Optional[int] = None
-        self._data_lock = threading.Lock()
-        self._data_loaded = threading.Event()
-
-        # Prefetch cache for PROCESSED data (large - includes pixel_values)
-        # Key: global_idx, Value: ImageTextDict
-        # Items are popped when accessed - cache only holds prefetched but not-yet-accessed data
-        self._processed_cache: OrderedDict[int, ImageTextDict] = OrderedDict()
-        self._cache_lock = threading.Lock()
-
-        self._prefetch_thread: Optional[threading.Thread] = None
-        self._stop_prefetch = threading.Event()
-        self._prefetch_error: Optional[Exception] = None
-
-    def _ensure_data_loaded(self) -> None:
-        """Load all raw data into memory (synchronous)."""
-        if self._raw_data is not None:
-            return
-
-        with self._data_lock:
-            if self._raw_data is not None:
-                return
-
-            logger.info("Loading raw records into memory for indexed image access...")
-
-            raw_data: list[ConversationDict] = []
-            for shard_name in self.source.shard_names:
-                shard_data = list(self.source.open_shard(shard_name))
-                raw_data.extend(shard_data)
-
-            self._raw_data = raw_data
-            self._length = len(raw_data)
-            self._data_loaded.set()
-            logger.info(f"Loaded {self._length} raw examples into memory")
-
-            self._start_prefetch_thread()
-
-    def _start_prefetch_thread(self) -> None:
-        """Start background thread to prefetch data sequentially."""
-        if self._prefetch_thread is not None:
-            return
-
-        def prefetch_worker() -> None:
-            batch_size = 32
-            next_idx = 0
-
-            while not self._stop_prefetch.is_set():
-                if self._length is None or self._raw_data is None:
-                    self._stop_prefetch.wait(PREFETCH_WAIT_TIMEOUT)
-                    continue
-
-                cache_len = len(self._processed_cache)
-                if cache_len >= self.cache_size:
-                    self._stop_prefetch.wait(PREFETCH_WAIT_TIMEOUT)
-                    continue
-
-                if next_idx >= self._length:
-                    return
-
-                end_idx = min(next_idx + batch_size, self._length)
-                with self._cache_lock:
-                    indices_to_prefetch = [i for i in range(next_idx, end_idx) if i not in self._processed_cache]
-
-                if not indices_to_prefetch:
-                    next_idx = end_idx
-                    continue
-
-                try:
-                    with self._processor_lock:
-                        processed = self._process_items(indices_to_prefetch)
-
-                    with self._cache_lock:
-                        for idx, item in zip(indices_to_prefetch, processed):
-                            self._processed_cache[idx] = item
-                        while len(self._processed_cache) > self.cache_size:
-                            self._processed_cache.popitem(last=False)
-                except Exception as error:
-                    # Transfer worker failures to the caller rather than retrying forever.
-                    self._prefetch_error = error
-                    return
-
-                next_idx = end_idx
-
-        self._prefetch_thread = threading.Thread(target=prefetch_worker, daemon=True)
-        self._prefetch_thread.start()
-        logger.debug("Started sequential prefetch thread")
-
-    def _process_items(self, indices: Sequence[int]) -> List[ImageTextDict]:
-        """Process items - must be called with _processor_lock held."""
-        assert self._raw_data is not None, "Data not loaded"
-        raw_items = [self._raw_data[i] for i in indices]
-        if self.padding:
-            return list(self._batch_processor(raw_items))
-        return [self._batch_processor([item])[0] for item in raw_items]
-
-    def _get_from_cache_or_process(self, indices: Sequence[int]) -> List[ImageTextDict]:
-        """Consume prefetched items and process cache misses."""
-        self._ensure_data_loaded()
-        if self._prefetch_error is not None:
-            raise self._prefetch_error
-
-        results: List[Optional[ImageTextDict]] = [None] * len(indices)
-        indices_to_process: List[Tuple[int, int]] = []  # (result_idx, global_idx)
-
-        with self._cache_lock:
-            for result_idx, global_idx in enumerate(indices):
-                if global_idx in self._processed_cache:
-                    results[result_idx] = self._processed_cache.pop(global_idx)
-                else:
-                    indices_to_process.append((result_idx, global_idx))
-
-        if indices_to_process:
-            global_indices = [gidx for _, gidx in indices_to_process]
-
-            with self._processor_lock:
-                processed = self._process_items(global_indices)
-
-            for (result_idx, _), item in zip(indices_to_process, processed):
-                results[result_idx] = item
-
-        return results  # type: ignore
-
-    async def async_len(self) -> int:
-        self._ensure_data_loaded()
-        assert self._length is not None, "Data not loaded"
-        return self._length
-
-    def is_finite(self) -> bool:
-        return True
-
-    async def get_batch(self, indices: Sequence[int]) -> Sequence[ImageTextDict]:
-        """Get a batch of processed items."""
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self._get_from_cache_or_process, indices)
-
-    def __del__(self) -> None:
-        """Clean up background thread."""
-        self._stop_prefetch.set()
-        if self._prefetch_thread is not None:
-            self._prefetch_thread.join(timeout=1.0)
 
 
 class ProcessedImageCache(AsyncDataset[ImageTextDict]):
@@ -1146,8 +929,6 @@ class ImageIODatasetConfig(ImageTaskConfig):
     def train_set(
         self,
         options: CacheOptions = CacheOptions.default(),
-        *,
-        key: Optional[PRNGKeyArray] = None,
     ) -> ProcessedImageCache:
         dataset = self.build_or_load_cache(self.source.train_split, options)
         if dataset is None:
@@ -1223,30 +1004,6 @@ class ImageTextExample(eqx.Module):
             grid_mask=grid_mask,
             unpad_indices=unpad_indices,
         )
-
-
-class RepeatedImageDataset(AsyncDataset[ImageTextDict]):
-    """Repeat a finite image dataset for a specified number of epochs."""
-
-    def __init__(self, dataset: AsyncDataset[ImageTextDict], epochs: int) -> None:
-        if not dataset.is_finite() or epochs <= 0:
-            raise ValueError("Repetition requires a finite dataset and positive epochs.")
-        self.dataset = dataset
-        self.epochs = epochs
-
-    async def async_len(self) -> int:
-        return self.epochs * await self.dataset.async_len()
-
-    def is_finite(self) -> bool:
-        return True
-
-    async def get_batch(self, indices: Sequence[int]) -> Sequence[ImageTextDict]:
-        if not indices:
-            return []
-        length = await self.dataset.async_len()
-        if any(index < 0 or index >= self.epochs * length for index in indices):
-            raise IndexError("Image dataset index exceeds the configured epochs.")
-        return await self.dataset.get_batch([index % length for index in indices])
 
 
 class ImageTextDataset(MappedAsyncDataset[ImageTextDict, ImageTextExample]):
@@ -1366,21 +1123,7 @@ class ImageTextDataset(MappedAsyncDataset[ImageTextDict, ImageTextExample]):
 
 @dataclass
 class ImageMixtureDatasetConfig(ImageTaskConfig):
-    """Configuration for a mixture of image-text datasets with their associated weights.
-
-    This class supports mixing multiple image-text data sources for training,
-    similar to AudioMixtureDatasetConfig for audio data.
-
-    Example:
-        config = ImageMixtureDatasetConfig(
-            cache_dir="cache/",
-            configs={
-                "coco": ImageDatasetSourceConfig(id="coco-dataset", ...),
-                "llava": ConversationDatasetSourceConfig(id="llava-dataset", ...),
-            },
-            train_weights={"coco": 0.3, "llava": 0.7},
-        )
-    """
+    """Mix cached image-caption and conversation datasets by weight."""
 
     cache_dir: Optional[str] = "cache/"
 
@@ -1394,8 +1137,6 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
     stop_strategy: str = field(default=StopStrategy.RESTART_STRATEGY)
     mixture_block_size: int = 2048
     """Block size for the mixture dataset."""
-    use_cache: bool = True
-    """Whether to cache preprocessed data. When False, retain raw records in memory and process images on demand."""
 
     def __post_init__(self) -> None:
         if len(self.configs) == 0:
@@ -1438,10 +1179,10 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
             image_datasets = out_datasets
 
         if epochs and epochs > 0:
-            logger.info(f"Wrapping each dataset in RepeatedImageDataset with max_epochs={epochs}")
+            logger.info(f"Wrapping each dataset in RepeatedDataset with max_epochs={epochs}")
             epoch_wrapped_datasets = {}
             for name, ds in image_datasets.items():
-                epoch_wrapped_datasets[name] = RepeatedImageDataset(ds, epochs=epochs)
+                epoch_wrapped_datasets[name] = RepeatedDataset(ds, epochs=epochs)
             image_datasets = epoch_wrapped_datasets
 
         mixture = MixtureDataset(
@@ -1457,51 +1198,10 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
     def training_sets(
         self, max_num_patches: Optional[int] = None, options: CacheOptions = CacheOptions.default()
     ) -> Mapping[str, AsyncDataset[ImageTextDict]]:
-        if self.use_cache:
-            return self.build_caches("train", options=options, max_num_patches=max_num_patches)
-        else:
-            return self.build_on_demand_datasets("train", max_num_patches=max_num_patches)
+        return self.build_caches("train", options=options, max_num_patches=max_num_patches)
 
     def validation_sets(self, max_num_patches: Optional[int] = None) -> Mapping[str, AsyncDataset[ImageTextDict]]:
-        if self.use_cache:
-            return self.build_caches("validation", max_num_patches=max_num_patches)
-        else:
-            return self.build_on_demand_datasets("validation", max_num_patches=max_num_patches)
-
-    def build_on_demand_datasets(
-        self, split: str, max_num_patches: Optional[int] = None
-    ) -> Dict[str, OnDemandImageDataset]:
-        """Build indexed datasets that retain raw records and process images on demand."""
-        datasets_dict = {}
-
-        for name, source_config in self.configs.items():
-            weight = self.train_weights.get(name, 0)
-
-            if weight == 0 and split == "train":
-                continue
-
-            if split == "train":
-                source = source_config.get_shard_source(source_config.train_split)
-            elif split == "validation":
-                source = source_config.get_shard_source(source_config.validation_split)
-            else:
-                source = source_config.get_shard_source(split)
-
-            if source is None:
-                logger.warning(f"Skipping {name} for split {split} because no source was provided")
-                continue
-
-            dataset = OnDemandImageDataset(
-                source=source,
-                processor=self.loaded_processor,
-                max_length=self.max_length,
-                padding=self.padding,
-                max_num_patches=max_num_patches,
-            )
-
-            datasets_dict[name] = dataset
-
-        return datasets_dict
+        return self.build_caches("validation", max_num_patches=max_num_patches)
 
     def build_caches(
         self,

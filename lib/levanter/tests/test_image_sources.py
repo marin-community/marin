@@ -28,9 +28,8 @@ from transformers import (
     PreTrainedTokenizerFast,
 )
 
-from levanter.data.dataset import ListAsyncDataset
+from levanter.data.dataset import ListAsyncDataset, RepeatedDataset
 from levanter.data.image import (
-    RepeatedImageDataset,
     ConversationDatasetSourceConfig,
     ImageMixtureDatasetConfig,
     image_caption_to_conversation,
@@ -202,9 +201,8 @@ def test_processor_dimensions_match_processed_pixels_and_cache_schema(caption_pr
 
 
 @pytest.mark.parametrize("source_kind", ["caption", "conversation"])
-@pytest.mark.parametrize("use_cache", [False, True])
 def test_image_mixture_preserves_patch_limit_and_unpadded_targets(
-    tmp_path, caption_processor, source_kind, use_cache, monkeypatch
+    tmp_path, caption_processor, source_kind, monkeypatch
 ):
     image = tmp_path / "red.png"
     Image.new("RGB", (4, 4), "red").save(image)
@@ -226,8 +224,7 @@ def test_image_mixture_preserves_patch_limit_and_unpadded_targets(
         train_weights={"tiny": 1},
         cache_dir=str(tmp_path / "cache"),
         mixture_block_size=2,
-        use_cache=use_cache,
-        padding=not use_cache,
+        padding=False,
         max_length=12,
     )
     # The dataset must preserve different target lengths even when callers request them together.
@@ -238,18 +235,14 @@ def test_image_mixture_preserves_patch_limit_and_unpadded_targets(
         0
     ]
     for item, length in zip(sorted([first, second], key=lambda item: int(item["attention_mask"].sum())), [8, 9]):
-        expected_length = length if use_cache else 12
-        assert item["input_ids"].shape == (expected_length,)
+        assert item["input_ids"].shape == (length,)
         assert item["pixel_values"] is not None
         assert item["pixel_values"].shape == (4, 3, 4, 4)
         np.testing.assert_allclose(item["pixel_values"][0], expected_pixels)
         np.testing.assert_array_equal(item["grid_mask"], [True, False, False, False])
-        np.testing.assert_array_equal(
-            item["loss_mask"], [0] * 6 + [1] * (length - 6) + [0] * (expected_length - length)
-        )
-    if use_cache:
-        restored = config.train_set(options=CacheOptions(batch_size=1), max_num_patches=3)
-        np.testing.assert_array_equal(asyncio.run(restored.get_batch([1]))[0]["input_ids"], second["input_ids"])
+        np.testing.assert_array_equal(item["loss_mask"], [0] * 6 + [1] * (length - 6))
+    restored = config.train_set(options=CacheOptions(batch_size=1), max_num_patches=3)
+    np.testing.assert_array_equal(asyncio.run(restored.get_batch([1]))[0]["input_ids"], second["input_ids"])
 
 
 def test_any_resolution_uses_processor_encoder_patch_size(caption_processor) -> None:
@@ -275,9 +268,9 @@ def test_any_resolution_uses_processor_encoder_patch_size(caption_processor) -> 
 
 
 @pytest.mark.asyncio
-async def test_image_repetition_crosses_epoch_boundary_and_stops() -> None:
+async def test_repetition_crosses_epoch_boundary_and_stops() -> None:
     source = ListAsyncDataset([{"text": "first"}, {"text": "second"}])
-    repeated = RepeatedImageDataset(source, epochs=2)
+    repeated = RepeatedDataset(source, epochs=2)
     assert await repeated.async_len() == 4
     assert await repeated.get_batch([1, 2, 3]) == [{"text": "second"}, {"text": "first"}, {"text": "second"}]
     with pytest.raises(IndexError):
