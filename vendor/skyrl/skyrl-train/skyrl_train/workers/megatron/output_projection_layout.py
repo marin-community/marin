@@ -49,7 +49,7 @@ def _fp32_projection_input(
 
 
 def use_fp32_output_projection(projection: nn.Module) -> None:
-    """Run the existing Megatron output projection with FP32 operands and gradients."""
+    """Run the existing Megatron output projection in FP32 and cast gradients back to the BF16 operands."""
     # A cast weight is not a parameter with Megatron's main_grad buffer. Let
     # autograd return its gradient through the cast to the original parameter.
     projection.gradient_accumulation_fusion = False

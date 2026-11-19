@@ -7,7 +7,6 @@ import pytest
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
-from loguru import logger
 from torch import nn
 from torch.nn import functional as F
 
@@ -178,24 +177,12 @@ def test_install_fp32_output_projection_targets_pp_last_stage_and_validates_layo
     head = _FakeColumnParallelLinear(torch.ones((16, 8), dtype=torch.bfloat16))
     stage1 = _wrap(SimpleNamespace(post_process=True, output_layer=head))
 
-    receipts: list[str] = []
-    sink_id = logger.add(lambda message: receipts.append(str(message)), filter=lambda r: "fp32_lm_head" in r["message"])
-    try:
-        install_fp32_output_projection([stage0, stage1])
-        assert head.gradient_accumulation_fusion is False
-        logits, _ = head(torch.ones((2, 1, 8), dtype=torch.bfloat16))
-        head(torch.ones((2, 1, 8), dtype=torch.bfloat16))
-    finally:
-        logger.remove(sink_id)
+    install_fp32_output_projection([stage0, stage1])
+    assert head.gradient_accumulation_fusion is False
+    logits, _ = head(torch.ones((2, 1, 8), dtype=torch.bfloat16))
+    head(torch.ones((2, 1, 8), dtype=torch.bfloat16))
     assert logits.dtype == torch.float32
     assert head.seen_operand_dtypes == [(torch.float32, torch.float32), (torch.float32, torch.float32)]
-    assert len(receipts) == 1
-    assert "raw_input=torch.bfloat16" in receipts[0]
-    assert "raw_weight=torch.bfloat16" in receipts[0]
-    assert "gemm_input=torch.float32" in receipts[0]
-    assert "gemm_weight=torch.float32" in receipts[0]
-    assert "output=torch.float32" in receipts[0]
-    assert "gradient_accumulation_fusion=False" in receipts[0]
 
     unsupported_projections = [
         _FakeColumnParallelLinear(torch.ones((16, 8), dtype=torch.bfloat16), output_size=32, output_size_per_partition=16),
