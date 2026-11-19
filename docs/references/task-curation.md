@@ -767,10 +767,11 @@ original and the candidate side by side. Review and serving run on
 identity stays the same wherever the jobs place. The judge is the pinned FULL-QC reviewer (GLM-5.3,
 temperature 0.7, V3 budgets) under the `atlas-repair-comparative` rubric, returning a typed
 `ComparativeVerdict`: `BETTER`/`TIE`/`WORSE`/`INCOMPARABLE` plus the `Defect` members fixed
-and introduced. A candidate replaces its tracked counterpart only when the comparison is not
-worse, introduces no defects, and the candidate's own oracle and `nop` negative control pass;
-otherwise the original is kept and every failed gate is recorded as typed evidence on the
-pair's `ComparativeRepairReceipt`.
+and introduced. A candidate replaces its tracked counterpart only for `BETTER` or `TIE`, with no
+introduced defects, qualified oracle and applicable `nop` controls, no BAD static
+quality finding and no reference conflict. `INCOMPARABLE` keeps the original.
+These candidate-selection checks do not exclude the tracked source or task.
+Every failed gate is recorded on the pair's `ComparativeRepairReceipt`.
 
 **Dropped-by-candidate.** The candidate's own filter (for example pass@k) is a signal, not a
 mandate: each advisory flag feeds the tracked task's QC evidence and never excludes the task
