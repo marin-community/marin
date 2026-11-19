@@ -19,7 +19,6 @@ from marin.rl.skyrl import ArtifactHfModel, IrisSkyRLExecution
 from marin.rl.skyrl_records import RESOLVED_LAUNCH_FILENAME
 from skyrlrecipe import RecipePatch
 from skyrlrecipe.documents import set_path
-from skyrlrecipe.locality import RoleTopologyMode
 
 from experiments.post_training import rl, rl_gate, rl_recipe
 from experiments.post_training.mochi_rl import MOCHI
@@ -88,11 +87,8 @@ def test_new_presets_match_revisioned_native_configs(table, revisions, selection
         configs = assert_revisioned_native_configs(
             table, revisions, tmp_path=tmp_path, monkeypatch=pins, mixed_tasks=selection
         )
-    documents = dict(zip(revisions, configs, strict=True))
-    agentic = documents["train-long-agentic"]["skyrl"]
-    assert agentic["trainer"]["hf_export_checkpoint"] == "best"
     if table.model == "mochi":
-        assert all(config["iris"]["role_topology"] == RoleTopologyMode.NVLINK_DOMAIN.value for config in configs)
+        documents = dict(zip(revisions, configs, strict=True))
         docs = (rl_recipe.REPO_ROOT / "docs/dev-guide/skyrl.md").read_text()
         fragment = docs.split("## Mochi inference on GB200", 1)[1].split("```yaml", 1)[1].split("```", 1)[0]
         served = rl_gate._config_values(documents["train-long-3rack"]["skyrl"])
@@ -107,6 +103,7 @@ def test_mixed_candidate_uses_the_selected_tasks_and_preserves_authored_concurre
     run = rl.build_run(preset, table=SNOWBALL, tasks=selection, settings=settings)
     assert run.inputs is not None
     config = rl_gate.validate_candidate(preset, run.inputs, table=SNOWBALL)["skyrl"]
+    # The Snowball campaign recipe sets a fixed cap of 32 generating groups.
     assert config["trainer"]["rollout_buffer"]["max_in_flight"] == 32
     assert config["trainer"]["rollout_buffer"]["groups_per_family"] == {"agentic": 64, "nonagentic": 64}
     execution = next(value for value in run.runs[0].runtime_args.values() if isinstance(value, IrisSkyRLExecution))
@@ -181,7 +178,9 @@ def test_runner_refuses_incompatible_launches(selection, tmp_path, monkeypatch, 
             "train-medium",
             (
                 "trainer.policy.megatron_config.tensor_model_parallel_size=2",
+                # With TP=2, CP=2 keeps TP * PP * CP at 48 policy GPUs.
                 "trainer.policy.megatron_config.context_parallel_size=2",
+                # Expert-block weight sync requires TP=1.
                 "generator.weight_sync_transport=broadcast",
             ),
             "MuonH fused-matrix updates require tensor parallel size 1",

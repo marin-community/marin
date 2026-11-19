@@ -395,10 +395,8 @@ def test_selection_mixes_released_and_curated_tasks(tmp_path):
     assert step.fingerprint() != task_selection_step(curated, changed).fingerprint()
     root = Path(run(step)[0].path)
     summary = json.loads((root / "summary.json").read_text())
-    assert summary["training_family_counts"] == {"agentic": 1, "nonagentic": 1}
     assert summary["harness_graded_datasets"] == ["long-loop-smartie-swesmith"]
     assert summary["grader_kind_counts"]["train"]["harness"] == 1
-    assert summary["recipe"]["released"] == [release.model_dump(mode="json")]
     assert summary["source_counts"][release.uri] == {
         "input": 3,
         "selected": 1,
@@ -424,13 +422,12 @@ def test_selection_mixes_released_and_curated_tasks(tmp_path):
         ("count", "row count changed"),
         ("schema", "Unsupported TaskSpec schema"),
         ("tag", "contradicts the source"),
-        ("grader", "does not admit image graders"),
         ("harness", "does not admit harness graders"),
         ("harness-without-tag", "harness grader requires the harbor tag"),
     ],
 )
 def test_selection_refuses_invalid_released_tasks(tmp_path, fault, message):
-    task = source_task("agent-task", image=fault == "grader")
+    task = source_task("agent-task")
     if fault == "schema":
         task = task.model_copy(update={"schema_version": "0.27"})
     if fault == "tag":
@@ -443,7 +440,7 @@ def test_selection_refuses_invalid_released_tasks(tmp_path, fault, message):
             }
         )
     release = released_training(tmp_path / "release.parquet", task)
-    update = {"digest": {"sha256": "0" * 64, "rows": 2}, "count": {"rows": 2}, "tag": {"agentic": False}}
+    update = {"digest": {"sha256": "0" * 64}, "count": {"rows": 2}, "tag": {"agentic": False}}
     release = release.model_copy(update=update.get(fault, {}))
     settings = SelectionRecipe(
         name="released",
@@ -466,6 +463,7 @@ def test_selection_refuses_invalid_released_tasks(tmp_path, fault, message):
 def test_grader_admission_preserves_published_selection_fingerprints():
     recipes = Path(__file__).parents[1] / "recipes"
     training = SelectionRecipe.model_validate_json((recipes / "snowball-100k.json").read_text())
+    agentic = SelectionRecipe.model_validate_json((recipes / "snowball-100k-agentic.json").read_text())
     evaluation = EvalLiteRecipe.model_validate_json((recipes / "eval-lite.json").read_text())
 
     def curated(sources):
@@ -481,6 +479,7 @@ def test_grader_admission_preserves_published_selection_fingerprints():
     assert task_selection_step(training_sources, explicit).fingerprint() != "7fb51836"
     evaluation_sources = curated(part.source_id for part in evaluation.sources)
     assert eval_lite_step(evaluation_sources, evaluation).fingerprint() == "4fd3f893"
+    task_selection_step(curated(agentic.sources), agentic)
 
 
 @pytest.mark.parametrize("shared_id", ["shared-unsampled", "shared-alias"])

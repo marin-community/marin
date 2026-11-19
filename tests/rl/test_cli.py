@@ -189,7 +189,7 @@ def test_rl_entrypoint_can_spawn_workers(tmp_path: Path) -> None:
         from experiments.post_training import rl
 
         assert "experiments.post_training.snowball_rl" not in sys.modules
-        from experiments.post_training import mochi_rl, snowball_rl, snowball_sft_then_rl
+        from experiments.post_training import mochi_rl, mochi_sft_then_rl, snowball_rl, snowball_sft_then_rl
 
         assert "marin.processing.embeddings.harrier" not in sys.modules
         assert {"levanter", "transformers", "torch", "wandb"}.isdisjoint(sys.modules)
