@@ -428,6 +428,18 @@ def validate_megatron_cfg(cfg: DictConfig):
                             f"trainer.{worker_type}.megatron_config.{kwargs_name}.{'.'.join(key_path)} "
                             "must stay false with moe_router_replay: the fused router bypasses the replay hook"
                         )
+        if config.megatron_config.get("fp32_lm_head", False):
+            if config.megatron_config.tensor_model_parallel_size != 1:
+                raise ValueError(
+                    f"trainer.{worker_type}.megatron_config.fp32_lm_head requires tensor_model_parallel_size == 1"
+                )
+            for kwargs_name in ("transformer_config_kwargs", "model_config_kwargs"):
+                for key_path, value in _iter_config_kwargs(config.megatron_config.get(kwargs_name, {})):
+                    if key_path[-1] == "defer_embedding_wgrad_compute" and value:
+                        raise ValueError(
+                            f"trainer.{worker_type}.megatron_config.{kwargs_name}.{'.'.join(key_path)} "
+                            "must stay false with fp32_lm_head"
+                        )
 
 
 def _iter_config_kwargs(node):

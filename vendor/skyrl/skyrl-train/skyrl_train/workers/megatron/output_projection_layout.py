@@ -1,6 +1,7 @@
 """Project unsharded GPT output in its consumer layout without duplicating vocabulary logits."""
 
 import torch
+from loguru import logger
 from torch import nn
 
 from marinskyrl.runtime_options import PolicyLossType
@@ -29,15 +30,22 @@ def use_batch_major_output_projection(projection: nn.Module) -> None:
     projection.register_forward_hook(_sequence_major_output)
 
 
+def _extract_weight(projection: nn.Module, inputs: tuple[torch.Tensor, ...], kwargs: dict) -> torch.Tensor:
+    if len(inputs) >= 2:
+        return projection.weight if inputs[1] is None else inputs[1]
+    weight = kwargs.get("weight")
+    return projection.weight if weight is None else weight
+
+
 def _fp32_projection_input(
     projection: nn.Module,
     inputs: tuple[torch.Tensor, ...],
     kwargs: dict,
 ) -> tuple[tuple[torch.Tensor, ...], dict]:
-    weight = kwargs.get("weight")
-    if weight is None:
-        weight = projection.weight
-    return (inputs[0].float(), *inputs[1:]), {**kwargs, "weight": weight.float()}
+    weight = _extract_weight(projection, inputs, kwargs).float()
+    if len(inputs) >= 2:
+        return (inputs[0].float(), weight, *inputs[2:]), kwargs
+    return (inputs[0].float(),), {**kwargs, "weight": weight}
 
 
 def use_fp32_output_projection(projection: nn.Module) -> None:
@@ -45,7 +53,39 @@ def use_fp32_output_projection(projection: nn.Module) -> None:
     # A cast weight is not a parameter with Megatron's main_grad buffer. Let
     # autograd return its gradient through the cast to the original parameter.
     projection.gradient_accumulation_fusion = False
+    raw_dtypes: dict[str, torch.dtype] = {}
+    receipt_handles: list[torch.utils.hooks.RemovableHandle] = []
+
+    def _capture_raw_dtypes(module: nn.Module, inputs: tuple[torch.Tensor, ...], kwargs: dict) -> None:
+        raw_dtypes["input"] = inputs[0].dtype
+        raw_dtypes["weight"] = _extract_weight(module, inputs, kwargs).dtype
+
+    def _log_receipt_once(
+        module: nn.Module,
+        inputs: tuple[torch.Tensor, ...],
+        kwargs: dict,
+        output: tuple[torch.Tensor, torch.Tensor | None],
+    ) -> None:
+        while receipt_handles:
+            receipt_handles.pop().remove()
+        logits = output[0] if isinstance(output, tuple) else output
+        gemm_weight = _extract_weight(module, inputs, kwargs)
+        logger.info(
+            "fp32_lm_head runtime receipt: raw_input={} raw_weight={} gemm_input={} gemm_weight={} "
+            "output={} allow_tf32={} fp32_matmul_precision={} gradient_accumulation_fusion={}",
+            raw_dtypes.get("input"),
+            raw_dtypes.get("weight"),
+            inputs[0].dtype,
+            gemm_weight.dtype,
+            logits.dtype,
+            torch.backends.cuda.matmul.allow_tf32,
+            torch.get_float32_matmul_precision(),
+            getattr(module, "gradient_accumulation_fusion", None),
+        )
+
+    receipt_handles.append(projection.register_forward_pre_hook(_capture_raw_dtypes, with_kwargs=True))
     projection.register_forward_pre_hook(_fp32_projection_input, with_kwargs=True)
+    receipt_handles.append(projection.register_forward_hook(_log_receipt_once, with_kwargs=True))
 
 
 def install_fp32_output_projection(model_chunks) -> None:
