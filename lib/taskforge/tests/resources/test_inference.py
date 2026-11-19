@@ -8,11 +8,10 @@ import pytest
 from lib.taskforge.tests.resources.inference_fakes import Backend, provider_completion, request
 
 from taskforge.effects.events import Event, Retrying
-from taskforge.effects.issues import Restart
+from taskforge.effects.issues import ContextExceeded, Restart
 from taskforge.llm.client import Attempt, AttemptOutcome, ContextExhausted, ModelRequestRejected, ModelUnavailable
 from taskforge.model.llm import ToolCall
 from taskforge.resources.inference import (
-    ContextExceeded,
     GlmInference,
     complete,
 )

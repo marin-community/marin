@@ -6,7 +6,6 @@ import shutil
 import subprocess
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
-from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from typing import override
 
@@ -29,7 +28,7 @@ from shellbox.machine import (
 from shellsim import SimulationError
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 
-from taskforge.effects.events import Event, Note, Resolved, Retrying
+from taskforge.effects.events import Event, Note, Retrying
 from taskforge.effects.issues import Hold, OutputBudgetExhausted, Restart, Transient
 from taskforge.resources import env as env_module
 from taskforge.resources.env import (
@@ -37,7 +36,6 @@ from taskforge.resources.env import (
     Env,
     FakeCommand,
     FakeEnv,
-    Mutation,
     ReadFile,
     RunCommand,
     ShellboxEnv,
@@ -137,14 +135,13 @@ async def create_env(request: pytest.FixtureRequest) -> AsyncIterator[Callable[[
         await env.close()
 
 
-async def test_environment_restores_binary_writes_and_command_history(
+async def test_environment_writes_binary_files_and_fingerprints_command_history(
     create_env: Callable[[], Awaitable[Env]],
 ) -> None:
     original = await create_env()
     initial = original.fingerprint()
     path = PurePosixPath("/workspace/binary")
     data = b"\x00\xff\nquoted ' bytes"
-    writes = WriteFile(path, data)
     await original.write(path, data)
     after_write = original.fingerprint()
     assert after_write != initial
@@ -154,41 +151,10 @@ async def test_environment_restores_binary_writes_and_command_history(
     result = await original.run(command.cmd, timeout=command.timeout)
     assert (result.exit_code, result.stdout, result.stderr) == (7, "hello", "err")
     assert await original.read(OUTPUT) == b"changed"
-    records: tuple[Mutation, ...] = (Resolved(writes, (initial,), None), Resolved(command, (after_write,), result))
-    restored = await create_env()
-    await restored.restore(records)
-    assert restored.fingerprint() == original.fingerprint()
-    assert await restored.read(path) == data
-    assert await restored.read(OUTPUT) == b"changed"
-    await restored.close()
+    assert original.fingerprint() != after_write
+    await original.close()
     with pytest.raises(Restart):
-        await restored.run(COMMAND, timeout=5)
-
-
-async def test_restore_warns_on_output_divergence_and_keeps_logged_position() -> None:
-    notes = Notes()
-    source = FakeEnv("image", {COMMAND: FakeCommand(VALUE, {})}, notes)
-    first = source.fingerprint()
-    await source.run(COMMAND, timeout=5)
-    second = source.fingerprint()
-    await source.write(OUTPUT, b"after")
-    replay = FakeEnv("image", {COMMAND: FakeCommand(replace(VALUE, stdout="different", wall=9), {})}, notes)
-    await replay.restore(
-        (Resolved(RunCommand(COMMAND, 5), (first,), VALUE), Resolved(WriteFile(OUTPUT, b"after"), (second,), None))
-    )
-    assert len(notes.events) == 1
-    assert replay.fingerprint() == source.fingerprint()
-    assert await replay.read(OUTPUT) == b"after"
-
-
-async def test_restore_refuses_wrong_image_before_mutating_files() -> None:
-    notes = Notes()
-    expected = FakeEnv("image-a", {}, notes).fingerprint()
-    env = FakeEnv("image-b", {}, notes)
-    before = env.fingerprint()
-    with pytest.raises(Hold):
-        await env.restore((Resolved(WriteFile(OUTPUT, b"data"), (expected,), None),))
-    assert env.fingerprint() == before
+        await original.run(COMMAND, timeout=5)
 
 
 @pytest.mark.parametrize(

@@ -88,16 +88,7 @@ def _decode(data: Mapping[str, Any], known: dict[str, Event[object]]) -> Event[o
     if "ref" in data:
         return known[data["ref"]]
     cls = EVENT_TYPES[data["type"]]
-    payload = data["payload"]
-    if cls is StageCompleted and "refs" in payload:
-        refs = payload["refs"]
-        payload = {key: value for key, value in payload.items() if key != "refs"}
-        payload.update(round=int(refs.get("round", 0)), terminal=(refs.get("terminal") or "").lower() or None)
-        if payload["stage"] == "driver":
-            payload["stage"] = None
-    if cls in (Resolved, Retrying) and EVENT_TAG not in payload["request"]:
-        payload = {**payload, "request": {EVENT_TAG: payload["request"]}}
-    restored = _restore(payload, known)
+    restored = _restore(data["payload"], known)
     if cls is Resolved:
         request = restored["request"]
         value = TypeAdapter(cast(Any, request.result_type)).validate_python(restored["value"])
@@ -184,7 +175,7 @@ class JsonlSink(Sink):
                 output.write(data)
 
     def read_bytes(self) -> bytes:
-        """Read a final/legacy snapshot and any subsequently appended batches."""
+        """Read the snapshot at ``path``, if any, and the batches appended after it."""
         try:
             with open_url(self.path, "rb") as source:
                 content = source.read()
@@ -252,6 +243,7 @@ class EventLog:
     ) -> None:
         self._sink = sink
         self._sleep = sleep
+        self._replayable = replayable
         self._records = list(replay_from)
         self._pending: list[Record] = []
         self._index: dict[tuple[str, tuple[Fingerprint, ...]], object] = {
@@ -273,7 +265,7 @@ class EventLog:
             raise LogFailure("Cannot encode the event") from error
         record = Record(len(self._records) + 1, time.time(), event)
         self._records.append(record)
-        if isinstance(event, Resolved):
+        if isinstance(event, Resolved) and self._replayable(event):
             self._index[event_digest(event.request), event.fingerprints] = event.value
         if self._sink is None:
             return

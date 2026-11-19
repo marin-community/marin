@@ -32,7 +32,7 @@ For a task without a machine, keep `capabilities: []` and `docker_image: null` i
 
 Each control contains a candidate (reply and files), an expected status and reward band, and a kind (positive, negative or malformed). Include correct and incorrect answers that test the grader. The `grade` tool checks candidates against the current `task.json`; its file arguments are workspace paths whose bytes are captured for grading. Embedded files in TaskSpec and Control JSON must follow the resource schema below.
 
-Use `submit` with `task_path`, `controls_path` and `notes` when ready. If `validate` is available, it runs the current draft and returns evidence so you can revise before submitting. Use `finish` only when you cannot complete the task.
+Use `submit` with `notes` when ready; it submits the current `task.json` and `controls.json`. If `validate` is available, it runs the current draft and returns evidence so you can revise before submitting. Use `finish` only when you cannot complete the task.
 
 ## Live JSON schemas
 
