@@ -63,7 +63,8 @@ def retain_prior_assessments(
                         f"AND hashtext(previous.task_id) & {RETAIN_COPY_BUCKETS - 1} = :bucket "
                         "AND NOT EXISTS (SELECT 1 FROM atlas_assessments current_assessment "
                         "WHERE current_assessment.load_id = :load_id "
-                        "AND current_assessment.pipeline_key = previous.pipeline_key)",
+                        "AND current_assessment.pipeline_key = previous.pipeline_key) "
+                        "ON CONFLICT DO NOTHING",
                         {**parameters, "bucket": bucket},
                     )
                     total += result["row_count"]
@@ -75,7 +76,8 @@ def retain_prior_assessments(
                     "AND previous.pipeline_key = :pipeline_key "
                     "AND NOT EXISTS (SELECT 1 FROM atlas_assessments current_assessment "
                     "WHERE current_assessment.load_id = :load_id "
-                    "AND current_assessment.pipeline_key = previous.pipeline_key)",
+                    "AND current_assessment.pipeline_key = previous.pipeline_key) "
+                    "ON CONFLICT DO NOTHING",
                     parameters,
                 )
                 total += result["row_count"]

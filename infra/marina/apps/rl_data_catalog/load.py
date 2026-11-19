@@ -164,16 +164,30 @@ def ensure_tables(query: AppletQuery, names: tuple[str, ...]) -> None:
         query(statements[name], {})
 
 
-def insert_rows(query: AppletQuery, table: str, columns: str, load_id: str, rows: Iterable[dict[str, Any]]) -> int:
-    """Insert byte-bounded batches and return the stored row count."""
+def insert_rows(
+    query: AppletQuery,
+    table: str,
+    columns: str,
+    load_id: str,
+    rows: Iterable[dict[str, Any]],
+    *,
+    conflict_nothing: bool = False,
+) -> int:
+    """Insert byte-bounded batches and return the stored row count.
+
+    With ``conflict_nothing``, re-staged rows whose primary keys already exist are
+    absorbed instead of raising — the resume path re-runs every insert and lets the
+    primary keys deduplicate.
+    """
     names = ", ".join(column.strip().split()[0] for column in columns.split(","))
     budget = table_batch_bytes(table)
     max_rows = table_batch_rows(table)
+    conflict = "ON CONFLICT DO NOTHING" if conflict_nothing else ""
     count = 0
     for body in batches(rows, budget, max_rows):
         result = query(
             f"INSERT INTO {table} (load_id, {names}) SELECT :load_id, {names} "
-            f"FROM jsonb_to_recordset(CAST(:rows AS JSONB)) AS row({columns})",
+            f"FROM jsonb_to_recordset(CAST(:rows AS JSONB)) AS row({columns}) {conflict}",
             {"load_id": load_id, "rows": body},
         )
         count += result["row_count"]
@@ -412,36 +426,18 @@ def load_catalog(
         return {"changed": False, "snapshot_id": snapshot.snapshot_id}
     expected_load_id = current[0]["load_id"] if current else None
     load_id = resume_load_id or uuid.uuid4().hex
-    staged_prefixes: dict[str, int] = {}
-    if resume_load_id is not None:
-        # A resumed load reuses its fixed identifier and skips the staged prefixes:
-        # the rows are inserted in a deterministic order, so each table's staged
-        # row count is exactly the prefix the previous attempt completed.
-        staged_prefixes = {
-            table: query(
-                f"SELECT COUNT(*) AS n FROM atlas_{table} WHERE load_id = :load_id",
-                {"load_id": load_id},
-            )[
-                "rows"
-            ][0]["n"]
-            for table in TABLE_COLUMNS
-        }
     requests = 2
 
     def execute(sql: str, parameters: dict[str, Any]) -> dict[str, Any]:
-        nonlocal requests
-        requests += 1
         return query(sql, parameters)
 
     def insert(table: str, rows: Iterable[dict[str, Any]]) -> int:
-        skip = staged_prefixes.get(table, 0)
-        if skip:
-            rows = list(rows)
-            rows = rows[skip:]
-            if not rows:
-                return skip
-            return skip + insert_rows(execute, f"atlas_{table}", TABLE_COLUMNS[table], load_id, rows)
-        return insert_rows(execute, f"atlas_{table}", TABLE_COLUMNS[table], load_id, rows)
+        # A resumed load re-stages everything: the primary keys absorb the rows the
+        # previous attempt already committed, so no prefix arithmetic can desynchronize
+        # with partially completed batches.
+        return insert_rows(
+            execute, f"atlas_{table}", TABLE_COLUMNS[table], load_id, rows, conflict_nothing=resume_load_id is not None
+        )
 
     if resume_load_id is not None:
         execute(
