@@ -29,7 +29,7 @@ from taskcompendium.importers.imobench import (
 )
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.inputs import SourceFormat
-from taskcompendium.pipeline.models import ImportRejection, IntendedUse
+from taskcompendium.pipeline.models import Converter, IntendedUse
 
 from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmarks
 from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
@@ -52,7 +52,7 @@ def _source(
     filename: str,
     sha256: str,
     population: int,
-    convert: Callable[..., TaskSpec | ImportRejection],
+    convert: Converter,
     item_builder: Callable[[TaskSpec], EvaluationItem],
     metric: Metric,
     trials: int,

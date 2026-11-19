@@ -11,7 +11,7 @@ adds one rule that marks hedged answers incorrect. Each solver sees only the pro
 
 from verifyit.spec import JudgeCompletionPolicy, JudgeSpec
 
-from taskcompendium.convert.answers import answer_task, source_defect, source_evidence
+from taskcompendium.convert.answers import answer_task, nonempty_text, source_defect, source_evidence
 from taskcompendium.evaluation.corpus import chat_item
 from taskcompendium.evaluation.spec import EvaluationItem
 from taskcompendium.models import TaskSpec
@@ -125,11 +125,6 @@ PROOF_POINTS = (7, 6, 1, 0)
 ANSWERBENCH_CATEGORIES = frozenset({"Algebra", "Combinatorics", "Geometry", "Number theory"})
 
 
-def _text(row: RawRow, column: str) -> str | None:
-    value = row.data.get(column)
-    return value.strip() if isinstance(value, str) and value.strip() else None
-
-
 def answer_judge_spec(problem: str, answer: str) -> JudgeSpec:
     """AnswerAutoGrader: the verdict is the box after the judge's <thinking> block."""
     return JudgeSpec(
@@ -175,7 +170,7 @@ def proof_judge_spec(problem: str, solution: str, guidelines: str) -> JudgeSpec:
 
 
 def convert_answerbench(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
-    problem, answer = _text(row, "Problem"), _text(row, "Short Answer")
+    problem, answer = nonempty_text(row.data.get("Problem")), nonempty_text(row.data.get("Short Answer"))
     if problem is None or answer is None:
         return source_defect("missing_field", "IMO-AnswerBench rows require Problem and Short Answer")
     # algebra-036 in answerbench_v2 has shifted columns: its answer is "Algebra" and its
@@ -187,7 +182,9 @@ def convert_answerbench(row: RawRow, _context: ConversionContext) -> TaskSpec | 
 
 
 def convert_proofbench(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
-    problem, solution, guidelines = (_text(row, column) for column in ("Problem", "Solution", "Grading guidelines"))
+    problem, solution, guidelines = (
+        nonempty_text(row.data.get(column)) for column in ("Problem", "Solution", "Grading guidelines")
+    )
     if problem is None or solution is None or guidelines is None:
         return source_defect("missing_field", "IMO-ProofBench rows require Problem, Solution and Grading guidelines")
     task = answer_task(
