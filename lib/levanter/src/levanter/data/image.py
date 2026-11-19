@@ -37,6 +37,7 @@ from levanter.utils.logging import silence_transformer_nag
 silence_transformer_nag()
 from transformers import (  # noqa: E402
     BatchFeature,
+    LlavaOnevisionProcessor,
     PreTrainedTokenizerBase,
     ProcessorMixin,
 )
@@ -498,18 +499,10 @@ class BatchMultimodalProcessor(BatchProcessor[ConversationDict, ImageTextDict]):
 
         return mask.astype(np.float32)
 
-    def __call__(self, batch: Sequence[Mapping[str, Any]]) -> Sequence[ImageTextDict]:
-        """
-        Process a batch of conversation data.
-
-        Args:
-            batch: Sequence of conversation dictionaries with 'messages' and 'images' keys.
-
-        Returns:
-            Sequence of processed ImageTextDict
-        """
-        batch_size = len(batch)
-        all_images: list = []
+    def _prepare_conversations(
+        self, batch: Sequence[Mapping[str, Any]]
+    ) -> tuple[list[str], list[Image.Image], list[int]]:
+        all_images: list[Image.Image] = []
         all_texts: list[str] = []
         images_per_example: list[int] = []
 
@@ -530,6 +523,17 @@ class BatchMultimodalProcessor(BatchProcessor[ConversationDict, ImageTextDict]):
                     add_generation_prompt=self.add_generation_prompt,
                 )
             )
+
+        return all_texts, all_images, images_per_example
+
+    def __call__(self, batch: Sequence[Mapping[str, Any]]) -> Sequence[ImageTextDict]:
+        """Process conversations into token targets and image inputs."""
+        all_texts, all_images, images_per_example = self._prepare_conversations(batch)
+        batch_size = len(batch)
+
+        if self.grid_pinpoints and any(count > 1 for count in images_per_example):
+            if not isinstance(self.processor, LlavaOnevisionProcessor):
+                raise ValueError("Multi-image tiling currently requires a LLaVA OneVision processor")
 
         if self.max_num_patches is not None and self.grid_pinpoints:
             image_offset = 0
@@ -707,8 +711,8 @@ class ImageDatasetSourceConfig:
     name: Optional[str] = None  # Dataset configuration name
 
     stream: bool = True  # Whether to use streaming
-    image_key: str = "image"  # Key for image field
-    text_key: str = "text"  # Key for text field
+    image_key: str = "image"
+    text_key: str = "text"
 
     train_split: str = "train"
     validation_split: str = "validation"
