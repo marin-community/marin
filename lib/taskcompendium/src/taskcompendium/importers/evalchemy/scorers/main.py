@@ -18,6 +18,18 @@ from verifyit.spec import Constraint, JudgeSpec, parse_spec
 
 def score(scorer: str, config: dict[str, Any], response: str) -> Reward:
     # Scorers load only the dependencies of the selected dataset's environment.
+    if scorer == "gsm8k_cot":
+        from .math import grade_gsm8k_cot
+
+        return grade_gsm8k_cot(config["document"], response)
+    if scorer == "minerva_math":
+        from .math import grade_minerva_completion
+
+        return grade_minerva_completion(config["document"], response)
+    if scorer == "bbh_cot":
+        from .choices import grade_bbh_cot
+
+        return grade_bbh_cot(config["document"], response)
     if scorer == "boxed_math":
         from .math import grade_boxed_math
 
@@ -46,6 +58,10 @@ def score(scorer: str, config: dict[str, Any], response: str) -> Reward:
 
         grade = grade_gpqa_answer if scorer == "gpqa" else grade_mmlu_answer
         return grade(config["expected"], response)
+    if scorer == "zeroeval_mcqa":
+        from .zeroeval import grade_zeroeval_mcqa
+
+        return grade_zeroeval_mcqa(config["expected"], response)
     if scorer in {"mrcr", "graphwalks"}:
         from .long_context import grade_graphwalks, grade_nonce_similarity
 

@@ -17,12 +17,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
-
 from harbor.cli.jobs import _prune_unscored_trials
 from harbor.job import Job
 from harbor.metrics.mean import Mean
 from harbor.models.job.config import JobConfig
-from harbor.models.trial.config import TaskConfig
+from harbor.models.trial.config import AgentConfig, TaskConfig
 from harbor.models.trial.result import AgentInfo, ExceptionInfo, TrialResult
 from harbor.models.verifier.result import VerifierResult
 
@@ -37,7 +36,12 @@ def _exc(exc_type: str) -> ExceptionInfo:
 
 
 def _make_job(tmp_path: Path, task_paths: list[str]) -> Job:
-    config = JobConfig(job_name="prune-test", jobs_dir=tmp_path, n_concurrent_trials=4)
+    config = JobConfig(
+        agents=[AgentConfig(name="pi")],
+        job_name="prune-test",
+        jobs_dir=tmp_path,
+        n_concurrent_trials=4,
+    )
     metrics = defaultdict(lambda: [Mean()])
     return Job(
         config,
@@ -103,9 +107,9 @@ def test_prune_keeps_scored_removes_unscored(tmp_path: Path) -> None:
 
     for trial_name, kept in expect_kept.items():
         exists = (job.job_dir / trial_name).exists()
-        assert exists == kept, (
-            f"{trial_name}: expected kept={kept}, got exists={exists}"
-        )
+        assert (
+            exists == kept
+        ), f"{trial_name}: expected kept={kept}, got exists={exists}"
 
 
 @pytest.mark.unit

@@ -49,6 +49,7 @@ provisioning:
   coreweave:
     cluster: { name: marin-rn02a, zone: RNO2A }
     kueue:
+      cpu_scale_group: cpu-turin
       flavor_topology: infiniband  # H100 IB cluster: bind the flavor to the infiniband topology
     ingress:
       ingress_class: traefik
@@ -118,9 +119,10 @@ auth:
     - principal:human-080
     - "*@openathena.ai"
     - github-iris@hai-gcp-models.iam.gserviceaccount.com
-    - contractor@hai-gcp-models.iam.gserviceaccount.com
+    - principal:human-076
     - ravwojdyla@rav-openathena.iam.gserviceaccount.com
     - morrisy@stanford.edu
+    - wg0420@princeton.edu
 
 kubernetes_provider:
   namespace: iris
@@ -164,6 +166,12 @@ defaults:
     # differs per node/region, so an exact-match pin (=enpXsYnpZ) is fragile and was
     # silently unmatched by the current task image's NCCL build, breaking bootstrap.
     NCCL_SOCKET_IFNAME: "^ibs,ibp,lo,docker,veth,cilium,lxc"
+    # A privileged task pod also sees the front-end Ethernet NIC's RoCE functions
+    # (mlx5_*, 100G) beside the eight InfiniBand rails (ibp0..ibp7). NCCL merges
+    # them into virtual NICs and routes channels over them; they do not reach the
+    # peer's rails, so transfers fail with IBV_WC_RETRY_EXC_ERR(12). Restrict NCCL
+    # to the rails, as CoreWeave documents.
+    NCCL_IB_HCA: "ibp"
   worker:
     docker_image: ghcr.io/marin-community/iris-worker:latest
     port: 10001

@@ -118,6 +118,8 @@ def test_trial_start_skill_flags_are_repeatable(tmp_path: Path, monkeypatch) -> 
         [
             "trial",
             "start",
+            "--agent",
+            "pi",
             "--path",
             str(tmp_path / "task"),
             "--skill",

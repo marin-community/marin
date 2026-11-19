@@ -21,6 +21,7 @@ from shellbox.machine import (
     ExitReason,
     MachineSpec,
     NetworkPolicy,
+    ProcessScope,
     Result,
     UnsupportedMachineSpec,
     check_execution_requirements,
@@ -200,6 +201,9 @@ class DockerMachine:
 
         return await acquire_owned(asyncio.create_task(acquire()))
 
+    async def open_process_scope(self) -> ProcessScope:
+        raise UnsupportedMachineSpec("Docker does not provide confirmed scoped descendant teardown")
+
     async def run(self, command: Command) -> Result:
         if self._closed:
             raise RuntimeError("Machine is closed")
@@ -291,11 +295,6 @@ class DockerMachine:
                 raise RuntimeError(result.stderr.decode(errors="replace"))
 
     async def download(self, source: str, target: Path) -> None:
-        exists = await docker("exec", "--user", "0", self.name, "test", "-e", source)
-        if exists.exit_code == 1:
-            raise FileNotFoundError(source)
-        if exists.exit_code:
-            raise RuntimeError(exists.stderr.decode(errors="replace"))
         target.parent.mkdir(parents=True, exist_ok=True)
         copy_source = f"{source}/." if target.is_dir() else source
         result = await docker("cp", f"{self.name}:{copy_source}", str(target))

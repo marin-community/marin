@@ -12,7 +12,6 @@ On GCS, we use generation-based conditional writes for atomicity.
 """
 
 import contextlib
-import json
 import logging
 import os
 from collections.abc import Generator
@@ -27,21 +26,19 @@ from rigging.filesystem.distributed_lock import (
     default_worker_id,
 )
 from rigging.filesystem.factory import url_to_fs
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.step_status import (
+    STATUS_DEP_FAILED,
+    STATUS_FAILED,
+    STATUS_RUNNING,
+    STATUS_SUCCESS,
+    get_status_path,
+    read_status_file,
+)
 from rigging.timing import RateLimiter
 
 logger = logging.getLogger(__name__)
 
-STATUS_RUNNING = "RUNNING"
-STATUS_FAILED = "FAILED"
-STATUS_SUCCESS = "SUCCESS"
-STATUS_DEP_FAILED = "DEP_FAILED"  # Dependency failed
 _LOCK_WAIT_LOG_INTERVAL = 5 * 60
-
-
-def get_status_path(output_path: str) -> str:
-    """Return the path of the status file associated with `output_path`."""
-    return prefix_join(output_path, ".executor_status")
 
 
 class StatusFile:
@@ -65,49 +62,7 @@ class StatusFile:
 
     @property
     def status(self) -> str | None:
-        """Read current status from status file.
-
-        The modern representation stores a single status token, but older
-        executors wrote JSON-line event logs. We support both until the legacy
-        files are gone.
-        """
-        if not self.fs.exists(self.path):
-            return None
-
-        # Status changes while peers wait; a ranged S3 read pins the ETag from
-        # its metadata lookup and fails if another worker updates the object.
-        content = self.fs.cat_file(self.path).decode("utf-8")
-        lines = [line.strip() for line in content.splitlines() if line.strip()]
-
-        if not lines:
-            return None
-
-        # New format: a single status token such as SUCCESS/RUNNING/etc.
-        if len(lines) == 1 and not lines[0].startswith("{"):
-            return lines[0]
-
-        # Legacy format: JSON event log, one object per line.
-        legacy_status = self._parse_legacy_status(lines)
-        if legacy_status:
-            return legacy_status
-
-        # Fall back to the last non-empty line if parsing fails.
-        return lines[-1]
-
-    @staticmethod
-    def _parse_legacy_status(lines: list[str]) -> str | None:
-        """Return the latest status from the deprecated JSON-lines format."""
-        last_status: str | None = None
-        for line in lines:
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(event, dict):
-                status = event.get("status")
-                if isinstance(status, str):
-                    last_status = status
-        return last_status
+        return read_status_file(self.fs, self.path)
 
     def write_status(self, status: str) -> None:
         """Write the status file without changing lock ownership.

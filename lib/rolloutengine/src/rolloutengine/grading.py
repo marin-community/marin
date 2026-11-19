@@ -69,7 +69,7 @@ async def _grade_rollout(
     stop_reason: str,
     verifier: Callable[[MachineSpec], Awaitable[Machine]] | None = None,
 ) -> GradeResult:
-    """Grade in process, through the judge service, or in a supplied or attempt-owned verifier.
+    """Grade in process, through the judge service, or in a supplied or attempt-owned verifier machine.
 
     ``outputs`` holds the task's ``output_paths`` that the engine captured after the harness ended.
     """

@@ -6,6 +6,7 @@
 
 import bz2
 import gzip
+import hashlib
 import io
 import json
 import lzma
@@ -400,6 +401,56 @@ def test_verified_copy_same_size_source_overwrite_invalidates_completion(tmp_pat
     assert (destination / "weights.bin").read_bytes() == b"first!!"
 
 
+@pytest.mark.parametrize(
+    ("listed_version", "head_version"),
+    [(None, "null"), (None, "version-1"), ("null", "null")],
+)
+def test_verified_copy_s3_head_metadata_preserves_copy_and_detects_overwrite(
+    tmp_path, monkeypatch, listed_version, head_version
+):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    source_file = source / "weights.bin"
+    source_file.write_bytes(b"first!!")
+    source_filesystem, source_path = verified_copy_module.filesystem_for(str(source))
+    original_filesystem_for = verified_copy_module.filesystem_for
+
+    def object_info(path, version):
+        info = source_filesystem.info(path)
+        result = {"name": path, "size": info["size"], "type": info["type"]}
+        result["ETag"] = f'"{hashlib.md5(Path(path).read_bytes(), usedforsecurity=False).hexdigest()}"'
+        if version is not None:
+            result["VersionId"] = version
+        return result
+
+    class S3Source:
+        def __getattr__(self, name):
+            return getattr(source_filesystem, name)
+
+        def find(self, path, *, detail):
+            return {name: object_info(name, listed_version) for name in source_filesystem.find(path)}
+
+        def info(self, path):
+            return object_info(path, head_version)
+
+    def route(url, *, s3_upload_policy=S3UploadPolicy.STANDARD):
+        if url == str(source):
+            return S3Source(), source_path
+        return original_filesystem_for(url, s3_upload_policy=s3_upload_policy)
+
+    monkeypatch.setattr(verified_copy_module, "filesystem_for", route)
+    result = verified_copy_prefix(str(source), str(destination), workers=1)
+    assert result.copied_files == 1
+    assert (destination / "weights.bin").read_bytes() == b"first!!"
+
+    source_file.write_bytes(b"second!")
+    with pytest.raises(VerifiedCopyError, match="source identity changed"):
+        verified_copy_prefix(str(source), str(destination), workers=1)
+
+    assert (destination / "weights.bin").read_bytes() == b"first!!"
+
+
 def test_verified_copy_identityless_source_rereads_content_on_completion(tmp_path, monkeypatch):
     source = tmp_path / "source"
     destination = tmp_path / "destination"
@@ -560,6 +611,59 @@ def test_verified_copy_verifies_s3_staging_objects(tmp_path, monkeypatch, conten
         assert etag_destination.reads > 0
     else:
         assert etag_destination.reads == 0
+
+
+def test_verified_copy_promotes_small_s3_multipart_object_without_etag_preservation(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    (source / "weights.bin").write_bytes(b"abc")
+
+    destination_filesystem, destination_path = verified_copy_module.filesystem_for(str(destination))
+    original_filesystem_for = verified_copy_module.filesystem_for
+
+    class SmallMultipartDestination:
+        protocol = "s3"
+        fixed_upload_size = False
+
+        def __getattr__(self, name):
+            return getattr(destination_filesystem, name)
+
+        def info(self, path):
+            info = destination_filesystem.info(path)
+            if path.endswith("weights.bin"):
+                info["ETag"] = (
+                    '"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-1"'
+                    if STAGING_SUFFIX in path
+                    else '"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"'
+                )
+            return info
+
+        def find(self, path, *, detail):
+            found = destination_filesystem.find(path, detail=detail)
+            if detail:
+                for name in found:
+                    found[name] = self.info(name)
+            return found
+
+        def cp_file(self, source_path, destination_path, **kwargs):
+            if kwargs.get("preserve_etag"):
+                raise OSError("CoreWeave rejects small multipart UploadPartCopy")
+            destination_filesystem.cp_file(source_path, destination_path)
+
+    routed_destination = SmallMultipartDestination()
+
+    def routed_filesystem(url, *, s3_upload_policy=S3UploadPolicy.STANDARD):
+        if url == str(destination):
+            return routed_destination, destination_path
+        return original_filesystem_for(url, s3_upload_policy=s3_upload_policy)
+
+    monkeypatch.setattr(verified_copy_module, "filesystem_for", routed_filesystem)
+    result = verified_copy_prefix(str(source), str(destination), workers=1)
+
+    assert result.copied_files == 1
+    assert (destination / "weights.bin").read_bytes() == b"abc"
+    assert (destination / COMPLETION_MANIFEST).exists()
 
 
 def test_verified_copy_rejects_s3_etag_mismatch(tmp_path, monkeypatch):

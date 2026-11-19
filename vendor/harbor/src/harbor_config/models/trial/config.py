@@ -20,8 +20,6 @@ from upath import UPath
 
 from harbor_config.env import redact_capability_urls, templatize_sensitive_env
 from harbor_config.model_name import split_provider_model_name
-from harbor_config.models.agent.name import AgentName
-from harbor_config.models.bridge import BridgeConfig
 from harbor_config.models.environment_type import EnvironmentType
 from harbor_config.models.task.config import ArtifactConfig, MCPServerConfig, TpuSpec
 from harbor_config.models.task.id import GitTaskId, LocalTaskId, PackageTaskId
@@ -101,7 +99,6 @@ class ResolvedTimeouts(BaseModel):
 
 class AgentConfig(BaseModel):
     name: str | None = None
-    import_path: str | None = None
     model_name: str | None = Field(
         default=None,
         description="Immutable model identity recorded in results and used for resume.",
@@ -111,7 +108,6 @@ class AgentConfig(BaseModel):
         description="Mutable serving name used to route model requests for this run.",
     )
     skills: list[Path] = Field(default_factory=list)
-    mode: Literal["container", "local"] = "container"
     override_timeout_sec: float | None = None
     override_setup_timeout_sec: float | None = None
     max_timeout_sec: float | None = Field(
@@ -194,18 +190,6 @@ class AgentConfig(BaseModel):
 
         serialized = {k: _safe(v) for k, v in kwargs.items()}
         return redact_capability_urls(serialized) if info.mode == "json" else serialized
-
-    @model_validator(mode="after")
-    def set_default_name(self):
-        if self.name is None and self.import_path is None:
-            self.name = AgentName.ORACLE.value
-        return self
-
-
-class UserAgentConfig(AgentConfig):
-    user_persona_path: Path | None = None
-    user_prompt_template_path: Path | None = None
-    bridge: BridgeConfig
 
 
 class EnvironmentConfig(BaseModel):
@@ -451,14 +435,7 @@ class TrialConfig(BaseModel):
         ),
     )
     resolved_timeouts: ResolvedTimeouts | None = None
-    agent: AgentConfig = Field(default_factory=AgentConfig)
-    user_agent: UserAgentConfig | None = Field(
-        default=None,
-        description=(
-            "Optional simulated-user agent that communicates with the primary "
-            "agent through its configured bridge."
-        ),
-    )
+    agent: AgentConfig
     environment: EnvironmentConfig = Field(default_factory=EnvironmentConfig)
     verifier: VerifierConfig = Field(default_factory=VerifierConfig)
     artifacts: list[str | ArtifactConfig] = Field(default_factory=list)
@@ -545,8 +522,6 @@ class TrialConfig(BaseModel):
         """
         dump = self.model_dump(exclude=self._SERVING_TOP_FIELDS)
         dump["agent"] = self.agent.identity_fingerprint()
-        if self.user_agent is not None:
-            dump["user_agent"] = self.user_agent.identity_fingerprint()
         dump["environment"] = self.environment.identity_fingerprint(
             candidate_model_identity=self.agent.model_name,
             judge_model_identity=self.verifier.model_name,
@@ -581,12 +556,6 @@ class TrialConfig(BaseModel):
     def set_default_trial_name(self):
         if not self.trial_name:
             self.trial_name = self.generate_trial_name()
-        return self
-
-    @model_validator(mode="after")
-    def _validate_user_agent_mode(self):
-        if self.user_agent is not None and self.user_agent.mode != "container":
-            raise ValueError("user_agent requires container mode")
         return self
 
     def generate_trial_name(self):

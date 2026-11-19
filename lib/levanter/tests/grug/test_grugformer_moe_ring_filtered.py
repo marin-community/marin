@@ -4,11 +4,15 @@
 """Ring-filtered expert-parallel MoE against ring and a dense reference, with sender and receiver drops."""
 
 import math
+from collections.abc import Callable
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from haliax.nn.ragged_dot import ragged_dot
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+from levanter.grug._moe import ep_ring, ep_ring_filtered
 from levanter.grug._moe.ep_ring_filtered import destination_hit_fraction
 from levanter.grug.grug_moe import moe_mlp
 from levanter.testing.devices import use_test_devices
@@ -157,3 +161,91 @@ def test_ring_filtered_matches_ring_and_dense_with_drops(
         # Each case drops what its parameters ask for; with no valid tokens nothing can drop.
         assert (expected_sender_dropped > 0) == (padding != "all" and transport_capacity_factor < 1.0)
         assert (expected_receiver_dropped > 0) == (padding != "all" and capacity_factor < 1.0)
+
+
+def _fill_rows_past_groups(out: jax.Array, group_sizes: jax.Array, fill: float) -> jax.Array:
+    return jnp.where(jnp.arange(out.shape[0])[:, None] < jnp.sum(group_sizes), out, fill)
+
+
+def _ragged_dot_with_unwritten_rows(fill: float) -> Callable[..., jax.Array]:
+    """``ragged_dot`` whose output and lhs gradient rows past the groups hold ``fill``, as a kernel that leaves them
+    unwritten may."""
+
+    @jax.custom_vjp
+    def filled(lhs, rhs, group_sizes):
+        return _fill_rows_past_groups(ragged_dot(lhs, rhs, group_sizes), group_sizes, fill)
+
+    def filled_fwd(lhs, rhs, group_sizes):
+        return filled(lhs, rhs, group_sizes), (lhs, rhs, group_sizes)
+
+    def filled_bwd(residual, cotangent):
+        lhs, rhs, group_sizes = residual
+        _, vjp = jax.vjp(lambda a, b: ragged_dot(a, b, group_sizes), lhs, rhs)
+        dlhs, drhs = vjp(cotangent)
+        return _fill_rows_past_groups(dlhs, group_sizes, fill), drhs, None
+
+    filled.defvjp(filled_fwd, filled_bwd)
+    return filled
+
+
+@pytest.mark.timeout(240)
+@pytest.mark.parametrize("implementation", ["ring", "ring_gather_combine", "ring_filtered"])
+@pytest.mark.multidevice
+def test_ring_paths_never_read_the_padding_rows_past_the_groups(implementation: str, monkeypatch):
+    """The ring paths leave unused dispatch capacity outside every ragged_dot group, where the kernels' output is
+    unspecified. NaN there instead of zero must leave every output and gradient finite and unchanged up to the
+    rounding of a different compiled program."""
+    with use_test_devices(4) as devices, jax.default_matmul_precision("highest"):
+        shards, tokens_per_shard, hidden, inter, experts, topk = 4, 16, 8, 6, 16, 2
+        tokens = shards * tokens_per_shard
+        mesh = Mesh(
+            np.asarray(devices).reshape(1, shards, 1),
+            axis_names=("data", "expert", "model"),
+            axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+        )
+        keys = jax.random.split(jax.random.key(1), 6)
+        batch = NamedSharding(mesh, P(("data", "expert"), None))
+        expert_sharding = NamedSharding(mesh, P("expert", None, None))
+        args = (
+            jax.device_put(jax.random.normal(keys[0], (tokens, hidden)), batch),
+            jax.device_put(jax.nn.softmax(jax.random.normal(keys[1], (tokens, topk)), axis=-1), batch),
+            jax.device_put(
+                jax.random.normal(keys[2], (experts, hidden, 2 * inter)) / math.sqrt(hidden), expert_sharding
+            ),
+            jax.device_put(jax.random.normal(keys[3], (experts, inter, hidden)) / math.sqrt(inter), expert_sharding),
+        )
+        selected = jnp.argsort(jax.random.uniform(keys[4], (tokens, experts)), axis=1)[:, :topk].astype(jnp.int32)
+        selected = jax.device_put(selected, batch)
+        # A quarter of the tokens are padding, so every shard has unused capacity.
+        token_valid = jax.device_put(jnp.arange(tokens) % 4 != 1, NamedSharding(mesh, P(("data", "expert"))))
+        cotangent = jax.device_put(jax.random.normal(keys[5], (tokens, hidden)), batch)
+
+        def run(fill):
+            for module in (ep_ring, ep_ring_filtered):
+                monkeypatch.setattr(module, "ragged_dot", _ragged_dot_with_unwritten_rows(fill))
+
+            def loss(x, cw, w_up_gate, w_down):
+                out, _ = moe_mlp(
+                    x,
+                    selected,
+                    cw,
+                    w_up_gate,
+                    w_down,
+                    token_valid=token_valid,
+                    activation=jax.nn.silu,
+                    implementation=implementation,
+                    mesh=mesh,
+                    capacity_factor=2.0,
+                    pooled_transport_capacity_factor=2.0,
+                    report_capacity_overflow=True,
+                )
+                return jnp.sum(out * cotangent), out
+
+            with jax.set_mesh(mesh):
+                (_, out), grads = jax.jit(jax.value_and_grad(loss, argnums=(0, 1, 2, 3), has_aux=True))(*args)
+            return out, grads
+
+        zero_filled, nan_filled = run(0.0), run(jnp.nan)
+        for zero, nan in zip(jax.tree.leaves(zero_filled), jax.tree.leaves(nan_filled), strict=True):
+            assert np.isfinite(np.asarray(nan)).all()
+            np.testing.assert_allclose(np.asarray(nan), np.asarray(zero), rtol=1e-6, atol=1e-6)

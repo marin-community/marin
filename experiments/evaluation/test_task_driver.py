@@ -11,19 +11,16 @@ from types import SimpleNamespace
 import httpx
 import openai
 import pytest
+from evalrecords.records import JudgeIdentity
+from evalrecords.rollout_attempts import ATTEMPTS_TABLE
 from finestore.reader import ReadView
 from fray.local_backend import LocalClient
 from iris.client.client import IrisClient, IrisContext, Job, iris_ctx_scope
 from iris.cluster.client import remote_client
 from iris.cluster.types import ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
-from marin.rollouts.evaluation import (
-    ATTEMPTS_TABLE,
-    EvaluationInfrastructureError,
-    EvaluationRunConfig,
-    JudgeIdentity,
-    ModelIdentity,
-)
+from marin.evaluation import task_worker
+from marin.rollouts.evaluation import EvaluationInfrastructureError, EvaluationRunConfig, ModelIdentity
 from rolloutengine.models import RolloutLimits
 from taskcompendium.convert.answers import exact_answer_task
 from taskcompendium.evaluation.corpus import chat_item
@@ -150,14 +147,14 @@ def recovery_endpoint(monkeypatch):
         unk_token="[UNK]",
         chat_template="{% for message in messages %}{{ message['content'] }} {% endfor %}",
     )
-    monkeypatch.setattr(task_driver.AutoTokenizer, "from_pretrained", lambda *_args, **_kwargs: tokenizer)
+    monkeypatch.setattr(task_worker, "load_tokenizer", lambda *_args, **_kwargs: tokenizer)
 
     def client(**kwargs):
         return openai.AsyncOpenAI(
             **kwargs, http_client=httpx.AsyncClient(transport=httpx.MockTransport(endpoint.handle))
         )
 
-    monkeypatch.setattr(task_driver, "AsyncOpenAI", client)
+    monkeypatch.setattr(task_worker, "AsyncOpenAI", client)
     monkeypatch.setattr("rigging.timing.time.sleep", lambda _delay: None)
     return endpoint
 

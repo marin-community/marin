@@ -67,18 +67,6 @@ class KubectlError(RuntimeError):
     """Error raised for kubectl command failures."""
 
 
-class ExecStatusError(KubectlError):
-    """The exec stream ended without an integer command status."""
-
-    def __init__(self, detail: str, *, container_missing: bool = False) -> None:
-        super().__init__(f"Non-integer exec status: {detail}")
-        self.container_missing = container_missing
-
-
-class ExecSetupError(KubectlError):
-    """The websocket handshake failed before a command was sent."""
-
-
 class K8sResource(Enum):
     """Kubernetes resource type with API metadata.
 
@@ -120,6 +108,9 @@ class K8sResource(Enum):
 
     # Scheduling v1
     PRIORITY_CLASSES = ("scheduling.k8s.io", "v1", False, "priorityclasses", "PriorityClass")
+
+    # Node v1
+    RUNTIME_CLASSES = ("node.k8s.io", "v1", False, "runtimeclasses", "RuntimeClass")
 
     # Cilium: egress allowlist policies for EGRESS_POLICY_ALLOWLIST pods.
     CILIUM_NETWORK_POLICIES = ("cilium.io", "v2", True, "ciliumnetworkpolicies", "CiliumNetworkPolicy")

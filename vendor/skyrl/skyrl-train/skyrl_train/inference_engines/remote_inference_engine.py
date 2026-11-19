@@ -8,25 +8,22 @@ from skyrl_train.inference_engines.base import (
 from skyrl_train.weight_sync.weight_loader import WeightLoader
 from typing import List, Optional, Any, Dict
 import json
-from transformers import PreTrainedTokenizerBase
 
 
 class RemoteWeightLoader(WeightLoader):
     """Loads weights into remote inference engine via HTTP.
 
     This loader coordinates weight updates with remote inference servers
-    (vLLM or SGLang) via their HTTP APIs.
+    through vLLM's HTTP API.
     """
 
-    def __init__(self, url: str, engine_backend: str) -> None:
+    def __init__(self, url: str) -> None:
         """Initialize the loader.
 
         Args:
             url: Base URL of the remote inference server.
-            engine_backend: Backend type ("vllm" or "sglang").
         """
         self._url = url
-        self._engine_backend = engine_backend
 
     async def init_communicator(
         self,
@@ -52,7 +49,7 @@ class RemoteWeightLoader(WeightLoader):
         Returns:
             Response from the remote server.
         """
-        path = "/init_weights_update_group" if self._engine_backend == "sglang" else "/init_weight_update_communicator"
+        path = "/init_weight_update_communicator"
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"{self._url}{path}",
@@ -80,20 +77,13 @@ class RemoteWeightLoader(WeightLoader):
         Returns:
             Response from the remote server.
         """
-        if self._engine_backend == "vllm":
-            weight_update_method = "update_weights"
-        elif self._engine_backend == "sglang":
-            weight_update_method = "update_weights_from_distributed"
-        else:
-            raise ValueError(f"Invalid engine backend: {self._engine_backend}")
-
         async with aiohttp.ClientSession() as session:
             name = request["names"][0]
             dtype = request["dtypes"][0]
             shape = request["shapes"][0]
 
             resp = await session.post(
-                f"{self._url}/{weight_update_method}",
+                f"{self._url}/update_weights",
                 json={
                     "name": name,
                     "dtype": dtype,
@@ -115,15 +105,13 @@ class RemoteWeightLoader(WeightLoader):
 
 class RemoteInferenceEngine(InferenceEngineInterface):
     """
-    Lightweight client to call into an OpenAI-compatible server over HTTP with a customizable backend.
+    HTTP client for OpenAI-compatible inference and vLLM management endpoints.
     """
 
     def __init__(
         self,
         url: str,
         model_name: str,
-        engine_backend: str,
-        tokenizer: PreTrainedTokenizerBase,
         tp_size: Optional[int] = None,
         pp_size: Optional[int] = None,
         dp_size: Optional[int] = None,
@@ -140,16 +128,14 @@ class RemoteInferenceEngine(InferenceEngineInterface):
         """
         self.url = f"http://{url}"
         self.model_name = model_name
-        self.engine_backend = engine_backend
         self._tp_size = tp_size
         self._pp_size = pp_size
         self._dp_size = dp_size
         self._ep_size = ep_size
         self._dcp_size = dcp_size
-        self.tokenizer = tokenizer
 
         # Create weight loader for coordinating weight updates
-        self._weight_loader = RemoteWeightLoader(self.url, engine_backend)
+        self._weight_loader = RemoteWeightLoader(self.url)
 
     def tp_size(self) -> int:
         return self._tp_size
@@ -187,57 +173,43 @@ class RemoteInferenceEngine(InferenceEngineInterface):
         response = None
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=None)) as session:
             headers = {"Content-Type": "application/json"}
-            payload = {}
-            request_url = ""
-            if self.engine_backend == "vllm":
-                # vLLM does not support /generate, use /completions instead. It supports batch generation.
-                payload = sampling_params.copy()
-                payload["model"] = self.model_name
-                payload["prompt"] = prompt_token_ids
-                request_url = f"{self.url}/v1/completions"
-            elif self.engine_backend == "sglang":
-                # SGLang supports /generate, works exactly like its Python `async_generate()` method
-                # and can do batch generation.
-                payload = {
-                    "input_ids": prompt_token_ids,
-                    "sampling_params": sampling_params,
-                }
-                request_url = f"{self.url}/generate"
-            else:
-                raise ValueError(f"Invalid engine backend: {self.engine_backend}")
+            # vLLM does not support /generate, use /completions instead. It supports batch generation.
+            payload = sampling_params.copy()
+            payload["model"] = self.model_name
+            payload["prompt"] = prompt_token_ids
+            payload["return_token_ids"] = True
+            payload.setdefault("logprobs", 0)
+            request_url = f"{self.url}/v1/completions"
             async with session.post(request_url, json=payload, headers=headers) as resp:
+                resp.raise_for_status()
                 response = await resp.json()
 
         # 3. Parse outputs
         outputs = []
         output_ids = []
         finish_reasons = []
+        response_logprobs = None
 
-        if self.engine_backend == "vllm":
-            for i, choice in enumerate(response.get("choices", [])):
-                # Since n=1, index i represents the output for `prompt[i]`
-                assert choice["index"] == i, "Expect the choices to be ordered by index."
-                text = choice["text"]
-                outputs.append(text)
-                finish_reasons.append(choice["finish_reason"])
-                # TODO(Charlie): this is not token-in-token-out because vLLM does not support
-                # returning token IDs via HTTP requests. Fix after this vLLM PR is merged:
-                # https://github.com/vllm-project/vllm/pull/22587
-                output_ids.append(self.tokenizer.encode(text, add_special_tokens=False))
-        elif self.engine_backend == "sglang":
-            # since prompt_token_ids is a list of lists, response is a list of dicts
-            for output in response:
-                cur_output_ids = output["output_ids"]
-                output_ids.append(cur_output_ids)
-                # SGLang only returns tokens not text when skip_tokenizer_init is True, so
-                # we manually decode it.
-                outputs.append(self.tokenizer.decode(cur_output_ids, skip_special_tokens=True))
-                finish_reasons.append(output["meta_info"]["finish_reason"]["type"])
-        else:
-            raise ValueError(f"Invalid engine backend: {self.engine_backend}")
+        if len(response["choices"]) != len(prompt_token_ids):
+            raise ValueError("Remote completion count does not match the prompt batch")
+        if payload["logprobs"] is not None:
+            response_logprobs = []
+        for i, choice in enumerate(response.get("choices", [])):
+            # Since n=1, index i represents the output for `prompt[i]`
+            assert choice["index"] == i, "Expect the choices to be ordered by index."
+            text = choice["text"]
+            outputs.append(text)
+            finish_reasons.append(choice["finish_reason"])
+            token_ids = choice["token_ids"]
+            output_ids.append(token_ids)
+            if response_logprobs is not None:
+                logprobs = choice["logprobs"]["token_logprobs"]
+                if len(logprobs) != len(token_ids) or any(value is None for value in logprobs):
+                    raise ValueError("Remote sampled-token logprobs must align with the returned token IDs")
+                response_logprobs.append(logprobs)
 
         return InferenceEngineOutput(
-            responses=outputs, stop_reasons=finish_reasons, response_ids=output_ids, response_logprobs=None
+            responses=outputs, stop_reasons=finish_reasons, response_ids=output_ids, response_logprobs=response_logprobs
         )
 
     async def chat_completion(self, request_payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -271,8 +243,6 @@ class RemoteInferenceEngine(InferenceEngineInterface):
 
     async def sleep(self, *args: Any, **kwargs: Any):
         async with aiohttp.ClientSession() as session:
-            # TODO(Charlie): this is vLLM's API, not SGLang (which uses tags). Fix when need to
-            # support sleeping with remote engines.
             resp = await session.post(f"{self.url}/sleep", json={"level": kwargs.get("level", 1)})
             return await resp.json()
 
@@ -301,15 +271,8 @@ class RemoteInferenceEngine(InferenceEngineInterface):
 
     # TODO(tgriggs): Come up with a (more) elegant way to handle text or json responses, and test it and handle errors.
     async def reset_prefix_cache(self):
-        if self.engine_backend == "vllm":
-            reset_prefix_cache_method = "reset_prefix_cache"
-        elif self.engine_backend == "sglang":
-            reset_prefix_cache_method = "flush_cache"
-        else:
-            raise ValueError(f"Invalid engine backend: {self.engine_backend}")
-
         async with aiohttp.ClientSession() as session:
-            resp = await session.post(f"{self.url}/{reset_prefix_cache_method}")
+            resp = await session.post(f"{self.url}/reset_prefix_cache")
             text = await resp.text()
 
         # First try to parse it as JSON
@@ -335,8 +298,6 @@ class RemoteInferenceEngine(InferenceEngineInterface):
 def create_remote_inference_engines(
     urls: List[str],
     model_name: str,
-    engine_backend: str,
-    tokenizer: PreTrainedTokenizerBase,
     tensor_parallel_size: Optional[int] = None,
     pipeline_parallel_size: Optional[int] = None,
     data_parallel_size: Optional[int] = None,
@@ -351,8 +312,6 @@ def create_remote_inference_engines(
         RemoteInferenceEngine(
             url=url,
             model_name=model_name,
-            tokenizer=tokenizer,
-            engine_backend=engine_backend,
             tp_size=tensor_parallel_size,
             pp_size=pipeline_parallel_size,
             dp_size=data_parallel_size,

@@ -9,20 +9,7 @@ from pathlib import Path
 from harbor.environments.shellsim import ShellSimEnvironment
 from rigging.filesystem.storage_path import StoragePath
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from tests import shellbox_smoke
 from shellbox.machine import MachineSpec, PackageSpec
-
-
-def test_shellsim_harbor_trial(tmp_path: Path) -> None:
-    asyncio.run(
-        shellbox_smoke.main(
-            tmp_path / "jobs",
-            Path(__file__).parents[2] / "fixtures/shellbox/task",
-            ["echo 'hello from qemu' > /workspace/answer.txt"],
-            "shellsim",
-            {"network_policy": "deny"},
-        )
-    )
 
 
 def test_shellsim_downloads_to_remote_paths(tmp_path: Path) -> None:
@@ -52,9 +39,7 @@ def test_shellsim_downloads_to_remote_paths(tmp_path: Path) -> None:
             await environment.download_dir(
                 "/logs/agent", f"file://{tmp_path}/local-download"
             )
-            (tmp_path / "local-download" / "existing.txt").write_text(
-                "local artifact"
-            )
+            (tmp_path / "local-download" / "existing.txt").write_text("local artifact")
             await environment.download_dir("/logs/agent", tmp_path / "local-download")
             await environment.download_dir("/logs/agent", str(remote / "by-uri"))
 

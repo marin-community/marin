@@ -23,8 +23,8 @@ from typing import Any
 
 import pytest
 
-from tests.test_utils import skip_if_no_tpu
 from tests.vllm import grugmoe_real_checkpoint_backend as backend
+from tests.vllm.tpu_availability import skip_if_no_tpu
 
 TPU_LOCK_PATH = "/tmp/marin-tpu-e2e.lock"
 BACKEND_MODULE = "tests.vllm.grugmoe_real_checkpoint_backend"
