@@ -53,14 +53,14 @@ BUILTIN_LOSS_SPECS: Mapping[str, LossSpec] = MappingProxyType(
     {
         PolicyLossType.REGULAR: LossSpec(RatioAnchor.OLD),
         PolicyLossType.DUAL_CLIP: LossSpec(RatioAnchor.OLD),
+        PolicyLossType.IMPORTANCE_SAMPLING: LossSpec(RatioAnchor.OLD),
+        PolicyLossType.SFT: LossSpec(RatioAnchor.NONE, advantage_linear=False),
+        PolicyLossType.BEHAVIOR_CLIP: LossSpec(RatioAnchor.ROLLOUT),
+        PolicyLossType.SAPO: LossSpec(RatioAnchor.OLD),
         PolicyLossType.GSPO: LossSpec(RatioAnchor.OLD, sequence_level=True),
         PolicyLossType.CISPO: LossSpec(RatioAnchor.OLD),
-        PolicyLossType.SAPO: LossSpec(RatioAnchor.OLD),
         PolicyLossType.CLIP_COV: LossSpec(RatioAnchor.OLD, row_local=False),
         PolicyLossType.KL_COV: LossSpec(RatioAnchor.OLD, row_local=False, advantage_linear=False),
-        PolicyLossType.IMPORTANCE_SAMPLING: LossSpec(RatioAnchor.OLD),
-        PolicyLossType.BEHAVIOR_CLIP: LossSpec(RatioAnchor.ROLLOUT),
-        PolicyLossType.SFT: LossSpec(RatioAnchor.NONE, advantage_linear=False),
         PolicyLossType.FTPO: LossSpec(RatioAnchor.NONE, advantage_linear=False),
         PolicyLossType.DPO: LossSpec(RatioAnchor.NONE, advantage_linear=False),
     }
