@@ -1,0 +1,12 @@
+id: X0244
+slug: muonc-with-25x-stronger-decay
+name: MuonC with 25x stronger decay
+category: Optimizers
+summary: 🤖 Posted on behalf of @armorfaye.
+source: intake
+status: approved
+track: speedrun
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-6995649952
+  author: armorfaye
+  approved_by: armorfaye (trusted)
