@@ -29,6 +29,7 @@ def test_source_publication_attribution_links_upstream_and_cc_by(journey: Journe
 
     page.route("**/api/source?*", source)
     page.goto(f"{journey.origin}/{APP_ROOT}/")
+    page.locator("#show-everything").click()
     page.locator('tr[data-source-id="Marin:clean"] a[href^="source.html"]').click()
     expect(page.locator("#sections")).to_have_attribute("aria-busy", "false")
     field = page.locator(".field").filter(has=page.get_by_text("License", exact=True))
