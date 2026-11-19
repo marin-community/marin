@@ -34,7 +34,7 @@ from experiments.post_training.task_curation.derived_contract_census import (
     DerivedContractReceipt,
 )
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
-from infra.marina.apps.rl_data_catalog.server.derived_contract import INPUT_FIELDS
+from infra.marina.apps.rl_data_catalog.server.contract_selection import INPUT_FIELDS
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 LOGGER = logging.getLogger(__name__)

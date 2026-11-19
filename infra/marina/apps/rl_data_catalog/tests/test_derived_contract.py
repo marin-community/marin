@@ -9,7 +9,10 @@ from pathlib import Path
 
 import pytest
 
-from infra.marina.apps.rl_data_catalog.server.contract_selection import receipt_identity, select_contract_receipts
+from infra.marina.apps.rl_data_catalog.server.contract_selection import (
+    receipt_identity,
+    select_contract_receipts,
+)
 from infra.marina.apps.rl_data_catalog.server.derived_contract import contract_projection
 
 

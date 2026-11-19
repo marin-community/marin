@@ -6,7 +6,7 @@
 import hashlib
 import json
 from functools import cache
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -22,28 +22,48 @@ INPUT_FIELDS = (
 )
 
 
+Sha256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+
+
+class ContractInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    dataset_id: str
+    dataset_revision: str
+    converter_version: str
+    converter_revision: str
+    measured_tasks: int
+    task_specs_sha256: Sha256
+
+
+class SummaryChange(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    single_turn_count: tuple[int, int]
+
+
 class ContractSupersession(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     source_id: str
-    previous_receipt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    selected_receipt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    previous_receipt_sha256: Sha256
+    selected_receipt_sha256: Sha256
     previous_uri: str
     selected_uri: str
-    input: dict[str, str | int]
-    summary_changes: dict[str, tuple[int, int]]
+    input: ContractInput
+    summary_changes: SummaryChange
     reason: Literal["single-turn-rule-correction"]
 
     @model_validator(mode="after")
-    def exact_scope(self):
-        if set(self.input) != set(INPUT_FIELDS) or set(self.summary_changes) != {"single_turn_count"}:
-            raise ValueError("Derived-rule correction must bind all input fields and only single_turn_count")
+    def validate_distinct_receipts(self):
         if self.previous_receipt_sha256 == self.selected_receipt_sha256:
             raise ValueError("A supersession must identify two distinct receipts")
         return self
 
 
+def receipt_json(receipt: dict[str, Any]) -> str:
+    return json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+
+
 def receipt_identity(receipt: dict[str, Any]) -> str:
-    return hashlib.sha256(json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return hashlib.sha256(receipt_json(receipt).encode()).hexdigest()
 
 
 def contract_registry_key() -> str:
@@ -63,7 +83,7 @@ def contract_supersessions() -> tuple[ContractSupersession, ...]:
 
 
 def select_contract_receipts(source_id: str, matches: list[dict]) -> list[dict]:
-    """Remove only exact, input-bound predecessor receipts; every other conflict fails."""
+    """Remove exact predecessor receipts and reject all remaining summary conflicts."""
     indexed = {receipt_identity(receipt): receipt for receipt in matches}
     superseded = set()
     for rule in contract_supersessions():
@@ -74,7 +94,7 @@ def select_contract_receipts(source_id: str, matches: list[dict]) -> list[dict]:
         if previous is None or selected is None:
             continue
         if any(
-            any(receipt["input"][field] != rule.input[field] for field in INPUT_FIELDS)
+            any(receipt["input"][field] != getattr(rule.input, field) for field in INPUT_FIELDS)
             for receipt in (previous, selected)
         ):
             raise ValueError("Superseded contract input differs from its authorization")
@@ -86,7 +106,7 @@ def select_contract_receipts(source_id: str, matches: list[dict]) -> list[dict]:
             for field in fields
             if previous["summary"].get(field) != selected["summary"].get(field)
         }
-        if changes != rule.summary_changes:
+        if changes != rule.summary_changes.model_dump():
             raise ValueError("Superseded contract summary differs from its authorization")
         superseded.add(rule.previous_receipt_sha256)
     result = [receipt for receipt in matches if receipt_identity(receipt) not in superseded]

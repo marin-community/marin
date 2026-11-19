@@ -16,6 +16,7 @@ from infra.marina.apps.rl_data_catalog.load import ensure_tables
 from infra.marina.apps.rl_data_catalog.server.contract_selection import (
     INPUT_FIELDS,
     receipt_identity,
+    receipt_json,
     select_contract_receipts,
 )
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
@@ -42,7 +43,7 @@ def load_contracts(records: list[DerivedContractReceipt], query: AppletQuery) ->
     inserted = 0
     for record in records:
         payload = record.model_dump(mode="json")
-        serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        serialized = receipt_json(payload)
         identity = receipt_identity(payload)
         params = {"source": canonical_source_id(record.source_id), "identity": identity, "receipt": serialized}
         inserted += query(
