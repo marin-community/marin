@@ -375,6 +375,8 @@ def comparison_config(launch: dict, recorded: RecordedLaunch | None = None) -> d
     """Compare complete native configuration with declared runtime aliases resolved."""
     recorded = recorded or RecordedLaunch.from_document(launch, attempt=launch["run"]["attempt_id"])
     config = deepcopy(launch)
+    if get_path(config, "skyrl.trainer.rollout_buffer.groups_per_family") == {}:
+        del config["skyrl"]["trainer"]["rollout_buffer"]["groups_per_family"]
     inputs = launch["inputs"]
 
     def replace_alias(path, aliases, replacement):
@@ -482,9 +484,6 @@ def comparison_config(launch: dict, recorded: RecordedLaunch | None = None) -> d
         runtime.pop(field, None)
     if not runtime:
         config["skyrl"].pop("runtime", None)
-    buffer = config["skyrl"]["trainer"].get("rollout_buffer", {})
-    if buffer.get("groups_per_family") == {}:
-        del buffer["groups_per_family"]
     return _config_values(config)
 
 
