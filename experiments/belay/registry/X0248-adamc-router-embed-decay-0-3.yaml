@@ -1,0 +1,12 @@
+id: X0248
+slug: adamc-router-embed-decay-0-3
+name: AdamC router/embed decay 0.3
+category: Optimizers
+summary: 🤖 Posted on behalf of @armorfaye.
+source: intake
+status: approved
+track: speedrun
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-7020794352
+  author: armorfaye
+  approved_by: armorfaye (trusted)
