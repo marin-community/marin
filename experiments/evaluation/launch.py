@@ -394,6 +394,8 @@ def build_evaluation_batch(
         model = pinned_model(model)
     source_model_config = ModelConfigRef.model_validate(asdict(model))
     accelerator = MARIN_EVAL_HARDWARE.select(model, spec.platform, spec.accelerator)
+    if instances > 1 and accelerator.platform is Platform.TPU and accelerator.tasks_per_instance > 1:
+        raise ValueError("multi-host TPU serving requires one serving instance")
     if spec.federated_cluster is not None:
         if accelerator.platform is not Platform.GPU:
             raise ValueError("--federated_cluster requires a GPU accelerator")

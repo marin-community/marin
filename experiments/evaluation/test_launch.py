@@ -5,10 +5,11 @@
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 from contextlib import contextmanager
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -82,8 +83,15 @@ def _command(tmp_path: Path) -> list[str]:
     ]
 
 
+@dataclass(frozen=True)
+class InstanceSelection:
+    model_config: Path
+    override: int | None
+    expected: int
+
+
 @pytest.fixture(params=[(2, None, 2), (2, 1, 1), (1, 2, 2)], ids=["omitted", "explicit-one", "explicit-two"])
-def instance_selection(request, tmp_path):
+def instance_selection(request, tmp_path) -> InstanceSelection:
     catalog_instances, override, expected = request.param
     path = tmp_path / "model.json"
     path.write_text(
@@ -96,27 +104,26 @@ def instance_selection(request, tmp_path):
             }
         )
     )
-    return path, override, expected
+    return InstanceSelection(path, override, expected)
 
 
 def test_cli_uses_same_instance_count_for_launch_and_dry_run(
     tmp_path, monkeypatch, submitted_batches, instance_selection
 ):
-    model, override, expected = instance_selection
     monkeypatch.setenv("CW_KEY_ID", "local-test-key")
     monkeypatch.setenv("CW_KEY_SECRET", "local-test-secret")
     args = [
         "launch",
         "--model-config",
-        str(model),
+        str(instance_selection.model_config),
         "--evals",
         "gsm8k-smoke",
         "--records-prefix",
         str(tmp_path),
         "--no-wait",
     ]
-    if override is not None:
-        args.extend(["--instances", str(override)])
+    if instance_selection.override is not None:
+        args.extend(["--instances", str(instance_selection.override)])
     runner = CliRunner()
 
     plan = runner.invoke(cli, [*args, "--dry-run"])
@@ -124,24 +131,61 @@ def test_cli_uses_same_instance_count_for_launch_and_dry_run(
 
     assert plan.exit_code == 0, plan.output
     assert launch.exit_code == 0, launch.output
-    assert f"instances={expected}" in plan.output.splitlines()[0]
-    assert f"serve=PP1 TP1 DP8 instances={expected} tasks={expected} x H100x8" in plan.output
-    assert [batch.instances for batch in submitted_batches] == [expected]
+    assert re.findall(r"\binstances\s*=\s*(\d+)", plan.output) == [str(instance_selection.expected)] * 2
+    assert re.findall(r"\bserving_tasks\s*=\s*(\d+)", plan.output) == [str(instance_selection.expected)]
+    assert [batch.instances for batch in submitted_batches] == [instance_selection.expected]
 
 
 def test_pipeline_uses_model_instances_unless_overridden(tmp_path, monkeypatch, submitted_batches, instance_selection):
-    path, override, expected = instance_selection
     monkeypatch.setattr("experiments.evaluation.pipeline.read_record", lambda path: SimpleNamespace(results_path=path))
     step = eval_step(
-        load_model_config(path),
+        load_model_config(instance_selection.model_config),
         resolve_evaluations("gsm8k-smoke"),
         version="dev",
-        **({"instances": override} if override is not None else {}),
+        **({"instances": instance_selection.override} if instance_selection.override is not None else {}),
     )
 
     step.run(materialized_config(step, str(tmp_path)))
 
-    assert [batch.instances for batch in submitted_batches] == [expected]
+    assert [batch.instances for batch in submitted_batches] == [instance_selection.expected]
+
+
+def test_cli_multihost_tpu_requires_one_serving_instance(tmp_path, submitted_batches):
+    model = tmp_path / "model.json"
+    model.write_text(
+        json.dumps(
+            {
+                "name": "test-tpu",
+                "location": "gs://test/model",
+                "resource_hint": {"hbm_gb": 16},
+                "serve": {"instances": 2},
+            }
+        )
+    )
+    args = [
+        "launch",
+        "--model-config",
+        str(model),
+        "--evals",
+        "gsm8k-smoke",
+        "--accelerator",
+        "v4-32",
+        "--records-prefix",
+        str(tmp_path),
+        "--no-wait",
+    ]
+    runner = CliRunner()
+
+    rejected = runner.invoke(cli, args)
+    rejected_plan = runner.invoke(cli, [*args, "--dry-run"])
+    accepted_plan = runner.invoke(cli, [*args, "--dry-run", "--instances", "1"])
+
+    for result in (rejected, rejected_plan):
+        assert result.exit_code != 0
+        assert "multi-host TPU serving requires one serving instance" in result.output
+    assert accepted_plan.exit_code == 0, accepted_plan.output
+    assert re.findall(r"\bserving_tasks\s*=\s*(\d+)", accepted_plan.output) == ["4"]
+    assert submitted_batches == []
 
 
 @pytest.fixture

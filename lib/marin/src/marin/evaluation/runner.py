@@ -295,7 +295,7 @@ def _record(
             tensor_parallel_size=serve.tensor_parallel_size,
             data_parallel_size=serve.data_parallel_size,
             pipeline_parallel_size=serve.pipeline_parallel_size,
-            task_count=serve.pipeline_parallel_size * serve.instances,
+            task_count=batch.accelerator.tasks_per_instance * batch.instances,
             max_model_len=serve.max_model_len,
         )
     evalchemy = identity.eval_ref.evalchemy

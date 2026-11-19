@@ -475,6 +475,31 @@ def test_evaluation_steps_refresh_direct_endpoint_between_evaluations(tmp_path, 
     assert set(observed_urls) == {"http://10.0.0.1:8000/v1", "http://10.0.0.2:8000/v1"}
 
 
+def test_candidate_startup_failure_records_the_requested_workers(tmp_path, monkeypatch):
+    evaluation = _evaluation(tmp_path, "candidate", _successful_evaluation)
+    batch = _hosted_judge_batch(tmp_path, (evaluation,))
+    model = replace(
+        batch.model,
+        serve=ServeConfig(auto_overrides=False),
+        resource_hint=ResourceHint(hbm_gb=3, memory="1g"),
+    )
+
+    def fail_to_start(config):
+        assert config.instances == 2
+        raise RemoteInferenceStartupError("candidate did not become ready", jobs=())
+
+    _patch_inference_runtime(monkeypatch, fail_to_start)
+    monkeypatch.setattr("marin.evaluation.runner.inference_config_for_model", inference_config_for_model)
+
+    with pytest.raises(RuntimeError, match=r"1 step\(s\) failed"):
+        _run_test_batch(replace(batch, model=model, judge=None, instances=2))
+
+    record = read_record(record_path(batch.records_prefix, evaluation.identity.run_id))
+    assert record.status is RunStatus.INFRA_FAILED
+    assert record.serving is not None
+    assert record.serving.task_count == 2
+
+
 def test_evaluation_steps_record_each_hosted_judge_startup_failure(tmp_path, monkeypatch):
     class InferenceContext:
         def __init__(self, model_name: str):
