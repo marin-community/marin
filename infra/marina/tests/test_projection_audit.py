@@ -45,6 +45,18 @@ def test_pin_audit_projects_active_identity_under_the_gateway_bound(database_url
                         "pipeline": json.dumps(pipeline),
                     },
                 )
+            connection.execute(
+                text(
+                    "INSERT INTO atlas_sources(load_id,id,declaration,latest_attempt_status,diagnostics) "
+                    "SELECT 'active','source-' || lpad(n::text,3,'0'),CAST(:declaration AS JSONB),"
+                    "'complete','[]'::jsonb FROM generate_series(1,103) n"
+                ),
+                {
+                    "declaration": json.dumps(
+                        {"dataset_id": "dataset", "dataset_revision": "revision", "pipeline": pipeline}
+                    )
+                },
+            )
             connection.execute(text("UPDATE curriculum_current SET load_id='active' WHERE name='latest'"))
             connection.execute(
                 text(
@@ -58,16 +70,25 @@ def test_pin_audit_projects_active_identity_under_the_gateway_bound(database_url
                 },
             )
 
+        pages = []
+
         def query(sql, parameters):
             validate_query(sql)
             with engine.begin() as connection:
                 rows = [dict(row) for row in connection.execute(text(sql), parameters).mappings()]
+            if "FROM atlas_sources" in sql:
+                pages.append(len(rows))
+                if len(pages) == 1:
+                    with engine.begin() as connection:
+                        connection.execute(text("UPDATE atlas_current SET load_id='staged' WHERE name='latest'"))
             assert len(json.dumps(rows).encode()) < 5_242_880
             return {"rows": rows}
 
         monkeypatch.setattr(ensure_current_projections, "atlas_applet_query", lambda: query)
-        pins = ensure_current_projections.served_declaration_pins()
-        assert len(pins) == 1
+        selection = ensure_current_projections.atlas_catalog_selection()
+        pins = ensure_current_projections.served_declaration_pins(selection)
+        assert [pin.source_id for pin in pins] == ["source"] + [f"source-{n:03d}" for n in range(1, 104)]
+        assert pages == [50, 50, 4]
         projected = pins[0]
         assert projected.dataset_id == "dataset"
         assert projected.dataset_revision == "revision"

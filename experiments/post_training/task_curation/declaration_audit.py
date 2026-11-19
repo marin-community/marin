@@ -20,6 +20,17 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
+from experiments.post_training.task_curation.ensure_current_projections import (
+    DeclarationPin,
+    ProjectionWaivers,
+    apply_projection_waivers,
+    atlas_catalog_selection,
+    atlas_contract_receipts,
+    atlas_curriculum_rows,
+    projection_gaps,
+    served_declaration_pins,
+    served_pin_map,
+)
 from experiments.post_training.task_curation.registry import read_registry_json
 
 LOGGER = logging.getLogger(__name__)
@@ -322,7 +333,9 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, help="Write the audit summary JSON here")
+    parser.add_argument("--waivers", type=Path, help="Source:projection landing waivers with preview refresh expiry")
     args = parser.parse_args()
+    waivers = ProjectionWaivers.model_validate_json(args.waivers.read_bytes()) if args.waivers else None
 
     layer, families, release_rows, sources = canonical_layer()
 
@@ -344,14 +357,6 @@ def main() -> None:
     # The serving projections (the Atlas grader and curriculum-area columns) must also bind
     # every current pin: a derived-contract census receipt and a curriculum alignment at the
     # exact pin, served through a catalog whose declarations carry the same binding.
-    from experiments.post_training.task_curation.ensure_current_projections import (  # noqa: PLC0415
-        DeclarationPin,
-        atlas_contract_receipts,
-        atlas_curriculum_rows,
-        projection_gaps,
-        served_declaration_pins,
-        served_pin_map,
-    )
 
     projection_pins = [
         DeclarationPin(
@@ -365,16 +370,20 @@ def main() -> None:
         )
         for source_id, source in sources.items()
     ]
+    selection = atlas_catalog_selection()
     projection_findings, projection_notes = projection_gaps(
         projection_pins,
         atlas_contract_receipts(),
         atlas_curriculum_rows(),
-        served_pins=served_pin_map(served_declaration_pins()),
+        served_pins=served_pin_map(served_declaration_pins(selection)),
     )
+    if atlas_catalog_selection() != selection:
+        raise ValueError("Catalog selection changed during declaration audit; retry")
+    projection_blocking, waiver_notes = apply_projection_waivers(projection_findings, waivers, selection)
     findings.extend(
         f"serving projection {gap.projection}/{gap.state}: {gap.source_id}"
         + (f" (last computed at {gap.last_computed_revision})" if gap.last_computed_revision else "")
-        for gap in projection_findings
+        for gap in projection_blocking
     )
     notes.extend(projection_notes)
 
@@ -386,8 +395,12 @@ def main() -> None:
         "dedup_rows": len(families["within-source dedup"]),
         "retained_release_receipts": len(release_rows),
         "findings": findings,
+        "projection_waivers": waiver_notes,
+        "waived_projection_count": len(projection_findings) - len(projection_blocking),
+        "waiver_scope": waivers.model_dump(mode="json", exclude={"waivers"}) if waivers else None,
+        "catalog_load_id": selection.load_id,
         "staged_for_intake": notes,
-        "state": "ok" if not findings else "mismatched",
+        "state": "mismatched" if findings else "ok-with-waivers" if projection_findings else "ok",
     }
     print(json.dumps(summary, indent=2))
     if args.output is not None:

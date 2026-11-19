@@ -24,7 +24,7 @@ from typing import Any, Literal
 from finestore.rl.curation import ActorCensusInput
 from marin.execution.artifact import read_record
 from marina.client import applet_query
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from experiments.post_training.task_curation.datasets.derived_contract_measurements import (
     derived_contract_receipts,
@@ -38,6 +38,9 @@ from infra.marina.apps.rl_data_catalog.server.derived_contract import INPUT_FIEL
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 LOGGER = logging.getLogger(__name__)
+
+DECLARATION_PIN_PAGE_SIZE = 50
+PROJECTION_WAIVER_REASON = "preview projection lag; declaration drift 0; ruling 2026-11-19"
 
 CURRICULUM_DECLARATION_FIELDS = ("dataset_id", "dataset_revision", "pipeline")
 
@@ -85,6 +88,73 @@ class ProjectionGap:
     projection: Literal["derived-contract", "curriculum", "served-catalog"]
     state: Literal["missing", "stale-pin"]
     last_computed_revision: str | None
+
+
+@dataclass(frozen=True)
+class CatalogSelection:
+    marina_url: str
+    applet_id: str
+    load_id: str
+
+
+class ProjectionWaiver(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    source_id: str = Field(min_length=1)
+    projection: Literal["derived-contract", "curriculum", "served-catalog"]
+    reason: Literal["preview projection lag; declaration drift 0; ruling 2026-11-19"]
+
+    @property
+    def key(self) -> str:
+        return f"{self.source_id}:{self.projection}"
+
+
+class ProjectionWaivers(BaseModel):
+    """Landing-only exceptions that expire when the coordinated refresh selects a new load."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    marina_url: str
+    applet_id: str
+    valid_catalog_load_ids: tuple[str, ...] = Field(min_length=1)
+    expires_when: Literal["preview_refresh_seals"] = "preview_refresh_seals"
+    waivers: tuple[ProjectionWaiver, ...]
+
+    def active(self, selection: CatalogSelection) -> bool:
+        return (
+            self.marina_url == selection.marina_url
+            and self.applet_id == selection.applet_id
+            and selection.load_id in self.valid_catalog_load_ids
+        )
+
+
+def apply_projection_waivers(
+    gaps: list[ProjectionGap], waivers: ProjectionWaivers | None, selection: CatalogSelection | None
+) -> tuple[list[ProjectionGap], list[str]]:
+    """Apply only named missing/stale projections while the frozen preview scope remains active."""
+    if waivers is None:
+        return gaps, []
+    if selection is None:
+        raise ValueError("Projection waivers require the observed catalog selection")
+    if not waivers.active(selection):
+        return gaps, ["Projection waivers expired or target differs; all projection checks remain blocking"]
+    named = {waiver.key: waiver for waiver in waivers.waivers}
+    blocking, notes = [], []
+    for gap in gaps:
+        key = f"{gap.source_id}:{gap.projection}"
+        if key in named and gap.state in {"missing", "stale-pin"}:
+            notes.append(f"waived {key}/{gap.state}: {named[key].reason}; expires when preview refresh seals")
+        else:
+            blocking.append(gap)
+    return blocking, notes
+
+
+def atlas_catalog_selection() -> CatalogSelection:
+    marina_url, applet_id = target_applet()
+    rows = atlas_applet_query()("SELECT load_id FROM atlas_current WHERE name='latest'", {})["rows"]
+    if len(rows) != 1 or not rows[0]["load_id"]:
+        raise ValueError("The served catalog has no selected load")
+    return CatalogSelection(marina_url, applet_id, rows[0]["load_id"])
 
 
 def contract_receipt_map(receipts: Iterable[DerivedContractReceipt]) -> dict[str, list[DerivedContractReceipt]]:
@@ -146,6 +216,7 @@ def projection_gaps(
     gaps: list[ProjectionGap] = []
     notes: list[str] = []
     for declaration in declarations:
+        state, last_computed = contract_state(declaration, contract_receipts)
         if served_pins is not None and declaration.measured:
             served = served_pins.get(canonical_source_id(declaration.source_id))
             if (
@@ -165,7 +236,6 @@ def projection_gaps(
                     )
                 )
                 continue
-        state, last_computed = contract_state(declaration, contract_receipts)
         if state in {"missing", "stale-pin"}:
             gaps.append(
                 ProjectionGap(
@@ -266,19 +336,19 @@ def publication_preflight(
     declarations: list[DeclarationPin],
     contract_receipts: dict[str, list[DerivedContractReceipt]],
     curriculum_rows: dict[str, dict],
-    waivers: frozenset[str] = frozenset(),
+    waivers: ProjectionWaivers | None = None,
     served_pins: dict[str, DeclarationPin] | None = None,
+    *,
+    selection: CatalogSelection | None = None,
 ) -> list[str]:
     """Refuse a preview or production release while a current pin lacks either projection.
 
-    ``waivers`` names "source:projection" pairs (or bare source ids) deliberately published
-    without one of the projections; a waiver covers only what it names and is recorded in the
-    release manifest. Returns the informational notes so the caller can record them.
+    Waivers name individual source:projection pairs, record the ruling reason, and expire
+    outside their frozen preview catalog selections. Returns notes including each applied waiver.
     """
     gaps, notes = projection_gaps(declarations, contract_receipts, curriculum_rows, served_pins=served_pins)
-    blocking = [
-        gap for gap in gaps if f"{gap.source_id}:{gap.projection}" not in waivers and gap.source_id not in waivers
-    ]
+    blocking, waiver_notes = apply_projection_waivers(gaps, waivers, selection)
+    notes.extend(waiver_notes)
     if blocking:
         counts: Counter = Counter((gap.projection, gap.state) for gap in blocking)
         detail = ", ".join(f"{projection}.{state}={count}" for (projection, state), count in sorted(counts.items()))
@@ -316,31 +386,35 @@ def atlas_contract_receipts() -> dict[str, list[DerivedContractReceipt]]:
     )
 
 
-def served_declaration_pins() -> list[DeclarationPin]:
-    """The served catalog's declaration pins (the live applet's atlas_sources rows)."""
-    result = atlas_applet_query()(
-        "SELECT id, jsonb_build_object("
-        "'dataset_id', declaration->'dataset_id', "
-        "'dataset_revision', declaration->'dataset_revision', "
-        "'pipeline', declaration->'pipeline', "
-        "'actor_census_input', declaration->'actor_census_input') AS declaration "
-        "FROM atlas_sources WHERE load_id=(SELECT load_id FROM atlas_current WHERE name='latest')",
-        {},
-    )
+def served_declaration_pins(selection: CatalogSelection) -> list[DeclarationPin]:
+    """Page the four consumed fields from one frozen active catalog load."""
+    query = atlas_applet_query()
     pins = []
-    for row in result["rows"]:
-        served = row.get("declaration") or {}
-        binding = served.get("actor_census_input")
-        pins.append(
-            DeclarationPin(
-                source_id=row["id"],
-                dataset_id=served.get("dataset_id"),
-                dataset_revision=served.get("dataset_revision"),
-                pipeline=served.get("pipeline"),
-                actor_binding=_binding_from_served(binding),
+    offset = 0
+    while True:
+        rows = query(
+            "SELECT id, jsonb_build_object("
+            "'dataset_id', declaration->'dataset_id', "
+            "'dataset_revision', declaration->'dataset_revision', "
+            "'pipeline', declaration->'pipeline', "
+            "'actor_census_input', declaration->'actor_census_input') AS declaration "
+            "FROM atlas_sources WHERE load_id=:load_id ORDER BY id LIMIT :limit OFFSET :offset",
+            {"load_id": selection.load_id, "limit": DECLARATION_PIN_PAGE_SIZE, "offset": offset},
+        )["rows"]
+        for row in rows:
+            served = row.get("declaration") or {}
+            pins.append(
+                DeclarationPin(
+                    source_id=row["id"],
+                    dataset_id=served.get("dataset_id"),
+                    dataset_revision=served.get("dataset_revision"),
+                    pipeline=served.get("pipeline"),
+                    actor_binding=_binding_from_served(served.get("actor_census_input")),
+                )
             )
-        )
-    return pins
+        if len(rows) < DECLARATION_PIN_PAGE_SIZE:
+            return pins
+        offset += len(rows)
 
 
 def _binding_from_served(binding: dict | None):
@@ -378,9 +452,13 @@ def main() -> None:
         "--assembled", action="store_true", help="Audit the assembled layer instead of the served catalog"
     )
     parser.add_argument("--plan", type=Path, help="Write the derived-contract census inputs manifest here")
-    parser.add_argument("--waivers", type=Path, help="JSON list of source:projection waivers for the preflight")
+    parser.add_argument(
+        "--waivers", type=Path, help="JSON source:projection waivers with ruling reason and preview refresh expiry"
+    )
     parser.add_argument("--preflight", action="store_true", help="Refuse while a current pin lacks a projection")
     args = parser.parse_args()
+    if args.waivers is not None and not args.preflight:
+        parser.error("--waivers requires --preflight")
 
     if args.plan is not None:
         pins, sources = assembled_declaration_pins()
@@ -402,6 +480,9 @@ def main() -> None:
             )
         )
         return
+    if args.assembled and args.waivers is not None:
+        parser.error("Projection waivers apply only to the served preview")
+    selection = atlas_catalog_selection() if not args.assembled else None
     curriculum_rows = atlas_curriculum_rows()
     if args.assembled:
         pins, _ = assembled_declaration_pins()
@@ -409,17 +490,21 @@ def main() -> None:
         served = None
     else:
         assembled_pins, _ = assembled_declaration_pins()
-        served_list = served_declaration_pins()
+        served_list = served_declaration_pins(selection)
         pins, served = assembled_pins, served_pin_map(served_list)
         contracts = atlas_contract_receipts()
+    if selection is not None and atlas_catalog_selection() != selection:
+        raise ValueError("Catalog selection changed during projection audit; retry")
     gaps, notes = projection_gaps(pins, contracts, curriculum_rows, served_pins=served)
     report = summary(gaps, notes)
     print(json.dumps(report, indent=2))
     if args.preflight:
-        waivers = frozenset(json.loads(args.waivers.read_text())) if args.waivers is not None else frozenset()
-        preflight_notes = publication_preflight(pins, contracts, curriculum_rows, waivers, served_pins=served)
+        waivers = ProjectionWaivers.model_validate_json(args.waivers.read_bytes()) if args.waivers else None
+        preflight_notes = publication_preflight(
+            pins, contracts, curriculum_rows, waivers, served_pins=served, selection=selection
+        )
         for note in preflight_notes:
-            LOGGER.info("staged for intake: %s", note)
+            LOGGER.info("%s", note)
         return
     if not args.check:
         parser.error("choose --check, --assembled, --plan or --preflight")

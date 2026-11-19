@@ -11,7 +11,10 @@ from finestore.rl.curation import ActorCensusInput
 
 from experiments.post_training.task_curation import ensure_current_projections
 from experiments.post_training.task_curation.ensure_current_projections import (
+    CatalogSelection,
     DeclarationPin,
+    ProjectionWaiver,
+    ProjectionWaivers,
     projection_gaps,
     publication_preflight,
     summary,
@@ -172,7 +175,6 @@ def test_the_preflight_refuses_and_names_the_pins_with_their_last_computed_revis
             [source],
             {"Test:source": [Receipt(revision="9" * 40)]},
             {"Test:source": curriculum_row(source)},
-            frozenset(),
         )
         raise AssertionError("the preflight must refuse")
     except ValueError as error:
@@ -180,15 +182,71 @@ def test_the_preflight_refuses_and_names_the_pins_with_their_last_computed_revis
         assert "Test:source" in str(error) and "last computed at " + "9" * 40 in str(error)
 
 
-def test_the_preflight_honors_typed_waivers():
+def projection_waivers() -> ProjectionWaivers:
+    return ProjectionWaivers(
+        marina_url="https://marina.example",
+        applet_id="preview",
+        valid_catalog_load_ids=("lagging", "frozen-before-refresh"),
+        waivers=(
+            ProjectionWaiver(
+                source_id="Test:source",
+                projection="derived-contract",
+                reason=ensure_current_projections.PROJECTION_WAIVER_REASON,
+            ),
+        ),
+    )
+
+
+@pytest.mark.parametrize("load_id", ["lagging", "frozen-before-refresh"])
+def test_the_preflight_records_each_named_waiver_before_refresh(load_id):
     source = declaration()
     notes = publication_preflight(
         [source],
         {"Test:source": [Receipt(revision="9" * 40)]},
         {"Test:source": curriculum_row(source)},
-        frozenset({"Test:source:derived-contract"}),
+        projection_waivers(),
+        selection=CatalogSelection("https://marina.example", "preview", load_id),
     )
-    assert notes == []
+    assert len(notes) == 1
+    assert "Test:source:derived-contract/stale-pin" in notes[0]
+    assert ensure_current_projections.PROJECTION_WAIVER_REASON in notes[0]
+
+
+@pytest.mark.parametrize(
+    "selection",
+    [
+        CatalogSelection("https://marina.example", "preview", "refreshed-and-sealed"),
+        CatalogSelection("https://marina.example", "production", "lagging"),
+    ],
+)
+def test_a_sealed_refresh_or_different_target_cannot_reuse_a_projection_waiver(selection):
+    source = declaration()
+    with pytest.raises(ValueError, match="derived-contract/stale-pin: Test:source"):
+        publication_preflight(
+            [source],
+            {"Test:source": [Receipt(revision="9" * 40)]},
+            {"Test:source": curriculum_row(source)},
+            projection_waivers(),
+            selection=selection,
+        )
+    assert publication_preflight(
+        [source],
+        {"Test:source": [Receipt()]},
+        {"Test:source": curriculum_row(source)},
+        projection_waivers(),
+        selection=selection,
+    ) == ["Projection waivers expired or target differs; all projection checks remain blocking"]
+
+
+def test_a_waived_contract_does_not_waive_an_unnamed_curriculum_gap():
+    with pytest.raises(ValueError, match="curriculum/missing: Test:source"):
+        publication_preflight(
+            [declaration()],
+            {},
+            {},
+            projection_waivers(),
+            selection=CatalogSelection("https://marina.example", "preview", "lagging"),
+        )
 
 
 def test_the_summary_counts_gaps_by_projection_and_state():
@@ -230,12 +288,20 @@ def test_served_declaration_fields_must_match_even_with_the_same_actor_binding(f
     assert [(gap.projection, gap.state) for gap in gaps] == [("served-catalog", "stale-pin")]
 
 
-def test_conflicting_current_contract_summaries_fail():
+@pytest.mark.parametrize("served_revision", [REVISION, "9" * 40])
+def test_conflicting_current_contract_summaries_fail(served_revision):
     source = declaration()
     other = Receipt()
     other.summary = {"task_count": 10, "grader_type_counts": {"script": 10}}
     with pytest.raises(ValueError, match="Conflicting derived contract summaries"):
-        projection_gaps([source], {"Test:source": [Receipt(), other]}, {"Test:source": curriculum_row(source)})
+        publication_preflight(
+            [source],
+            {"Test:source": [Receipt(), other]},
+            {"Test:source": curriculum_row(source)},
+            projection_waivers(),
+            selection=CatalogSelection("https://marina.example", "preview", "lagging"),
+            served_pins={"Test:source": replace(source, dataset_revision=served_revision)},
+        )
 
 
 def test_receipt_grouping_keeps_both_current_and_historical_inputs():

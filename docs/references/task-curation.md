@@ -448,6 +448,25 @@ rebase conflicts and rerun. Advisory review remains required for non-trivial
 changes. Report the landed SHA to the coordinator. Never force-push or push to
 `main`. This rule ends when CI resumes.
 
+Ruling 60 (2026-11-19) temporarily permits named missing/stale serving-projection
+waivers while the preview load and coordinated refresh complete. Use the explicit
+waiver file for a landing:
+
+```bash
+atlas-push --waivers experiments/post_training/task_curation/declaration-projection-waivers.json \
+  --test "<affected test command>" --who "<session id>" --what "<change summary>"
+```
+
+Each entry names a source and projection and records
+`preview projection lag; declaration drift 0; ruling 2026-11-19`. The file binds
+these exceptions to the preview applet and the current/frozen catalog load IDs.
+Selecting the new refresh load automatically expires them; they cannot waive
+production checks. Declaration drift, query errors, conflicting contract summaries,
+and every other non-projection failure still block. The audit records each applied
+`source:projection` waiver. Without `--waivers`, the audit remains strict. After
+the refresh seals, run `python -m
+experiments.post_training.task_curation.declaration_audit` without that option.
+
 ## Repair candidates
 
 A *repair candidate* is a "cleaned subset" of a source the Atlas already tracks, offered by a

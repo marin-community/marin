@@ -3,6 +3,11 @@
 
 """The declaration audit pairs every Atlas receipt family with the canonical layer."""
 
+import sys
+
+import pytest
+
+from experiments.post_training.task_curation import declaration_audit, ensure_current_projections
 from experiments.post_training.task_curation.declaration_audit import (
     CanonicalLayer,
     DeclaredPin,
@@ -174,3 +179,62 @@ def test_an_archived_original_record_counts_as_declared():
     )
     assert findings == []
     assert notes == []
+
+
+@pytest.fixture
+def waived_audit_cli(monkeypatch, tmp_path):
+    waivers = ensure_current_projections.ProjectionWaivers(
+        marina_url="https://marina.example",
+        applet_id="preview",
+        valid_catalog_load_ids=("lagging",),
+        waivers=(
+            ensure_current_projections.ProjectionWaiver(
+                source_id="Test:declared-source",
+                projection="curriculum",
+                reason=ensure_current_projections.PROJECTION_WAIVER_REASON,
+            ),
+        ),
+    )
+    path = tmp_path / "waivers.json"
+    path.write_text(waivers.model_dump_json())
+    monkeypatch.setattr(sys, "argv", ["declaration_audit", "--waivers", str(path)])
+    monkeypatch.setattr(
+        declaration_audit,
+        "canonical_layer",
+        lambda: (
+            layer(),
+            {
+                "census receipts": {"Test:declared-source": pin("Test:declared-source", revision="9" * 40)},
+                "lexical receipts": {},
+                "grading census receipts": {},
+                "within-source dedup": {},
+            },
+            {},
+            {},
+        ),
+    )
+    monkeypatch.setattr("experiments.post_training.task_curation.sources.configured_sources", lambda: [])
+    monkeypatch.setattr(
+        declaration_audit,
+        "atlas_catalog_selection",
+        lambda: (ensure_current_projections.CatalogSelection("https://marina.example", "preview", "lagging")),
+    )
+    monkeypatch.setattr(declaration_audit, "atlas_contract_receipts", lambda: {})
+    monkeypatch.setattr(declaration_audit, "atlas_curriculum_rows", lambda: {})
+    monkeypatch.setattr(declaration_audit, "served_declaration_pins", lambda selection: [])
+    return declaration_audit.main
+
+
+def test_projection_waivers_cannot_clear_declaration_drift(waived_audit_cli, capsys):
+    with pytest.raises(SystemExit, match="1 mismatches"):
+        waived_audit_cli()
+    assert "but the canonical layer declares" in capsys.readouterr().out
+
+
+def test_projection_waivers_cannot_clear_a_served_query_failure(waived_audit_cli, monkeypatch):
+    def failed_query():
+        raise RuntimeError("served query failed")
+
+    monkeypatch.setattr(declaration_audit, "atlas_contract_receipts", failed_query)
+    with pytest.raises(RuntimeError, match="served query failed"):
+        waived_audit_cli()
