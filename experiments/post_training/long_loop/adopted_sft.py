@@ -5,7 +5,7 @@
 
 Two forms are accepted. A loop-produced SFT run root is re-exported by the
 graph. A pinned HF export (``kind: hf_export``) is verified byte for byte and
-handed to the endpoint check and RL directly, with no export stage.
+handed to RL directly, with no export stage.
 """
 
 import dataclasses

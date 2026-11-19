@@ -125,8 +125,8 @@ def check_expert_tensors(config: dict, weight_map: dict) -> None:
             raise ValueError(f"Invalid SFT export: schema-{schema} tensor missing: {name}")
 
 
-def validate_handoff(root: str, relative_path: str = HANDOFF_DIR) -> None:
-    hf = prefix_join(root, relative_path) if relative_path else root
+def validate_handoff(root: str) -> None:
+    hf = prefix_join(root, HANDOFF_DIR)
     check_expert_tensors(
         read_json(prefix_join(hf, "config.json")),
         read_json(prefix_join(hf, "model.safetensors.index.json"))["weight_map"],
