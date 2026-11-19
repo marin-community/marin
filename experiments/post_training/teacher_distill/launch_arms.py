@@ -81,6 +81,8 @@ def worker(config, output, settings):
     config = replace(config, data=E12DataConfig(**original, **settings))
     configure_jax_compilation_cache()
     if int(os.environ["IRIS_MULTIGPU_PROCESS_INDEX"]) == 0:
+        print("worker XLA_FLAGS:", os.environ.get("XLA_FLAGS", ""), flush=True)
+    if int(os.environ["IRIS_MULTIGPU_PROCESS_INDEX"]) == 0:
         (StoragePath(output) / "consumed-config.json").write_text(json.dumps(draccus.encode(config), indent=2))
     _run_grug_local(config)
 
