@@ -100,9 +100,14 @@ def _reshard_like(logits: jax.Array, reference: jax.Array) -> jax.Array:
     return jax.sharding.reshard(logits, jax.typeof(reference).sharding.spec)
 
 
-def capture_wanda_norms(model, batches, *, num_layers: int) -> tuple[np.ndarray, np.ndarray]:
-    """Run the base model over calibration batches and return (routed, shared) input norms."""
-    capture = _capture_model(model)
+def capture_wanda_norms(model, batches, *, num_layers: int, mp) -> tuple[np.ndarray, np.ndarray]:
+    """Run the base model over calibration batches and return (routed, shared) input norms.
+
+    The capture runs at the training compute policy (the norms then reflect the
+    activations the training forward actually sees; the GPU attention kernels
+    require the compute dtypes).
+    """
+    capture = mp.cast_to_compute(_capture_model(model))
 
     @jax.jit
     def capture_step(tokens):
@@ -274,7 +279,7 @@ def _initialize_deletion(model, *, config, trainer, settings: DeletionTrainSetti
     train_dataset = config.data.train_set(pos, config.trainer.batch_schedule, key=data_key)
     loader = trainer.data_loader(train_dataset)
     batches = itertools.islice(loader.iter_from_step(0), max(1, settings.calibration_sequences))
-    routed_norms, shared_norms = capture_wanda_norms(model, batches, num_layers=num_layers)
+    routed_norms, shared_norms = capture_wanda_norms(model, batches, num_layers=num_layers, mp=trainer.mp)
     scores = None
     logger.info("calibrated Wanda norms over %d batches", settings.calibration_sequences)
 
