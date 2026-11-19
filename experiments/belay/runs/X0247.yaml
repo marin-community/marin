@@ -1,0 +1,13 @@
+experiment: X0247
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: MuonC lambda 0.2 + s(t)^2 head and late-matrix anneal
+    flags:
+    - --opt-set
+    - muonc_anneal_decay=0.2
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
