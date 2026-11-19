@@ -5,6 +5,7 @@
 
 import asyncio
 import json
+import logging
 import time
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
@@ -14,11 +15,15 @@ from typing import override
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.factory import open_url
 from rigging.filesystem.storage_path import prefix_join
+from s3fs.core import S3_RETRYABLE_ERRORS
 
 from taskforge.effects.log import JsonlSink, Record, Sink
 
 CHECKPOINT_EVENTS = 25
 CHECKPOINT_SECONDS = 60
+# s3fs translates service errors into OSError but re-raises its retryable transport errors (botocore
+# HTTPClientError, ResponseParserError, IncompleteRead, ...) untranslated once its own retries run out.
+UPLOAD_ERRORS: tuple[type[Exception], ...] = (OSError, *S3_RETRYABLE_ERRORS)
 
 
 class CheckpointSink(Sink):
@@ -75,7 +80,13 @@ class CheckpointSink(Sink):
                 return
             except TimeoutError:
                 async with self.lock:
-                    await self._upload()
+                    try:
+                        await self._upload()
+                    except UPLOAD_ERRORS as error:
+                        # The local log stays complete; the next tick republishes from the unadvanced offset.
+                        logging.warning(
+                            "Checkpoint upload to %s failed; retrying next tick: %r", self.destination, error
+                        )
 
     @asynccontextmanager
     async def running(self) -> AsyncIterator[None]:

@@ -89,3 +89,36 @@ async def test_checkpoints_upload_only_new_bytes_and_recover_without_final_snaps
     assert len(parts) == 2 and first.read_bytes() == original
     assert sum(part.stat().st_size for part in parts) == Path(local.path).stat().st_size
     assert await JsonlSink(str(destination / "events.jsonl")).read() == log.records
+
+
+async def test_failed_timer_upload_keeps_logging_and_republishes_from_the_same_offset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(checkpoint, "CHECKPOINT_EVENTS", 100)
+    monkeypatch.setattr(checkpoint, "CHECKPOINT_SECONDS", 0.01)
+    destination = tmp_path / "published"
+    local = JsonlSink(str(tmp_path / "events.jsonl"))
+    sink = CheckpointSink(local, str(destination), b"{}")
+    failed, published = threading.Event(), threading.Event()
+    publish = sink._publish
+
+    def reset_once(events: bytes) -> None:
+        if not failed.is_set():
+            failed.set()
+            raise ConnectionResetError("connection reset by peer")
+        publish(events)
+        published.set()
+
+    monkeypatch.setattr(sink, "_publish", reset_once)
+    log = EventLog(sink=sink)
+    async with sink.running():
+        await log.record(StageCompleted(Stage.AUTHOR, "", "draft"))
+        assert await asyncio.to_thread(failed.wait, 2)
+        await log.record(StageCompleted(Stage.VALIDATE, "", "ready"))
+        assert await asyncio.to_thread(published.wait, 2)
+        await log.record(StageCompleted(Stage.REVIEW, "", "accept"))
+    assert await local.read() == log.records
+    # The timer's republish starts at sequence 1; read() refuses a stream with a gap.
+    assert (await JsonlSink(str(destination / "events.jsonl")).read())[0].sequence == 1
+    await sink._upload()
+    assert await JsonlSink(str(destination / "events.jsonl")).read() == log.records
