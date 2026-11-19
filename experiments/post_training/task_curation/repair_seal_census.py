@@ -121,7 +121,7 @@ def measure_census(population: SourceTextPopulation, output: str) -> dict[str, A
     record = census.model_dump(mode="json")
     integrity = integrity_summary_for_actor(record, {**record, "summary": census.integrity_contracts})
     receipt = receipt_from_census(record, integrity)
-    StoragePath(f"{output}/actor-census-receipt.json").write_text(receipt.model_dump_json(indent=2) + "\n")
+    (StoragePath(output) / "actor-census-receipt.json").write_text(receipt.model_dump_json(indent=2) + "\n")
     LOGGER.info(
         "Actor census %s: %d slots, %d failures",
         census.source_id,
@@ -133,7 +133,7 @@ def measure_census(population: SourceTextPopulation, output: str) -> dict[str, A
 
 def normalized_view(config: SealCensusConfig, rows: list[tuple[dict, dict, str]], output: str) -> str:
     """Write the QUICK normalized shards whose grading assessments feed the grading receipt."""
-    normalized = StoragePath(f"{output}/normalize/part-000000.parquet")
+    normalized = StoragePath(output) / "normalize" / "part-000000.parquet"
     seen: set[str] = set()
 
     def records() -> Iterator[list[dict]]:
