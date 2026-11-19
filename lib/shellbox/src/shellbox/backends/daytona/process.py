@@ -42,6 +42,10 @@ BRIDGE_SOURCE = (
     "sys.modules['shellbox.process_framing'] = _framing\n" + Path(bridge.__file__).read_text()
 )
 
+# Daytona's SDK can pass bytes of its stdout/stderr stream markers through as
+# output when a marker ends a websocket message. Frames never contain them.
+STREAM_MARKER_BYTES = b"\x01\x02"
+
 
 class DaytonaProcessSession(StreamProcessSession):
     """A command whose provider session owns all of its processes."""
@@ -113,7 +117,7 @@ class DaytonaProcessSession(StreamProcessSession):
                 own_cleanup(self.close())
 
     async def _receive_stdout(self, text: str) -> None:
-        for frame in self._stdout_frames.feed(text.encode("ascii")):
+        for frame in self._stdout_frames.feed(text.encode("ascii").translate(None, STREAM_MARKER_BYTES)):
             kind, data = decode_frame(frame)
             if kind == PAD:
                 continue
@@ -123,16 +127,15 @@ class DaytonaProcessSession(StreamProcessSession):
                 self._code = int(data)
             elif kind == STDOUT:
                 await self._output.feed(data)
+            elif kind == STDERR:
+                self.capture_stderr(data)
             else:
                 raise ValueError("Invalid Daytona process output frame")
 
     async def _receive_stderr(self, text: str) -> None:
-        for frame in self._stderr_frames.feed(text.encode("ascii")):
-            # Startup errors from the image shell/Python precede bridge framing.
-            data = decode_frame(frame)[1] if frame.startswith(STDERR) else frame + b"\n"
-            if len(data) > CHUNK_BYTES:
-                raise ValueError("Daytona process stderr exceeds its limit")
-            self.capture_stderr(data)
+        # Only the image shell and Python write here, before the bridge starts.
+        for line in self._stderr_frames.feed(text.encode("ascii")):
+            self.capture_stderr(line + b"\n")
 
     async def _send(self, data: bytes) -> None:
         assert self._command is not None

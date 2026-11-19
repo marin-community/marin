@@ -37,6 +37,7 @@ class SessionAPI:
         self.delete_release.set()
         self.corrupt_output = None
         self.withheld_tail = 0
+        self.leaked_marker = b""
 
     async def create_session(self, name, request_timeout):
         self.sessions[name] = None
@@ -68,10 +69,11 @@ class SessionAPI:
             return
 
         async def pump(pipe, callback):
-            # Daytona's SDK may withhold the last bytes of output until more arrives.
+            # Daytona's SDK may withhold the last bytes of output until more
+            # arrives, and may pass a stream-marker byte through after a line.
             pending = b""
             while data := await pipe.read(337):
-                pending += data
+                pending += data.replace(b"\n", b"\n" + self.leaked_marker)
                 cut = max(len(pending) - self.withheld_tail, 0)
                 if cut:
                     await callback(pending[:cut].decode("ascii"))
@@ -197,12 +199,13 @@ sys.exit(7)
 
 
 @pytest.mark.requires_linux_process_api
-def test_daytona_process_output_awaiting_a_reply_survives_a_withheld_stream_tail(session_machine):
+def test_daytona_process_survives_withheld_tails_and_leaked_stream_markers(session_machine):
     script = "import sys; print('request', flush=True); print(sys.stdin.readline().upper(), end='', flush=True)"
 
     async def scenario():
         machine, api = session_machine
         api.withheld_tail = 2
+        api.leaked_marker = b"\x01"
         try:
             session = await machine.open_process(Command((sys.executable, "-c", script)))
             line = b""
