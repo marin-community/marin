@@ -10,7 +10,7 @@ import sqlite3
 from collections import Counter, defaultdict
 from pathlib import Path
 
-ACCEPTED_STATUSES = {"converted_adapter_checked", "header_normalized_no_calls"}
+ACCEPTED_STATUSES = {"converted_adapter_checked", "rule_converted_adapter_checked", "header_normalized_no_calls"}
 
 
 def summarize(root: Path) -> dict:

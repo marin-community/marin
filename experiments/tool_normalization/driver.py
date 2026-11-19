@@ -43,7 +43,7 @@ def run_locked(config_path: Path, manifest_path: Path, root: Path) -> None:
     if not 0 < reservation <= budget <= 1_000_000_000_000:
         raise ValueError("Invalid artifact budget")
     model_cfg = cfg["model"].copy()
-    for key in ("api_key_file", "capacity_file", "ledger"):
+    for key in ("api_key_file", "capacity_file", "ledger", "stop_file"):
         model_cfg[key] = Path(model_cfg[key])
     model = ModelConfig(**model_cfg)
     initialize_ledger(model)
@@ -72,7 +72,12 @@ def run_locked(config_path: Path, manifest_path: Path, root: Path) -> None:
     stop_dispatch = threading.Event()
 
     def worker() -> None:
-        while not stop_dispatch.is_set() and not (root / "STOP").exists():
+        while (
+            not stop_dispatch.is_set()
+            and not (root / "STOP").exists()
+            and not model.stop_file.exists()
+            and time.time() < model.deadline_unix
+        ):
             with sqlite3.connect(queue, timeout=60) as db:
                 db.execute("BEGIN IMMEDIATE")
                 used, active = db.execute(

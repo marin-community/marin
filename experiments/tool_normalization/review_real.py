@@ -259,7 +259,7 @@ def run(config_file: Path, manifest_file: Path, root: Path) -> None:
     cfg = json.loads(config_file.read_text())
     root.mkdir(parents=True, exist_ok=False)
     model_args = cfg["model"].copy()
-    for key in ("api_key_file", "capacity_file", "ledger"):
+    for key in ("api_key_file", "capacity_file", "ledger", "stop_file"):
         model_args[key] = Path(model_args[key])
     model = ModelConfig(**model_args)
     initialize_ledger(model)

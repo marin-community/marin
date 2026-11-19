@@ -16,6 +16,8 @@ REQUIRED_PROVENANCE_FILES = (
     "experiments/glm_tool_serving/scale_production.py",
     "experiments/glm_tool_serving/ortet_production.py",
     "experiments/glm_tool_serving/provenance.py",
+    "experiments/glm_tool_serving/fleet.py",
+    "experiments/glm_tool_serving/assets.py",
     "experiments/tool_normalization/environments.json",
     "experiments/tool_normalization/opencode-tools.json",
     "experiments/glm_tool_serving/production_data/rule-approval-v3.json",

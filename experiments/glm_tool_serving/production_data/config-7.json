@@ -1,17 +1,13 @@
 {
   "model": {
-    "base_url": "http://10.168.192.29:18094/v1",
     "model": "glm-5.3",
-    "generation": "dedicated-h100-cluster-production-r1-20261103",
-    "api_key_file": "/Users/benfeuer/Documents/experiments/active/sft-new-mix-candidate/artifacts/reports/empireai-tool-normalization/implementation/dedicated-h100-20261103/local-api-key.txt",
     "context_tokens": 262144,
     "output_tokens": 32768,
     "request_timeout": 1800,
-    "capacity_file": "/Users/benfeuer/Documents/experiments/active/sft-new-mix-candidate/artifacts/reports/empireai-tool-normalization/implementation/dedicated-h100-20261103/production-pool2-r1/capacity.json",
-    "ledger": "/Users/benfeuer/Documents/experiments/active/sft-new-mix-candidate/artifacts/reports/empireai-tool-normalization/implementation/dedicated-h100-20261103/production-pool2-r1/ledger.sqlite3",
     "temperature": 1.0,
     "top_p": 0.95,
-    "thinking_token_budget": 8192
+    "thinking_token_budget": 8192,
+    "max_attempts": 4
   },
   "execution": {
     "image": "ghcr.io/marin-community/iris-task@sha256:14cf7c1e4dd086e8fa4951dda58e3dbc97e0c891306528ad1c6840d05504c432",

@@ -104,7 +104,7 @@ def run(config_path: Path, root: Path, fixture_path: Path | None = None) -> None
     root.mkdir(parents=True, exist_ok=False)
     cfg = json.loads(config_path.read_text())
     model_config = cfg["model"]
-    for key in ("api_key_file", "capacity_file", "ledger"):
+    for key in ("api_key_file", "capacity_file", "ledger", "stop_file"):
         model_config[key] = Path(model_config[key])
     model = ModelConfig(**model_config)
     initialize_ledger(model)
