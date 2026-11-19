@@ -11,9 +11,7 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
-import tempfile
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
@@ -49,12 +47,10 @@ from marin.rl.skyrl import (
     SkyRLRunConfig,
     read_skyrl_attempt,
     run_skyrl,
-    skyrl_cpu_command,
 )
 from marin.rl.skyrl_records import (
     RecordedLaunch,
     attempt_tracking,
-    read_skyrl_launch_config,
     read_skyrl_metrics,
     read_stored_skyrl_attempt,
     recorded_launch,
@@ -133,6 +129,11 @@ def _run_name(
     return user_owned_name(name + (f"-r{replicate}" if preset.gated else ""))
 
 
+def _check_resume(preset: presets.Preset, *, has_init: bool) -> None:
+    if has_init or preset.checkpoint_every is None:
+        raise click.BadParameter("--resume requires checkpointing and cannot be combined with --init")
+
+
 def build_run(
     preset: presets.Preset,
     *,
@@ -155,13 +156,16 @@ def build_run(
         raise click.BadParameter("this preset accepts no --set")
     if preset.tasks_input == "required":
         if tasks is None and not control:
-            raise click.BadParameter(f"{preset.name} requires --tasks")
+            message = "data presets require --tasks and accept no --set"
+            if preset.accepts_settings:
+                message = f"{preset.name} requires --tasks"
+            raise click.BadParameter(message)
     elif preset.tasks_input == "forbidden" and tasks is not None:
         raise click.BadParameter("this preset does not accept --tasks")
     if not preset.accepts_init and init is not None:
         raise click.BadParameter("this preset does not accept --init")
-    if resume is not None and (init is not None or preset.checkpoint_every is None):
-        raise click.BadParameter("--resume requires checkpointing and cannot be combined with --init")
+    if resume is not None:
+        _check_resume(preset, has_init=init is not None)
     if (not preset.gated and replicates != 1) or (control and preset.controls != preset.name):
         raise click.BadParameter(f"{preset.name} does not accept this replicate or control selection")
     if control and (settings or tasks is not None or init is not None or resume is not None):
@@ -603,7 +607,7 @@ def command(
         "--resume",
         "resume_name",
         metavar="NAME@VERSION",
-        help="Continue from a finished run's native checkpoint. Temporary checkpoints usually expire after 14 days.",
+        help="Continue from a finished run's native checkpoint within the source run's retention period.",
     )
     @click.option(
         "--control",
@@ -634,12 +638,12 @@ def command(
             raise click.UsageError("--run requires --issue N or --no-issue")
         recorded_issue: RunIssue | None = "opted_out" if no_issue else issue
         preset = table.by_name[preset_name]
-        if then is not None and (preset.export == "none" or preset.gated or replicates != 1):
+        if then is not None and (preset.export == "none" or preset.gated):
             raise click.UsageError("a stage after RL requires one ungated run with a model export")
         if init is not None and init_name is not None:
             raise click.UsageError("Python init and --init cannot be used together")
-        if resume_name is not None and (init is not None or init_name is not None or preset.checkpoint_every is None):
-            raise click.UsageError("--resume requires checkpointing and cannot be combined with --init")
+        if resume_name is not None:
+            _check_resume(preset, has_init=init is not None or init_name is not None)
         missing = [name for name in forward_env if name not in os.environ]
         if missing:
             raise click.UsageError(f"missing required environment variables: {', '.join(missing)}")
@@ -690,31 +694,6 @@ def _run_graph(handles: list[ArtifactStep], max_concurrent: int) -> None:
         build_artifacts(gate, max_concurrent=max_concurrent)
 
 
-def _export_best_command(table: presets.ModelPresets) -> click.Command:
-    @click.command(cls=RLCommand)
-    @click.option("--preset", "preset_name", type=click.Choice(sorted(table.by_name)), required=True)
-    @click.argument("run_name", metavar="NAME@VERSION")
-    def command(preset_name: str, run_name: str) -> None:
-        """Export a stored run's best committed native checkpoint to Hugging Face format."""
-        name, version = recipe.run_reference(run_name)
-        layout = table.by_name[preset_name].recipe.layout
-        config = read_skyrl_launch_config(recipe.run_path(layout.cluster, name, version))
-        program = (
-            "import sys\nfrom pathlib import Path\n"
-            "from cloud.iris.export_hf_checkpoint import export_terminal_policy\n"
-            "export_terminal_policy(Path(sys.argv[1]), recover_best=True)"
-        )
-        with tempfile.TemporaryDirectory(prefix="skyrl-export-best-") as directory:
-            path = Path(directory) / "launch.yaml"
-            path.write_text(yaml.safe_dump(config))
-            try:
-                subprocess.run(skyrl_cpu_command("python", "-c", program, str(path)), check=True)
-            except subprocess.CalledProcessError as error:
-                raise click.ClickException("SkyRL could not export the best checkpoint") from error
-
-    return command
-
-
 def main(
     table: presets.ModelPresets,
     *,
@@ -727,10 +706,7 @@ def main(
     """Run the selected model table's CLI, retaining Click's exit status."""
     args = list(sys.argv[1:] if argv is None else argv)
     try:
-        if args and args[0] == "export-best":
-            selected = _export_best_command(table)
-            args = args[1:]
-        elif args and args[0] in {"rescore", "publish"}:
+        if args and args[0] in {"rescore", "publish"}:
             if init is not None and args[0] == "rescore":
                 raise click.UsageError("Python init cannot be used with rescore")
             selected = (rl_gate if args[0] == "rescore" else rl_publication).command(table)

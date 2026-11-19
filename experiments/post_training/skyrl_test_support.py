@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 from marin.execution.fingerprint import fingerprint_hash
-from marin.execution.lazy import materialized_config
+from marin.execution.lazy import ArtifactStep, materialized_config
 from marin.rl.skyrl import skyrl_cpu_command
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.storage_path import StoragePath
@@ -59,7 +59,12 @@ def native_json(*uv_options: str):
 
 
 def assert_revisioned_native_configs(
-    table: ModelPresets, revisions: Mapping[str, Mapping[str, str]], *, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    table: ModelPresets,
+    revisions: Mapping[str, Mapping[str, str]],
+    *,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mixed_tasks: ArtifactStep | None = None,
 ) -> list[dict]:
     monkeypatch.delenv("WANDB_ENTITY", raising=False)
     bindings = {binding for preset in table.presets for binding in (preset.tasks, preset.eval_lite)}
@@ -74,16 +79,26 @@ def assert_revisioned_native_configs(
     paths = []
     for name in revisions:
         preset = table.by_name[name]
-        step = recipe.run_step(preset, recipe.run_spec(preset, name="fixture-default-" + name, model_name=table.model))
+        spec = recipe.run_spec(
+            preset,
+            name="fixture-default-" + name,
+            model_name=table.model,
+            tasks=mixed_tasks if preset.tasks_input == "required" else None,
+        )
+        step = recipe.run_step(preset, spec)
         path = tmp_path / f"{name}.yaml"
         path.write_text(materialized_config(step, f"/{namespace}-pin-prefix").launch_config_yaml)
         paths.append(str(path))
     configs = gate.compose_configs(paths)
-    actual = {
-        name: fingerprint_hash(json.dumps(gate.comparison_config(config), sort_keys=True))
-        for name, config in zip(revisions, configs, strict=True)
-    }
-    assert actual == {name: values.get(table.by_name[name].revision) for name, values in revisions.items()}
+    actual = {}
+    for name, config in zip(revisions, configs, strict=True):
+        canonical = json.dumps(gate.comparison_config(config), sort_keys=True)
+        if mixed_tasks is not None:
+            canonical = canonical.replace(mixed_tasks.path(), "<mixed-selection-fixture>")
+            pinned = f"{mixed_tasks.name}@{mixed_tasks.version}"
+            canonical = canonical.replace(f"{pinned}:{mixed_tasks.fingerprint()}", f"{pinned}:<fixture>")
+        actual[name] = fingerprint_hash(canonical)
+    assert actual == {name: values.get(table.by_name[name].revision) for name, values in revisions.items()}, actual
     for preset, config in zip((table.by_name[name] for name in revisions), configs, strict=True):
         plan = preset.recipe.layout.workload.plan
         allocation = config["iris"]["allocation"]

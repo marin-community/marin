@@ -84,9 +84,10 @@ def validate_candidate(
     preset: presets.Preset, inputs: GateInputs, *, table: ModelPresets, control: bool = False
 ) -> dict:
     """Return the composed candidate after checking gated controls against current defaults."""
-    defaults, candidate = _current_configs(preset, inputs)
     if control or not preset.gated:
+        (candidate,) = _compose_plans(preset, (inputs,))
         return candidate
+    defaults, candidate = _compose_plans(preset, (GateInputs(preset_name=preset.name), inputs))
     pin = control_pin(preset, table=table)
     for index in range(pin.runs):
         path = control_path(preset, pin, index, table=table)
@@ -487,17 +488,9 @@ def comparison_config(launch: dict, recorded: RecordedLaunch | None = None) -> d
     return _config_values(config)
 
 
-def _current_configs(
-    preset: presets.Preset, inputs: GateInputs, *, model: ResolvedModelLocator | None = None
-) -> tuple[dict, dict]:
-    defaults, candidate = _compose_plans(preset, (GateInputs(preset_name=preset.name), inputs), model=model)
-    return defaults, candidate
-
-
-def validate_plan(preset: presets.Preset, inputs: GateInputs) -> dict:
+def validate_plan(preset: presets.Preset, inputs: GateInputs) -> None:
     """Compose the candidate without loading gate receipts."""
-    (candidate,) = _compose_plans(preset, (inputs,))
-    return candidate
+    _compose_plans(preset, (inputs,))
 
 
 def _compose_plans(
@@ -681,7 +674,9 @@ def _write_gate(
         resolved_model = ResolvedModelLocator(
             **{field.name: model[field.name] for field in fields(ResolvedModelLocator)}
         )
-        current_config, expected_config = _current_configs(preset, inputs, model=resolved_model)
+        current_config, expected_config = _compose_plans(
+            preset, (GateInputs(preset_name=preset.name), inputs), model=resolved_model
+        )
         current, expected = comparison_config(current_config), comparison_config(expected_config)
         changed = _changed_config_keys(current, expected)
         explicit = _setting_keys(inputs, set(current) | set(expected))

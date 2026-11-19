@@ -23,7 +23,7 @@ from skyrlrecipe.declared import EvaluationSampling
 from skyrlrecipe.sampling import EvalSamplingParams
 
 from experiments.post_training import rl
-from experiments.post_training.rl_agentic_recipe import AGENTIC_BATCH_MIX, AGENTIC_RECIPE, agentic_limits
+from experiments.post_training.rl_agentic_recipe import agentic, agentic_limits
 from experiments.post_training.rl_presets import (
     UPDATE_SECONDS_METRIC,
     ControlPin,
@@ -128,6 +128,7 @@ _DEFAULT_PATCH = RecipePatch(
         weight_sync_backend="nccl",
         weight_sync_pause=sections.WeightSyncPause(mode="keep", clear_cache=True),
         weight_sync_transport="expert_block",
+        # The agentic layouts use the same weight-sync deadline as the Snowball control.
         expert_block_sync=sections.ExpertBlockSync(timeout_seconds=600, verify=False),
         gpu_memory_utilization=0.75,
         max_num_seqs=1024,
@@ -287,7 +288,7 @@ _TASK_SET = EVALUATIONS["eval_lite_100"]
 
 _BATCH_KEYS = frozenset(BATCH_SETTINGS)
 
-_OWNED_KEYS = frozenset({"generator.run_engines_locally", *_MODE_KEYS})
+_OWNED_KEYS = frozenset({"generator.run_engines_locally", "generator.trajectory_retention", *_MODE_KEYS})
 
 _GATED_KEYS = frozenset(
     {
@@ -379,11 +380,13 @@ _CAMPAIGN_LAYOUT = replace(
     megatron=replace(P40.megatron, context_parallel_size=5),
     cluster="cw-rno2a",
     priority="production",
+    # Each campaign job has a 12-hour allocation and resumes from its committed checkpoint.
     job_timeout_seconds=12 * 3600,
 )
 _CAMPAIGN_PATCH = RecipePatch(
     context_budget=ContextBudget(request_window_tokens=102_400, max_new_tokens_per_turn=16_384, max_turns=128),
     trainer=sections.Trainer(
+        use_sample_packing=True,
         rollout_buffer=sections.RolloutBuffer(max_in_flight=32),
         policy=sections.Policy(
             megatron_config=sections.PolicyMegatronConfig(
@@ -394,29 +397,42 @@ _CAMPAIGN_PATCH = RecipePatch(
         ref=sections.Ref(megatron_config=sections.RefMegatronConfig(transformer_config_kwargs={"cp_comm_type": "a2a"})),
         algorithm=sections.Algorithm(tis_splice=True),
     ),
+    generator=sections.Generator(
+        max_num_seqs=64,
+        chat_template_kwargs={"enable_thinking": True},
+        engine_init_kwargs={"enable_auto_tools": True, "tool_parser": "hermes"},
+        trajectory_retention=sections.TrajectoryRetention(
+            phases=("train", "eval"),
+            sample_fraction=0.1,
+            sample_count_per_step=0,
+            required=True,
+            always_retain_failures=False,
+            always_retain_non_terminating=False,
+            always_retain_loops=False,
+        ),
+    ),
 )
 _HARBOR_EVALUATION = harbor_evaluation(Path(__file__).with_name("rl_harbor.yaml"))
 
-_TRAIN_LONG_AGENTIC = replace(
-    _TRAIN_LONG.with_updates(10_000),
-    name="train-long-agentic",
-    tasks_input="required",
-    data_settings=frozenset({"shuffle"}),
-    export="best",
-    evaluations=(replace(_TASK_SET, every=2),),
-    checkpoint_every=2,
-    batch_mix=AGENTIC_BATCH_MIX,
-    harbor=_HARBOR_EVALUATION,
-    gaps=("harbor-on-daytona",),
-    recipe=replace(
-        _TRAIN_LONG.recipe,
-        layout=_CAMPAIGN_LAYOUT,
-        config=(
-            _TRAIN_LONG.recipe.config.merge(AGENTIC_RECIPE)
-            .merge(agentic_limits(attempt_timeout=5400, model_turn_timeout=1800, ttl_minutes=120, stall_timeout=11_000))
-            .merge(_CAMPAIGN_PATCH)
-        ),
+_TRAIN_LONG_AGENTIC = agentic(
+    replace(
+        _TRAIN_LONG.with_updates(10_000),
+        data_settings=frozenset({"shuffle"}),
+        export="best",
+        evaluations=(replace(_TASK_SET, every=2),),
+        checkpoint_every=2,
+        gaps=("harbor-on-daytona",),
     ),
+    name="train-long-agentic",
+    layout=_CAMPAIGN_LAYOUT,
+    # The sandbox covers one 90-minute trial; admission covers the trial and one retry.
+    limits=agentic_limits(
+        attempt_timeout=5400,
+        session_attempt_timeout=2520,
+        model_turn_timeout=1800,
+        ttl_minutes=90,
+        stall_timeout=10_800,
+    ).merge(_CAMPAIGN_PATCH),
 )
 _TRAIN_MEDIUM_AGENTIC = replace(
     _TRAIN_LONG_AGENTIC.with_updates(10),

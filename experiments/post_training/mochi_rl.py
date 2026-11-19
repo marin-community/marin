@@ -15,7 +15,7 @@ from skyrlrecipe.locality import RoleTopologyMode
 from skyrlrecipe.sampling import EvalSamplingParams
 
 from experiments.post_training import rl
-from experiments.post_training.rl_agentic_recipe import AGENTIC_BATCH_MIX, AGENTIC_RECIPE, agentic_limits
+from experiments.post_training.rl_agentic_recipe import agentic, agentic_limits
 from experiments.post_training.rl_presets import (
     Evaluation,
     Layout,
@@ -23,7 +23,6 @@ from experiments.post_training.rl_presets import (
     Preset,
     Recipe,
     Training,
-    harbor_evaluation,
 )
 from experiments.post_training.task_curation.selection import VALIDATION_FILENAME
 
@@ -57,7 +56,7 @@ _ONE_RACK_PLAN = SkyRLRolePlan(
 )
 ONE_RACK = Layout(
     name="mochi-one-rack",
-    workload=Training(_ONE_RACK_PLAN, epochs_follow_updates=True),
+    workload=Training(_ONE_RACK_PLAN),
     megatron=MegatronGeometry(1, 12, 4, 4, 1),
     cluster="cw-us-east-08a",
     host_memory="900GB",
@@ -96,6 +95,7 @@ _ONE_TURN = RecipePatch(
         use_sample_packing=True,
         gradient_checkpointing=True,
         offload_optimizer_during_rollouts=False,
+        epochs=10_000,
         update_epochs_per_batch=1,
         eval_batch_size=120,
         logger=("console", "records", "wandb"),
@@ -169,6 +169,17 @@ _ONE_TURN = RecipePatch(
             "compilation_config": {"mode": 3, "cudagraph_mode": "PIECEWISE", "splitting_ops": _SPLITTING_OPS},
             "enable_return_routed_experts": True,
         },
+        trajectory_retention=sections.TrajectoryRetention(
+            phases=("train", "eval"),
+            sample_fraction=0.1,
+            sample_count_per_step=0,
+            max_bytes_per_step=64 * 1024**2,
+            max_bytes_per_run=512 * 1024**2,
+            required=True,
+            always_retain_failures=False,
+            always_retain_non_terminating=False,
+            always_retain_loops=False,
+        ),
     ),
     trajectory_runner=sections.TrajectoryRunner(
         rollout_workers=sections.RolloutWorkers(num_workers=32, cpus_per_worker=2, start_interval_seconds=0)
@@ -202,9 +213,6 @@ _THREE_RACK_PATCH = RecipePatch(
         expert_block_sync=sections.ExpertBlockSync(verify=True, timeout_seconds=1800),
         engine_init_kwargs={
             "compilation_config": {
-                "mode": 3,
-                "cudagraph_mode": "PIECEWISE",
-                "splitting_ops": _SPLITTING_OPS,
                 "inductor_compile_config": {
                     "enable_auto_functionalized_v2": False,
                     "combo_kernels": True,
@@ -266,21 +274,10 @@ TRAIN_MEDIUM = replace(
 )
 
 
-def _agentic(preset: Preset, name: str) -> Preset:
-    config = preset.recipe.config
-    assert config.context_budget is not None
-    config = config.merge(AGENTIC_RECIPE).merge(
-        agentic_limits(attempt_timeout=14_400, model_turn_timeout=10_800, ttl_minutes=300, stall_timeout=30_000)
-    )
-    config = config.merge(RecipePatch(context_budget=config.context_budget.replace(max_turns=128)))
-    return replace(
-        preset,
-        name=name,
-        tasks_input="required",
-        batch_mix=AGENTIC_BATCH_MIX,
-        harbor=harbor_evaluation(Path(__file__).with_name("rl_harbor.yaml")),
-        recipe=replace(preset.recipe, config=config),
-    )
+# Four hours covers the trial; eight hours covers the trial and one retry.
+_AGENTIC_LIMITS = agentic_limits(
+    attempt_timeout=14_400, model_turn_timeout=10_800, ttl_minutes=240, stall_timeout=28_800
+).merge(RecipePatch(terminal_bench={"harbor": {"override_memory_mb": 4096}}))
 
 
 MOCHI = ModelPresets(
@@ -289,8 +286,8 @@ MOCHI = ModelPresets(
         TRAIN_MEDIUM,
         TRAIN_LONG,
         TRAIN_LONG_3RACK,
-        _agentic(TRAIN_LONG, "train-long-agentic"),
-        _agentic(TRAIN_LONG_3RACK, "train-long-agentic-3rack"),
+        agentic(TRAIN_LONG, name="train-long-agentic", limits=_AGENTIC_LIMITS),
+        agentic(TRAIN_LONG_3RACK, name="train-long-agentic-3rack", limits=_AGENTIC_LIMITS),
     ),
     namespace="mochi-rl",
     controls={},

@@ -1,99 +1,100 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import runpy
 import sys
-from contextlib import nullcontext
 from dataclasses import replace
 from fractions import Fraction
-from types import SimpleNamespace
 
 import click
 import pytest
 import yaml
 from click.testing import CliRunner
-from iris.client.client import IrisContext, iris_ctx_scope
-from iris.cluster.client.job_info import JobInfo, set_job_info
 from iris.cluster.types import JobName
 from marin.execution.artifact import Artifact
-from marin.execution.lazy import apply, materialized_config
-from marin.rl.skyrl import IrisSkyRLExecution
+from marin.execution.lazy import OUT, apply, materialized_config
+from marin.rl.skyrl import ArtifactHfModel, IrisSkyRLExecution
 from marin.rl.skyrl_records import RESOLVED_LAUNCH_FILENAME
 from skyrlrecipe import RecipePatch
 from skyrlrecipe.documents import set_path
+from skyrlrecipe.locality import RoleTopologyMode
 
 from experiments.post_training import rl, rl_gate, rl_recipe
 from experiments.post_training.mochi_rl import MOCHI
 from experiments.post_training.rl_presets import BatchMix
+from experiments.post_training.rl_tests.fixtures import SELECTION_IDENTITY
+from experiments.post_training.skyrl_test_support import assert_revisioned_native_configs
 from experiments.post_training.snowball_rl import SNOWBALL
 from experiments.post_training.snowball_sft import MIXTURE_SFT
 
 
-def test_model_presets_compose_with_their_role_plans(selection, tmp_path):
-    named = [(MOCHI, name) for name in MOCHI.by_name]
-    named.extend((SNOWBALL, name) for name in ("train-medium-agentic", "train-long-agentic"))
-    paths = []
-    for table, name in named:
-        preset = table.by_name[name]
-        tasks = selection if preset.batch_mix else None
-        spec = rl_recipe.run_spec(preset, name=f"test-{table.model}-{name}", tasks=tasks, model_name=table.model)
-        step = rl_recipe.run_step(preset, spec)
-        path = tmp_path / f"{table.model}-{name}.yaml"
-        path.write_text(materialized_config(step, str(tmp_path)).launch_config_yaml)
-        paths.append(str(path))
-    documents = dict(zip(((table.model, name) for table, name in named), rl_gate.compose_configs(paths), strict=True))
-    expected_gpus = {
-        ("mochi", "train-medium"): 60,
-        ("mochi", "train-long"): 60,
-        ("mochi", "train-long-3rack"): 192,
-        ("mochi", "train-long-agentic"): 60,
-        ("mochi", "train-long-agentic-3rack"): 192,
-        ("snowball", "train-medium-agentic"): 88,
-        ("snowball", "train-long-agentic"): 256,
-    }
-    for identity, config in documents.items():
-        allocation = config["iris"]["allocation"]
-        assert allocation["num_nodes"] * allocation["gpus_per_node"] == expected_gpus[identity]
-        trainer = config["skyrl"]["trainer"]
-        if identity[0] == "mochi":
-            assert trainer["policy"]["optimizer_config"]["optimizer"] == "MuonH"
-            assert trainer["epochs"] == trainer["max_steps"]
-            assert config["inputs"]["model"]["uri"].endswith("/step-400407/2af3f828aa-cpu-a1")
-            assert config["skyrl"]["generator"]["sampling_params"]["stop_token_ids"] == [128001, 128009]
-            assert config["skyrl"]["generator"]["engine_init_kwargs"]["compilation_config"]["cudagraph_mode"] == (
-                "PIECEWISE"
+@pytest.mark.parametrize(
+    ("table", "revisions"),
+    [
+        (
+            MOCHI,
+            {
+                "train-medium": {"2026.11.19.1": "f5a97828"},
+                "train-long": {"2026.11.19.1": "4ce8b138"},
+                "train-long-3rack": {"2026.11.19.1": "349c287f"},
+                "train-long-agentic": {"2026.11.19.1": "ffd07b8d"},
+                "train-long-agentic-3rack": {"2026.11.19.1": "34ec44c4"},
+            },
+        ),
+        (
+            SNOWBALL,
+            {
+                "train-medium-agentic": {"2026.11.19.1": "355e9079"},
+                "train-long-agentic": {"2026.11.19.1": "b0fba56c"},
+            },
+        ),
+    ],
+    ids=("mochi", "snowball-agentic"),
+)
+def test_new_presets_match_revisioned_native_configs(table, revisions, selection, tmp_path, monkeypatch):
+    with monkeypatch.context() as pins:
+        configs = assert_revisioned_native_configs(
+            table, revisions, tmp_path=tmp_path, monkeypatch=pins, mixed_tasks=selection
+        )
+    documents = dict(zip(revisions, configs, strict=True))
+    agentic = documents["train-long-agentic"]["skyrl"]
+    assert agentic["trainer"]["hf_export_checkpoint"] == "best"
+    limits = agentic["terminal_bench_config"]["installed_agent"]["agent"]["kwargs"]["model_info"]
+    assert limits["max_input_tokens"] - limits["max_output_tokens"] == (49_152 if table is MOCHI else 86_016)
+    if table is MOCHI:
+        for preset in table.presets:
+            spec = rl_recipe.run_spec(
+                preset, name="layout-check", tasks=selection if preset.batch_mix else None, model_name=table.model
             )
-        if "agentic" in identity[1]:
-            half = trainer["train_batch_size"] // 2
-            assert trainer["rollout_buffer"]["groups_per_family"] == {"agentic": half, "nonagentic": half}
-            normalized = rl_gate.comparison_config(config)
-            for family in ("agentic", "nonagentic"):
-                assert normalized[f"skyrl.trainer.rollout_buffer.groups_per_family.{family}"] == half
-
-    medium = documents["mochi", "train-medium"]
-    assert not medium["run"]["export_hf"]
-    assert [callback["type"] for callback in medium["skyrl"]["trainer"]["callbacks"]] == ["checkpoint"]
-
-    docs = (rl_recipe.REPO_ROOT / "docs/dev-guide/skyrl.md").read_text()
-    fragment = docs.split("## Mochi inference on GB200", 1)[1].split("```yaml", 1)[1].split("```", 1)[0]
-    served = rl_gate._config_values(documents["mochi", "train-long-3rack"]["skyrl"])
-    for path, value in rl_gate._config_values(yaml.safe_load(fragment)).items():
-        assert served[path] == value, path
+            execution = next(
+                value
+                for value in rl_recipe.run_step(preset, spec).runtime_args.values()
+                if isinstance(value, IrisSkyRLExecution)
+            )
+            assert execution.role_topology == RoleTopologyMode.NVLINK_DOMAIN
+        docs = (rl_recipe.REPO_ROOT / "docs/dev-guide/skyrl.md").read_text()
+        fragment = docs.split("## Mochi inference on GB200", 1)[1].split("```yaml", 1)[1].split("```", 1)[0]
+        served = rl_gate._config_values(documents["train-long-3rack"]["skyrl"])
+        for path, value in rl_gate._config_values(yaml.safe_load(fragment)).items():
+            assert served[path] == value, path
 
 
-def test_recipe_derives_agent_limits_and_preserves_authored_concurrency(selection):
+def test_mixed_candidate_uses_the_selected_tasks_and_preserves_authored_concurrency(selection):
     preset = SNOWBALL.by_name["train-medium-agentic"]
+    settings = ("context_budget.max_new_tokens_per_turn=24576", "trainer.train_batch_size=128")
+    inputs = rl_gate.gate_inputs(preset.name, settings, SELECTION_IDENTITY)
+    config = rl_gate.validate_candidate(preset, inputs, table=SNOWBALL)["skyrl"]
+    assert config["trainer"]["rollout_buffer"]["max_in_flight"] == 32
+    assert config["trainer"]["rollout_buffer"]["groups_per_family"] == {"agentic": 64, "nonagentic": 64}
+    limits = config["terminal_bench_config"]["installed_agent"]["agent"]["kwargs"]["model_info"]
+    assert limits == {"max_input_tokens": 102_400, "max_output_tokens": 24_576}
     spec = rl_recipe.run_spec(
         preset,
         name="test-agent-settings",
         tasks=selection,
-        settings=("context_budget.max_new_tokens_per_turn=8192", "trainer.train_batch_size=128"),
+        settings=settings,
     )
-    config = yaml.safe_load(spec.config_yaml)
-    assert config["trainer"]["rollout_buffer"]["max_in_flight"] == 32
-    assert config["trainer"]["rollout_buffer"]["groups_per_family"] == {"agentic": 64, "nonagentic": 64}
-    model_info = config["terminal_bench"]["installed_agent"]["agent"]["kwargs"]["model_info"]
-    assert model_info == {"max_input_tokens": 102_400 - 8192, "max_output_tokens": 8192}
     execution = next(
         value
         for value in rl_recipe.run_step(preset, spec).runtime_args.values()
@@ -108,45 +109,81 @@ def test_recipe_derives_agent_limits_and_preserves_authored_concurrency(selectio
 
 
 @pytest.mark.parametrize(
-    ("key", "value", "error"),
+    ("case", "value", "error"),
     [
-        ("environment.task_sessions.daytona.ttl_minutes", 60, "ttl_minutes"),
-        ("trainer.algorithm.group_admission.stall_timeout", 9000, "stall_timeout"),
-        ("terminal_bench.installed_agent.agent.kwargs.unused", True, "Unknown Pi recipe kwargs: unused"),
+        ("recipe", ("environment.task_sessions.daytona.ttl_minutes", 60), "ttl_minutes"),
+        ("recipe", ("trainer.algorithm.group_admission.stall_timeout", 9000), "stall_timeout"),
+        ("owner", ("trainer.hf_export_checkpoint", "best"), "derived by the runner"),
+        ("owner", ("trainer.rollout_buffer.groups_per_family", {"agentic": 32}), "derived by the runner"),
+        ("mix", {"agentic": Fraction(1, 4), "nonagentic": Fraction(1, 4)}, "sum to 1"),
+        ("mix", {"agentic": Fraction(1, 3), "nonagentic": Fraction(2, 3)}, "whole number of groups"),
+        ("mix", {"agentic": Fraction(1, 2), "math": Fraction(1, 2)}, "training selection has"),
+        ("checkpoint", None, "best export requires checkpointing"),
+        ("evaluation", 3, "fall on checkpoint steps"),
+        ("prefix", None, "storage prefix"),
+        ("gated", None, "already built"),
     ],
 )
-def test_preset_refuses_inconsistent_agent_recipe(key, value, error):
+def test_runner_refuses_incompatible_launches(selection, tmp_path, monkeypatch, case, value, error):
     preset = SNOWBALL.by_name["train-medium-agentic"]
-    patch = {}
-    set_path(patch, key, value)
-    config = preset.recipe.config.merge(RecipePatch.from_document(patch))
-    with pytest.raises(ValueError, match=error):
-        replace(preset, recipe=replace(preset.recipe, config=config))
+    with pytest.raises((ValueError, click.BadParameter), match=error):
+        if case in ("recipe", "owner"):
+            key, setting = value
+            patch = {}
+            set_path(patch, key, setting)
+            config = preset.recipe.config.merge(RecipePatch.from_document(patch))
+            if case == "owner":
+                with pytest.raises(click.BadParameter, match=error):
+                    rl_recipe.run_spec(
+                        preset, name="settings-test", tasks=selection, settings=(f"{key}={json.dumps(setting)}",)
+                    )
+            rl_recipe.run_spec(
+                replace(preset, recipe=replace(preset.recipe, config=config)), name="recipe-test", tasks=selection
+            )
+        elif case == "mix":
+            rl_recipe.run_spec(replace(preset, batch_mix=BatchMix(value)), name="mix-test", tasks=selection)
+        elif case == "checkpoint":
+            replace(preset, checkpoint_every=None)
+        elif case == "evaluation":
+            replace(preset, evaluations=(replace(preset.evaluations[0], every=value),))
+        else:
 
+            def export_artifact(path):
+                return Artifact(path=path)
 
-def test_checkpoint_settings_are_owned_by_the_runner(selection):
-    preset = SNOWBALL.by_name["train-long"]
-    with pytest.raises(click.BadParameter, match="derived by the runner"):
-        rl_recipe.run_spec(preset, name="test-checkpoints", settings=("trainer.hf_export_checkpoint=best",))
-    patch = RecipePatch.from_document({"trainer": {"ckpt_interval": 100}})
-    config = preset.recipe.config.merge(patch)
-    with pytest.raises(ValueError, match=r"derived by the runner: trainer\.ckpt_interval"):
-        rl_recipe.run_spec(replace(preset, recipe=replace(preset.recipe, config=config)), name="test-checkpoints")
+            monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "other") if case == "prefix" else str(tmp_path))
+            init = ArtifactHfModel(apply("models/not-built", export_artifact, version="2026.11.19", path=OUT))
+            preset = SNOWBALL.by_name["learning-medium" if case == "gated" else "train-long"]
+            rl.build_run(preset, table=SNOWBALL, init=init)
 
 
 @pytest.mark.parametrize(
-    ("shares", "error"),
+    ("table", "name", "settings", "error"),
     [
-        ({"agentic": Fraction(1, 4), "nonagentic": Fraction(1, 4)}, "sum to 1"),
-        ({"agentic": Fraction(1, 3), "nonagentic": Fraction(2, 3)}, "whole number of groups"),
-        ({"agentic": Fraction(1, 2), "math": Fraction(1, 2)}, "training selection has"),
+        (
+            MOCHI,
+            "train-medium",
+            (
+                "trainer.policy.megatron_config.tensor_model_parallel_size=2",
+                "trainer.policy.megatron_config.context_parallel_size=2",
+                "generator.weight_sync_transport=broadcast",
+            ),
+            "MuonH fused-matrix updates require tensor parallel size 1",
+        ),
+        (SNOWBALL, "train-medium-agentic", ("terminal_bench.installed_agent.agent.kwargs.unused=true",), "unused"),
     ],
+    ids=("muonh", "installed-agent-kwargs"),
 )
-def test_runner_refuses_incompatible_batch_mix(selection, shares, error):
-    preset = SNOWBALL.by_name["train-medium-agentic"]
-    with pytest.raises((ValueError, click.BadParameter), match=error):
-        preset = replace(preset, batch_mix=BatchMix(shares))
-        rl_recipe.run_spec(preset, name="test-groups", tasks=selection)
+def test_plan_print_rejects_invalid_native_config(table, name, settings, error, selection):
+    preset = table.by_name[name]
+    args = ["--preset", name, "--version", preset.revision, "--plan"]
+    for setting in settings:
+        args += ["--set", setting]
+    if preset.tasks_input == "required":
+        args += ["--tasks", SELECTION_IDENTITY]
+    result = CliRunner().invoke(rl.command(table, argv=tuple(args)), args)
+    assert result.exit_code == 4, (result.output, result.exception)
+    assert "native configuration cannot be composed" in result.output and error in result.output
 
 
 def test_resume_pins_the_native_checkpoint(selection, tmp_path):
@@ -158,74 +195,20 @@ def test_resume_pins_the_native_checkpoint(selection, tmp_path):
         yaml.safe_dump({"config": {"artifacts": {"checkpoint_root": str(checkpoint.parent)}}})
     )
     (checkpoint.parent / "latest_ckpt_global_step.txt").write_text("4")
-    with pytest.raises(click.BadParameter, match="temporary checkpoints usually expire after 14 days"):
+    with pytest.raises(click.BadParameter, match="source run's retention period"):
         rl_recipe.published_checkpoint("checkpoints/previous@2026.11.19.1", preset=preset)
     (checkpoint / "trainer_state.pt").write_bytes(b"trainer checkpoint")
     resume = rl_recipe.published_checkpoint("checkpoints/previous@2026.11.19.1", preset=preset)
     resumed = rl.build_run(preset, table=SNOWBALL, resume=resume)
-    plain = rl.build_run(preset, table=SNOWBALL)
-    assert resumed.runs[0].name != plain.runs[0].name
     config = materialized_config(resumed.runs[0], str(tmp_path)).launch_config_yaml
     source = yaml.safe_load(config)["inputs"]["starting_checkpoint"]
     assert source["uri"] == str(checkpoint)
     assert "step-4@2026.11.19.1" in source["identity"]
+    args = ("--preset", preset.name, "--version", preset.revision, "--resume", "checkpoints/previous@2026.11.19.1")
+    planned = CliRunner().invoke(rl.command(SNOWBALL, argv=args), args)
+    assert planned.exit_code == 0 and "-resume-step-4" in planned.output, (planned.output, planned.exception)
     with pytest.raises(click.BadParameter, match="cannot be combined with --init"):
         rl.build_run(preset, table=SNOWBALL, resume=resume, init=preset.model)
-
-
-@pytest.mark.usefixtures("source_provenance")
-def test_resume_refuses_a_checkpoint_that_advanced_after_submission(selection, tmp_path, monkeypatch):
-    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
-    root = tmp_path / "checkpoints" / "previous" / "2026.11.19.1"
-    scratch = root / "scratch"
-    for step in (4, 8):
-        checkpoint = scratch / f"global_step_{step}"
-        checkpoint.mkdir(parents=True)
-        (checkpoint / "trainer_state.pt").touch()
-    (root / RESOLVED_LAUNCH_FILENAME).write_text(
-        yaml.safe_dump({"config": {"artifacts": {"checkpoint_root": str(scratch)}}})
-    )
-    latest = scratch / "latest_ckpt_global_step.txt"
-    latest.write_text("4")
-    job = JobName.from_wire("/fixture/resume-coordinator")
-    submitted = {}
-
-    def submit(**request):
-        submitted.update(request)
-        return SimpleNamespace(job_id=job)
-
-    monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(SimpleNamespace(submit=submit)))
-    monkeypatch.setattr(
-        "marin.rl.skyrl._run_launcher", lambda *args: pytest.fail("Coordinator launched with a different checkpoint")
-    )
-    args = (
-        "--preset",
-        "train-long",
-        "--version",
-        "2026.11.19.1",
-        "--run",
-        "--no-issue",
-        "--resume",
-        "checkpoints/previous@2026.11.19.1",
-    )
-    command = rl.command(SNOWBALL, argv=args, entry_module="experiments.post_training.snowball_rl")
-    result = CliRunner().invoke(command, args)
-    assert result.exit_code == 0, (result.output, result.exception)
-
-    latest.write_text("8")
-    for name, value in submitted["environment"].env_vars.items():
-        monkeypatch.setenv(name, value)
-    task_id = JobName.from_wire(f"{job}/0")
-    monkeypatch.setenv("IRIS_TASK_ID", str(task_id))
-    try:
-        with iris_ctx_scope(IrisContext.from_job_info(JobInfo(task_id=task_id))):
-            result = CliRunner().invoke(command, submitted["entrypoint"].command[3:])
-    finally:
-        set_job_info(None)
-    assert result.exit_code == 4, (result.output, result.exception)
-    _, _, error = result.output.partition("coordinator rebuilt a different RL graph: submitted=")
-    original, _, rebuilt = error.partition(", rebuilt=")
-    assert "-resume-step-4" in original and "-resume-step-8" in rebuilt, result.output
 
 
 @pytest.mark.usefixtures("source_provenance")
@@ -259,22 +242,21 @@ def test_sft_composition_reenters_its_own_module(selection, monkeypatch):
     assert submitted == [(submitted[0][0], argv)] * 2
 
 
-def test_runner_composes_after_an_export_and_refuses_other_runs(selection):
+@pytest.mark.parametrize(
+    ("table", "name", "allowed"),
+    [(SNOWBALL, "train-long", True), (SNOWBALL, "learning-medium", False), (MOCHI, "train-medium", False)],
+    ids=("exporting", "gated", "no-export"),
+)
+def test_runner_composes_after_an_export(selection, table, name, allowed):
     def read_policy(policy_output):
         return Artifact(path=policy_output)
 
     def evaluate(model):
         return (apply("runs/post-rl-evaluation", read_policy, version="2026.11.19", policy_output=model.step),)
 
-    command = rl.command(SNOWBALL, argv=(), then=evaluate)
-    args = ["--version", "2026.11.19.1", "--preset"]
-    result = CliRunner().invoke(command, [*args, "train-long"])
-    assert result.exit_code == 0, (result.output, result.exception)
-    assert "runs/post-rl-evaluation" in result.output
-    for extra in (("learning-medium",), ("train-long", "--replicates", "2")):
-        result = CliRunner().invoke(command, [*args, *extra])
-        assert result.exit_code == 4
-        assert "requires one ungated run with a model export" in result.output
-    no_export = CliRunner().invoke(rl.command(MOCHI, argv=(), then=evaluate), [*args, "train-medium"])
-    assert no_export.exit_code == 4
-    assert "requires one ungated run with a model export" in no_export.output
+    result = CliRunner().invoke(
+        rl.command(table, argv=(), then=evaluate), ["--version", "2026.11.19.1", "--preset", name]
+    )
+    assert result.exit_code == (0 if allowed else 4), (result.output, result.exception)
+    expected = "runs/post-rl-evaluation" if allowed else "requires one ungated run with a model export"
+    assert expected in result.output

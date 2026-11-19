@@ -114,7 +114,6 @@ class Evaluation:
 @dataclass(frozen=True)
 class Training:
     plan: SkyRLRolePlan
-    epochs_follow_updates: bool = False
     completion_metric: ClassVar[str] = "timing/step_wall/unaccounted"
     outcome_prefix: ClassVar[str] = "generate/outcome/"
     named_schedule: ClassVar[Literal["final"]] = "final"
@@ -353,22 +352,9 @@ def validate_agentic_recipe(config: RecipePatch) -> None:
     if (
         stall is not None
         and attempt_timeout is not None
-        and harbor.get("max_retries", 0)
-        and stall < 2 * attempt_timeout
+        and stall < (1 + harbor.get("max_retries", 0)) * attempt_timeout
     ):
-        raise ValueError("group_admission.stall_timeout must cover one Harbor attempt and retry")
-    agent = terminal.get("installed_agent", {}).get("agent", {})
-    if agent.get("name") == "pi":
-        allowed = {
-            "version",
-            "mcp_adapter_version",
-            "thinking",
-            "thinking_format",
-            "compaction_reserve_tokens",
-            "http_idle_timeout",
-        }
-        if unknown := sorted(agent.get("kwargs", {}).keys() - allowed):
-            raise ValueError(f"Unknown Pi recipe kwargs: {', '.join(unknown)}")
+        raise ValueError("group_admission.stall_timeout must cover the Harbor attempt and configured retries")
 
 
 @dataclass(frozen=True)
@@ -407,12 +393,8 @@ class Preset:
             raise ValueError("measured window must lie within the planned steps")
         if self.gated and not self.guards:
             raise ValueError("gated presets require guards")
-        if self.batch_mix is not None and not isinstance(self.recipe.layout.workload, Training):
-            raise ValueError("batch mix requires a training workload")
         if self.checkpoint_every is not None and self.checkpoint_every <= 0:
             raise ValueError("checkpoint_every must be positive")
-        if isinstance(self.recipe.layout.workload, Generation) and (self.checkpoint_every or self.export != "none"):
-            raise ValueError("checkpointing and export require a training workload")
         if self.export == "best" and (self.checkpoint_every is None or not self.evaluations):
             raise ValueError("best export requires checkpointing and an evaluation")
         if self.export == "best" and self.evaluations[0].every:

@@ -572,9 +572,8 @@ def prepare(config: SelectionConfig) -> None:
                     yield _selection_row(task, tags, state=MembershipState.ACTIVE).model_dump(mode="json")
 
         write_parquet_file(manifest_rows(), str(directory / TASK_MANIFEST_FILENAME), schema=TASK_MANIFEST_SCHEMA)
-        recipe_document = config.recipe.model_dump(mode="json", exclude={"admitted_graders"})
-        if config.recipe.admitted_graders != LOCAL_GRADERS:
-            recipe_document["admitted_graders"] = sorted(config.recipe.admitted_graders)
+        recipe_document = config.recipe.model_dump(mode="json")
+        recipe_document["admitted_graders"] = sorted(config.recipe.admitted_graders)
         summary = {
             "selection_strata": (
                 SelectionDefinition(

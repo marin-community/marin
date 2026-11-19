@@ -288,7 +288,8 @@ def test_recovery_exports_the_best_checkpoint_without_a_terminal_request(tmp_pat
         return 0
 
     monkeypatch.setattr(export_hf_checkpoint.subprocess, "call", child_export)
-    export_hf_checkpoint.export_terminal_policy(path, recover_best=True)
+    monkeypatch.setattr("sys.argv", ["export_hf_checkpoint", "--launch-config", str(path), "--recover-best"])
+    export_hf_checkpoint.main()
     assert read_hf_export_request(str(checkpoints / "global_step_15")).status is HFExportStatus.COMPLETE
     assert not (exports / "global_step_20").exists()
 

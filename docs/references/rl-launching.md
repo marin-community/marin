@@ -65,13 +65,12 @@ submission and coordinator startup, the command refuses the launch and shows
 both step numbers. The source checkpoint stays in temporary storage for the
 retention period recorded by its run.
 
-Use `export-best` to export a stored run's best committed native checkpoint,
-including after an early stop. The command reads the checkpoint selected by the
-run's evaluation and uses its recorded launch configuration for conversion.
+Use the run's resolved launch document to export its best committed native
+checkpoint, including after an early stop.
 
 ```bash
-uv run python -m experiments.post_training.snowball_rl export-best \
-  --preset train-long-agentic checkpoints/snowball-rl/my-run@2026.11.19.1
+uv run --project vendor/skyrl --extra cpu python -m cloud.iris.export_hf_checkpoint \
+  --launch-config ./training-launch.yaml --recover-best
 ```
 
 ## One Hydra launch document

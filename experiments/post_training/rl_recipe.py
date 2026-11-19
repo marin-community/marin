@@ -116,7 +116,6 @@ RUNNER_KEYS = frozenset(
         "generator.inference_engine_pipeline_parallel_size",
         "generator.inference_engine_data_parallel_size",
         "generator.inference_engine_expert_parallel_size",
-        "generator.trajectory_retention",
     }
 )
 
@@ -308,7 +307,8 @@ def published_checkpoint(value: str, *, preset: Preset) -> presets.StoredResume:
     except (FileNotFoundError, KeyError, ValueError):
         pass
     raise click.BadParameter(
-        f"no committed native checkpoint for {name}@{version}; temporary checkpoints usually expire after 14 days"
+        f"no committed native checkpoint for {name}@{version}. "
+        "Checkpoint availability follows the source run's retention period."
     )
 
 
@@ -423,7 +423,7 @@ def _training_config(
             presets.validate_agentic_recipe(config)
         except ValueError as error:
             raise click.BadParameter(str(error)) from error
-    if preset.harbor is not None or get_path(config.to_skyrl(), "terminal_bench.installed_agent") is not MISSING:
+    if preset.harbor is not None:
         config = config.merge(RecipePatch(generator=sections.Generator(enable_http_endpoint=True)))
     return config
 
@@ -480,22 +480,6 @@ def run_spec(
             RecipePatch(trainer=sections.Trainer(rollout_buffer=sections.RolloutBuffer(groups_per_family=groups)))
         )
     preset = preset.with_updates(config.trainer.max_steps)
-    if isinstance(workload, presets.Training) and workload.epochs_follow_updates:
-        config = config.merge(RecipePatch(trainer=sections.Trainer(epochs=preset.updates)))
-    agent = get_path(config.to_skyrl(), "terminal_bench.installed_agent.agent")
-    if isinstance(agent, dict) and agent.get("name") == "pi":
-        budget = config.context_budget
-        assert budget is not None
-        derived_agent = {}
-        set_path(
-            derived_agent,
-            "terminal_bench.installed_agent.agent.kwargs.model_info",
-            {
-                "max_input_tokens": budget.effective_serving_window_tokens - budget.max_new_tokens_per_turn,
-                "max_output_tokens": budget.max_new_tokens_per_turn,
-            },
-        )
-        config = config.merge(RecipePatch.from_document(derived_agent))
     model = preset.model if init is None else init
     initial_model_uri = model.step.path(artifact_prefix(preset.recipe.layout.cluster))
     validation_data = ()
@@ -586,9 +570,8 @@ def run_step(
     layout = preset.recipe.layout
     config = yaml.safe_load(spec.config_yaml)
     required_env = ("WANDB_API_KEY", "WANDB_ENTITY") if wandb_entity else ("WANDB_API_KEY",)
-    if preset.harbor is not None:
-        required_env += (preset.harbor.daytona_api_key_env,)
     if preset.harbor is not None or get_path(config, "terminal_bench.installed_agent") is not MISSING:
+        # The submitter selects the Daytona target for the run.
         required_env += ("DAYTONA_TARGET",)
     required_env += tuple(_recipe_env(config))
     return skyrl_step(
