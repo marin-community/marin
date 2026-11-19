@@ -48,7 +48,8 @@ def convert_olympiad(row: RawRow, _context: ConversionContext) -> TaskSpec:
         label_scores={"VERDICT: CORRECT": 1.0, "VERDICT: INCORRECT": 0.0},
         label_scan="lines",
     )
-    return answer_task(row, prompt=problem, spec=spec, evidence=dict(row.data))
+    task = answer_task(row, prompt=problem, spec=spec, evidence=dict(row.data))
+    return task.model_copy(update={"tags": ("eval", "benchmark:frontierscience-olympiad")})
 
 
 def convert_research(row: RawRow, _context: ConversionContext) -> TaskSpec:
@@ -64,7 +65,8 @@ def convert_research(row: RawRow, _context: ConversionContext) -> TaskSpec:
         exact_gate=False,
         empty_output=EmptyOutputPolicy.GRADE,
     )
-    return answer_task(row, prompt=problem, spec=spec, evidence=dict(row.data))
+    task = answer_task(row, prompt=problem, spec=spec, evidence=dict(row.data))
+    return task.model_copy(update={"tags": ("eval", "benchmark:frontierscience-research")})
 
 
 def frontierscience_item(task: TaskSpec) -> EvaluationItem:
