@@ -13,7 +13,6 @@ from experiments.post_training.task_curation import ensure_current_projections
 from experiments.post_training.task_curation.ensure_current_projections import (
     CatalogSelection,
     DeclarationPin,
-    ProjectionWaiver,
     ProjectionWaivers,
     projection_gaps,
     publication_preflight,
@@ -187,13 +186,8 @@ def projection_waivers() -> ProjectionWaivers:
         marina_url="https://marina.example",
         applet_id="preview",
         valid_catalog_load_ids=("lagging", "frozen-before-refresh"),
-        waivers=(
-            ProjectionWaiver(
-                source_id="Test:source",
-                projection="derived-contract",
-                reason=ensure_current_projections.PROJECTION_WAIVER_REASON,
-            ),
-        ),
+        rule="stale-or-missing-serving-projection-without-declaration-drift",
+        reason=ensure_current_projections.PROJECTION_WAIVER_REASON,
     )
 
 
@@ -205,6 +199,7 @@ def test_the_preflight_records_each_named_waiver_before_refresh(load_id):
         {"Test:source": [Receipt(revision="9" * 40)]},
         {"Test:source": curriculum_row(source)},
         projection_waivers(),
+        drift_sources=frozenset(),
         selection=CatalogSelection("https://marina.example", "preview", load_id),
     )
     assert len(notes) == 1
@@ -228,6 +223,7 @@ def test_a_sealed_refresh_or_different_target_cannot_reuse_a_projection_waiver(s
             {"Test:source": curriculum_row(source)},
             projection_waivers(),
             selection=selection,
+            drift_sources=frozenset(),
         )
     assert publication_preflight(
         [source],
@@ -235,17 +231,36 @@ def test_a_sealed_refresh_or_different_target_cannot_reuse_a_projection_waiver(s
         {"Test:source": curriculum_row(source)},
         projection_waivers(),
         selection=selection,
+        drift_sources=frozenset(),
     ) == ["Projection waivers expired or target differs; all projection checks remain blocking"]
 
 
-def test_a_waived_contract_does_not_waive_an_unnamed_curriculum_gap():
-    with pytest.raises(ValueError, match="curriculum/missing: Test:source"):
+def test_a_gap_created_after_the_rule_file_is_generated_is_waived(tmp_path):
+    path = tmp_path / "rule.json"
+    path.write_text(projection_waivers().model_dump_json())
+    source = declaration(source_id="New:source-after-file-generation")
+    notes = publication_preflight(
+        [source],
+        {},
+        {},
+        ProjectionWaivers.model_validate_json(path.read_bytes()),
+        selection=CatalogSelection("https://marina.example", "preview", "lagging"),
+        drift_sources=frozenset(),
+    )
+    assert len(notes) == 2
+    assert any("New:source-after-file-generation:derived-contract/missing" in note for note in notes)
+    assert any("New:source-after-file-generation:curriculum/missing" in note for note in notes)
+
+
+def test_the_same_source_declaration_drift_cannot_be_waived():
+    with pytest.raises(ValueError, match="Declaration drift blocks publication: Test:source"):
         publication_preflight(
             [declaration()],
             {},
             {},
             projection_waivers(),
             selection=CatalogSelection("https://marina.example", "preview", "lagging"),
+            drift_sources=frozenset({"Test:source"}),
         )
 
 
@@ -299,6 +314,7 @@ def test_conflicting_current_contract_summaries_fail(served_revision):
             {"Test:source": [Receipt(), other]},
             {"Test:source": curriculum_row(source)},
             projection_waivers(),
+            drift_sources=frozenset(),
             selection=CatalogSelection("https://marina.example", "preview", "lagging"),
             served_pins={"Test:source": replace(source, dataset_revision=served_revision)},
         )

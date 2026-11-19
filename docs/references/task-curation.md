@@ -440,7 +440,7 @@ rebase conflicts and rerun. Advisory review remains required for non-trivial
 changes. Report the landed SHA to the coordinator. Never force-push or push to
 `main`. This rule ends when CI resumes.
 
-Ruling 60 (2026-11-19) temporarily permits named missing/stale serving-projection
+Ruling 60 (2026-11-19) temporarily permits missing/stale serving-projection
 waivers while the preview load and coordinated refresh complete. Use the explicit
 waiver file for a landing:
 
@@ -449,13 +449,17 @@ atlas-push --waivers experiments/post_training/task_curation/declaration-project
   --test "<affected test command>" --who "<session id>" --what "<change summary>"
 ```
 
-Each entry names a source and projection and records
+The rule evaluates the gaps and per-source declaration drift in the gated audit
+run, so sources and projections added after the rule file was written are covered.
+Only missing/stale serving projections on sources with zero declaration drift
+qualify. Every applied exception records
 `preview projection lag; declaration drift 0; ruling 2026-11-19`. The file binds
-these exceptions to the preview applet and the current/frozen catalog load IDs.
+this rule to the preview applet and the current/frozen catalog load IDs.
 Selecting the new refresh load automatically expires them; they cannot waive
 production checks. Declaration drift, query errors, conflicting contract summaries,
-and every other non-projection failure still block. The audit records each applied
-`source:projection` waiver. Without `--waivers`, the audit remains strict. After
+and every other non-projection failure still block. The audit writes each applied `source:projection`, state, and reason as structured
+records to its JSON receipt. `atlas-push` runs that audit with `--output` and embeds
+the same receipt in its landing log; it never generates a separate pair list. Without `--waivers`, the audit remains strict. After
 the refresh seals, run `python -m
 experiments.post_training.task_curation.declaration_audit` without that option.
 

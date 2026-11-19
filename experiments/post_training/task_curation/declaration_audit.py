@@ -329,6 +329,44 @@ def canonical_layer() -> tuple[CanonicalLayer, dict[str, dict[str, DeclaredPin]]
     return layer, families, release_rows, sources
 
 
+@dataclass(frozen=True)
+class DeclarationAudit:
+    findings: list[str]
+    notes: list[str]
+    drift_sources: frozenset[str]
+
+
+def audit_declarations(
+    families: dict[str, dict[str, DeclaredPin]],
+    *,
+    layer: CanonicalLayer,
+    releases: dict[str, ReleasePin],
+    configured_ids: frozenset[str],
+) -> DeclarationAudit:
+    """Audit each source once so projection exceptions can use the same run's drift evidence."""
+    source_ids = set(layer.source_ids) | set(releases) | set(configured_ids)
+    for rows in families.values():
+        source_ids.update(rows)
+    findings, notes, drift_sources = [], [], set()
+    for source_id in sorted(source_ids):
+        source_findings, source_notes = audit_families(
+            {family: {source_id: rows[source_id]} for family, rows in families.items() if source_id in rows},
+            layer=layer,
+            releases={source_id: releases[source_id]} if source_id in releases else {},
+        )
+        if (
+            source_id in configured_ids
+            and source_id not in layer.retired
+            and source_id not in families["within-source dedup"]
+        ):
+            source_findings.append(f"within-source dedup: {source_id} is declared but has no dedup receipt")
+        if source_findings:
+            drift_sources.add(source_id)
+        findings.extend(source_findings)
+        notes.extend(source_notes)
+    return DeclarationAudit(findings, notes, frozenset(drift_sources))
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser(description=__doc__)
@@ -339,20 +377,15 @@ def main() -> None:
 
     layer, families, release_rows, sources = canonical_layer()
 
-    findings, notes = audit_families(families, layer=layer, releases=release_rows)
-
-    # Every configured source the Atlas measures must carry its dedup receipt: the assembly
-    # raises on a missing row, so name the missing ones explicitly before it does.
     from experiments.post_training.task_curation.sources import configured_sources  # noqa: PLC0415
 
-    missing_dedup = sorted(
-        source.info.id
-        for source in configured_sources()
-        if source.info.id not in layer.retired and source.info.id not in families["within-source dedup"]
+    declarations = audit_declarations(
+        families,
+        layer=layer,
+        releases=release_rows,
+        configured_ids=frozenset(source.info.id for source in configured_sources()),
     )
-    findings.extend(
-        f"within-source dedup: {source_id} is declared but has no dedup receipt" for source_id in missing_dedup
-    )
+    findings, notes = declarations.findings, declarations.notes
 
     # The serving projections (the Atlas grader and curriculum-area columns) must also bind
     # every current pin: a derived-contract census receipt and a curriculum alignment at the
@@ -379,7 +412,13 @@ def main() -> None:
     )
     if atlas_catalog_selection() != selection:
         raise ValueError("Catalog selection changed during declaration audit; retry")
-    projection_blocking, waiver_notes = apply_projection_waivers(projection_findings, waivers, selection)
+    waiver_result = apply_projection_waivers(
+        projection_findings,
+        waivers,
+        selection,
+        declarations.drift_sources,
+    )
+    projection_blocking = waiver_result.blocking
     findings.extend(
         f"serving projection {gap.projection}/{gap.state}: {gap.source_id}"
         + (f" (last computed at {gap.last_computed_revision})" if gap.last_computed_revision else "")
@@ -395,9 +434,13 @@ def main() -> None:
         "dedup_rows": len(families["within-source dedup"]),
         "retained_release_receipts": len(release_rows),
         "findings": findings,
-        "projection_waivers": waiver_notes,
+        "projection_waivers": [
+            {"source_projection": record.key, **record.model_dump(mode="json")} for record in waiver_result.waived
+        ],
+        "waiver_notes": waiver_result.notes,
+        "declaration_drift_sources": sorted(declarations.drift_sources),
         "waived_projection_count": len(projection_findings) - len(projection_blocking),
-        "waiver_scope": waivers.model_dump(mode="json", exclude={"waivers"}) if waivers else None,
+        "waiver_scope": waivers.model_dump(mode="json") if waivers else None,
         "catalog_load_id": selection.load_id,
         "staged_for_intake": notes,
         "state": "mismatched" if findings else "ok-with-waivers" if projection_findings else "ok",

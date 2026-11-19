@@ -102,7 +102,8 @@ class ProjectionWaiver(BaseModel):
 
     source_id: str = Field(min_length=1)
     projection: Literal["derived-contract", "curriculum", "served-catalog"]
-    reason: Literal["preview projection lag; declaration drift 0; ruling 2026-11-19"]
+    state: Literal["missing", "stale-pin"]
+    reason: str
 
     @property
     def key(self) -> str:
@@ -118,7 +119,8 @@ class ProjectionWaivers(BaseModel):
     applet_id: str
     valid_catalog_load_ids: tuple[str, ...] = Field(min_length=1)
     expires_when: Literal["preview_refresh_seals"] = "preview_refresh_seals"
-    waivers: tuple[ProjectionWaiver, ...]
+    rule: Literal["stale-or-missing-serving-projection-without-declaration-drift"]
+    reason: Literal["preview projection lag; declaration drift 0; ruling 2026-11-19"]
 
     def active(self, selection: CatalogSelection) -> bool:
         return (
@@ -128,25 +130,42 @@ class ProjectionWaivers(BaseModel):
         )
 
 
+@dataclass(frozen=True)
+class ProjectionWaiverResult:
+    blocking: list[ProjectionGap]
+    waived: list[ProjectionWaiver]
+    notes: list[str]
+
+
 def apply_projection_waivers(
-    gaps: list[ProjectionGap], waivers: ProjectionWaivers | None, selection: CatalogSelection | None
-) -> tuple[list[ProjectionGap], list[str]]:
-    """Apply only named missing/stale projections while the frozen preview scope remains active."""
+    gaps: list[ProjectionGap],
+    waivers: ProjectionWaivers | None,
+    selection: CatalogSelection | None,
+    drift_sources: frozenset[str] | None,
+) -> ProjectionWaiverResult:
+    """Evaluate the temporary rule against gaps and declaration drift from this audit run."""
     if waivers is None:
-        return gaps, []
-    if selection is None:
-        raise ValueError("Projection waivers require the observed catalog selection")
+        return ProjectionWaiverResult(gaps, [], [])
+    if selection is None or drift_sources is None:
+        raise ValueError("Projection waiver rules require catalog selection and declaration drift evidence")
     if not waivers.active(selection):
-        return gaps, ["Projection waivers expired or target differs; all projection checks remain blocking"]
-    named = {waiver.key: waiver for waiver in waivers.waivers}
-    blocking, notes = [], []
+        return ProjectionWaiverResult(
+            gaps, [], ["Projection waivers expired or target differs; all projection checks remain blocking"]
+        )
+    blocking, waived, notes = [], [], []
     for gap in gaps:
-        key = f"{gap.source_id}:{gap.projection}"
-        if key in named and gap.state in {"missing", "stale-pin"}:
-            notes.append(f"waived {key}/{gap.state}: {named[key].reason}; expires when preview refresh seals")
+        if gap.source_id not in drift_sources and gap.state in {"missing", "stale-pin"}:
+            record = ProjectionWaiver(
+                source_id=gap.source_id,
+                projection=gap.projection,
+                state=gap.state,
+                reason=waivers.reason,
+            )
+            waived.append(record)
+            notes.append(f"waived {record.key}/{gap.state}: {record.reason}; expires when preview refresh seals")
         else:
             blocking.append(gap)
-    return blocking, notes
+    return ProjectionWaiverResult(blocking, waived, notes)
 
 
 def atlas_catalog_selection() -> CatalogSelection:
@@ -340,15 +359,19 @@ def publication_preflight(
     served_pins: dict[str, DeclarationPin] | None = None,
     *,
     selection: CatalogSelection | None = None,
+    drift_sources: frozenset[str] | None = None,
 ) -> list[str]:
     """Refuse a preview or production release while a current pin lacks either projection.
 
-    Waivers name individual source:projection pairs, record the ruling reason, and expire
-    outside their frozen preview catalog selections. Returns notes including each applied waiver.
+    The rule requires current declaration drift evidence and expires outside its frozen
+    preview selections. Returns notes recording each source:projection pair actually waived.
     """
     gaps, notes = projection_gaps(declarations, contract_receipts, curriculum_rows, served_pins=served_pins)
-    blocking, waiver_notes = apply_projection_waivers(gaps, waivers, selection)
-    notes.extend(waiver_notes)
+    result = apply_projection_waivers(gaps, waivers, selection, drift_sources)
+    if waivers is not None and drift_sources:
+        raise ValueError("Declaration drift blocks publication: " + ", ".join(sorted(drift_sources)))
+    blocking = result.blocking
+    notes.extend(result.notes)
     if blocking:
         counts: Counter = Counter((gap.projection, gap.state) for gap in blocking)
         detail = ", ".join(f"{projection}.{state}={count}" for (projection, state), count in sorted(counts.items()))
@@ -500,8 +523,31 @@ def main() -> None:
     print(json.dumps(report, indent=2))
     if args.preflight:
         waivers = ProjectionWaivers.model_validate_json(args.waivers.read_bytes()) if args.waivers else None
+        drift_sources = None
+        if waivers is not None:
+            # The declaration audit imports this module; import here to break that cycle.
+            from experiments.post_training.task_curation.declaration_audit import (  # noqa: PLC0415
+                audit_declarations,
+                canonical_layer,
+            )
+            from experiments.post_training.task_curation.sources import configured_sources  # noqa: PLC0415
+
+            layer, families, releases, _ = canonical_layer()
+            declaration_audit = audit_declarations(
+                families,
+                layer=layer,
+                releases=releases,
+                configured_ids=frozenset(source.info.id for source in configured_sources()),
+            )
+            drift_sources = declaration_audit.drift_sources
         preflight_notes = publication_preflight(
-            pins, contracts, curriculum_rows, waivers, served_pins=served, selection=selection
+            pins,
+            contracts,
+            curriculum_rows,
+            waivers,
+            served_pins=served,
+            selection=selection,
+            drift_sources=drift_sources,
         )
         for note in preflight_notes:
             LOGGER.info("%s", note)
