@@ -70,7 +70,7 @@ KL = "policy/mismatch/staleness0/kl_k3"
 def rescore(preset, *args):
     result = CliRunner().invoke(gate.command(snowball_model.SNOWBALL), ["--preset", preset, *args])
     assert result.exception is None or isinstance(result.exception, SystemExit), (result.output, result.exception)
-    payload = json.loads(result.output.splitlines()[-1])
+    payload = json.loads(result.stdout.splitlines()[-1])
     assert result.exit_code == EXIT_CODES[payload["verdict"]], (
         result.output,
         result.exception,
