@@ -254,6 +254,8 @@ class SnowballConfig(HFCompatConfig):
             raise ValueError("snowball requires an always-on shared expert (shared_expert_intermediate_dim > 0)")
         if self.fp32_activations and self.moe_implementation == "sonic_cute":
             raise ValueError("fp32_activations cannot use moe_implementation='sonic_cute': its kernel fuses BF16 SiLU")
+        if self.router_combine_fp32 and self.moe_implementation in ("sonic", "sonic_cute"):
+            raise ValueError(f"router_combine_fp32 cannot use moe_implementation={self.moe_implementation!r}")
         if self.moe_implementation in _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS:
             raise ValueError(
                 f"snowball cannot use moe_implementation={self.moe_implementation!r}: it requires "

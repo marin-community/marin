@@ -32,9 +32,9 @@ def _moe_mlp_local(
     expert_chunks: int = 1,
     combine_in_fp32: bool = False,
 ) -> tuple[Float[Array, "T H"], Int[Array, ""]]:
-    if combine_in_fp32 and (expert_chunks != 1 or implementation in ("sonic", "sonic_cute")):
-        raise ValueError(f"combine_in_fp32 requires the local scatter path, got implementation={implementation!r}")
     if implementation == "sonic_cute":
+        if combine_in_fp32:
+            raise ValueError("combine_in_fp32 is unsupported by sonic_cute")
         if activation_fn is not jax.nn.silu:
             raise ValueError("sonic_cute requires SiLU because its QuACK kernel fuses SwiGLU")
         # QuACK and CUTLASS DSL are installed only with the CUDA 13 GPU extra.
@@ -70,18 +70,6 @@ def _moe_mlp_local(
     if expert_chunks != 1:
         raise ValueError(f"expert_chunks requires implementation='sonic_cute', got {implementation!r}")
     local_key = implementation if implementation in _LOCAL_MOE_IMPLEMENTATIONS else "scatter"
-    if combine_in_fp32:
-        return _moe_mlp_local_scatter(
-            x,
-            selected_experts,
-            combine_weights,
-            token_valid,
-            moe_w13,
-            moe_w2,
-            activation_fn=activation_fn,
-            num_experts=num_experts,
-            combine_in_fp32=True,
-        )
     return _MOE_LOCAL_FNS[local_key](
         x,
         selected_experts,
@@ -91,4 +79,5 @@ def _moe_mlp_local(
         moe_w2,
         activation_fn=activation_fn,
         num_experts=num_experts,
+        combine_in_fp32=combine_in_fp32,
     )
