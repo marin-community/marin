@@ -6,7 +6,7 @@ from collections.abc import Callable
 from functools import partial
 from itertools import product
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from fsspec import get_filesystem_class, register_implementation
 from fsspec.implementations.memory import MemoryFileSystem
@@ -29,6 +29,8 @@ VERSION = "2026.10.24"
 
 class _MemoryObjectStore(MemoryFileSystem):
     protocol = "s3"
+    store: ClassVar[dict[str, Any]] = {}
+    pseudo_dirs: ClassVar[list[str]] = [""]
 
     @classmethod
     def _strip_protocol(cls, path):
