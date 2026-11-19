@@ -121,7 +121,7 @@ def score_doc(task: tuple[str, str, dict, dict]) -> dict:
 def list_cells(cells_root: str) -> list[str]:
     cells = []
     for split in ("heldout", "train"):
-        listing = sorted(str(p) for p in StoragePath(prefix_join(cells_root, split)).iterdir())
+        listing = sorted(str(p) for p in StoragePath(prefix_join(cells_root, split)).ls())
         cells.extend(p for p in listing if p.endswith(".jsonl.gz"))
     return cells
 
