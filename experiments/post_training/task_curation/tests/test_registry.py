@@ -111,6 +111,100 @@ def test_archive_updates_references_only_after_every_document_verifies(tmp_path,
     assert {name: (staged / name).read_bytes() for name in originals} == originals
 
 
+def _archive_fixture(tmp_path, monkeypatch, *, remote):
+    """Stage an archive run against a fixture registry with the given parent-revision shards."""
+    staged = tmp_path / "staged"
+    checkout = tmp_path / "checkout"
+    cached = tmp_path / "cache"
+    for directory in (staged, checkout, cached):
+        directory.mkdir()
+
+    class Archive:
+        def repo_info(self, **kwargs):
+            return SimpleNamespace(private=True)
+
+        def create_commit(self, *, operations, **kwargs):
+            for operation in operations:
+                remote[operation.path_in_repo] = operation.path_or_fileobj
+            return SimpleNamespace(oid="b" * 40)
+
+    def download(*, repo_id, repo_type, revision, filename):
+        path = cached / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(remote[filename])
+        return str(path)
+
+    monkeypatch.setattr(registry, "HfApi", Archive)
+    monkeypatch.setattr(registry, "hf_hub_download", download)
+    return staged, checkout
+
+
+def test_archive_refuses_duplicate_identities_across_staged_shards(tmp_path, monkeypatch):
+    staged, checkout = _archive_fixture(
+        tmp_path, monkeypatch, remote={"receipts/part-000.json": b'{"kept": {"source_id": "kept"}}\n'}
+    )
+    for name, payload in (
+        ("receipts/part-000.json", b'{"kept": {"source_id": "one"}}\n'),
+        ("receipts/part-001.json", b'{"kept": {"source_id": "one"}}\n'),
+    ):
+        (staged / name).parent.mkdir(parents=True, exist_ok=True)
+        (staged / name).write_bytes(payload)
+    with pytest.raises(ValueError, match="duplicate identities across staged shards"):
+        registry.archive_registry_documents(
+            staged,
+            checkout,
+            repo="fixture/registry",
+            parent_revision="a" * 40,
+            commit_message="Record measurements",
+        )
+
+
+def test_archive_refuses_a_consolidation_above_the_lowest_part(tmp_path, monkeypatch):
+    staged, checkout = _archive_fixture(
+        tmp_path,
+        monkeypatch,
+        remote={
+            "receipts/part-000.json": b'{"kept-a": {"source_id": "a"}}\n',
+            "receipts/part-001.json": b'{"kept-b": {"source_id": "b"}}\n',
+        },
+    )
+    union = staged / "receipts/part-022.json"
+    union.parent.mkdir(parents=True, exist_ok=True)
+    union.write_bytes(b'{"kept-a": {"source_id": "a"}, "kept-b": {"source_id": "b"}}\n')
+    for name in ("receipts/part-000.json", "receipts/part-001.json"):
+        (checkout / name).parent.mkdir(parents=True, exist_ok=True)
+        (checkout / name).write_text("existing reference")
+    with pytest.raises(ValueError, match="consolidation lands its union at the lowest part number"):
+        registry.archive_registry_documents(
+            staged,
+            checkout,
+            repo="fixture/registry",
+            parent_revision="a" * 40,
+            commit_message="Record measurements",
+        )
+
+
+def test_archive_accepts_a_consolidation_at_the_lowest_part(tmp_path, monkeypatch):
+    remote = {
+        "receipts/part-000.json": b'{"kept-a": {"source_id": "a"}}\n',
+        "receipts/part-001.json": b'{"kept-b": {"source_id": "b"}}\n',
+    }
+    staged, checkout = _archive_fixture(tmp_path, monkeypatch, remote=remote)
+    union = staged / "receipts/part-000.json"
+    union.parent.mkdir(parents=True, exist_ok=True)
+    union.write_bytes(b'{"kept-a": {"source_id": "a"}, "kept-b": {"source_id": "b"}}\n')
+    (checkout / "receipts/part-001.json").parent.mkdir(parents=True, exist_ok=True)
+    (checkout / "receipts/part-001.json").write_text("existing reference")
+    registry.archive_registry_documents(
+        staged, checkout, repo="fixture/registry", parent_revision="a" * 40, commit_message="Record measurements"
+    )
+    assert registry.read_registry_json(checkout / "receipts/part-000.json") == {
+        "kept-a": {"source_id": "a"},
+        "kept-b": {"source_id": "b"},
+    }
+    assert registry.read_registry_json(checkout / "receipts/part-001.json") == {}
+
+
 def test_census_staging_preserves_an_existing_reference_directory(tmp_path, monkeypatch):
     censuses = tmp_path / "censuses.json"
     censuses.write_text("[]")

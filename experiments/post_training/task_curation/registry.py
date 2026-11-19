@@ -57,11 +57,27 @@ def _require_complete_shard_family(
     siblings' rows from the refreshed collection (the 2026-11-16 census incident).
     A sibling whose parent-revision rows are all present in the staged shards may
     still be blanked; a sibling holding rows the staged set lacks aborts the publish.
+
+    Two shard-layout rules keep the resulting family readable (the 2026-11-19
+    census-family repair incident): identities may not survive an append in two
+    staged shards at once, and a consolidation that blanks populated siblings must
+    land its union at the lowest staged part number so the family's rows lead its
+    part ordering instead of hiding behind blanked tails.
     """
-    staged_keys: set[str] = set()
-    for name, data in documents.items():
-        if Path(name).parent == directory:
-            staged_keys.update(json.loads(data))
+    staged_parts = sorted(name for name in documents if Path(name).parent == directory)
+    owners: dict[str, list[str]] = {}
+    for name in staged_parts:
+        for key in json.loads(documents[name]):
+            owners.setdefault(key, []).append(name)
+    duplicated = sorted(key for key, parts in owners.items() if len(parts) > 1)
+    if duplicated:
+        raise ValueError(
+            f"Publishing {directory.as_posix()}/ would carry duplicate identities across staged shards: "
+            f"{duplicated[0]} appears in {', '.join(sorted(owners[duplicated[0]]))}; "
+            "consolidate the union into one shard"
+        )
+    staged_keys: set[str] = set(owners)
+    blanked_rows = 0
     for previous in sorted((references_root / directory).glob("part-*.json")):
         name = previous.relative_to(references_root).as_posix()
         if name in documents:
@@ -85,7 +101,24 @@ def _require_complete_shard_family(
                 f" {name} ({', '.join(dropped[:4])}{'…' if len(dropped) > 4 else ''});"
                 " stage the complete shard family or consolidate its rows into the staged shards"
             )
+        blanked_rows += len(parent_content)
         documents.setdefault(name, b"{}\n")
+    if blanked_rows:
+
+        def part_number(name: str) -> int:
+            return int(Path(name).stem.split("-")[1])
+
+        staged_numbers = [part_number(name) for name in staged_parts]
+        family_numbers = staged_numbers + [
+            part_number(previous.relative_to(references_root).as_posix())
+            for previous in (references_root / directory).glob("part-*.json")
+        ]
+        if min(staged_numbers) != min(family_numbers):
+            raise ValueError(
+                f"Publishing {directory.as_posix()}/ consolidates {blanked_rows} blanked sibling rows into "
+                f"{staged_parts[0]} while the family also holds the lower part {min(family_numbers):03d}; "
+                "a consolidation lands its union at the lowest part number"
+            )
 
 
 def archive_registry_documents(
