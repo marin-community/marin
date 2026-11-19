@@ -13,6 +13,8 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import ProgrammingError
 
+_RETAINED_FIELDS = ("issue", "gate", "gate_result", "model", "evaldash_run_ids")
+
 
 def migrate(connection: Connection) -> None:
     connection.execute(
@@ -58,13 +60,17 @@ def create_api(services):
                             'gate', COALESCE(NULLIF(EXCLUDED.record -> 'gate', 'null'::jsonb),
                                              rl_runs.record -> 'gate', 'null'::jsonb),
                             'gate_result', COALESCE(NULLIF(EXCLUDED.record -> 'gate_result', 'null'::jsonb),
-                                                    rl_runs.record -> 'gate_result', 'null'::jsonb))
+                                                    rl_runs.record -> 'gate_result', 'null'::jsonb),
+                            'model', COALESCE(NULLIF(EXCLUDED.record -> 'model', 'null'::jsonb),
+                                              rl_runs.record -> 'model', 'null'::jsonb),
+                            'evaldash_run_ids', COALESCE(NULLIF(EXCLUDED.record -> 'evaldash_run_ids', 'null'::jsonb),
+                                                        rl_runs.record -> 'evaldash_run_ids', 'null'::jsonb))
                         RETURNING record"""
                     ),
                     {"run_id": summary.run_id, "attempt_id": summary.attempt_id, "record": summary.model_dump_json()},
                 ).scalar_one()
                 repaired = dict(stored)
-                for field in ("issue", "gate", "gate_result"):
+                for field in _RETAINED_FIELDS:
                     if incoming[field] is None:
                         try:
                             json.dumps(repaired[field], allow_nan=False)
@@ -74,7 +80,7 @@ def create_api(services):
                     summary = RunSummary.model_validate_json(json.dumps(repaired, allow_nan=False), strict=True)
                 except ValidationError as error:
                     invalid = {item["loc"][0] for item in error.errors() if item["loc"]}
-                    for field in ("issue", "gate", "gate_result"):
+                    for field in _RETAINED_FIELDS:
                         if field in invalid and incoming[field] is None:
                             repaired[field] = None
                     summary = RunSummary.model_validate_json(json.dumps(repaired, allow_nan=False), strict=True)

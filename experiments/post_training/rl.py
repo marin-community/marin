@@ -21,8 +21,8 @@ from pathlib import Path
 
 import click
 import yaml
-from finestore.rl.rl_progress import Verdict
-from finestore.rl.run_records import AttemptRecord
+from finestore.rl.rl_progress import RunIssue, Verdict
+from finestore.rl.run_records import AttemptRecord, write_attempt
 from iris.cli.connect import open_iris_client
 from iris.client.client import IrisClient, get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
@@ -95,11 +95,17 @@ def _provenance(*, control: bool) -> Provenance:
     return provenance
 
 
-def _run_rl(config: SkyRLRunConfig, *, inputs: GateInputs, forward_env: tuple[str, ...] = ()) -> SkyRLRun:
+def _run_rl(
+    config: SkyRLRunConfig, *, inputs: GateInputs, issue: RunIssue | None, forward_env: tuple[str, ...] = ()
+) -> SkyRLRun:
     path = StoragePath(config.output.resolved_config_uri).parent / GATE_INPUTS_FILENAME
     if not path.exists():
         path.parent.mkdirs()
         path.write_text(inputs.model_dump_json(indent=2) + "\n")
+    if issue is not None:
+        write_attempt(
+            config.output.export_root, AttemptRecord(run_id=config.run_id, attempt_id=config.attempt_id, issue=issue)
+        )
     return run_skyrl(config, forward_env=forward_env)
 
 
@@ -128,6 +134,7 @@ def build_run(
     replicates: int = 1,
     control: bool = False,
     requirements: tuple[str, ...] = (),
+    issue: RunIssue | None = None,
     forward_env: tuple[str, ...] = (),
 ) -> RLRun:
     """Construct an RL experiment: one run step per replicate and, for a gated preset, its gate step."""
@@ -166,7 +173,7 @@ def build_run(
         if not any(row["uri"] == expected and row["version"] == task_set.version for row in excluded):
             raise click.BadParameter("candidate tasks must record the full EvalLite in recipe.exclusions")
     initializer = recipe.stored_initializer(init, preset=preset) if init is not None else None
-    spec = recipe.run_spec(preset, name="rl-config", tasks=tasks, init=init, settings=settings)
+    spec = recipe.run_spec(preset, name="rl-config", tasks=tasks, init=init, settings=settings, model_name=table.model)
     evaluation_inputs = [
         (evaluation.name, source.name, source.version)
         for evaluation in preset.evaluations
@@ -193,7 +200,7 @@ def build_run(
     for replicate in range(replicates):
         name = _run_name(preset, provenance, inputs_hash, replicate, table=table, control=control)
         run = recipe.run_step(preset, replace(spec, name=name), wandb_entity=wandb_entity, forward_env=forward_env)
-        runs.append(replace(run, run=partial(_run_rl, inputs=inputs, forward_env=forward_env)))
+        runs.append(replace(run, run=partial(_run_rl, inputs=inputs, issue=issue, forward_env=forward_env)))
     gate = (
         rl_gate.gate_step(
             preset,
@@ -237,7 +244,7 @@ def _status(
     preset: presets.Preset,
     *,
     stored_only: bool = False,
-    issue: int | None = None,
+    issue: RunIssue | None = None,
     publication_urls: dict[str, str] | None = None,
 ) -> dict:
     rows = []
@@ -308,7 +315,7 @@ def _status(
                     "disk": execution.disk,
                 },
                 "output": path,
-                "issue": issue,
+                "issue": receipt.issue if receipt is not None else issue,
                 "rl_progress_url": (publication_urls or {}).get(path),
             }
         )
@@ -377,16 +384,14 @@ def _iris_client() -> Iterator[IrisClient]:
 
 
 def _publish_records(
-    run: RLRun, preset: presets.Preset, *, table: presets.ModelPresets, issue: int | None, service_url: str | None
+    run: RLRun, preset: presets.Preset, *, table: presets.ModelPresets, service_url: str | None
 ) -> rl_publication.PublicationOutcome | None:
     if not preset.publishes:
         return None
     prefix = recipe.artifact_prefix(preset.recipe.layout.cluster)
     gate_path = run.gate.path(prefix) if run.gate is not None else None
     outputs = [training.path(prefix) for training in run.runs]
-    return rl_publication.publish_runs(
-        outputs, preset, table=table, gate_path=gate_path, issue=issue, service_url=service_url
-    )
+    return rl_publication.publish_runs(outputs, preset, table=table, gate_path=gate_path, service_url=service_url)
 
 
 def _wait_for_run(
@@ -395,7 +400,6 @@ def _wait_for_run(
     preset: presets.Preset,
     *,
     table: presets.ModelPresets,
-    issue: int | None,
     service_url: str | None,
 ) -> None:
     with _iris_client() as client:
@@ -410,7 +414,7 @@ def _wait_for_run(
     run = _from_handles(handles)
     run = replace(run, gate=rl_gate.completed_gate(run.gate))
     try:
-        publication = _publish_records(run, preset, table=table, issue=issue, service_url=service_url)
+        publication = _publish_records(run, preset, table=table, service_url=service_url)
     except Exception as error:
         publication = rl_publication.PublicationOutcome(
             errors=[str(error)], retry="Repeat the original command with --wait."
@@ -418,7 +422,6 @@ def _wait_for_run(
     snapshot = _status(
         run,
         preset,
-        issue=issue,
         stored_only=True,
         publication_urls=publication.urls if publication is not None else None,
     )
@@ -482,7 +485,7 @@ def _run_command(
             _run_graph(handles, max_concurrent)
             job = None
         if options["wait"] and job is not None:
-            _wait_for_run(job, handles, preset, table=table, issue=options["issue"], service_url=options["url"])
+            _wait_for_run(job, handles, preset, table=table, service_url=options["url"])
 
     return click.command(
         cls=RLCommand, help=__doc__ + "\n\n" + "\n".join(f"{preset.name}: {preset.budget}" for preset in table.presets)
@@ -498,7 +501,9 @@ def command(
     forward_env: tuple[str, ...] = (),
 ) -> click.Command:
     @partial(_run_command, table, argv, entry_module)
-    @click.option("--issue", type=click.IntRange(min=1), help="GitHub experiment issue for launcher publication.")
+    @click.option("--issue", type=click.IntRange(min=1), help="GitHub experiment issue for this launch.")
+    @click.option("--no-issue", is_flag=True, help="Record an explicit opt-out of the experiment issue.")
+    @click.option("--plan", is_flag=True, help="Print the plan without submission (the default).")
     @click.option("--url", help="Marina origin for run publication (defaults to the Marina service).")
     @click.option(
         "--wait",
@@ -574,7 +579,17 @@ def command(
         control: bool,
         requirements: tuple[str, ...],
         issue: int | None,
+        no_issue: bool,
+        plan: bool,
     ) -> tuple[ArtifactStep, ...]:
+        do_run = click.get_current_context().params["do_run"]
+        if plan and do_run:
+            raise click.UsageError("Choose either --plan or --run")
+        if issue is not None and no_issue:
+            raise click.UsageError("Choose either --issue or --no-issue")
+        if do_run and issue is None and not no_issue:
+            raise click.UsageError("--run requires --issue N or --no-issue")
+        recorded_issue: RunIssue | None = "opted_out" if no_issue else issue
         preset = table.by_name[preset_name]
         if init is not None and init_name is not None:
             raise click.UsageError("Python init and --init cannot be used together")
@@ -591,8 +606,8 @@ def command(
             replicates=replicates,
             control=control,
             requirements=requirements,
+            issue=recorded_issue,
         )
-        do_run = click.get_current_context().params.get("do_run", False)
         if do_run and get_job_info() is None:
             assert run.inputs is not None
             validated = rl_gate.validate_candidate(
@@ -602,7 +617,9 @@ def command(
                 table=table,
             )
             click.get_current_context().meta["rl_training_type"] = validated["runtime"]["training_type"]
-        snapshot = _status(replace(run, gate=rl_gate.completed_gate(run.gate)), preset, stored_only=do_run, issue=issue)
+        snapshot = _status(
+            replace(run, gate=rl_gate.completed_gate(run.gate)), preset, stored_only=do_run, issue=recorded_issue
+        )
         _print_status(snapshot)
         if not do_run and _evaluation_failed(snapshot, preset):
             raise click.exceptions.Exit(EXIT_CODES[Verdict.FAIL])

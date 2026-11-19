@@ -528,6 +528,7 @@ _PRESETS = (
 )
 
 SNOWBALL = ModelPresets(
+    model="snowball",
     presets=_PRESETS,
     namespace="snowball-rl",
     controls={

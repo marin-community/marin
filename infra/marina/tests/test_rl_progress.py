@@ -36,12 +36,12 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     }
     publish(failed)
     changed = copy.deepcopy(record)
-    changed.update(issue=456, label="corrected label")
+    changed.update(issue=456, label="corrected label", model="snowball", evaldash_run_ids=["eval-start", "eval-finish"])
     changed["gate_result"]["comparisons"][0]["run"] = 0.9
     assert publish(changed) == changed
     for omit_issue in (False, True):
         missing_issue = copy.deepcopy(changed)
-        for field in ("issue", "gate", "gate_result"):
+        for field in ("issue", "gate", "gate_result", "model", "evaldash_run_ids"):
             if omit_issue:
                 missing_issue.pop(field)
             else:
@@ -57,7 +57,16 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
         "optimizer_steps": None,
         "evidence": ["Checkpoint lineage timing is unknown: a native time window is missing."],
     }
-    publish(unknown)
+    legacy = {key: value for key, value in unknown.items() if key not in {"model", "evaldash_run_ids", "issue"}}
+    request(
+        "http://localhost",
+        "POST",
+        query_path,
+        json_body={
+            "sql": insert_sql,
+            "parameters": {"run_id": legacy["run_id"], "attempt_id": "unknown", "record": json.dumps(legacy)},
+        },
+    )
     for run_id, invalid in (
         ("test/legacy", record | {"run_id": "test/legacy", "attempt_id": "bad", "evaluation": None}),
         ("test/wrong-sql-key", record | {"attempt_id": "bad"}),
@@ -108,7 +117,7 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     rows = {row["attempt_id"]: row for row in payload["runs"]}
     assert rows["native-first"] == changed
     assert rows["native-second"] == failed
-    assert rows["unknown"] == unknown
+    assert rows["unknown"] == legacy
     assert len(rows) == 3
     skipped = {row["run_id"]: row["error"] for row in payload["skipped_records"]}
     assert "gate_result.comparisons" in skipped["test/bad-result"]

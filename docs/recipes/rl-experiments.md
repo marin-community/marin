@@ -39,8 +39,9 @@ against control r0 even during planning. Gated execution and re-scoring require 
 the preset; a mismatch returns exit 4 before submission or INVALID during gate execution. Controls are collected
 after merge; `--control` and `train-long` need no pin.
 
-Without `--run`, the command prints the graph and saved status. Add `--run` to submit an Iris
-coordinator, or `--run --wait` to poll every 60 seconds and print the final report.
+The default command and `--plan` print the graph and saved status. Add `--run` to submit an Iris
+coordinator, or `--run --wait` to poll every 60 seconds and print the final report. Submission
+requires `--issue ISSUE_NUMBER` or `--no-issue` and records that choice on the native attempt.
 Repeating the same command reuses completed artifacts. Track or stage source files under
 `experiments/`, `lib/` and `vendor/`: their working-tree hash forms part of the run name.
 `--version dev` satisfies the standard launcher interface; each preset's steps use its `revision`.
@@ -68,15 +69,17 @@ uv run python -m experiments.post_training.snowball_rl publish --preset train-lo
 ```
 
 Without `--output` and `--attempt`, that command publishes the selected preset's pinned controls.
-Both selectors are required together. Historical attempts retain their own native identity and
-window. Unattributed historical JSONL dumps do not supply per-attempt evaluation summaries.
+Both selectors are required together. Pass `--evaldash-run-id RUN_ID` once per evaluation definition
+using the IDs returned in `EvaluationResult.run_ids`. Republishing with these options sets the linked
+EvalDash runs for the selected attempt. Publishing without them preserves saved links.
+Historical attempts retain their own native identity and window. Unattributed historical JSONL dumps do not supply per-attempt evaluation summaries.
 The dashboard's detail view shows each evaluation step's counts and strata means, including
 family, AAII category and difficulty, and links to the run's Grafana window.
 
 
 After `--run --wait` observes the coordinator finish, the launcher publishes learning-medium,
-data-medium and train-long attempts using the caller's Marina login. Pass `--issue ISSUE_NUMBER`
-and record the finishing status's `rl_progress_url` with the verdict.
+data-medium and train-long attempts using the caller's Marina login. The row shows the model and
+the launch's issue link or explicit opt-out. Record the finishing status's `rl_progress_url` with the verdict.
 Use `--url ORIGIN` to publish to a local Marina stack; the default is the Marina service.
 
 Repeat the original command with `--wait` from the same source and inputs. The executor reuses

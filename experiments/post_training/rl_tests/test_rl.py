@@ -20,7 +20,7 @@ import pyarrow.parquet as pq
 import pytest
 import yaml
 from click.testing import CliRunner
-from finestore.rl.run_records import read_evaluations
+from finestore.rl.run_records import AttemptRecord, read_attempt, read_evaluations, write_attempt
 from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.client.job_info import JobInfo, set_job_info
 from iris.cluster.types import JobName
@@ -64,7 +64,7 @@ def printed_status(output):
 def test_all_presets_plan_with_their_declared_controls(selection):
     table = snowball_model.SNOWBALL
     for preset in table.presets:
-        arguments = ["--preset", preset.name, "--version", preset.revision]
+        arguments = ["--preset", preset.name, "--version", preset.revision, "--plan"]
         if preset.tasks_input == "required":
             arguments += ["--tasks", SELECTION_IDENTITY]
         result = CliRunner().invoke(snowball.command(table, argv=tuple(arguments)), arguments)
@@ -77,6 +77,7 @@ def test_all_presets_plan_with_their_declared_controls(selection):
     unpinned = replace(table, controls={})
     result = CliRunner().invoke(snowball.command(unpinned, argv=tuple(arguments)), arguments)
     assert result.exit_code == 4 and "no control pin" in result.output, (result.output, result.exception)
+    assert "--issue ISSUE_NUMBER --run" in result.output
 
 
 def test_preset_variants_compose(selection, tmp_path, monkeypatch):
@@ -272,13 +273,13 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
 
 def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatch):
     revisions = {
-        "speed-short": {"2026.11.13.1": "96e0d088", "2026.11.17.1": "363225a9", "2026.11.19.1": "d54e1bae"},
-        "data-short": {"2026.11.13.1": "7d9a590f", "2026.11.17.1": "772467a8", "2026.11.19.1": "f6d53410"},
-        "speed-medium": {"2026.11.12.1": "e75349ff", "2026.11.17.1": "5cd852f4", "2026.11.19.1": "180849ef"},
-        "learning-medium": {"2026.11.12.1": "ba638a12", "2026.11.17.1": "2be6e5e2", "2026.11.19.1": "549c5f28"},
-        "data-medium": {"2026.11.12.1": "ba638a12", "2026.11.17.1": "2be6e5e2", "2026.11.19.1": "549c5f28"},
-        "speed-long": {"2026.11.11.1": "cd0a5f4e", "2026.11.17.1": "f29155cc", "2026.11.19.1": "e69093f8"},
-        "train-long": {"2026.11.11.1": "4945b701", "2026.11.17.1": "b411c765", "2026.11.19.1": "b079be4a"},
+        "speed-short": {"2026.11.13.1": "96e0d088", "2026.11.17.1": "363225a9", "2026.11.19.1": "f1b46599"},
+        "data-short": {"2026.11.13.1": "7d9a590f", "2026.11.17.1": "772467a8", "2026.11.19.1": "62b1ee29"},
+        "speed-medium": {"2026.11.12.1": "e75349ff", "2026.11.17.1": "5cd852f4", "2026.11.19.1": "ce637da7"},
+        "learning-medium": {"2026.11.12.1": "ba638a12", "2026.11.17.1": "2be6e5e2", "2026.11.19.1": "2f2ba696"},
+        "data-medium": {"2026.11.12.1": "ba638a12", "2026.11.17.1": "2be6e5e2", "2026.11.19.1": "2f2ba696"},
+        "speed-long": {"2026.11.11.1": "cd0a5f4e", "2026.11.17.1": "f29155cc", "2026.11.19.1": "f414fb00"},
+        "train-long": {"2026.11.11.1": "4945b701", "2026.11.17.1": "b411c765", "2026.11.19.1": "f3f5af68"},
     }
     configs = assert_revisioned_native_configs(
         snowball_model.SNOWBALL, revisions, tmp_path=tmp_path, monkeypatch=monkeypatch
@@ -476,6 +477,8 @@ def test_grafana_url_selects_native_run_and_utc_window():
         ("compose-timeout", 4),
         ("unexpected", 3),
         ("missing-requirement", 4),
+        ("missing-issue", 4),
+        ("ambiguous-issue", 4),
     ],
 )
 def test_submission_exit_codes_and_publication_retries(
@@ -538,6 +541,9 @@ def test_submission_exit_codes_and_publication_retries(
         ]
     )
     source = sources[0] if sources else None
+    for index, root in enumerate(sources):
+        native = read_attempt(str(root / "exports"), f"native-{index}")
+        write_attempt(str(root / "exports"), AttemptRecord(run_id=native.run_id, attempt_id=native.attempt_id, issue=73))
     if case == "data-short":
         receipt = json.loads((source / "terminal.json").read_text())
         descriptor = receipt["config"]["inputs"]["validation_data"][0]
@@ -613,6 +619,10 @@ def test_submission_exit_codes_and_publication_retries(
             metrics = read_skyrl_metrics(str(source), attempt_id="native-0")
             receipt["config"]["run"]["attempt_id"] = "native-retry"
             write_receipt(source, receipt)
+            write_attempt(
+                str(source / "exports"),
+                AttemptRecord(run_id=receipt["config"]["run"]["id"], attempt_id="native-retry", issue=74),
+            )
             copy_evaluations(source, "native-0", "native-retry")
             for row in metrics.values():
                 row["attempt_id"] = "native-retry"
@@ -637,7 +647,11 @@ def test_submission_exit_codes_and_publication_retries(
     job = JobName.from_wire("/test-user/dashboard-coordinator")
     client.submit.return_value.job_id = job
     client.job.return_value.wait.side_effect = finish
-    if case.startswith(("malformed-", "stale-control")) or "candidate-compose" in case:
+    if case.startswith(("malformed-", "stale-control")) or case in {
+        "candidate-compose",
+        "missing-issue",
+        "ambiguous-issue",
+    }:
         client.submit.side_effect = AssertionError("invalid stored inputs reached the coordinator RPC")
     monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
     monkeypatch.setattr(snowball, "open_iris_client", lambda **kwargs: nullcontext(client))
@@ -660,7 +674,11 @@ def test_submission_exit_codes_and_publication_retries(
         monkeypatch.setattr(
             skyrl_api, "_run_launcher", lambda *args: pytest.fail("Cached coordinator run invoked native execution")
         )
-    arguments = ["--preset", preset.name, "--version", preset.revision, "--run", "--issue", "73"]
+    arguments = ["--preset", preset.name, "--version", preset.revision, "--run"]
+    if case != "missing-issue":
+        arguments.extend(["--issue", "73"])
+    if case == "ambiguous-issue":
+        arguments.append("--no-issue")
     if case != "unexpected":
         arguments.append("--wait")
     if "candidate-compose" in case:
@@ -750,6 +768,7 @@ def test_submission_exit_codes_and_publication_retries(
     unavailable["value"] = False
     phase["retry"] = True
     arguments[arguments.index("--issue") + 1] = "74"
+    previously_published = len(published)
     repeated = CliRunner().invoke(
         snowball.command(
             snowball_model.SNOWBALL, argv=tuple(arguments), entry_module="experiments.post_training.snowball_rl"
@@ -762,12 +781,15 @@ def test_submission_exit_codes_and_publication_retries(
     )
     recovered = printed_status(repeated.output)
     assert recovered["publication"]["unserved_records"] == [] and recovered["publication"]["errors"] == []
-    assert all(row["issue"] == 74 for row in recovered["runs"])
+    assert {row["attempt_id"]: row["issue"] for row in recovered["runs"]} == (
+        {"native-retry": 74, "native-1": 73} if case == "mixed-native-failed" else {attempt: 73 for _, attempt in paths}
+    )
     if case == "mixed-native-failed":
-        retry = next(row for row in published if row["attempt_id"] == "native-retry")
+        retry = next(row for row in published[previously_published:] if row["attempt_id"] == "native-retry")
         assert retry["status"] == "succeeded" and retry["gate_result"]["verdict"] == "pass" and (retry["issue"] == 74)
     else:
-        assert any(row["attempt_id"] == "native-0" and row["issue"] == 74 for row in published)
+        cached = next(row for row in published[previously_published:] if row["attempt_id"] == "native-0")
+        assert cached["issue"] == 73
 
 
 @pytest.mark.parametrize("fault", ["untracked", "dirty"])
@@ -869,13 +891,31 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
             "args=launch.create_parser().parse_args(sys.argv[1:])\n"
             "config=launch.load_launch_config(args.config)\n"
             "print(json.dumps({'forward_env':args.forward_env,'disk':config.iris.allocation.disk,"
-            "'tokenizer':config.inputs.model.tokenizer_uri}))\n",
+            "'tokenizer':config.inputs.model.tokenizer_uri,'model':config.run.model,"
+            "'attempt':config.run.attempt_id,'export':config.artifacts.export_root}))\n",
             command[command.index("marinskyrl") + 1 :],
         )
-        assert inspection == {"forward_env": ["HF_TEST_KEY"], "disk": "3TB", "tokenizer": "tests/python-tokenizer"}
+        assert (inspection["forward_env"], inspection["disk"], inspection["tokenizer"]) == (
+            ["HF_TEST_KEY"],
+            "3TB",
+            "tests/python-tokenizer",
+        )
+        launched = read_attempt(inspection["export"], inspection["attempt"])
+        assert launched is not None and launched.issue == "opted_out"
         native_calls.append(command)
         shutil.copytree(staged, source, dirs_exist_ok=True)
-        response = json.loads((source / "terminal.json").read_text())["result"]
+        stored = json.loads((source / "terminal.json").read_text())
+        stored["config"]["run"]["model"] = inspection["model"]
+        write_receipt(source, stored)
+        write_attempt(
+            inspection["export"],
+            AttemptRecord(
+                run_id=stored["config"]["run"]["id"],
+                attempt_id=stored["config"]["run"]["attempt_id"],
+                issue=launched.issue,
+            ),
+        )
+        response = stored["result"]
         response["model"] = dict(
             policy_export_uri=str(source / "policy"),
             global_step=12,
@@ -905,8 +945,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         preset.revision,
         "--run",
         "--wait",
-        "--issue",
-        "73",
+        "--no-issue",
         "--url",
         "http://127.0.0.1:55777",
         "--max-concurrent",
@@ -996,6 +1035,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         assert "http://127.0.0.1:55777/" in result.output and "test-initializer-credential" not in result.output
     assert len(native_calls) == 1
     assert published[-1].optimizer_steps == published[-1].planned_updates == 12
+    assert (published[-1].model, published[-1].issue) == ("snowball", "opted_out")
 
     for mode in (
         "initializer-mismatch",

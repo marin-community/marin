@@ -362,6 +362,7 @@ def run_spec(
     tasks: ArtifactStep | None = None,
     init: SkyRLModelSource | None = None,
     settings: tuple[str, ...] = (),
+    model_name: str | None = None,
 ) -> SkyRLSpec:
     """Build the complete default recipe with explicit candidate inputs and settings."""
     config = _training_config(preset, settings)
@@ -434,6 +435,7 @@ def run_spec(
         version=preset.revision,
         config_yaml=yaml.safe_dump(SkyRLRecipe.from_document(config.to_skyrl()).to_skyrl(), sort_keys=False),
         model=model,
+        model_name=model_name,
         train_data=workload.training_data(selection),
         validation_data=validation_data,
         evaluation_data=tuple(evaluation_data),
