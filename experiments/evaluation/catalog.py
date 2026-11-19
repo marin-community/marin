@@ -20,6 +20,7 @@ from experiments.evaluation.benchmarks import (
     math,
     mmlu,
     mmlu_redux,
+    multichallenge,
     multiple_choice,
     nupa,
     question_answering,
@@ -57,6 +58,7 @@ def evaluation_benchmarks() -> dict[str, EvaluationBenchmark]:
             reasoning,
             financebench,
             simpleqa,
+            multichallenge,
             long_context,
             nupa,
         )

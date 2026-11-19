@@ -9,6 +9,8 @@ import threading
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
@@ -23,6 +25,7 @@ from taskcompendium.submission import conversation_messages
 from verifyit.modes.grade_judge import JudgeConnection
 from zephyr.context import ZephyrContext
 
+from experiments.evaluation.benchmarks.multichallenge import sources as multichallenge_sources
 from experiments.evaluation.benchmarks.simpleqa import simpleqa_source, simpleqa_verified_source
 from experiments.evaluation.preparation import prepare_evaluation
 from experiments.post_training.task_curation.campaign import CampaignRuntime
@@ -196,3 +199,62 @@ def test_simpleqa_verified_publishes_bare_question_and_judges_only_the_final_ans
     assert state["requests"][-1]["messages"][-1]["content"] == SIMPLEQA_VERIFIED_GRADER_TEMPLATE.format(
         question="Who wrote it?", target="Ada", predicted_answer="It was Ada."
     )
+
+
+# JUDGE_PROMPT from github.com/ekwinox117/multi-challenge@5ccefcca6a39020d66c1383c4e6a809cb07afa33 src/evaluator.py.
+MULTICHALLENGE_REFERENCE_JUDGE_PROMPT = """You are tasked with evaluating a model response to see if it meets a specific criteria.
+The criteria will always be YES/NO evaluation.
+
+The model response is as follows:
+<MODEL_RESPONSE>
+{}
+</MODEL_RESPONSE>
+
+The criteria that the model response must meet is as follows. Be VERY STRICT!:
+<CRITERIA>
+{}
+</CRITERIA>
+
+Print your reasoning followed by your verdict, either "YES" or "NO"."""  # noqa: E501 - exact source prompt
+
+
+@pytest.mark.parametrize("verdict,reward", [("YES", 1), ("NO", 0)])
+def test_multichallenge_replays_history_and_passes_on_the_expected_verdict(
+    tmp_path, monkeypatch, judge_http, verdict, reward
+):
+    conversation = {"role": ["user", "assistant", "user"], "content": ["I am vegan.", "Noted!", "Suggest a dinner."]}
+
+    def write_rows(file):
+        row = {
+            "question_id": "q1",
+            "axis": "INFERENCE_MEMORY",
+            "conversation": conversation,
+            "target_question": "Is the dinner vegan?",
+            "pass_criteria": "YES",
+            "num_turns": 3,
+        }
+        pq.write_table(pa.Table.from_pylist([row]), file)
+
+    (source,) = multichallenge_sources()
+    (case,) = published_cases(source, write_rows, tmp_path, monkeypatch, 1)
+    assert conversation_messages(case.task.context.events) == [
+        {"role": role, "content": content}
+        for role, content in zip(conversation["role"], conversation["content"], strict=True)
+    ]
+    assert case.item.operation.response_selection == "final_only"
+    assert case.item.groups == {"axis": "INFERENCE_MEMORY"}
+    state, connection = judge_http
+    state["response"] = judge_response("MultiChallenge", reply=f"The dinner has no animal products.\n{verdict}")
+    connection = replace(connection, default_model="fixture-judge")
+    result = grade_remote_judge_answer(case.task, judged_attempt(case.task, "Lentil curry."), connection)
+    assert result.status is Outcome.GRADED
+    assert result.reward == reward
+    assert state["requests"][-1]["messages"] == [
+        {
+            "role": "user",
+            "content": (
+                MULTICHALLENGE_REFERENCE_JUDGE_PROMPT.format("Lentil curry.", "Is the dinner vegan?")
+                + " Write the verdict alone on the final line."
+            ),
+        }
+    ]
