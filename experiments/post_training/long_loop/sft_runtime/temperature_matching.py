@@ -31,6 +31,7 @@ from jaxtyping import Array, Float
 from levanter.data.mixture import MixtureDataset
 from levanter.grug.sharding import _axis_names, _current_mesh, _reshard_for_shard_map
 from levanter.sharding import partition_spec_of
+from levanter.utils.jax_utils import local_cpu_mesh
 
 
 @dataclass(frozen=True)
@@ -143,13 +144,16 @@ def source_names_for_mixture_indices(dataset: MixtureDataset, indices: Sequence[
     names: list[str] = []
     block_size = dataset.block_size
     dataset_index = dataset.dataset_index
-    for raw_index in indices:
-        rel_index = dataset._relative_index(int(raw_index))
-        block_id = rel_index // block_size
-        block = dataset._get_block(int(block_id))
-        packed_id = int(block[rel_index % block_size])
-        dataset_id = packed_id >> 16
-        names.append(dataset_index[dataset_id])
+    # MixtureDataset.__init__ places self.key under local_cpu_mesh() (Auto); match that mesh
+    # so cold-cache _get_block() calls work inside an active Explicit training mesh.
+    with local_cpu_mesh():
+        for raw_index in indices:
+            rel_index = dataset._relative_index(int(raw_index))
+            block_id = rel_index // block_size
+            block = dataset._get_block(int(block_id))
+            packed_id = int(block[rel_index % block_size])
+            dataset_id = packed_id >> 16
+            names.append(dataset_index[dataset_id])
     return names
 
 
