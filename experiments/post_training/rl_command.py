@@ -7,7 +7,9 @@ from urllib.parse import urlencode
 
 import click
 from finestore.rl.rl_progress import Verdict
+from finestore.rl.run_records import AttemptRecord
 from marin.rl.skyrl import SkyRLReceiptLookupError
+from marin.rl.skyrl_records import RecordedLaunch
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 from experiments.post_training.rl_recipe import utc_millis
@@ -37,6 +39,13 @@ def grafana_url(
         safe="$",
     )
     return f"{GRAFANA_URL}?{query}"
+
+
+def attempt_grafana_url(receipt: AttemptRecord, launch: RecordedLaunch) -> str | None:
+    result = receipt.native.result
+    if result.started_at:
+        return grafana_url(receipt.run_id, launch.cluster, launch.training_type, result.started_at, result.finished_at)
+    return None
 
 
 class RLCommand(click.Command):

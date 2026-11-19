@@ -419,11 +419,17 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
     ]
 
 
-def test_skyrl_changes_select_the_launch_census(tmp_path: Path) -> None:
+def test_skyrl_changes_select_native_launch_and_snowball_owners(tmp_path: Path) -> None:
     census = "tests/rl/test_rl_launch_documents.py"
-    write(tmp_path, census, "def test_launch(): pass\n")
-    for changed in ("vendor/skyrl/uv.lock", "lib/skyrlrecipe/src/skyrlrecipe/recipe.py"):
-        assert leg_paths(select_matrix([changed], tmp_path), "marin") == [census]
+    runner = "experiments/post_training/rl_tests/test_rl.py"
+    for path in (census, runner):
+        write(tmp_path, path, "def test_launch(): pass\n")
+    for changed in (
+        "vendor/skyrl/uv.lock",
+        "lib/skyrlrecipe/src/skyrlrecipe/recipe.py",
+        "vendor/skyrl/skyrl-train/skyrl_train/callbacks/builtin.py",
+    ):
+        assert sorted(leg_paths(select_matrix([changed], tmp_path), "marin")) == [runner, census]
 
 
 @pytest.mark.parametrize(

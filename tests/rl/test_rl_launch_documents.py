@@ -10,18 +10,12 @@ import pytest
 from marin.rl.skyrl import SkyRLSpec, skyrl_cpu_command
 from marin.rl.skyrl import _run_launcher as run_launcher_for_test
 
-from experiments.post_training import rl_recipe as snowball
-from experiments.post_training import snowball_rl as snowball_model
-from experiments.post_training.skyrl_test_support import with_current_control_revisions
 from tests.rl.launch_document_census import render_launch_census
 
 
 # A cold SkyRL environment sync and the full batch of compositions share this deadline.
 @pytest.mark.timeout(540)
 def test_rl_launch_documents_load_with_the_vendored_launcher(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(snowball, "SELECTION_ROOT", str(tmp_path / "selections"))
-    monkeypatch.setattr(snowball, "artifact_prefix", lambda cluster: str(tmp_path / "artifacts"))
-    monkeypatch.setattr(snowball_model, "SNOWBALL", with_current_control_revisions(snowball_model.SNOWBALL))
     producers = set()
     validate = SkyRLSpec.__post_init__
 
@@ -39,7 +33,9 @@ def test_rl_launch_documents_load_with_the_vendored_launcher(tmp_path: Path, mon
     authored = {
         str(path.relative_to(root)) for path in (root / "experiments").rglob("*.py") if "SkyRLSpec(" in path.read_text()
     }
-    assert authored <= producers, authored - producers
+    # The Snowball preset goldens and override test own the shared runner's documents.
+    separate_owners = {"experiments/post_training/rl_recipe.py"}
+    assert authored <= producers | separate_owners, authored - producers - separate_owners
     source = tmp_path / "source.json"
     source.write_text(json.dumps(documents))
     output = tmp_path / "loaded.json"

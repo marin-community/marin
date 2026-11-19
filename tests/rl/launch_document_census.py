@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import inspect
-import json
 from collections.abc import Callable
 from functools import partial
 from itertools import product
@@ -18,14 +17,10 @@ from marin.rl.skyrl import SkyRLRun
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training import iceball_micro, rl, rl_presets, skyrl_port_smoke, snowball_online_eagle
-from experiments.post_training import rl_recipe as recipe
-from experiments.post_training import snowball_rl as snowball_model
+from experiments.post_training import iceball_micro, skyrl_port_smoke, snowball_online_eagle
 from experiments.post_training.cat_count_canary import launcher as canary
 from experiments.post_training.curriculum_rl import launch as curriculum
 from experiments.post_training.mismatch_probe import launch as mismatch
-from experiments.post_training.skyrl_test_support import selection_summary
-from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, SUMMARY_FILENAME
 from experiments.post_training.task_sessions import validation
 
 VERSION = "2026.10.24"
@@ -46,31 +41,6 @@ class _MemoryObjectStore(MemoryFileSystem):
 
 def _curriculum_step(scale, policy, arm) -> ArtifactStep[SkyRLRun]:
     return curriculum.build_arms(specs=(arm,), scale=scale, policy=policy, version=VERSION)[arm.name].rl
-
-
-def _snowball_step(preset: rl_presets.Preset, settings: tuple[str, ...] = ()) -> ArtifactStep[SkyRLRun]:
-    selection = recipe.selection_artifact(preset.tasks)
-    summary = selection_summary(910)
-    sources = [(selection, summary)]
-    if preset.held_out_tasks is not None:
-        held_out = recipe.selection_artifact(preset.held_out_tasks)
-        summary["recipe"]["exclusions"] = [
-            {
-                "uri": str(StoragePath(held_out.path()) / FULL_VALIDATION_FILENAME),
-                "version": held_out.version,
-            }
-        ]
-        sources.append((held_out, selection_summary(20)))
-    for source, summary in sources:
-        path = StoragePath(source.path()) / SUMMARY_FILENAME
-        path.parent.mkdirs()
-        path.write_text(json.dumps(summary))
-    return rl.build_run(
-        preset,
-        tasks=selection if preset.tasks_input == "required" else None,
-        settings=settings,
-        table=snowball_model.SNOWBALL,
-    ).runs[0]
 
 
 def _iceball_step() -> ArtifactStep[SkyRLRun]:
@@ -106,14 +76,6 @@ def launch_builders(
         if (policy is curriculum.SNOWBALL_POLICY) != scale.startswith("snowball-"):
             continue
         builders[name] = partial(_curriculum_step, scale, policy, arm)
-    for label, preset in snowball_model.SNOWBALL.by_name.items():
-        builders[f"snowball/{label}"] = partial(_snowball_step, preset)
-    builders["snowball/settings/optimizer"] = partial(
-        _snowball_step, snowball_model.SNOWBALL.by_name["learning-medium"], ("trainer.policy.optimizer_config.lr=2e-6",)
-    )
-    builders["snowball/settings/context-budget"] = partial(
-        _snowball_step, snowball_model.SNOWBALL.by_name["train-long"], ("context_budget.request_window_tokens=32768",)
-    )
     canary_base = {"preset": "dry", "lane": "async", "model": canary.DEFAULT_MODEL, "checkpoint": False, "export": False}
     canary_axes = {
         "preset": canary.PRESETS,

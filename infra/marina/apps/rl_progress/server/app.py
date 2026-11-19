@@ -14,6 +14,17 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.exc import ProgrammingError
 
 _RETAINED_FIELDS = ("issue", "gate", "gate_result", "model", "evaldash_run_ids")
+_RETAINED_VALUES = ", ".join(
+    f"'{key}', COALESCE(NULLIF(EXCLUDED.record -> '{key}', 'null'::jsonb), rl_runs.record -> '{key}', 'null'::jsonb)"
+    for key in _RETAINED_FIELDS
+)
+_UPSERT = text(
+    f"""INSERT INTO rl_runs (run_id, attempt_id, record)
+    VALUES (:run_id, :attempt_id, CAST(:record AS jsonb))
+    ON CONFLICT (run_id, attempt_id) DO UPDATE
+      SET record = EXCLUDED.record || jsonb_build_object({_RETAINED_VALUES})
+    RETURNING record"""
+)
 
 
 def migrate(connection: Connection) -> None:
@@ -51,22 +62,7 @@ def create_api(services):
             with engine.begin() as connection:
                 incoming = summary.model_dump(mode="json")
                 stored = connection.execute(
-                    text(
-                        """INSERT INTO rl_runs (run_id, attempt_id, record)
-                        VALUES (:run_id, :attempt_id, CAST(:record AS jsonb))
-                        ON CONFLICT (run_id, attempt_id) DO UPDATE SET record = EXCLUDED.record || jsonb_build_object(
-                            'issue', COALESCE(NULLIF(EXCLUDED.record -> 'issue', 'null'::jsonb),
-                                              rl_runs.record -> 'issue', 'null'::jsonb),
-                            'gate', COALESCE(NULLIF(EXCLUDED.record -> 'gate', 'null'::jsonb),
-                                             rl_runs.record -> 'gate', 'null'::jsonb),
-                            'gate_result', COALESCE(NULLIF(EXCLUDED.record -> 'gate_result', 'null'::jsonb),
-                                                    rl_runs.record -> 'gate_result', 'null'::jsonb),
-                            'model', COALESCE(NULLIF(EXCLUDED.record -> 'model', 'null'::jsonb),
-                                              rl_runs.record -> 'model', 'null'::jsonb),
-                            'evaldash_run_ids', COALESCE(NULLIF(EXCLUDED.record -> 'evaldash_run_ids', 'null'::jsonb),
-                                                        rl_runs.record -> 'evaldash_run_ids', 'null'::jsonb))
-                        RETURNING record"""
-                    ),
+                    _UPSERT,
                     {"run_id": summary.run_id, "attempt_id": summary.attempt_id, "record": summary.model_dump_json()},
                 ).scalar_one()
                 repaired = dict(stored)
@@ -114,7 +110,10 @@ def create_api(services):
             ).mappings()
             for row in rows:
                 try:
-                    encoded = json.dumps(row["record"], allow_nan=False)
+                    record = row["record"]
+                    if isinstance(record, dict) and record.get("issue") == "opted_out":
+                        record = {**record, "issue": None}
+                    encoded = json.dumps(record, allow_nan=False)
                     summary = RunSummary.model_validate_json(encoded, strict=True)
                     if (summary.run_id, summary.attempt_id) != (row["run_id"], row["attempt_id"]):
                         raise ValueError("Stored key disagrees with the record identity")
@@ -129,7 +128,7 @@ def create_api(services):
                     )
                     skipped.append({"run_id": row["run_id"], "attempt_id": row["attempt_id"], "error": reason})
                     continue
-                records.append(row["record"])
+                records.append(record)
         return {"runs": records, "skipped_records": skipped}
 
     return api

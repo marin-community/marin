@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 import json
 import shutil
-from collections.abc import Iterator
+from collections import defaultdict
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -29,7 +31,14 @@ from finestore.rl.run_records import (
     update_attempt,
     write_evaluations,
 )
-from finestore.rl.strata import MembershipState, SelectionDefinition, SelectionTaskRow, TaskStrata, read_selection_strata
+from finestore.rl.strata import (
+    MembershipState,
+    SelectionDefinition,
+    SelectionStrata,
+    SelectionTaskRow,
+    TaskStrata,
+    read_selection_strata,
+)
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
 from iris.cluster.client.job_info import set_job_info
@@ -61,6 +70,41 @@ NATIVE_RECORD = json.loads(Path(__file__).with_name("native_record.json").read_t
 def write_json(path: Path, value) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value))
+
+
+def fake_s3_checkpoint(monkeypatch, uri: str, root: Path) -> None:
+    prefix = uri.removeprefix("s3://")
+
+    def local(path):
+        name = str(path).removeprefix("s3://")
+        if name == prefix or name.startswith(prefix + "/"):
+            return root / name.removeprefix(prefix).lstrip("/")
+        return None
+
+    def files(_self, path, **_kwargs):
+        pattern = local(path)
+        return (
+            []
+            if pattern is None
+            else [f"{prefix}/{entry.relative_to(root)}" for entry in root.glob(str(pattern.relative_to(root)))]
+        )
+
+    monkeypatch.setattr("s3fs.S3FileSystem.glob", files)
+    monkeypatch.setattr(
+        "s3fs.S3FileSystem.exists", lambda _, path, **kw: (path := local(path)) is not None and path.exists()
+    )
+    monkeypatch.setattr(
+        "s3fs.S3FileSystem.modified", lambda _, path: datetime.fromtimestamp(local(path).stat().st_mtime, UTC)
+    )
+
+
+def write_published_artifact(root: Path, name: str, version: str, kind: type, *, source: str, config=None) -> None:
+    write_json(
+        root / name / version / RECORD_FILENAME,
+        ArtifactRecord(
+            name=name, version=version, result_type=result_type_name(kind), config=config, source=source
+        ).model_dump(mode="json"),
+    )
 
 
 def write_receipt(root: Path, receipt: dict) -> None:
@@ -113,8 +157,8 @@ def _rewrite_records(root: Path, *, metrics: list[dict] | None = None, evaluatio
         tables = register_run_tables(store)
         for record in records.values():
             update_attempt(store, record)
-        tables.metrics.extend(metrics)
-        tables.evaluations.extend(evaluations)
+        tables[METRICS_TABLE].extend(metrics)
+        tables[EVALUATIONS_TABLE].extend(evaluations)
 
 
 def write_metrics(root: Path, metrics: dict[int, dict]) -> None:
@@ -133,7 +177,7 @@ def copy_evaluations(root: Path, old_attempt: str, new_attempt: str) -> None:
         )
     )
     with DataStore.open(run_records_root(export_root)) as store:
-        register_run_tables(store).evaluations.extend(dict(row, attempt_id=new_attempt) for row in rows)
+        register_run_tables(store)[EVALUATIONS_TABLE].extend(dict(row, attempt_id=new_attempt) for row in rows)
 
 
 @contextmanager
@@ -171,7 +215,7 @@ def preset_table(monkeypatch):
 
 def append_metrics(root: Path, metrics: dict[int, dict]) -> None:
     with DataStore.open(run_records_root(str(root / "exports"))) as store:
-        register_run_tables(store).metrics.extend(metric_rows(metrics))
+        register_run_tables(store)[METRICS_TABLE].extend(metric_rows(metrics))
 
 
 def selection(tmp_path, monkeypatch):
@@ -210,6 +254,57 @@ def answer(task, score, *, tokens=1, error=None, low=0, high=1, status="verified
     row.update(task_id=task, response_token_ids=[1] * tokens, exception_type=error)
     row["verification"].update(status=status, score=score, score_min=low, score_max=high)
     return row
+
+
+def evaluation_task_rows(
+    rows: Sequence[dict],
+    *,
+    attempt_id: str,
+    step: int,
+    evaluation: str,
+    panel: SelectionStrata | None,
+    normalized: Sequence[float | None] | None = None,
+) -> list[EvaluationTaskRow]:
+    by_task = defaultdict(list)
+    for ordinal, row in enumerate(rows):
+        verification = row.get("verification") or {}
+        raw, low, high = (verification.get(key) for key in ("score", "score_min", "score_max"))
+        score = normalized[ordinal] if normalized is not None else (raw - low) / (high - low)
+        by_task[row["task_id"]].append(
+            EvaluationAnswerRow(
+                ordinal=ordinal,
+                native_uid=str(ordinal),
+                optimization_reward=row.get("score", 0.0),
+                verifier_score=score,
+                raw_verifier_score=raw,
+                score_min=low,
+                score_max=high,
+                verification_status=verification.get("status"),
+                passed=score == 1,
+                outcome=Outcome.GRADED if score is not None else Outcome.UNAVAILABLE,
+                error_type=row.get("exception_type"),
+                error_treatment=row.get("error_treatment"),
+                response_token_count=len(row["response_token_ids"]),
+            )
+        )
+    return [
+        EvaluationTaskRow(
+            attempt_id=attempt_id,
+            step=step,
+            evaluation=evaluation,
+            task_id=item,
+            data_source="fixture",
+            panel_name=panel.definition.name if panel else None,
+            panel_version=panel.definition.version if panel else None,
+            strata=panel.identity(item).strata if panel else TaskStrata(),
+            task_digest=panel.tasks[item].task_digest if panel else None,
+            score=sum(answer.verifier_score or 0.0 for answer in answers) / len(answers),
+            outcome=Outcome.GRADED,
+            error_type=None,
+            answers=answers,
+        )
+        for item, answers in by_task.items()
+    ]
 
 
 def recorded_runs(selection, tmp_path, monkeypatch, request):
@@ -435,53 +530,14 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                     for i, item in enumerate(ids)
                     for sample in range(evaluation.answers)
                 ]
-                export = root / "exports" / evaluation.name if index else root / "exports"
-                session = "eval_only" if step == -1 else f"global_step_{step}_evals"
-                by_task = {}
-                for ordinal, row in enumerate(rows):
-                    row.update(attempt_id=attempt, step=step, is_last_step=True)
-                    by_task.setdefault(row["task_id"], []).append((ordinal, row))
-                path = export / "dumped_evals" / attempt / session / "task_set.jsonl"
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text("".join(json.dumps(row) + "\n" for row in rows))
-                panel = read_selection_strata(str(directory))
-                task_rows = []
-                for item in ids:
-                    answers = [
-                        EvaluationAnswerRow(
-                            ordinal=ordinal,
-                            native_uid=str(ordinal),
-                            optimization_reward=row.get("score", 0.0),
-                            verifier_score=(row["verification"]["score"] - row["verification"]["score_min"])
-                            / (row["verification"]["score_max"] - row["verification"]["score_min"]),
-                            raw_verifier_score=row["verification"]["score"],
-                            score_min=row["verification"]["score_min"],
-                            score_max=row["verification"]["score_max"],
-                            verification_status=row["verification"]["status"],
-                            passed=row["verification"]["score"] == row["verification"]["score_max"],
-                            outcome=Outcome.GRADED,
-                            error_type=row.get("exception_type"),
-                            error_treatment=row.get("error_treatment"),
-                        )
-                        for ordinal, row in by_task[item]
-                    ]
-                    task_rows.append(
-                        EvaluationTaskRow(
-                            attempt_id=attempt,
-                            step=step,
-                            evaluation=f"eval/{evaluation.name}/" if index else "eval/",
-                            panel_name=panel.definition.name if panel is not None else None,
-                            panel_version=panel.definition.version if panel is not None else None,
-                            task_id=item,
-                            data_source="fixture",
-                            strata=panel.identity(item).strata if panel is not None else TaskStrata(),
-                            task_digest=panel.tasks[item].task_digest if panel is not None else None,
-                            score=sum(answer.verifier_score or 0.0 for answer in answers) / len(answers),
-                            outcome=Outcome.GRADED,
-                            error_type=None,
-                            answers=answers,
-                        )
-                    )
+                evaluation_name = f"eval/{evaluation.name}/" if index else "eval/"
+                task_rows = evaluation_task_rows(
+                    rows,
+                    attempt_id=attempt,
+                    step=step,
+                    evaluation=evaluation_name,
+                    panel=read_selection_strata(str(directory)),
+                )
                 write_evaluations(str(root / "exports"), task_rows)
                 values = stored_metrics.setdefault(max(step, 0), {"step": max(step, 0)})
                 prefix = f"eval/{evaluation.name}/all/outcome/" if index else "eval/all/outcome/"

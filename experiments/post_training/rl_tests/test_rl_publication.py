@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import shutil
 from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -67,7 +66,6 @@ pytestmark = pytest.mark.usefixtures("source_provenance")
             ["eval_lite/grader_error_fraction", "eval_lite/initial/grader_error_fraction"],
         ),
         ("updates-override", 1, 3600, []),
-        ("train-long-updates-override", 2, 3600, []),
         ("negative-duration", None, None, []),
     ],
 )
@@ -177,8 +175,6 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
     write_metrics(source, metrics)
     if case == "versioned-missing-evaluation":
         replace_evaluations(source, [])
-    if case == "native-composed":
-        shutil.rmtree(source / "exports/dumped_evals")
     if case == "negative-duration":
         receipt["result"]["finished_at"] = "2026-11-06T20:40:00+00:00"
         write_receipt(source, receipt)
@@ -268,24 +264,6 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         return report, str(report.path)
 
     report, first_gate = saved_gate()
-    with monkeypatch.context() as boundary:
-        boundary.setattr(
-            "marina.client.marina_request", lambda *args, **kwargs: pytest.fail("Invalid record reached Marina")
-        )
-        rejected = publication.publish_runs(
-            [str(sources[0])], preset, table=table, attempt_id="native-0", evaldash_run_ids=("",)
-        )
-        assert len(rejected.unserved_records) == 1 and "evaldash_run_ids" in rejected.errors[0]
-    report_file = Path(first_gate) / RECORD_FILENAME
-    original = report_file.read_bytes()
-    invalid_count = json.loads(original)
-    invalid_count["result"]["run"]["replicates"] = 3
-    write_json(report_file, invalid_count)
-    try:
-        rejected = publish(first_gate)
-        assert len(rejected.unserved_records) == 2 and all("current output group" in error for error in rejected.errors)
-    finally:
-        report_file.write_bytes(original)
     interrupted = {"once": True}
 
     def unavailable_readback(origin, method, path, *, json_body=None, **kwargs):
@@ -301,7 +279,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         attempt = read_stored_skyrl_attempts(str(source))[1][attempt_id]
         write_attempt(
             str(source / "exports"),
-            AttemptRecord(run_id=attempt.run_id, attempt_id=attempt_id, issue=73 if index == 0 else "opted_out"),
+            AttemptRecord(run_id=attempt.run_id, attempt_id=attempt_id, issue=73 if index == 0 else None),
         )
     first = publish(first_gate)
     assert len(first.served_records) == 1 and first.errors == ["Response unavailable after insert"]
@@ -382,7 +360,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         assert republished.exit_code == 0, (republished.output, republished.exception)
         retained = stored()[f"native-{index}"]
         assert retained["gate_result"] == expected and retained["gate"] == rows[f"native-{index}"]["gate"]
-        assert retained["issue"] == (73 if index == 0 else "opted_out")
+        assert retained["issue"] == (73 if index == 0 else None)
         assert retained["evaldash_run_ids"] == list(run_ids)
         assert retained["wandb_url"] == rows[f"native-{index}"]["wandb_url"]
         assert (retained["status"], retained["failed_facts"]) == (

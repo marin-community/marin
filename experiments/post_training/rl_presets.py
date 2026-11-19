@@ -32,16 +32,10 @@ from skyrlrecipe.declared import (
     HFModelSaveCallback,
 )
 
-from experiments.post_training.task_curation.selection import (
-    TRAIN_FILENAME,
-)
+from experiments.post_training.task_curation.selection import TRAIN_FILENAME
 
 UPDATE_SECONDS_METRIC = "speed/update_seconds"
-
-
 GENERATE_WALL_SECONDS_METRIC = "generate/wall_seconds"
-
-
 MINIMUM_SCORED_FRACTION = 0.99
 
 
@@ -135,7 +129,7 @@ class Training:
             Invariant(name="finite_losses_and_gradients", value=finite, limit=True, comparator="==", holds=finite),
         )
 
-    def fixed_reply_holds(self, fixed: int, training: list[dict], answers: list) -> bool:
+    def fixed_reply_holds(self, fixed: int, training: list[dict], response_token_counts: set[int | None]) -> bool:
         return all(row.get("generate/min_num_tokens") == row.get("generate/max_num_tokens") == fixed for row in training)
 
     def evaluation_patch(self, answer_count: int) -> RecipePatch:
@@ -231,8 +225,8 @@ class Generation:
             Invariant(name="planned_updates", value=int(0 in metrics), limit=1, comparator="==", holds=0 in metrics),
         )
 
-    def fixed_reply_holds(self, fixed: int, training: list[dict], answers: list) -> bool:
-        return {len(row["response_token_ids"]) for _, _, row in answers} == {fixed}
+    def fixed_reply_holds(self, fixed: int, training: list[dict], response_token_counts: set[int | None]) -> bool:
+        return response_token_counts == {fixed}
 
     def evaluation_patch(self, answer_count: int) -> RecipePatch:
         return RecipePatch(trajectory_runner=sections.TrajectoryRunner(max_concurrent_tasks=answer_count))
@@ -277,21 +271,21 @@ class Metric:
     window: WindowStatistic = WindowStatistic.MEAN
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class Preset:
     name: str
     revision: str
     recipe: Recipe
     updates: int
     measured: range
-    tasks_input: Literal["forbidden", "required", "optional"]
-    accepts_settings: bool
-    accepts_init: bool
-    publishes: bool
-    controls: str | None
-    checkpoint_every: int | None
-    owned_keys: frozenset[str]
-    data_settings: frozenset[str]
+    tasks_input: Literal["forbidden", "required", "optional"] = "forbidden"
+    accepts_settings: bool = True
+    accepts_init: bool = False
+    publishes: bool = False
+    controls: str | None = None
+    checkpoint_every: int | None = None
+    owned_keys: frozenset[str] = frozenset()
+    data_settings: frozenset[str] = frozenset()
     tasks: str
     model: ArtifactHfModel
     evaluations: tuple[Evaluation, ...]
@@ -299,7 +293,7 @@ class Preset:
     sample_namespace: str
     wandb_entity: str
     retention: SkyRLRetentionPolicy
-    export_hf: bool
+    export_hf: bool = False
     held_out_tasks: str | None = None
     guards: tuple[Metric, ...] = ()
     objectives: tuple[Metric, ...] = ()

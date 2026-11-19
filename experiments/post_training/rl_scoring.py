@@ -12,7 +12,6 @@ from collections import Counter, defaultdict
 from collections.abc import Iterator, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from pathlib import PurePosixPath
 from typing import NamedTuple
 
 import click
@@ -21,7 +20,7 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from finestore.rl.rl_progress import Comparison, ComparisonRole, Invariant
 from finestore.rl.run_records import AttemptRecord, EvaluationAnswerRow, EvaluationTaskRow, read_evaluations
-from finestore.rl.strata import MembershipState, SelectionStrata, read_selection_strata
+from finestore.rl.strata import MembershipState, SelectionStrata
 from marin.rl.skyrl import read_skyrl_attempt
 from marin.rl.skyrl_records import (
     RecordedLaunch,
@@ -35,7 +34,6 @@ from pydantic import BaseModel
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.grading_result import Outcome
-from taskcompendium.identity import canonical_sha256
 
 from experiments.post_training import rl_presets as presets
 from experiments.post_training import rl_recipe as recipe
@@ -53,12 +51,20 @@ EVAL_SCORE_SCHEMA = pa.schema(
         *((column, pa.bool_() if column == SLICE_COLUMNS[-1] else pa.string()) for column in SLICE_COLUMNS),
         ("score", pa.float64()),
         ("scored", pa.bool_()),
+        ("response_token_count", pa.int32()),
     ]
 )
 
 
 class InvalidComparison(ValueError):
     """The recorded runs cannot support this calibrated comparison."""
+
+
+def read_recorded_launch(receipt: AttemptRecord) -> RecordedLaunch:
+    try:
+        return recorded_launch(receipt)
+    except ValueError as error:
+        raise InvalidComparison(str(error)) from None
 
 
 @dataclass(frozen=True)
@@ -77,7 +83,9 @@ def _scored_answer(answer: EvaluationAnswerRow) -> bool:
     return _verified_score(answer) and not answer.error_type and not answer.error_treatment
 
 
-def score_eval_lite_version(rows: Sequence[EvaluationTaskRow], panel: SelectionStrata) -> EvalLiteVersionScore:
+def score_eval_lite_version(
+    rows: Sequence[EvaluationTaskRow], panel: SelectionStrata, *, expected_answers: int | None = None
+) -> EvalLiteVersionScore:
     """Score one attempt, evaluation and step against an EvalLite version's active tasks.
 
     Every task needs a matching digest and verified answers. Each task contributes
@@ -94,7 +102,7 @@ def score_eval_lite_version(rows: Sequence[EvaluationTaskRow], panel: SelectionS
         if expected.state != MembershipState.ACTIVE:
             continue
         row = measured.get(task_id)
-        if row is None:
+        if row is None or (expected_answers is not None and len(row.answers) != expected_answers):
             missing.append(task_id)
         elif row.task_digest is None or row.task_digest != expected.task_digest:
             mismatches.append(task_id)
@@ -113,45 +121,15 @@ def score_eval_lite_version(rows: Sequence[EvaluationTaskRow], panel: SelectionS
     return EvalLiteVersionScore(score, len(scores), tuple(missing), tuple(mismatches))
 
 
-def paths(pattern: StoragePath) -> list[StoragePath]:
-    return sorted(pattern.glob(), key=str)
-
-
-class EvaluationAnswer(NamedTuple):
-    step: int
-    path: StoragePath
-    answer: dict
-
-
-def _evaluation_answers(dump_root: StoragePath) -> list[EvaluationAnswer]:
-    answers = []
-    for session in paths(dump_root / "*"):
-        name = PurePosixPath(str(session)).name
-        step = -1 if name == "eval_only" else int(name.removeprefix("global_step_").removesuffix("_evals"))
-        for path in paths(session / "*.jsonl"):
-            if PurePosixPath(str(path)).name != "aggregated_results.jsonl":
-                answers.extend(
-                    EvaluationAnswer(step, path, json.loads(line))
-                    for line in path.read_text().split("\n")
-                    if line.strip()
-                )
-    return answers
-
-
-def _evaluation_record(run_output: str) -> AttemptRecord:
-    record = read_stored_skyrl_attempt(run_output)
-    if record is None:
-        raise InvalidComparison(f"evaluation attempt receipt is unavailable: {run_output}")
-    return record
-
-
 def _selected_evaluation_record(
     run_output: str, launch: RecordedLaunch | None, receipt: AttemptRecord | None
 ) -> tuple[AttemptRecord, RecordedLaunch]:
-    record = receipt or _evaluation_record(run_output)
+    record = receipt or read_stored_skyrl_attempt(run_output)
+    if record is None:
+        raise InvalidComparison(f"evaluation attempt receipt is unavailable: {run_output}")
     if record.evaluation_storage_version != 1:
         raise InvalidComparison("per-task evaluation records require storage version 1")
-    selected = recorded_launch(record)
+    selected = read_recorded_launch(record)
     if (record.run_id, record.attempt_id) != (selected.run_id, selected.attempt_id):
         raise InvalidComparison("evaluation receipt identity differs from its configuration")
     if launch is not None and (launch.run_id, launch.attempt_id, launch.export_root) != (
@@ -161,23 +139,6 @@ def _selected_evaluation_record(
     ):
         raise InvalidComparison("evaluation launch differs from the selected receipt")
     return record, launch or selected
-
-
-def _attempt_answers(record: AttemptRecord, root: StoragePath) -> list[EvaluationAnswer]:
-    root = root / record.attempt_id
-    if not root.exists():
-        raise InvalidComparison(f"evaluation dump is missing for attempt {record.attempt_id}: {root}")
-    answers = _evaluation_answers(root)
-    if any(row.answer.get("attempt_id") != record.attempt_id or row.answer.get("step") != row.step for row in answers):
-        raise InvalidComparison(f"evaluation dump attribution differs from attempt {record.attempt_id}")
-    return [row for row in answers if row.answer["is_last_step"]]
-
-
-def evaluation_answers(
-    run_output: str, launch: RecordedLaunch | None = None, *, receipt: AttemptRecord | None = None
-) -> list[EvaluationAnswer]:
-    record, launch = _selected_evaluation_record(run_output, launch, receipt)
-    return _attempt_answers(record, StoragePath(launch.export_root) / "dumped_evals")
 
 
 def recorded_sources(launch: RecordedLaunch, name: str) -> list[RecordedSource]:
@@ -250,44 +211,20 @@ def evaluation_scores(
     run_output: str,
     *,
     launch: RecordedLaunch | None = None,
-    panel_root: str | None = None,
-    step: int | None = None,
     receipt: AttemptRecord | None = None,
 ) -> pa.Table:
-    """Read one recorded attempt, optionally joining an earlier panel's active membership."""
+    """Read the verified answer evidence for one recorded evaluation."""
     record, launch = _selected_evaluation_record(run_output, launch, receipt)
     tasks = read_evaluations(
-        launch.export_root, attempt_id=record.attempt_id, evaluation=native_prefix(launch, evaluation.name), step=step
+        launch.export_root, attempt_id=record.attempt_id, evaluation=native_prefix(launch, evaluation.name)
     )
     if not tasks:
         raise InvalidComparison(f"per-task evaluation records are missing for attempt {record.attempt_id}")
-    panel = read_selection_strata(panel_root) if panel_root is not None else None
-    if panel_root is not None and panel is None:
-        raise InvalidComparison(f"selection strata are unavailable: {panel_root}")
-    if panel is not None:
-        expected = {task_id for task_id, row in panel.tasks.items() if row.state == MembershipState.ACTIVE}
-        measured_content = {
-            task_id: canonical_sha256(json.loads(raw))
-            for source in recorded_sources(launch, evaluation.name)
-            for task_id, raw in _task_specs(StoragePath(source.uri) / source.relative_path)
-        }
-        if any(panel.tasks[task_id].task_digest != measured_content.get(task_id) for task_id in expected):
-            raise InvalidComparison("panel recomputation task content differs from the measured source")
-        expected_answers = evaluation_protocol(launch, evaluation.name)["n_samples_per_prompt"]
-        if any(len(row.answers) != expected_answers for row in tasks if row.task_id in expected):
-            raise InvalidComparison("panel recomputation has incomplete answer coverage")
-        for measured_step in {row.step for row in tasks}:
-            missing = expected - {row.task_id for row in tasks if row.step == measured_step}
-            if missing:
-                raise InvalidComparison(f"panel recomputation is incomplete at step {measured_step}: {sorted(missing)}")
-        tasks = [row for row in tasks if row.task_id in expected]
     rows = []
     attempts = Counter()
     for task, answer in sorted(
         ((row, value) for row in tasks for value in row.answers), key=lambda pair: (pair[0].step, pair[1].ordinal)
     ):
-        identity = panel.tasks[task.task_id] if panel is not None else task
-        strata = identity.strata
         verified = _verified_score(answer)
         rows.append(
             {
@@ -295,9 +232,10 @@ def evaluation_scores(
                 "step": task.step,
                 "item": task.task_id,
                 "attempt": attempts[task.step, task.task_id],
-                **strata.model_dump(),
+                **task.strata.model_dump(),
                 "score": answer.verifier_score if verified else 0.0,
                 "scored": _scored_answer(answer),
+                "response_token_count": answer.response_token_count,
             }
         )
         attempts[task.step, task.task_id] += 1
@@ -608,15 +546,7 @@ def load_run(
     planned = workload.planned_steps(preset.updates)
     training = [row for step, row in sorted(metrics.items()) if step in planned]
     invariants = list(training_invariants(preset, metrics))
-    try:
-        launch = recorded_launch(terminal)
-    except ValueError as error:
-        raise InvalidComparison(str(error)) from None
-    answers = (
-        evaluation_answers(path, launch, receipt=terminal)
-        if preset.evaluations and preset.recipe.fixed_reply_tokens is not None
-        else []
-    )
+    launch = read_recorded_launch(terminal)
     tracking = attempt_tracking(terminal, launch)
     try:
         recorded_task_sets = {
@@ -637,12 +567,17 @@ def load_run(
     task_set = preset.held_out_tasks if preset.held_out is not None else None
     scores, initial_scores = [EVAL_SCORE_SCHEMA.empty_table()], []
     evaluations = []
-    for evaluation in preset.evaluations:
+    response_token_counts: set[int | None] = set()
+    primary_answers = 0
+    for index, evaluation in enumerate(preset.evaluations):
         quality = evaluation.held_out and (evaluation == preset.guarded or bool(preset.checkpoint_every))
         expected = recipe.evaluation_answer_count(
             evaluation, recipe.evaluation_source(evaluation, selection, default, preset.held_out_tasks)
         )
         all_scores = evaluation_scores(evaluation, path, launch=launch, receipt=terminal)
+        if index == 0:
+            primary_answers = all_scores.num_rows
+            response_token_counts.update(all_scores["response_token_count"].to_pylist())
         table = all_scores
         initial = table.filter(pc.equal(table["step"], 0))
         table = table.filter(pc.equal(table["step"], workload.scored_step(preset.updates)))
@@ -695,7 +630,14 @@ def load_run(
     invariants.append(_grader_errors(training, prefix, "grader_error_fraction"))
     fixed = preset.recipe.fixed_reply_tokens
     if fixed is not None:
-        holds = workload.fixed_reply_holds(fixed, training, answers)
+        if response_token_counts == {None} and isinstance(workload, presets.Generation):
+            lengths = metrics.get(0, {})
+            if (
+                lengths.get("eval/all/response_tokens_max") == fixed
+                and lengths.get("eval/all/response_tokens") == fixed * primary_answers
+            ):
+                response_token_counts = {fixed}
+        holds = workload.fixed_reply_holds(fixed, training, response_token_counts)
         invariants.append(Invariant(name="fixed_reply_tokens", value=holds, limit=True, comparator="==", holds=holds))
     final = pa.concat_tables(scores)
     values = {

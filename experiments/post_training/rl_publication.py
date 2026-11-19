@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 import tomllib
 from collections.abc import Sequence
-from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -18,12 +17,13 @@ from finestore.rl.run_records import AttemptRecord, attempt_lineage
 from marin.execution.artifact import read_record
 from marin.rl import skyrl_records
 from marin.rl.skyrl_records import attempt_tracking, read_stored_skyrl_attempts, recorded_launch
+from pydantic import BaseModel, Field
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import rl_presets as presets
 from experiments.post_training import rl_recipe as recipe
-from experiments.post_training.rl_command import grafana_url
+from experiments.post_training.rl_command import attempt_grafana_url
 from experiments.post_training.rl_scoring import (
     GateInputs,
     InvalidComparison,
@@ -58,20 +58,15 @@ def publish_result(summary: RunSummary, service_url: str | None = None) -> str:
     return details["authenticated_url"] + "#" + urlencode({"run": summary.run_id, "attempt": summary.attempt_id})
 
 
-@dataclass
-class PublicationOutcome:
-    served_records: list[tuple[str, str]] = field(default_factory=list)
-    unserved_records: list[tuple[str, str] | str] = field(default_factory=list)
-    errors: list[str] = field(default_factory=list)
-    urls: dict[str, str] = field(default_factory=dict)
+class PublicationOutcome(BaseModel):
+    served_records: list[tuple[str, str]] = Field(default_factory=list)
+    unserved_records: list[tuple[str, str] | str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    urls: dict[str, str] = Field(default_factory=dict)
     retry: str | None = None
 
     def to_dict(self) -> dict:
-        return {
-            "served_records": [list(key) for key in self.served_records],
-            "unserved_records": [list(key) if isinstance(key, tuple) else key for key in self.unserved_records],
-            "errors": self.errors,
-        } | ({"retry": self.retry} if self.retry is not None else {})
+        return self.model_dump(mode="json", exclude={"urls"}, exclude_none=True)
 
 
 def label(inputs: GateInputs) -> str:
@@ -188,9 +183,7 @@ def build_record(
         measured_updates=list(preset.measured),
         iris_job_id=result.iris_job_id,
         wandb_url=tracking.get("wandb_url"),
-        grafana_url=(
-            grafana_url(receipt.run_id, launch.cluster, launch.training_type, started, finished) if started else None
-        ),
+        grafana_url=attempt_grafana_url(receipt, launch),
         evaluations=evaluations,
         engine=tracking.get("engine"),
         source_revision=(
@@ -277,17 +270,13 @@ def publish_runs(
     return result
 
 
-def _control_presets(table: presets.ModelPresets) -> tuple[str, ...]:
-    return tuple(preset.name for preset in table.presets if preset.publishes and preset.gated)
-
-
 def publish_controls(
     table: presets.ModelPresets, preset_name: str, *, service_url: str | None = None
 ) -> PublicationOutcome:
     """Publish the exact pinned controls from their stored native outputs."""
-    if preset_name not in _control_presets(table):
+    preset = table.by_name.get(preset_name)
+    if preset is None or not (preset.publishes and preset.gated):
         raise click.BadParameter("Choose a dashboard preset with controls", param_hint="--preset")
-    preset = table.by_name[preset_name]
     try:
         pin = gate.control_pin(preset, table=table)
     except InvalidComparison as error:

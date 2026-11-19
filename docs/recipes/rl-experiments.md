@@ -41,7 +41,7 @@ after merge; `--control` and `train-long` need no pin.
 
 The default command and `--plan` print the graph and saved status. Add `--run` to submit an Iris
 coordinator, or `--run --wait` to poll every 60 seconds and print the final report. Submission
-requires `--issue ISSUE_NUMBER` or `--no-issue` and records that choice on the native attempt.
+accepts an optional `--issue ISSUE_NUMBER` and records the issue number on the native attempt when supplied.
 Repeating the same command reuses completed artifacts. Track or stage source files under
 `experiments/`, `lib/` and `vendor/`: their working-tree hash forms part of the run name.
 `--version dev` satisfies the standard launcher interface; each preset's steps use its `revision`.
