@@ -74,6 +74,11 @@ still missing or differs in size. Rerun the same command to resume an
 interrupted copy. `--max-workers` (default 100) bounds the Zephyr pool; each
 worker copies eight files at a time.
 
+Use this bulk path for immutable datakit outputs. It compares files by size
+only, so a rerun can skip changed source content when its size is unchanged.
+It writes no completion manifest. Use [fsutil verified-copy](../../../docs/references/fsutil.md)
+when content verification or a completion marker is required.
+
 CoreWeave rejects `CopyObject` between buckets in different regions
 (`InvalidRegion`), so every byte passes through a worker. Only CoreWeave
 prefixes are accepted; Hugging Face buckets and R2 are not supported yet.

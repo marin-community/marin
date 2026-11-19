@@ -14,9 +14,10 @@ missing or has a different size there. Rerunning the same command resumes the co
 files already at the destination with the source's size are skipped.
 
 CoreWeave rejects ``CopyObject`` between buckets in different regions with
-``InvalidRegion``, so workers read and rewrite every byte. Files are compared by size
-only: multipart ETags depend on the uploader's part size, so they cannot be compared
-across buckets written by different clients.
+``InvalidRegion``, so workers read and rewrite every byte. This bulk path is for
+immutable datakit outputs. It compares files by size only: a rerun can skip changed
+source content when its size is unchanged. It writes no completion manifest. Use
+``fsutil verified-copy`` when content verification or a completion marker is required.
 
 Only CoreWeave URLs are accepted. Hugging Face buckets and R2 are not supported yet.
 
