@@ -4,7 +4,7 @@ name: MuonC with s² head and late-matrix anneal
 category: Optimizers
 summary: 🤖 Posted on behalf of @WhenWen.
 source: intake
-status: running
+status: done
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-7019433555
@@ -26,3 +26,10 @@ trials:
     muonc_anneal_decay: '0.2'
   commit: 760dbc5325
   priority: interactive
+  loss:
+  - 3.0314
+  delta:
+  - -0.0144
+  steps: 3030
+  baseline: belay-X0247-control 3.0458 (same commit, seed 0)
+  step_time_change: 0%
