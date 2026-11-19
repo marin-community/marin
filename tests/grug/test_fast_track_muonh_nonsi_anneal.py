@@ -11,7 +11,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from experiments.grug.fast_track.optimizer import NONSI_LATE_ANNEAL_FRAC, GrugMoeMuonHConfig
+from experiments.grug.fast_track.optimizer import LATE_ANNEAL_FRAC, GrugMoeMuonHConfig
 
 # A free 2-D matrix and a 3-D layer stack (one sphere per layer) beside the frozen q projection, MLA KV
 # down-projection and MoE latent down-projection, and the output head.
@@ -92,7 +92,7 @@ def test_radius_grows_without_bound_while_frozen_matrices_keep_muonh():
 
 def test_head_and_late_matrix_steps_follow_the_squared_schedule():
     num_train_steps = 20
-    late_anneal_start = round(NONSI_LATE_ANNEAL_FRAC * num_train_steps)
+    late_anneal_start = round(LATE_ANNEAL_FRAC * num_train_steps)
     params = _random_tree(jax.random.key(1))
     grads = _random_tree(jax.random.key(2))
     on = GrugMoeMuonHConfig(learning_rate=0.1, warmup=0.0, muonh_nonsi_anneal=True)
