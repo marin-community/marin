@@ -196,9 +196,8 @@ cd lib/taskforge && uv run --frozen pyrefly check
 
 `tests/test_end_to_end.py` drives both arms through fakes (inference, environments, grading);
 `tests/resources/` covers each executor. Any change that touches the sandbox backend must also
-pass a live probe on `cw-rno2a` before it is relaunched into a pilot: the fakes have passed while
-the real backend failed three times. The verifier restructure adds that probe as a marked live
-test (`test_verifier_live.py`, excluded by the default marker expression and run as an Iris job).
+run on `cw-rno2a` before it is relaunched into a pilot: the fakes have passed while the real
+backend failed three times.
 
 ## Known limits
 
