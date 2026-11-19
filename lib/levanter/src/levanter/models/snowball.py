@@ -54,7 +54,7 @@ from levanter.grug.sharding import (
     Pembed_vocab,
     Plm_head,
     _current_mesh,
-    _drop_absent_mesh_axes,
+    _current_sharding,
     _mesh_axis_size,
     unshard,
 )
@@ -1231,10 +1231,8 @@ def _reshard_replicated(arr: jax.Array) -> jax.Array:
 
 
 def _reshard(arr: jax.Array, spec: P) -> jax.Array:
-    mesh = _current_mesh()
-    if mesh.empty:
-        return arr
-    return reshard(arr, NamedSharding(mesh, _drop_absent_mesh_axes(mesh, spec)))
+    sharding = _current_sharding(spec)
+    return arr if sharding is None else reshard(arr, sharding)
 
 
 # Register the HF config so ``AutoConfig.from_pretrained`` resolves ``grug_moe`` without remote code.
