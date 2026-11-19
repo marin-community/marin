@@ -194,24 +194,12 @@ Direct datasets are expected to yield `LmExample` instances that already include
 
 ## Image captions and conversations
 
-Choose a source from `levanter.data.image`:
+- **Captions** — `ImageDatasetSourceConfig` reads one `image` and one `text` caption per row. Use `image_key` and `text_key` for other column names.
+- **Conversations** — `ConversationDatasetSourceConfig` reads turns from `messages`. Each `{"type": "image"}` in a turn takes the next image from the row’s `images` list.
 
-- `ImageDatasetSourceConfig` reads one image and caption per row. It expects columns named `image` and `text`. Set `image_key` and `text_key` to use other names.
-- `ConversationDatasetSourceConfig` reads chat turns from `messages`. Each `{"type": "image"}` uses the next item in `images`, in order.
+Set `id` for a Hugging Face dataset, or list JSON, JSONL, or Parquet files in `train_urls` and `validation_urls`.
 
-```json
-{
-  "images": ["images/car.jpg"],
-  "messages": [
-    {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What color is the car?"}]},
-    {"role": "assistant", "content": [{"type": "text", "text": "Red."}]}
-  ]
-}
-```
-
-Set `id` for a Hugging Face dataset, or list JSON, JSONL, or Parquet files in `train_urls` and `validation_urls`. Images can be encoded bytes, paths, or URLs.
-
-The cache keeps the image fields and shapes returned by the Hugging Face processor. Single image-caption pairs work without a chat template. For assistant-only loss in conversations, wrap the assistant response in `{% generation %}…{% endgeneration %}` in the template. Set `mask_prompt: false` to train on all text tokens instead.
+Captions work without a chat template. For conversations, wrap assistant replies in `{% generation %}` and `{% endgeneration %}`, or set `mask_prompt: false` to train on all text tokens.
 
 # API
 
