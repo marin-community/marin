@@ -439,7 +439,8 @@ def load_catalog(
             rows = list(rows)
             rows = rows[skip:]
             if not rows:
-                return 0
+                return skip
+            return skip + insert_rows(execute, f"atlas_{table}", TABLE_COLUMNS[table], load_id, rows)
         return insert_rows(execute, f"atlas_{table}", TABLE_COLUMNS[table], load_id, rows)
 
     if resume_load_id is not None:
