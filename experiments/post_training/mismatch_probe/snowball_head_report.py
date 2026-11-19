@@ -63,6 +63,11 @@ def summarize(archives: dict[str, ArchiveData]) -> dict:
             raise ValueError(f"{arm} did not reuse the BF16 collector archive")
         if manifest.scored_updates != [0] or manifest.optimizer_steps_per_update != 0:
             raise ValueError(f"{arm} is not a scoring-only run")
+        if any(
+            row.prompt_token_ids != row.trainer_prompt_ids or row.vllm_output_ids != row.trainer_input_ids
+            for row in archive.probes
+        ):
+            raise ValueError(f"{arm} has different token IDs in the trainer and vLLM")
         config = json.loads(manifest.config_json)
         serving_head = config["generator"]["engine_init_kwargs"].get("hf_overrides", {}).get("head_dtype", "bfloat16")
         learner_head = config["trainer"]["policy"]["megatron_config"].get("fp32_lm_head", False)
