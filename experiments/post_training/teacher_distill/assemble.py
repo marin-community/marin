@@ -40,7 +40,10 @@ def load_cell(plan: str, teacher: str, split: str, index: int):
             for x in gzip.decompress(StoragePath(prefix_join(plan, name + ".jsonl.gz")).read_bytes()).splitlines()
         )
     }
-    scored = np.load(io.BytesIO(StoragePath(prefix_join(teacher, name + ".npz")).read_bytes()))
+    # Load each array once: every NpzFile item access decompresses a fresh full copy, and a per-document
+    # slice of it would keep that whole copy alive.
+    with np.load(io.BytesIO(StoragePath(prefix_join(teacher, name + ".npz")).read_bytes())) as npz:
+        scored = {key: npz[key] for key in npz.files}
     offsets = scored["doc_offsets"]
     for n, row in enumerate(scored["doc_rows"].tolist()):
         lo, hi = offsets[n], offsets[n + 1]
