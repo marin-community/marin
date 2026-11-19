@@ -354,7 +354,7 @@ class GrugTrainerConfig:
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
     z_loss_weight: float = 1e-4  # Weight on final-logit logsumexp z-loss stabilization term.
     # Weight on the soft cross-entropy against stored teacher top-K targets. 0 trains on the hard
-    # loss alone, through the same code path as a run without teacher data.
+    # loss alone and loads training rows without teacher targets.
     distill_alpha: float = 0.0
     # Keep disabled except on model sizes where Grace-Blackwell host offload has been measured.
     # The d6144 EP64 runs used it; d5120 required a 135 GiB pinned-host arena and regressed.
@@ -1409,18 +1409,22 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         train_dataset = None
         train_loader = None
         if config.trainer.training_data_mode == TrainingDataMode.MIXTURE:
+            distill = config.trainer.distill_alpha > 0
+            train_data = config.data
+            if not distill and isinstance(train_data, E12DataConfig):
+                # A hard-only arm reads no teacher arrays for training; the teacher eval set keeps them.
+                train_data = replace(train_data, teacher_topk=0)
             train_dataset = build_train_dataset(
-                config.data,
+                train_data,
                 max_seq_len=config.model.max_seq_len,
                 batch_schedule=batch_schedule,
                 key=data_key,
             )
-            teacher_rows = isinstance(config.data, E12DataConfig) and config.data.teacher_topk > 0
             train_loader = build_train_loader(
                 train_dataset,
                 batch_schedule=batch_schedule,
                 mesh=mesh,
-                max_buffered_batches=_TEACHER_TRAIN_LOADER_BUFFER_SIZE if teacher_rows else _TRAIN_LOADER_BUFFER_SIZE,
+                max_buffered_batches=_TEACHER_TRAIN_LOADER_BUFFER_SIZE if distill else _TRAIN_LOADER_BUFFER_SIZE,
             )
 
         flops_per_example, flops_summary = _compute_flops(model_config=config.model)
