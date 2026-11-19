@@ -1,22 +1,20 @@
 # RL experiments
 
-Run an experiment from a named preset. The command binds the versioned task selection,
-Datakit SFT weights and tokenizer, GPU layout, evaluation schedule and measurement window.
+Plan, submit and inspect an RL experiment through its model entry file. A named preset binds
+the task selection, initial weights and tokenizer, GPU layout, evaluation schedule and measurement
+window. Start with a plan to confirm the inputs, allocation and output path.
 
 ## Which experiment to run
 
-| change | presets |
-|---|---|
-| vLLM wheel, kernel or engine option | speed-short, then speed-medium |
-| trainer kernel, parallelism, recompute or exact numerics | speed-medium, then learning-medium |
-| weight synchronization | speed-medium |
-| fp8 experts or KV-cache precision | speed-medium, then learning-medium; a person assesses the trade-off |
-| loss, estimator, optimizer, schedule, reward, task sampling or batch shape | learning-medium |
-| task selection | data-short, then data-medium |
-| SFT initializer | learning-medium with `--init` |
-| startup latency | speed-medium, which reports startup |
-| asynchronous grading, admission or loop performance | speed-long |
-| release training | train-long |
+| Preset | What it measures | Default work and estimated cost | Evaluation and gate | When to use it |
+|---|---|---|---|---|
+| `speed-short` | Generation throughput per GPU | 8 H100s, 512 prompts × four answers, 14–17 min and about 2 H100-hours | Separate full EvalLite pass. Gated on throughput and EvalLite family mean. | Screen a vLLM wheel, kernel or engine option before testing the full training loop with `speed-medium`. |
+| `data-short` | Fraction of prompts with both passing and failing answers | 8 H100s, 256 candidate training prompts × four answers, 10–15 min and about 2 H100-hours | Scores the sampled candidate tasks. Gated on mixed-answer fraction. | Screen a new `--tasks` selection before training on it with `data-medium`. |
+| `speed-medium` | Update time and policy agreement | 40 H100s, 10 updates. Wall time and cost are unmeasured. | Training metrics on updates 2–10. Gated on speed and mismatch. | Check startup, trainer kernels, parallelism, weight synchronization or numerics. Use `learning-medium` to measure quality after a precision change. |
+| `learning-medium` | EvalLite family mean and score gain per GPU-hour | 40 H100s, 25 updates. Wall time and cost are unmeasured. | Full EvalLite at steps 0 and 25. Gated on EvalLite family mean. | Compare objectives, optimizers, sampling, batch shape or initial weights. |
+| `data-medium` | Learning on a candidate training selection | 40 H100s, 25 updates. Wall time and cost are unmeasured. | Full EvalLite at steps 0 and 25. Shares the `learning-medium` gate and controls. | Train on a `--tasks` selection after it passes the short screen. |
+| `speed-long` | Sustained asynchronous update time and policy agreement | 40 H100s, 20 updates, 45–75 min and 30–50 H100-hours | Training metrics on updates 3–20. Gated on speed and mismatch. | Measure grading, admission or throughput changes over a longer window. |
+| `train-long` | Full training and checkpoint quality | 40 H100s, 100 updates by default, hours to days. Check the plan and use the reported GPU-hours for cost. | EvalLite's 100 active tasks at step 0 and every 10 updates. Evaluation coverage invariants, without a calibrated control comparison. | Train a release candidate with checkpoint recovery and durable HF export. |
 
 ## The loop
 
@@ -31,27 +29,34 @@ Datakit SFT weights and tokenizer, GPU layout, evaluation schedule and measureme
 ## Run a preset
 
 ```bash
-uv run python -m experiments.post_training.snowball_rl --preset speed-short --version dev
+uv run python -m experiments.post_training.snowball_rl --preset speed-short --version dev --plan
 ```
 
-A plan without `--require` uses the declared control pin. `--require` validates the pin and requested metric
-against control r0 even during planning. Gated execution and re-scoring require the pin's revision to match
+A plan without `--require` uses the declared control pin. With `--require`, planning also validates the pin
+and checks that control r0 recorded the requested metric. Gated execution and re-scoring require the pin's revision to match
 the preset; a mismatch returns exit 4 before submission or INVALID during gate execution. Controls are collected
 after merge; `--control` and `train-long` need no pin.
 
-The default command and `--plan` print the graph and saved status. Add `--run` to submit an Iris
-coordinator, or `--run --wait` to poll every 60 seconds and print the final report. Submission
-accepts an optional `--issue ISSUE_NUMBER` and records the issue number on the native attempt when supplied.
-Repeating the same command reuses completed artifacts. Track or stage source files under
-`experiments/`, `lib/` and `vendor/`: their working-tree hash forms part of the run name.
-`--version dev` satisfies the standard launcher interface; each preset's steps use its `revision`.
+The command invokes the shared runner through the Snowball model file. Track or stage source files
+under `experiments/`, `lib/` and `vendor/`. The full tracked working-tree hash forms part of the run
+name, so even a documentation edit can change it. `--version dev` satisfies the standard launcher
+interface. Each preset's steps use its own `revision`.
 
-Exit codes are 0 for PASS or a completed ungated run, 1 for FAIL, 2 for INVALID,
-3 for an unexpected error, failed coordinator or unavailable required verdict, and 4 for refusal before execution. Submission without
-`--wait` returns 0 when accepted. Status lists completed updates, native attempt and job IDs,
-W&B URLs and a Grafana dashboard link. Set `WANDB_API_KEY` before submission;
-`WANDB_ENTITY` selects the team, with `marin-community` as the default. The project is
-`marin-snowball-rl`. The team does not affect run identity.
+- **Plan and status.** The default mode and `--plan` print the graph and status, including the run
+  name, allocation and output path. Repeat the plan from the same source with the same inputs to look up an existing run.
+  For a saved attempt, status can include its job ID, completed update, evaluations and verdict.
+- **Submit and wait.** Replace `--plan` with `--run` to submit an Iris coordinator. Add `--wait` for
+  the terminal report. To link an experiment issue, pass `--issue ISSUE_NUMBER`. The issue number
+  is optional and is stored on the native attempt when supplied.
+- **Resume.** Repeat the original `--run --wait` invocation from the same source and inputs.
+  The executor reuses successful artifacts. When training resumes, `train-long` loads its
+  latest retained checkpoint and records the new attempt and parent checkpoint.
+
+Submission without `--wait` returns 0 when accepted. A terminal invocation returns 0 for PASS
+or successful ungated completion, 1 for FAIL, 2 for INVALID, 3 for an unexpected error, failed
+coordinator or unavailable required verdict, and 4 for refusal before execution.
+Set `WANDB_API_KEY` before submission. `WANDB_ENTITY` selects the team and defaults to
+`marin-community`. Snowball logs to the `marin-snowball-rl` project.
 
 Short presets use eight H100s; training presets use 40.
 East is `cw-us-east-02a`. The 40-H100 layout has 32 policy GPUs and eight engine GPUs,
@@ -65,11 +70,12 @@ Publish a stored attempt after an app release, without starting native work:
 
 ```bash
 uv run python -m experiments.post_training.snowball_rl publish --preset train-long \
-  --output RUN_OUTPUT --attempt ATTEMPT_ID --url MARINA_ORIGIN
+  --output "$RUN_OUTPUT" --attempt "$ATTEMPT_ID" --url "$MARINA_ORIGIN"
 ```
 
-Without `--output` and `--attempt`, that command publishes the selected preset's pinned controls.
-Both selectors are required together. Pass the complete `EvaluationResult.run_ids` tuple with one
+Set `RUN_OUTPUT` to the path in the run's status, `ATTEMPT_ID` to the selected native attempt,
+and `MARINA_ORIGIN` to the target Marina origin. Both attempt selectors are required together.
+Pass the complete `EvaluationResult.run_ids` tuple with one
 `--evaldash-run-id RUN_ID` per evaluation definition. Providing IDs sets the entire list for the
 selected attempt. Publishing without IDs preserves its saved links. Historical attempts retain their
 own native identity and window. Unattributed historical JSONL dumps do not supply per-attempt
@@ -77,10 +83,9 @@ evaluation summaries.
 The dashboard's detail view shows each evaluation step's counts and strata means, including
 family, AAII category and difficulty, and links to the run's Grafana window.
 
-
 After `--run --wait` observes the coordinator finish, the launcher publishes learning-medium,
 data-medium and train-long attempts using the caller's Marina login. The row shows the model and
-the launch's issue link or explicit opt-out. Record the finishing status's `rl_progress_url` with the verdict.
+the issue link when the launch supplied a number. Record the finishing status's `rl_progress_url` with the verdict.
 Use `--url ORIGIN` to publish to a local Marina stack; the default is the Marina service.
 
 Repeat the original command with `--wait` from the same source and inputs. The executor reuses
@@ -92,7 +97,7 @@ requires a report for exactly the current native attempts.
 Publish learning-medium or data-medium controls from their stored paths:
 
 ```bash
-python -m experiments.post_training.snowball_rl publish --preset learning-medium
+uv run python -m experiments.post_training.snowball_rl publish --preset learning-medium --url "$MARINA_ORIGIN"
 ```
 
 The pins in `snowball_rl.SNOWBALL.controls` must match the preset's current revision; unavailable pins
@@ -105,11 +110,11 @@ recorded measurements and stored gate facts.
 ```bash
 uv run python -m experiments.post_training.snowball_rl --preset learning-medium \
   --set trainer.algorithm.advantage_estimator=grpo \
-  --set trainer.algorithm.group_advantage_min_size=null --version dev
+  --set trainer.algorithm.group_advantage_min_size=null --version dev --plan
 uv run python -m experiments.post_training.snowball_rl --preset data-short \
-  --tasks my-selection@2026.11.10.1 --version dev
+  --tasks "$TASK_SELECTION" --version dev --plan
 uv run python -m experiments.post_training.snowball_rl --preset train-long \
-  --set trainer.max_steps=100 --version dev
+  --set trainer.max_steps=100 --version dev --plan
 ```
 
 `--set` takes a typed dotted SkyRL key and a JSON value; text values may be bare.
@@ -119,15 +124,17 @@ Placement, data bindings, retention, evaluation and measurement settings belong 
 Learning and train-long can change task sampling, optimizer, schedule and batch shape.
 Data presets require `--tasks` and refuse `--set`.
 
-Custom selections must use the default heldout development input and record the complete
+Set `TASK_SELECTION` to a published `NAME@VERSION`. Custom selections must use the default held-out
+development input and record the complete
 frozen EvalLite in their recipe's `exclusions`. The builder checks those recorded inputs.
 Create an immutable candidate through [task curation](../references/task-curation.md#final-task-selection).
 Selections with AI-judged tasks are refused before submission.
 
-`--init NAME@VERSION` on a learning or train-long preset selects a published model or kept
-HF export. Learning-medium and data-medium retain final HF weights for both controls and
-candidates. Durable exports live under `exports/global_step_<N>/policy`.
-Train-long resumes its latest checkpoint and keeps HF exports. See
+`--init NAME@VERSION` on `learning-medium` or `train-long` starts from a published initializer
+or a retained RL HF export. The selected initializer supplies both weights and its tokenizer.
+Training recovery uses the run's native checkpoint lineage. Learning-medium and data-medium
+retain final HF weights under `exports/global_step_<N>/policy`. Train-long exports the latest
+checkpoint by default and records the best eligible evaluation step separately. See
 [native checkpoint and attempt handling](../references/rl-launching.md) for retention and retries.
 
 `--replicates N` makes 1–5 copies of a gated preset with one seed. `--control --replicates N`
@@ -161,29 +168,30 @@ Run stored comparisons on CPU:
 
 ```bash
 uv run python -m experiments.post_training.snowball_rl rescore \
-  --preset learning-medium --candidate RUN_NAME[@VERSION] --require 'eval_lite/aai_category/coding/mean>=control'
+  --preset learning-medium --candidate "$CANDIDATE" --require 'eval_lite/aai_category/coding/mean>=control'
 uv run python -m experiments.post_training.snowball_rl rescore \
   --preset speed-medium --leave-out r0
 ```
 
-Leave-one-out compares one control replicate against the remaining controls with fixed default inputs.
+Set `CANDIDATE` to the stored run name or `NAME@VERSION`. Leave-one-out compares one control
+replicate against the remaining controls with fixed default inputs.
 Reports use the caller's namespace under `MARIN_PREFIX`; controls are read-only.
 
 ## Change a preset's default
 
-1. Edit that preset's `tasks`, `model`, `eval_lite` or `recipe` in `snowball_rl.py`.
+1. Edit that preset's `tasks`, `model`, `held_out_tasks` or `recipe` in `snowball_rl.py`.
    A preset's `Recipe.config` is its typed override point; merge a `RecipePatch` there for a
    preset-specific default. `_DEFAULT_PATCH` supplies shared settings, including context budget.
    Trainer precision, engine precision and batch invariance use the native recipe keys through `--set`.
 2. Bump that preset's `revision`. Data-medium shares learning-medium's settings and revision.
-3. From the repository root, print the complete compared-configuration hash:
+3. From the repository root, check the composed configuration against the golden fixture:
 
    ```bash
    uv run pytest -s -q -n 0 experiments/post_training/rl_tests/test_rl.py::test_presets_match_revisioned_native_configs
    ```
 
-   A new revision intentionally fails until its printed hash is added under that preset in
-   the test's `revisions` table. Inspect the composed settings before accepting the hash.
+   Inspect the composed settings and add the new revision's hash under that preset in the
+   test's `revisions` table.
    The compared-configuration hash includes actual execution memory and priority.
 4. Controls are collected by CI after the default change merges, once per changed default.
    That CI workflow is planned separately; control collection is not a merge gate.
@@ -209,29 +217,55 @@ by task ID and count as scored only after successful verification without an exc
 Equal-family mean averages answers per task, tasks per family, then families. Slices use family, AAII
 category and agentic status. Task selection versions are immutable; follow the EvalLite reference to change one.
 
-To compute each EvalLite version for a run, read the stored task rows for one attempt, evaluation
-and checkpoint step. Load each version's selection with `read_selection_strata` and pass it to
-`score_eval_lite_version`.
+To score earlier EvalLite versions, choose the run output, native attempt, evaluation name and
+checkpoint step. Set `version_roots` to the paths of the published selections you want to compare.
+The stored launch supplies the export root, evaluation prefix and expected answers per task.
 
 ```python
 from finestore.rl.run_records import read_evaluations
 from finestore.rl.strata import read_selection_strata
-from experiments.post_training.rl_scoring import score_eval_lite_version
+from marin.rl.skyrl_records import read_stored_skyrl_attempts, recorded_launch
+from experiments.post_training.rl_scoring import evaluation_protocol, native_prefix, score_eval_lite_version
 
-rows = read_evaluations(export_root, attempt_id=attempt_id, evaluation="eval/eval_lite_100/", step=step)
+_, attempts = read_stored_skyrl_attempts(run_output)
+launch = recorded_launch(attempts[attempt_id])
+answers = evaluation_protocol(launch, evaluation_name)["n_samples_per_prompt"]
+rows = read_evaluations(
+    launch.export_root,
+    attempt_id=attempt_id,
+    evaluation=native_prefix(launch, evaluation_name),
+    step=step,
+)
 for root in version_roots:
     panel = read_selection_strata(root)
     if panel is None:
         raise ValueError(f"Missing selection manifest: {root}")
-    print(panel.definition.version, score_eval_lite_version(rows, panel, expected_answers=answers_per_task))
+    print(panel.definition.version, score_eval_lite_version(rows, panel, expected_answers=answers))
 ```
 
-Use the evaluation name stored on the rows and its recorded `n_samples_per_prompt` as `answers_per_task`.
-A primary evaluation uses `eval/`. The result reports
-how many active tasks scored, which are missing verified answers, and which have missing or different
-content digests. A version has a score only when every active task has verified answers with matching
-content. To compare earlier versions whose active tasks have since retired, evaluate the retained
-pool so the run includes those tasks.
+Use a preset's evaluation name, such as `eval_lite_100` for train-long. The primary evaluation is
+stored under `eval/`, and named evaluations use `eval/<name>/`. The result reports scored tasks,
+missing verified answers and digest mismatches. A version has a score only when all of its active
+tasks have matching content and complete verified answers. Evaluate the full retained pool to
+include tasks that were active in earlier versions.
+
+## Telemetry and provenance
+
+Keep the native run ID and attempt ID together. The run identifies the experiment. The attempt
+identifies one native execution, including a resumed execution. In `resolved-launch.yaml`, these
+are `config.run.id` and `config.run.attempt_id`. Pair them with the output path and source revision
+when recording a result.
+
+| Sink | Where to find the run |
+|---|---|
+| W&B | Open the attempt's `wandb_url` from status. The Snowball project is `marin-snowball-rl` in the launch's W&B team. The model tag identifies Snowball runs in that project. |
+| Finelog and Grafana | Use the status's Grafana link for the native run and UTC execution window. Finelog uses service `marinskyrl`. Filter by model, cluster and run ID, and use the Iris job ID and attempt timestamps to inspect a retry. |
+| Marina RL progress | Open `rl_progress_url` from terminal status. The row is keyed by native run and attempt IDs and carries the model, issue link when supplied, and evaluation summaries. |
+| EvalDash | An offline benchmark run has its own evaluation run ID. Publish the IDs returned in `EvaluationResult.run_ids` on the selected RL attempt to link them from the Marina row. |
+
+The dashboards are available through the [RL Grafana dashboard](https://grafana.oa.dev/d/marin-rl-runs/rl-post-training),
+[Marina RL progress](https://applets.marina.oa.dev/a/6c971887-1e22-45b1-9dcb-dd775829df57/) and
+[EvalDash](https://marina.oa.dev/evaldash/).
 
 ## What a run writes
 
@@ -284,10 +318,12 @@ The layouts declare GPU type, CPU, memory, disk, priority and both job deadlines
 supply the GPU width. Presets declare seed, W&B entity, checkpoint retention and HF export
 independently of dashboard publication. Its `__main__` calls `rl.main(SNOWBALL)`.
 
-To add a model, create its own entry file with explicit `Preset.model`, `Preset.tasks`,
-`Preset.held_out_tasks`, evaluations and recipe configuration, then pass its `ModelPresets` value to
-`rl.main`. The table's namespace owns run and control paths. The shared runner imports no other
-model entries. The native launch-document census counts `rl_recipe.py`, where `SkyRLSpec` is
+To add a model, create an entry file and pass its `ModelPresets` to `rl.main`. Each preset supplies
+its own model, tasks, layout and recipe. A preset with held-out evaluations declares
+`held_out_tasks` and the evaluation profiles. A `mochi_rl.py` entry fits the same interface with the
+model label `mochi`, its own namespace, and Mochi's initializer, resources and evaluation choices.
+The model table's namespace owns run and control paths.
+The native launch-document census counts `rl_recipe.py`, where `SkyRLSpec` is
 constructed; add the new table's builders to `tests/rl/launch_document_census.py` the same way
 as Snowball. Use `assert_revisioned_native_configs` in `skyrl_test_support.py` with the table's
 pinned revisions and native hashes.
