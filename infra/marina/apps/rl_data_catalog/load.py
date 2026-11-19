@@ -67,6 +67,7 @@ from infra.marina.apps.rl_data_catalog.server.restrictions import is_private
 from infra.marina.apps.rl_data_catalog.server.schema import SCHEMA_SQL
 
 MAX_BATCH_BYTES = 1_000_000
+STAGING_TABLE_PREFIX = "atlas_"
 # The per-task staging tables carry many small rows; their inserts maintain four
 # indexes (including the GIN defects index) on the retained item volume, so their
 # statements stay under the SQL gateway's per-statement timeout only with small
@@ -77,8 +78,7 @@ TABLE_BATCH_BYTES = {
 }
 TABLE_BATCH_ROWS = {
     "items": 5,
-    # A packet can contain a large evidence document. Keep its transport byte
-    # budget, but never combine it with other packets in the same statement.
+    # Large evidence packets use MAX_BATCH_BYTES and one row per statement.
     "packets": 1,
 }
 PACKET_READ_BATCH = 512
@@ -146,12 +146,12 @@ def batches(rows: Iterable[dict[str, Any]], budget: int = MAX_BATCH_BYTES, max_r
 
 def table_batch_bytes(table: str) -> int:
     """The SQL batch budget for one staging table."""
-    return TABLE_BATCH_BYTES.get(table.removeprefix("atlas_"), MAX_BATCH_BYTES)
+    return TABLE_BATCH_BYTES.get(table.removeprefix(STAGING_TABLE_PREFIX), MAX_BATCH_BYTES)
 
 
 def table_batch_rows(table: str) -> int | None:
     """The row-count cap for one staging table, when its statements need one."""
-    return TABLE_BATCH_ROWS.get(table.removeprefix("atlas_"))
+    return TABLE_BATCH_ROWS.get(table.removeprefix(STAGING_TABLE_PREFIX))
 
 
 def ensure_tables(query: AppletQuery, names: tuple[str, ...]) -> None:
