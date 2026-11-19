@@ -247,7 +247,8 @@ A `ScriptGrader` declares:
 | `reward` | `StdoutReward` (default), `ExitCodeReward`, or `FileReward`. |
 | `empty_output` | `ZERO` rejects an empty extracted answer; `GRADE` passes it to the script. |
 | `judge` | Optional `JudgeSpec` declaring the model service required by the script. |
-| `timeout` | Deadline in seconds for each grading command (default 600). |
+| `timeout` | Deadline in seconds for each grading command (default 600), or the complete operation when `replay` is present. |
+| `replay` | Optional `ReplayStage` that executes captured files in a separate machine before grading its declared outputs. |
 
 `StdoutReward` requires exit code 0 and one finite number on standard output; anything else is `infra_error`. `ExitCodeReward` scores 1.0 for exit code 0 and 0.0 otherwise. `FileReward.files` lists candidate reward files in priority order; the first that exists supplies the score. Each `RewardFile` holds a number, or a JSON object whose `key` (default `reward`) holds the score and whose optional `detail` object becomes the grade detail. `FileReward.pass_above` sets `GradeResult.passed`; `ExitCodeReward` sets it from the exit code. A missing, empty, or invalid reward file is `infra_error`. A timed-out command is `infra_error` for every reward source.
 
@@ -260,6 +261,23 @@ A scripted judge receives its declared specification at `/tests/judge.toml`.
 The caller supplies `JudgeConnection` separately; the runtime puts credentials
 only in the verifier machine's environment. Task serialization and staged
 archives exclude those credentials. The machine must permit network access.
+
+For file and workspace answers, `ReplayStage` declares a prepared, digest-pinned
+`environment`, an `argv` command, `cwd`, command `timeout`, and output `artifacts`.
+Replay receives shared and worker resources, its declared helper `resources`,
+and captured submission files. Replay helpers must contain no references or secrets;
+they are not installed in the actor or grader. Replay
+receives neither oracle/verifier resources nor inherited machine environment
+variables or judge credentials. Its image, explicit environment, and helper resources must be
+audited for the same separation. Replay closes before the grading machine starts;
+only declared replay outputs are transferred, with the usual archive size and
+symlink checks. The original submitted program is not transferred to grading.
+Output formats must also be safe for the grader to decode: replay isolation does
+not make a candidate-produced pickle safe to load alongside references.
+
+Candidate execution failure scores zero; setup and total-deadline failures are
+ungraded infrastructure errors. Missing outputs follow each artifact's policy.
+Replay cannot be combined with `answer_path`, `collect`, or actor `artifacts`.
 
 TaskSpec validation ties the grader to the answer:
 
@@ -416,6 +434,43 @@ restored = TaskSpec.model_validate_json(serialized)
 
 The serialized spec includes the grader configuration and verifier resources. Store it where trusted grading code can read it; build model requests with `chat_request(task)` or `render_instruction(task)`, which read only the public context, final tools, and answer format.
 
+### ScienceAgentBench Verified conversion
+
+`taskcompendium.importers.scienceagentbench.VERIFIED_SOURCE` pins the released
+Verified annotation Parquet and rejects missing, duplicated, or unexpected task
+IDs before yielding rows. `actor_context` constructs knowledge-on/off inputs
+from explicit public fields, preserving complete instructions and previews.
+Raw annotations contain reference metadata and must not be mounted for actors;
+image preparation must also check knowledge-off isolation.
+
+`scienceagentbench_task` combines one annotation with a prepared actor environment,
+a replay-enabled `GraderPackage`, and the private reference program. It captures
+only `/testbed/solution.py` and requires the same environment for actor and replay.
+An oracle control can copy `/controls/reference.py` to `/testbed/solution.py` and
+then use ordinary grading. The reference is staged only for oracle controls.
+
+`scienceagentbench_grading.deterministic_grader` packages a source evaluator
+with the common output wrapper. The grader image supplies the source's private
+gold files and required data. Source data/shape errors remain failed submissions;
+missing gold files, dependencies, and other runtime failures remain ungraded.
+Reference validation must reject any package whose own gold data or evaluator
+produces these errors before the package can be used for model scoring.
+
+Task 22 uses `papyrus_grader`. Replay executes the submitted program and decodes
+its pickle without gold data or credentials, then transfers normalized JSON rows.
+Trusted preparation separately normalizes the pinned gold pickle with the same
+decoder. The scorer reads only JSON arrays of strings, with a 1,048,576-character
+row limit. It preserves the upstream sort/round/string conversion and gold-prefix
+comparison, including the upstream acceptance of matching rows followed by extras.
+The package transfers neither the candidate pickle nor the decoder to grading. Validation
+must use the pinned scientific environment; synthetic local tests establish the
+transfer and scoring behavior, not full benchmark or container validation.
+
+This module is not registered as a runnable evaluation. Preparing the real images
+and visual grader packages, validating references, and official Pi/EvalDash integration
+remain tracked in
+[issue #11592](https://github.com/marin-community/marin/issues/11592).
+
 ## Development
 
 TaskCompendium requires Python 3.12 or 3.13 and uses `marin-rigging` for relative POSIX path and mount-collision validation. Resource names preserve Linux semantics, including colons, backslashes, trailing spaces, and case distinctions. Absolute paths, traversal, NUL bytes, duplicate files, and file/directory collisions are rejected. The validator leaf module performs no storage access.
@@ -430,5 +485,5 @@ cd lib/taskcompendium
 uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
 ```
 
-Schema `0.30` adds queryable task labels. Reconvert
+Schema `0.31` adds isolated submitted-program replay to script graders. Reconvert
 older TaskSpecs before using the updated readers; no compatibility shim is supplied.

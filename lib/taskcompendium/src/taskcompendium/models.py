@@ -43,7 +43,7 @@ from verifyit.spec import (
     spec_from_table,
 )
 
-SCHEMA_VERSION = "0.30"
+SCHEMA_VERSION = "0.31"
 DOCKER_IMAGE_PATTERN = r"^[^\s@]+@sha256:[0-9a-f]{64}$"
 TOOL_ARGUMENTS_OBJECT_ERROR = "Tool arguments must be a JSON object"
 
@@ -601,6 +601,33 @@ def verifyit_spec(grader: VerifyitGrader) -> Spec:
         raise ValueError(f"Invalid {grader.mode!r} verifier parameters: {error}") from error
 
 
+class ReplayStage(BaseModel):
+    """Run submitted files in a fresh image before exposing outputs to a grader.
+
+    Only shared/worker resources, replay helpers, and captured submissions enter this machine.
+    ``artifacts`` selects its outputs for the subsequent grading machine.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    environment: EnvironmentRequirements
+    argv: tuple[str, ...] = Field(min_length=1)
+    cwd: str
+    timeout: float = Field(gt=0)
+    artifacts: tuple[VerifierArtifact, ...] = Field(min_length=1)
+    resources: tuple[TaskResource, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_replay(self) -> "ReplayStage":
+        if self.environment.docker_image is None and self.environment.docker_build is None:
+            raise ValueError("Replay requires a digest-pinned image or Docker build context")
+        normalized_absolute_path(self.cwd)
+        validate_output_paths(tuple(artifact.source for artifact in self.artifacts))
+        validate_output_paths(tuple(artifact.target for artifact in self.artifacts))
+        validate_relative_file_paths(resource.path for resource in self.resources)
+        return self
+
+
 class ScriptGrader(BaseModel):
     """A command run in a fresh machine built from ``environment``; ``reward`` says how it scores.
 
@@ -612,6 +639,10 @@ class ScriptGrader(BaseModel):
     ``judge`` declares a required service contract, staged as ``/tests/judge.toml``. The runtime
     supplies endpoint credentials only to the grading machine. ``empty_output`` permits scripts
     to grade blank plain-text submissions when the source requires per-item metrics for them.
+
+    With ``replay``, submitted files first execute in a separate reference-free machine.
+    Only declared replay outputs reach the grader, and ``timeout`` bounds the entire
+    replay/preparation/grading operation instead of only the grading command.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
@@ -629,6 +660,7 @@ class ScriptGrader(BaseModel):
     timeout: float = Field(default=600.0, gt=0)
     empty_output: EmptyOutputPolicy = EmptyOutputPolicy.ZERO
     judge: JudgeSpec | None = None
+    replay: ReplayStage | None = None
 
     @model_validator(mode="after")
     def validate_grader(self) -> "ScriptGrader":
@@ -643,6 +675,8 @@ class ScriptGrader(BaseModel):
                 raise ValueError("The answer path must lie outside /tests and /logs/verifier")
             if self.answer_path == self.conversation_path:
                 raise ValueError("The answer and conversation paths must differ")
+        if self.replay is not None and (self.answer_path is not None or self.collect or self.artifacts):
+            raise ValueError("Replay grades captured files and cannot also collect original actor artifacts or text")
         return self
 
 
@@ -950,6 +984,13 @@ class TaskSpec(BaseModel):
             if self.answer_type in CONVERSATION_ANSWERS and verifyit_answer_file(verifyit_spec(self.grader)) is None:
                 raise ValueError(f"Workspace verifier {self.grader.mode} cannot grade a {self.answer_type} answer")
         if isinstance(self.grader, ScriptGrader):
+            if self.grader.replay is not None and self.answer_type not in (AnswerType.FILE, AnswerType.WORKSPACE_STATE):
+                raise ValueError("Replay requires captured file or workspace submissions")
+            if self.grader.replay is not None:
+                validate_relative_file_paths(
+                    resource.path
+                    for resource in self.resources.all + self.resources.worker + self.grader.replay.resources
+                )
             if self.grader.answer_path is not None and self.answer_type not in CONVERSATION_ANSWERS:
                 raise ValueError(f"A {self.answer_type} answer has no extracted answer to write")
             installed = {f"/tests/{resource.path}" for resource in self.resources.verifier}
