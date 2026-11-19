@@ -37,7 +37,6 @@ def main() -> None:
             artifact_budget=args.artifact_budget,
             hours=args.hours,
             root=Path(f"/tmp/tool-ortet-r{args.replica}"),
-            config_file="config-1.json",
             recovery_file=args.recovery_file,
             generation=f"ortet-24-r{args.replica}-20261112",
             capacity_hours=80,

@@ -19,7 +19,7 @@ using its committed reference index.
 
 Both commands use the same batch loop. Each replica must have a single writer
 and a fresh local work directory (`/tmp/tool-scale-r<N>` or
-`/tmp/tool-ortet-r<N>`). The committed config files are templates; the loop
+`/tmp/tool-ortet-r<N>`). The committed `production_data/config.json` is a template; the loop
 fills in runtime paths, credentials, relay URL, generation and deadline, and
 writes the effective config inside that work directory.
 
@@ -60,3 +60,7 @@ allocation deadline also stops dispatch, retry waits and streaming reads.
 Network reads have a maximum 30-second inactivity timeout; a stopped request
 with an uncertain outcome keeps its lease. The stopped batch is archived before
 the driver reports that reconciliation is required.
+
+Deterministic mappings are accepted only when the pinned rule approval covers
+every applied rule and matches the rule version and implementation hashes.
+Changed approval artifacts or implementations fail verification.

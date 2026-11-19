@@ -14,10 +14,9 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
-import fsspec
-from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.cluster_config import StoreType, data_buckets
 from rigging.filesystem.s3_compat import configure_coreweave_s3, s3_credentials
+from rigging.filesystem.storage_path import StoragePath
 from tokenizers import Tokenizer
 
 from experiments.glm_tool_serving.assets import provision_tokenizers
@@ -28,26 +27,25 @@ from experiments.tool_normalization.acquire import acquire_shard
 from experiments.tool_normalization.driver import run
 from experiments.tool_normalization.preflight import classify
 from experiments.tool_normalization.relay import RELAY_JOB, read_bulk_token, resolve_relay_base_url
-from experiments.tool_normalization.scope import terminus_source
+from experiments.tool_normalization.scope import excluded_terminal_source
+
+BATCH_ROWS = 128
 
 
 def resume_cursor(prefix: str, predecessor: str | None, catalog_hash: str) -> tuple[dict, str]:
-    """Continue from durable progress without moving or rewriting the previous run."""
-    cursor_url = prefix + "/cursor.json"
-    fs, _ = filesystem_for(cursor_url)
-    cursor_source = cursor_url
-    if not fs.exists(cursor_url) and predecessor:
-        cursor_source = predecessor + "/cursor.json"
-        fs, _ = filesystem_for(cursor_source)
-        if not fs.exists(cursor_source):
+    """Return the saved cursor and its URI, or a fresh cursor and its future URI."""
+    cursor_source = StoragePath(prefix) / "cursor.json"
+    if not cursor_source.exists() and predecessor:
+        cursor_source = StoragePath(predecessor) / "cursor.json"
+        if not cursor_source.exists():
             raise ValueError("Predecessor cursor missing; refusing to restart at row zero")
     cursor = {"shard": 0, "row": 0, "batches": 0, "artifact_bytes": 0, "counts": {}, "catalog_sha256": catalog_hash}
-    if fs.exists(cursor_source):
-        with fsspec.open(cursor_source) as stream:
+    if cursor_source.exists():
+        with cursor_source.open() as stream:
             cursor = json.load(stream)
         if cursor["catalog_sha256"] != catalog_hash:
             raise ValueError("Resume catalog differs from the saved cursor")
-    return cursor, cursor_source
+    return cursor, str(cursor_source)
 
 
 @dataclass(frozen=True)
@@ -61,7 +59,6 @@ class FleetConfig:
     artifact_budget: int
     hours: float
     root: Path
-    config_file: str
     recovery_file: str | None
     generation: str
     capacity_hours: float
@@ -86,45 +83,42 @@ def reconcile_claims(prefix: str, predecessor: str | None, name: str, replica: i
     """Refuse replay if either claim owns an archive; preserve archive-less claim evidence."""
     claims = []
     for owner in dict.fromkeys(p for p in (prefix, predecessor) if p is not None):
-        claim = f"{owner}/claims/{name}.json"
-        fs, _ = filesystem_for(claim)
-        if not fs.exists(claim):
+        claim = StoragePath(owner) / "claims" / (name + ".json")
+        if not claim.exists():
             continue
-        if fs.exists(f"{owner}/batches/{name}.tar.gz"):
+        if (StoragePath(owner) / "batches" / (name + ".tar.gz")).exists():
             raise RuntimeError(f"Uncommitted prior batch requires reconciliation: {claim}")
-        with fs.open(claim, "rb") as stream:
+        with claim.open("rb") as stream:
             claims.append((owner, claim, stream.read()))
     for owner, claim, raw in claims:
         evidence = {
             "replica": replica,
             "batch": name,
-            "claim_url": claim,
+            "claim_url": str(claim),
             "claim_evidence": json.loads(raw),
             "archive_absent": True,
             "decision": "self-healed: replaying archive-less claim from the cursor",
             "reconciled_at": time.time(),
         }
         tag = "current" if owner == prefix else "predecessor"
-        with fsspec.open(f"{prefix}/reconciliations/{name}-{tag}-selfheal.json", "w") as stream:
+        with (StoragePath(prefix) / "reconciliations" / f"{name}-{tag}-selfheal.json").open("w") as stream:
             json.dump(evidence, stream, indent=2)
-        with fsspec.open(f"{prefix}/reconciled-claims/{name}-{tag}", "wb") as stream:
+        with (StoragePath(prefix) / "reconciled-claims" / f"{name}-{tag}").open("wb") as stream:
             stream.write(raw)
         if owner == prefix:
-            fs, _ = filesystem_for(claim)
-            fs.rm(claim)
+            claim.rm()
 
 
 def recovery_archive(prefix: str, predecessor: str | None, name: str, expected_sha256: str) -> str:
     """Locate the explicitly approved stopped archive, including the new run's first batch."""
     matches = []
     for owner in dict.fromkeys(p for p in (prefix, predecessor) if p is not None):
-        archive = f"{owner}/batches/{name}.tar.gz"
-        fs, _ = filesystem_for(archive)
-        if fs.exists(archive):
-            with fs.open(archive, "rb") as stream:
+        archive = StoragePath(owner) / "batches" / (name + ".tar.gz")
+        if archive.exists():
+            with archive.open("rb") as stream:
                 if hashlib.file_digest(stream, "sha256").hexdigest() != expected_sha256:
                     raise ValueError("Stopped archive changed; reconcile again")
-            matches.append(archive)
+            matches.append(str(archive))
     if not matches:
         raise ValueError("Stopped archive missing; reconcile again")
     return matches[0]
@@ -137,17 +131,17 @@ def run_fleet(config: FleetConfig) -> None:
     data = Path(__file__).resolve().parent / "production_data"
     catalog, catalog_hash = load_catalog(data, config.catalog)
     recovery_path = data / config.recovery_file if config.recovery_file else None
-    recovery = json.loads(recovery_path.read_text()) if recovery_path and recovery_path.exists() else None
+    recovery = json.loads(recovery_path.read_text()) if recovery_path else None
     tail = load_catalog(data, config.tail_catalog)[0] if config.tail_catalog else None
     shards = assigned_shards(catalog, catalog_hash, config.replica, config.replicas, tail)
     skip = set(catalog["skip_ids"])
     root = config.root
     root.mkdir(exist_ok=False)
-    prefix = f"{config.destination}/r{config.replica}"
-    cursor_url = prefix + "/cursor.json"
-    predecessor = f"{config.predecessor.rstrip('/')}/r{config.replica}" if config.predecessor else None
+    prefix = str(StoragePath(config.destination) / f"r{config.replica}")
+    cursor_url = StoragePath(prefix) / "cursor.json"
+    predecessor = str(StoragePath(config.predecessor) / f"r{config.replica}") if config.predecessor else None
     cursor, cursor_source = resume_cursor(prefix, predecessor, catalog_hash)
-    cfg = json.loads((data / config.config_file).read_text())
+    cfg = json.loads((data / "config.json").read_text())
     cfg["workers"] = config.slots
     if "rule_approval" in cfg:
         cfg["rule_approval"]["path"] = str(data / cfg["rule_approval"]["path"])
@@ -184,7 +178,9 @@ def run_fleet(config: FleetConfig) -> None:
     )
     config_path = root / "config.json"
     config_path.write_text(json.dumps(cfg, indent=2))
-    provenance = write_provenance(Path(__file__).resolve().parents[2], root, catalog_hash)
+    provenance = write_provenance(
+        Path(__file__).resolve().parents[2], root, catalog_hash, os.environ.get("PROVENANCE_GIT_HEAD")
+    )
     route_gate = load_route_gate(root)
     environment_path = Path(__file__).resolve().parents[1] / "tool_normalization/environments.json"
     packages = json.loads(environment_path.read_text())[cfg["execution"]["image"]]["packages"]
@@ -194,12 +190,12 @@ def run_fleet(config: FleetConfig) -> None:
     for shard_index in range(cursor["shard"], len(shards)):
         shard = shards[shard_index]
         start = max(cursor["row"] if shard_index == cursor["shard"] else 0, shard.get("start_row", 0))
-        for first in range(start, shard["rows"], 128):
+        for first in range(start, shard["rows"], BATCH_ROWS):
             if (root / "STOP").exists() or time.time() >= deadline or cursor["artifact_bytes"] >= config.artifact_budget:
                 print(json.dumps({"phase": "allocation_complete", "cursor": cursor}), flush=True)
                 # No batch is open here; avoid library teardown keeping a completed allocation alive.
                 os._exit(0)
-            stop = min(first + 128, shard["rows"])
+            stop = min(first + BATCH_ROWS, shard["rows"])
             name = f"shard-{shard_index:05d}-rows-{first:08d}-{stop:08d}"
             preserved = {}
             recovered_bytes = 0
@@ -220,14 +216,14 @@ def run_fleet(config: FleetConfig) -> None:
                 for row in range(first, stop)
             ]
             # Claim before acquisition/inference; an interrupted batch is never silently replayed.
-            claim_url = prefix + "/claims/" + name + ".json"
+            claim_url = StoragePath(prefix) / "claims" / (name + ".json")
             reconcile_claims(prefix, predecessor, name, config.replica)
-            with fsspec.open(claim_url, "w") as stream:
+            with claim_url.open("w") as stream:
                 json.dump({"started_at": time.time(), "source": shard, "first": first, "stop": stop}, stream)
             index = acquire_shard(source_rows, tokenizer, batch / "sources")
             selected = []
             dispositions = []
-            terminus = terminus_source(shard.get("source", ""))
+            terminus = excluded_terminal_source(shard.get("source", ""))
             for item in index:
                 source_file = batch / "sources" / item["id"] / "source.json"
                 source = json.loads(source_file.read_text())
@@ -283,7 +279,7 @@ def run_fleet(config: FleetConfig) -> None:
                 tar.add(config_path, arcname="config.json")
                 tar.add(root / "lineage.json", arcname="lineage.json")
                 tar.add(root / "provenance.json", arcname="provenance.json")
-            with archive.open("rb") as source, fsspec.open(prefix + "/batches/" + archive.name, "wb") as target:
+            with archive.open("rb") as source, (StoragePath(prefix) / "batches" / archive.name).open("wb") as target:
                 shutil.copyfileobj(source, target)
             if occupied or (selected and (summary.get("pending", 0) or summary.get("capacity_deferred", 0))):
                 raise RuntimeError("Saved stopped batch requires admission reconciliation; cursor not advanced")
@@ -295,7 +291,7 @@ def run_fleet(config: FleetConfig) -> None:
                 counts=dict(counts),
                 updated_at=time.time(),
             )
-            with fsspec.open(cursor_url, "w") as stream:
+            with cursor_url.open("w") as stream:
                 json.dump(cursor, stream)
             print(json.dumps({"phase": "batch_committed", "name": name, "cursor": cursor}), flush=True)
             emit_receipt(prefix, name, archive, catalog_hash, cursor, provenance)

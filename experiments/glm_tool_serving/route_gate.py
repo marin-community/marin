@@ -1,9 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Step-(iv) route gate: route unprocessed rows per the refocus selection manifest.
+"""Route unprocessed rows using the SHA-pinned deterministic replacement manifest.
 
-Coordinator-approved plan v2, amendment 3: a row is dispositioned
+The manifest URLs below identify the durable selection evidence: a row is dispositioned
 out_of_scope_deterministic only when the published exact-selection manifest
 matches on (source_shard, source_row, input_ids_sha256) AND its route is
 "deterministic" AND the entry carries a verified_replacement with an archive URI
@@ -19,9 +19,10 @@ import gzip
 import hashlib
 import json
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
-import fsspec
+from rigging.filesystem.storage_path import StoragePath
 
 GATE_SUMMARY_URI = (
     "s3://marin-us-east-08a/marin/users/benfeuer/tool-normalization/"
@@ -35,17 +36,23 @@ GATE_MANIFEST_URI = (
 GATE_MANIFEST_SHA256 = "fd770d3936d0d2679ebcdde4577004459981f316f4e65c149b9dc05846693402"
 
 
+@dataclass(frozen=True)
+class RouteGate:
+    rows: dict[tuple[str, int], tuple[str, int, str]]
+    archives: list[dict]
+
+
 def _fetch_verified(uri: str, expected_sha256: str, destination: Path) -> bool:
     """Download uri to destination; True only if the bytes match the pinned SHA."""
     digest = hashlib.sha256()
-    with fsspec.open(uri, "rb") as source, destination.open("wb") as target:
+    with StoragePath(uri).open("rb") as source, destination.open("wb") as target:
         for chunk in iter(lambda: source.read(1 << 22), b""):
             digest.update(chunk)
             target.write(chunk)
     return digest.hexdigest() == expected_sha256
 
 
-def load_route_gate(root: Path) -> dict | None:
+def load_route_gate(root: Path) -> RouteGate | None:
     """Build {(source_shard, source_row): (input_ids_sha256, archive_index, record_prefix)}
     plus the archive table for route=deterministic rows; None disables the gate."""
     root.mkdir(parents=True, exist_ok=True)
@@ -99,18 +106,18 @@ def load_route_gate(root: Path) -> dict | None:
         ),
         flush=True,
     )
-    return {"rows": gate, "archives": archives}
+    return RouteGate(rows=gate, archives=archives)
 
 
-def gate_result(gate: dict | None, item: dict) -> dict | None:
+def gate_result(gate: RouteGate | None, item: dict) -> dict | None:
     """Return the out_of_scope_deterministic disposition when the row matches the
     gate on shard + row + input hash; None routes the row to the normal path."""
     if gate is None:
         return None
-    entry = gate["rows"].get((item.get("shard"), item.get("row")))
+    entry = gate.rows.get((item.get("shard"), item.get("row")))
     if entry is None or entry[0] != item.get("input_ids_sha256"):
         return None
-    archive = gate["archives"][entry[1]]
+    archive = gate.archives[entry[1]]
     return {
         "status": "out_of_scope_deterministic",
         "reason": "deterministic path replacement per the 2026-11-15 refocus selection manifest",

@@ -24,6 +24,8 @@ def main() -> None:
     args = parser.parse_args()
     if not 1 <= args.replica <= args.replicas <= 8 or args.slots * args.replicas > 32:
         raise ValueError("Invalid replica ownership or aggregate admission allocation")
+    recovery = f"recovery-{args.replica}.json"
+    data = Path(__file__).resolve().parent / "production_data"
     run_fleet(
         FleetConfig(
             replica=args.replica,
@@ -35,8 +37,7 @@ def main() -> None:
             artifact_budget=args.artifact_budget,
             hours=args.hours,
             root=Path(f"/tmp/tool-scale-r{args.replica}"),
-            config_file=f"config-{args.replica}.json",
-            recovery_file=f"recovery-{args.replica}.json",
+            recovery_file=recovery if (data / recovery).exists() else None,
             generation=f"{args.destination.rstrip('/').rsplit('/', 1)[-1]}-r{args.replica}",
             capacity_hours=30,
             tail_catalog="ortet-24-catalog.json",

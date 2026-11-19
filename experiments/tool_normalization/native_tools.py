@@ -61,7 +61,7 @@ def replay(binary: Path, calls: list[dict], workspace: Path, evidence: Path, tim
     failures = []
 
     class Handler(BaseHTTPRequestHandler):
-        def log_message(self, fmt, *args):
+        def log_message(self, _fmt, *_args):
             # Full requests are persisted below; omit the HTTP server's stderr log.
             pass
 

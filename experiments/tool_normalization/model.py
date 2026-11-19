@@ -60,6 +60,14 @@ class ModelConfig:
     relay_job: str | None
 
 
+def parse_model_config(values: dict) -> ModelConfig:
+    """Normalize paths from a serialized model configuration."""
+    values = values.copy()
+    for key in ("api_key_file", "capacity_file", "ledger", "stop_file"):
+        values[key] = Path(values[key])
+    return ModelConfig(**values)
+
+
 def check_allocation(config: ModelConfig, deadline: float) -> None:
     if config.stop_file.exists() or time.time() >= deadline:
         raise CapacityUnavailable("Request stopped or allocation deadline reached")

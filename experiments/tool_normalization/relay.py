@@ -12,7 +12,6 @@ from iris.client.client import iris_ctx
 from iris.cluster.types import JobName
 
 RELAY_JOB = "/muchanem/glm53-relay-rno2a-g-20261027T0414Z"
-SECRET_FILE = Path(os.environ.get("RIGGING_SECRETS_DIR", "/run/rigging/secrets")) / "GLM_BULK_TOKEN"
 
 
 def resolve_relay_base_url(token: str, job: str = RELAY_JOB) -> str:
@@ -34,8 +33,9 @@ def resolve_relay_base_url(token: str, job: str = RELAY_JOB) -> str:
 
 
 def read_bulk_token() -> str:
-    if SECRET_FILE.exists():
-        token = SECRET_FILE.read_text().strip()
+    secret_file = Path(os.environ.get("RIGGING_SECRETS_DIR", "/run/rigging/secrets")) / "GLM_BULK_TOKEN"
+    if secret_file.exists():
+        token = secret_file.read_text().strip()
         if token:
             return token
     token = os.environ.get("GLM_BULK_TOKEN", "").strip()
