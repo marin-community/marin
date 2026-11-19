@@ -4,7 +4,7 @@ name: MuonC with s² head and late-matrix anneal
 category: Optimizers
 summary: 🤖 Posted on behalf of @WhenWen.
 source: intake
-status: approved
+status: running
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-7019433555
@@ -12,3 +12,16 @@ intake:
   approved_by: WhenWen (trusted)
 code_commits:
 - 43cba9ad203f90fceb113f0c320f87de9dc56b12
+trials:
+- id: t001
+  variant: MuonC lambda 0.2 + s(t)^2 head and late-matrix anneal
+  rung: speedrun
+  protocol: equal_steps
+  batch: X0247
+  date: '2026-11-19'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0247
+  wandb: []
+  settings:
+    muonc_anneal_decay: '0.2'
+  commit: 760dbc5325
+  priority: interactive
