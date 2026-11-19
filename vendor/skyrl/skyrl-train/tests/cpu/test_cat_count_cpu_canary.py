@@ -92,7 +92,7 @@ def train(
     eval_interval: int | None = None,
     seed: int = 0,
     callbacks: list[dict] | None = None,
-    family_quotas: dict[str, int] | None = None,
+    groups_per_family: dict[str, int] | None = None,
 ):
     cfg = cat_count_config(
         root, model, steps=steps, staleness=staleness, resume=resume, eval_interval=eval_interval, seed=seed
@@ -101,7 +101,7 @@ def train(
         OmegaConf.update(cfg, "trainer.callbacks", callbacks, force_add=True)
     if flipped:
         cfg.trainer.algorithm.advantage_estimator = "cat_count_flipped_grpo"
-    if family_quotas:
+    if groups_per_family:
         source = Path(cfg.data.train_data[0])
         configs = OmegaConf.to_container(cfg.environment.task_sessions, resolve=True)
         rows = []
@@ -114,7 +114,7 @@ def train(
         pq.write_table(pa.Table.from_pylist(rows), parquet)
         cfg.data.train_data = [str(parquet)]
         cfg.environment.task_sessions.task_spec.harness_by_dataset = {"train": "cat_count"}
-        OmegaConf.update(cfg, "trainer.rollout_buffer.family_quotas", family_quotas, force_add=True)
+        OmegaConf.update(cfg, "trainer.rollout_buffer.groups_per_family", groups_per_family, force_add=True)
     worker_env = {key: os.environ[key] for key in ("SKYRL_TELEMETRY_ENDPOINT", "SKYRL_RUN_ID", "SKYRL_EXECUTION_UID")}
     start = time.perf_counter()
     process = forkserver_context.Process(target=run_cat_count, args=(cfg, worker_env))
@@ -324,10 +324,10 @@ def test_cat_count_flipped_advantage_fails(tmp_path, cat_count_policy, cat_count
 def test_cat_count_async_resumes_and_converges(tmp_path, cat_count_policy, cat_count_session, forkserver_context):
     root = tmp_path / "async"
     quotas = {"odd": 4, "even": 4}
-    first = train(forkserver_context, root, cat_count_policy, steps=4, staleness=1, family_quotas=quotas)
+    first = train(forkserver_context, root, cat_count_policy, steps=4, staleness=1, groups_per_family=quotas)
     resumed = train(
         forkserver_context, root, cat_count_policy, steps=100, staleness=1, resume=True, eval_interval=2,
-        family_quotas=quotas,
+        groups_per_family=quotas,
     )
     assert scores(resumed)[len(scores(first))] == scores(first)[-1]
     assert len([row for row in first if "policy/raw_grad_norm" in row]) == 4

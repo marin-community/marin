@@ -8,7 +8,7 @@ from omegaconf import DictConfig, OmegaConf
 from marinskyrl.distillation import compile_distillation_plan_from_config
 from marinskyrl.runtime_options import WeightSyncTransport
 
-FAMILY_QUOTAS_KEY = "trainer.rollout_buffer.family_quotas"
+GROUPS_PER_FAMILY_KEY = "trainer.rollout_buffer.groups_per_family"
 FAMILY_COLUMN = "family"
 
 
@@ -26,20 +26,20 @@ class EntrypointOperation(StrEnum):
 
 def validate_family_quota_config(cfg: DictConfig) -> dict[str, int]:
     """Read the batch quotas and check their interaction with training settings."""
-    quotas = OmegaConf.select(cfg, FAMILY_QUOTAS_KEY, default={})
+    quotas = OmegaConf.select(cfg, GROUPS_PER_FAMILY_KEY, default={})
     if not isinstance(quotas, Mapping) or any(
         not isinstance(family, str) or not family or type(count) is not int or count <= 0
         for family, count in quotas.items()
     ):
-        raise ValueError(f"{FAMILY_QUOTAS_KEY} requires family names and positive integer counts")
+        raise ValueError(f"{GROUPS_PER_FAMILY_KEY} requires family names and positive integer counts")
     if quotas:
         if cfg.trainer.rollout_buffer.batch_policy != BatchPolicy.FULL_BATCH:
-            raise ValueError(f"{FAMILY_QUOTAS_KEY} requires batch_policy={BatchPolicy.FULL_BATCH}")
+            raise ValueError(f"{GROUPS_PER_FAMILY_KEY} requires batch_policy={BatchPolicy.FULL_BATCH}")
         batch_size = cfg.trainer.train_batch_size
         if sum(quotas.values()) != batch_size:
-            raise ValueError(f"{FAMILY_QUOTAS_KEY} sums to {sum(quotas.values())}, expected train_batch_size={batch_size}")
+            raise ValueError(f"{GROUPS_PER_FAMILY_KEY} sums to {sum(quotas.values())}, expected train_batch_size={batch_size}")
         if cfg.data.sampling.kind is not None:
-            raise ValueError(f"{FAMILY_QUOTAS_KEY} requires data.sampling.kind to be null")
+            raise ValueError(f"{GROUPS_PER_FAMILY_KEY} requires data.sampling.kind to be null")
     return dict(quotas)
 
 
@@ -48,16 +48,16 @@ def validate_family_pools(
 ) -> None:
     """Check that every family can supply its full window of distinct groups."""
     if family_counts.get(None, 0) or family_counts.get("", 0):
-        raise ValueError(f"{FAMILY_QUOTAS_KEY} requires a family on every training row")
+        raise ValueError(f"{GROUPS_PER_FAMILY_KEY} requires a family on every training row")
     if family_counts.keys() != quotas.keys():
         raise ValueError(
-            f"{FAMILY_QUOTAS_KEY} names {sorted(quotas)}, but training rows have families {sorted(map(str, family_counts))}"
+            f"{GROUPS_PER_FAMILY_KEY} names {sorted(quotas)}, but training rows have families {sorted(map(str, family_counts))}"
         )
     for family, quota in quotas.items():
         available = family_counts[family]
         needed = (max_staleness_steps + 1) * quota
         if available < needed:
-            raise ValueError(f"{FAMILY_QUOTAS_KEY} requires {needed} rows for family {family!r}, found {available}")
+            raise ValueError(f"{GROUPS_PER_FAMILY_KEY} requires {needed} rows for family {family!r}, found {available}")
 
 
 def validate_rollout_launch(

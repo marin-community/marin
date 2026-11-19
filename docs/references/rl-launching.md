@@ -202,7 +202,7 @@ parallelism. An omitted or null ETP inherits the role's TP before these checks.
 Context-parallel ranks participate in the expert grid, so EP need not divide dense
 data parallelism.
 
-Set `trainer.rollout_buffer.family_quotas` for fixed numbers of prompt groups per task family in
+Set `trainer.rollout_buffer.groups_per_family` for fixed numbers of prompt groups per task family in
 each training batch. Each Parquet training row supplies its `family`. The counts must sum to
 `trainer.train_batch_size`. Use `batch_policy: full_batch` and leave `data.sampling.kind` unset.
 Each family needs its quota times `max_staleness_steps + 1` usable rows so that every batch in

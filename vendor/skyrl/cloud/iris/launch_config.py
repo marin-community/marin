@@ -16,7 +16,7 @@ from skyrl_train.config.mismatch_probe import validate_mismatch_probe_config
 from skyrl_train.config.objective_spec import validate_objective
 from skyrl_train.config.rollout_validation import (
     FAMILY_COLUMN,
-    FAMILY_QUOTAS_KEY,
+    GROUPS_PER_FAMILY_KEY,
     validate_family_pools,
     validate_family_quota_config,
 )
@@ -278,9 +278,9 @@ def load_launch_config(path: Path) -> DictConfig:
     validate_launch_config(config)
     if is_source_recipe:
         buffer = config.skyrl.trainer.rollout_buffer
-        if buffer.family_quotas:
+        if buffer.groups_per_family:
             inputs = OmegaConf.to_container(config.inputs, resolve=True)
-            _validate_launch_family_pools(inputs, dict(buffer.family_quotas), buffer.max_staleness_steps)
+            _validate_launch_family_pools(inputs, dict(buffer.groups_per_family), buffer.max_staleness_steps)
     return config
 
 
@@ -329,7 +329,7 @@ def _validate_launch_family_pools(
 ) -> None:
     sources = [data_source(entry) for entry in inputs["train_data"]]
     if inputs["data_kind"] != "parquet" or any(not isinstance(source, DirectoryDataSource) for source in sources):
-        raise ValueError(f"{FAMILY_QUOTAS_KEY} requires parquet training rows with a {FAMILY_COLUMN} column")
+        raise ValueError(f"{GROUPS_PER_FAMILY_KEY} requires parquet training rows with a {FAMILY_COLUMN} column")
     counts: Counter[str | None] = Counter()
     for source in sources:
         uri = join_resource_path(source.uri, source.relative_path)
@@ -337,7 +337,7 @@ def _validate_launch_family_pools(
         with filesystem.open(path, "rb") as stream:
             rows = parquet.ParquetFile(stream)
             if FAMILY_COLUMN not in rows.schema_arrow.names:
-                raise ValueError(f"{FAMILY_QUOTAS_KEY} requires a {FAMILY_COLUMN} column in {uri}")
+                raise ValueError(f"{GROUPS_PER_FAMILY_KEY} requires a {FAMILY_COLUMN} column in {uri}")
             for batch in rows.iter_batches(columns=[FAMILY_COLUMN]):
                 counts.update(batch.column(0).to_pylist())
     validate_family_pools(quotas, counts, max_staleness_steps)

@@ -66,7 +66,7 @@ TYPES = MappingProxyType(
         "trainer.ref.megatron_config.optimizer_checkpoint_sharding_type": OPTIMIZER_CHECKPOINT_SHARDING,
         "trainer.rollout_buffer.max_staleness_steps": "NonNegativeInt",
         "trainer.rollout_buffer.batch_policy": _literal(BatchPolicy),
-        "trainer.rollout_buffer.family_quotas": "CountMap",
+        "trainer.rollout_buffer.groups_per_family": "CountMap",
         "trainer.hf_upload_mode": _literal(HFUploadMode),
         "trainer.policy.grug_query_bias_update_mode": _literal(GrugQueryBiasUpdateMode),
         "trainer.algorithm.advantage_estimator": _literal(AdvantageEstimatorRegistry.list_available()),

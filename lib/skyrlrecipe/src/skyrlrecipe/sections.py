@@ -494,7 +494,7 @@ class RolloutBuffer(Section):
     groups leased for it, waiting for the slowest, so training never favors rollouts that finish quickly. rolling
     fills each batch in commit order and regenerates groups that miss the staleness window, so a slow rollout
     never blocks training, but quick rollouts train more often and at lower staleness."""
-    family_quotas: CountMap = field({})
+    groups_per_family: CountMap = field({})
     """Prompt groups of each task family per batch, keyed by the rows' family column. Quotas require full_batch and
     the counts must sum to train_batch_size. An empty map leaves the mix to the prompt order."""
     max_stale_retries: int = field(1)

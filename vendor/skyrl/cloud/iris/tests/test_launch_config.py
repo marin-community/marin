@@ -660,12 +660,12 @@ def test_composed_launch_rejects_tis_selectors(tmp_path: Path, key: str, value) 
         ({"algorithm.dynamic_sampling.max_mean_reward": 0.9}, "requires dynamic_sampling.type=filter"),
         ({"algorithm.dynamic_sampling.max_mean_reward": 0.9, "algorithm.dynamic_sampling.type": "filter"}, None),
         (
-            {"rollout_buffer.family_quotas": {"math": 8}, "rollout_buffer.batch_policy": "rolling"},
+            {"rollout_buffer.groups_per_family": {"math": 8}, "rollout_buffer.batch_policy": "rolling"},
             "requires batch_policy=full_batch",
         ),
-        ({"rollout_buffer.family_quotas": {"math": 7}}, "sums to 7, expected train_batch_size=8"),
+        ({"rollout_buffer.groups_per_family": {"math": 7}}, "sums to 7, expected train_batch_size=8"),
         (
-            {"rollout_buffer.family_quotas": {"math": 8}, "data.sampling.kind": "domain-weighted"},
+            {"rollout_buffer.groups_per_family": {"math": 8}, "data.sampling.kind": "domain-weighted"},
             r"requires data\.sampling\.kind to be null",
         ),
     ],
@@ -705,7 +705,7 @@ def test_source_launch_preserves_nested_open_mappings(tmp_path):
     ],
     ids=["insufficient", "unlisted-family", "valid-pool"],
 )
-def test_launch_preflights_family_quotas(tmp_path, remaining_families, error):
+def test_launch_preflights_groups_per_family(tmp_path, remaining_families, error):
     data_path = tmp_path / "tasks.parquet"
     pq.write_table(pa.table({"family": ["math"] * 8 + remaining_families}), data_path)
     raw = raw_launch_config()
@@ -717,7 +717,7 @@ def test_launch_preflights_family_quotas(tmp_path, remaining_families, error):
     raw["skyrl"]["data"] = {"kind": "parquet"}
     trainer = raw["skyrl"]["trainer"]
     trainer["rollout_buffer"] = {
-        "family_quotas": {"math": 4, "code": 4},
+        "groups_per_family": {"math": 4, "code": 4},
         "max_staleness_steps": 1,
     }
     trainer["placement"]["colocate_all"] = False
@@ -727,7 +727,7 @@ def test_launch_preflights_family_quotas(tmp_path, remaining_families, error):
     path.write_text(yaml.safe_dump(raw))
 
     if error:
-        with pytest.raises(ValueError, match=rf"trainer\.rollout_buffer\.family_quotas {error}"):
+        with pytest.raises(ValueError, match=rf"trainer\.rollout_buffer\.groups_per_family {error}"):
             load_launch_config(path)
         return
 
