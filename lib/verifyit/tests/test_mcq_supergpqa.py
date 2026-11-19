@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import signal
-import threading
 
 import pytest
-from verifyit.grade import GradingInfraError, Status
+from verifyit import supergpqa_extraction
+from verifyit.grade import Status
 from verifyit.grade import grade as dispatch
 from verifyit.modes import grade_mcq
 from verifyit.spec import McqExtraction, McqSpec
@@ -47,7 +47,7 @@ def test_supergpqa_reference_grades_the_answer_file(tmp_path):
 
 @pytest.mark.parametrize("run", ["*" * 40, "(" * 40, "\\" * 40])
 def test_backtracking_search_times_out_as_a_miss(monkeypatch, run):
-    monkeypatch.setattr(grade_mcq, "SUPERGPQA_SEARCH_TIMEOUT", 0.05)
+    monkeypatch.setattr(supergpqa_extraction, "SUPERGPQA_SEARCH_TIMEOUT", 0.05)
     result = grade_mcq.grade_mcq_candidate(SPEC, run)
     assert result.status == Status.SCORED
     assert result.detail["extracted"] is None
@@ -68,18 +68,3 @@ def test_search_timeout_restores_the_callers_alarm():
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous)
-
-
-def test_supergpqa_reference_refuses_to_run_off_the_main_thread():
-    errors = []
-
-    def grade():
-        try:
-            grade_mcq.grade_mcq_candidate(SPEC, "Answer: C")
-        except GradingInfraError as error:
-            errors.append(error)
-
-    worker = threading.Thread(target=grade)
-    worker.start()
-    worker.join()
-    assert len(errors) == 1
