@@ -338,6 +338,7 @@ def build_sft_run(
     checkpoint_root: str | None = None,
     expert_placement: ExpertPlacement | None = None,
     version: str | None = None,
+    resources: ResourceConfig | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build the hero SFT run that continues ``initialize_from`` at ``start_step``.
 
@@ -412,7 +413,7 @@ def build_sft_run(
         special_tokens=special_token_init(start_step),
         expert_placement=expert_placement,
     )
-    train_resources = sft_resources(dp_racks)
+    train_resources = sft_resources(dp_racks) if resources is None else resources
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
     validation = validation_datasets() if eval_every > 0 else []

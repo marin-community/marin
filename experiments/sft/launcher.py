@@ -70,7 +70,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
 from functools import partial
-from typing import Generic, Protocol, TypeVar, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 import click
 import draccus
@@ -89,13 +89,12 @@ from levanter.trainer import DEFAULT_JAX_CONFIG, TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, lower
-from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
 from marin.experiment.checkpoints import HfToLevanterCheckpoint
+from marin.experiment.train import train_job
 from marin.processing.tokenize.tokenize import TokenizeConfig, TokenizedCache
 from marin.processing.tokenize.tokenize import tokenize as run_tokenize
 from marin.rl.skyrl import ArtifactHfModel
-from marin.training.levanter import resolve_training_env, run_levanter_train_lm
 from marin.training.training import DEFAULT_HF_CHECKPOINTS_PATH, LevanterCheckpoint, TrainLmOnPodConfig
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.timing import Duration
@@ -207,7 +206,7 @@ def _levanter_train_config(
     """Assemble the identity-bearing ``TrainLmConfig`` for a Levanter-backend SFT run.
 
     ``model_config`` is the concrete ``LmConfig`` the pytree is built from. With
-    ``use_hf_model_config```, the checkpoint supplies the architecture and the given config supplies
+    ``use_hf_model_config``, the checkpoint supplies the architecture and the given config supplies
     supported runtime settings. Native init needs the architecture the checkpoint was saved with.
     """
     return TrainLmConfig(
@@ -237,6 +236,23 @@ def _levanter_train_config(
     )
 
 
+def _validate_gpu_mesh(spec: SFTSpec, resources: ResourceConfig) -> None:
+    if not isinstance(resources.device, GpuConfig):
+        return
+    mesh = spec.mesh or MeshConfig()
+    try:
+        ici, dcn = mesh.axis_shapes(resources.device.count * resources.replicas, resources.replicas)
+    except ValueError as error:
+        raise ValueError(f"mesh does not fit SFT resources: {error}") from error
+    batch_axes = mesh.resolved_compute_mapping["batch"]
+    batch_axes = (batch_axes,) if isinstance(batch_axes, str) else batch_axes
+    sizes = ici | dcn
+    batch_shards = math.prod(sizes.get(axis, 1) for axis in batch_axes)
+    microbatch = batch_shards * max(spec.per_device_parallelism, 1)
+    if spec.batch_size % microbatch:
+        raise ValueError(f"SFT batch_size={spec.batch_size} must be divisible by the mesh microbatch ({microbatch})")
+
+
 def _levanter_pod_config(
     ctx: StepContext,
     spec: SFTSpec,
@@ -258,18 +274,7 @@ def _levanter_pod_config(
     """
     gpu_allocator = not ctx.is_fingerprint and isinstance(resources.device, GpuConfig)
     if gpu_allocator:
-        mesh = spec.mesh or MeshConfig()
-        try:
-            ici, dcn = mesh.axis_shapes(resources.device.count * resources.replicas, resources.replicas)
-        except ValueError as error:
-            raise ValueError(f"mesh does not fit SFT resources: {error}") from error
-        batch_axes = mesh.resolved_compute_mapping["batch"]
-        batch_axes = (batch_axes,) if isinstance(batch_axes, str) else batch_axes
-        sizes = ici | dcn
-        batch_shards = math.prod(sizes.get(axis, 1) for axis in batch_axes)
-        microbatch = batch_shards * max(spec.per_device_parallelism, 1)
-        if spec.batch_size % microbatch:
-            raise ValueError(f"SFT batch_size={spec.batch_size} must be divisible by the mesh microbatch ({microbatch})")
+        _validate_gpu_mesh(spec, resources)
     return TrainLmOnPodConfig(
         train_config=_levanter_train_config(
             spec,
@@ -287,21 +292,6 @@ def _levanter_pod_config(
         env_vars={"XLA_FLAGS": " ".join(spec.xla_flags)} if spec.xla_flags else None,
         auto_build_caches=data_config.auto_build_caches,
     )
-
-
-def _levanter_train_job(pod_config: TrainLmOnPodConfig, *, task_timeout_seconds: int | None = None) -> None:
-    """Dispatch a Levanter ``train_lm`` config as its own Fray training job."""
-    env = (
-        resolve_training_env(pod_config.env_vars, pod_config.resources)
-        if isinstance(pod_config.resources.device, GpuConfig)
-        else {}
-    )
-    remote(
-        run_levanter_train_lm,
-        resources=pod_config.resources,
-        env_vars=env,
-        timeout=Duration.from_seconds(task_timeout_seconds) if task_timeout_seconds is not None else None,
-    )(pod_config)
 
 
 @dataclass(frozen=True)
@@ -326,9 +316,8 @@ class HFModel:
 
     @property
     def run(self) -> Callable[..., None]:
-        if self.task_timeout_seconds is None:
-            return _levanter_train_job
-        return partial(_levanter_train_job, task_timeout_seconds=self.task_timeout_seconds)
+        timeout = None if self.task_timeout_seconds is None else Duration.from_seconds(self.task_timeout_seconds)
+        return partial(train_job, timeout=timeout)
 
     def init_deps(self) -> tuple[ArtifactStep, ...]:
         return ()
@@ -378,7 +367,7 @@ class PreparedModel:
 
     @property
     def run(self) -> Callable[..., None]:
-        return _levanter_train_job
+        return train_job
 
     def init_deps(self) -> tuple[ArtifactStep, ...]:
         return (self.step,)
@@ -459,7 +448,7 @@ class ConvertedCheckpointModel:
 
     @property
     def run(self) -> Callable[..., None]:
-        return _levanter_train_job
+        return train_job
 
     def init_deps(self) -> tuple[ArtifactStep, ...]:
         return (self.conversion.step,)
@@ -509,7 +498,7 @@ class LevanterCheckpointModel:
 
     @property
     def run(self) -> Callable[..., None]:
-        return _levanter_train_job
+        return train_job
 
     def init_deps(self) -> tuple[ArtifactStep, ...]:
         return (self.init_from,) if isinstance(self.init_from, ArtifactStep) else ()
@@ -614,6 +603,7 @@ class SFTSpec:
     def trained(self, resources: ResourceConfig) -> ArtifactHfModel:
         if not isinstance(self.model, (HFModel, PreparedModel, ConvertedCheckpointModel, LevanterCheckpointModel)):
             raise ValueError(f"Build a Hugging Face export for the {type(self.model).__name__} trainer")
+        _validate_gpu_mesh(self, resources)
         steps = self.num_train_steps
         return ArtifactHfModel(
             step=sft_step(self, resources),
@@ -625,13 +615,10 @@ class SFTRecipe(Protocol):
     def trained(self, resources: ResourceConfig) -> ArtifactHfModel: ...
 
 
-_Recipe = TypeVar("_Recipe", bound=SFTRecipe, covariant=True)
-
-
 @dataclass(frozen=True)
-class SFTPreset(Generic[_Recipe]):
+class SFTPreset:
     name: str
-    recipe: _Recipe
+    recipe: SFTRecipe
     resources: ResourceConfig
 
     def model(self) -> ArtifactHfModel:
@@ -911,12 +898,8 @@ def sft_step(spec: SFTSpec, resources: ResourceConfig) -> ArtifactStep[LevanterC
     )
 
 
-def run_sft_cli(presets: Sequence[SFTPreset[SFTRecipe]] | SFTSpec) -> None:
+def main(presets: Sequence[SFTPreset]) -> None:
     """Print or run a named SFT preset."""
-    if isinstance(presets, SFTSpec):
-        _run_sft_spec_cli(presets)
-        return
-
     by_name = {preset.name: preset for preset in presets}
 
     @click.command()
@@ -926,20 +909,30 @@ def run_sft_cli(presets: Sequence[SFTPreset[SFTRecipe]] | SFTSpec) -> None:
     def _cli(preset: str, run: bool, accelerator: str | None) -> None:
         if accelerator is not None:
             raise click.UsageError("The SFT preset fixes its own allocation. Run without --accelerator.")
-        model = by_name[preset].model()
+        try:
+            model = by_name[preset].model()
+        except ValueError as error:
+            raise click.UsageError(str(error)) from error
         StepRunner().run([lower(model.step)], dry_run=not run)
 
     _cli()
 
 
-def _run_sft_spec_cli(spec: SFTSpec) -> None:
+def run_sft_cli(spec: SFTSpec) -> None:
+    """Click entry point: launch ``spec`` on the accelerator named by ``--accelerator``.
+
+    A config module ends with ``if __name__ == "__main__": run_sft_cli(SPEC)``; the user then runs
+    ``python -m experiments.sft.configs.<name> --accelerator <accel>``.
+    """
+
     @click.command()
     @click.option(
         "--accelerator",
         required=True,
-        help="Accelerator '<count>x<gpu>' or a TPU slice variant such as 'v4-64'.",
+        help="Accelerator: '<count>x<gpu>' (e.g. '8xH100') or a TPU slice variant (e.g. 'v4-64').",
     )
     def _cli(accelerator: str) -> None:
-        StepRunner().run([lower(sft_step(spec, resources_from_accelerator(accelerator)))])
+        resources = resources_from_accelerator(accelerator)
+        StepRunner().run([lower(sft_step(spec, resources))])
 
     _cli()

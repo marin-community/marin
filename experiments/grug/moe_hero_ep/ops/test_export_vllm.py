@@ -18,7 +18,7 @@ from jax.sharding import PartitionSpec as P
 from levanter.checkpoint import save_checkpoint
 from levanter.grug.sharding import compact_grug_mesh
 from marin.execution.artifact import read_record
-from marin.execution.lazy import StepContext
+from marin.execution.lazy import StepContext, materialized_config
 from rigging.filesystem.storage_path import StoragePath
 from safetensors.numpy import load_file
 
@@ -30,7 +30,7 @@ from experiments.grug.moe_hero_ep.expert_placement import ExpertPlacement
 from experiments.grug.moe_hero_ep.model import GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY, GrugModelConfig, Transformer
 from experiments.grug.moe_hero_ep.ops.export_vllm import ExportConfig, export
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
-from experiments.post_training.mochi_sft import PRODUCTION_SFT
+from experiments.post_training.mochi_sft import MIXTURE_262K_176NODE, MOCHI_SPEC
 
 
 @pytest.mark.parametrize(
@@ -199,15 +199,19 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
     monkeypatch.setattr(launch_hero_sft, "special_token_init", lambda _: None)
     monkeypatch.setattr(sft_recipe, "configure_coreweave_s3", lambda: None)
     recipe = dataclasses.replace(
-        PRODUCTION_SFT.recipe,
+        MOCHI_SPEC,
         initialize_from=str(initializer),
         dp_racks=1,
         stop_after_steps=1,
         eval_every=0,
         expert_placement=placement,
     )
-    resources = launch_hero_sft.sft_resources(recipe.dp_racks)
-    preset = dataclasses.replace(PRODUCTION_SFT, recipe=recipe, resources=resources)
+    resources = dataclasses.replace(
+        launch_hero_sft.sft_resources(recipe.dp_racks),
+        regions=("US-EAST-08A",),
+        target_cluster="cw-us-east-08a",
+    )
+    preset = dataclasses.replace(MIXTURE_262K_176NODE, recipe=recipe, resources=resources)
     with pytest.raises(ValueError, match="GB200 allocation derived from dp_racks"):
         dataclasses.replace(preset, resources=dataclasses.replace(resources, replicas=1)).model()
     initializer_metadata.write_text(json.dumps({"step": 16, "is_temporary": True}))
@@ -216,6 +220,9 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
     initializer_metadata.write_text(json.dumps({"step": 16, "is_temporary": False}))
     model = preset.model()
     [trained] = model.step.deps
+    training = materialized_config(trained, str(tmp_path))
+    assert training.resources.regions == ("US-EAST-08A",)
+    assert training.resources.target_cluster == "cw-us-east-08a"
     checkpoints = Path(trained.path()) / f"expert-placement-{placement.fingerprint}" / "checkpoints"
     native, _ = native_fixture(str(checkpoints / "step-17"), master=True)
     native_fixture(str(checkpoints / "step-18"), master=True, step=18)
@@ -235,7 +242,7 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
     assert model.relative_path == "hf"
     assert record.config["relative_path"] == model.relative_path
     assert record.config["tokenizer_uri"] == model.tokenizer_uri == "marin-community/marin-tokenizer-tools"
-    assert record.config["tokenizer_revision"] == model.tokenizer_revision == PRODUCTION_SFT.recipe.tokenizer_revision
+    assert record.config["tokenizer_revision"] == model.tokenizer_revision == MOCHI_SPEC.tokenizer_revision
     hf = output / model.relative_path
     assert (hf / "export-manifest.json").is_file()
     completed = (hf / "export-manifest.json").read_bytes()

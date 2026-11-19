@@ -18,9 +18,9 @@ from experiments.grug.moe_hero_ep import launch_hero_sft
 from experiments.grug.moe_hero_ep.expert_placement import ExpertPlacement
 from experiments.grug.moe_hero_ep.sft_recipe import GrugHeroSFT
 from experiments.grug.moe_hero_ep.train import RouterBiasMode
-from experiments.sft.launcher import SFTPreset, run_sft_cli
+from experiments.sft.launcher import SFTPreset, main
 
-_RECIPE = GrugHeroSFT(
+MOCHI_SPEC = GrugHeroSFT(
     run_id="hero-sft-fullab-step393k-v2",
     initialize_from=(
         "s3://marin-us-east-02a/marin/grug/hero-lce-log65536sq-step390k/2026.08.19.2/checkpoints/step-393491"
@@ -45,13 +45,13 @@ _RECIPE = GrugHeroSFT(
     tokenizer_uri="marin-community/marin-tokenizer-tools",
     tokenizer_revision="3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09",
 )
-PRODUCTION_SFT = SFTPreset(
+MIXTURE_262K_176NODE = SFTPreset(
     "mixture-262k-176node",
-    _RECIPE,
-    replace(launch_hero_sft.sft_resources(_RECIPE.dp_racks), regions=("US-EAST-08A",), target_cluster="cw-us-east-08a"),
+    MOCHI_SPEC,
+    replace(launch_hero_sft.sft_resources(MOCHI_SPEC.dp_racks), regions=("US-EAST-08A",), target_cluster="cw-us-east-08a"),
 )
-MOCHI_SFT = (PRODUCTION_SFT,)
+MOCHI_SFT = (MIXTURE_262K_176NODE,)
 
 
 if __name__ == "__main__":
-    run_sft_cli(MOCHI_SFT)
+    main(MOCHI_SFT)

@@ -65,8 +65,8 @@ class GrugHeroSFT:
             eval_every=self.eval_every,
             expert_placement=self.expert_placement,
             version=self.version,
+            resources=resources,
         )
-        step = replace(step, runtime_args={**step.runtime_args, "train_resources": resources})
         training = step.build_config(StepContext.for_fingerprint(step.runtime_args.keys(), step.deps))
         relative_path = "hf"
         export_step = apply(
@@ -103,8 +103,6 @@ def _export_final_sft(
     tokenizer_uri: str,
     tokenizer_revision: str,
 ) -> None:
-    if not tokenizer_uri or not tokenizer_revision:
-        raise ValueError("Grug Hero SFT exports require a pinned tokenizer")
     configure_coreweave_s3()
     directory = permanent_checkpoint_dir(trained, None, placement)
     candidates = discover_checkpoint_candidates(directory)

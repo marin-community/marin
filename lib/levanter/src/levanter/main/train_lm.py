@@ -114,7 +114,11 @@ def _restore_lm_model_from_partial_checkpoint(
 
 
 def preserve_hf_runtime_settings(reloaded: LmConfig, requested: LmConfig) -> LmConfig:
-    """Reapply supported runtime settings while loading the checkpoint's architecture."""
+    """Reapply the requested Snowball runtime settings after an HF config reload.
+
+    HF metadata supplies architecture fields. Keep the requested runtime settings,
+    reference checkpoint, and tokenizer.
+    """
     if not isinstance(requested, SnowballConfig):
         return reloaded
     if not isinstance(reloaded, SnowballConfig):

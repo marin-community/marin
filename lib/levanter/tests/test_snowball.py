@@ -48,6 +48,7 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.layers.attention import AttentionMask
 from levanter.main.export_hf_to_lm import ImportHfConfig, main as import_hf
 from levanter.main.train_lm import TrainLmConfig, main, preserve_hf_runtime_settings
+from levanter.metrics import ReductionType
 from levanter.models.lm_model import LmConfig, LmExample
 from levanter.models.snowball import (
     GRUG_MOE_ARCHITECTURE,
@@ -355,7 +356,9 @@ def test_snowball_training_reports_capacity_drops():
             plain = hax.named_jit(lambda m, e: m.compute_next_token_loss(e, **loss_kwargs))(model, example)
             np.testing.assert_allclose(loss.array, plain.array, rtol=1e-6)
             # All assignments target the same shard. It has half of the configured capacity.
-            assert float(metrics["moe/dropped_assignment_fraction"]) == 0.5
+            metric = metrics["moe/dropped_assignment_fraction"]
+            assert metric.reduction is ReductionType.MEAN
+            assert float(metric) == 0.5
 
 
 def test_snowball_fp32_activations_is_a_runtime_setting():

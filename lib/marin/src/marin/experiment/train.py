@@ -45,6 +45,7 @@ from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.levanter import resolve_training_env, run_levanter_train_lm
 from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig
+from rigging.timing import Duration
 
 # Compute in bf16, keep master params and optimizer state in f32. The universal marin
 # precision policy; it bears identity (it changes numerics), so overriding it is a
@@ -81,7 +82,7 @@ def _marin_mesh(tensor_parallel_size: int) -> MeshConfig:
     )
 
 
-def _train_job(pod_config: TrainLmOnPodConfig) -> None:
+def train_job(pod_config: TrainLmOnPodConfig, *, timeout: Duration | None = None) -> None:
     """Dispatch the assembled config as its own Fray training job."""
     # GPU: resolve the env now so XLA_FLAGS is in the pod environment before the
     # worker imports JAX. TPU/CPU resolve in-worker, where mounted secrets are
@@ -91,7 +92,7 @@ def _train_job(pod_config: TrainLmOnPodConfig) -> None:
         if isinstance(pod_config.resources.device, GpuConfig)
         else {}
     )
-    remote(run_levanter_train_lm, resources=pod_config.resources, env_vars=env_vars)(pod_config)
+    remote(run_levanter_train_lm, resources=pod_config.resources, env_vars=env_vars, timeout=timeout)(pod_config)
 
 
 def train_lm(
@@ -231,7 +232,7 @@ def train_lm(
         name=user_namespaced_name(name, version),
         version=version,
         artifact_type=LevanterCheckpoint,
-        run=_train_job,
+        run=train_job,
         build_config=build_config,
         deps=all_deps,
         runtime_args={"train_resources": resources},
