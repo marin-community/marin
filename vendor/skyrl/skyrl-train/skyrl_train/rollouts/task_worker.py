@@ -319,7 +319,11 @@ def _failed_rollout(
         grade = fold_grades([step.transition.grade for step in rollout.steps if step.transition.grade is not None])
     if cleanup_errors := interruption.grade.diagnostics.get("cleanup_errors"):
         grade = replace(grade, diagnostics={**grade.diagnostics, "cleanup_errors": cleanup_errors})
-    logger.warning("Task {} interrupted during {}: {}", task.id, interruption.operation, exception_type)
+    detail = exception_type
+    if isinstance(error, TaskMachineError) and error.__cause__ is not None:
+        # Diagnostics carry only allowlisted fields, so the provider's message appears only in this log line.
+        detail = f"{exception_type} ({type(error.__cause__).__name__}: {error.__cause__})"
+    logger.warning("Task {} interrupted during {}: {}", task.id, interruption.operation, detail)
     return replace(
         rollout,
         grade=grade,
