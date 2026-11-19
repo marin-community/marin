@@ -20,8 +20,6 @@ from harbor.utils.logger import logger
 DEFAULT_BATCH_EXEC_TIMEOUT_MARGIN_SEC = 180.0
 _MAX_CAPTURE_BYTES = 1_000_000
 _FOREGROUND_STOP_TIMEOUT = 5
-# Bounds tmux bookkeeping commands so a lost sandbox fails the turn instead of
-# stalling it until the agent timeout.
 _TMUX_COMMAND_TIMEOUT = 30
 _ENTER_KEYS = {"Enter", "C-m", "KPEnter", "C-j", "^M", "^J"}
 
@@ -508,7 +506,6 @@ class TmuxSession:
         return result is not None
 
     async def _exec_bounded(self, command: str, timeout_sec: int) -> ExecResult:
-        """Run a tmux command whose sandbox exec must finish within ``timeout_sec``."""
         try:
             return await self.environment.exec(
                 command=command, user=self._user, timeout_sec=timeout_sec
