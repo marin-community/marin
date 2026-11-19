@@ -49,12 +49,12 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                         "openai/frontierscience", SOURCE_REVISION, (f"{track}/test.jsonl",), SourceFormat.JSONL
                     ),
                     convert=convert,
-                    version="2026.11.19",
+                    version=version,
                     intended_use=IntendedUse.EVAL,
                 ),
                 protocol=EvaluationProtocol(
                     benchmark=f"frontierscience-{track}",
-                    version="2026.11.19",
+                    version=version,
                     operation=OperationKind.CHAT_GENERATION,
                     requires_judge=True,
                     context_policy=ContextPolicy(output_fit=OutputFit.REQUIRE),
@@ -71,9 +71,9 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             ),
             pipeline=prepare_evaluation,
         )
-        for track, count, convert, metrics in (
-            ("olympiad", 100, convert_olympiad, (Metrics.ACCURACY,)),
-            ("research", 60, convert_research, RESEARCH_METRICS),
+        for track, count, convert, metrics, version in (
+            ("olympiad", 100, convert_olympiad, (Metrics.ACCURACY,), "2026.11.19"),
+            ("research", 60, convert_research, RESEARCH_METRICS, "2026.11.19.1"),
         )
     ]
 

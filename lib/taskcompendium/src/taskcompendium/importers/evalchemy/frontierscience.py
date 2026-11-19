@@ -62,6 +62,8 @@ def convert_research(row: RawRow, _context: ConversionContext) -> TaskSpec:
         model="openai/gpt-oss-120b",
         reasoning_effort="high",
         prompt_template=_RESEARCH_PROMPT,
+        max_completion_tokens=32768,
+        request_timeout=300,
         exact_gate=False,
         empty_output=EmptyOutputPolicy.GRADE,
     )
