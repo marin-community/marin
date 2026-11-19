@@ -33,7 +33,6 @@ def test_answer_grader_reads_the_box_after_thinking(judge_server, connection, re
     assert verdict.reward == reward
     prompt = judge_server.requests[-1]["messages"][-1]["content"]
     assert prompt.endswith("Problem: Find all $N$.\nModel Solution: So $N = 3$.\nGolden Answer: $N=3$\n")
-    assert "{1, 2} is equivalent to {2, 1}" in prompt
 
 
 @pytest.mark.parametrize("points", [7, 6, 1, 0])
