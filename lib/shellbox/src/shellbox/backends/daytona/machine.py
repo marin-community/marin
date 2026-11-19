@@ -100,10 +100,12 @@ def _is_transient_session_error(error: Exception) -> bool:
 
 
 def _retry_after(error: Exception) -> int:
+    if not isinstance(error, DaytonaError):
+        return 0
     return max(
         (
             int(value)
-            for name, value in (getattr(error, "headers", None) or {}).items()
+            for name, value in (error.headers or {}).items()
             if name.lower().startswith("retry-after") and str(value).isdecimal()
         ),
         default=0,
@@ -302,7 +304,8 @@ class DaytonaMachine:
         finally:
             await self.sandbox.process.exec(_control_command(f"rm -f {shlex.quote(clipped)}"), cwd=CONTROL_CWD)
 
-    async def _stop_command(self, pidfile: str, completed_path: str) -> None:
+    async def _stop_command(self, prefix: str) -> None:
+        pidfile, completed_path = f"{prefix}/pid", f"{prefix}/completed"
         async with asyncio.timeout(INTERRUPT_TIMEOUT):
             stopped = await self.sandbox.process.exec(
                 _control_command(shlex.join(("/bin/sh", "-c", STOP_COMMAND, "stop-command", pidfile, completed_path))),
@@ -323,15 +326,16 @@ class DaytonaMachine:
         except Exception as cleanup_error:
             failure.add_note(f"Daytona machine cleanup failed: {cleanup_error!r}")
 
-    async def _abort_command(self, prefix: str, started: bool, failure: BaseException) -> None:
+    async def _abort_command(self, prefix: str, may_have_started: bool, failure: BaseException) -> None:
         """Stop possibly submitted work, or close after interrupted preparation.
 
         Finish despite repeated cancellation. If stopping fails, close the machine
-        and attach cleanup errors to the original failure. Files belong to run().
+        and attach cleanup errors to the original failure.
+        The caller retains ownership of command files.
         """
         try:
-            if started:
-                await finish_owned(own_cleanup(self._stop_command(f"{prefix}/pid", f"{prefix}/completed")))
+            if may_have_started:
+                await finish_owned(own_cleanup(self._stop_command(prefix)))
             else:
                 await finish_owned(own_cleanup(self.close()))
         except BaseException as cleanup_error:
@@ -397,7 +401,7 @@ class DaytonaMachine:
                 except BaseException as error:
                     primary_error.add_note(f"Daytona command session cleanup failed: {error!r}")
 
-    async def _poll_command(self, path: str, name: str) -> _CompletedCommand:
+    async def _submit_and_wait(self, path: str, name: str) -> _CompletedCommand:
         """Submit once, then poll bounded status reads, retrying transient read failures."""
         process = self.sandbox.process
         polling = ExponentialBackoff(initial=0.2, maximum=MAX_COMMAND_POLL_DELAY, factor=1.5)
@@ -491,32 +495,32 @@ class DaytonaMachine:
     async def _execute_command(
         self, command: Command, prefix: str, sessions: AsyncExitStack
     ) -> _CompletedCommand | None:
-        """Prepare and wait under the caller's deadline; None means it expired.
+        """Prepare, submit and wait within the caller's deadline.
 
-        The session stays in sessions until output and diagnostics are read.
-        Submission/status failures abort possibly accepted work without replay.
-        Failed session acquisition has not submitted work. Caller expiry stops
-        submitted work before returning None; cancellation finishes abort before
-        propagating. Provider failures remain exceptions.
+        Return None on caller expiry after stopping any submitted work.
+        Provider failures stay exceptions. Submission/status failures abort
+        possibly accepted work without replay. Failed acquisition has not
+        submitted work. Cancellation finishes abort before propagating.
+        The supplied exit stack owns the session through output and diagnostics.
         """
-        started = False
+        may_have_started = False
         try:
             async with asyncio.timeout(command.timeout) as deadline:
                 script_path = await self._prepare_command(command, prefix)
                 session_id = await sessions.enter_async_context(self._command_session())
                 # The provider may accept the command before the submission request fails.
-                started = True
-                return await self._poll_command(script_path, session_id)
+                may_have_started = True
+                return await self._submit_and_wait(script_path, session_id)
         except TimeoutError as error:
             if not deadline.expired():
-                if started and not self._closed:
-                    await self._abort_command(prefix, started, error)
+                if may_have_started and not self._closed:
+                    await self._abort_command(prefix, may_have_started, error)
                 raise
-            if started:
+            if may_have_started:
                 try:
-                    await self._stop_command(f"{prefix}/pid", f"{prefix}/completed")
+                    await self._stop_command(prefix)
                 except asyncio.CancelledError as cancellation:
-                    await self._abort_command(prefix, started, cancellation)
+                    await self._abort_command(prefix, may_have_started, cancellation)
                     raise
                 except Exception as error:
                     failure = RuntimeError("Cannot stop the Daytona command process group")
@@ -524,11 +528,11 @@ class DaytonaMachine:
                     raise failure from error
             return None
         except asyncio.CancelledError as cancellation:
-            await self._abort_command(prefix, started, cancellation)
+            await self._abort_command(prefix, may_have_started, cancellation)
             raise
         except BaseException as error:
-            if started and not self._closed:
-                await self._abort_command(prefix, started, error)
+            if may_have_started and not self._closed:
+                await self._abort_command(prefix, may_have_started, error)
             raise
 
     async def _collect_command_output(self, command: Command, prefix: str, response: _CompletedCommand) -> Result:
