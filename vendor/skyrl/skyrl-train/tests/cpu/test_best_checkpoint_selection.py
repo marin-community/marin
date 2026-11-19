@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -6,6 +7,9 @@ from omegaconf import OmegaConf
 
 from skyrl_train.callbacks.base import TrainerControl, TrainerState
 from skyrl_train.callbacks.builtin import create_callbacks_from_config
+from skyrl_train.rollouts.context import TrainingContextState
+from skyrl_train.rollouts.loader import PromptLoaderState
+from skyrl_train.trainer import RayPPOTrainer
 
 
 @pytest.mark.asyncio
@@ -98,3 +102,62 @@ async def test_delayed_best_selection_preserves_baseline_gates_after_resume(tmp_
     assert selected["accuracy"] == 0.7
     assert selected["preservation_baseline"] == {"preservation": 0.9}
     assert selected["model_format"] == "native"
+
+
+@pytest.mark.asyncio
+async def test_periodic_checkpoint_can_be_selected_on_write_once_storage(tmp_path, monkeypatch):
+    class PolicyStorage:
+        def async_run_ray_method(self, _dispatch, method, **kwargs):
+            if method == "save_checkpoint":
+                path = Path(kwargs["ckpt_dir"]) / "rank_0.pt"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with path.open("xb") as shard:
+                    shard.write(b"policy")
+            return []
+
+    async def rollout_state():
+        return TrainingContextState(PromptLoaderState({}, []), [], None)
+
+    config = OmegaConf.create(
+        {
+            "trainer": {
+                "ckpt_path": str(tmp_path),
+                "max_ckpts_to_keep": -1,
+                "callbacks": [
+                    {
+                        "type": "best_checkpoint",
+                        "initial_model_uri": "base-model",
+                        "expected_tasks": 1,
+                        "minimum_scored_tasks": 1,
+                        "selection_metric": "score",
+                    }
+                ],
+            }
+        }
+    )
+    monkeypatch.setattr("skyrl_train.trainer.ray.get", lambda refs: refs)
+    trainer = RayPPOTrainer.__new__(RayPPOTrainer)
+    trainer.cfg = config
+    trainer.policy_model = PolicyStorage()
+    trainer.critic_model = None
+    trainer.context = SimpleNamespace(state_dict=rollout_state)
+    trainer.tokenizer = None
+    trainer.all_timings = {}
+    trainer._last_saved_step = None
+    trainer._ftpo_stopped = False
+    trainer._domain_balancer = None
+    trainer.distillation_scored_tokens_total = 0
+    callback = create_callbacks_from_config(config)[0]
+    coverage = {"eval/all/num_attempted": 1, "eval/all/num_scored": 1}
+    await callback.on_evaluate_async(
+        TrainerState(0, 0, 1, 1), TrainerControl(), trainer=trainer, metrics={**coverage, "score": 0.0}
+    )
+    trainer.global_step = 1
+    await trainer.save_checkpoints()
+    await callback.on_evaluate_async(
+        TrainerState(1, 0, 1, 1), TrainerControl(), trainer=trainer, metrics={**coverage, "score": 1.0}
+    )
+
+    selected = json.loads((tmp_path / "best_checkpoint.json").read_text())
+    assert (selected["step"], selected["accuracy"]) == (1, 1.0)
+    assert (Path(selected["model_uri"]) / "rank_0.pt").read_bytes() == b"policy"

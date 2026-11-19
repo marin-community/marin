@@ -217,7 +217,7 @@ def _canonical_task_prompt(row: dict, _index: int, *, environment_configs: Mappi
         machine = config["image_verifier"] if grader.environment.docker_image is not None else config["package_verifier"]
         verifier = MachineRuntimeSpec.model_validate(machine)
     lowered = rollout_spec(task, session, task_machine=task_machine, verifier_machine=verifier)
-    return _stored_prompt(lowered)
+    return {**_stored_prompt(lowered), "family": row.get("family")}
 
 
 def write_tasks(path: Path, records: Iterable[TaskRolloutSpec]) -> None:

@@ -109,7 +109,15 @@ class PromptLoader:
     The sequence never ends; the trainer decides when to stop.
     """
 
-    def __init__(self, dataset: PromptGroupDataset, order: PromptOrder, *, batch_size: int, max_stale_retries: int):
+    def __init__(
+        self,
+        dataset: PromptGroupDataset,
+        order: PromptOrder,
+        *,
+        batch_size: int,
+        max_stale_retries: int,
+        families: Mapping[str, str] | None = None,
+    ):
         if max_stale_retries < 0:
             raise ValueError(f"max_stale_retries must be non-negative, got {max_stale_retries}")
         self._uid_count = len({dataset.uid(index) for index in range(len(dataset))})
@@ -119,6 +127,7 @@ class PromptLoader:
                 f"{batch_size}; a batch trains each uid at most once"
             )
         self._dataset = dataset
+        self._families = dict(families or {})
         self._order = order
         self._draw_limit = 2 * batch_size
         self._max_stale_retries = max_stale_retries
@@ -127,28 +136,31 @@ class PromptLoader:
         self._retries_exhausted = 0
         self._scan_start = 0
 
-    def next_prompt(self, live: Collection[str]) -> dict | None:
-        """The next prompt whose uid is not in ``live``, or None when every uid is live.
+    def next_prompt(self, live: Collection[str], family: str | None = None) -> dict | None:
+        """Return an eligible prompt outside ``live`` in the requested family, if one is available.
 
         Prompts awaiting regeneration come first, then up to two batches' worth of the prompt order's draws. If those
         draws find only live uids, a scan of the dataset from where the last scan stopped takes a free row, so an
         order that keeps drawing live rows cannot stall dispatch; the row may be one the order weights at zero.
         """
+        def eligible(uid: str) -> bool:
+            return uid not in live and (family is None or self._families.get(uid) == family)
+
         for position, prompt in enumerate(self._retries):
-            if prompt["uid"] not in live:
+            if eligible(prompt["uid"]):
                 del self._retries[position]
-                return prompt
+                return self._label_family(prompt)
         # Every dataset uid is live, so drawing would only advance the order.
         if len(live) >= self._uid_count:
             return None
         for _ in range(self._draw_limit):
             index = self._order.next_index()
-            if self._dataset.uid(index) not in live:
+            if eligible(self._dataset.uid(index)):
                 return self._offer(index)
         num_rows = len(self._dataset)
         for offset in range(num_rows):
             index = (self._scan_start + offset) % num_rows
-            if self._dataset.uid(index) not in live:
+            if eligible(self._dataset.uid(index)):
                 self._scan_start = index + 1
                 return self._offer(index)
         return None
@@ -181,4 +193,7 @@ class PromptLoader:
     def _offer(self, index: int) -> dict:
         (prompt,) = self._dataset.collate_fn([self._dataset[index]])
         self._stale_retries.pop(prompt["uid"], None)
-        return prompt
+        return self._label_family(prompt)
+
+    def _label_family(self, prompt: dict) -> dict:
+        return {**prompt, "family": self._families[prompt["uid"]]} if self._families else prompt

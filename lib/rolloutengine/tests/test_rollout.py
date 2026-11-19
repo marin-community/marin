@@ -485,21 +485,41 @@ async def test_output_capture_over_the_file_budget_interrupts_grading():
     assert len(factory.machines) == 1
 
 
-@pytest.mark.parametrize("compact", [False, True])
-async def test_agent_harness_receives_engine_turns_and_controls_next_history(compact):
+@pytest.mark.parametrize(
+    ("change", "continues"),
+    [("none", True), ("reserialized", True), ("output-limit", True), ("tools", False), ("compaction", False)],
+)
+async def test_agent_harness_receives_engine_turns_and_controls_next_history(change, continues):
     first = ({"role": "user", "content": "Return 12."},)
     observation = {"role": "tool", "tool_call_id": "write", "content": "Written."}
+    first_options = {"tool_choice": "auto", "max_tokens": 128, "max_completion_tokens": 128}
+    next_options = dict(first_options)
+    if change == "output-limit":
+        next_options.update(max_tokens=64, max_completion_tokens=64)
+    if change == "tools":
+        next_options["tools"] = [{"type": "function", "function": {"name": "finish", "parameters": {}}}]
     received = []
     finished = asyncio.Event()
 
     async def agent(complete):
-        turn = await complete(Prompt(first, {"tool_choice": "auto"}))
+        turn = await complete(Prompt(first, first_options))
         received.append(turn)
+        message = turn.message
+        if change == "reserialized":
+            call = message["tool_calls"][0]
+            function = call["function"]
+            arguments = json.dumps(json.loads(function["arguments"]), separators=(",", ":"))
+            message = {
+                **message,
+                "reasoning_content": "",
+                "tool_calls": [{**call, "function": {**function, "arguments": arguments}}],
+            }
         history = (
-            ({"role": "user", "content": "File written. Finish."},) if compact else (*first, turn.message, observation)
+            ({"role": "user", "content": "File written. Finish."},)
+            if change == "compaction"
+            else (*first, message, observation)
         )
-        options = {} if compact else {"tool_choice": "auto"}
-        received.append(await complete(Prompt(history, options)))
+        received.append(await complete(Prompt(history, next_options)))
         finished.set()
 
     model = ReplayModel([shell_call("echo 12 > answer"), {"role": "assistant", "content": "12"}])
@@ -509,14 +529,14 @@ async def test_agent_harness_receives_engine_turns_and_controls_next_history(com
 
     assert finished.is_set()
     assert result.grade.reward == 1.0
-    assert len(result.rollout.conversations) == (2 if compact else 1)
+    assert len(result.rollout.conversations) == (1 if continues else 2)
     assert [turn.response_token_ids for turn in received] == [(20,), (21,)]
     assert [turn.logprobs for turn in received] == [(-0.5,), (-0.5,)]
-    assert result.rollout.conversations[-1].loss_mask == ((1,) if compact else (1, 0, 0, 1))
-    assert model.requests[1].options == ({} if compact else {"tool_choice": "auto"})
+    assert result.rollout.conversations[-1].loss_mask == ((1, 0, 0, 1) if continues else (1,))
+    assert [request.options for request in model.requests] == [first_options, next_options]
     assert model.requests[1].messages == (
         ({"role": "user", "content": "File written. Finish."},)
-        if compact
+        if change == "compaction"
         else (*first, received[0].message, observation)
     )
 

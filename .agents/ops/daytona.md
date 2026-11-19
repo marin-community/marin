@@ -234,6 +234,11 @@ snapshot change, run the campaign's end-to-end smoke before scaling collection.
 
 ## Sandbox lifecycle and idle cleanup
 
+For Pi agents, set `http_idle_timeout` in the agent kwargs when a model request
+can go several minutes without returning HTTP headers or response bytes. The
+value is in seconds and is written to Pi's `httpIdleTimeoutMs` setting. When
+omitted, Pi uses the image's settings and its own default.
+
 Hard termination can orphan in-flight sandboxes. Reap only sandboxes proven idle
 and covered by cleanup authority. Correlate provider IDs/labels with the owning
 trial and job; a quiet agent can still be waiting for model inference or tool

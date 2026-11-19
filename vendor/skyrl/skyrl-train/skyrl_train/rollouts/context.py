@@ -19,6 +19,7 @@ from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 from marinskyrl.environment_contract import TrainingType
 from marinskyrl.runtime_options import PolicyLossType
 from marinskyrl.distillation import DistillationObjectiveKind, compile_distillation_plan_from_config
+from skyrl_train.config.rollout_validation import validate_family_pools, validate_family_quota_config
 from skyrl_train.curriculum import CurriculumConfig, CurriculumOrder, SamplingKind
 from skyrl_train.dataset import PromptDataset
 from skyrl_train.domain_sampling import DomainWeightedOrder
@@ -179,6 +180,7 @@ class TrainingContext:
         )
         batch_size = config.trainer.train_batch_size
         max_sample_batches = int(dynamic_sampling.max_sample_batches)
+        family_quotas = validate_family_quota_config(config)
         buffer_config = RolloutBufferConfig(
             batch_size=batch_size,
             max_in_flight=config.trainer.rollout_buffer.max_in_flight,
@@ -186,7 +188,15 @@ class TrainingContext:
             batch_policy=BatchPolicy(config.trainer.rollout_buffer.batch_policy),
             dynamic_sampling=selection.sampling_type,
             max_candidate_groups=max_sample_batches * batch_size if max_sample_batches > 0 else None,
+            family_quotas=family_quotas,
         )
+        families: dict[str, str] = {}
+        if family_quotas:
+            if not isinstance(dataset, PromptDataset) or "family" not in dataset.dataframe.column_names:
+                raise ValueError("trainer.rollout_buffer.family_quotas requires a family column in the training rows")
+            column = dataset.dataframe.with_format(None)["family"]
+            families = {dataset.uid(index): family for index, family in enumerate(column)}
+            validate_family_pools(family_quotas, collections.Counter(families.values()), buffer_config.max_staleness_steps)
         plan = compile_distillation_plan_from_config(config)
         admission = GroupAdmissionPolicy(
             GroupAdvantageInvariant.from_config(algorithm.resolved_group_advantage),
@@ -208,6 +218,7 @@ class TrainingContext:
                 prompt_order_from_config(config, dataset),
                 batch_size=batch_size,
                 max_stale_retries=config.trainer.rollout_buffer.max_stale_retries,
+                families=families,
             ),
             buffer_config,
             start_rollout_buffer(buffer_config),
@@ -395,7 +406,9 @@ class TrainingContext:
                     lease = await self._buffer.acquire_lease.remote()
                 with self._wait("prompt"):
                     async with self._uids_released:
-                        prompt = await self._uids_released.wait_for(lambda: self.loader.next_prompt(self._live_uids))
+                        prompt = await self._uids_released.wait_for(
+                            lambda: self.loader.next_prompt(self._live_uids, lease.family)
+                        )
                         self._live_uids[prompt["uid"]] += 1
                 # A lease or prompt wait may span an evaluation boundary. Keep the
                 # single acquired lease, but do not submit its generation yet.

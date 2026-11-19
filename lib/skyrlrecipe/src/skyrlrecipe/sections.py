@@ -10,7 +10,7 @@ from typing import Annotated, Literal
 from pydantic import Field, NonNegativeInt, PositiveInt
 
 from .declared import Callback, CorrectionRule, LoggingBackend, Teacher, TeacherRouting
-from .model import NumberMap, OpenMap, Section, SectionMap, field, unset_field
+from .model import CountMap, NumberMap, OpenMap, Section, SectionMap, field, unset_field
 from .sampling import EvalSamplingParams
 
 
@@ -491,6 +491,9 @@ class RolloutBuffer(Section):
     groups leased for it, waiting for the slowest, so training never favors rollouts that finish quickly. rolling
     fills each batch in commit order and regenerates groups that miss the staleness window, so a slow rollout
     never blocks training, but quick rollouts train more often and at lower staleness."""
+    family_quotas: CountMap = field({})
+    """Prompt groups of each task family per batch, keyed by the rows' family column. With full_batch the counts sum
+    to train_batch_size. An empty map leaves the mix to the prompt order."""
     max_stale_retries: int = field(1)
     """How many times in a row rolling regenerates a prompt whose group missed the staleness window; after that the
     prompt waits until the prompt order offers it again."""

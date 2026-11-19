@@ -5,6 +5,8 @@ from __future__ import annotations
 import base64
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 import yaml
 from omegaconf import OmegaConf, open_dict
@@ -678,6 +680,31 @@ def test_source_launch_preserves_nested_open_mappings(tmp_path):
     assert OmegaConf.to_container(load_launch_config(path).skyrl.generator.engine_init_kwargs.user_options) == {
         "nested": {}
     }
+
+
+@pytest.mark.parametrize(
+    ("policy", "quotas", "count", "error"),
+    [
+        ("rolling", {"math": 4, "code": 4}, 4, "requires batch_policy=full_batch"),
+        ("full_batch", {"math": 3, "code": 4}, 4, "sums to 7, expected train_batch_size=8"),
+        ("full_batch", {"math": 4, "code": 4}, 3, "requires 4 rows for family 'code', found 3"),
+    ],
+)
+def test_launch_rejects_unfillable_family_quotas(tmp_path, policy, quotas, count, error):
+    pq.write_table(pa.table({"family": ["math"] * 4 + ["code"] * count}), tmp_path / "tasks.parquet")
+    raw = raw_launch_config()
+    raw["inputs"]["data_kind"] = "parquet"
+    raw["inputs"]["train_data"] = [
+        {"kind": "directory", "uri": str(tmp_path), "identity": "fixture", "local_path": str(tmp_path),
+         "relative_path": "tasks.parquet"}
+    ]
+    raw["skyrl"]["data"] = {"kind": "parquet"}
+    raw["skyrl"]["trainer"]["rollout_buffer"] = {"batch_policy": policy, "family_quotas": quotas}
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw))
+
+    with pytest.raises(ValueError, match=rf"trainer\.rollout_buffer\.family_quotas {error}"):
+        load_launch_config(path)
 
 
 def test_first_train_submission_validates_recipe_and_resolved_reload(tmp_path):

@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import posixpath
+from collections import Counter
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Mapping
 
 from omegaconf import MISSING, DictConfig, OmegaConf
+from pyarrow import parquet
 from skyrl_train.config.callbacks import validate_hf_export_config
 from skyrl_train.config.mismatch_probe import validate_mismatch_probe_config
 from skyrl_train.config.objective_spec import validate_objective
+from skyrl_train.config.rollout_validation import validate_family_pools, validate_family_quota_config
 from skyrlrecipe import RLEntrypoint
 
 from cloud.iris.ray_storage import RaySpillBackend, resolve_ray_spill_target
@@ -32,9 +35,10 @@ from marinskyrl.distillation import (
 )
 from cloud.iris.rl_config_translation import RL_ENTRYPOINTS
 from marinskyrl.hf_model import HuggingFaceModelCache
+from marinskyrl.remote_io import filesystem_and_path
 from marinskyrl.resource_locator import is_cloud_uri, is_hugging_face_repo_id, join_resource_path
 from marinskyrl.runtime_options import WeightSyncTransport
-from marinskyrl.task_sources import data_source
+from marinskyrl.task_sources import DirectoryDataSource, data_source
 
 DEFAULT_DRAFT_MODEL_CACHE_TTL_DAYS = 14
 
@@ -309,6 +313,27 @@ def _validate_inputs(inputs: dict[str, Any]) -> None:
             data_source(value)
 
 
+def _validate_launch_family_pools(
+    inputs: dict[str, Any], quotas: dict[str, int], max_staleness_steps: int
+) -> None:
+    if inputs["data_kind"] != "parquet":
+        raise ValueError("trainer.rollout_buffer.family_quotas requires parquet training rows with a family column")
+    counts: Counter[str | None] = Counter()
+    for entry in inputs["train_data"]:
+        source = data_source(entry)
+        if not isinstance(source, DirectoryDataSource):
+            raise ValueError("trainer.rollout_buffer.family_quotas requires parquet training rows with a family column")
+        uri = join_resource_path(source.uri, source.relative_path) if source.relative_path else source.uri
+        filesystem, path = filesystem_and_path(uri)
+        with filesystem.open(path, "rb") as stream:
+            rows = parquet.ParquetFile(stream)
+            if "family" not in rows.schema_arrow.names:
+                raise ValueError(f"trainer.rollout_buffer.family_quotas requires a family column in {uri}")
+            for batch in rows.iter_batches(columns=["family"]):
+                counts.update(batch.column(0).to_pylist())
+    validate_family_pools(quotas, counts, max_staleness_steps)
+
+
 def derive_launch_topology(config: dict[str, Any]) -> LaunchTopology:
     """Derive placement from one role plan and check the requested allocation."""
     skyrl = config["skyrl"]
@@ -375,6 +400,9 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
     if run["mode"] == RunMode.TRAIN:
         validate_objective(config.skyrl)
         validate_hf_export_config(config.skyrl)
+        quotas = validate_family_quota_config(config.skyrl)
+        if quotas:
+            _validate_launch_family_pools(raw["inputs"], quotas, config.skyrl.trainer.rollout_buffer.max_staleness_steps)
     runtime = raw["runtime"]
     entrypoint = runtime["entrypoint"]
     registered_rl_entrypoint_module(entrypoint)
