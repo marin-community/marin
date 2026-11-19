@@ -26,6 +26,7 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
+from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 from skyrlrecipe import RecipePatch, RLEntrypoint, SkyRLRecipe, sections
 from skyrlrecipe.sampling import EvalSamplingParams
@@ -80,11 +81,10 @@ def training_recipe(steps: int, *, reproducible_serving: bool = False) -> SkyRLR
         extra_env={
             **base.extra_env,
             "VERIFYIT_JUDGE_MODEL": "openai/gpt-oss-120b",
-            # InfiniBand between some cw-us-east-02a nodes fails the first inter-node collective with
-            # IBV_WC_RETRY_EXC_ERR(12), and retries land on the same nodes. TCP is slower but completes.
-            "NCCL_NET": "Socket",
-            "NCCL_IB_DISABLE": "1",
-            "NCCL_SOCKET_FAMILY": "AF_INET",
+            # The privileged profile below exposes the front-end Ethernet NIC's RoCE functions
+            # (mlx5_*) beside the InfiniBand rails. NCCL routes some channels over them, which fails
+            # with IBV_WC_RETRY_EXC_ERR(12). Pin NCCL to the rails (ibp0-ibp7).
+            "NCCL_IB_HCA": "ibp",
         },
     )
     config = config.merge(
@@ -242,7 +242,8 @@ def main(selection_uri: str, steps: int, export_hf: bool, reproducible_serving: 
     selection_name, selection_version = parts
     # SkyRL trains each task at most once per update, so a smaller selection fails only after GPU allocation.
     batch_size = training_recipe(steps).trainer.train_batch_size
-    with (StoragePath(selection_uri) / TRAIN_FILENAME).open("rb") as stream:
+    fs, train_path = filesystem_for(str(StoragePath(selection_uri) / TRAIN_FILENAME))
+    with fs.open(train_path, "rb") as stream:
         train_rows = pq.ParquetFile(stream).metadata.num_rows
     if train_rows < batch_size:
         raise click.BadParameter(

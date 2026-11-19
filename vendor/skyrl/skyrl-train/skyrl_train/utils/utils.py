@@ -4,7 +4,6 @@ import time
 import sys
 import logging
 import math
-import socket
 
 import ray
 import torch
@@ -502,12 +501,6 @@ def validate_cfg(cfg: DictConfig):
     except ValueError as error:
         raise AssertionError(str(error)) from error
 
-    # if advantage estimator is GAE, then critic path should be provided
-    if cfg.trainer.algorithm.advantage_estimator == "gae":
-        assert cfg.trainer.critic.model.path, (
-            "`trainer.critic.model.path` should be provided for PPO training, got `None`"
-        )
-
     assert not (cfg.trainer.algorithm.use_kl_in_reward and cfg.trainer.algorithm.use_kl_loss), (
         "use_kl_in_reward and use_kl_loss should be mutually exclusive"
     )
@@ -991,7 +984,6 @@ def prepare_runtime_environment(cfg: DictConfig) -> dict[str, str]:
         gpu_counts.extend(
             [
                 placement.policy_num_gpus_per_node,
-                placement.critic_num_gpus_per_node,
                 placement.ref_num_gpus_per_node,
             ]
         )
@@ -1302,11 +1294,3 @@ def get_tcp_url(host: str, port: int) -> str:
         # not a literal IP, probably a hostname
         pass
     return f"tcp://{host}:{port}"
-
-
-def get_free_port():
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(("", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port

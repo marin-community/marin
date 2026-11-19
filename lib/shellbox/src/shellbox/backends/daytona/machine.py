@@ -26,6 +26,7 @@ from daytona import (
     CreateSandboxFromImageParams,
     CreateSandboxFromSnapshotParams,
     DaytonaConflictError,
+    DaytonaError,
     DaytonaNotFoundError,
     DaytonaRateLimitError,
 )
@@ -33,6 +34,7 @@ from rigging.timing import ExponentialBackoff
 
 from shellbox.backends.daytona.process import DaytonaProcessSession
 from shellbox.backends.daytona.snapshot import (
+    TRANSIENT_DAYTONA_STATUS,
     daytona_image,
     ensure_snapshot,
     snapshot_request_for_spec,
@@ -114,12 +116,21 @@ async def _create_sandbox(
 
 
 async def _delete_named_sandbox(client: AsyncDaytona, name: str) -> None:
+    """Delete the sandbox, retrying transient gateway errors until the interrupt deadline."""
+    backoff = ExponentialBackoff(initial=1, maximum=4, factor=2, jitter=0)
     async with asyncio.timeout(INTERRUPT_TIMEOUT):
-        try:
-            sandbox = await client.get(name)
-        except DaytonaNotFoundError:
-            return
-        await client.delete(sandbox)
+        while True:
+            try:
+                sandbox = await client.get(name)
+                await client.delete(sandbox)
+                return
+            except DaytonaNotFoundError:
+                return
+            except DaytonaError as error:
+                if error.status_code not in TRANSIENT_DAYTONA_STATUS:
+                    raise
+                logger.warning("Retrying Daytona sandbox deletion after HTTP %s: %s", error.status_code, name)
+            await sleep(backoff.next_interval())
 
 
 class DaytonaImageBuild(StrEnum):
