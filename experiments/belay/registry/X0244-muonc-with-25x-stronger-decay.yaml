@@ -52,8 +52,8 @@ trials:
   baseline: belay-X0244-control 3.0460 (same commit, seed 0)
   step_time_change: -1%
 potential:
-  score: 6
-  rationale: −0.0069 at equal data; equal-time run pending; ladder and MFU not run → 6
+  score: 7
+  rationale: −0.0102 at equal time (−0.0069 equal data); ladder and MFU not run → 7
   model: claude-opus-5-5
   date: '2026-11-19'
-  inputs_digest: c02f93fc1186
+  inputs_digest: becf09a2c531
