@@ -346,7 +346,9 @@ export default function (pi) {
                 "model request with a trial correlation ID"
             )
         if http_idle_timeout is not None and (
-            not math.isfinite(http_idle_timeout) or http_idle_timeout <= 0
+            isinstance(http_idle_timeout, bool)
+            or not math.isfinite(http_idle_timeout)
+            or http_idle_timeout <= 0
         ):
             raise ValueError("http_idle_timeout must be finite and positive")
 
