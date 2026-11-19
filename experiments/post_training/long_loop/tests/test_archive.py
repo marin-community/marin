@@ -21,6 +21,7 @@ from wandb.apis.public.runhistory.downloads import IncompleteRunHistoryError
 from experiments.post_training.long_loop import archive_stage
 from experiments.post_training.long_loop.archive import (
     ArchiveInput,
+    assert_best_rl_checkpoint,
     checkpoint_cleanup,
     seal_archive,
     verify_archive,
@@ -185,6 +186,7 @@ def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(
     selected.mkdir(parents=True)
     weight = selected / "weight"
     weight.write_bytes(b"selected-native-weights")
+    (selected / "trainer_state.pt").write_bytes(b"selected-native-state")
     sft_checkpoint = tmp_path / "sft" / "checkpoints" / "step-1"
     save_checkpoint(
         {"model": np.asarray([0.64], np.float32), "opt_state": {"count": np.asarray(1, np.float32)}},
@@ -564,3 +566,40 @@ def test_wandb_history_fallback_propagates_provider_failure(tmp_path, monkeypatc
     with pytest.raises(PermissionError, match="provider denied history"):
         archive_stage._scan_wandb_history("test/project/run", tmp_path, "https://api.wandb.ai")
     assert not list(tmp_path.glob("scan-history*"))
+
+
+def test_best_rl_checkpoint_assertion(tmp_path):
+    best = tmp_path / "checkpoints" / "global_step_5"
+    best.mkdir(parents=True)
+    (best / "trainer_state.pt").write_bytes(b"best-state")
+    (best / "policy").mkdir()
+    (best / "policy" / "weights.distcp").write_bytes(b"best-weights")
+    final = tmp_path / "checkpoints" / "global_step_6"
+    final.mkdir(parents=True)
+    (final / "trainer_state.pt").write_bytes(b"final-state")
+    (final / "policy").mkdir()
+    (final / "policy" / "weights.distcp").write_bytes(b"final-weights")
+    inventory = {"selected": str(best), "final": str(final)}
+    receipt = assert_best_rl_checkpoint(str(tmp_path / "archive"), inventory)
+    assert receipt["verdict"] == "full"
+    assert receipt["selected"]["step"] == 5 and receipt["final"]["step"] == 6
+    sealed = json.loads((tmp_path / "archive" / "best-rl-checkpoint.json").read_text())
+    assert sealed == receipt
+
+    scratch = {"selected": str(tmp_path / "tmp" / "global_step_5"), "final": str(final)}
+    with pytest.raises(ValueError, match="permanent path"):
+        assert_best_rl_checkpoint(str(tmp_path / "archive2"), scratch)
+    missing_state = tmp_path / "checkpoints" / "global_step_7"
+    missing_state.mkdir()
+    (missing_state / "policy").mkdir()
+    broken = {"selected": str(missing_state), "final": str(final)}
+    with pytest.raises(ValueError, match=r"trainer_state\.pt"):
+        assert_best_rl_checkpoint(str(tmp_path / "archive3"), broken)
+    empty = tmp_path / "checkpoints" / "global_step_8"
+    empty.mkdir()
+    (empty / "trainer_state.pt").write_bytes(b"state")
+    hollow = {"selected": str(empty), "final": str(final)}
+    with pytest.raises(ValueError, match="no weights payload"):
+        assert_best_rl_checkpoint(str(tmp_path / "archive4"), hollow)
+    with pytest.raises(ValueError, match="final RL checkpoint"):
+        assert_best_rl_checkpoint(str(tmp_path / "archive5"), {"selected": str(best)})

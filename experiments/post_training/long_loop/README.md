@@ -348,7 +348,13 @@ Model-owned turn, token and agent-time limits retain the task verifier's actual
 reward and training eligibility. Pi's generic nonzero exit needs the engine's
 matching model-limit stop reason; a network or cleanup error does not qualify.
 Missing or failed verification remains masked. The turn limit stays at128 and
-best-checkpoint selection still requires all120validation tasks to be scored.
+best-checkpoint selection requires at least 90% of the expected validation
+tasks scored (108 of 120 for this shape). An ineligible validation warns
+loudly, is recorded with its reason in the selection receipts, and is skipped;
+it never silently cancels best selection and never aborts training. When no
+validation is eligible, export falls back to the final checkpoint with a
+durable warning; when an eligible validation exists, the best-by-validation
+checkpoint is required and its absence fails closed.
 
 
 Stage deadlines follow the controlled envelope described below. RL has no
@@ -429,7 +435,11 @@ plan records that checkpoint from the SFT stage's `selected.json`, cleanup rejec
 any candidate at or under it, and after cleanup the archive verifies the
 checkpoint again: permanent metadata, weights plus optimizer state in the
 manifest, a complete OCDBT chunk inventory, and sample decodes. The verification
-receipt lands in `final-sft-checkpoint.json` beside the sealed archive.
+receipt lands in `final-sft-checkpoint.json` beside the sealed archive. The same
+rule protects the RL side: the best-by-validation checkpoint and the committed
+final checkpoint stay in the retention set even when newer partial directories
+exist, and the post-archive receipt `best-rl-checkpoint.json` re-checks both —
+committed `trainer_state.pt`, a weights payload, and a permanent path.
 
 For a BixBench verifier timeout, a separately verified grade of the retained
 original answer can be incorporated with `bixbench.merge_verifier_recovery`.
@@ -662,7 +672,8 @@ Smoke mode uses two groups of eight samples, two rollout workers and a one-hour
 clock after the first optimizer update. It saves each update and at finalization;
 it skips held-out evaluation and best selection. Normal runs save every two hours,
 at finalization and when best selection commits an improved checkpoint. They
-retain the 120-task coverage gate and the five-observation evaluation EMA.
+retain the 90%-of-expected coverage gate (108 of 120 for this shape) and the
+five-observation evaluation EMA seeded by the first eligible validation.
 Native checkpoints are not pruned by these profiles (`checkpoint_count: -1`);
 the regional temporary storage has a 14-day lifecycle. Record a durable handoff
 before that lifecycle expires. No model weights are copied to the submitter.

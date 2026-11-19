@@ -35,6 +35,7 @@ from wandb.apis.public.runhistory.downloads import IncompleteRunHistoryError
 from experiments.grug.moe_hero_ep.ops.upload_hf import RESPONSIBLE_USE, WARNING
 from experiments.post_training.long_loop.archive import (
     ArchiveInput,
+    assert_best_rl_checkpoint,
     assert_final_sft_checkpoint,
     checkpoint_cleanup,
     digest,
@@ -126,6 +127,7 @@ def archive_run(*, output: str, plan: dict, completed_report: str) -> None:
     blockers = provenance.get("cleanup_blockers", [])
     if missing or declared_missing or blockers:
         assert_final_sft_checkpoint(output, final_sft)
+        assert_best_rl_checkpoint(output, inventory)
         write_once(
             prefix_join(output, "cleanup-blocked.json"),
             json.dumps(
@@ -146,6 +148,7 @@ def archive_run(*, output: str, plan: dict, completed_report: str) -> None:
         protected=[final_sft["uri"]],
     )
     assert_final_sft_checkpoint(output, final_sft)
+    assert_best_rl_checkpoint(output, inventory)
 
 
 def archive_step(version: str, plan: dict, completed_report: ArtifactStep) -> ArtifactStep:

@@ -24,6 +24,9 @@ class ArchiveInput:
     category: str
 
 
+PERMANENT_TMP_SEGMENT = "tmp"
+
+
 @dataclass(frozen=True)
 class ArchivedObject:
     source: str
@@ -94,6 +97,37 @@ def assert_final_sft_checkpoint(output: str, final_sft: dict) -> dict:
     receipt = verify_final_checkpoint(uri, expect_step=final_sft.get("step"))
     write_once(
         prefix_join(output, "final-sft-checkpoint.json"),
+        json.dumps(receipt, sort_keys=True, indent=2).encode(),
+    )
+    return receipt
+
+
+def assert_best_rl_checkpoint(output: str, inventory: dict) -> dict:
+    """R1: after archival, the best and final RL checkpoints exist in full at permanent paths.
+
+    Native SkyRL checkpoints commit `trainer_state.pt` plus their payload tree;
+    the assertion checks both are present and the paths are not scratch storage.
+    """
+    checked = {}
+    for role in ("selected", "final"):
+        uri = inventory.get(role)
+        if not uri:
+            raise ValueError(f"Archive inventory must record the {role} RL checkpoint")
+        path = StoragePath(uri)
+        if PERMANENT_TMP_SEGMENT in path.segments:
+            raise ValueError(f"The {role} RL checkpoint must live at a permanent path, not scratch storage: {uri}")
+        step = str(uri).rsplit("global_step_", 1)[-1].split("/", 1)[0]
+        if not (path / "trainer_state.pt").exists():
+            raise ValueError(f"The {role} RL checkpoint has no committed trainer_state.pt: {uri}")
+        fs, key = filesystem_for(uri)
+        objects = fs.find(key)
+        payload = [item for item in objects if not item.rstrip("/").endswith("trainer_state.pt")]
+        if not payload:
+            raise ValueError(f"The {role} RL checkpoint holds no weights payload: {uri}")
+        checked[role] = {"uri": uri, "step": int(step), "objects": len(objects)}
+    receipt = {"verdict": "full", **checked}
+    write_once(
+        prefix_join(output, "best-rl-checkpoint.json"),
         json.dumps(receipt, sort_keys=True, indent=2).encode(),
     )
     return receipt
