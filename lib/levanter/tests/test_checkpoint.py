@@ -939,6 +939,38 @@ def test_checkpointer_commits_application_metadata_with_every_save(tmp_path):
     assert not (tmp_path / "temporary" / "run1" / "step-1").exists()
 
 
+def test_final_checkpoint_skips_already_saved_permanent_step(tmp_path):
+    config = CheckpointerConfig(
+        base_path=str(tmp_path / "checkpoints"),
+        temporary_base_path=str(tmp_path / "temporary"),
+        save_interval=None,
+        keep=[{"every": 4}],
+    )
+    checkpointer = config.create("run1")
+    state = {"model": jnp.asarray([1.0, 2.0])}
+
+    # This step is saved permanently by the periodic policy.
+    checkpointer.on_step(tree=state, step=4)
+    checkpointer.wait_until_finished()
+    checkpoint_path = pathlib.Path(tmp_path / "checkpoints" / "run1" / "step-4")
+    assert load_checkpoint_metadata(str(checkpoint_path))["is_temporary"] is False
+    before = {
+        path.relative_to(checkpoint_path).as_posix(): path.read_bytes()
+        for path in checkpoint_path.rglob("*")
+        if path.is_file()
+    }
+
+    # The final-save call must recognize that the same permanent step is already committed.
+    checkpointer.save_final_checkpoint(tree=state, step=4)
+    checkpointer.wait_until_finished()
+    after = {
+        path.relative_to(checkpoint_path).as_posix(): path.read_bytes()
+        for path in checkpoint_path.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
+
+
 def test_final_checkpoint_waits_for_pending_temporary_save_and_restores_completed_state(tmp_path):
     permanent_path = tmp_path / "checkpoints"
     temporary_path = tmp_path / "temporary"

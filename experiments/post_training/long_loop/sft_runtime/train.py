@@ -1665,7 +1665,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         callbacks.ProgressEvent.CHECKPOINT_FINISHED,
                     ),
                 ):
-                    checkpointer.on_step(tree=state, step=int(state.step), force=True)
+                    checkpointer.save_final_checkpoint(tree=state, step=int(state.step))
                     checkpointer.wait_until_finished()
         finally:
             state_callbacks.emit_event(callbacks.ProgressEvent.TRAINING_FINISHED)
