@@ -88,16 +88,7 @@ def _decode(data: Mapping[str, Any], known: dict[str, Event[object]]) -> Event[o
     if "ref" in data:
         return known[data["ref"]]
     cls = EVENT_TYPES[data["type"]]
-    payload = data["payload"]
-    if cls is StageCompleted and "refs" in payload:
-        refs = payload["refs"]
-        payload = {key: value for key, value in payload.items() if key != "refs"}
-        payload.update(round=int(refs.get("round", 0)), terminal=(refs.get("terminal") or "").lower() or None)
-        if payload["stage"] == "driver":
-            payload["stage"] = None
-    if cls in (Resolved, Retrying) and EVENT_TAG not in payload["request"]:
-        payload = {**payload, "request": {EVENT_TAG: payload["request"]}}
-    restored = _restore(payload, known)
+    restored = _restore(data["payload"], known)
     if cls is Resolved:
         request = restored["request"]
         value = TypeAdapter(cast(Any, request.result_type)).validate_python(restored["value"])
@@ -184,7 +175,7 @@ class JsonlSink(Sink):
                 output.write(data)
 
     def read_bytes(self) -> bytes:
-        """Read a final/legacy snapshot and any subsequently appended batches."""
+        """Read the snapshot at ``path``, if any, and the batches appended after it."""
         try:
             with open_url(self.path, "rb") as source:
                 content = source.read()
