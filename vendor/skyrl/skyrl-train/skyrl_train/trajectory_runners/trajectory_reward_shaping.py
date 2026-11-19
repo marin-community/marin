@@ -39,6 +39,8 @@ REWARD_SHAPING_ROW_KEYS = (
     "error_treatments",
     "server_errors",
 )
+
+
 @dataclass(frozen=True)
 class NormalizedReward:
     values: tuple[float, ...]

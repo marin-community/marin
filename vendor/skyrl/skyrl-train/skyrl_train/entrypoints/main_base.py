@@ -182,7 +182,9 @@ def create_ray_wrapped_inference_engines_from_config(
     requested_logprobs = [cfg.generator.sampling_params.logprobs, cfg.generator.eval_sampling_params.logprobs]
     requested_logprobs.extend(
         profile.sampling_params.logprobs if profile.sampling_params is not None else None
-        for profile in (resolve_evaluation_profiles(cfg) if evaluation_profiles is None else evaluation_profiles).values()
+        for profile in (
+            resolve_evaluation_profiles(cfg) if evaluation_profiles is None else evaluation_profiles
+        ).values()
     )
     requested_logprobs = [
         value + 1
