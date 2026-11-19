@@ -58,46 +58,51 @@ def load_cell(plan: str, teacher: str, split: str, index: int):
     return docs
 
 
-def build_split(plan: str, teacher: str, output: str, split: str, scored_cells: set[str]) -> dict:
-    rows = [json.loads(x) for x in StoragePath(prefix_join(plan, f"{split}/rows.jsonl")).read_text().splitlines()]
+def build_split(plan: str, teacher: str, output: str, name: str, splits: list[str], scored_cells: set[str]) -> dict:
+    """Write the scored rows of ``splits``, in order, as one cache named ``name``."""
     exemplar = {
         "input_ids": np.zeros(0, np.int32),
         "loss_weights": np.zeros(0, np.float32),
         "teacher_ids": np.zeros(0, np.int32),
         "teacher_logprobs": np.zeros(0, np.float32),
     }
-    written = loss_tokens = 0
-    with SerialCacheWriter(prefix_join(output, split), exemplar) as writer:
-        for cell_index, start in enumerate(range(0, len(rows), ROWS_PER_CELL)):
-            if f"{split}/docs-{cell_index:03d}" not in scored_cells:
-                logger.info("%s cell %d not scored; dropping its rows", split, cell_index)
-                continue
-            logger.info("%s cell %d: loading", split, cell_index)
-            docs = load_cell(plan, teacher, split, cell_index)
-            logger.info("%s cell %d: loaded %d docs", split, cell_index, len(docs))
-            batch = {k: [] for k in exemplar}
-            for row in rows[start : start + ROWS_PER_CELL]:
-                ids = np.full(POS, EOS, np.int32)
-                weights = np.zeros(POS, np.float32)
-                t_ids = np.zeros((POS, TOP), np.int32)
-                t_lp = np.zeros((POS, TOP), np.float32)
-                for item in row:
-                    doc, offset = docs[item["doc"]], item["offset"]
-                    n = len(doc["input_ids"])
-                    ids[offset : offset + n] = doc["input_ids"]
-                    weights[offset : offset + n] = doc["loss_weights"]
-                    positions, top_ids, top_lp = doc["teacher"]
-                    t_ids[offset + positions] = top_ids
-                    t_lp[offset + positions] = top_lp
-                batch["input_ids"].append(ids)
-                batch["loss_weights"].append(weights)
-                batch["teacher_ids"].append(t_ids.reshape(-1))
-                batch["teacher_logprobs"].append(t_lp.reshape(-1))
-                loss_tokens += int(weights.sum())
-            writer.write_batch(batch)
-            written += len(batch["input_ids"])
-    summary = {"rows": written, "planned_rows": len(rows), "loss_tokens": loss_tokens}
-    logger.info("%s: %s", split, summary)
+    written = loss_tokens = planned = 0
+    with SerialCacheWriter(prefix_join(output, name), exemplar) as writer:
+        for split in splits:
+            rows = [
+                json.loads(x) for x in StoragePath(prefix_join(plan, f"{split}/rows.jsonl")).read_text().splitlines()
+            ]
+            planned += len(rows)
+            for cell_index, start in enumerate(range(0, len(rows), ROWS_PER_CELL)):
+                if f"{split}/docs-{cell_index:03d}" not in scored_cells:
+                    logger.info("%s cell %d not scored; dropping its rows", split, cell_index)
+                    continue
+                logger.info("%s cell %d: loading", split, cell_index)
+                docs = load_cell(plan, teacher, split, cell_index)
+                logger.info("%s cell %d: loaded %d docs", split, cell_index, len(docs))
+                batch = {k: [] for k in exemplar}
+                for row in rows[start : start + ROWS_PER_CELL]:
+                    ids = np.full(POS, EOS, np.int32)
+                    weights = np.zeros(POS, np.float32)
+                    t_ids = np.zeros((POS, TOP), np.int32)
+                    t_lp = np.zeros((POS, TOP), np.float32)
+                    for item in row:
+                        doc, offset = docs[item["doc"]], item["offset"]
+                        n = len(doc["input_ids"])
+                        ids[offset : offset + n] = doc["input_ids"]
+                        weights[offset : offset + n] = doc["loss_weights"]
+                        positions, top_ids, top_lp = doc["teacher"]
+                        t_ids[offset + positions] = top_ids
+                        t_lp[offset + positions] = top_lp
+                    batch["input_ids"].append(ids)
+                    batch["loss_weights"].append(weights)
+                    batch["teacher_ids"].append(t_ids.reshape(-1))
+                    batch["teacher_logprobs"].append(t_lp.reshape(-1))
+                    loss_tokens += int(weights.sum())
+                writer.write_batch(batch)
+                written += len(batch["input_ids"])
+    summary = {"rows": written, "planned_rows": planned, "loss_tokens": loss_tokens, "splits": splits}
+    logger.info("%s: %s", name, summary)
     return summary
 
 
@@ -106,7 +111,7 @@ def main():
     parser.add_argument("--plan", required=True)
     parser.add_argument("--teacher", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--splits", nargs="+", default=["heldout", "train"])
+    parser.add_argument("--splits", nargs="+", default=["heldout", "train"], help="SPLIT or NAME=SPLIT+SPLIT")
     parser.add_argument(
         "--wait-idle-seconds", type=float, default=0, help="first wait until the scorer summary is this long unchanged"
     )
@@ -122,8 +127,19 @@ def main():
         ) < args.wait_idle_seconds:
             logger.info("scorer summary updated %.0f s ago; waiting", age)
             time.sleep(60)
-    scored = {c["cell"] for c in json.loads(StoragePath(prefix_join(args.teacher, "summary.json")).read_text())["cells"]}
-    summary = {split: build_split(args.plan, args.teacher, args.output, split, scored) for split in args.splits}
+    # One summary per scoring job (or shard); a cell is scored if any of them lists it.
+    scored = {
+        c["cell"]
+        for path in StoragePath(args.teacher).ls()
+        if str(path).rsplit("/", 1)[-1].startswith("summary") and str(path).endswith(".json")
+        for c in json.loads(StoragePath(str(path)).read_text())["cells"]
+    }
+    # NAME=SPLIT[+SPLIT...] writes several plan splits as one cache; a bare SPLIT writes itself.
+    targets = dict(spec.split("=", 1) if "=" in spec else (spec, spec) for spec in args.splits)
+    summary = {
+        name: build_split(args.plan, args.teacher, args.output, name, splits.split("+"), scored)
+        for name, splits in targets.items()
+    }
     for split, values in summary.items():
         StoragePath(prefix_join(args.output, f"{split}-summary.json")).write_text(json.dumps(values, indent=2) + "\n")
     print(json.dumps(summary, indent=2))
