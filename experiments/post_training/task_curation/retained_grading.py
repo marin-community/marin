@@ -11,7 +11,7 @@ from concurrent.futures import ProcessPoolExecutor
 
 import pyarrow.parquet as pq
 from finestore.rl.curation import ActorCensusInput, GradingEnvironmentEvidence
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.grading_environment import count_grading_environment, grading_environment_census
@@ -20,7 +20,7 @@ from taskcompendium.grading_environment import count_grading_environment, gradin
 class RetainedGradingReceipt(BaseModel):
     source_id: str
     input: ActorCensusInput
-    normalized_path: str
+    normalized_path: str = Field(min_length=1)
     evidence: GradingEnvironmentEvidence
 
     @model_validator(mode="after")
@@ -28,6 +28,35 @@ class RetainedGradingReceipt(BaseModel):
         if self.evidence.assessed_tasks != self.input.measured_tasks:
             raise ValueError("Retained grading assessments do not cover the complete population")
         return self
+
+
+class RetainedGradingLegacyReceipt(BaseModel):
+    """Read-only legacy retained grading evidence, from before normalized populations.
+
+    The older receipts pinned the pre-normalization population instead: the frozen graded
+    population path with its task-spec digest and the per-task evidence parquet. Accepted
+    only so reads of existing receipts parse (ruling 2026-11-19: DCAgent's -r3 chain
+    supersedes them, and they are never rewritten); every new retained grading receipt
+    carries ``normalized_path``.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    source_id: str
+    input: ActorCensusInput
+    population_path: str
+    scanned_task_specs_sha256: str
+    evidence: GradingEnvironmentEvidence
+    task_evidence_uri: str
+
+
+RetainedGrading = RetainedGradingReceipt | RetainedGradingLegacyReceipt
+"""A retained grading receipt at either the current or the legacy read-only shape."""
+
+
+def parse_retained_grading(record: dict) -> RetainedGrading:
+    """Validate a retained grading record at the current or the legacy read-only shape."""
+    return TypeAdapter(RetainedGrading).validate_python(record)
 
 
 def grading_receipt(census: dict, output_root: str) -> RetainedGradingReceipt:

@@ -41,6 +41,8 @@ from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_s
 LOGGER = logging.getLogger(__name__)
 
 DECLARATION_PIN_PAGE_SIZE = 50
+APPLET_PAGE_SIZE = 128
+"""Receipt rows can be large; a bounded key window keeps every query under the response cap."""
 PROJECTION_REFRESH_SEAL_NAME = "ruling-60-2026-11-19"
 PROJECTION_WAIVER_CONFIG = Path(__file__).with_name("declaration-projection-waivers.json")
 PROJECTION_WAIVER_REASON = "preview projection lag; declaration drift 0; ruling 2026-11-19"
@@ -439,20 +441,41 @@ def publication_preflight(
 
 def atlas_curriculum_rows() -> dict[str, dict]:
     """The served curriculum rows from the live atlas applet (the current release)."""
-    result = atlas_applet_query()(
-        "SELECT source_id, declaration, alignment IS NOT NULL AS has_alignment FROM curriculum_sources "
-        "WHERE load_id=(SELECT load_id FROM curriculum_current WHERE name='latest')",
-        {},
-    )
-    return {row["source_id"]: row for row in result["rows"]}
+    query = atlas_applet_query()
+    rows: list[dict] = []
+    after = ""
+    while True:
+        page = query(
+            "SELECT source_id, declaration, alignment IS NOT NULL AS has_alignment FROM curriculum_sources "
+            "WHERE load_id=(SELECT load_id FROM curriculum_current WHERE name='latest') "
+            "AND source_id > :after ORDER BY source_id LIMIT :batch",
+            {"after": after, "batch": APPLET_PAGE_SIZE},
+        )["rows"]
+        rows.extend(page)
+        if len(page) < APPLET_PAGE_SIZE:
+            break
+        after = page[-1]["source_id"]
+    return {row["source_id"]: row for row in rows}
 
 
 def atlas_contract_receipts() -> dict[str, list[DerivedContractReceipt]]:
-    """Read the archive and select only explicitly superseded, input-bound corrections."""
-    result = atlas_applet_query()("SELECT source_id, receipt FROM atlas_derived_contracts ORDER BY receipt_id", {})
+    """Read the archive in bounded key windows; the receipts outgrew one query's response cap."""
+    query = atlas_applet_query()
+    rows: list[dict] = []
+    after = ""
+    while True:
+        page = query(
+            "SELECT receipt_id, source_id, receipt FROM atlas_derived_contracts "
+            "WHERE receipt_id > :after ORDER BY receipt_id LIMIT :batch",
+            {"after": after, "batch": APPLET_PAGE_SIZE},
+        )["rows"]
+        rows.extend(page)
+        if len(page) < APPLET_PAGE_SIZE:
+            break
+        after = page[-1]["receipt_id"]
     # Select exact archived JSON identities before typed parsing adds legacy defaults.
     populations = defaultdict(list)
-    for row in result["rows"]:
+    for row in rows:
         receipt = row["receipt"] if isinstance(row["receipt"], dict) else json.loads(row["receipt"])
         source = canonical_source_id(row["source_id"])
         identity = (source, *(receipt["input"][key] for key in INPUT_FIELDS))

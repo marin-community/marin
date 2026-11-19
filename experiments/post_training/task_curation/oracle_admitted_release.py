@@ -55,7 +55,7 @@ from experiments.post_training.task_curation.remediation_binding import (
     ArchivedRetainedBinding,
     bind_archived_retained_release,
 )
-from experiments.post_training.task_curation.retained_grading import RetainedGradingReceipt
+from experiments.post_training.task_curation.retained_grading import RetainedGrading
 from experiments.post_training.task_curation.sample_qc_binding import (
     SampleQCReceipt,
     bind_sample_result,
@@ -78,7 +78,7 @@ class OracleAdmittedReleaseReceipt(BaseModel):
     execution_release: DatasetRelease | None
     output_dedup: WithinSourceDedupEvidence
     actor: ActorCensusReceipt
-    grading: RetainedGradingReceipt
+    grading: RetainedGrading
     lexical: LexicalContaminationEvidence
     sample: SampleQCReceipt
     repair_evidence: tuple[ContentEvidenceReference, ...] = Field(min_length=1)
@@ -372,7 +372,7 @@ def main() -> None:
         execution_release=item.execution_release,
         output_dedup=WithinSourceDedupEvidence.model_validate(metadata["dedup"]),
         actor=ActorCensusReceipt.model_validate(metadata["actor"]),
-        grading=RetainedGradingReceipt.model_validate(metadata["grading"]),
+        grading=RetainedGrading.model_validate(metadata["grading"]),
         lexical=LexicalContaminationEvidence.model_validate(metadata["lexical"]),
         sample=observed_sample,
         repair_evidence=item.repair_evidence,

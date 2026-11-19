@@ -353,3 +353,28 @@ def test_served_contract_reader_applies_exact_corrections_before_parsing_legacy_
     rows.append({"source_id": pair["source_id"], "receipt": unlisted})
     with pytest.raises(ValueError, match="Conflicting derived contract summaries"):
         ensure_current_projections.atlas_contract_receipts()
+
+
+def test_contract_receipts_read_in_bounded_key_windows(monkeypatch):
+    """The archive read pages by receipt_id so no single query exceeds the response cap."""
+    fixture = Path(__file__).parents[4] / "infra/marina/apps/rl_data_catalog/tests/fixtures/contract_supersessions.json"
+    base = json.loads(fixture.read_text())[0]["selected"]
+    rows = []
+    for index in range(5):
+        receipt = copy.deepcopy(base)
+        receipt["input"]["dataset_revision"] = str(index)
+        rows.append({"receipt_id": f"{index:064x}", "source_id": "Fixture:source", "receipt": receipt})
+    seen_windows = []
+
+    def fake_query(sql, parameters):
+        seen_windows.append(parameters["after"])
+        after = parameters["after"]
+        page = [row for row in rows if row["receipt_id"] > after][: parameters["batch"]]
+        return {"rows": page}
+
+    monkeypatch.setattr(ensure_current_projections, "atlas_applet_query", lambda: fake_query)
+    monkeypatch.setattr(ensure_current_projections, "APPLET_PAGE_SIZE", 2)
+    receipts = ensure_current_projections.atlas_contract_receipts()
+    # Every row crossed a window boundary exactly once, in key order.
+    assert seen_windows == ["", rows[1]["receipt_id"], rows[3]["receipt_id"]]
+    assert len(receipts) == 1
