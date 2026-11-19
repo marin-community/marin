@@ -610,8 +610,13 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     AdamW decay ``MUONC_ANNEAL_ADAMW_DECAY`` on its rank >= 2 leaves in place of the annealed
     ``gate_router_weight_decay``. 0: off."""
     adamc_adam_decay: float | None = None
-    """``lambda`` of the ``adamc_adam`` group in place of ``ADAMC_ADAM_DECAY``; needs ``adamc_head_router_embed``.
-    None: off."""
+    """``lambda`` of the ``adamc_adam`` group in place of ``ADAMC_ADAM_DECAY``; needs ``adamc_head_router_embed`` or
+    ``muonc_anneal_adamc``. None: off."""
+    muonc_anneal_adamc: float = 0.0
+    """With ``muonc_anneal_decay``: AdamC in place of AdamW on the head and the router and embedding. The head takes
+    ``scale_by_adamc`` at ``lr_h = lr_max s(t)^2`` with decay mult ``muonc_anneal_adamc``, so its decay is
+    ``(lr_h^2 / lr_max) lambda_h`` with ``lambda_h = muonc_anneal_adamc * lr_max``. The MoE router weights and
+    ``token_embed`` move to the ``adamc_adam`` group, as with ``adamc_head_router_embed``. 0: off."""
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -775,7 +780,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             # Only when on, so the optimizer state of runs without it keeps its groups.
             if self.embed_lr_mult is not None:
                 transforms["embed_lr"] = adam_at(adam_lr * self.embed_lr_mult, decay=True)
-            if self.adamc_head_router_embed:
+            if self.adamc_head_router_embed or self.muonc_anneal_adamc:
                 # Before scale(-adam_lr): p <- p - adam_lr u - (adam_lr^2 / self.adam_lr) lambda p.
                 adamc_adam_decay = ADAMC_ADAM_DECAY if self.adamc_adam_decay is None else self.adamc_adam_decay
                 transforms[ADAMC_ADAM_GROUP] = optax.chain(
@@ -809,6 +814,17 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     _fixed_decoupled_decay(MUONC_ANNEAL_ADAMW_DECAY),
                     optax.scale(-learning_rate * learning_rate / self.learning_rate),
                 )
+                if self.muonc_anneal_adamc:
+                    transforms["adamh"] = optax.chain(
+                        scale_by_adamc(
+                            self.beta1,
+                            self.beta2,
+                            self.epsilon,
+                            learning_rate * learning_rate / self.learning_rate,
+                            self.muonc_anneal_adamc,
+                        ),
+                        _match_named_update_sharding(),
+                    )
             return _multi_transform_when_used(
                 transforms, {FULL_BANDWIDTH_MUON_GROUP: muon_at(learning_rate)}, self.create_mask
             )
@@ -854,8 +870,16 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "muonc_anneal_decay must be non-negative and excludes muonh_radial_softcap, muonc_decay_mult, "
                 "muonh_nonsi_anneal, embed_lr_mult and embed_optimizer other than adam_group"
             )
-        if self.adamc_adam_decay is not None and (self.adamc_adam_decay < 0 or not self.adamc_head_router_embed):
-            raise ValueError("adamc_adam_decay must be non-negative and needs adamc_head_router_embed")
+        if self.adamc_adam_decay is not None and (
+            self.adamc_adam_decay < 0 or not (self.adamc_head_router_embed or self.muonc_anneal_adamc)
+        ):
+            raise ValueError(
+                "adamc_adam_decay must be non-negative and needs adamc_head_router_embed or muonc_anneal_adamc"
+            )
+        if self.muonc_anneal_adamc < 0 or (
+            self.muonc_anneal_adamc and (not self.muonc_anneal_decay or self.router_lr_mult != 1.0)
+        ):
+            raise ValueError("muonc_anneal_adamc must be non-negative and needs muonc_anneal_decay and router_lr_mult 1")
 
     def create_mask(self, params):
         paths = leaf_key_paths(params)
@@ -886,7 +910,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             # and n-gram cache mixtures' weights (zero-initialised).
             if ".rel_pos." in path_lower or _ADAM_LEAVES.search(path_lower):
                 return "adam"
-            if self.adamc_head_router_embed and (_TOKEN_EMBED.search(path_lower) or _is_router_weight(path_lower)):
+            adamc_router_embed = self.adamc_head_router_embed or self.muonc_anneal_adamc
+            if adamc_router_embed and (_TOKEN_EMBED.search(path_lower) or _is_router_weight(path_lower)):
                 return ADAMC_ADAM_GROUP
             if _TOKEN_EMBED.search(path_lower) and self.embed_lr_mult is not None:
                 return "embed_lr"
