@@ -446,7 +446,7 @@ def build_workflow(*, version: str | None = None) -> IceballMicroWorkflow:
     evaluation_version = version or resolve_version(evaluation_name, None)
     evaluation_model = ModelConfig(
         name=ICEBALL_MODEL_NAME,
-        location=QWEN_TOKENIZER,
+        location="",
         apply_chat_template=True,
         resource_hint=ResourceHint(gpu={ICEBALL_GPU_VARIANT: 1}),
         serve=ServeConfig(

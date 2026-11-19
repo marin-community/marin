@@ -156,7 +156,7 @@ def build_smoke(version: str) -> Smoke:
         SkyRLPolicyModel(resume),
         ModelConfig(
             name="skyrl-port-smoke",
-            location=MODEL,
+            location="",
             apply_chat_template=True,
             resource_hint=ResourceHint(gpu={"H100": 1}),
             serve=ServeConfig(tensor_parallel_size=1, max_model_len=4096, max_num_seqs=16),

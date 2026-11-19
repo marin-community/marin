@@ -155,6 +155,7 @@ from marinskyrl.runtime_options import WeightSyncTransport
 from skyrl_train.utils.logging_utils import log_exception_as_text
 from skyrl_train.weight_sync.expert_block.driver import ExpertBlockSync
 from skyrl_train.hf_export_schema import (
+    DEFAULT_HF_HUB_PRIVATE,
     DEFAULT_HF_HUB_REVISION,
     DEFAULT_HF_UPLOAD_MODE,
     HFExportRequest,
@@ -3215,7 +3216,7 @@ class RayPPOTrainer:
             model_source_uri=model.source_uri,
             model_source_identity=model.source_identity,
             hf_hub_repo_id=self.cfg.trainer.get("hf_hub_repo_id"),
-            hf_hub_private=self.cfg.trainer.get("hf_hub_private", True),
+            hf_hub_private=self.cfg.trainer.get("hf_hub_private", DEFAULT_HF_HUB_PRIVATE),
             hf_hub_revision=self.cfg.trainer.get("hf_hub_revision", DEFAULT_HF_HUB_REVISION),
             hf_upload_mode=HFUploadMode(self.cfg.trainer.get("hf_upload_mode", DEFAULT_HF_UPLOAD_MODE)),
         )

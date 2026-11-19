@@ -596,11 +596,10 @@ class CurriculumArm:
 
 
 def evaluation_model_config(policy: PolicySpec, preset: ScalePreset, name: str) -> ModelConfig:
-    """Model configuration for the trained policy checkpoint, from the policy's
-    ``serve_*`` fields and the preset's context window."""
+    """Build serving settings from the policy's profile and the preset's context window."""
     return ModelConfig(
         name=name,
-        location=SNOWBALL_SFT_EXPORT_URI if policy.adopted_model is not None else QWEN3_MODEL,
+        location="",
         apply_chat_template=True,
         resource_hint=ResourceHint(gpu={GPU_VARIANT: policy.serve_gpus}, memory=policy.serve_memory),
         serve=ServeConfig(

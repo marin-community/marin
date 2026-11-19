@@ -4,6 +4,7 @@ import json
 import sys
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 import numpy as np
@@ -29,6 +30,7 @@ from skyrl_train.hf_export import read_hf_export_request, write_hf_export_reques
 from skyrl_train.trainer import RayPPOTrainer
 from skyrl_train.hf_export_schema import HFExportRequest, HFExportStatus
 from marinskyrl.checkpoint_paths import policy_export_path, selected_export_step
+from skyrlrecipe.sections import Trainer
 
 
 def _training_config():
@@ -85,8 +87,8 @@ def _spec(request: HFExportRequest) -> ExportJobSpec:
     )
 
 
-@pytest.mark.parametrize("transport", ["broadcast", "expert_block"])
-def test_checkpoint_export_config_carries_request_fields_as_data(tmp_path: Path, transport: str) -> None:
+@pytest.mark.parametrize(("transport", "private"), [("broadcast", True), ("expert_block", False)])
+def test_checkpoint_export_config_carries_request_fields_as_data(tmp_path: Path, transport: str, private: bool) -> None:
     raw = raw_launch_config()
     raw["iris"]["allocation"]["gpus_per_node"] = 4
     raw["skyrl"]["trainer"]["placement"]["policy_num_gpus_per_node"] = 4
@@ -114,7 +116,6 @@ def test_checkpoint_export_config_carries_request_fields_as_data(tmp_path: Path,
         "--model_path", "Qwen/Qwen3-8B", "--num-nodes", "1", "--gpus-per-node", "4",
         "--gpu-variant", "H100", "--hf-hub-repo-id", "org/model",
     ]
-    private = transport == "broadcast"
     if not private:
         args.append("--no-hf-hub-private")
     spec = export_hf_checkpoint.manual_spec(parser.parse_args(args), parser)
@@ -133,6 +134,22 @@ def test_checkpoint_export_config_carries_request_fields_as_data(tmp_path: Path,
     assert config.skyrl.checkpoint_export.checkpoint_path == request.checkpoint_path
     assert config.skyrl.checkpoint_export.export_root == request.export_path
     assert config.skyrl.checkpoint_export.hf_hub_private is private
+
+
+def test_checkpoint_export_request_uses_private_trainer_default(tmp_path: Path) -> None:
+    trainer = Trainer(hf_hub_repo_id="org/model")
+    raw = raw_launch_config()
+    raw["skyrl"]["trainer"].update(trainer.model_dump(include={"hf_hub_repo_id", "hf_hub_private"}))
+    path = tmp_path / "training.yaml"
+    OmegaConf.save(OmegaConf.create(raw), path)
+    training = load_launch_config(path)
+
+    with patch.object(export_hf_checkpoint, "checkpoint_export_launch_config", wraps=checkpoint_export_launch_config) as derive:
+        export_hf_checkpoint.validate_checkpoint_export(training)
+
+    request = derive.call_args.args[1]
+    assert request.hf_hub_repo_id == "org/model"
+    assert request.hf_hub_private is True
 
 
 def test_checkpoint_export_config_preserves_federated_routing() -> None:

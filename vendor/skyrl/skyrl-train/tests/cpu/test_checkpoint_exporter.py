@@ -14,6 +14,7 @@ from marinskyrl.model_manifest import MODEL_MANIFEST_FILENAME, write_local_model
 from skyrl_train.checkpoint_exporter import CheckpointExportPlan, CheckpointExporter, RayPolicyExportWorkers, hub_publisher
 from skyrl_train.hf_export_schema import HFUploadMode
 from skyrl_train.hf_model_io import verify_hf_model_export
+from skyrl_train.hf_publisher import HuggingFacePublisher
 
 
 class FakePolicyExportWorkers:
@@ -280,3 +281,20 @@ def test_hf_publisher_checks_visibility_and_uploaded_files(tmp_path, monkeypatch
     assert first == expected
     assert last == {**expected, **{f"checkpoints/step_12/{path}": data for path, data in expected.items()}}
     assert os.environ["HF_HUB_OFFLINE"] == "1"
+
+
+def test_hf_publisher_refuses_large_file_without_lfs_metadata(tmp_path):
+    export_path = tmp_path / "policy"
+    export_path.mkdir()
+    save_file({"weight": torch.tensor([0.0])}, export_path / "model.safetensors")
+    for filename in ("config.json", "tokenizer_config.json"):
+        (export_path / filename).write_text("{}")
+    with (export_path / "tokenizer.json").open("wb") as tokenizer:
+        tokenizer.truncate(64 * 2**20 + 1)
+    write_local_model_manifest(export_path)
+    api = FakeHubApi(tmp_path / "downloads", private=None, corrupt=None)
+    publisher = HuggingFacePublisher(repo_id="org/model", private=True, api=api)
+
+    with pytest.raises(ValueError, match="lacks LFS SHA-256 metadata: tokenizer.json"):
+        publisher.publish(str(export_path), step=12)
+    assert not (api.root / "commit-0" / "tokenizer.json").exists()

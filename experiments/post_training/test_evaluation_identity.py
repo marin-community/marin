@@ -15,6 +15,7 @@ from experiments.post_training.curriculum_sft.math_trial import build_math_trial
 def test_post_training_evaluation_identities_stay_pinned(monkeypatch):
     monkeypatch.setattr("marin.experiment.namespacing.username_segment", lambda: "alice")
     monkeypatch.setattr(launch, "username_segment", lambda: "alice")
+    # The curriculum SFT pin includes this test's stubbed architecture.
     monkeypatch.setattr("marin.experiment.checkpoints.resolve_lm_config", lambda *_: SnowballConfig())
     version = "2026.10.26"
     arm = launch.build_arms(specs=(launch.ARMS["naive"],), scale="smoke", version=version)["naive"]

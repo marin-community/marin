@@ -15,6 +15,7 @@ from transformers import PreTrainedTokenizerBase
 from marinskyrl.checkpoint_paths import POLICY_CHECKPOINT_SUBDIRECTORY, policy_export_path
 from skyrl_train import hf_model_io
 from skyrl_train.hf_export_schema import (
+    DEFAULT_HF_HUB_PRIVATE,
     DEFAULT_HF_HUB_REVISION,
     DEFAULT_HF_UPLOAD_MODE,
     HFUploadMode,
@@ -212,7 +213,7 @@ def hub_publisher(cfg: DictConfig) -> HuggingFacePublisher | None:
         return None
     return HuggingFacePublisher(
         repo_id=str(repo_id),
-        private=bool(cfg.checkpoint_export.get("hf_hub_private", True)),
+        private=bool(cfg.checkpoint_export.get("hf_hub_private", DEFAULT_HF_HUB_PRIVATE)),
         revision=str(cfg.checkpoint_export.get("hf_hub_revision", DEFAULT_HF_HUB_REVISION)),
         upload_mode=HFUploadMode(cfg.checkpoint_export.get("hf_upload_mode", DEFAULT_HF_UPLOAD_MODE)),
     )

@@ -6,6 +6,7 @@ from marinskyrl.resource_locator import validate_replayable_model_reference
 HF_EXPORT_REQUEST_SCHEMA_VERSION = 1
 TRAINER_STATE_FILENAME = "trainer_state.pt"
 DEFAULT_HF_EXPORT_TIMEOUT = 7200
+DEFAULT_HF_HUB_PRIVATE = True
 DEFAULT_HF_HUB_REVISION = "main"
 
 
@@ -37,7 +38,7 @@ class HFExportRequest:
     schema_version: int = HF_EXPORT_REQUEST_SCHEMA_VERSION
     status: HFExportStatus = HFExportStatus.PENDING
     hf_hub_repo_id: str | None = None
-    hf_hub_private: bool = True
+    hf_hub_private: bool = DEFAULT_HF_HUB_PRIVATE
     hf_hub_revision: str = DEFAULT_HF_HUB_REVISION
     hf_upload_mode: HFUploadMode = DEFAULT_HF_UPLOAD_MODE
     attempts: int = 0

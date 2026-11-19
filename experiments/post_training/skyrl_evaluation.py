@@ -23,18 +23,20 @@ def evaluate(
     accelerator: str | None,
     submission_cluster: str,
     federated_cluster: str | None,
-    judge: ModelConfig | None = None,
-    instances: int = 1,
-    task_timeout_seconds: int | None = None,
+    job_timeout_seconds: int | None = None,
 ) -> ArtifactStep[EvaluationResult]:
-    """Evaluate a trained model artifact, with an optional hosted judge for Harbor verifiers."""
+    """Evaluate a trained model with serving settings and replace its location with the resolved export."""
+    if any(
+        value is not None
+        for value in (serving.revision, serving.identity, serving.tokenizer, serving.tokenizer_revision)
+    ):
+        raise ValueError("Evaluation revision, identity, tokenizer and tokenizer_revision come from the model")
 
     def resolve_model(ctx: StepContext) -> ModelConfig:
         resolved = model.resolve(ctx)
         return replace(
             serving,
             location=resolved.uri,
-            revision=None,
             identity=resolved.identity,
             tokenizer=resolved.tokenizer_uri or resolved.uri,
             tokenizer_revision=resolved.tokenizer_revision,
@@ -58,7 +60,5 @@ def evaluate(
         accelerator=accelerator,
         submission_cluster=submission_cluster,
         federated_cluster=federated_cluster,
-        judge_model=judge,
-        instances=instances,
-        task_timeout_seconds=task_timeout_seconds,
+        job_timeout_seconds=job_timeout_seconds,
     )

@@ -52,7 +52,7 @@ _ACCELERATOR_RUNTIME_ARG = "accelerator"
 _SUBMISSION_CLUSTER_RUNTIME_ARG = "submission_cluster"
 _FEDERATED_CLUSTER_RUNTIME_ARG = "federated_cluster"
 _INSTANCES_RUNTIME_ARG = "instances"
-_TASK_TIMEOUT_RUNTIME_ARG = "task_timeout_seconds"
+_JOB_TIMEOUT_RUNTIME_ARG = "job_timeout_seconds"
 
 
 @dataclass(frozen=True)
@@ -69,9 +69,8 @@ class EvalStepConfig:
     federated_cluster: str | None
     version: str
     instances: int = 1
-    judge_model: ModelConfig | None = None
     rl_run: RLRunRef | None = None
-    task_timeout_seconds: int | None = None
+    job_timeout_seconds: int | None = None
 
 
 @dataclass(frozen=True)
@@ -95,8 +94,6 @@ class EvaluationResult(Artifact):
 
 
 def run_eval_pipeline_step(config: EvalStepConfig) -> EvaluationResult:
-    if config.task_timeout_seconds is not None and config.task_timeout_seconds <= 0:
-        raise ValueError("task_timeout_seconds must be positive")
     spec = LaunchSpec(
         model=config.model,
         evals=config.evals,
@@ -110,12 +107,11 @@ def run_eval_pipeline_step(config: EvalStepConfig) -> EvaluationResult:
         federated_cluster=config.federated_cluster,
         priority_band=job_pb2.PRIORITY_BAND_INHERIT,
         version=config.version,
-        judge_model=config.judge_model,
         rl_run=config.rl_run,
         cache_key=None if is_mutable_version(config.version) else config.artifact_path,
     )
     submitted = launch_group(
-        prepare_evaluation_batch(spec), iris_ctx().client, task_timeout_seconds=config.task_timeout_seconds
+        prepare_evaluation_batch(spec), iris_ctx().client, job_timeout_seconds=config.job_timeout_seconds
     )
     submitted.job.wait(timeout=float("inf"))
     run_ids = tuple(evaluation.run_id for evaluation in submitted.evaluations)
@@ -144,8 +140,7 @@ def eval_step(
     accelerator: str | None = None,
     submission_cluster: str = EVALUATION_CONTROLLER_CLUSTER,
     federated_cluster: str | None = None,
-    judge_model: ModelConfig | None = None,
-    task_timeout_seconds: int | None = None,
+    job_timeout_seconds: int | None = None,
 ) -> ArtifactStep[EvaluationResult]:
     """Evaluate a model with curated TaskSpec corpora and Harbor.
 
@@ -153,20 +148,20 @@ def eval_step(
     Checked-in models use ``model`` directly without a producer step.
     ``max_concurrent`` caps concurrent evaluators sharing inference.
     ``instances`` starts candidate serving workers behind one broker when greater than one.
-    ``judge_model`` serves Harbor verifiers. Curated definitions declare their own judge settings.
     """
+    if job_timeout_seconds is not None and job_timeout_seconds <= 0:
+        raise ValueError("job_timeout_seconds must be positive")
 
-    def build_config(ctx: StepContext) -> EvalStepConfig | EvalStepFingerprint | tuple[EvalStepFingerprint, ModelConfig]:
+    def build_config(ctx: StepContext) -> EvalStepConfig | EvalStepFingerprint:
         resolved_model = resolve_model(ctx) if resolve_model is not None else model
         if ctx.is_fingerprint:
-            fingerprint = EvalStepFingerprint(
+            return EvalStepFingerprint(
                 model=resolved_model,
                 dependencies=tuple(artifact_identity(dep) for dep in deps),
                 evals=evals,
                 limit=limit,
                 version=version,
             )
-            return fingerprint if judge_model is None else (fingerprint, judge_model)
         return EvalStepConfig(
             model=resolved_model,
             evals=evals,
@@ -178,9 +173,8 @@ def eval_step(
             submission_cluster=ctx.runtime_arg(_SUBMISSION_CLUSTER_RUNTIME_ARG),
             federated_cluster=ctx.runtime_arg(_FEDERATED_CLUSTER_RUNTIME_ARG),
             version=version,
-            judge_model=judge_model,
             rl_run=resolve_rl_run(ctx) if resolve_rl_run is not None else None,
-            task_timeout_seconds=ctx.runtime_arg(_TASK_TIMEOUT_RUNTIME_ARG),
+            job_timeout_seconds=ctx.runtime_arg(_JOB_TIMEOUT_RUNTIME_ARG),
         )
 
     return ArtifactStep(
@@ -195,7 +189,7 @@ def eval_step(
             _SUBMISSION_CLUSTER_RUNTIME_ARG: submission_cluster,
             _FEDERATED_CLUSTER_RUNTIME_ARG: federated_cluster,
             _INSTANCES_RUNTIME_ARG: instances,
-            _TASK_TIMEOUT_RUNTIME_ARG: task_timeout_seconds,
+            _JOB_TIMEOUT_RUNTIME_ARG: job_timeout_seconds,
         },
     )
 

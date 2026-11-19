@@ -692,7 +692,7 @@ def run_evaluation_group(batch: EvaluationBatch) -> None:
 
 
 def launch_group(
-    batch: EvaluationBatch, client: IrisClient, *, task_timeout_seconds: int | None = None
+    batch: EvaluationBatch, client: IrisClient, *, job_timeout_seconds: int | None = None
 ) -> SubmittedEvaluationBatch:
     """Bind final evaluation steps and submit one CPU orchestrator."""
     constraints = None
@@ -723,7 +723,7 @@ def launch_group(
         ),
         constraints=constraints,
         egress_allow=batch.egress_allow,
-        timeout=Duration.from_seconds(task_timeout_seconds) if task_timeout_seconds is not None else None,
+        timeout=Duration.from_seconds(job_timeout_seconds) if job_timeout_seconds is not None else None,
         max_retries_failure=0,
         priority_band=batch.priority_band,
     )

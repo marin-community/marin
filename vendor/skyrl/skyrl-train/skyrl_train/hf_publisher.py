@@ -16,12 +16,15 @@ from skyrl_train.hf_export_schema import DEFAULT_HF_HUB_REVISION, DEFAULT_HF_UPL
 from skyrl_train.io import io
 
 
+_MAX_GIT_VERIFICATION_BYTES = 64 * 2**20
+
+
 @dataclass(frozen=True)
 class HuggingFacePublisher:
     """Publish one completed model at the repository root and optional step archive."""
 
     repo_id: str
-    private: bool = True
+    private: bool
     revision: str = DEFAULT_HF_HUB_REVISION
     upload_mode: HFUploadMode = DEFAULT_HF_UPLOAD_MODE
     api: HfApi | None = None
@@ -95,6 +98,8 @@ class HuggingFacePublisher:
     def _sha256(self, api: HfApi, file: RepoFile, revision: str) -> str:
         if file.lfs is not None:
             return file.lfs.sha256
+        if file.size > _MAX_GIT_VERIFICATION_BYTES:
+            raise ValueError(f"Hugging Face file over 64 MiB lacks LFS SHA-256 metadata: {file.path}")
         downloaded = call_with_hugging_face_retry(
             lambda: api.hf_hub_download(self.repo_id, file.path, repo_type="model", revision=revision),
             operation=f"read Hugging Face file {self.repo_id}@{revision}:{file.path}",
