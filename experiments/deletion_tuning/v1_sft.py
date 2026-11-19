@@ -170,8 +170,8 @@ def v1_recipe(production_recipe: dict) -> dict:
     recipe["target_positions"] = V1_TARGET_POSITIONS
     recipe["stage_guard"]["h100_hour_limit"] = V1_H100_HOUR_LIMIT
     resources = recipe["resources"]
-    assert resources["device"]["count"] == 8 and resources["replicas"] == 2 * V1_NODES, resources["replicas"]
-    resources["replicas"] = V1_NODES
+    assert resources["device"]["count"] == 8 and resources["replicas"] * 8 == 256, resources["replicas"]
+    resources["replicas"] = V1_DEVICES // 8
     # the Deletion init deliberately perturbs the masked weights, so the Exp3
     # identity gate against the unmodified base would reject a correct init.
     recipe["initial_eval_match"] = None
