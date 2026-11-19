@@ -7,39 +7,7 @@ import pytest
 from verifyit.grade import GradingInfraError, Status
 from verifyit.modes.grade_judge import JudgeConnection, grade_judge_candidate
 
-from taskcompendium.importers.imobench import answer_judge_spec, convert_answerbench, proof_judge_spec
-from taskcompendium.models import Source, TaskSpec
-from taskcompendium.pipeline.inputs import ConversionContext
-from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, RawRow
-
-
-def _answerbench_row(**data: str) -> RawRow:
-    source = Source(
-        dataset="imobench/answerbench_v2", revision="a" * 40, row="answerbench_v2.csv:1", importer_revision="1"
-    )
-    return RawRow("imo-bench-algebra-001", source, data)
-
-
-def test_answerbench_rejects_a_row_with_shifted_columns():
-    # answerbench_v2's algebra-036, abridged: Category, Subcategory and Source are shifted one column left.
-    shifted = _answerbench_row(
-        **{
-            "Problem ID": "imo-bench-algebra-036",
-            "Problem": "Find all functions $Y$ ... $Y(x) = A + B/x$",
-            "Short Answer": "Algebra",
-            "Category": "Functional Equation",
-            "Subcategory": "Iran 2002",
-            "Source": "",
-        }
-    )
-    rejection = convert_answerbench(shifted, ConversionContext({}, None))
-    assert isinstance(rejection, ImportRejection)
-    assert rejection.kind is ImportFailureKind.SOURCE_DEFECT
-
-    valid = _answerbench_row(
-        **{"Problem ID": "imo-bench-algebra-001", "Problem": "Find $N$.", "Short Answer": "3", "Category": "Algebra"}
-    )
-    assert isinstance(convert_answerbench(valid, ConversionContext({}, None)), TaskSpec)
+from taskcompendium.importers.imobench import answer_judge_spec, proof_judge_spec
 
 
 @pytest.fixture

@@ -9,6 +9,8 @@ ProofAutoGrader texts, transcribed from the paper's LaTeX source as Markdown; th
 adds one rule that marks hedged answers incorrect. Each solver sees only the problem statement.
 """
 
+from typing import Any
+
 from verifyit.spec import JudgeCompletionPolicy, JudgeSpec
 
 from taskcompendium.convert.answers import answer_task, nonempty_text, source_defect, source_evidence
@@ -169,14 +171,15 @@ def proof_judge_spec(problem: str, solution: str, guidelines: str) -> JudgeSpec:
     )
 
 
+def answerbench_row_selected(data: dict[str, Any], _context: ConversionContext) -> bool:
+    """Drop rows outside the four categories: answerbench_v2's algebra-036 has shifted columns."""
+    return data.get("Category") in ANSWERBENCH_CATEGORIES
+
+
 def convert_answerbench(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
     problem, answer = nonempty_text(row.data.get("Problem")), nonempty_text(row.data.get("Short Answer"))
     if problem is None or answer is None:
         return source_defect("missing_field", "IMO-AnswerBench rows require Problem and Short Answer")
-    # algebra-036 in answerbench_v2 has shifted columns: its answer is "Algebra" and its
-    # category "Functional Equation".
-    if row.data.get("Category") not in ANSWERBENCH_CATEGORIES:
-        return source_defect("shifted_columns", f"unknown IMO-AnswerBench category {row.data.get('Category')!r}")
     task = answer_task(row, prompt=problem, spec=answer_judge_spec(problem, answer), evidence=dict(row.data))
     return task.model_copy(update={"tags": ("eval", "source:imobench", "benchmark:IMO-AnswerBench")})
 

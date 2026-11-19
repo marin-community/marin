@@ -23,6 +23,7 @@ from taskcompendium.evaluation.spec import (
 )
 from taskcompendium.importers.imobench import (
     answerbench_item,
+    answerbench_row_selected,
     convert_answerbench,
     convert_proofbench,
     proofbench_item,
@@ -33,7 +34,7 @@ from taskcompendium.pipeline.models import Converter, IntendedUse
 
 from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmarks
 from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
-from experiments.post_training.task_curation.pipeline import CurationRecipe, UrlSource
+from experiments.post_training.task_curation.pipeline import CurationRecipe, RowSelector, UrlSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 SUPERHUMAN_REVISION = "9b620a92886b3a7655b30ddcfe36e725e9596509"
@@ -52,6 +53,7 @@ def _source(
     filename: str,
     sha256: str,
     population: int,
+    select: RowSelector | None,
     convert: Converter,
     item_builder: Callable[[TaskSpec], EvaluationItem],
     metric: Metric,
@@ -75,6 +77,7 @@ def _source(
                     sha256,
                     filename,
                     SourceFormat.CSV,
+                    select=select,
                 ),
                 convert=convert,
                 version=VERSION,
@@ -115,6 +118,7 @@ def answerbench_source() -> RlDataSource[EvaluationCorpusRecipe]:
         filename="answerbench_v2.csv",
         sha256=ANSWERBENCH_SHA256,
         population=399,
+        select=answerbench_row_selected,
         convert=convert_answerbench,
         item_builder=answerbench_item,
         metric=Metrics.ACCURACY,
@@ -130,6 +134,7 @@ def proofbench_source() -> RlDataSource[EvaluationCorpusRecipe]:
         filename="proofbench_v2.csv",
         sha256=PROOFBENCH_SHA256,
         population=60,
+        select=None,
         convert=convert_proofbench,
         item_builder=proofbench_item,
         metric=PROOF_SCORE,
