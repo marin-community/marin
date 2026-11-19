@@ -69,6 +69,9 @@ MARIN_PREFIX=s3://marin-us-east-02a/marin uv run python -m experiments.post_trai
   --preset train-medium --version 2026.11.19.1 --plan
 ```
 
+Use Mochi's `train-medium-agentic` for two mixed-workload training updates with native
+checkpointing. Pass a versioned selection containing both task families with `--tasks NAME@VERSION`.
+
 The Snowball and Mochi preset commands use `--resume NAME@VERSION` to start from
 the latest committed native checkpoint of a finished run. Use a checkpointing
 preset and an immutable version. If the source checkpoint advances between

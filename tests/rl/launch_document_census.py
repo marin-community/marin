@@ -19,6 +19,7 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training import iceball_micro, rl, rl_presets, skyrl_port_smoke, snowball_online_eagle
+from experiments.post_training import mochi_rl as mochi_model
 from experiments.post_training import rl_recipe as recipe
 from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.cat_count_canary import launcher as canary
@@ -48,7 +49,9 @@ def _curriculum_step(scale, policy, arm) -> ArtifactStep[SkyRLRun]:
     return curriculum.build_arms(specs=(arm,), scale=scale, policy=policy, version=VERSION)[arm.name].rl
 
 
-def _snowball_step(preset: rl_presets.Preset, settings: tuple[str, ...] = ()) -> ArtifactStep[SkyRLRun]:
+def _preset_step(
+    table: rl_presets.ModelPresets, preset: rl_presets.Preset, settings: tuple[str, ...] = ()
+) -> ArtifactStep[SkyRLRun]:
     eval_lite = recipe.selection_artifact(preset.eval_lite)
     selection = recipe.selection_artifact(preset.tasks)
     for source, full_rows in ((selection, 910), (eval_lite, 20)):
@@ -70,7 +73,7 @@ def _snowball_step(preset: rl_presets.Preset, settings: tuple[str, ...] = ()) ->
         preset,
         tasks=selection if preset.tasks_input == "required" else None,
         settings=settings,
-        table=snowball_model.SNOWBALL,
+        table=table,
     ).runs[0]
 
 
@@ -108,12 +111,21 @@ def launch_builders(
             continue
         builders[name] = partial(_curriculum_step, scale, policy, arm)
     for label, preset in snowball_model.SNOWBALL.by_name.items():
-        builders[f"snowball/{label}"] = partial(_snowball_step, preset)
+        builders[f"snowball/{label}"] = partial(_preset_step, snowball_model.SNOWBALL, preset)
     builders["snowball/settings/optimizer"] = partial(
-        _snowball_step, snowball_model.SNOWBALL.by_name["learning-medium"], ("trainer.policy.optimizer_config.lr=2e-6",)
+        _preset_step,
+        snowball_model.SNOWBALL,
+        snowball_model.SNOWBALL.by_name["learning-medium"],
+        ("trainer.policy.optimizer_config.lr=2e-6",),
     )
     builders["snowball/settings/context-budget"] = partial(
-        _snowball_step, snowball_model.SNOWBALL.by_name["train-long"], ("context_budget.request_window_tokens=32768",)
+        _preset_step,
+        snowball_model.SNOWBALL,
+        snowball_model.SNOWBALL.by_name["train-long"],
+        ("context_budget.request_window_tokens=32768",),
+    )
+    builders["mochi/train-medium-agentic"] = partial(
+        _preset_step, mochi_model.MOCHI, mochi_model.MOCHI.by_name["train-medium-agentic"]
     )
     canary_base = {"preset": "dry", "lane": "async", "model": canary.DEFAULT_MODEL, "checkpoint": False, "export": False}
     canary_axes = {

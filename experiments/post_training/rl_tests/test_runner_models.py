@@ -67,6 +67,7 @@ def test_mochi_default_matches_production_sft_export(mochi_sft_preset):
                 "train-medium": {"2026.11.19.1": "8b5a970e"},
                 "train-long": {"2026.11.19.1": "db854d78"},
                 "train-long-3rack": {"2026.11.19.1": "a0e17c94"},
+                "train-medium-agentic": {"2026.11.19.1": "3fe4f7a8"},
                 "train-long-agentic": {"2026.11.19.1": "da5ac9be"},
                 "train-long-agentic-3rack": {"2026.11.19.1": "185f5443"},
             },
