@@ -99,6 +99,18 @@ def test_every_historical_reason_maps_to_typed_gaps(reason):
             "Production judge route or temperature qualification pending: glm-5.3 at temperature 0.0",
             [(DifficultyGap.JUDGE_QUALIFICATION_PENDING, "glm-5.3 at temperature 0.0")],
         ),
+        (
+            "production_judge_route_or_temperature_not_qualified:openai/gpt-oss-120b:temperature=0.0",
+            [(DifficultyGap.JUDGE_QUALIFICATION_PENDING, "openai/gpt-oss-120b:temperature=0.0")],
+        ),
+        (
+            "production_judge_route_or_temperature_not_qualified:gpt-4o-mini:temperature=0.0",
+            [(DifficultyGap.JUDGE_QUALIFICATION_PENDING, "gpt-4o-mini:temperature=0.0")],
+        ),
+        (
+            "production_judge_route_or_temperature_not_qualified::temperature=0.0",
+            [(DifficultyGap.JUDGE_QUALIFICATION_PENDING, ":temperature=0.0")],
+        ),
     ],
 )
 def test_parameterized_legacy_reasons_keep_their_typed_detail(reason, expected):
@@ -213,7 +225,15 @@ def test_free_text_after_a_gap_fails_validation():
         require_difficulty_gaps("invalid_reference:the snapshot is broken; whatever")
 
 
-def test_not_measured_observation_rejects_untyped_reasons():
+@pytest.mark.parametrize(
+    "recorded_reason",
+    [
+        "production_judge_route_or_temperature_not_qualified:openai/gpt-oss-120b:temperature=0.0",
+        "production_judge_route_or_temperature_not_qualified:gpt-4o-mini:temperature=0.0",
+        "production_judge_route_or_temperature_not_qualified::temperature=0.0",
+    ],
+)
+def test_not_measured_observation_rejects_untyped_reasons(recorded_reason):
     release = {
         "repo": "open-athena/marin-eval-data",
         "revision": "a" * 40,
@@ -254,6 +274,10 @@ def test_not_measured_observation_rejects_untyped_reasons():
         DifficultyObservation.model_validate(evidence_only)
     typed = {**base, "reason": DifficultyGap.ENVIRONMENT_ARTIFACT_MISSING.value}
     assert DifficultyObservation.model_validate(typed).reason == DifficultyGap.ENVIRONMENT_ARTIFACT_MISSING.value
+    archived = DifficultyObservation.model_validate({**base, "reason": recorded_reason})
+    assert archived.reason == recorded_reason
+    assert archived.status is MeasurementStatus.NOT_MEASURED
+    assert (archived.n, archived.solved, archived.wilson_95) == (0, 0, None)
 
 
 def test_blocked_attempt_rejects_untyped_reasons():

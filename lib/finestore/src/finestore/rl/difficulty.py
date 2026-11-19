@@ -321,6 +321,7 @@ LEGACY_DIFFICULTY_GAP_PREFIXES: tuple[tuple[str, DifficultyGap], ...] = (
         DifficultyGap.FILTRATION_FINDINGS_ADMISSION_PENDING,
     ),
     ("Production judge route or temperature qualification pending:", DifficultyGap.JUDGE_QUALIFICATION_PENDING),
+    ("production_judge_route_or_temperature_not_qualified:", DifficultyGap.JUDGE_QUALIFICATION_PENDING),
     ("production_judge_route_not_qualified:", DifficultyGap.JUDGE_ROUTE_UNQUALIFIED),
     ("production_judge_api_not_qualified:", DifficultyGap.JUDGE_API_UNQUALIFIED),
     ("missing_environment_artifact:", DifficultyGap.ENVIRONMENT_ARTIFACT_MISSING),
