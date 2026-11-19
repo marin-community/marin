@@ -15,6 +15,7 @@ exponentially on runs of characters such as ``*``, ``(`` or ``\\``.
 
 import re
 import signal
+import time
 from collections.abc import Sequence
 
 from verifyit.adapters.completion import final_text
@@ -33,6 +34,8 @@ CONTENT_PATTERNS = (
 )
 SEARCH_TIMEOUT = 5.0
 MAX_SEARCH_TIME = 2 * (len(LABEL_PATTERNS) + len(CONTENT_PATTERNS)) * SEARCH_TIMEOUT
+# A caller timer that expired during a search fires as soon as it is restored.
+MIN_TIMER = 1e-6
 
 
 class _SearchTimeout(Exception):
@@ -44,15 +47,20 @@ def _expire(_signum, _frame):
 
 
 def _search(pattern: str, text: str, flags: int) -> re.Match[str] | None:
-    previous = signal.signal(signal.SIGALRM, _expire)
-    signal.setitimer(signal.ITIMER_REAL, SEARCH_TIMEOUT)
+    """Search under a ``SEARCH_TIMEOUT`` alarm, then restore the caller's handler and remaining timer."""
+    previous_handler = signal.signal(signal.SIGALRM, _expire)
+    previous_delay, previous_interval = signal.setitimer(signal.ITIMER_REAL, SEARCH_TIMEOUT)
+    start = time.monotonic()
     try:
         return re.search(pattern, text, flags)
     except _SearchTimeout:
         return None
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, previous)
+        signal.signal(signal.SIGALRM, previous_handler)
+        if previous_delay:
+            remaining = previous_delay - (time.monotonic() - start)
+            signal.setitimer(signal.ITIMER_REAL, max(remaining, MIN_TIMER), previous_interval)
 
 
 def _first_match(patterns: Sequence[str], text: str, flags: int = 0) -> str | None:

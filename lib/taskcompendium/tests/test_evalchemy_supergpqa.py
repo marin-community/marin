@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import signal
+
 import pytest
 from verifyit.grade import Status
 
@@ -54,6 +56,22 @@ def test_backtracking_search_times_out_as_a_miss(monkeypatch, run):
     assert result.status == Status.SCORED
     assert result.detail["extracted"] is None
     assert grade_supergpqa("C", OPTIONS, run + "\nAnswer: C").reward == 1
+
+
+def test_search_timeout_restores_the_callers_alarm():
+    def caller_handler(_signum, _frame):
+        raise AssertionError("caller alarm fired early")
+
+    previous = signal.signal(signal.SIGALRM, caller_handler)
+    signal.setitimer(signal.ITIMER_REAL, 30.0)
+    try:
+        assert grade_supergpqa("C", OPTIONS, "Answer: C").reward == 1
+        remaining, _interval = signal.getitimer(signal.ITIMER_REAL)
+        assert 0 < remaining <= 30.0
+        assert signal.getsignal(signal.SIGALRM) is caller_handler
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
 
 
 def test_reasoning_trace_is_ignored():
