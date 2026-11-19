@@ -76,8 +76,8 @@ def test_mochi_default_matches_production_sft_export(mochi_sft_preset):
         (
             "snowball",
             {
-                "train-medium-agentic": {"2026.11.19.1": "a0074f2c"},
-                "train-long-agentic": {"2026.11.19.1": "6c50961b"},
+                "train-medium-agentic": {"2026.11.19.1": "546a047f"},
+                "train-long-agentic": {"2026.11.19.1": "41536315"},
             },
         ),
     ],
@@ -115,6 +115,18 @@ def test_mixed_candidate_uses_the_selected_tasks_and_preserves_authored_concurre
         "DAYTONA_TARGET",
         "WANDB_API_KEY",
     }
+
+
+def test_snowball_plan_requires_route_capture(selection):
+    args = ("--preset", "train-medium-agentic", "--version", "dev", "--plan", "--tasks", SELECTION_IDENTITY)
+    runner = CliRunner()
+    valid = runner.invoke(rl.command(SNOWBALL, argv=args), args)
+    assert valid.exit_code == 0, (valid.output, valid.exception)
+
+    without_capture = (*args, "--set", "generator.engine_init_kwargs.enable_return_routed_experts=false")
+    invalid = runner.invoke(rl.command(SNOWBALL, argv=without_capture), without_capture)
+    assert invalid.exit_code == 4, (invalid.output, invalid.exception)
+    assert "moe_router_replay requires generator.engine_init_kwargs.enable_return_routed_experts=true" in invalid.output
 
 
 @pytest.mark.parametrize(

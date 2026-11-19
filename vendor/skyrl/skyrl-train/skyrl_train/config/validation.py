@@ -66,6 +66,13 @@ def validate_megatron_config(cfg: DictConfig):
                             f"trainer.{worker_type}.megatron_config.{kwargs_name}.{'.'.join(key_path)} "
                             "must stay false with moe_router_replay: the fused router bypasses the replay hook"
                         )
+    if policy.megatron_config.get("moe_router_replay", False) and not cfg.generator.engine_init_kwargs.get(
+        "enable_return_routed_experts", False
+    ):
+        raise ValueError(
+            "trainer.policy.megatron_config.moe_router_replay requires "
+            "generator.engine_init_kwargs.enable_return_routed_experts=true"
+        )
 
 
 def _iter_config_kwargs(node):
