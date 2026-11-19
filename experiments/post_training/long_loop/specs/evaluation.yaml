@@ -115,13 +115,14 @@ config:
   terminal_bench:
     harbor:
       environment_type: daytona
-      daytona_provisioning: declarative
+      daytona_image_build: declarative
+      eval_daytona_image_build: declarative
       daytona_api_key_env: DAYTONA_EVAL_API_KEY
       eval_daytona_api_key_env: DAYTONA_EVAL_API_KEY
-      verifier_override_timeout_sec: 300
+      verifier_override_timeout_sec: null
       override_timeout_sec: 1800
       eval_timeout_override_sec: 1800
-      trial_attempt_timeout_sec: 2460
+      trial_attempt_timeout_sec: 10800
       n_concurrent_trials: 8
       max_retries: 0
     installed_agent:

@@ -78,6 +78,33 @@ see if the `{checkpointer.base_path}/{run_id}` directory exists and load the lat
  the trainer will start training from scratch.
 - You can also specify `--trainer.initialize_from` to initialize the model from a specific checkpoint, without loading the optimizer state.
 
+### Stop within an execution duration
+
+Set `trainer.training_budget` to stop between complete updates while reserving
+time for the last update and final checkpoint:
+
+```yaml
+trainer:
+  num_train_steps: 746
+  native_telemetry_root: /path/to/run/telemetry
+  training_budget:
+    duration: 20h
+    finalization_reserve: 40m
+    update_reserve: 10m
+```
+
+The reserves are explicit operating choices, inside the duration. They do not
+change the optimizer schedule or the maximum update count. Marin's Iris worker
+binds the deadline to the earliest task execution start. For direct Levanter
+execution, supply `deadline_epoch_seconds` explicitly. A previously bound earlier
+deadline is retained on recovery.
+
+Rank zero broadcasts the stop decision to every process. The trainer forces the
+last checkpoint, waits for its native commit, and writes `completion.json` under
+the telemetry root with the actual update count, checkpoint and stop reason.
+Finalization after the deadline fails the run. The external execution deadline
+still applies; choose reserves from measured update and checkpoint times.
+
 ### Change Evaluation Parameters
 To change how often the model is evaluated during training, you can use the following command:
 

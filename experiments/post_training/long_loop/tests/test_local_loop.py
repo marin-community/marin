@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from rigging.event_log import EventLog
 
-from experiments.post_training.long_loop.timing import EventLog, read_events
+from experiments.post_training.long_loop.timing import read_events
 
 
 def test_exception_records_failed_span_without_swallowing(tmp_path):

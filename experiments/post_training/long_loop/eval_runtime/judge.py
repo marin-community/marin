@@ -19,13 +19,13 @@ from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.inference.iris import remote_inference
 from marin.rl.skyrl import SkyRLRun, SkyRLRunConfig, run_skyrl
+from rigging.event_log import EventLog
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.timing import Duration
 
 from experiments.post_training.long_loop.execution_policy import DEFAULT_TASK_TIMEOUT_SECONDS
 from experiments.post_training.long_loop.launch_validation import validate_before_allocation, validate_selected_context
-from experiments.post_training.long_loop.timing import EventLog
 
 
 @dataclass(frozen=True)
@@ -34,6 +34,8 @@ class JudgedEvaluation:
     judge: ModelConfig
     capability_origin: str
     judge_gpu_count: int = 8
+    judge_gpu_variant: str = "H100"
+    judge_target_cluster: str | None = None
 
 
 def run_with_existing_judge(config: SkyRLRunConfig) -> SkyRLRun:
@@ -41,7 +43,13 @@ def run_with_existing_judge(config: SkyRLRunConfig) -> SkyRLRun:
     previous = os.environ.get("OPENAI_API_KEY")
     os.environ["OPENAI_API_KEY"] = os.environ["TOGETHER_API_KEY"]
     try:
-        return run_skyrl(config)
+        return run_skyrl(
+            config,
+            env_vars={
+                "OPENAI_API_KEY": os.environ["TOGETHER_API_KEY"],
+                "JUDGE_API_KEY": os.environ.get("JUDGE_API_KEY", "EMPTY"),
+            },
+        )
     finally:
         if previous is None:
             del os.environ["OPENAI_API_KEY"]
@@ -61,7 +69,12 @@ def run_judged(config: JudgedEvaluation) -> SkyRLRun:
     validation_fs.pipe_file(validation_key, json.dumps(validation, indent=2).encode())
     inference = inference_config_for_model(
         config.judge,
-        AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=config.judge_gpu_count, target_cluster=None),
+        AcceleratorChoice(
+            platform=Platform.GPU,
+            gpu_type=config.judge_gpu_variant,
+            gpu_count=config.judge_gpu_count,
+            target_cluster=config.judge_target_cluster,
+        ),
         env_vars={},
         priority=priority_band_value(launch["iris"]["priority"]),
         capability_origin=config.capability_origin,
@@ -87,7 +100,10 @@ def run_judged(config: JudgedEvaluation) -> SkyRLRun:
     with tempfile.TemporaryDirectory() as directory, ExitStack() as stack:
         log = EventLog(Path(directory) / "events.jsonl", launch["run"]["id"], "eval", attempt)
         try:
-            with log.span("judge_startup_including_queue", gpus=config.judge_gpu_count):
+            with log.span(
+                "judge_startup_including_queue",
+                gpus=config.judge_gpu_count * config.judge.serve.pipeline_parallel_size,
+            ):
                 judge = stack.enter_context(remote_inference(inference))
             fs.pipe_file(key, log.path.read_bytes())
             base_url = judge.model.endpoint.base_url

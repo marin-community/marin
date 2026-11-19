@@ -3,7 +3,6 @@
 
 import inspect
 from collections.abc import Callable
-from dataclasses import replace
 from functools import partial
 from itertools import product
 from pathlib import Path
@@ -12,8 +11,7 @@ from unittest.mock import patch
 
 from marin.execution.artifact import write_artifact
 from marin.execution.build_context import BuildContext, VersionCodex, build_context
-from marin.execution.lazy import ArtifactStep, StepContext, materialized_config
-from marin.experiment.cli import graph_handles
+from marin.execution.lazy import ArtifactStep, materialized_config
 from marin.rl.skyrl import SkyRLRun
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
@@ -24,8 +22,6 @@ from experiments.post_training import async_rl, iceball_micro, skyrl_port_smoke,
 from experiments.post_training.cat_count_canary import launcher as canary
 from experiments.post_training.curriculum_rl import launch as curriculum
 from experiments.post_training.inventory import train_quick_loop as inventory
-from experiments.post_training.long_loop.run_spec import resolve_spec
-from experiments.post_training.long_loop.spec_pipeline import build_spec_graph
 from experiments.post_training.mismatch_probe import launch as mismatch
 from experiments.post_training.task_sessions import validation
 from tests.rl.micro210_fixture import policy_fixture_reference
@@ -195,22 +191,4 @@ def render_launch_census(artifact_root: Path) -> tuple[dict[str, str], dict[str,
                 documents[name] = config.launch_config_yaml
             except Exception as error:
                 failures[name] = f"{type(error).__name__}: {error}"
-        # The long loop binds both launchers in one artifact graph. Fingerprint
-        # resolution renders its pinned model/data identities without remote I/O.
-        spec_path = Path(__file__).resolve().parents[2] / "experiments/post_training/long_loop/specs/round1.yaml"
-        resolved = resolve_spec(spec_path, smoke=False)
-        graph = build_spec_graph(resolved, VERSION, through="evaluation")
-        for step in graph_handles([graph]):
-            for stage in ("rl", "evaluation"):
-                if not (step.name == resolved[stage]["name"] or step.name.endswith("/" + resolved[stage]["name"])):
-                    continue
-                name = "long-loop/" + stage
-                try:
-                    context = StepContext.for_run(
-                        str(artifact_root / stage), str(artifact_root), deps=step.deps, runtime_args=step.runtime_args
-                    )
-                    built = step.build_config(replace(context, is_fingerprint=True))
-                    documents[name] = (built if stage == "rl" else built.skyrl).launch_config_yaml
-                except Exception as error:
-                    failures[name] = f"{type(error).__name__}: {error}"
     return documents, failures

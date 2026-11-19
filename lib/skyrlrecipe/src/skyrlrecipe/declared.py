@@ -91,6 +91,7 @@ class EvaluationImprovement(Section):
 
 
 class CheckpointCallback(Section):
+    save_interval_seconds: int | float | None = unset_field()
     type: Literal["checkpoint"]
     save_steps: int = unset_field()
     save_on_train_end: bool = unset_field()

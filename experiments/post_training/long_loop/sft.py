@@ -61,6 +61,8 @@ def fresh_sft_config(
     checkpointer.setdefault("save_interval", DEFAULT_TEMP_SAVE_INTERVAL)
     checkpointer.setdefault("delete_old_temp_checkpoints", True)
     checkpointer.setdefault("keep_last_temporary_checkpoints", DEFAULT_TEMP_CHECKPOINT_COUNT)
+    if not trainer["tracker"].get("entity") or not trainer["tracker"].get("project"):
+        raise ValueError("Long-loop SFT requires explicit W&B entity and project")
     trainer["id"] = run_id
     config["native_timing_root"] = prefix_join(output, "timing/native-sft")
     trainer["initialize_from"] = prefix_join(initializer, "native/step-0")

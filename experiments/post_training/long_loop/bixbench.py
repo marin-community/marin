@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""A one-task BixBench continuation and a provenance-preserving result merge."""
+"""BixBench continuations and provenance-preserving result recovery."""
 
 import hashlib
 import json
@@ -15,7 +15,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.post_training.long_loop.archive import write_once
-from experiments.post_training.long_loop.eval_runtime.audit_results import audit
+from experiments.post_training.long_loop.eval_runtime.audit_results import audit, require_evaluation_coverage
 from experiments.post_training.long_loop.sft import read_json
 
 BIXBENCH_RESULTS_FILENAME = "bixbench-pi.jsonl"
@@ -161,6 +161,169 @@ def merge_results(*, output: str, original: str, repair: str) -> None:
                 "replaced": BIXBENCH_RESULTS_FILENAME,
                 "files": provenance,
                 "original_failed_result": prefix_join(prefix_join(original, suffix), BIXBENCH_RESULTS_FILENAME),
+            },
+            indent=2,
+        ).encode(),
+    )
+
+
+def merge_verifier_recovery(
+    *,
+    output: str,
+    original: str,
+    selection: str,
+    recovery: str,
+    recovery_manifest_sha256: str,
+    accepted_unscored_attempts: list[dict],
+) -> None:
+    """Publish a separate scored view of one original BixBench verifier timeout."""
+    manifest_uri = prefix_join(recovery, "manifest.json")
+    manifest_bytes = StoragePath(manifest_uri).read_bytes()
+    if hashlib.sha256(manifest_bytes).hexdigest() != recovery_manifest_sha256:
+        raise ValueError("Verifier recovery manifest changed")
+    manifest = json.loads(manifest_bytes)
+    for item in manifest["files"]:
+        if "/" in item["name"] or item["name"] in {".", ".."}:
+            raise ValueError("Recovery filenames must be direct children")
+        raw = StoragePath(prefix_join(recovery, item["name"])).read_bytes()
+        if len(raw) != item["bytes"] or hashlib.sha256(raw).hexdigest() != item["sha256"]:
+            raise ValueError("Verifier recovery payload changed")
+    names = {item["name"] for item in manifest["files"]}
+    if not {"result.json", "grade.json", "answer.txt", "llm_judge.py", "ground_truth.json"} <= names:
+        raise ValueError("Recovery lacks required verifier evidence")
+    result = read_json(prefix_join(recovery, "result.json"))
+    if (
+        result["status"] != "completed"
+        or result["returncode"] != 0
+        or result["candidate_resampled"] is not False
+        or result["original_results_mutated"] is not False
+    ):
+        raise ValueError("Recovery must grade the preserved original attempt successfully")
+    score = float(result["verifier_result"]["rewards"]["reward"])
+    grade = read_json(prefix_join(recovery, "grade.json"))
+    if not 0 <= score <= 1 or grade["rewards"]["reward"] != score:
+        raise ValueError("Recovery has no matching normalized verifier score")
+    selected = read_json(prefix_join(selection, "selection.json"))
+    identities = [item for item in selected["identities"] if item["task_id"] == result["task_id"]]
+    if len(identities) != 1 or identities[0]["data_source"] != "bixbench-pi":
+        raise ValueError("Recovery must identify one selected BixBench attempt")
+    identity = identities[0]
+    source = result["source"]
+    original_identity = read_json(prefix_join(source, "identity.json"))
+    if (
+        original_identity["task_id"] != result["task_id"]
+        or original_identity["attempt_id"] != result["original_attempt"]
+        or original_identity["session_id"]
+        != f"eval-None-0--{identity['dataset_row_uid']}_{identity['repetition_index']}"
+    ):
+        raise ValueError("Recovered answer belongs to another selected attempt")
+    trial_root = prefix_join(source, f"trials/{result['original_attempt']}")
+    trial = read_json(prefix_join(trial_root, "result.json"))
+    if trial["exception_info"]["exception_type"] != "VerifierTimeoutError":
+        raise ValueError("Original attempt is not a verifier timeout")
+    if trial["verifier_result"] is not None and trial["verifier_result"]["rewards"] is not None:
+        raise ValueError("Cannot replace an existing original verifier reward")
+    if trial["config"]["verifier"]["override_timeout_sec"] != result["verifier_timeout_seconds"]:
+        raise ValueError("Recovery changed the original verifier deadline")
+    trajectory_bytes = StoragePath(prefix_join(trial_root, "agent/trajectory.json")).read_bytes()
+    if hashlib.sha256(trajectory_bytes).hexdigest() != result["source_trajectory_sha256"]:
+        raise ValueError("Original sampled trajectory changed")
+    answer = StoragePath(prefix_join(recovery, "answer.txt")).read_bytes()
+    last = json.loads(trajectory_bytes)["steps"][-1]
+    if (
+        last["tool_calls"][0]["arguments"] != {"command": "cat /workspace/answer.txt"}
+        or last["observation"]["results"][0]["source_call_id"] != last["tool_calls"][0]["tool_call_id"]
+        or last["observation"]["results"][0]["content"].encode() != answer
+        or last["observation"]["results"][0]["extra"]["is_error"]
+    ):
+        raise ValueError("Recovery answer differs from the final retained tool observation")
+    for name in ("llm_judge.py", "ground_truth.json"):
+        if (
+            StoragePath(prefix_join(source, f"task/tests/{name}")).read_bytes()
+            != StoragePath(prefix_join(recovery, name)).read_bytes()
+        ):
+            raise ValueError("Recovery did not use the original frozen verifier")
+    before = audit(original, selected["attempts"], selected["attempts_per_data_source"], selected["identities"])
+    expected_unscored = [
+        {"data_source": "bixbench-pi", "uid": identity["dataset_row_uid"], "exception_type": "VerifierTimeoutError"},
+        *accepted_unscored_attempts,
+    ]
+    if (
+        before["completed_rollouts"] != selected["attempts"]
+        or not before["source_coverage_matches"]
+        or not before["identity_coverage_matches"]
+        or sorted(json.dumps(row, sort_keys=True) for row in before["unscored_attempts"])
+        != sorted(json.dumps(row, sort_keys=True) for row in expected_unscored)
+    ):
+        raise ValueError("Native evaluation has missing identities or additional unscored attempts")
+    if read_json(prefix_join(original, "terminal.json"))["result"]["state"] != "succeeded":
+        raise ValueError("Native evaluation must finish before verifier recovery is merged")
+    suffix = "exports/dumped_evals/eval_only"
+    root = StoragePath(original) / suffix
+    files = []
+    replaced = 0
+    for path in sorted((root / "*.jsonl").glob(), key=str):
+        raw = path.read_bytes()
+        write_once(prefix_join(output, f"original-native/{path.name}"), raw)
+        files.append({"source": str(path), "name": path.name, "sha256": hashlib.sha256(raw).hexdigest()})
+        if path.name == "aggregated_results.jsonl":
+            continue
+        lines = []
+        for line in raw.splitlines(keepends=True):
+            row = json.loads(line)
+            if row["data_source"] == "bixbench-pi" and str(row["uid"]) == identity["dataset_row_uid"]:
+                row["verifier_recovery"] = {
+                    "manifest": manifest_uri,
+                    "manifest_sha256": recovery_manifest_sha256,
+                    "original_verification": row["verification"],
+                    "original_attempt": result["original_attempt"],
+                    "candidate_resampled": False,
+                }
+                row["verification"] = {
+                    "status": "verified",
+                    "reason": "Verifier-only recovery of the retained original answer",
+                    "score": score,
+                    "passed": score > 0,
+                    "score_min": 0,
+                    "score_max": 1,
+                    "diagnostics": {
+                        **row["verification"]["diagnostics"],
+                        "recovery_manifest": manifest_uri,
+                        "recovery_manifest_sha256": recovery_manifest_sha256,
+                    },
+                }
+                line = (json.dumps(row, ensure_ascii=False) + "\n").encode()
+                replaced += 1
+            lines.append(line)
+        write_once(prefix_join(output, f"{suffix}/{path.name}"), b"".join(lines))
+    if replaced != 1:
+        raise ValueError("Recovery must replace exactly one native verification")
+    for name in ("resolved-launch.yaml", "terminal.json"):
+        write_once(prefix_join(output, name), StoragePath(prefix_join(original, name)).read_bytes())
+    after = audit(output, selected["attempts"], selected["attempts_per_data_source"], selected["identities"])
+    after["accepted_unscored_attempts"] = accepted_unscored_attempts
+    require_evaluation_coverage(after)
+    write_once(prefix_join(output, "evaluation.json"), json.dumps(after, indent=2).encode())
+    write_once(
+        prefix_join(output, "merge-provenance.json"),
+        json.dumps(
+            {
+                "original": original,
+                "selection": selection,
+                "recovery_manifest": manifest_uri,
+                "recovery_manifest_sha256": recovery_manifest_sha256,
+                "identity": identity,
+                "native_scored": before["verified_rollouts"],
+                "recovered_scored": after["verified_rollouts"],
+                "all_verified": after["all_verified"],
+                "accepted_unscored_attempts": accepted_unscored_attempts,
+                "source_files": files,
+                "metadata": "Verbatim original job snapshots; this view did not run candidate generation",
+                "judge_model": result["judge_model"],
+                "judge_revision": result["judge_revision"],
+                "verifier_timeout_seconds": result["verifier_timeout_seconds"],
+                "original_aggregate": "original-native/aggregated_results.jsonl",
+                "metrics": "Scored view metrics come from evaluation.json; native aggregate remains unchanged",
             },
             indent=2,
         ).encode(),

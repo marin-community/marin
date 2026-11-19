@@ -88,3 +88,44 @@ def test_changed_payload_size_prevents_handoff(recorded_selection, tmp_path):
             output=str(tmp_path / "changed"), checkpoint_pin=pin, model=model, tokenizer_revision="b" * 40
         )
     assert not (tmp_path / "changed/selected.json").exists()
+
+
+@pytest.mark.parametrize("changed", [None, "model", "tokenizer", "completed_updates"])
+def test_sft_spec_adoption_binds_consumed_defaults_and_final_update(recorded_selection, tmp_path, changed):
+    pin, legacy_model, checkpoint = recorded_selection
+    root = checkpoint.parent.parent
+    consumed_model = {"type": "snowball", "hidden_dim": 2560}
+    consumed = {
+        "format": "SFTSpec",
+        "train_config": {
+            "model": consumed_model,
+            "data": {"tokenizer": "s3://test/pinned-tokenizer"},
+            "trainer": {"num_train_steps": 16},
+        },
+    }
+    lineage = json.loads((root / "lineage.json").read_text())
+    lineage.update(model_sha256=digest(consumed_model), tokenizer_uri="s3://test/pinned-tokenizer")
+    selection = {"checkpoint": str(checkpoint), "step": 15, "format": "SFTSpec", "completed_updates": 16}
+    if changed == "model":
+        consumed["train_config"]["model"] = {"type": "snowball", "hidden_dim": 4096}
+    elif changed == "tokenizer":
+        consumed["train_config"]["data"]["tokenizer"] = "s3://test/other-tokenizer"
+    elif changed == "completed_updates":
+        selection["completed_updates"] = 15
+    for name, value, pin_key in (
+        ("consumed-config.json", consumed, "consumed_config_sha256"),
+        ("selected.json", selection, "selected_sha256"),
+        ("lineage.json", lineage, "lineage_sha256"),
+    ):
+        payload = json.dumps(value).encode()
+        (root / name).write_bytes(payload)
+        pin[pin_key] = hashlib.sha256(payload).hexdigest()
+    output = tmp_path / "native-adoption"
+    if changed is not None:
+        with pytest.raises(ValueError, match=r"lineage|tokenizer|final update"):
+            verify_adopted_sft(output=str(output), checkpoint_pin=pin, model=legacy_model, tokenizer_revision="b" * 40)
+        assert not (output / "selected.json").exists()
+        return
+    verify_adopted_sft(output=str(output), checkpoint_pin=pin, model=legacy_model, tokenizer_revision="b" * 40)
+    assert json.loads((output / "selected.json").read_text()) == selection
+    assert json.loads((output / "adoption.json").read_text())["verified_payload_bytes"] == len(b"fixture-payload")

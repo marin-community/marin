@@ -223,7 +223,7 @@ def _ensure_named_lm_example(batch: LmEvalExample, *, EvalBatch: hax.Axis, model
     raise ValueError(f"GrugLmExample tokens must be rank-1 or rank-2 for eval, got rank={batch.tokens.ndim}")
 
 
-def _default_lm_eval_loss_fn(
+def lm_eval_loss(
     model: LmHeadModel,
     batch: LmEvalExample,
     *,
@@ -322,7 +322,7 @@ def cb_tagged_lm_evaluate(
     if loss_fn is None:
 
         def loss_fn(model: LmHeadModel, batch: LmEvalExample) -> LossFnOutput:
-            return _default_lm_eval_loss_fn(model, batch, EvalBatch=EvalBatch, mp=mp)
+            return lm_eval_loss(model, batch, EvalBatch=EvalBatch, mp=mp)
 
     evaluator = TaggedEvaluator(
         EvalBatch=EvalBatch,

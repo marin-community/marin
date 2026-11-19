@@ -14,6 +14,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.filesystem.transfer import copy
 
 from experiments.post_training.long_loop.hf_archive import file_identity, verify_hf_checkpoint
+from experiments.post_training.long_loop.verify_final_sft_checkpoint import verify_final_checkpoint
 
 
 @dataclass(frozen=True)
@@ -21,6 +22,9 @@ class ArchiveInput:
     source: str
     name: str
     category: str
+
+
+PERMANENT_TMP_SEGMENT = "tmp"
 
 
 @dataclass(frozen=True)
@@ -85,6 +89,50 @@ def seal_archive(root: str, inputs: list[ArchiveInput], provenance: dict) -> dic
     return manifest
 
 
+def assert_final_sft_checkpoint(output: str, final_sft: dict) -> dict:
+    """R1: after archival, the final SFT checkpoint must exist in full at a permanent path."""
+    uri = final_sft.get("uri") if isinstance(final_sft, dict) else None
+    if not uri:
+        raise ValueError("Archive plan must record the final SFT checkpoint")
+    receipt = verify_final_checkpoint(uri, expect_step=final_sft.get("step"))
+    write_once(
+        prefix_join(output, "final-sft-checkpoint.json"),
+        json.dumps(receipt, sort_keys=True, indent=2).encode(),
+    )
+    return receipt
+
+
+def assert_best_rl_checkpoint(output: str, inventory: dict) -> dict:
+    """R1: after archival, the best and final RL checkpoints exist in full at permanent paths.
+
+    Native SkyRL checkpoints commit `trainer_state.pt` plus their payload tree;
+    the assertion checks both are present and the paths are not scratch storage.
+    """
+    checked = {}
+    for role in ("selected", "final"):
+        uri = inventory.get(role)
+        if not uri:
+            raise ValueError(f"Archive inventory must record the {role} RL checkpoint")
+        path = StoragePath(uri)
+        if PERMANENT_TMP_SEGMENT in path.segments:
+            raise ValueError(f"The {role} RL checkpoint must live at a permanent path, not scratch storage: {uri}")
+        step = str(uri).rsplit("global_step_", 1)[-1].split("/", 1)[0]
+        if not (path / "trainer_state.pt").exists():
+            raise ValueError(f"The {role} RL checkpoint has no committed trainer_state.pt: {uri}")
+        fs, key = filesystem_for(uri)
+        objects = fs.find(key)
+        payload = [item for item in objects if not item.rstrip("/").endswith("trainer_state.pt")]
+        if not payload:
+            raise ValueError(f"The {role} RL checkpoint holds no weights payload: {uri}")
+        checked[role] = {"uri": uri, "step": int(step), "objects": len(objects)}
+    receipt = {"verdict": "full", **checked}
+    write_once(
+        prefix_join(output, "best-rl-checkpoint.json"),
+        json.dumps(receipt, sort_keys=True, indent=2).encode(),
+    )
+    return receipt
+
+
 def verify_archive(root: str) -> dict:
     raw = (StoragePath(root) / "manifest.json").read_bytes()
     marker = json.loads((StoragePath(root) / "VERIFIED.json").read_bytes())
@@ -97,8 +145,14 @@ def verify_archive(root: str) -> dict:
     return manifest
 
 
-def checkpoint_cleanup(root: str, checkpoint_root: str, selected: str, candidates: list[str]) -> None:
-    """Delete inventoried superseded weights after verifying HF publication and evidence."""
+def checkpoint_cleanup(
+    root: str, checkpoint_root: str, selected: str, candidates: list[str], *, protected: list[str] | None = None
+) -> None:
+    """Delete inventoried superseded weights after verifying HF publication and evidence.
+
+    ``protected`` names checkpoints that R1 keeps regardless of inventory: the
+    final SFT checkpoint is never a cleanup target.
+    """
     manifest = verify_archive(root)
     reference = verify_hf_checkpoint(manifest["provenance"]["hf_checkpoint"])
     inventory = manifest["provenance"]["checkpoint_inventory"]
@@ -111,10 +165,12 @@ def checkpoint_cleanup(root: str, checkpoint_root: str, selected: str, candidate
         raise ValueError("Native checkpoint location and TTL must remain in provenance")
     root_path = StoragePath(checkpoint_root)
     keep_path = StoragePath(selected)
+    retained_paths = [StoragePath(path) for path in inventory["retained"]]
     if str(root_path) != checkpoint_root or str(keep_path) != selected:
         raise ValueError("Checkpoint cleanup requires canonical storage paths")
     if not keep_path.relative_to(root_path):
         raise ValueError("Selected checkpoint must be a child of this experiment's checkpoint root")
+    guarded = [StoragePath(uri) for uri in protected or []]
     planned = []
     for uri in candidates:
         path = StoragePath(uri)
@@ -122,6 +178,10 @@ def checkpoint_cleanup(root: str, checkpoint_root: str, selected: str, candidate
             raise ValueError(f"Cleanup target is outside scope: {uri}")
         if path == keep_path or path.segments[: len(keep_path.segments)] == keep_path.segments:
             raise ValueError(f"Cleanup target is selected: {uri}")
+        if any(path.segments[: len(keep.segments)] == keep.segments for keep in retained_paths):
+            raise ValueError(f"Cleanup target is retained: {uri}")
+        if any(path.segments[: len(guard.segments)] == guard.segments for guard in guarded):
+            raise ValueError(f"Cleanup target is a protected checkpoint: {uri}")
         if uri not in disposable:
             raise ValueError(f"Cleanup requires a sealed checkpoint inventory: {uri}")
         fs, key = filesystem_for(uri)

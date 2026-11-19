@@ -1,0 +1,128 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Physical identity regressions from the original Mochi three-rack gate."""
+
+from collections import Counter
+import json
+import sys
+from types import SimpleNamespace
+
+import pytest
+from ray.scripts.scripts import parse_node_labels_string
+from skyrlrecipe.locality import LocalityPlan
+
+from cloud.iris import task_runtime
+from cloud.iris.role_topology import (
+    CLIQUE_LABEL,
+    GPU_LABEL_PREFIX,
+    LOCALITY_GROUP_LABEL,
+    RoleTopology,
+    node_physical_labels,
+    validate_role_nodes,
+)
+
+
+def three_rack_nodes(topology=None):
+    if topology is None:
+        topology = RoleTopology(("policy", "inference_0", "inference_1"), LocalityPlan((16, 16, 16), (0, 1, 2)))
+    nodes = []
+    for rank in range(topology.num_nodes):
+        devices = "".join(
+            f"<gpu><uuid>GPU-{rank}-{index}</uuid><fabric><state>Completed</state><status>Success</status>"
+            f"<clusterUuid>cluster</clusterUuid><cliqueId>{topology.locality.group_for_rank(rank)}</cliqueId></fabric></gpu>"
+            for index in range(4)
+        )
+        labels = {
+            **topology.node_labels(rank),
+            **node_physical_labels(
+                rank=rank,
+                gpus_per_node=4,
+                host=f"host-{rank}",
+                fabric_xml=f"<nvidia_smi_log>{devices}</nvidia_smi_log>",
+            ),
+        }
+        nodes.append({"NodeID": f"ray-{rank}", "Alive": True, "Resources": {"GPU": 4}, "Labels": labels})
+    return topology, nodes
+
+
+def test_policy_and_inference_replicas_cover_distinct_physical_racks():
+    topology, nodes = three_rack_nodes()
+    rows = validate_role_nodes(nodes, topology=topology, gpus_per_node=4)
+    assert Counter(row["roles"][0] for row in rows) == {"policy": 16, "inference_0": 16, "inference_1": 16}
+    assert {row["roles"][0]: row["fabric"] for row in rows} == {
+        "policy": "cluster:0",
+        "inference_0": "cluster:1",
+        "inference_1": "cluster:2",
+    }
+    assert {gpu for row in rows for gpu in row["gpu_uuids"]} == {
+        f"GPU-{rank}-{index}" for rank in range(48) for index in range(4)
+    }
+
+
+def test_physical_identity_labels_round_trip_through_ray_cli():
+    _, nodes = three_rack_nodes()
+    for node in nodes:
+        labels = node["Labels"]
+        assert parse_node_labels_string(",".join(f"{key}={value}" for key, value in labels.items())) == labels
+
+
+@pytest.mark.parametrize("wrong_layout", ["split_policy", "overlapping_roles", "duplicate_gpu", "wrong_label"])
+def test_same_gpu_counts_reject_unsafe_physical_role_placement(wrong_layout):
+    topology, nodes = three_rack_nodes()
+    if wrong_layout == "split_policy":
+        nodes[0]["Labels"][CLIQUE_LABEL] = "1"
+    elif wrong_layout == "overlapping_roles":
+        for node in nodes[16:32]:
+            node["Labels"][CLIQUE_LABEL] = "0"
+    elif wrong_layout == "wrong_label":
+        nodes[0]["Labels"][LOCALITY_GROUP_LABEL] = "1"
+    else:
+        nodes[1]["Labels"][GPU_LABEL_PREFIX + "0"] = "GPU-0-0"
+    with pytest.raises(ValueError, match="physical NVLink domain|duplicate physical GPUs|locality labels"):
+        validate_role_nodes(nodes, topology=topology, gpus_per_node=4)
+
+
+def test_shared_domain_roles_use_the_planned_group_boundaries():
+    topology, nodes = three_rack_nodes(
+        RoleTopology(
+            ("policy", *(f"inference_{index}" for index in range(7))),
+            LocalityPlan((15, 14, 5), (0, 0, 0, 0, 1, 1, 1, 2)),
+        )
+    )
+    rows = validate_role_nodes(nodes, topology=topology, gpus_per_node=4)
+    assert rows[14]["roles"] == ["policy", "inference_0", "inference_1", "inference_2"]
+    assert rows[15]["roles"] == ["inference_3", "inference_4", "inference_5"]
+    assert rows[29]["roles"] == ["inference_6"]
+
+
+@pytest.mark.parametrize("split", [False, True])
+def test_head_join_gate_writes_only_a_verified_physical_report(tmp_path, monkeypatch, split):
+    topology, nodes = three_rack_nodes()
+    if split:
+        nodes[0]["Labels"][CLIQUE_LABEL] = "1"
+    monkeypatch.setitem(
+        sys.modules,
+        "ray",
+        SimpleNamespace(
+            init=lambda **_kwargs: None,
+            shutdown=lambda: None,
+            nodes=lambda: nodes,
+            cluster_resources=lambda: {"GPU": 192},
+        ),
+    )
+    monkeypatch.setenv("IRIS_OUTPUT_DIR", str(tmp_path))
+
+    def join():
+        task_runtime.wait_for_nodes("fixture", 48, 1, role_topology=topology, gpus_per_node=4)
+
+    output = tmp_path / "role-topology.json"
+    if split:
+        with pytest.raises(ValueError, match="physical NVLink domain"):
+            join()
+        assert not output.exists()
+    else:
+        join()
+        report = json.loads(output.read_text())
+        assert len(report["nodes"]) == 48
+        assert len({gpu for row in report["nodes"] for gpu in row["gpu_uuids"]}) == 192

@@ -8,8 +8,10 @@ import subprocess
 from dataclasses import asdict
 from pathlib import Path
 
+import numpy as np
 import pytest
 import yaml
+from levanter.checkpoint import save_checkpoint
 from marin.execution.artifact import RECORD_FILENAME, write_artifact
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.rl.skyrl import SkyRLRun
@@ -19,6 +21,7 @@ from wandb.apis.public.runhistory.downloads import IncompleteRunHistoryError
 from experiments.post_training.long_loop import archive_stage
 from experiments.post_training.long_loop.archive import (
     ArchiveInput,
+    assert_best_rl_checkpoint,
     checkpoint_cleanup,
     seal_archive,
     verify_archive,
@@ -30,7 +33,58 @@ from experiments.post_training.long_loop.archive_stage import (
 )
 from experiments.post_training.long_loop.graph import execute_local_graph
 from experiments.post_training.long_loop.hf_archive import file_identity, upload_checkpoint
+from experiments.post_training.long_loop.recipe_bundle import runtime_source_manifest, verify_recipe_bundle
 from experiments.post_training.long_loop.tests.test_hf_archive import upload_config
+from vendor.skyrl.marinskyrl.checkpoint_paths import (
+    BEST_CHECKPOINT_FILENAME,
+    LATEST_CHECKPOINT_FILE,
+    VALIDATION_RECEIPTS_FILENAME,
+    ValidationReceipt,
+)
+
+
+def write_native_selection(root: Path, step: int = 5, reward: float = 0.5, attempted: int = 2) -> None:
+    """Write a committed first-eligible native selection at the requested step."""
+    root.mkdir(parents=True, exist_ok=True)
+    history = [{"step": step, "reward": reward, "attempted": attempted, "scored": attempted}]
+    (root / "validation_selection_history.json").write_text(json.dumps(history))
+    (root / BEST_CHECKPOINT_FILENAME).write_text(
+        json.dumps(
+            {
+                "model_format": "native",
+                "step": step,
+                "model_uri": str(root / f"global_step_{step}" / "policy"),
+                "ema_window": 5,
+                "ema_alpha": 2 / 6,
+                "attempted": attempted,
+                "scored": attempted,
+                "expected_tasks": attempted,
+                "minimum_scored_tasks": attempted,
+                "eligible": True,
+                "accuracy": reward,
+                "evaluation_interval": 1,
+            }
+        )
+    )
+    checkpoint = root / f"global_step_{step}"
+    checkpoint.mkdir(exist_ok=True)
+    (checkpoint / "trainer_state.pt").write_bytes(b"committed-fixture-state")
+    (root / LATEST_CHECKPOINT_FILE).write_text(str(step))
+    receipt = ValidationReceipt(
+        step,
+        attempted,
+        attempted,
+        attempted,
+        attempted,
+        0,
+        True,
+        "best_checkpoint_committed",
+        reward,
+        ema_score=reward,
+        improved=True,
+        checkpoint_uri=str(checkpoint / "policy"),
+    )
+    (root / VALIDATION_RECEIPTS_FILENAME).write_text(json.dumps([asdict(receipt)]))
 
 
 def test_archive_survives_source_loss_and_detects_corruption(tmp_path):
@@ -56,6 +110,9 @@ def test_cleanup_is_verified_scoped_and_preserves_selected(tmp_path, hub):
     (keep / "weight").write_bytes(b"best")
     item = old / "weight"
     item.write_bytes(b"old")
+    recent = checkpoints / "global_step_4" / "weight"
+    recent.parent.mkdir()
+    recent.write_bytes(b"recent")
     root = str(tmp_path / "archive")
 
     def inventory(path):
@@ -65,6 +122,9 @@ def test_cleanup_is_verified_scoped_and_preserves_selected(tmp_path, hub):
     receipt = upload_checkpoint(
         upload_config(tmp_path, keep), timing_destination=str(tmp_path / "timing" / "upload.jsonl")
     )
+    protected = checkpoints / "sft-final"
+    protected.mkdir()
+    (protected / "weight").write_bytes(b"final-sft")
     seal_archive(
         root,
         [],
@@ -73,29 +133,37 @@ def test_cleanup_is_verified_scoped_and_preserves_selected(tmp_path, hub):
             "checkpoint_inventory": {
                 "root": str(checkpoints),
                 "selected": str(keep),
+                "retained": [str(keep), str(recent.parent)],
                 "ttl": "14d",
-                "disposable_files": [inventory(item)],
+                "disposable_files": [inventory(item), inventory(recent)],
             },
         },
     )
     with pytest.raises(ValueError, match="selected"):
         checkpoint_cleanup(root, str(checkpoints), str(keep), [str(keep / "weight")])
+    with pytest.raises(ValueError, match="retained"):
+        checkpoint_cleanup(root, str(checkpoints), str(keep), [str(recent)])
+    with pytest.raises(ValueError, match="protected checkpoint"):
+        checkpoint_cleanup(root, str(checkpoints), str(keep), [str(protected / "weight")], protected=[str(protected)])
     original_stat = item.stat()
     item.write_bytes(b"mutated")
     with pytest.raises(ValueError, match="changed"):
-        checkpoint_cleanup(root, str(checkpoints), str(keep), [str(item)])
+        checkpoint_cleanup(root, str(checkpoints), str(keep), [str(item)], protected=[str(protected)])
     item.write_bytes(b"old")
     os.utime(item, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
-    checkpoint_cleanup(root, str(checkpoints), str(keep), [str(item)])
+    checkpoint_cleanup(root, str(checkpoints), str(keep), [str(item)], protected=[str(protected)])
     checkpoint_cleanup(root, str(checkpoints), str(keep), [str(item)])
     assert not item.exists()
     assert (keep / "weight").read_bytes() == b"best"
+    assert recent.read_bytes() == b"recent"
+    assert (protected / "weight").read_bytes() == b"final-sft"
 
 
 @pytest.mark.parametrize("incomplete", [False, True])
 @pytest.mark.parametrize("unscored", [False, True])
+@pytest.mark.parametrize("max_checkpoints", [3, -1])
 def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(
-    tmp_path, monkeypatch, hub, incomplete, unscored
+    tmp_path, monkeypatch, hub, incomplete, unscored, max_checkpoints
 ):
 
     report = tmp_path / "report"
@@ -118,6 +186,14 @@ def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(
     selected.mkdir(parents=True)
     weight = selected / "weight"
     weight.write_bytes(b"selected-native-weights")
+    (selected / "trainer_state.pt").write_bytes(b"selected-native-state")
+    sft_checkpoint = tmp_path / "sft" / "checkpoints" / "step-1"
+    save_checkpoint(
+        {"model": np.asarray([0.64], np.float32), "opt_state": {"count": np.asarray(1, np.float32)}},
+        step=1,
+        checkpoint_path=str(sft_checkpoint),
+        is_temporary=False,
+    )
     inputs = []
     for category in sorted(REQUIRED_CATEGORIES):
         path = tmp_path / f"{category}.txt"
@@ -129,14 +205,25 @@ def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(
         "provenance": {
             "marin_commit": "a" * 40,
             "evaluation_complete": not unscored,
+            "final_sft_checkpoint": {"uri": str(sft_checkpoint), "step": 1},
             "checkpoint_inventory": {
                 "root": str(selected.parent),
                 "selected": str(selected),
+                "retained": [str(selected)],
                 "ttl": "14d",
                 "disposable_files": [],
             },
         },
     }
+    exported = tmp_path / "exports" / "global_step_5" / "policy"
+    exported.parent.mkdir(parents=True)
+    Path(plan["hf_upload"]["source"]).rename(exported)
+    plan["hf_upload"]["source"] = str(exported)
+    workspace = tmp_path / "runtime"
+    workspace.mkdir()
+    (workspace / "recipe.py").write_text("BATCH = 256\n")
+    monkeypatch.setattr(archive_stage, "RUNTIME_WORKSPACE", workspace)
+    plan["runtime_source"] = runtime_source_manifest(workspace, "a" * 40)
     if incomplete:
         plan["provenance"]["missing_evidence"] = {"timing": "Native journal coverage incomplete"}
         plan["provenance"]["cleanup_blockers"] = ["Native journal coverage incomplete"]
@@ -181,10 +268,7 @@ def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(
         },
     }
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
-    (selected.parent / "best_checkpoint.json").write_text(
-        json.dumps({"step": 5, "model_uri": str(selected / "policy"), "ema_window": 5})
-    )
-    (selected.parent / "validation_selection_history.json").write_text("[]")
+    write_native_selection(selected.parent)
     prior = selected.parent / "global_step_4"
     prior.mkdir()
     (prior / "weights.distcp").write_bytes(b"unused native")
@@ -203,6 +287,22 @@ def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(
         ).result_payload(),
         trained_path,
     )
+    (Path(trained_path) / "resolved-launch.yaml").write_text(
+        json.dumps({"config": {"skyrl": {"trainer": {"max_ckpts_to_keep": max_checkpoints}}}})
+    )
+    final = selected.parent / "global_step_6"
+    final.mkdir()
+    (final / "trainer_state.pt").write_bytes(b"committed-final-state")
+    (final / "weights.distcp").write_bytes(b"final-native-weights")
+    (selected.parent / LATEST_CHECKPOINT_FILE).write_text("6")
+    # Failed uploads with higher step numbers must not displace the committed final.
+    recent = []
+    for step in (8, 10, 12):
+        checkpoint = selected.parent / f"global_step_{step}"
+        checkpoint.mkdir()
+        path = checkpoint / "weights.distcp"
+        path.write_bytes(f"native-{step}".encode())
+        recent.append(path)
     trained = ArtifactStep.adopt("test/rl", "2026.11.09", trained_path, kind=SkyRLRun)
     completed = ArtifactStep.adopt("test/completed-report", "2026.11.09", str(report))
     stage = apply(
@@ -217,15 +317,32 @@ def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(
     execute_local_graph(stage)
     root = stage.path()
     archive_selected_run(output=root, plan=plan, trained=trained_path, completed_report=str(report))
-    assert {item["category"] for item in verify_archive(root)["objects"]} == REQUIRED_CATEGORIES
+    sealed = verify_archive(root)
+    assert {item["category"] for item in sealed["objects"]} == REQUIRED_CATEGORIES | {"recipe"}
+    recipe = sealed["provenance"]["recipe_bundle"]
+    assert verify_recipe_bundle(str(Path(root) / "objects/recipe"), recipe["manifest_sha256"]) == recipe
     manifest = verify_archive(root)
     assert manifest["provenance"]["hf_checkpoint"]["revision"] == hub.revision
     assert manifest["provenance"]["checkpoint_inventory"]["ttl"] == "14d"
     assert not any("weight" in item["destination"] for item in manifest["objects"])
     assert weight.read_bytes() == b"selected-native-weights"
+    assert (final / "weights.distcp").read_bytes() == b"final-native-weights"
+    assert (final / "trainer_state.pt").read_bytes() == b"committed-final-state"
+    inventory = manifest["provenance"]["checkpoint_inventory"]
+    assert inventory["final"] == str(final)
+    assert str(final) in inventory["retained"]
+    evidence = {item["destination"] for item in manifest["objects"]}
+    assert {
+        str(Path(root) / "objects" / "selection" / filename)
+        for filename in (LATEST_CHECKPOINT_FILE, VALIDATION_RECEIPTS_FILENAME)
+    } <= evidence
+    assert [path.read_bytes() for path in recent] == [b"native-8", b"native-10", b"native-12"]
+    assert manifest["provenance"]["checkpoint_inventory"]["max_ckpts_to_keep"] == max_checkpoints
     assert manifest["provenance"]["evaluation_complete"] is not unscored
-    assert (prior / "weights.distcp").exists() == (incomplete or unscored)
+    assert (prior / "weights.distcp").exists() == (incomplete or unscored or max_checkpoints < 0)
     assert Path(root, "cleanup-blocked.json").exists() == (incomplete or unscored)
+    assert json.loads(Path(root, "final-sft-checkpoint.json").read_text())["verdict"] == "full"
+    assert (sft_checkpoint / "metadata.json").exists()
 
 
 @pytest.mark.parametrize("incomplete_wandb_history", [False, True])
@@ -244,7 +361,7 @@ def test_runtime_plan_uses_consumed_paths_and_preserves_missing_evidence(
     roots = {stage: str(tmp_path / stage) for stage in settings["stage_files"]}
     trained = roots["rl"]
     run = SkyRLRun(
-        hf_model_uri=str(tmp_path / "hf"),
+        hf_model_uri=str(tmp_path / "checkpoints" / "global_step_5" / "policy"),
         global_step=5,
         tokenizer_uri="test",
         tokenizer_revision="a" * 40,
@@ -254,11 +371,13 @@ def test_runtime_plan_uses_consumed_paths_and_preserves_missing_evidence(
         iris_job_id="test",
     )
     write_artifact(run.result_payload(), trained)
+    write_native_selection(Path(run.checkpoint_root))
     record = json.loads((Path(trained) / RECORD_FILENAME).read_text())
     document(Path(trained) / RECORD_FILENAME, {**record, "version": "2026.11.10"})
     for stage, entries in settings["stage_files"].items():
         for entry in entries:
             document(Path(roots[stage]) / entry["path"], {})
+    document(Path(roots["sft"]) / "selected.json", {"checkpoint": str(tmp_path / "sft-final"), "step": 12})
     terminal = {"state": rl_state, "failure": "GroupAdmissionStalledError" if rl_state == "failed" else None}
     document(Path(trained) / "terminal.json", {"result": terminal})
     tracker = {"entity": None, "project": "test", "id": None}
@@ -350,7 +469,13 @@ def test_runtime_plan_uses_consumed_paths_and_preserves_missing_evidence(
             ),
         },
     )
-    spec = {"marin_revision": "a" * 40, "name": "test", "datasets": {"rows": "pinned"}, "rl": {"execution": {}}}
+    spec = {
+        "marin_revision": "a" * 40,
+        "name": "test",
+        "datasets": {"rows": "pinned"},
+        "rl": {"execution": {}},
+        "runtime_source": {"schema": 1, "marin_revision": "a" * 40, "files": []},
+    }
     plan = derive_archive_plan(
         output=str(tmp_path / "archive"),
         settings=settings,
@@ -361,9 +486,10 @@ def test_runtime_plan_uses_consumed_paths_and_preserves_missing_evidence(
         completed_report=roots["report"],
     )
     assert plan["hf_upload"]["repo_id"].endswith("-2026.11.10")
+    assert plan["provenance"]["final_sft_checkpoint"] == {"uri": str(tmp_path / "sft-final"), "step": 12}
     assert plan["provenance"]["rl_terminal"] == terminal
     assert set(plan["provenance"]["missing_evidence"]) == (
-        {"timing", "wandb", "evaluation"} if unscored else {"timing", "wandb"}
+        {"timing", "wandb", "metric_history", "evaluation"} if unscored else {"timing", "wandb", "metric_history"}
     )
     assert plan["provenance"]["evaluation_complete"] is not unscored
     assert plan["evaldash"]["record"]["status"] == ("infra_failed" if unscored else "succeeded")
@@ -440,3 +566,40 @@ def test_wandb_history_fallback_propagates_provider_failure(tmp_path, monkeypatc
     with pytest.raises(PermissionError, match="provider denied history"):
         archive_stage._scan_wandb_history("test/project/run", tmp_path, "https://api.wandb.ai")
     assert not list(tmp_path.glob("scan-history*"))
+
+
+def test_best_rl_checkpoint_assertion(tmp_path):
+    best = tmp_path / "checkpoints" / "global_step_5"
+    best.mkdir(parents=True)
+    (best / "trainer_state.pt").write_bytes(b"best-state")
+    (best / "policy").mkdir()
+    (best / "policy" / "weights.distcp").write_bytes(b"best-weights")
+    final = tmp_path / "checkpoints" / "global_step_6"
+    final.mkdir(parents=True)
+    (final / "trainer_state.pt").write_bytes(b"final-state")
+    (final / "policy").mkdir()
+    (final / "policy" / "weights.distcp").write_bytes(b"final-weights")
+    inventory = {"selected": str(best), "final": str(final)}
+    receipt = assert_best_rl_checkpoint(str(tmp_path / "archive"), inventory)
+    assert receipt["verdict"] == "full"
+    assert receipt["selected"]["step"] == 5 and receipt["final"]["step"] == 6
+    sealed = json.loads((tmp_path / "archive" / "best-rl-checkpoint.json").read_text())
+    assert sealed == receipt
+
+    scratch = {"selected": str(tmp_path / "tmp" / "global_step_5"), "final": str(final)}
+    with pytest.raises(ValueError, match="permanent path"):
+        assert_best_rl_checkpoint(str(tmp_path / "archive2"), scratch)
+    missing_state = tmp_path / "checkpoints" / "global_step_7"
+    missing_state.mkdir()
+    (missing_state / "policy").mkdir()
+    broken = {"selected": str(missing_state), "final": str(final)}
+    with pytest.raises(ValueError, match=r"trainer_state\.pt"):
+        assert_best_rl_checkpoint(str(tmp_path / "archive3"), broken)
+    empty = tmp_path / "checkpoints" / "global_step_8"
+    empty.mkdir()
+    (empty / "trainer_state.pt").write_bytes(b"state")
+    hollow = {"selected": str(empty), "final": str(final)}
+    with pytest.raises(ValueError, match="no weights payload"):
+        assert_best_rl_checkpoint(str(tmp_path / "archive4"), hollow)
+    with pytest.raises(ValueError, match="final RL checkpoint"):
+        assert_best_rl_checkpoint(str(tmp_path / "archive5"), {"selected": str(best)})

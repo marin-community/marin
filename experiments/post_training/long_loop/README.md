@@ -26,9 +26,68 @@ pin `marin_revision` to the clean code commit; Iris bundles those explicit input
 Use a relative or cluster-local validation output path for a remote run.
 A printed blocked plan is not a successful dry-run or permission to launch.
 
+## Exp3 smoke and recipe capture
+
+Production entrypoints refuse both tracked and untracked source changes. Commit
+the complete runtime before resolving or submitting a production spec. The
+archive automatically writes `recipe-bundle/recipe.tar.gz`, its SHA-pinned
+manifest, and a verification receipt. It includes the canonical Iris workspace
+files, consumed configurations and dataset referents. Source bytes must still
+match the snapshot captured while constructing the graph. The archive verifies
+every bundle member before sealing and retains the bundle in its object inventory.
+
+The explicitly approved Exp3 wiring smoke uses 8 H100, three updates of a tiny
+Snowball model, and complete short documents from the frozen Exp1 caches. It
+checks CPU/GPU initialization parity, retained FP32 parameters, update norms,
+chat/full-token masks, lookahead padding and native telemetry. It does not measure
+the 67B initializer's upstream loss or qualify production throughput.
+
+```bash
+uv run python -m experiments.post_training.long_loop.exp3_smokes \
+  --source-revision "$(git rev-parse HEAD)" --h100-hour-limit 4 \
+  --version YYYY.MM.DD.N
+```
+
+Inspect the printed graph before adding `--run --max-concurrent 1`. The stage
+guard charges timestamped build and worker allocation, excludes queue time,
+retries watchdog stalls at most twice with fresh child names, and cancels only
+the active stage when its required H100-hour ceiling is reached. Other failures
+are reported without replay. Its ledger records observed spend and the ceiling.
+
+The separately approved initializer proof runs two short updates of the pinned
+67B model on two eight-H100 nodes (EP8/CP2), after a 262,144-context C4-en check.
+Its provisional reference is an explicitly labeled estimate, 2.313741889 nats
+per token with absolute tolerance 0.5. The frozen input audit must match before
+the loss comparison. Raw and token-reseeded initialization are checked separately.
+The proof keeps capacity factor 1.0 and reports route drops, as in the baseline.
+Optimizer state is offloaded between steps, as in Exp1. Only the final native
+checkpoint is saved; time-policy saves are disabled. A complete hash-pinned
+regional C4 bundle is required; workers do not read the original GCS cache.
+
+```bash
+uv run python -m experiments.post_training.long_loop.exp3_initializer_smoke \
+  --source-revision "$(git rev-parse HEAD)" --h100-hour-limit 12 \
+  --reference-bundle s3://REGIONAL-PREFIX/manifest.json \
+  --reference-bundle-sha256 MANIFEST_SHA256 \
+  --version YYYY.MM.DD.N
+```
+
+The `snowball_exp3` SFT profile requires a hash-pinned supervision sidecar,
+explicit trainer/model/mesh configuration, initial-evaluation gate and stage
+guard. Scheduled SFT validation data is explicit and separate from the upstream
+initialization gate's heldout data. It uses retained FP32 parameters, BF16 computation, MuonH5e-5 with
+AdamLR3/13 of that, clipping1, z-loss1e-4 and the unchanged4750-step schedule.
+Packing binds the sidecar's precomputed prediction weights for every source.
+The full candidate catalog and recipe require separate approval before launch.
+
+Historical recipe backfills use the CPU-only `backfill_recipe` entrypoint with
+an exact archive-manifest hash, full source commit SHAs and a fresh output path.
+It reads only recipe categories, verifies their archived bytes, and records
+reconstruction limits. It does not execute producers or modify the sealed archive.
+
 ## Shared SFT and historical reproduction
 
-New SFT stages use `experiments.sft.launcher.SFTSpec` and the checked-in
+The historical `snowball_h100` adapter uses `experiments.sft.launcher.SFTSpec` and the checked-in
 `experiments/sft/configs/snowball_h100.py` defaults: native Levanter Snowball,
 Adam, 32,768 positions, batch eight and one transcript per sequence. The run
 spec supplies the prepared data, training budget, execution resources and
@@ -148,13 +207,42 @@ resolver before judge allocation.
 The archive derives its inventory from committed stage outputs and consumed
 configs, including retention ledgers, exact evaluation selection and native result
 rows. SkyRL writes the initialized W&B identity to `exports/wandb-run.json`.
-For adopted SFT, `additional_evidence` accepts explicit `source`, `name`, `category`
-and `sha256` pins. Use `kind: wandb-run-reference` for an independently verified
-SFT W&B receipt and `native-sft-journal` / `native-sft-attempt-archive` for preserved
-native timing evidence. Missing native timing coverage or strict W&B history
-verification produces an explicitly partial archive and prevents checkpoint
-cleanup. Model exports go to public Hugging Face repositories; native optimizer
-payloads remain location/TTL references.
+New native long-loop SFT and RL runs require explicit W&B entity and project values.
+Every SFT rank and the RL metric producer append each metric call to a local
+JSONL file and fsync it before forwarding it to W&B. Repeated step IDs and calls
+with W&B `commit=False` remain separate
+JSONL records. Files live beneath `$IRIS_OUTPUT_DIR` when it is available and
+are published to each stage's durable `telemetry/` prefix on normal exit or a
+handled training failure.
+A start marker registers each attempt. The immutable completion receipt records
+SHA-256 hashes of metric-history and phase-journal files, metric row counts, and
+observed step IDs. Failed attempts
+remain separate. A registered attempt without a completion receipt prevents
+telemetry certification.
+
+Native journals record model initialization, data loading, compilation, first
+and steady steps, checkpoint enqueue/write/drain, and HF export. RL's inference
+engine initialization span includes startup and compilation; it does not isolate
+compiler CPU time. The selected RL checkpoint exporter writes its own export
+journal. The archive requires all expected SFT ranks, the RL metric producer and
+the selected exporter, checks every payload hash and the metric record sequence numbers, and requires
+matching start and successful-end events for each required phase. It copies these artifacts without querying
+W&B history. Missing or changed native evidence fails archive construction.
+
+Historical adopted stages without producer telemetry still use pinned
+`additional_evidence` and the W&B history-export path described below. Use `kind: wandb-run-reference`
+for an independently verified SFT identity and `native-sft-journal` /
+`native-sft-attempt-archive` for preserved timing. Incomplete historical evidence
+keeps the archive partial and blocks checkpoint cleanup. Model exports go to
+public Hugging Face repositories; native optimizer payloads retain location and
+TTL references.
+
+Final evaluation preserves each task's declared verifier timeout. A global
+300-second override previously truncated the 1,800-second
+`mcmc-sampling-stan` and 7,200-second `sam-cell-seg` verifier budgets. The outer
+trial deadline is 10,800 seconds to include setup, the 1,800-second agent window,
+verification and teardown. Verifier exceptions receive no score and are excluded from reward means.
+Whole-agent replay and score imputation are disabled.
 
 An explicitly approved partial evaluation can pass an exact list of
 `data_source`, `uid` and `exception_type` records to
@@ -164,6 +252,31 @@ unscored attempts from reward means, and records the accepted exceptions. The
 archive preserves this limitation, publishes an `infra_failed` EvalDash record
 with scored coverage, and blocks deletion of superseded native checkpoints. Unexpected failures still
 stop finalization.
+
+For a completed evaluation with a verified supplemental BixBench result, use
+the tail-only entrypoint. Its SHA-pinned JSON plan names the original resolved
+run specification, adopted artifact roots, verifier-recovery manifest, exact
+accepted unscored identities and additional evidence. Pin the postprocessing
+commit separately from the original training revision.
+
+```bash
+uv run python -m experiments.post_training.long_loop.postprocess \
+  --plan-uri s3://<bucket>/<owner>/postprocessing/plan.json \
+  --plan-sha256 <sha256> --version <fresh-version>
+```
+
+Inspect the dry plan before adding `--run`. This entrypoint adopts all producing
+stages and runs only the recovered view, report, SFT accounting and CPU archive.
+It archives the original native rows and aggregate alongside the scored view.
+The original CPU resources, deadlines and checkpoint-retention controls apply.
+To recover only accounting/archive, include the committed `recovered_eval` and
+`report` roots in the plan's adopted artifacts; those transformations are then
+reused. Accounting resolves concatenation offsets and remaps mixture indices
+in batches without changing sample order, token hashes or supervision masks.
+An `accounting_resume` pin can reuse a contiguous initial JSONL sample range:
+declare its `source`, `sha256`, `rows`, `consumed_config_sha256` and
+`checkpoint_metadata_sha256`. The checkpoint and config must match, and only
+the remaining global indices are reconstructed. The report records the prefix.
 
 If the strict W&B exporter reports `IncompleteRunHistoryError`, the archive
 confirms that typed provider error and automatically streams every row from
@@ -235,7 +348,13 @@ Model-owned turn, token and agent-time limits retain the task verifier's actual
 reward and training eligibility. Pi's generic nonzero exit needs the engine's
 matching model-limit stop reason; a network or cleanup error does not qualify.
 Missing or failed verification remains masked. The turn limit stays at128 and
-best-checkpoint selection still requires all120validation tasks to be scored.
+best-checkpoint selection requires at least 90% of the expected validation
+tasks scored (108 of 120 for this shape). An ineligible validation warns
+loudly, is recorded with its reason in the selection receipts, and is skipped;
+it never silently cancels best selection and never aborts training. When no
+validation is eligible, export falls back to the final checkpoint with a
+durable warning; when an eligible validation exists, the best-by-validation
+checkpoint is required and its absence fails closed.
 
 
 Stage deadlines follow the controlled envelope described below. RL has no
@@ -273,6 +392,12 @@ artifact graph, emits its launch YAML, runs the production SkyRL composition, an
 compares every supplied setting with the compiled configuration, excluding artifact
 bindings such as model and data paths.
 
+The RL document explicitly selects `daytona_image_build: snapshot` for training
+and `eval_daytona_image_build: declarative` for inline validation. Declarative
+validation creates sandboxes directly from each task's image or build context
+with the eval credential, without creating or leasing named snapshots. Final
+evaluation also selects declarative provisioning in its evaluation document.
+
 The [next-run spec](specs/round1.yaml) explicitly uses temperature 0.7 for training,
 held-out validation and final evaluation, and 16,384 output tokens per turn. In the
 stopped `/benfeuer/long-loop-full-2026.11.11.2`, training temperature is 1.0,
@@ -301,6 +426,35 @@ The next trial explicitly budgets 10 hours from its first optimizer step. Native
 checkpoints save every two updates and retain the latest three plus the selected
 best; the selection uses five validation observations at two-update intervals.
 Final evaluation, HF export and archive use that same selected best checkpoint.
+Archive cleanup reads `trainer.max_ckpts_to_keep` from the consumed RL launch and
+preserves that rolling window plus the selected best. Its sealed inventory names
+the retained checkpoints, and cleanup rejects any retained path.
+
+Post-run archival and pruning never remove the final SFT checkpoint. The archive
+plan records that checkpoint from the SFT stage's `selected.json`, cleanup rejects
+any candidate at or under it, and after cleanup the archive verifies the
+checkpoint again: permanent metadata, weights plus optimizer state in the
+manifest, a complete OCDBT chunk inventory, and sample decodes. The verification
+receipt lands in `final-sft-checkpoint.json` beside the sealed archive. The same
+rule protects the RL side: the best-by-validation checkpoint and the committed
+final checkpoint stay in the retention set even when newer partial directories
+exist, and the post-archive receipt `best-rl-checkpoint.json` re-checks both —
+committed `trainer_state.pt`, a weights payload, and a permanent path.
+
+For a BixBench verifier timeout, a separately verified grade of the retained
+original answer can be incorporated with `bixbench.merge_verifier_recovery`.
+Pass the original evaluation, frozen selection, recovery receipt root and pinned
+recovery-manifest SHA to a new artifact version. The merge requires the complete
+selected native result set and that one recoverable unscored attempt. Pass an
+explicit `accepted_unscored_attempts` list (empty for full scoring) for any
+separately approved infrastructure exclusions. Unexpected missing rewards still
+block the merge; accepted exclusions remain unscored in the view and report.
+It checks the
+original task/session, sampled trajectory, final answer, frozen grader and
+verifier deadline; it does not generate another answer. The scored view preserves
+every original native file and aggregate under `original-native/`, records native
+versus recovered coverage, and computes view metrics in `evaluation.json`.
+Its launch and terminal files are verbatim snapshots of the original job.
 # SWE task admission
 
 The repaired SWE release is derived from the pinned source packages rather than
@@ -377,3 +531,186 @@ CUDA graphs stay enabled. Cold tuning work may increase. The requested flags
 and accelerator environment are recorded in `consumed-config.json`; the run
 spec and that receipt are archived. This setting does not change the RL or
 final policy-evaluation runtime.
+
+For an RL-only recovery after SFTSpec finishes, pin `adopted_sft` and
+`adopted_handoff` to the committed SFT selection and exported checkpoint. The
+adoption verifier checks the native zero-based final step against completed
+updates, the exact consumed config, model/tokenizer lineage and payload inventory.
+It uses SFTSpec's consumed model defaults rather than the legacy Grug recipe.
+
+If RunAI object streaming fails during engine startup, set
+`rl.config.generator.model_loading: stage_local` in a freshly pinned run spec.
+The existing staging path materializes the same checkpoint once per node before
+Ray startup and vLLM loads local safetensors. Reserve enough node-local disk for
+the full checkpoint; the policy's source URI and identity remain in the consumed
+config. This changes weight loading only; compilation and CUDA graphs stay enabled.
+
+## Exp3 production preparation
+
+`exp3_production` consumes one final data-release URI and overlays its pinned
+catalog, supervision metadata and natural weights on the frozen Exp1 RL recipe.
+It fixes SFT at 256 H100 (EP8/CP32), batch 256, context 262144, maximum 746 updates and
+a 20-hour execution deadline. The trainer reserves time for the final native/HF
+checkpoint and records the actual completed count. Source must be clean and
+pinned to the submitted commit.
+
+Future production recipes save rolling native SFT checkpoints every two hours,
+retaining three resume checkpoints. Finalization forces a permanent checkpoint
+even when the last periodic save was recent. The trainer drains the write and
+reads its committed metadata before publishing the training completion receipt.
+SFT selection verifies that receipt and checkpoint again; the HF handoff and RL
+consume the selected final update. Graceful time-limit and maximum-update stops
+use this path. Exhausting the dataset also preserves the last completed update,
+but fails controlled-run admission. This policy does not alter already submitted
+jobs: Exp3 artifact `2026.11.16.51` retains its pinned 30-minute interval.
+Retention keeps the final SFT checkpoint at its permanent path for the run's
+whole lifetime; rolling temporary checkpoints may still be pruned.
+
+Before requesting approval, run the graph preflight with no `--run`:
+
+```bash
+uv run python -m experiments.post_training.long_loop.exp3_production \
+  --data-release "$DATA_RELEASE_URI" \
+  --source-revision "$RUNTIME_COMMIT" \
+  --version "$ARTIFACT_VERSION" \
+  --validation-output /tmp/exp3-production-preflight \
+  --max-concurrent 1
+```
+
+A CPU-only release (`training_ready:false`) can validate configuration wiring;
+it is rejected if submission is requested. Final readiness requires the release
+publisher's catalog, weights, retention tables, native consumer receipt and
+Atlas evidence. The release never substitutes for user approval of the recipe,
+catalog and retention table. All referenced metadata bytes are checked against
+SHA256 pins; cached token bodies and model weights are not downloaded by this
+local preflight. The resolved plan and concrete graph validation receipts are
+written to `--validation-output`.
+
+`--through sft` limits preflight to the SFT stage when a downstream control
+remains unresolved. Full-loop admission still enforces the RL learning-clock,
+drain and outer-job deadline relationship. A successful SFT-only dry run does
+not certify downstream admission. After approval, the same frozen command with
+`--run` submits through Iris; keep the runtime commit and artifact version
+unchanged between approval and submission.
+
+## Defining a new round
+
+Round configuration lives in YAML under `experiments/post_training/long_loop/rounds/`;
+code holds the mechanism and the invariants. `round_runner` loads a round YAML
+into a strict schema (unknown or mistyped fields fail), resolves its named
+references through the code registry (data release, curriculum pools, evaluation
+policy, initializer), re-derives the resolved plan through the shared pipeline,
+and enforces the shared invariants: whole-run annealing (optimizer horizon equals
+the updates actually run, final LR near min_lr), the special-token LR multiplier
+default of 1.0 with explicit-override semantics (R2), a permanent output prefix,
+and the final-SFT-checkpoint retention rule (R1, enforced again at archive time).
+
+To define a new round:
+
+1. Copy the previous round's YAML, for example `rounds/exp5.yaml` to
+   `rounds/exp6.yaml`.
+2. Change the identity fields: `name`, `version`, `slug`, `storage.output_prefix`
+   and the `archive` prefixes. Change recipe knobs only when the round intends
+   them: `sft.updates`, `sft.batch_size`, `sft.min_lr_ratio`,
+   `sft.learning_rate`, `sft.adam_learning_rate`,
+   `sft.special_token_lr_multiplier`, `sft.mesh`, `sft.resources`, `cluster`,
+   and the registry bindings `data_release`, `pools`, `evaluation`,
+   `initializer`. The runner requires `--version` to equal the YAML's version.
+3. Run the dry run in region (no `--run`; the Mac cannot read the pinned
+   storage inputs):
+
+```bash
+uv run iris --cluster=cw-rno2a job run \
+  --job-name round6-preflight-dryrun --priority interactive --timeout 21600 \
+  --cpu 8 --memory 16GB --enable-extra-resources --no-wait \
+  -e WANDB_API_KEY "$WANDB_API_KEY" \
+  -- python -m experiments.post_training.long_loop.round_runner \
+    --round experiments/post_training/long_loop/rounds/exp6.yaml \
+    --version "<the YAML version>" \
+    --source-revision "<the runtime commit>" \
+    --validation-output '$IRIS_OUTPUT_DIR/round6-preflight'
+```
+
+The dry run writes `resolved-plan.json`, `optimizer-groups.json` and
+`sft-lr-schedule.json` plus per-stage launch validation receipts to the
+validation output, and prints the resolved artifact plan. Submitting the round
+(`--run`) is a separate, explicitly approved step; keep the runtime commit and
+the YAML version unchanged between approval and submission.
+
+## NVL72 profiles
+
+Use this package's artifact main for adopted Snowball and Mochi RL inputs:
+
+```bash
+uv run python -m experiments.post_training.long_loop \
+  --spec /path/to/nvl72-run.yaml --through rl --smoke \
+  --version YYYY.MM.DD.N --validation-output /path/to/preflight
+```
+
+The command validates without submitting. Add `--run` after the checks pass.
+The spec uses `format: nvl72_rl` and names `marin_revision`, `output_prefix`,
+`profile`, `model_uri`, `tokenizer_revision`, `data_uri`, `data_sha256`,
+`input_version` and `max_steps`. Use an immutable Git revision, calendar input
+version and regional `s3://marin-us-east-08a/` output prefix. `data_uri` is a list
+with one adopted artifact directory; `data_file` defaults to `train.parquet`.
+`tokenizer_uri` defaults to the model input. Normal runs also require a
+`validation_data_uri` list; its default file is `validation.parquet`.
+
+Mochi profiles are `one-rack` (48 trainer + 12 inference GPUs, 65,536 context)
+and `three-rack` (64 trainer + two 64-GPU inference engines, 262,144 context).
+Snowball parity profiles are `snowball-one-rack` (32 + 8 GPUs) and
+`snowball-three-rack` (64 + two 64-GPU engines). Snowball uses PP2 because its
+26 layers cannot use Mochi's PP12 or PP16. The profiles request physical NVLink
+domains at production priority. Compilation and piecewise CUDA graphs stay on.
+
+NVL72 coordinators use `mochi-<profile>-<version>` for RL and
+`mochi-<evaluation-name>-<version>` for policy evaluation. Iris adds the submitting
+user namespace, giving the cancellation prefix `/<owner>/mochi-`. Children stay
+beneath that coordinator's job ID. Record the exact submitted IDs before cancellation.
+
+Smoke mode uses two groups of eight samples, two rollout workers and a one-hour
+clock after the first optimizer update. It saves each update and at finalization;
+it skips held-out evaluation and best selection. Normal runs save every two hours,
+at finalization and when best selection commits an improved checkpoint. They
+retain the 90%-of-expected coverage gate (108 of 120 for this shape) and the
+five-observation evaluation EMA seeded by the first eligible validation.
+Native checkpoints are not pruned by these profiles (`checkpoint_count: -1`);
+the regional temporary storage has a 14-day lifecycle. Record a durable handoff
+before that lifecycle expires. No model weights are copied to the submitter.
+
+For an adopted NVL72 run, upload the small self-contained run spec to regional S3
+and pass its immutable URI to `--spec`. The coordinator replays this argument on
+Iris; a Mac-local absolute path is not available there. Keep `--validation-output`
+under `/tmp` when submitting. Save its local preflight receipts in the experiment
+record before launch.
+
+### Adopted NVL72 policy evaluation
+
+Use the same main with `format: nvl72_eval` and `--through eval` to evaluate an
+existing HF export. Omit `--smoke`; the supplied micro dataset defines the scope.
+Run without `--run` first. The spec pins the export manifest, model config,
+checkpoint step, tokenizer revision and evaluation Parquet SHA. A changed pin
+fails before allocation. `NVL72EvaluationSpec` in `nvl72_evaluation.py` defines
+all required fields.
+
+This path uses SkyRL's generation entrypoint with no training dataset. The
+policy uses one EP12 inference pool on three four-GPU GB200 hosts. The shared
+judge uses TP4 on one further host. Both use production priority in 08a;
+compilation and CUDA graphs stay enabled. The ordinary GB200 gang placement
+binds each pool to an NVLink domain. Keep the same context, sampling, task
+selection and judge pins when comparing two policies. The result has no RL
+checkpoint or synthetic training-completion marker.
+
+### Fresh Exp3 RL after the Socket failure
+
+`exp3_rl_restart` adopts the sealed `.51` SFT export and data inputs without
+rerunning SFT. Supply the hash-pinned predecessor plan and launch document as one
+reference JSON object. The fresh lineage removes forced Socket transport, keeps
+the 12-hour learning budget, saves native checkpoints every two hours and at
+finalization, and labels a final-native HF fallback when no native best exists.
+Evaluation sandbox storage is 128 GiB; training sandbox resources are unchanged.
+
+Run without `--run` first, with `--reference`, `--reference-sha256`,
+`--source-revision`, `--validation-output`, and a fresh `--version`. Inspect the
+resolved launch diff and the cross-node InfiniBand probe receipt before adding
+`--run`. Both the coordinator and child job names use the `mochi-` prefix.

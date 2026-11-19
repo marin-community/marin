@@ -6,11 +6,12 @@
 import hashlib
 import json
 import os
-import subprocess
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import click
+import draccus
+import yaml
 from huggingface_hub import hf_hub_download
 from iris.cluster.client.job_info import get_job_info
 from marin.execution.build_context import resolve_version
@@ -18,11 +19,17 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import graph_handles
 from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import SkyRLRunConfig
+from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.secrets import require_secret
 
+from experiments.evaluation.micro210 import Micro210Run
 from experiments.post_training.long_loop.eval_runtime.judge import JudgedEvaluation
 from experiments.post_training.long_loop.launch_validation import validate_launch
+from experiments.post_training.long_loop.nvl72 import PROFILES, NVL72RunSpec, run_from_spec, validate_model_geometry
+from experiments.post_training.long_loop.nvl72_evaluation import NVL72EvaluationSpec, evaluation_from_spec
+from experiments.post_training.long_loop.recipe_bundle import require_clean_revision, runtime_source_manifest
 from experiments.post_training.long_loop.run_spec import resolve_spec, stage_blockers
 from experiments.post_training.long_loop.spec_pipeline import build_spec_graph
 
@@ -41,7 +48,7 @@ def validate_graph(
         # Future checkpoint selection is unavailable before training. Use the
         # builder's identity branch, retaining actual runtime config and paths.
         config = step.build_config(replace(context, is_fingerprint=True))
-        launch = config.skyrl if isinstance(config, JudgedEvaluation) else config
+        launch = config.skyrl if isinstance(config, (JudgedEvaluation, Micro210Run)) else config
         row = {"stage": step.name, "status": "constructed; not a SkyRL launch"}
         if isinstance(launch, SkyRLRunConfig):
             digest = hashlib.sha256(launch.launch_config_yaml.encode()).hexdigest()
@@ -56,9 +63,9 @@ def validate_graph(
 
 
 @click.command(help=__doc__)
-@click.option("--spec", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True)
+@click.option("--spec", required=True, help="Pinned local run spec or regional S3 NVL72 spec URI.")
 @click.option("--smoke", is_flag=True, help="Apply only the spec's explicit scale overrides.")
-@click.option("--through", type=click.Choice(["sft", "rl", "archive"]), default="archive", show_default=True)
+@click.option("--through", type=click.Choice(["sft", "rl", "eval", "archive"]), default="archive", show_default=True)
 @click.option("--validation-output", type=click.Path(path_type=Path), required=True)
 @click.option("--i-know-i-am-using-a-deprecated-config-format", is_flag=True)
 @click.option("--i-know-i-am-breaking-experimental-controls", is_flag=True)
@@ -67,7 +74,7 @@ def validate_graph(
 )
 @rl_build_options
 def main(
-    spec: Path,
+    spec: str,
     smoke: bool,
     through: str,
     validation_output: Path,
@@ -75,8 +82,49 @@ def main(
     i_know_i_am_breaking_experimental_controls: bool,
     experimental_controls_reason: str | None,
 ) -> ArtifactStep:
+    configure_coreweave_s3()
+    document = yaml.safe_load(StoragePath(spec).read_bytes())
+    if document.get("format") == "nvl72_eval":
+        if through != "eval" or smoke:
+            raise click.UsageError("An NVL72 evaluation requires --through eval without --smoke")
+        evaluation = draccus.decode(NVL72EvaluationSpec, document)
+        if not evaluation.output_prefix.startswith("s3://marin-us-east-08a/"):
+            raise ValueError("NVL72 outputs must use regional S3 in us-east-08a")
+        if not evaluation.model_uri.startswith("s3://marin-us-east-08a/"):
+            raise ValueError("NVL72 evaluation requires a regional model")
+        os.environ["MARIN_PREFIX"] = evaluation.output_prefix
+        if get_job_info() is None:
+            require_clean_revision(Path(__file__).resolve().parents[3], evaluation.marin_revision)
+        validation_output.mkdir(parents=True, exist_ok=True)
+        terminal = evaluation_from_spec(evaluation, validation_output / "launch.yaml")
+        model_config = (StoragePath(evaluation.model_uri) / "config.json").read_bytes()
+        validate_graph(
+            terminal, validation_output / terminal.version, evaluation.output_prefix, model_config=model_config
+        )
+        (validation_output / "resolved-plan.json").write_text(json.dumps(asdict(evaluation), indent=2))
+        return terminal
+    if document.get("format") == "nvl72_rl":
+        if through != "rl":
+            raise click.UsageError("An adopted NVL72 RL input requires --through rl")
+        nvl72 = draccus.decode(NVL72RunSpec, document)
+        if not nvl72.output_prefix.startswith("s3://marin-us-east-08a/"):
+            raise ValueError("NVL72 outputs must use regional S3 in us-east-08a")
+        os.environ["MARIN_PREFIX"] = nvl72.output_prefix
+        if get_job_info() is None:
+            require_clean_revision(Path(__file__).resolve().parents[3], nvl72.marin_revision)
+        configure_coreweave_s3()
+        validation_output.mkdir(parents=True, exist_ok=True)
+        fs, model_path = filesystem_for(prefix_join(nvl72.model_uri, "config.json"))
+        model_config = fs.cat_file(model_path)
+        validate_model_geometry(json.loads(model_config), PROFILES[nvl72.profile])
+        terminal = run_from_spec(nvl72, smoke=smoke, config_output=validation_output / "launch.yaml")
+        (validation_output / "resolved-plan.json").write_text(
+            json.dumps({**asdict(nvl72), "smoke": smoke, "through": through}, indent=2)
+        )
+        validate_graph(terminal, validation_output / terminal.version, nvl72.output_prefix, model_config=model_config)
+        return terminal
     resolved = resolve_spec(
-        spec,
+        Path(spec),
         smoke=smoke,
         acknowledge_deprecated_config_format=i_know_i_am_using_a_deprecated_config_format,
         acknowledge_experimental_controls=i_know_i_am_breaking_experimental_controls,
@@ -88,9 +136,8 @@ def main(
     resolved["active_stage_blockers"] = stage_blockers(resolved, through)
     # Iris ships the validated workspace bundle without Git metadata.
     if get_job_info() is None:
-        revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-        if revision != resolved["marin_revision"]:
-            resolved["active_stage_blockers"].append("Run spec's Marin revision differs from the checked-out code")
+        require_clean_revision(Path(__file__).resolve().parents[3], resolved["marin_revision"])
+    resolved["runtime_source"] = runtime_source_manifest(Path(__file__).resolve().parents[3], resolved["marin_revision"])
     validation_output.mkdir(parents=True, exist_ok=True)
     plan = validation_output / "resolved-plan.json"
     plan.write_text(json.dumps(resolved, indent=2))

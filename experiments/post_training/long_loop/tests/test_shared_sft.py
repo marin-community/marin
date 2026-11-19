@@ -4,6 +4,7 @@
 import copy
 import json
 from dataclasses import replace
+from datetime import timedelta
 from pathlib import Path
 
 import draccus
@@ -15,21 +16,65 @@ from haliax import Axis
 from levanter.checkpoint import save_checkpoint
 from levanter.data.text.datasets import dataset_for_component
 from levanter.store.cache import SerialCacheWriter
+from levanter.training_budget import TrainingBudgetConfig, TrainingStopReason, record_training_completion
 from levanter.utils.thread_utils import blocking_wait
 from marin.execution.lazy import ArtifactStep, StepContext
 
+from experiments.post_training.long_loop.archive import ArchiveInput, seal_archive, verify_archive
+from experiments.post_training.long_loop.archive_stage import time_limited_sft_input
 from experiments.post_training.long_loop.run_spec import resolve_spec
 from experiments.post_training.long_loop.sft import SMOKE_CONFIG
 from experiments.post_training.long_loop.shared_sft import (
     export_shared_sft,
     legacy_sft_step,
     select_shared_sft,
+    select_time_limited_sft,
     shared_sft_spec,
 )
 from experiments.sft.configs.snowball_h100 import SPEC as SNOWBALL_SFT
 from experiments.sft.launcher import sft_step
 
 SPEC = Path(__file__).parents[1] / "specs/round1.yaml"
+
+
+def test_time_bound_selects_the_actual_final_checkpoint_without_shortening_the_maximum(tmp_path):
+    checkpoint = str(tmp_path / "checkpoints/step-1")
+    save_checkpoint(
+        {"model": np.asarray([0.64], dtype=np.float32)}, step=1, checkpoint_path=checkpoint, is_temporary=False
+    )
+    policy = TrainingBudgetConfig(
+        timedelta(hours=20), timedelta(minutes=40), timedelta(minutes=10), deadline_epoch_seconds=1e12
+    )
+    telemetry = tmp_path / "telemetry"
+    telemetry.mkdir()
+    record_training_completion(
+        telemetry_root=str(telemetry),
+        checkpoint=checkpoint,
+        completed_updates=2,
+        maximum_updates=746,
+        budget=policy,
+        stop_reason=TrainingStopReason.TIME_BOUND,
+    )
+    select_time_limited_sft(output=str(tmp_path), maximum_updates=746, budget=policy)
+    selection = json.loads((tmp_path / "selected.json").read_text())
+    assert selection["checkpoint"] == checkpoint
+    assert selection["completed_updates"] == 2
+    assert selection["training_completion"]["maximum_updates"] == 746
+    assert selection["training_completion"]["stop_reason"] == "time_bound"
+    consumed = {
+        "native_telemetry_root": str(telemetry),
+        "num_train_steps": 746,
+        "training_budget": draccus.encode(policy),
+    }
+    archived = time_limited_sft_input(str(tmp_path), consumed)
+    archive = str(tmp_path / "archive")
+    seal_archive(archive, [ArchiveInput(**archived)], {})
+    manifest = verify_archive(archive)
+    copied = Path(manifest["objects"][0]["destination"])
+    assert json.loads(copied.read_text()) == selection["training_completion"]
+    (tmp_path / "selected.json").write_text(json.dumps({**selection, "checkpoint": "wrong-checkpoint"}))
+    with pytest.raises(ValueError, match="selection differs"):
+        time_limited_sft_input(str(tmp_path), consumed)
 
 
 def test_native_sft_retains_sources_and_token_schedule_while_using_shared_defaults(tmp_path):

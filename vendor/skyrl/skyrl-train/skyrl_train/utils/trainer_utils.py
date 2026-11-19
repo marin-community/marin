@@ -21,7 +21,7 @@ from skyrl_train.io import io
 from skyrl_train.metric_names import ENVIRONMENT_METRIC_PREFIX
 from marinskyrl.resource_locator import join_resource_path
 from skyrl_train.checkpoint_listing import extract_step_from_path, list_checkpoint_dirs
-from marinskyrl.checkpoint_paths import GLOBAL_STEP_PREFIX
+from marinskyrl.checkpoint_paths import GLOBAL_STEP_PREFIX, protected_native_checkpoint_steps
 from skyrl_train.dataset import PromptDataset
 from torchdata.stateful_dataloader import StatefulDataLoader
 from skyrl_train.batch_metrics import consumed_stop_metrics
@@ -123,7 +123,7 @@ def cleanup_old_checkpoints(
 
     checkpoint_dirs.sort(key=extract_step)
 
-    protected_steps = protected_steps or set()
+    protected_steps = set(protected_steps or ()) | protected_native_checkpoint_steps(checkpoint_base_path)
     recent = set(checkpoint_dirs[-max_checkpoints:]) if max_checkpoints > 0 else set()
     dirs_to_remove = [
         directory

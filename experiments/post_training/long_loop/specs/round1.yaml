@@ -1,5 +1,5 @@
 name: long-loop/round1
-marin_revision: 6e24f53e5fe6d2e863c463a649a43c861f7097b6
+marin_revision: bb854930beacc66455622173ffd5f1b9dee3a03c
 datasets:
   sft:
     path: sft-data.yaml
@@ -21,7 +21,7 @@ datasets:
     sha256: 0064c4384975ab758a89d27533a32c958192ff4c06f12ffd91354aa6289934e0
 sft:
   path: sft.yaml
-  sha256: 2a4fbea982691edfca28f519e2122fe9bd28b83aae4fde1828614f27644508cf
+  sha256: cdf09c627893d3b9763e5762a9e696e921a8e5596b19c28edba4be76496519d7
 initializer:
   path: initializer.yaml
   sha256: e08ba272421bac7fdc72750d89d46e938ed84f212677527cdddd686ca4240ca5
@@ -39,10 +39,10 @@ archive:
   sha256: 10412b80e40f1431eb03aec445ae93746f209e7adc5aa552f69b4cb2ce843724
 rl:
   path: rl.yaml
-  sha256: 4540d84becef0a221755ff97ac792929291c5be121eba44b430ca6a82b65ecb0
+  sha256: df78dbcbae58b6a6e6862ebc2e51bae1641025d4d8af77eb23ed4baf833c48bb
 evaluation:
   path: evaluation.yaml
-  sha256: 63beeb89012cfd3153503e81c064084a1c8ea4ab874b9ed69a21355b668bac14
+  sha256: 9c5e03833e51fb17c08453ccaf813852d293b38728cdf1e04db071f61f861b14
 smoke_overrides:
   sft_steps: 5
   rl_steps: 5

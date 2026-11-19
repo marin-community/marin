@@ -276,7 +276,7 @@ def _build_inference_engine_runtime_env(
     return {"env_vars": env_vars}
 
 
-async def _await_actor_task(actor_task: Any) -> Any:
+async def _await_actor_task(actor_task: ray.ObjectRef) -> Any:
     """Await a Ray actor task and cancel the remote work if the caller leaves."""
     try:
         return await actor_task

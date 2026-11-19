@@ -12,8 +12,7 @@ from pathlib import Path
 
 import yaml
 from marin.rl.skyrl import skyrl_cpu_command
-from rigging.filesystem.buckets import filesystem_for
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.post_training.long_loop.serving import serving_release
 
@@ -65,8 +64,7 @@ def validate_selected_context(document: str) -> dict:
     generator = launch["skyrl"]["generator"]
     overrides = generator.get("engine_init_kwargs", {}).get("hf_overrides", {})
     requested = launch["skyrl"]["context_budget"]["request_window_tokens"]
-    fs, key = filesystem_for(prefix_join(model["uri"], "config.json"))
-    content = fs.cat_file(key)
+    content = (StoragePath(model["uri"]) / "config.json").read_bytes()
     with tempfile.TemporaryDirectory(prefix="long-loop-selected-context-") as temporary:
         root = Path(temporary)
         (root / "config.json").write_bytes(content)

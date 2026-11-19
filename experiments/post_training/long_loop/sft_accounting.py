@@ -16,13 +16,16 @@ import numpy as np
 from haliax import Axis
 from levanter.data.dataset import MappedAsyncDataset, PermutationDataset, SlicedAsyncDataset
 from levanter.data.mixture import ConcatDataset, MixtureDataset
-from levanter.data.packing import pack_documents
+from levanter.data.packing import LookaheadPrepackedDataset, pack_documents
 from levanter.data.text.datasets import CausalLmDataset, PackedTokenDataset, TokenSeqDataset, _resolve_pack_config
 from levanter.main.train_lm import TrainLmConfig
 from levanter.utils.thread_utils import blocking_wait
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.long_loop.archive import ArchiveInput, digest, write_once
+from experiments.post_training.long_loop.source_loss import SourceLossMode, source_loss_metadata
+
+ACCOUNTING_READ_BATCH_SIZE = 256
 
 
 @dataclass(frozen=True)
@@ -41,30 +44,41 @@ class SampleOrigin:
     documents: tuple[DocumentOrigin, ...]
 
 
-async def sample_origin(dataset, index: int, *, child: str = "") -> SampleOrigin:
+async def sample_origin(
+    dataset, index: int, *, child: str = "", loss_mode: SourceLossMode | None = None
+) -> SampleOrigin:
     """Resolve the loader's real permutation/slice/packing indices without guessing its order."""
     if isinstance(dataset, PermutationDataset):
         permutation = await dataset._get_permutation()
-        return await sample_origin(dataset.dataset, int(permutation(index)), child=child)
+        return await sample_origin(dataset.dataset, int(permutation(index)), child=child, loss_mode=loss_mode)
     if isinstance(dataset, SlicedAsyncDataset):
-        return await sample_origin(dataset.dataset, index + dataset.start_index, child=child)
+        return await sample_origin(dataset.dataset, index + dataset.start_index, child=child, loss_mode=loss_mode)
     if isinstance(dataset, ConcatDataset):
-        for name, source in dataset.datasets.items():
-            length = await source.async_len()
-            if index < length:
-                return await sample_origin(source, index, child=name)
-            index -= length
-        raise IndexError("SFT accounting index exceeds the concatenated source")
+        await dataset._ensure_initialized()
+        child_index = int(np.searchsorted(dataset._cumulative_lengths, index, side="right"))
+        if child_index >= len(dataset._children):
+            raise IndexError("SFT accounting index exceeds the concatenated source")
+        offset = int(dataset._cumulative_lengths[child_index - 1]) if child_index else 0
+        return await sample_origin(
+            dataset._children[child_index], index - offset, child=dataset._names[child_index], loss_mode=loss_mode
+        )
     if isinstance(dataset, PackedTokenDataset):
         packed = dataset.packed
-        if packed.slice_strategy != "left":
-            raise ValueError("SFT accounting requires the explicit left-slice view")
-        rows = packed._pack_indices[index]
+        if isinstance(packed, LookaheadPrepackedDataset):
+            if loss_mode is None:
+                raise ValueError("Lookahead accounting requires an explicit source loss mode")
+            rows = packed.document_indices[index]
+            lengths = packed.document_lengths
+        else:
+            if packed.slice_strategy != "left":
+                raise ValueError("SFT accounting requires the explicit left-slice view")
+            rows = packed._pack_indices[index]
+            lengths = packed._lengths["input_ids"]
         documents = tuple(
             DocumentOrigin(
-                row,
-                int(packed._lengths["input_ids"][row]),
-                min(int(packed._lengths["input_ids"][row]), dataset.Pos.size),
+                int(row),
+                int(lengths[row]),
+                min(int(lengths[row]), dataset.Pos.size),
             )
             for row in rows
         )
@@ -72,14 +86,14 @@ async def sample_origin(dataset, index: int, *, child: str = "") -> SampleOrigin
             child,
             sum(doc.original_tokens for doc in documents),
             sum(doc.real_tokens for doc in documents),
-            True,
+            loss_mode != SourceLossMode.FULL_TOKEN,
             documents,
         )
     if isinstance(dataset, CausalLmDataset) and isinstance(dataset.dataset, TokenSeqDataset):
         length = dataset.dataset.seq_len
         return SampleOrigin(child, length, length, False, ())
     if isinstance(dataset, MappedAsyncDataset):
-        return await sample_origin(dataset.dataset, index, child=child)
+        return await sample_origin(dataset.dataset, index, child=child, loss_mode=loss_mode)
     raise TypeError(f"Unsupported SFT accounting source: {type(dataset).__name__}")
 
 
@@ -99,7 +113,7 @@ def sequence_statistics(
     all_loss = assistant + replay_loss
     documents = [doc for row in rows for doc in row["documents"]]
     document_lengths = [doc["real_tokens"] for doc in documents]
-    document_lengths.extend(row["real_tokens"] for row in rows if not row["is_sft"])
+    document_lengths.extend(row["real_tokens"] for row in rows if not row["documents"])
     packed = (
         len(
             pack_documents(
@@ -115,7 +129,7 @@ def sequence_statistics(
     unpacked_positions = len(document_lengths) * sequence_length
     return {
         "sequences": len(rows),
-        "sft_traces_seen": len(documents),
+        "sft_traces_seen": sum(len(row["documents"]) for row in rows if row["is_sft"]),
         "left_truncated_traces": sum(doc["original_tokens"] > doc["real_tokens"] for doc in documents),
         "original_tokens": original,
         "real_tokens": real,
@@ -176,10 +190,15 @@ def sequence_statistics(
     }
 
 
-async def sampled_rows(config: TrainLmConfig, steps: int):
+async def sampled_rows(
+    config: TrainLmConfig, steps: int, *, start_index: int = 0, loss_modes: dict[str, SourceLossMode] | None = None
+):
     """Replay precisely the global sample range consumed by committed native updates."""
     if config.data.prior_context_phases or config.data.mixture_start_step is not None:
         raise ValueError("SFT accounting requires the experiment's fresh, fixed-context run")
+    total = config.trainer.batch_schedule.global_data_offset_by_step(steps)
+    if not 0 <= start_index <= total:
+        raise ValueError("Accounting prefix exceeds the committed global sample range")
     jax.config.update("jax_threefry_partitionable", config.trainer.jax_config["jax_threefry_partitionable"])
     data_key = jax.random.split(jax.random.PRNGKey(config.trainer.seed), 4)[0]
     if config.data_seed is not None:
@@ -188,17 +207,30 @@ async def sampled_rows(config: TrainLmConfig, steps: int):
     mixture = config.data.train_mixture(Axis("position", length), config.trainer.batch_schedule, key=data_key)
     if not isinstance(mixture, MixtureDataset):
         raise TypeError("SFT accounting requires the native mixture loader")
-    total = config.trainer.batch_schedule.global_data_offset_by_step(steps)
-    for first in range(0, total, 64):
-        indices = list(range(first, min(first + 64, total)))
+    if loss_modes is not None and set(loss_modes) != set(config.data.components):
+        raise ValueError("Accounting supervision modes do not cover the exact consumed mixture")
+    for first in range(start_index, total, ACCOUNTING_READ_BATCH_SIZE):
+        indices = list(range(first, min(first + ACCOUNTING_READ_BATCH_SIZE, total)))
         examples = await mixture.get_batch(indices)
-        for index, example in zip(indices, examples, strict=True):
+        source_rows = defaultdict(list)
+        for position, index in enumerate(indices):
             block_id, slot = divmod(index, mixture.block_size)
             source_id, source_index = mixture._index_into_dataset_for_id(mixture._get_block(block_id)[slot], block_id)
             source_name = mixture.dataset_index[source_id]
+            source_rows[source_name].append((position, source_index))
+        origins: dict[int, tuple[str, SampleOrigin]] = {}
+        for source_name, positions in source_rows.items():
             source = mixture.datasets[source_name]
-            source_index = (await mixture._remap_indices(source, [source_index]))[0]
-            origin = await sample_origin(source, source_index)
+            remapped = await mixture._remap_indices(source, [index for _, index in positions])
+            for (position, _), source_index in zip(positions, remapped, strict=True):
+                origins[position] = (
+                    source_name,
+                    await sample_origin(
+                        source, source_index, loss_mode=None if loss_modes is None else loss_modes[source_name]
+                    ),
+                )
+        for position, (index, example) in enumerate(zip(indices, examples, strict=True)):
+            source_name, origin = origins[position]
             tokens = np.asarray(example.tokens)
             yield {
                 "global_index": index,
@@ -218,6 +250,11 @@ def write_sft_accounting(*, output: str, trained: str, settings: dict) -> None:
     if document["format"] != "SFTSpec":
         raise ValueError("SFT accounting requires the native SFTSpec producer")
     config = draccus.decode(TrainLmConfig, document["train_config"])
+    modes = None
+    if "source_loss_metadata" in settings:
+        pin = settings["source_loss_metadata"]
+        sources = source_loss_metadata(pin["source"], pin["sha256"])
+        modes = {name: source.loss_mode for name, source in sources.items()}
     steps = selected["completed_updates"]
     metadata = (StoragePath(selected["checkpoint"]) / "metadata.json").read_bytes()
     if json.loads(metadata)["step"] != selected["step"] or selected["step"] + 1 != steps:
@@ -234,12 +271,27 @@ def write_sft_accounting(*, output: str, trained: str, settings: dict) -> None:
         write_once(str(StoragePath(output) / name), content)
         files.append({"name": name, "sha256": pin["sha256"]})
     rows = []
+    resume = settings.get("resume_samples")
+    prefix = b""
+    if resume is not None:
+        if (
+            resume["consumed_config_sha256"] != hashlib.sha256(consumed).hexdigest()
+            or resume["checkpoint_metadata_sha256"] != hashlib.sha256(metadata).hexdigest()
+        ):
+            raise ValueError("Accounting prefix belongs to another consumed configuration or checkpoint")
+        prefix = StoragePath(resume["source"]).read_bytes()
+        if hashlib.sha256(prefix).hexdigest() != resume["sha256"] or not prefix.endswith(b"\n"):
+            raise ValueError("Accounting prefix changed or has an incomplete final record")
+        rows = [json.loads(line) for line in prefix.splitlines()]
+        if len(rows) != resume["rows"] or any(row["global_index"] != index for index, row in enumerate(rows)):
+            raise ValueError("Accounting prefix must cover the contiguous initial global sample range")
     with TemporaryDirectory(prefix="sft-sample-manifest-") as temporary:
         manifest = Path(temporary) / "realized-samples.jsonl"
 
         async def collect():
             with manifest.open("w") as stream:
-                async for row in sampled_rows(config, steps):
+                stream.write(prefix.decode())
+                async for row in sampled_rows(config, steps, start_index=len(rows), loss_modes=modes):
                     stream.write(json.dumps(row, sort_keys=True) + "\n")
                     rows.append(row)
 
@@ -264,6 +316,7 @@ def write_sft_accounting(*, output: str, trained: str, settings: dict) -> None:
         "batch_size": batch,
         "step_seconds": settings["measured_step_seconds"],
         "timing_source": settings["timing_source"],
+        "resumed_prefix": resume,
         "limitations": (
             "Padding compute/MFU share assumes cost proportional to positions; not a hardware MFU measurement. "
             "Repacking combines retained sampled documents into one counterfactual pool at the configured cap; "

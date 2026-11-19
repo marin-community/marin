@@ -4,9 +4,9 @@
 import json
 
 import pytest
+from rigging.event_log import durable_event_log
 
 from experiments.post_training.long_loop.reconstruct_timing import attempt_measurements
-from experiments.post_training.long_loop.timing import durable_event_log
 
 
 def test_running_occupancy_excludes_queue_and_missing_finish_stays_unknown():
@@ -39,13 +39,12 @@ def test_running_occupancy_excludes_queue_and_missing_finish_stays_unknown():
     assert rows[1]["attempt_envelope_gpu_hours"] is None
 
 
-def test_worker_timing_is_uploaded_when_phase_fails(tmp_path, monkeypatch):
+def test_worker_timing_is_uploaded_when_phase_fails(tmp_path):
     task_outputs = tmp_path / "task-outputs"
     task_outputs.mkdir()
-    monkeypatch.setenv("IRIS_OUTPUT_DIR", str(task_outputs))
     destination = tmp_path / "durable/events.jsonl"
     with pytest.raises(RuntimeError, match="work failed"):
-        with durable_event_log(str(destination), "run", "export", "attempt") as log:
+        with durable_event_log(str(destination), "run", "export", "attempt", local_directory=str(task_outputs)) as log:
             with log.span("upload"):
                 raise RuntimeError("work failed")
     events = [json.loads(line) for line in destination.read_text().splitlines()]

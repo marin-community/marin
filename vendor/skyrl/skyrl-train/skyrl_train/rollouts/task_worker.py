@@ -3,6 +3,7 @@
 import asyncio
 import math
 import os
+import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, nullcontext
@@ -62,6 +63,7 @@ from skyrl_train.rollouts.machines import OwnedMachineFactory, TaskMachineError
 from skyrl_train.rollouts.workers import WorkerShard, detached_config
 from skyrl_train.rollouts.finalization import finalize_trajectory_batch, propagate_data_sources
 from skyrl_train.rollout_observability import rollout_phase, rollout_wait
+from skyrl_train.telemetry import record_event
 from skyrl_train.trajectory_runners.trajectory_retention import RetentionSink
 from skyrl_train.trajectory_runners.model_clients import (
     ContextLengthExceededError,
@@ -650,8 +652,23 @@ class TaskRolloutWorker:
 
     async def run_task(self, task: RolloutTask, writer: RolloutWriter) -> int:
         with self._active_request():
+            started = time.perf_counter()
             rollouts = await self.generate(task.request)
             batch = await self.training_batch(task.request, rollouts)
+            record_event(
+                "task_group_completed",
+                {
+                    "uid": task.prompt["uid"],
+                    "duration_seconds": time.perf_counter() - started,
+                    "response_tokens": sum(len(tokens) for tokens in batch["response_ids"]),
+                    "loss_tokens": sum(sum(mask) for mask in batch["loss_masks"]),
+                    **(batch.get("rollout_metrics") or {}),
+                },
+                attributes={
+                    "source": task.request.metadata[0].data_source or "_unknown",
+                    "step": str(task.lease.policy_step),
+                },
+            )
             return await write_trajectory_batch(task, writer, batch)
 
 

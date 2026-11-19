@@ -207,7 +207,9 @@ data parallelism.
 Identity-bearing inputs belong in `SkyRLSpec`: model and tokenizer,
 data artifacts, a starting native checkpoint, topology, seed, retention, and the rendered config. Cluster routing,
 host resources, priority, and retry policy belong in `IrisSkyRLExecution`; changing placement must
-not fork artifact identity.
+not fork artifact identity. A versioned task mix (`RlCurriculum`) also belongs in `SkyRLSpec`; it
+renders the trainer's sampling settings and is named in the run record. See
+[RL curricula](rl-curricula.md).
 
 `IrisSkyRLExecution.container_profile` accepts an `iris.rpc.job_pb2.ContainerProfile` enum for the
 coordinator and trainer jobs. Enum names are serialized at the launch boundary. It defaults to `None`,
@@ -310,6 +312,25 @@ Training limits use the absolute trainer step. To apply two more updates from
 A checkpoint already at or beyond the target completes without another update.
 Set `reset_global_step_on_resume=true` to count a new stage from zero instead;
 this leaves the restored optimizer and scheduler state intact.
+
+### Frozen Micro210 evaluation
+
+`python -m experiments.evaluation.micro210` builds the canonical Micro210
+evaluation graph. Supply `--model-uri`, the SHA256 of its
+`.marinskyrl-model-manifest.json` through `--model-manifest-sha256`, a tokenizer
+repository and full commit through `--tokenizer-uri` and `--tokenizer-revision`,
+and the run identity through `--name` and `--version`. The command prints the
+graph by default; `--run` submits it through Iris.
+
+The protocol lives in durable object storage. The code pins its URI, revision,
+SHA256 and byte size, and verifies those bytes before reading the policy.
+The model binding cannot set sampling, task subsets, sandbox resources, harness
+deadlines or the judge. The graph checks the prepared task bytes and model
+manifest before GPU allocation, then writes `canonical-evaluation.json` with the
+protocol hash beside the run outputs. Sandbox resources come from each task.
+The bound tokenizer must map the frozen stop IDs to `<|end_of_text|>` and
+`<|eot_id|>`; an incompatible tokenizer fails before allocation. Retained
+trajectories use the supplied run identity.
 
 ## Pre-launch review
 

@@ -52,11 +52,9 @@ from levanter.data.text.formats import (
     LmDatasetFormatBase,
     PrebuiltLmDatasetFormat,
     ProcessedChatDict,
-    SerializedChatLmDatasetFormat,
     TextLmDatasetFormat,
     TokenSeqDict,
 )
-from levanter.data.text.serialized_chat import mask_serialized_chat
 from levanter.data.text.length_bucket import (
     LengthBucket,
     LengthBucketIndex,
@@ -399,7 +397,7 @@ def _effective_pack(component: DatasetComponent) -> bool | int:
     if component.pack is not None:
         return component.pack
     fmt = component.format
-    if isinstance(fmt, TextLmDatasetFormat | SerializedChatLmDatasetFormat):
+    if isinstance(fmt, TextLmDatasetFormat):
         return False
     if isinstance(fmt, ChatLmDatasetFormat):
         return True if fmt.pack is None else fmt.pack
@@ -549,20 +547,6 @@ def dataset_for_component(
 ) -> AsyncDataset[GrugLmExample]:
     pack = _effective_pack(component)
     fmt = component.format
-    if isinstance(fmt, SerializedChatLmDatasetFormat):
-        max_segments, slice_strategy = _resolve_pack_config(pack) if pack else (1, "left")
-        dataset = PackedTokenDataset(
-            cache,
-            Pos,
-            max_segments_per_example=max_segments,
-            slice_strategy=slice_strategy,
-            block_cross_document_attention=block_cross_document_attention,
-        )
-        return dataset.map(
-            functools.partial(
-                mask_serialized_chat, message_start_id=fmt.message_start_id, assistant_prefix=fmt.assistant_prefix
-            )
-        )
     if isinstance(fmt, TextLmDatasetFormat):
         if pack:
             max_segments, slice_strategy = _resolve_pack_config(pack)

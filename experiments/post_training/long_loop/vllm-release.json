@@ -1,21 +1,18 @@
 {
-  "source_manifest": {
-    "url": "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261106-5fa2e9bad66d/marin-vllm-gpu-manifest.json",
-    "sha256": "e3c0ac92f81c1b981d8f2f7ca06841bb3097fe819fa983eb763fb5e5781cfb53"
-  },
-  "release": {
-    "tag": "marin-vllm-gpu-20261106-5fa2e9bad66d",
-    "status": "released"
-  },
-  "source": {
-    "fork_commit": "5fa2e9bad66dcc2b9836e657323214aefc179a7f"
+  "abi": {
+    "cuda_compiler_version": "13.2.86",
+    "cuda_runtime_version": "13.2",
+    "cuda_toolkit_version": "13.2.2",
+    "cuda_variant": "cu132",
+    "python_version": "3.12",
+    "torch_index_url": "https://download.pytorch.org/whl/cu132",
+    "torch_version": "2.14.1+cu132"
   },
   "distribution": {
-    "version": "0.0.0.dev20261106+marin.5fa2e9bad66d.cu132"
-  },
-  "abi": {
-    "cuda_variant": "cu132",
-    "torch_version": "2.14.1+cu132"
+    "name": "vllm",
+    "requires_python": "<3.15,>=3.10",
+    "torch_metadata_requirement": "torch==2.14.1",
+    "version": "0.0.0.dev20261113+marin.0ac9dcb157ee.cu132"
   },
   "platforms": [
     {
@@ -24,8 +21,10 @@
         "10.0"
       ],
       "wheel": {
-        "url": "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261106-5fa2e9bad66d/vllm-0.0.0.dev20261106+marin.5fa2e9bad66d.cu132-cp38-abi3-manylinux_2_28_aarch64.whl",
-        "sha256": "78225da21b0b6fb7b20af1fe2a51e635a6586ceeac4685a2cae0817d0bb78eee"
+        "filename": "vllm-0.0.0.dev20261113+marin.0ac9dcb157ee.cu132-cp38-abi3-manylinux_2_28_aarch64.whl",
+        "sha256": "e0a2b9e2bb6b16ba6d4e1821770123cc74f04b86128536c2744e91b59c6e4b6a",
+        "size_bytes": 227857062,
+        "url": "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261113-0ac9dcb157ee/vllm-0.0.0.dev20261113+marin.0ac9dcb157ee.cu132-cp38-abi3-manylinux_2_28_aarch64.whl"
       }
     },
     {
@@ -34,9 +33,39 @@
         "9.0"
       ],
       "wheel": {
-        "url": "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261106-5fa2e9bad66d/vllm-0.0.0.dev20261106+marin.5fa2e9bad66d.cu132-cp38-abi3-manylinux_2_28_x86_64.whl",
-        "sha256": "7acf9799328bbbfe9735178f23d1ebea67e77453b855dd51f76e0e8ecf9ee378"
+        "filename": "vllm-0.0.0.dev20261113+marin.0ac9dcb157ee.cu132-cp38-abi3-manylinux_2_28_x86_64.whl",
+        "sha256": "b8897bde70bf353a08f37450fb89fca5ebf50d768d6756807a43867ef11134f4",
+        "size_bytes": 257109970,
+        "url": "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261113-0ac9dcb157ee/vllm-0.0.0.dev20261113+marin.0ac9dcb157ee.cu132-cp38-abi3-manylinux_2_28_x86_64.whl"
       }
     }
-  ]
+  ],
+  "provenance": {
+    "manifest_sha256": "c01d7b92d98745d08b21168c36ca2cd051a3ab38fcb95844aa7b1a7c89c45166",
+    "manifest_uri": "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261113-0ac9dcb157ee/marin-vllm-gpu-manifest.json"
+  },
+  "release": {
+    "brand": "Marin vLLM",
+    "created_at": "2026-11-12T22:36:04-08:00",
+    "provenance": {
+      "job": "publish",
+      "run_attempt": "3",
+      "run_id": "43379837147",
+      "run_url": "https://github.com/marin-community/vllm/actions/runs/43379837147",
+      "runner_arch": "X64",
+      "system": "GitHub Actions",
+      "workflow_ref": "marin-community/vllm/.github/workflows/marin-gpu-candidate.yaml@refs/heads/main"
+    },
+    "published_at": "2026-11-13T13:48:39Z",
+    "repository": "marin-community/vllm",
+    "status": "released",
+    "tag": "marin-vllm-gpu-20261113-0ac9dcb157ee"
+  },
+  "schema_version": 2,
+  "source": {
+    "fork_commit": "0ac9dcb157ee86ccb447bc717259159c41ad456a",
+    "repository": "https://github.com/marin-community/vllm",
+    "upstream_base": "ced6857afa0ea7b2e3f0846a62e1394e90f15607",
+    "upstream_repository": "https://github.com/vllm-project/vllm"
+  }
 }

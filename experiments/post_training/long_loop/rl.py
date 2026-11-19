@@ -8,6 +8,7 @@ from dataclasses import replace
 import yaml
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.namespacing import user_owned_name
+from marin.rl.curriculum import RlCurriculum
 from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
@@ -38,9 +39,12 @@ def configured_rl_step(
     retained: int,
     seed: int,
     ray_timeouts: dict[str, int],
+    curriculum: RlCurriculum | None = None,
 ) -> ArtifactStep[SkyRLRun]:
     """Bind supplied training settings to admitted model/data artifacts and runtime paths."""
     validate_stage_config(config, "rl")
+    if not execution.wandb_entity or not config["trainer"].get("project_name"):
+        raise ValueError("Long-loop RL requires explicit W&B entity and project")
     buffer = config.get("trainer", {}).get("rollout_buffer", {})
     quotas = buffer.get("consumed_route_quotas", {})
     if quotas and set(buffer.get("source_routes", {}).values()) != set(quotas):
@@ -61,6 +65,7 @@ def configured_rl_step(
             ),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=retained),
             seed=seed,
+            curriculum=curriculum,
         ),
         execution,
         export_hf=True,
@@ -74,6 +79,8 @@ def configured_rl_step(
         document["run"]["finalization"] = "any_terminal"
         document["ray"].update(ray_timeouts)
         recipe = document["skyrl"]
+        recipe["trainer"]["wandb_entity"] = execution.wandb_entity
+        recipe["trainer"]["native_telemetry_root"] = prefix_join(context.output_path, "telemetry")
         for callback in recipe["trainer"].get("callbacks", []):
             if callback["type"] == "best_checkpoint":
                 callback["initial_model_uri"] = document["inputs"]["model"]["uri"]
@@ -86,4 +93,5 @@ def configured_rl_step(
             installed["output_path"] = prefix_join(traces, "installed-agent")
         return replace(launch, launch_config_yaml=yaml.safe_dump(document, sort_keys=False))
 
-    return replace(step, build_config=bind_runtime)
+    configured = replace(step, build_config=bind_runtime)
+    return replace(configured, expected_fingerprint=configured.fingerprint())

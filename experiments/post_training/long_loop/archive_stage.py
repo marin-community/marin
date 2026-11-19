@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Archive-only continuation: no dependency can launch an earlier training stage."""
+"""Seal long-loop evidence after the supplied producer dependencies complete."""
 
 import hashlib
 import json
@@ -14,10 +14,12 @@ from pathlib import Path
 from typing import Any
 
 import click
+import draccus
 import wandb
 import yaml
+from evalrecords.records import EvalRunRecord
 from fray.types import ResourceConfig
-from marin.evaluation.records import EvalRunRecord
+from levanter.training_budget import COMPLETION_FILE, TrainingBudgetConfig, read_training_completion
 from marin.execution.artifact import RECORD_FILENAME
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.execution.remote import remote
@@ -26,12 +28,15 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.redaction import redact_string
 from rigging.secrets import require_secret
+from rigging.training_journal import verify_training_journals
 from wandb import env as wandb_env
 from wandb.apis.public.runhistory.downloads import IncompleteRunHistoryError
 
 from experiments.grug.moe_hero_ep.ops.upload_hf import RESPONSIBLE_USE, WARNING
 from experiments.post_training.long_loop.archive import (
     ArchiveInput,
+    assert_best_rl_checkpoint,
+    assert_final_sft_checkpoint,
     checkpoint_cleanup,
     digest,
     seal_archive,
@@ -45,19 +50,26 @@ from experiments.post_training.long_loop.hf_archive import (
     upload_checkpoint,
     verify_hf_checkpoint,
 )
-from experiments.post_training.long_loop.rl_selection import VALIDATION_EMA_WINDOW
+from experiments.post_training.long_loop.recipe_bundle import verify_recipe_bundle, write_recipe_bundle
+from experiments.post_training.long_loop.rl_selection import validate_full_selection
 from experiments.post_training.long_loop.sft_accounting import sft_accounting_inputs
-from vendor.skyrl.marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME
+from vendor.skyrl.marinskyrl.checkpoint_paths import (
+    BEST_CHECKPOINT_FILENAME,
+    EXPORT_FALLBACK_FILENAME,
+    LATEST_CHECKPOINT_FILE,
+    VALIDATION_RECEIPTS_FILENAME,
+    protected_native_checkpoint_steps,
+)
 
 REQUIRED_CATEGORIES = {"source", "config", "dataset", "timing", "eval_trace", "wandb"}
 INCOMPLETE_HISTORY_EXCEPTION = "wandb.apis.public.runhistory.downloads.IncompleteRunHistoryError"
 EXPORT_ERROR_TAIL_BYTES = 8192
+RUNTIME_WORKSPACE = Path(__file__).resolve().parents[3]
 
 
 def archive_run(*, output: str, plan: dict, completed_report: str) -> None:
     """Seal an explicit reviewed inventory, then clean only its superseded checkpoints."""
-    fs, key = filesystem_for(prefix_join(completed_report, "evaluation.json"))
-    evaluation = json.loads(fs.cat_file(key))
+    evaluation = json.loads((StoragePath(completed_report) / "evaluation.json").read_bytes())
     require_evaluation_coverage(evaluation)
     inputs = [ArchiveInput(**item) for item in plan["inputs"]]
     missing = REQUIRED_CATEGORIES - {item.category for item in inputs}
@@ -72,6 +84,11 @@ def archive_run(*, output: str, plan: dict, completed_report: str) -> None:
         raise ValueError("Archive plan misstates evaluation completeness")
     if not evaluation["all_verified"] and "evaluation" not in declared_missing:
         raise ValueError("Unscored evaluation attempts must block cleanup")
+    recipe_root = prefix_join(output, "recipe-bundle")
+    recipe_inputs, recipe_receipt = write_recipe_bundle(recipe_root, inputs, plan["runtime_source"], RUNTIME_WORKSPACE)
+    verify_recipe_bundle(recipe_root, recipe_receipt["manifest_sha256"])
+    inputs.extend(recipe_inputs)
+    provenance["recipe_bundle"] = recipe_receipt
     receipt_fs, receipt_key = filesystem_for(prefix_join(output, "hf-checkpoint.json"))
     if receipt_fs.exists(receipt_key):
         receipt = json.loads(receipt_fs.cat_file(receipt_key))
@@ -103,9 +120,14 @@ def archive_run(*, output: str, plan: dict, completed_report: str) -> None:
             )
         )
     seal_archive(output, inputs, provenance)
+    final_sft = provenance.get("final_sft_checkpoint")
+    if not isinstance(final_sft, dict) or not final_sft.get("uri"):
+        raise ValueError("Archive plan must record the final SFT checkpoint")
     inventory = provenance["checkpoint_inventory"]
     blockers = provenance.get("cleanup_blockers", [])
     if missing or declared_missing or blockers:
+        assert_final_sft_checkpoint(output, final_sft)
+        assert_best_rl_checkpoint(output, inventory)
         write_once(
             prefix_join(output, "cleanup-blocked.json"),
             json.dumps(
@@ -123,7 +145,10 @@ def archive_run(*, output: str, plan: dict, completed_report: str) -> None:
         inventory["root"],
         inventory["selected"],
         [item["source"] for item in inventory["disposable_files"]],
+        protected=[final_sft["uri"]],
     )
+    assert_final_sft_checkpoint(output, final_sft)
+    assert_best_rl_checkpoint(output, inventory)
 
 
 def archive_step(version: str, plan: dict, completed_report: ArtifactStep) -> ArtifactStep:
@@ -139,16 +164,32 @@ def archive_selected_run(*, output: str, plan: dict, trained: str, completed_rep
         raise ValueError("Selected RL run has no committed HF export")
     fs, root = filesystem_for(run.checkpoint_root)
     best_uri = prefix_join(run.checkpoint_root, BEST_CHECKPOINT_FILENAME)
-    best = json.loads(fs.cat_file(prefix_join(root, BEST_CHECKPOINT_FILENAME)))
+    best = validate_full_selection(run)
+    if best.get("selection") == "final_native_not_best":
+        best_uri = prefix_join(run.checkpoint_root, LATEST_CHECKPOINT_FILE)
     selected = prefix_join(run.checkpoint_root, f"global_step_{best['step']}")
-    if (
-        best["step"] != run.global_step
-        or best["model_uri"] != prefix_join(selected, "policy")
-        or best["ema_window"] != VALIDATION_EMA_WINDOW
-    ):
-        raise ValueError("Exported RL step differs from the five-step validation selection")
+    final_step = int(fs.cat_file(prefix_join(root, LATEST_CHECKPOINT_FILE)).strip())
+    final = prefix_join(run.checkpoint_root, f"global_step_{final_step}")
+    if not fs.isfile(prefix_join(root, f"global_step_{final_step}/trainer_state.pt")):
+        raise ValueError(f"Final RL checkpoint is not committed: step {final_step}")
+    launch = _read_document(prefix_join(trained, "resolved-launch.yaml"))
+    max_checkpoints = launch["config"]["skyrl"]["trainer"]["max_ckpts_to_keep"]
+    if max_checkpoints == 0:
+        raise ValueError("Checkpoint retention must keep a positive count or all checkpoints")
+    objects = fs.find(root, detail=True)
+    checkpoint_names = set()
+    for key in objects:
+        component = StoragePath(key).relative_to(StoragePath(root)).split("/", 1)[0]
+        if re.fullmatch(r"global_step_[0-9]+", component):
+            checkpoint_names.add(component)
+    ordered = sorted(checkpoint_names, key=lambda name: int(name.removeprefix("global_step_")))
+    retained = set(ordered if max_checkpoints < 0 else ordered[-max_checkpoints:])
+    retained.update(f"global_step_{step}" for step in protected_native_checkpoint_steps(run.checkpoint_root))
     request_sha = hashlib.sha256(
-        json.dumps({"plan": plan, "trained": trained, "report": completed_report}, sort_keys=True).encode()
+        json.dumps(
+            {"plan": plan, "trained": trained, "report": completed_report, "max_ckpts_to_keep": max_checkpoints},
+            sort_keys=True,
+        ).encode()
     ).hexdigest()
     archive_fs, archive_key = filesystem_for(prefix_join(output, "resolved-plan.json"))
     if archive_fs.exists(archive_key):
@@ -165,12 +206,12 @@ def archive_selected_run(*, output: str, plan: dict, trained: str, completed_rep
     resolved["archive_request_sha256"] = request_sha
     resolved["hf_upload"].update(source=run.hf_model_uri, native_checkpoint=selected)
     disposable = []
-    for key, info in sorted(fs.find(root, detail=True).items()):
+    for key, info in sorted(objects.items()):
         relative = StoragePath(key).relative_to(StoragePath(root))
         component = relative.split("/", 1)[0]
         if info.get("type") != "file" or re.fullmatch(r"global_step_[0-9]+", component) is None:
             continue
-        if component == f"global_step_{best['step']}":
+        if component in retained:
             continue
         disposable.append(
             {"source": prefix_join(run.checkpoint_root, relative), "storage_identity": file_identity(info)}
@@ -178,10 +219,21 @@ def archive_selected_run(*, output: str, plan: dict, trained: str, completed_rep
     resolved["provenance"]["checkpoint_inventory"] = {
         "root": run.checkpoint_root,
         "selected": selected,
+        "final": final,
         "ttl": resolved["native_checkpoint_ttl"],
+        "max_ckpts_to_keep": max_checkpoints,
+        "retained": [prefix_join(run.checkpoint_root, name) for name in sorted(retained)],
         "disposable_files": disposable,
     }
-    for filename in (BEST_CHECKPOINT_FILENAME, "validation_selection_history.json"):
+    selection_files = [LATEST_CHECKPOINT_FILE]
+    if best.get("selection") != "final_native_not_best":
+        selection_files.extend((BEST_CHECKPOINT_FILENAME, "validation_selection_history.json"))
+    selection_files.extend(
+        filename
+        for filename in (VALIDATION_RECEIPTS_FILENAME, EXPORT_FALLBACK_FILENAME)
+        if fs.isfile(prefix_join(root, filename))
+    )
+    for filename in selection_files:
         resolved["inputs"].append(
             {
                 "source": prefix_join(run.checkpoint_root, filename),
@@ -351,6 +403,68 @@ def _wandb_export(refs: list[dict], settings: dict, destination: str) -> tuple[l
     return inputs, status
 
 
+def native_training_inputs(
+    sft_root: str, rl_root: str, sft_producers: int, selected_rl_step: int
+) -> tuple[list[dict], dict]:
+    """Require complete producer-owned histories and journals before archiving a new run."""
+    inputs, coverage = [], {}
+    stages = {
+        "sft": (
+            sft_root,
+            {f"rank-{rank}" for rank in range(sft_producers)},
+            {"init", "data_load", "compile", "first_step", "steady_state", "checkpoint_save", "export"},
+        ),
+        "rl": (
+            rl_root,
+            {"trainer"},
+            {
+                "init",
+                "data_load",
+                "inference_engine_init_and_compile",
+                "first_step",
+                "steady_state",
+                "save_checkpoints",
+                "queue_hf_export",
+            },
+        ),
+    }
+    stages["rl_export"] = (prefix_join(rl_root, f"exports/step-{selected_rl_step}"), {"exporter"}, {"export"})
+    for stage, (root, producers, phases) in stages.items():
+        receipts = verify_training_journals(root, producers, phases)
+        coverage[stage] = {
+            "expected": len(producers),
+            "verified": len({receipt["producer"] for receipt in receipts if receipt["status"] == "completed"}),
+            "producers": sorted(producers),
+            "runs": sorted({receipt["run"] for receipt in receipts}),
+        }
+        for receipt in receipts:
+            directory = StoragePath(receipt["source"]).parent
+            for name in ("started.json", "receipt.json", "history.jsonl", "phases.jsonl"):
+                inputs.append(
+                    _input(
+                        str(directory / name),
+                        f"telemetry/{stage}/{receipt['producer']}/{receipt['attempt']}/{name}",
+                        "timing" if name == "phases.jsonl" else "metric_history",
+                    )
+                )
+    return inputs, coverage
+
+
+def time_limited_sft_input(output: str, trainer: dict) -> dict:
+    """Verify and archive the completion receipt matching the selected checkpoint."""
+    telemetry = trainer["native_telemetry_root"]
+    completion = read_training_completion(
+        telemetry_root=telemetry,
+        checkpoint_root=prefix_join(output, "checkpoints"),
+        maximum_updates=trainer["num_train_steps"],
+        budget=draccus.decode(TrainingBudgetConfig, trainer["training_budget"]),
+    )
+    selected = _read_document(prefix_join(output, "selected.json"))
+    if any(selected[key] != completion[key] for key in ("checkpoint", "completed_updates", "step")):
+        raise ValueError("Archived SFT selection differs from its completed training receipt")
+    return _input(prefix_join(telemetry, COMPLETION_FILE), "telemetry/sft/completion.json", "timing")
+
+
 def derive_archive_plan(
     *,
     output: str,
@@ -444,7 +558,7 @@ def derive_archive_plan(
     timing_sources = documents[("report", "timing-sources.json")]
     for index, uri in enumerate(timing_sources):
         inputs.append(_input(uri, f"timing/journals/{index:06d}.jsonl", "timing"))
-    limitations.append("Stage timing journals do not establish complete native phase or allocation coverage.")
+    limitations.append("Timing journals do not establish complete allocation coverage.")
     launch = documents[("rl", "resolved-launch.yaml")]
     trainer = launch["config"]["skyrl"]["trainer"]
     order_root = prefix_join(trainer["export_path"], "training_order")
@@ -463,6 +577,10 @@ def derive_archive_plan(
         if digest(item["source"])[1] != item["sha256"]:
             raise ValueError(f"Pinned additional evidence changed: {item['name']}")
         inputs.append(_input(item["source"], prefix_join("additional", item["name"]), item["category"]))
+    selection = documents[("sft", "selected.json")]
+    if "checkpoint" not in selection or "step" not in selection:
+        raise ValueError("The SFT selection must name its final checkpoint and step")
+    final_sft_checkpoint = {"uri": selection["checkpoint"], "step": selection["step"]}
     full_sft = documents[("sft", "consumed-config.json")]
     shared_sft = full_sft.get("format") == "SFTSpec"
     sft = full_sft["train_config"]["trainer"] if shared_sft else full_sft["trainer"]["trainer"]
@@ -495,28 +613,53 @@ def derive_archive_plan(
         if item.get("kind") == "wandb-run-reference":
             ref = _read_document(item["source"])
             refs = [entry for entry in refs if entry["stage"] != ref["stage"]] + [ref]
-    wandb_inputs, wandb_status = _wandb_export(refs, settings["wandb"], prefix_join(metadata_root, "wandb"))
-    inputs.extend(wandb_inputs)
-    record("wandb-status.json", {"exporter": settings["wandb"]["package"], "runs": wandb_status}, "provenance")
+    sft_telemetry = sft.get("native_telemetry_root")
+    rl_telemetry = trainer.get("native_telemetry_root")
     missing = {}
-    expected_timing = {
-        "native-sft-attempt-archive": full_sft["resources"]["replicas"],
-        "native-sft-journal": full_sft["resources"]["replicas"] * (1 if shared_sft else full_sft["processes_per_task"]),
-    }
-    timing_coverage = {
-        kind: {"expected": count, "observed": len({item["source"] for item in extra if item.get("kind") == kind})}
-        for kind, count in expected_timing.items()
-    }
-    if any(item["observed"] != item["expected"] for item in timing_coverage.values()):
-        missing["timing"] = (
-            "Native SFT attempt archive/journal coverage is incomplete; stage-wall journals do not substitute."
+    timing_coverage = {}
+    if (sft_telemetry is None) != (rl_telemetry is None):
+        raise ValueError("Native training telemetry must be present for both SFT and RL")
+    if sft_telemetry is not None and rl_telemetry is not None:
+        if shared_sft and sft.get("training_budget") is not None:
+            inputs.append(time_limited_sft_input(roots["sft"], sft))
+        native_inputs, timing_coverage = native_training_inputs(
+            sft_telemetry,
+            rl_telemetry,
+            full_sft["resources"]["replicas"] * (1 if shared_sft else full_sft["processes_per_task"]),
+            run.global_step,
         )
-        blockers.append(missing["timing"])
-    if any(item["status"] != "strict_export_verified" for item in wandb_status):
-        missing["wandb"] = (
-            "One or more exact W&B identities or strict native-history exports unavailable; see wandb-status.json."
-        )
-        blockers.append(missing["wandb"])
+        for stage, expected in {"sft": sft["id"], "rl": trainer["run_name"], "rl_export": trainer["run_name"]}.items():
+            if timing_coverage[stage]["runs"] != [expected]:
+                raise ValueError(f"Native {stage} telemetry belongs to another run")
+        inputs.extend(native_inputs)
+        wandb_status = [{**ref, "status": "producer_history_verified"} for ref in refs]
+        record("wandb-status.json", {"runs": wandb_status, "history_source": "producer artifacts"}, "wandb")
+    else:
+        missing["metric_history"] = "Producer-owned training history is unavailable for historical stages."
+        blockers.append(missing["metric_history"])
+        wandb_inputs, wandb_status = _wandb_export(refs, settings["wandb"], prefix_join(metadata_root, "wandb"))
+        inputs.extend(wandb_inputs)
+        record("wandb-status.json", {"exporter": settings["wandb"]["package"], "runs": wandb_status}, "provenance")
+        expected_timing = {
+            "native-sft-attempt-archive": full_sft["resources"]["replicas"],
+            "native-sft-journal": (
+                full_sft["resources"]["replicas"] * (1 if shared_sft else full_sft["processes_per_task"])
+            ),
+        }
+        timing_coverage = {
+            kind: {"expected": count, "observed": len({item["source"] for item in extra if item.get("kind") == kind})}
+            for kind, count in expected_timing.items()
+        }
+        if any(item["observed"] != item["expected"] for item in timing_coverage.values()):
+            missing["timing"] = (
+                "Native SFT attempt archive/journal coverage is incomplete; stage-wall journals do not substitute."
+            )
+            blockers.append(missing["timing"])
+        if any(item["status"] != "strict_export_verified" for item in wandb_status):
+            missing["wandb"] = (
+                "One or more exact W&B identities or strict native-history exports unavailable; see wandb-status.json."
+            )
+            blockers.append(missing["wandb"])
     evaluation = documents[("report", "evaluation.json")]
     require_evaluation_coverage(evaluation)
     if not evaluation["all_verified"]:
@@ -538,11 +681,17 @@ def derive_archive_plan(
     )
     if evaluation["result_uri"] != evaluated:
         raise ValueError("Evaluation report belongs to another run")
+    selection = validate_full_selection(run)
+    selection_description = (
+        "final native checkpoint; no eligible trained best checkpoint"
+        if selection.get("selection") == "final_native_not_best"
+        else "five-step EMA validation reward"
+    )
     card = (
         "---\nlicense: openmdw-1.1\n---\n\n# Long-loop selected checkpoint\n\n"
         + WARNING
         + "\n\n"
-        + f"Selected RL step: {run.global_step}. Selection: five-step EMA validation reward. "
+        + f"Selected RL step: {run.global_step}. Selection: {selection_description}. "
         + f"Marin source commit: `{revision}`. Scored evaluation attempts: {evaluation['verified_rollouts']} "
         + f"of {evaluation['completed_rollouts']}. Unscored attempts are excluded from reward means.\n\n"
         + "This is an experimental training result, not a quality-parity claim. "
@@ -555,6 +704,7 @@ def derive_archive_plan(
     version = records["rl"]["version"]
     return {
         "inputs": inputs,
+        "runtime_source": resolved_spec["runtime_source"],
         "hf_upload": {
             "source": run.hf_model_uri,
             "repo_id": settings["hf_upload"]["repo_prefix"] + "-" + version,
@@ -569,6 +719,7 @@ def derive_archive_plan(
             "marin_commit": revision,
             "experimental_controls": resolved_spec.get("experimental_controls"),
             "rl_terminal": documents[("rl", "terminal.json")]["result"],
+            "final_sft_checkpoint": final_sft_checkpoint,
             "evaluation_complete": evaluation["all_verified"],
             "wandb_runs": wandb_status,
             "missing_evidence": missing,

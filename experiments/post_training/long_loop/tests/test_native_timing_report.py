@@ -7,12 +7,14 @@ import json
 import pytest
 from marin.execution.artifact import ArtifactRecord, write_record
 from marin.rl.skyrl import SkyRLRun
+from rigging.event_log import EventLog
+from rigging.filesystem.storage_path import StoragePath
+from rigging.training_journal import TrainingJournal
 
 from experiments.post_training.long_loop.runtime_timing import write_report
-from experiments.post_training.long_loop.timing import EventLog
 
 
-def test_adopted_native_journal_is_verified_and_reported(tmp_path):
+def test_producer_and_adopted_native_journals_are_reported(tmp_path):
     journal = tmp_path / "native.jsonl"
     log = EventLog(journal, "original-sft", "sft", "rank0")
     with log.span("compile"):
@@ -29,6 +31,10 @@ def test_adopted_native_journal_is_verified_and_reported(tmp_path):
     (results / "results.jsonl").write_text(json.dumps(row))
     trained = tmp_path / "trained"
     trained.mkdir()
+    native = TrainingJournal(str(trained / "telemetry"), "producer-sft", "sft", "rank-0")
+    with native.events.span("steady_state"):
+        native.log({"train/loss": 0.2}, step=1, commit=True)
+    native.finish(status="completed")
     terminal = trained / "terminal.json"
     terminal.write_text(json.dumps({"result": {"state": "failed", "failure": "GroupAdmissionStalledError"}}))
     run = SkyRLRun(
@@ -47,7 +53,7 @@ def test_adopted_native_journal_is_verified_and_reported(tmp_path):
     pin = {"source": str(journal), "sha256": hashlib.sha256(journal.read_bytes()).hexdigest()}
     write_report(
         output=str(output),
-        stages=[str(eval_root)],
+        stages=[str(trained), str(eval_root)],
         expected_rollouts=1,
         sft_geometry="CPU fixture",
         additional_timing=[pin],
@@ -57,12 +63,15 @@ def test_adopted_native_journal_is_verified_and_reported(tmp_path):
         "state": "failed",
         "failure": "GroupAdmissionStalledError",
     }
-    assert str(journal) in json.loads((output / "timing-sources.json").read_text())
+    sources = json.loads((output / "timing-sources.json").read_text())
+    assert str(journal) in sources
+    assert len(sources) == 2
+    assert any(StoragePath(source).read_bytes() == native.events.path.read_bytes() for source in sources)
     journal.write_text(journal.read_text() + "\n")
     with pytest.raises(ValueError, match="Pinned native timing journal changed"):
         write_report(
             output=str(output),
-            stages=[str(eval_root)],
+            stages=[str(trained), str(eval_root)],
             expected_rollouts=1,
             sft_geometry="CPU fixture",
             additional_timing=[pin],
