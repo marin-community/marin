@@ -3,6 +3,7 @@
 
 """Run a registry image as a gVisor Iris job and exec into its container."""
 
+import ast
 import asyncio
 import base64
 import math
@@ -17,6 +18,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+import httpx
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cli.connect import ControllerEndpoint, connect_controller
@@ -36,10 +38,14 @@ from shellbox.machine import (
     Backend,
     Command,
     CommandSemantics,
+    ExecSetupFailed,
     ExecutionRequirements,
     ExitReason,
+    MachineCancelled,
+    MachineResourceExhausted,
     MachineSpec,
     MachineTerminated,
+    MachineUnavailable,
     NetworkPolicy,
     ProcessScope,
     Result,
@@ -79,6 +85,86 @@ def _exec_was_shed(error: Exception) -> bool:
     return isinstance(error, ConnectError) and error.code == Code.RESOURCE_EXHAUSTED
 
 
+def _raise_if_unreachable(error: BaseException) -> None:
+    """Report a controller that stayed unreachable through the Iris client's own retry as ``MachineUnavailable``."""
+    if isinstance(error, MachineUnavailable):
+        return
+    if (isinstance(error, ConnectError) and error.code == Code.UNAVAILABLE) or isinstance(
+        error, (ConnectionError, httpx.ConnectError)
+    ):
+        raise MachineUnavailable(f"Iris controller unavailable: {error}") from error
+
+
+# The Kubernetes client parses the exec status channel as an integer; the controller reports a failure
+# there as exit code 1 with this ValueError text, so the command's own outcome is unknown.
+UNKNOWN_EXEC_STATUS = "invalid literal for int()"
+_UNKNOWN_EXEC_STATUS_PREFIX = UNKNOWN_EXEC_STATUS + " with base 10: "
+# Container runtime errors on an exec into a sandbox that is gone, even while its task still reads RUNNING.
+DEAD_CONTAINER_MARKERS = (
+    "error executing command in container",
+    "cannot exec in a",
+    "not running",
+    "container not found",
+)
+# The Kubernetes client raises this when the exec websocket fails before the command is sent.
+EXEC_SETUP_FAILURE = "'NoneType' object has no attribute 'decode'"
+PARENT_TERMINATED = re.compile(r"Cannot submit job: parent job .+ has terminated \(state=JOB_STATE_\w+\)")
+
+
+def _exec_status_detail(status: str) -> str:
+    """The cause quoted in an unknown-status error; the controller may truncate it mid-quote."""
+    quoted = status.removeprefix(_UNKNOWN_EXEC_STATUS_PREFIX)
+    if quoted == status:
+        return status
+    try:
+        decoded = ast.literal_eval(quoted)
+    except (ValueError, SyntaxError):
+        return quoted[1:] if quoted[:1] in ("'", '"') else quoted
+    return decoded if isinstance(decoded, str) else quoted
+
+
+# Kills processes started since the baseline and empties task roots, keeping mount points and
+# ``/tmp/.shellbox*`` capture files. Prints the baseline for the next reset.
+RESET = """
+import json, os, shutil, signal, sys
+from pathlib import Path
+processes = {}
+for path in Path('/proc').glob('[0-9]*/stat'):
+    try:
+        fields = path.read_text().rsplit(')', 1)[1].split()
+        processes[path.parent.name] = (fields[1], fields[19])
+    except (FileNotFoundError, ProcessLookupError):
+        pass
+baseline = json.loads(sys.argv[1]) if sys.argv[1] else [processes, os.listdir('/')]
+keep, pid = set(), str(os.getpid())
+while pid in processes and pid not in keep:
+    keep.add(pid)
+    pid = processes[pid][0]
+for pid, (_, started) in processes.items():
+    if pid not in keep and baseline[0].get(pid, [None, None])[1] != started:
+        try:
+            os.kill(int(pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+task_roots = {'/app', '/workspace', '/tests', '/tmp', sys.argv[2]}
+roots = set(task_roots)
+roots.update('/' + name for name in set(os.listdir('/')) - set(baseline[1]))
+for root in roots:
+    path = Path(root)
+    entries = list(path.iterdir()) if path.is_dir() and not path.is_symlink() else [path]
+    for entry in entries:
+        if root == '/tmp' and entry.name.startswith('.shellbox'):
+            continue
+        if entry.is_dir() and not entry.is_symlink():
+            shutil.rmtree(entry)
+        else:
+            entry.unlink(missing_ok=True)
+    if root in task_roots:
+        path.mkdir(parents=True, exist_ok=True)
+print(json.dumps(baseline))
+"""
+
+
 @dataclass(frozen=True)
 class ExecOutput:
     """The completed command's exit code and text output from one Iris container exec."""
@@ -106,6 +192,7 @@ class IrisMachine:
         self.job = job
         self.task = task
         self.spec = spec
+        self._reset_baseline = ""
         self._closed = False
         self._container_user: tuple[str, str] | None = None
         # Guards ``_closed`` and ``_in_flight`` so ``close`` cannot interleave with an exec attempt's
@@ -124,7 +211,7 @@ class IrisMachine:
             # A timed-out ``run`` closes the machine while this thread may still be retrying.
             with self._admission:
                 if self._closed:
-                    raise RuntimeError("Machine is closed")
+                    raise MachineTerminated("Machine is closed")
                 attempt_id = uuid.uuid4().hex
                 self._in_flight[attempt_id] = argv
             try:
@@ -143,22 +230,42 @@ class IrisMachine:
                 backoff=EXEC_SHED_BACKOFF,
                 operation=f"Iris exec in {self.task.task_id}",
             )
-        except ConnectError as error:
-            self._raise_if_terminated(error)
+        except Exception as error:
+            _raise_if_unreachable(error)
+            if isinstance(error, ConnectError):
+                self._raise_if_terminated(error)
             raise
+        lines = (response.error or (response.stderr if response.exit_code else "")).splitlines()
+        if lines and lines[-1].startswith(UNKNOWN_EXEC_STATUS):
+            detail = _exec_status_detail(lines[-1])
+            error = RuntimeError(f"Iris exec failed: {detail}")
+            if detail.startswith("Internal error occurred"):
+                raise MachineUnavailable(str(error)) from error
+            raise error
         if response.error:
             error = RuntimeError(f"Iris exec failed: {response.error}")
             self._raise_if_terminated(error)
+            if any(marker in response.error for marker in DEAD_CONTAINER_MARKERS):
+                raise MachineTerminated(str(error)) from error
+            if response.error == EXEC_SETUP_FAILURE:
+                raise ExecSetupFailed(str(error)) from error
             raise error
         return ExecOutput(exit_code=response.exit_code, stdout=response.stdout, stderr=response.stderr)
 
     def _raise_if_terminated(self, cause: Exception) -> None:
         """Raise ``MachineTerminated`` from ``cause`` when the sandbox task is no longer running."""
-        status = self.task.status()
+        try:
+            status = self.task.status()
+        except Exception as error:
+            _raise_if_unreachable(error)
+            raise
         if status.state != TaskState.RUNNING:
-            raise MachineTerminated(
-                f"Iris sandbox task {self.task.task_id} is {status.state}: {status.error_message or cause}"
-            ) from cause
+            detail = str(status.error_message or cause)
+            kind = MachineTerminated
+            if "oomkilled" in detail.lower():
+                kind = MachineResourceExhausted
+                detail += f" (memory request: {self.spec.memory_mb or DEFAULT_MEMORY_MB} MiB)"
+            raise kind(f"Iris sandbox task {self.task.task_id} is {status.state}: {detail}") from cause
 
     async def _script(self, script: str, timeout: float | None = None) -> ExecOutput:
         return await asyncio.to_thread(self._exec_sync, ["sh", "-c", script], timeout)
@@ -199,7 +306,7 @@ class IrisMachine:
 
     async def run(self, command: Command) -> Result:
         if self._closed:
-            raise RuntimeError("Machine is closed")
+            raise MachineTerminated("Machine is closed")
         if command.user is not None and command.user not in await self._user_identity():
             uid, name = await self._user_identity()
             raise UnsupportedMachineSpec(
@@ -224,7 +331,8 @@ class IrisMachine:
             f"> {shlex.quote(stdout_path)} 2> {shlex.quote(stderr_path)}"
         )
         try:
-            response = await asyncio.wait_for(self._script(script), timeout=command.timeout)
+            # An exec without a positive deadline falls back to the controller's short Kubernetes default.
+            response = await asyncio.wait_for(self._script(script, command.timeout), timeout=command.timeout)
             stdout, stdout_truncated = await self._download_bytes(stdout_path, command.output_limit_bytes)
             stderr, stderr_truncated = await self._download_bytes(stderr_path, command.output_limit_bytes)
             return Result(response.exit_code, stdout, stderr, stdout_truncated, stderr_truncated, ExitReason.EXITED)
@@ -239,6 +347,21 @@ class IrisMachine:
                 await self._script(
                     f"rm -f {shlex.quote(stdin_path)} {shlex.quote(stdout_path)} {shlex.quote(stderr_path)}"
                 )
+
+    async def reset(self) -> None:
+        """Exclusively clear task roots and non-runtime processes; preserve mount points."""
+        if self.spec.workdir == "/":
+            raise MachineTerminated("Cannot reset the filesystem root as a task workdir")
+        try:
+            result = await self.run(
+                Command(("python3", "-c", RESET, self._reset_baseline, self.spec.workdir), cwd="/", timeout=30)
+            )
+            if result.exit_code != 0 or result.reason != ExitReason.EXITED:
+                raise MachineTerminated(f"Iris reset failed: {result.stderr.decode(errors='replace')}")
+            self._reset_baseline = result.stdout.decode().strip()
+        except BaseException:
+            await self.close()
+            raise
 
     async def upload(self, source: Path, target: str) -> None:
         if source.is_dir():
@@ -355,6 +478,7 @@ class IrisMachineFactory:
                 try:
                     status = await asyncio.to_thread(machine.task.status)
                 except ConnectError as error:
+                    _raise_if_unreachable(error)
                     if error.code != Code.NOT_FOUND:
                         raise
                 else:
@@ -363,12 +487,18 @@ class IrisMachineFactory:
                         if created.exit_code:
                             raise RuntimeError(f"Failed to create Iris workdir {spec.workdir}: {created.stderr}")
                         return machine
+                    if status.state is TaskState.KILLED:
+                        raise MachineCancelled(f"Iris sandbox task was killed before running: {status.error_message}")
                     if status.state not in (TaskState.PENDING, TaskState.BUILDING, TaskState.ASSIGNED):
-                        raise RuntimeError(f"Iris sandbox task failed before running: {status.error_message}")
+                        raise MachineTerminated(f"Iris sandbox task failed before running: {status.error_message}")
                 await asyncio.sleep(2)
             raise TimeoutError(f"Iris sandbox did not start within {self.scheduling_timeout} seconds")
-        except BaseException:
-            await machine.close()
+        except BaseException as error:
+            # A failed cancel must not hide why the sandbox never started.
+            try:
+                await machine.close()
+            except Exception as cleanup_error:
+                error.add_note(f"Sandbox cleanup failed: {cleanup_error}")
             raise
 
     def _submit_sync(self, spec: MachineSpec, source: RegistryImage) -> IrisMachine:
@@ -408,7 +538,7 @@ class IrisMachineFactory:
                 max_retries_preemption=0,
             )
             return IrisMachine(endpoint, client, rpc, job, job.task(0), spec)
-        except BaseException:
+        except BaseException as error:
             try:
                 if job is not None:
                     job.cancel()
@@ -418,4 +548,14 @@ class IrisMachineFactory:
                         client.shutdown()
                 finally:
                     endpoint.close()
+            _raise_if_unreachable(error)
+            if isinstance(error, ConnectError) and error.code == Code.ALREADY_EXISTS:
+                raise MachineUnavailable("Iris sandbox name collision; retry with a fresh sandbox id") from error
+            # Controller-owned text until Iris reports parent termination as a typed status.
+            if (
+                isinstance(error, ConnectError)
+                and error.code == Code.FAILED_PRECONDITION
+                and PARENT_TERMINATED.fullmatch(error.message)
+            ):
+                raise MachineCancelled("parent job terminated") from error
             raise
