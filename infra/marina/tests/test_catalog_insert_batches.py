@@ -222,7 +222,6 @@ def test_retained_history_copies_only_bounded_missing_rows(batch_database, recor
     record_property("retained_max_statement_seconds", max(elapsed))
 
 
-
 def test_parallel_ranges_resume_after_copy_commits_before_checkpoint(batch_database, record_property):
     population = 12307
     batch_rows = 1024
