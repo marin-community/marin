@@ -34,6 +34,7 @@ from iris.jax.compile_cache import configure_jax_compilation_cache
 from iris.rpc import job_pb2
 from levanter.data.text.datasets import LmDataConfig
 from marin.training.training import resolve_training_env
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration
 
@@ -95,9 +96,13 @@ def build(template: Path, arm: str, date: str):
     trainer["trainer"]["tracker"]["tags"] = ["task504", "mochi-distill", f"alpha-{alpha}"]
     config = draccus.decode(GrugRunConfig, raw)
     settings = json.loads((template / "data-settings.json").read_text())
+    # A scoring time cap drops whole cells, so substitute exactly the rows that were assembled.
+    rows = json.loads(StoragePath(f"{ROWS}/train-summary.json").read_text())["rows"]
+    if not 0 < rows <= SUBSTITUTED_ROWS:
+        raise ValueError(f"unexpected teacher-scored train rows: {rows}")
     settings.update(
         repair_cache=f"{ROWS}/train",
-        repair_row_weight=SUBSTITUTED_ROWS / BLOCK,
+        repair_row_weight=rows / BLOCK,
         outer_block_size=BLOCK,
         repair_once=True,
         control_only=False,
@@ -133,7 +138,7 @@ def build(template: Path, arm: str, date: str):
         existing_job_policy=job_pb2.EXISTING_JOB_POLICY_ERROR,
         termination_grace=Duration.from_seconds(60),
     )
-    return kwargs, {"run_id": run_id, "alpha": alpha, "output": output, "settings": settings}
+    return kwargs, {"run_id": run_id, "alpha": alpha, "output": output, "rows": rows, "settings": settings}
 
 
 def main():
@@ -144,6 +149,7 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     os.chdir(ROOT)
+    configure_coreweave_s3()
     kwargs, plan = build(args.template, args.arm, args.date)
     print(json.dumps(plan, indent=2))
     if args.dry_run:
