@@ -229,8 +229,8 @@ def _stage(dry_run: bool, destination: str) -> None:
             synthesized[name] = hashlib.sha256(payload.encode()).hexdigest()
         logger.info("synthesized sidecars: %s", sorted(synthesized))
 
-    destination = StoragePath(destination)
-    entries = [str(entry) for entry in destination.ls()]
+    destination_storage = StoragePath(destination)
+    entries = [str(entry) for entry in destination_storage.ls()]
     shard_pins = []
     sidecar_pins = {}
     fs, _ = filesystem_for(destination)
