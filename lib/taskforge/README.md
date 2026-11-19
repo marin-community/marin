@@ -17,7 +17,7 @@ file covers how to run it.
 | `src/taskforge/effects/` | effect types, the event log, replay, observers, `Hold`/`Restart`/`Transient` |
 | `src/taskforge/resources/` | executors: inference (per-role waiting backend), environments, grading, rollouts, the round-owned verifier machine |
 | `src/taskforge/harness/` | the agentic loop and its tools (`shell`, `read_file`, `write_file`, `grade`, `submit`, `validate`, `report`, `finish`, web) |
-| `src/taskforge/stages/` | `triage`, `author`, `validate`, `review`; the review rules; prompt summaries |
+| `src/taskforge/stages/` | `triage`, `author`, `validate`, `review`; the review rules; prompt summaries. `triage` and its proposal check are present, but no transition reaches them yet |
 | `src/taskforge/model/` | frozen data: proposal, workpiece, task spec, verdicts, decisions |
 | `src/taskforge/llm/` | the GLM transport kept from the previous Taskforge: client, policy, structured output, wire helpers |
 | `src/taskforge/policy/` | the policy record: `defaults/policy.json` and `defaults/prompts/<role>/*.md` |
