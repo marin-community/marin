@@ -295,6 +295,39 @@ def test_vllm_backend_direct_start_uses_tokenizer_chat_template(monkeypatch):
     assert observed_templates == ["{{ messages }}"]
 
 
+def test_vllm_backend_names_stop_tokens_the_checkpoint_does_not_ship(monkeypatch):
+    observed = []
+
+    @contextmanager
+    def environment(**kwargs):
+        extra_args = kwargs["extra_args"]
+        directory = Path(extra_args[extra_args.index("--generation-config") + 1])
+        observed.append((directory, json.loads((directory / "generation_config.json").read_text())))
+        yield SimpleNamespace()
+
+    monkeypatch.setattr("marin.inference.vllm_backend.VllmEnvironment", environment)
+    monkeypatch.setattr("marin.inference.vllm_backend.vllm_launcher", lambda _config: object())
+    spec = ModelSpec(
+        weights="s3://bucket/export",
+        api_model="public-model",
+        num_chips=None,
+        tensor_parallel_size=1,
+        dtype="auto",
+        max_model_len=1024,
+        chat_template_content="{{ messages }}",
+        tokenizer="org/tokenizer",
+        tokenizer_revision="tokenizer-sha",
+        eos_token_ids=(128001, 128009),
+    )
+
+    with VllmBackend(VllmEngineConfig(), port=8000).start(spec):
+        pass
+
+    [(directory, generation_config)] = observed
+    assert generation_config == {"eos_token_id": [128001, 128009]}
+    assert not directory.exists()
+
+
 def test_vllm_backend_propagates_startup_timeout_to_engine_processes(tmp_path, monkeypatch):
     observed = tmp_path / "engine-timeout.json"
     monkeypatch.setenv("VLLM_ENGINE_READY_TIMEOUT_S", "17")

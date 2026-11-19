@@ -106,3 +106,46 @@ def test_wait_until_retries_transient_actor_errors(monkeypatch, code):
     monkeypatch.setattr(iris_vllm, "_POLL_SECONDS", 0.001)
     iris_vllm._wait_until(transient_outage, error_message="did not recover")
     assert attempts == 2
+
+
+def _launch_args(task_index: int, *, pipeline_parallel_size: int, data_parallel_size: int, data_parallel_hosts: int):
+    job_info = SimpleNamespace(task_index=task_index, num_tasks=pipeline_parallel_size * data_parallel_hosts)
+    launch = iris_vllm._build_task_launch(
+        job_info,
+        pipeline_parallel_size=pipeline_parallel_size,
+        tensor_parallel_size=1,
+        data_parallel_size=data_parallel_size,
+        data_parallel_hosts=data_parallel_hosts,
+        master_addr="10.0.0.1",
+        coordinator_name="test",
+    )
+    args = launch.extra_cli_args
+    flags = {flag: args[index + 1] for index, flag in enumerate(args[:-1]) if flag.startswith("--")}
+    return args, flags
+
+
+def test_data_parallel_hosts_form_one_global_data_parallel_group(monkeypatch):
+    monkeypatch.setattr(iris_vllm, "_node_network", lambda _: ("10.0.0.9", "eth0"))
+    leader, leader_flags = _launch_args(0, pipeline_parallel_size=1, data_parallel_size=4, data_parallel_hosts=4)
+    follower, follower_flags = _launch_args(3, pipeline_parallel_size=1, data_parallel_size=4, data_parallel_hosts=4)
+
+    for flags in (leader_flags, follower_flags):
+        assert flags["--data-parallel-size"] == "16"
+        assert flags["--data-parallel-size-local"] == "4"
+        assert flags["--nnodes"] == "4"
+        assert flags["--device-ids"] == "0,1,2,3"
+        assert flags["--data-parallel-address"] == "10.0.0.1"
+        assert flags["--data-parallel-backend"] == "mp"
+        assert "--data-parallel-start-rank" not in flags
+    assert (leader_flags["--node-rank"], follower_flags["--node-rank"]) == ("0", "3")
+    assert "--headless" not in leader
+    assert "--headless" in follower
+
+
+def test_pipeline_gang_omits_multi_host_data_parallel_flags(monkeypatch):
+    monkeypatch.setattr(iris_vllm, "_node_network", lambda _: ("10.0.0.9", "eth0"))
+    _, flags = _launch_args(0, pipeline_parallel_size=2, data_parallel_size=1, data_parallel_hosts=1)
+    assert flags["--nnodes"] == "2"
+    assert flags["--data-parallel-size"] == flags["--data-parallel-size-local"] == "1"
+    assert "--data-parallel-address" not in flags
+    assert "--data-parallel-start-rank" not in flags

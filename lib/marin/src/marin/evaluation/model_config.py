@@ -18,7 +18,7 @@ from marin.inference.config import (
     SpeculativeServingConfig,
     VllmSource,
     resolve_tokenizer_revision,
-    validate_pipeline_args,
+    validate_gang_args,
 )
 
 
@@ -74,7 +74,9 @@ class ServeConfig:
 
     ``backend`` selects vLLM or Levanter. Parallelism, context, and engine limits become first-class
     inference settings. ``instances`` starts independent servers behind Marin's inference broker;
-    it is distinct from pipeline parallelism, which splits one server across multiple Iris tasks.
+    it is distinct from pipeline parallelism and ``data_parallel_hosts``, which split one server across
+    multiple Iris tasks. ``data_parallel_size`` counts the data-parallel ranks on one task, so a server
+    with ``data_parallel_hosts`` tasks runs ``data_parallel_size * data_parallel_hosts`` ranks.
     The remaining typed vLLM fields map onto command-line flags or process settings.
     ``hf_hub_disable_xet`` selects regular HTTP for the worker's Hugging Face weight mirror when Xet
     is rate-limited. ``vllm_extra_args`` is the escape hatch for flags without a typed field.
@@ -90,6 +92,7 @@ class ServeConfig:
     tensor_parallel_size: int | None = None
     data_parallel_size: int | None = None
     pipeline_parallel_size: int = 1
+    data_parallel_hosts: int = 1
     instances: int = 1
     gpu_memory_utilization: float | None = None
     max_model_len: int | None = None
@@ -112,6 +115,7 @@ class ServeConfig:
     vllm_extra_args: tuple[str, ...] = ()
     speculative: SpeculativeServingConfig | None = None
     chat_template: str | None = None
+    eos_token_ids: tuple[int, ...] = ()
     auto_overrides: bool = True
 
     def __post_init__(self) -> None:
@@ -129,14 +133,18 @@ class ServeConfig:
             value = getattr(self, name)
             if value is not None and value < 1:
                 raise ValueError(f"{name} must be positive")
-        if self.pipeline_parallel_size > 1:
+        if self.data_parallel_hosts < 1:
+            raise ValueError("data_parallel_hosts must be >= 1")
+        if self.pipeline_parallel_size > 1 and self.data_parallel_hosts > 1:
+            raise ValueError("a server spans pipeline stages or data-parallel hosts, not both")
+        if self.pipeline_parallel_size > 1 or self.data_parallel_hosts > 1:
             if self.backend is not ServeBackend.VLLM:
-                raise ValueError("pipeline parallelism requires the vLLM backend")
+                raise ValueError("a multi-task server requires the vLLM backend")
             if self.tensor_parallel_size is None:
-                raise ValueError("pipeline parallelism requires an explicit tensor_parallel_size")
+                raise ValueError("a multi-task server requires an explicit tensor_parallel_size")
             if self.instances > 1:
-                raise ValueError("pipeline parallelism requires instances=1")
-            validate_pipeline_args(self.vllm_extra_args)
+                raise ValueError("a multi-task server requires instances=1")
+            validate_gang_args(self.vllm_extra_args)
         if self.gpu_memory_utilization is not None:
             if not 0 < self.gpu_memory_utilization <= 1:
                 raise ValueError("gpu_memory_utilization must be in (0, 1]")
@@ -159,6 +167,16 @@ class ServeConfig:
                 raise ValueError("runai_streamer_concurrency must be positive")
             if self.backend is not ServeBackend.VLLM:
                 raise ValueError("runai_streamer_concurrency requires the vLLM backend")
+        if self.eos_token_ids:
+            if self.backend is not ServeBackend.VLLM:
+                raise ValueError("eos_token_ids requires the vLLM backend")
+            if has_vllm_option(self.vllm_extra_args, "--generation-config"):
+                raise ValueError("eos_token_ids owns --generation-config; remove it from vllm_extra_args")
+
+    @property
+    def task_count(self) -> int:
+        """Iris tasks one server spans: its pipeline stages or its data-parallel hosts."""
+        return self.pipeline_parallel_size * self.data_parallel_hosts
 
 
 @dataclass(frozen=True)
@@ -220,8 +238,8 @@ class ModelConfig:
             raise ValueError("model name cannot contain '/'")
         if self.evaluation_num_concurrent is not None and self.evaluation_num_concurrent <= 0:
             raise ValueError("evaluation_num_concurrent must be positive")
-        if self.serve.pipeline_parallel_size > 1 and not self.resource_hint.gpu:
-            raise ValueError("pipeline parallelism requires resource_hint.gpu")
+        if self.serve.task_count > 1 and not self.resource_hint.gpu:
+            raise ValueError("a multi-task server requires resource_hint.gpu")
 
     @property
     def effective_tokenizer_revision(self) -> str | None:
@@ -254,7 +272,7 @@ def serve_config_vllm_args(serve: ServeConfig) -> tuple[str, ...]:
         if not has_vllm_option(explicit, option):
             derived.extend((option, *values))
 
-    if serve.data_parallel_size is not None and serve.pipeline_parallel_size == 1:
+    if serve.data_parallel_size is not None and serve.task_count == 1:
         add("--data-parallel-size", str(serve.data_parallel_size))
     if serve.gpu_memory_utilization is not None:
         add("--gpu-memory-utilization", str(serve.gpu_memory_utilization))

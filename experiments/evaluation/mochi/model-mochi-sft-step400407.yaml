@@ -1,0 +1,44 @@
+# Mochi (Hero 535B-A23B) SFT step-400407, BF16 schema-3 export, served for BFCL parity runs.
+# One server spans four GB200 hosts in one NVLink domain: TP1 with four data-parallel ranks per
+# host (DP16 overall) and expert parallelism. The serving flags are the baseline that passed the
+# correctness gates against the JAX reference for this export (marin-community/marin issue 11430),
+# plus the hermes tool-call parser that BFCL needs. The export ships no tokenizer, chat template or
+# generation config. The tokenizer repository below supplies the first two. Assistant turns end with
+# <|eot_id|> (128009), which the tokenizer does not mark as eos, so eos_token_ids names both stop
+# tokens, as the Snowball exports' generation configs do.
+name: mochi-sft-step400407
+location: s3://marin-us-east-02a/marin/exports/mochi-sft/hero-sft-fullab-step393k-v2/step-400407/2af3f828aa-cpu-a1
+tokenizer: marin-community/marin-tokenizer-tools
+tokenizer_revision: 3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09
+apply_chat_template: true
+resource_hint:
+  gpu:
+    GB200: 4
+  cpu: 100
+  memory: 880g
+  disk: 1t
+serve:
+  tensor_parallel_size: 1
+  data_parallel_size: 4
+  data_parallel_hosts: 4
+  gpu_memory_utilization: 0.9
+  max_model_len: 73728
+  max_num_batched_tokens: 2048
+  max_num_seqs: 32
+  tool_call_parser: hermes
+  eos_token_ids:
+  - 128001
+  - 128009
+  auto_overrides: false
+  vllm_extra_args:
+  - --enable-expert-parallel
+  - --no-enable-prefix-caching
+  - --load-format
+  - runai_streamer
+  - --model-loader-extra-config
+  - '{"distributed": true, "concurrency": 4, "memory_limit": 17179869184}'
+  - --compilation-config
+  - '{"cudagraph_mode": "PIECEWISE", "splitting_ops": ["vllm::unified_attention_with_output", "vllm::unified_kv_cache_update", "vllm::grug_moe_short_conv"], "inductor_compile_config": {"enable_auto_functionalized_v2": false, "combo_kernels": true, "benchmark_combo_kernel": true}}'
+agent:
+  agent_kwargs:
+    thinking_format: chat-template

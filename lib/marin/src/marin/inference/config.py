@@ -31,6 +31,9 @@ VLLM_TOPOLOGY_OPTIONS = frozenset(
         "--data-parallel-size",
         "--data-parallel-size-local",
         "--data-parallel-start-rank",
+        "--data-parallel-address",
+        "--data-parallel-rpc-port",
+        "--data-parallel-backend",
         "--nnodes",
         "--node-rank",
         "--master-addr",
@@ -54,32 +57,50 @@ def resolve_tokenizer_revision(
     return None
 
 
-def validate_pipeline_args(args: tuple[str, ...]) -> None:
+def validate_gang_args(args: tuple[str, ...]) -> None:
     """Reject flags whose values must agree with the Iris gang geometry."""
     for arg in args:
         option = arg.partition("=")[0]
         if option in VLLM_TOPOLOGY_OPTIONS:
-            raise ValueError(f"pipeline parallelism owns {option}; remove it from extra args")
+            raise ValueError(f"a multi-task vLLM gang owns {option}; remove it from extra args")
 
 
 @dataclass(frozen=True)
 class ServingGeometry:
-    """GPU ranks per pipeline stage and stages per Iris gang."""
+    """GPU ranks per Iris task, and the tasks one gang spans.
+
+    A gang spans either ``pipeline_parallel_size`` stages or ``data_parallel_hosts`` hosts that
+    each run ``data_parallel_size`` local data-parallel ranks; vLLM's global data-parallel size is
+    their product.
+    """
 
     tensor_parallel_size: int
     data_parallel_size: int
     pipeline_parallel_size: int
     gpus_per_task: int
+    data_parallel_hosts: int = 1
 
     def __post_init__(self) -> None:
-        if min(self.tensor_parallel_size, self.data_parallel_size, self.pipeline_parallel_size) < 1:
+        sizes = (
+            self.tensor_parallel_size,
+            self.data_parallel_size,
+            self.pipeline_parallel_size,
+            self.data_parallel_hosts,
+        )
+        if min(sizes) < 1:
             raise ValueError("parallel sizes must be positive")
+        if self.pipeline_parallel_size > 1 and self.data_parallel_hosts > 1:
+            raise ValueError("a gang spans pipeline stages or data-parallel hosts, not both")
         if self.tensor_parallel_size * self.data_parallel_size != self.gpus_per_task:
             raise ValueError("tensor_parallel_size * data_parallel_size must equal gpus_per_task")
 
     @property
+    def global_data_parallel_size(self) -> int:
+        return self.data_parallel_size * self.data_parallel_hosts
+
+    @property
     def task_count(self) -> int:
-        return self.pipeline_parallel_size
+        return self.pipeline_parallel_size * self.data_parallel_hosts
 
     @property
     def total_gpus(self) -> int:
@@ -87,7 +108,7 @@ class ServingGeometry:
 
     @property
     def label(self) -> str:
-        return f"PP{self.pipeline_parallel_size} TP{self.tensor_parallel_size} DP{self.data_parallel_size}"
+        return f"PP{self.pipeline_parallel_size} TP{self.tensor_parallel_size} DP{self.global_data_parallel_size}"
 
 
 @dataclass(frozen=True)
@@ -235,6 +256,7 @@ class ServedModelConfig:
     max_model_len: int | None = None
     tensor_parallel_size: int | None = None
     chat_template_content: str | None = None
+    eos_token_ids: tuple[int, ...] = ()
     object_store_load_mode: ObjectStoreLoadMode = ObjectStoreLoadMode.STREAM
 
     def __post_init__(self) -> None:
@@ -458,9 +480,9 @@ class RemoteInferenceConfig:
         geometry = self.iris.serving_geometry
         if geometry is not None and geometry.task_count > 1:
             if not isinstance(self.engine, VllmEngineConfig):
-                raise ValueError("pipeline parallelism requires the vLLM backend")
+                raise ValueError("a multi-task vLLM gang requires the vLLM backend")
             if self.instances != 1 or self.broker is not None:
-                raise ValueError("pipeline parallelism requires one instance and no broker")
+                raise ValueError("a multi-task vLLM gang requires one instance and no broker")
             if self.model.tensor_parallel_size != geometry.tensor_parallel_size:
                 raise ValueError("model tensor_parallel_size must match serving geometry")
-            validate_pipeline_args(self.engine.extra_args)
+            validate_gang_args(self.engine.extra_args)

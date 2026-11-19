@@ -109,14 +109,21 @@ def iris_vllm_launch(
     pipeline_parallel_size: int,
     tensor_parallel_size: int,
     data_parallel_size: int,
+    data_parallel_hosts: int = 1,
 ) -> Iterator[IrisVllmLaunch]:
-    """Bootstrap a stage-striped native-vLLM task from Iris metadata."""
+    """Bootstrap one native-vLLM task of a pipeline or multi-host data-parallel gang.
+
+    ``data_parallel_size`` counts the data-parallel ranks on each task; a gang of
+    ``data_parallel_hosts`` tasks serves ``data_parallel_size * data_parallel_hosts`` ranks.
+    """
     job_info = get_job_info()
     if job_info is None:
         raise RuntimeError("Iris vLLM launch must run inside an Iris job")
-    if job_info.num_tasks != pipeline_parallel_size:
+    task_count = pipeline_parallel_size * data_parallel_hosts
+    if job_info.num_tasks != task_count:
         raise ValueError(
-            f"vLLM PP={pipeline_parallel_size} requires {pipeline_parallel_size} Iris tasks, got {job_info.num_tasks}"
+            f"vLLM PP={pipeline_parallel_size} over {data_parallel_hosts} data-parallel hosts requires "
+            f"{task_count} Iris tasks, got {job_info.num_tasks}"
         )
 
     endpoint_namespace = str(job_info.job_id).strip("/").replace("/", "-")
@@ -128,6 +135,7 @@ def iris_vllm_launch(
             pipeline_parallel_size=pipeline_parallel_size,
             tensor_parallel_size=tensor_parallel_size,
             data_parallel_size=data_parallel_size,
+            data_parallel_hosts=data_parallel_hosts,
             master_addr=master_addr,
             coordinator_name=coordinator_name,
         )
@@ -234,6 +242,7 @@ def _build_task_launch(
     pipeline_parallel_size: int,
     tensor_parallel_size: int,
     data_parallel_size: int,
+    data_parallel_hosts: int,
     master_addr: str,
     coordinator_name: str,
 ) -> IrisVllmLaunch:
@@ -243,11 +252,11 @@ def _build_task_launch(
         "--pipeline-parallel-size",
         str(pipeline_parallel_size),
         "--data-parallel-size",
-        str(data_parallel_size),
+        str(data_parallel_size * data_parallel_hosts),
         "--data-parallel-size-local",
         str(data_parallel_size),
         "--nnodes",
-        str(pipeline_parallel_size),
+        str(job_info.num_tasks),
         "--node-rank",
         str(job_info.task_index),
         "--master-addr",
@@ -257,7 +266,19 @@ def _build_task_launch(
         "--device-ids",
         ",".join(str(index) for index in range(tensor_parallel_size * data_parallel_size)),
     )
-    if data_parallel_size > 1:
+    if data_parallel_hosts > 1:
+        # vLLM derives each host's first data-parallel rank from --node-rank, and the hosts
+        # join rank 0's data-parallel coordinator over its RPC port.
+        args = (
+            *args,
+            "--data-parallel-address",
+            master_addr,
+            "--data-parallel-rpc-port",
+            str(_MASTER_PORT + 1),
+            "--data-parallel-backend",
+            "mp",
+        )
+    elif data_parallel_size > 1:
         args = (*args, "--data-parallel-start-rank", "0")
     if job_info.task_index != 0:
         args = (*args, "--headless")

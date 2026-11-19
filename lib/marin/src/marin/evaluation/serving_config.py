@@ -358,6 +358,7 @@ def inference_config_for_model(
             max_model_len=max_model_len,
             tensor_parallel_size=serve.tensor_parallel_size,
             chat_template_content=serve.chat_template,
+            eos_token_ids=serve.eos_token_ids,
             object_store_load_mode=serve.object_store_load_mode,
         ),
         engine=engine,

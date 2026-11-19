@@ -391,7 +391,7 @@ def _effective_serving(
     geometry = iris.serving_geometry
     parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
     parser.add_argument("--tensor-parallel-size", type=int, default=tensor_parallel_size)
-    parser.add_argument("--data-parallel-size", type=int, default=geometry.data_parallel_size if geometry else 1)
+    parser.add_argument("--data-parallel-size", type=int, default=geometry.global_data_parallel_size if geometry else 1)
     parser.add_argument("--max-model-len", default=model.max_model_len)
     options, _ = parser.parse_known_args(engine.extra_args if isinstance(engine, VllmEngineConfig) else ())
     context = options.max_model_len
@@ -527,7 +527,7 @@ def run_iris_service(service: IrisServiceConfig) -> None:
         return
     geometry = service.iris.serving_geometry
     if geometry is not None and geometry.task_count > 1:
-        _run_pipeline_service(service)
+        _run_gang_service(service)
         return
     broker = _broker_config(service.instances, service.broker)
     if broker is None:
@@ -576,6 +576,7 @@ def _vllm_model_spec(model: ServedModelConfig, num_chips: int, tensor_parallel_s
         tokenizer=model.tokenizer,
         revision=model.revision,
         tokenizer_revision=model.effective_tokenizer_revision,
+        eos_token_ids=model.eos_token_ids,
     )
 
 
@@ -642,7 +643,7 @@ def _run_tpu_service(service: IrisServiceConfig) -> None:
         notify_iris_vllm_stopped(gang.identity)
 
 
-def _run_pipeline_service(service: IrisServiceConfig) -> None:
+def _run_gang_service(service: IrisServiceConfig) -> None:
     from marin.inference.vllm_backend import VllmBackend  # noqa: PLC0415
 
     geometry = service.iris.serving_geometry
@@ -655,6 +656,7 @@ def _run_pipeline_service(service: IrisServiceConfig) -> None:
         pipeline_parallel_size=geometry.pipeline_parallel_size,
         tensor_parallel_size=geometry.tensor_parallel_size,
         data_parallel_size=geometry.data_parallel_size,
+        data_parallel_hosts=geometry.data_parallel_hosts,
     ) as launch:
         with backend.start(spec, extra_args=launch.extra_cli_args, subprocess_env=launch.subprocess_env) as environment:
             if launch.is_leader:

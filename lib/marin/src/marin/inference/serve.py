@@ -48,6 +48,7 @@ def local_inference(
         tokenizer=model.tokenizer,
         revision=model.revision,
         tokenizer_revision=model.effective_tokenizer_revision,
+        eos_token_ids=model.eos_token_ids,
     )
     if isinstance(engine, VllmEngineConfig):
         # Import only the selected implementation; Levanter pulls in JAX and Transformers.

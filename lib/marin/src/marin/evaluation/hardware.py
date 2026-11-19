@@ -177,8 +177,8 @@ def _select_required_gpu(model: ModelConfig, policy: HardwarePolicy) -> Accelera
 
 def serving_geometry(serve: ServeConfig, choice: AcceleratorChoice) -> ServingGeometry | None:
     """Validate per-task GPU ranks while preserving worker-resolved single-node TP."""
-    if serve.pipeline_parallel_size > 1 and choice.platform is not Platform.GPU:
-        raise ValueError("pipeline parallelism requires a GPU accelerator")
+    if serve.task_count > 1 and choice.platform is not Platform.GPU:
+        raise ValueError("a multi-task server requires a GPU accelerator")
     if choice.platform is not Platform.GPU or serve.tensor_parallel_size is None:
         return None
     ranks = serve.tensor_parallel_size * (serve.data_parallel_size or 1)
@@ -193,6 +193,7 @@ def serving_geometry(serve: ServeConfig, choice: AcceleratorChoice) -> ServingGe
         data_parallel_size=serve.data_parallel_size or 1,
         pipeline_parallel_size=serve.pipeline_parallel_size,
         gpus_per_task=choice.gpu_count,
+        data_parallel_hosts=serve.data_parallel_hosts,
     )
 
 

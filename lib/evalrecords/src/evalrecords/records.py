@@ -180,6 +180,7 @@ class ModelServeConfig(BaseModel):
     tensor_parallel_size: int | None
     data_parallel_size: int | None
     pipeline_parallel_size: int = 1
+    data_parallel_hosts: int = 1
     instances: int = 1
     gpu_memory_utilization: float | None = None
     max_model_len: int | None
@@ -189,6 +190,7 @@ class ModelServeConfig(BaseModel):
     limit_mm_per_prompt: str | None
     tool_call_parser: str | None
     reasoning_parser: str | None
+    eos_token_ids: tuple[int, ...] = ()
     vllm_batch_invariant: bool | None = None
     vllm_use_flashinfer_sampler: bool | None = None
     # Omitted when unset so that adding this setting leaves earlier records' config digests unchanged.

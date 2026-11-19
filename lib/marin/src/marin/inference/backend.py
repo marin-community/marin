@@ -28,6 +28,7 @@ class ModelSpec:
     tokenizer: str | None = None
     revision: str | None = None
     tokenizer_revision: str | None = None
+    eos_token_ids: tuple[int, ...] = ()
 
     @property
     def tokenizer_source(self) -> str:
