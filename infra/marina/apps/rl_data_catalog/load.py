@@ -646,7 +646,7 @@ def load_catalog(
     }
     all_items = []
     full_counts: dict[str, dict[str, int]] = {}
-    private_pipelines = {
+    withheld_pipelines = {
         source.assessment_key
         for source in sources
         if source.assessment_key is not None and content_is_withheld(source.declaration.model_dump(mode="json"))
@@ -737,7 +737,7 @@ def load_catalog(
             for item, packet in catalog.packets(all_items[offset : offset + PACKET_READ_BATCH]):
                 if ("task" in packet) != item.has_task:
                     raise ValueError(f"Packet evidence disagrees with catalog item: {item.task_id}")
-                if item.pipeline_key in private_pipelines:
+                if item.pipeline_key in withheld_pipelines:
                     # A PRIVATE_ALWAYS source's packets stay in its private store:
                     # the served database holds the marker response, never the bytes.
                     continue

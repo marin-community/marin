@@ -385,11 +385,11 @@ function graderChip(source) {
   return node('span', 'Pending', 'chip quality-unassessed');
 }
 
+const PRIVATE_DATA_TIER = 'private_always';
 function contentWithheld(data) {
-  return Boolean(data?.private || data?.content_withheld || data?.data_restriction === 'private_always'
-    || data?.declaration?.content_withheld || data?.declaration?.data_restriction === 'private_always');
+  return Boolean(data?.private || data?.content_withheld || data?.data_restriction === PRIVATE_DATA_TIER
+    || data?.declaration?.content_withheld || data?.declaration?.data_restriction === PRIVATE_DATA_TIER);
 }
 function contentWithheldMessage(data) {
-  return data?.marker || (data?.content_withheld || data?.declaration?.content_withheld
-    ? 'Content withheld: this source has a license exclusion.' : 'Private data: content is not displayed.');
+  return data?.marker || data?.declaration?.marker || 'Content is not displayed.';
 }

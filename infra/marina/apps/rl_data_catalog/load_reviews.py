@@ -80,7 +80,7 @@ def stage_content_reviews(
 ) -> dict[str, Any]:
     """Resolve the frozen declaration's panel, retaining its original input identity."""
     if content_is_withheld(source):
-        raise ValueError("PRIVATE_ALWAYS reviews remain in their private store; do not stage content")
+        raise ValueError("Withheld reviews remain in their private store; do not stage content")
     selected = (source.get("independent_qc") or {}).get("evidence_url")
     expected_uri = selected if selected and selected.endswith(".artifact.json") else f"{selected}/.artifact.json"
     if reference.uri != expected_uri:

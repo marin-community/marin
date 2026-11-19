@@ -100,7 +100,7 @@ class DifficultyCoverage(BaseModel):
         return sorted(source_id for source_id, source in self.sources.items() if source.measurable)
 
 
-def _solver_coverage(model: dict[str, Any], private: bool = False) -> SolverCoverage:
+def _solver_coverage(model: dict[str, Any], withheld: bool = False) -> SolverCoverage:
     status = MeasurementStatus(model["status"])
     gaps: tuple[DifficultyGap, ...] = ()
     reason = model.get("reason")
@@ -113,7 +113,7 @@ def _solver_coverage(model: dict[str, Any], private: bool = False) -> SolverCove
         except ValueError as error:
             raise ValueError(f"Difficulty observation carries an unmapped reason: {reason!r}") from error
     measurement_id = model.get("measurement_id")
-    if private:
+    if withheld:
         reason = PRIVATE_TEXT_MARKER if gaps else None
     return SolverCoverage(
         solver=Solver(model["solver"]),
@@ -133,8 +133,8 @@ def source_coverage(declaration: dict[str, Any], records: list[DifficultyObserva
     served reason text is still replaced by the private marker, so its content
     can never travel through the coverage document.
     """
-    private = content_is_withheld(declaration)
-    solvers = tuple(_solver_coverage(model, private=private) for model in raw_current_models(declaration, records))
+    withheld = content_is_withheld(declaration)
+    solvers = tuple(_solver_coverage(model, withheld=withheld) for model in raw_current_models(declaration, records))
     measured = [model for model in solvers if model.status is MeasurementStatus.MEASURED]
     gaps = tuple(gap for model in solvers for gap in model.gaps)
     evidence = tuple(model.reason for model in solvers if model.reason and model.gaps)

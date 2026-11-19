@@ -325,7 +325,7 @@ def task_response(
     for row in rows[:limit]:
         source = canonical_source_id(row["source_id"])
         restriction = restrictions.get(source)
-        private = (
+        withheld = (
             content_is_withheld(row["source_declaration"])
             if row.get("source_declaration") is not None
             else restriction is DataRestriction.PRIVATE_ALWAYS
@@ -333,7 +333,7 @@ def task_response(
         served = {key: value for key, value in row.items() if key != "source_declaration"}
         if restriction is not None:
             served["data_restriction"] = restriction.value
-        if private:
+        if withheld:
             served["task_preview"] = (
                 content_marker(row["source_declaration"])["marker"]
                 if row.get("source_declaration") is not None
@@ -347,11 +347,11 @@ def task_response(
     }
 
 
-def current_content_policies(connection: Connection, rows: list[dict[str, Any]]) -> None:
-    """Strengthen historical sample policy with the current source's content decision."""
-    ids = sorted({canonical_source_id(row["source_id"]) for row in rows})
+def current_content_policies(connection: Connection, source_ids: list[str]) -> dict[str, dict[str, Any]]:
+    """Return current policies that withhold historical sample content."""
+    ids = sorted({canonical_source_id(source_id) for source_id in source_ids})
     if not ids:
-        return
+        return {}
     policies = {
         canonical_source_id(row["id"]): row["declaration"]
         for row in connection.execute(
@@ -368,10 +368,7 @@ def current_content_policies(connection: Connection, rows: list[dict[str, Any]])
             {"ids": json.dumps(ids)},
         ).mappings()
     }
-    for row in rows:
-        current = policies.get(canonical_source_id(row["source_id"]))
-        if current is not None and content_is_withheld(current):
-            row["source_declaration"] = current
+    return {source: declaration for source, declaration in policies.items() if content_is_withheld(declaration)}
 
 
 def source_restrictions(rows: list[dict[str, Any]]) -> dict[str, DataRestriction]:
@@ -635,7 +632,14 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
             metadata = loaded_release(connection, filters.release)
             params = task_parameters(metadata, filters, subject_id, node_id, scope, outcome, cursor, limit, sample_pool)
             rows = [dict(row) for row in connection.execute(text(TASKS_SQL), params).mappings()]
-            current_content_policies(connection, rows)
+            policies = current_content_policies(connection, [row["source_id"] for row in rows])
+            rows = [
+                {
+                    **row,
+                    "source_declaration": policies.get(canonical_source_id(row["source_id"]), row["source_declaration"]),
+                }
+                for row in rows
+            ]
         return task_response(metadata, rows, limit, source_restrictions(rows))
 
     @api.get("/curriculum/task")
@@ -662,9 +666,11 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
                 .one_or_none()
             )
             if detail is not None:
-                policy_rows = [{"source_id": source_id, "source_declaration": detail["source_declaration"]}]
-                current_content_policies(connection, policy_rows)
-                detail = {**detail, "source_declaration": policy_rows[0]["source_declaration"]}
+                policies = current_content_policies(connection, [source_id])
+                detail = {
+                    **detail,
+                    "source_declaration": policies.get(canonical_source_id(source_id), detail["source_declaration"]),
+                }
         if detail is None:
             raise HTTPException(404, "Task is outside the loaded alignment population")
         if content_is_withheld(detail["source_declaration"]):

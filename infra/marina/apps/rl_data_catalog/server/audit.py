@@ -17,13 +17,12 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from finestore.rl.curation import Defect, Verdict
-from finestore.rl.status_taxonomy import DataRestriction
 from pydantic import BaseModel, Field
 from rigging.server_auth import VerifiedIdentity, get_verified_identity
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
-from .content_access import content_is_withheld
+from .content_access import content_is_withheld, current_source_declaration
 from .restrictions import (
     redact_text,
 )
@@ -233,7 +232,7 @@ def register_audit_routes(api: FastAPI, engine: Engine) -> None:
             header = assessment_header(connection, request.source_id)
             if header is None:
                 raise HTTPException(404, "Source has no stored review assessment")
-            if content_is_withheld(sample_source_declaration(connection, request.source_id)):
+            if content_is_withheld(current_source_declaration(connection, request.source_id)):
                 raise HTTPException(
                     403,
                     "Auditing a PRIVATE_ALWAYS source would quote its content to reviewers; "
@@ -326,7 +325,7 @@ def register_audit_routes(api: FastAPI, engine: Engine) -> None:
         user = signed_in_user()
         with engine.connect() as connection:
             sample = _sample_row(connection, sample_id)
-            private = content_is_withheld(sample_source_declaration(connection, sample["source_id"]))
+            withheld = content_is_withheld(current_source_declaration(connection, sample["source_id"]))
             tasks = connection.execute(
                 text(
                     """
@@ -350,7 +349,7 @@ def register_audit_routes(api: FastAPI, engine: Engine) -> None:
                     "user": user,
                 },
             ).mappings()
-        return {"sample": sample, "tasks": [_task_view(row, user, private=private) for row in tasks]}
+        return {"sample": sample, "tasks": [_task_view(row, user, withheld=withheld) for row in tasks]}
 
     @api.put("/audit/samples/{sample_id}/judgments")
     def record_judgment(sample_id: str, judgment: AuditJudgment) -> dict[str, Any]:
@@ -410,24 +409,6 @@ def register_audit_routes(api: FastAPI, engine: Engine) -> None:
         return {"sample_id": sample_id, **agreement_report(judgments, reviewer)}
 
 
-def sample_source_declaration(connection: Connection, source_id: str) -> dict[str, Any]:
-    """The effective tier of an audit sample's source from the selected catalog.
-
-    Fail closed: a source the selected catalog does not declare is treated as
-    private, so legacy or detached samples never expose content.
-    """
-    row = connection.execute(
-        text(
-            "SELECT s.declaration FROM atlas_sources s JOIN atlas_current c USING (load_id) "
-            "WHERE c.name='latest' AND s.id IN (:source_id, :original_source_id)"
-        ),
-        {"source_id": canonical_source_id(source_id), "original_source_id": original_source_id(source_id)},
-    ).scalar_one_or_none()
-    if row is None:
-        return {"data_restriction": DataRestriction.PRIVATE_ALWAYS.value}
-    return dict(row)
-
-
 def _sample_row(connection: Connection, sample_id: str) -> dict[str, Any]:
     row = (
         connection.execute(
@@ -445,9 +426,9 @@ def _sample_row(connection: Connection, sample_id: str) -> dict[str, Any]:
     return dict(row)
 
 
-def _task_view(row: dict[str, Any], user: str, private: bool = False) -> dict[str, Any]:
+def _task_view(row: dict[str, Any], user: str, withheld: bool = False) -> dict[str, Any]:
     view = {key: row[key] for key in ("task_id", "verdict", "cohort", "explanation", "evidence_ids")}
-    if private:
+    if withheld:
         # A private source's reviewer text quotes its content; the marker replaces it.
         view["explanation"] = redact_text(view["explanation"])
     view["reviewer_defects"] = row["defects"] or []
@@ -456,7 +437,7 @@ def _task_view(row: dict[str, Any], user: str, private: bool = False) -> dict[st
     if row["user_id"] is None:
         view["judgment"] = None
     else:
-        note = redact_text(row["note"]) if private else row["note"]
+        note = redact_text(row["note"]) if withheld else row["note"]
         view["judgment"] = {
             "agree": row["agree"],
             "corrected_verdict": row["corrected_verdict"],

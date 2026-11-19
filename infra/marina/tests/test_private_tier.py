@@ -692,10 +692,6 @@ def test_private_rollout_routes_never_read_attempt_content(catalog_database, cat
     stage_private_catalog(root)
     load_tier_catalog(CurationCatalog(root), catalog_query)
 
-    def reject_content_read(connection, cursor, statement, parameters, context, executemany):
-        if "atlas_rollout" in statement or "FROM atlas_difficulty" in statement:
-            raise AssertionError("Private rollout route read task-level content")
-
     event.listen(catalog_database, "before_cursor_execute", reject_content_read)
     try:
         with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
@@ -726,6 +722,7 @@ def test_license_ban_redacts_existing_content_and_invalidates_inventory_cache(
     stage_private_catalog(root)
     load_tier_catalog(CurationCatalog(root), catalog_query)
     canary = "LICENSE-BANNED-CONTENT-CANARY-20261119"
+    measurement_id = "banned-measurement"
     release, coverage, _, _ = curriculum_release_fixture(
         tmp_path / "license-open-release",
         [restricted_declaration(OPEN_SOURCE_ID, DataRestriction.OPEN, notes=OPEN_NOTES)],
@@ -747,10 +744,13 @@ def test_license_ban_redacts_existing_content_and_invalidates_inventory_cache(
         )
         connection.execute(
             text(
-                "INSERT INTO atlas_rollout_attempts VALUES ('banned-measurement','attempt','one', '{}'::jsonb, "
+                "INSERT INTO atlas_rollout_attempts VALUES (:measurement,'attempt','one', '{}'::jsonb, "
                 "CAST(:detail AS JSONB))"
             ),
-            {"detail": json.dumps(pack_content({"conversation": canary, "verifier": canary}))},
+            {
+                "measurement": measurement_id,
+                "detail": json.dumps(pack_content({"conversation": canary, "verifier": canary})),
+            },
         )
         connection.execute(
             text("INSERT INTO catalog_reviews VALUES ('license-review',:source,CAST(:collection AS JSONB),now())"),
@@ -802,17 +802,13 @@ def test_license_ban_redacts_existing_content_and_invalidates_inventory_cache(
             detail = client.get("/curriculum/task", params={"source_id": OPEN_SOURCE_ID, "task_id": "one"}).json()
             assert detail["task"]["content_withheld"] is True
 
-            def reject_attempt_read(connection, cursor, statement, parameters, context, executemany):
-                if "atlas_rollout" in statement or "FROM atlas_difficulty" in statement:
-                    raise AssertionError("Banned route read attempt content")
-
-            event.listen(catalog_database, "before_cursor_execute", reject_attempt_read)
+            event.listen(catalog_database, "before_cursor_execute", reject_content_read)
             try:
                 for endpoint, parameters in [
-                    ("/difficulty-attempts", {"source_id": OPEN_SOURCE_ID, "measurement_id": "banned-measurement"}),
+                    ("/difficulty-attempts", {"source_id": OPEN_SOURCE_ID, "measurement_id": measurement_id}),
                     (
                         "/difficulty-rollout",
-                        {"source_id": OPEN_SOURCE_ID, "measurement_id": "banned-measurement", "attempt_id": "attempt"},
+                        {"source_id": OPEN_SOURCE_ID, "measurement_id": measurement_id, "attempt_id": "attempt"},
                     ),
                 ]:
                     response = client.get(endpoint, params=parameters)
@@ -821,8 +817,8 @@ def test_license_ban_redacts_existing_content_and_invalidates_inventory_cache(
                     assert response.json()["content"] is None
                     assert canary not in response.text
             finally:
-                event.remove(catalog_database, "before_cursor_execute", reject_attempt_read)
-            with pytest.raises(ValueError, match="private store"):
+                event.remove(catalog_database, "before_cursor_execute", reject_content_read)
+            with pytest.raises(ValueError):
                 stage_rollouts({}, restricted_declaration(OPEN_SOURCE_ID, DataRestriction.OPEN), 1)
         finally:
             licensing.license_bans.cache_clear()
@@ -867,3 +863,8 @@ def test_explicit_license_ruling_withholds_attempts(catalog_database, catalog_qu
         assert response.status_code == 200
         assert response.json()["content"] is None
         assert response.json()["content_withheld"] is True
+
+
+def reject_content_read(connection, cursor, statement, parameters, context, executemany):
+    if "atlas_rollout" in statement or "FROM atlas_difficulty" in statement:
+        raise AssertionError("Withheld rollout route read task-level content")

@@ -7,6 +7,8 @@ from typing import Any
 
 from finestore.rl.licenses import LicenseDecisionKind, LicenseReceipt
 from finestore.rl.status_taxonomy import ExclusionReason
+from sqlalchemy import text
+from sqlalchemy.engine import Connection
 
 from .licensing import declaration_license_ban
 from .restrictions import (
@@ -15,7 +17,9 @@ from .restrictions import (
     private_content_marker,
     private_declaration_projection,
 )
+from .source_identity import canonical_source_id, original_source_id
 
+LICENSE_WITHHELD_REASON = "license-excluded"
 LICENSE_CONTENT_MARKER = "Content withheld: this source has a license exclusion."
 
 
@@ -48,7 +52,7 @@ def content_marker(declaration: dict[str, Any]) -> dict[str, Any]:
     return {
         "data_restriction": declaration_restriction(declaration).value,
         "content_withheld": True,
-        "withheld_reason": "license-excluded",
+        "withheld_reason": LICENSE_WITHHELD_REASON,
         "content": None,
         "marker": LICENSE_CONTENT_MARKER,
     }
@@ -67,7 +71,8 @@ def withheld_declaration_projection(declaration: dict[str, Any]) -> dict[str, An
         projected["license_receipt"] = receipt
     if is_private(declaration):
         return projected
-    projected.update(content_withheld=True, withheld_reason="license-excluded", notes=LICENSE_CONTENT_MARKER)
+    projected["marker"] = LICENSE_CONTENT_MARKER
+    projected.update(content_withheld=True, withheld_reason=LICENSE_WITHHELD_REASON, notes=LICENSE_CONTENT_MARKER)
     if ban := declaration_license_ban(declaration):
         projected["license_ban"] = ban.model_dump(mode="json")
     return projected
@@ -86,3 +91,15 @@ def backend_metadata(capabilities: dict[str, Any] | None) -> dict[str, Any] | No
         "source_id": capabilities.get("source_id"),
         "backends": {name: {"support": fit["support"]} for name, fit in (capabilities.get("backends") or {}).items()},
     }
+
+
+def current_source_declaration(connection: Connection, source_id: str) -> dict[str, Any]:
+    """Read current content policy; detached sources fail closed to private."""
+    row = connection.execute(
+        text(
+            "SELECT s.declaration FROM atlas_sources s JOIN atlas_current c USING(load_id) "
+            "WHERE c.name='latest' AND s.id IN (:source,:original)"
+        ),
+        {"source": canonical_source_id(source_id), "original": original_source_id(source_id)},
+    ).scalar_one_or_none()
+    return dict(row) if row is not None else {"data_restriction": "private_always"}

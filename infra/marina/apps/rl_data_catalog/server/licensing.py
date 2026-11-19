@@ -52,5 +52,5 @@ def license_projection(declaration: dict[str, Any]) -> dict[str, Any]:
 
 
 def license_registry_key() -> str:
-    """Invalidate served content when the embedded license decisions change."""
+    """Return the embedded license-decision version for response cache keys."""
     return "license:" + json.loads(LICENSE_BANS)["version"]
