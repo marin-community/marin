@@ -19,6 +19,13 @@ from taskcompendium.source_fingerprints import DuplicateReview
 from .audit import register_audit_routes
 from .cohort_summaries import COHORT_SUMMARY_VERSION, materialize_cohort_summaries
 from .contamination import contamination
+from .content_access import (
+    backend_metadata,
+    content_is_withheld,
+    content_marker,
+    fingerprint_metadata,
+    withheld_declaration_projection,
+)
 from .count_evidence import SOURCE_COUNTS
 from .curriculum import register_curriculum_routes, source_coverage
 from .daytona import daytona
@@ -36,15 +43,12 @@ from .evidence_content import unpack_content
 from .filtration import filtration
 from .identity_measurements import IDENTITY_REVIEWS_SQL, IDENTITY_SURVEY_SQL
 from .inventory_state import CachedInventory, inventory_input_key
-from .licensing import license_projection
+from .licensing import license_projection, license_registry_key
 from .quality import intended_use, issue_rate, quality_display, result, review_coverage
 from .quality_evidence import full_review_records, quality_explanation
 from .restrictions import (
     PRIVATE_TEXT_MARKER,
     declaration_restriction,
-    is_private,
-    private_content_marker,
-    private_declaration_projection,
     redact_advisories,
     redact_mapping,
     restriction_projection,
@@ -188,7 +192,7 @@ def migrate(connection: Connection) -> None:
     )
 
 
-def archive_source_restriction(connection: Connection, source_id: str) -> DataRestriction:
+def archive_source_declaration(connection: Connection, source_id: str) -> dict[str, Any]:
     """The effective tier of an archived review's source, failing closed to private.
 
     A review whose source is absent from the selected catalog cannot prove it is
@@ -203,8 +207,8 @@ def archive_source_restriction(connection: Connection, source_id: str) -> DataRe
         {"source_id": canonical_source_id(source_id), "original_source_id": original_source_id(source_id)},
     ).scalar_one_or_none()
     if row is None:
-        return DataRestriction.PRIVATE_ALWAYS
-    return declaration_restriction(dict(row) if isinstance(row, str) else row)
+        return {"data_restriction": DataRestriction.PRIVATE_ALWAYS.value}
+    return dict(row)
 
 
 def loaded_catalog(connection: Connection) -> dict[str, Any]:
@@ -438,7 +442,7 @@ def create_api(services: AppletServices) -> FastAPI:
 
     def inventory_cache_key(connection: Connection, load_id: str) -> str:
         """SQL row versions plus the restriction registry version: either change rebuilds."""
-        return f"{inventory_input_key(connection, load_id)}|{restriction_registry_key()}"
+        return f"{inventory_input_key(connection, load_id)}|{restriction_registry_key()}|{license_registry_key()}"
 
     @api.get("/source-labels")
     def source_labels() -> dict[str, Any]:
@@ -480,8 +484,8 @@ def create_api(services: AppletServices) -> FastAPI:
             for row in rows:
                 record = canonical_source_record(dict(row))
                 declaration = license_projection(record["declaration"])
-                if is_private(declaration):
-                    declaration = private_declaration_projection(declaration)
+                if content_is_withheld(declaration):
+                    declaration = withheld_declaration_projection(declaration)
                 else:
                     declaration = restriction_projection(declaration)
                 sources.append(
@@ -547,13 +551,13 @@ def create_api(services: AppletServices) -> FastAPI:
             inventory = []
             for retained_row in rows:
                 row = canonical_source_record(dict(retained_row))
-                private = is_private(row["declaration"])
+                private = content_is_withheld(row["declaration"])
                 restriction = declaration_restriction(row["declaration"])
                 row["declaration"] = license_projection(
                     contract_projection(row["declaration"], contracts.get(row["id"], []))
                 )
                 served_declaration = (
-                    private_declaration_projection(row["declaration"]) if private else row["declaration"]
+                    withheld_declaration_projection(row["declaration"]) if private else row["declaration"]
                 )
                 display = quality_display(row["declaration"], row["curation"], row["assessment_key"])
                 inventory.append(
@@ -561,7 +565,7 @@ def create_api(services: AppletServices) -> FastAPI:
                         **served_declaration,
                         "data_restriction": restriction.value,
                         "task_count": row["task_count"],
-                        "curation": row["curation"],
+                        "curation": None if private else row["curation"],
                         "quality": display.quality,
                         "quality_review_status": display.review_status,
                         "quality_explanation": quality_explanation(
@@ -584,19 +588,23 @@ def create_api(services: AppletServices) -> FastAPI:
                             else difficulty_summary(row["declaration"], measurements.get(row["id"], []))
                         ),
                         "intended_use": intended_use(row["declaration"]),
-                        "backend_capabilities": row["backend_capabilities"],
+                        "backend_capabilities": (
+                            backend_metadata(row["backend_capabilities"]) if private else row["backend_capabilities"]
+                        ),
                         "partial_overlaps": overlaps.get(row["id"], []),
-                        "source_fingerprint": row["source_fingerprint"],
+                        "source_fingerprint": (
+                            fingerprint_metadata(row["source_fingerprint"]) if private else row["source_fingerprint"]
+                        ),
                         "duplicate_group": groups.get(row["id"]),
                         "assessment": {
                             "status": "complete" if row["assessment_key"] else row["latest_attempt_status"],
                             "pipeline_key": row["assessment_key"],
                             "latest_attempt_key": row["latest_attempt_key"],
                             "latest_attempt_status": row["latest_attempt_status"],
-                            "reason": row["reason"],
+                            "reason": PRIVATE_TEXT_MARKER if private else row["reason"],
                             "scope": row["scope"],
                             "model": row["model"],
-                            **(row["cohorts"] or {}),
+                            **redact_cohort_summaries(row["cohorts"] or {}, private),
                         },
                     }
                 )
@@ -674,7 +682,14 @@ def create_api(services: AppletServices) -> FastAPI:
     def source_fingerprint(source_id: str) -> dict[str, Any]:
         with engine.connect() as connection:
             source = source_record(connection, source_id)
-            return {"source_id": canonical_source_id(source_id), "fingerprint": source["source_fingerprint"]}
+            return {
+                "source_id": canonical_source_id(source_id),
+                "fingerprint": (
+                    fingerprint_metadata(source["source_fingerprint"])
+                    if content_is_withheld(source["declaration"])
+                    else source["source_fingerprint"]
+                ),
+            }
 
     @api.get("/source-duplicates")
     def source_duplicates() -> dict[str, Any]:
@@ -735,7 +750,7 @@ def create_api(services: AppletServices) -> FastAPI:
             raise HTTPException(422, "offset must not be negative")
         with engine.connect() as connection:
             source = source_record(connection, source_id)
-            private = is_private(source["declaration"])
+            private = content_is_withheld(source["declaration"])
             if source["assessment_key"] is None:
                 raise HTTPException(404, source["reason"] or "Assessment unavailable")
             parameters = {"load_id": source["load_id"], "pipeline_key": source["assessment_key"]}
@@ -777,7 +792,10 @@ def create_api(services: AppletServices) -> FastAPI:
             ]
             if private:
                 items = [
-                    {**redact_mapping(item), "repair_advisories": redact_advisories(item["repair_advisories"])}
+                    {
+                        **redact_mapping(item, fields=frozenset({"explanation", "provenance", "exclusion_reason"})),
+                        "repair_advisories": redact_advisories(item["repair_advisories"]),
+                    }
                     for item in items
                 ]
             (filtered_total,) = connection.execute(
@@ -790,7 +808,7 @@ def create_api(services: AppletServices) -> FastAPI:
                 item_parameters,
             ).one()
         declaration = source["declaration"]
-        display = quality_display(declaration, source["curation"], source["assessment_key"])
+        display = quality_display(source["declaration"], source["curation"], source["assessment_key"])
         finalization = declaration.get("quality_result_finalization")
         report = {**row, "source_id": canonical_source_id(row["source_id"])}
         if private:
@@ -798,6 +816,7 @@ def create_api(services: AppletServices) -> FastAPI:
             # reviewer prompt text: a PRIVATE_ALWAYS source serves neither.
             report.pop("traces", None)
             report["rubric"] = PRIVATE_TEXT_MARKER
+            report["curation"] = None
         return {
             "source": declaration["display_name"],
             "scope": display.quality.value,
@@ -857,10 +876,12 @@ def create_api(services: AppletServices) -> FastAPI:
             )
         if row is None:
             raise HTTPException(404, "Task is outside this assessment sample")
-        private = is_private(row["source_declaration"])
-        packet = json.loads(row["packet"]) if row["packet"] is not None else None
-        if private:
-            packet = private_content_marker()
+        private = content_is_withheld(row["source_declaration"])
+        packet = (
+            content_marker(row["source_declaration"])
+            if private
+            else (json.loads(row["packet"]) if row["packet"] is not None else None)
+        )
         judgment = {
             key: row[key]
             for key in (
@@ -880,11 +901,11 @@ def create_api(services: AppletServices) -> FastAPI:
         }
         if private:
             judgment = {
-                **redact_mapping(judgment),
+                **redact_mapping(judgment, fields=frozenset({"explanation", "provenance"})),
                 "repair_advisories": redact_advisories(judgment["repair_advisories"]),
             }
         raw_review = (
-            private_content_marker()
+            content_marker(row["source_declaration"])
             if private
             else (unpack_content(row["raw_review"]) if row["raw_review"] is not None else None)
         )
@@ -927,8 +948,8 @@ def create_api(services: AppletServices) -> FastAPI:
             "judgment": judgment,
             "packet": packet,
             "raw_review": raw_review,
-            "omissions": row["omissions"],
-            "exclusion_reason": row["exclusion_reason"],
+            "omissions": [] if private else row["omissions"],
+            "exclusion_reason": PRIVATE_TEXT_MARKER if private and row["exclusion_reason"] else row["exclusion_reason"],
         }
 
     @api.get("/source")
@@ -936,7 +957,7 @@ def create_api(services: AppletServices) -> FastAPI:
         """Every quality-evidence pointer the catalog holds for one source."""
         with engine.connect() as connection:
             source = source_record(connection, source_id)
-            private = is_private(source["declaration"])
+            private = content_is_withheld(source["declaration"])
             assessment = None
             summaries: dict[str, Any] = {}
             if source["assessment_key"] is not None:
@@ -1002,25 +1023,25 @@ def create_api(services: AppletServices) -> FastAPI:
         declaration = license_projection(source["declaration"])
         declaration = restriction_projection(declaration)
         if private:
-            declaration = private_declaration_projection(declaration)
+            declaration = withheld_declaration_projection(declaration)
         review = summaries.get("admitted")
-        display = quality_display(declaration, source["curation"], source["assessment_key"])
+        display = quality_display(source["declaration"], source["curation"], source["assessment_key"])
         return {
             "declaration": declaration,
             "coverage": coverage,
             "difficulty": difficulty,
             "intended_use": intended_use(declaration),
             "contamination_status": contamination(declaration),
-            "filtration": filtration(declaration, counts.get(declaration["id"])),
-            "curation": source["curation"],
-            "diagnostics": source["diagnostics"],
-            "backend_capabilities": capabilities,
+            "filtration": filtration(source["declaration"], counts.get(declaration["id"])),
+            "curation": None if private else source["curation"],
+            "diagnostics": [] if private else source["diagnostics"],
+            "backend_capabilities": backend_metadata(capabilities) if private else capabilities,
             "duplicate_group": groups.get(declaration["id"]),
             "partial_overlaps": overlaps.get(declaration["id"], []),
             "latest_attempt": {
                 "key": source["latest_attempt_key"],
                 "status": source["latest_attempt_status"],
-                "reason": source["reason"],
+                "reason": PRIVATE_TEXT_MARKER if private else source["reason"],
             },
             "assessment": assessment,
             "cohorts": summaries,
@@ -1075,13 +1096,13 @@ def create_api(services: AppletServices) -> FastAPI:
             )
             if record is None:
                 raise HTTPException(404, "Archived review not found")
-            restriction = archive_source_restriction(connection, record["source_id"])
-        private = restriction is DataRestriction.PRIVATE_ALWAYS
+            declaration = archive_source_declaration(connection, record["source_id"])
+        private = content_is_withheld(declaration)
         return {
             "id": record["id"],
             "source_id": canonical_source_id(record["source_id"]),
-            "data_restriction": restriction.value,
-            "collection": private_content_marker() if private else record["collection"],
+            "data_restriction": declaration_restriction(declaration).value,
+            "collection": content_marker(declaration) if private else record["collection"],
             "updated_at": record["updated_at"],
             "artifacts": [dict(row) for row in files],
         }
@@ -1102,11 +1123,16 @@ def create_api(services: AppletServices) -> FastAPI:
             ).scalar_one_or_none()
             if record is None:
                 raise HTTPException(404, "Archived artifact not found")
-            if archive_source_restriction(connection, owner or "") is DataRestriction.PRIVATE_ALWAYS:
+            declaration = archive_source_declaration(connection, owner or "")
+            if content_is_withheld(declaration):
                 return Response(
-                    PRIVATE_TEXT_MARKER,
+                    content_marker(declaration)["marker"],
                     media_type="text/plain",
-                    headers={"ETag": record["sha256"], "X-Data-Restriction": "private_always"},
+                    headers={
+                        "ETag": record["sha256"],
+                        "X-Data-Restriction": declaration_restriction(declaration).value,
+                        "X-Content-Withheld": "true",
+                    },
                 )
         return Response(record["content"], media_type="text/plain", headers={"ETag": record["sha256"]})
 

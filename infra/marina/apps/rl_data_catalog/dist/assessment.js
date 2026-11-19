@@ -459,9 +459,9 @@ function auditPanel() {
 (async () => {
   try {
     const info = await json(`api/source?${new URLSearchParams({source_id: source})}`);
-    if (info.data_restriction === 'private_always' || info.declaration.data_restriction === 'private_always') {
+    if (contentWithheld(info)) {
       $('title').textContent = `QC reviews · ${info.declaration.display_name}`;
-      $('message').textContent = 'Private data: content is not displayed.';
+      $('message').textContent = contentWithheldMessage(info);
       return;
     }
     const data = await json(`api/assessment?${browseQuery(0)}`);

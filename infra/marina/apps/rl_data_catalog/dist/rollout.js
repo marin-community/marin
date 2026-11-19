@@ -3,11 +3,11 @@
   const parameters = new URLSearchParams(location.search), source = parameters.get('source'), measurement = parameters.get('measurement');
   try {
     const evidence = await json(`api/source?${new URLSearchParams({source_id: source})}`);
-    if (evidence.data_restriction === 'private_always' || evidence.declaration.data_restriction === 'private_always') {
-      $('message').textContent = 'Private data'; return;
+    if (contentWithheld(evidence)) {
+      $('message').textContent = contentWithheldMessage(evidence); return;
     }
     const data = await json(`api/difficulty-rollout?${new URLSearchParams({source_id: source, measurement_id: measurement, attempt_id: parameters.get('attempt')})}`);
-    if (data.private) { $('message').textContent = 'Private data'; return; }
+    if (contentWithheld(data)) { $('message').textContent = contentWithheldMessage(data); return; }
     $('title').textContent = `Rollout · ${data.summary.task_id}`;
     $('message').textContent = `${data.summary.solver} · score ${data.summary.score ?? 'unscored'} · ${data.summary.status} · trial ${data.summary.trial_id}`;
     const back = node('a', '← Attempts'); back.href = `attempts.html?${new URLSearchParams({source, measurement})}`;

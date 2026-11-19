@@ -211,3 +211,39 @@ def test_source_solver_links_reach_attempt_and_rollout(journey: Journey, width: 
     expect(page.get_by_role("heading", name="Verifier output")).to_be_visible()
     expect(page.get_by_role("link", name="Open in Filer ↗")).to_have_count(2)
     page.screenshot(path=str(journey.shots / f"rollout-{entry}-{theme}-{width}.png"))
+
+
+@pytest.mark.parametrize("width,theme", [(1440, "light"), (1440, "dark"), (390, "light"), (390, "dark")])
+def test_license_withheld_pages_do_not_request_task_content(journey: Journey, width: int, theme: str) -> None:
+    page = journey.page
+    page.set_viewport_size({"width": width, "height": 1000})
+    page.emulate_media(color_scheme=theme)
+    marker = "Content withheld: this source has a license exclusion."
+    requests = []
+    page.on("request", lambda request: requests.append(request.url))
+    page.route(
+        "**/api/source?**",
+        lambda route: route.fulfill(
+            json={
+                "declaration": {
+                    "id": "Marin:clean",
+                    "display_name": "clean",
+                    "data_restriction": "open",
+                    "content_withheld": True,
+                },
+                "marker": marker,
+            }
+        ),
+    )
+    for path in (
+        "attempts.html?source=Marin%3Aclean",
+        "rollout.html?source=Marin%3Aclean&measurement=x&attempt=y",
+        "assessment.html?source=Marin%3Aclean",
+    ):
+        page.goto(f"{journey.origin}/a/{APP_ID}/v/1/{path}")
+        expect(page.locator("#message")).to_have_text(marker)
+        page.screenshot(path=str(journey.shots / f"withheld-{path.split('.')[0]}-{theme}-{width}.png"))
+    assert not any(
+        "/api/difficulty-attempts?" in url or "/api/difficulty-rollout?" in url or "/api/assessment?" in url
+        for url in requests
+    )

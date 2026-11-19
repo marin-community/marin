@@ -8,11 +8,10 @@ from datetime import datetime
 from typing import Any
 
 from finestore.rl.difficulty import PROTOCOL_ID, DifficultyObservation, MeasurementStatus, Solver
-from finestore.rl.status_taxonomy import DataRestriction
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from .restrictions import PRIVATE_TEXT_MARKER, declaration_restriction
+from .content_access import content_is_withheld, content_marker
 from .source_identity import canonical_source_id, original_source_id
 
 
@@ -94,9 +93,9 @@ def difficulty_summary(declaration: dict[str, Any], records: Iterable[Difficulty
     current, historical = split_observations(declaration, records)
     models = model_summaries(current)
     historical = [record.model_dump(mode="json", exclude={"sample": {"tasks"}}) for record in historical]
-    if declaration_restriction(declaration) is DataRestriction.PRIVATE_ALWAYS:
-        models = [{**model, "reason": PRIVATE_TEXT_MARKER} for model in models]
-        historical = [{**record, "reason": PRIVATE_TEXT_MARKER} for record in historical]
+    if content_is_withheld(declaration):
+        models = [{**model, "reason": content_marker(declaration)["marker"]} for model in models]
+        historical = [{**record, "reason": content_marker(declaration)["marker"]} for record in historical]
     return {
         "protocol_id": PROTOCOL_ID,
         "models": models,

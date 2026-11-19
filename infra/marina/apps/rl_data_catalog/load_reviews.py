@@ -31,8 +31,9 @@ from infra.marina.apps.rl_data_catalog.load import (
 )
 from infra.marina.apps.rl_data_catalog.role_projection import ManifestReference, manifest_bytes
 from infra.marina.apps.rl_data_catalog.server.cohort_summaries import materialize_cohort_summaries
+from infra.marina.apps.rl_data_catalog.server.content_access import content_is_withheld
 from infra.marina.apps.rl_data_catalog.server.evidence_content import pack_content
-from infra.marina.apps.rl_data_catalog.server.restrictions import declaration_restriction, is_private
+from infra.marina.apps.rl_data_catalog.server.restrictions import declaration_restriction
 from infra.marina.apps.rl_data_catalog.server.review_content import task_request_evidence
 
 
@@ -78,7 +79,7 @@ def stage_content_reviews(
     reference: ManifestReference, source: dict, workers: int, mapping_reference: ManifestReference | None = None
 ) -> dict[str, Any]:
     """Resolve the frozen declaration's panel, retaining its original input identity."""
-    if is_private(source):
+    if content_is_withheld(source):
         raise ValueError("PRIVATE_ALWAYS reviews remain in their private store; do not stage content")
     selected = (source.get("independent_qc") or {}).get("evidence_url")
     expected_uri = selected if selected and selected.endswith(".artifact.json") else f"{selected}/.artifact.json"
@@ -327,7 +328,7 @@ def load_content_reviews(staged: dict, load_id: str, source_id: str, query: Appl
         "SELECT declaration FROM atlas_sources WHERE load_id=:load AND id=:source",
         {"load": load_id, "source": source_id},
     )["rows"]
-    if len(declarations) != 1 or is_private(declarations[0]["declaration"]):
+    if len(declarations) != 1 or content_is_withheld(declarations[0]["declaration"]):
         raise ValueError("Review content may only be staged for an open selected source")
     if staged["data_restriction"] != declaration_restriction(declarations[0]["declaration"]).value:
         raise ValueError("Staged review restriction is missing or differs from its source")

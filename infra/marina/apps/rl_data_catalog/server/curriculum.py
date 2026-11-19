@@ -17,10 +17,10 @@ from finestore.rl.status_taxonomy import DataRestriction
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
+from .content_access import content_is_withheld, content_marker
 from .restrictions import (
     PRIVATE_TEXT_MARKER,
     declaration_restriction,
-    private_content_marker,
 )
 from .source_areas import SOURCE_AREA_VERSION
 from .source_identity import canonical_source_id, original_source_id
@@ -325,18 +325,53 @@ def task_response(
     for row in rows[:limit]:
         source = canonical_source_id(row["source_id"])
         restriction = restrictions.get(source)
-        private = restriction is DataRestriction.PRIVATE_ALWAYS
+        private = (
+            content_is_withheld(row["source_declaration"])
+            if row.get("source_declaration") is not None
+            else restriction is DataRestriction.PRIVATE_ALWAYS
+        )
         served = {key: value for key, value in row.items() if key != "source_declaration"}
         if restriction is not None:
             served["data_restriction"] = restriction.value
         if private:
-            served["task_preview"] = PRIVATE_TEXT_MARKER
+            served["task_preview"] = (
+                content_marker(row["source_declaration"])["marker"]
+                if row.get("source_declaration") is not None
+                else PRIVATE_TEXT_MARKER
+            )
         tasks.append({**served, "source_id": source})
     return {
         "release_id": metadata["release_id"],
         "tasks": tasks,
         "next_cursor": next_cursor,
     }
+
+
+def current_content_policies(connection: Connection, rows: list[dict[str, Any]]) -> None:
+    """Strengthen historical sample policy with the current source's content decision."""
+    ids = sorted({canonical_source_id(row["source_id"]) for row in rows})
+    if not ids:
+        return
+    policies = {
+        canonical_source_id(row["id"]): row["declaration"]
+        for row in connection.execute(
+            text(
+                "SELECT s.id,jsonb_build_object('id',s.id,'dataset_id',s.declaration->'dataset_id',"
+                "'license_receipt',s.declaration->'license_receipt',"
+                "'exclusion_claims',s.declaration->'exclusion_claims') || "
+                "CASE WHEN s.declaration ? 'data_restriction' "
+                "THEN jsonb_build_object('data_restriction',s.declaration->'data_restriction') "
+                "ELSE '{}'::jsonb END AS declaration "
+                "FROM atlas_sources s JOIN atlas_current c USING(load_id) WHERE c.name='latest' "
+                "AND s.id IN (SELECT value FROM jsonb_array_elements_text(CAST(:ids AS JSONB)))"
+            ),
+            {"ids": json.dumps(ids)},
+        ).mappings()
+    }
+    for row in rows:
+        current = policies.get(canonical_source_id(row["source_id"]))
+        if current is not None and content_is_withheld(current):
+            row["source_declaration"] = current
 
 
 def source_restrictions(rows: list[dict[str, Any]]) -> dict[str, DataRestriction]:
@@ -600,6 +635,7 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
             metadata = loaded_release(connection, filters.release)
             params = task_parameters(metadata, filters, subject_id, node_id, scope, outcome, cursor, limit, sample_pool)
             rows = [dict(row) for row in connection.execute(text(TASKS_SQL), params).mappings()]
+            current_content_policies(connection, rows)
         return task_response(metadata, rows, limit, source_restrictions(rows))
 
     @api.get("/curriculum/task")
@@ -625,10 +661,14 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
                 .mappings()
                 .one_or_none()
             )
+            if detail is not None:
+                policy_rows = [{"source_id": source_id, "source_declaration": detail["source_declaration"]}]
+                current_content_policies(connection, policy_rows)
+                detail = {**detail, "source_declaration": policy_rows[0]["source_declaration"]}
         if detail is None:
             raise HTTPException(404, "Task is outside the loaded alignment population")
-        if declaration_restriction(detail["source_declaration"]) is DataRestriction.PRIVATE_ALWAYS:
-            return {"release_id": metadata["release_id"], "task": private_content_marker()}
+        if content_is_withheld(detail["source_declaration"]):
+            return {"release_id": metadata["release_id"], "task": content_marker(detail["source_declaration"])}
         return {
             "release_id": metadata["release_id"],
             "task": {

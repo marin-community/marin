@@ -6,8 +6,8 @@
   try {
     const evidence = await json(`api/source?${new URLSearchParams({source_id: source})}`);
     $('title').textContent = `Difficulty attempts · ${evidence.declaration.display_name}`;
-    if (evidence.data_restriction === 'private_always' || evidence.declaration.data_restriction === 'private_always') {
-      $('message').textContent = 'Private data'; return;
+    if (contentWithheld(evidence)) {
+      $('message').textContent = contentWithheldMessage(evidence); return;
     }
     const models = [...evidence.difficulty.models, ...evidence.difficulty.historical].filter(model => model.measurement_id);
     const label = node('label', 'Solver measurement ', 'measurement-picker'), select = node('select');
@@ -23,7 +23,7 @@
     const results = node('section'); $('content').append(pager, results);
     async function render() {
       const data = await json(`api/difficulty-attempts?${new URLSearchParams({source_id: source, measurement_id: measurement, limit: PAGE, offset})}`);
-      if (data.private) { $('message').textContent = 'Private data'; results.replaceChildren(); return; }
+      if (contentWithheld(data)) { $('message').textContent = contentWithheldMessage(data); results.replaceChildren(); return; }
       $('message').textContent = data.status === 'not_loaded' ? 'Attempt artifacts have not been loaded for this measurement.'
         : `${data.current_pin ? 'Current pinned input' : 'Historical input'} · ${data.total.toLocaleString()} attempt/outcome records · ${data.measurement.solver} · ${data.measurement.status}${data.measurement.reason ? ` · ${data.measurement.reason}` : ''}`;
       previous.disabled = offset === 0; next.disabled = offset + PAGE >= data.total;

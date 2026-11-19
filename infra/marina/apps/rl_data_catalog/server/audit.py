@@ -23,8 +23,8 @@ from rigging.server_auth import VerifiedIdentity, get_verified_identity
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
+from .content_access import content_is_withheld
 from .restrictions import (
-    declaration_restriction,
     redact_text,
 )
 from .source_identity import canonical_source_id, original_source_id
@@ -233,7 +233,7 @@ def register_audit_routes(api: FastAPI, engine: Engine) -> None:
             header = assessment_header(connection, request.source_id)
             if header is None:
                 raise HTTPException(404, "Source has no stored review assessment")
-            if sample_source_restriction(connection, request.source_id) is DataRestriction.PRIVATE_ALWAYS:
+            if content_is_withheld(sample_source_declaration(connection, request.source_id)):
                 raise HTTPException(
                     403,
                     "Auditing a PRIVATE_ALWAYS source would quote its content to reviewers; "
@@ -326,7 +326,7 @@ def register_audit_routes(api: FastAPI, engine: Engine) -> None:
         user = signed_in_user()
         with engine.connect() as connection:
             sample = _sample_row(connection, sample_id)
-            private = sample_source_restriction(connection, sample["source_id"]) is DataRestriction.PRIVATE_ALWAYS
+            private = content_is_withheld(sample_source_declaration(connection, sample["source_id"]))
             tasks = connection.execute(
                 text(
                     """
@@ -410,7 +410,7 @@ def register_audit_routes(api: FastAPI, engine: Engine) -> None:
         return {"sample_id": sample_id, **agreement_report(judgments, reviewer)}
 
 
-def sample_source_restriction(connection: Connection, source_id: str) -> DataRestriction:
+def sample_source_declaration(connection: Connection, source_id: str) -> dict[str, Any]:
     """The effective tier of an audit sample's source from the selected catalog.
 
     Fail closed: a source the selected catalog does not declare is treated as
@@ -424,8 +424,8 @@ def sample_source_restriction(connection: Connection, source_id: str) -> DataRes
         {"source_id": canonical_source_id(source_id), "original_source_id": original_source_id(source_id)},
     ).scalar_one_or_none()
     if row is None:
-        return DataRestriction.PRIVATE_ALWAYS
-    return declaration_restriction(dict(row) if isinstance(row, str) else row)
+        return {"data_restriction": DataRestriction.PRIVATE_ALWAYS.value}
+    return dict(row)
 
 
 def _sample_row(connection: Connection, sample_id: str) -> dict[str, Any]:

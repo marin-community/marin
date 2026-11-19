@@ -32,12 +32,12 @@ from finestore.rl.difficulty import (
     Solver,
     difficulty_gaps,
 )
-from finestore.rl.status_taxonomy import DataRestriction
 from pydantic import BaseModel, ConfigDict
 from taskcompendium.identity import canonical_sha256
 
+from .content_access import content_is_withheld
 from .difficulty import raw_current_models
-from .restrictions import PRIVATE_TEXT_MARKER, declaration_restriction
+from .restrictions import PRIVATE_TEXT_MARKER
 from .source_identity import canonical_source_id
 
 COVERED_STATUSES = ("Available", "Pending")
@@ -133,7 +133,7 @@ def source_coverage(declaration: dict[str, Any], records: list[DifficultyObserva
     served reason text is still replaced by the private marker, so its content
     can never travel through the coverage document.
     """
-    private = declaration_restriction(declaration) is DataRestriction.PRIVATE_ALWAYS
+    private = content_is_withheld(declaration)
     solvers = tuple(_solver_coverage(model, private=private) for model in raw_current_models(declaration, records))
     measured = [model for model in solvers if model.status is MeasurementStatus.MEASURED]
     gaps = tuple(gap for model in solvers for gap in model.gaps)

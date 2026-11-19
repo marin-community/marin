@@ -61,8 +61,10 @@ from taskcompendium.source_fingerprints import SourceIdentitySurvey
 
 from infra.marina.apps.rl_data_catalog.load import load_catalog as load_surveyed_catalog
 from infra.marina.apps.rl_data_catalog.load_curriculum import load_curriculum
-from infra.marina.apps.rl_data_catalog.server import restriction_registry
+from infra.marina.apps.rl_data_catalog.load_rollouts import stage_rollouts
+from infra.marina.apps.rl_data_catalog.server import licensing, restriction_registry
 from infra.marina.apps.rl_data_catalog.server.app import create_api, migrate
+from infra.marina.apps.rl_data_catalog.server.evidence_content import pack_content
 from infra.marina.apps.rl_data_catalog.server.restrictions import (
     require_public_data,
     restriction_overrides,
@@ -715,3 +717,153 @@ def test_private_rollout_routes_never_read_attempt_content(catalog_database, cat
                 assert not canary_in_payload(response.json())
     finally:
         event.remove(catalog_database, "before_cursor_execute", reject_content_read)
+
+
+def test_license_ban_redacts_existing_content_and_invalidates_inventory_cache(
+    catalog_database, catalog_query, tmp_path, monkeypatch
+):
+    root = str(tmp_path / "license-ban-catalog")
+    stage_private_catalog(root)
+    load_tier_catalog(CurationCatalog(root), catalog_query)
+    canary = "LICENSE-BANNED-CONTENT-CANARY-20261119"
+    release, coverage, _, _ = curriculum_release_fixture(
+        tmp_path / "license-open-release",
+        [restricted_declaration(OPEN_SOURCE_ID, DataRestriction.OPEN, notes=OPEN_NOTES)],
+        instructions=canary,
+    )
+    load_curriculum(str(release), str(coverage), catalog_query)
+    with catalog_database.begin() as connection:
+        load_id = connection.execute(text("SELECT load_id FROM atlas_current WHERE name='latest'")).scalar_one()
+        connection.execute(
+            text(
+                "UPDATE atlas_sources SET source_fingerprint=CAST(:fingerprint AS JSONB) "
+                "WHERE load_id=:load AND id=:source"
+            ),
+            {
+                "load": load_id,
+                "source": OPEN_SOURCE_ID,
+                "fingerprint": json.dumps({"task_count": 3, "sample": [{"instruction": canary}]}),
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO atlas_rollout_attempts VALUES ('banned-measurement','attempt','one', '{}'::jsonb, "
+                "CAST(:detail AS JSONB))"
+            ),
+            {"detail": json.dumps(pack_content({"conversation": canary, "verifier": canary}))},
+        )
+        connection.execute(
+            text("INSERT INTO catalog_reviews VALUES ('license-review',:source,CAST(:collection AS JSONB),now())"),
+            {"source": OPEN_SOURCE_ID, "collection": json.dumps({"reviews": [{"prompt": canary}]})},
+        )
+        connection.execute(
+            text("INSERT INTO review_artifacts VALUES ('license-review','raw.txt',:content,:sha)"),
+            {"content": canary, "sha": "f" * 64},
+        )
+    services = cast(AppletServices, CatalogServices(catalog_database))
+    with TestClient(create_api(services)) as client:
+        # Existing content is genuinely served before the ban, including the
+        # cached inventory fingerprint and the historical curriculum sample.
+        assert client.get("/sources").status_code == 200
+        assert canary in client.get("/source-fingerprint", params={"source_id": OPEN_SOURCE_ID}).text
+        assert canary in client.get("/curriculum/tasks").text
+        assert canary in client.get("/archive/reviews/license-review/artifacts/raw.txt").text
+        registry = json.loads(licensing.LICENSE_BANS)
+        ban = {
+            **registry["bans"][0],
+            "source_id": OPEN_SOURCE_ID,
+            "upstream_id": FIXTURE_DATASET,
+            "upstream_revision": FIXTURE_REVISION,
+            "reason": "Recorded license exclusion",
+        }
+        monkeypatch.setattr(licensing, "LICENSE_BANS", json.dumps({"version": "license-ban-test-v1", "bans": [ban]}))
+        licensing.license_bans.cache_clear()
+        try:
+            for endpoint, parameters in [
+                ("/sources", {}),
+                ("/source-statuses", {}),
+                ("/source", {"source_id": OPEN_SOURCE_ID}),
+                ("/assessment", {"source_id": OPEN_SOURCE_ID}),
+                ("/evidence", {"source_id": OPEN_SOURCE_ID, "task_id": "one"}),
+                ("/source-fingerprint", {"source_id": OPEN_SOURCE_ID}),
+                ("/curriculum/tasks", {}),
+                ("/curriculum/task", {"source_id": OPEN_SOURCE_ID, "task_id": "one"}),
+                ("/archive/reviews/license-review", {}),
+                ("/archive/reviews/license-review/artifacts/raw.txt", {}),
+            ]:
+                response = client.get(endpoint, params=parameters)
+                assert response.status_code == 200, (endpoint, response.text)
+                assert canary not in response.text, endpoint
+                assert OPEN_PROMPT not in response.text, endpoint
+            evidence = client.get("/evidence", params={"source_id": OPEN_SOURCE_ID, "task_id": "one"}).json()
+            assert evidence["packet"]["content"] is None
+            assert evidence["packet"]["content_withheld"] is True
+            assert evidence["packet"]["data_restriction"] == "open"
+            detail = client.get("/curriculum/task", params={"source_id": OPEN_SOURCE_ID, "task_id": "one"}).json()
+            assert detail["task"]["content_withheld"] is True
+
+            def reject_attempt_read(connection, cursor, statement, parameters, context, executemany):
+                if "atlas_rollout" in statement or "FROM atlas_difficulty" in statement:
+                    raise AssertionError("Banned route read attempt content")
+
+            event.listen(catalog_database, "before_cursor_execute", reject_attempt_read)
+            try:
+                for endpoint, parameters in [
+                    ("/difficulty-attempts", {"source_id": OPEN_SOURCE_ID, "measurement_id": "banned-measurement"}),
+                    (
+                        "/difficulty-rollout",
+                        {"source_id": OPEN_SOURCE_ID, "measurement_id": "banned-measurement", "attempt_id": "attempt"},
+                    ),
+                ]:
+                    response = client.get(endpoint, params=parameters)
+                    assert response.status_code == 200
+                    assert response.json()["content_withheld"] is True
+                    assert response.json()["content"] is None
+                    assert canary not in response.text
+            finally:
+                event.remove(catalog_database, "before_cursor_execute", reject_attempt_read)
+            with pytest.raises(ValueError, match="private store"):
+                stage_rollouts({}, restricted_declaration(OPEN_SOURCE_ID, DataRestriction.OPEN), 1)
+        finally:
+            licensing.license_bans.cache_clear()
+
+
+@pytest.mark.parametrize("ruling", ["decision", "exclusion"])
+def test_explicit_license_ruling_withholds_attempts(catalog_database, catalog_query, tmp_path, ruling):
+    root = str(tmp_path / "license-ruling-catalog")
+    stage_private_catalog(root)
+    load_tier_catalog(CurationCatalog(root), catalog_query)
+    with catalog_database.begin() as connection:
+        declaration = connection.execute(
+            text("SELECT declaration FROM atlas_sources WHERE id=:source"), {"source": OPEN_SOURCE_ID}
+        ).scalar_one()
+        if ruling == "decision":
+            declaration["license_receipt"]["decisions"] = [
+                {
+                    "kind": "ban",
+                    "approved": False,
+                    "who": "fixture",
+                    "when": "2026-11-19T15:00:00Z",
+                    "source_id": OPEN_SOURCE_ID,
+                    "dataset_id": FIXTURE_DATASET,
+                    "revision": FIXTURE_REVISION,
+                    "scope": ["train"],
+                    "rationale": "Recorded license exclusion",
+                    "evidence_urls": ["https://example.org/license"],
+                    "issue_url": "https://github.com/marin-community/marin/issues/11497",
+                }
+            ]
+        else:
+            declaration["exclusion_claims"] = [{"reason": "license-ban"}]
+        connection.execute(
+            text("UPDATE atlas_sources SET declaration=CAST(:declaration AS JSONB) WHERE id=:source"),
+            {"source": OPEN_SOURCE_ID, "declaration": json.dumps(declaration)},
+        )
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        response = client.get(
+            "/difficulty-rollout",
+            params={"source_id": OPEN_SOURCE_ID, "measurement_id": "not-read", "attempt_id": "not-read"},
+        )
+        assert response.status_code == 200
+        assert response.json()["content"] is None
+        assert response.json()["content_withheld"] is True

@@ -384,3 +384,12 @@ function graderChip(source) {
   }
   return node('span', 'Pending', 'chip quality-unassessed');
 }
+
+function contentWithheld(data) {
+  return Boolean(data?.private || data?.content_withheld || data?.data_restriction === 'private_always'
+    || data?.declaration?.content_withheld || data?.declaration?.data_restriction === 'private_always');
+}
+function contentWithheldMessage(data) {
+  return data?.marker || (data?.content_withheld || data?.declaration?.content_withheld
+    ? 'Content withheld: this source has a license exclusion.' : 'Private data: content is not displayed.');
+}

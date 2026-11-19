@@ -20,8 +20,9 @@ from rigging.filesystem.storage_path import StoragePath
 
 from infra.marina.apps.rl_data_catalog.load import batches, ensure_tables
 from infra.marina.apps.rl_data_catalog.role_projection import ManifestReference, manifest_bytes
+from infra.marina.apps.rl_data_catalog.server.content_access import content_is_withheld
 from infra.marina.apps.rl_data_catalog.server.evidence_content import pack_content
-from infra.marina.apps.rl_data_catalog.server.restrictions import declaration_restriction, is_private
+from infra.marina.apps.rl_data_catalog.server.restrictions import declaration_restriction
 
 MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
 MAX_MEMBER_BYTES = 16 * 1024 * 1024
@@ -101,8 +102,8 @@ def stage_attempt(reference: dict, tasks: set[str], solver: str) -> dict[str, An
 
 
 def stage_rollouts(measurement: dict[str, Any], source: dict[str, Any], workers: int) -> tuple[dict, list[dict]]:
-    if is_private(source):
-        raise ValueError("PRIVATE_ALWAYS rollouts remain in their private store; do not stage content")
+    if content_is_withheld(source):
+        raise ValueError("Restricted rollouts remain in their private store; do not stage content")
     reference = ManifestReference.model_validate(measurement["attempts_receipt"])
     aggregate = json.loads(manifest_bytes(reference))
     typed = DifficultyMeasurement.model_validate(measurement)
@@ -171,7 +172,7 @@ def load_rollouts(measurement: dict, metadata: dict, rows: list[dict], query: Ap
         "WHERE c.name='latest' AND s.id=:source",
         {"source": measurement["source_id"]},
     )["rows"]
-    if len(sources) != 1 or is_private(sources[0]["declaration"]):
+    if len(sources) != 1 or content_is_withheld(sources[0]["declaration"]):
         raise ValueError("Rollout content may only be staged for an open selected source")
     if metadata["data_restriction"] != declaration_restriction(sources[0]["declaration"]).value:
         raise ValueError("Staged rollout restriction differs from its source")

@@ -61,9 +61,9 @@ from infra.marina.apps.rl_data_catalog.server.admission import (
     require_sample_pin_currency,
 )
 from infra.marina.apps.rl_data_catalog.server.cohort_summaries import materialize_cohort_summaries
+from infra.marina.apps.rl_data_catalog.server.content_access import content_is_withheld
 from infra.marina.apps.rl_data_catalog.server.filtration import filtration
 from infra.marina.apps.rl_data_catalog.server.quality import Quality, quality_display, review_completeness
-from infra.marina.apps.rl_data_catalog.server.restrictions import is_private
 from infra.marina.apps.rl_data_catalog.server.schema import SCHEMA_SQL
 
 MAX_BATCH_BYTES = 1_000_000
@@ -649,7 +649,7 @@ def load_catalog(
     private_pipelines = {
         source.assessment_key
         for source in sources
-        if source.assessment_key is not None and is_private(source.declaration.model_dump(mode="json"))
+        if source.assessment_key is not None and content_is_withheld(source.declaration.model_dump(mode="json"))
     }
     for source, record in zip(sources, metadata["sources"], strict=True):
         key = source.assessment_key
