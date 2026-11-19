@@ -129,7 +129,8 @@ def build(template: Path, arm: str, date: str):
         constraints=convert_constraints(config.resources),
         coscheduling=resolve_coscheduling(config.resources, 8),
         replicas=8,
-        scheduling_timeout=Duration.from_seconds(1800),
+        # Both arms may not fit at once; the second can queue behind the first.
+        scheduling_timeout=Duration.from_seconds(10800),
         timeout=Duration.from_seconds(14400),
         max_retries_failure=0,
         max_retries_preemption=0,
