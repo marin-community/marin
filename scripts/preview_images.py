@@ -88,12 +88,10 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _load_archive_images(records: list[dict[str, Any]], image_column: str, image_archive: str) -> None:
-    with fsspec.open(image_archive, "rb", block_size=ARCHIVE_BLOCK_SIZE) as remote:
-        with ZipFile(remote) as archive:
-            for record in records:
-                with archive.open(record[image_column]) as image_file:
-                    with Image.open(image_file) as image:
-                        record[image_column] = image.convert("RGB")
+    with fsspec.open(image_archive, "rb", block_size=ARCHIVE_BLOCK_SIZE) as remote, ZipFile(remote) as archive:
+        for record in records:
+            with archive.open(record[image_column]) as image_file, Image.open(image_file) as image:
+                record[image_column] = image.convert("RGB")
 
 
 def main() -> None:

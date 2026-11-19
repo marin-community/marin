@@ -5,26 +5,26 @@
 """Image and conversation sources, preprocessing, batching, and caching."""
 
 import abc
-import logging
 from dataclasses import dataclass
-from functools import cached_property, partial
+from functools import cached_property
 from io import BytesIO
-from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Union, cast
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, cast
 
 import datasets
 import jax
 import numpy as np
+import requests
 from datasets.fingerprint import Hasher
 from draccus import field
-
-from levanter.data.mixture import MixtureDataset, StopStrategy
 from jaxtyping import PRNGKeyArray
+from PIL import Image
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from typing_extensions import TypedDict
 
 from levanter.compat.hf_checkpoints import load_processor
-from levanter.data.dataset import AsyncDataset
 from levanter.data._preprocessor import BatchProcessor
-from levanter.data.dataset import RepeatedDataset
+from levanter.data.dataset import AsyncDataset, RepeatedDataset
+from levanter.data.mixture import MixtureDataset, StopStrategy
 from levanter.data.sharded_datasource import (
     ShardedDataSource,
     UrlDataSource,
@@ -40,13 +40,6 @@ from transformers import (  # noqa: E402
     PreTrainedTokenizerBase,
     ProcessorMixin,
 )
-
-
-import requests  # noqa: E402
-from PIL import Image  # noqa: E402
-from rigging.filesystem.storage_path import StoragePath, prefix_join  # noqa: E402
-
-logger = logging.getLogger("levanter.data.image")
 
 
 class ConversationMessage(TypedDict):
@@ -71,16 +64,6 @@ def image_source_urls(urls: Sequence[str]) -> list[str]:
             else:
                 result.append(str(path))
     return sorted(result)
-
-
-def conversation_fields(record: Mapping[str, Any], messages_key: str, images_key: str) -> ConversationDict:
-    """Read chat turns and media references from a source record."""
-    return {
-        "messages": record[messages_key],
-        "images": record.get(images_key, []),
-        "audio": record.get("audio", []),
-        "videos": record.get("videos", []),
-    }
 
 
 ImageTextDict = dict[str, np.ndarray]
@@ -252,10 +235,26 @@ def image_caption_to_conversation(record: Dict[str, Any]) -> ConversationDict:
     }
 
 
+def _raw_source(config: "ImageSource", split: str, columns: list[str] | None = None) -> ShardedDataSource[dict] | None:
+    if config.id is not None:
+        return datasource_from_hf_or_none(config.id, split=split, name=config.name, streaming=config.stream)
+    urls = config.urls_for_split(split)
+    return UrlDataSource(urls, columns=columns) if urls else None
+
+
+def _raw_records(config: "ImageSource", split: str, columns: list[str] | None = None) -> Iterator[dict]:
+    if config.id is not None:
+        rows = datasets.load_dataset(config.id, split=split, name=config.name, streaming=config.stream)
+        for row in rows:
+            yield cast(dict, row)
+    elif (source := _raw_source(config, split, columns)) is not None:
+        yield from source
+
+
 def _image_split_urls(split: str, split_urls: Mapping[str, Sequence[str]]) -> List[str]:
     if split not in split_urls:
         raise ValueError(f"Unknown split: {split}")
-    return image_source_urls(list(split_urls[split]))
+    return image_source_urls(split_urls[split])
 
 
 @dataclass
@@ -277,34 +276,16 @@ class ImageDatasetSourceConfig:
 
     def get_shard_source(self, split: str) -> Optional[ShardedDataSource[ConversationDict]]:
         """Return the split as conversations, or None if it has no data."""
-        source = self._caption_source(split)
-        return None if source is None else source.map(image_caption_to_conversation)
-
-    def _caption_source(self, split: str) -> Optional[ShardedDataSource[dict]]:
-        if self.id is not None:
-            source = datasource_from_hf_or_none(self.id, split=split, name=self.name, streaming=self.stream)
-            if source is None:
-                return None
-        else:
-            urls = self.urls_for_split(split)
-            if not urls:
-                return None
-            source = UrlDataSource(urls, columns=[self.image_key, self.text_key])
-        return source.map(self._caption_fields)
+        source = _raw_source(self, split, [self.image_key, self.text_key])
+        return None if source is None else source.map(self._caption_fields).map(image_caption_to_conversation)
 
     def _caption_fields(self, record: dict) -> dict:
         return {"image": record[self.image_key], "text": record[self.text_key]}
 
     def doc_iterator(self, split: str) -> Iterator[Dict[str, Any]]:
         """Yield records with image and text fields."""
-        if self.id is not None:
-            data = datasets.load_dataset(self.id, split=split, name=self.name, streaming=self.stream)
-            for doc in data:
-                yield self._caption_fields(cast(dict, doc))
-        else:
-            source = self._caption_source(split)
-            if source is not None:
-                yield from source
+        for row in _raw_records(self, split, [self.image_key, self.text_key]):
+            yield self._caption_fields(row)
 
     def urls_for_split(self, split: str) -> List[str]:
         return _image_split_urls(
@@ -331,32 +312,29 @@ class ConversationDatasetSourceConfig:
 
     def get_shard_source(self, split: str) -> Optional[ShardedDataSource[ConversationDict]]:
         """Return the split as conversations, or None if it has no data."""
-        if self.id is not None:
-            source = datasource_from_hf_or_none(self.id, split=split, name=self.name, streaming=self.stream)
-            if source is None:
-                return None
-        else:
-            urls = self.urls_for_split(split)
-            if not urls:
-                return None
-            source = UrlDataSource(urls)
-        return source.map(partial(conversation_fields, messages_key=self.messages_key, images_key=self.images_key))
+        source = _raw_source(self, split)
+        return None if source is None else source.map(self._conversation)
+
+    def _conversation(self, record: dict) -> ConversationDict:
+        return {
+            "messages": record[self.messages_key],
+            "images": record.get(self.images_key, []),
+            "audio": record.get("audio", []),
+            "videos": record.get("videos", []),
+        }
 
     def doc_iterator(self, split: str) -> Iterator[ConversationDict]:
         """Iterate over conversations with normalized field names."""
-        if self.id is not None:
-            data = datasets.load_dataset(self.id, split=split, name=self.name, streaming=self.stream)
-            for doc in data:
-                yield conversation_fields(cast(dict, doc), self.messages_key, self.images_key)
-        else:
-            source = self.get_shard_source(split)
-            if source is not None:
-                yield from source
+        for row in _raw_records(self, split):
+            yield self._conversation(row)
 
     def urls_for_split(self, split: str) -> List[str]:
         return _image_split_urls(
             split, {self.train_split: self.train_urls, self.validation_split: self.validation_urls}
         )
+
+
+ImageSource = ImageDatasetSourceConfig | ConversationDatasetSourceConfig
 
 
 @dataclass
@@ -392,76 +370,23 @@ class ImageTaskConfig(abc.ABC):
         pass
 
 
-class ProcessedImageCache(AsyncDataset[ImageTextDict]):
-    """Read cached processor outputs by example index."""
-
-    def __init__(self, cache: TreeCache[ImageTextDict]) -> None:
-        super().__init__()
-        self.cache = cache
-
-    async def async_len(self) -> int:
-        return await self.cache.async_len()
-
-    def is_finite(self) -> bool:
-        return self.cache.is_finite()
-
-    async def get_batch(self, indices: Sequence[int]) -> Sequence[ImageTextDict]:
-        return await self.cache.get_batch(indices)
-
-    @staticmethod
-    def build_or_load(
-        cache_dir: str,
-        source: ShardedDataSource[ConversationDict],
-        processor: ProcessorMixin,
-        max_length: int,
-        padding: bool = True,
-        messages_key: str = "messages",
-        images_key: str = "images",
-        cache_options: CacheOptions = CacheOptions.default(),
-        *,
-        mask_prompt: bool = True,
-    ) -> "ProcessedImageCache":
-        batch_processor = BatchMultimodalProcessor(
-            processor,
-            max_length=max_length,
-            padding=padding,
-            mask_prompt=mask_prompt,
-            messages_key=messages_key,
-            images_key=images_key,
-        )
-        fingerprint = Hasher.hash(batch_processor.metadata)
-        cache = build_or_load_cache(
-            prefix_join(cache_dir, f"processor-inputs-v2/{fingerprint}"),
-            source,
-            batch_processor,
-            options=cache_options,
-        )
-
-        if cache.is_finished:
-            logger.info(f"Cache {cache_dir} is complete.")
-        else:
-            logger.info(f"Cache {cache_dir} is incomplete.")
-
-        return ProcessedImageCache(cache)
-
-
 @dataclass(kw_only=True)
 class ImageIODatasetConfig(ImageTaskConfig):
     """Preprocess a normalized image source into a persistent cache."""
 
-    source: Union[ImageDatasetSourceConfig, ConversationDatasetSourceConfig]
+    source: ImageSource
     cache_dir: str
 
     def train_set(
         self,
         options: CacheOptions = CacheOptions.default(),
-    ) -> ProcessedImageCache:
+    ) -> TreeCache[ImageTextDict]:
         dataset = self.build_or_load_cache(self.source.train_split, options)
         if dataset is None:
             raise ValueError("No training set!")
         return dataset
 
-    def validation_sets(self) -> Mapping[str, ProcessedImageCache]:
+    def validation_sets(self) -> Mapping[str, TreeCache[ImageTextDict]]:
         dataset = self.build_or_load_cache(self.source.validation_split)
         return {"": dataset} if dataset is not None else {}
 
@@ -469,18 +394,17 @@ class ImageIODatasetConfig(ImageTaskConfig):
         self,
         split: str,
         cache_options: CacheOptions = CacheOptions.default(),
-    ) -> Optional[ProcessedImageCache]:
+    ) -> Optional[TreeCache[ImageTextDict]]:
         source = self.source.get_shard_source(split)
         if source is None:
             return None
-        return ProcessedImageCache.build_or_load(
-            prefix_join(self.cache_dir, split),
-            source,
-            self.loaded_processor,
-            max_length=self.max_length,
-            padding=self.padding,
-            mask_prompt=self.mask_prompt,
-            cache_options=cache_options,
+        processor = BatchMultimodalProcessor(
+            self.loaded_processor, max_length=self.max_length, padding=self.padding, mask_prompt=self.mask_prompt
+        )
+        fingerprint = Hasher.hash(processor.metadata)
+        cache_dir = prefix_join(self.cache_dir, split)
+        return build_or_load_cache(
+            prefix_join(cache_dir, f"processor-inputs-v2/{fingerprint}"), source, processor, options=cache_options
         )
 
 
@@ -490,7 +414,7 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
 
     cache_dir: Optional[str] = "cache/"
 
-    configs: Dict[str, Union[ImageDatasetSourceConfig, ConversationDatasetSourceConfig]] = field(default_factory=dict)
+    configs: Dict[str, ImageSource] = field(default_factory=dict)
     train_weights: Dict[str, float] = field(default_factory=dict)
     """Relative sampling weights, keyed by source name."""
     shuffle: bool | int = False
@@ -499,10 +423,10 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
     mixture_block_size: int = 2048
 
     def __post_init__(self) -> None:
-        if len(self.configs) == 0:
+        if not self.configs:
             raise ValueError("At least one dataset must be provided")
 
-        if set(self.configs.keys()) != set(self.train_weights.keys()):
+        if self.configs.keys() != self.train_weights.keys():
             raise ValueError(
                 f"The keys in configs and weights must be the same; got {self.configs.keys()} and"
                 f" {self.train_weights.keys()}"
@@ -522,37 +446,25 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
 
         mix_key, shuffle_key = jax.random.split(key)
 
-        # Shuffling within sources keeps the mixture’s source order stable.
-        def shuffle_ds(ds: AsyncDataset[ImageTextDict], key: PRNGKeyArray) -> AsyncDataset[ImageTextDict]:
-            if self.shuffle is True:
-                ds = ds.shuffle(key)
-            elif isinstance(self.shuffle, int):
-                ds = ds.era_shuffle(self.shuffle, key=key)
-            return ds
-
         if self.shuffle:
-            out_datasets = {}
-            key_iter = key_iterator(shuffle_key)
-            for name, ds in image_datasets.items():
-                out_datasets[name] = shuffle_ds(ds, next(key_iter))
-            image_datasets = out_datasets
+            shuffled = {}
+            for (name, ds), source_key in zip(image_datasets.items(), key_iterator(shuffle_key)):
+                if self.shuffle is True:
+                    shuffled[name] = ds.shuffle(source_key)
+                else:
+                    shuffled[name] = ds.era_shuffle(self.shuffle, key=source_key)
+            image_datasets = shuffled
 
-        if epochs and epochs > 0:
-            logger.info(f"Wrapping each dataset in RepeatedDataset with max_epochs={epochs}")
-            epoch_wrapped_datasets = {}
-            for name, ds in image_datasets.items():
-                epoch_wrapped_datasets[name] = RepeatedDataset(ds, epochs=epochs)
-            image_datasets = epoch_wrapped_datasets
+        if epochs is not None and epochs > 0:
+            image_datasets = {name: RepeatedDataset(ds, epochs) for name, ds in image_datasets.items()}
 
-        mixture = MixtureDataset(
+        return MixtureDataset(
             datasets=image_datasets,
             weights={name: self.train_weights[name] for name in image_datasets},
             stop_strategy=self.stop_strategy,
             key=mix_key,
             block_size=self.mixture_block_size,
         )
-
-        return mixture
 
     def training_sets(
         self, options: CacheOptions = CacheOptions.default()
@@ -566,7 +478,7 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
         self,
         split: str,
         options: CacheOptions = CacheOptions.default(),
-    ) -> Dict[str, ProcessedImageCache]:
+    ) -> Dict[str, TreeCache[ImageTextDict]]:
         caches = {}
         for name, source in self.configs.items():
             if self.train_weights[name] == 0 and split == "train":
@@ -593,5 +505,5 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
         return caches
 
     @property
-    def sources(self) -> Mapping[str, Union[ImageDatasetSourceConfig, ConversationDatasetSourceConfig]]:
+    def sources(self) -> Mapping[str, ImageSource]:
         return self.configs

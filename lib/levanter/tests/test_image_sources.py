@@ -162,7 +162,6 @@ def test_caption_source_preserves_images_and_truncated_targets(tmp_path, caption
     source = ImageDatasetSourceConfig(train_urls=[str(records)]).get_shard_source("train")
     batch = list(source.open_shard(source.shard_names[0]))
     processed = BatchMultimodalProcessor(caption_processor, max_length=max_length)(batch)[0]
-    assert processed["pixel_values"] is not None
     expected_pixels = caption_processor.image_processor(images=Image.open(image), return_tensors="np")["pixel_values"][
         0
     ]
@@ -216,7 +215,6 @@ def test_processor_dimensions_match_processed_pixels_and_cache_schema(caption_pr
     output = processor([record])[0]
     pixels = output["pixel_values"]
     exemplar = processor.output_exemplar["pixel_values"]
-    assert pixels is not None and exemplar is not None
     assert pixels.shape == exemplar.shape == (1, 3, tile_size, tile_size)
     expected = caption_processor.image_processor(images=record["images"], return_tensors="np")["pixel_values"][0]
     np.testing.assert_allclose(pixels[0], expected)
@@ -258,7 +256,6 @@ def test_image_mixture_caches_processor_pixels_and_unpadded_targets(
     ]
     for item, length in zip(sorted([first, second], key=lambda item: int(item["attention_mask"].sum())), [8, 9]):
         assert item["input_ids"].shape == (length,)
-        assert item["pixel_values"] is not None
         assert item["pixel_values"].shape == (1, 3, 4, 4)
         np.testing.assert_allclose(item["pixel_values"][0], expected_pixels)
         np.testing.assert_array_equal(item["loss_mask"], [0] * 6 + [1] * (length - 6))
