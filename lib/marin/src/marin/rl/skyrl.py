@@ -506,6 +506,37 @@ class SkyRLOutputPaths:
 
 _MISSING_CONFIG_VALUE = object()
 
+_FORCED_SOCKET_ENV_VALUES = {
+    "NCCL_NET": {"Socket"},
+    "NCCL_IB_DISABLE": {"1"},
+}
+
+
+def reject_forced_socket_transport(task_env: dict, num_nodes: int) -> None:
+    """Refuse multi-node launches that force NCCL onto socket transport.
+
+    Multi-node jobs run on clusters whose InfiniBand fabric works with the
+    default environment (measured 85-88 GB/s all-reduce cross-node on
+    cw-rno2a and cw-us-east-02a). Forcing `NCCL_NET=Socket` or
+    `NCCL_IB_DISABLE=1` drops cross-node collectives onto TCP sockets,
+    measured at 12-24x lower bandwidth, and a partial override hangs at
+    bootstrap. See the transport audit in #11619.
+    """
+    if num_nodes <= 1:
+        return
+    offenders = [
+        f"{key}={task_env[key]}"
+        for key, forced_values in _FORCED_SOCKET_ENV_VALUES.items()
+        if str(task_env.get(key, "")).strip() in forced_values
+    ]
+    if offenders:
+        raise ValueError(
+            "Multi-node SkyRL launch forces NCCL onto socket transport via extra_env "
+            f"({', '.join(offenders)}). Remove the override so collectives use InfiniBand; "
+            "the two-node probe in experiments/post_training/nccl_transport_probe.py "
+            "verifies the fabric before a run. See marin-community/marin#11619."
+        )
+
 
 def _parsed_config(config_yaml: str) -> dict[str, object]:
     try:
@@ -884,6 +915,7 @@ def _launch_config_yaml(
     task_env = recipe.get("extra_env", {})
     if not isinstance(task_env, dict):
         raise ValueError("SkyRL extra_env must be a mapping")
+    reject_forced_socket_transport(task_env, num_nodes)
     launch = {
         "schema_version": 1,
         "run": {
