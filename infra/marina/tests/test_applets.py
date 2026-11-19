@@ -762,6 +762,30 @@ def test_public_applet_surface_serves_only_public_reads(tmp_path: Path, database
     assert updated.status_code == 201
     assert updated.json()["mode"] == "public"
 
+    # Publishing a new selection must close every anonymous route into the old
+    # backend, including its content API and static pages. History stays private.
+    for suffix in ("", "app.js", "api/problems", "api/identity"):
+        for method in ("GET", "HEAD"):
+            assert public_client.request(method, f"{revision_path}{suffix}").status_code == 404
+    assert public_client.get(f"/a/{applet_id}/v/2/").status_code == 200
+    assert public_client.get(f"/a/{applet_id}/v/2/api/problems").status_code == 200
+    assert public_client.get(f"/a/{applet_id}/api/problems").status_code == 200
+    assert publisher.get(revision_path).status_code == 200
+    assert publisher.get(f"{revision_path}api/problems").status_code == 200
+
+    # The selected revision, rather than the greatest published number, controls
+    # public access after a rollback too.
+    assert (
+        publisher.put(f"/api/marina/applets/{applet_id}/current", json={"version": 1, "base_version": 2}).status_code
+        == 200
+    )
+    assert public_client.get(revision_path).status_code == 200
+    assert public_client.get(f"/a/{applet_id}/v/2/api/problems").status_code == 404
+    assert (
+        publisher.put(f"/api/marina/applets/{applet_id}/current", json={"version": 2, "base_version": 1}).status_code
+        == 200
+    )
+
     revoked = publisher.put(
         f"/api/marina/applets/{applet_id}/mode",
         json={"mode": "private", "base_version": 2},
@@ -857,7 +881,18 @@ def test_public_named_host_serves_its_app_only_while_the_app_is_public(tmp_path:
     assert reader.get("https://unbound.example/").status_code == 404
     assert reader.get(f"https://unbound.example/a/{applet_id}/v/1/").status_code == 404
 
-    publisher.put(f"/api/marina/applets/{applet_id}/mode", json={"mode": "private", "base_version": 1})
+    assert (
+        publisher.post(
+            f"/api/marina/applets/{applet_id}", params={"base_version": 1}, content=package_applet(DEMO_APPLET)
+        ).status_code
+        == 201
+    )
+    for suffix in ("", "app.js", "api/problems"):
+        assert reader.get(f"/v/1/{suffix}").status_code == 404
+        assert reader.get(f"/v/2/{suffix}").status_code == 200
+    assert reader.get("/", follow_redirects=False).headers["location"] == "/v/2/"
+
+    publisher.put(f"/api/marina/applets/{applet_id}/mode", json={"mode": "private", "base_version": 2})
     for path in named_paths:
         assert reader.get(path).status_code == 404
     # The public origin itself also stops serving the app; the binding alone grants nothing.
