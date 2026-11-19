@@ -3,30 +3,24 @@
 
 """Stage and preserve Endless's pristine SIF images as independently sealed artifacts."""
 
-import argparse
 import json
-import logging
 from dataclasses import asdict
-from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from finestore.rl.licenses import LicenseReceipt, require_license
 from huggingface_hub import hf_hub_download
 from iris.cluster.client.job_info import get_job_info
-from marin.execution.lazy import ArtifactStep, run
-from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from shellbox.sif import OciTools, SifTools, file_sha256, oci_from_filesystem, sif_runtime, unpack_sif
 
 from experiments.post_training.task_curation.datasets.facet.artifacts import PreservedImage
 from experiments.post_training.task_curation.datasets.facet.images import (
     ImageConfig,
-    image_config,
+    image_main,
     pinned_json,
     upload_verified,
 )
-from experiments.post_training.task_curation.local import artifact_prefix, local_client
 from infra.marina.apps.rl_data_catalog.server.licensing import require_unbanned
 
 DATASET = "FWeindel/validated-tasks"
@@ -159,69 +153,12 @@ def preserve_image(config: ImageConfig) -> PreservedImage:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    for name in (
-        "index",
-        "index-sha256",
-        "licenses",
-        "licenses-sha256",
-        "tools",
-        "tools-sha256",
-        "workdir",
-        "artifact-root",
-        "artifact-version",
-        "output",
-    ):
-        parser.add_argument("--" + name, required=True)
-    parser.add_argument("--max-concurrent", type=int, required=True)
-    parser.add_argument("--bundle", action="append")
-    parser.add_argument("--run", action="store_true")
-    args = parser.parse_args()
-    configure_coreweave_s3()
-    logging.basicConfig(level=logging.INFO)
-    StoragePath(args.artifact_root).relative_to(StoragePath(REGIONAL_PREFIX))
-    index = pinned_json(args.index, args.index_sha256)
-    files = image_files(index)
-    tools = pinned_json(args.tools, args.tools_sha256)
-    selected = sorted(args.bundle if args.bundle else files)
-    if len(set(selected)) != len(selected):
-        raise ValueError("Endless bundle selection repeats an image")
-    with artifact_prefix(args.artifact_root):
-        steps = []
-        for bundle in selected:
-            item = files[bundle]
-            config = ImageConfig(
-                bundle,
-                item["path"],
-                item["sha256"],
-                item["bytes"],
-                args.index,
-                args.index_sha256,
-                args.licenses,
-                args.licenses_sha256,
-                {name: tool["path"] for name, tool in tools.items()},
-                {name: tool["binary_sha256"] for name, tool in tools.items()},
-                args.workdir,
-                "",
-            )
-            steps.append(
-                ArtifactStep(
-                    name="rl-data/endless/pristine-oci/" + bundle,
-                    version=args.artifact_version,
-                    artifact_type=PreservedImage,
-                    run=preserve_image,
-                    build_config=partial(image_config, config),
-                )
-            )
-        if not args.run:
-            print(json.dumps([{"path": step.path(), "fingerprint": step.fingerprint()} for step in steps], indent=2))
-            return
-        with local_client():
-            results = run(*steps, max_concurrent=args.max_concurrent)
-        destination = StoragePath(args.output)
-        if destination.exists():
-            raise FileExistsError(str(destination))
-        destination.write_text(json.dumps([result.model_dump(mode="json") for result in results], indent=2) + "\n")
+    image_main(
+        description="Preserve Endless pristine SIF images as independent artifacts",
+        artifact_namespace="endless",
+        files_for_index=image_files,
+        producer=preserve_image,
+    )
 
 
 if __name__ == "__main__":
