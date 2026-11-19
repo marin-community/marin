@@ -19,17 +19,6 @@ class ScaleByAdamHState(NamedTuple):
     nu: optax.Updates
 
 
-def clamp_zero_learning_rate(update, learning_rate):
-    """Return an exact zero update when the learning rate is zero.
-
-    Scale-invariant re-projections divide and multiply the parameter by norms
-    that round differently (the parameter dtype versus the promoted post-step
-    value), so at learning rate zero they would still emit a rounding-noise
-    update instead of zero.
-    """
-    return jnp.where(learning_rate == 0.0, jnp.zeros_like(update), update)
-
-
 def scale_by_adamh(
     b1: float = 0.9,
     b2: float = 0.999,
@@ -61,11 +50,18 @@ def scale_by_adamh(
 
         def _scale_invariant_2d(p, u):
             """Core update for a 2-D (matrix) parameter."""
-            p_norm = jnp.linalg.norm(p)
-            u_norm = jnp.linalg.norm(u)
-            new_p = p - learning_rate * u * p_norm / jnp.maximum(u_norm, 1e-10)
-            projected_update = new_p / jnp.linalg.norm(new_p) * p_norm - p
-            return clamp_zero_learning_rate(projected_update, learning_rate)
+            # Run the step and the re-projection in float32 so the parameter-space
+            # and post-step norms round identically; see the MuonH hyperball path.
+            p_f32 = p.astype(jnp.float32)
+            u_f32 = u.astype(jnp.float32)
+            p_norm = jnp.linalg.norm(p_f32)
+            u_norm = jnp.linalg.norm(u_f32)
+            new_p = p_f32 - learning_rate * u_f32 * p_norm / jnp.maximum(u_norm, 1e-10)
+            new_p_norm = jnp.linalg.norm(new_p)
+            # Ratio form: equal norms give a ratio of exactly 1.0, so a zero raw
+            # step yields an exactly zero update without a special case.
+            ratio = jnp.maximum(p_norm, 1e-10) / jnp.maximum(new_p_norm, 1e-10)
+            return (new_p * ratio - p_f32).astype(p.dtype)
 
         def scale_invariant_update(p, u):
             if p is None:
@@ -87,4 +83,4 @@ def scale_by_adamh(
     return optax.GradientTransformation(init_fn, update_fn)
 
 
-__all__ = ["ScaleByAdamHState", "clamp_zero_learning_rate", "scale_by_adamh"]
+__all__ = ["ScaleByAdamHState", "scale_by_adamh"]

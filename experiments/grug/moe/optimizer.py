@@ -11,7 +11,7 @@ from levanter.optim.grugmuon import _grug_scale_with_muon
 from levanter.optim.util import CoefficientType
 from levanter.utils.jax_utils import leaf_key_paths
 
-from experiments.grug.moe.adamh import clamp_zero_learning_rate, scale_by_adamh
+from experiments.grug.moe.adamh import scale_by_adamh
 
 
 def _target_named_sharding(array) -> jax.sharding.NamedSharding | None:
@@ -71,19 +71,27 @@ def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate:
             return None
         if not hasattr(param, "ndim"):
             return update
+        # Run the step and the re-projection in float32. With BF16 parameters the
+        # parameter-space norms otherwise round to BF16 while the post-step norms
+        # stay float32, which biases the Frobenius re-projection at every learning
+        # rate, not only at zero.
+        param_f32 = param.astype(jnp.float32)
+        update_f32 = update.astype(jnp.float32)
         if param.ndim == 2:
-            param_norm = jnp.linalg.norm(param)
-            update_norm = jnp.linalg.norm(update)
-            new_param = param - learning_rate * update * param_norm / jnp.maximum(update_norm, 1e-10)
+            param_norm = jnp.linalg.norm(param_f32)
+            update_norm = jnp.linalg.norm(update_f32)
+            new_param = param_f32 - learning_rate * update_f32 * param_norm / jnp.maximum(update_norm, 1e-10)
             new_param_norm = jnp.linalg.norm(new_param)
         else:
             axes = tuple(range(1, param.ndim))
-            param_norm = jnp.sqrt(jnp.sum(jnp.square(param), axis=axes, keepdims=True))
-            update_norm = jnp.sqrt(jnp.sum(jnp.square(update), axis=axes, keepdims=True))
-            new_param = param - learning_rate * update * param_norm / jnp.maximum(update_norm, 1e-10)
+            param_norm = jnp.sqrt(jnp.sum(jnp.square(param_f32), axis=axes, keepdims=True))
+            update_norm = jnp.sqrt(jnp.sum(jnp.square(update_f32), axis=axes, keepdims=True))
+            new_param = param_f32 - learning_rate * update_f32 * param_norm / jnp.maximum(update_norm, 1e-10)
             new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param), axis=axes, keepdims=True))
-        projected_update = new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
-        return clamp_zero_learning_rate(projected_update, learning_rate)
+        # Ratio form: equal norms give a ratio of exactly 1.0, so a zero raw step
+        # yields an exactly zero update without a special case.
+        ratio = jnp.maximum(param_norm, 1e-10) / jnp.maximum(new_param_norm, 1e-10)
+        return (new_param * ratio - param_f32).astype(param.dtype)
 
     return jax.tree.map(
         scale_invariant_update,

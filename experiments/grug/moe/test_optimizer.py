@@ -11,6 +11,12 @@ from experiments.grug.moe.optimizer import GrugMoeAdamHConfig, GrugMoeMuonHConfi
 
 _NUM_EXPERTS, _INTERMEDIATE, _HIDDEN, _VOCAB = 2, 8, 16, 32
 _UINT_DTYPE = {"bfloat16": jnp.uint16, "float32": jnp.uint32}
+# The scale-invariant step re-projects each matrix onto its previous Frobenius norm,
+# so stored-norm drift stays at BF16 storage-rounding scale: at most 6e-4 over 15
+# steps on this tree with float32 norms. A parameter-space norm computed in BF16
+# instead biases the re-projection at every step and drifts 1.2e-3 to 6.0e-3 over
+# the same steps.
+_NORM_DRIFT_TOLERANCE = 1e-3
 
 
 def _moe_params(dtype):
@@ -39,6 +45,29 @@ def _moe_params(dtype):
                     "shared": {"w_gate": normal((_INTERMEDIATE, _HIDDEN), 0.05, k[8])},
                 },
                 "gated_norm": {"weight": normal((_HIDDEN,), 0.5, k[9])},
+            }
+        },
+    }
+
+
+def _norm_test_params(dtype):
+    """Larger matrices than _moe_params so norm drift reflects accumulated rounding."""
+
+    def normal(shape, scale, key):
+        return (jax.random.normal(key, shape) * scale).astype(dtype)
+
+    k = jax.random.split(jax.random.PRNGKey(0), 6)
+    return {
+        "token_embed": normal((128, 64), 0.02, k[0]),
+        "output_proj": normal((128, 64), 0.05, k[1]),
+        "blocks": {
+            "0": {
+                "attn": {"w_q": normal((64, 64), 0.05, k[2])},
+                "mlp": {
+                    "router": normal((64, 4), 0.05, k[3]),
+                    "expert_mlp": {"w_gate": normal((4, 64, 64), 0.05, k[4])},
+                    "shared": {"w_gate": normal((64, 64), 0.05, k[5])},
+                },
             }
         },
     }
@@ -73,6 +102,18 @@ def _bits_differ(reference, current):
     reference_bits = jax.lax.bitcast_convert_type(reference, uint)
     current_bits = jax.lax.bitcast_convert_type(current.astype(reference.dtype), uint)
     return reference_bits != current_bits
+
+
+def _norm_drift(reference, current):
+    """Largest relative change of per-slice Frobenius norms between two leaves."""
+
+    def per_slice_norms(leaf):
+        x = leaf.astype(jnp.float32)
+        if x.ndim == 2:
+            return jnp.linalg.norm(x)[None]
+        return jnp.linalg.norm(x, axis=tuple(range(1, x.ndim)))
+
+    return float(jnp.max(jnp.abs(per_slice_norms(current) / per_slice_norms(reference) - 1.0)))
 
 
 @pytest.mark.parametrize(
@@ -115,6 +156,27 @@ def test_grug_moe_optimizer_positive_lr_updates_params(config_factory):
         if reference.ndim >= 2 and not _bits_differ(reference, current).any()
     ]
     assert unchanged == [], f"matrix leaves failed to update at a positive learning rate: {unchanged}"
+
+
+@pytest.mark.parametrize("config_factory", [GrugMoeMuonHConfig, GrugMoeAdamHConfig])
+def test_grug_moe_optimizer_positive_lr_preserves_bfloat16_matrix_norms(config_factory):
+    config = config_factory(learning_rate=0.01, adam_lr=0.01, lr_schedule="constant")
+
+    initial, final = _run_steps(config, _norm_test_params(jnp.bfloat16), num_steps=15)
+
+    initial_leaves = jax.tree_util.tree_flatten_with_path(initial)[0]
+    final_leaves = jax.tree_util.tree_flatten_with_path(final)[0]
+    group_leaves = jax.tree_util.tree_flatten_with_path(config.create_mask(initial))[0]
+    # Only the scale-invariant groups re-project onto the previous Frobenius norm.
+    # Adam-group matrices may change norm freely.
+    scale_invariant_groups = {"muonh", "adamh", "adamh_expert"}
+    drifts = [
+        (str(path), _norm_drift(reference, current))
+        for (path, reference), (_, current), (_, group) in zip(initial_leaves, final_leaves, group_leaves, strict=True)
+        if group in scale_invariant_groups
+    ]
+    drifted = [f"{name} {drift:.3e}" for name, drift in drifts if drift > _NORM_DRIFT_TOLERANCE]
+    assert drifted == [], f"BF16 matrix norms drifted at a positive learning rate: {drifted}"
 
 
 def test_grug_moe_adamh_mask_routes_expert_mlp_weights_to_expert_group():
