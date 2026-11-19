@@ -350,6 +350,9 @@ _CAMPAIGN_PATCH = RecipePatch(
     generator=sections.Generator(
         max_num_seqs=64,
         chat_template_kwargs={"enable_thinking": True},
+        sampling_params=sections.SamplingParams(
+            temperature=0.7, stop_token_ids=(128001, 128009), skip_special_tokens=False
+        ),
         engine_init_kwargs={"enable_auto_tools": True, "tool_parser": "hermes", "enable_return_routed_experts": True},
         trajectory_retention=sections.TrajectoryRetention(
             phases=("train", "eval"),

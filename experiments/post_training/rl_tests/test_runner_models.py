@@ -76,8 +76,8 @@ def test_mochi_default_matches_production_sft_export(mochi_sft_preset):
         (
             "snowball",
             {
-                "train-medium-agentic": {"2026.11.19.1": "546a047f"},
-                "train-long-agentic": {"2026.11.19.1": "41536315"},
+                "train-medium-agentic": {"2026.11.19.1": "4226185f"},
+                "train-long-agentic": {"2026.11.19.1": "694dd3ee"},
             },
         ),
     ],
