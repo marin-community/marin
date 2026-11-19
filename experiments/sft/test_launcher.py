@@ -114,6 +114,9 @@ def test_snowball_round1_refuses_a_mesh_that_does_not_fit_resources():
         sft_model(snowball_round1.SFT, snowball_h100.RESOURCES)
     with pytest.raises(ValueError, match="must be divisible by the mesh microbatch"):
         sft_model(snowball_round1.SFT, replace(snowball_round1.RESOURCES, replicas=64))
+    with pytest.raises(ValueError, match="must be divisible by the mesh microbatch"):
+        default_mesh = LevanterSft(replace(snowball_round1.SPEC, mesh=None))
+        sft_model(default_mesh, snowball_round1.RESOURCES)
 
 
 def test_qwen3_hf_reload_keeps_explicit_runtime_settings():

@@ -840,12 +840,15 @@ def sft_step(spec: SFTSpec, resources: ResourceConfig) -> ArtifactStep[LevanterC
     """
     model = spec.model
     run = model.run
-    if isinstance(resources.device, GpuConfig) and spec.mesh is not None:
+    if isinstance(resources.device, GpuConfig) and run is _levanter_train_job:
+        mesh = spec.mesh or MeshConfig()
         try:
-            ici, dcn = spec.mesh.axis_shapes(resources.device.count * resources.replicas, resources.replicas)
+            ici, dcn = mesh.axis_shapes(resources.device.count * resources.replicas, resources.replicas)
         except ValueError as error:
             raise ValueError(f"mesh does not fit SFT resources: {error}") from error
-        batch_axes = spec.mesh.resolved_compute_mapping["batch"]
+        batch_axes = mesh.resolved_compute_mapping.get("batch")
+        if batch_axes is None:
+            raise ValueError("SFT requires a compute mapping for the batch axis")
         batch_axes = (batch_axes,) if isinstance(batch_axes, str) else batch_axes
         sizes = ici | dcn
         batch_shards = math.prod(sizes.get(axis, 1) for axis in batch_axes)

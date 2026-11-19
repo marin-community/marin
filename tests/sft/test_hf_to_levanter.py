@@ -12,6 +12,7 @@ draccus round-trip that carries the ``LmConfig`` from construction to the worker
 from __future__ import annotations
 
 import dataclasses
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -207,13 +208,15 @@ def test_sft_exports_once_at_the_final_update(tmp_path):
     trainer.hooks.run_hooks(info, force=True)
     assert {path.name: (path / "policy.txt").read_text() for path in export_path.iterdir()} == {"step-2": "2"}
     assert (export_path / "step-2" / "chat_template.jinja").read_text() == spec.chat_template
-    epoch_spec = dataclasses.replace(spec, num_train_steps=None, num_train_epochs=1)
+    epoch_spec = dataclasses.replace(spec, version="2026.07.18-dev", num_train_steps=None, num_train_epochs=1)
     epoch_model = sft_model(LevanterSft(epoch_spec), resources)
     assert epoch_model.relative_path is None
-    for policy in (model, epoch_model):
+    epoch_export_path = Path(epoch_model.step.path(str(tmp_path))) / "hf"
+    shutil.copytree(export_path, epoch_export_path)
+    for policy, expected in [(model, export_path), (epoch_model, epoch_export_path)]:
         context = StepContext.for_run(str(tmp_path / "rl"), str(tmp_path), deps=policy.deps())
         locator = policy.resolve(context)
-        assert (locator.uri, locator.tokenizer_uri) == (str(export_path / "step-2"), None)
+        assert (locator.uri, locator.tokenizer_uri) == (str(expected / "step-2"), None)
 
 
 def test_sft_artifacts_with_the_same_version_do_not_share_tracker_history():

@@ -185,6 +185,7 @@ def test_export_recovery_verifies_shards_and_preserves_completed_output(tmp_path
     assert {path.name: path.read_bytes() for path in root.iterdir()} == before
 
 
+@pytest.mark.timeout(240)
 def test_mochi_sft_exports_the_latest_permanent_checkpoint_for_skyrl(tmp_path, monkeypatch):
     root = tmp_path / "override"
     placement_file = Path(launch_hero_sft.__file__).with_name("hero_sft_expert_placement_step393491.json")
@@ -225,8 +226,7 @@ def test_mochi_sft_exports_the_latest_permanent_checkpoint_for_skyrl(tmp_path, m
             "--frozen",
             "--extra",
             "cpu",
-            "--group",
-            "dev",
+            "--no-dev",
             "python",
             "-c",
             """
@@ -251,8 +251,14 @@ assert layout == GRUG_SPLIT_EXPERT_SCHEMA_VERSION
         cwd=skyrl,
         env=os.environ | {"PYTHONPATH": "skyrl-train:skyrl-gym"},
         check=True,
-        timeout=300,
+        timeout=180,
     )
+    shard = next(hf.glob("*.safetensors"))
+    damaged = bytearray(shard.read_bytes())
+    damaged[-1] ^= 1
+    shard.write_bytes(damaged)
+    with pytest.raises(ValueError, match="Shard integrity check failed"):
+        mochi_sft._export_final_sft(**config)
 
 
 def test_cpu_export_resumes_completed_shards_after_lowering_execution_limits(tmp_path, monkeypatch):
