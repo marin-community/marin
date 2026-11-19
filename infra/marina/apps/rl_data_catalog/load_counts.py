@@ -3,8 +3,6 @@
 
 """Count large staged tables through bounded primary-key windows on resume."""
 
-from typing import Any
-
 from marina.client import AppletQuery
 
 STAGED_COUNT_BATCH = 4096
@@ -12,8 +10,8 @@ LARGE_STAGE_TABLES = frozenset({"atlas_items", "atlas_packets"})
 
 
 def staged_row_count(query: AppletQuery, table: str, load_id: str) -> int:
-    """Return the exact staged total, including retained history, without a full scan statement."""
-    parameters: dict[str, Any] = {"load_id": load_id, "batch": STAGED_COUNT_BATCH}
+    """Return exact staged totals; item and packet scans use bounded key windows."""
+    parameters: dict[str, str | int] = {"load_id": load_id, "batch": STAGED_COUNT_BATCH}
     if table not in LARGE_STAGE_TABLES:
         return query(f"SELECT COUNT(*) AS n FROM {table} WHERE load_id=:load_id", parameters)["rows"][0]["n"]
     total = 0

@@ -13,7 +13,7 @@ from sqlalchemy import create_engine, text
 
 from infra.marina.apps.rl_data_catalog.historical_assessments import retain_prior_assessments
 from infra.marina.apps.rl_data_catalog.load import TABLE_COLUMNS, insert_rows
-from infra.marina.apps.rl_data_catalog.load_counts import staged_row_count
+from infra.marina.apps.rl_data_catalog.load_counts import STAGED_COUNT_BATCH, staged_row_count
 from infra.marina.apps.rl_data_catalog.parallel_history import CHECKPOINT_TABLE, retain_prior_assessments_parallel
 from infra.marina.apps.rl_data_catalog.server.cohort_summaries import materialize_cohort_summaries
 from infra.marina.apps.rl_data_catalog.server.schema import SCHEMA_SQL
@@ -434,6 +434,7 @@ def test_bounded_summary_matches_canonical_view_and_resumes(batch_database, coun
 @pytest.mark.parametrize("count", [0, 5, 8193, 110600])
 def test_resume_count_windows_include_retained_pipelines(batch_database, count, record_property):
     load = f"count-{count}"
+    packet_stride = 17
     with batch_database.begin() as connection:
         connection.execute(
             text(
@@ -450,9 +451,9 @@ def test_resume_count_windows_include_retained_pipelines(batch_database, count, 
         connection.execute(
             text(
                 "INSERT INTO atlas_packets SELECT load_id,pipeline_key,task_id,'{}' "
-                "FROM atlas_items WHERE load_id=:load AND mod(task_id::int,17)=0"
+                "FROM atlas_items WHERE load_id=:load AND mod(task_id::int,:stride)=0"
             ),
-            {"load": load},
+            {"load": load, "stride": packet_stride},
         )
     timings = []
 
@@ -460,10 +461,9 @@ def test_resume_count_windows_include_retained_pipelines(batch_database, count, 
         started = time.perf_counter()
         result = execute_statement(batch_database, sql, parameters)
         timings.append(time.perf_counter() - started)
-        if "batch" in parameters:
-            assert not result["rows"] or result["rows"][0]["n"] <= 4096
+        assert not result["rows"] or result["rows"][0]["n"] <= STAGED_COUNT_BATCH
         return result
 
     assert staged_row_count(query, "atlas_items", load) == count
-    assert staged_row_count(query, "atlas_packets", load) == count // 17
+    assert staged_row_count(query, "atlas_packets", load) == count // packet_stride
     record_property("count_max_statement_seconds", max(timings))
