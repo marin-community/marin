@@ -11,8 +11,9 @@ document as a token-id prompt with ``prompt_logprobs=20`` and ``max_tokens=1``.
 Output per cell, ``<output>/<split>/docs-NNN.npz``: for every loss-bearing position i of every document, the
 teacher's top 20 token ids and logprobs for token i + 1 (``ids``/``logprobs``, [N, 20], sorted by logprob), the
 teacher's logprob of the actual token i + 1 (``target``), the position (``positions``) and per-document offsets
-(``doc_rows``, ``doc_offsets``). Cells are scored held-out first, then train, in order; once ``--budget-seconds``
-of scoring has passed no new cell starts, so a cap drops whole cells (whole packed rows).
+(``doc_rows``, ``doc_offsets``). Cells of ``--splits`` are scored in that order; ``--shard``/``--num-shards`` give
+each serve every n-th cell, and each shard writes its own ``summary-<splits>-<shard>of<n>.json``. Once
+``--budget-seconds`` of scoring has passed no new cell starts, so a cap drops whole cells (whole packed rows).
 
     uv run --env-file .env python -m experiments.post_training.teacher_distill.score_topk \
         --cells-root s3://marin-us-east-08a/tmp/ttl=14d/teacher-distill-504/cells \
@@ -29,6 +30,7 @@ import math
 import os
 import time
 from concurrent.futures import ProcessPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -118,9 +120,9 @@ def score_doc(task: tuple[str, str, dict, dict]) -> dict:
     }
 
 
-def list_cells(cells_root: str) -> list[str]:
+def list_cells(cells_root: str, splits: list[str]) -> list[str]:
     cells = []
-    for split in ("heldout", "train"):
+    for split in splits:
         listing = sorted(str(p) for p in StoragePath(prefix_join(cells_root, split)).ls())
         cells.extend(p for p in listing if p.endswith(".jsonl.gz"))
     return cells
@@ -160,14 +162,26 @@ def score_cell(pool, url, api_model, headers, cell: str, cells_root: str, output
     return summary
 
 
-def run_job(cells_root: str, output: str, budget_seconds: float) -> None:
-    """Iris CPU entrypoint: one Mochi serve, then every cell until the scoring budget is spent."""
+def run_job(
+    cells_root: str,
+    output: str,
+    budget_seconds: float,
+    splits: list[str],
+    shard: int,
+    num_shards: int,
+    max_batched_tokens: int | None,
+) -> None:
+    """Iris CPU entrypoint: one Mochi serve, then this shard's cells until the scoring budget is spent."""
     logging.basicConfig(level=logging.INFO)
     configure_coreweave_s3()
-    cells = list_cells(cells_root)
+    cells = list_cells(cells_root, splits)[shard::num_shards]
+    summary_path = StoragePath(prefix_join(output, f"summary-{'-'.join(splits)}-{shard}of{num_shards}.json"))
+    logger.info("shard %d of %d: %d cells", shard, num_shards, len(cells))
     # Resolve in the job: the bundled workspace is the working directory there.
     root = next(p for p in (Path.cwd(), Path("/app")) if (p / MODEL_CONFIG).exists())
     model = load_model_config(root / MODEL_CONFIG)
+    if max_batched_tokens:
+        model = replace(model, serve=replace(model.serve, max_num_batched_tokens=max_batched_tokens))
     accelerator = MARIN_EVAL_HARDWARE.select(model, Platform.GPU, None)
     inference = inference_config_for_model(
         model,
@@ -193,13 +207,26 @@ def run_job(cells_root: str, output: str, budget_seconds: float) -> None:
                     logger.info("scoring budget spent; %s and later cells are not scored", cell)
                     break
                 summaries.append(score_cell(pool, url, endpoint.model, headers, cell, cells_root, output))
-                StoragePath(prefix_join(output, "summary.json")).write_text(
-                    json.dumps({"ready_seconds": ready_seconds, "cells": summaries}, indent=2) + "\n"
+                summary_path.write_text(
+                    json.dumps(
+                        {
+                            "ready_seconds": ready_seconds,
+                            "max_num_batched_tokens": model.serve.max_num_batched_tokens,
+                            "cells": summaries,
+                        },
+                        indent=2,
+                    )
+                    + "\n"
                 )
     scored_tokens = sum(s["tokens"] for s in summaries)
     seconds = sum(s["seconds"] for s in summaries)
-    logger.info("done: %d cells, %d tokens in %.0f s (%.0f tok/s)", len(summaries), scored_tokens, seconds,
-                scored_tokens / max(seconds, 1))
+    logger.info(
+        "done: %d cells, %d tokens in %.0f s (%.0f tok/s)",
+        len(summaries),
+        scored_tokens,
+        seconds,
+        scored_tokens / max(seconds, 1),
+    )
 
 
 def main() -> None:
@@ -208,14 +235,27 @@ def main() -> None:
     parser.add_argument("--output", required=True)
     parser.add_argument("--budget-seconds", type=float, default=3600.0)
     parser.add_argument("--timeout-hours", type=float, default=2.5)
+    parser.add_argument("--splits", nargs="+", default=["heldout", "train"])
+    parser.add_argument("--shard", type=int, default=0)
+    parser.add_argument("--num-shards", type=int, default=1)
+    parser.add_argument("--max-batched-tokens", type=int, default=None, help="override the serve config value")
     args = parser.parse_args()
     if not args.output.startswith("s3://marin-us-east-08a/tmp/ttl="):
         raise ValueError("outputs go under s3://marin-us-east-08a/tmp/ttl=<N>d/")
     request = JobRequest(
-        name=f"task504-mochi-top20-{os.urandom(4).hex()}",
+        name=f"task504-mochi-top20-s{args.shard}of{args.num_shards}-{os.urandom(4).hex()}",
         # Reference the importable module, not __main__, so worker processes in the job can find score_doc.
         entrypoint=Entrypoint.from_callable(
-            importlib.import_module(__spec__.name).run_job, args=[args.cells_root, args.output, args.budget_seconds]
+            importlib.import_module(__spec__.name).run_job,
+            args=[
+                args.cells_root,
+                args.output,
+                args.budget_seconds,
+                args.splits,
+                args.shard,
+                args.num_shards,
+                args.max_batched_tokens,
+            ],
         ),
         resources=ResourceConfig.with_cpu(cpu=64, ram="192g", disk="64g", target_cluster=CLUSTER),
         environment=create_environment(setup_scripts=[default_setup_script(packages=["marin-core"])]),
