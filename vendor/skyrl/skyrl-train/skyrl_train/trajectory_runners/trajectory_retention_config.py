@@ -2,7 +2,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from skyrl_train.trajectory_runners.trajectory_reward_shaping import DEFAULT_ACCEPTED_STOP_REASONS
+from skyrl_train.config.reward_shaping import DEFAULT_ACCEPTED_STOP_REASONS
 
 
 @dataclass(frozen=True)

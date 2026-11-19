@@ -26,10 +26,14 @@ from marin.experiment.namespacing import user_owned_name
 from marin.rl.skyrl import (
     ArtifactHfModel,
     ResolvedModelLocator,
+    SkyRLPolicyModel,
     SkyRLReceiptLookupError,
     SkyRLRun,
+    SkyRLSpec,
     read_skyrl_attempt,
     skyrl_cpu_command,
+    skyrl_execution,
+    skyrl_step,
 )
 from marin.rl.skyrl_records import RecordedLaunch, read_stored_skyrl_attempt
 from pydantic import BaseModel
@@ -534,16 +538,39 @@ def _native_program(native_root: str, modules: tuple[str, ...], body: str) -> st
     )
 
 
-def compose_configs(paths: Sequence[str]) -> list[dict]:
-    """Load launch files with the native SkyRL composer in its CPU environment."""
+def compose_configs(paths: Sequence[str], *, validate_driver: bool = False) -> list[dict]:
+    """Compose launch files and optionally check the driver configuration in SkyRL's CPU environment."""
     program = _native_program(
         str(recipe.REPO_ROOT / "vendor/skyrl"),
         ("cloud.iris.launch_config", "skyrl_train", "marinskyrl"),
         "from cloud.iris import launch_config\n"
-        "print(json.dumps([OmegaConf.to_container(launch_config.load_launch_config(path), resolve=True) "
-        "for path in sys.argv[1:]]))\n",
+        "configs = [launch_config.load_launch_config(path) for path in sys.argv[1:]]\n"
+        "documents = [OmegaConf.to_container(config, resolve=True) for config in configs]\n"
+        f"if {validate_driver!r}:\n"
+        "    for config in configs:\n"
+        "        launch_config.validate_launch_driver_config(config)\n"
+        "print(json.dumps(documents))\n",
     )
     return _native_json(program, *paths)
+
+
+def validate_plan(preset: presets.Preset, spec: SkyRLSpec, step: ArtifactStep[SkyRLRun]) -> None:
+    """Validate a planned launch through the native CPU composer and driver."""
+    # The artifact root supplies the storage reference before the initializer's export exists.
+    model = spec.model
+    if isinstance(model, SkyRLPolicyModel):
+        model = ArtifactHfModel(model.step, relative_path="")
+    elif model.relative_path is None:
+        model = replace(model, relative_path="")
+    if model is not spec.model:
+        execution = skyrl_execution(step)
+        assert execution is not None
+        step = skyrl_step(replace(spec, model=model), execution, export_hf=preset.export_hf)
+    config = materialized_config(step, recipe.artifact_prefix(preset.recipe.layout.cluster))
+    with tempfile.TemporaryDirectory(prefix="rl-plan-") as directory:
+        path = Path(directory) / "launch.yaml"
+        path.write_text(config.launch_config_yaml)
+        compose_configs([str(path)], validate_driver=True)
 
 
 def _changed_config_keys(left: dict[str, object], right: dict[str, object]) -> set[str]:
