@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+from rolloutengine.models import TaskRolloutSpec
 from skyrl_train.dataset.harbor import lower_harbor_task
 from skyrl_train.dataset.harbor_import import HARBOR_TRIAL_SESSION
 from taskcompendium.models import Source, TaskSpec
@@ -23,7 +24,7 @@ TRIAL_SESSION = {
 }
 
 
-def harbor_task(directory: Path, task: TaskSpec, task_toml: str) -> Path:
+def lowered_trial_task(directory: Path, task: TaskSpec, task_toml: str) -> TaskRolloutSpec:
     (directory / "task.toml").write_text(task_toml)
     (directory / "instruction.md").write_text("Do the thing.\n")
     return lower_harbor_task(
@@ -34,7 +35,7 @@ def harbor_task(directory: Path, task: TaskSpec, task_toml: str) -> Path:
 
 
 def test_trial_lowering_keeps_declared_verifier_and_agent_timeouts(tmp_path):
-    lowered = harbor_task(
+    lowered = lowered_trial_task(
         tmp_path,
         text_task("tb2/declared"),
         """
@@ -54,7 +55,7 @@ timeout_sec = 1800.0
 
 
 def test_trial_lowering_defaults_to_harbor_defaults_when_task_toml_is_silent(tmp_path):
-    lowered = harbor_task(tmp_path, text_task("tb2/silent"), "schema_version = '1.1'\n")
+    lowered = lowered_trial_task(tmp_path, text_task("tb2/silent"), "schema_version = '1.1'\n")
     # A missing [verifier] section means Harbor's own 600 s default, not the session's 300 s.
     assert lowered.limits.verifier_timeout == 600.0
     # A missing [agent] section declares no agent deadline; the deployment settings govern it.
