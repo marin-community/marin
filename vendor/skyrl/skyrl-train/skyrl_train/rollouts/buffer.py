@@ -15,9 +15,9 @@ import time
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from enum import StrEnum
 from typing import Protocol
 
+from skyrl_train.config.rollout_validation import FAMILY_COLUMN, FAMILY_QUOTAS_KEY, BatchPolicy
 from skyrl_train.dynamic_sampling import DynamicSamplingType, GroupSelectionPolicy, GroupSelectionResult
 from skyrl_train.group_admission import (
     AdmissionRejection,
@@ -41,13 +41,6 @@ from skyrl_train.trajectory_runners.trajectory_processing import (
     rollout_successes,
 )
 from skyrl_train.trajectory_runners.types import BatchFields, RewardShapingComponents
-
-
-class BatchPolicy(StrEnum):
-    """How committed groups are assigned to training batches; the two coincide at ``max_staleness_steps=0``."""
-
-    FULL_BATCH = "full_batch"
-    ROLLING = "rolling"
 
 
 @dataclass(frozen=True)
@@ -578,9 +571,8 @@ class RolloutBuffer:
     async def acquire_lease(self) -> RolloutLease:
         """Wait for generation capacity and lease it at the current policy step."""
         async with self._changed:
-            await self._changed.wait_for(lambda: self._lease_batch() is not None)
-            batch_id = self._lease_batch()
-            assert batch_id is not None
+            while (batch_id := self._lease_batch()) is None:
+                await self._changed.wait()
             family = self._lease_family(batch_id) if self.config.family_quotas else None
             lease = RolloutLease(uuid.uuid4().hex, self._policy_step, batch_id, family)
             self._leases[lease.lease_id] = lease
@@ -590,8 +582,8 @@ class RolloutBuffer:
         occupied = collections.Counter(
             lease.family for lease in self._leases.values() if lease.batch_id == batch_id and lease.family is not None
         )
-        occupied.update(group.prompt["family"] for group in self._ready if group.batch_id == batch_id)
-        occupied.update(group.prompt["family"] for group in self._admitted[batch_id])
+        occupied.update(group.prompt[FAMILY_COLUMN] for group in self._ready if group.batch_id == batch_id)
+        occupied.update(group.prompt[FAMILY_COLUMN] for group in self._admitted[batch_id])
         for _ in range(len(self._family_order)):
             family = self._family_order[0]
             self._family_order.rotate(-1)
@@ -603,7 +595,7 @@ class RolloutBuffer:
         """Record a written group and release its lease."""
         async with self._changed:
             lease = self._leases[lease_id]
-            if lease.family is not None and prompt.get("family") != lease.family:
+            if lease.family is not None and prompt.get(FAMILY_COLUMN) != lease.family:
                 raise ValueError("Committed prompt family does not match its rollout lease")
             del self._leases[lease_id]
             self._generated.append((lease.policy_step, verdict.work))
@@ -683,10 +675,14 @@ class RolloutBuffer:
                 stats = self._stats.pop(self._policy_step)
                 metrics = stats.metrics(self.config.dynamic_sampling)
                 if self.config.family_quotas:
-                    counts = collections.Counter(group.prompt["family"] for group in self._admitted[self._policy_step])
+                    counts = collections.Counter(
+                        group.prompt[FAMILY_COLUMN] for group in self._admitted[self._policy_step]
+                    )
                     if counts != self.config.family_quotas:
-                        raise RuntimeError("Rollout batch does not meet trainer.rollout_buffer.family_quotas")
-                    metrics.update({f"async/consumed_family/{family}": float(count) for family, count in counts.items()})
+                        raise RuntimeError(f"Rollout batch does not meet {FAMILY_QUOTAS_KEY}")
+                    metrics.update(
+                        {f"async/consumed_family/{family}": float(count) for family, count in counts.items()}
+                    )
                 selection = BatchSelection(metrics, stats.judged)
                 self._batch_taken = True
             elif (batch_id := self._over_budget_batch()) is not None:
@@ -740,12 +736,12 @@ class RolloutBuffer:
             if self._policy_step or self._leases or self._ready or self._retries or any(self._admitted.values()):
                 raise RuntimeError("a rollout buffer can only be restored before training starts")
             if self.config.family_quotas:
-                occupied = collections.Counter((row.batch_id, row.prompt.get("family")) for row in snapshot.ready)
+                occupied = collections.Counter((row.batch_id, row.prompt.get(FAMILY_COLUMN)) for row in snapshot.ready)
                 if any(
                     family is None or count > self.config.family_quotas.get(family, 0)
                     for (_, family), count in occupied.items()
                 ):
-                    raise ValueError("Checkpoint rollout groups do not fit trainer.rollout_buffer.family_quotas")
+                    raise ValueError(f"Checkpoint rollout groups do not fit {FAMILY_QUOTAS_KEY}")
             self._ready.extend(snapshot.ready)
             self._retries.extend(snapshot.retries)
 

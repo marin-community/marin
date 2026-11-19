@@ -30,7 +30,7 @@ async def test_rejected_rollout_reopens_the_same_family_slot():
         )
     )
 
-    async def commit(lease: RolloutLease, *, rejected: bool = False) -> None:
+    async def commit(lease: RolloutLease, *, rejected: bool = False, family: str | None = None) -> None:
         verdict = RolloutVerdict(
             lease.lease_id,
             (AdmissionRejection.FULLY_MASKED,) if rejected else (),
@@ -39,12 +39,14 @@ async def test_rejected_rollout_reopens_the_same_family_slot():
             GeneratedWork(2, 2, 20),
         )
         payload = PayloadReference(None if rejected else lease.lease_id)
-        await buffer.commit(lease.lease_id, {"family": lease.family}, verdict, payload)
+        await buffer.commit(lease.lease_id, {"family": family if family is not None else lease.family}, verdict, payload)
 
     async with asyncio.timeout(5):
         await buffer.publish(1)
         first, rejected, *later = [await buffer.acquire_lease() for _ in range(4)]
         assert (first.family, rejected.family) == ("agentic", "math")
+        with pytest.raises(ValueError, match="family does not match its rollout lease"):
+            await commit(first, family=rejected.family)
         others = [first, *later]
         for lease in reversed(others):
             await commit(lease)

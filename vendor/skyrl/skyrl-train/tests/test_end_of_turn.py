@@ -106,10 +106,15 @@ def test_a_tool_call_cut_off_at_the_budget_on_a_special_delimiter_is_a_length_st
 
 
 @pytest.mark.parametrize(
-    "options",
-    [{"max_tokens": 64}, {"max_completion_tokens": 64}, {"max_tokens": 64, "max_completion_tokens": 127}],
+    ("options", "effective_cap"),
+    [
+        ({"max_tokens": 64}, 64),
+        ({"max_completion_tokens": 64}, 64),
+        ({"max_tokens": 64, "max_completion_tokens": 127, "max_output_tokens": 96}, 64),
+        ({"max_tokens": 256}, 128),
+    ],
 )
-def test_agent_output_cap_reaches_the_chat_server(options):
+def test_agent_output_cap_reaches_the_chat_server(options, effective_cap):
     engine = _InferenceClient([PLAN], "stop")
     output = asyncio.run(
         DirectModelClient(engine).generate(
@@ -121,6 +126,6 @@ def test_agent_output_cap_reaches_the_chat_server(options):
         )
     )
     [request] = engine.chat_requests
-    assert request["max_completion_tokens"] == 64
+    assert request["max_completion_tokens"] == effective_cap
     assert "max_tokens" not in request
-    assert output["generation_token_budgets"] == [64]
+    assert output["generation_token_budgets"] == [effective_cap]

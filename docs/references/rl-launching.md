@@ -202,6 +202,12 @@ parallelism. An omitted or null ETP inherits the role's TP before these checks.
 Context-parallel ranks participate in the expert grid, so EP need not divide dense
 data parallelism.
 
+Set `trainer.rollout_buffer.family_quotas` for fixed numbers of prompt groups per task family in
+each training batch. Each Parquet training row supplies its `family`. The counts must sum to
+`trainer.train_batch_size`. Use `batch_policy: full_batch` and leave `data.sampling.kind` unset.
+Each family needs its quota times `max_staleness_steps + 1` usable rows so that every batch in
+the rollout window can use distinct prompts. A rejected group releases a slot in its own family.
+
 ## Artifact and runtime boundaries
 
 Identity-bearing inputs belong in `SkyRLSpec`: model and tokenizer,
@@ -219,12 +225,6 @@ Use artifact dependencies for model and data handoffs. A raw checkpoint path hid
 can point at an incomplete export. Keep resume behavior and terminal export explicit. Use Marin's
 temporary-storage helper for checkpoints and trajectories so paths have a bounded lifetime and do
 not repeat a source bucket prefix.
-
-Set `trainer.rollout_buffer.family_quotas` for fixed numbers of prompt groups per task family in
-each training batch. Each Parquet training row supplies its `family`. The counts must sum to
-`trainer.train_batch_size`. Use `batch_policy: full_batch` and leave `data.sampling.kind` unset.
-Each family needs its quota times `max_staleness_steps + 1` usable rows so that every batch in
-the rollout window can use distinct prompts. A rejected group releases a slot in its own family.
 
 Shared W&B trackers bound final SDK uploads to 30 seconds per process. The
 training entrypoint first waits up to 30 seconds for remote node loggers, then

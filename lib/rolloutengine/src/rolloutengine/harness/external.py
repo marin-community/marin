@@ -25,7 +25,7 @@ AgentRun = Callable[[HarnessContext, AgentCompletion], Coroutine[Any, Any, None]
 """An agent: it gets the attempt's context and a completion function, and sends one prompt at a time."""
 
 
-def messages_equal(left: tuple[dict[str, Any], ...], right: tuple[dict[str, Any], ...]) -> bool:
+def _messages_equal(left: tuple[dict[str, Any], ...], right: tuple[dict[str, Any], ...]) -> bool:
     """Compare messages after normalizing empty fields and tool argument JSON."""
     return len(left) == len(right) and all(
         a == b or _normalized_message(a) == _normalized_message(b) for a, b in zip(left, right, strict=True)
@@ -69,7 +69,7 @@ async def complete_agent_prompt(
             prompt.token_ids is None
             and turn.stop_reason != LENGTH_STOP_REASON
             and reply_options_match(previous.options, prompt.options)
-            and messages_equal(prefix, history)
+            and _messages_equal(prefix, history)
         )
         if exact_reply or text_reply:
             return await session.reply(
@@ -82,14 +82,7 @@ async def complete_agent_prompt(
 class AgentHarness:
     """A harness for an agent that owns its prompts and tool loop.
 
-    Each completion call sends one prompt and returns the exact ``ModelTurn``, also from tasks that the agent
-    does not await, such as HTTP handlers. A prompt that extends the last history with the same options is
-    a reply. After a turn that finishes within its token limit, a prompt without pinned tokens can also
-    reply with equivalent messages and updated output caps. Other prompts start a new conversation.
-    The last prompt again gets the same turn. One model request can be open at a time. When the attempt
-    ends, calls wait until the cleanup after grading, when the cleanup cancels the agent. ``check``
-    rejects tools outside the harness, such as an answer tool or a tool provider. The task rollout
-    reference gives the rules for cancelled calls and for agent shutdown.
+    See the task rollouts reference for conversation, cancellation, and shutdown rules.
     """
 
     context_recovery = ContextRecovery.ALWAYS

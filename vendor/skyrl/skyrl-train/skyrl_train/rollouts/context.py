@@ -19,7 +19,13 @@ from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 from marinskyrl.environment_contract import TrainingType
 from marinskyrl.runtime_options import PolicyLossType
 from marinskyrl.distillation import DistillationObjectiveKind, compile_distillation_plan_from_config
-from skyrl_train.config.rollout_validation import validate_family_pools, validate_family_quota_config
+from skyrl_train.config.rollout_validation import (
+    FAMILY_COLUMN,
+    FAMILY_QUOTAS_KEY,
+    BatchPolicy,
+    validate_family_pools,
+    validate_family_quota_config,
+)
 from skyrl_train.curriculum import CurriculumConfig, CurriculumOrder, SamplingKind
 from skyrl_train.dataset import PromptDataset
 from skyrl_train.domain_sampling import DomainWeightedOrder
@@ -31,7 +37,6 @@ from skyrl_train.dynamic_sampling import (
 from skyrl_train.group_admission import GroupAdmissionPolicy, GroupAdmissionStalledError, GroupAdvantageInvariant
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 from skyrl_train.rollouts.buffer import (
-    BatchPolicy,
     Admission,
     AdmittedRollout,
     BufferSnapshot,
@@ -192,11 +197,13 @@ class TrainingContext:
         )
         families: dict[str, str] = {}
         if family_quotas:
-            if not isinstance(dataset, PromptDataset) or "family" not in dataset.dataframe.column_names:
-                raise ValueError("trainer.rollout_buffer.family_quotas requires a family column in the training rows")
-            column = dataset.dataframe.with_format(None)["family"]
+            if not isinstance(dataset, PromptDataset) or FAMILY_COLUMN not in dataset.dataframe.column_names:
+                raise ValueError(f"{FAMILY_QUOTAS_KEY} requires a {FAMILY_COLUMN} column in the training rows")
+            column = dataset.dataframe.with_format(None)[FAMILY_COLUMN]
             families = {dataset.uid(index): family for index, family in enumerate(column)}
-            validate_family_pools(family_quotas, collections.Counter(families.values()), buffer_config.max_staleness_steps)
+            validate_family_pools(
+                family_quotas, collections.Counter(families.values()), buffer_config.max_staleness_steps
+            )
         plan = compile_distillation_plan_from_config(config)
         admission = GroupAdmissionPolicy(
             GroupAdvantageInvariant.from_config(algorithm.resolved_group_advantage),

@@ -14,7 +14,12 @@ from pyarrow import parquet
 from skyrl_train.config.callbacks import validate_hf_export_config
 from skyrl_train.config.mismatch_probe import validate_mismatch_probe_config
 from skyrl_train.config.objective_spec import validate_objective
-from skyrl_train.config.rollout_validation import validate_family_pools, validate_family_quota_config
+from skyrl_train.config.rollout_validation import (
+    FAMILY_COLUMN,
+    FAMILY_QUOTAS_KEY,
+    validate_family_pools,
+    validate_family_quota_config,
+)
 from skyrlrecipe import RLEntrypoint
 
 from cloud.iris.ray_storage import RaySpillBackend, resolve_ray_spill_target
@@ -322,20 +327,18 @@ def _validate_inputs(inputs: dict[str, Any]) -> None:
 def _validate_launch_family_pools(
     inputs: dict[str, Any], quotas: dict[str, int], max_staleness_steps: int
 ) -> None:
-    if inputs["data_kind"] != "parquet":
-        raise ValueError("trainer.rollout_buffer.family_quotas requires parquet training rows with a family column")
+    sources = [data_source(entry) for entry in inputs["train_data"]]
+    if inputs["data_kind"] != "parquet" or any(not isinstance(source, DirectoryDataSource) for source in sources):
+        raise ValueError(f"{FAMILY_QUOTAS_KEY} requires parquet training rows with a {FAMILY_COLUMN} column")
     counts: Counter[str | None] = Counter()
-    for entry in inputs["train_data"]:
-        source = data_source(entry)
-        if not isinstance(source, DirectoryDataSource):
-            raise ValueError("trainer.rollout_buffer.family_quotas requires parquet training rows with a family column")
-        uri = join_resource_path(source.uri, source.relative_path) if source.relative_path else source.uri
+    for source in sources:
+        uri = join_resource_path(source.uri, source.relative_path)
         filesystem, path = filesystem_and_path(uri)
         with filesystem.open(path, "rb") as stream:
             rows = parquet.ParquetFile(stream)
-            if "family" not in rows.schema_arrow.names:
-                raise ValueError(f"trainer.rollout_buffer.family_quotas requires a family column in {uri}")
-            for batch in rows.iter_batches(columns=["family"]):
+            if FAMILY_COLUMN not in rows.schema_arrow.names:
+                raise ValueError(f"{FAMILY_QUOTAS_KEY} requires a {FAMILY_COLUMN} column in {uri}")
+            for batch in rows.iter_batches(columns=[FAMILY_COLUMN]):
                 counts.update(batch.column(0).to_pylist())
     validate_family_pools(quotas, counts, max_staleness_steps)
 

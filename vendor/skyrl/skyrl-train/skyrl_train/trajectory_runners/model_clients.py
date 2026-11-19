@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import numpy as np
 from transformers import PreTrainedTokenizerBase
+from rolloutengine.harness.core import OUTPUT_LIMIT_OPTION_KEYS
 from rolloutengine.models import RolloutContractError
 
 from skyrl_gym.envs.nemotron_ultra.answer_extraction import final_answer_text
@@ -48,7 +49,6 @@ from skyrl_train.rollout_observability import rollout_phase
 # The per-turn output limit, as the trainer config (`max_generate_length`) and vLLM (`max_tokens`) spell it. Chat
 # requests carry it only as `max_completion_tokens`, which vLLM prefers over `max_tokens`.
 _OUTPUT_LIMIT_KEYS = ("max_generate_length", "max_tokens")
-_CHAT_OUTPUT_LIMIT_KEYS = ("max_completion_tokens", "max_output_tokens", "max_tokens")
 _CHAT_SAMPLING_EXCLUSIONS = frozenset({*_OUTPUT_LIMIT_KEYS, "logprobs", "stop"})
 
 
@@ -93,9 +93,13 @@ class GenerationBudgetExceededError(ContextLengthExceededError):
         super().__init__(category="context_overflow", request_id=None, status_code=None)
 
 
-def _generation_token_budget(
-    request: InferenceEngineInput, prompt_ids: list[int], requested_tokens: list[int]
-) -> int | None:
+def _requested_output_limit(options: dict[str, Any]) -> int | None:
+    return min(
+        (int(value) for key in OUTPUT_LIMIT_OPTION_KEYS if (value := options.get(key)) is not None), default=None
+    )
+
+
+def _generation_token_budget(request: InferenceEngineInput, prompt_ids: list[int], requested_limit: int | None) -> int | None:
     """Return the tightest output cap, or None when uncapped.
 
     Raise GenerationBudgetExceededError if the prompt exceeds its cap or fills the context.
@@ -105,7 +109,8 @@ def _generation_token_budget(
         raise GenerationBudgetExceededError(prompt_ids)
     sampling = request.get("sampling_params") or {}
     configured = [int(sampling[key]) for key in _OUTPUT_LIMIT_KEYS if sampling.get(key) is not None]
-    configured.extend(requested_tokens)
+    if requested_limit is not None:
+        configured.append(requested_limit)
     max_context_length = request.get("max_context_length")
     if max_context_length is not None:
         remaining = max_context_length - len(prompt_ids)
@@ -292,12 +297,7 @@ class DirectModelClient:
         prompt_ids = assistant_prefix_token_ids(self._client.tokenizer, messages, options)
         sampling = dict(request.get("sampling_params") or {})
         skip_special_tokens = options.get("skip_special_tokens", sampling.get("skip_special_tokens", True))
-        requested_tokens = [
-            int(options[key])
-            for key in _CHAT_OUTPUT_LIMIT_KEYS
-            if options.get(key) is not None
-        ]
-        token_budget = _generation_token_budget(request, prompt_ids, requested_tokens)
+        token_budget = _generation_token_budget(request, prompt_ids, _requested_output_limit(options))
         if token_budget is not None:
             sampling["max_tokens"] = token_budget
         sampling.pop("max_generate_length", None)
@@ -339,9 +339,8 @@ class DirectModelClient:
         result.pop("input", None)
         if not result.get("tools"):
             result.pop("tools", None)
-        requested_limits = [int(value) for key in _CHAT_OUTPUT_LIMIT_KEYS if (value := result.pop(key, None)) is not None]
-        if requested_limits:
-            result["max_completion_tokens"] = min(requested_limits)
+        for key in OUTPUT_LIMIT_OPTION_KEYS:
+            result.pop(key, None)
         return result
 
     async def _generate_chat(self, request: InferenceEngineInput) -> ModelClientOutput:
@@ -377,10 +376,7 @@ class DirectModelClient:
             }
             with rollout_phase("tokenize"):
                 messages, prompt_ids = await _render_chat_prompt(self._client.tokenize, render_request, continuation)
-            requested_tokens = (
-                [] if chat_options.get("max_completion_tokens") is None else [int(chat_options["max_completion_tokens"])]
-            )
-            token_budget = _generation_token_budget(request, prompt_ids, requested_tokens)
+            token_budget = _generation_token_budget(request, prompt_ids, _requested_output_limit(row_options))
             if token_budget is not None:
                 chat_options["max_completion_tokens"] = token_budget
 

@@ -9,6 +9,8 @@ from typing import Any, Protocol
 
 import torch
 
+from skyrl_train.config.rollout_validation import FAMILY_COLUMN
+
 STALE_RETRIES_EXHAUSTED_METRIC = "async/stale_retries_exhausted"
 
 
@@ -116,7 +118,7 @@ class PromptLoader:
         *,
         batch_size: int,
         max_stale_retries: int,
-        families: Mapping[str, str] | None = None,
+        families: Mapping[str, str],
     ):
         if max_stale_retries < 0:
             raise ValueError(f"max_stale_retries must be non-negative, got {max_stale_retries}")
@@ -127,7 +129,7 @@ class PromptLoader:
                 f"{batch_size}; a batch trains each uid at most once"
             )
         self._dataset = dataset
-        self._families = dict(families or {})
+        self._families = dict(families)
         self._order = order
         self._draw_limit = 2 * batch_size
         self._max_stale_retries = max_stale_retries
@@ -136,7 +138,7 @@ class PromptLoader:
         self._retries_exhausted = 0
         self._scan_start = 0
 
-    def next_prompt(self, live: Collection[str], family: str | None = None) -> dict | None:
+    def next_prompt(self, live: Collection[str], family: str | None) -> dict | None:
         """Return an eligible prompt outside ``live`` in the requested family, if one is available.
 
         Prompts awaiting regeneration come first, then up to two batches' worth of the prompt order's draws. If those
@@ -196,4 +198,4 @@ class PromptLoader:
         return self._label_family(prompt)
 
     def _label_family(self, prompt: dict) -> dict:
-        return {**prompt, "family": self._families[prompt["uid"]]} if self._families else prompt
+        return {**prompt, FAMILY_COLUMN: self._families[prompt["uid"]]} if self._families else prompt

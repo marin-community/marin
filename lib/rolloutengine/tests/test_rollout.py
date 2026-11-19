@@ -487,7 +487,14 @@ async def test_output_capture_over_the_file_budget_interrupts_grading():
 
 @pytest.mark.parametrize(
     ("change", "continues"),
-    [("none", True), ("reserialized", True), ("output-limit", True), ("tools", False), ("compaction", False)],
+    [
+        ("none", True),
+        ("reserialized", True),
+        ("cut-reserialized", False),
+        ("output-limit", True),
+        ("tools", False),
+        ("compaction", False),
+    ],
 )
 async def test_agent_harness_receives_engine_turns_and_controls_next_history(change, continues):
     first = ({"role": "user", "content": "Return 12."},)
@@ -495,17 +502,18 @@ async def test_agent_harness_receives_engine_turns_and_controls_next_history(cha
     first_options = {"tool_choice": "auto", "max_tokens": 128, "max_completion_tokens": 128}
     next_options = dict(first_options)
     if change == "output-limit":
-        next_options.update(max_tokens=64, max_completion_tokens=64)
+        next_options.update(max_tokens=96, max_completion_tokens=96, max_output_tokens=64)
     if change == "tools":
         next_options["tools"] = [{"type": "function", "function": {"name": "finish", "parameters": {}}}]
     received = []
+    sent_histories = []
     finished = asyncio.Event()
 
     async def agent(complete):
         turn = await complete(Prompt(first, first_options))
         received.append(turn)
         message = turn.message
-        if change == "reserialized":
+        if change in {"reserialized", "cut-reserialized"}:
             call = message["tool_calls"][0]
             function = call["function"]
             arguments = json.dumps(json.loads(function["arguments"]), separators=(",", ":"))
@@ -519,10 +527,18 @@ async def test_agent_harness_receives_engine_turns_and_controls_next_history(cha
             if change == "compaction"
             else (*first, message, observation)
         )
+        sent_histories.append(history)
         received.append(await complete(Prompt(history, next_options)))
         finished.set()
 
-    model = ReplayModel([shell_call("echo 12 > answer"), {"role": "assistant", "content": "12"}])
+    class HistoryModel(ReplayModel):
+        async def complete(self, request):
+            turn = await super().complete(request)
+            if change == "cut-reserialized" and len(self.requests) == 1:
+                return replace(turn, stop_reason=LENGTH_STOP_REASON)
+            return turn
+
+    model = HistoryModel([shell_call("echo 12 > answer"), {"role": "assistant", "content": "12"}])
     result = await engine(model, harnesses={"agent": AgentHarness(lambda _context, complete: agent(complete))}).run_task(
         rollout_spec(arithmetic_task(), harness="agent")
     )
@@ -534,11 +550,7 @@ async def test_agent_harness_receives_engine_turns_and_controls_next_history(cha
     assert [turn.logprobs for turn in received] == [(-0.5,), (-0.5,)]
     assert result.rollout.conversations[-1].loss_mask == ((1, 0, 0, 1) if continues else (1,))
     assert [request.options for request in model.requests] == [first_options, next_options]
-    assert model.requests[1].messages == (
-        ({"role": "user", "content": "File written. Finish."},)
-        if change == "compaction"
-        else (*first, received[0].message, observation)
-    )
+    assert model.requests[1].messages == ((*first, received[0].message, observation) if continues else sent_histories[0])
 
 
 @pytest.mark.parametrize("change", ["none", "compaction", "output-limit"])

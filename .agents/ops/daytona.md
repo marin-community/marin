@@ -71,6 +71,23 @@ OpenThoughts-Agent Jupiter launcher also uses `DC_AGENT_SECRET_ENV` to identify
 its private secrets file. That is a launcher-specific setting, not an Iris
 requirement. See the source Jupiter runbook below for that workflow.
 
+## Pi HTTP idle timeout
+
+Pi's HTTP idle timeout is separate from Harbor task and agent deadlines and
+provider execution deadlines. For a prepared policy that already selects Pi,
+pass the optional `http_idle_timeout` agent kwarg in seconds:
+
+```bash
+uv run --isolated --project vendor/harbor --frozen --extra runtime \
+  harbor run --config prepared-policy.yaml \
+  --agent-kwarg http_idle_timeout=360
+```
+
+Harbor writes Pi's existing `httpIdleTimeoutMs` setting in milliseconds and
+preserves other settings, including compaction. Omit the kwarg to keep the
+image's setting; the pinned Pi 0.87.0 defaults to five minutes. This override
+does not extend Harbor or provider execution deadlines.
+
 ## Snapshot preflight and reclamation
 
 Shellbox identifies snapshots for all launchers. One snapshot
@@ -233,11 +250,6 @@ exception and preserve it separately from model errors. After any backend or
 snapshot change, run the campaign's end-to-end smoke before scaling collection.
 
 ## Sandbox lifecycle and idle cleanup
-
-For Pi agents, set `http_idle_timeout` in the agent kwargs when a model request
-can go several minutes without returning HTTP headers or response bytes. The
-value is in seconds and is written to Pi's `httpIdleTimeoutMs` setting. When
-omitted, Pi uses the image's settings and its own default.
 
 Hard termination can orphan in-flight sandboxes. Reap only sandboxes proven idle
 and covered by cleanup authority. Correlate provider IDs/labels with the owning

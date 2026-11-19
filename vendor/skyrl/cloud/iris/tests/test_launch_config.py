@@ -655,12 +655,22 @@ def test_composed_launch_rejects_tis_selectors(tmp_path: Path, key: str, value) 
         ),
         ({"algorithm.dynamic_sampling.max_mean_reward": 0.9}, "requires dynamic_sampling.type=filter"),
         ({"algorithm.dynamic_sampling.max_mean_reward": 0.9, "algorithm.dynamic_sampling.type": "filter"}, None),
+        (
+            {"rollout_buffer.family_quotas": {"math": 8}, "rollout_buffer.batch_policy": "rolling"},
+            "requires batch_policy=full_batch",
+        ),
+        ({"rollout_buffer.family_quotas": {"math": 7}}, "sums to 7, expected train_batch_size=8"),
+        (
+            {"rollout_buffer.family_quotas": {"math": 8}, "data.sampling.kind": "domain-weighted"},
+            r"requires data\.sampling\.kind to be null",
+        ),
     ],
 )
 def test_launch_validates_correction_and_selection_contract(tmp_path: Path, overrides: dict, error: str | None):
     raw = OmegaConf.create(raw_launch_config())
     for key, value in overrides.items():
-        OmegaConf.update(raw.skyrl.trainer, key, value, force_add=True)
+        path = key if key.startswith("data.") else f"trainer.{key}"
+        OmegaConf.update(raw.skyrl, path, value, force_add=True)
     path = tmp_path / "launch.yaml"
     OmegaConf.save(raw, path)
     if error is not None:
@@ -683,17 +693,17 @@ def test_source_launch_preserves_nested_open_mappings(tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("policy", "quotas", "staleness", "count", "error"),
+    ("remaining_families", "error"),
     [
-        ("rolling", {"math": 4, "code": 4}, 0, 8, "requires batch_policy=full_batch"),
-        ("full_batch", {"math": 3, "code": 4}, 0, 8, "sums to 7, expected train_batch_size=8"),
-        ("full_batch", {"math": 4, "code": 4}, 1, 7, "requires 8 rows for family 'code', found 7"),
-        ("full_batch", {"math": 4, "code": 4}, 1, 8, None),
+        (["code"] * 7, "requires 8 rows for family 'code', found 7"),
+        (["code"] * 8 + ["other"], r"names .* but training rows have families .*'other'"),
+        (["code"] * 8, None),
     ],
+    ids=["insufficient", "unlisted-family", "valid-pool"],
 )
-def test_launch_preflights_family_quotas(tmp_path, policy, quotas, staleness, count, error):
+def test_launch_preflights_family_quotas(tmp_path, remaining_families, error):
     data_path = tmp_path / "tasks.parquet"
-    pq.write_table(pa.table({"family": ["math"] * 8 + ["code"] * count}), data_path)
+    pq.write_table(pa.table({"family": ["math"] * 8 + remaining_families}), data_path)
     raw = raw_launch_config()
     raw["inputs"]["data_kind"] = "parquet"
     raw["inputs"]["train_data"] = [
@@ -703,9 +713,8 @@ def test_launch_preflights_family_quotas(tmp_path, policy, quotas, staleness, co
     raw["skyrl"]["data"] = {"kind": "parquet"}
     trainer = raw["skyrl"]["trainer"]
     trainer["rollout_buffer"] = {
-        "batch_policy": policy,
-        "family_quotas": quotas,
-        "max_staleness_steps": staleness,
+        "family_quotas": {"math": 4, "code": 4},
+        "max_staleness_steps": 1,
     }
     trainer["placement"]["colocate_all"] = False
     trainer["algorithm"]["off_policy_correction"] = "none"

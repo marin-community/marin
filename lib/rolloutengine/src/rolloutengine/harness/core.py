@@ -17,13 +17,13 @@ from taskcompendium.models import TaskSpec
 
 from rolloutengine.models import ContextRecovery, EventSink, ModelTurn, Prompt, RolloutLimits
 
-_REPLY_OPTION_KEYS = {"max_tokens", "max_completion_tokens"}
+OUTPUT_LIMIT_OPTION_KEYS = ("max_tokens", "max_completion_tokens", "max_output_tokens")
 
 
 def reply_options_match(previous: dict[str, Any], current: dict[str, Any]) -> bool:
     """Check whether the model options can belong to the same conversation."""
-    return {key: value for key, value in previous.items() if key not in _REPLY_OPTION_KEYS} == {
-        key: value for key, value in current.items() if key not in _REPLY_OPTION_KEYS
+    return {key: value for key, value in previous.items() if key not in OUTPUT_LIMIT_OPTION_KEYS} == {
+        key: value for key, value in current.items() if key not in OUTPUT_LIMIT_OPTION_KEYS
     }
 
 

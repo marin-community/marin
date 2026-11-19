@@ -5,11 +5,12 @@ from types import SimpleNamespace
 import pytest
 from omegaconf import OmegaConf
 
-from skyrl_train.callbacks.base import TrainerControl, TrainerState
+from skyrl_train.callbacks.base import CallbackHandler, TrainerControl, TrainerState
 from skyrl_train.callbacks.builtin import create_callbacks_from_config
 from skyrl_train.rollouts.context import TrainingContextState
 from skyrl_train.rollouts.loader import PromptLoaderState
 from skyrl_train.trainer import RayPPOTrainer
+from skyrl_train.utils.trainer_utils import ResumeMode
 
 
 @pytest.mark.asyncio
@@ -105,7 +106,8 @@ async def test_delayed_best_selection_preserves_baseline_gates_after_resume(tmp_
 
 
 @pytest.mark.asyncio
-async def test_periodic_checkpoint_can_be_selected_on_write_once_storage(tmp_path, monkeypatch):
+@pytest.mark.parametrize("restart", [False, True], ids=["same-trainer", "after-restart"])
+async def test_periodic_checkpoint_can_be_selected_on_write_once_storage(tmp_path, monkeypatch, restart):
     class PolicyStorage:
         def async_run_ray_method(self, _dispatch, method, **kwargs):
             if method == "save_checkpoint":
@@ -122,7 +124,10 @@ async def test_periodic_checkpoint_can_be_selected_on_write_once_storage(tmp_pat
         {
             "trainer": {
                 "ckpt_path": str(tmp_path),
+                "ckpt_interval": 1,
                 "max_ckpts_to_keep": -1,
+                "offload_optimizer_during_rollouts": False,
+                "restore_dataloader_state": False,
                 "callbacks": [
                     {
                         "type": "best_checkpoint",
@@ -136,26 +141,36 @@ async def test_periodic_checkpoint_can_be_selected_on_write_once_storage(tmp_pat
         }
     )
     monkeypatch.setattr("skyrl_train.trainer.ray.get", lambda refs: refs)
-    trainer = RayPPOTrainer.__new__(RayPPOTrainer)
-    trainer.cfg = config
-    trainer.policy_model = PolicyStorage()
-    trainer.critic_model = None
-    trainer.context = SimpleNamespace(state_dict=rollout_state)
-    trainer.tokenizer = None
-    trainer.all_timings = {}
-    trainer._last_saved_step = None
-    trainer._ftpo_stopped = False
-    trainer._domain_balancer = None
-    trainer.distillation_scored_tokens_total = 0
-    callback = create_callbacks_from_config(config)[0]
+
+    def make_trainer():
+        trainer = RayPPOTrainer.__new__(RayPPOTrainer)
+        trainer.cfg = config
+        trainer.policy_model = PolicyStorage()
+        trainer.critic_model = None
+        trainer.context = SimpleNamespace(state_dict=rollout_state)
+        trainer.tokenizer = None
+        trainer.all_timings = {}
+        trainer._last_saved_step = None
+        trainer._ftpo_stopped = False
+        trainer._domain_balancer = None
+        trainer.distillation_scored_tokens_total = 0
+        trainer.colocate_all = False
+        trainer.resume_mode = ResumeMode.LATEST
+        trainer.callback_handler = CallbackHandler(create_callbacks_from_config(config))
+        trainer._control = TrainerControl()
+        return trainer
+
+    trainer = make_trainer()
     coverage = {"eval/all/num_attempted": 1, "eval/all/num_scored": 1}
-    await callback.on_evaluate_async(
-        TrainerState(0, 0, 1, 1), TrainerControl(), trainer=trainer, metrics={**coverage, "score": 0.0}
-    )
     trainer.global_step = 1
-    await trainer.save_checkpoints()
+    await trainer._save_intermediate_checkpoint(TrainerState(1, 0, 1, 1))
+    if restart:
+        await trainer._drain_checkpoint_upload()
+        trainer = make_trainer()
+        trainer.global_step, _ = trainer.load_checkpoints()
+    callback = trainer.callback_handler.callbacks[0]
     await callback.on_evaluate_async(
-        TrainerState(1, 0, 1, 1), TrainerControl(), trainer=trainer, metrics={**coverage, "score": 1.0}
+        TrainerState(trainer.global_step, 0, 1, 1), TrainerControl(), trainer=trainer, metrics={**coverage, "score": 1.0}
     )
 
     selected = json.loads((tmp_path / "best_checkpoint.json").read_text())
