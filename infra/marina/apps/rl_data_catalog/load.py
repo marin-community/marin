@@ -73,8 +73,8 @@ MAX_BATCH_BYTES = 1_000_000
 # batches — bounded both by bytes and by row count. Catalog rows with inline
 # evidence exceed the byte budgets and keep the default.
 TABLE_BATCH_BYTES = {
-    "items": 50_000,
-    "packets": 50_000,
+    "items": 35_000,
+    "packets": 35_000,
 }
 TABLE_BATCH_ROWS = {
     "items": 5,
@@ -360,12 +360,15 @@ def load_catalog(
     *,
     display_policy: CatalogDisplayPolicy = CatalogDisplayPolicy.STRICT,
     full_reviews: dict[str, FullContentResultBinding] | None = None,
+    resume_load_id: str | None = None,
 ) -> dict[str, Any]:
     """Stage and validate a snapshot, then select it if the serving pointer is unchanged.
 
     ``full_reviews`` carries staged whole-source FULL review bindings keyed by
     source ID. For each bound source without a catalog assessment, the loader
     stages the pinned per-task review rows as a browseable assessment.
+    ``resume_load_id`` continues a previous attempt of the same load: the staged
+    prefixes per table are skipped and the fixed load identifier is reused.
     """
     started = time.monotonic()
     backend_map = canonical_backend_survey(backend_map.model_dump(mode="json"))
@@ -408,7 +411,21 @@ def load_catalog(
         materialize_cohort_summaries(lambda sql, parameters: query(sql, parameters)["rows"], current[0]["load_id"])
         return {"changed": False, "snapshot_id": snapshot.snapshot_id}
     expected_load_id = current[0]["load_id"] if current else None
-    load_id = uuid.uuid4().hex
+    load_id = resume_load_id or uuid.uuid4().hex
+    staged_prefixes: dict[str, int] = {}
+    if resume_load_id is not None:
+        # A resumed load reuses its fixed identifier and skips the staged prefixes:
+        # the rows are inserted in a deterministic order, so each table's staged
+        # row count is exactly the prefix the previous attempt completed.
+        staged_prefixes = {
+            table: query(
+                f"SELECT COUNT(*) AS n FROM atlas_{table} WHERE load_id = :load_id",
+                {"load_id": load_id},
+            )[
+                "rows"
+            ][0]["n"]
+            for table in TABLE_COLUMNS
+        }
     requests = 2
 
     def execute(sql: str, parameters: dict[str, Any]) -> dict[str, Any]:
@@ -417,23 +434,44 @@ def load_catalog(
         return query(sql, parameters)
 
     def insert(table: str, rows: Iterable[dict[str, Any]]) -> int:
+        skip = staged_prefixes.get(table, 0)
+        if skip:
+            rows = list(rows)
+            rows = rows[skip:]
+            if not rows:
+                return 0
         return insert_rows(execute, f"atlas_{table}", TABLE_COLUMNS[table], load_id, rows)
 
-    execute(
-        """
-        INSERT INTO atlas_loads
-            (load_id, catalog_root, snapshot_id, created_at, review_completeness_version, display_policy)
-        VALUES (:load_id, :catalog_root, :snapshot_id, :created_at, :review_completeness_version, :display_policy)
-    """,
-        {
-            "load_id": load_id,
-            "catalog_root": catalog.root,
-            "snapshot_id": snapshot.snapshot_id,
-            "created_at": snapshot.created_at,
-            "review_completeness_version": REVIEW_COMPLETENESS_VERSION,
-            "display_policy": display_policy,
-        },
-    )
+    if resume_load_id is not None:
+        execute(
+            "UPDATE atlas_loads SET catalog_root = :catalog_root, snapshot_id = :snapshot_id, "
+            "created_at = :created_at, review_completeness_version = :review_completeness_version, "
+            "display_policy = :display_policy WHERE load_id = :load_id",
+            {
+                "load_id": load_id,
+                "catalog_root": catalog.root,
+                "snapshot_id": snapshot.snapshot_id,
+                "created_at": snapshot.created_at,
+                "review_completeness_version": REVIEW_COMPLETENESS_VERSION,
+                "display_policy": display_policy,
+            },
+        )
+    else:
+        execute(
+            """
+            INSERT INTO atlas_loads
+                (load_id, catalog_root, snapshot_id, created_at, review_completeness_version, display_policy)
+            VALUES (:load_id, :catalog_root, :snapshot_id, :created_at, :review_completeness_version, :display_policy)
+        """,
+            {
+                "load_id": load_id,
+                "catalog_root": catalog.root,
+                "snapshot_id": snapshot.snapshot_id,
+                "created_at": snapshot.created_at,
+                "review_completeness_version": REVIEW_COMPLETENESS_VERSION,
+                "display_policy": display_policy,
+            },
+        )
     sources = [canonical_snapshot_source(source) for source in catalog.sources(snapshot.snapshot_id)]
     if retired := {source.id for source in sources} & retired_admission_source_ids():
         raise ValueError(f"Retired sources remain in the selected catalog: {sorted(retired)}")
@@ -733,6 +771,11 @@ def load_catalog(
         "catalog assessment load their pinned per-task review rows as a browseable assessment."
     ),
 )
+@click.option(
+    "--resume-load-id",
+    default=None,
+    help="Continue a previous attempt of this load: reuse the identifier and skip staged prefixes.",
+)
 def main(
     catalog_root: str,
     applet_id: str,
@@ -740,6 +783,7 @@ def main(
     backend_map: Path,
     source_identities: Path,
     full_content_reviews: Path | None,
+    resume_load_id: str | None,
 ) -> None:
     configure_coreweave_s3()
     survey = canonical_backend_survey(json.loads(backend_map.read_text()))
@@ -763,6 +807,7 @@ def main(
                     CatalogDisplayPolicy.PREVIEW if applet_id == PREVIEW_APP_ID else CatalogDisplayPolicy.STRICT
                 ),
                 full_reviews=reviews,
+                resume_load_id=resume_load_id,
             )
         )
     )
