@@ -15,6 +15,7 @@ from experiments.grug.moe_hero_pipeline.pipeline import (
 from experiments.grug.moe_hero_pipeline.tiny_hero import packed_batch, tiny_hero
 
 
+# Compiling both gradient paths can exceed the default minute on shared CI CPUs.
 @pytest.mark.timeout(180)
 @pytest.mark.parametrize("remat_mode", ["recompute_all", "offload_carry"])
 def test_hero_pipeline_loss_and_gradients_match_unsplit_model(remat_mode):

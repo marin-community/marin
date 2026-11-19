@@ -130,9 +130,6 @@ def test_hero_pipeline_applies_log_scaling():
     assert np.max(np.abs(np.asarray(expected_hidden) - np.asarray(off_hidden))) > 1e-4
 
 
-# Compiling both gradient paths can exceed the default minute on shared CI CPUs.
-
-
 def test_parked_host_copy_survives_device_alias_deletion_and_restores_bits():
     mesh = Mesh(np.asarray(jax.devices()[:1]), ("expert",), axis_types=(AxisType.Explicit,))
     sharding = NamedSharding(mesh, P("expert"))
