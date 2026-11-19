@@ -84,12 +84,8 @@ from marin.execution.lazy import ArtifactStep, StepContext, materialized_config
 from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
 from marin.processing.tokenize.tokenize import TokenizedCache
-from marin.training.training import (
-    LevanterCheckpoint,
-    TrainLmOnPodConfig,
-    apply_output_path,
-    run_levanter_train_lm,
-)
+from marin.training.levanter import apply_output_path, run_levanter_train_lm
+from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig
 from rigging.filesystem.cluster_config import marin_prefix
 
 VERSION = "2026.09.22"

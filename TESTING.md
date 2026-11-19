@@ -26,6 +26,14 @@ partial marker expression such as `-m "not slow"`; pytest replaces the default
 expression and may select live-cluster tests. Run excluded markers only when
 requested or directed by the relevant module guide.
 
+Tests that execute Linux guest behavior directly on the host can declare a
+requirement marker from their package's `conftest.py`: `requires_host_setsid` for the
+host executable, `requires_linux_procfs` for Linux CPU sampling,
+`requires_linux_loopback` for arbitrary loopback-address binding, or
+`requires_linux_process_api` for `/proc` process ownership and `waitid` with
+`WNOWAIT`. These markers skip only on macOS; Linux CI still runs the tests.
+Apply them to individual tests with reproduced host-semantics failures.
+
 The root and standalone Levanter pytest configurations use a 60-second per-test
 timeout, including fixture setup and teardown. On POSIX, pytest-timeout first
 interrupts the test with `SIGALRM`; if the test suppresses that failure, the test process exits five
@@ -49,10 +57,9 @@ When adding a new `lib/<name>/` package, run its unit tests through
 These registrations include the library in pull request, push, and full-suite
 runs.
 
-`vendor/evalchemy` is excluded from the workspace and uses its own `uv.lock`.
-Its dedicated `evalchemy-unit` lane checks that lock and runs the retained tests
-in the independent evaluator environment. Run them locally with
-`uv run --directory vendor/evalchemy --frozen --all-extras --group test pytest`.
+Harbor's isolated test environment includes TaskCompendium for task-curation
+rebuild and snapshot-identity checks; rebuild tests skip in environments without
+Harbor.
 
 Root `pyproject.toml` and `uv.lock` changes run the broad CPU matrix. The
 Levanter TPU lane runs for those changes when the resolved dependencies of

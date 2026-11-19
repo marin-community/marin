@@ -13,8 +13,10 @@ from harbor.cli.utils import (
     parse_tpu_spec,
     run_async,
 )
+from harbor.models.agent.name import AgentName
 from harbor.models.environment_type import EnvironmentType
 from harbor.models.trial.config import (
+    AgentConfig,
     EnvironmentConfig,
     ResourceMode,
     TaskConfig,
@@ -140,19 +142,7 @@ def start(
         Option(
             "-a",
             "--agent",
-            help=(
-                "Agent name or ACP registry shorthand "
-                "(for example: acp:opencode@1.3.9)."
-            ),
-            rich_help_panel="Agent",
-            show_default=False,
-        ),
-    ] = None,
-    agent_import_path: Annotated[
-        str | None,
-        Option(
-            "--agent-import-path",
-            help="Import path for custom agent",
+            help=f"Supported agent: {', '.join(name.value for name in AgentName)}.",
             rich_help_panel="Agent",
             show_default=False,
         ),
@@ -415,10 +405,12 @@ def start(
     if config_path is not None:
         if config_path.suffix == ".yaml":
             base_config = TrialConfig.model_validate(
-                yaml.safe_load(config_path.read_text())
+                yaml.safe_load(config_path.read_text()), extra="forbid"
             )
         elif config_path.suffix == ".json":
-            base_config = TrialConfig.model_validate_json(config_path.read_text())
+            base_config = TrialConfig.model_validate_json(
+                config_path.read_text(), extra="forbid"
+            )
         else:
             raise ValueError(f"Unsupported config file format: {config_path.suffix}")
 
@@ -426,7 +418,12 @@ def start(
         if path is None:
             raise ValueError("Either --path or --config must be provided")
 
+        if agent_name is None:
+            raise ValueError(
+                "Specify --agent or a config with an explicit supported agent"
+            )
         config = TrialConfig(
+            agent=AgentConfig(name=agent_name),
             task=TaskConfig(path=path),
             trial_name=trial_name or "",
             trials_dir=(
@@ -458,9 +455,6 @@ def start(
 
     if agent_name is not None:
         config.agent.name = agent_name
-    if agent_import_path is not None:
-        config.agent.import_path = agent_import_path
-        config.agent.name = None  # Clear name so import_path takes precedence
     if model_name is not None:
         config.agent.model_name = model_name
     if agent_timeout_sec is not None:
@@ -532,7 +526,7 @@ def start(
     async def _create_and_run() -> TrialResult:
         console.print(f"Starting trial: {config.trial_name}")
         console.print(f"Task: {config.task.get_task_id().get_name()}")
-        agent_display = config.agent.name or config.agent.import_path or "unknown"
+        agent_display = config.agent.name or "unknown"
         console.print(f"Agent: {agent_display}")
         environment_display = config.environment.type.value
         console.print(f"Environment: {environment_display}")

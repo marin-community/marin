@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import jax.random as jrandom
+import jmp
 
 import haliax.random
 
@@ -25,6 +26,7 @@ from levanter.adaptor.lora import (
     save_merged_hf_checkpoint_callback,
     save_peft_checkpoint_callback,
 )
+from levanter.field_dtype_overrides import hf_load_dtype
 from levanter.models.lm_model import LmExample, LmHeadModel
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
@@ -51,6 +53,13 @@ class LoraLmConfig:
 
     trust_remote_code: bool = False
     train_seq_len: int = 4096
+
+
+def load_base_model(converter: HFCheckpointConverter, model_config, parameter_axis_mapping, mp: jmp.Policy):
+    """Load the HF base model; fields in the policy's dtype overrides keep their stored dtype."""
+    return converter.load_pretrained(
+        model_config.model_type, axis_mapping=parameter_axis_mapping, dtype=hf_load_dtype(mp)
+    )
 
 
 def main(config: LoraLmConfig):
@@ -100,9 +109,7 @@ def main(config: LoraLmConfig):
 
         # load the underlying hf model
         logger.info(f"Loading pretrained model from {converter.reference_checkpoint}")
-        model = converter.load_pretrained(
-            model_config.model_type, axis_mapping=parameter_axis_mapping, dtype=trainer.mp.compute_dtype
-        )
+        model = load_base_model(converter, model_config, parameter_axis_mapping, trainer.mp)
 
         @haliax.named_jit(axis_resources=parameter_axis_mapping, donate_args=(True))
         def loraize_hf_model(model):
@@ -146,7 +153,7 @@ def main(config: LoraLmConfig):
                 trainer.device_mesh,
                 trainer.compute_axis_mapping,
                 max_eval_examples_per_ds,
-                mp=config.trainer.mp,
+                mp=trainer.mp,
             )
             trainer.add_hook(cb, every=config.trainer.steps_per_eval)
 
@@ -167,7 +174,12 @@ def main(config: LoraLmConfig):
         if config.merged_hf_save_path is not None:
             full_save_path = os.path.join(config.merged_hf_save_path, trainer.run_id)
             trainer.add_hook(
-                save_merged_hf_checkpoint_callback(full_save_path, converter, config.merged_hf_upload),
+                save_merged_hf_checkpoint_callback(
+                    full_save_path,
+                    converter,
+                    config.merged_hf_upload,
+                    field_dtype_overrides=config.trainer.field_dtype_overrides,
+                ),
                 every=config.hf_save_steps,
             )
 

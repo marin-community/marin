@@ -34,9 +34,8 @@ def _select_local_assignments(
 ) -> tuple[Int[Array, "Elocal"], jax.Array, Int[Array, "C"], Bool[Array, "C"]]:
     """Pick this shard's assignments in (local expert id, flat position) order under ring's capacity rule.
 
-    ``local_expert`` must be zero where ``local_mask`` is false. Returns the ``ragged_dot`` group sizes, with
-    padding rows attributed to the last expert, the dropped assignment count, the picked flat positions and
-    which of the ``physical_capacity`` picks are valid.
+    ``local_expert`` must be zero where ``local_mask`` is false. Returns accepted counts per expert, the dropped
+    assignment count, picked flat positions, and validity for each of the ``physical_capacity`` picks.
     """
     assignments = local_expert.shape[0]
     # TPU lowers this small-expert count reduction better as a dense compare+sum than as `bincount`.
@@ -56,9 +55,9 @@ def _select_local_assignments(
     order_key = local_expert * assignments + jnp.arange(assignments, dtype=jnp.int32)
     selection_key = jnp.where(local_mask, local_experts * assignments - order_key, -1)
     _, picked = jax.lax.top_k(selection_key, physical_capacity)
-    # `picked` pads with invalid rows at the end; attribute them to the final expert segment.
-    group_sizes = accepted_counts.at[-1].add(physical_capacity - accepted_total)
-    return group_sizes, dropped, picked, valid
+    # `picked` pads with invalid rows at the end. They stay outside every group, so ragged_dot skips them and leaves
+    # their output unspecified; the dispatch and combine read only the valid rows.
+    return accepted_counts, dropped, picked, valid
 
 
 def _gather_sum_slots(rows: Float[Array, "P H"], slots: Int[Array, "T K"]) -> Float[Array, "T H"]:
@@ -136,10 +135,13 @@ def _scatter_add_dispatch_combine(
 ) -> _DispatchCombine:
     """Dispatch with a take and combine with a scatter-add; autodiff transposes each into the other."""
     token = jnp.floor_divide(picked, topk)
+    # Invalid rows scatter out of range and are dropped: their ragged_dot output is unspecified, and a zero weight
+    # times a NaN row is still NaN.
+    combine_token = jnp.where(valid, token, tokens)
     return _DispatchCombine(
         dispatch=lambda x: _take_valid_rows(x, token, valid),
         combine=lambda rows, weights: jnp.zeros((tokens, rows.shape[1]), rows.dtype)
-        .at[token]
+        .at[combine_token]
         .add(rows * weights[:, None], mode="drop"),
     )
 

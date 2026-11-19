@@ -1,6 +1,6 @@
 {
   "name": "snowball-100k",
-  "version": "2026.11.04",
+  "version": "2026.11.10.1",
   "sources": {
     "MarinSkyRL:eurus2_code": "competitive_coding",
     "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_calendar_v2": "calendar",
@@ -10,7 +10,6 @@
     "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_structured_outputs_v2": "structural",
     "MarinSkyRL:openscience": "stem",
     "MarinSkyRL:reasoning_gym": "reasoning_gym",
-    "Task Trove:laion__glaive-code-assistant-sandboxes-verified-v2": "competitive_coding",
     "Task Trove:laion__nemotron-gym-agent-calendar-v2": "calendar",
     "Task Trove:laion__nemotron-gym-instruction-following-calendar-v3": "calendar",
     "Task Trove:laion__nemotron-gym-instruction-following-structured-v3": "structural",
@@ -24,7 +23,7 @@
     "structural": 22721
   },
   "source_limits": {
-    "MarinSkyRL:eurus2_code": 10317,
+    "MarinSkyRL:eurus2_code": 16970,
     "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_calendar_v2": 743,
     "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_comp_coding": 5752,
     "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_reasoning_gym": 1921,
@@ -32,17 +31,27 @@
     "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_structured_outputs_v2": 2079,
     "MarinSkyRL:openscience": 20790,
     "MarinSkyRL:reasoning_gym": 20800,
-    "Task Trove:laion__glaive-code-assistant-sandboxes-verified-v2": 6653,
     "Task Trove:laion__nemotron-gym-agent-calendar-v2": 2699,
     "Task Trove:laion__nemotron-gym-instruction-following-calendar-v3": 5673,
     "Task Trove:laion__nemotron-gym-instruction-following-structured-v3": 9008,
     "SnowballV01:structure-closure": 11634
   },
-  "heldout": {
-    "uri": "s3://marin-us-east-02a/marin/rl-data/inputs/snowball-heldout/2026.10.23.1/validation.parquet",
-    "version": "2026.10.23.1",
-    "rows": 910
-  },
+  "heldout": [
+    {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/inputs/snowball-heldout/2026.10.23.1/validation.parquet",
+      "version": "2026.10.23.1",
+      "rows": 910,
+      "format": "historical"
+    }
+  ],
   "validation_per_family": 20,
-  "seed": 20261019
+  "seed": 20261019,
+  "exclusions": [
+    {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/task-selection/eval-lite/2026.11.11.1/full_validation.parquet",
+      "version": "2026.11.11.1",
+      "rows": 1500,
+      "format": "task_spec"
+    }
+  ]
 }

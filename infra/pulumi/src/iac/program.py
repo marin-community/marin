@@ -38,7 +38,7 @@ from iac.config import (
 )
 from iac.coreweave.cluster import CoreweaveCluster, CoreweaveClusterArgs
 from iac.coreweave.dns import FederationDns, FederationDnsArgs
-from iac.coreweave.kueue import KueueAddon, KueueAddonArgs, accelerator_nominal_quotas
+from iac.coreweave.kueue import KueueAddon, KueueAddonArgs, accelerator_nominal_quotas, cpu_flavor_node_labels
 from iac.coreweave.rbac import (
     GrafanaObserverRbac,
     GrafanaObserverRbacArgs,
@@ -102,6 +102,8 @@ def _build_coreweave(cluster: str, *, imports: ImportRegistrar) -> None:
     assert provisioning.coreweave is not None  # guaranteed by load_provisioning
     coreweave_provisioning = provisioning.coreweave
     iris_config = load_iris_config(cluster)
+    cpu_scale_group = coreweave_provisioning.kueue.cpu_scale_group
+    cpu_node_labels = cpu_flavor_node_labels(iris_config, cpu_scale_group) if cpu_scale_group is not None else None
     _warn_if_no_persistent_signing_key(cluster, iris_config)
 
     # Single-source: namespace + queue name come from the Iris config, not provisioning.
@@ -142,11 +144,21 @@ def _build_coreweave(cluster: str, *, imports: ImportRegistrar) -> None:
         "cluster",
         CoreweaveClusterArgs(
             cluster=coreweave_provisioning.cluster,
-            nodepools=derive_nodepools(iris_config),
+            nodepools=derive_nodepools(iris_config, cpu_scale_group=cpu_scale_group),
         ),
         k8s_provider=k8s_provider,
         imports=imports,
     )
+    if sandbox_runtime := coreweave_provisioning.sandbox_runtime:
+        if kubernetes_provider is None:
+            raise ValueError(f"cluster {cluster!r} configures a sandbox runtime without a Kubernetes provider")
+        k8s.node.v1.RuntimeClass(
+            "sandbox-runtime-class",
+            metadata={"name": kubernetes_provider.sandbox_runtime_class},
+            handler=sandbox_runtime.handler,
+            scheduling={"nodeSelector": sandbox_runtime.node_selector},
+            opts=pulumi.ResourceOptions(provider=k8s_provider, depends_on=[coreweave_cluster]),
+        )
     rbac = IrisRbac(
         "rbac",
         IrisRbacArgs(namespace=namespace, spec=coreweave_provisioning.rbac),
@@ -184,6 +196,7 @@ def _build_coreweave(cluster: str, *, imports: ImportRegistrar) -> None:
             cluster_queue=kueue_config.cluster_queue,
             spec=coreweave_provisioning.kueue,
             nominal_quotas=accelerator_nominal_quotas(iris_config),
+            cpu_node_labels=cpu_node_labels,
         ),
         k8s_provider=k8s_provider,
         imports=imports,

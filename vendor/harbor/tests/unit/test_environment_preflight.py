@@ -3,13 +3,18 @@
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
-
 from harbor.job import Job
 from harbor.models.job.config import JobConfig
-from harbor.models.trial.config import EnvironmentConfig, TaskConfig, TrialConfig, VerifierConfig
+from harbor.models.trial.config import (
+    AgentConfig,
+    EnvironmentConfig,
+    TaskConfig,
+    TrialConfig,
+    VerifierConfig,
+)
 from harbor.trial.trial import Trial
 from harbor_config import load_config_document
+from pydantic import ValidationError
 
 
 @pytest.mark.parametrize(
@@ -27,12 +32,16 @@ def retention_task(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     def forbidden_backend(*args, **kwargs):
         pytest.fail("A retention request reached backend construction")
 
-    monkeypatch.setattr("harbor.environments.local.LocalMachineFactory", forbidden_backend)
+    monkeypatch.setattr(
+        "harbor.environments.local.LocalMachineFactory", forbidden_backend
+    )
     task = tmp_path / "task"
     task.mkdir()
     (task / "environment").mkdir()
     (task / "task.toml").write_text(
-        '[environment]\ndocker_image = "registry.invalid/task@sha256:' + "a" * 64 + '"\n'
+        '[environment]\ndocker_image = "registry.invalid/task@sha256:'
+        + "a" * 64
+        + '"\n'
     )
     (task / "instruction.md").write_text("Return the answer.\n")
     (task / "tests").mkdir()
@@ -40,8 +49,14 @@ def retention_task(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return task
 
 
-async def test_job_rejects_retention_before_backend_construction(tmp_path: Path, retention_task: Path):
-    config = JobConfig(jobs_dir=tmp_path / "jobs", tasks=[TaskConfig(path=retention_task)])
+async def test_job_rejects_retention_before_backend_construction(
+    tmp_path: Path, retention_task: Path
+):
+    config = JobConfig(
+        agents=[AgentConfig(name="pi")],
+        jobs_dir=tmp_path / "jobs",
+        tasks=[TaskConfig(path=retention_task)],
+    )
     # CLI overrides mutate this field after the schema has been validated.
     config.environment.delete = False
 
@@ -51,12 +66,15 @@ async def test_job_rejects_retention_before_backend_construction(tmp_path: Path,
     assert not (tmp_path / "jobs").exists()
 
 
-async def test_direct_trial_rejects_retention_before_backend_construction(tmp_path: Path, retention_task: Path):
+async def test_direct_trial_rejects_retention_before_backend_construction(
+    tmp_path: Path, retention_task: Path
+):
     config = TrialConfig(
         task=TaskConfig(path=retention_task),
         trials_dir=tmp_path / "trials",
         environment=EnvironmentConfig(delete=False),
         verifier=VerifierConfig(disable=True),
+        agent=AgentConfig(name="pi"),
     )
 
     with pytest.raises(ValueError, match="Shellbox environments cannot be retained"):

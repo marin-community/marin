@@ -7,12 +7,14 @@ import sys
 from io import StringIO
 from pathlib import Path
 
+import pytest
 from iris.cluster.runtime.process import ProcessRuntime, _read_proc_cpu_millicores
 from iris.cluster.runtime.types import ContainerConfig, ContainerPhase, MountKind, MountSpec
 from iris.rpc import job_pb2
 from iris.test_util import wait_for_condition
 
 
+@pytest.mark.requires_linux_procfs
 def test_process_cpu_stat_with_parentheses_in_name_reports_cpu_usage(monkeypatch):
     stat = "42 (python) worker) S 0 1 1 0 -1 4194560 12345 0 0 0 80 20 0 0 20 0 8 0 6000 0 0 0"
 

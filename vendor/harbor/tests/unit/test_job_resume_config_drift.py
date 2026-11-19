@@ -17,12 +17,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
-
 from harbor.job import Job
 from harbor.metrics.mean import Mean
 from harbor.models.job.config import JobConfig
 from harbor.models.job.result import JobResult, JobStats
-from harbor.models.trial.config import TaskConfig, TrialConfig
+from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.result import AgentInfo, TrialCompletion, TrialResult
 from harbor.models.verifier.result import VerifierResult
 
@@ -36,6 +35,7 @@ def _make_job(
     n_concurrent_trials: int = 4,
 ) -> Job:
     config = JobConfig(
+        agents=[AgentConfig(name="pi")],
         job_name=_JOB_NAME,
         jobs_dir=tmp_path,
         n_concurrent_trials=n_concurrent_trials,

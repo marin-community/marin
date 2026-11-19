@@ -12,13 +12,13 @@ from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from evalrecords.records import BenchmarkMetadataRef
 from pydantic import ValidationError
 from rigging.config_discovery import find_project_root
 from rigging.provenance import launch_provenance
 from rigging.tunnel import terminate_process_group
 
 from marin.evaluation.eval_env import DAYTONA_RUNTIME_ENV_KEYS, env_vars_from_keys
-from marin.evaluation.records import BenchmarkMetadataRef
 from marin.evaluation.runner import BACKEND_POLL_SECONDS, check_inference_backend
 from marin.inference.iris import InferenceBackendState
 
