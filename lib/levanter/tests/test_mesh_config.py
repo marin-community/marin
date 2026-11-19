@@ -26,6 +26,7 @@ def test_hybrid_gpu_mesh_preserves_iota_assignment_and_named_groups():
         axis_types=(AxisType.Explicit, AxisType.Auto),
     )
     assert [device.id for device in mesh.devices.flat] == list(range(256))
+    assert mesh.axis_names == ("context", "expert")
     assert mesh.axis_types == (AxisType.Auto, AxisType.Explicit)
     for node in range(32):
         assert [device.id for device in mesh.devices[node, :]] == list(range(node * 8, (node + 1) * 8))

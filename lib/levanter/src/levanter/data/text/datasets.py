@@ -33,6 +33,7 @@ from levanter.data.mixture import (
 )
 from levanter.data.packing import GreedyPrepackedDataset
 from levanter.data.passthrough_tokenizer import PassthroughTokenizer
+from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.data.sharded_datasource import (
     ShardedDataSource,
     UrlDataSource,
@@ -556,13 +557,18 @@ def dataset_for_component(
             Pos,
             max_segments_per_example=max_segments,
             slice_strategy=slice_strategy,
-            block_cross_document_attention=block_cross_document_attention,
         )
-        return dataset.map(
-            functools.partial(
-                mask_serialized_chat, message_start_id=fmt.message_start_id, assistant_prefix=fmt.assistant_prefix
+
+        def apply_chat_mask(example: GrugLmExample) -> GrugLmExample:
+            masked = mask_serialized_chat(
+                example, message_start_id=fmt.message_start_id, assistant_prefix=fmt.assistant_prefix
             )
-        )
+            # Loss masking needs each document's boundary even with cross-document attention.
+            if not block_cross_document_attention:
+                masked = dataclasses.replace(masked, attn_mask=GrugAttentionMask.causal())
+            return masked
+
+        return dataset.map(apply_chat_mask)
     if isinstance(fmt, TextLmDatasetFormat):
         if pack:
             max_segments, slice_strategy = _resolve_pack_config(pack)

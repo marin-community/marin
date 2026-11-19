@@ -862,6 +862,7 @@ def test_hf_config_reload_keeps_fp32_router_settings(tmp_path):
             head_dim=8,
             max_seq_len=128,
             router_dot_fp32=True,
+            report_capacity_overflow=True,
             tokenizer=str(hf_path),
         )
         # HF metadata chooses the platform kernel; test reload separately from
@@ -914,6 +915,7 @@ def test_hf_config_reload_keeps_fp32_router_settings(tmp_path):
         )
         metrics = json.loads((tmp_path / "eval_results.json").read_text())
         assert math.isfinite(metrics["train/loss"])
+        assert 0.0 <= metrics["train/moe/dropped_assignment_fraction"] <= 1.0
         assert math.isfinite(metrics["eval/loss"])
 
 

@@ -99,7 +99,7 @@ from marin.experiment.checkpoints import HfToLevanterCheckpoint
 from marin.processing.tokenize.tokenize import TokenizeConfig, TokenizedCache
 from marin.processing.tokenize.tokenize import tokenize as run_tokenize
 from marin.rl.skyrl import ArtifactHfModel
-from marin.training.levanter import run_levanter_train_lm
+from marin.training.levanter import _add_gpu_collective_watchdog_env, run_levanter_train_lm
 from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.timing import Duration
@@ -211,9 +211,8 @@ def _levanter_train_config(
     """Assemble the identity-bearing ``TrainLmConfig`` for a Levanter-backend SFT run.
 
     ``model_config`` is the concrete ``LmConfig`` the pytree is built from. With
-    ``use_hf_model_config`` (the HF/prepared paths) its fields are re-derived from the checkpoint, so
-    only its class matters; native init (``initialize_model_from_checkpoint_path``) does not re-derive
-    it, so it must be the architecture the checkpoint was saved with.
+    ``use_hf_model_config```, the checkpoint supplies the architecture and the given config supplies
+    supported runtime settings. Native init needs the architecture the checkpoint was saved with.
     """
     return TrainLmConfig(
         data=data_config,
@@ -276,18 +275,20 @@ def _levanter_pod_config(
         ),
         resources=resources,
         output_path=ctx.output_path,
+        env_vars={"XLA_FLAGS": " ".join(spec.xla_flags)} if spec.xla_flags else None,
         auto_build_caches=data_config.auto_build_caches,
     )
 
 
-def _levanter_train_job(
-    pod_config: TrainLmOnPodConfig, *, xla_flags: tuple[str, ...] = (), task_timeout_seconds: int | None = None
-) -> None:
+def _levanter_train_job(pod_config: TrainLmOnPodConfig, *, task_timeout_seconds: int | None = None) -> None:
     """Dispatch a Levanter ``train_lm`` config as its own Fray training job."""
+    env = dict(pod_config.env_vars or {})
+    if "XLA_FLAGS" in env and isinstance(pod_config.resources.device, GpuConfig):
+        _add_gpu_collective_watchdog_env(env)
     remote(
         run_levanter_train_lm,
         resources=pod_config.resources,
-        env_vars={"XLA_FLAGS": " ".join(xla_flags)} if xla_flags else None,
+        env_vars=env,
         timeout=Duration.from_seconds(task_timeout_seconds) if task_timeout_seconds is not None else None,
     )(pod_config)
 
@@ -578,6 +579,8 @@ class SFTSpec:
     """
 
     def __post_init__(self) -> None:
+        if self.per_device_parallelism != -1 and self.per_device_parallelism <= 0:
+            raise ValueError("per_device_parallelism must be -1 or positive")
         if (self.num_train_steps is None) == (self.num_train_epochs is None):
             raise ValueError("Set exactly one of num_train_steps or num_train_epochs.")
         if self.num_train_epochs is not None and len(self.datasets) != 1:
@@ -588,7 +591,10 @@ class SFTSpec:
         if self.prepared_data is not None:
             if self.datasets:
                 raise ValueError("prepared_data and datasets are mutually exclusive")
-            if self.prepared_data.tokenizer != self.model.tokenizer_cache_key():
+            if (
+                not isinstance(self.model, (PreparedModel, ConvertedCheckpointModel))
+                and self.prepared_data.tokenizer != self.model.tokenizer_cache_key()
+            ):
                 raise ValueError("prepared_data.tokenizer must match the SFT model's tokenizer")
 
 
@@ -836,12 +842,19 @@ def sft_step(spec: SFTSpec, resources: ResourceConfig) -> ArtifactStep[LevanterC
     run = model.run
     if isinstance(resources.device, GpuConfig) and spec.mesh is not None:
         try:
-            spec.mesh.axis_shapes(resources.device.count * resources.replicas, resources.replicas)
+            ici, dcn = spec.mesh.axis_shapes(resources.device.count * resources.replicas, resources.replicas)
         except ValueError as error:
             raise ValueError(f"mesh does not fit SFT resources: {error}") from error
+        batch_axes = spec.mesh.resolved_compute_mapping["batch"]
+        batch_axes = (batch_axes,) if isinstance(batch_axes, str) else batch_axes
+        sizes = ici | dcn
+        batch_shards = math.prod(sizes.get(axis, 1) for axis in batch_axes)
+        microbatch = batch_shards * max(spec.per_device_parallelism, 1)
+        if spec.batch_size % microbatch:
+            raise ValueError(f"SFT batch_size={spec.batch_size} must be divisible by the mesh microbatch ({microbatch})")
     timeout = model.task_timeout_seconds if isinstance(model, HFModel) else None
-    if run is _levanter_train_job and (spec.xla_flags or timeout is not None):
-        run = partial(_levanter_train_job, xla_flags=spec.xla_flags, task_timeout_seconds=timeout)
+    if run is _levanter_train_job and timeout is not None:
+        run = partial(_levanter_train_job, task_timeout_seconds=timeout)
     transform_deps = _dataset_deps(spec)
 
     def train_config(ctx: StepContext, data: LmDataConfig, steps: int) -> object:
@@ -867,6 +880,8 @@ def sft_step(spec: SFTSpec, resources: ResourceConfig) -> ArtifactStep[LevanterC
                     data_config = draccus.decode(LmDataConfig, json.load(stream))
                 if data_config.tokenizer != prepared.tokenizer:
                     raise ValueError("prepared_data file tokenizer does not match prepared_data.tokenizer")
+                if data_config.tokenizer != model.resolve_tokenizer(ctx):
+                    raise ValueError("prepared_data file tokenizer must match the resolved SFT model tokenizer")
             assert spec.num_train_steps is not None
             return train_config(ctx, data_config, spec.num_train_steps)
 
@@ -905,15 +920,15 @@ def sft_step(spec: SFTSpec, resources: ResourceConfig) -> ArtifactStep[LevanterC
 def run_sft_cli(recipe: SftRecipe, resources: ResourceConfig | None = None) -> None:
     """Run an SFT recipe using its resources or the accelerator selected on the command line."""
 
-    @click.command()
-    @click.option(
-        "--accelerator",
-        required=resources is None,
-        help="Accelerator: '<count>x<gpu>' (e.g. '8xH100') or a TPU slice variant (e.g. 'v4-64').",
-    )
-    def _cli(accelerator: str | None) -> None:
+    def _cli(accelerator: str | None = None) -> None:
         selected = resources_from_accelerator(accelerator) if accelerator is not None else resources
         assert selected is not None
         StepRunner().run([lower(sft_model(recipe, selected).step)])
 
-    _cli()
+    if resources is None:
+        _cli = click.option(
+            "--accelerator",
+            required=True,
+            help="Accelerator '<count>x<gpu>' or a TPU slice variant such as 'v4-64'.",
+        )(_cli)
+    click.command()(_cli)()

@@ -3,20 +3,31 @@
 
 """Export the final permanent Mochi SFT checkpoint for policy initialization."""
 
+import json
 from dataclasses import dataclass, replace
 
+import draccus
 from fray.types import ResourceConfig
 from levanter.checkpoint import discover_checkpoint_candidates
+from levanter.compat.hf_export import HFShardRecord, HFShardResume
 from marin.execution.lazy import OUT, apply
 from marin.execution.remote import remote
 from marin.rl.skyrl import ArtifactHfModel
 from rigging.filesystem.s3_compat import configure_coreweave_s3
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.grug.moe_hero_ep.expert_placement import ExpertPlacement
 from experiments.grug.moe_hero_ep.hero_recipe import HERO_MODEL_CONFIG, with_transport_remat_mode
 from experiments.grug.moe_hero_ep.launch_hero_sft import _placement_label, build_sft_run, sft_resources
 from experiments.grug.moe_hero_ep.ops.export_cpu import CpuExportConfig, export
+from experiments.grug.moe_hero_ep.ops.export_metadata import (
+    EXPORT_VERSION,
+    INDEX_FILENAME,
+    MANIFEST_FILENAME,
+    REQUEST_FILENAME,
+    artifact_config,
+    bf16_hf_config,
+)
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
 from experiments.grug.moe_hero_ep.train import RouterBiasMode
 
@@ -92,7 +103,7 @@ def _export_final_sft(
     source_revision: str,
 ) -> None:
     configure_coreweave_s3()
-    root = checkpoint_root or trained
+    root = trained if checkpoint_root is None else checkpoint_root
     if placement_label is not None:
         root = prefix_join(root, placement_label)
     directory = prefix_join(root, "checkpoints")
@@ -103,4 +114,41 @@ def _export_final_sft(
     if final is None:
         raise ValueError(f"Mochi SFT has no permanent checkpoint in {directory}")
     model = with_transport_remat_mode(replace(HERO_MODEL_CONFIG, capacity_factor=capacity_factor))
-    export(CpuExportConfig(final.path, digest(final.metadata), model, prefix_join(output, "hf"), source_revision))
+    config = CpuExportConfig(final.path, digest(final.metadata), model, prefix_join(output, "hf"), source_revision)
+    try:
+        export(config)
+    except FileExistsError:
+        root = StoragePath(config.destination)
+        if not (root / MANIFEST_FILENAME).exists():
+            raise
+        _verify_completed_export(root, config)
+
+
+def _verify_completed_export(root: StoragePath, config: CpuExportConfig) -> None:
+    """Accept a completed export after an interrupted artifact commit."""
+    request = {
+        "export_version": EXPORT_VERSION,
+        "implementation": "cpu",
+        "config": artifact_config(draccus.encode(config)),
+        "hf_config": bf16_hf_config(config.model),
+    }
+    manifest = json.loads((root / MANIFEST_FILENAME).read_text())
+    export_id = digest(request)
+    if (
+        export_id != manifest["export_id"]
+        or digest(manifest["request"]) != export_id
+        or digest(json.loads((root / REQUEST_FILENAME).read_text())) != export_id
+    ):
+        raise FileExistsError(f"Completed Mochi export differs from the selected checkpoint: {root}")
+    if digest(json.loads((root / "config.json").read_text())) != digest(request["hf_config"]):
+        raise ValueError(f"Completed Mochi export has an inconsistent HF config: {root}")
+
+    records = [draccus.decode(HFShardRecord, item) for item in manifest["shards"]]
+    index = json.loads((root / INDEX_FILENAME).read_text())
+    weight_map = {name: record.filename for record in records for name in record.tensor_names}
+    if not weight_map or index["weight_map"] != weight_map:
+        raise ValueError(f"Completed Mochi export index disagrees with its shard manifests: {root}")
+    resume = HFShardResume(root, export_id)
+    for record in records:
+        if resume.completed(record.filename, record.tensor_names) != record:
+            raise ValueError(f"Completed Mochi export has an inconsistent shard receipt: {record.filename}")

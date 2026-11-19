@@ -17,7 +17,15 @@ from experiments.sft.launcher import LevanterSft, PreparedData, run_sft_cli
 
 NODES = 32
 RESOURCES = ResourceConfig.with_gpu(
-    "H100", count=8, cpu=64, ram="1500GB", disk="500GB", replicas=NODES, preemptible=False
+    "H100",
+    count=8,
+    cpu=64,
+    ram="1500GB",
+    disk="500GB",
+    replicas=NODES,
+    preemptible=False,
+    regions=("US-EAST-02A",),
+    target_cluster="cw-us-east-02a",
 )
 TOKENIZER = "s3://marin-us-east-02a/marin/grug_sft/tokenizer/2026.09.18"
 

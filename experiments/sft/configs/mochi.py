@@ -25,7 +25,9 @@ SFT = MochiSft(
     capacity_factor=SFT_CAPACITY_FACTOR,
     version="2026.11.19.1",
     source_revision="2515cb1404e03b444a5e427fd7b9aaef2c034af1",
-    export_resources=ResourceConfig.with_cpu(cpu=64, ram="256g", disk="512g"),
+    export_resources=ResourceConfig.with_cpu(
+        cpu=64, ram="256g", disk="512g", regions=("US-EAST-08A",), target_cluster="cw-us-east-08a"
+    ),
     tokenizer_uri="marin-community/marin-tokenizer-tools",
     tokenizer_revision="3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09",
 )

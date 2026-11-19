@@ -35,6 +35,7 @@ from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.field_dtype_overrides import hf_load_dtype
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
+from levanter.models.qwen import Qwen3Config
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
@@ -114,11 +115,16 @@ def _restore_lm_model_from_partial_checkpoint(
 
 
 def preserve_hf_runtime_settings(reloaded: LmConfig, requested: LmConfig) -> LmConfig:
-    """Reapply the requested Snowball runtime settings after an HF config reload.
-
-    HF metadata supplies architecture fields. Keep the requested runtime settings,
-    reference checkpoint, and tokenizer.
-    """
+    """Reapply supported runtime settings while loading the checkpoint's architecture."""
+    if isinstance(requested, Qwen3Config) and isinstance(reloaded, Qwen3Config):
+        return replace(
+            reloaded,
+            upcast_attn=requested.upcast_attn,
+            attn_backend=requested.attn_backend,
+            flash_attention_block_size=requested.flash_attention_block_size,
+            gradient_checkpointing=requested.gradient_checkpointing,
+            scan_layers=requested.scan_layers,
+        )
     if not isinstance(requested, SnowballConfig):
         return reloaded
     if not isinstance(reloaded, SnowballConfig):

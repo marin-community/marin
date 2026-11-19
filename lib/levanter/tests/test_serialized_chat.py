@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import numpy as np
+import pytest
 from dataclasses import replace
 from haliax import Axis
 
@@ -43,7 +44,10 @@ def test_cached_transcript_masks_prompts_tools_and_headers_without_changing_toke
     np.testing.assert_array_equal(np.flatnonzero(short.loss_weight), [9, 10, 11])
 
 
-def test_packed_native_transcripts_preserve_document_masks_and_attention_boundaries(tmp_path):
+@pytest.mark.parametrize("block_cross_document_attention", [True, False])
+def test_packed_native_transcripts_preserve_document_masks_and_attention_boundaries(
+    tmp_path, block_cross_document_attention
+):
     documents = [
         [10, 2, 11, 12, 20, 13, 10, 3, 11, 12, 21, 22, 13],
         # BOS/text before the next header must not inherit assistant loss.
@@ -65,9 +69,10 @@ def test_packed_native_transcripts_preserve_document_masks_and_attention_boundar
         Axis("position", 32),
         writer.result(),
         eos_id=None,
-        block_cross_document_attention=True,
+        block_cross_document_attention=block_cross_document_attention,
     )
     actual = blocking_wait(packed.get_batch([0]))[0]
+    np.testing.assert_array_equal(np.flatnonzero(actual.loss_weight), [9, 10, 11, 24, 25])
     start = 0
     for doc_id, (tokens, expected) in enumerate(zip(documents, separate, strict=True)):
         end = start + len(tokens)
@@ -75,6 +80,9 @@ def test_packed_native_transcripts_preserve_document_masks_and_attention_boundar
         np.testing.assert_array_equal(
             np.asarray(actual.loss_weight)[start:end], np.asarray(expected.loss_weight)[: len(tokens)]
         )
-        np.testing.assert_array_equal(np.asarray(actual.attn_mask.segment_ids[0])[start:end], doc_id)
+        if block_cross_document_attention:
+            np.testing.assert_array_equal(np.asarray(actual.attn_mask.segment_ids[0])[start:end], doc_id)
+        else:
+            assert actual.attn_mask.segment_ids is None
         start = end
     np.testing.assert_array_equal(np.asarray(actual.loss_weight)[start:], 0)

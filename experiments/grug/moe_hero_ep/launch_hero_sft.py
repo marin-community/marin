@@ -318,6 +318,8 @@ def sft_resources(dp_racks: int) -> ResourceConfig:
         ram=HERO_NODE_RAM,
         disk=HERO_NODE_DISK,
         replicas=HERO_EP_NODES * dp_racks,
+        regions=("US-EAST-08A",),
+        target_cluster="cw-us-east-08a",
     )
 
 
