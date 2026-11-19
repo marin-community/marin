@@ -13,6 +13,7 @@ token i + 1, zero where the position carries no loss). Packed rows whose cell wa
 
 import argparse
 import datetime
+import faulthandler
 import gzip
 import io
 import json
@@ -71,7 +72,9 @@ def build_split(plan: str, teacher: str, output: str, split: str, scored_cells: 
             if f"{split}/docs-{cell_index:03d}" not in scored_cells:
                 logger.info("%s cell %d not scored; dropping its rows", split, cell_index)
                 continue
+            logger.info("%s cell %d: loading", split, cell_index)
             docs = load_cell(plan, teacher, split, cell_index)
+            logger.info("%s cell %d: loaded %d docs", split, cell_index, len(docs))
             batch = {k: [] for k in exemplar}
             for row in rows[start : start + ROWS_PER_CELL]:
                 ids = np.full(POS, EOS, np.int32)
@@ -109,6 +112,8 @@ def main():
     )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
+    faulthandler.dump_traceback_later(300, repeat=True)
+    logger.info("assembling %s", args.splits)
     configure_coreweave_s3()
     if args.wait_idle_seconds:
         summary_path = StoragePath(prefix_join(args.teacher, "summary.json"))
