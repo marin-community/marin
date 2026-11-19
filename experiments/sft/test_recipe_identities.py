@@ -9,8 +9,9 @@ from levanter.utils.mesh import MeshConfig
 from experiments.june_tpu_67b_a2b.moe import sft_67b_a2b_2stage as grug
 from experiments.post_training.curriculum_sft import math_trial, trial
 from experiments.post_training.iceball_micro import build_workflow
-from experiments.sft.configs import delphi_1e22, snowball_h100
-from experiments.sft.launcher import LevanterSft, resources_from_accelerator, sft_model
+from experiments.post_training.snowball_sft import OPENTHOUGHTS_SFT
+from experiments.sft.configs import delphi_1e22
+from experiments.sft.launcher import resources_from_accelerator, sft_step
 
 
 def test_sft_recipe_identities(monkeypatch):
@@ -27,13 +28,13 @@ def test_sft_recipe_identities(monkeypatch):
         axes={"data": 1, "replica": 1, "model": 1, "context": 4, "expert": -1},
         compute_mapping={"batch": ["replica_dcn", "data", "expert"], "position": "context"},
     )
-    old_snowball = LevanterSft(replace(snowball_h100.SPEC, version="2026.09.23", mesh=old_mesh))
+    old_snowball = replace(OPENTHOUGHTS_SFT.recipe, version="2026.09.23", mesh=old_mesh)
     tpu = resources_from_accelerator("v6e-64")
     steps = (
-        sft_model(old_snowball, snowball_h100.RESOURCES).step,
-        sft_model(snowball_h100.SFT, snowball_h100.RESOURCES).step,
-        sft_model(delphi_1e22.SFT, tpu).step,
-        sft_model(LevanterSft(delphi_1e22.SPEC_WC50M), tpu).step,
+        sft_step(old_snowball, OPENTHOUGHTS_SFT.resources),
+        OPENTHOUGHTS_SFT.model().step,
+        sft_step(delphi_1e22.SPEC, tpu),
+        sft_step(delphi_1e22.SPEC_WC50M, tpu),
         build_workflow(version="2026.11.19.1").sft,
         grug.build_job1("2026.11.19.1"),
         curriculum,

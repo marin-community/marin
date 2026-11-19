@@ -41,7 +41,7 @@ from levanter.optim.config import AdamConfig
 from marin.execution.lazy import ArtifactStep
 
 from experiments.sft.delphi_chat_template import DELPHI_RESERVED_TOKEN_RENAMES, DELPHI_V0_CHAT_TEMPLATE
-from experiments.sft.launcher import DatasetSpec, HFModel, LevanterSft, SFTSpec, run_sft_cli
+from experiments.sft.launcher import DatasetSpec, HFModel, SFTSpec, run_sft_cli
 from experiments.sft.prepare_checkpoint import prepare_checkpoint_step
 
 # Prepared (reserved-slot-renamed + embedding-reinit'd) checkpoint + tokenizer. Stage per prefix
@@ -144,8 +144,5 @@ SPEC_WC50M = SFTSpec(
 )
 
 
-SFT = LevanterSft(SPEC)
-
-
 if __name__ == "__main__":
-    run_sft_cli(SFT)
+    run_sft_cli(SPEC)

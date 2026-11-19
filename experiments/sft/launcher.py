@@ -70,7 +70,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
 from functools import partial
-from typing import Protocol, runtime_checkable
+from typing import Generic, Protocol, TypeVar, runtime_checkable
 
 import click
 import draccus
@@ -611,28 +611,32 @@ class SFTSpec:
             ):
                 raise ValueError("prepared_data.tokenizer must match the SFT model's tokenizer")
 
+    def trained(self, resources: ResourceConfig) -> ArtifactHfModel:
+        if not isinstance(self.model, (HFModel, PreparedModel, ConvertedCheckpointModel, LevanterCheckpointModel)):
+            raise ValueError(f"Build a Hugging Face export for the {type(self.model).__name__} trainer")
+        steps = self.num_train_steps
+        return ArtifactHfModel(
+            step=sft_step(self, resources),
+            relative_path=f"{DEFAULT_HF_CHECKPOINTS_PATH}/step-{steps - 1}" if steps is not None else None,
+        )
 
-class SftRecipe(Protocol):
+
+class SFTRecipe(Protocol):
     def trained(self, resources: ResourceConfig) -> ArtifactHfModel: ...
 
 
-def sft_model(recipe: SftRecipe, resources: ResourceConfig) -> ArtifactHfModel:
-    """Build the SFT step and return its exported model."""
-    return recipe.trained(resources)
+_Recipe = TypeVar("_Recipe", bound=SFTRecipe, covariant=True)
 
 
 @dataclass(frozen=True)
-class LevanterSft:
-    spec: SFTSpec
+class SFTPreset(Generic[_Recipe]):
+    name: str
+    recipe: _Recipe
+    resources: ResourceConfig
 
-    def trained(self, resources: ResourceConfig) -> ArtifactHfModel:
-        if not isinstance(self.spec.model, (HFModel, PreparedModel, ConvertedCheckpointModel, LevanterCheckpointModel)):
-            raise ValueError(f"{type(self.spec.model).__name__} writes no Hugging Face export for SFT")
-        steps = self.spec.num_train_steps
-        return ArtifactHfModel(
-            step=sft_step(self.spec, resources),
-            relative_path=f"{DEFAULT_HF_CHECKPOINTS_PATH}/step-{steps - 1}" if steps is not None else None,
-        )
+    def model(self) -> ArtifactHfModel:
+        """Build the model export using the preset's fixed allocation."""
+        return self.recipe.trained(self.resources)
 
 
 # Accelerator strings: "<count>x<gpu>" (e.g. "8xH100") for GPU, else a TPU slice variant ("v4-64").
@@ -907,18 +911,35 @@ def sft_step(spec: SFTSpec, resources: ResourceConfig) -> ArtifactStep[LevanterC
     )
 
 
-def run_sft_cli(recipe: SftRecipe, resources: ResourceConfig | None = None) -> None:
-    """Run an SFT recipe using its resources or the accelerator selected on the command line."""
+def run_sft_cli(presets: Sequence[SFTPreset[SFTRecipe]] | SFTSpec) -> None:
+    """Print or run a named SFT preset."""
+    if isinstance(presets, SFTSpec):
+        _run_sft_spec_cli(presets)
+        return
 
-    def _cli(accelerator: str | None = None) -> None:
-        selected = resources_from_accelerator(accelerator) if accelerator is not None else resources
-        assert selected is not None
-        StepRunner().run([lower(sft_model(recipe, selected).step)])
+    by_name = {preset.name: preset for preset in presets}
 
-    if resources is None:
-        _cli = click.option(
-            "--accelerator",
-            required=True,
-            help="Accelerator '<count>x<gpu>' or a TPU slice variant such as 'v4-64'.",
-        )(_cli)
-    click.command()(_cli)()
+    @click.command()
+    @click.option("--preset", type=click.Choice(tuple(by_name)), required=True)
+    @click.option("--run", is_flag=True, help="Launch training and export the model.")
+    @click.option("--accelerator", hidden=True)
+    def _cli(preset: str, run: bool, accelerator: str | None) -> None:
+        if accelerator is not None:
+            raise click.UsageError("The SFT preset fixes its own allocation. Run without --accelerator.")
+        model = by_name[preset].model()
+        StepRunner().run([lower(model.step)], dry_run=not run)
+
+    _cli()
+
+
+def _run_sft_spec_cli(spec: SFTSpec) -> None:
+    @click.command()
+    @click.option(
+        "--accelerator",
+        required=True,
+        help="Accelerator '<count>x<gpu>' or a TPU slice variant such as 'v4-64'.",
+    )
+    def _cli(accelerator: str) -> None:
+        StepRunner().run([lower(sft_step(spec, resources_from_accelerator(accelerator)))])
+
+    _cli()

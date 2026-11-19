@@ -1,10 +1,10 @@
 # Fine-tune Snowball with Levanter on H100s
 
-The [Snowball SFT recipe](https://github.com/marin-community/marin/blob/main/experiments/sft/configs/snowball_h100.py) trains Levanter's `SnowballLMHeadModel` directly from the pinned Snowball Hugging Face weights. It uses the shared chat SFT launcher to transform OpenThoughts Agent conversations, supervise assistant tokens, and save native Levanter checkpoints. There is no Grug trainer checkpoint or model-specific conversion job.
+The [Snowball SFT presets](https://github.com/marin-community/marin/blob/main/experiments/post_training/snowball_sft.py) train Levanter's `SnowballLMHeadModel` from pinned Hugging Face weights. The `openthoughts-32k-4node` preset transforms OpenThoughts Agent conversations, supervises assistant tokens, and saves a native Levanter checkpoint and a Hugging Face export.
 
 This is a 32,768-token, ten-step starting recipe on 32 H100s. A prior [Snowball training run](https://github.com/marin-community/marin/pull/9144) demonstrated the 67B model on 32 learner H100s at 4,096 tokens. That run used GRPO; this longer SFT recipe has not completed an end-to-end accelerator run. Do not assume the model's 262K position limit is a validated training length.
 
-The mesh splits each sequence over four H100s and shards experts across the other eight mesh ranks. Attention keeps local queries and gathers the full keys and values. Large weight and optimizer leaves are sharded over both axes. The recipe keeps conversations separate (`pack=False`) because Snowball does not yet consume Levanter's packed-document attention mask. Its scan layers are checkpointed during reverse mode to bound activation memory.
+The mesh splits each sequence across four nodes and shards experts across eight H100s within a node. Attention keeps local queries and gathers the full keys and values. Large weight and optimizer leaves are sharded over both axes. The OpenThoughts preset keeps conversations separate (`pack=False`). Its scan layers are checkpointed during reverse mode to bound activation memory.
 
 ## Prepare
 
@@ -23,7 +23,7 @@ export HF_TOKEN=hf_example
 
 ## Launch
 
-Submit a CPU coordinator through Iris. It transforms the data and dispatches the 32-H100 training job through the shared SFT launcher:
+Print the plan by running `python -m experiments.post_training.snowball_sft --preset openthoughts-32k-4node`. To train, submit a CPU coordinator through Iris with `--run`.
 
 ```bash
 uv run iris --cluster=marin job run --job-name snowball-sft-coord \
@@ -31,7 +31,7 @@ uv run iris --cluster=marin job run --job-name snowball-sft-coord \
   --priority interactive --no-wait \
   -e MARIN_PREFIX "$MARIN_PREFIX" -e HF_TOKEN "$HF_TOKEN" \
   -e WANDB_API_KEY "$WANDB_API_KEY" \
-  -- python -m experiments.sft.configs.snowball_h100 --accelerator 32xH100
+  -- python -m experiments.post_training.snowball_sft --preset openthoughts-32k-4node --run
 ```
 
 The coordinator and workers need the same storage and Hugging Face credentials. The completed training artifact is recorded under `checkpoints/snowball-openthoughts-agent-sft` in `MARIN_PREFIX`. Change the `SFTSpec` fields in the recipe to choose a different step count, batch size, or context length; increasing context length requires a separate memory and attention validation.
@@ -50,12 +50,17 @@ from datetime import timedelta
 
 from levanter.checkpoint import CheckpointerConfig
 
-SPEC = replace(
-    SPEC,
-    checkpointer=CheckpointerConfig(
-        save_interval=timedelta(minutes=30),
-        keep_last_temporary_checkpoints=2,
-        keep=[{"every": 1000}],
+from experiments.post_training.snowball_sft import OPENTHOUGHTS_SFT
+
+preset = replace(
+    OPENTHOUGHTS_SFT,
+    recipe=replace(
+        OPENTHOUGHTS_SFT.recipe,
+        checkpointer=CheckpointerConfig(
+            save_interval=timedelta(minutes=30),
+            keep_last_temporary_checkpoints=2,
+            keep=[{"every": 1000}],
+        ),
     ),
 )
 ```

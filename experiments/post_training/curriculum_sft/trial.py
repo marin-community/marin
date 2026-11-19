@@ -22,7 +22,7 @@ from rigging.filesystem.storage_path import prefix_join
 from experiments.evaluation.evals import resolve_evaluations
 from experiments.evaluation.models import SNOWBALL_VLLM_ARGS
 from experiments.evaluation.pipeline import EvaluationResult, eval_step
-from experiments.sft.configs.snowball_h100 import resources, snowball_mesh
+from experiments.post_training.snowball_sft import snowball_mesh, snowball_resources
 from experiments.sft.launcher import (
     LLAMA3_CHAT_EOS_TOKEN_IDS,
     ArtifactDatasetSpec,
@@ -127,7 +127,7 @@ def build_trial(
         hf_save_dtype="bfloat16",
         wandb_project="marin_moe_sft",
     )
-    trained = sft_step(spec, resources(TRAIN_NODES))
+    trained = sft_step(spec, snowball_resources(TRAIN_NODES))
     baseline: ArtifactStep[EvaluationResult] = eval_step(
         snowball_model(f"{eval_name}-base", HF_MODEL, HF_REVISION),
         resolve_evaluations(evals),

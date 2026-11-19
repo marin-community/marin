@@ -34,9 +34,8 @@ from experiments.sft.launcher import (
     ConvertedCheckpointModel,
     DatasetSpec,
     LevanterCheckpointModel,
-    LevanterSft,
+    SFTPreset,
     SFTSpec,
-    sft_model,
     sft_step,
 )
 
@@ -189,7 +188,7 @@ class _FileConverter:
 def test_sft_exports_once_at_the_final_update(tmp_path):
     spec = dataclasses.replace(_spec(ConvertedCheckpointModel(conversion=_fake_conversion())), num_train_steps=3)
     resources = ResourceConfig.with_cpu()
-    model = sft_model(LevanterSft(spec), resources)
+    model = SFTPreset("converted", spec, resources).model()
     config = materialized_config(model.step, str(tmp_path)).train_config
     export_path = Path(model.step.path(str(tmp_path))) / DEFAULT_HF_CHECKPOINTS_PATH
     export_path.mkdir(parents=True)
@@ -209,7 +208,7 @@ def test_sft_exports_once_at_the_final_update(tmp_path):
     assert {path.name: (path / "policy.txt").read_text() for path in export_path.iterdir()} == {"step-2": "2"}
     assert (export_path / "step-2" / "chat_template.jinja").read_text() == spec.chat_template
     epoch_spec = dataclasses.replace(spec, version="2026.07.18-dev", num_train_steps=None, num_train_epochs=1)
-    epoch_model = sft_model(LevanterSft(epoch_spec), resources)
+    epoch_model = SFTPreset("converted-epochs", epoch_spec, resources).model()
     assert epoch_model.relative_path is None
     epoch_export_path = Path(epoch_model.step.path(str(tmp_path))) / DEFAULT_HF_CHECKPOINTS_PATH
     shutil.copytree(export_path, epoch_export_path)

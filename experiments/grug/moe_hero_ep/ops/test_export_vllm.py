@@ -23,14 +23,13 @@ from safetensors.numpy import load_file
 
 import experiments.grug.moe_hero_ep.ops.export_cpu as cpu_export
 import experiments.grug.moe_hero_ep.ops.export_vllm as hero_export
-import experiments.grug.moe_hero_ep.sft_model as mochi_sft
+import experiments.grug.moe_hero_ep.sft_recipe as sft_recipe
 from experiments.grug.moe_hero_ep import launch_hero_sft
 from experiments.grug.moe_hero_ep.expert_placement import ExpertPlacement
 from experiments.grug.moe_hero_ep.model import GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY, GrugModelConfig, Transformer
 from experiments.grug.moe_hero_ep.ops.export_vllm import ExportConfig, export
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
-from experiments.sft.configs import mochi
-from experiments.sft.launcher import sft_model
+from experiments.post_training.mochi_sft import PRODUCTION_SFT
 
 
 @pytest.mark.parametrize(
@@ -186,10 +185,16 @@ def test_export_recovery_verifies_shards_and_preserves_completed_output(tmp_path
 
 
 @pytest.mark.timeout(240)
-def test_mochi_sft_exports_the_latest_permanent_checkpoint_for_skyrl(tmp_path, monkeypatch):
+def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monkeypatch):
     root = tmp_path / "override"
+    initializer = tmp_path / "pretraining" / "step-16"
+    initializer.mkdir(parents=True)
+    initializer_metadata = initializer / "metadata.json"
+    initializer_metadata.write_text(json.dumps({"step": 16, "is_temporary": False}))
     placement_file = Path(launch_hero_sft.__file__).with_name("hero_sft_expert_placement_step393491.json")
-    placement = ExpertPlacement.from_json(placement_file.read_text())
+    placement = dataclasses.replace(
+        ExpertPlacement.from_json(placement_file.read_text()), source_checkpoint=str(initializer)
+    )
     checkpoints = root / f"expert-placement-{placement.fingerprint}" / "checkpoints"
     native, _ = native_fixture(str(checkpoints / "step-17"), master=True)
     metadata = json.loads((checkpoints / "step-17" / "metadata.json").read_text())
@@ -198,26 +203,43 @@ def test_mochi_sft_exports_the_latest_permanent_checkpoint_for_skyrl(tmp_path, m
         candidate.mkdir()
         (candidate / "metadata.json").write_text(json.dumps({**metadata, "step": step, "is_temporary": temporary}))
     monkeypatch.setattr(launch_hero_sft, "special_token_init", lambda _: None)
-    monkeypatch.setattr(mochi_sft, "HERO_MODEL_CONFIG", native.model)
-    monkeypatch.setattr(mochi_sft, "configure_coreweave_s3", lambda: None)
-    recipe = dataclasses.replace(mochi.SFT, checkpoint_root=str(root), expert_placement=placement)
+    monkeypatch.setattr(sft_recipe, "HERO_MODEL_CONFIG", native.model)
+    monkeypatch.setattr(sft_recipe, "configure_coreweave_s3", lambda: None)
+    recipe = dataclasses.replace(
+        PRODUCTION_SFT.recipe,
+        initialize_from=str(initializer),
+        dp_racks=1,
+        stop_after_steps=1,
+        eval_every=0,
+        checkpoint_root=str(root),
+        expert_placement=placement,
+    )
+    resources = launch_hero_sft.sft_resources(recipe.dp_racks)
+    preset = dataclasses.replace(PRODUCTION_SFT, recipe=recipe, resources=resources)
     with pytest.raises(ValueError, match="GB200 allocation derived from dp_racks"):
-        sft_model(recipe, dataclasses.replace(mochi.RESOURCES, replicas=1))
-    model = sft_model(recipe, mochi.RESOURCES)
+        dataclasses.replace(preset, resources=dataclasses.replace(resources, replicas=1)).model()
+    initializer_metadata.write_text(json.dumps({"step": 16, "is_temporary": True}))
+    with pytest.raises(ValueError, match="temporary checkpoint"):
+        preset.model()
+    initializer_metadata.write_text(json.dumps({"step": 16, "is_temporary": False}))
+    model = preset.model()
     output = tmp_path / "output"
     ctx = StepContext.for_run(str(output), str(tmp_path), deps=model.step.deps)
     config = model.step.build_config(ctx)
-    mochi_sft._export_final_sft(**config)
+    sft_recipe._export_final_sft(**config)
 
     assert model.relative_path == "hf"
-    assert model.tokenizer_revision == mochi.SFT.tokenizer_revision
+    assert model.tokenizer_revision == PRODUCTION_SFT.recipe.tokenizer_revision
     hf = output / model.relative_path
     assert (hf / "export-manifest.json").is_file()
     completed = (hf / "export-manifest.json").read_bytes()
-    mochi_sft._export_final_sft(**config)
+    sft_recipe._export_final_sft(**config)
     assert (hf / "export-manifest.json").read_bytes() == completed
     with pytest.raises(FileExistsError, match="differs from the selected checkpoint"):
-        mochi_sft._export_final_sft(**{**config, "source_revision": "0" * 40})
+        sft_recipe._export_final_sft(**{**config, "source_revision": "0" * 40})
+    (checkpoints / "step-18" / "metadata.json").write_text(json.dumps({**metadata, "step": 18, "is_temporary": False}))
+    with pytest.raises(ValueError, match="expected final step 17, found newest permanent step 18"):
+        sft_recipe._export_final_sft(**config)
     skyrl = Path(__file__).resolve().parents[4] / "vendor" / "skyrl"
     subprocess.run(
         [
