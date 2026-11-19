@@ -171,12 +171,12 @@ class E12DataConfig(LmDataConfig):
                 result.append((dataset, ["e12", "e12/" + label]))
         return result
 
-    def teacher_eval_sets(self, Pos) -> list[tuple[AsyncDataset[TeacherLmExample], list[str]]]:
+    def teacher_eval_dataset(self, Pos) -> AsyncDataset[TeacherLmExample]:
+        """The held-out teacher-scored rows, in cache order."""
         if not self.teacher_validation_cache:
-            return []
+            raise ValueError("No teacher_validation_cache configured")
         if self.teacher_topk <= 0:
             raise ValueError("teacher_validation_cache needs teacher_topk > 0")
-        dataset = teacher_dataset(
+        return teacher_dataset(
             self.teacher_validation_cache, Pos, self.teacher_topk, self.block_cross_document_attention
         )
-        return [(dataset, ["e12_teacher/validation"])]
