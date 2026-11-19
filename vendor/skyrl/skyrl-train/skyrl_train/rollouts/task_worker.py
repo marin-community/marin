@@ -14,6 +14,7 @@ from jinja2 import TemplateError
 from daytona import DaytonaError
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
+from rigging.redaction import redact_string
 from shellbox.machine import Backend, Machine, MachineFactory
 from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import EnvironmentRequirements, NoGrader, ReasoningMarkupPolicy
@@ -319,7 +320,11 @@ def _failed_rollout(
         grade = fold_grades([step.transition.grade for step in rollout.steps if step.transition.grade is not None])
     if cleanup_errors := interruption.grade.diagnostics.get("cleanup_errors"):
         grade = replace(grade, diagnostics={**grade.diagnostics, "cleanup_errors": cleanup_errors})
-    logger.warning("Task {} interrupted during {}: {}", task.id, interruption.operation, exception_type)
+    detail = exception_type
+    if isinstance(error, TaskMachineError) and isinstance(error.__cause__, DaytonaError):
+        # Diagnostics carry only allowlisted fields. Provider text can contain credentials, so log it redacted.
+        detail = f"{exception_type} ({type(error.__cause__).__name__}: {redact_string(str(error.__cause__))})"
+    logger.warning("Task {} interrupted during {}: {}", task.id, interruption.operation, detail)
     return replace(
         rollout,
         grade=grade,
