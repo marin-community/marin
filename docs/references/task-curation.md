@@ -436,7 +436,13 @@ The script takes a machine-wide lock, fetches and rebases onto
 `origin/atlas-env-audit`, runs the docs check, catalog tests and fingerprint
 pre-push checks, then lint and your affected tests on the rebased head,
 pushes without force and verifies the remote. A failure stops the push; resolve
-rebase conflicts and rerun. Advisory review remains required for non-trivial
+rebase conflicts and rerun. When the branch's new commits carry merge commits
+(for example a maintenance merge of main), the script switches to a
+merge-preserving mode instead: it verifies the target tip is already an ancestor
+of the branch, runs the same gates, and pushes the branch unchanged so the merge
+commits survive; if the target moved, it aborts and the branch must merge the
+new tip first. The tool's source and tests live at `infra/ci/atlas-push` and
+`tests/ci/test_atlas_push.py`. Advisory review remains required for non-trivial
 changes. Report the landed SHA to the coordinator. Never force-push or push to
 `main`. This rule ends when CI resumes.
 

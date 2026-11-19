@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# Serialized direct landing onto the Atlas integration branch (used while CI is suspended).
+#
+# Usage (from the author's own worktree, with the change committed):
+#   atlas-push --test "<affected test command>" --who "<author session id>" --what "<one-line summary>"
+#
+# Holds a machine-wide lock for the whole land, so only one push to the target happens at a time:
+#   fetch -> rebase onto origin/<target> -> lint (branch changes) -> author's tests on the
+#   rebased head -> non-force push -> remote readback. Any failure aborts without pushing.
+# Every landing is appended to the landing log.
+#
+# Merge-preserving mode: when the branch's new commits include merge commits (for example a
+# maintenance merge of main), a linearizing rebase would flatten them. In that case the
+# script verifies the target tip is already an ancestor of HEAD, runs the same gates, and
+# pushes the branch unchanged. If the target moved, it aborts: re-merge the new tip first.
+#
+# ATLAS_PUSH_TARGET / ATLAS_PUSH_LOG / ATLAS_PUSH_LOCK override the target branch, the
+# landing log and the lock file (tests set them to temporary paths).
+set -euo pipefail
+TARGET="${ATLAS_PUSH_TARGET:-atlas-env-audit}"
+LOCK="${ATLAS_PUSH_LOCK:-$HOME/.local/share/atlas-push/lock}"
+LOG="${ATLAS_PUSH_LOG:-$HOME/.local/share/atlas-push/landings.jsonl}"
+mkdir -p "$(dirname "$LOCK")"
+
+test_cmd=""; who=""; what=""; waiver_file=""; wait_s=7200
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --test) test_cmd=$2; shift 2 ;;
+    --who) who=$2; shift 2 ;;
+    --what) what=$2; shift 2 ;;
+    --wait) wait_s=$2; shift 2 ;;
+    --waivers) waiver_file=$2; shift 2 ;;
+    --locked) shift; break ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+[[ -n $test_cmd && -n $who && -n $what ]] || { echo "usage: atlas-push --test CMD --who SESSION --what SUMMARY" >&2; exit 2; }
+
+if [[ -z ${ATLAS_PUSH_LOCKED:-} ]]; then
+  echo "waiting for the atlas-push lock (up to ${wait_s}s)..." >&2
+  exec env ATLAS_PUSH_LOCKED=1 /usr/bin/lockf -k -t "$wait_s" "$LOCK" "$0" --test "$test_cmd" --who "$who" --what "$what" --waivers "$waiver_file"
+fi
+
+top=$(git rev-parse --show-toplevel)
+cd "$top"
+branch=$(git rev-parse --abbrev-ref HEAD)
+[[ $branch != main && $branch != HEAD ]] || { echo "refusing: on '$branch'; use a named work branch" >&2; exit 2; }
+[[ -z $(git status --porcelain --untracked-files=no) ]] || { echo "refusing: uncommitted changes; commit first" >&2; exit 2; }
+
+git fetch -q origin "$TARGET"
+tip=$(git rev-parse "origin/$TARGET")
+echo "target tip: $tip" >&2
+merges=$(git rev-list --merges "$tip..HEAD" | wc -l | tr -d ' ')
+if [[ $merges -gt 0 ]]; then
+  # Merge-preserving mode: a rebase would flatten the branch's merge commits.
+  if ! git merge-base --is-ancestor "$tip" HEAD; then
+    echo "ABORTED: the target moved past a merge-carrying branch; merge the new origin/$TARGET into your branch and rerun" >&2
+    exit 3
+  fi
+  echo "== merge-preserving landing of $merges merge commit(s); skipping the linearizing rebase" >&2
+else
+  if ! git rebase -q "origin/$TARGET"; then
+    git rebase --abort || true
+    echo "ABORTED: rebase onto origin/$TARGET conflicts; resolve in your worktree and retry" >&2
+    exit 3
+  fi
+fi
+[[ -n $(git rev-list "origin/$TARGET..HEAD") ]] || { echo "nothing to land: HEAD is already on origin/$TARGET" >&2; exit 0; }
+
+echo "== lint (branch changes)" >&2
+./infra/pre-commit.py --changed-files || { echo "ABORTED: lint failed on the landing head" >&2; exit 4; }
+echo "== author tests: $test_cmd" >&2
+bash -c "$test_cmd" || { echo "ABORTED: tests failed on the landing head" >&2; exit 5; }
+
+# Path-gated checks mirroring the CI jobs that failed on PR #11277 (2026-11-16), run on the landing head.
+changed=$(git diff --name-only "origin/$TARGET..HEAD")
+if grep -qE '^(docs/|mkdocs\.yml$)' <<<"$changed"; then
+  echo "== docs links + strict mkdocs build" >&2
+  uv run --no-sync python infra/check_docs_source_links.py && uv run --no-sync mkdocs build --strict -q \
+    || { echo "ABORTED: docs check failed (CI 'Marin - Docs')" >&2; exit 6; }
+fi
+if grep -qE '^(experiments/post_training/task_curation/|lib/taskcompendium/src/taskcompendium/convert/|infra/marina/apps/rl_data_catalog/)' <<<"$changed"; then
+  echo "== catalog publication tests" >&2
+  uv run --no-sync pytest -q experiments/post_training/task_curation/tests/test_catalog.py \
+    experiments/post_training/task_curation/tests/test_catalog_publication.py \
+    || { echo "ABORTED: catalog tests failed (CI 'Marin - Unit')" >&2; exit 7; }
+  echo "== source fingerprint requirement" >&2
+  fp_tmp=$(mktemp -d "${TMPDIR:-/tmp}/atlas-push-fp.XXXXXX")
+  ( set -a; source "$HOME/Documents/secrets.env"; set +a
+    uv run --no-sync python -m experiments.post_training.task_curation.source_duplicate_ci --base-ref origin/main \
+      --index experiments/post_training/task_curation/source_fingerprint_index.json \
+      --output "$fp_tmp/fingerprints.json" --changed-output "$fp_tmp/changed.json" ) \
+    || { echo "ABORTED: missing or stale source fingerprints (CI 'Atlas source overlap'); add or refresh them in this landing" >&2; exit 8; }
+  echo "== declaration audit (ruling 2026-11-18: the canonical RlDataSource layer stays current)" >&2
+  # Runs only once the audit module is on the branch being landed; before that it would block every lane.
+  if [[ -f experiments/post_training/task_curation/declaration_audit.py ]]; then
+    audit_cmd=(uv run --no-sync python -m experiments.post_training.task_curation.declaration_audit)
+    if [[ -n $waiver_file ]]; then
+      audit_cmd+=(--waivers "$waiver_file")
+    fi
+    "${audit_cmd[@]}" \
+      || { echo "ABORTED: an Atlas receipt family names a source or pin the declarations do not carry (ruling row 51); update the RlDataSource layer in this landing" >&2; exit 9; }
+  else
+    echo "   (declaration_audit not on this branch yet; skipped)" >&2
+  fi
+fi
+
+head=$(git rev-parse HEAD)
+git push origin "HEAD:$TARGET"
+remote=$(git ls-remote origin "refs/heads/$TARGET" | awk '{print $1}')
+[[ $remote == "$head" ]] || { echo "WARNING: remote $TARGET is $remote, expected $head" >&2; exit 6; }
+
+python3 - "$LOG" "$head" "$who" "$what" "$top" "$branch" <<'EOF'
+import json, sys, datetime
+log, head, who, what, wt, br = sys.argv[1:]
+with open(log, "a") as f:
+    f.write(json.dumps({"at": datetime.datetime.now(datetime.timezone.utc).isoformat(), "sha": head,
+                        "who": who, "what": what, "worktree": wt, "branch": br}) + "\n")
+EOF
+echo "LANDED $head on $TARGET" >&2
