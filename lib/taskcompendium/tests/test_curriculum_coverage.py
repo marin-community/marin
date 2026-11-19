@@ -22,6 +22,7 @@ from taskcompendium.pipeline.curriculum.task_alignment import TaskAlignment
 
 def test_curriculum_release_retains_qualified_pins_and_private_tier():
     revision = "a" * 40
+    converter_revision = "fixture-converter"
     declaration = QualifiedSourceDeclaration(
         id="Marin:curriculum",
         name="curriculum",
@@ -37,7 +38,7 @@ def test_curriculum_release_retains_qualified_pins_and_private_tier():
             "within_source_duplicates": 0,
             "source_dataset_id": "fixture",
             "source_revision": revision,
-            "converter_revision": "fixture-converter",
+            "converter_revision": converter_revision,
             "converter_version": "1",
             "drop_manifest_uri": "memory://fixture/drops",
             "evidence_url": "memory://fixture/dedup",
@@ -56,7 +57,7 @@ def test_curriculum_release_retains_qualified_pins_and_private_tier():
         is_benchmark=False,
         kind="Dataset",
         status="Pending",
-        pipeline={"name": "fixture", "version": "1", "source": "fixture", "revision": "fixture-converter", "files": []},
+        pipeline={"name": "fixture", "version": "1", "source": "fixture", "revision": converter_revision, "files": []},
         daytona_safety="not_applicable",
     )
     release = {

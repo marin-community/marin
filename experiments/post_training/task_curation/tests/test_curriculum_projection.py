@@ -7,8 +7,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from finestore.rl.curation import LexicalUse, SourceOrigin, SourceUse, source_identifier
-from finestore.rl.curation import QualifiedSourceDeclaration as SourceDeclaration
+from finestore.rl.curation import LexicalUse, QualifiedSourceDeclaration, SourceOrigin, SourceUse, source_identifier
 from finestore.rl.licenses import LicenseReceipt
 from finestore.schema import arrow_schema
 from marin.execution.lazy import run
@@ -41,7 +40,7 @@ from lib.taskcompendium.tests.deduplication_fixtures import deduplication_eviden
 
 
 def declaration(identifier, revision="1"):
-    return SourceDeclaration(
+    return QualifiedSourceDeclaration(
         id=source_identifier(SourceOrigin.MARIN, identifier, None, None),
         name=identifier,
         display_name=identifier,
