@@ -60,7 +60,12 @@ def main() -> None:
 )
 @click.option("--vllm-source", type=click.Choice(["upstream", "marin-fork"]), default="upstream")
 @click.option("--vllm-version", default=DEFAULT_CUDA_VLLM_VERSION)
-@click.option("--vllm-release", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None)
+@click.option(
+    "--vllm-release",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Published vLLM GPU release manifest for this deployment.",
+)
 @click.option("--session-router", is_flag=True, help="Route stable X-Session-ID values to native DP ranks.")
 @click.option("--data-parallel-size", type=click.IntRange(min=1), default=1)
 @click.option("--tokenizer", default=None)

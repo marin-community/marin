@@ -147,12 +147,12 @@ uv run marin-serve local Qwen/Qwen3-0.6B --launcher cuda \
 uv run marin-serve iris Qwen/Qwen3-0.6B --cluster cw-us-east-08a --gpu GB200x4 \
   --tensor-parallel-size 1 --data-parallel-size 16 \
   --session-router --proxy-timeout 14400 \
-  --vllm-source marin-fork --vllm-release promoted-release.json \
+  --vllm-source marin-fork --vllm-release marin-vllm-gpu-manifest.json \
   --vllm-arg=--enable-prefix-caching
 ```
 
-`--vllm-release` accepts [VllmGpuRelease](../../../../lib/marin/src/marin/inference/vllm_release_schema.py)
-JSON; omitting it uses the normal runtime.
+`--vllm-release` reads `marin-vllm-gpu-manifest.json` from a [published release](https://github.com/marin-community/vllm/releases).
+Omitting it uses the normal runtime.
 The isolated `vllm-router==0.1.16` process uses vLLM's global internal DP frontend;
 external/hybrid balancing is unsupported. `/metrics` reports vLLM worker counters.
 
@@ -179,3 +179,4 @@ ServingGeometry(
 
 This gives four tasks, four local ranks per task and 16 router targets. Omitted model TP uses
 geometry; explicit TP must match. Multi-task or routed geometry requires `instances=1`, `broker=None`.
+Multi-task GPU serving requires stream loading; single-task serving also supports local weight staging.

@@ -8,20 +8,15 @@ import platform
 from dataclasses import dataclass
 from pathlib import Path
 
-import draccus
-
 from marin.external_dependencies import VllmGpuRelease, VllmGpuWheel
-from marin.inference.vllm_release_schema import validate_vllm_gpu_release
+from marin.inference.vllm_release_schema import release_from_manifest
 
 
 def load_vllm_gpu_release(path: Path | None) -> VllmGpuRelease | None:
-    """Read a deployment's pinned vLLM GPU release."""
+    """Read a deployment's published vLLM GPU release manifest."""
     if path is None:
         return None
-    payload = json.loads(path.read_text())
-    release = draccus.decode(VllmGpuRelease, payload)
-    validate_vllm_gpu_release(release, path)
-    return release
+    return release_from_manifest(json.loads(path.read_text()), path)
 
 
 @dataclass(frozen=True)

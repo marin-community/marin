@@ -6,9 +6,11 @@
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from urllib.parse import quote
 
 GPU_RELEASE_REPOSITORY = "marin-community/vllm"
+CUDA_TOOLCHAIN_VERSION_BY_BACKEND = MappingProxyType({"cu130": "13.0.88", "cu132": "13.2.86"})
 
 
 @dataclass(frozen=True)
@@ -37,6 +39,35 @@ def gpu_release_url_prefix(release_tag: str) -> str:
     return f"https://github.com/{GPU_RELEASE_REPOSITORY}/releases/download/{release_tag}/"
 
 
+def release_from_manifest(manifest: dict, path: Path) -> VllmGpuRelease:
+    """Read a validated, published GPU release manifest."""
+    metadata = manifest["release"]
+    if metadata.get("status") != "released":
+        raise ValueError(f"{path}: expected a promoted 'released' manifest")
+    if manifest.get("validation", {}).get("status") != "passed":
+        raise ValueError(f"{path}: manifest validation did not pass")
+    if metadata["repository"] != GPU_RELEASE_REPOSITORY:
+        raise ValueError(f"{path}: expected a {GPU_RELEASE_REPOSITORY} release")
+    release = VllmGpuRelease(
+        release_tag=metadata["tag"],
+        source_commit=manifest["source"]["fork_commit"],
+        version=manifest["distribution"]["version"],
+        torch_backend=manifest["abi"]["cuda_variant"],
+        torch_version=manifest["abi"]["torch_version"],
+        wheels=tuple(
+            VllmGpuWheel(
+                architecture=platform["architecture"],
+                sm_targets=tuple(platform["sm_targets"]),
+                url=gpu_release_url_prefix(metadata["tag"]) + quote(platform["wheel"]["filename"], safe=""),
+                sha256=platform["wheel"]["sha256"],
+            )
+            for platform in manifest["platforms"]
+        ),
+    )
+    validate_vllm_gpu_release(release, path)
+    return release
+
+
 def validate_vllm_gpu_release(release: VllmGpuRelease, path: Path) -> None:
     """Check a release descriptor's identities, wheel URLs and CUDA metadata."""
     source_commit = release.source_commit
@@ -47,8 +78,8 @@ def validate_vllm_gpu_release(release: VllmGpuRelease, path: Path) -> None:
     wheels = release.wheels
     if re.fullmatch(r"[0-9a-f]{40}", source_commit) is None:
         raise ValueError(f"{path}: expected a full vLLM source commit, found {source_commit!r}")
-    if not re.fullmatch(r"cu[0-9]+", backend):
-        raise ValueError(f"{path}: expected a CUDA torch backend, found {backend!r}")
+    if backend not in CUDA_TOOLCHAIN_VERSION_BY_BACKEND:
+        raise ValueError(f"{path}: no CUDA toolchain pin registered for {backend}")
     if not torch_version.endswith(f"+{backend}"):
         raise ValueError(f"{path}: torch version {torch_version!r} does not match {backend}")
     architectures = tuple(wheel.architecture for wheel in wheels)

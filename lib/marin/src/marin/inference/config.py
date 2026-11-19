@@ -352,7 +352,7 @@ class VllmRouterConfig:
 class VllmEngineConfig:
     """vLLM runtime and native arguments.
 
-    Native groups reject topology flags in ``extra_args``; ServingGeometry owns them.
+    Iris geometry owns topology in multi-task and routed deployments.
     Single-task serving without a router allows native overrides.
     vLLM YAML ``--config`` is unsupported.
     """
@@ -409,11 +409,9 @@ class LevanterEngineConfig:
 InferenceEngineConfig = VllmEngineConfig | LevanterEngineConfig
 
 
-def uses_native_vllm_group(geometry: ServingGeometry | None, engine: InferenceEngineConfig) -> bool:
-    """Coordinate multi-task or routed geometry; otherwise use local/brokered serving."""
-    return geometry is not None and (
-        geometry.task_count > 1 or (isinstance(engine, VllmEngineConfig) and engine.router is not None)
-    )
+def uses_native_vllm_group(geometry: ServingGeometry | None) -> bool:
+    """Coordinate native vLLM when geometry spans several Iris tasks."""
+    return geometry is not None and geometry.task_count > 1
 
 
 @dataclass(frozen=True)
@@ -537,9 +535,8 @@ class IrisConfig:
 class RemoteInferenceConfig:
     """Remote serving; ``instances`` counts independent servers.
 
-    Multi-task or routed geometry uses one coordinated vLLM group:
-    ``instances=1``, ``broker=None``. Single-task geometry without a router
-    allows local or brokered serving.
+    Multi-task geometry uses one coordinated vLLM group and stream loading.
+    Session routing requires ``instances=1``, ``broker=None``.
     """
 
     model: ServedModelConfig
@@ -569,11 +566,15 @@ class RemoteInferenceConfig:
             and self.model.tensor_parallel_size != geometry.tensor_parallel_size
         ):
             raise ValueError("model tensor_parallel_size must match serving geometry")
-        if uses_native_vllm_group(geometry, self.engine):
+        native_group = uses_native_vllm_group(geometry)
+        if native_group or session_routing:
             if not isinstance(self.engine, VllmEngineConfig):
                 raise ValueError("native GPU serving requires the vLLM backend")
-            validate_serving_geometry_args(self.engine.extra_args)
-        elif not session_routing:
+            if geometry is not None:
+                validate_serving_geometry_args(self.engine.extra_args)
+        else:
             return
+        if native_group and self.model.object_store_load_mode is not ObjectStoreLoadMode.STREAM:
+            raise ValueError("multi-task GPU serving requires shared weights with stream loading")
         if self.instances != 1 or self.broker is not None:
             raise ValueError("native GPU serving requires one instance and no broker")

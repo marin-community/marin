@@ -10,6 +10,7 @@ import signal
 import threading
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -18,10 +19,10 @@ from fray.types import ResourceConfig, create_environment
 from iris.client.context_state import reset_context, set_context
 from iris.cluster.client.job_info import JobInfo, set_job_info
 from iris.cluster.types import JobName
-from marin.inference import iris_vllm
 from marin.inference.config import (
     InferenceModelConfig,
     IrisConfig,
+    ObjectStoreLoadMode,
     RemoteInferenceConfig,
     ServedModelConfig,
     ServingGeometry,
@@ -34,6 +35,7 @@ from marin.inference.serve import local_inference
 from marin.inference.vllm_router import available_port, vllm_router
 from marin.inference.vllm_server import VllmEnvironment
 from marin.testing.inference.fake_vllm_server import FakeVllmLauncher
+from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration, ExponentialBackoff
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse, StreamingResponse
@@ -235,18 +237,6 @@ def test_local_inference_owns_router_and_worker_lifetimes_with_separate_metrics(
             requests.get(url, timeout=1)
 
 
-def test_environment_routes_all_native_ranks():
-    with VllmEnvironment(
-        InferenceModelConfig("fake", None, {}),
-        launcher=FakeVllmLauncher("serve"),
-        port=available_port("127.0.0.1"),
-        extra_args=["--data-parallel-size=4", "--data-parallel-size-local=2"],
-        router=VllmRouterConfig(),
-    ) as environment:
-        assert environment.server_url != environment.worker_server_url
-        _assert_native_rank_affinity(environment.server_url, 4)
-
-
 @pytest.mark.parametrize(
     "native_args",
     [
@@ -259,7 +249,7 @@ def test_environment_routes_all_native_ranks():
     ],
 )
 def test_managed_router_rejects_native_load_balancers_that_cannot_dispatch_global_ranks(native_args):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="serving geometry owns"):
         RemoteInferenceConfig(
             model=ServedModelConfig(weights="fake"),
             engine=VllmEngineConfig(router=VllmRouterConfig(), extra_args=native_args),
@@ -271,7 +261,7 @@ def test_managed_router_rejects_native_load_balancers_that_cannot_dispatch_globa
                 ),
             ),
         )
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="global internal DP"):
         with VllmEnvironment(
             InferenceModelConfig("fake", None, {}),
             launcher=FakeVllmLauncher("serve"),
@@ -290,15 +280,23 @@ def test_managed_router_rejects_native_load_balancers_that_cannot_dispatch_globa
         (True, ("-dp", "2"), False, 2),
     ],
 )
-def test_iris_serving_dispatches_and_reports_all_native_ranks(
+def test_iris_serving_preserves_staged_weights_and_rank_routing(
     monkeypatch, tmp_path, with_geometry, native_args, routed, rank_count
 ):
-    monkeypatch.setattr("marin.inference.vllm_backend.vllm_launcher", lambda _: FakeVllmLauncher("serve"))
+    argv_path = tmp_path / "argv.json"
+    monkeypatch.setattr(
+        "marin.inference.vllm_backend.vllm_launcher", lambda _: FakeVllmLauncher("record-args", str(argv_path))
+    )
+    weights = StoragePath(f"memory://router-models/{tmp_path.name}")
+    (weights / "config.json").write_text('{"model_type": "fake"}')
     registered_metadata = {}
 
     @contextmanager
     def registered(_name, address, metadata=None, **_kwargs):
         if metadata is not None:
+            native_argv = json.loads(argv_path.read_text())
+            assert (Path(native_argv[1]) / "config.json").read_text() == '{"model_type": "fake"}'
+            assert requests.get(f"{address}/metrics", timeout=10).status_code == 200
             registered_metadata.update(metadata)
             if routed:
                 _assert_native_rank_affinity(f"{address}/v1", rank_count)
@@ -317,9 +315,6 @@ def test_iris_serving_dispatches_and_reports_all_native_ranks(
 
     context = SimpleNamespace(registry=SimpleNamespace(registered=registered))
     monkeypatch.setattr("marin.inference.iris.iris_ctx", lambda: context)
-    monkeypatch.setattr(iris_vllm, "iris_ctx", lambda: context)
-    coordinator = iris_vllm.VllmCoordinatorActor("127.0.0.1")
-    monkeypatch.setattr(iris_vllm, "_coordinator_client", lambda _: coordinator)
     geometry = (
         ServingGeometry(tensor_parallel_size=1, data_parallel_size=4, pipeline_parallel_size=1, gpus_per_task=4)
         if with_geometry
@@ -327,13 +322,17 @@ def test_iris_serving_dispatches_and_reports_all_native_ranks(
     )
     service = IrisServiceConfig(
         model=ServedModelConfig(
-            weights=str(tmp_path), tensor_parallel_size=None if geometry else 1, chat_template_content="{{ messages }}"
+            weights=str(weights),
+            tensor_parallel_size=None if geometry else 1,
+            chat_template_content="{{ messages }}",
+            object_store_load_mode=ObjectStoreLoadMode.STAGE_LOCAL,
         ),
         engine=VllmEngineConfig(router=VllmRouterConfig() if routed else None, extra_args=native_args),
         iris=IrisConfig(
             worker_resources=ResourceConfig.with_gpu("H100", count=4),
             worker_environment=create_environment(docker_image="test"),
             serving_geometry=geometry,
+            cache_ttl_days=0,
         ),
         endpoint_name="/serve/router",
         timeout_hours=0,
@@ -347,3 +346,19 @@ def test_iris_serving_dispatches_and_reports_all_native_ranks(
         set_job_info(None)
         reset_context(context_token)
     assert int(registered_metadata["data_parallel_size"]) == rank_count
+    assert not Path(json.loads(argv_path.read_text())[1]).exists()
+
+
+def test_multitask_router_rejects_local_staging_before_submission():
+    with pytest.raises(ValueError, match="stream loading"):
+        RemoteInferenceConfig(
+            model=ServedModelConfig(weights="s3://models/large", object_store_load_mode=ObjectStoreLoadMode.STAGE_LOCAL),
+            engine=VllmEngineConfig(router=VllmRouterConfig()),
+            iris=IrisConfig(
+                worker_resources=ResourceConfig.with_gpu("H100", count=4, replicas=2),
+                worker_environment=create_environment(docker_image="test"),
+                serving_geometry=ServingGeometry(
+                    tensor_parallel_size=1, data_parallel_size=8, pipeline_parallel_size=1, gpus_per_task=4
+                ),
+            ),
+        )

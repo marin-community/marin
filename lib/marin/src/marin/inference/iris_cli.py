@@ -423,7 +423,12 @@ def _wait_and_report_endpoint(
     help="Total native GPU DP ranks; ranks per task are GPUs per task divided by TP size.",
 )
 @click.option("--session-router", is_flag=True, help="Route stable X-Session-ID values to native DP ranks.")
-@click.option("--vllm-release", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None)
+@click.option(
+    "--vllm-release",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Published vLLM GPU release manifest for this deployment.",
+)
 @click.option("--dtype", default="bfloat16", help="Weight/compute dtype.")
 @click.option("--cache-ttl-days", type=int, default=14, help="Mirror HF models to a TTL'd GCS cache (0 disables).")
 @click.option(

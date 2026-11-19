@@ -10,8 +10,8 @@ come from the root ``uv.lock``.
 """
 
 from dataclasses import dataclass
-from types import MappingProxyType
 
+from marin.inference.vllm_release_schema import CUDA_TOOLCHAIN_VERSION_BY_BACKEND as CUDA_TOOLCHAIN_VERSION_BY_BACKEND
 from marin.inference.vllm_release_schema import VllmGpuRelease, VllmGpuWheel
 
 
@@ -32,14 +32,6 @@ class ExternalDependency:
         if extras:
             distribution = f"{distribution}[{','.join(extras)}]"
         return f"{distribution} @ git+{self.repository}@{self.commit}"
-
-
-CUDA_TOOLCHAIN_VERSION_BY_BACKEND = MappingProxyType(
-    {
-        "cu130": "13.0.88",
-        "cu132": "13.2.86",
-    }
-)
 
 
 VLLM_GPU_RELEASE = VllmGpuRelease(

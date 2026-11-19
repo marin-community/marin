@@ -535,7 +535,7 @@ def run_iris_service(service: IrisServiceConfig) -> None:
     if isinstance(device, TpuConfig) and device.vm_count() > 1:
         _run_tpu_service(service)
         return
-    if uses_native_vllm_group(service.iris.serving_geometry, service.engine):
+    if uses_native_vllm_group(service.iris.serving_geometry):
         _run_native_gpu_service(service)
         return
     broker = _broker_config(service.instances, service.broker)

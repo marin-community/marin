@@ -17,17 +17,15 @@ import tempfile
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from types import MappingProxyType
-from urllib.parse import parse_qs, quote, urlsplit, urlunsplit
+from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 ROOT = Path(__file__).parents[1]
 # Keep this standalone script's shared validator free of workspace dependencies.
 sys.path.insert(0, str(ROOT / "lib" / "marin" / "src"))
 from marin.inference.vllm_release_schema import (  # noqa: E402
-    GPU_RELEASE_REPOSITORY,
     VllmGpuRelease,
     VllmGpuWheel,
-    gpu_release_url_prefix,
+    release_from_manifest,
     validate_vllm_gpu_release,
 )
 
@@ -40,12 +38,6 @@ VLLM_CONFIG_NAME = "vllm"
 VLLM_GPU_RELEASE_CONFIG = EXTERNAL_ROOT / VLLM_CONFIG_NAME / "gpu.toml"
 TPU_FORKS_CONFIG = EXTERNAL_ROOT / VLLM_CONFIG_NAME / "tpu.toml"
 GPU_RELEASE_MANIFEST_NAME = "marin-vllm-gpu-manifest.json"
-CUDA_TOOLCHAIN_VERSION_BY_BACKEND = MappingProxyType(
-    {
-        "cu130": "13.0.88",
-        "cu132": "13.2.86",
-    }
-)
 
 
 @dataclass(frozen=True)
@@ -201,42 +193,24 @@ def load_vllm_gpu_release(path: Path) -> VllmGpuRelease:
 
 
 def render_gpu_release_toml(manifest: dict) -> str:
-    """Return gpu.toml text for a promoted release with a registered CUDA backend.
-
-    ``manifest`` is a parsed ``marin-vllm-gpu-manifest.json``. Each wheel URL is rebuilt from
-    its filename with ``+`` percent-encoded because the manifest stores the raw ``+`` filename
-    while ``load_vllm_gpu_release`` accepts only the ``%2B`` form.
-    """
-    release = manifest["release"]
-    if release.get("status") != "released":
-        raise ValueError(f"expected a promoted 'released' manifest, found status {release.get('status')!r}")
-    if manifest.get("validation", {}).get("status") != "passed":
-        raise ValueError("manifest validation did not pass; refusing to pin an unvalidated release")
-    repository = release["repository"]
-    if repository != GPU_RELEASE_REPOSITORY:
-        raise ValueError(f"expected a {GPU_RELEASE_REPOSITORY} release, found {repository!r}")
-    release_tag = release["tag"]
-    torch_backend = manifest["abi"]["cuda_variant"]
-    if torch_backend not in CUDA_TOOLCHAIN_VERSION_BY_BACKEND:
-        raise ValueError(f"no CUDA toolchain pin registered for {torch_backend}")
+    """Render the shared release descriptor from a published manifest."""
+    release = release_from_manifest(manifest, Path(GPU_RELEASE_MANIFEST_NAME))
     lines = [
-        f'release_tag = "{release_tag}"',
-        f'source_commit = "{manifest["source"]["fork_commit"]}"',
-        f'version = "{manifest["distribution"]["version"]}"',
-        f'torch_backend = "{torch_backend}"',
-        f'torch_version = "{manifest["abi"]["torch_version"]}"',
+        f'release_tag = "{release.release_tag}"',
+        f'source_commit = "{release.source_commit}"',
+        f'version = "{release.version}"',
+        f'torch_backend = "{release.torch_backend}"',
+        f'torch_version = "{release.torch_version}"',
     ]
-    for platform in manifest["platforms"]:
-        filename = platform["wheel"]["filename"]
-        url = gpu_release_url_prefix(release_tag) + quote(filename, safe="")
-        sm_targets = ", ".join(f'"{target}"' for target in platform["sm_targets"])
+    for wheel in release.wheels:
+        sm_targets = ", ".join(f'"{target}"' for target in wheel.sm_targets)
         lines += [
             "",
             "[[wheels]]",
-            f'architecture = "{platform["architecture"]}"',
+            f'architecture = "{wheel.architecture}"',
             f"sm_targets = [{sm_targets}]",
-            f'url = "{url}"',
-            f'sha256 = "{platform["wheel"]["sha256"]}"',
+            f'url = "{wheel.url}"',
+            f'sha256 = "{wheel.sha256}"',
         ]
     return "\n".join(lines) + "\n"
 
@@ -290,9 +264,6 @@ def render_pins(
     entries = f"{entries}\n\n" if entries else ""
     constants = ", ".join(dependency.project.constant_name for dependency in dependencies)
     constants = f"({constants},)" if len(dependencies) == 1 else f"({constants})"
-    toolchain_entries = "\n".join(
-        f'        "{backend}": "{version}",' for backend, version in CUDA_TOOLCHAIN_VERSION_BY_BACKEND.items()
-    )
     wheel_entries = "\n".join(
         "        VllmGpuWheel(\n"
         f'            architecture="{wheel.architecture}",\n'
@@ -314,8 +285,8 @@ come from the root ``uv.lock``.
 """
 
 from dataclasses import dataclass
-from types import MappingProxyType
 
+from marin.inference.vllm_release_schema import CUDA_TOOLCHAIN_VERSION_BY_BACKEND as CUDA_TOOLCHAIN_VERSION_BY_BACKEND
 from marin.inference.vllm_release_schema import VllmGpuRelease, VllmGpuWheel
 
 
@@ -336,13 +307,6 @@ class ExternalDependency:
         if extras:
             distribution = f"{{distribution}}[{{','.join(extras)}}]"
         return f"{{distribution}} @ git+{{self.repository}}@{{self.commit}}"
-
-
-CUDA_TOOLCHAIN_VERSION_BY_BACKEND = MappingProxyType(
-    {{
-{toolchain_entries}
-    }}
-)
 
 
 {entries}VLLM_GPU_RELEASE = VllmGpuRelease(
