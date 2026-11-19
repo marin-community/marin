@@ -13,7 +13,7 @@ FAMILY_COLUMN = "family"
 
 
 class BatchPolicy(StrEnum):
-    """How committed groups are assigned to training batches."""
+    """How committed groups are batched. Both policies coincide at max_staleness_steps=0."""
 
     FULL_BATCH = "full_batch"
     ROLLING = "rolling"
@@ -37,7 +37,9 @@ def validate_family_quota_config(cfg: DictConfig) -> dict[str, int]:
             raise ValueError(f"{GROUPS_PER_FAMILY_KEY} requires batch_policy={BatchPolicy.FULL_BATCH}")
         batch_size = cfg.trainer.train_batch_size
         if sum(quotas.values()) != batch_size:
-            raise ValueError(f"{GROUPS_PER_FAMILY_KEY} sums to {sum(quotas.values())}, expected train_batch_size={batch_size}")
+            raise ValueError(
+                f"{GROUPS_PER_FAMILY_KEY} sums to {sum(quotas.values())}, expected train_batch_size={batch_size}"
+            )
         if cfg.data.sampling.kind is not None:
             raise ValueError(f"{GROUPS_PER_FAMILY_KEY} requires data.sampling.kind to be null")
     return dict(quotas)
@@ -51,7 +53,8 @@ def validate_family_pools(
         raise ValueError(f"{GROUPS_PER_FAMILY_KEY} requires a family on every training row")
     if family_counts.keys() != quotas.keys():
         raise ValueError(
-            f"{GROUPS_PER_FAMILY_KEY} names {sorted(quotas)}, but training rows have families {sorted(map(str, family_counts))}"
+            f"{GROUPS_PER_FAMILY_KEY} names {sorted(quotas)}, "
+            f"but training rows have families {sorted(map(str, family_counts))}"
         )
     for family, quota in quotas.items():
         available = family_counts[family]

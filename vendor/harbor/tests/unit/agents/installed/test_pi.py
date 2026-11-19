@@ -302,7 +302,7 @@ class TestPiAgent:
             model_name="openai/test-model",
             model_info={"max_input_tokens": 65536, "max_output_tokens": 16384},
             compaction_reserve_tokens=32768,
-            http_idle_timeout=360.0001,
+            http_idle_timeout=360,
         )
 
         await agent.run("Fix the bug", shell.environment, AgentContext())
@@ -313,7 +313,7 @@ class TestPiAgent:
             "reserveTokens": 32768,
             "keepRecentTokens": 16384,
         }
-        assert settings["httpIdleTimeoutMs"] == 360001
+        assert settings["httpIdleTimeoutMs"] == 360000
 
     @pytest.mark.parametrize("compaction_reserve_tokens", [16383, 65536])
     def test_explicit_compaction_reserve_must_fit_model_limits(
@@ -330,7 +330,7 @@ class TestPiAgent:
                 compaction_reserve_tokens=compaction_reserve_tokens,
             )
 
-    @pytest.mark.parametrize("http_idle_timeout", [0, -1, float("inf"), float("nan")])
+    @pytest.mark.parametrize("http_idle_timeout", [True, 0, -1, float("inf"), float("nan")])
     def test_http_idle_timeout_must_be_finite_and_positive(self, temp_dir, http_idle_timeout):
         with pytest.raises(ValueError, match="http_idle_timeout must be finite and positive"):
             Pi(logs_dir=temp_dir, model_name="openai/test-model", http_idle_timeout=http_idle_timeout)

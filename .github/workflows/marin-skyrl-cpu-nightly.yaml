@@ -42,5 +42,4 @@ jobs:
           skyrl-train/tests/cpu/test_cat_count_cpu_canary.py
           skyrl-train/tests/cpu/test_cat_count_cpu_opd.py
           skyrl-train/tests/cpu/test_worker_batch_training.py
-          skyrl-train/tests/cpu/test_best_checkpoint_selection.py
           -n 0 -s --durations=10

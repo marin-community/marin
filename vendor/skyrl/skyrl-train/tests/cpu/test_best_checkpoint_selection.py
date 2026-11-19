@@ -106,8 +106,8 @@ async def test_delayed_best_selection_preserves_baseline_gates_after_resume(tmp_
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("restart", [False, True], ids=["same-trainer", "after-restart"])
-async def test_periodic_checkpoint_can_be_selected_on_write_once_storage(tmp_path, monkeypatch, restart):
+@pytest.mark.parametrize("resume", ["same-trainer", "after-restart", "imported"])
+async def test_periodic_checkpoint_can_be_selected_on_write_once_storage(tmp_path, monkeypatch, resume):
     class PolicyStorage:
         def async_run_ray_method(self, _dispatch, method, **kwargs):
             if method == "save_checkpoint":
@@ -164,15 +164,25 @@ async def test_periodic_checkpoint_can_be_selected_on_write_once_storage(tmp_pat
     coverage = {"eval/all/num_attempted": 1, "eval/all/num_scored": 1}
     trainer.global_step = 1
     await trainer._save_intermediate_checkpoint(TrainerState(1, 0, 1, 1))
-    if restart:
+    output = tmp_path
+    if resume != "same-trainer":
         await trainer._drain_checkpoint_upload()
+        if resume == "imported":
+            output = tmp_path / "resumed"
+            config.trainer.ckpt_path = str(output)
+            config.trainer.resume_path = str(tmp_path / "global_step_1")
         trainer = make_trainer()
         trainer.global_step, _ = trainer.load_checkpoints()
     callback = trainer.callback_handler.callbacks[0]
     await callback.on_evaluate_async(
-        TrainerState(trainer.global_step, 0, 1, 1), TrainerControl(), trainer=trainer, metrics={**coverage, "score": 1.0}
+        TrainerState(trainer.global_step, 0, 1, 1),
+        TrainerControl(),
+        trainer=trainer,
+        metrics={**coverage, "score": 1.0},
     )
 
-    selected = json.loads((tmp_path / "best_checkpoint.json").read_text())
+    selected = json.loads((output / "best_checkpoint.json").read_text())
     assert (selected["step"], selected["accuracy"]) == (1, 1.0)
-    assert (Path(selected["model_uri"]) / "rank_0.pt").read_bytes() == b"policy"
+    model = Path(selected["model_uri"])
+    assert model.is_relative_to(output)
+    assert (model / "rank_0.pt").read_bytes() == b"policy"

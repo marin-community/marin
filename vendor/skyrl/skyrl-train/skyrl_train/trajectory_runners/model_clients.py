@@ -99,7 +99,9 @@ def _requested_output_limit(options: dict[str, Any]) -> int | None:
     )
 
 
-def _generation_token_budget(request: InferenceEngineInput, prompt_ids: list[int], requested_limit: int | None) -> int | None:
+def _generation_token_budget(
+    request: InferenceEngineInput, prompt_ids: list[int], requested_limit: int | None
+) -> int | None:
     """Return the tightest output cap, or None when uncapped.
 
     Raise GenerationBudgetExceededError if the prompt exceeds its cap or fills the context.
