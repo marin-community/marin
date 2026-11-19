@@ -27,6 +27,7 @@ import logging
 import tempfile
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import click
 import draccus
@@ -200,8 +201,6 @@ def run_production_smoke(output_root: Path | None = None) -> dict:
 
 def _pod_train_config(spec: SFTSpec, output_path: str):
     """The pod config the launcher would dispatch, built against a local output path."""
-    from types import SimpleNamespace
-
     ctx = SimpleNamespace(is_fingerprint=False, output_path=output_path)
     return _levanter_pod_config(
         ctx,
