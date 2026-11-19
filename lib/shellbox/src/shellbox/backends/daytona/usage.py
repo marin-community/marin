@@ -243,9 +243,10 @@ def usage_report(
 ) -> dict[str, Any]:
     """Return one account's usage as the CLI JSON interchange.
 
-    The resource and region blocks are informational sums over every quota
-    row; ``max_concurrency`` is sized against ``region``, the row that a
-    launch into the target region is charged against.
+    The resource block sums CPU, memory and disk across regions and includes
+    account-level snapshot and volume quotas. The region block lists each
+    quota row. ``max_concurrency`` is sized against ``region``, the row charged
+    for a launch into the target region.
     """
     report: dict[str, Any] = {
         "organization_id": usage.organization_id,

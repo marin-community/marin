@@ -131,9 +131,8 @@ provider enforces each row's quota separately; the summed totals above it are
 informational. The line applies the headroom (default 20%, `--headroom`) to
 that row's remaining CPU, memory and disk capacity, divides by the per-sandbox
 request from `--cpu`, `--memory-gib` and `--disk-gib`, and reports the
-minimum. Keep the planned launch plus every other lane running on that org
-within the suggestion; the sandbox state counts show what is live. The reading
-moves as lanes start and stop, so re-read before large submissions. A
+minimum. The sandbox state counts show what is live. The reading moves as
+lanes start and stop, so re-read before large submissions. A
 per-sandbox request above the row's `max_cpu_per_sandbox`,
 `max_memory_gib_per_sandbox` or `max_disk_gib_per_sandbox` fails at creation;
 the command prints a warning when the profile exceeds one.

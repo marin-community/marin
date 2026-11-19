@@ -31,22 +31,12 @@ from shellbox.backends.daytona.usage import (
     usage_report,
 )
 
-# The three known accounts in report order. Each maps to one unambiguous key
-# name: the eval account's key is DAYTONA_EVAL_API_KEY (DAYTONA_API_KEY is the
-# SDK's ambient variable and some launchers load the RL key into it, so it is
-# never an account selector).
-ALL_ACCOUNTS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("eval", ("DAYTONA_EVAL_API_KEY",)),
-    ("rl", ("DAYTONA_RL_API_KEY",)),
-    ("data", ("DAYTONA_DATA_API_KEY",)),
+# The accounts use dedicated keys, not the SDK's ambient DAYTONA_API_KEY.
+ALL_ACCOUNTS: tuple[tuple[str, str], ...] = (
+    ("eval", "DAYTONA_EVAL_API_KEY"),
+    ("rl", "DAYTONA_RL_API_KEY"),
+    ("data", "DAYTONA_DATA_API_KEY"),
 )
-
-
-def _api_key(names: tuple[str, ...]) -> str | None:
-    for name in names:
-        if value := os.environ.get(name):
-            return value
-    return None
 
 
 def _connection(api_key: str, arguments: argparse.Namespace) -> DaytonaConnection:
@@ -128,13 +118,13 @@ async def _run(arguments: argparse.Namespace) -> None:
     headroom = DEFAULT_HEADROOM if arguments.headroom is None else arguments.headroom
     if arguments.all:
         reports: dict[str, Any] = {}
-        for account, names in ALL_ACCOUNTS:
-            api_key = _api_key(names)
-            if api_key is None:
+        for account, name in ALL_ACCOUNTS:
+            api_key = os.environ.get(name)
+            if not api_key:
                 if arguments.json:
-                    reports[account] = {"skipped": f"missing {' or '.join(names)}"}
+                    reports[account] = {"skipped": f"missing {name}"}
                 else:
-                    print(f"{account}: skipped (missing {' or '.join(names)})")
+                    print(f"{account}: skipped (missing {name})")
                 continue
             usage = await account_usage(_connection(api_key, arguments))
             region = (
@@ -151,8 +141,8 @@ async def _run(arguments: argparse.Namespace) -> None:
             print(json.dumps(reports, indent=2, sort_keys=True))
         return
 
-    api_key = _api_key((arguments.api_key_env,))
-    if api_key is None:
+    api_key = os.environ.get(arguments.api_key_env)
+    if not api_key:
         raise SystemExit(f"Missing Daytona credential environment variable: {arguments.api_key_env}")
     usage = await account_usage(_connection(api_key, arguments))
     region = (
