@@ -69,10 +69,11 @@ uv run python -m experiments.post_training.snowball_rl publish --preset train-lo
 ```
 
 Without `--output` and `--attempt`, that command publishes the selected preset's pinned controls.
-Both selectors are required together. Pass `--evaldash-run-id RUN_ID` once per evaluation definition
-using the IDs returned in `EvaluationResult.run_ids`. Republishing with these options sets the linked
-EvalDash runs for the selected attempt. Publishing without them preserves saved links.
-Historical attempts retain their own native identity and window. Unattributed historical JSONL dumps do not supply per-attempt evaluation summaries.
+Both selectors are required together. Pass the complete `EvaluationResult.run_ids` tuple with one
+`--evaldash-run-id RUN_ID` per evaluation definition. Providing IDs sets the entire list for the
+selected attempt. Publishing without IDs preserves its saved links. Historical attempts retain their
+own native identity and window. Unattributed historical JSONL dumps do not supply per-attempt
+evaluation summaries.
 The dashboard's detail view shows each evaluation step's counts and strata means, including
 family, AAII category and difficulty, and links to the run's Grafana window.
 
