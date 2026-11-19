@@ -106,7 +106,6 @@ async def test_grading_timeout_replays_candidate_on_new_attempt_once() -> None:
         None,
         "timeout",
         failure=GradingFailure.TIMEOUT,
-        diagnostics={"grader_elapsed_seconds": 300.0, "grader_timeout_seconds": 300.0},
     )
     success = GradeResult(Outcome.GRADED, 1, "correct")
     rollout = Rollout("trial", (), "stop")
@@ -123,7 +122,6 @@ async def test_grading_repeated_timeout_returns_the_second_grade() -> None:
         None,
         "timeout",
         failure=GradingFailure.TIMEOUT,
-        diagnostics={"grader_elapsed_seconds": 300.0, "grader_timeout_seconds": 300.0},
     )
     rollout = Rollout("trial", (), "stop")
     engine = FakeEngine((GradedRollout(rollout, timeout), GradedRollout(rollout, timeout)))

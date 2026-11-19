@@ -8,6 +8,7 @@ import json
 import os
 import time
 import traceback
+from contextlib import AsyncExitStack
 from dataclasses import replace
 from pathlib import Path
 
@@ -17,7 +18,7 @@ from rigging.filesystem.factory import open_url
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from shellbox.backends.iris.machine import ExecOutput, IrisMachine
 from shellbox.image import RegistryImage
-from shellbox.machine import Command, ExitReason, MachineSpec
+from shellbox.machine import Command, MachineSpec
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -42,6 +43,7 @@ from taskforge.lowering import (
 )
 from taskforge.model.controls import Candidate
 from taskforge.policy import GRADER_BASE_IMAGE, load_policy
+from taskforge.resources.env import ShellboxEnv
 from taskforge.resources.grading import GradeCandidate, GradingResource
 from taskforge.resources.verifier import RoundVerifier
 
@@ -136,11 +138,8 @@ async def test_verifier_reuse_and_replacement(monkeypatch: pytest.MonkeyPatch) -
         try:
             async with asyncio.timeout(180):
                 while True:
-                    try:
-                        if await machine.read_file("/app/mid-command") == b"running":
-                            break
-                    except FileNotFoundError:
-                        pass
+                    if (await machine.run(Command(("cat", "/app/mid-command")))).stdout == b"running":
+                        break
                     await asyncio.sleep(1)
             print("KILLING_SANDBOX_MID_COMMAND " + str(machine.job.job_id), flush=True)
             await asyncio.to_thread(machine.job.cancel)
@@ -210,16 +209,16 @@ async def test_verifier_reuse_and_replacement(monkeypatch: pytest.MonkeyPatch) -
 @pytest.mark.cluster
 @pytest.mark.timeout(1800)
 @pytest.mark.skipif(not os.environ.get("PROBE_OUTPUT"), reason="requires live Iris and storage")
-async def test_nested_command_timeout_keeps_sandbox_alive() -> None:
+async def test_command_timeout_keeps_sandbox_alive() -> None:
     configure_coreweave_s3()
     factory = RecordingIrisFactory()
     machine = await factory.create(MachineSpec(source=RegistryImage(GRADER_BASE_IMAGE), workdir="/workspace"))
+    env = ShellboxEnv(machine, GRADER_BASE_IMAGE, print, AsyncExitStack())
     result: dict[str, object] = {"passed": False, "machine": str(machine.job.job_id)}
     try:
-        command = await machine.run(Command(("sh", "-c", "printf before; timeout 1 sh -c 'sleep 5'"), timeout=3))
-        result.update(exit_code=command.exit_code, reason=command.reason.value, stdout=command.stdout.decode())
-        assert command.reason is ExitReason.TIMED_OUT and command.exit_code == 124
-        assert command.stdout == b"before"
+        command = await env.run("printf before; sleep 30", timeout=3)
+        result.update(exit_code=command.exit_code, stdout=command.stdout, wall=command.wall)
+        assert command.exit_code == 124 and command.stdout == "before"
         assert (await machine.run(Command(("true",)))).exit_code == 0
         result["passed"] = True
     except Exception as error:

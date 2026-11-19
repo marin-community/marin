@@ -9,11 +9,12 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.harness.shell import ShellHarness
+from rolloutengine.harness.shell import DEFAULT_SHELL_TOOL, ShellHarness
 from rolloutengine.models import MachineRuntimeSpec, RolloutLimits, TaskRolloutSpec
-from rolloutengine.validation import InvalidTaskSpec, check_grader
-from shellbox.machine import DEFAULT_WORKDIR, Backend, MachineFactory, NetworkPolicy, PackageSpec
+from rolloutengine.validation import task_machine_reason
+from shellbox.machine import Backend, MachineFactory, NetworkPolicy, PackageSpec
 from taskcompendium.models import (
+    CONVERSATION_ANSWERS,
     CommandSemantics,
     EnvironmentRequirements,
     Grader,
@@ -21,11 +22,15 @@ from taskcompendium.models import (
     TaskSpec,
     judge_spec,
 )
-from verifyit.modes.grade_judge import JudgeConnection
+from taskcompendium.runtime.shell import resolve_shell_tool
+from taskcompendium.submission import require_submission_compatibility
+from verifyit.grade import InvalidTask
+from verifyit.modes.grade_judge import JudgeConnection, validate_judge_spec
 
 from taskforge.model.controls import Candidate
 from taskforge.policy import GRADER_BASE_IMAGE, Policy
 from taskforge.resources.sandbox.factories import (
+    DEFAULT_WORKDIR,
     SANDBOX_SCHEDULING_TIMEOUT,
     grading_environment,
 )
@@ -33,6 +38,28 @@ from taskforge.resources.sandbox.factories import (
 SHELL_CAPABILITY = "shell"
 TOOL_HARNESS = "tools"
 """The harness every Taskforge spec selects: a shell tool on the task machine, or a plain conversation without one."""
+
+
+class InvalidTaskSpec(ValueError):
+    """Authored task requirements are inconsistent or unsupported; return them to the author."""
+
+
+def check_authored(task: TaskSpec) -> None:
+    """Raise ``InvalidTaskSpec`` for the authored defects RolloutEngine reports only as ``ValueError``.
+
+    Runs before machine admission, so the defect returns to the author instead of holding the stage.
+    """
+    try:
+        judge = judge_spec(task.grader)
+        if judge is not None:
+            validate_judge_spec(judge)
+        resolve_shell_tool(task, DEFAULT_SHELL_TOOL)
+        if task.answer_type in CONVERSATION_ANSWERS:
+            require_submission_compatibility(task)
+    except (ValueError, InvalidTask) as error:
+        raise InvalidTaskSpec(str(error)) from error
+    if SHELL_CAPABILITY not in task.environment_requirements.capabilities and (reason := task_machine_reason(task)):
+        raise InvalidTaskSpec(reason)
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,7 +250,7 @@ def lower_with_settings(
     task: TaskSpec, settings: LoweringSettings, factories: Mapping[str, MachineFactory]
 ) -> TaskRolloutSpec:
     """Lower with shared budgets and only the machines the task requires."""
-    check_grader(task.grader)
+    check_authored(task)
     judge = judge_spec(task.grader)
     connection = None
     if judge is not None:
