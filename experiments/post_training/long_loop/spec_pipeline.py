@@ -285,15 +285,10 @@ def build_spec_graph(
         trained=learned,
     )
     evaluation = resolved["evaluation"]
-    eval_inputs = ArtifactStep.adopt(
-        "evaluation/micro210/prepared",
-        "2026.11.18",
-        PREPARED_INPUTS,
-        config={"policy": "canonical; no launch overrides"},
-    )
     canonical = micro210_artifact_step(
         TerminalPolicy(learned, expected_step=None), name=evaluation["name"], version=version
     )
+    (eval_inputs,) = (dep for dep in canonical.deps if dep.adopt_source == PREPARED_INPUTS)
     canonical_execution = canonical.runtime_args["skyrl_execution"]
     canonical = replace(
         canonical,

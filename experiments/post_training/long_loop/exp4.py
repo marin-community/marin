@@ -253,6 +253,12 @@ def main(
             source_names=[NEMOTRON_SOURCE if label == "nemotron_if" else label for label in manifest["source_counts"]],
             teacher_routes=manifest["source_counts"],
         )
+    resolved["resolved_sha256"] = hashlib.sha256(
+        json.dumps(
+            {key: value for key, value in resolved.items() if key != "resolved_sha256"},
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
     terminal = build_spec_graph(
         resolved, version, through="archive", data_artifacts=pools, curriculum=exp4_rl_curriculum(), sft_release=handle
     )
