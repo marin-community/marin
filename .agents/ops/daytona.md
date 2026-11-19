@@ -104,6 +104,34 @@ Read the account's current quota and inventory before submission. Snapshot quota
 and live sandbox capacity are separate limits. A successful GPU allocation proves
 neither is available.
 
+`shellbox-daytona-usage` reads the account's live quota, current usage and
+remaining capacity. It lists the account's sandboxes (paginated) and reports
+the usage overview with sandbox counts by state. The `/organizations` endpoint
+rejects API-key credentials with 401, so the command resolves the organization
+ID from the inventory; when the org has no sandboxes, it reads snapshots and
+then volumes instead:
+
+```bash
+uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-usage \
+  --api-key-env DAYTONA_RL_API_KEY --cpu 2 --memory-gib 8 --disk-gib 8
+```
+
+`--all` reads the three known accounts in one sweep (eval =
+`DAYTONA_API_KEY`, which some launchers load as `DAYTONA_EVAL_API_KEY`;
+rl = `DAYTONA_RL_API_KEY`; data = `DAYTONA_DATA_API_KEY`). `--json` emits the
+machine-readable report, including per-region rows with the provider's
+per-sandbox maxima.
+
+Size concurrency from the remaining capacity. The `max concurrency` line applies
+the headroom (default 20%, `--headroom`) to each remaining capacity, divides by
+the per-sandbox request from `--cpu`, `--memory-gib` and `--disk-gib`, and
+reports the minimum over CPU, memory and disk. Keep the planned launch plus
+every other lane running on that org within the suggestion; the sandbox state
+counts show what is live. The reading moves as lanes start and stop, so re-read
+before large submissions. A per-sandbox request above the region's
+`max_cpu_per_sandbox`, `max_memory_gib_per_sandbox` or `max_disk_gib_per_sandbox`
+fails at creation; the command prints a warning when the profile exceeds one.
+
 1. Inventory snapshots in the intended account, including every result page:
 
    ```bash
