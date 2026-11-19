@@ -49,6 +49,8 @@ from levanter.utils.types import FilterSpec
 
 logger = logging.getLogger(__name__)
 
+CHECKPOINT_METADATA_FILENAME = "metadata.json"
+
 _CHECKPOINT_CURRENT = telemetry.snapshot_attributes("gauge", telemetry.CURRENT_SNAPSHOT)
 _CHECKPOINT_PHASE_DURATION_METRIC = "checkpoint_phase_duration_seconds"
 
@@ -769,7 +771,7 @@ class Checkpointer:
     def _do_rm_checkpoint(self, cp_path):
         # have to strip protocol from path because fsspec filesystems don't like them
         fs, plain_path = _get_fs_and_plain_path(cp_path)
-        metadata_path = os.path.join(plain_path, "metadata.json")
+        metadata_path = os.path.join(plain_path, CHECKPOINT_METADATA_FILENAME)
 
         try:
             logger.info(f"Deleting old checkpoint from {cp_path}")
@@ -955,7 +957,7 @@ def _save_metadata(checkpoint_path, step, is_temporary, extra_metadata=None):
         "is_temporary": is_temporary,
     }
     if jax.process_index() == 0:
-        metadata_path = StoragePath(prefix_join(checkpoint_path, "metadata.json"))
+        metadata_path = StoragePath(prefix_join(checkpoint_path, CHECKPOINT_METADATA_FILENAME))
         if metadata_path.is_remote:
             # Object-store writers publish the completed object when they close. A sibling rename
             # would copy and then delete its temporary source, which protected checkpoint prefixes
@@ -1138,7 +1140,7 @@ def load_checkpoint_metadata(checkpoint_path, fs=None) -> dict[str, Any]:
     """Read a concrete checkpoint's ``metadata.json``: step, timestamp, retention, and application metadata."""
     if fs is None:
         fs, _, _ = fsspec.get_fs_token_paths(str(checkpoint_path))
-    with fs.open(os.path.join(checkpoint_path, "metadata.json")) as metadata_in:
+    with fs.open(os.path.join(checkpoint_path, CHECKPOINT_METADATA_FILENAME)) as metadata_in:
         metadata = json.load(metadata_in)
     return metadata
 
@@ -1262,7 +1264,7 @@ def _discover_checkpoint_paths_single(checkpoint_path: str, fs: AbstractFileSyst
     base_path_protocol = urllib.parse.urlparse(str(checkpoint_path)).scheme
 
     def is_checkpoint_dir(path: str):
-        return fs.exists(os.path.join(path, "metadata.json"))
+        return fs.exists(os.path.join(path, CHECKPOINT_METADATA_FILENAME))
 
     def maybe_unstrip_protocol(path: str):
         if base_path_protocol != "" and urllib.parse.urlparse(path).scheme == "":
@@ -1380,7 +1382,7 @@ def is_checkpoint_path(path: str) -> bool:
         # Sometimes we have incomplete checkpoints due to preemption or other issues.
         # try to find a metadata file in the path
         fs, plain_path = _get_fs_and_plain_path(path)
-        metadata_path = os.path.join(plain_path, "metadata.json")
+        metadata_path = os.path.join(plain_path, CHECKPOINT_METADATA_FILENAME)
         if fs.exists(metadata_path):
             return True
         # if we don't find a metadata file, we can check if the path has any checkpoint subdirectories

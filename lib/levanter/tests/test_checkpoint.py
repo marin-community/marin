@@ -1282,62 +1282,7 @@ def test_mpmd_checkpoint_uses_standard_format_across_destination_shardings(tmp_p
     assert loaded["unused"] is None
 
 
-def test_prune_removes_metadata_before_payload_so_interrupted_delete_is_skipped(tmp_path, monkeypatch):
-    permanent_path = tmp_path / "checkpoints"
-    temporary_path = tmp_path / "temporary"
-    checkpointer = Checkpointer(
-        permanent_path,
-        None,
-        [],
-        temporary_base_path=temporary_path,
-        keep_last_temporary_checkpoints=1,
-    )
-
-    checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
-    _on_step(checkpointer, 1)
-    checkpointer.wait_until_finished()
-    step1_dir = temporary_path / "step-1"
-    assert (step1_dir / "metadata.json").is_file()
-
-    real_get_fs = checkpoint_module._get_fs_and_plain_path
-    observed_candidates_at_payload_rm: list[list[int]] = []
-
-    class InterruptedPayloadRmFs:
-        def __init__(self, inner):
-            self._inner = inner
-
-        def __getattr__(self, name):
-            return getattr(self._inner, name)
-
-        def rm(self, path, recursive=False):
-            if recursive:
-                assert not (step1_dir / "metadata.json").exists()
-                observed_candidates_at_payload_rm.append(
-                    [c.step for c in discover_checkpoint_candidates(temporary_path)]
-                )
-                raise OSError("simulated mid-delete failure")
-            return self._inner.rm(path, recursive=False)
-
-    def wrapped_get_fs(path, fs=None):
-        inner, plain = real_get_fs(path, fs=fs)
-        if str(path) == str(step1_dir):
-            return InterruptedPayloadRmFs(inner), plain
-        return inner, plain
-
-    monkeypatch.setattr(checkpoint_module, "_get_fs_and_plain_path", wrapped_get_fs)
-
-    checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
-    _on_step(checkpointer, 2)
-    checkpointer.wait_until_finished()
-
-    assert observed_candidates_at_payload_rm == [[2]]
-    assert step1_dir.exists()
-    assert not (step1_dir / "metadata.json").exists()
-    assert [c.step for c in discover_checkpoint_candidates(temporary_path)] == [2]
-
-
-@pytest.mark.parametrize("failure_mode", ["raise", "silent_noop"])
-def test_prune_aborts_payload_removal_when_metadata_delete_fails(tmp_path, monkeypatch, failure_mode):
+def _run_temp_prune_with_fs_wrapper(tmp_path, monkeypatch, wrapper_factory):
     permanent_path = tmp_path / "checkpoints"
     temporary_path = tmp_path / "temporary"
     checkpointer = Checkpointer(
@@ -1356,10 +1301,56 @@ def test_prune_aborts_payload_removal_when_metadata_delete_fails(tmp_path, monke
     assert "metadata.json" in before_files
 
     real_get_fs = checkpoint_module._get_fs_and_plain_path
+
+    def wrapped_get_fs(path, fs=None):
+        inner, plain = real_get_fs(path, fs=fs)
+        if str(path) == str(step1_dir):
+            return wrapper_factory(inner, step1_dir, temporary_path), plain
+        return inner, plain
+
+    monkeypatch.setattr(checkpoint_module, "_get_fs_and_plain_path", wrapped_get_fs)
+
+    checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
+    _on_step(checkpointer, 2)
+    checkpointer.wait_until_finished()
+    return step1_dir, temporary_path, before_files
+
+
+def test_prune_removes_metadata_before_payload_so_interrupted_delete_is_skipped(tmp_path, monkeypatch):
+    observed_candidates_at_payload_rm: list[list[int]] = []
+
+    class InterruptedPayloadRmFs:
+        def __init__(self, inner, step1_dir, temporary_path):
+            self._inner = inner
+            self._step1_dir = step1_dir
+            self._temporary_path = temporary_path
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        def rm(self, path, recursive=False):
+            if recursive:
+                assert not (self._step1_dir / "metadata.json").exists()
+                observed_candidates_at_payload_rm.append(
+                    [c.step for c in discover_checkpoint_candidates(self._temporary_path)]
+                )
+                raise OSError("simulated mid-delete failure")
+            return self._inner.rm(path, recursive=False)
+
+    step1_dir, temporary_path, _ = _run_temp_prune_with_fs_wrapper(tmp_path, monkeypatch, InterruptedPayloadRmFs)
+
+    assert observed_candidates_at_payload_rm == [[2]]
+    assert step1_dir.exists()
+    assert not (step1_dir / "metadata.json").exists()
+    assert [c.step for c in discover_checkpoint_candidates(temporary_path)] == [2]
+
+
+@pytest.mark.parametrize("failure_mode", ["raise", "silent_noop"])
+def test_prune_aborts_payload_removal_when_metadata_delete_fails(tmp_path, monkeypatch, failure_mode):
     recursive_rm_called = False
 
     class FailingMetadataRmFs:
-        def __init__(self, inner):
+        def __init__(self, inner, _step1_dir, _temporary_path):
             self._inner = inner
 
         def __getattr__(self, name):
@@ -1374,17 +1365,9 @@ def test_prune_aborts_payload_removal_when_metadata_delete_fails(tmp_path, monke
                 raise PermissionError("metadata delete denied")
             return None
 
-    def wrapped_get_fs(path, fs=None):
-        inner, plain = real_get_fs(path, fs=fs)
-        if str(path) == str(step1_dir):
-            return FailingMetadataRmFs(inner), plain
-        return inner, plain
-
-    monkeypatch.setattr(checkpoint_module, "_get_fs_and_plain_path", wrapped_get_fs)
-
-    checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
-    _on_step(checkpointer, 2)
-    checkpointer.wait_until_finished()
+    step1_dir, temporary_path, before_files = _run_temp_prune_with_fs_wrapper(
+        tmp_path, monkeypatch, FailingMetadataRmFs
+    )
 
     assert not recursive_rm_called
     after_files = sorted(str(p.relative_to(step1_dir)) for p in step1_dir.rglob("*") if p.is_file())
