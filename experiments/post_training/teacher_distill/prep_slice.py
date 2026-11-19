@@ -40,7 +40,9 @@ SOURCES = (
     ("agenttrove", "levanter-store/sft/agenttrove_64b65e16/train", 0.17),
     ("swe_rebench_v2", "store/sft/open_swe_traces/v1_2/minisweagent/qwen38_27b/swe_rebench_v2_f35daad0/train", 0.20),
 )
-SPLITS = (("train", 480), ("heldout", 32))
+# Later splits draw from documents the earlier ones did not touch. The 8 h run adds train8h: with the 472
+# scored train rows it gives 3,776 of 15,360 rows, the same Mochi share (472 / 1,920) as the 1 h run.
+SPLITS = (("train", 480), ("heldout", 32), ("train8h", 3304))
 ROWS_PER_CELL = 8
 SEED = 504
 
@@ -75,6 +77,8 @@ def select(split_index: int, rows_needed: int, rng: np.random.Generator, taken: 
         total = len(cache)
         want, got = budget * share, 0
         while got < want:
+            if total - len(taken[name]) < 512:
+                raise ValueError(f"{name}: only {total - len(taken[name])} unused documents left")
             candidates = [int(x) for x in rng.choice(total, size=512, replace=False) if int(x) not in taken[name]]
             batch = cache.get_batch_sync(candidates)
             for index, entry in zip(candidates, batch, strict=True):
@@ -120,6 +124,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--plan", required=True, help="02a prefix for the packing plan")
     parser.add_argument("--cells-root", required=True, help="scoring-region prefix for the scorer cells")
+    parser.add_argument(
+        "--write", nargs="+", default=[name for name, _ in SPLITS], help="splits to write; the others only replay"
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     configure_coreweave_s3()
@@ -137,9 +144,15 @@ def main():
         renumber = {k: n for n, k in enumerate(order)}
         docs = [docs[k] for k in order]
         plan_rows = [[{"doc": renumber[k], "offset": o} for k, o in row] for row in rows]
-        StoragePath(prefix_join(args.plan, f"{split}/rows.jsonl")).write_text(
-            "".join(json.dumps(r) + "\n" for r in plan_rows)
-        )
+        rows_text = "".join(json.dumps(r) + "\n" for r in plan_rows)
+        rows_path = StoragePath(prefix_join(args.plan, f"{split}/rows.jsonl"))
+        if split not in args.write:
+            # A replayed split must match what was written before, or later splits are not disjoint from it.
+            if rows_path.read_text() != rows_text:
+                raise ValueError(f"{split}: replay differs from the stored plan")
+            logger.info("%s: replay matches the stored plan (%d rows)", split, len(rows))
+            continue
+        rows_path.write_text(rows_text)
         cells = []
         for cell_index, start in enumerate(range(0, len(rows), ROWS_PER_CELL)):
             cell_docs = [renumber[k] for row in rows[start : start + ROWS_PER_CELL] for k, _ in row]
@@ -169,7 +182,8 @@ def main():
             s["loss_tokens"] += int(d["loss_weights"].sum())
         summary[split] = {"rows": len(rows), "fill": fill, "docs": len(docs), "sources": by_source, "cells": cells}
         logger.info("%s: %s", split, json.dumps({k: v for k, v in summary[split].items() if k != "cells"}))
-    StoragePath(prefix_join(args.plan, "summary.json")).write_text(json.dumps(summary, indent=2) + "\n")
+    for split, values in summary.items():
+        StoragePath(prefix_join(args.plan, f"{split}/summary.json")).write_text(json.dumps(values, indent=2) + "\n")
     print(json.dumps(summary, indent=2))
 
 
