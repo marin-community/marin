@@ -8081,9 +8081,8 @@ trainer:
         top_allocations: 8
         tracemalloc_frames: 25
       delete_old_temp_checkpoints: true
-      keep:
-      - every: 15
-      keep_last_temporary_checkpoints: 2
+      keep: null
+      keep_last_temporary_checkpoints: 1
       save_interval: 30m
       temporary_base_path: UNBOUND
       write:
@@ -8127,7 +8126,7 @@ trainer:
         embed: data
       shared_mapping: *id191
     model_averaging: null
-    mp: compute=bfloat16,params=float32,output=bfloat16
+    mp: params=float32,compute=bfloat16,output=bfloat16
     num_train_steps: 4750
     per_device_eval_parallelism: -1
     per_device_parallelism: -1

@@ -34,6 +34,7 @@ from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
+from levanter.checkpoint import CheckpointRetention
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
 from levanter.data.mixture import MixtureDataset
@@ -253,15 +254,25 @@ def checkpoint_samples(state) -> tuple:
 
 
 def restore_first_checkpoint(state, checkpointer, mesh):
-    """Commit and reload the first full state before continuing optimization."""
+    """Commit and reload the first full state before continuing optimization.
+
+    Requests a temporary checkpoint so an unlisted restore-gate step rolls away
+    under the checkpointer's retention policy while preserving any explicitly
+    scheduled or queued permanent checkpoint at that step. The checkpointer must
+    retain at least one temporary checkpoint, or the gate copy is pruned at commit.
+    """
     step = int(state.step)
+    if step <= 0:
+        raise ValueError(f"First-step restore gate requires step >= 1, got {step}")
     expected = checkpoint_samples(state)
-    checkpointer.on_step(tree=state, step=step, force=True)
+    checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
+    checkpointer.on_step(tree=state, step=step)
     checkpointer.wait_until_finished()
+    saved = checkpointer.last_saved_checkpoint_path
+    if saved is None or os.path.basename(saved) != f"step-{step}":
+        raise ValueError(f"First-step restore gate did not commit a checkpoint at step {step}")
     template = restore_template_from(state)
-    restored = load_grug_checkpoint(
-        state=template, candidate=prefix_join(checkpointer.base_path, f"step-{step}"), mesh=mesh, allow_partial=False
-    )
+    restored = load_grug_checkpoint(state=template, candidate=saved, mesh=mesh, allow_partial=False)
     jax.block_until_ready(restored)
     if int(restored.step) != step or checkpoint_samples(restored) != expected:
         raise ValueError("First SFT checkpoint restore changed the step or sampled state values")
@@ -517,6 +528,10 @@ class GrugRunConfig:
         mu_dtype = getattr(self.optimizer, "mu_dtype", None)
         if mu_dtype is not None and jnp.dtype(mu_dtype) != jnp.float32:
             raise ValueError(f"Long-loop SFT requires float32 optimizer moments; got optimizer.mu_dtype={mu_dtype}")
+        checkpointer = self.trainer.trainer.checkpointer
+        if self.first_checkpoint_restore_step is not None and checkpointer.keep_last_temporary_checkpoints < 1:
+            # The restore gate saves a temporary checkpoint and reloads it after commit-time pruning.
+            raise ValueError("first_checkpoint_restore_step requires keep_last_temporary_checkpoints >= 1")
 
 
 def build_train_dataset(
@@ -1652,7 +1667,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         callbacks.ProgressEvent.CHECKPOINT_FINISHED,
                     ),
                 ):
-                    checkpointer.on_step(tree=state, step=int(state.step), force=True)
+                    checkpointer.save_final_checkpoint(tree=state, step=int(state.step))
                     checkpointer.wait_until_finished()
         finally:
             state_callbacks.emit_event(callbacks.ProgressEvent.TRAINING_FINISHED)
