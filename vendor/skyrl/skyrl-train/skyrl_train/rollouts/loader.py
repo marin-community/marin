@@ -8,8 +8,18 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 import torch
+from loguru import logger
+
+from skyrl_train.group_admission import AdmissionRejection
 
 STALE_RETRIES_EXHAUSTED_METRIC = "async/stale_retries_exhausted"
+QUARANTINED_PROMPTS_METRIC = "async/quarantined_prompts"
+# Rejections of a group training cannot use: no loss tokens, or too few graded samples for its baseline.
+UNUSABLE_GROUP_REJECTIONS = frozenset(
+    {AdmissionRejection.FULLY_MASKED.value, AdmissionRejection.BELOW_MINIMUM_GROUP_SIZE.value}
+)
+# Dispositions that say nothing about whether the prompt's groups are usable.
+NEUTRAL_DISPOSITIONS = frozenset({AdmissionRejection.STALE.value, AdmissionRejection.DUPLICATE_UID.value})
 
 
 class PromptGroupDataset(Protocol):
@@ -104,14 +114,28 @@ class PromptLoader:
     copy the batch would reject.
 
     A prompt whose group missed the staleness window is regenerated at most ``max_stale_retries`` times in a row;
-    after that it waits until the prompt order offers it again. The counts restart at zero when a run resumes.
+    after that it waits until the prompt order offers it again.
+
+    A prompt whose last ``max_unusable_groups`` groups were all unusable, for example because its grader failed on
+    every sample, is quarantined: the loader stops offering it for the rest of the run. Training fails once fewer
+    usable prompts remain than one batch needs. Retry counts and quarantine restart empty when a run resumes.
 
     The sequence never ends; the trainer decides when to stop.
     """
 
-    def __init__(self, dataset: PromptGroupDataset, order: PromptOrder, *, batch_size: int, max_stale_retries: int):
+    def __init__(
+        self,
+        dataset: PromptGroupDataset,
+        order: PromptOrder,
+        *,
+        batch_size: int,
+        max_stale_retries: int,
+        max_unusable_groups: int,
+    ):
         if max_stale_retries < 0:
             raise ValueError(f"max_stale_retries must be non-negative, got {max_stale_retries}")
+        if max_unusable_groups < 1:
+            raise ValueError(f"max_unusable_groups must be positive, got {max_unusable_groups}")
         self._uid_count = len({dataset.uid(index) for index in range(len(dataset))})
         if self._uid_count < batch_size:
             raise ValueError(
@@ -120,8 +144,12 @@ class PromptLoader:
             )
         self._dataset = dataset
         self._order = order
+        self._batch_size = batch_size
         self._draw_limit = 2 * batch_size
         self._max_stale_retries = max_stale_retries
+        self._max_unusable_groups = max_unusable_groups
+        self._unusable_groups: dict[str, int] = {}
+        self._quarantined: set[str] = set()
         self._retries: collections.deque[dict] = collections.deque()
         self._stale_retries: dict[str, int] = {}
         self._retries_exhausted = 0
@@ -135,20 +163,20 @@ class PromptLoader:
         order that keeps drawing live rows cannot stall dispatch; the row may be one the order weights at zero.
         """
         for position, prompt in enumerate(self._retries):
-            if prompt["uid"] not in live:
+            if prompt["uid"] not in live and prompt["uid"] not in self._quarantined:
                 del self._retries[position]
                 return prompt
-        # Every dataset uid is live, so drawing would only advance the order.
-        if len(live) >= self._uid_count:
+        # Every usable dataset uid is live, so drawing would only advance the order. A quarantined uid is never live.
+        if len(live) + len(self._quarantined) >= self._uid_count:
             return None
         for _ in range(self._draw_limit):
             index = self._order.next_index()
-            if self._dataset.uid(index) not in live:
+            if self._available(self._dataset.uid(index), live):
                 return self._offer(index)
         num_rows = len(self._dataset)
         for offset in range(num_rows):
             index = (self._scan_start + offset) % num_rows
-            if self._dataset.uid(index) not in live:
+            if self._available(self._dataset.uid(index), live):
                 self._scan_start = index + 1
                 return self._offer(index)
         return None
@@ -163,13 +191,49 @@ class PromptLoader:
         self._stale_retries[uid] = count + 1
         self._retries.append(prompt)
 
+    def record_disposition(self, uid: str, disposition: str) -> None:
+        """Count a group that left the buffer toward its prompt's quarantine.
+
+        Raises:
+            RuntimeError: Quarantine left fewer usable prompts than one batch needs.
+        """
+        if disposition in NEUTRAL_DISPOSITIONS:
+            return
+        if disposition not in UNUSABLE_GROUP_REJECTIONS:
+            self._unusable_groups.pop(uid, None)
+            return
+        count = self._unusable_groups.get(uid, 0) + 1
+        if count < self._max_unusable_groups:
+            self._unusable_groups[uid] = count
+            return
+        del self._unusable_groups[uid]
+        self._quarantined.add(uid)
+        usable = self._uid_count - len(self._quarantined)
+        logger.warning(
+            "Quarantined prompt {} after {} unusable groups in a row (last: {}); {} usable prompts remain",
+            uid,
+            count,
+            disposition,
+            usable,
+        )
+        if usable < self._batch_size:
+            raise RuntimeError(
+                f"{len(self._quarantined)} prompts are quarantined for producing only unusable groups, leaving "
+                f"{usable} usable prompts, fewer than one batch of {self._batch_size}"
+            )
+
     def observe(self, groups: Sequence[JudgedGroup]) -> dict[str, float]:
         """Report one training step's judged groups to the prompt order and return its metrics.
 
-        The metrics include how many stale prompts used up their regenerations since the previous call.
+        The metrics include how many stale prompts used up their regenerations since the previous call and how many
+        prompts are quarantined.
         """
         exhausted, self._retries_exhausted = self._retries_exhausted, 0
-        return {**self._order.observe(groups), STALE_RETRIES_EXHAUSTED_METRIC: float(exhausted)}
+        return {
+            **self._order.observe(groups),
+            STALE_RETRIES_EXHAUSTED_METRIC: float(exhausted),
+            QUARANTINED_PROMPTS_METRIC: float(len(self._quarantined)),
+        }
 
     def state_dict(self) -> PromptLoaderState:
         return PromptLoaderState(self._order.state_dict(), list(self._retries))
@@ -177,6 +241,9 @@ class PromptLoader:
     def load_state_dict(self, state: PromptLoaderState) -> None:
         self._order.load_state_dict(state.order)
         self._retries = collections.deque(state.retries)
+
+    def _available(self, uid: str, live: Collection[str]) -> bool:
+        return uid not in live and uid not in self._quarantined
 
     def _offer(self, index: int) -> dict:
         (prompt,) = self._dataset.collate_fn([self._dataset[index]])

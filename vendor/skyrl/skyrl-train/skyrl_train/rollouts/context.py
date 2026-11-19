@@ -208,6 +208,7 @@ class TrainingContext:
                 prompt_order_from_config(config, dataset),
                 batch_size=batch_size,
                 max_stale_retries=config.trainer.rollout_buffer.max_stale_retries,
+                max_unusable_groups=config.trainer.rollout_buffer.max_unusable_groups,
             ),
             buffer_config,
             start_rollout_buffer(buffer_config),
@@ -414,6 +415,8 @@ class TrainingContext:
             return
         async with self._uids_released:
             self._live_uids -= collections.Counter(outcome.uid for outcome in admission.dispositions)
+            for outcome in admission.dispositions:
+                self.loader.record_disposition(outcome.uid, outcome.disposition)
             for prompt in admission.retries:
                 self.loader.retry(prompt)
             self._uids_released.notify_all()
