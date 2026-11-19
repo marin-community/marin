@@ -432,6 +432,7 @@ class Trial(ABC):
         await self.agent_environment.run_healthcheck()
         await self._upload_injected_skills()
         await self._upload_setup_files()
+        await self._emit(TrialEvent.ENVIRONMENT_READY)
         with self.agent_environment.with_default_user(self.task.config.agent.user):
             await self._setup_agent()
         self.result.agent_info = self.agent.to_agent_info()

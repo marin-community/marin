@@ -31,6 +31,7 @@ from cloud.iris.rl_config_translation import (
     materialize_launch_config,
     parse_rl_config,
 )
+from skyrl_train import trainer as trainer_module
 from skyrl_train.callbacks.base import TrainerControl, TrainerState
 from skyrl_train.callbacks.builtin import HFModelSaveCallback, create_default_callbacks
 from skyrl_train.distributed.step_policy import NonfiniteStepPolicy, nonfinite_step_policy
@@ -41,7 +42,10 @@ from skyrl_train.config.utils import get_default_config
 from skyrl_train.utils.tracking import Tracking
 from skyrl_train.config.rollout_validation import EntrypointOperation, validate_rollout_launch
 from skyrl_train.inference_engines import placement as inference_placement
-from skyrl_train.inference_engines.ray_wrapped_inference_engine import should_verify_inference_workers
+from skyrl_train.inference_engines.ray_wrapped_inference_engine import (
+    _build_inference_engine_runtime_env,
+    should_verify_inference_workers,
+)
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 
 
@@ -946,12 +950,22 @@ def test_composed_launch_rejects_tis_selectors(tmp_path: Path, key: str, value) 
         ),
         ({"algorithm.dynamic_sampling.max_mean_reward": 0.9}, "requires dynamic_sampling.type=filter"),
         ({"algorithm.dynamic_sampling.max_mean_reward": 0.9, "algorithm.dynamic_sampling.type": "filter"}, None),
+        (
+            {"rollout_buffer.family_quotas": {"math": 8}, "rollout_buffer.batch_policy": "rolling"},
+            "requires batch_policy=full_batch",
+        ),
+        ({"rollout_buffer.family_quotas": {"math": 7}}, "sums to 7, expected train_batch_size=8"),
+        (
+            {"rollout_buffer.family_quotas": {"math": 8}, "data.sampling.kind": "domain-weighted"},
+            r"requires data\.sampling\.kind to be null",
+        ),
     ],
 )
 def test_launch_validates_correction_and_selection_contract(tmp_path: Path, overrides: dict, error: str | None):
     raw = OmegaConf.create(raw_launch_config())
     for key, value in overrides.items():
-        OmegaConf.update(raw.skyrl.trainer, key, value, force_add=True)
+        path = key if key.startswith("data.") else f"trainer.{key}"
+        OmegaConf.update(raw.skyrl, path, value, force_add=True)
     if overrides.get("placement.colocate_all") is False:
         raw.iris.allocation.num_nodes = 2
     if overrides.get("algorithm.batch_invariant"):
@@ -976,6 +990,47 @@ def test_source_launch_preserves_nested_open_mappings(tmp_path):
     assert OmegaConf.to_container(load_launch_config(path).skyrl.generator.engine_init_kwargs.user_options) == {
         "nested": {}
     }
+
+
+@pytest.mark.parametrize(
+    ("remaining_families", "error"),
+    [
+        (["code"] * 7, "requires 8 rows for family 'code', found 7"),
+        (["code"] * 8 + ["other"], r"names .* but training rows have families .*'other'"),
+        (["code"] * 8, None),
+    ],
+    ids=["insufficient", "unlisted-family", "valid-pool"],
+)
+def test_launch_preflights_family_quotas(tmp_path, remaining_families, error):
+    data_path = tmp_path / "tasks.parquet"
+    pq.write_table(pa.table({"family": ["math"] * 8 + remaining_families}), data_path)
+    raw = raw_launch_config()
+    raw["inputs"]["data_kind"] = "parquet"
+    raw["inputs"]["train_data"] = [
+        {"kind": "directory", "uri": str(tmp_path), "identity": "fixture", "local_path": str(tmp_path),
+         "relative_path": "tasks.parquet"}
+    ]
+    raw["skyrl"]["data"] = {"kind": "parquet"}
+    trainer = raw["skyrl"]["trainer"]
+    trainer["rollout_buffer"] = {
+        "family_quotas": {"math": 4, "code": 4},
+        "max_staleness_steps": 1,
+    }
+    trainer["placement"]["colocate_all"] = False
+    trainer["algorithm"]["off_policy_correction"] = "none"
+    raw["iris"]["allocation"]["num_nodes"] = 2
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw))
+
+    if error:
+        with pytest.raises(ValueError, match=rf"trainer\.rollout_buffer\.family_quotas {error}"):
+            load_launch_config(path)
+        return
+
+    resolved = load_launch_config(path)
+    OmegaConf.save(resolved, path)
+    data_path.unlink()
+    assert load_launch_config(path) == resolved
 
 
 def test_first_train_submission_validates_recipe_and_resolved_reload(tmp_path):
@@ -1044,3 +1099,52 @@ def test_source_launch_rejects_conflicting_author_values(tmp_path):
         OmegaConf.save(raw, path)
         with pytest.raises(ValueError, match=error):
             load_launch_config(path)
+
+
+@pytest.mark.parametrize(
+    ("colocate_all", "colocate_policy_ref"), [(True, False), (False, True), (False, False)]
+)
+def test_resolved_nccl_buffers_override_inherited_small_buffer(
+    tmp_path, monkeypatch, colocate_all, colocate_policy_ref
+):
+    # A stale driver environment must not restore the NVLSTree corruption setting.
+    monkeypatch.setenv("NCCL_BUFFSIZE", "262144")
+    raw = raw_launch_config()
+    raw["skyrl"]["trainer"]["algorithm"]["use_kl_loss"] = True
+    raw["skyrl"]["trainer"]["placement"].update(
+        colocate_all=colocate_all, colocate_policy_ref=colocate_policy_ref
+    )
+    raw["iris"]["allocation"]["num_nodes"] = 1 if colocate_all else 2 if colocate_policy_ref else 3
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    config = load_launch_config(path).skyrl
+    actor_environments = {}
+
+    def record_actor_group(cfg, nodes, gpus, worker, **kwargs):
+        actor_environments[worker] = kwargs["actor_env_vars"]
+        return object()
+
+    # Replace the remote allocation boundary, then run the actual role wiring.
+    monkeypatch.setattr(trainer_module, "PPORayActorGroup", record_actor_group)
+    trainer = trainer_module.RayPPOTrainer.__new__(trainer_module.RayPPOTrainer)
+    trainer.cfg = config
+    trainer.colocate_pg = None
+    monkeypatch.setattr(trainer, "_initialize_model_actors", lambda *_args: None)
+    trainer.build_models("policy", "critic", "ref", policy_pg=object())
+    assert actor_environments == {
+        "policy": {"NCCL_BUFFSIZE": "4194304"},
+        "ref": {"NCCL_BUFFSIZE": "4194304"},
+    }
+    runtime_env = _build_inference_engine_runtime_env(
+        nccl_buffer_size_bytes=config.trainer.policy.nccl_buffer_size_bytes
+    )
+    assert runtime_env["env_vars"]["NCCL_BUFFSIZE"] == "4194304"
+
+    # Keep explicit per-role tuning representable for diagnostic controls.
+    raw["skyrl"]["trainer"].setdefault("policy", {})["nccl_buffer_size_bytes"] = 8388608
+    path.write_text(yaml.safe_dump(raw))
+    resolved = load_launch_config(path).skyrl
+    runtime_env = _build_inference_engine_runtime_env(
+        nccl_buffer_size_bytes=resolved.trainer.policy.nccl_buffer_size_bytes
+    )
+    assert runtime_env["env_vars"]["NCCL_BUFFSIZE"] == "8388608"

@@ -28,7 +28,9 @@ from marinskyrl.speculative_decoding import SpeculativeDecodingMethod
 
 
 def _literal(choices) -> str:
-    return "Literal[" + ", ".join(repr(choice.value if isinstance(choice, Enum) else choice) for choice in choices) + "]"
+    return (
+        "Literal[" + ", ".join(repr(choice.value if isinstance(choice, Enum) else choice) for choice in choices) + "]"
+    )
 
 
 CORRECTION_PRESETS = tuple(
@@ -46,6 +48,7 @@ TYPES = MappingProxyType(
     {
         "terminal_bench": "OpenMap | None",
         "trainer.strategy": 'Literal["megatron"]',
+        "trainer.batch_builder": _literal(runtime_options.BatchBuilder),
         "trainer.hf_export_checkpoint": 'Literal["latest", "best"]',
         "trainer.policy.optimizer_config.lr_decay_steps": "int | None",
         "trainer.critic.optimizer_config.lr_decay_steps": "int | None",
@@ -63,6 +66,7 @@ TYPES = MappingProxyType(
         "trainer.ref.megatron_config.optimizer_checkpoint_sharding_type": OPTIMIZER_CHECKPOINT_SHARDING,
         "trainer.rollout_buffer.max_staleness_steps": "NonNegativeInt",
         "trainer.rollout_buffer.batch_policy": _literal(BatchPolicy),
+        "trainer.rollout_buffer.family_quotas": "CountMap",
         "trainer.hf_upload_mode": _literal(HFUploadMode),
         "trainer.policy.grug_query_bias_update_mode": _literal(GrugQueryBiasUpdateMode),
         "trainer.algorithm.advantage_estimator": _literal(AdvantageEstimatorRegistry.list_available()),

@@ -116,6 +116,15 @@ When the execution user is set, the task machine runs an execution-user probe af
 An explicit command user overrides that default.
 The verifier machine uses its own configured default user.
 
+Original Harbor trials run each `setup_commands` entry as root with `sh`, after
+environment staging and before agent installation. An entry's nonzero exit status
+fails the trial; output stays separate from model traces, and setup uses the
+configured installed-agent `setup_timeout` while counting toward the whole
+trial's time limit.
+For these trials, the Harbor task package defines the image, environment variables
+and agent user. TaskSpec may add `setup_commands` and their setup-only
+`working_directory`; other TaskSpec machine-environment overrides are rejected.
+
 ## Harnesses
 
 A harness is the agent loop of a task: what the model sees, which tools run, and when the attempt ends.
@@ -271,7 +280,10 @@ engine = RolloutEngine(machine_factories, {"agent": AgentHarness(run_agent)})
 `complete` obeys these rules:
 
 - A prompt that extends the last prompt with the model's message, under the same options, is a `reply`. Its
-  `token_ids`, if any, pin the next request. Any other prompt starts a new conversation.
+  `token_ids`, if any, pin the next request. After a turn that finishes within its token limit, a prompt
+  without pinned tokens can also reply with updated `max_tokens` or `max_completion_tokens` and equivalent
+  messages. Message comparison accepts empty optional text fields and reserialized tool argument JSON.
+  Other prompts start a new conversation.
 - The agent can call `complete` from other tasks, such as HTTP handlers. One model request can be open at a
   time: a call that needs the model while another call waits for it raises `RuntimeError`.
 - The last prompt again, for example after the HTTP client lost the response, gets the same turn without a new

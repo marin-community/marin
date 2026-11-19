@@ -10,7 +10,7 @@ from typing import Annotated, Literal
 from pydantic import Field, NonNegativeInt, PositiveInt
 
 from .declared import Callback, CorrectionRule, LoggingBackend, Teacher, TeacherRouting
-from .model import NumberMap, OpenMap, Section, SectionMap, field, unset_field
+from .model import CountMap, NumberMap, OpenMap, Section, SectionMap, field, unset_field
 from .sampling import EvalSamplingParams
 
 
@@ -218,9 +218,9 @@ class Policy(Section):
     sequence_parallel_size: int = field(1)
     use_torch_compile: bool = field(False)
     record_memory: bool = field(False)
-    nccl_buffer_size_bytes: PositiveInt | None = field(None)
-    """Limit per-peer NCCL buffers before Megatron policy process-group initialization. Null preserves NCCL's
-    default; useful when a reference actor shares each GPU."""
+    nccl_buffer_size_bytes: PositiveInt | None = field(4194304)
+    """Pin the standard 4-MiB SIMPLE buffer before process-group initialization. Smaller buffers can corrupt NVLSTree
+    reductions in NCCL 2.30.7 (https://github.com/marin-community/marin/issues/11649)."""
     megatron_config: PolicyMegatronConfig = Field(default_factory=PolicyMegatronConfig)
 
 
@@ -278,9 +278,12 @@ class RefMegatronConfig(Section):
 
 
 class Ref(Section):
-    nccl_buffer_size_bytes: PositiveInt | None = field(262144)
-    """Colocated Megatron reference workers retain NCCL buffers after model offload. Reduce their per-peer buffer
-    before process-group initialization; null keeps NCCL's default."""
+    nccl_buffer_size_bytes: PositiveInt | None = field(4194304)
+    """Keep the standard buffer even when reference workers share a GPU. Null delegates sizing to the process
+    environment and NCCL config. The explicit 4-MiB buffer works around NCCL 2.30.7's NVLSTree chunk exceeding the
+    SIMPLE FIFO slot (https://github.com/marin-community/marin/issues/11649). The NVLSTree chunk tuning in NCCL
+    2.32.6 (https://github.com/NVIDIA/nccl/commit/b89a40883e4868c6bb44610c3c75d4a8b7a40530) is a possible path
+    back to smaller buffers once an upgrade is validated."""
     model: RefModel = Field(default_factory=RefModel)
     sequence_parallel_size: int = field(1)
     megatron_config: RefMegatronConfig = Field(default_factory=RefMegatronConfig)
@@ -491,6 +494,9 @@ class RolloutBuffer(Section):
     groups leased for it, waiting for the slowest, so training never favors rollouts that finish quickly. rolling
     fills each batch in commit order and regenerates groups that miss the staleness window, so a slow rollout
     never blocks training, but quick rollouts train more often and at lower staleness."""
+    family_quotas: CountMap = field({})
+    """Prompt groups of each task family per batch, keyed by the rows' family column. Quotas require full_batch and
+    the counts must sum to train_batch_size. An empty map leaves the mix to the prompt order."""
     max_stale_retries: int = field(1)
     """How many times in a row rolling regenerates a prompt whose group missed the staleness window; after that the
     prompt waits until the prompt order offers it again."""
@@ -556,6 +562,8 @@ class Trainer(Section):
     hf_export_checkpoint: Literal["latest", "best"] = field("latest")
     """Best selection queues only the final export, after the last evaluation. latest or best native checkpoint for
     HF export"""
+    batch_builder: Literal["driver", "worker"] = field("driver")
+    "driver, worker"
     evaluation_runner: Literal["training", "task", "harbor"] = field("training")
     "task or harbor selects generated validation for offline preference training"
     trajectory_selector: TrajectorySelector = Field(default_factory=TrajectorySelector)

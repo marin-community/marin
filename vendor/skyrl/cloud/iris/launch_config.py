@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import posixpath
+from collections import Counter
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Mapping
 
 from omegaconf import MISSING, DictConfig, OmegaConf, open_dict
+from pyarrow import parquet
 
 from skyrl_train.evaluation_profiles import (
     record_evaluation_profiles,
@@ -26,6 +28,12 @@ from skyrl_train.config.utils import normalize_logging_backends
 from skyrl_train.config.mismatch_probe import validate_mismatch_probe_config
 from skyrl_train.config.callbacks import validate_hf_export_config
 from skyrl_train.config.objective_spec import validate_objective
+from skyrl_train.config.rollout_validation import (
+    FAMILY_COLUMN,
+    FAMILY_QUOTAS_KEY,
+    validate_family_pools,
+    validate_family_quota_config,
+)
 from skyrlrecipe import RLEntrypoint
 
 from cloud.iris.ray_storage import RaySpillBackend, resolve_ray_spill_target
@@ -51,9 +59,10 @@ from marinskyrl.distillation import (
 )
 from cloud.iris.rl_config_translation import RL_ENTRYPOINTS
 from marinskyrl.hf_model import HuggingFaceModelCache
+from marinskyrl.remote_io import filesystem_and_path
 from marinskyrl.resource_locator import is_cloud_uri, is_hugging_face_repo_id, join_resource_path
 from marinskyrl.runtime_options import WeightSyncTransport
-from marinskyrl.task_sources import data_source
+from marinskyrl.task_sources import DirectoryDataSource, data_source
 
 DEFAULT_DRAFT_MODEL_CACHE_TTL_DAYS = 14
 
@@ -288,7 +297,8 @@ def _compose_source_recipe(config: DictConfig) -> DictConfig:
 def load_launch_config(path: Path) -> DictConfig:
     """Load and validate one complete SkyRL launch document."""
     config = compose_launch_config(OmegaConf.load(path))
-    if _is_source_recipe(config):
+    is_source_recipe = _is_source_recipe(config)
+    if is_source_recipe:
         validate_evaluation_data(config, source_recipe=True)
         if config.run.mode != RunMode.TRAIN:
             raise ValueError("checkpoint_export launch configs must already contain a composed SkyRL subtree")
@@ -313,6 +323,11 @@ def load_launch_config(path: Path) -> DictConfig:
             from cloud.iris.export_hf_checkpoint import validate_checkpoint_export  # noqa: PLC0415 - shared loader
 
             validate_checkpoint_export(config)
+    if is_source_recipe:
+        buffer = config.skyrl.trainer.rollout_buffer
+        if buffer.family_quotas:
+            inputs = OmegaConf.to_container(config.inputs, resolve=True)
+            _validate_launch_family_pools(inputs, dict(buffer.family_quotas), buffer.max_staleness_steps)
     return config
 
 
@@ -355,6 +370,25 @@ def _validate_inputs(inputs: dict[str, Any]) -> None:
             if not isinstance(value, dict):
                 raise TypeError(f"inputs.{name}[{index}] must be a mapping")
             data_source(value)
+
+
+def _validate_launch_family_pools(
+    inputs: dict[str, Any], quotas: dict[str, int], max_staleness_steps: int
+) -> None:
+    sources = [data_source(entry) for entry in inputs["train_data"]]
+    if inputs["data_kind"] != "parquet" or any(not isinstance(source, DirectoryDataSource) for source in sources):
+        raise ValueError(f"{FAMILY_QUOTAS_KEY} requires parquet training rows with a {FAMILY_COLUMN} column")
+    counts: Counter[str | None] = Counter()
+    for source in sources:
+        uri = join_resource_path(source.uri, source.relative_path)
+        filesystem, path = filesystem_and_path(uri)
+        with filesystem.open(path, "rb") as stream:
+            rows = parquet.ParquetFile(stream)
+            if FAMILY_COLUMN not in rows.schema_arrow.names:
+                raise ValueError(f"{FAMILY_QUOTAS_KEY} requires a {FAMILY_COLUMN} column in {uri}")
+            for batch in rows.iter_batches(columns=[FAMILY_COLUMN]):
+                counts.update(batch.column(0).to_pylist())
+    validate_family_pools(quotas, counts, max_staleness_steps)
 
 
 def derive_launch_topology(config: dict[str, Any]) -> LaunchTopology:
@@ -432,6 +466,7 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
     if run["mode"] == RunMode.TRAIN:
         validate_objective(config.skyrl)
         validate_hf_export_config(config.skyrl)
+        validate_family_quota_config(config.skyrl)
     runtime = raw["runtime"]
     entrypoint = runtime["entrypoint"]
     registered_rl_entrypoint_module(entrypoint)

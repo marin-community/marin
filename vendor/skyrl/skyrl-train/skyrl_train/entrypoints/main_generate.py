@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import ray
+from ray.util.queue import Queue
 from loguru import logger
 from omegaconf import DictConfig
 from marinskyrl.runtime_options import EvaluationRunner
@@ -19,6 +20,7 @@ from skyrl_train.evaluation_profiles import (
 )
 from skyrl_train.config.rollout_validation import EntrypointOperation
 from skyrl_train.entrypoints.main_base import BasePPOExp
+from skyrl_train.entrypoints.evaluation_progress import forward_evaluation_progress, wait_for_evaluation
 from skyrl_train.inference_engines.base import NamedWeightsUpdateRequest, lora_disk_load_request
 from skyrl_train.inference_engines.vllm.stats import IntervalReadMode
 from skyrl_train.inference_observability import configured_inference_sinks, trainer_metrics
@@ -156,14 +158,19 @@ class EvalOnlyEntrypoint(BasePPOExp):
 
 
 @ray.remote(num_cpus=1)
-def eval_entrypoint(cfg: DictConfig) -> dict:
+def eval_entrypoint(cfg: DictConfig, progress: Queue) -> dict:
     exp = EvalOnlyEntrypoint(cfg)
-    return exp.run()
+    with forward_evaluation_progress(progress):
+        return exp.run()
 
 
 def run(cfg: DictConfig) -> None:
     normalize_logging_backends(cfg)
     validate_generator_cfg(cfg)
     initialize_ray(cfg)
-    metrics = ray.get(eval_entrypoint.remote(cfg))
+    progress = Queue(maxsize=256, actor_options={"num_cpus": 0})
+    try:
+        metrics = wait_for_evaluation(eval_entrypoint.remote(cfg, progress), progress)
+    finally:
+        progress.shutdown()
     logger.info(f"Metrics from eval only run: {metrics}")
