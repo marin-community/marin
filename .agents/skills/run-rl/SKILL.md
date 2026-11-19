@@ -28,16 +28,21 @@ Use `use-iris` for job inspection and `use-fsutil` for object-store reads.
 
    Check inputs, allocation, guards, budget estimate and output paths.
    `--version dev` satisfies the launcher; step versions use each preset's `revision`.
+   Use the same plan and inputs to read status for a saved run.
 4. Before submission, tell the person the preset, estimated budget and replicate count. Submit
-   train-long or multiple 40-H100 replicates only when the person asked. Set `WANDB_API_KEY`.
+   either train-long preset or multiple 40-H100 replicates only when the person asked. Set `WANDB_API_KEY`.
    `WANDB_ENTITY` chooses the team, defaulting to `marin-community`.
-5. Pass `--issue ISSUE_NUMBER`, or `--no-issue` when the experiment explicitly opts out. Add `--run` to submit and `--wait`
-   for the final report; use a background process for these multi-minute jobs. Record the original process and job ID so a yielded tool call does not
-   cause a second submission.
+   For `train-long-harbor`, check the recipe's [Daytona requirements](../../../docs/recipes/rl-experiments.md#harbor-evaluation).
+5. Pass the optional `--issue ISSUE_NUMBER` when the experimenter links the run to an issue.
+   Replace `--plan` with `--run` to submit and add `--wait` for the final report.
+   Use a background process and record its process and job IDs so a yielded tool call
+   does not cause a second submission.
    Record the finishing status's `rl_progress_url` with the verdict; the launcher publishes using
    the caller's Marina login. Follow the recipe's [publication procedure](../../../docs/recipes/rl-experiments.md#dashboard-publication)
    for retries and pinned controls.
    Use `--url ORIGIN` when publication targets a local Marina stack.
+   Repeat the original `--run --wait` invocation with the same source and inputs to resume
+   either train-long preset from its latest retained checkpoint.
 
 Follow the recipe's [input and flag contracts](../../../docs/recipes/rl-experiments.md#change-one-input),
 [comparison rules](../../../docs/recipes/rl-experiments.md#compare-with-controls) and
@@ -46,16 +51,15 @@ For an exact-numerics claim, require zero mismatch:
 
 ```bash
 uv run python -m experiments.post_training.snowball_rl --preset speed-medium \
-  --require 'policy/mismatch/staleness0/log_ratio_abs_max<=0' --version dev --issue ISSUE_NUMBER --run
+  --require 'policy/mismatch/staleness0/log_ratio_abs_max<=0' --version dev --run
 ```
 
 ## Record the experiment
 
-For an experiment with a linked issue, open one issue through `file-issue` before the first run.
+Open an issue through `file-issue` before the first run only when the experimenter asks for one.
 In **Description**, explain what changes and what the preset measures. In **Hypothesis or Goal**,
-state the expected result and the measure that would confirm it. In **Links**, keep the relevant PR
-or source, run reports and dashboard links as they become available. Follow the person's approval
-rules for the exact text. Post one comment per verdict after approval. Use the same issue for later
+state the expected result and the measure that would confirm it. Put the relevant PR or source in
+**Links**. For an existing issue, pass its number with `--issue`. Use the same issue for later
 presets that measure the same change.
 
 ## Inspect saved answers
@@ -73,9 +77,15 @@ Read the recipe's [report contract](../../../docs/recipes/rl-experiments.md#comp
 the verdict, label, reason and report path, followed by the Markdown tables. Inspect the reason for INVALID.
 
 Confirm the native receipt records success and the Iris job finished before reporting success.
-For a linked issue, prepare the update with the change, exact source, inputs, run and attempt IDs,
-W&B and Grafana links, objective values, constraints, verdict and report path. Have the person
-review posting text as required by their publication rules.
+For a linked issue, post one comment per result after the person's posting approval. Use these fields
+in order:
+
+- **Preset** — name, version, source and changed inputs.
+- **Run / attempt** — IDs, Iris and Grafana links.
+- **W&B** — exact run link.
+- **Marina** — attempt link.
+- **Verdict and key metrics** — verdict, objectives, constraints and report path.
+- **Cost** — elapsed time and measured GPU-hours, or label the estimate.
 
 ## Never
 

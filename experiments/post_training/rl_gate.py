@@ -31,7 +31,7 @@ from marin.rl.skyrl import (
     read_skyrl_attempt,
     skyrl_cpu_command,
 )
-from marin.rl.skyrl_records import RecordedLaunch, read_stored_skyrl_attempt, recorded_launch
+from marin.rl.skyrl_records import RecordedLaunch, read_stored_skyrl_attempt
 from pydantic import BaseModel
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import Provenance
@@ -51,6 +51,7 @@ from experiments.post_training.rl_scoring import (
     load_run,
     parse_requirement,
     read_gate_inputs,
+    read_recorded_launch,
     with_objectives,
     with_requirements,
 )
@@ -67,12 +68,11 @@ def validate_requirements(
     preset: presets.Preset, requirements: Sequence[str], *, table: ModelPresets, control: bool
 ) -> None:
     """Validate a candidate's control pin and user requirements before GPU submission."""
-    gated = preset.gated
-    if requirements and (control or not gated):
-        raise click.BadParameter("--require needs a gated candidate preset, without --control")
-    keys = [parse_requirement(text).key for text in requirements]
     if not requirements:
         return
+    if control or not preset.gated:
+        raise click.BadParameter("--require needs a gated candidate preset, without --control")
+    keys = [parse_requirement(text).key for text in requirements]
     pin = control_pin(preset, table=table)
     reference = with_objectives(load_run(control_path(preset, pin, 0, table=table), preset), preset)
     missing = [key for key in keys if key not in reference.values]
@@ -93,10 +93,7 @@ def validate_candidate(
         receipt = read_stored_skyrl_attempt(path)
         if receipt is None:
             raise InvalidComparison(f"control receipt is unavailable: {path}")
-        try:
-            launch = recorded_launch(receipt)
-        except ValueError as error:
-            raise InvalidComparison(str(error)) from error
+        launch = read_recorded_launch(receipt)
         _check_control_config(receipt.native.config, defaults, launch, preset=preset)
     return candidate
 
@@ -511,10 +508,13 @@ def _current_configs(
         return tuple(compose_configs(paths))
 
 
-def _native_json(program: str, *arguments: str):
+def _native_json(program: str, *arguments: str, timeout: int = 120, uv_options: tuple[str, ...] = ()):
     try:
         result = subprocess.run(
-            skyrl_cpu_command("python", "-c", program, *arguments), capture_output=True, text=True, timeout=120
+            skyrl_cpu_command(*uv_options, "python", "-c", program, *arguments),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
         )
         result.check_returncode()
         return json.loads(result.stdout.splitlines()[-1])
@@ -525,16 +525,23 @@ def _native_json(program: str, *arguments: str):
         raise InvalidComparison(f"native configuration cannot be composed: {cause}") from error
 
 
+def _native_program(native_root: str, modules: tuple[str, ...], body: str) -> str:
+    return (
+        "import json,sys\nfrom pathlib import Path\nfrom omegaconf import OmegaConf\n"
+        "from importlib import import_module\n"
+        f"assert all(Path(import_module(name).__file__).resolve().is_relative_to({native_root!r}) "
+        f"for name in {modules!r})\n" + body
+    )
+
+
 def compose_configs(paths: Sequence[str]) -> list[dict]:
     """Load launch files with the native SkyRL composer in its CPU environment."""
-    native_root = str(recipe.REPO_ROOT / "vendor/skyrl")
-    program = (
-        "import json,sys\nfrom pathlib import Path\nfrom omegaconf import OmegaConf\n"
-        "from cloud.iris import launch_config\nimport skyrl_train,marinskyrl\n"
-        f"assert all(Path(module.__file__).resolve().is_relative_to({native_root!r}) "
-        "for module in (launch_config,skyrl_train,marinskyrl))\n"
+    program = _native_program(
+        str(recipe.REPO_ROOT / "vendor/skyrl"),
+        ("cloud.iris.launch_config", "skyrl_train", "marinskyrl"),
+        "from cloud.iris import launch_config\n"
         "print(json.dumps([OmegaConf.to_container(launch_config.load_launch_config(path), resolve=True) "
-        "for path in sys.argv[1:]]))\n"
+        "for path in sys.argv[1:]]))\n",
     )
     return _native_json(program, *paths)
 
@@ -569,16 +576,15 @@ def _setting_keys(inputs: GateInputs, keys: set[str]) -> set[str]:
 
 @lru_cache(maxsize=16)
 def _schema_defaults(native_project: str, source_identity: str | None, groups: tuple[tuple[str, str], ...]) -> dict:
-    program = (
-        "import json,sys\nfrom pathlib import Path\nfrom omegaconf import OmegaConf\n"
+    program = _native_program(
+        native_project,
+        ("cloud.iris.launch_config", "cloud.iris.rl_config_translation"),
         "from cloud.iris import launch_config, rl_config_translation\n"
-        f"assert all(Path(module.__file__).resolve().is_relative_to({native_project!r}) "
-        "for module in (launch_config,rl_config_translation))\n"
         "config = rl_config_translation.compose_config_groups(json.loads(sys.argv[1]), config_name='ppo_base_config')\n"
         "defaults = OmegaConf.to_container(\n"
         "    OmegaConf.structured(launch_config.SkyRLLaunchConfig), resolve=False, enum_to_str=True)\n"
         "defaults['skyrl'] = OmegaConf.to_container(config, resolve=True, enum_to_str=True)\n"
-        "print(json.dumps(defaults))\n"
+        "print(json.dumps(defaults))\n",
     )
     return _native_json(program, json.dumps(dict(groups)))
 
@@ -624,7 +630,8 @@ def _write_gate(
     invariants, comparisons = [], []
     verdict, label, reason = Verdict.INVALID, None, None
     try:
-        _check_pin_revision(preset, control_pin)
+        if control_pin.revision != preset.revision:
+            raise _pin_error(preset, control_pin)
         receipts = [read_stored_skyrl_attempt(path) for path in run_paths]
         metadata = metadata.model_copy(
             update={"attempt_ids": tuple(receipt.attempt_id for receipt in receipts if receipt)}
@@ -713,25 +720,14 @@ def _pin_error(preset: presets.Preset, pin: ControlPin | None) -> InvalidCompari
         f"no control pin for {preset.name} at {preset.revision}; "
         f"recorded control revision={pin.revision if pin else None}; "
         f"collect current controls with --preset {name} "
-        f"--version {preset.revision} --control --replicates {replicas} --issue ISSUE_NUMBER --run"
+        f"--version {preset.revision} --control --replicates {replicas} --run"
     )
 
 
-def _declared_pin(preset: presets.Preset, table: ModelPresets) -> ControlPin:
+def control_pin(preset: presets.Preset, *, table: ModelPresets, check_revision: bool = True) -> ControlPin:
     pin = table.controls.get(preset.controls)
-    if pin is None:
+    if pin is None or (check_revision and pin.revision != preset.revision):
         raise _pin_error(preset, pin)
-    return pin
-
-
-def _check_pin_revision(preset: presets.Preset, pin: ControlPin) -> None:
-    if pin.revision != preset.revision:
-        raise _pin_error(preset, pin)
-
-
-def control_pin(preset: presets.Preset, *, table: ModelPresets) -> ControlPin:
-    pin = _declared_pin(preset, table)
-    _check_pin_revision(preset, pin)
     return pin
 
 
@@ -819,7 +815,7 @@ def _gate_with_evidence(step: ArtifactStep[GateReport]) -> ArtifactStep[GateRepo
 def gate_step(
     preset: presets.Preset, runs: tuple[ArtifactStep[SkyRLRun], ...], *, table: ModelPresets, inputs: GateInputs
 ) -> ArtifactStep[GateReport]:
-    pin = _declared_pin(preset, table)
+    pin = control_pin(preset, table=table, check_revision=False)
     name = runs[0].name.rsplit("-r", 1)[0] + f"/gate-n{len(runs)}-{pin.commit}"
     paths = tuple(candidate.path(recipe.artifact_prefix(preset.recipe.layout.cluster)) for candidate in runs)
     identities = tuple(f"{candidate.name}@{candidate.version}" for candidate in runs)

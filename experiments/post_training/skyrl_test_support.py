@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import subprocess
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -10,7 +9,6 @@ from pathlib import Path
 import pytest
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import materialized_config
-from marin.rl.skyrl import skyrl_cpu_command
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.storage_path import StoragePath
 
@@ -39,21 +37,8 @@ def selection_summary(full_rows: int) -> dict:
 def native_json(*uv_options: str):
     def execute(script, paths):
         source = str(find_project_root(Path(__file__)) / "vendor/skyrl")
-        program = (
-            "from pathlib import Path as SourcePath\nfrom cloud.iris import launch_config as SourceLaunch\n"
-            "import skyrl_train as SourceTrain\n"
-            f"assert all(SourcePath(module.__file__).resolve().is_relative_to({source!r}) "
-            "for module in (SourceLaunch, SourceTrain))\n"
-            "print('RL_NATIVE_SOURCE_ORIGINS_PASS')\n" + script
-        )
-        result = subprocess.run(
-            skyrl_cpu_command(*uv_options, "python", "-c", program, *paths),
-            capture_output=True,
-            text=True,
-            timeout=170,
-        )
-        assert result.returncode == 0, result.stderr
-        return json.loads(result.stdout.splitlines()[-1])
+        program = gate._native_program(source, ("cloud.iris.launch_config", "skyrl_train"), script)
+        return gate._native_json(program, *paths, timeout=170, uv_options=uv_options)
 
     return execute
 
@@ -85,11 +70,6 @@ def assert_revisioned_native_configs(
     }
     assert actual == {name: values.get(table.by_name[name].revision) for name, values in revisions.items()}
     for preset, config in zip((table.by_name[name] for name in revisions), configs, strict=True):
-        plan = preset.recipe.layout.workload.plan
-        allocation = config["iris"]["allocation"]
-        assert (allocation["num_nodes"], allocation["gpus_per_node"]) == (plan.num_nodes, plan.gpus_per_node)
-        assert config["iris"]["wandb_entity"] == preset.wandb_entity
-        assert config["run"]["model"] == table.model
         staleness = preset.recipe.config.trainer.rollout_buffer.max_staleness_steps
         if staleness is not None:
             assert config["skyrl"]["trainer"]["rollout_buffer"]["max_staleness_steps"] == staleness

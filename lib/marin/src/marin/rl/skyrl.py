@@ -709,6 +709,12 @@ _FINGERPRINT_EXECUTION = IrisSkyRLExecution(
 )
 
 
+def skyrl_execution(step: ArtifactStep) -> IrisSkyRLExecution | None:
+    """Return the execution settings from a native SkyRL artifact step."""
+    value = step.runtime_args.get(_EXECUTION)
+    return value if isinstance(value, IrisSkyRLExecution) else None
+
+
 @dataclass(frozen=True)
 class SkyRLOutputPaths:
     checkpoint_root: str
