@@ -43,7 +43,7 @@ addresses; `DENY` denies external traffic. Neither grants cluster access.
 Iris commands and file transfer use the existing `ExecInContainer` RPC and require
 `/bin/sh`, `setsid`, `base64`, `tar`, `head`, `tail`, `wc` and readable `/proc` in the task image.
 Daytona uses its filesystem API and requires `/bin/sh`, `tar`, `head` and `wc`
-for commands and directory transfer.
+for commands and directory transfer; `open_process` also needs Python 3.8 or newer.
 Daytona uploads each control wrapper into a private command directory before execution,
 so nested shell quoting does not enlarge the argument sent to its execution API.
 The original argv, stdin, environment and working directory are preserved;
@@ -212,7 +212,7 @@ The host handler receives bounded requests on that process's stdout and performs
 operations it authorizes. Model URLs and authentication stay with the host
 handler; a runtime service uses the group-local listener URL and a dummy API key.
 The group needs no route to a model server or cloud storage. The listener requires
-Python 3 in its member image. It supports bounded nonstreaming GET and POST
+Python 3.8 or newer in its member image. It supports bounded nonstreaming GET and POST
 requests, with no caller headers forwarded to the host handler. Request IDs allow
 concurrent calls; responses remain whole messages, without SSE or token streaming.
 There is no per-request exec or guest control endpoint.

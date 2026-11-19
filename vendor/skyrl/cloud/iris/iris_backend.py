@@ -786,12 +786,19 @@ def _build_task_shell(
     )
     if not flashqla_enabled:
         gdn_branch = f"exec {ctrl}"
+    gate_report_prefix = f"{args.rendezvous_dir.rstrip('/')}/interconnect-gate"
+    transport_gate = (
+        f"{RL_PYTHON} {APP_DIR}/experiments/post_training/nccl_transport_probe.py"
+        " --mode gate --gate-coverage all-gpus --pynccl-init"
+        f" --gate-report-prefix {shlex.quote(gate_report_prefix)}; "
+    )
     bash = (
         f"set -e; {spill_preflight}cd {SKYRL_HOME}; "
         f"export SKYRL_HOME={shlex.quote(SKYRL_HOME)}; "
         f"source {shlex.quote(MARINSKYRL_ACTIVATION_FILE)}; "
         f"export PYTHONPATH={shlex.quote(pythonpath)}:${{PYTHONPATH:-}}; "
         f"export VLLM_USE_V1=1; "
+        f"{transport_gate}"
         f"{gdn_branch}"
     )
     return ["bash", "-c", bash]

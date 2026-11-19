@@ -15,9 +15,9 @@ from marinskyrl.hf_model import (
     normalize_fast_tokenizer_metadata,
     write_generation_config,
 )
+from marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 from marinskyrl.model_manifest import (
     HF_WEIGHT_INDEX_FILENAME,
-    MODEL_MANIFEST_FILENAME,
     ModelManifest,
     build_safetensors_weight_index,
     read_safetensors_header,
