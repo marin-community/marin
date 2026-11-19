@@ -98,7 +98,7 @@ class CatalogSelection:
     marina_url: str
     applet_id: str
     load_id: str
-    refresh_sealed: bool = False
+    refresh_sealed: bool
 
 
 class ProjectionWaiver(BaseModel):

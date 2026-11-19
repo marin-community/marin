@@ -201,7 +201,7 @@ def test_new_selected_loads_remain_waived_until_the_strict_seal_event(load_id):
         {"Test:source": curriculum_row(source)},
         projection_waivers(),
         drift_sources=frozenset(),
-        selection=CatalogSelection("https://marina.example", "preview", load_id),
+        selection=CatalogSelection("https://marina.example", "preview", load_id, refresh_sealed=False),
     )
     assert len(notes) == 1
     assert "Test:source:derived-contract/stale-pin" in notes[0]
@@ -212,7 +212,7 @@ def test_new_selected_loads_remain_waived_until_the_strict_seal_event(load_id):
     "selection",
     [
         CatalogSelection("https://marina.example", "preview", "r31j-during-refresh", refresh_sealed=True),
-        CatalogSelection("https://marina.example", "production", "lagging"),
+        CatalogSelection("https://marina.example", "production", "lagging", refresh_sealed=False),
     ],
 )
 def test_a_sealed_refresh_or_different_target_cannot_reuse_a_projection_waiver(selection):
@@ -245,7 +245,7 @@ def test_a_gap_created_after_the_rule_file_is_generated_is_waived(tmp_path):
         {},
         {},
         ProjectionWaivers.model_validate_json(path.read_bytes()),
-        selection=CatalogSelection("https://marina.example", "preview", "lagging"),
+        selection=CatalogSelection("https://marina.example", "preview", "lagging", refresh_sealed=False),
         drift_sources=frozenset(),
     )
     assert len(notes) == 2
@@ -260,7 +260,7 @@ def test_the_same_source_declaration_drift_cannot_be_waived():
             {},
             {},
             projection_waivers(),
-            selection=CatalogSelection("https://marina.example", "preview", "lagging"),
+            selection=CatalogSelection("https://marina.example", "preview", "lagging", refresh_sealed=False),
             drift_sources=frozenset({"Test:source"}),
         )
 
@@ -316,7 +316,7 @@ def test_conflicting_current_contract_summaries_fail(served_revision):
             {"Test:source": curriculum_row(source)},
             projection_waivers(),
             drift_sources=frozenset(),
-            selection=CatalogSelection("https://marina.example", "preview", "lagging"),
+            selection=CatalogSelection("https://marina.example", "preview", "lagging", refresh_sealed=False),
             served_pins={"Test:source": replace(source, dataset_revision=served_revision)},
         )
 

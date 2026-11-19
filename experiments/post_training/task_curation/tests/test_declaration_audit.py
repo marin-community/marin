@@ -213,7 +213,11 @@ def waived_audit_cli(monkeypatch, tmp_path):
     monkeypatch.setattr(
         declaration_audit,
         "atlas_catalog_selection",
-        lambda: (ensure_current_projections.CatalogSelection("https://marina.example", "preview", "lagging")),
+        lambda: (
+            ensure_current_projections.CatalogSelection(
+                "https://marina.example", "preview", "lagging", refresh_sealed=False
+            )
+        ),
     )
     monkeypatch.setattr(declaration_audit, "atlas_contract_receipts", lambda: {})
     monkeypatch.setattr(declaration_audit, "atlas_curriculum_rows", lambda: {})
@@ -256,7 +260,9 @@ def test_a_same_source_drift_leaves_its_projection_gap_blocking():
     waived = ensure_current_projections.apply_projection_waivers(
         [gap],
         rule,
-        ensure_current_projections.CatalogSelection("https://marina.example", "preview", "lagging"),
+        ensure_current_projections.CatalogSelection(
+            "https://marina.example", "preview", "lagging", refresh_sealed=False
+        ),
         result.drift_sources,
     )
     assert result.findings
