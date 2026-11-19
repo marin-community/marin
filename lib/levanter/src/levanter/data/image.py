@@ -4,18 +4,14 @@
 
 """Image and conversation sources, preprocessing, batching, and caching."""
 
-import pyarrow.parquet as pq
-
 import abc
-import copy
 import asyncio
-import json
 import logging
 import threading
 import weakref
 from collections import OrderedDict
 from dataclasses import dataclass
-from functools import cached_property
+from functools import cached_property, partial
 from typing import Any, Dict, Iterator, List, Mapping, Optional, Protocol, Sequence, Tuple, Union, cast
 
 import datasets
@@ -35,10 +31,8 @@ from levanter.data._preprocessor import BatchProcessor
 from levanter.data.dataset import MappedAsyncDataset
 from levanter.data.sharded_datasource import (
     ShardedDataSource,
-    UrlBackedShardedDataSource,
+    UrlDataSource,
     datasource_from_hf_or_none,
-    _iter_parquet_from_row,
-    _sniff_format_for_dataset,
 )
 from levanter.store.cache import CacheOptions, TreeCache, build_or_load_cache
 from levanter.utils.jax_utils import key_iterator
@@ -50,6 +44,8 @@ from transformers import (  # noqa: E402
     PreTrainedTokenizerBase,
     ProcessorMixin,
 )
+
+from transformers.image_processing_utils import select_best_resolution  # noqa: E402
 
 from io import BytesIO  # noqa: E402
 
@@ -80,147 +76,6 @@ ConversationDict = TypedDict(
     },
     total=False,
 )
-
-
-class ImageTextUrlDataSource(UrlBackedShardedDataSource[dict]):
-    """
-    Dataset for image-text pairs from various file formats (JSON, JSONL, Parquet).
-
-    This data source reads image-text pairs where:
-    - image_key: points to the image data (can be path, URL, bytes, or HF dict format)
-    - text_key: points to the text description/caption
-
-    Supports HuggingFace-style image formats:
-    - {"bytes": <raw_bytes>}
-    - {"path": "path/to/image.jpg"}
-    - Direct path string or URL
-    """
-
-    def __init__(self, urls: Sequence[str], image_key: str = "image", text_key: str = "text") -> None:
-        super().__init__(urls)
-        self.image_key = image_key
-        self.text_key = text_key
-
-    def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[dict]:
-        url = self._shard_name_to_url_mapping[shard_name]
-        i = 0
-        format = _sniff_format_for_dataset(url)
-        if format == ".parquet":
-            with StoragePath(url).open("rb") as f:
-                parquet_file = pq.ParquetFile(f)
-                for record in _iter_parquet_from_row(parquet_file, row, columns=[self.image_key, self.text_key]):
-                    yield {
-                        "image": record[self.image_key],
-                        "text": record[self.text_key],
-                    }
-        else:
-            with StoragePath(url).open("r", compression="infer") as f:
-                match format:
-                    case ".jsonl":
-                        for line in f:
-                            if i >= row:
-                                data = json.loads(line)
-                                yield {
-                                    "image": data[self.image_key],
-                                    "text": data[self.text_key],
-                                }
-                            i += 1
-                    case ".json":
-                        data = json.load(f)
-                        for doc in data[row:]:
-                            yield {
-                                "image": doc[self.image_key],
-                                "text": doc[self.text_key],
-                            }
-                    case _:
-                        raise ValueError(f"Unknown format {format}")
-
-
-class ImageConversationUrlDataSource(UrlBackedShardedDataSource[ConversationDict]):
-    """
-    Dataset for conversation-format image-text data (VLM training format).
-
-    This data source reads conversation data with interleaved images and text,
-    used for vision-language model training like LLaVA.
-
-    Expected data format:
-    {
-        "messages": [
-            {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "..."}]},
-            {"role": "assistant", "content": [{"type": "text", "text": "..."}]}
-        ],
-        "images": ["path/to/image.jpg"]  # or PIL Images, URLs, or bytes
-    }
-    """
-
-    def __init__(self, urls: Sequence[str], messages_key: str = "messages", images_key: str = "images") -> None:
-        super().__init__(urls)
-        self.messages_key = messages_key
-        self.images_key = images_key
-
-    def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[ConversationDict]:
-        url = self._shard_name_to_url_mapping[shard_name]
-        i = 0
-        format = _sniff_format_for_dataset(url)
-        if format == ".parquet":
-            with StoragePath(url).open("rb") as f:
-                parquet_file = pq.ParquetFile(f)
-                optional_columns = [
-                    column
-                    for column in (self.images_key, "audio", "videos")
-                    if column in parquet_file.schema_arrow.names
-                ]
-                columns = [self.messages_key, *optional_columns]
-                for record in _iter_parquet_from_row(parquet_file, row, columns=columns):
-                    yield conversation_fields(record, self.messages_key, self.images_key)
-        else:
-            with StoragePath(url).open("r", compression="infer") as f:
-                match format:
-                    case ".jsonl":
-                        for line in f:
-                            if i >= row:
-                                data = json.loads(line)
-                                yield conversation_fields(data, self.messages_key, self.images_key)
-                            i += 1
-                    case ".json":
-                        data = json.load(f)
-                        for doc in data[row:]:
-                            yield conversation_fields(doc, self.messages_key, self.images_key)
-                    case _:
-                        raise ValueError(f"Unknown format {format}")
-
-
-def processor_with_tokenizer(
-    processor: ProcessorMixin,
-    tokenizer: PreTrainedTokenizerBase,
-    *,
-    image_token: str,
-    video_token: str,
-) -> ProcessorMixin:
-    """Copy a processor with explicit modality tokens and a compatible tokenizer.
-
-    Retains the original processor class, its image expansion logic, and its other
-    modality processors. Shared sub-processors are not mutated.
-    """
-    old_tokenizer = processor.tokenizer
-    if old_tokenizer.eos_token_id != tokenizer.eos_token_id:
-        raise ValueError("Replacement tokenizer must preserve the EOS token ID")
-    old_modality_tokens = {getattr(processor, "image_token", None), getattr(processor, "video_token", None)}
-    for token in old_tokenizer.all_special_tokens:
-        if token not in old_modality_tokens and old_tokenizer.convert_tokens_to_ids(
-            token
-        ) != tokenizer.convert_tokens_to_ids(token):
-            raise ValueError(f"Replacement tokenizer changes special token {token!r}")
-    for token in (image_token, video_token):
-        if token not in tokenizer.get_vocab():
-            raise ValueError(f"Tokenizer does not contain the configured modality token {token!r}")
-    result = copy.copy(processor)
-    result.tokenizer = tokenizer
-    result.image_token = image_token
-    result.video_token = video_token
-    result.image_token_id = tokenizer.convert_tokens_to_ids(image_token)
-    result.video_token_id = tokenizer.convert_tokens_to_ids(video_token)
-    return result
 
 
 def image_source_urls(urls: Sequence[str]) -> list[str]:
@@ -372,15 +227,10 @@ def _extract_anyres_params(processor: ProcessorMixin) -> AnyResolutionParams:
         vision_feature_height = tile_size // encoder_patch_size
     max_num_patches = None
 
-    # Try to get max_num_patches from vision_aspect_ratio (LLaVA-specific)
-    vision_aspect_ratio = getattr(image_processor, "vision_aspect_ratio", None)
-    if vision_aspect_ratio and isinstance(vision_aspect_ratio, str) and "anyres_max_" in vision_aspect_ratio:
-        max_num_patches = int(vision_aspect_ratio.split("anyres_max_")[-1])
-
-    if max_num_patches is None and grid_pinpoints:
-        max_resolution = max(max(h, w) for h, w in grid_pinpoints)
-        max_patches_per_dim = max_resolution // tile_size
-        max_num_patches = max_patches_per_dim * max_patches_per_dim  # +1 for base is added in _pad_pixel_values
+    if grid_pinpoints:
+        # Size the cache for raw image tiles. OneVision's aspect-ratio limit
+        # applies to features after vision encoding.
+        max_num_patches = max((h // tile_size) * (w // tile_size) for h, w in grid_pinpoints)
 
     return AnyResolutionParams(grid_pinpoints, tile_size, vision_feature_height, max_num_patches)
 
@@ -458,9 +308,6 @@ class BatchMultimodalProcessor(BatchProcessor[ConversationDict, ImageTextDict]):
         self,
         processor: ProcessorMixin,
         *,
-        tokenizer: Optional[PreTrainedTokenizerBase] = None,
-        image_token: str | None = None,
-        video_token: str | None = None,
         max_length: int,
         padding: bool = True,
         messages_key: str = "messages",
@@ -472,25 +319,7 @@ class BatchMultimodalProcessor(BatchProcessor[ConversationDict, ImageTextDict]):
         tile_size: Optional[int] = None,
         vision_feature_height: Optional[int] = None,
     ) -> None:
-        """
-        Initialize the BatchMultimodalProcessor.
-
-        Args:
-            processor: HuggingFace processor (e.g., AutoProcessor.from_pretrained(...))
-            tokenizer: Optional tokenizer to replace the processor's tokenizer.
-                       Use this to ensure tokenization matches the LLM's tokenizer (e.g., Qwen3-1.7B).
-                       If provided, critical special tokens will be verified for consistency.
-            max_length: Maximum sequence length for tokenization
-            padding: Whether to pad sequences to max_length
-            messages_key: Key for messages list in input dictionaries
-            images_key: Key for images list in input dictionaries
-            add_generation_prompt: Whether to add generation prompt at the end
-            mask_prompt: Whether to mask non-assistant tokens (set loss_mask to 0.0)
-            grid_pinpoints: List of grid resolutions for anyres processing, e.g., [[384,384], [768,384], ...]
-            tile_size: Image tile size; inferred from the image processor when omitted
-            vision_feature_height: Vision encoder output tokens per spatial dim (e.g., 27 for 384/14)
-            max_num_patches: Maximum number of patches for anyres constraint (e.g., 9 for anyres_max_9)
-        """
+        """Initialize processing with the tokenizer bundled with the Hugging Face processor."""
         self.processor = processor
         self.max_length = max_length
         self.padding = padding
@@ -509,60 +338,27 @@ class BatchMultimodalProcessor(BatchProcessor[ConversationDict, ImageTextDict]):
         )
         self.max_num_patches = params.max_num_patches if max_num_patches is None else max_num_patches
 
-        if grid_pinpoints is not None:
-            self._grid_h: np.ndarray | None = np.array([p[0] for p in grid_pinpoints], dtype=np.float64)
-            self._grid_w: np.ndarray | None = np.array([p[1] for p in grid_pinpoints], dtype=np.float64)
-            self._grid_area: np.ndarray | None = self._grid_h * self._grid_w
-        else:
-            self._grid_h = None
-            self._grid_w = None
-            self._grid_area = None
-
-        if tokenizer is not None:
-            self.processor = processor_with_tokenizer(
-                processor,
-                tokenizer,
-                image_token=image_token or processor.image_token,
-                video_token=video_token or processor.video_token,
-            )
-
         self._padding_mode = "max_length" if self.padding else False
 
-        final_tokenizer = self.processor.tokenizer
-        self._cached_im_start_id: int = final_tokenizer.convert_tokens_to_ids("<|im_start|>")
-        self._cached_im_end_id: int = final_tokenizer.convert_tokens_to_ids("<|im_end|>")
-        assistant_ids = final_tokenizer.encode("assistant", add_special_tokens=False)
-        self._cached_num_assistant_tokens: int = len(assistant_ids)
-        self._cached_assistant_token_ids_array: np.ndarray = np.array(assistant_ids, dtype=np.int32)
+        if self.mask_prompt:
+            tokenizer = self.processor.tokenizer
+            vocab = tokenizer.get_vocab()
+            if "<|im_start|>" not in vocab or "<|im_end|>" not in vocab:
+                raise ValueError("Prompt masking requires a ChatML tokenizer with <|im_start|> and <|im_end|> tokens")
+            assistant_ids = tokenizer.encode("assistant", add_special_tokens=False)
+            if not assistant_ids or tokenizer.unk_token_id in assistant_ids:
+                raise ValueError("Prompt masking requires the tokenizer to encode the assistant role")
+            self._cached_im_start_id = vocab["<|im_start|>"]
+            self._cached_im_end_id = vocab["<|im_end|>"]
+            self._cached_num_assistant_tokens = len(assistant_ids)
+            self._cached_assistant_token_ids_array = np.array(assistant_ids, dtype=np.int32)
 
     def _compute_grid_shape(self, image_size: Tuple[int, int]) -> Tuple[int, int]:
-        """Select the tile grid that preserves the most image area with least padding."""
-        if self._grid_h is None or self.tile_size is None:
-            return (1, 1)  # Default for no anyres
+        if not self.grid_pinpoints:
+            return (1, 1)
 
-        assert self._grid_w is not None and self._grid_area is not None
-        orig_h, orig_w = image_size
-        orig_area = orig_h * orig_w
-
-        # scale = min(w/orig_w, h/orig_h) for each resolution
-        scales = np.minimum(self._grid_w / orig_w, self._grid_h / orig_h)
-
-        scaled_h = (orig_h * scales).astype(np.int64)
-        scaled_w = (orig_w * scales).astype(np.int64)
-        eff = np.minimum(scaled_h * scaled_w, orig_area)
-
-        waste = self._grid_area - eff
-
-        # Combined score: maximize eff first, then minimize waste
-        # Use large multiplier to ensure eff dominates
-        scores = eff.astype(np.float64) * 1e12 - waste
-        best_idx = int(np.argmax(scores))
-
-        assert self.grid_pinpoints is not None
-        best_h, best_w = self.grid_pinpoints[best_idx]
-        gh = best_h // self.tile_size
-        gw = best_w // self.tile_size
-        return (gh, gw)
+        height, width = select_best_resolution(image_size, self.grid_pinpoints)
+        return height // self.tile_size, width // self.tile_size
 
     def _compute_unpad_indices_for_image(
         self,
@@ -659,7 +455,7 @@ class BatchMultimodalProcessor(BatchProcessor[ConversationDict, ImageTextDict]):
         grid_mask[:valid_patches] = True
 
         if actual_patches > total_patches:
-            grid_mask[:] = True
+            raise ValueError(f"Example has {actual_patches} image tiles but the cache holds {total_patches}")
 
         return _pad_or_trim_image_tiles(pixel_values, total_patches), grid_mask
 
@@ -929,39 +725,34 @@ class ImageDatasetSourceConfig:
 
     def get_shard_source(self, split: str) -> Optional[ShardedDataSource[ConversationDict]]:
         """Get a sharded data source for the specified split."""
+        source = self._caption_source(split)
+        return None if source is None else source.map(image_caption_to_conversation)
+
+    def _caption_source(self, split: str) -> Optional[ShardedDataSource[dict]]:
         if self.id is not None:
-            ds = datasource_from_hf_or_none(self.id, split=split, name=self.name, streaming=self.stream)
-            if ds is None:
+            source = datasource_from_hf_or_none(self.id, split=split, name=self.name, streaming=self.stream)
+            if source is None:
                 return None
-
-            def extract_fields(x: dict[str, Any]) -> dict[str, Any]:
-                return {
-                    "image": x[self.image_key],
-                    "text": x[self.text_key],
-                }
-
-            return ds.map(extract_fields).map(image_caption_to_conversation)
-        else:
-            split_urls = self.urls_for_split(split)
-            if len(split_urls) == 0:
-                return None
-            return ImageTextUrlDataSource(split_urls, image_key=self.image_key, text_key=self.text_key).map(
-                image_caption_to_conversation
-            )
-
-    def doc_iterator(self, split: str) -> Iterator[Dict[str, Any]]:
-        """Iterate over documents in the specified split."""
-        if self.id is not None:
-            data = datasets.load_dataset(self.id, split=split, name=self.name, streaming=self.stream)
-            for raw_doc in data:
-                doc = cast(Dict[str, Any], raw_doc)
-                yield {
-                    "image": doc[self.image_key],
-                    "text": doc[self.text_key],
-                }
         else:
             urls = self.urls_for_split(split)
-            yield from ImageTextUrlDataSource(urls, image_key=self.image_key, text_key=self.text_key)
+            if not urls:
+                return None
+            source = UrlDataSource(urls, columns=[self.image_key, self.text_key])
+        return source.map(self._caption_fields)
+
+    def _caption_fields(self, record: dict) -> dict:
+        return {"image": record[self.image_key], "text": record[self.text_key]}
+
+    def doc_iterator(self, split: str) -> Iterator[Dict[str, Any]]:
+        """Iterate over normalized image-caption pairs."""
+        if self.id is not None:
+            data = datasets.load_dataset(self.id, split=split, name=self.name, streaming=self.stream)
+            for doc in data:
+                yield self._caption_fields(cast(dict, doc))
+        else:
+            source = self._caption_source(split)
+            if source is not None:
+                yield from source
 
     def urls_for_split(self, split: str) -> List[str]:
         return _image_split_urls(
@@ -1028,36 +819,26 @@ class ConversationDatasetSourceConfig:
     def get_shard_source(self, split: str) -> Optional[ShardedDataSource[ConversationDict]]:
         """Get a sharded data source for the specified split."""
         if self.id is not None:
-            ds = datasource_from_hf_or_none(self.id, split=split, name=self.name, streaming=self.stream)
-            if ds is None:
+            source = datasource_from_hf_or_none(self.id, split=split, name=self.name, streaming=self.stream)
+            if source is None:
                 return None
-
-            def extract_fields(x: dict[str, Any]) -> ConversationDict:
-                return conversation_fields(x, self.messages_key, self.images_key)
-
-            return ds.map(extract_fields)
-        else:
-            split_urls = self.urls_for_split(split)
-            if len(split_urls) == 0:
-                return None
-            return cast(
-                ShardedDataSource[ConversationDict],
-                ImageConversationUrlDataSource(split_urls, messages_key=self.messages_key, images_key=self.images_key),
-            )
-
-    def doc_iterator(self, split: str) -> Iterator[ConversationDict]:
-        """Iterate over documents in the specified split."""
-        if self.id is not None:
-            data = datasets.load_dataset(self.id, split=split, name=self.name, streaming=self.stream)
-            for raw_doc in data:
-                doc = cast(Dict[str, Any], raw_doc)
-                yield conversation_fields(doc, self.messages_key, self.images_key)
         else:
             urls = self.urls_for_split(split)
-            for doc in ImageConversationUrlDataSource(
-                urls, messages_key=self.messages_key, images_key=self.images_key
-            ):
-                yield cast(ConversationDict, doc)
+            if not urls:
+                return None
+            source = UrlDataSource(urls)
+        return source.map(partial(conversation_fields, messages_key=self.messages_key, images_key=self.images_key))
+
+    def doc_iterator(self, split: str) -> Iterator[ConversationDict]:
+        """Iterate over conversations with normalized field names."""
+        if self.id is not None:
+            data = datasets.load_dataset(self.id, split=split, name=self.name, streaming=self.stream)
+            for doc in data:
+                yield conversation_fields(cast(dict, doc), self.messages_key, self.images_key)
+        else:
+            source = self.get_shard_source(split)
+            if source is not None:
+                yield from source
 
     def urls_for_split(self, split: str) -> List[str]:
         return _image_split_urls(
@@ -1074,16 +855,16 @@ class ImageTaskConfig(abc.ABC):
     padding: bool = True
 
     @cached_property
-    def the_processor(self) -> ProcessorMixin:
+    def loaded_processor(self) -> ProcessorMixin:
         return load_processor(self.processor)
 
     @cached_property
     def pad_token_id(self) -> int:
-        return self.the_processor.tokenizer.pad_token_id
+        return self.loaded_processor.tokenizer.pad_token_id
 
     @cached_property
     def the_tokenizer(self) -> PreTrainedTokenizerBase:
-        return self.the_processor.tokenizer
+        return self.loaded_processor.tokenizer
 
     @abc.abstractmethod
     def train_set(
@@ -1389,7 +1170,7 @@ class ImageIODatasetConfig(ImageTaskConfig):
         return ProcessedImageCache.build_or_load(
             prefix_join(self.cache_dir, split),
             source,
-            self.the_processor,
+            self.loaded_processor,
             max_length=self.max_length,
             padding=self.padding,
             cache_options=cache_options,
@@ -1712,7 +1493,7 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
 
             dataset = OnDemandImageDataset(
                 source=source,
-                processor=self.the_processor,
+                processor=self.loaded_processor,
                 max_length=self.max_length,
                 padding=self.padding,
                 max_num_patches=max_num_patches,

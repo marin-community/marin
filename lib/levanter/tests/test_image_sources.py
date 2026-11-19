@@ -31,14 +31,11 @@ from transformers import (
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.image import (
     RepeatedImageDataset,
-    processor_with_tokenizer,
     ConversationDatasetSourceConfig,
     ImageMixtureDatasetConfig,
     image_caption_to_conversation,
     BatchMultimodalProcessor,
-    ImageConversationUrlDataSource,
     ImageDatasetSourceConfig,
-    ImageTextUrlDataSource,
     image_source_urls,
     load_image,
 )
@@ -69,7 +66,8 @@ def test_conversation_source_preserves_other_modalities(tmp_path: Path, file_for
         path.write_text(json.dumps([record]))
     else:
         path.write_text(json.dumps(record) + "\n")
-    source = ImageConversationUrlDataSource([str(path)])
+    source = ConversationDatasetSourceConfig(train_urls=[str(path)]).get_shard_source("train")
+    assert source is not None
     loaded = list(source.open_shard(source.shard_names[0]))
     assert loaded == [{**record, "images": []}]
 
@@ -78,10 +76,13 @@ def test_parquet_image_source_resumes_across_row_groups(tmp_path: Path) -> None:
     path = tmp_path / "records.parquet"
     table = pa.table({"picture": ["a.png", "b.png", "c.png"], "caption": ["a", "b", "c"]})
     pq.write_table(table, path, row_group_size=1)
-    source = ImageTextUrlDataSource([str(path)], image_key="picture", text_key="caption")
-    assert list(source.open_shard_at_row(source.shard_names[0], 1)) == [
-        {"image": "b.png", "text": "b"},
-        {"image": "c.png", "text": "c"},
+    config = ImageDatasetSourceConfig(train_urls=[str(path)], image_key="picture", text_key="caption")
+    source = config.get_shard_source("train")
+    assert source is not None
+    rows = list(source.open_shard_at_row(source.shard_names[0], 1))
+    assert rows == [
+        image_caption_to_conversation({"image": "b.png", "text": "b"}),
+        image_caption_to_conversation({"image": "c.png", "text": "c"}),
     ]
 
 
@@ -115,21 +116,6 @@ def test_directory_and_brace_shards_are_reopenable(tmp_path: Path) -> None:
         str(first),
         str(tmp_path / "missing.parquet"),
     ]
-
-
-def test_processor_replacement_uses_configured_modality_tokens() -> None:
-    tokenizer = PreTrainedTokenizerFast(
-        tokenizer_object=Tokenizer(WordLevel({"[UNK]": 0, "<visual>": 1, "<clip>": 2}, unk_token="[UNK]")),
-        unk_token="[UNK]",
-    )
-    image_processor = CLIPImageProcessor()
-    original = CLIPProcessor(image_processor=image_processor, tokenizer=tokenizer)
-    replaced = processor_with_tokenizer(original, tokenizer, image_token="<visual>", video_token="<clip>")
-    assert isinstance(replaced, CLIPProcessor)
-    assert replaced is not original
-    assert replaced.image_token_id == 1
-    assert replaced.video_token_id == 2
-    assert replaced.image_processor is image_processor
 
 
 @pytest.fixture
