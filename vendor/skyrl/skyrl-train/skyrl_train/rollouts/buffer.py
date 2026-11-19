@@ -149,6 +149,7 @@ class RowFacts:
     spanning_policy_steps: tuple[bool, ...]
     prompt_len: np.ndarray
     response_len: np.ndarray
+    loss_tokens: np.ndarray
     is_last_step: np.ndarray
     exclude_from_baseline: np.ndarray
     fields: BatchFields
@@ -201,6 +202,7 @@ class RowFacts:
             spanning_policy_steps=tuple(bool(steps.size and steps.min() != steps.max()) for steps in stamped_steps),
             prompt_len=np.asarray([len(row) for row in batch["prompt_token_ids"]], dtype=np.int64),
             response_len=np.asarray([len(row) for row in batch["response_ids"]], dtype=np.int64),
+            loss_tokens=np.asarray([mask.sum() for mask in masks], dtype=np.int64),
             is_last_step=np.asarray(batch.get("is_last_step") or [True] * count, dtype=bool),
             exclude_from_baseline=np.asarray(
                 batch.get("exclude_from_baseline") or [False] * len(batch["response_ids"]), dtype=bool
