@@ -21,8 +21,8 @@ The audit has seven steps:
 2. **Write a contract for each check.** State its pass and fail conditions from
    the task text, before reading the grader code.
 3. **Build labeled fixtures.** Write short responses labeled from the contract
-   alone, and run them against the grader as regression tests. When they show
-   a defect that a change to the grader can fix, build a replacement grader
+   alone, and run them against the grader as regression tests. When they or a
+   later step show a defect in the grader's code, build a replacement grader
    from the contracts.
 4. **Compare with the reference and stress the grader.** Grade the same
    responses with the benchmark authors' grader, and add property tests,
