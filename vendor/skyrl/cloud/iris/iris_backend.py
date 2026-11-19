@@ -296,6 +296,8 @@ def _iris_submission_state(config_path: Path, config: DictConfig) -> SimpleNames
         priority=iris["priority"],
         max_retries=int(iris["max_retries"]),
         timeout=int(iris["timeout"]),
+        scheduling_timeout=int(iris["scheduling_timeout"]),
+        max_retries_preemption=iris["max_retries_preemption"],
         no_wait=submission == SubmissionMode.DETACH,
         dry_run=submission == SubmissionMode.PREPARE,
         target_cluster=iris["target_cluster"],
@@ -1077,6 +1079,9 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
 
     with client_cm as client:
         entrypoint = Entrypoint.from_command(*command)
+        retry_options = (
+            {} if args.max_retries_preemption is None else {"max_retries_preemption": args.max_retries_preemption}
+        )
         job = client.submit(
             entrypoint=entrypoint,
             name=args.job_name,
@@ -1096,6 +1101,10 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
             max_task_failures=args.max_retries,
             priority_band=priority_band,
             timeout=None if args.timeout == 0 else _seconds_to_duration(args.timeout),
+            scheduling_timeout=(
+                None if args.scheduling_timeout == 0 else _seconds_to_duration(args.scheduling_timeout)
+            ),
+            **retry_options,
         )
         full_job_id = str(job.job_id)
         print(
