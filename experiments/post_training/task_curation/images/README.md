@@ -15,8 +15,8 @@ image, and the pipeline places each one:
   from its lock ([`../environment_runtime.py`](../environment_runtime.py)).
 
 Agent environments name their image. Iris workers and training pull images
-anonymously, so every agent image is a tag of the public
-`ghcr.io/marin-community/iris-task` package; a digest copied there with
+anonymously, so new agent images use the public
+`ghcr.io/marin-community/rollout-images` package; a digest copied there with
 `crane copy` keeps its reference's `sha256`.
 
 ## The grader packages
@@ -45,6 +45,13 @@ project at `/lean4/my_project` with its prebuilt oleans, laid out like the NeMo
 Skills sandbox. It runs in a built image; the Nemotron Ultra Lean grader
 compiles proofs there through
 [`../datasets/nemotron_ultra/scorers/local_lean_sandbox.py`](../datasets/nemotron_ultra/scorers/local_lean_sandbox.py).
+
+`LEAN_KERNEL_GRADER_PACKAGES` adds the fragment
+[`../datasets/lean/lean.Dockerfile`](../datasets/lean/lean.Dockerfile), which installs elan, Lean, Mathlib with its
+prebuilt oleans under `/opt/lean/mathlib`, and Prime Intellect's `lean-export` and
+`lean-verify` under `/opt/lean/verify`, each pinned by checksum or commit. The Lean proof grader
+[`../datasets/lean/lean_grade.py`](../datasets/lean/lean_grade.py) runs `lean` directly with the `LEAN_PATH` the
+build records, so grading needs neither the network nor Lake.
 
 A `dockerfile` fragment is self-contained: it downloads what it installs inside
 its own `RUN` steps, so the build context carries only the lock, the placed
@@ -75,7 +82,7 @@ when converter or bundled scorer code changes.
 
 ```bash
 uv run python -m experiments.post_training.task_curation.images \
-  (--all | --identity IDENTITY_PREFIX ...) [--repository ghcr.io/marin-community/iris-task]
+  (--all | --identity IDENTITY_PREFIX ...) [--repository ghcr.io/marin-community/rollout-images]
 ```
 
 Register a new buildable grader environment in `BUILDABLE_ENVIRONMENTS` in
@@ -127,8 +134,9 @@ identity raises `MissingEnvironmentArtifact` with the build command. The
 environment's identity and built image digest enter every such source's
 artifact identity.
 
-The default repository is the public `iris-task` package: GHCR creates new
-packages org-internal, and Iris workers pull anonymously, so an image in a new
-package never starts on the cluster until the package is made public. Built
-images are separate from the Zephyr worker image, which carries the grading code
-that starts each grader machine.
+New builds use the public `rollout-images` package, shared with evaluation
+rollout images.
+Existing digest references remain valid in their original packages. Iris workers
+pull anonymously, so any replacement repository must be public. Built images are
+separate from the Zephyr worker image, which carries the grading code that starts
+each grader machine.

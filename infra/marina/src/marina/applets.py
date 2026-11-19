@@ -127,6 +127,16 @@ class AppletMode(StrEnum):
     PUBLIC = "public"
 
 
+class IndexFallback(StrEnum):
+    """When a missing applet path is answered with the frontend's index page."""
+
+    NONE = "none"
+    EXTENSIONLESS = "extensionless"
+    """Any-type requests: a final segment with an extension is a missing asset, not a route."""
+    ANY_PATH = "any_path"
+    """Page navigations ask for HTML explicitly, so client routes such as `/runs/model-v0.1` load."""
+
+
 @dataclass(frozen=True)
 class AppletManifest:
     title: str
@@ -1031,14 +1041,17 @@ class AppletStore:
         version: int,
         path: str,
         accept_gzip: bool,
-        accept_html: bool,
+        index_fallback: IndexFallback,
     ) -> StoredFile:
         self.version(applet_id, version)
         requested = path.strip("/")
         candidates = [f"{DIST_PREFIX}{requested}" if requested else INDEX_FILE]
         if requested.endswith("/"):
             candidates.append(f"{DIST_PREFIX}{requested}index.html")
-        elif requested and "." not in PurePosixPath(requested).name and accept_html:
+        elif requested and (
+            index_fallback is IndexFallback.ANY_PATH
+            or (index_fallback is IndexFallback.EXTENSIONLESS and "." not in PurePosixPath(requested).name)
+        ):
             candidates.append(INDEX_FILE)
         for candidate in candidates:
             variants = [(candidate + ".gz", "gzip"), (candidate, None)] if accept_gzip else [(candidate, None)]

@@ -37,7 +37,7 @@ async function loadCoverage() {
     }
     $('domain').value = state.subject;
     renderCoverage();
-    const processed = data.sources.filter(source => source.alignment).length;
+    const processed = data.sources.filter(source => source.alignment?.basis === 'matched').length;
     $('message').textContent = `${number.format(processed)} of ${number.format(data.sources.length)} sources included · ${new Date(data.created_at).toLocaleDateString()}`;
     $('provenance').textContent = JSON.stringify({release_id: data.release_id, curriculum_key: data.curriculum_key, population: data.population, sample_size: data.sample_size, lineage: data.lineage}, null, 2);
     const area = state.nodes.get(`${state.subject}/${state.parent}`);
@@ -75,7 +75,7 @@ function renderCoverage() {
   $('mapped-count').textContent = total ? percent(mapped / total) : '—';
   $('capability-count').textContent = number.format(data.totals.assigned);
   $('broad-count').textContent = `${number.format(data.totals.subject_only)} have a subject-only match`;
-  const sourceCount = data.sources.filter(source => source.alignment && (!$('source').value || source.source_id === $('source').value) && ($('use').value === 'all' || source.alignment.intended_use === $('use').value)).length;
+  const sourceCount = data.sources.filter(source => source.alignment?.basis === 'matched' && (!$('source').value || source.source_id === $('source').value) && ($('use').value === 'all' || source.alignment.intended_use === $('use').value)).length;
   $('source-count').textContent = `${number.format(sourceCount)} processed sources`;
   const selectedSource = data.sources.find(source => source.source_id === $('source').value)?.alignment;
   $('source-ledger').hidden = !selectedSource || selectedSource.input_rows === null;

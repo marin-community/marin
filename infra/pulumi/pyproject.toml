@@ -20,8 +20,6 @@ dependencies = [
 
 [dependency-groups]
 test = [
-    # Root pytest defaults load marin.pytest_timeout_guard before collection.
-    "marin-core",
     "pytest>=8.3.2",
     "pytest-timeout",
     "pytest-xdist",

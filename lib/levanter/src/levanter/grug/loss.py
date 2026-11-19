@@ -12,7 +12,7 @@ import jax.numpy as jnp
 from jax.sharding import PartitionSpec as P
 
 from haliax.jax_utils import named_call
-from levanter.grug.sharding import _axis_names, _current_mesh, _reshard_for_shard_map
+from levanter.grug.sharding import _axis_names, _current_mesh, _reshard_for_shard_map, keep_reduced
 from levanter.kernels.pallas.fused_cross_entropy_loss import (
     BlockSizes,
     fused_cross_entropy_loss_and_logsumexp_penalty,
@@ -152,7 +152,7 @@ def fused_linear_softmax_cross_entropy_loss(
         return _loss_shard(hidden, lm_head, labels, weight_array)
 
     hidden_spec = P(*token_dim_specs, None)
-    lm_head_spec = P(None, None)
+    lm_head_spec = keep_reduced(P(None, None), lm_head)
     label_spec = P(*token_dim_specs)
     hidden = _reshard_for_shard_map(hidden, mesh, hidden_spec)
     lm_head = _reshard_for_shard_map(lm_head, mesh, lm_head_spec)

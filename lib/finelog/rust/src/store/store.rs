@@ -149,7 +149,9 @@ pub fn log_registered_schema() -> Schema {
             Column::new("source", ColumnType::COLUMN_TYPE_STRING, false),
             // Substring-searched via contains()/LIKE.
             Column::new("data", ColumnType::COLUMN_TYPE_STRING, false).with_trigram_index(),
-            Column::new("epoch_ms", ColumnType::COLUMN_TYPE_INT64, false),
+            // Each segment covers a short time span, but the key column is
+            // `key`, so key bounds say nothing about time.
+            Column::new("epoch_ms", ColumnType::COLUMN_TYPE_INT64, false).with_catalog_bounds(),
             Column::new("level", ColumnType::COLUMN_TYPE_INT32, false),
             Column::new("cluster", ColumnType::COLUMN_TYPE_STRING, true),
         ],
@@ -157,10 +159,17 @@ pub fn log_registered_schema() -> Schema {
     )
 }
 
+/// Merge the code-owned `log` schema into `existing` during boot and recovery.
+/// The retained table spec may lack later flags such as `catalog_bounds`.
+fn merge_log_registered_schema(existing: &Schema) -> Result<Schema, StatsError> {
+    merge_schemas(existing, &stored_form(log_registered_schema()))
+}
+
 /// One consistent view of a namespace's sealed local segments: the Arrow schema,
 /// resolved key and known bounds, paths, and lowest `seq`. Captured under one hold
 /// of the insertion lock so all segment metadata describes exactly the same paths.
 pub struct NamespaceSnapshot {
+    pub read_deadline: Option<tokio::time::Instant>,
     pub schema: SchemaRef,
     pub exact_postings_policy: BTreeMap<String, Vec<String>>,
     pub key_column: String,
@@ -328,7 +337,6 @@ impl Store {
             (Some(provider), Some(root)) => Some(Arc::new(CachedObjectStore::new(
                 Arc::new(provider.clone()),
                 root.clone(),
-                Arc::clone(&query_visibility),
                 object_cache_bytes,
             )?) as Arc<dyn ObjectStore>),
             _ => None,
@@ -689,7 +697,10 @@ impl Store {
                 "decode recovered logical schema for {namespace:?}: {error}"
             ))
         })?;
-        let schema = stored_form(schema_from_proto_view(&schema_view)?);
+        let mut schema = stored_form(schema_from_proto_view(&schema_view)?);
+        if namespace == LOG_NAMESPACE_NAME {
+            schema = merge_log_registered_schema(&schema)?;
+        }
         let policy = spec
             .operating_policy
             .as_option()
@@ -779,6 +790,9 @@ impl Store {
                         table_spec_version,
                         source: source.clone(),
                         artifacts: ArtifactReferences::from_catalog_segment(segment),
+                        column_bounds: crate::store::column_bounds::from_proto(
+                            &segment.column_bounds,
+                        ),
                         migration_backfill: segment.migration_backfill.unwrap_or(false),
                         migration_source_id: segment.migration_source_id.clone(),
                         migration_source_rows: segment.migration_source_rows,
@@ -821,11 +835,12 @@ impl Store {
         resolve_key_column(&schema)?;
         let stored = stored_form(schema);
         let policy = self.catalog.get_policy(LOG_NAMESPACE_NAME)?;
-        let stored_for_merge = stored.clone();
-        self.catalog
-            .register_or_evolve(LOG_NAMESPACE_NAME, stored, policy, move |existing| {
-                merge_schemas(existing, &stored_for_merge)
-            })?;
+        self.catalog.register_or_evolve(
+            LOG_NAMESPACE_NAME,
+            stored,
+            policy,
+            merge_log_registered_schema,
+        )?;
         Ok(())
     }
 
@@ -1339,7 +1354,8 @@ impl Store {
 
     /// The process-wide query-visibility lock. Query/FetchLogs handlers hold the
     /// READ side across the full DataFusion scan; structural mutations that
-    /// unlink segments (`drop_table`, compaction/eviction) take the WRITE side.
+    /// unlink legacy segments or drop a table take the WRITE side. Object-cache
+    /// eviction uses per-file pins; object compaction retains immutable inputs.
     /// See the field doc on [`Store`].
     pub fn query_visibility(&self) -> &tokio::sync::RwLock<()> {
         self.tables.query_visibility()
@@ -1383,6 +1399,7 @@ impl Store {
     ) -> Result<NamespaceProvider, StatsError> {
         let provider = NamespaceProvider::build(snapshot.schema, &snapshot.paths, snapshot.indices)
             .map_err(|e| StatsError::Internal(format!("build provider {name:?}: {e}")))?
+            .with_read_deadline(snapshot.read_deadline)
             .with_segment_artifacts(snapshot.artifacts)
             .with_segment_indexes_enabled(segment_indexes_enabled_for(name))
             .with_exact_postings_policy(snapshot.exact_postings_policy)
@@ -1396,19 +1413,6 @@ impl Store {
         })
     }
 
-    /// The tightest maximum query time among the object-backed tables a server
-    /// read plans over, or `None` when it plans over none.
-    ///
-    /// The read's effective deadline may not exceed this: past it the table
-    /// stops promising that objects retired by a newer state are still readable.
-    pub fn object_query_bound(&self) -> Option<Duration> {
-        self.tables
-            .runtimes()
-            .iter()
-            .filter_map(|runtime| runtime.snapshot_query_bound())
-            .min()
-    }
-
     /// Snapshot `name`'s arrow schema alongside one consistent observation of its sealed
     /// segments: the paths a scan may read, and the lowest `seq` those paths hold. Both
     /// describe the same segment set, so a reader can tell a `seq` it simply has not
@@ -1417,6 +1421,7 @@ impl Store {
         let engine = self.tables.require(name)?;
         let segments = engine.query_snapshot()?;
         Ok(NamespaceSnapshot {
+            read_deadline: segments.read_deadline,
             schema: Arc::clone(engine.arrow_schema()),
             exact_postings_policy: engine.schema().exact_postings_policy(),
             key_column: engine.key_column().to_string(),
@@ -1768,6 +1773,7 @@ mod tests {
         partition_field, OperatingPolicy, PartitionField, PartitionSpec, RemoteRetentionPolicy,
         SourceLayout, TableMigrationStatus, TableSpec, TableSpecView,
     };
+    use crate::store::column_bounds::ColumnRange;
     use crate::store::schema::{
         schema_to_arrow, schema_to_proto_owned, with_implicit_cluster, with_implicit_seq,
         CoveringProjection,
@@ -2123,10 +2129,8 @@ mod tests {
         .unwrap();
         let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
         store.write_rows("iris.worker", &ipc, None).unwrap();
-        store
-            .maintain_namespace("iris.worker", false)
-            .await
-            .unwrap();
+        // The backfill skips L0, so compact the segment to L1 first.
+        store.maintain_namespace("iris.worker", true).await.unwrap();
         let before = store.query_snapshot("iris.worker").unwrap();
         let path = before.paths[0].clone();
         assert_eq!(
@@ -2154,7 +2158,7 @@ mod tests {
             .is_empty());
         std::fs::remove_file(&path).unwrap();
 
-        maintenance::run(&runtime, TableWork::KeyBounds)
+        maintenance::run(&runtime, TableWork::SegmentBounds)
             .await
             .unwrap();
         assert!(
@@ -3175,6 +3179,7 @@ mod tests {
             .unwrap()
             .catalog_generation;
 
+        let old_read = store.query_providers(&["iris.worker".into()]).unwrap();
         // Same layout, different operating policy.
         let registration = store
             .register_versioned_table(
@@ -3199,6 +3204,35 @@ mod tests {
             .iter()
             .all(|segment| segment.table_spec_version == 2));
         assert_eq!(store.query_snapshot("iris.worker").unwrap().paths, before);
+        tokio::task::spawn_blocking(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async {
+                tokio::time::pause();
+                let deadline = crate::query::snapshot_deadline(&old_read).unwrap();
+                tokio::time::advance(
+                    deadline.saturating_duration_since(tokio::time::Instant::now())
+                        + Duration::from_millis(1),
+                )
+                .await;
+                let error = crate::query::run_query_over(
+                    &crate::query::make_ctx(),
+                    old_read,
+                    "SELECT * FROM \"iris.worker\"",
+                )
+                .await
+                .err()
+                .expect("the captured snapshot deadline must expire");
+                assert!(
+                    crate::query::is_read_deadline(&error),
+                    "a later policy change must not extend an existing snapshot's lifetime"
+                );
+            });
+        })
+        .await
+        .unwrap();
         assert_eq!(scan_table(&store, "iris.worker").await, 1);
 
         store.shutdown(Duration::from_secs(1)).await;
@@ -4506,6 +4540,51 @@ mod tests {
         std::fs::remove_dir_all(remote_dir).ok();
     }
 
+    /// Tables share `MAX_CONCURRENT_MAINTENANCE_CYCLES` maintenance slots, so a
+    /// table with an L0 backlog waits a full round of every table between
+    /// visits. One visit must therefore drain more than one run, or flushes
+    /// outpace compaction on a busy hub.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn object_backed_cycle_drains_more_than_one_l0_run() {
+        let data_dir = crate::test_support::unique_dir("object_drain_data");
+        let remote_dir = crate::test_support::unique_dir("object_drain_remote");
+        let store = Store::new(
+            Some(data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        store.bootstrap_maintenance();
+        store
+            .register_versioned_table("iris.worker", object_backed_spec(1))
+            .unwrap();
+        store.publish_object_catalog("iris.worker").await.unwrap();
+        let table = store.tables.require("iris.worker").unwrap();
+        // Two full L0 jobs plus one flush, which stays below the count trigger.
+        let flushes = 2 * crate::store::compaction::object_driver::OBJECT_MAX_L0_INPUTS as i64 + 1;
+        for index in 0..flushes {
+            let (_, ipc) = worker_ipc(&[("w", index, index)]);
+            store.write_rows("iris.worker", &ipc, None).unwrap();
+            table.flush().await.unwrap();
+        }
+        assert_eq!(
+            store.query_snapshot("iris.worker").unwrap().paths.len(),
+            flushes as usize
+        );
+
+        store
+            .maintain_namespace("iris.worker", false)
+            .await
+            .unwrap();
+
+        assert_eq!(store.query_snapshot("iris.worker").unwrap().paths.len(), 3);
+        assert_eq!(scan_table(&store, "iris.worker").await, flushes);
+        store.shutdown(Duration::from_secs(1)).await;
+        std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn object_backed_compaction_replaces_inputs_in_one_catalog_generation() {
         let data_dir = crate::test_support::unique_dir("object_compaction_data");
@@ -5223,11 +5302,509 @@ mod tests {
             schema.column("key").unwrap().index.trigram,
             "boot enables the key trigram index a pre-existing namespace lacks"
         );
+        assert!(
+            schema.column("epoch_ms").unwrap().index.catalog_bounds,
+            "boot enables epoch_ms catalog bounds a pre-existing namespace lacks"
+        );
         assert_eq!(
             store.get_policy(LOG_NAMESPACE_NAME).unwrap(),
             seeded_policy,
             "boot evolution must not reset the persisted log policy"
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn catalog_bounds_leave_the_index_policy_fingerprint_unchanged() {
+        // Turning the flag on must not rebuild every index bundle of `log`.
+        let flagged = stored_form(log_registered_schema());
+        let mut plain = flagged.clone();
+        for column in &mut plain.columns {
+            column.index.catalog_bounds = false;
+        }
+        let fingerprint = |schema: Schema| {
+            crate::store::table::segment_format::SegmentFormat::resolve(schema)
+                .unwrap()
+                .index_config("iris.worker")
+                .policy_fingerprint()
+        };
+        assert_eq!(fingerprint(flagged), fingerprint(plain));
+    }
+
+    /// `iris.worker` keyed on `worker_id`, with catalog bounds on `timestamp_ms`.
+    fn time_bounded_worker_spec() -> ValidatedTableSpec {
+        let mut schema = worker_schema_keyed_on("worker_id");
+        for column in &mut schema.columns {
+            if column.name == "timestamp_ms" {
+                column.index.catalog_bounds = true;
+            }
+        }
+        ObjectSpec::new(1).schema(schema).validated()
+    }
+
+    struct TimeBoundedTable {
+        store: Store,
+        data_dir: PathBuf,
+        remote_dir: PathBuf,
+        /// One segment per write, in `timestamp_ms` order: 1000–1500,
+        /// 2000–2500 and 3000–3500.
+        paths: Vec<String>,
+    }
+
+    impl TimeBoundedTable {
+        /// `force_compact_l0` compacts each write's L0 into its own L1 segment,
+        /// the level the bounds backfill reads.
+        async fn new(tag: &str, force_compact_l0: bool) -> Self {
+            let data_dir = crate::test_support::unique_dir(&format!("{tag}_data"));
+            let remote_dir = crate::test_support::unique_dir(&format!("{tag}_remote"));
+            let store = Store::new(
+                Some(data_dir.clone()),
+                remote_dir.to_string_lossy().into_owned(),
+                crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+                ServeMode::Shadow,
+            )
+            .unwrap();
+            store
+                .register_versioned_table("iris.worker", time_bounded_worker_spec())
+                .unwrap();
+            store.publish_object_catalog("iris.worker").await.unwrap();
+            for (worker, start) in [("w-1", 1_000), ("w-2", 2_000), ("w-3", 3_000)] {
+                let (_, ipc) = worker_ipc(&[(worker, 1, start), (worker, 2, start + 500)]);
+                store.write_rows("iris.worker", &ipc, None).unwrap();
+                store
+                    .maintain_namespace("iris.worker", force_compact_l0)
+                    .await
+                    .unwrap();
+            }
+            let paths = store.query_snapshot("iris.worker").unwrap().paths;
+            assert_eq!(paths.len(), 3, "each write flushes its own segment");
+            Self {
+                store,
+                data_dir,
+                remote_dir,
+                paths,
+            }
+        }
+
+        fn clear_column_bounds(&self, path: &str) {
+            let runtime = self.store.tables.require("iris.worker").unwrap();
+            let lease = runtime.controller().begin_compaction().unwrap();
+            runtime
+                .controller()
+                .commit_maintenance(&lease, || {
+                    let revision = self
+                        .store
+                        .catalog
+                        .clear_object_segment_column_bounds("iris.worker", path)?;
+                    Ok((revision, ()))
+                })
+                .unwrap();
+        }
+
+        /// The bounds the catalog records for each segment, in segment order.
+        fn recorded_bounds(&self) -> Vec<Option<ColumnRange>> {
+            let records = self.store.catalog.object_segments("iris.worker").unwrap();
+            self.paths
+                .iter()
+                .map(|path| {
+                    records
+                        .iter()
+                        .find(|record| &record.path == path)
+                        .and_then(|record| record.column_bounds.get("timestamp_ms").copied())
+                })
+                .collect()
+        }
+
+        fn cleanup(self) {
+            std::fs::remove_dir_all(self.data_dir).ok();
+            std::fs::remove_dir_all(self.remote_dir).ok();
+        }
+    }
+
+    /// `timestamp_ms` bounds per segment, sorted, from the catalog and from the
+    /// live query view the planner reads.
+    fn catalog_and_live_bounds(store: &Store) -> (Vec<ColumnRange>, Vec<ColumnRange>) {
+        let collect = |bounds: Vec<Option<ColumnRange>>| {
+            let mut bounds: Vec<_> = bounds
+                .into_iter()
+                .map(|range| range.expect("every segment records timestamp_ms bounds"))
+                .collect();
+            bounds.sort_by_key(|range| format!("{range:?}"));
+            bounds
+        };
+        let catalog = store
+            .catalog
+            .object_segments("iris.worker")
+            .unwrap()
+            .into_iter()
+            .map(|record| record.column_bounds.get("timestamp_ms").copied())
+            .collect();
+        let live = store
+            .tables
+            .require("iris.worker")
+            .unwrap()
+            .live_segments()
+            .into_iter()
+            .map(|segment| segment.column_bounds.get("timestamp_ms").copied())
+            .collect();
+        (collect(catalog), collect(live))
+    }
+
+    fn three_write_bounds() -> Vec<ColumnRange> {
+        vec![
+            ColumnRange::new(1_000, 1_500),
+            ColumnRange::new(2_000, 2_500),
+            ColumnRange::new(3_000, 3_500),
+        ]
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn compaction_carries_column_bounds_through_merge_and_level_bump() {
+        // Compaction runs alone, without the footer backfill that would repair
+        // bounds a compaction dropped.
+        async fn compact(table: &TimeBoundedTable) {
+            let runtime = table.store.tables.require("iris.worker").unwrap();
+            maintenance::run(
+                &runtime,
+                TableWork::Compaction {
+                    force_compact_l0: true,
+                },
+            )
+            .await
+            .unwrap();
+        }
+        let table = TimeBoundedTable::new("column_bounds_compaction", false).await;
+        let runtime = table.store.tables.require("iris.worker").unwrap();
+
+        // The three L0 segments merge into one L1 object.
+        compact(&table).await;
+        assert_eq!(runtime.live_segments().len(), 1);
+        let merged = vec![ColumnRange::new(1_000, 3_500)];
+        assert_eq!(
+            catalog_and_live_bounds(&table.store),
+            (merged.clone(), merged.clone()),
+            "a merge records the union of its inputs' bounds"
+        );
+
+        // A lone L0 segment is promoted to L1 without a rewrite.
+        let (_, ipc) = worker_ipc(&[("w-4", 1, 4_000), ("w-4", 2, 4_500)]);
+        table.store.write_rows("iris.worker", &ipc, None).unwrap();
+        maintenance::run(&runtime, TableWork::Flush).await.unwrap();
+        compact(&table).await;
+        assert!(runtime
+            .live_segments()
+            .iter()
+            .all(|segment| segment.level == 1));
+        let mut expected = merged;
+        expected.push(ColumnRange::new(4_000, 4_500));
+        assert_eq!(
+            catalog_and_live_bounds(&table.store),
+            (expected.clone(), expected),
+            "a level bump keeps its input's bounds"
+        );
+        table.cleanup();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn column_bounds_survive_restart_and_checkpoint_recovery() {
+        let table = TimeBoundedTable::new("column_bounds_restart", true).await;
+        table.store.shutdown(Duration::from_secs(1)).await;
+        let TimeBoundedTable {
+            store,
+            data_dir,
+            remote_dir,
+            ..
+        } = table;
+        drop(store);
+
+        let reopened = Store::new(
+            Some(data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        reopened.bootstrap_maintenance();
+        reopened.recover_tables().await.unwrap();
+        assert_eq!(
+            catalog_and_live_bounds(&reopened),
+            (three_write_bounds(), three_write_bounds()),
+            "a restart on the same disk keeps the bounds"
+        );
+        reopened.shutdown(Duration::from_secs(1)).await;
+        drop(reopened);
+
+        let (recovered, empty_data_dir) =
+            recover_on_empty_disk(&remote_dir, "column_bounds_restart_cold").await;
+        assert_eq!(
+            catalog_and_live_bounds(&recovered),
+            (three_write_bounds(), three_write_bounds()),
+            "recovery from the remote checkpoint keeps the bounds"
+        );
+        recovered.shutdown(Duration::from_secs(1)).await;
+        for dir in [data_dir, empty_data_dir, remote_dir] {
+            std::fs::remove_dir_all(dir).ok();
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn flushed_segments_record_column_bounds() {
+        let table = TimeBoundedTable::new("column_bounds_flushed", false).await;
+        assert_eq!(
+            table.recorded_bounds(),
+            three_write_bounds()
+                .into_iter()
+                .map(Some)
+                .collect::<Vec<_>>()
+        );
+        table.cleanup();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn bounds_backfill_skips_l0_segments() {
+        let table = TimeBoundedTable::new("column_bounds_skip_l0", false).await;
+        for path in &table.paths {
+            table.clear_column_bounds(path);
+        }
+        let runtime = table.store.tables.require("iris.worker").unwrap();
+        let pending = maintenance::run(&runtime, TableWork::SegmentBounds)
+            .await
+            .unwrap();
+
+        assert!(!pending.has_more_work());
+        assert_eq!(table.recorded_bounds(), vec![None, None, None]);
+        table.cleanup();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn maintenance_backfills_column_bounds_from_footers_without_rewriting_objects() {
+        let table = TimeBoundedTable::new("column_bounds_backfill", true).await;
+        let sources_before: Vec<_> = table
+            .store
+            .catalog
+            .object_segments("iris.worker")
+            .unwrap()
+            .into_iter()
+            .map(|record| record.source)
+            .collect();
+        for path in &table.paths {
+            table.clear_column_bounds(path);
+        }
+        let runtime = table.store.tables.require("iris.worker").unwrap();
+        maintenance::run(&runtime, TableWork::SegmentBounds)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            table.recorded_bounds(),
+            three_write_bounds()
+                .into_iter()
+                .map(Some)
+                .collect::<Vec<_>>()
+        );
+        let sources_after: Vec<_> = table
+            .store
+            .catalog
+            .object_segments("iris.worker")
+            .unwrap()
+            .into_iter()
+            .map(|record| record.source)
+            .collect();
+        assert_eq!(
+            sources_after, sources_before,
+            "the backfill reuses each object"
+        );
+        table.cleanup();
+    }
+
+    /// `log` as published before `catalog_bounds` existed: a v1 spec whose
+    /// logical schema lacks the flag, with one flushed segment.
+    async fn log_published_without_catalog_bounds(tag: &str) -> (PathBuf, PathBuf) {
+        let data_dir = crate::test_support::unique_dir(&format!("{tag}_data"));
+        let remote_dir = crate::test_support::unique_dir(&format!("{tag}_remote"));
+        let store = Store::new(
+            Some(data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        let mut v1_schema = log_registered_schema();
+        for column in &mut v1_schema.columns {
+            column.index.catalog_bounds = false;
+        }
+        // Boot already flagged the namespace row; put it back to the pre-flag
+        // schema the v1 spec was published from.
+        let v1_stored = stored_form(v1_schema.clone());
+        store
+            .catalog
+            .register_or_evolve(
+                LOG_NAMESPACE_NAME,
+                v1_stored.clone(),
+                StoragePolicy::default(),
+                move |_| Ok(v1_stored.clone()),
+            )
+            .unwrap();
+        // Registration replaces log's boot runtime, which blocks; the RPC runs it
+        // on a blocking worker.
+        tokio::task::block_in_place(|| {
+            store.register_versioned_table(
+                LOG_NAMESPACE_NAME,
+                ObjectSpec::new(1).schema(v1_schema).validated(),
+            )
+        })
+        .unwrap();
+        store
+            .publish_object_catalog(LOG_NAMESPACE_NAME)
+            .await
+            .unwrap();
+        write_log_rows(&store, 1_000).await;
+        // The backfill skips L0, so compact the segment to L1 first.
+        store
+            .maintain_namespace(LOG_NAMESPACE_NAME, true)
+            .await
+            .unwrap();
+        store
+            .publish_object_catalog(LOG_NAMESPACE_NAME)
+            .await
+            .unwrap();
+        store.shutdown(Duration::from_secs(1)).await;
+        (data_dir, remote_dir)
+    }
+
+    async fn write_log_rows(store: &Store, epoch_ms: i64) {
+        let batch_schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("key", arrow::datatypes::DataType::Utf8, false),
+            arrow::datatypes::Field::new("source", arrow::datatypes::DataType::Utf8, false),
+            arrow::datatypes::Field::new("data", arrow::datatypes::DataType::Utf8, false),
+            arrow::datatypes::Field::new("epoch_ms", arrow::datatypes::DataType::Int64, false),
+            arrow::datatypes::Field::new("level", arrow::datatypes::DataType::Int32, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            batch_schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["/job/a", "/job/a"])),
+                Arc::new(StringArray::from(vec!["stdout", "stdout"])),
+                Arc::new(StringArray::from(vec!["first", "second"])),
+                Arc::new(Int64Array::from(vec![epoch_ms, epoch_ms + 500])),
+                Arc::new(arrow::array::Int32Array::from(vec![0, 0])),
+            ],
+        )
+        .unwrap();
+        let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
+        store.write_rows(LOG_NAMESPACE_NAME, &ipc, None).unwrap();
+        store
+            .maintain_namespace(LOG_NAMESPACE_NAME, false)
+            .await
+            .unwrap();
+    }
+
+    async fn recover_on_empty_disk(remote_dir: &Path, tag: &str) -> (Store, PathBuf) {
+        let empty_data_dir = crate::test_support::unique_dir(tag);
+        let store = Store::new(
+            Some(empty_data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        store
+            .configure_ack_durability(AckDurability::ObjectStore)
+            .unwrap();
+        store.bootstrap_maintenance();
+        assert!(store.recover_tables().await.unwrap() >= 1);
+        (store, empty_data_dir)
+    }
+
+    fn log_epoch_bounds(store: &Store) -> Vec<Option<ColumnRange>> {
+        store
+            .catalog
+            .object_segments(LOG_NAMESPACE_NAME)
+            .unwrap()
+            .into_iter()
+            .map(|record| record.column_bounds.get("epoch_ms").copied())
+            .collect()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn log_recovered_from_a_spec_without_catalog_bounds_keeps_recording_them() {
+        let (data_dir, remote_dir) =
+            log_published_without_catalog_bounds("log_bounds_recovery").await;
+        let (store, empty_data_dir) =
+            recover_on_empty_disk(&remote_dir, "log_bounds_recovery_target").await;
+
+        assert!(
+            store
+                .get_table_schema(LOG_NAMESPACE_NAME)
+                .unwrap()
+                .column("epoch_ms")
+                .unwrap()
+                .index
+                .catalog_bounds,
+            "recovery from a spec without the flag keeps log's code-owned flag"
+        );
+        write_log_rows(&store, 5_000).await;
+        assert!(
+            log_epoch_bounds(&store).contains(&Some(ColumnRange::new(5_000, 5_500))),
+            "a segment flushed after recovery records epoch_ms bounds"
+        );
+
+        store.shutdown(Duration::from_secs(1)).await;
+        for dir in [data_dir, empty_data_dir, remote_dir] {
+            std::fs::remove_dir_all(dir).ok();
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn recovered_log_flag_publishes_no_spec_on_maintenance_or_reregistration() {
+        // The recovered runtime carries `catalog_bounds` while the retained spec
+        // does not; neither later maintenance nor re-registering log's schema
+        // may turn that difference into a new spec version.
+        let (data_dir, remote_dir) =
+            log_published_without_catalog_bounds("log_bounds_spec_stable").await;
+        let (store, empty_data_dir) =
+            recover_on_empty_disk(&remote_dir, "log_bounds_spec_stable_target").await;
+        let active_version = |store: &Store| {
+            store
+                .spec_lifecycle(LOG_NAMESPACE_NAME)
+                .unwrap()
+                .active_version()
+        };
+        assert_eq!(active_version(&store), 1);
+
+        let runtime = store.tables.require(LOG_NAMESPACE_NAME).unwrap();
+        maintenance::run(&runtime, TableWork::SegmentBounds)
+            .await
+            .unwrap();
+        store
+            .maintain_namespace(LOG_NAMESPACE_NAME, false)
+            .await
+            .unwrap();
+        store.ensure_log_namespace_schema().unwrap();
+        tokio::task::block_in_place(|| {
+            store.register_table(
+                LOG_NAMESPACE_NAME,
+                log_registered_schema(),
+                store.get_policy(LOG_NAMESPACE_NAME).unwrap(),
+            )
+        })
+        .unwrap();
+
+        assert_eq!(active_version(&store), 1, "no new spec version");
+        assert!(store
+            .spec_lifecycle(LOG_NAMESPACE_NAME)
+            .unwrap()
+            .desired
+            .is_none());
+        assert_eq!(
+            log_epoch_bounds(&store),
+            vec![Some(ColumnRange::new(1_000, 1_500))],
+            "the backfill records the pre-recovery segment's bounds from its footer"
+        );
+
+        store.shutdown(Duration::from_secs(1)).await;
+        for dir in [data_dir, empty_data_dir, remote_dir] {
+            std::fs::remove_dir_all(dir).ok();
+        }
     }
 }

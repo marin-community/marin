@@ -286,6 +286,7 @@ class Overlay:
                 node_name=_last_non_null(old.node_name, delta.node_name),
                 terminal_reason=_last_non_null(old.terminal_reason, delta.terminal_reason),
                 output_archive=_last_non_null(old.output_archive, delta.output_archive),
+                topology=_last_non_null(old.topology, delta.topology),
             )
         self._effects.attempts[key] = merged
         # The job-wide failure budget counts FAILED attempt deltas (job_basis); a

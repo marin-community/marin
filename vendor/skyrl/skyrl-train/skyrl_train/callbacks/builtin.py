@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Type
 
 from loguru import logger
+from shellbox.backends.daytona.machine import DaytonaImageBuild
 from omegaconf import DictConfig, OmegaConf
 
 from skyrl_train.config.callbacks import has_explicit_callbacks, hf_export_destination_configured
@@ -46,8 +47,16 @@ from skyrl_train.inference_observability import (
 )
 
 from skyrl_train.mismatch_probe.callback import MismatchProbeCallback
+from skyrl_train.callbacks.reference_likelihood import ReferenceLikelihoodCallback
 
-from .base import TrainerCallback, TrainerState, TrainerControl, CallbackHandler
+from .base import (
+    CallbackHandler,
+    TrainerCallback,
+    TrainerControl,
+    TrainerState,
+    checkpoint_save_allowed,
+    validate_save_after_fraction,
+)
 from .types import (
     CallbackErrorBehavior,
     CHECKPOINT_CALLBACK_TYPE,
@@ -56,7 +65,7 @@ from .types import (
 
 # Registry mapping callback type names to classes
 # This enables YAML-based callback configuration
-CALLBACK_REGISTRY: Dict[str, Type[TrainerCallback]] = {}
+CALLBACK_REGISTRY: Dict[str, Type[TrainerCallback]] = {"reference_likelihood": ReferenceLikelihoodCallback}
 
 
 def register_callback(name: str):
@@ -102,11 +111,14 @@ class CheckpointCallback(TrainerCallback):
     Args:
         save_steps: Save a checkpoint every N steps. Set to -1 or 0 to disable.
         save_on_train_end: Whether to save a final checkpoint when training ends.
+        save_after_fraction: Suppress saves before this fraction of planned updates, including early termination.
     """
 
-    def __init__(self, save_steps: int = 10, save_on_train_end: bool = True):
+    def __init__(self, save_steps: int = 10, save_on_train_end: bool = True, save_after_fraction: float = 0.0):
+        validate_save_after_fraction(save_after_fraction)
         self.save_steps = save_steps
         self.save_on_train_end = save_on_train_end
+        self.save_after_fraction = save_after_fraction
 
     def on_step_end(
         self,
@@ -114,7 +126,11 @@ class CheckpointCallback(TrainerCallback):
         control: TrainerControl,
         **kwargs,
     ) -> Optional[TrainerControl]:
-        if self.save_steps > 0 and state.global_step % self.save_steps == 0:
+        if (
+            self.save_steps > 0
+            and state.global_step % self.save_steps == 0
+            and checkpoint_save_allowed(state, self.save_after_fraction)
+        ):
             control.should_save = True
         return control
 
@@ -124,7 +140,7 @@ class CheckpointCallback(TrainerCallback):
         control: TrainerControl,
         **kwargs,
     ) -> Optional[TrainerControl]:
-        if self.save_on_train_end and self.save_steps > 0:
+        if self.save_on_train_end and self.save_steps > 0 and checkpoint_save_allowed(state, self.save_after_fraction):
             control.should_save = True
         return control
 
@@ -195,30 +211,65 @@ class BestCheckpointCallback(TrainerCallback):
 
     error_behavior = CallbackErrorBehavior.RAISE
 
-    def __init__(self, *, initial_model_uri: str, expected_tasks: int, minimum_scored_tasks: int):
+    def __init__(
+        self,
+        *,
+        initial_model_uri: str,
+        expected_tasks: int,
+        minimum_scored_tasks: int,
+        selection_metric: str = "eval/all/avg_verifier_score",
+        save_after_fraction: float = 0.0,
+        preservation_max_drop: dict[str, float] | None = None,
+    ):
+        validate_save_after_fraction(save_after_fraction)
         self.initial_model_uri = initial_model_uri
         self.expected_tasks = expected_tasks
         self.minimum_scored_tasks = minimum_scored_tasks
         self.best_score: float | None = None
+        self.selection_metric = selection_metric
+        self.save_after_fraction = save_after_fraction
+        self.preservation_max_drop = dict(preservation_max_drop or {})
+        if any(not math.isfinite(drop) or drop < 0 for drop in self.preservation_max_drop.values()):
+            raise ValueError("Preservation drops must be finite and nonnegative")
+        self.preservation_baseline: dict[str, float] = {}
 
     async def on_evaluate_async(self, state, control, *, metrics, trainer, **kwargs):
         root = trainer.cfg.trainer.ckpt_path
         best_path = join_resource_path(root, BEST_CHECKPOINT_FILENAME)
         if self.best_score is None and io.exists(best_path):
             with io.open_file(best_path, "r") as stream:
-                self.best_score = json.load(stream)["accuracy"]
+                saved = json.load(stream)
+                self.best_score = saved["accuracy"]
+                self.preservation_baseline = saved.get("preservation_baseline", {})
         attempted = metrics["eval/all/num_attempted"]
         scored = metrics["eval/all/num_scored"]
-        if (
+        ineligible = (
             attempted != self.expected_tasks
             or scored < self.minimum_scored_tasks
             or not metrics.get("eval/selection_eligible", 1.0)
-        ):
+        )
+        if state.global_step == 0 and self.preservation_max_drop and ineligible:
+            raise ValueError("Preservation-gated selection requires an eligible step-zero evaluation")
+        if ineligible:
             return control
-        score = metrics["eval/all/avg_verifier_score"]
+        if state.global_step == 0:
+            self.preservation_baseline = {key: metrics[key] for key in self.preservation_max_drop}
+            if any(not math.isfinite(value) for value in self.preservation_baseline.values()):
+                raise ValueError("Preservation baseline must be finite")
+        if set(self.preservation_baseline) != set(self.preservation_max_drop):
+            raise ValueError("Preservation-gated selection requires step-zero evaluation or restored baseline")
+        for key, maximum_drop in self.preservation_max_drop.items():
+            value = metrics[key]
+            if not math.isfinite(value):
+                raise ValueError(f"Nonfinite preservation metric: {key}")
+            if value < self.preservation_baseline[key] - maximum_drop:
+                return control
+        score = metrics[self.selection_metric]
         if not math.isfinite(score) or not 0 <= score <= 1:
             raise ValueError("Best-checkpoint selection requires a finite normalized verifier score")
         if self.best_score is not None and score <= self.best_score:
+            return control
+        if state.global_step and not checkpoint_save_allowed(state, self.save_after_fraction):
             return control
         model_uri = self.initial_model_uri
         model_format = "hf"
@@ -235,7 +286,11 @@ class BestCheckpointCallback(TrainerCallback):
             "scored": scored,
             "model_uri": model_uri,
             "model_format": model_format,
-            "selection": "Highest valid normalized verifier score; keep the earliest checkpoint on ties",
+            "selection": "Highest eligible selected metric; keep the earliest checkpoint on ties",
+            "selection_metric": self.selection_metric,
+            "preservation_baseline": self.preservation_baseline,
+            "preservation_max_drop": self.preservation_max_drop,
+            "save_after_fraction": self.save_after_fraction,
         }
         io.makedirs(root, exist_ok=True)
         io.write_bytes_atomic(best_path, json.dumps(payload).encode())
@@ -251,6 +306,12 @@ class HarborEvaluationCallback(TrainerCallback):
 
     def __init__(self, *, cohorts: list[dict], timeout: float, minimum_coverage: float, daytona_api_key_env: str):
         self.cohorts = OmegaConf.to_container(cohorts, resolve=True) if OmegaConf.is_config(cohorts) else cohorts
+        # Per-sandbox declarative builds are limited to standalone evals for now; reject them
+        # before the trainer acquires resources.
+        for cohort in self.cohorts:
+            kwargs = cohort["job"].get("environment", {}).get("kwargs", {})
+            if kwargs.get("image_build", DaytonaImageBuild.SNAPSHOT) != DaytonaImageBuild.SNAPSHOT:
+                raise ValueError(f"Harbor validation cohort {cohort['name']} requires Daytona snapshot image builds")
         self.timeout = timeout
         self.minimum_coverage = minimum_coverage
         self.daytona_api_key_env = daytona_api_key_env
@@ -427,11 +488,14 @@ class HFModelSaveCallback(TrainerCallback):
         save_steps: Request an HF export every N steps. Set to -1 or 0 to request only the
             terminal export.
         save_on_train_end: Whether to request a final HF export when training ends.
+        save_after_fraction: Suppress exports before this fraction of planned updates, including early termination.
     """
 
-    def __init__(self, save_steps: int = -1, save_on_train_end: bool = True):
+    def __init__(self, save_steps: int = -1, save_on_train_end: bool = True, save_after_fraction: float = 0.0):
+        validate_save_after_fraction(save_after_fraction)
         self.save_steps = save_steps
         self.save_on_train_end = save_on_train_end
+        self.save_after_fraction = save_after_fraction
 
     def on_step_end(
         self,
@@ -439,7 +503,11 @@ class HFModelSaveCallback(TrainerCallback):
         control: TrainerControl,
         **kwargs,
     ) -> Optional[TrainerControl]:
-        if self.save_steps > 0 and state.global_step % self.save_steps == 0:
+        if (
+            self.save_steps > 0
+            and state.global_step % self.save_steps == 0
+            and checkpoint_save_allowed(state, self.save_after_fraction)
+        ):
             control.should_save_hf_model = True
         return control
 
@@ -449,7 +517,7 @@ class HFModelSaveCallback(TrainerCallback):
         control: TrainerControl,
         **kwargs,
     ) -> Optional[TrainerControl]:
-        if self.save_on_train_end:
+        if self.save_on_train_end and checkpoint_save_allowed(state, self.save_after_fraction):
             control.should_save_hf_model = True
         return control
 

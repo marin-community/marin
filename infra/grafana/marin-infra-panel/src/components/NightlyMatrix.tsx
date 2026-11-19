@@ -10,7 +10,7 @@ interface Props { frames: DataFrame[]; width: number; height: number }
 
 const GROUP_NAMES: Record<string, string> = { marin: 'Marin', forks: 'Forks' };
 const SUBGROUP_NAMES: Record<string, string> = { training: 'Training', data: 'Data', cluster: 'Cluster', evaluation: 'Evaluation', rl: 'RL', inference: 'Inference' };
-const SUMMARY_ORDER = ['passed', 'running', 'slow', 'failed', 'no run', 'data unavailable', 'not due'];
+const SUMMARY_ORDER = ['passed', 'running', 'slow', 'failed', 'skipped', 'no run', 'data unavailable', 'not due'];
 
 function formatDuration(seconds?: number): string {
   if (seconds === undefined) {return '—';}
@@ -36,6 +36,7 @@ function status(cell: NightlyCell): { icon: string; tone: string; label: string;
     }
     return { icon: '✓', tone: '#064e3b', label: 'Passed', summary: 'passed' };
   }
+  if (cell.state === 'skipped') {return { icon: '⊘', tone: '#475569', label: 'Skipped (no capacity)', summary: 'skipped' };}
   if (cell.state === 'missing') {return { icon: '!', tone: '#9f1239', label: 'No run', summary: 'no run' };}
   if (cell.state === 'unavailable') {return { icon: '?', tone: '#9a3412', label: 'Data unavailable', summary: 'data unavailable' };}
   if (cell.state === 'not-yet-due') {return { icon: '◷', tone: '#475569', label: 'Not due', summary: 'not due' };}
@@ -80,7 +81,7 @@ export function NightlyMatrix({ frames, width, height }: Props) {
     <section className={css`width:${width}px;min-height:${height}px;color:${theme.colors.text.primary};padding:2px 4px;`} aria-label="Nightly regression status">
       <div className={css`display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline;justify-content:space-between;margin:0 2px 5px;font-size:13px;color:${theme.colors.text.secondary};`}>
         <span><strong className={css`color:${theme.colors.text.primary};font-size:16px;`}>Nightly regressions</strong>{todaySummary && ` · Today: ${todaySummary}`}</span>
-        <span role="note" aria-label="Nightly state legend">✓ Passed · ↻ Running · ⚠ Slow · × Failed · ! No run · ? Data unavailable · ◷ Not due</span>
+        <span role="note" aria-label="Nightly state legend">✓ Passed · ↻ Running · ⚠ Slow · × Failed · ⊘ Skipped · ! No run · ? Data unavailable · ◷ Not due</span>
       </div>
       <table className={css`width:100%;border-collapse:separate;border-spacing:2px;table-layout:fixed;font-size:12px;`}>
         <caption className={css`position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);`}>Seven UTC days of scheduled regression status and duration by lane</caption>

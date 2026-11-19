@@ -50,6 +50,7 @@ provisioning:
   coreweave:
     cluster: { name: marin-gpu, zone: US-EAST-02A }
     kueue:
+      cpu_scale_group: cpu-genoa
       flavor_topology: infiniband  # H100 IB cluster: bind the flavor to the infiniband topology
     ingress:
       ingress_class: traefik
@@ -66,6 +67,12 @@ provisioning:
       usernames:
         - cwtoken-uhBSRqWXRtyV7WWciRtYr-loom-token
         - cwtoken-umHabiNiEWJbDFZqyTwbP-ops-loom-token
+    sandbox_runtime:
+      handler: cw-gvisor-cpu
+      node_selector:
+        iris-cw-use02a-scale-group: cpu-genoa
+        node.coreweave.cloud/gvisor: "true"
+        node.coreweave.cloud/container-runtime.cw-gvisor-cpu: "true"
 
 platform:
   label_prefix: cw-use02a
@@ -116,12 +123,15 @@ auth:
   allowed_submitters:
     - principal:human-080
     - "*@openathena.ai"
-    - contractor@hai-gcp-models.iam.gserviceaccount.com
+    - principal:human-076
+    - iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
     - ravwojdyla@rav-openathena.iam.gserviceaccount.com
     - morrisy@stanford.edu
+    - wg0420@princeton.edu
 
 kubernetes_provider:
   namespace: iris
+  sandbox_runtime_class: iris-gvisor-cpu
   node_health:
     storage:
       scratch: s3://marin-us-east-08a/tmp/ttl=1d/iris-node-health/cw-us-east-02a

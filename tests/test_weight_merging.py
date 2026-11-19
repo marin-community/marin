@@ -20,6 +20,8 @@ from marin.merging.curvature import ota_merge_tensor
 from marin.merging.geometry import weight_update_gram
 from marin.merging.learned import differentiable_weight_blend
 
+ROUTER_BIAS_PATTERN = r"model\.layers\.(?:[0-9]|1[0-9]|2[0-5])\.mlp\.router\.bias"
+
 
 @pytest.mark.parametrize("chunk_elements", [1, 2, 10])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
@@ -329,3 +331,103 @@ def test_dare_ties_trims_after_dropping_with_independent_density():
         tensor_name="weight",
     )
     torch.testing.assert_close(result, torch.tensor([0.0, 4.5, 0.0, 0.0]), rtol=0, atol=0)
+
+
+@pytest.mark.parametrize(
+    "method,expected",
+    [
+        (MergeMethod.AVERAGE, 1.5),
+        (MergeMethod.TASK_ARITHMETIC, 1.5),
+        (MergeMethod.TIES, 3.0),
+        (MergeMethod.DARE_LINEAR, 1.5),
+        (MergeMethod.DARE_TIES, 3.0),
+    ],
+)
+@pytest.mark.parametrize("donor_bias_dtype,donor_dtype_name", [(torch.bfloat16, "bfloat16"), (torch.float16, "float16")])
+def test_checkpoint_merge_widens_allowlisted_router_bias_and_records_policy(
+    tmp_path, method, expected, donor_bias_dtype, donor_dtype_name
+):
+    bias = "model.layers.25.mlp.router.bias"
+    weight = "model.layers.25.mlp.router.weight"
+    sources = []
+    for label, bias_dtype, value in (("anchor", torch.float32, 1.0), ("donor", donor_bias_dtype, 3.0)):
+        folder = tmp_path / label
+        folder.mkdir()
+        tensors = {
+            bias: torch.full((256,), value, dtype=bias_dtype),
+            weight: torch.full((2, 2), value, dtype=torch.bfloat16),
+        }
+        safetensors.torch.save_file(tensors, folder / "weights.safetensors")
+        (folder / "model.safetensors.index.json").write_text(
+            json.dumps({"weight_map": {key: "weights.safetensors" for key in tensors}})
+        )
+        sources.append(CheckpointSource(str(folder), label))
+    donor_shard = tmp_path / "donor" / "weights.safetensors"
+    original_donor_shard = donor_shard.read_bytes()
+    # Round-trip the JSON recipe representation used by the command-line launcher.
+    donor_config = json.loads(
+        json.dumps(
+            {
+                "path": sources[1].path,
+                "revision": "donor",
+                "dtype_widenings": {ROUTER_BIAS_PATTERN: [donor_dtype_name, "float32"]},
+            }
+        )
+    )
+    donor = CheckpointSource(**donor_config)
+    output = tmp_path / "merged"
+    merge_checkpoint(
+        sources[0],
+        [donor],
+        str(output),
+        MergeParameters(method, (0.25,), 1, 1, 0),
+        code_revision="fixture",
+        preserve_rows={},
+        tensor_coefficients={},
+        row_overrides={},
+    )
+    reader = CheckpointReader(CheckpointSource(str(output), "merged"))
+    torch.testing.assert_close(reader.tensor(bias), torch.full((256,), expected), rtol=0, atol=0)
+    torch.testing.assert_close(reader.tensor(weight), torch.full((2, 2), expected, dtype=torch.bfloat16), rtol=0, atol=0)
+    manifest = json.loads((output / "merge-manifest.json").read_text())
+    assert manifest["donors"][0]["dtype_widenings"] == donor_config["dtype_widenings"]
+    assert donor_shard.read_bytes() == original_donor_shard
+
+
+@pytest.mark.parametrize(
+    "key,allowlist",
+    [
+        ("model.layers.0.mlp.router.bias", {}),
+        ("model.layers.26.mlp.router.bias", {ROUTER_BIAS_PATTERN: ("bfloat16", "float32")}),
+        ("model.layers.0.mlp.router.weight", {ROUTER_BIAS_PATTERN: ("bfloat16", "float32")}),
+    ],
+)
+def test_checkpoint_merge_rejects_dtype_mismatch_outside_allowlist(tmp_path, key, allowlist):
+    sources = []
+    for label, dtype in (("anchor", torch.float32), ("donor", torch.bfloat16)):
+        folder = tmp_path / label
+        folder.mkdir()
+        safetensors.torch.save_file({key: torch.ones(256, dtype=dtype)}, folder / "weights.safetensors")
+        (folder / "model.safetensors.index.json").write_text(json.dumps({"weight_map": {key: "weights.safetensors"}}))
+        sources.append(CheckpointSource(str(folder), label, allowlist if label == "donor" else {}))
+    with pytest.raises(ValueError):
+        merge_checkpoint(
+            sources[0],
+            sources[1:],
+            str(tmp_path / "output"),
+            MergeParameters(MergeMethod.AVERAGE, (0.1,), 1, 1, 0),
+            code_revision="fixture",
+            preserve_rows={},
+            tensor_coefficients={},
+            row_overrides={},
+        )
+
+
+def test_checkpoint_reader_rejects_misdeclared_widening_dtype(tmp_path):
+    key = "model.layers.0.mlp.router.bias"
+    safetensors.torch.save_file({key: torch.ones(2, dtype=torch.bfloat16)}, tmp_path / "weights.safetensors")
+    (tmp_path / "model.safetensors.index.json").write_text(json.dumps({"weight_map": {key: "weights.safetensors"}}))
+    source = CheckpointSource(str(tmp_path), "donor", {ROUTER_BIAS_PATTERN: ("float16", "float32")})
+
+    with pytest.raises(ValueError):
+        CheckpointReader(source).tensor(key)

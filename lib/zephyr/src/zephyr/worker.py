@@ -30,7 +30,15 @@ from zephyr.stats import (
     ZephyrWorkerStatStatus,
     _push_iris_task_status,
 )
-from zephyr.worker_context import CounterEntry, CounterSnapshot, RunnerSnapshot, ShardProgress, merge_counter_entries
+from zephyr.worker_context import (
+    CounterEntry,
+    CounterKey,
+    CounterSnapshot,
+    RunnerSnapshot,
+    ShardProgress,
+    counters_by_name,
+    merge_counter_entries,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,11 +59,11 @@ class _ActiveShard:
     attempt: int
     stage_generation: int
     attempt_id: str = field(default_factory=lambda: uuid.uuid4().hex)
-    last_counters: dict[str, CounterEntry] = field(default_factory=dict)
+    last_counters: dict[CounterKey, CounterEntry] = field(default_factory=dict)
 
 
-def _counter_values(counters: dict[str, CounterEntry]) -> dict[str, int | float]:
-    return {name: entry.value for name, entry in counters.items()}
+def _counter_values(counters: dict[CounterKey, CounterEntry]) -> dict[str, int | float]:
+    return {name: entry.value for name, entry in counters_by_name(counters.items()).items()}
 
 
 def _shard_progress(active: _ActiveShard, snapshot: RunnerSnapshot, now: float) -> ShardProgress:
@@ -66,7 +74,8 @@ def _shard_progress(active: _ActiveShard, snapshot: RunnerSnapshot, now: float) 
         elapsed_seconds=max(0, now - active.start_time),
         records_in=int(
             snapshot.counters.get(
-                stage_counters.RECORDS_IN, CounterEntry(progress.completed if progress is not None else 0)
+                CounterKey(None, stage_counters.RECORDS_IN),
+                CounterEntry(progress.completed if progress is not None else 0),
             ).value
         ),
         input_rows_completed=progress.completed if progress is not None else None,
@@ -112,7 +121,7 @@ class ZephyrWorker:
         self._stage_runner_factory = stage_runner_factory
         self._shutdown_event = threading.Event()
         self._counter_generation = 0
-        self._last_reported_counters: dict[str, dict[str, CounterEntry]] = {}
+        self._last_reported_counters: dict[str, dict[CounterKey, CounterEntry]] = {}
         self._active_shards: list[_ActiveShard] = []
 
         # Resource pool: each accepted task deducts its cost and restores it on
@@ -363,7 +372,7 @@ class ZephyrWorker:
         self,
         active_shard: _ActiveShard,
         status: ZephyrWorkerStatStatus,
-        counters: dict[str, CounterEntry],
+        counters: dict[CounterKey, CounterEntry],
     ) -> None:
         with self._resources_lock:
             if not counters:
@@ -391,11 +400,12 @@ class ZephyrWorker:
         stage = active[-1].task.stage_name if active else ""
         return _format_worker_status_md(len(active), stage)
 
-    def _report_shuffle_sizes(self, active: _ActiveShard, counters: dict[str, CounterEntry]) -> None:
+    def _report_shuffle_sizes(self, active: _ActiveShard, counters: dict[CounterKey, CounterEntry]) -> None:
+        stage = active.task.stage_name
         keys = (
-            stage_counters.SHUFFLE_INPUT_ROWS,
-            stage_counters.SHUFFLE_PAYLOAD_BYTES,
-            stage_counters.SHUFFLE_NUM_SOURCES,
+            CounterKey(stage, stage_counters.SHUFFLE_INPUT_ROWS),
+            CounterKey(stage, stage_counters.SHUFFLE_PAYLOAD_BYTES),
+            CounterKey(stage, stage_counters.SHUFFLE_NUM_SOURCES),
         )
         if not all(key in counters for key in keys):
             return
@@ -431,14 +441,14 @@ class ZephyrWorker:
 
     def _heartbeat_counter_snapshots(self) -> dict[str, CounterSnapshot] | None:
         """Return live shard progress and counters, grouped by pipeline execution."""
-        entries_by_execution: dict[str, list[tuple[str, CounterEntry]]] = defaultdict(list)
+        entries_by_execution: dict[str, list[tuple[CounterKey, CounterEntry]]] = defaultdict(list)
         shards_by_execution: dict[str, dict[int, ShardProgress]] = defaultdict(dict)
         with self._resources_lock:
             for active_shard in self._active_shards:
                 snapshot = active_shard.runner.live_snapshot()
                 counters = snapshot.counters
                 active_shard.last_counters = dict(counters)
-                if ZEPHYR_WORKER_MEM_CURRENT_KEY in counters:
+                if CounterKey(active_shard.task.stage_name, ZEPHYR_WORKER_MEM_CURRENT_KEY) in counters:
                     self._stats_writer.emit_worker_stat(
                         active_shard.task.stage_name,
                         active_shard.task.shard_idx,
@@ -515,7 +525,7 @@ class ZephyrWorker:
         chunk_prefix: str,
         execution_id: str,
         stage_runner: StageRunner,
-    ) -> tuple[TaskResult, dict[str, CounterEntry]]:
+    ) -> tuple[TaskResult, dict[CounterKey, CounterEntry]]:
         logger.info(
             "[%s] [shard %d/%d] stage=%s, %d ops",
             execution_id,

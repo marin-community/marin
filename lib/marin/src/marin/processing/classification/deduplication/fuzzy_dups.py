@@ -37,6 +37,7 @@ from pydantic import BaseModel
 from zephyr import counters
 from zephyr.context import MAX_IRIS_WORKER_REPLICAS, ZephyrContext
 from zephyr.dataset import Dataset
+from zephyr.readers import iter_parquet_row_groups
 from zephyr.worker_context import zephyr_worker_ctx
 from zephyr.writers import write_parquet_file
 
@@ -50,7 +51,6 @@ from marin.datakit.source_key import DatakitArtifactPath, datakit_source_key
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.connected_components import connected_components
-from marin.processing.classification.deduplication.dedup_commons import _load_batches
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData, MinHashParams
 
 logger = logging.getLogger(__name__)
@@ -153,7 +153,7 @@ def _strip_cc_prefix(record_id: str) -> str:
 def _emit_bucket_records(entries: list[CopartitionedShard]) -> Iterator[dict]:
     """For each (bucket, id) pair across all attr shards in *entries*, emit a routing record."""
     for entry in entries:
-        for batch in _load_batches(entry.input_path, columns=["id", "buckets"]):
+        for batch in iter_parquet_row_groups(entry.input_path, columns=["id", "buckets"]):
             ids = batch["id"]
             # String-encoded and uint64 attrs must map to the same shuffle key: str and int
             # keys never meet in the LSH group_by, so mixing them would silently drop links.

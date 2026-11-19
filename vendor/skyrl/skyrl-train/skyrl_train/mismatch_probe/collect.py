@@ -9,6 +9,7 @@ import random
 import time
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from functools import partial
 
 import numpy as np
 import ray
@@ -27,6 +28,7 @@ from skyrl_train.config.mismatch_probe import (
     trainer_label,
 )
 from skyrl_train.distributed.dispatch import concatenate_outputs_after_mesh_dispatch
+from skyrl_train.evaluation_pool import EvaluationPool
 from skyrl_train.group_admission import GroupAdvantageInvariant, GroupAdvantageKind
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 from skyrl_train.inference_engines.vllm_teacher_oracle import tokenizer_vocabulary_fingerprint
@@ -156,30 +158,46 @@ class ProbeCollector:
                 f"mismatch probe requested {count} validation prompts but only {len(trainer.eval_dataset)} exist"
             )
         prompts = trainer.eval_dataset.collate_fn([trainer.eval_dataset[i] for i in range(count)])
-        batches = []
         seeds = []
         sample_ids = []
         uids = []
+        generator = trainer.cfg.generator
+        concurrency = min(
+            int(trainer.cfg.trajectory_runner.max_concurrent_tasks),
+            int(generator.num_inference_engines)
+            * int(generator.inference_engine_data_parallel_size)
+            * int(generator.max_num_seqs),
+            count * samples,
+        )
+        logger.info("Mismatch probe generation: prompts={} samples={} max_in_flight={}", count, samples, concurrency)
         await trainer.trajectory_runner.start_eval_session(
             run_name=trainer.cfg.trainer.get("run_name") or "mismatch-probe",
             eval_step=trainer.global_step,
             val_set_name="mismatch-probe",
         )
         try:
-            for prompt in prompts:
-                for repetition in range(samples):
-                    seed = request_seed(int(self.spec.seed), prompt["uid"], repetition)
-                    sampling = get_sampling_params_for_backend(
-                        trainer.cfg.generator.backend, trainer.cfg.generator.sampling_params
-                    )
-                    sampling["seed"] = seed
-                    request, _ = prepare_trajectory_request([prompt], 1, sampling, "eval", 0)
-                    request.trajectory_ids[0].repetition_id = repetition
-                    batch = await trainer.trajectory_runner.run(request)
-                    batches.append(batch)
-                    seeds.append(seed)
-                    sample_ids.append(f"{prompt['uid']}:{repetition}")
-                    uids.append(prompt["uid"])
+            async with EvaluationPool(concurrency) as pool:
+                async with asyncio.TaskGroup() as group:
+                    tasks = []
+                    for prompt in prompts:
+                        for repetition in range(samples):
+                            seed = request_seed(int(self.spec.seed), prompt["uid"], repetition)
+                            sampling = get_sampling_params_for_backend(
+                                trainer.cfg.generator.backend, trainer.cfg.generator.sampling_params
+                            )
+                            sampling["seed"] = seed
+                            request, _ = prepare_trajectory_request([prompt], 1, sampling, "eval", 0)
+                            request.trajectory_ids[0].repetition_id = repetition
+                            tasks.append(
+                                group.create_task(
+                                    pool.run("mismatch-probe", partial(trainer.trajectory_runner.run, request))
+                                )
+                            )
+                            seeds.append(seed)
+                            sample_ids.append(f"{prompt['uid']}:{repetition}")
+                            uids.append(prompt["uid"])
+                # Completion order must not change the frozen bank's sample positions.
+                batches = [task.result() for task in tasks]
         finally:
             await trainer.trajectory_runner.stop_eval_session()
         trajectory = concatenate_trajectory_batches(

@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from harbor.utils.env import (
+from harbor_config.env import (
     get_required_host_vars,
     parse_bool_env_value,
     resolve_env_vars,

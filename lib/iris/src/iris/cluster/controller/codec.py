@@ -198,13 +198,17 @@ def reconstruct_launch_job_request(
         req.submit_argv.append(arg)
 
     if job.has_coscheduling:
-        req.coscheduling.CopyFrom(job_pb2.CoschedulingConfig(group_by=job.coscheduling_group_by))
+        req.coscheduling.CopyFrom(
+            job_pb2.CoschedulingConfig(group_by=job.coscheduling_group_by, group_sizes=job.coscheduling_group_sizes)
+        )
 
     if job.scheduling_timeout_ms is not None and job.scheduling_timeout_ms > 0:
         req.scheduling_timeout.milliseconds = job.scheduling_timeout_ms
 
     if job.timeout_ms is not None and job.timeout_ms > 0:
         req.timeout.milliseconds = job.timeout_ms
+
+    req.termination_grace.milliseconds = job.termination_grace_ms
 
     return req
 

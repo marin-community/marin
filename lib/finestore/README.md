@@ -115,6 +115,13 @@ destination file to avoid another complete copy. A transaction's `max_bytes` lim
 still applies; `FineStoreDirectory` treats its byte limit as a multi-file batch target
 and admits one larger file.
 
+`ReadView.blob_metadata(name)` reads a named object's metadata from the same pinned
+snapshot as its bytes. It returns `None` for an absent object and a dictionary for
+an existing object. `EvaluationStore.add_source_artifacts` commits one attempt's
+native files and their metadata together, including chunked files that exceed the
+normal transaction buffer limit. A caller can publish completion after this method
+returns; a failed transaction publishes none of its files.
+
 Blob descriptor shards use at most 1024 rows per row group; ordinary tables retain
 their 16,384-row limit. Named-object lookups scan descriptors in 64-row batches
 with one batch and one fragment of readahead per shard, single-threaded decoding,

@@ -15,6 +15,7 @@ from datasets import Dataset
 from rolloutengine.harness.shell import task_prompt as marin_task_prompt
 from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS, assistant_prefix_prompt
 from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
+from rolloutengine.validation import task_machine_reason
 from skyrl_gym.rollout_specs import is_shell_harness, rollout_spec, shell_harness
 from skyrl_gym.source_task import session_parameters, source_task
 from taskcompendium.models import (
@@ -23,13 +24,14 @@ from taskcompendium.models import (
     ScriptGrader,
     Source,
     TaskSpec,
+    TextMessage,
     VerifyitGrader,
     grades_with_judge,
 )
 from taskcompendium.runtime.shell import resolve_shell_tool
 from transformers import PreTrainedTokenizerBase
 
-from skyrl_train.dataset.dataset import PromptDataset, _prompt_token_count
+from skyrl_train.dataset.dataset import PromptDataset, _prompt_token_count, dataset_num_proc
 from skyrl_train.inference_engines.chat_template import assistant_prefix_token_ids
 from skyrl_train.dataset.harbor_import import HARBOR_TRIAL_SESSION
 from skyrl_train.rollouts.group_grader import task_group_grader
@@ -57,13 +59,19 @@ class TaskDataset(PromptDataset):
     """Render public conversation fields and retain private lowered tasks for workers."""
 
     def prepare_dataset(self, dataset):
-        return dataset.map(_stored_task_prompt, num_proc=self.num_workers).with_transform(_restore_task_prompts)
+        return dataset.map(
+            _stored_task_prompt, num_proc=dataset_num_proc(len(dataset), self.num_workers)
+        ).with_transform(_restore_task_prompts)
 
     @staticmethod
     def prompt_token_count(
         tokenizer: PreTrainedTokenizerBase, row: dict, prompt_key: str, *, chat_template_kwargs: dict | None = None
     ) -> int:
         return task_prompt_token_count(tokenizer, row, prompt_key, chat_template_kwargs=chat_template_kwargs)
+
+    def label(self, index: int) -> str:
+        """The task id, which unlike the default row-number uid survives prompt-length filtering."""
+        return TaskRolloutSpec.model_validate_json(self.dataframe[index][TASK_ROLLOUT_COLUMN]).task.id
 
     def collate_fn(self, rows) -> list[dict]:
         inputs = []
@@ -186,8 +194,23 @@ def _canonical_task_prompt(row: dict, _index: int, *, environment_configs: Mappi
     """Bind runtime settings when a canonical TaskSpec enters the trainer."""
     task = TaskSpec.model_validate_json(row[TASK_SPEC_COLUMN])
     config = environment_configs["task_spec"]
-    harness = config["harness_by_dataset"].get(task.source.dataset, config["default_harness"])
+    final_event = task.context.events[-1]
+    # Only the assistant-prefix harness keeps an unfinished assistant message last.
+    continues_assistant = isinstance(final_event, TextMessage) and final_event.role == "assistant"
+    harness = (
+        ASSISTANT_PREFIX_HARNESS
+        if continues_assistant
+        else config["harness_by_dataset"].get(task.source.dataset, config["default_harness"])
+    )
     session = {**config["session"], "task_session": harness}
+    if task.source.dataset in config["max_turns_by_dataset"]:
+        session["max_turns"] = config["max_turns_by_dataset"][task.source.dataset]
+    machine = config["task_machine_by_dataset"].get(task.source.dataset)
+    task_machine = (
+        MachineRuntimeSpec.model_validate(machine)
+        if machine is not None and task_machine_reason(task) is not None
+        else None
+    )
     verifier = None
     grader = task.grader
     if (
@@ -197,7 +220,7 @@ def _canonical_task_prompt(row: dict, _index: int, *, environment_configs: Mappi
     ):
         machine = config["image_verifier"] if grader.environment.docker_image is not None else config["package_verifier"]
         verifier = MachineRuntimeSpec.model_validate(machine)
-    lowered = rollout_spec(task, session, verifier_machine=verifier)
+    lowered = rollout_spec(task, session, task_machine=task_machine, verifier_machine=verifier)
     return _stored_prompt(lowered)
 
 
@@ -267,6 +290,6 @@ class SourceTaskDataset(TaskDataset):
             mapper,
             with_indices=True,
             remove_columns=dataset.column_names,
-            num_proc=self.num_workers,
+            num_proc=dataset_num_proc(len(dataset), self.num_workers),
             keep_in_memory=True,
         )

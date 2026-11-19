@@ -32,7 +32,7 @@ from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
-from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_batch_schedule
+from levanter.data.mixture import MixtureDataset
 from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate, eval_model
@@ -57,6 +57,7 @@ from experiments.grug.fast_track.model import (
     GrugModelConfig,
     Transformer,
 )
+from experiments.grug.preemption import GracefulPreemption
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
 # variant-specific model/loss/FLOP wiring, per the grug copy-first workflow in
@@ -200,21 +201,7 @@ def build_train_dataset(
     batch_schedule: BatchSchedule,
     key: PRNGKeyArray,
 ) -> MixtureDataset[GrugLmExample]:
-    pos = Axis("position", max_seq_len)
-    mix_key, shuffle_key = jax.random.split(key)
-    weights = data_config.train_weights
-    if isinstance(weights, list):
-        weights = rescale_mixture_schedule_for_batch_schedule(weights, batch_schedule)
-
-    initial_batch_size = batch_schedule.batch_size_at_step(0)
-    datasets = data_config.train_sets(pos, key=shuffle_key, initial_batch_size=initial_batch_size)
-    return MixtureDataset(
-        datasets=datasets,
-        weights=weights,
-        stop_strategy=data_config.stop_strategy,
-        key=mix_key,
-        block_size=data_config.mixture_block_size,
-    )
+    return data_config.train_mixture(Axis("position", max_seq_len), batch_schedule, key=key)
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
@@ -911,6 +898,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         last_step_duration = 0.0
 
         # Main optimization loop.
+        preemption = GracefulPreemption()
+        preemption.install()
+        preempted = False
         try:
             while int(state.step) < stop_step:
                 with jax.profiler.TraceAnnotation("load_batch"):
@@ -980,26 +970,30 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     ):
                         checkpointer.on_step(tree=state, step=int(state.step))
 
+                preempted = preemption.should_stop(int(state.step))
+                if preempted:
+                    break
         except BaseException:
             logger.exception(
                 "Fatal error in grug training loop; skipping final callbacks/checkpoint to preserve root cause"
             )
             raise
         else:
-            # Mirror classic trainer behavior: force callbacks on the last completed step.
-            state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
+            if not preempted:
+                state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
             if checkpointer is not None:
                 with callbacks.progress_event_scope(
                     state_callbacks.emit_event,
                     callbacks.ProgressEvent.CHECKPOINT_STARTED,
                     callbacks.ProgressEvent.CHECKPOINT_FINISHED,
                 ):
-                    checkpointer.on_step(tree=state, step=int(state.step), force=True)
-                    checkpointer.wait_until_finished()
+                    checkpointer.save_final_checkpoint(tree=state, step=int(state.step))
         finally:
+            preemption.restore()
             state_callbacks.emit_event(callbacks.ProgressEvent.TRAINING_FINISHED)
 
     levanter.tracker.current_tracker().finish()
+    preemption.exit_if_preempted()
 
 
 def run_grug(config: GrugRunConfig) -> None:

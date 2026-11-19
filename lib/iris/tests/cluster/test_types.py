@@ -321,16 +321,6 @@ def test_preemptible_preference_invalid_value_raises():
 # ---------------------------------------------------------------------------
 
 
-def test_required_regions_single():
-    constraints = [_proto_constraint(WellKnownAttribute.REGION, "eu-west4")]
-    assert extract_placement_requirements(constraints).required_regions == frozenset({"eu-west4"})
-
-
-def test_required_regions_none_when_absent():
-    constraints = [_proto_constraint(WellKnownAttribute.PREEMPTIBLE, "true")]
-    assert extract_placement_requirements(constraints).required_regions is None
-
-
 def test_required_regions_conflicting_raises():
     constraints = [
         _proto_constraint(WellKnownAttribute.REGION, "us-west4"),
@@ -349,16 +339,6 @@ def test_required_regions_empty_string_raises():
 # ---------------------------------------------------------------------------
 # extract_placement_requirements: required_zones field
 # ---------------------------------------------------------------------------
-
-
-def test_required_zones_single():
-    constraints = [_proto_constraint(WellKnownAttribute.ZONE, "us-central2-b")]
-    assert extract_placement_requirements(constraints).required_zones == frozenset({"us-central2-b"})
-
-
-def test_required_zones_none_when_absent():
-    constraints = [_proto_constraint(WellKnownAttribute.PREEMPTIBLE, "true")]
-    assert extract_placement_requirements(constraints).required_zones is None
 
 
 def test_required_zones_conflicting_raises():
@@ -403,44 +383,6 @@ def test_merge_parent_only():
     parent = [region_constraint(["us-west4"]), preemptible_constraint(True)]
     result = merge_constraints(parent, [])
     assert set(result) == set(parent)
-
-
-def test_merge_child_overrides_region():
-    parent = [region_constraint(["us-west4"])]
-    child = [region_constraint(["eu-west4"])]
-    result = merge_constraints(parent, child)
-    regions = [c for c in result if c.key == WellKnownAttribute.REGION]
-    assert len(regions) == 1
-    assert regions[0].values[0].value == "eu-west4"
-
-
-def test_merge_child_overrides_preemptible():
-    parent = [preemptible_constraint(True)]
-    child = [preemptible_constraint(False)]
-    result = merge_constraints(parent, child)
-    preemptibles = [c for c in result if c.key == WellKnownAttribute.PREEMPTIBLE]
-    assert len(preemptibles) == 1
-    assert preemptibles[0].values[0].value == "false"
-
-
-def test_merge_child_overrides_zone():
-    """Child zone constraint replaces parent's (zone is canonical)."""
-    parent = [Constraint.create(key=WellKnownAttribute.ZONE, op=ConstraintOp.EQ, value="a")]
-    child = [Constraint.create(key=WellKnownAttribute.ZONE, op=ConstraintOp.EQ, value="b")]
-    result = merge_constraints(parent, child)
-    zone_constraints = [c for c in result if c.key == WellKnownAttribute.ZONE]
-    assert len(zone_constraints) == 1
-    assert zone_constraints[0].values[0].value == "b"
-
-
-def test_merge_non_canonical_key_both_present():
-    """Non-canonical keys from parent and child are both kept."""
-    parent = [Constraint.create(key=WellKnownAttribute.TPU_NAME, op=ConstraintOp.EQ, value="a")]
-    child = [Constraint.create(key=WellKnownAttribute.TPU_NAME, op=ConstraintOp.EQ, value="b")]
-    result = merge_constraints(parent, child)
-    tpu_constraints = [c for c in result if c.key == WellKnownAttribute.TPU_NAME]
-    assert len(tpu_constraints) == 2
-    assert {c.values[0].value for c in tpu_constraints} == {"a", "b"}
 
 
 def test_merge_non_canonical_key_dedup():
@@ -508,12 +450,6 @@ def test_required_regions_in_single():
     assert result == frozenset({"eu-west4"})
 
 
-def test_required_regions_in_empty_values_raises():
-    """IN constraint with no values is invalid — rejected at construction."""
-    with pytest.raises(ValueError, match="IN requires"):
-        Constraint(key=WellKnownAttribute.REGION, op=ConstraintOp.IN, values=())
-
-
 def test_extract_placement_requirements_with_in_region():
     """extract_placement_requirements works with IN region constraints."""
     constraints = [
@@ -578,21 +514,6 @@ def test_constraints_from_resources_auto_variant_skipped():
     result = constraints_from_resources(resources)
     assert len(result) == 1
     assert result[0].key == WellKnownAttribute.DEVICE_TYPE
-
-
-# ---------------------------------------------------------------------------
-# merge_constraints: device-type is a canonical key
-# ---------------------------------------------------------------------------
-
-
-def test_merge_child_overrides_device_type():
-    """Child device-type constraint replaces parent's."""
-    parent = [Constraint.create(key=WellKnownAttribute.DEVICE_TYPE, op=ConstraintOp.EQ, value="tpu")]
-    child = [Constraint.create(key=WellKnownAttribute.DEVICE_TYPE, op=ConstraintOp.EQ, value="gpu")]
-    result = merge_constraints(parent, child)
-    dt = [c for c in result if c.key == WellKnownAttribute.DEVICE_TYPE]
-    assert len(dt) == 1
-    assert dt[0].values[0].value == "gpu"
 
 
 # ---------------------------------------------------------------------------

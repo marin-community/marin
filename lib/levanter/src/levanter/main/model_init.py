@@ -5,11 +5,13 @@ from dataclasses import dataclass
 from typing import cast
 
 import equinox as eqx
+import jmp
 from haliax.partitioning import named_jit
 
 import haliax as hax
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
+from levanter.field_dtype_overrides import hf_load_dtype
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.utils.jax_utils import use_cpu_device
 
@@ -56,8 +58,7 @@ def load_model_from_source(
     Vocab,
     model_key,
     parameter_axis_mapping,
-    compute_dtype,
-    cast_to_param,
+    mp: jmp.Policy,
     hf_ref: bool | str = False,
     checkpoint_path: str | None = None,
 ) -> LmHeadModel:
@@ -77,9 +78,9 @@ def load_model_from_source(
             ref=hf_ref if isinstance(hf_ref, str) else None,
             config=converter_config,
             axis_mapping=parameter_axis_mapping,
-            dtype=compute_dtype,
+            dtype=hf_load_dtype(mp),
         )
-        return named_jit(cast_to_param, parameter_axis_mapping)(model)
+        return named_jit(mp.cast_to_param, parameter_axis_mapping)(model)
 
     if checkpoint_path is None:
         raise ValueError("Either hf_ref or checkpoint_path must be provided.")
@@ -90,4 +91,4 @@ def load_model_from_source(
         model = load_checkpoint(model, resolved_checkpoint_path, subpath="model")
 
     model = hax.shard(model, parameter_axis_mapping)
-    return named_jit(cast_to_param, parameter_axis_mapping)(model)
+    return named_jit(mp.cast_to_param, parameter_axis_mapping)(model)

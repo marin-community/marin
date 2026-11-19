@@ -3,7 +3,7 @@
 
 """Iris subcommand for ``marin-serve``.
 
-Submits a single Iris job that boots a serving backend on a single-host TPU or GPU slice and
+Submits a single Iris job that boots a serving backend on a TPU slice or single-host GPU allocation and
 registers a browser dashboard + OpenAI-compatible endpoint through the controller proxy. The job
 stops itself after ``--timeout-hours`` so a forgotten server frees its slice.
 
@@ -45,8 +45,8 @@ from pathlib import Path
 import click
 import requests
 from click.core import ParameterSource
-from fray.iris_backend import convert_constraints, convert_resources
-from fray.types import ANY_REGION, ResourceConfig, create_environment
+from fray.iris_backend import FrayIrisClient, convert_constraints, convert_resources, resolve_coscheduling
+from fray.types import ANY_REGION, GpuConfig, ResourceConfig, create_environment
 from iris.cli.connect import connect_controller
 from iris.cli.job import build_tpu_alternatives, parse_gpu_spec
 from iris.client.client import IrisClient, Job
@@ -58,6 +58,7 @@ from iris.cluster.types import (
 )
 from rigging.config_discovery import find_project_root
 from rigging.connect import capability_path, proxy_path
+from rigging.secrets import resolve_secret_spec
 from rigging.timing import Duration
 
 from marin.inference.config import (
@@ -75,6 +76,8 @@ from marin.inference.config import (
     load_vllm_metric_family_additions,
 )
 from marin.inference.iris import IrisServiceConfig, run_iris_service
+from marin.inference.iris_tpu_vllm import RAY_PORTS
+from marin.inference.model_cache import ModelPreparationError, prepare_hf_models
 
 # The GPU serve worker only runs the dashboard/registry glue plus a `vllm serve`
 # subprocess; CUDA vLLM is provisioned in an isolated uv-tool env (not the workspace
@@ -176,9 +179,9 @@ def _resolve_serving_plan(
         raise click.ClickException(str(exc)) from exc
     for tpu_type in tpu_types:
         topology = get_tpu_topology(tpu_type)
-        if topology.vm_count != 1:
+        if topology.vm_count != 1 and backend != "vllm":
             raise click.ClickException(
-                f"{tpu_type!r} is a multi-host slice (vm_count={topology.vm_count}); marin-serve iris supports "
+                f"{tpu_type!r} is a multi-host slice (vm_count={topology.vm_count}); the Levanter backend supports "
                 f"single-host slices only (e.g. v6e-8, v5litepod-8)."
             )
     if backend == "levanter":
@@ -218,6 +221,43 @@ def _checkout_free_setup_script(marin_version: str, extras: tuple[str, ...]) -> 
         f'uv venv "$IRIS_VENV" --python {WORKER_PYTHON_VERSION}\n'
         f'uv pip install --python "$IRIS_VENV" --link-mode symlink --torch-backend cpu {shlex.quote(spec)}\n'
     )
+
+
+def _prepared_direct_service(
+    service: IrisServiceConfig,
+    placement: ResourceConfig,
+    workspace_dir: Path | None,
+    client: IrisClient,
+    secrets: dict[str, str],
+) -> IrisServiceConfig:
+    regions = placement.regions
+    if not placement.target_cluster and (
+        isinstance(placement.device, GpuConfig) or not regions or len(regions) != 1 or ANY_REGION in regions
+    ):
+        click.echo(
+            "Warning: skipping CPU model preparation because the serving cache location is not pinned; "
+            "weights will download on the serving worker. Set --target-cluster for GPUs, or a single --region for TPUs.",
+            err=True,
+        )
+        return service
+    setup_scripts = None if workspace_dir is not None else [_checkout_free_setup_script(_marin_core_version(), ())]
+    environment = create_environment(
+        workspace=str(workspace_dir or Path.cwd()),
+        setup_scripts=setup_scripts,
+        secrets={name: value for name, value in secrets.items() if name == "HF_TOKEN"},
+    )
+    click.echo("Preparing Hugging Face weights on CPU before reserving accelerators...")
+    try:
+        model, engine = prepare_hf_models(
+            service.model,
+            service.engine,
+            replace(service.iris, worker_resources=placement),
+            client=FrayIrisClient.from_iris_client(client),
+            environment=environment,
+        )
+    except ModelPreparationError as exc:
+        raise click.ClickException(str(exc)) from exc
+    return replace(service, model=model, engine=engine)
 
 
 def _resolve_chat_template(spec: str | None) -> str | None:
@@ -283,6 +323,34 @@ def _mint_and_print_capability_url(
         click.echo(f"    path       {capability_path(endpoint, resp.token)}/v1  (front the controller /proxy/t route)")
         click.echo(f"    expires    in {hours_left:.1f}h")
     click.echo("")
+
+
+def _wait_and_report_endpoint(
+    client: IrisClient,
+    job: Job,
+    endpoint: str,
+    wait_timeout: float,
+    proxy_url: str,
+    dashboard_url: str | None,
+    timeout_hours: float,
+) -> None:
+    """Wait, mint the scoped URL, and hold the tunnel independently of submission planning."""
+    click.echo("Waiting for the model to load and register (Ctrl-C to detach; the job keeps running) …")
+    _wait_for_endpoint(client, job, endpoint, wait_timeout)
+    click.echo("")
+    click.echo(f"READY — dashboard: {proxy_url}/")
+    click.echo(f"        OpenAI:    {proxy_url}/v1")
+    if dashboard_url:
+        click.echo(f"        share:     {dashboard_url.rstrip('/')}{proxy_path(endpoint)}/")
+    click.echo("")
+    # Mint after the endpoint registers (the controller resolves the row for owner authz),
+    # so the token is bound to a live endpoint.
+    _mint_and_print_capability_url(client, endpoint, dashboard_url, timeout_hours)
+    click.echo("Tunnel held open; press Ctrl-C to detach (the server stays up on Iris).")
+    with contextlib.suppress(KeyboardInterrupt):
+        while True:
+            time.sleep(3600)
+    click.echo("\nDetached. The server remains available until its timeout or explicit stop.")
 
 
 @click.command(context_settings={"show_default": True})
@@ -403,6 +471,15 @@ def _mint_and_print_capability_url(
     help="Override the task container image. On the GPU path this bypasses the isolated "
     "uv-tool vLLM and serves from the image's own `vllm` on PATH.",
 )
+@click.option(
+    "--secret",
+    "secret_sources",
+    multiple=True,
+    type=(str, str),
+    help="Deliver a named secret to the serving job as a file (NAME SOURCE), e.g. "
+    "--secret PARALLEL_API_KEY env:PARALLEL_API_KEY. Can be repeated.",
+)
+@click.option("--dry-run", is_flag=True, help="Print resources, gang placement and named ports without submitting.")
 @click.option("--wait/--no-wait", default=True, help="Wait for readiness and mint a capability URL before blocking.")
 @click.option(
     "--wait-timeout",
@@ -446,6 +523,8 @@ def main(
     vllm_source: str,
     extras: tuple[str, ...],
     task_image: str | None,
+    secret_sources: tuple[tuple[str, str], ...],
+    dry_run: bool,
     wait: bool,
     wait_timeout: float,
 ) -> None:
@@ -498,6 +577,8 @@ def main(
     )
 
     brokered = broker or instances > 1
+    if brokered and any(get_tpu_topology(tpu_type).vm_count > 1 for tpu_type in plan.tpu_types):
+        raise click.ClickException("multi-host TPU serving requires one instance and no broker")
     broker_config = (
         BrokerConfig(
             worker=InferenceWorkerConfig(
@@ -567,11 +648,15 @@ def main(
         controller_proxy_timeout_seconds=proxy_timeout,
     )
 
+    secrets = {name: resolve_secret_spec(source).value for name, source in secret_sources}
     if workspace_dir is None:
         outer_extras = () if brokered else plan.worker_extras
-        environment = EnvironmentSpec(setup_scripts=[_checkout_free_setup_script(_marin_core_version(), outer_extras)])
+        environment = EnvironmentSpec(
+            setup_scripts=[_checkout_free_setup_script(_marin_core_version(), outer_extras)],
+            secrets=secrets,
+        )
     else:
-        environment = EnvironmentSpec(extras=() if brokered else plan.worker_extras)
+        environment = EnvironmentSpec(extras=() if brokered else plan.worker_extras, secrets=secrets)
 
     # Broker workers carry their own device constraints. Leaving the lightweight broker job
     # region-free prevents Iris from implicitly pinning its child workers to a region that may not
@@ -594,6 +679,14 @@ def main(
             target_cluster=target_cluster,
         )
     constraints = convert_constraints(submission_resources)
+    replicas = submission_resources.replicas
+    coscheduling = resolve_coscheduling(submission_resources, replicas)
+    ports = ["http", *RAY_PORTS] if not brokered and replicas > 1 else ["http"]
+    if dry_run:
+        click.echo(f"resources: {submission_resources}")
+        click.echo(f"replicas: {replicas}; coscheduling: {coscheduling}")
+        click.echo(f"ports (Iris allocates values per host): {ports}")
+        return
 
     endpoint_cluster = cluster if controller is None else None
     with connect_controller(cluster_name=endpoint_cluster, controller_url=controller) as endpoint_info:
@@ -601,12 +694,16 @@ def main(
         dashboard_url = endpoint_info.config.dashboard_url if endpoint_info.config else None
         click.echo(f"Using controller {controller_url}")
         with IrisClient.remote(controller_url, workspace=workspace_dir, credentials=endpoint_info.credentials) as client:
+            if not brokered:
+                service = _prepared_direct_service(service, submission_resources, workspace_dir, client, secrets)
             job = client.submit(
                 entrypoint=Entrypoint.from_callable(run_iris_service, service),
                 name=job_name,
                 resources=convert_resources(submission_resources),
                 environment=environment,
-                ports=["http"],
+                ports=ports,
+                replicas=replicas,
+                coscheduling=coscheduling,
                 constraints=constraints or None,
                 max_retries_failure=0,
                 max_retries_preemption=max_retries_preemption,
@@ -643,22 +740,15 @@ def main(
                 click.echo("Submitted without waiting; no capability URL was minted.")
                 return
 
-            click.echo("Waiting for the model to load and register (Ctrl-C to detach; the job keeps running) …")
-            _wait_for_endpoint(client, job, endpoint, wait_timeout)
-            click.echo("")
-            click.echo(f"READY — dashboard: {proxy_url}/")
-            click.echo(f"        OpenAI:    {proxy_url}/v1")
-            if dashboard_url:
-                click.echo(f"        share:     {dashboard_url.rstrip('/')}{proxy_path(endpoint)}/")
-            click.echo("")
-            # Mint after the endpoint registers (the controller resolves the row for owner authz),
-            # so the token is bound to a live endpoint.
-            _mint_and_print_capability_url(client, endpoint, dashboard_url, timeout_hours)
-            click.echo("Tunnel held open; press Ctrl-C to detach (the server stays up on Iris).")
-            with contextlib.suppress(KeyboardInterrupt):
-                while True:
-                    time.sleep(3600)
-            click.echo("\nDetached. The server remains available until its timeout or explicit stop.")
+            _wait_and_report_endpoint(
+                client,
+                job,
+                endpoint,
+                wait_timeout,
+                proxy_url,
+                dashboard_url,
+                timeout_hours,
+            )
 
 
 if __name__ == "__main__":

@@ -21,11 +21,17 @@ from shellbox.machine import (
     ExitReason,
     MachineSpec,
     NetworkPolicy,
+    ProcessScope,
     Result,
     UnsupportedMachineSpec,
     check_execution_requirements,
 )
-from shellbox.process_session import SubprocessSession, acquire_owned
+from shellbox.process_session import (
+    PROBE_PROCESS_GROUP_COMMAND,
+    PROCESS_GROUP_ABSENT_EXIT_CODE,
+    SubprocessSession,
+    acquire_owned,
+)
 
 logger = logging.getLogger(__name__)
 IMAGE_PLATFORM = "linux/amd64"
@@ -40,24 +46,6 @@ INTERRUPT_TIMEOUT = 10
 PROCESS_GROUP_PROBE_INTERVAL = 0.05
 OUTPUT_READ_CHUNK_BYTES = 64 * 1024
 KILL_PROCESS_GROUP_COMMAND = 'kill -KILL "-$1"'
-PROCESS_GROUP_ABSENT_EXIT_CODE = 3
-PROBE_PROCESS_GROUP_COMMAND = f"""
-group=$1
-[ -r /proc/1/stat ] || exit 1
-for path in /proc/[0-9]*/stat; do
-    record=
-    if ! {{ while IFS= read -r line; do record=$record$line; done; }} < "$path"; then
-        [ ! -e "$path" ] || exit 1
-        continue
-    fi
-    [ "$record" ] || continue
-    record=${{record##*) }}
-    set -- $record
-    [ "$#" -ge 3 ] || exit 1
-    [ "$3" != "$group" ] || [ "$1" = Z ] || exit 0
-done
-exit {PROCESS_GROUP_ABSENT_EXIT_CODE}
-"""
 
 
 @dataclass(frozen=True)
@@ -212,6 +200,9 @@ class DockerMachine:
                 raise
 
         return await acquire_owned(asyncio.create_task(acquire()))
+
+    async def open_process_scope(self) -> ProcessScope:
+        raise UnsupportedMachineSpec("Docker does not provide confirmed scoped descendant teardown")
 
     async def run(self, command: Command) -> Result:
         if self._closed:

@@ -145,6 +145,9 @@ fn relay_cluster(ctx: &RequestContext) -> Result<String, ConnectError> {
 /// buried under context still classifies as `invalid_argument`.
 fn map_query_error(e: DataFusionError) -> ConnectError {
     let msg = format!("query failed: {e}");
+    if crate::query::is_read_deadline(&e) {
+        return ConnectError::deadline_exceeded(msg);
+    }
     match e.find_root() {
         DataFusionError::SQL(..)
         | DataFusionError::Plan(_)
@@ -339,17 +342,28 @@ impl StatsService for StatsServiceImpl {
     ) -> ServiceResult<QueryResponse> {
         let request_started = Instant::now();
         let sql = request.sql.unwrap_or("").to_string();
-
-        // Hold the query-visibility READ guard across the WHOLE scan. DataFusion
-        // opens the snapshotted parquet files LAZILY during collect(), so the
-        // guard must outlive run_query_over (not just query_providers) to keep a
-        // concurrent drop_table / compaction from unlinking a file mid-scan.
-        let visibility_started = Instant::now();
-        let _read_guard = self.store.query_visibility().read().await;
-        let visibility_wait = visibility_started.elapsed();
-
         let query_ctx = make_ctx();
+        crate::query::bind_read_deadline(
+            &query_ctx,
+            ctx.time_remaining()
+                .map(|remaining| tokio::time::Instant::now() + remaining),
+        );
+        let admission = query_ctx
+            .copied_config()
+            .get_extension::<crate::store::object_store::QueryCacheAdmission>()
+            .unwrap();
         let names = query_namespaces(&query_ctx, &sql).map_err(map_query_error)?;
+
+        // DataFusion opens legacy Parquet files during collect(), so keep the
+        // visibility guard through the scan. Legacy replacement and drop_table
+        // can unlink those files after the guard is released.
+        let visibility_started = Instant::now();
+        let _read_guard = if names.is_empty() {
+            None
+        } else {
+            Some(self.store.query_visibility().read().await)
+        };
+        let visibility_wait = visibility_started.elapsed();
 
         // Plan only referenced namespaces from their pinned state (schema, bounds,
         // partitions, exact object references) on the blocking pool. Objects are
@@ -360,7 +374,9 @@ impl StatsService for StatsServiceImpl {
         let provider_elapsed = provider_started.elapsed();
         // Object-backed tables bound the read themselves; that bound cannot be
         // configured away.
-        let table_bound = self.store.object_query_bound();
+        let table_bound = crate::query::snapshot_deadline(&providers)
+            .map(|deadline| deadline.saturating_duration_since(tokio::time::Instant::now()));
+        let fills = admission.cancel_on_drop(query_timeout(ctx.time_remaining(), table_bound));
 
         // DataFusion schedules its own CPU tasks; await sql()/collect() directly
         // (no spawn_blocking). Errors map by variant: parse/plan/schema/catalog
@@ -419,6 +435,7 @@ impl StatsService for StatsServiceImpl {
                 "slow Query RPC stage breakdown",
             );
         }
+        fills.complete();
         connectrpc::Response::ok(
             QueryResponse::default()
                 .with_arrow_ipc(buf)

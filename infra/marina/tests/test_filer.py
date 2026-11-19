@@ -6,12 +6,16 @@
 import gzip
 import json
 import zipfile
+from types import SimpleNamespace
 
 import fsspec
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from fastapi.testclient import TestClient
+from rigging.server_auth import VerifiedIdentity, identity_scope
+from sqlalchemy import create_engine
+from sqlalchemy.pool import StaticPool
 
 from infra.marina.apps.filer.server import app as filer
 
@@ -19,13 +23,15 @@ from infra.marina.apps.filer.server import app as filer
 @pytest.fixture
 def storage_client(tmp_path, monkeypatch):
     fs = fsspec.filesystem("file")
+    engine = create_engine("sqlite+pysqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
 
     def route(url):
         return fs, str(tmp_path / url.split("/", 3)[3])
 
     monkeypatch.setattr(filer, "filesystem_for", route)
     monkeypatch.setattr("rigging.fsutil.listing.filesystem_for", route)
-    return TestClient(filer.create_api(None)), tmp_path
+    yield TestClient(filer.create_api(SimpleNamespace(engine=lambda: engine))), tmp_path
+    engine.dispose()
 
 
 def test_parquet_pages_preserve_nested_records_across_groups(storage_client):
@@ -36,6 +42,10 @@ def test_parquet_pages_preserve_nested_records_across_groups(storage_client):
     assert result["rows"] == records[3:9]
     assert result["total"] == 13
     assert result["next_offset"] == 9
+    assert result["schema"][0]["null_count"] == 0
+    assert result["schema"][0]["min"] == 0
+    assert result["schema"][0]["max"] == 12
+    assert result["schema"][0]["compressed_size"] > 0
     projected = client.get(
         "/inspect", params={"url": "s3://bucket/rows.parquet", "offset": 9, "columns": json.dumps(["id"])}
     ).json()
@@ -49,6 +59,7 @@ def test_parquet_large_group_allows_schema_then_narrow_projection(storage_client
     monkeypatch.setattr(filer, "MAX_GROUP_BYTES", 1000)
     initial = client.get("/inspect", params={"url": "s3://bucket/large.parquet"}).json()
     assert initial["rows"] == []
+    assert initial["next_offset"] is None
     assert [column["name"] for column in initial["schema"]] == ["id", "body"]
     projected = client.get("/inspect", params={"url": "s3://bucket/large.parquet", "columns": '["id"]'}).json()
     assert projected["rows"] == [{"id": 1}, {"id": 2}]
@@ -113,3 +124,34 @@ def test_media_preview_returns_bytes_and_enforces_size_limit(storage_client, mon
     assert response.headers["content-type"] == "application/pdf"
     monkeypatch.setattr(filer, "MAX_MEDIA_BYTES", 5)
     assert client.get("/media", params={"url": "s3://bucket/document.pdf"}).status_code == 413
+
+
+def test_thumbnail_reads_small_images_only(storage_client, monkeypatch):
+    client, root = storage_client
+    data = b"\x89PNG\r\n\x1a\nsmall image"
+    (root / "image.png").write_bytes(data)
+    response = client.get("/thumbnail", params={"url": "s3://bucket/image.png"})
+    assert response.content == data
+    assert response.headers["content-type"] == "image/png"
+    monkeypatch.setattr(filer, "MAX_THUMBNAIL_BYTES", 5)
+    assert client.get("/thumbnail", params={"url": "s3://bucket/image.png"}).status_code == 413
+
+
+def test_favorites_are_scoped_to_verified_user():
+    engine = create_engine("sqlite+pysqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    with engine.begin() as connection:
+        filer.migrate(connection)
+    client = TestClient(filer.create_api(SimpleNamespace(engine=lambda: engine)))
+    url = "s3://bucket/rows.parquet"
+    with identity_scope(VerifiedIdentity("alice", "viewer")):
+        assert client.post("/favorites", json={"url": url}).status_code == 200
+        assert client.get("/favorites").json() == {"urls": [url]}
+    with identity_scope(VerifiedIdentity("bob", "viewer")):
+        assert client.get("/favorites").json() == {"urls": []}
+        assert client.post("/favorites", json={"url": url}).status_code == 200
+    with identity_scope(VerifiedIdentity("alice", "viewer")):
+        assert client.delete("/favorites", params={"url": url}).status_code == 200
+        assert client.get("/favorites").json() == {"urls": []}
+    with identity_scope(VerifiedIdentity("bob", "viewer")):
+        assert client.get("/favorites").json() == {"urls": [url]}
+    engine.dispose()

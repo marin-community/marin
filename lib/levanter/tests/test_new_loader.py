@@ -16,6 +16,7 @@ from haliax.partitioning import ResourceAxis
 
 from levanter.data.dataset import AsyncDataset, ListAsyncDataset
 from levanter.data.loader import DataLoader, check_sharded_consistency
+from levanter.data.mixture import MixtureDataset
 from levanter.schedule import ScheduleStep
 
 from levanter.testing.helpers import skip_if_not_enough_devices, use_test_mesh
@@ -64,6 +65,28 @@ def test_loader_rejects_empty_finite_dataset():
         dataset = ListAsyncDataset([])
         with pytest.raises(ValueError, match="finite but has length 0"):
             DataLoader(dataset, 1, max_buffered_batches=0, mesh=mesh, axis_resources=None)
+
+
+def test_loader_builds_over_a_mixture_that_starts_past_index_zero():
+    first_index = 1000
+    sequences = np.arange(40).reshape(10, 4)
+    mixture = MixtureDataset(
+        {"only": ListAsyncDataset(list(sequences))},
+        {"only": 1.0},
+        8,
+        randomize_blocks=False,
+        key=0,
+        first_index=first_index,
+    )
+    dataset = mixture.map(lambda sequence: sequence + 1)
+    batch_size = len(jax.devices())
+
+    with use_test_mesh(tensor_parallelism=1) as mesh, haliax.axis_mapping({"batch": ResourceAxis.DATA}):
+        loader = DataLoader(dataset, batch_size, max_buffered_batches=0, mesh=mesh, axis_resources=None)
+        with closing(loader.iter_from_step(first_index // batch_size)) as batches:
+            batch = next(batches)
+
+    np.testing.assert_array_equal(np.asarray(batch)[0], sequences[0] + 1)
 
 
 @pytest.mark.parametrize("buffered_batches", [-1, 0, 2])

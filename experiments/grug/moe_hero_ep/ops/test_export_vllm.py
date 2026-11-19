@@ -4,6 +4,7 @@
 import dataclasses
 import json
 from pathlib import Path
+from threading import Lock
 
 import equinox as eqx
 import jax
@@ -17,10 +18,30 @@ from levanter.grug.sharding import compact_grug_mesh
 from rigging.filesystem.storage_path import StoragePath
 from safetensors.numpy import load_file
 
+import experiments.grug.moe_hero_ep.ops.export_cpu as cpu_export
 import experiments.grug.moe_hero_ep.ops.export_vllm as hero_export
-from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
+from experiments.grug.moe_hero_ep.model import GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY, GrugModelConfig, Transformer
 from experiments.grug.moe_hero_ep.ops.export_vllm import ExportConfig, export
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
+
+
+@pytest.mark.parametrize(
+    "log_scaling",
+    [
+        {"log_scaling_n_floor": 16, "log_scaling_alpha": 0.1, "log_scaling_power": 2.0},
+        {"log_scaling_n_floor": None, "log_scaling_alpha": None, "log_scaling_power": None},
+    ],
+)
+def test_hf_config_round_trips_log_scaling_at_schema_3(log_scaling):
+    model = GrugModelConfig(vocab_size=32, **log_scaling)
+
+    hf_config = model.to_hf_config(model.vocab_size)
+    loaded = GrugModelConfig.from_hf_config(hf_config)
+
+    serialized = hf_config.to_dict()
+    assert serialized[GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY] == 3
+    assert {name: serialized[name] for name in log_scaling} == log_scaling
+    assert {name: getattr(loaded, name) for name in log_scaling} == log_scaling
 
 
 def native_fixture(root: str, *, master: bool = False) -> tuple[ExportConfig, Transformer]:
@@ -107,6 +128,7 @@ def test_native_export_preserves_all_weights_and_config(tmp_path, monkeypatch):
             assert actual.shape == wanted.shape and actual.dtype == wanted.dtype, name
             assert actual.tobytes() == wanted.tobytes(), name
     expected_config = request.model.to_hf_config(request.model.vocab_size).to_dict()
+    expected_config["dtype"] = "bfloat16"
     assert json.loads((root / "config.json").read_text()) == json.loads(json.dumps(expected_config))
 
 
@@ -145,10 +167,113 @@ def test_export_recovery_verifies_shards_and_preserves_completed_output(tmp_path
     completed_shard.write_bytes(original)
     committed_mtime = completed_shard.stat().st_mtime_ns
 
-    export(request)
+    resumed = dataclasses.replace(request, export_host_budget_bytes=1024**2, max_concurrent_shards=1)
+    export(resumed)
     reload_export(root)
     assert completed_shard.stat().st_mtime_ns == committed_mtime
     before = {path.name: path.read_bytes() for path in root.iterdir()}
     with pytest.raises(FileExistsError):
         export(request)
     assert {path.name: path.read_bytes() for path in root.iterdir()} == before
+
+
+def test_cpu_export_resumes_completed_shards_after_lowering_execution_limits(tmp_path, monkeypatch):
+    monkeypatch.setattr(cpu_export, "DEFAULT_MAX_SHARD_SIZE", 4096)
+    monkeypatch.setattr(hero_export, "DEFAULT_MAX_SHARD_SIZE", 4096)
+    native, _ = native_fixture(str(tmp_path / "checkpoint"), master=True)
+    config = cpu_export.CpuExportConfig(
+        checkpoint=native.checkpoint,
+        metadata_digest=native.metadata_digest,
+        model=native.model,
+        destination=str(tmp_path / "cpu-export"),
+        source_revision=native.source_revision,
+        read_host_budget_bytes=2 * 1024**2,
+        export_host_budget_bytes=2 * 1024**2,
+        max_concurrent_shards=2,
+        request_concurrency=4,
+    )
+    original_save = hf_export.save_file
+    lock = Lock()
+    write_count = 0
+
+    def interrupt_second_write(tensors, path, **kwargs):
+        nonlocal write_count
+        with lock:
+            write_count += 1
+            number = write_count
+        if number == 2:
+            path.write_bytes(b"interrupted")
+            raise OSError("write interrupted")
+        original_save(tensors, path, **kwargs)
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(hf_export, "save_file", interrupt_second_write)
+        with pytest.raises(OSError, match="write interrupted"):
+            cpu_export.export(config)
+    root = Path(config.destination)
+    assert not (root / "export-manifest.json").exists()
+    request = (root / "export-request.json").read_bytes()
+    completed = {}
+    for receipt in root.glob(".export-progress-*.json"):
+        filename = json.loads(receipt.read_text())["filename"]
+        shard = root / filename
+        completed[filename] = (shard.read_bytes(), shard.stat().st_mtime_ns)
+    assert completed
+
+    with pytest.raises(FileExistsError):
+        cpu_export.export(dataclasses.replace(config, model=dataclasses.replace(config.model, qk_mult=1.5)))
+    retry = dataclasses.replace(
+        config,
+        read_host_budget_bytes=1024**2,
+        export_host_budget_bytes=1024**2,
+        max_concurrent_shards=1,
+        request_concurrency=2,
+    )
+    cpu_export.export(retry)
+    assert (root / "export-request.json").read_bytes() == request
+    for filename, (contents, mtime) in completed.items():
+        assert (root / filename).read_bytes() == contents
+        assert (root / filename).stat().st_mtime_ns == mtime
+    manifest = json.loads((root / "export-manifest.json").read_text())
+    assert manifest["request"] == json.loads(request)
+    assert manifest["execution"]["max_concurrent_shards"] == 1
+    export(native)
+    assert {path.name: path.read_bytes() for path in root.glob("*.safetensors")} == {
+        path.name: path.read_bytes() for path in Path(native.destination).glob("*.safetensors")
+    }
+
+
+@pytest.mark.parametrize("master,manifest", [(False, True), (True, True), (True, False)])
+@pytest.mark.parametrize("shard_size", [256, 1024**2])
+def test_cpu_export_matches_device_bytes_and_reads_expert_chunks_once(
+    tmp_path, monkeypatch, master, manifest, shard_size
+):
+    # Cover both standalone banks (as in Hero) and multiple banks in one file.
+    monkeypatch.setattr(hero_export, "DEFAULT_MAX_SHARD_SIZE", shard_size)
+    monkeypatch.setattr(cpu_export, "DEFAULT_MAX_SHARD_SIZE", shard_size)
+    request, model = native_fixture(str(tmp_path / "checkpoint"), master=master)
+    if not manifest:
+        (Path(request.checkpoint) / "manifest.json").unlink()
+    export(request)
+    cpu_request = cpu_export.CpuExportConfig(
+        checkpoint=request.checkpoint,
+        metadata_digest=request.metadata_digest,
+        model=request.model,
+        destination=str(tmp_path / "cpu-export"),
+        source_revision=request.source_revision,
+        read_host_budget_bytes=1024**2,
+        export_host_budget_bytes=1024**2,
+    )
+    cpu_export.export(cpu_request)
+    device_root = Path(request.destination)
+    cpu_root = Path(cpu_request.destination)
+    device_files = {path.name: path.read_bytes() for path in device_root.glob("*.safetensors")}
+    cpu_files = {path.name: path.read_bytes() for path in cpu_root.glob("*.safetensors")}
+    assert cpu_files == device_files
+    for filename in ("config.json", "model.safetensors.index.json"):
+        assert (cpu_root / filename).read_bytes() == (device_root / filename).read_bytes()
+    completed = json.loads((cpu_root / "export-manifest.json").read_text())
+    assert completed["expert_blocks_read"] == 3
+    expected_native_bytes = sum(x.size * x.dtype.itemsize for x in jax.tree.leaves(model))
+    pending_bytes = request.model.num_layers * request.model.num_experts * np.dtype(np.float32).itemsize
+    assert completed["read_bytes"] == expected_native_bytes + pending_bytes

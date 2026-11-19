@@ -50,8 +50,12 @@ MARIN_RUFF_CONFIG = ROOT_DIR / "lib/marin/pyproject.toml"
 EXCLUDE_PATTERNS = [
     # Vendored runtimes retain upstream formatting and license notices.
     "vendor/skyrl/**",
-    "vendor/evalchemy/**",
     "vendor/harbor/**",
+    # Canonical instruction checkers retain upstream style and license notices.
+    "lib/taskcompendium/src/taskcompendium/importers/evalchemy/scorers/ifeval/**",
+    "lib/taskcompendium/src/taskcompendium/importers/evalchemy/scorers/ifbench/**",
+    # Benchmark prompts retain source whitespace byte for byte.
+    "lib/taskcompendium/src/taskcompendium/importers/evalchemy/assets/crux_*.txt",
     # Upstream scorers are vendored byte for byte; see each family's scorers/VENDORED.md.
     "experiments/post_training/task_curation/datasets/*/scorers/**",
     # Production artifacts are hash-bound to producer cursors (catalog_sha256);
@@ -64,6 +68,7 @@ EXCLUDE_PATTERNS = [
     "**/*_connect.py",
     "**/*_pb2.py",
     "**/*.gz",
+    "**/*.zip",
     "**/*.pb",
     "**/*.index",
     "**/*.ico",
@@ -174,17 +179,11 @@ def matches_pattern(file_path: pathlib.Path, patterns: list[str]) -> bool:
     return False
 
 
-def should_exclude(file_path: pathlib.Path) -> bool:
-    return matches_pattern(file_path, EXCLUDE_PATTERNS)
-
-
 def get_matching_files(
     patterns: list[str], all_files_list: list[pathlib.Path], exclude_patterns: list[str]
 ) -> list[pathlib.Path]:
     matched = []
     for file_path in all_files_list:
-        if should_exclude(file_path):
-            continue
         if matches_pattern(file_path, exclude_patterns):
             continue
         if matches_pattern(file_path, patterns):
@@ -832,11 +831,55 @@ def check_pyrefly(files: list[pathlib.Path], fix: bool) -> int:
     return _record("Pyrefly type checker", result.returncode, output)
 
 
+# Vendored projects with their own uv.lock. They can install Marin libraries from local
+# paths, so a dependency change in one of those libraries makes their lock stale.
+VENDORED_LOCK_PROJECTS = tuple(
+    sorted(str(lock.parent.relative_to(ROOT_DIR)) for lock in ROOT_DIR.glob("vendor/*/uv.lock"))
+)
+
+
+def _vendored_lock_inputs(project: str) -> set[str]:
+    """Repo-relative pyproject.toml files whose dependencies ``project``'s uv.lock records."""
+    project_dir = ROOT_DIR / project
+    pyproject = tomllib.loads((project_dir / "pyproject.toml").read_text())
+    sources = pyproject.get("tool", {}).get("uv", {}).get("sources", {})
+    local = [project_dir / source["path"] for source in sources.values() if "path" in source]
+    return {str(path.resolve().relative_to(ROOT_DIR) / "pyproject.toml") for path in [project_dir, *local]}
+
+
+VENDORED_LOCK_INPUTS = {project: _vendored_lock_inputs(project) for project in VENDORED_LOCK_PROJECTS}
+
+
+def check_vendored_locks(files: list[pathlib.Path], fix: bool) -> int:
+    changed = {str(f.relative_to(ROOT_DIR)) for f in files}
+    projects = [project for project, inputs in VENDORED_LOCK_INPUTS.items() if changed & inputs]
+    if not projects:
+        return 0
+
+    exit_code = 0
+    output = []
+    for project in projects:
+        result = run_cmd(["uv", "lock", "--project", project, "--check"])
+        if result.returncode == 0:
+            continue
+        exit_code = result.returncode
+        output.append(f"`uv lock --project {project} --check` failed:\n{(result.stdout + result.stderr).strip()}")
+        if fix:
+            relock = run_cmd(["uv", "lock", "--project", project])
+            output.append(f"Ran `uv lock --project {project}`; stage {project}/uv.lock.")
+            if relock.returncode:
+                output.append((relock.stdout + relock.stderr).strip())
+        else:
+            output.append(f"Run `uv lock --project {project}` and commit {project}/uv.lock.")
+    return _record("Vendored uv locks", exit_code, "\n".join(output))
+
+
 @dataclass
 class PrecommitConfig:
     patterns: list[str]
     checks: list[Callable[[list[pathlib.Path], bool], int]]
     exclude_patterns: list[str] = field(default_factory=list)
+    global_exclude_patterns: list[str] = field(default_factory=lambda: EXCLUDE_PATTERNS)
 
 
 PRECOMMIT_CONFIGS = [
@@ -881,6 +924,8 @@ PRECOMMIT_CONFIGS = [
             "lib/fray/src/**/*.py",
             "lib/iris/src/**/*.py",
             "lib/rigging/src/**/*.py",
+            "lib/skyrlrecipe/src/**/*.py",
+            "lib/evalrecords/src/**/*.py",
             "lib/zephyr/src/**/*.py",
             "infra/marina/src/**/*.py",
             "infra/marina/apps/**/*.py",
@@ -923,6 +968,14 @@ PRECOMMIT_CONFIGS = [
         checks=[
             check_skill_metadata,
         ],
+    ),
+    PrecommitConfig(
+        patterns=sorted(set().union(*VENDORED_LOCK_INPUTS.values())),
+        checks=[
+            check_vendored_locks,
+        ],
+        # EXCLUDE_PATTERNS drops vendor/harbor/** and vendor/skyrl/**, whose pyproject.toml files are lock inputs.
+        global_exclude_patterns=[],
     ),
 ]
 
@@ -1053,7 +1106,9 @@ def main(
     only_set = set(f"check_{o}" for o in only)
 
     for config in PRECOMMIT_CONFIGS:
-        matched_files = get_matching_files(config.patterns, all_files_list, config.exclude_patterns)
+        matched_files = get_matching_files(
+            config.patterns, all_files_list, config.global_exclude_patterns + config.exclude_patterns
+        )
         matched_files = [f for f in matched_files if f.exists()]
         if not matched_files:
             continue

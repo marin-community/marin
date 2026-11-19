@@ -15,7 +15,7 @@ from typing import Any, Protocol
 from shellbox.machine import Machine
 from taskcompendium.models import TaskSpec
 
-from rolloutengine.models import EventSink, ModelTurn, Prompt, RolloutLimits
+from rolloutengine.models import ContextRecovery, EventSink, ModelTurn, Prompt, RolloutLimits
 
 
 class HarnessCleanup(Protocol):
@@ -55,7 +55,9 @@ class ModelSession(Protocol):
     nothing, so the harness can send it again. If the harness ends before its next request, the record
     keeps the cancelled request without an answer. When a limit ends the attempt, the next ``start`` or
     ``reply`` raises ``LimitReached``, and the harness lets it propagate. A failed model request raises
-    ``RolloutEnded`` with the model's error as its cause. A harness that catches a refusal and asks again
+    ``RolloutEnded`` with the model's error as its cause. ``ContextWindowExceeded`` rejects only the
+    current request; a harness can shorten its observations or compact and retry under the same limits.
+    A harness that catches a refusal and asks again
     runs until a turn or attempt deadline. Each request after the end of the attempt yields before it
     raises, so a harness that asks again in a loop does not stop other attempts.
     """
@@ -97,6 +99,11 @@ class ModelSession(Protocol):
 
 class Harness(Protocol):
     """The agent loop for a task: what the model sees, which tools run, and when the attempt ends."""
+
+    @property
+    def context_recovery(self) -> ContextRecovery:
+        """When the session lets this harness recover from a context rejection during an attempt."""
+        ...
 
     def check(self, task: TaskSpec, limits: RolloutLimits) -> None:
         """Raise an error if this harness cannot run ``task`` under ``limits``, before any machine starts."""

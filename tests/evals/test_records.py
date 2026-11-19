@@ -14,9 +14,8 @@ import json
 from pathlib import Path
 
 import pytest
-from marin.evaluation.model_config import AgentConfig, GenerationConfig, ModelConfig, ResourceHint, ServeConfig
-from marin.evaluation.model_identity import comparison_model_name
-from marin.evaluation.records import (
+from evalrecords.model_identity import comparison_model_name
+from evalrecords.records import (
     BenchmarkMetadataRef,
     BenchmarkMetricRef,
     EvalchemyRef,
@@ -41,6 +40,7 @@ from marin.evaluation.records import (
     scan_records,
     write_record,
 )
+from marin.evaluation.model_config import AgentConfig, GenerationConfig, ModelConfig, ResourceHint, ServeConfig
 
 
 def test_benchmark_metadata_rejects_duplicate_canonical_metric_names():
@@ -258,7 +258,7 @@ def test_scan_records_invalidates_filesystem_listing_cache(tmp_path, monkeypatch
     write_record(_RECORD.model_copy(update={"run_id": "first-run"}), str(evals))
     filesystem = _CachedListingFileSystem()
     monkeypatch.setattr(
-        "marin.evaluation.records.url_to_fs",
+        "evalrecords.records.url_to_fs",
         lambda prefix: (filesystem, prefix),
     )
     initial = scan_records(str(evals))
@@ -282,9 +282,9 @@ def test_record_json_includes_harbor_policy_identity_and_effective_limit(tmp_pat
                     env="daytona",
                     task_limit=2,
                     config_digest="sha256:" + "a" * 64,
-                    harbor_config_commit="b" * 40,
                 ),
-            )
+            ),
+            "provenance": Provenance(git_sha="abc123", launch_host="dev-box"),
         }
     )
 
@@ -299,8 +299,8 @@ def test_record_json_includes_harbor_policy_identity_and_effective_limit(tmp_pat
         "env": "daytona",
         "task_limit": 2,
         "config_digest": "sha256:" + "a" * 64,
-        "harbor_config_commit": "b" * 40,
     }
+    assert raw["provenance"] == {"git_sha": "abc123", "launch_host": "dev-box"}
 
 
 def test_record_json_includes_normalized_evalchemy_configuration(tmp_path):

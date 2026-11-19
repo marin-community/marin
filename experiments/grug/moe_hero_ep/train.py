@@ -26,6 +26,7 @@ import numpy as np
 import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
+from haliax.jax_utils import broadcast_one_to_all
 from haliax.partitioning import set_mesh
 from jax._src import config as jax_config
 from jax.sharding import Mesh, NamedSharding
@@ -34,6 +35,7 @@ from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray, PyTree
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
+from levanter.checkpoint import Checkpointer, discover_checkpoint_candidates, load_checkpoint_metadata
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
 from levanter.data.mixture import MixtureDataset
@@ -50,7 +52,7 @@ from levanter.grug.grug_moe import (
     MOE_VALID_ASSIGNMENTS_METRIC,
     MoeImplementation,
 )
-from levanter.grug.sharding import compact_grug_mesh
+from levanter.grug.sharding import _axis_names, compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
@@ -64,10 +66,11 @@ from levanter.utils.mesh import MeshConfig
 
 from experiments.grug.checkpointing import (
     checkpoint_stores_master,
-    restore_grug_state_from_checkpoint,
+    restore_grug_state_and_source,
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe_hero_ep.coordinated_gc import GC_TIME_METRIC, GC_WARMUP_STEPS, collect_garbage, coordinated_gc
+from experiments.grug.moe_hero_ep.expert_placement import ExpertPlacement
 from experiments.grug.moe_hero_ep.model import (
     OFFLOAD_CARRY_REMAT_MODE,
     GrugModelConfig,
@@ -75,6 +78,8 @@ from experiments.grug.moe_hero_ep.model import (
     Transformer,
     apply_qb_betas,
 )
+from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
+from experiments.grug.preemption import GracefulPreemption
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
@@ -160,6 +165,45 @@ class TrainingDataMode(StrEnum):
 
     MIXTURE = "mixture"
     SYNTHETIC = "synthetic"
+
+
+class RouterBiasMode(StrEnum):
+    """How the router bias moves during training.
+
+    UPDATE sets each step's bias from the previous step's quantile-balancing betas. FROZEN keeps
+    the restored betas, so every step routes with the bias the restored checkpoint would have used next.
+    """
+
+    UPDATE = "update"
+    FROZEN = "frozen"
+
+
+@dataclass(frozen=True)
+class SpecialTokenInit:
+    """Reseed chat special-token rows of the LM head and raise their learning rate.
+
+    At ``start_step`` each ``token_ids`` column of ``output_proj`` is copied from the matching
+    ``anchor_ids`` column, and the optimizer moments of those columns are zeroed; input embeddings
+    and their moments are kept. Every step scales the optimizer updates of the same
+    ``token_embed`` rows and ``output_proj`` columns by ``lr_multiplier``.
+    """
+
+    token_ids: tuple[int, ...]
+    anchor_ids: tuple[int, ...]
+    start_step: int
+    lr_multiplier: float
+
+    def __post_init__(self):
+        if not self.token_ids or len(set(self.token_ids)) != len(self.token_ids):
+            raise ValueError("token_ids must be nonempty and unique")
+        if len(self.anchor_ids) != len(self.token_ids):
+            raise ValueError("each special token needs exactly one anchor token")
+        if set(self.anchor_ids) & set(self.token_ids):
+            raise ValueError("anchor tokens must be rows that are not reseeded")
+        if self.start_step < 0:
+            raise ValueError(f"start_step must be non-negative, got {self.start_step}")
+        if self.lr_multiplier <= 0:
+            raise ValueError(f"lr_multiplier must be positive, got {self.lr_multiplier}")
 
 
 def restore_template_from(state):
@@ -329,7 +373,7 @@ class GrugTrainerConfig:
     # restarts at step 0.
     save_checkpoints: bool = False
 
-    # Grug builds its own compact (replica_dcn, data, context, expert, model) mesh instead of using
+    # Grug builds its own compact (replica_dcn, data, expert, context, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these leave free.
     # Defaults reproduce the historical layout: no expert parallelism and full replication
     # across slices (replica_axis_size=None -> jax.process_count()), i.e. parameters
@@ -344,10 +388,17 @@ class GrugTrainerConfig:
     # measured to pay off at 65K, gained only 0.4% at 16K on one rack, and its full-batch gather crosses racks.
     balance_attention_rows: bool = False
     sharding_dump_path: str | None = None
+    router_bias_mode: RouterBiasMode = RouterBiasMode.UPDATE
+    # SFT from a pretrained checkpoint: reseed chat-token rows once and train them faster.
+    special_tokens: SpecialTokenInit | None = None
+    # Renumber the routed experts of the placement's source checkpoint once, when the run restores it.
+    expert_placement: ExpertPlacement | None = None
 
     def __post_init__(self):
         if self.gc_interval is not None and self.gc_interval <= 0:
             raise ValueError("GC interval must be positive")
+        if self.special_tokens is not None and self.master_param_mode != MasterParamMode.DEVICE:
+            raise ValueError("special-token reseeding supports only MasterParamMode.DEVICE")
 
 
 def grug_trainer_mesh_config(context_axis_size: int) -> MeshConfig:
@@ -413,9 +464,10 @@ class GrugRunConfig:
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
     trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
-    # Stop after this many steps while `trainer.num_train_steps` still sizes the learning-rate
+    # The absolute step the run stops at, while `trainer.num_train_steps` still sizes the learning-rate
     # schedule. Warmup and decay are fractions of `num_train_steps`, so training the head of a
-    # long schedule requires the two to differ. None runs the whole schedule.
+    # long schedule requires the two to differ. Only the optimizer's `ScheduleExtension` allows a stop past
+    # the schedule's end. None runs the whole schedule and its extension.
     stop_after_steps: int | None = None
     flops_baseline: FlopsBaseline | None = None
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
@@ -427,6 +479,23 @@ class GrugRunConfig:
     # restores checkpoints benefits from a deep budget.
     max_retries_failure: int = 0
     max_task_failures: int = 10
+
+    def __post_init__(self):
+        if self.stop_after_steps is not None and self.stop_after_steps > self.last_step:
+            raise ValueError(
+                f"stop_after_steps={self.stop_after_steps} is past the optimizer's last defined step {self.last_step}; "
+                "only a ScheduleExtension trains past the schedule"
+            )
+
+    @property
+    def last_step(self) -> int:
+        """The end of the learning-rate schedule and its extension."""
+        extension = self.optimizer.schedule_extension if isinstance(self.optimizer, GrugMoeMuonHConfig) else None
+        return self.trainer.trainer.num_train_steps + (extension.steps if extension is not None else 0)
+
+    @property
+    def stop_step(self) -> int:
+        return self.last_step if self.stop_after_steps is None else self.stop_after_steps
 
 
 def build_train_dataset(
@@ -440,7 +509,8 @@ def build_train_dataset(
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
-_TRAIN_LOADER_BUFFER_SIZE = 512
+# Queued batches live in device memory, 4 MiB per device each at 262K. At 29 s/step, 64 batches is 31 minutes of data.
+_TRAIN_LOADER_BUFFER_SIZE = 64
 # On one GB200 tray, four-batch requests delivered the first data in 3.7s and sustained 3.4 batches/s.
 _TRAIN_LOADER_FETCH_BATCH_SIZE = 4
 
@@ -490,7 +560,7 @@ def build_train_loader(
     mesh: Mesh,
 ) -> DataLoader[GrugLmExample]:
     # DataLoader uses this batch axis mapping to shard batches across the distributed mesh.
-    # `compact_grug_mesh` always carries (replica_dcn, data, context, expert, model); length-1 axes
+    # `compact_grug_mesh` always carries (replica_dcn, data, expert, context, model); length-1 axes
     # are kept so we can name "expert" unconditionally.
     return DataLoader(
         dataset,
@@ -504,20 +574,57 @@ def build_train_loader(
     )
 
 
-def _reshard_tree_to_mesh(tree, mesh: Mesh):
-    """Move each array leaf onto ``mesh``, preserving its PartitionSpec.
+def expert_collapsed_eval_mesh(train_mesh: Mesh) -> Mesh:
+    """Return ``train_mesh`` with its ``expert`` axis folded into ``data``, for the dropless eval.
 
-    The train and eval meshes name the same axes (only the ``expert``/``data`` sizes differ), so a
-    leaf's PartitionSpec is valid on both; ``jax.device_put`` performs the cross-mesh transfer. The
-    model's own ``reshard`` calls fix the exact layout inside the forward, so any valid placement on
-    the target mesh suffices here. Non-array leaves pass through.
+    Every device keeps its training ``context`` group, and its eval ``data`` group is its training
+    ``(data, expert)`` group, so eval collectives need no NCCL communicator that training lacks.
     """
+    names = train_mesh.axis_names
+    if names[names.index("data") + 1] != "expert":
+        raise ValueError(f"expert must follow data in the training mesh, got {names}")
+    shape = dict(train_mesh.shape)
+    shape["data"] *= shape["expert"]
+    shape["expert"] = 1
+    devices = train_mesh.devices.reshape(tuple(shape[name] for name in names))
+    return Mesh(devices, names, axis_types=train_mesh.axis_types)
+
+
+def _expert_folded_spec(spec: P, train_mesh: Mesh) -> P:
+    """Rename a training PartitionSpec for ``expert_collapsed_eval_mesh(train_mesh)``.
+
+    At training ``data`` size one, ``expert`` becomes the eval ``data`` axis and training ``data``
+    drops out, so every device keeps the shard it already holds. Otherwise the spec is unchanged:
+    a leaf sharded on ``expert`` without ``data`` lands replicated and the move transfers it.
+    """
+    if train_mesh.shape["data"] != 1:
+        return spec
+
+    def rename(entry):
+        renamed = tuple("data" if name == "expert" else name for name in _axis_names(entry) if name != "data")
+        if not renamed:
+            return None
+        return renamed if len(renamed) > 1 else renamed[0]
+
+    return P(*(rename(entry) for entry in spec))
+
+
+def _move_tree_to_eval_mesh(tree, train_mesh: Mesh):
+    """Move each array leaf from ``train_mesh`` onto ``expert_collapsed_eval_mesh(train_mesh)``.
+
+    The move must not need a collective when training ``data`` has size one. A collective here runs
+    on a communicator training does not hold, and that communicator's NCCL buffers stay outside the
+    allocator pool for the life of the process, taking room the next train step's arena needs. The
+    model's own ``reshard`` calls fix the layout inside the forward, so any valid placement on the
+    eval mesh suffices. Non-array leaves pass through.
+    """
+    eval_mesh = expert_collapsed_eval_mesh(train_mesh)
 
     def move(leaf):
         if not isinstance(leaf, jax.Array):
             return leaf
         spec = leaf.sharding.spec if isinstance(leaf.sharding, NamedSharding) else P()
-        return jax.device_put(leaf, NamedSharding(mesh, spec))
+        return jax.device_put(leaf, NamedSharding(eval_mesh, _expert_folded_spec(spec, train_mesh)))
 
     return jax.tree.map(move, tree)
 
@@ -589,7 +696,7 @@ def build_tagged_evaluator(
         max_examples_per_dataset = eval_cfg.max_eval_batches * eval_cfg.eval_batch_size
 
     tokenizer = data_config.the_tokenizer if eval_cfg.compute_bpb else None
-    # `compact_grug_mesh` always carries (replica_dcn, data, context, expert, model); length-1 axes
+    # `compact_grug_mesh` always carries (replica_dcn, data, expert, context, model); length-1 axes
     # are kept so we can name "expert" unconditionally.
     eval_axis_mapping = {"batch": _BATCH_AXES}
     eval_batch = Axis("batch", eval_cfg.eval_batch_size)
@@ -700,7 +807,8 @@ def _make_mixture_stage_callback(train_dataset: MixtureDataset, batch_schedule: 
 
     def log_mixture_stage(step_info):
         nonlocal last_mixture_stage
-        seq_index = batch_schedule.global_data_offset_by_step(step_info.step)
+        # Stages are laid out from the mixture's first readable index, which `mixture_start_step` can move.
+        seq_index = batch_schedule.global_data_offset_by_step(step_info.step) - train_dataset.first_readable_index()
         block_id = seq_index // train_dataset.block_size
         stage = train_dataset._get_stage_for_block(block_id)
         if stage == last_mixture_stage:
@@ -955,9 +1063,24 @@ def _make_train_step(
     offload_opt_state: bool = False,
     master_param_mode: MasterParamMode = MasterParamMode.DEVICE,
     balance_rows: bool = False,
+    router_bias_mode: RouterBiasMode = RouterBiasMode.UPDATE,
+    special_tokens: SpecialTokenInit | None = None,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
+    frozen_router_bias = router_bias_mode == RouterBiasMode.FROZEN
+
+    def adjust_updates(updates):
+        if special_tokens is None:
+            return updates
+        return scale_special_token_updates(updates, special_tokens.token_ids, special_tokens.lr_multiplier)
+
+    def keep_router_bias(new_params, reference_params):
+        # Inherited optimizer momentum would otherwise move the frozen bias between steps.
+        if not frozen_router_bias:
+            return new_params
+        return eqx.tree_at(_router_bias, new_params, _router_bias(reference_params))
+
     if watch_config is not None:
         if isinstance(watch_config.watch_targets, str):
             watch_targets = tuple(t.strip() for t in watch_config.watch_targets.split(","))
@@ -998,12 +1121,14 @@ def _make_train_step(
             master_params_in = apply_qb_betas(master_params_in, state.pending_qb_betas)
             master_grads = _FP32_POLICY.cast_to_param(grads)
             updates, opt_state = optimizer.update(master_grads, opt_state_in, master_params_in)
-            master_params = optax.apply_updates(master_params_in, updates)
+            updates = adjust_updates(updates)
+            master_params = keep_router_bias(optax.apply_updates(master_params_in, updates), master_params_in)
             params = mp.cast_to_param(master_params)
             master_params = _tree_to_memory_kind(master_params, "pinned_host")
         else:
             updates, opt_state = optimizer.update(grads, opt_state_in, qb_params)
-            params = optax.apply_updates(qb_params, updates)
+            updates = adjust_updates(updates)
+            params = keep_router_bias(optax.apply_updates(qb_params, updates), qb_params)
             master_params = None
 
         if ema_beta is None:
@@ -1042,12 +1167,211 @@ def _make_train_step(
             master_params=master_params,
             opt_state=opt_state,
             ema_params=ema_params,
-            pending_qb_betas=metrics["qb_beta_per_layer"],
+            pending_qb_betas=state.pending_qb_betas if frozen_router_bias else metrics["qb_beta_per_layer"],
         )
 
         return next_state, metrics, watch_stats
 
     return train_step
+
+
+def _router_bias(model: Transformer) -> jax.Array:
+    return model.stacked_blocks.stacked.mlp.router_bias
+
+
+def scale_special_token_updates(updates: Transformer, token_ids: tuple[int, ...], multiplier: float) -> Transformer:
+    """Scale the updates of special-token embedding rows and LM-head columns by ``multiplier``.
+
+    The scale applies after the optimizer's normalization, so it changes the effective learning rate.
+    """
+    vocab_size = updates.token_embed.shape[0]
+    scales = jnp.ones((vocab_size,), dtype=jnp.float32).at[jnp.asarray(token_ids)].set(multiplier)
+    token_embed = updates.token_embed * scales[:, None].astype(updates.token_embed.dtype)
+    output_proj = updates.output_proj * scales[None, :].astype(updates.output_proj.dtype)
+    return eqx.tree_at(lambda m: (m.token_embed, m.output_proj), updates, (token_embed, output_proj))
+
+
+def reseed_special_token_columns(
+    state: GrugTrainState, special_tokens: SpecialTokenInit, *, offload_opt_state: bool
+) -> GrugTrainState:
+    """Copy each special token's LM-head column from its anchor and zero that column's optimizer moments."""
+    vocab_size = state.params.output_proj.shape[1]
+    if max(special_tokens.token_ids + special_tokens.anchor_ids) >= vocab_size:
+        raise ValueError(f"special or anchor token is outside the {vocab_size}-token vocabulary")
+    ids = jnp.asarray(special_tokens.token_ids)
+    sources = jnp.asarray(special_tokens.anchor_ids)
+    output_proj_shape = state.params.output_proj.shape
+
+    @eqx.filter_jit
+    def reset(state):
+        output_proj = state.params.output_proj
+        sharding = jax.typeof(output_proj).sharding
+        anchors = output_proj.at[:, sources].get(out_sharding=P(sharding.spec[0], None))
+        params = eqx.tree_at(
+            lambda m: m.output_proj, state.params, output_proj.at[:, ids].set(anchors, out_sharding=sharding)
+        )
+
+        def clear_moments(path, leaf):
+            if not eqx.is_array(leaf) or not path or str(path[-1]) != ".output_proj":
+                return leaf
+            if leaf.shape != output_proj_shape:
+                raise ValueError(f"optimizer leaf {jax.tree_util.keystr(path)} has shape {leaf.shape}")
+            moment = _tree_to_memory_kind(leaf, "device") if offload_opt_state else leaf
+            moment = moment.at[:, ids].set(0, out_sharding=jax.typeof(moment).sharding)
+            return _tree_to_memory_kind(moment, "pinned_host") if offload_opt_state else moment
+
+        opt_state = jax.tree_util.tree_map_with_path(clear_moments, state.opt_state)
+        return dataclasses.replace(state, params=params, opt_state=opt_state)
+
+    return reset(state)
+
+
+# Expert-indexed leaves of the stacked MoE block, by the attribute names that end their key path, and the
+# axis of each that indexes experts. Every leaf is stacked over layers on axis 0.
+_MOE_PATH = ("stacked_blocks", "stacked", "mlp")
+_EXPERT_AXES: dict[tuple[str, ...], int] = {
+    (*_MOE_PATH, "router"): 2,
+    (*_MOE_PATH, "router_bias"): 1,
+    (*_MOE_PATH, "expert_mlp", "w_gate"): 1,
+    (*_MOE_PATH, "expert_mlp", "w_up"): 1,
+    (*_MOE_PATH, "expert_mlp", "w_down"): 1,
+}
+
+
+def _attribute_names(path) -> tuple[str, ...]:
+    return tuple(entry.name for entry in path if isinstance(entry, jax.tree_util.GetAttrKey))
+
+
+def _expert_axis(path, leaf: jax.Array, num_experts: int) -> int | None:
+    """The expert axis of an expert-indexed leaf, or None; raise on an unlisted MoE leaf with an expert axis."""
+    names = _attribute_names(path)
+    for suffix, axis in _EXPERT_AXES.items():
+        if names[-len(suffix) :] == suffix:
+            if leaf.shape[axis] != num_experts:
+                raise ValueError(f"{jax.tree_util.keystr(path)} has shape {leaf.shape}, no expert axis {axis}")
+            return axis
+    inside_moe = any(names[i : i + len(_MOE_PATH)] == _MOE_PATH for i in range(len(names)))
+    if inside_moe and num_experts in leaf.shape[1:]:
+        raise ValueError(f"{jax.tree_util.keystr(path)} looks expert-indexed but has no placement rule")
+    return None
+
+
+@functools.partial(jax.jit, static_argnums=(2, 3), donate_argnums=(0,))
+def _take_experts(leaf: jax.Array, order: jax.Array, axis: int, on_host: bool) -> jax.Array:
+    # Memory-kind moves need the traced sharding, so an offloaded leaf crosses to the device and back in here.
+    if on_host:
+        leaf = _tree_to_memory_kind(leaf, "device")
+    sharding = jax.typeof(leaf).sharding
+    layer_spec = P(*sharding.spec[1:]) if sharding.spec else P()
+
+    def take(layer_and_order):
+        x, o = layer_and_order
+        return x.at[o].get(out_sharding=layer_spec) if axis == 1 else x.at[:, o].get(out_sharding=layer_spec)
+
+    # A gather along the expert-sharded axis all-gathers its operand, so map over layers one at a time:
+    # a vmap would gather every layer's experts onto each device at once.
+    placed = jax.lax.map(take, (leaf, order))
+    return _tree_to_memory_kind(placed, "pinned_host") if on_host else placed
+
+
+def _permute_tree(tree, order: jax.Array, num_experts: int):
+    def permute(path, leaf):
+        if not eqx.is_array(leaf):
+            return leaf
+        axis = _expert_axis(path, leaf, num_experts)
+        if axis is None:
+            return leaf
+        # One leaf at a time, donated, so the device holds at most one extra copy of the largest leaf.
+        return _take_experts(leaf, order, axis, leaf.sharding.memory_kind == "pinned_host")
+
+    return jax.tree_util.tree_map_with_path(permute, tree)
+
+
+def permute_experts(state: GrugTrainState, placement: ExpertPlacement) -> GrugTrainState:
+    """Renumber each layer's routed experts: slot ``i`` takes expert ``placement.order[layer][i]``.
+
+    Moves the router columns, router bias, pending QB betas, expert weights, and every optimizer leaf
+    of those parameters together, so the model computes the same function and the optimizer continues
+    from the same moments.
+    """
+    order = jnp.asarray(placement.order, dtype=jnp.int32)
+    num_experts = placement.num_experts
+    if _count_expert_leaves(state.params, num_experts) != len(_EXPERT_AXES):
+        raise ValueError("the model does not hold every expert-indexed leaf the placement must move")
+    permute = functools.partial(_permute_tree, order=order, num_experts=num_experts)
+    params = permute(state.params)
+    pending = jax.vmap(lambda betas, o: betas[o])(state.pending_qb_betas, order)
+    return dataclasses.replace(
+        state,
+        params=params,
+        master_params=None if state.master_params is None else permute(state.master_params),
+        ema_params=None if state.ema_params is None else permute(state.ema_params),
+        opt_state=permute(state.opt_state),
+        pending_qb_betas=pending,
+    )
+
+
+def _validate_expert_placement(placement: ExpertPlacement, config: GrugRunConfig) -> None:
+    if config.model.moe_implementation != RAGGED_MOE_IMPLEMENTATION:
+        raise ValueError(f"expert placement balances {RAGGED_MOE_IMPLEMENTATION} capacity blocks only")
+    placement.validate_for(
+        num_layers=config.model.num_layers,
+        num_experts=config.model.num_experts,
+        expert_axis_size=config.trainer.expert_axis_size,
+    )
+
+
+def _place_restored_experts(
+    state: GrugTrainState, placement: ExpertPlacement | None, *, loaded_checkpoint: str
+) -> GrugTrainState:
+    """Place the routed experts of a restored checkpoint, or check that they are already placed.
+
+    Each checkpoint of a placed run records its placement in its metadata. The trainer places only the
+    placement's source checkpoint, and refuses a checkpoint whose recorded placement is not the run's.
+    """
+    recorded = ExpertPlacement.recorded_in(load_checkpoint_metadata(loaded_checkpoint))
+    if recorded is not None:
+        if placement is None or recorded.fingerprint != placement.fingerprint:
+            run_placement = "no expert placement" if placement is None else f"expert placement {placement.fingerprint}"
+            raise ValueError(
+                f"{loaded_checkpoint} holds its experts in expert placement {recorded.fingerprint}, "
+                f"but this run uses {run_placement}"
+            )
+        logger.info("Restored %s, already in expert placement %s", loaded_checkpoint, recorded.fingerprint)
+        return state
+    if placement is None:
+        return state
+    if not placement.permutes(loaded_checkpoint):
+        raise ValueError(
+            f"{loaded_checkpoint} records no expert placement and is not the placement's source checkpoint "
+            f"{placement.source_checkpoint}"
+        )
+    placed = permute_experts(state, placement)
+    logger.info(
+        "Placed routed experts by %s (placement %s) on %d-expert capacity blocks",
+        placement.loads_from,
+        placement.fingerprint,
+        placement.block_experts,
+    )
+    return placed
+
+
+def _count_expert_leaves(tree, num_experts: int) -> int:
+    return sum(
+        _expert_axis(path, leaf, num_experts) is not None
+        for path, leaf in jax.tree_util.tree_leaves_with_path(tree)
+        if eqx.is_array(leaf)
+    )
+
+
+def _final_checkpoint_committed(checkpointer: Checkpointer, step: int) -> bool:
+    """Whether a complete permanent checkpoint of ``step`` exists under the checkpointer's permanent root."""
+    # Every process must take the same branch around the collective save, so process 0 decides for all.
+    committed = jax.process_index() == 0 and any(
+        candidate.step == step and candidate.metadata.get("is_temporary") is False
+        for candidate in discover_checkpoint_candidates(checkpointer.base_path, max_step=step)
+    )
+    return bool(broadcast_one_to_all(jnp.array(committed, dtype=jnp.bool_)))
 
 
 def _run_grug_local(config: GrugRunConfig) -> None:
@@ -1087,6 +1411,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         offload_opt_state=config.trainer.offload_opt_state,
         master_param_mode=config.trainer.master_param_mode,
         balance_rows=config.trainer.balance_attention_rows,
+        router_bias_mode=config.trainer.router_bias_mode,
+        special_tokens=config.trainer.special_tokens,
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
@@ -1107,7 +1433,14 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     # in initialization, checkpoint restore, cache construction or compilation.
     progress_watchdog = trainer.progress_watchdog.create(process_index=jax.process_index())
 
-    checkpointer = trainer.checkpointer.create(run_id) if config.trainer.save_checkpoints else None
+    expert_placement = config.trainer.expert_placement
+    checkpointer = (
+        trainer.checkpointer.create(
+            run_id, metadata=None if expert_placement is None else expert_placement.checkpoint_metadata()
+        )
+        if config.trainer.save_checkpoints
+        else None
+    )
     dashboard = (
         TrainingDashboard(config, checkpointer.request_checkpoint, run_id) if checkpointer is not None else nullcontext()
     )
@@ -1131,7 +1464,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         if released_initial_state:
             state = restore_template_from(state)
 
-        state = restore_grug_state_from_checkpoint(
+        if expert_placement is not None:
+            _validate_expert_placement(expert_placement, config)
+        state, loaded_checkpoint = restore_grug_state_and_source(
             state,
             checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
             load_checkpoint_setting=trainer.load_checkpoint,
@@ -1143,8 +1478,22 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         )
         if config.trainer.master_param_mode == MasterParamMode.DEVICE:
             state = take_master_as_params(state)
-        if released_initial_state and any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state)):
+        restored_nothing = any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state))
+        if released_initial_state and restored_nothing:
             state = _init_state(model_key)
+        if loaded_checkpoint is not None and not restored_nothing:
+            state = _place_restored_experts(state, expert_placement, loaded_checkpoint=loaded_checkpoint)
+        special_tokens = config.trainer.special_tokens
+        # Reseeding at the start step is idempotent, so a restart that restores a save from that step stays exact.
+        if special_tokens is not None and int(state.step) == special_tokens.start_step:
+            state = reseed_special_token_columns(
+                state, special_tokens, offload_opt_state=config.trainer.offload_opt_state
+            )
+            logger.info(
+                "Reseeded %d LM-head special-token columns from anchors %s",
+                len(special_tokens.token_ids),
+                dict(zip(special_tokens.token_ids, special_tokens.anchor_ids, strict=True)),
+            )
         dump_grug_state_sharding_run_artifact(
             state,
             log_dir=trainer.log_dir,
@@ -1198,12 +1547,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             # weights dropless under the local backend on an expert-collapsed mesh (expert folded
             # into `data`), which the local backend requires. FSDP runs already have expert=1.
             if dropless:
-                dropless_eval_mesh = compact_grug_mesh(
-                    expert_axis_size=1,
-                    replica_axis_size=mesh.shape["replica_dcn"],
-                    model_axis_size=mesh.shape["model"],
-                    context_axis_size=mesh.shape["context"],
-                )
+                dropless_eval_mesh = expert_collapsed_eval_mesh(mesh)
                 # Build under the eval mesh so every constant the evaluator captures at construction
                 # (e.g. `log2e`, the byte-per-token table, output shardings) is bound to the eval mesh
                 # rather than the ambient train mesh; otherwise those leak a train-mesh aval into the
@@ -1222,9 +1566,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     )
 
         # `trainer.num_train_steps` sizes the schedule; this bounds the run. Progress and the loop
-        # both use it so a head-of-schedule run reports against the steps it will actually take.
-        requested_stop_step = trainer.num_train_steps if config.stop_after_steps is None else config.stop_after_steps
-        stop_step = min(requested_stop_step, trainer.num_train_steps)
+        # both use it so a run reports against the steps it will actually take.
+        stop_step = config.stop_step
+        restored_step = int(state.step)
+        # A restore exactly at the stop is allowed, because a retry after the final checkpoint lands there.
+        if restored_step > stop_step:
+            raise ValueError(f"Restored step {restored_step} is past the stop step {stop_step}; nothing would train")
 
         profiler_cfg = trainer.profiler
         profiler_num_steps = profiler_cfg.resolve_num_profile_steps(num_train_steps=stop_step)
@@ -1303,10 +1650,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     step_count = int(step.step)
                     if step_count < 0 or step_count == last_dropless_eval_step:
                         return
-                    # `model` must stay a local. The eval mesh has expert=1, so a leaf sharded on
-                    # the expert axis lands replicated, and the copy is much larger than the
-                    # train-mesh params. The train step needs almost the whole device budget for
-                    # its temporary buffer, thus this copy must die before the next step.
+                    # `model` must stay a local. In a multi-process run the move copies each leaf,
+                    # also when the leaf stays on its devices. The copy adds to the train-mesh
+                    # params, and the train step needs almost the whole device budget for its
+                    # temporary buffer, thus this copy must die before the next step.
                     with (
                         callbacks.progress_event_scope(
                             step.emit_event,
@@ -1315,7 +1662,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         ),
                         set_mesh(_mesh),
                     ):
-                        model = _reshard_tree_to_mesh(step.model, _mesh)
+                        model = _move_tree_to_eval_mesh(step.model, mesh)
                         with jax_config.enable_pgle(False):
                             log_dict = eval_model(_ev, model, prefix=_prefix)
                         levanter.tracker.log(log_dict, step=step_count)
@@ -1331,10 +1678,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     state_callbacks.add_hook(hook, every=interval)
 
             # Baseline point at the start of the loss curve. The periodic cadence first fires at
-            # `steps_per_eval` (step 3000 on the hero), thus a fresh run gets no early point.
+            # `steps_per_eval` (step 500 on the hero), thus a fresh run gets no early point.
             # These run after the first optimization step, not before it: the first train step
             # then allocates against a clean pool, and the eval-to-train handoff gets a gate at
-            # step 2 instead of first at step 3000. `every=1` is the only interval that covers
+            # step 2 instead of first at step 500. `every=1` is the only interval that covers
             # the first step, and `_first_step_only` makes the hook fire once. A resumed run
             # starts above step 1, thus it never fires. The hooks log at `StepInfo.step`, which
             # is 0 there, so the point lands at step 0 on the curve.
@@ -1349,6 +1696,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         gc_start_step = current_step + GC_WARMUP_STEPS
 
         # Main optimization loop.
+        preemption = GracefulPreemption()
+        preemption.install()
+        preempted = False
         try:
             while current_step < stop_step:
                 iteration_start = time.perf_counter()
@@ -1440,26 +1790,45 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     step=step,
                 )
 
+                preempted = preemption.should_stop(int(state.step))
+                if preempted:
+                    break
         except BaseException:
             logger.exception(
-                "Fatal error in grug training loop; skipping final callbacks/checkpoint to preserve root cause"
+                "Fatal error in grug training loop; skipping pending final callbacks/checkpoint to preserve root cause"
             )
             raise
         else:
-            # Mirror classic trainer behavior: force callbacks on the last completed step.
-            state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
-            if checkpointer is not None:
-                with callbacks.progress_event_scope(
-                    state_callbacks.emit_event,
-                    callbacks.ProgressEvent.CHECKPOINT_STARTED,
-                    callbacks.ProgressEvent.CHECKPOINT_FINISHED,
-                ):
-                    checkpointer.on_step(tree=state, step=int(state.step), force=True)
-                    checkpointer.wait_until_finished()
+            # The final checkpoint comes before the forced hooks, whose evals can fail, so a failure there cannot
+            # lose it. A retry that restores that checkpoint has nothing left to protect, and it must not repeat a
+            # failing eval on every rack or write a second copy of every array into the checkpoint's OCDBT store.
+            # It succeeds with no final eval, which can run offline.
+            if (
+                checkpointer is not None
+                and restored_step == stop_step
+                and _final_checkpoint_committed(checkpointer, stop_step)
+            ):
+                logger.warning(
+                    "ZERO-STEP SUCCESS: permanent checkpoint of stop step %d already exists. Skipping the final "
+                    "callbacks, including the final eval, and the final checkpoint.",
+                    stop_step,
+                )
+            else:
+                if checkpointer is not None:
+                    with callbacks.progress_event_scope(
+                        state_callbacks.emit_event,
+                        callbacks.ProgressEvent.CHECKPOINT_STARTED,
+                        callbacks.ProgressEvent.CHECKPOINT_FINISHED,
+                    ):
+                        checkpointer.save_final_checkpoint(tree=state, step=int(state.step))
+                if not preempted:
+                    state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
         finally:
+            preemption.restore()
             state_callbacks.emit_event(callbacks.ProgressEvent.TRAINING_FINISHED)
 
     levanter.tracker.current_tracker().finish()
+    preemption.exit_if_preempted()
 
 
 def run_grug(config: GrugRunConfig) -> None:
