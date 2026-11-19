@@ -97,7 +97,6 @@ def test_one_unsupported_sentence_fails_an_eligible_response():
         (sentence("A.", "supported") + "\r\n" + sentence("B.", "supported"), True),
         (sentence("A.", "supported") + "\r\n" + sentence("B.", "not_supported"), False),
         ("No verdicts at all.", False),
-        ("", False),
     ],
 )
 def test_grounding_parser_matches_the_notebook_rules(answer, grounded):

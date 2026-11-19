@@ -4,7 +4,7 @@
 """FACTS Grounding v2 on the 856 public examples, judged by one model through the v2 protocol.
 
 FACTS Grounding (Google DeepMind; v2 is section 6 of arXiv:2512.10791) asks for a long-form answer
-grounded only in a supplied document of up to about 32k tokens. The rows are Kaggle dataset
+grounded only in a supplied document. The rows are Kaggle dataset
 ``deepmind/FACTS-grounding-examples`` version 17, the file the v2 starter notebook reads; the data are
 CC-BY-4.0. The Hugging Face mirror ``google/FACTS-grounding-public`` is the 860-row v1 release, four
 rows of which the current release dropped.

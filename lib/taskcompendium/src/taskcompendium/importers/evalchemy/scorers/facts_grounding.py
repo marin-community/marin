@@ -182,7 +182,7 @@ def clean_json_content_8(text: str, start_field: str, end_field: str | None = No
 
 
 def parse_ufg_rev21_verdict(answer: str) -> tuple[bool, list[dict[str, Any]]]:
-    """Return whether every parsed sentence is supported or exempt, and the parsed sentence verdicts."""
+    """Return the notebook's grounding decision and parsed sentence verdicts."""
     # The notebook splits verdict lines on "}\n" only; a judge that writes CRLF would merge them all.
     answer = answer.replace("\r\n", "\n")
     if "```json" in answer:
@@ -223,7 +223,7 @@ def parse_ufg_rev21_verdict(answer: str) -> tuple[bool, list[dict[str, Any]]]:
 
 
 def grade_facts_grounding(full_prompt: str, user_request: str, context_document: str, response: str, ask: Ask) -> Reward:
-    """Score 1 when the judge finds the response eligible and every factual sentence grounded."""
+    """Score with the notebook's eligibility and sentence-label rules."""
     baseline = ask([{"role": "user", "content": full_prompt}])
     eligibility_prompt = ELIGIBILITY_PROMPT.format(
         user_request=user_request, response_a=response, response_b=baseline.text

@@ -255,9 +255,10 @@ class JudgeReply:
 
 
 def judge_reply(spec: JudgeSpec, messages: list[ChatCompletionMessageParam]) -> JudgeReply:
-    """Return the spec's judge's complete reply to ``messages``, retrying transient transport failures.
+    """Return the judge's reply to ``messages``, retrying transient transport failures.
 
-    An incomplete, empty or refused reply raises ``GradingInfraError``.
+    For chat completions, ``COMPLETED_TEXT`` rejects incomplete, empty, and refused replies;
+    ``CONTENT`` may return empty or truncated content.
     """
     _validate_spec(spec)
     client, model = _client(spec, None)
