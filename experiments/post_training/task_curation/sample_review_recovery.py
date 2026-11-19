@@ -48,6 +48,7 @@ from experiments.post_training.task_curation.review_carry_forward import (
     plan_review_carry_forward,
     population_identities,
     sample_recovery_outcome,
+    sample_topup_ids,
 )
 from experiments.post_training.task_curation.sample_qc_binding import SampleQCReceipt
 from infra.marina.apps.rl_data_catalog.server.source_identity import SourceId
@@ -228,7 +229,13 @@ def recover_target(
         tuple(carried.values()),  # type: ignore[arg-type]
         reviewers=tuple(reviewers) or (current_receipt.review.reviewer,),
     )
-    return recovery, priors
+    topup = sample_topup_ids(
+        current_population.task_count,
+        panel_reviews,
+        tuple(carried.values()),  # type: ignore[arg-type]
+        current_identities(frozenset()).keys(),
+    )
+    return recovery.model_copy(update={"topup_ids": topup}), priors
 
 
 def _recover_prior(
@@ -309,6 +316,8 @@ def recover_queue(queue: RecoveryQueue, output_root: str, normalization_fields: 
             "reviewed_fraction": recovery.reviewed_fraction,
             "level": recovery.level.value,
             "became_full": recovery.full,
+            "topup_count": len(recovery.topup_ids),
+            "topup_ids": list(recovery.topup_ids),
             "reviewer_sha256s": [canonical_sha256(reviewer) for reviewer in recovery.reviewers],
             "priors": [
                 {
@@ -373,6 +382,7 @@ def main() -> None:
                 "carried_reviews": record["carried_reviews"],
                 "coverage_percent": round(100 * record["reviewed_fraction"], 2),
                 "became_full": record["became_full"],
+                "topup_count": record["topup_count"],
             }
             for record in records
         ],

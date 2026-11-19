@@ -27,7 +27,7 @@ moves. Its contract:
 import argparse
 import json
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 
 import pyarrow as pa
@@ -694,6 +694,8 @@ class SampleRecovery(BaseModel):
     reviewers: tuple[dict, ...]
     """Every carried review's original reviewer identity, recorded verbatim and
     never relabeled; the current receipt's reviewer stands when nothing carries."""
+    topup_ids: tuple[str, ...] = ()
+    """Task IDs whose fresh review completes the panel's conclusive coverage."""
 
 
 def sample_recovery_outcome(
@@ -738,6 +740,35 @@ def sample_recovery_outcome(
         panel_result=panel_result,
         reviewers=reviewers,
     )
+
+
+def sample_topup_ids(
+    retained: int,
+    panel_reviews: tuple[ReviewRecord, ...],
+    carried: tuple[CarriedReview, ...],
+    current_ids: Iterable[str],
+    *,
+    seed: int = SAMPLE_SEED,
+    max_panel_size: int = SAMPLE_SIZE,
+) -> tuple[str, ...]:
+    """The exact fresh reviews that complete the panel's conclusive coverage.
+
+    The reviewed set is the panel plus the carried reviews. First complete the
+    panel: its members without a conclusive observation go first. Then draw
+    seeded replacements from the retained population until
+    ``min(max_panel_size, retained)`` distinct tasks have a conclusive review.
+    """
+    panel_ids = {record.task_id for record in panel_reviews}
+    covered = {record.task_id for record in panel_reviews if is_conclusive(record)}
+    covered |= {entry.current_task_id for entry in carried if is_conclusive(entry.review)}
+    target = min(max_panel_size, retained)
+    topup = sorted(task_id for task_id in panel_ids if task_id not in covered)
+    remaining = target - len(covered) - len(topup)
+    if remaining > 0:
+        pool = [task_id for task_id in current_ids if task_id not in panel_ids and task_id not in covered]
+        _, replacements = seeded_sample(pool, size=remaining, key=lambda task_id: seeded_order(task_id, seed))
+        topup.extend(replacements)
+    return tuple(topup)
 
 
 def load_earlier_receipt(document_path: str, source_id: str) -> SampleQCReceipt:
