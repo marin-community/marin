@@ -876,6 +876,19 @@ def get_physical_gpu_id():
     return str(props.uuid)
 
 
+def configured_ray_worker_environment(cfg: DictConfig) -> dict[str, str]:
+    """Resolve config-defined Ray worker settings before probing hardware."""
+    environment = EnvVarManager.from_config(cfg).environment_for(EnvVarScope.RAY_WORKER)
+    # The collective timeout caps the debug preset's heartbeat deadline.
+    environment.update(
+        worker_nccl_environment(
+            base_environment=environment,
+            collective_timeout_seconds=int(cfg.trainer.distributed.worker_collective_timeout_seconds),
+        )
+    )
+    return environment
+
+
 def prepare_runtime_environment(cfg: DictConfig) -> dict[str, str]:
     """
     Prepare environment variables for Ray runtime environment.
@@ -936,15 +949,7 @@ def prepare_runtime_environment(cfg: DictConfig) -> dict[str, str]:
     # runtime_env contract, not from arbitrary driver env. EnvVarManager puts it
     # in the actor's process env before the actor imports uvloop/libuv, so
     # libuv's first uv__use_io_uring() reads 0.
-    env_vars.update(EnvVarManager.from_config(cfg).environment_for(EnvVarScope.RAY_WORKER))
-    # Resolve the actual collective deadline last so the debug preset's heartbeat
-    # cannot exceed a shorter explicitly configured process-group timeout.
-    env_vars.update(
-        worker_nccl_environment(
-            base_environment=env_vars,
-            collective_timeout_seconds=int(cfg.trainer.distributed.worker_collective_timeout_seconds),
-        )
-    )
+    env_vars.update(configured_ray_worker_environment(cfg))
 
     # NOTE (charlie): See https://github.com/vllm-project/vllm/blob/c6b0a7d3ba03ca414be1174e9bd86a97191b7090/vllm/worker/worker_base.py#L445
     # and https://docs.vllm.ai/en/v0.9.2/usage/troubleshooting.html?h=nccl_cumem_enable#known-issues
