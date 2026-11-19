@@ -20,7 +20,8 @@ trials:
   batch: X0251
   date: '2026-11-19'
   comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0251
-  wandb: []
+  wandb:
+  - belay-X0251-seed0
   settings:
     muonh_init_removal: 'true'
   commit: 932d5e08a1
