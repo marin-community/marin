@@ -821,6 +821,22 @@ def test_vision_converter_restores_weights_and_missing_buffers(tmp_path, prefix)
     np.testing.assert_array_equal(safetensors.numpy.load_file(exported / SAFE_TENSORS_MODEL)["weight"], weights)
 
 
+def test_vision_converter_exports_bundled_processor(tmp_path, local_gpt2_tokenizer_path):
+    processor = transformers.CLIPProcessor(
+        image_processor=transformers.CLIPImageProcessorPil(crop_size={"height": 48, "width": 48}),
+        tokenizer=transformers.AutoTokenizer.from_pretrained(local_gpt2_tokenizer_path),
+    )
+    converter = HfVisionLanguageCheckpointConverter(TinyVisionConfig, HfConfigClass=HfViTConfig, processor=processor)
+    with use_test_mesh():
+        model = TinyVisionModel.init(TinyVisionConfig(width=2), key=PRNGKey(0))
+        converter.save_pretrained(model, str(tmp_path), save_reference_code=False)
+
+    restored = transformers.AutoProcessor.from_pretrained(tmp_path, local_files_only=True)
+    assert isinstance(restored, transformers.CLIPProcessor)
+    assert restored.image_processor.crop_size == {"height": 48, "width": 48}
+    assert restored.tokenizer.get_vocab() == processor.tokenizer.get_vocab()
+
+
 @pytest.mark.parametrize("resize", [False, True])
 def test_lm_converter_preserves_or_resizes_checkpoint_vocabulary(tmp_path, local_gpt2_tokenizer_path, resize):
     config = Gpt2Config(max_seq_len=8, hidden_dim=8, num_layers=1, num_heads=1, use_flash_attention=False)

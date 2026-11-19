@@ -84,7 +84,7 @@ from transformers.dynamic_module_utils import get_class_from_dynamic_module  # n
 
 if TYPE_CHECKING:
     # transformers is an optional dep; keep guard to avoid import at type-check time only
-    from transformers import FeatureExtractionMixin, ProcessorMixin
+    from transformers import BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin
 
 DEFAULT_MAX_SHARD_SIZE = int(5e9)
 MAX_CONCURRENT_HF_SHARDS = 16
@@ -1436,6 +1436,8 @@ class HfLanguageCheckpointConverter(HfCheckpointIO[MConfig]):
 class HfVisionLanguageCheckpointConverter(HfCheckpointIO[VisionConfig]):
     """Convert standalone vision encoder checkpoints."""
 
+    processor: Optional["ProcessorMixin | BaseImageProcessor"] = None
+
     def __init__(
         self,
         LevConfigClass: Type[VisionConfig],
@@ -1444,6 +1446,8 @@ class HfVisionLanguageCheckpointConverter(HfCheckpointIO[VisionConfig]):
         config_overrides: Optional[dict] = None,
         trust_remote_code: bool = False,
         ignore_prefix: Optional[str] = None,
+        *,
+        processor: Optional["ProcessorMixin | BaseImageProcessor"] = None,
     ):
         hf_class = self._infer_config_class(HfConfigClass, reference_checkpoint, trust_remote_code)
         self.__default_init__(  # type: ignore
@@ -1453,6 +1457,7 @@ class HfVisionLanguageCheckpointConverter(HfCheckpointIO[VisionConfig]):
             config_overrides=config_overrides,
             trust_remote_code=trust_remote_code,
             ignore_prefix=ignore_prefix,
+            processor=processor,
         )
 
     def load_pretrained(
@@ -1496,6 +1501,7 @@ class HfVisionLanguageCheckpointConverter(HfCheckpointIO[VisionConfig]):
             export_host_budget_bytes=export_host_budget_bytes,
             max_concurrent_shards=max_concurrent_shards,
             dtype=dtype,
+            save_extra_metadata=self.processor.save_pretrained if self.processor is not None else None,
             **hf_upload_kwargs,
         )
 
