@@ -432,12 +432,28 @@ def load_catalog(
         return query(sql, parameters)
 
     def insert(table: str, rows: Iterable[dict[str, Any]]) -> int:
-        # A resumed load re-stages everything: the primary keys absorb the rows the
-        # previous attempt already committed, so no prefix arithmetic can desynchronize
-        # with partially completed batches.
-        return insert_rows(
-            execute, f"atlas_{table}", TABLE_COLUMNS[table], load_id, rows, conflict_nothing=resume_load_id is not None
-        )
+        # A resumed load skips each table's staged prefix: the rows are inserted in a
+        # deterministic order and the gateway completes timed-out statements server-side,
+        # so the staged row count is exactly the committed prefix. ON CONFLICT DO NOTHING
+        # absorbs any overlap at the batch boundary.
+        if resume_load_id is not None:
+            skip = execute(f"SELECT COUNT(*) AS n FROM atlas_{table} WHERE load_id = :load_id", {"load_id": load_id})[
+                "rows"
+            ][0]["n"]
+            if skip:
+                rows = list(rows)
+                rows = rows[skip:]
+                if not rows:
+                    return skip
+                return skip + insert_rows(
+                    execute,
+                    f"atlas_{table}",
+                    TABLE_COLUMNS[table],
+                    load_id,
+                    rows,
+                    conflict_nothing=True,
+                )
+        return insert_rows(execute, f"atlas_{table}", TABLE_COLUMNS[table], load_id, rows)
 
     if resume_load_id is not None:
         execute(
