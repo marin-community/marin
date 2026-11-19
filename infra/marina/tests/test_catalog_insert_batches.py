@@ -4,6 +4,7 @@
 """Bound indexed catalog writes while preserving large evidence and resume identity."""
 
 import json
+import threading
 import time
 
 import pytest
@@ -12,6 +13,7 @@ from sqlalchemy import create_engine, text
 
 from infra.marina.apps.rl_data_catalog.historical_assessments import retain_prior_assessments
 from infra.marina.apps.rl_data_catalog.load import TABLE_COLUMNS, insert_rows
+from infra.marina.apps.rl_data_catalog.parallel_history import retain_prior_assessments_parallel
 from infra.marina.apps.rl_data_catalog.server.schema import SCHEMA_SQL
 
 COMMITTED_PREFIX_ROWS = 13
@@ -219,3 +221,119 @@ def test_retained_history_copies_only_bounded_missing_rows(batch_database, recor
     record_property("retained_max_packet_rows", maximum["packets"])
     record_property("retained_max_statement_seconds", max(elapsed))
 
+
+
+def test_parallel_ranges_resume_after_copy_commits_before_checkpoint(batch_database, record_property):
+    population = 12307
+    with batch_database.begin() as c:
+        c.execute(
+            text(
+                "INSERT INTO "
+                "atlas_assessments(load_id,pipeline_key,source_id,scope,model,rubric,curation,curation_uri,traces) "
+                "VALUES ('parallel-old','retired','source','full','{}','Archived','{}','s3://example/archived','[]')"
+            )
+        )
+        c.execute(
+            text(
+                "INSERT INTO atlas_populations(load_id,pipeline_key,cohort,population,sample_count) VALUES "
+                "('parallel-old','retired','admitted',:n,:n)"
+            ),
+            {"n": population},
+        )
+        c.execute(text("INSERT INTO atlas_cohort_summaries VALUES ('parallel-old','retired','admitted',1,'{}')"))
+        c.execute(
+            text(
+                "INSERT INTO "
+                "atlas_items(load_id,pipeline_key,task_id,cohort,status,verdict,explanation,evidence_i"
+                "ds,packet_uri,has_task,omissions,defects) "
+                "SELECT "
+                "'parallel-old','retired',lpad(i::text,8,'0'),'admitted','reviewed','good','original-'"
+                "||i,'[]','s3://fixture/original',true,'[]','[]' "
+                "FROM generate_series(0,:last) i"
+            ),
+            {"last": population - 1},
+        )
+        c.execute(
+            text(
+                "INSERT INTO atlas_items SELECT "
+                "'parallel-new',pipeline_key,task_id,cohort,status,verdict,'already-staged',evidence_i"
+                "ds,packet_uri,has_task,omissions,exclusion_reason,confidence,reference_status,defects"
+                ",provenance,replaced_task_sha256,repair_advisories "
+                "FROM atlas_items WHERE load_id='parallel-old' AND mod(task_id::int,11)=0"
+            )
+        )
+        c.execute(
+            text(
+                "INSERT INTO atlas_packets(load_id,pipeline_key,task_id,packet) SELECT "
+                "'parallel-old','retired',lpad(i::text,8,'0'),repeat('evidence-',15000) FROM generate_series(0,100) i"
+            )
+        )
+    stopped = threading.Event()
+    lock = threading.Lock()
+    interrupted = False
+    worker_threads = set()
+    durations = []
+
+    def query(sql, parameters):
+        nonlocal interrupted
+        start = time.monotonic()
+        result = execute_statement(batch_database, sql, parameters)
+        with lock:
+            durations.append(time.monotonic() - start)
+            if sql.startswith("INSERT INTO atlas_items"):
+                assert sum(key.startswith("task_id_") for key in parameters) <= 1024
+                worker_threads.add(threading.get_ident())
+                if not interrupted:
+                    interrupted = True
+                    raise RuntimeError("network lost after committed copy")
+        return result
+
+    with pytest.raises(RuntimeError):
+        retain_prior_assessments_parallel(
+            query,
+            lambda: query,
+            TABLE_COLUMNS,
+            "parallel-old",
+            "parallel-new",
+            workers=4,
+            item_batch_rows=1024,
+            stop=stopped,
+        )
+    with batch_database.connect() as c:
+        assert c.execute(text("SELECT count(*) FROM atlas_assessments WHERE load_id='parallel-new'")).scalar_one() == 0
+        committed = c.execute(text("SELECT count(*) FROM atlas_items WHERE load_id='parallel-new'")).scalar_one()
+        assert committed > population // 11
+    result = retain_prior_assessments_parallel(
+        query,
+        lambda: query,
+        TABLE_COLUMNS,
+        "parallel-old",
+        "parallel-new",
+        workers=4,
+        item_batch_rows=1024,
+        stop=threading.Event(),
+    )
+    with batch_database.connect() as c:
+        actual = dict(c.execute(text("SELECT task_id,explanation FROM atlas_items WHERE load_id='parallel-new'")).all())
+        expected = {f"{i:08d}": "already-staged" if i % 11 == 0 else f"original-{i}" for i in range(population)}
+        assert actual == expected
+        assert c.execute(text("SELECT count(*) FROM atlas_packets WHERE load_id='parallel-new'")).scalar_one() == 101
+        assert c.execute(text("SELECT count(*) FROM atlas_assessments WHERE load_id='parallel-new'")).scalar_one() == 1
+        segments = c.execute(
+            text("SELECT count(*) FROM atlas_history_copy_segments WHERE load_id='parallel-new' AND completed")
+        ).scalar_one()
+        assert segments >= 8
+    assert result["items"] == population - committed
+    assert len(worker_threads) >= 2
+    assert retain_prior_assessments_parallel(
+        query,
+        lambda: query,
+        TABLE_COLUMNS,
+        "parallel-old",
+        "parallel-new",
+        workers=4,
+        item_batch_rows=1024,
+        stop=threading.Event(),
+    ) == dict.fromkeys(result, 0)
+    record_property("parallel_copy_threads", len(worker_threads))
+    record_property("max_parallel_query_wall_seconds", max(durations))
