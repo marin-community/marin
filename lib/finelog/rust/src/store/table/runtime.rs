@@ -700,6 +700,12 @@ impl TableRuntime {
         self.buffer.clear_demand();
     }
 
+    /// The live query view's segments.
+    #[cfg(test)]
+    pub fn live_segments(&self) -> Vec<crate::store::types::LocalSegment> {
+        self.segments.segments()
+    }
+
     /// Record flush demand directly. `forced` bypasses the coalescing window the
     /// way a buffer holding a whole segment does.
     #[cfg(test)]

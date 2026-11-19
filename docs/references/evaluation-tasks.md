@@ -48,6 +48,10 @@ Dataset-specific declarations live beside their recipes. MRCR declares its
 bin/needle label groups there; neither the generic schema nor the selector knows
 MRCR. GraphWalks declares a reference-token output budget and prefix probe using
 generic `ContextPolicy` fields. Reference counts use the run's pinned tokenizer.
+LongBench v2 publishes each prompt in full and middle-truncated to a fixed ladder
+of `o200k_base` token budgets, as ranked chat prompt variants. A `fit_context` run
+sends the largest variant that fits the served context and output budget, so the
+truncation is part of the published corpus and every model receives every item.
 
 Operations distinguish chat generation, raw-text generation, choice likelihood,
 and continuation likelihood. Chat preserves the source conversation without an

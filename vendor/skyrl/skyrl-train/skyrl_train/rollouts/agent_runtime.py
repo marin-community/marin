@@ -234,7 +234,15 @@ class InstalledAgentRuntime:
                     }
                 )
                 trial = await Trial.create(trial_config, host_capabilities=host_capabilities, guest_environment={})
-                result = await run_harbor_trial(trial, self.backend, complete, evidence / "engine")
+                result = await run_harbor_trial(
+                    trial,
+                    self.backend,
+                    complete,
+                    evidence / "engine",
+                    setup_commands=lowered.task.environment_requirements.setup_commands,
+                    setup_cwd=lowered.task.environment_requirements.working_directory,
+                    setup_timeout=self.settings.setup_timeout,
+                )
                 return result.model_copy(update={"trial_uri": join_resource_path(destination, "trials", attempt_id)})
         finally:
             await publish_attempt(evidence, destination)

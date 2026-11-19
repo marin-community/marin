@@ -11,7 +11,7 @@ from typing import Any, Protocol
 
 import huggingface_hub.constants
 
-from marinskyrl.environment_contract import HF_HUB_OFFLINE_ENV, TRANSFORMERS_OFFLINE_ENV
+from .environment_contract import HF_HUB_OFFLINE_ENV, TRANSFORMERS_OFFLINE_ENV
 
 TOKENIZER_CONFIG_NAME = "tokenizer_config.json"
 TOKENIZER_JSON_NAME = "tokenizer.json"
