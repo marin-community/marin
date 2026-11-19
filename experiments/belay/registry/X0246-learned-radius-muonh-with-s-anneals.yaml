@@ -20,7 +20,8 @@ trials:
   batch: X0246
   date: '2026-11-19'
   comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0246
-  wandb: []
+  wandb:
+  - belay-X0246-seed0
   settings:
     muonh_nonsi_anneal: 'true'
   commit: 23af42aad2
