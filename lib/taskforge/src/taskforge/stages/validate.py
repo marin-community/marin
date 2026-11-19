@@ -8,7 +8,6 @@ import asyncio
 from pathlib import PurePosixPath
 
 from rolloutengine.models import TaskRolloutSpec, TraceMode
-from rolloutengine.validation import InvalidTaskSpec
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.runtime.resources import resource_bytes
 
@@ -18,7 +17,13 @@ from taskforge.effects.events import Note, Resolved
 from taskforge.effects.issues import Hold, OutputBudgetExhausted, describe_exception
 from taskforge.harness.protocol import Returned, Stopped, StopReason
 from taskforge.harness.tools.adversary import AdversaryClaim, AdversaryReport, ReportTool
-from taskforge.lowering import host_requirements, lower_with_settings, lowering_settings, requirements
+from taskforge.lowering import (
+    InvalidTaskSpec,
+    host_requirements,
+    lower_with_settings,
+    lowering_settings,
+    requirements,
+)
 from taskforge.model.controls import Control
 from taskforge.model.llm import Message, Role
 from taskforge.model.proposal import render
