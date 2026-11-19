@@ -90,7 +90,6 @@ def build(template: Path, arm: str, date: str):
     text = text.replace(TEMPLATE_PREFIX, f"tmp/ttl=14d/teacher-distill-504/runs/{run_id}").replace(TEMPLATE_ID, run_id)
     raw = json.loads(text)
     trainer = raw["trainer"]
-    trainer["save_checkpoints"] = False
     trainer["distill_alpha"] = alpha
     trainer["trainer"]["tracker"]["group"] = "task504-mochi-distill"
     trainer["trainer"]["tracker"]["tags"] = ["task504", "mochi-distill", f"alpha-{alpha}"]
