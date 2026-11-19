@@ -155,7 +155,9 @@ def parse_rl_config(document: Mapping[str, Any] | DictConfig) -> ParsedRLConfig:
     data = dict(raw.get("data", {}))
     data.pop("kind", None)
     trainer = resolve_paths_in_dict(trainer, skip_keys=TRAINER_NON_PATH_KEYS)
-    generator = resolve_paths_in_dict(generator)
+    generator = resolve_paths_in_dict(
+        generator, skip_keys={"engine_init_kwargs.marin_native_environment_control"}
+    )
     parse_speculative_decoding_config(
         generator.get("speculative_decoding"),
         backend=recipe.generator.backend,
