@@ -51,7 +51,7 @@ def _check_args(x: jax.Array, radix_bits: int) -> None:
         raise ValueError(f"radix_bits must be 1, 2 or 4, got {radix_bits}")
 
 
-def kth_largest_reference(
+def radix_select_reference(
     x: Float[Array, "R N"], k: Int[Array, ""] | Int[Array, "R"] | int, *, radix_bits: int = DEFAULT_RADIX_BITS
 ) -> Float[Array, "R"]:
     """The ``k``-th largest value (1-based, counting repeats) of each row of ``x``, as float32, in plain JAX.
@@ -76,7 +76,7 @@ def kth_largest_reference(
     return from_ordered_key(prefix)
 
 
-def _kth_largest_kernel(x_ref, k_ref, out_ref, *, columns: int, block: int, radix_bits: int):
+def _radix_select_kernel(x_ref, k_ref, out_ref, *, columns: int, block: int, radix_bits: int):
     row = pl.program_id(0)
     k = k_ref[...]
     tiles = columns // block
@@ -105,7 +105,7 @@ def _kth_largest_kernel(x_ref, k_ref, out_ref, *, columns: int, block: int, radi
 
 
 @functools.lru_cache(maxsize=None)
-def _kth_largest_call(
+def _radix_select_call(
     rows: int, columns: int, block: int, radix_bits: int, num_warps: int, interpret: bool, manual_axis_type
 ):
     x_spec = jax.ShapeDtypeStruct((rows, columns), jnp.float32)
@@ -113,12 +113,12 @@ def _kth_largest_call(
     # Inside a shard_map the output varies over the same mesh axes as the input.
     out_spec = jax.ShapeDtypeStruct((rows,), jnp.float32, manual_axis_type=manual_axis_type)
     cost = with_io_bytes_accessed(
-        pl.estimate_cost(functools.partial(kth_largest_reference, radix_bits=radix_bits), x_spec, k_spec),
+        pl.estimate_cost(functools.partial(radix_select_reference, radix_bits=radix_bits), x_spec, k_spec),
         kernel_inputs_specs=(x_spec, k_spec),
         kernel_outputs_specs=out_spec,
     )
     return pl.pallas_call(
-        functools.partial(_kth_largest_kernel, columns=columns, block=block, radix_bits=radix_bits),
+        functools.partial(_radix_select_kernel, columns=columns, block=block, radix_bits=radix_bits),
         out_shape=out_spec,
         in_specs=[pl.no_block_spec, pl.BlockSpec((None,), lambda r: (r,))],
         out_specs=pl.BlockSpec((None,), lambda r: (r,)),
@@ -129,7 +129,7 @@ def _kth_largest_call(
     )
 
 
-def kth_largest(
+def radix_select(
     x: Float[Array, "R N"],
     k: Int[Array, ""] | Int[Array, "R"] | int,
     *,
@@ -138,7 +138,7 @@ def kth_largest(
     num_warps: int = DEFAULT_NUM_WARPS,
     interpret: bool = False,
 ) -> Float[Array, "R"]:
-    """:func:`kth_largest_reference` as one Pallas-Triton kernel, one program per row.
+    """:func:`radix_select_reference` as one Pallas-Triton kernel, one program per row.
 
     Same result, bit for bit. Each program reads its row in ``block``-column tiles (at most the row length rounded up
     to a power of two; the row is padded to a whole number of tiles): a row of one tile once, kept in registers for
@@ -146,15 +146,15 @@ def kth_largest(
     call it inside a ``shard_map`` when ``x`` is sharded.
 
     The kernel is written for the Pallas Triton backend and raises on TPU. On CPU this is
-    :func:`kth_largest_reference` (the Pallas interpreter cannot run inside a ``shard_map`` that checks varying axes),
+    :func:`radix_select_reference` (the Pallas interpreter cannot run inside a ``shard_map`` that checks varying axes),
     unless ``interpret`` runs the kernel in the interpreter.
     """
     _check_args(x, radix_bits)
     backend = jax.default_backend()
     if backend == "tpu" and not interpret:
-        raise ValueError("kth_largest is a Pallas-Triton kernel and does not run on TPU; use kth_largest_reference")
+        raise ValueError("radix_select is a Pallas-Triton kernel and does not run on TPU; use radix_select_reference")
     if backend == "cpu" and not interpret:
-        return kth_largest_reference(x, k, radix_bits=radix_bits)
+        return radix_select_reference(x, k, radix_bits=radix_bits)
     rows, columns = x.shape
     block = min(block, 1 << math.ceil(math.log2(columns)))
     padded = -(-columns // block) * block
@@ -163,5 +163,5 @@ def kth_largest(
         fill = jax.lax.bitcast_convert_type(jnp.uint32(_SMALLEST_KEY_FLOAT_BITS), jnp.float32)
         x = jnp.pad(x, ((0, 0), (0, padded - columns)), constant_values=fill)
     k = jnp.broadcast_to(jnp.asarray(k, jnp.int32), (rows,))
-    call = _kth_largest_call(rows, padded, block, radix_bits, num_warps, interpret, jax.typeof(x).manual_axis_type)
+    call = _radix_select_call(rows, padded, block, radix_bits, num_warps, interpret, jax.typeof(x).manual_axis_type)
     return call(x, k)

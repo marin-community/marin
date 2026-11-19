@@ -10,7 +10,7 @@ import pytest
 
 from levanter.grug import grug_moe
 from levanter.grug.grug_moe import qb_beta_topk_shard
-from levanter.kernels.pallas.kth_largest import kth_largest, kth_largest_reference
+from levanter.kernels.pallas.radix_select import radix_select, radix_select_reference
 
 
 def _rows(kind: str, rows: int, columns: int, seed: int) -> np.ndarray:
@@ -49,7 +49,7 @@ def _bits(x) -> np.ndarray:
         ("infinities", 16, 512),
     ],
 )
-def test_kth_largest_matches_top_k_bit_for_bit(kind, rows, columns):
+def test_radix_select_matches_top_k_bit_for_bit(kind, rows, columns):
     x = _rows(kind, rows, columns, seed=rows * columns)
     rng = np.random.default_rng(columns)
     per_row_k = rng.integers(1, columns + 1, rows).astype(np.int32)
@@ -58,10 +58,10 @@ def test_kth_largest_matches_top_k_bit_for_bit(kind, rows, columns):
     want = _bits(_top_k_kth(x, per_row_k))
     for radix_bits in (1, 2, 4):
         np.testing.assert_array_equal(
-            _bits(kth_largest_reference(jnp.asarray(x), jnp.asarray(per_row_k), radix_bits=radix_bits)), want
+            _bits(radix_select_reference(jnp.asarray(x), jnp.asarray(per_row_k), radix_bits=radix_bits)), want
         )
     interpret = jax.default_backend() == "cpu"
-    kernel = jax.jit(kth_largest, static_argnames=("block", "interpret"))
+    kernel = jax.jit(radix_select, static_argnames=("block", "interpret"))
     np.testing.assert_array_equal(_bits(kernel(jnp.asarray(x), jnp.asarray(per_row_k), interpret=interpret)), want)
     if kind == "normal":
         # The short block forces several tiles and a padded final tile.
@@ -73,7 +73,7 @@ def test_kth_largest_matches_top_k_bit_for_bit(kind, rows, columns):
 @pytest.mark.parametrize(
     ("radix_bits", "block", "num_warps"), [(1, 64, 1), (2, 128, 2), (4, 32, 4), (2, 512, 8), (4, 1024, 2)]
 )
-def test_kth_largest_launch_shapes_match_top_k(radix_bits, block, num_warps):
+def test_radix_select_launch_shapes_match_top_k(radix_bits, block, num_warps):
     # Rows with ties, -0.0 and +0.0, -inf and repeated maxima; k at 1, at n and in between. A block shorter than the
     # row makes each lane count several tiles, the last one padded; a longer one keeps the padded row in registers.
     rows, columns = 8, 300
@@ -87,13 +87,13 @@ def test_kth_largest_launch_shapes_match_top_k(radix_bits, block, num_warps):
     k = rng.integers(1, columns + 1, rows).astype(np.int32)
     k[0], k[1], k[4], k[5] = 1, columns, 7, columns - 1
     want = _top_k_kth(x, k)
-    kernel = jax.jit(kth_largest, static_argnames=("radix_bits", "block", "num_warps", "interpret"))
+    kernel = jax.jit(radix_select, static_argnames=("radix_bits", "block", "num_warps", "interpret"))
     got = kernel(
         jnp.asarray(x), jnp.asarray(k), radix_bits=radix_bits, block=block, num_warps=num_warps, interpret=True
     )
     # lax.top_k may return either zero where -0.0 and +0.0 tie; the reference orders them as totalOrder does.
     np.testing.assert_array_equal(np.asarray(got), want)
-    np.testing.assert_array_equal(_bits(got), _bits(kth_largest_reference(jnp.asarray(x), jnp.asarray(k))))
+    np.testing.assert_array_equal(_bits(got), _bits(radix_select_reference(jnp.asarray(x), jnp.asarray(k))))
 
 
 @pytest.mark.parametrize("valid_fraction", [1.0, 0.7, 0.0])
@@ -106,7 +106,7 @@ def test_qb_thresholds_on_amd_instinct_equal_top_k(monkeypatch, valid_fraction):
     kwargs = dict(physical_count=tokens * topk // experts, num_experts_per_token=topk, num_experts=experts)
     want = qb_beta_topk_shard(scores, valid, **kwargs)
     monkeypatch.setattr(grug_moe, "is_amd_instinct", lambda: True)
-    monkeypatch.setattr(grug_moe, "kth_largest", functools.partial(kth_largest, interpret=True))
+    monkeypatch.setattr(grug_moe, "radix_select", functools.partial(radix_select, interpret=True))
     got = qb_beta_topk_shard(scores, valid, **kwargs)
     np.testing.assert_array_equal(_bits(got[0]), _bits(want[0]))
     assert int(got[1]) == int(want[1])
