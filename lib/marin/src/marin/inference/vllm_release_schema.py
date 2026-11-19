@@ -40,7 +40,7 @@ def gpu_release_url_prefix(release_tag: str) -> str:
 
 
 def release_from_manifest(manifest: dict, path: Path) -> VllmGpuRelease:
-    """Read a validated, published GPU release manifest."""
+    """Decode and validate a published GPU release manifest."""
     metadata = manifest["release"]
     if metadata.get("status") != "released":
         raise ValueError(f"{path}: expected a promoted 'released' manifest")

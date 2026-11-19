@@ -23,6 +23,7 @@ from marin.inference.config import WORKER_PYTHON_VERSION, VllmRouterConfig
 logger = logging.getLogger(__name__)
 VLLM_ROUTER_VERSION = "0.1.16"
 _ROUTER_SHUTDOWN_TIMEOUT = 10
+_ROUTER_PROBE_TIMEOUT = 5
 
 
 def available_port(host: str) -> int:
@@ -116,9 +117,9 @@ def vllm_router(
             try:
                 root = router.server_url.removesuffix(OPENAI_API_SUFFIX)
                 return (
-                    requests.get(f"{worker_url}/health", timeout=5).status_code == 200
-                    and requests.get(f"{root}/health", timeout=5).status_code == 200
-                    and requests.get(f"{router.server_url}/models", timeout=5).status_code == 200
+                    requests.get(f"{worker_url}/health", timeout=_ROUTER_PROBE_TIMEOUT).status_code == 200
+                    and requests.get(f"{root}/health", timeout=_ROUTER_PROBE_TIMEOUT).status_code == 200
+                    and requests.get(f"{router.server_url}/models", timeout=_ROUTER_PROBE_TIMEOUT).status_code == 200
                 )
             except (requests.ConnectionError, requests.Timeout):
                 return False

@@ -13,7 +13,7 @@ from marin.inference.vllm_release_schema import release_from_manifest
 
 
 def load_vllm_gpu_release(path: Path | None) -> VllmGpuRelease | None:
-    """Read a deployment's published vLLM GPU release manifest."""
+    """Load a published GPU release manifest, or return None when no path is given."""
     if path is None:
         return None
     return release_from_manifest(json.loads(path.read_text()), path)

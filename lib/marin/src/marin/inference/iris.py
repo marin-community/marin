@@ -337,7 +337,7 @@ def _prepared_local_inference(
 
 @contextlib.contextmanager
 def _staged_model(model: ServedModelConfig) -> Iterator[ServedModelConfig]:
-    """Stage remote weights on worker-local disk when the serving config requires it."""
+    """Yield a local copy for remote STAGE_LOCAL weights; delete it on exit. Otherwise keep the model unchanged."""
     source = StoragePath(model.weights)
     if model.object_store_load_mode is ObjectStoreLoadMode.STREAM or not source.is_remote:
         yield model
@@ -591,6 +591,7 @@ def _vllm_model_spec(model: ServedModelConfig, num_chips: int, tensor_parallel_s
 
 @contextlib.contextmanager
 def _ready_vllm_dashboard(service, model, environment, *, tensor_parallel_size, backend_name):
+    """Wait for vLLM and its router, then publish the serving endpoint."""
     environment.wait_until_ready()
     running_model = RunningModel(
         endpoint=OpenAIEndpoint(base_url=environment.server_url, model=model.model_id),

@@ -130,7 +130,6 @@ def test_router_later_turns_reach_the_same_dp_rank(router_worker):
         VllmRouterConfig(), router_worker.url, data_parallel_size=4, port=port, startup_timeout_seconds=30
     ) as router:
         _assert_native_rank_affinity(router.server_url, 4)
-        # Ordinary OpenAI requests remain valid without a session header.
         assert _chat(router.server_url).status_code == 200
         with _chat(router.server_url, "stream-session", stream=True) as response:
             assert response.status_code == 200

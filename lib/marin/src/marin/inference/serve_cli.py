@@ -67,7 +67,7 @@ def main() -> None:
     help="Published vLLM GPU release manifest for this deployment.",
 )
 @click.option("--session-router", is_flag=True, help="Route stable X-Session-ID values to native DP ranks.")
-@click.option("--data-parallel-size", type=click.IntRange(min=1), default=1)
+@click.option("--data-parallel-size", type=click.IntRange(min=1), default=None, help="Native DP ranks (default: 1).")
 @click.option("--tokenizer", default=None)
 @click.option("--host", default="127.0.0.1")
 @click.option("--port", type=int, default=None)
@@ -95,7 +95,7 @@ def local(
     vllm_version: str,
     vllm_release: Path | None,
     session_router: bool,
-    data_parallel_size: int,
+    data_parallel_size: int | None,
     tokenizer: str | None,
     host: str,
     port: int | None,
@@ -150,7 +150,7 @@ def local(
             max_num_batched_tokens=max_num_batched_tokens,
             extra_args=(
                 *vllm_args,
-                *(("--data-parallel-size", str(data_parallel_size)) if data_parallel_size > 1 else ()),
+                *(("--data-parallel-size", str(data_parallel_size)) if data_parallel_size is not None else ()),
             ),
             extra_metric_families=extra_metric_families,
         )

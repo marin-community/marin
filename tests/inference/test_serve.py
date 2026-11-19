@@ -347,6 +347,43 @@ def test_resolved_model_keeps_requested_id_as_served_name(monkeypatch):
     assert resolved.model_id == "Qwen/Qwen3-0.6B"
 
 
+@pytest.mark.parametrize("dp_args,rank_count", [((), 4), (("--data-parallel-size", "1"), 1)])
+def test_local_cli_explicit_dp_overrides_native_args(monkeypatch, tmp_path, unused_tcp_port, dp_args, rank_count):
+    monkeypatch.setattr("marin.inference.vllm_backend.vllm_launcher", lambda _: FakeVllmLauncher("serve"))
+
+    def probe_then_stop(_seconds):
+        for rank, status in ((rank_count - 1, 200), (rank_count, 400)):
+            response = requests.post(
+                f"http://127.0.0.1:{unused_tcp_port}/v1/chat/completions",
+                json={"model": "fake-model", "messages": [{"role": "user", "content": "hello"}]},
+                headers={"X-data-parallel-rank": str(rank)},
+                timeout=10,
+            )
+            assert response.status_code == status
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("marin.inference.serve_cli.time", SimpleNamespace(sleep=probe_then_stop))
+    template = tmp_path / "chat.jinja"
+    template.write_text("{{ messages }}")
+    result = CliRunner().invoke(
+        serve_main,
+        [
+            "local",
+            str(tmp_path),
+            "--tensor-parallel-size",
+            "1",
+            "--port",
+            str(unused_tcp_port),
+            "--chat-template",
+            str(template),
+            "--vllm-arg=-dp",
+            "--vllm-arg=4",
+            *dp_args,
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+
 def test_staged_model_downloads_remote_weights_to_temporary_directory(monkeypatch):
     observed: dict[str, object] = {}
 

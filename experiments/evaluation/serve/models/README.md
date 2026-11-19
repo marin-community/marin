@@ -130,8 +130,8 @@ pinned vLLM version and model architecture and must be checked on the target har
 
 ## Session routing for native vLLM DP
 
-`marin-serve local` and `marin-serve iris` accept `--session-router`. Reuse `X-Session-ID`
-on later turns to keep the same DP rank and KV cache. Direct serving remains the default.
+`marin-serve local` and `marin-serve iris` accept `--session-router`. With prefix caching enabled,
+reuse `X-Session-ID` on later turns to reach the same DP rank and KV cache. Direct serving remains the default.
 
 Two local replicas:
 
@@ -179,4 +179,5 @@ ServingGeometry(
 
 This gives four tasks, four local ranks per task and 16 router targets. Omitted model TP uses
 geometry; explicit TP must match. Multi-task or routed geometry requires `instances=1`, `broker=None`.
-Multi-task GPU serving requires stream loading; single-task serving also supports local weight staging.
+`ServedModelConfig.object_store_load_mode` defaults to `STREAM`, which multi-task GPU serving requires.
+Single-task serving also supports local weight staging.

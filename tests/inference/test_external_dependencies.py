@@ -81,7 +81,7 @@ def test_gpu_release_pin_matches_its_descriptor():
 
 
 @pytest.mark.parametrize("profile_format", ["toml", "manifest"])
-def test_render_gpu_release_toml_reencodes_the_wheel_url_and_round_trips(tmp_path, profile_format):
+def test_release_loaders_preserve_published_wheel_identity(tmp_path, profile_format):
     update_external = _update_external()
     rendered = update_external.render_gpu_release_toml(_promoted_manifest())
 
@@ -137,7 +137,6 @@ def test_release_loaders_refuse_an_unusable_manifest(tmp_path, mutation):
 
 
 def test_promote_gpu_release_keeps_the_pin_when_the_rendered_wheel_fails_validation(tmp_path, monkeypatch):
-    # An invalid wheel must leave the existing pin intact.
     update_external = _update_external()
     pin = tmp_path / "gpu.toml"
     original = 'release_tag = "keep-me"\n'

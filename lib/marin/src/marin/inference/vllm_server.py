@@ -779,7 +779,7 @@ def _get_first_model_id(server_url: str) -> str:
 
 
 def _router_data_parallel_size(extra_cli_args: Sequence[str]) -> int:
-    """Read the native ranks reachable behind vLLM's global internal DP frontend."""
+    """Return configured global DP size; reject balancing modes that hide ranks."""
     parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
     parser.add_argument(*VLLM_DATA_PARALLEL_SIZE_FLAGS, type=int, default=1)
     parser.add_argument(*vllm_option_flags("--data-parallel-size-local"), type=int)
@@ -975,7 +975,7 @@ class VllmEnvironment:
 
     @property
     def command(self) -> tuple[str, ...]:
-        """Return the effective argv of the running native vLLM process."""
+        """Return the effective argv used to launch the native vLLM process."""
         if self._command is None:
             raise RuntimeError("vLLM server is not running in this environment.")
         return tuple(self._command)
