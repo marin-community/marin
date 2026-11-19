@@ -103,6 +103,13 @@ trials:
   commit: 609dac681c
   priority: batch
   note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
+  loss:
+  - 2.2711
+  delta:
+  - 0.0005
+  steps: 20023
+  baseline: s7n-d1280L16 2.2706 (same commit, seed 0)
+  step_time_change: 0%
 potential:
   score: 7
   rationale: −0.0104 at equal time; ladder partial (d512 −0.007, d768 −0.0047, d1024/d1280 running); MFU not run → 7
