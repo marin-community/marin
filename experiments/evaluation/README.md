@@ -53,7 +53,7 @@ uv run python -m experiments.evaluation.cli launch \
 | `--federated_cluster cw-rno2a` | Select the GPU target cluster. Submission uses the `marin` controller. |
 | `--priority interactive` | Set the orchestrator and serving-job priority. |
 | `--limit N` | Cap items or tasks per evaluation. |
-| `--instances N` | Start N candidate serving instances, each with the selected accelerator shape. Default: 1. |
+| `--instances N` | Override the model's `serve.instances`. Each instance uses the selected accelerator shape. |
 | `--max-concurrent N` | Run at most N evaluators at once on shared serving. Default: 1. |
 | `--seed N` | Override the curated run seed. Default: 0, or unseeded on TPU vLLM, which rejects seeded sampling. |
 | `--version <label>` | Set the cohort label. Labels do not change evaluator settings. |

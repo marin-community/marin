@@ -67,7 +67,7 @@ class EvalStepConfig:
     submission_cluster: str
     federated_cluster: str | None
     version: str
-    instances: int = 1
+    instances: int | None = None
 
 
 @dataclass(frozen=True)
@@ -129,7 +129,7 @@ def eval_step(
     resolve_model: Callable[[StepContext], ModelConfig] | None = None,
     limit: int | None = None,
     max_concurrent: int = DEFAULT_EVAL_CONCURRENCY,
-    instances: int = 1,
+    instances: int | None = None,
     accelerator: str | None = None,
     submission_cluster: str = EVALUATION_CONTROLLER_CLUSTER,
     federated_cluster: str | None = None,
@@ -139,7 +139,7 @@ def eval_step(
     Experiments declare producer dependencies and resolve their paths in ``resolve_model``.
     Checked-in models use ``model`` directly without a producer step.
     ``max_concurrent`` caps concurrent evaluators sharing inference.
-    ``instances`` starts candidate serving workers behind one broker when greater than one.
+    ``instances`` overrides the resolved model's ``serve.instances``. Multiple instances share a broker.
     """
 
     def build_config(ctx: StepContext) -> EvalStepConfig | EvalStepFingerprint:

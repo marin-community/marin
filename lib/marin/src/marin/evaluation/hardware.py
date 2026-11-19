@@ -42,6 +42,13 @@ class AcceleratorChoice:
             return self.tpu_type
         return f"{self.gpu_type}x{self.gpu_count}"
 
+    @property
+    def tasks_per_instance(self) -> int:
+        """Number of Iris tasks in one serving instance."""
+        if self.tpu_type is not None:
+            return get_tpu_topology(self.tpu_type).vm_count
+        return self.geometry.task_count if self.geometry is not None else 1
+
 
 @dataclass(frozen=True)
 class GpuProfile:
