@@ -25,7 +25,7 @@ from levanter.data.text.datasets import (
     DatasetComponentBase,
     LmDataConfig,
 )
-from levanter.data.text.formats import TextLmDatasetFormat
+from levanter.data.text.formats import PrebuiltLmDatasetFormat, TextLmDatasetFormat
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -93,6 +93,7 @@ SFT_TOKENIZER = "s3://marin-us-east-02a/marin/grug_sft/tokenizer/2026.09.18"
 SFT_TARGET_BLOCK_SIZE = 64_000
 SFT_COMPONENT_PREFIX = "sft/source/"
 SFT_POOLED_COMPONENT = "sft/pooled"
+WEIGHTED_COMPONENT_NAME = "sft/weighted"
 REPLAY_COMPONENT_PREFIX = "replay/"
 # 10.05: constant learning rate, then linear decay to 0.1x over the final tenth, with no warmup.
 SFT_DECAY_FRACTION = 0.1
@@ -286,8 +287,145 @@ def sft_data_config(
     )
 
 
-def special_token_init(start_step: int, tokenizer_path: str = SFT_TOKENIZER, *, reseed: bool = True) -> SpecialTokenInit:
-    """The seven chat-token reseeds, checked against the SFT tokenizer."""
+@dataclass(frozen=True)
+class WeightedCacheSpec:
+    """A prebuilt cache with per-token ``loss_weights`` mixed into a bounded continuation run."""
+
+    cache_dir: str
+    packs: int
+    bounded_steps: int
+    component_name: str = WEIGHTED_COMPONENT_NAME
+    loss_weights_key: str = "loss_weights"
+
+    def __post_init__(self):
+        if not self.cache_dir:
+            raise ValueError("weighted cache_dir must be nonempty")
+        if self.packs <= 0:
+            raise ValueError(f"weighted packs must be positive, got {self.packs}")
+        if self.bounded_steps <= 0:
+            raise ValueError(f"bounded_steps must be positive, got {self.bounded_steps}")
+        if not self.component_name:
+            raise ValueError("component_name must be nonempty")
+
+
+def _apportion(total: int, weights: Mapping[str, float]) -> dict[str, int]:
+    """Split ``total`` integer slots across positive ``weights`` by largest remainder (sorted-key tiebreak)."""
+    if total < 0:
+        raise ValueError(f"total must be nonnegative, got {total}")
+    positive = {name: float(weight) for name, weight in weights.items() if weight > 0}
+    if total == 0:
+        return {}
+    if not positive:
+        raise ValueError("need at least one positive weight to apportion nonzero slots")
+    weight_sum = sum(positive.values())
+    exact = {name: total * weight / weight_sum for name, weight in positive.items()}
+    shares = {name: math.floor(value) for name, value in exact.items()}
+    remainder = total - sum(shares.values())
+    for name in sorted(positive, key=lambda name: (-(exact[name] - shares[name]), name))[:remainder]:
+        shares[name] += 1
+    assert sum(shares.values()) == total
+    return {name: count for name, count in shares.items() if count > 0}
+
+
+def plan_bounded_weighted_mixture(
+    weighted: WeightedCacheSpec, *, batch_size: int, replay_fraction: float
+) -> SftMixturePlan:
+    """One-block plan spanning ``weighted.bounded_steps`` updates of ``batch_size`` sequences."""
+    if not 0.0 < replay_fraction < 1.0:
+        raise ValueError(f"replay_fraction must be in (0, 1), got {replay_fraction}")
+    block_size = weighted.bounded_steps * batch_size
+    if weighted.packs >= block_size:
+        raise ValueError(
+            f"weighted packs ({weighted.packs}) must be smaller than the bounded run's {block_size} sequences"
+        )
+    general_packs = block_size - weighted.packs
+    replay_draws = round(general_packs * replay_fraction)
+    sft_draws = general_packs - replay_draws
+    return SftMixturePlan(
+        batch_size=batch_size,
+        block_size=block_size,
+        num_blocks=1,
+        sft_sequences=weighted.packs + sft_draws,
+    )
+
+
+def bounded_weighted_data_config(
+    stores: Mapping[str, SftStore],
+    plan: SftMixturePlan,
+    *,
+    weighted: WeightedCacheSpec,
+    replay_fraction: float,
+    start_step: int,
+    replay: LmDataConfig,
+    validation: Mapping[str, DatasetComponentBase],
+    tokenizer: str = SFT_TOKENIZER,
+) -> LmDataConfig:
+    """Single-block bounded continuation mixing a weighted prebuilt cache with general SFT and pretrain replay."""
+    if plan.num_blocks != 1 or plan.block_size != weighted.bounded_steps * plan.batch_size:
+        raise ValueError("bounded weighted continuation requires a single block matching bounded_steps * batch_size")
+    general_packs = plan.block_size - weighted.packs
+    replay_draws = round(general_packs * replay_fraction)
+    sft_draws = general_packs - replay_draws
+
+    sft_counts = _apportion(sft_draws, {name: store.packed_sequences for name, store in stores.items()})
+    replay_stage = replay.train_weights[0][1] if isinstance(replay.train_weights, list) else replay.train_weights
+    assert replay_stage is not None
+    replay_counts = _apportion(replay_draws, replay_stage)
+
+    components: dict[str, DatasetComponentBase] = {
+        weighted.component_name: DatasetComponent(
+            source=None,
+            cache_dir=weighted.cache_dir,
+            format=PrebuiltLmDatasetFormat(input_ids_key="input_ids", loss_weights_key=weighted.loss_weights_key),
+            flat_cache=True,
+        )
+    }
+    counts: dict[str, int] = {weighted.component_name: weighted.packs}
+    for name, count in sorted(sft_counts.items()):
+        comp_name = SFT_COMPONENT_PREFIX + name
+        components[comp_name] = _store_component(stores[name])
+        counts[comp_name] = count
+    for name, count in sorted(replay_counts.items()):
+        comp_name = REPLAY_COMPONENT_PREFIX + name
+        components[comp_name] = replay.components[name]
+        counts[comp_name] = count
+
+    assert sum(counts.values()) == plan.block_size
+    if collisions := components.keys() & validation.keys():
+        raise ValueError(f"validation components collide with training components: {sorted(collisions)}")
+    components.update(validation)
+    weights = {name: count / plan.block_size for name, count in counts.items()}
+    weights.update({name: 0.0 for name in validation})
+    return LmDataConfig(
+        tokenizer=tokenizer,
+        cache_dir=None,
+        components=components,
+        train_weights=[(0, weights)],
+        auto_build_caches=False,
+        shuffle=True,
+        block_cross_document_attention=True,
+        mixture_block_size=plan.block_size,
+        stop_strategy=StopStrategy.RESTART_STRATEGY,
+        mixture_start_step=start_step,
+    )
+
+
+def special_token_init(
+    start_step: int,
+    tokenizer_path: str = SFT_TOKENIZER,
+    *,
+    reseed: bool = True,
+    lr_multiplier: float = SPECIAL_TOKEN_LR_MULTIPLIER,
+) -> SpecialTokenInit | None:
+    """The seven chat-token reseeds and LR scaling, checked against the SFT tokenizer.
+
+    Returns ``None`` when ``reseed=False`` and ``lr_multiplier == 1.0``, since neither start-step reseeding nor
+    per-step update scaling would change the state.
+    """
+    if lr_multiplier <= 0:
+        raise ValueError(f"special_token_lr_multiplier must be positive, got {lr_multiplier}")
+    if not reseed and math.isclose(lr_multiplier, 1.0):
+        return None
     tokenizer = load_tokenizer(tokenizer_path)
     anchors = tuple(tuple(tokenizer.encode(text, add_special_tokens=False)) for _, text in SPECIAL_TOKEN_ANCHORS)
     if anchors != tuple((anchor,) for anchor in EXPECTED_ANCHOR_IDS):
@@ -296,17 +434,27 @@ def special_token_init(start_step: int, tokenizer_path: str = SFT_TOKENIZER, *, 
         token_ids=tuple(token_id for token_id, _ in SPECIAL_TOKEN_ANCHORS),
         anchor_ids=EXPECTED_ANCHOR_IDS,
         start_step=start_step,
-        lr_multiplier=SPECIAL_TOKEN_LR_MULTIPLIER,
+        lr_multiplier=lr_multiplier,
         reseed=reseed,
     )
 
 
-def sft_optimizer_config(*, muon_lr: float, adam_lr: float, decay_steps: int) -> GrugMoeMuonHConfig:
+def sft_optimizer_config(
+    *,
+    muon_lr: float,
+    adam_lr: float,
+    decay_steps: int,
+    min_lr_ratio: float = SFT_MIN_LR_RATIO,
+) -> GrugMoeMuonHConfig:
     """The hero's pretraining optimizer with the SFT schedule: constant, then linear decay over ``decay_steps``.
 
+    Passing ``min_lr_ratio=1.0`` disables tail decay (``decay=0``) so the rate stays constant across every step.
     The restored optimizer state comes from the hero's pretraining recipe, which fixes beta2 and epsilon. The
     schedule is indexed by the optimizer's own update count, not by the trainer step.
     """
+    if not 0.0 < min_lr_ratio <= 1.0:
+        raise ValueError(f"min_lr_ratio must be in (0, 1], got {min_lr_ratio}")
+    effective_decay = 0 if math.isclose(min_lr_ratio, 1.0) else decay_steps
     _, pretrain_optimizer = build_hero_configs(
         num_train_steps=HERO_SCHEDULE_STEPS,
         batch_size=hero_rack_batch_size(HERO_MODEL_CONFIG.max_seq_len) * LADDER_RACKS["d6144"],
@@ -316,8 +464,8 @@ def sft_optimizer_config(*, muon_lr: float, adam_lr: float, decay_steps: int) ->
         learning_rate=muon_lr,
         adam_lr=adam_lr,
         warmup=0,
-        decay=decay_steps,
-        min_lr_ratio=SFT_MIN_LR_RATIO,
+        decay=effective_decay,
+        min_lr_ratio=min_lr_ratio,
         weight_decay=0.0,
         gate_router_weight_decay=0.0,
         schedule_extension=None,
@@ -364,7 +512,10 @@ def build_sft_run(
     checkpoint_root: str | None = None,
     expert_placement: ExpertPlacement | None = None,
     special_token_reseed: bool = True,
+    special_token_lr_multiplier: float = SPECIAL_TOKEN_LR_MULTIPLIER,
+    min_lr_ratio: float = SFT_MIN_LR_RATIO,
     fresh_optimizer_state: bool = False,
+    weighted_continuation: WeightedCacheSpec | None = None,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build the hero SFT run that continues ``initialize_from`` at ``start_step``.
@@ -400,13 +551,20 @@ def build_sft_run(
         )
     batch_size = hero_rack_batch_size(model.max_seq_len) * dp_racks
     stores = load_sft_stores()
-    plan = plan_sft_mixture(stores, batch_size=batch_size, replay_fraction=replay_fraction)
+    if weighted_continuation is not None:
+        plan = plan_bounded_weighted_mixture(
+            weighted_continuation, batch_size=batch_size, replay_fraction=replay_fraction
+        )
+    else:
+        plan = plan_sft_mixture(stores, batch_size=batch_size, replay_fraction=replay_fraction)
     num_train_steps = start_step + plan.steps
     stop_step = num_train_steps if stop_after_steps is None else start_step + stop_after_steps
     if stop_step > num_train_steps:
         raise ValueError(f"stop_after_steps={stop_after_steps} is past the {plan.steps}-step epoch")
 
-    optimizer = sft_optimizer_config(muon_lr=muon_lr, adam_lr=adam_lr, decay_steps=plan.decay_steps)
+    optimizer = sft_optimizer_config(
+        muon_lr=muon_lr, adam_lr=adam_lr, decay_steps=plan.decay_steps, min_lr_ratio=min_lr_ratio
+    )
     batch_axes = validated_batch_axis_size(
         device_count=HERO_RACK_GPUS * dp_racks,
         dp_racks=dp_racks,
@@ -428,7 +586,9 @@ def build_sft_run(
             gc_interval=100,
         ),
         router_bias_mode=router_bias_mode,
-        special_tokens=special_token_init(start_step, reseed=special_token_reseed),
+        special_tokens=special_token_init(
+            start_step, reseed=special_token_reseed, lr_multiplier=special_token_lr_multiplier
+        ),
         fresh_optimizer_state_at_step=start_step if fresh_optimizer_state else None,
         expert_placement=expert_placement,
     )
@@ -453,7 +613,7 @@ def build_sft_run(
         plan.num_blocks,
         plan.block_size,
         plan.replay_fraction,
-        plan.decay_steps,
+        optimizer.decay,
         router_bias_mode.value,
         capacity_factor,
     )
@@ -528,9 +688,20 @@ def build_sft_run(
             validation=[],
             stats_path=ctx.artifact_path(length_statistics),
         )
-        data = sft_data_config(
-            stores, plan, start_step=start_step, replay=replay, validation=validation_components(ctx, validation)
-        )
+        if weighted_continuation is not None:
+            data = bounded_weighted_data_config(
+                stores,
+                plan,
+                weighted=weighted_continuation,
+                replay_fraction=replay_fraction,
+                start_step=start_step,
+                replay=replay,
+                validation=validation_components(ctx, validation),
+            )
+        else:
+            data = sft_data_config(
+                stores, plan, start_step=start_step, replay=replay, validation=validation_components(ctx, validation)
+            )
         return GrugRunConfig(
             model=model,
             data=data,
@@ -642,14 +813,48 @@ def _grad_norm(value: str) -> float | None:
     show_default=True,
     help=(
         "Reseed the chat special-token LM-head columns at the start step. Turn off to continue a finished SFT; "
-        "the special-token learning-rate multiplier applies either way."
+        "pair with --special-token-lr-multiplier 1.0 to disable special-token update scaling as well."
     ),
+)
+@click.option(
+    "--special-token-lr-multiplier",
+    type=click.FloatRange(min=0, min_open=True),
+    default=SPECIAL_TOKEN_LR_MULTIPLIER,
+    show_default=True,
+    help=(
+        "Update multiplier on the seven chat special-token rows/columns "
+        "(set 1.0 with --no-special-token-reseed to disable)."
+    ),
+)
+@click.option(
+    "--min-lr-ratio",
+    type=click.FloatRange(min=0, max=1, min_open=True),
+    default=SFT_MIN_LR_RATIO,
+    show_default=True,
+    help="Final LR as a fraction of peak; 1.0 holds a constant learning rate with zero tail decay.",
 )
 @click.option(
     "--fresh-optimizer-state",
     is_flag=True,
     default=False,
     help="Start from the checkpoint's weights with a fresh optimizer state instead of its restored one.",
+)
+@click.option(
+    "--weighted-cache-dir",
+    default=None,
+    help="Prebuilt TreeCache train split with per-token loss_weights for a bounded continuation run.",
+)
+@click.option(
+    "--weighted-cache-packs",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Number of packed sequences drawn from --weighted-cache-dir across --bounded-steps updates.",
+)
+@click.option(
+    "--bounded-steps",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Exact update count for a single-block bounded weighted continuation run.",
 )
 @build_options
 def main(
@@ -667,8 +872,25 @@ def main(
     checkpoint_root: str | None,
     expert_placement_path: Path | None,
     special_token_reseed: bool,
+    special_token_lr_multiplier: float,
+    min_lr_ratio: float,
     fresh_optimizer_state: bool,
+    weighted_cache_dir: str | None,
+    weighted_cache_packs: int | None,
+    bounded_steps: int | None,
 ) -> ArtifactStep[HeroThroughputResult]:
+    bounded_args = (weighted_cache_dir, weighted_cache_packs, bounded_steps)
+    if any(arg is not None for arg in bounded_args) and not all(arg is not None for arg in bounded_args):
+        raise click.UsageError("--weighted-cache-dir, --weighted-cache-packs, and --bounded-steps must be set together")
+    weighted_continuation = (
+        None
+        if weighted_cache_dir is None
+        else WeightedCacheSpec(
+            cache_dir=weighted_cache_dir,
+            packs=int(weighted_cache_packs),
+            bounded_steps=int(bounded_steps),
+        )
+    )
     return build_sft_run(
         run_id=run_id,
         initialize_from=initialize_from,
@@ -687,7 +909,10 @@ def main(
             None if expert_placement_path is None else ExpertPlacement.from_json(expert_placement_path.read_text())
         ),
         special_token_reseed=special_token_reseed,
+        special_token_lr_multiplier=special_token_lr_multiplier,
+        min_lr_ratio=min_lr_ratio,
         fresh_optimizer_state=fresh_optimizer_state,
+        weighted_continuation=weighted_continuation,
     )
 
 

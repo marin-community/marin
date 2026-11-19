@@ -1,9 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import dataclasses
 import json
 import math
+from pathlib import Path
 
 import equinox as eqx
 import jax
@@ -12,9 +14,13 @@ import jmp
 import numpy as np
 import optax
 import pytest
+from haliax import Axis
 from jax.sharding import AxisType, Mesh, reshard
-from levanter.data.text.datasets import LmDataConfig
+from levanter.data.text.datasets import DatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
+from levanter.data.text.formats import TextLmDatasetFormat
+from levanter.schedule import BatchSchedule
+from levanter.store.cache import SerialCacheWriter
 from levanter.testing.devices import use_test_devices
 
 from experiments.grug.moe_hero_ep import model
@@ -27,14 +33,19 @@ from experiments.grug.moe_hero_ep.expert_placement import (
 from experiments.grug.moe_hero_ep.launch_hero_sft import (
     SFT_COMPONENT_PREFIX,
     SFT_POOLED_COMPONENT,
+    WEIGHTED_COMPONENT_NAME,
     SftStore,
+    WeightedCacheSpec,
+    bounded_weighted_data_config,
     load_sft_stores,
     one_epoch_weight_stages,
     placement_applies,
+    plan_bounded_weighted_mixture,
     plan_sft_mixture,
     sft_components,
     sft_data_config,
     sft_optimizer_config,
+    special_token_init,
 )
 from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_hero_ep.train import (
@@ -48,6 +59,7 @@ from experiments.grug.moe_hero_ep.train import (
     reseed_special_token_columns,
     scale_special_token_updates,
 )
+from experiments.marin_tokenizer import marin_tokenizer
 
 _FP32 = jmp.get_policy("params=float32,compute=float32,output=float32")
 
@@ -608,3 +620,164 @@ def test_continuation_reads_the_sft_epoch_from_its_first_block():
     assert continued.mixture_start_step == 400_407
     assert continued.train_weights == first.train_weights
     assert continued.train_weights[0][0] == 0
+
+
+def test_special_token_init_disables_hook_when_no_reseed_and_unit_multiplier():
+    assert special_token_init(400_407, reseed=False, lr_multiplier=1.0) is None
+    with pytest.raises(ValueError, match="must be positive"):
+        special_token_init(400_407, reseed=False, lr_multiplier=0.0)
+
+
+def test_constant_lr_schedule_holds_rate_from_carried_count_on_first_step():
+    start, updates = 400_407, 108
+    lr = 1.0e-6
+    config = sft_optimizer_config(muon_lr=lr, adam_lr=lr, decay_steps=11, min_lr_ratio=1.0)
+    assert config.decay == 0
+    assert config.min_lr_ratio == 1.0
+    muon = config.lr_scheduler(start + updates)
+    adam = config.lr_scheduler(start + updates, override_lr=config.adam_lr)
+    for count in (start, start + 1, start + 54, start + updates - 1, start + updates):
+        assert float(muon(count)) == pytest.approx(lr, rel=1e-6)
+        assert float(adam(count)) == pytest.approx(lr, rel=1e-6)
+
+    # Restoring a checkpoint saved with an older scalar hyperparam (3.33e-6) applies the new constant LR on step 0.
+    mesh = _one_device_mesh()
+    optimizer = optax.inject_hyperparams(optax.adam)(learning_rate=muon)
+    model_cfg = _tiny_config()
+    tokens = jnp.asarray(np.random.default_rng(0).integers(0, model_cfg.vocab_size, size=(4, 8), dtype=np.int32))
+    batch = GrugLmExample(tokens=tokens, loss_weight=jnp.ones((4, 8), jnp.float32).at[:, -1].set(0.0))
+    step = _make_train_step(optimizer, _FP32, z_loss_weight=1e-4, ema_beta=None, router_bias_mode=RouterBiasMode.FROZEN)
+    with jax.set_mesh(mesh):
+        init_st = initial_state(model_cfg, optimizer=optimizer, mp=_FP32, key=jax.random.key(0), ema_beta=None)
+        state = _with_counts(init_st, start)
+        state = state.__class__(
+            **{
+                **vars(state),
+                "step": jnp.array(start, dtype=jnp.int32),
+                "opt_state": state.opt_state._replace(hyperparams={"learning_rate": jnp.float32(3.3332963e-6)}),
+            }
+        )
+        state, _, _ = step(state, batch)
+        assert int(state.step) == start + 1
+        assert int(state.opt_state.count) == start + 1
+        assert float(state.opt_state.hyperparams["learning_rate"]) == pytest.approx(lr, rel=1e-6)
+
+
+def test_bounded_weighted_plan_apportions_108_updates_of_skill_b_and_replay():
+    stores = load_sft_stores()
+    harrier_raw = json.loads(Path(__file__).with_name("harrier_mix_2026_08_18.json").read_text())
+    cooldown_weights = {k: v for k, v in harrier_raw["phases"][-1]["weights"].items() if v > 0}
+    full_plan = plan_sft_mixture(stores, batch_size=16, replay_fraction=0.2035)
+    dummy_comp = next(iter(sft_components(stores, full_plan)[0].values()))
+    replay = LmDataConfig(
+        components={cell: dummy_comp for cell in cooldown_weights},
+        train_weights=[(0, cooldown_weights)],
+    )
+    weighted = WeightedCacheSpec(cache_dir="s3://marin-us-east-02a/tmp/skill-b-w10/train", packs=32, bounded_steps=108)
+    plan = plan_bounded_weighted_mixture(weighted, batch_size=16, replay_fraction=0.2035)
+    assert (plan.steps, plan.block_size, plan.num_blocks) == (108, 1728, 1)
+
+    data = bounded_weighted_data_config(
+        stores,
+        plan,
+        weighted=weighted,
+        replay_fraction=0.2035,
+        start_step=400_407,
+        replay=replay,
+        validation={},
+    )
+    assert data.mixture_block_size == 1728
+    assert data.mixture_start_step == 400_407
+    assert len(data.train_weights) == 1
+    weights = data.train_weights[0][1]
+    counts = {name: round(w * 1728) for name, w in weights.items()}
+    assert sum(counts.values()) == 1728
+    assert counts[WEIGHTED_COMPONENT_NAME] == 32
+    sft_counts = {k: v for k, v in counts.items() if k.startswith(SFT_COMPONENT_PREFIX)}
+    replay_counts = {k: v for k, v in counts.items() if k.startswith("replay/")}
+    assert sum(sft_counts.values()) == 1351 and len(sft_counts) == 88
+    assert sum(replay_counts.values()) == 345 and len(replay_counts) == 118
+    assert data.components[WEIGHTED_COMPONENT_NAME].format.loss_weights_key == "loss_weights"
+
+
+def test_bounded_weighted_mixture_loads_prebuilt_w10_and_text_stores_together(tmp_path):
+    seq_len = 16
+    weighted_dir = tmp_path / "weighted"
+    sft_dir = tmp_path / "sft"
+    replay_dir = tmp_path / "replay"
+
+    with SerialCacheWriter(
+        str(weighted_dir),
+        exemplar={"input_ids": np.zeros((0,), dtype=np.int32), "loss_weights": np.zeros((0,), dtype=np.float32)},
+    ) as writer:
+        lw = np.zeros((seq_len,), dtype=np.float32)
+        lw[10:15] = 10.0
+        writer.write_batch(
+            [{"input_ids": np.arange(seq_len, dtype=np.int32) + 10, "loss_weights": lw} for _ in range(4)]
+        )
+    for d in (sft_dir / "train", replay_dir):
+        d.mkdir(parents=True, exist_ok=True)
+        with SerialCacheWriter(str(d), exemplar={"input_ids": np.zeros((0,), dtype=np.int32)}) as writer:
+            writer.write_batch([{"input_ids": np.arange(seq_len, dtype=np.int32) + 100} for _ in range(16)])
+
+    stores = {
+        "s0": SftStore(cache_path=str(sft_dir), tokenizer=marin_tokenizer, max_length=seq_len, packed_sequences=16)
+    }
+    replay_comp = DatasetComponent(
+        source=None, cache_dir=str(replay_dir), format=TextLmDatasetFormat(), flat_cache=True
+    )
+    replay = LmDataConfig(components={"r0": replay_comp}, train_weights=[(0, {"r0": 1.0})])
+    weighted = WeightedCacheSpec(cache_dir=str(weighted_dir), packs=4, bounded_steps=4)
+    plan = plan_bounded_weighted_mixture(weighted, batch_size=4, replay_fraction=0.25)
+    data = bounded_weighted_data_config(
+        stores,
+        plan,
+        weighted=weighted,
+        replay_fraction=0.25,
+        start_step=0,
+        replay=replay,
+        validation={},
+        tokenizer=marin_tokenizer,
+    )
+    mix = data.train_mixture(Axis("position", seq_len), BatchSchedule(4), key=jax.random.PRNGKey(0))
+    examples = asyncio.run(mix.get_batch(list(range(16))))
+    assert len({jax.tree.structure(ex) for ex in examples}) == 1
+    w10_rows = [ex for ex in examples if float(np.max(np.asarray(ex.loss_weight))) == 10.0]
+    w1_rows = [ex for ex in examples if float(np.max(np.asarray(ex.loss_weight))) == 1.0]
+    assert len(w10_rows) == 4 and len(w1_rows) == 12
+    for ex in w10_rows:
+        arr = np.asarray(ex.loss_weight)
+        assert set(np.unique(arr).tolist()) == {0.0, 10.0}
+        assert float(arr.sum()) == pytest.approx(50.0)
+
+
+@pytest.mark.multidevice
+def test_replica_dcn_axis_does_not_shard_params_or_opt_state():
+    config = _tiny_config()
+    optimizer = _optimizer()
+    with use_test_devices(4) as devices:
+        m1 = Mesh(
+            np.asarray(devices[:2]).reshape(1, 1, 2, 1, 1),
+            ("replica_dcn", "data", "expert", "context", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
+        )
+        m2 = Mesh(
+            np.asarray(devices).reshape(2, 1, 2, 1, 1),
+            ("replica_dcn", "data", "expert", "context", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
+        )
+
+        def leaf_specs(mesh):
+            with jax.set_mesh(mesh):
+                st = initial_state(config, optimizer=optimizer, mp=_FP32, key=jax.random.key(0), ema_beta=None)
+            out = {}
+            for path, leaf in jax.tree_util.tree_leaves_with_path((st.params, st.opt_state)):
+                if not eqx.is_array(leaf):
+                    continue
+                sh = leaf.sharding
+                for axis in sh.spec:
+                    assert axis != "replica_dcn" and not (isinstance(axis, tuple) and "replica_dcn" in axis)
+                out[jax.tree_util.keystr(path)] = (leaf.shape, sh.shard_shape(leaf.shape), str(sh.spec))
+            return out
+
+        assert leaf_specs(m1) == leaf_specs(m2)
