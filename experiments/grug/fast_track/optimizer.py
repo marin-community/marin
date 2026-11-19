@@ -424,6 +424,42 @@ def scale_with_grug_muonc(
     return optax.GradientTransformation(init_fn, update_fn)
 
 
+class AdamCState(NamedTuple):
+    adam: optax.OptState
+    init_radius: optax.Params
+
+
+def scale_by_adamc(b1: float, b2: float, eps: float, learning_rate, decay_mult: float) -> optax.GradientTransformation:
+    """AdamC for the output head: the AdamH direction as a step of norm ``lr r0`` plus AdamC decay, no sphere projection.
+
+    Per slice (a 2-D matrix, or each slice along a stack's leading axis), ``W <- W - lr r0 U / |U| - decay_mult lr^2 W``,
+    where ``U`` is the Adam direction and ``r0`` the slice's norm at init: ``scale_with_grug_muonc``'s update with Adam
+    in place of Newton-Schulz.
+    """
+    adam = optax.scale_by_adam(b1, b2, eps)
+
+    def init_fn(params):
+        return AdamCState(adam=adam.init(params), init_radius=jax.tree.map(_slice_norm, params))
+
+    def update_fn(updates, state, params=None):
+        if params is None:
+            raise ValueError("scale_by_adamc requires params")
+        directions, adam_state = adam.update(updates, state.adam, params)
+        directions = _match_named_sharding_to_params(directions, params)
+
+        def step(p, u, r0):
+            u = u.astype(jnp.float32)
+            unit = u / jnp.maximum(_slice_norm(u), 1e-10)
+            return (-learning_rate * r0 * unit - decay_mult * jnp.square(learning_rate) * p.astype(jnp.float32)).astype(
+                p.dtype
+            )
+
+        new_updates = jax.tree.map(step, params, directions, state.init_radius)
+        return new_updates, AdamCState(adam_state, state.init_radius)
+
+    return optax.GradientTransformation(init_fn, update_fn)
+
+
 def _multi_transform_when_used(
     transforms: dict[str, optax.GradientTransformation],
     optional: dict[str, optax.GradientTransformation],
@@ -456,6 +492,9 @@ ATTN_RES_QUERY_LR_SCALE = 0.1
 """Adam LR of the AttnRes pseudo-queries as a multiple of ``adam_lr``."""
 KDA_BETA_LR_MULT = 2.0
 """MuonH LR multiple of the ``kda_beta`` group (the KDA write-strength projection)."""
+ADAMC_ADAM_DECAY = 0.1
+"""AdamC ``lambda`` of the ``adamc_adam`` group (``adamc_head_router_embed``): decay ``(lr_t^2 / lr_max) lambda``."""
+ADAMC_ADAM_GROUP = "adamc_adam"
 _ADAM_LEAVES = re.compile(
     r"(?:^|\.)(value_embed|ve_lambda|ve_gate|head_ve_lambda|head_ve_gate|head_ve_gain|qk_mult"
     r"|pointer_w|pointer_b|pointer_open|ngram_cache_w|ngram_cache_b|ngram_cache_open)$"
@@ -528,6 +567,11 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """MuonC (``scale_with_grug_muonc``) in place of MuonH for the ``muonh`` group: Muon steps of norm ``lr_t r0`` plus
     AdamC decay ``(lr_t^2 / lr_max) lambda`` with ``lambda = muonc_decay_mult * lr_max``, no sphere projection. The
     ``kda_beta``, ``adamh`` and Adam groups are unchanged. 0: off."""
+    adamc_head_router_embed: bool = False
+    """AdamC on the head, router and input embedding; needs ``muonc_decay_mult``. The ``adamh`` group (``output_proj``)
+    takes ``scale_by_adamc`` with ``muonc_decay_mult``. The MoE router weights and ``token_embed`` move to the
+    ``adamc_adam`` group: the ``adam`` group's moments plus decay ``(adam_lr_t^2 / adam_lr) ADAMC_ADAM_DECAY``, which
+    replaces the router's annealed ``gate_router_weight_decay``."""
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -636,10 +680,18 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             decay = (_fixed_decoupled_decay(self.embed_weight_decay),) if self.embed_weight_decay else ()
             return optax.chain(moments, *decay, optax.scale(-lr))
 
+        def adamh_at(lr):
+            if self.adamc_head_router_embed:
+                return optax.chain(
+                    scale_by_adamc(self.beta1, self.beta2, self.epsilon, lr, self.muonc_decay_mult),
+                    _match_named_update_sharding(),
+                )
+            return optax.chain(scale_by_adamh(self.beta1, self.beta2, self.epsilon, lr))
+
         def optimizer(learning_rate, adam_lr):
             transforms = {
                 "muonh": muonc_at(learning_rate) if self.muonc_decay_mult else muonh_at(learning_rate),
-                "adamh": optax.chain(scale_by_adamh(self.beta1, self.beta2, self.epsilon, learning_rate)),
+                "adamh": adamh_at(learning_rate),
                 "adam": adam_at(adam_lr, decay=True),
                 "attn_res_query": adam_at(adam_lr * ATTN_RES_QUERY_LR_SCALE),
                 "kda_beta": muonh_at(learning_rate * KDA_BETA_LR_MULT),
@@ -655,6 +707,13 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             # Only when on, so the optimizer state of runs without it keeps its groups.
             if self.embed_lr_mult is not None:
                 transforms["embed_lr"] = adam_at(adam_lr * self.embed_lr_mult, decay=True)
+            if self.adamc_head_router_embed:
+                # Before scale(-adam_lr): p <- p - adam_lr u - (adam_lr^2 / self.adam_lr) ADAMC_ADAM_DECAY p.
+                transforms[ADAMC_ADAM_GROUP] = optax.chain(
+                    adam_moments(self.beta1, self.beta2),
+                    _fixed_decoupled_decay(ADAMC_ADAM_DECAY * adam_lr / self.adam_lr),
+                    optax.scale(-adam_lr),
+                )
             if self.muonh_radial_softcap:
                 transforms["muonh_radial"] = muonh_radial_at(learning_rate)
                 transforms["kda_beta_radial"] = muonh_radial_at(learning_rate * KDA_BETA_LR_MULT)
@@ -677,6 +736,16 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             raise ValueError("muonh_radial_softcap must be non-negative")
         if self.muonc_decay_mult < 0 or (self.muonc_decay_mult and self.muonh_radial_softcap):
             raise ValueError("muonc_decay_mult must be non-negative and excludes muonh_radial_softcap")
+        if self.adamc_head_router_embed and (
+            not self.muonc_decay_mult
+            or self.router_lr_mult != 1.0
+            or self.embed_lr_mult is not None
+            or self.embed_optimizer != EmbedOptimizer.ADAM_GROUP
+        ):
+            raise ValueError(
+                "adamc_head_router_embed needs muonc_decay_mult, router_lr_mult 1, no embed_lr_mult and "
+                "embed_optimizer adam_group"
+            )
 
     def create_mask(self, params):
         paths = leaf_key_paths(params)
@@ -706,6 +775,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             # and n-gram cache mixtures' weights (zero-initialised).
             if ".rel_pos." in path_lower or _ADAM_LEAVES.search(path_lower):
                 return "adam"
+            if self.adamc_head_router_embed and (_TOKEN_EMBED.search(path_lower) or _is_router_weight(path_lower)):
+                return ADAMC_ADAM_GROUP
             if _TOKEN_EMBED.search(path_lower) and self.embed_lr_mult is not None:
                 return "embed_lr"
             if _TOKEN_EMBED.search(path_lower) and self.embed_optimizer != EmbedOptimizer.ADAM_GROUP:
