@@ -44,6 +44,8 @@ SNAPSHOT_PAGE_SIZE = 100
 DOCKERFILE_WORD = re.compile(r"""(?:<<[ \t]*|[^\s'"\\]|\\.|'[^']*'|"(?:\\.|[^"\\])*")+""")
 HEREDOC_WORD = re.compile(r"^\d*<<(-?)\s*([^<]*)$")
 PARSER_DIRECTIVE = re.compile(r"^#\s*(syntax|escape|check)\s*=\s*(\S+)\s*$", re.IGNORECASE)
+# Gateway and availability statuses a Daytona API request may return transiently.
+TRANSIENT_DAYTONA_STATUS = frozenset({502, 503, 504})
 FAILED_SNAPSHOT_STATES = frozenset({SnapshotState.ERROR, SnapshotState.BUILD_FAILED, SnapshotState.INACTIVE})
 
 

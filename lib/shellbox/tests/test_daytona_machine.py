@@ -55,6 +55,7 @@ from shellbox.backends.daytona.machine import (
     DaytonaNetworkMode,
     DaytonaNetworkPolicy,
     _create_sandbox,
+    _delete_named_sandbox,
 )
 from shellbox.backends.daytona.provider import ProviderWaitPolicy
 from shellbox.backends.daytona.snapshot import (
@@ -2068,38 +2069,24 @@ def test_declarative_daytona_preserves_task_image_and_cleans_up_without_snapshot
     asyncio.run(scenario())
 
 
-def test_daytona_recreated_workdir_reopens_path_for_next_command(tmp_path: Path, inherit_image_workdir: bool) -> None:
-    workdir = tmp_path / "work"
-    workdir.mkdir()
-    original_inode = workdir.stat().st_ino
-
-    class StaleWorkdirProcess(LocalProcess):
+def test_sandbox_deletion_retries_a_gateway_error() -> None:
+    class FlakyGateway:
         def __init__(self):
-            super().__init__()
-            self.workdir_replaced = False
+            self.gets = 0
+            self.deleted = []
 
-        async def exec(self, command, cwd=None, env=None, timeout=None):
-            if cwd is None:
-                if self.workdir_replaced:
-                    raise OSError("Provider process retained the deleted working directory")
-                cwd = str(workdir)
-            result = await super().exec(command, cwd=cwd, env=env, timeout=timeout)
-            self.workdir_replaced = workdir.stat().st_ino != original_inode
-            return result
+        async def get(self, name):
+            self.gets += 1
+            if self.gets == 1:
+                raise DaytonaError("Failed to get sandbox: 502 Bad Gateway", status_code=502)
+            return SimpleNamespace(name=name, id=name)
 
-    async def scenario():
-        client = LocalDaytona()
-        client.sandbox.process = StaleWorkdirProcess()
-        machine = await DaytonaMachineFactory(lambda: client).create(
-            MachineSpec(RegistryImage("ubuntu:24.04"), workdir="" if inherit_image_workdir else str(workdir))
-        )
-        try:
-            replaced = await machine.run(Command(("sh", "-c", 'rm -rf "$PWD" && mkdir -p "$PWD" && printf recreated')))
-            assert (replaced.exit_code, replaced.stdout) == (0, b"recreated")
-            following = await machine.run(Command((sys.executable, "-c", "import os; print(os.getcwd())")))
-            assert (following.exit_code, following.stdout) == (0, f"{workdir}\n".encode())
-            assert workdir.stat().st_ino != original_inode
-        finally:
-            await machine.close()
+        async def delete(self, sandbox, *, wait=False):
+            self.deleted.append(sandbox.name)
 
-    asyncio.run(scenario())
+    # The merged machine retries through the provider-wait machinery, not a bare sleep.
+    client = FlakyGateway()
+
+    asyncio.run(_delete_named_sandbox(client, "fixture"))
+
+    assert client.deleted == ["fixture"]

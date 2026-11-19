@@ -139,8 +139,12 @@ async def _delete_named_sandbox(
             return
         record_sandbox_lifecycle(SandboxLifecycleEvent.DELETE_REQUESTED, name, sandbox.id)
         # A timeout or 5xx response is ambiguous: reconciliation checks this exact ID.
+        # Deletion is idempotent, so transient gateway errors retry under the same budget
+        # instead of leaving an orphaned sandbox behind (#11735).
         with wait_policy.wait():
-            await client.delete(sandbox, wait=True)
+            await retry_provider_call(
+                "sandbox.delete", partial(client.delete, sandbox, wait=True), wait_policy=wait_policy
+            )
         record_sandbox_lifecycle(SandboxLifecycleEvent.DELETED, name, sandbox.id)
 
 

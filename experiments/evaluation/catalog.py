@@ -17,6 +17,7 @@ from experiments.evaluation.benchmarks import (
     jee,
     lambada,
     long_context,
+    longbench,
     math,
     mmlu,
     mmlu_redux,
@@ -58,6 +59,7 @@ def evaluation_benchmarks() -> dict[str, EvaluationBenchmark]:
             financebench,
             simpleqa,
             long_context,
+            longbench,
             nupa,
         )
         for benchmark in family.benchmarks()
