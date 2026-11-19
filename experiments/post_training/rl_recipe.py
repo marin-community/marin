@@ -347,7 +347,10 @@ def _training_config(
             ),
         ),
     )
-    return apply_settings(config, settings, preset)
+    config = apply_settings(config, settings, preset)
+    if preset.harbor is not None:
+        config = config.merge(RecipePatch(generator=sections.Generator(enable_http_endpoint=True)))
+    return config
 
 
 def _refuse_judged(summary: dict, filename: str) -> None:
