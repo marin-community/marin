@@ -21,7 +21,6 @@ from taskcompendium.evaluation.spec import (
     SummaryKind,
     TrialPolicy,
 )
-from taskcompendium.importers.evalchemy.grader import scorer_revision
 from taskcompendium.importers.evalchemy.supergpqa import convert_supergpqa, supergpqa_item
 from taskcompendium.pipeline.inputs import SourceFormat
 
@@ -33,7 +32,7 @@ from experiments.post_training.task_curation.pipeline import HfSource
 SUPERGPQA_REVISION = "4430d4458112c7d4497fdcf94d7cc223313d6acf"
 SUPERGPQA_FILE = "SuperGPQA-all.jsonl"
 SUPERGPQA_POPULATION = 26529
-VERSION = "2026.11.18"
+VERSION = "2026.11.19"
 
 
 def benchmarks() -> list[EvaluationBenchmark]:
@@ -60,7 +59,7 @@ def benchmarks() -> list[EvaluationBenchmark]:
         name="supergpqa",
         source=HfSource("m-a-p/SuperGPQA", SUPERGPQA_REVISION, (SUPERGPQA_FILE,), SourceFormat.JSONL),
         convert=convert_supergpqa,
-        version=VERSION + "-" + scorer_revision("supergpqa"),
+        version=VERSION,
         protocol=protocol,
         item_builder=supergpqa_item,
         grader=BASIC_GRADER,

@@ -91,6 +91,17 @@ class EmptyOutputPolicy(StrEnum):
     GRADE = "grade"
 
 
+class McqExtraction(StrEnum):
+    """How an MCQ grader finds the chosen option in the output.
+
+    ``ANSWER_LINE`` reads the last ``Answer: X`` line or a bare letter. ``SUPERGPQA_REFERENCE``
+    reproduces the SuperGPQA runner's zero-shot extraction, including its option-text fallback.
+    """
+
+    ANSWER_LINE = "answer_line"
+    SUPERGPQA_REFERENCE = "supergpqa_reference"
+
+
 @dataclass(frozen=True)
 class FunctionCall:
     """A function name and decoded JSON argument object, without a harness call ID."""
@@ -137,6 +148,9 @@ class McqSpec:
     options: int = 4
     output: str = DEFAULT_OUTPUT
     empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
+    extraction: McqExtraction = field(default=McqExtraction.ANSWER_LINE, kw_only=True)
+    # The text of each option, in letter order; the SuperGPQA extraction maps matched option text to its letter.
+    option_texts: tuple[str, ...] = field(default=(), kw_only=True)
 
 
 @dataclass(frozen=True)

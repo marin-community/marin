@@ -5,18 +5,20 @@
 
 The prompt is the authors' ``config/prompt/zero-shot.yaml`` filled as in ``infer/data_loader.py``
 (SuperGPQA/SuperGPQA, ODC-By, at e31e8bf3e7089aef808be5ddecafd4538dee6e41). It always lists A to J as
-allowed letters, including for questions with fewer than ten options. The grader reads only the final
-answer, as the runner does for API reasoning models.
+allowed letters, including for questions with fewer than ten options. Grading uses verifyit's MCQ mode
+with the runner's extraction, in a grader machine because its regex timeout needs the main thread. The
+grader reads only the final answer, as the runner does for API reasoning models.
 """
 
 from collections.abc import Sequence
+
+from verifyit.spec import McqExtraction, McqSpec
 
 from taskcompendium.convert.answers import source_evidence
 from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.evaluation.corpus import chat_item
 from taskcompendium.evaluation.spec import EvaluationItem
-from taskcompendium.importers.evalchemy.grader import source_package
-from taskcompendium.importers.evalchemy.scorers.supergpqa import MAX_SEARCH_TIME
+from taskcompendium.grader import verifyit_package
 from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import RawRow
@@ -38,11 +40,14 @@ def convert_supergpqa(row: RawRow, context: ConversionContext) -> TaskSpec:
     task = conversation_task(
         row,
         events=(TextMessage(role="user", content=supergpqa_prompt(row.data["question"], options)),),
-        package=source_package(
-            "supergpqa",
-            {"expected": row.data["answer_letter"], "options": options},
+        package=verifyit_package(
+            McqSpec(
+                row.data["answer_letter"],
+                options=len(options),
+                extraction=McqExtraction.SUPERGPQA_REFERENCE,
+                option_texts=tuple(options),
+            ),
             environment=required_grader_environment(context),
-            timeout=60 + MAX_SEARCH_TIME,
         ),
         evidence={**row.data, "options": options},
     )

@@ -1,15 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""SuperGPQA publication renders the authors' prompt and binds gold letters, options and groups."""
+"""SuperGPQA publication renders the authors' prompt and binds the reference MCQ grader and groups."""
 
 import json
 
 from fray.local_backend import LocalClient
 from taskcompendium.evaluation.corpus import evaluation_cases
-from taskcompendium.models import CommandSemantics, EnvironmentRequirements
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements, verifyit_spec
 from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
-from taskcompendium.runtime.resources import resource_bytes
+from verifyit.spec import McqExtraction, McqSpec
 from zephyr.context import ZephyrContext
 
 from experiments.evaluation.catalog import evaluation_benchmarks
@@ -62,11 +62,9 @@ def test_publication_renders_reference_prompt_with_discipline_and_difficulty_gro
     [event] = cases[0].task.context.events
     assert event.role == "user"
     assert event.content.endswith("\n\nWhich number is prime?\nA) 4\nB) 6\nC) 7\nD) 9\n")
-    configs = [
-        json.loads(resource_bytes(next(r for r in case.task.resources.verifier if r.path == "config.json")))
-        for case in cases
+    reference = McqExtraction.SUPERGPQA_REFERENCE
+    assert [verifyit_spec(case.task.grader) for case in cases] == [
+        McqSpec("C", options=4, extraction=reference, option_texts=("4", "6", "7", "9")),
+        McqSpec("A", options=5, extraction=reference, option_texts=("8", "3", "5", "7", "9")),
     ]
-    assert configs == [
-        {"expected": "C", "options": ["4", "6", "7", "9"]},
-        {"expected": "A", "options": ["8", "3", "5", "7", "9"]},
-    ]
+    assert all(case.task.grader.environment is not None for case in cases)

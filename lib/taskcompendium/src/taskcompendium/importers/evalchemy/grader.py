@@ -35,7 +35,6 @@ DEPENDENCIES = {
     "gpqa": ("choices.py",),
     "mmlu_pro": ("choices.py",),
     "zeroeval_mcqa": ("zeroeval.py",),
-    "supergpqa": ("supergpqa.py",),
     "mrcr": ("long_context.py",),
     "graphwalks": ("long_context.py",),
     "longbench_v2": ("longbench_v2.py",),
