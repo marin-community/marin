@@ -11,7 +11,7 @@ from levanter.optim.grugmuon import _grug_scale_with_muon
 from levanter.optim.util import CoefficientType
 from levanter.utils.jax_utils import leaf_key_paths
 
-from experiments.grug.moe.adamh import scale_by_adamh
+from experiments.grug.moe.adamh import clamp_zero_learning_rate, scale_by_adamh
 
 
 def _target_named_sharding(array) -> jax.sharding.NamedSharding | None:
@@ -83,11 +83,7 @@ def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate:
             new_param = param - learning_rate * update * param_norm / jnp.maximum(update_norm, 1e-10)
             new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param), axis=axes, keepdims=True))
         projected_update = new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
-        # With a zero learning rate the raw step is exactly zero, but the re-projection
-        # divides and multiplies back by norms computed at different precisions (the
-        # parameter dtype versus the promoted new_param), which is not a bit-exact
-        # identity. Clamp to an exact zero update so parameters stay bit-identical.
-        return jnp.where(learning_rate == 0.0, jnp.zeros_like(projected_update), projected_update)
+        return clamp_zero_learning_rate(projected_update, learning_rate)
 
     return jax.tree.map(
         scale_invariant_update,

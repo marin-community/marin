@@ -107,9 +107,8 @@ def test_grug_moe_optimizer_positive_lr_updates_params(config_factory):
 
     initial_leaves = jax.tree_util.tree_flatten_with_path(initial)[0]
     final_leaves = jax.tree_util.tree_flatten_with_path(final)[0]
-    # Matrix leaves cover every scale-invariant re-projection the zero-rate fix
-    # touched. One-dimensional MuonH leaves only ever flip signs, so they are
-    # excluded.
+    # Matrix leaves cover every scale-invariant re-projection; one-dimensional
+    # MuonH leaves only change sign, so they are excluded.
     unchanged = [
         f"{path}"
         for (path, reference), (_, current) in zip(initial_leaves, final_leaves, strict=True)

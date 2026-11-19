@@ -19,6 +19,17 @@ class ScaleByAdamHState(NamedTuple):
     nu: optax.Updates
 
 
+def clamp_zero_learning_rate(update, learning_rate):
+    """Return an exact zero update when the learning rate is zero.
+
+    Scale-invariant re-projections divide and multiply the parameter by norms
+    that round differently (the parameter dtype versus the promoted post-step
+    value), so at learning rate zero they would still emit a rounding-noise
+    update instead of zero.
+    """
+    return jnp.where(learning_rate == 0.0, jnp.zeros_like(update), update)
+
+
 def scale_by_adamh(
     b1: float = 0.9,
     b2: float = 0.999,
@@ -54,10 +65,7 @@ def scale_by_adamh(
             u_norm = jnp.linalg.norm(u)
             new_p = p - learning_rate * u * p_norm / jnp.maximum(u_norm, 1e-10)
             projected_update = new_p / jnp.linalg.norm(new_p) * p_norm - p
-            # Clamp a zero learning rate to an exact zero update, mirroring the MuonH
-            # hyperball path: the re-projection is the identity when the raw step is
-            # zero, but its norms round at different precisions.
-            return jnp.where(learning_rate == 0.0, jnp.zeros_like(projected_update), projected_update)
+            return clamp_zero_learning_rate(projected_update, learning_rate)
 
         def scale_invariant_update(p, u):
             if p is None:
@@ -79,4 +87,4 @@ def scale_by_adamh(
     return optax.GradientTransformation(init_fn, update_fn)
 
 
-__all__ = ["ScaleByAdamHState", "scale_by_adamh"]
+__all__ = ["ScaleByAdamHState", "clamp_zero_learning_rate", "scale_by_adamh"]
