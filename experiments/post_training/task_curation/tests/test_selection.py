@@ -16,6 +16,7 @@ from click.testing import CliRunner
 from finestore.rl.strata import DifficultyBands, MembershipState, SelectionParent, TaskStrata, read_selection_strata
 from fray.local_backend import LocalClient
 from marin.execution.lazy import ArtifactStep, run
+from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.answers import source_evidence
 from taskcompendium.evaluation.corpus import evaluation_cases
 from taskcompendium.grader import verifyit_package
@@ -73,6 +74,7 @@ from experiments.post_training.task_curation.selection import (
     task_selection_step,
     validation_task,
 )
+from experiments.post_training.task_curation.swe_verified_release import convert_release
 from experiments.post_training.task_curation.tests.conversion import converted_task
 
 FAMILIES = (*HELDOUT_FAMILIES.values(), STRUCTURAL_FAMILY)
@@ -360,6 +362,81 @@ def released_training(path: Path, *tasks: TaskSpec) -> ReleasedSource:
         agentic=True,
         license="Apache-2.0",
     )
+
+
+@pytest.mark.parametrize("missing_bootstrap", [False, True], ids=["published", "missing-bootstrap"])
+def test_sealed_swe_conversion_preserves_rows_and_records_hashes(tmp_path, missing_bootstrap):
+    commands = ("python fixture_setup.py", "python other_setup.py")
+    tasks = []
+    for index, command in enumerate(commands):
+        config = '[environment]\ndocker_image="fixture/image:latest"\n'
+        if index == 0 or not missing_bootstrap:
+            config += f'[environment.setup]\ncommand="{command}"\n'
+        resources = ResourceGroups(verifier=(inline_resource("task.toml", config.encode()),))
+        tasks.append(source_task(f"agent-{index}").model_copy(update={"resources": resources}))
+    original = tmp_path / "sealed.parquet"
+    serialized = [task.model_dump_json() for task in tasks]
+    table = pa.table({"task_spec": serialized, "family": ["agentic", "agentic"]})
+    pq.write_table(table, original)
+    source_sha = hashlib.sha256(original.read_bytes()).hexdigest()
+    output = tmp_path / "derived"
+
+    def convert():
+        return convert_release(StoragePath(str(original)), source_sha, 2, StoragePath(str(output)), "test-commit")
+
+    if missing_bootstrap:
+        with pytest.raises(ValueError, match="agent-1 has no declared Harbor bootstrap command"):
+            convert()
+        assert not output.exists()
+        return
+
+    manifest = convert()
+    parquet = output / "agentic-train.parquet"
+    result = pq.read_table(parquet)
+    assert result.schema == table.schema and result["family"] == table["family"]
+    for task, command, before, after, receipt in zip(
+        tasks, commands, serialized, result["task_spec"].to_pylist(), manifest["tasks"], strict=True
+    ):
+        expected = json.loads(before)
+        expected["environment_requirements"]["setup_commands"] = [command]
+        assert json.loads(after) == expected
+        assert receipt == {
+            "task_id": task.id,
+            "input_sha256": hashlib.sha256(before.encode()).hexdigest(),
+            "output_sha256": hashlib.sha256(after.encode()).hexdigest(),
+        }
+    assert manifest["input_uri"] == str(original) and manifest["input_sha256"] == source_sha
+    assert manifest["code_commit"] == "test-commit" and manifest["rows"] == 2
+    assert manifest["output_sha256"] == hashlib.sha256(parquet.read_bytes()).hexdigest()
+    assert json.loads((output / "manifest.json").read_text()) == manifest
+    assert convert() == manifest
+    released = ReleasedSource(
+        uri=str(parquet),
+        version="derived",
+        rows=2,
+        format=PanelFormat.TASK_SPEC,
+        family="agentic",
+        sha256=manifest["output_sha256"],
+        agentic=True,
+        license="unverified",
+    )
+    heldout = source_task("validation")
+    heldout = heldout.model_copy(update={"source": heldout.source.model_copy(update={"dataset": "structure-closure"})})
+    recipe = SelectionRecipe(
+        name="derived-mix",
+        version="2026.11.19.1",
+        sources={},
+        family_limits={"agentic": 2},
+        heldout=(task_file(tmp_path / "heldout.parquet", [heldout]),),
+        validation_per_family=1,
+        seed=20261023,
+        released=(released,),
+    )
+    selected = Path(run(task_selection_step({}, recipe))[0].path) / TRAIN_FILENAME
+    selected_tasks = [TaskSpec.model_validate_json(row) for row in pq.read_table(selected)["task_spec"].to_pylist()]
+    assert {task.id: task.environment_requirements.setup_commands for task in selected_tasks} == {
+        task.id: (command,) for task, command in zip(tasks, commands, strict=True)
+    }
 
 
 def test_selection_mixes_released_and_curated_tasks(tmp_path):

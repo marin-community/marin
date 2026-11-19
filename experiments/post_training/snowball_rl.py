@@ -380,7 +380,7 @@ _TRAIN_LONG_AGENTIC = agentic(
     # The sandbox covers one 90-minute trial; admission covers the trial and one retry.
     limits=agentic_limits(
         attempt_timeout=5400,
-        session_attempt_timeout=2520,
+        session_attempt_timeout=5400,
         model_turn_timeout=1800,
         ttl_minutes=90,
         stall_timeout=10_800,

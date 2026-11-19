@@ -45,7 +45,7 @@ _AGENTIC_RECIPE = RecipePatch(
                     "thinking_format": "chat-template",
                 },
             },
-            "setup_timeout": 360,
+            "setup_timeout": 1_800,
             "cleanup_timeout": 120,
             "service_startup_timeout": 60,
             "service_shutdown_timeout": 60,
