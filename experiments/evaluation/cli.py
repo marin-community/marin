@@ -124,8 +124,8 @@ def _require_coreweave_credentials(batch: EvaluationBatch) -> None:
 def _print_plan(spec: LaunchSpec, batch: EvaluationBatch) -> None:
     geometry = batch.accelerator.geometry
     serving = geometry.label if geometry is not None else "worker-resolved"
-    serving = f"{serving} instances={batch.model.serve.instances}"
-    task_count = (geometry.task_count if geometry is not None else 1) * batch.model.serve.instances
+    serving = f"{serving} instances={batch.instances}"
+    task_count = (geometry.task_count if geometry is not None else 1) * batch.instances
     click.echo(
         f"model: {spec.model.name}  platform: {spec.platform.value}  "
         f"controller_cluster={EVALUATION_CONTROLLER_CLUSTER}  "
@@ -213,9 +213,8 @@ def cli() -> None:
 @click.option(
     "--instances",
     type=click.IntRange(min=1),
-    default=1,
-    show_default=True,
-    help="Candidate serving instances, each using the selected accelerator; multiple instances share a broker.",
+    default=None,
+    help="Override the model's serve.instances. Multiple candidate instances share a broker.",
 )
 @click.option(
     "--max-concurrent",
@@ -286,7 +285,7 @@ def launch(
     accelerator: str | None,
     limit: int | None,
     max_concurrent: int,
-    instances: int,
+    instances: int | None,
     seed: int | None,
     version: str | None,
     description: str | None,

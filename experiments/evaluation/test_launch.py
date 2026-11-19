@@ -19,6 +19,7 @@ from iris.client.client import IrisClient
 from iris.cluster.client import remote_client
 from iris.rpc import controller_pb2, job_pb2
 from marin.evaluation.hardware import Platform
+from marin.evaluation.model_config import load_model_config
 from marin.evaluation.runner import (
     EvaluationBatch,
     EvaluationError,
@@ -26,6 +27,7 @@ from marin.evaluation.runner import (
     SubmittedEvaluationBatch,
     _record,
 )
+from marin.execution.lazy import materialized_config
 from marin.execution.step_runner import StepRunner
 from marin.inference.iris import RemoteInferenceStartupError
 
@@ -36,6 +38,7 @@ from experiments.evaluation.curated import load_evaluations
 from experiments.evaluation.evals import resolve_evaluations
 from experiments.evaluation.launch import LaunchSpec, build_evaluation_steps, prepare_evaluation_batch
 from experiments.evaluation.models import models
+from experiments.evaluation.pipeline import eval_step
 
 
 @pytest.fixture
@@ -49,13 +52,14 @@ def submitted_batches(monkeypatch):
         def submit(self, *, entrypoint, **_kwargs):
             _, args, _ = entrypoint.resolve()
             batches.append(args[0])
-            return SimpleNamespace(job_id="/test/eval")
+            return SimpleNamespace(job_id="/test/eval", wait=lambda *, timeout: None)
 
     @contextmanager
     def client(**_kwargs):
         yield Client()
 
     monkeypatch.setattr("experiments.evaluation.cli.open_iris_client", client)
+    monkeypatch.setattr("experiments.evaluation.pipeline.iris_ctx", lambda: SimpleNamespace(client=Client()))
     return batches
 
 
@@ -76,6 +80,68 @@ def _command(tmp_path: Path) -> list[str]:
         "repeatable-evals",
         "--no-wait",
     ]
+
+
+@pytest.fixture(params=[(2, None, 2), (2, 1, 1), (1, 2, 2)], ids=["omitted", "explicit-one", "explicit-two"])
+def instance_selection(request, tmp_path):
+    catalog_instances, override, expected = request.param
+    path = tmp_path / "model.json"
+    path.write_text(
+        json.dumps(
+            {
+                "name": "test-dp",
+                "location": "s3://test/model",
+                "resource_hint": {"gpu": {"H100": 8}},
+                "serve": {"tensor_parallel_size": 1, "data_parallel_size": 8, "instances": catalog_instances},
+            }
+        )
+    )
+    return path, override, expected
+
+
+def test_cli_uses_same_instance_count_for_launch_and_dry_run(
+    tmp_path, monkeypatch, submitted_batches, instance_selection
+):
+    model, override, expected = instance_selection
+    monkeypatch.setenv("CW_KEY_ID", "local-test-key")
+    monkeypatch.setenv("CW_KEY_SECRET", "local-test-secret")
+    args = [
+        "launch",
+        "--model-config",
+        str(model),
+        "--evals",
+        "gsm8k-smoke",
+        "--records-prefix",
+        str(tmp_path),
+        "--no-wait",
+    ]
+    if override is not None:
+        args.extend(["--instances", str(override)])
+    runner = CliRunner()
+
+    plan = runner.invoke(cli, [*args, "--dry-run"])
+    launch = runner.invoke(cli, args)
+
+    assert plan.exit_code == 0, plan.output
+    assert launch.exit_code == 0, launch.output
+    assert f"instances={expected}" in plan.output.splitlines()[0]
+    assert f"serve=PP1 TP1 DP8 instances={expected} tasks={expected} x H100x8" in plan.output
+    assert [batch.instances for batch in submitted_batches] == [expected]
+
+
+def test_pipeline_uses_model_instances_unless_overridden(tmp_path, monkeypatch, submitted_batches, instance_selection):
+    path, override, expected = instance_selection
+    monkeypatch.setattr("experiments.evaluation.pipeline.read_record", lambda path: SimpleNamespace(results_path=path))
+    step = eval_step(
+        load_model_config(path),
+        resolve_evaluations("gsm8k-smoke"),
+        version="dev",
+        **({"instances": override} if override is not None else {}),
+    )
+
+    step.run(materialized_config(step, str(tmp_path)))
+
+    assert [batch.instances for batch in submitted_batches] == [expected]
 
 
 @pytest.fixture
