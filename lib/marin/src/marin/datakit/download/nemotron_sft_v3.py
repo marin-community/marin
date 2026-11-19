@@ -51,20 +51,25 @@ _UUID_FIELD = "uuid"
 #     or CPython 2.7.
 #   official_tests/failed_rows.parquet: the final program fails the official Codeforces tests of its problem in
 #     every run.
+#   comp_prog_code_contests_taco/<language>/failed_rows.parquet: the row has no official Codeforces tests, and
+#     the final program fails the deepmind/code_contests or BAAI/TACO tests of its problem in every run. A test
+#     set is used only when at least two of its upstream reference solutions pass it.
 #   failed_rows.parquet (text_to_sql): the final SQL fails on the database engine of its dialect.
 #   schema_not_loaded.parquet (text_to_sql): the schema script in the prompt does not load on the database engine
 #     of its dialect, so the final SQL cannot be run.
-COMPETITIVE_PROGRAMMING_EXCLUSION_REVISION = "d2cb335e55ed17de4278f2c402097938d03bcd4e"
+COMPETITIVE_PROGRAMMING_EXCLUSION_REVISION = "e6ee081dc5c72a8993566e72fe6f65c9a23f319d"
 _COMPETITIVE_PROGRAMMING_AUDIT_FOLDER = f"pinned_{_COMPETITIVE_PROGRAMMING_REVISION[:8]}"
 COMPETITIVE_PROGRAMMING_EXCLUSION_FILES: Mapping[str, tuple[str, ...]] = MappingProxyType(
     {
         _COMPETITIVE_CPP_PARTITION: (
             f"comp_prog_cpp/{_COMPETITIVE_PROGRAMMING_AUDIT_FOLDER}/exclusions.parquet",
             "comp_prog_cpp/official_tests/failed_rows.parquet",
+            "comp_prog_code_contests_taco/cpp/failed_rows.parquet",
         ),
         _COMPETITIVE_PYTHON_PARTITION: (
             f"comp_prog_python/{_COMPETITIVE_PROGRAMMING_AUDIT_FOLDER}/exclusions.parquet",
             "comp_prog_python/official_tests/failed_rows.parquet",
+            "comp_prog_code_contests_taco/python/failed_rows.parquet",
         ),
         _TEXT_TO_SQL_PARTITION: (
             f"comp_prog_text_to_sql/{_COMPETITIVE_PROGRAMMING_AUDIT_FOLDER}/failed_rows.parquet",

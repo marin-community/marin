@@ -218,6 +218,7 @@ def test_cpp_rows_on_any_audit_exclusion_list_are_dropped(tmp_path):
     answers = {
         "does-not-compile": "```cpp\nint main() { return total; }\n```",
         "fails-official-tests": "```cpp\nint main() { return 1; }\n```",
+        "fails-third-party-tests": "```cpp\nint main() { return 2; }\n```",
         "valid-row": "```cpp\nint main() { return 0; }\n```",
     }
     source = tmp_path / "input" / "data" / "competitive_programming_cpp_00.jsonl"
@@ -238,7 +239,8 @@ def test_cpp_rows_on_any_audit_exclusion_list_are_dropped(tmp_path):
         )
     )
     exclusion_files = COMPETITIVE_PROGRAMMING_EXCLUSION_FILES["competitive_coding_cpp"]
-    for exclusion_file, uuid in zip(exclusion_files, ["does-not-compile", "fails-official-tests"], strict=True):
+    listed_uuids = ["does-not-compile", "fails-official-tests", "fails-third-party-tests"]
+    for exclusion_file, uuid in zip(exclusion_files, listed_uuids, strict=True):
         exclusions = tmp_path / "exclusions" / exclusion_file
         exclusions.parent.mkdir(parents=True)
         pq.write_table(pa.table({"uuid": [uuid]}), exclusions)
