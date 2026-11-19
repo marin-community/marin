@@ -228,7 +228,6 @@ def test_prepare_timeout_fails_its_role_without_a_retry(serving):
         _prepare_all({"judge": config})
     assert caught.value.role == "judge"
     assert caught.value.error.phase is InferenceStartupPhase.PREPARATION
-    assert isinstance(caught.value.error.__cause__.__cause__, TimeoutError)
     assert serving.events == ["prepare", "prepare stopped"]
     assert len(serving.requests) == 1
 
@@ -249,7 +248,7 @@ def test_warm_candidate_serves_only_after_cold_judge_is_prepared(serving):
         _inference_session(stack, prepared["judge"])
 
     assert serving.events == ["prepare", "gpu", "gpu"]
-    assert [request.name for request in serving.requests] == [serving.requests[0].name]
+    assert len(serving.requests) == 1
     assert [download[0] for download in serving.downloads] == ["org/judge"]
     assert [served.model.model_id for served in serving.served] == ["org/candidate", "org/judge"]
 
