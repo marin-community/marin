@@ -270,7 +270,10 @@ license and difficulty per task) and `summary.json`.
 admitted training sources, with a quota for each source. It excludes the
 development panel (`heldout`) and EvalLite (`exclusions`) by task ID, full
 conversation and whitespace-normalized final user statement, and refuses tasks
-that need a container image or a judge service.
+that need a container image or a judge service. A recipe accepts other grader
+kinds by listing them in `grader_kinds` (default `["in_process", "package"]`).
+SkyRL grades `image` tasks on its Daytona `image_verifier` machine, so a launch
+that trains on them must give that machine the grader's memory and time.
 
 The checked-in recipe names version `2026.11.10.1`, which is not yet published;
 build it before training on it. The published `snowball-100k@2026.11.04.1` was

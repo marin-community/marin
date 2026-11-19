@@ -56,6 +56,7 @@ from experiments.post_training.task_curation.inventory import (
     TRAIN_FILENAME,
     VALIDATION_FILENAME,
     EvalLiteRecipe,
+    GraderKind,
     HeldoutSource,
     SelectionRecipe,
     task_selection_step,
@@ -333,13 +334,25 @@ def test_source_shortfall_cannot_be_filled_from_another_source(tmp_path):
     assert not (Path(selection.path()) / TRAIN_FILENAME).exists()
 
 
+def test_recipe_can_accept_image_graded_training_tasks(tmp_path):
+    settings = recipe(tmp_path).model_copy(
+        update={
+            "sources": {"fixture:first": "calendar"},
+            "grader_kinds": (GraderKind.IN_PROCESS, GraderKind.PACKAGE, GraderKind.IMAGE),
+        }
+    )
+    source = admitted_source(tmp_path / "source", [source_task("training-image", image=True), source_task("package")])
+    output = Path(run(task_selection_step({"fixture:first": source}, settings))[0].path)
+    assert {task.id for task in read_tasks(output / TRAIN_FILENAME)} == {"training-image", "package"}
+
+
 @pytest.mark.parametrize(
     "failure,cause",
     [
         ("evaluation-source", "not a training population"),
         ("development-image", "Development panel requires local graders"),
-        ("training-image", "Training selection requires local graders"),
-        ("training-judge", "Training selection requires local graders"),
+        ("training-image", "Training selection refuses image graders"),
+        ("training-judge", "Training selection refuses remote_judge graders"),
     ],
 )
 def test_selection_does_not_publish_for_invalid_source_or_grader(tmp_path, failure, cause):

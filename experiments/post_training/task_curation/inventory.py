@@ -143,6 +143,8 @@ class SelectionRecipe(BaseModel):
     exclusions: tuple[HeldoutSource, ...] = ()
     validation_per_family: PositiveInt
     seed: int
+    grader_kinds: tuple[GraderKind, ...] = LOCAL_GRADERS
+    """Grader kinds the training tasks may use; a recipe that lists others accepts remote grading cost."""
 
 
 @dataclass(frozen=True)
@@ -441,7 +443,7 @@ def _grader_counts(path: Path) -> dict[str, int]:
 def write_training(
     config: SelectionConfig, heldout: tuple[TaskSpec, ...], exclusions: tuple[TaskSpec, ...], destination: Path
 ) -> dict[str, SourceCounts]:
-    """Sample admitted local tasks after excluding panel overlaps and duplicates."""
+    """Sample admitted tasks of the recipe's grader kinds after excluding panel overlaps and duplicates."""
     excluded_keys = {key for task in (*heldout, *exclusions) for key in _panel_keys(task).exclusion}
     selected_ids: set[str] = set()
     selected_contracts: set[str] = set()
@@ -455,8 +457,8 @@ def write_training(
                 task = TaskSpec.model_validate_json(row[TASK_JSON_COLUMN])
                 source_counts = counts[source.source_id]
                 source_counts.input += 1
-                if _grader_kind(task) not in LOCAL_GRADERS:
-                    raise ValueError(f"Training selection requires local graders: {task.id}")
+                if _grader_kind(task) not in config.recipe.grader_kinds:
+                    raise ValueError(f"Training selection refuses {_grader_kind(task)} graders: {task.id}")
                 if not excluded_keys.isdisjoint(_panel_keys(task).exclusion):
                     source_counts.heldout_overlap += 1
                     continue
