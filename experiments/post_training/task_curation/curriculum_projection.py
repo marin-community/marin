@@ -4,6 +4,7 @@
 """Project an archived curriculum onto an exact current catalog without rescoring."""
 
 import argparse
+import hashlib
 import json
 import logging
 from collections import Counter
@@ -25,6 +26,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.identity import canonical_sha256
+from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.curriculum.coverage import STATISTIC_FIELDS, build_curriculum_coverage
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, AlignmentSource, CurriculumCoverage
 from taskcompendium.pipeline.semantics import TaskSemanticInput
@@ -99,6 +101,7 @@ class TaskRebinding:
     old_task_hashes: tuple[str, ...]
     new_task_hashes: tuple[str, ...]
     content_hashes: tuple[str, ...]
+    upstream_row_sha256: tuple[str | None, ...]
 
 
 @dataclass(frozen=True)
@@ -208,18 +211,26 @@ def _public_tasks(reference: ManifestReference) -> tuple[dict, dict[str, TaskSem
     return document, tasks
 
 
-def public_task_correspondence(old: dict[str, TaskSemanticInput], new: dict[str, TaskSemanticInput]) -> dict[str, str]:
+def public_task_correspondence(
+    old: dict[str, TaskSemanticInput], new: dict[str, TaskSemanticInput], upstream_rows: dict[str, str]
+) -> dict[str, str]:
     """Match stable IDs first, then require a unique public-content bijection for changed IDs."""
     matches = {identifier: identifier for identifier in old.keys() & new.keys()}
     unmatched_old = old.keys() - matches.keys()
     unmatched_new = new.keys() - matches.values()
+    upstream_new_ids = set(upstream_rows.values())
     by_content = {}
     for identifier in unmatched_new:
+        if identifier in upstream_new_ids:
+            continue
         content_hash = new[identifier].content_hash
         if content_hash in by_content:
             raise ValueError("Changed task IDs have ambiguous public inputs; existing scores cannot be reused")
         by_content[content_hash] = identifier
     for identifier in unmatched_old:
+        if identifier in upstream_rows:
+            matches[identifier] = upstream_rows[identifier]
+            continue
         candidate = by_content.pop(old[identifier].content_hash, None)
         if candidate is None:
             raise ValueError("Changed task IDs lack a unique public-input bijection; existing scores cannot be reused")
@@ -227,6 +238,66 @@ def public_task_correspondence(old: dict[str, TaskSemanticInput], new: dict[str,
     if by_content:
         raise ValueError("Changed task IDs leave unmatched public inputs; existing scores cannot be reused")
     return matches
+
+
+def pinned_upstream_rows(
+    manifest: dict, semantic_tasks: dict[str, TaskSemanticInput], selected: set[str]
+) -> dict[tuple[str, str, str], tuple[str, str]]:
+    """Bind upstream row identities to exact TaskSpecs from the complete frozen stream."""
+    frozen = manifest["input"]
+    if not {"specs_dir", "task_column", "raw_count", "task_spec_scan_sha256"} <= frozen.keys():
+        raise ValueError("Repeated public inputs require their original frozen TaskSpec streams")
+    digest = hashlib.sha256()
+    count = 0
+    rows = {}
+    upstream_counts = Counter()
+    for path in sorted((StoragePath(frozen["specs_dir"]) / "*.parquet").glob(), key=str):
+        with path.open("rb") as stream:
+            for batch in pq.ParquetFile(stream).iter_batches(batch_size=16, columns=[frozen["task_column"]]):
+                for encoded in batch.column(0).to_pylist():
+                    digest.update(encoded.encode())
+                    count += 1
+                    document = json.loads(encoded)
+                    source = document["source"]
+                    key = (source["dataset"], source["revision"], source["row"])
+                    upstream_counts[key] += 1
+                    if document["id"] not in selected:
+                        continue
+                    task = TaskSpec.model_validate(document)
+                    if canonical_sha256(task.model_dump(mode="json")) != semantic_tasks[task.id].task_hash:
+                        raise ValueError(f"Upstream identity TaskSpec differs from its public manifest: {task.id}")
+                    if key in rows:
+                        raise ValueError("Repeated public input has no unique pinned upstream row")
+                    rows[key] = (task.id, canonical_sha256(key))
+    if (
+        count != frozen["raw_count"]
+        or digest.hexdigest() != frozen["task_spec_scan_sha256"]
+        or {row[0] for row in rows.values()} != selected
+        or any(upstream_counts[key] != 1 for key in rows)
+    ):
+        raise ValueError("Upstream identity scan differs from the complete frozen TaskSpec stream")
+    return rows
+
+
+def ambiguous_upstream_correspondence(
+    old_manifest: dict, new_manifest: dict, old: dict[str, TaskSemanticInput], new: dict[str, TaskSemanticInput]
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Resolve repeated public inputs only through a unique immutable upstream row identity."""
+    old_unmatched = old.keys() - new.keys()
+    new_unmatched = new.keys() - old.keys()
+    old_counts = Counter(old[key].content_hash for key in old_unmatched)
+    new_counts = Counter(new[key].content_hash for key in new_unmatched)
+    repeated = {key for key in old_counts.keys() | new_counts.keys() if old_counts[key] > 1 or new_counts[key] > 1}
+    if not repeated:
+        return {}, {}
+    before = pinned_upstream_rows(old_manifest, old, {key for key in old_unmatched if old[key].content_hash in repeated})
+    after = pinned_upstream_rows(new_manifest, new, {key for key in new_unmatched if new[key].content_hash in repeated})
+    if before.keys() != after.keys():
+        raise ValueError("Repeated public inputs lack a complete pinned upstream-row bijection")
+    return (
+        {before[key][0]: after[key][0] for key in before},
+        {before[key][0]: before[key][1] for key in before},
+    )
 
 
 def task_rebinding(archive: AlignmentSource, replacement: SourceReplacement) -> TaskRebinding:
@@ -249,7 +320,8 @@ def task_rebinding(archive: AlignmentSource, replacement: SourceReplacement) -> 
         or len(new) != manifest["converted_rows"]
     ):
         raise ValueError("Rebound public inputs do not match their frozen populations or scans")
-    matches = public_task_correspondence(old, new)
+    upstream_rows, upstream_digests = ambiguous_upstream_correspondence(old_manifest, manifest, old, new)
+    matches = public_task_correspondence(old, new, upstream_rows)
     for identifier, before in old.items():
         after = new[matches[identifier]]
         fields = ("source_id", "content_hash", "intended_use", "population", "public_input")
@@ -278,6 +350,7 @@ def task_rebinding(archive: AlignmentSource, replacement: SourceReplacement) -> 
         tuple(old[key].task_hash for key in identifiers),
         tuple(new[matches[key]].task_hash for key in identifiers),
         tuple(new[matches[key]].content_hash for key in identifiers),
+        tuple(upstream_digests.get(key) for key in identifiers),
     )
 
 
@@ -397,6 +470,7 @@ def write_task_identity_mappings(
                         "old_task_sha256": row.old_task_hashes,
                         "new_task_sha256": row.new_task_hashes,
                         "public_content_sha256": row.content_hashes,
+                        "upstream_row_sha256": pa.array(row.upstream_row_sha256, type=pa.string()),
                     }
                 ),
                 stream,
@@ -585,6 +659,7 @@ def project_curriculum(
                     old != new for old, new in zip(row.task_ids, row.new_task_ids, strict=True)
                 ),
                 "task_identity_mapping": task_mappings[row.source.source_id].model_dump(mode="json"),
+                "pinned_upstream_row_matches": sum(value is not None for value in row.upstream_row_sha256),
             }
             for row in rebindings
         ],

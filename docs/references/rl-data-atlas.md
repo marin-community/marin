@@ -1166,7 +1166,9 @@ an explicit TRAIN Use. QC metadata updates are recorded separately from
 task-producing inputs. Changed pins require a complete public-input comparison.
 Stable task IDs must match exactly. Changed IDs require a unique bijection of
 the full public inputs, with matching content hashes, source, population and Use.
-Ambiguous or changed public inputs cannot reuse scores. The projection records
+Repeated public inputs also require unique pinned upstream dataset/revision/row
+identities, verified against both complete frozen TaskSpec streams. Remaining
+ambiguity or changed public inputs cannot reuse scores. The projection records
 old/new task IDs and TaskSpec hashes in an immutable mapping; TaskSpec, count and
 QA receipts keep their own input bindings.
 

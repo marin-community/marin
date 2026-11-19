@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -12,12 +13,15 @@ from finestore.rl.licenses import LicenseReceipt
 from finestore.schema import arrow_schema
 from marin.execution.lazy import run
 from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.convert.answers import numeric_answer_task
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.identity import canonical_sha256
+from taskcompendium.models import Source
 from taskcompendium.pipeline.curriculum.coverage import CONFIDENCE_LEVELS
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, AlignmentSource, CurriculumCoverage
 from taskcompendium.pipeline.curriculum.task_alignment import TaskAlignment
-from taskcompendium.pipeline.semantics import TaskSemanticInput
+from taskcompendium.pipeline.models import RawRow
+from taskcompendium.pipeline.semantics import TaskInputFile, TaskSemanticInput, task_semantic_input
 from zephyr.context import ZephyrContext
 from zephyr.readers import load_parquet
 
@@ -393,6 +397,7 @@ def test_projection_rebinds_only_provenance_and_rebuilds_selected_samples(tmp_pa
             "old_task_sha256": "old-task",
             "new_task_sha256": replacement_hash,
             "public_content_sha256": canonical_sha256("same-public-instruction"),
+            "upstream_row_sha256": None,
         }
     ]
 
@@ -471,6 +476,98 @@ def test_changed_task_ids_with_ambiguous_public_inputs_refuse_score_reuse(tmp_pa
     )
     with pytest.raises(ValueError):
         task_rebinding(original, replacement)
+
+
+@pytest.mark.parametrize("change", ["none", "row", "task_hash", "stream"])
+def test_repeated_public_inputs_require_pinned_upstream_rows_and_exact_frozen_tasks(tmp_path, change):
+    manifests = {}
+    source = None
+    for side, revision in (("old", "1"), ("new", "2")):
+        root = tmp_path / side
+        root.mkdir()
+        declared = declaration("Marin:rebound", revision).model_copy(
+            update={"task_count": 2, "within_source_dedup": deduplication_evidence("fixture", revision, "1", 2)}
+        )
+        tasks = [
+            numeric_answer_task(
+                RawRow(
+                    id=f"{side}-{index}",
+                    source=Source(
+                        dataset="pinned-upstream",
+                        revision="immutable-revision",
+                        importer_revision=revision,
+                        row=f"row-{index}" if not (side == "new" and change == "row" and index == 1) else "other-row",
+                    ),
+                    data={},
+                ),
+                prompt="Add two and three.",
+                answer="5",
+                tolerance_abs=0,
+                tolerance_rel=0,
+            )
+            for index in range(2)
+        ]
+        encoded = [task.model_dump_json() for task in tasks]
+        specs = root / "specs"
+        specs.mkdir()
+        pq.write_table(pa.Table.from_pylist([{"task_spec": value} for value in encoded]), specs / "part.parquet")
+        stream_hash = hashlib.sha256("".join(encoded).encode()).hexdigest()
+        manifest = {
+            "intended_use": "train",
+            "input_rows": 2,
+            "converted_rows": 2,
+            "rejections": {},
+            "input": {
+                "declaration": declared.model_dump(mode="json"),
+                "specs_dir": str(specs),
+                "task_column": "task_spec",
+                "raw_count": 2,
+                "task_spec_scan_sha256": stream_hash,
+            },
+        }
+        (root / "manifest.json").write_text(json.dumps(manifest))
+        key = canonical_sha256(manifest)
+        rows = [task_semantic_input(task, TaskInputFile(declared.id, key, "", "train", "converted")) for task in tasks]
+        if side == "new" and change == "task_hash":
+            rows[0] = rows[0].model_copy(update={"task_hash": "not-the-frozen-task"})
+        pq.write_table(
+            pa.Table.from_pylist([row.model_dump() for row in rows], schema=arrow_schema(TaskSemanticInput)),
+            root / "tasks.parquet",
+        )
+        (root / "public-inputs.json").write_text(
+            json.dumps({"source_key": key, "stored_stream_sha256": stream_hash, "paths": [str(root / "tasks.parquet")]})
+        )
+        if side == "new" and change == "stream":
+            pq.write_table(
+                pa.Table.from_pylist([{"task_spec": value} for value in reversed(encoded)]), specs / "part.parquet"
+            )
+        manifests[side] = root
+        if side == "old":
+            source = AlignmentSource(
+                source_id=declared.id,
+                source_key=key,
+                population="converted",
+                intended_use="train",
+                task_count=2,
+                ready_count=2,
+                insufficient_context_count=0,
+                basis="matched",
+                curation_root=str(root),
+            )
+    replacement = SourceReplacement(
+        source_id=declared.id,
+        source_manifest=reference(manifests["new"] / "manifest.json"),
+        public_inputs=reference(manifests["new"] / "public-inputs.json"),
+    )
+    if change != "none":
+        with pytest.raises(ValueError):
+            task_rebinding(source, replacement)
+        return
+    rebound = task_rebinding(source, replacement)
+    assert dict(zip(rebound.task_ids, rebound.new_task_ids, strict=True)) == {"old-0": "new-0", "old-1": "new-1"}
+    assert rebound.upstream_row_sha256 == tuple(
+        canonical_sha256(("pinned-upstream", "immutable-revision", f"row-{index}")) for index in range(2)
+    )
 
 
 def test_projection_cannot_silently_drop_a_live_source_or_restore_a_retired_source(archived):
