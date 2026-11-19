@@ -24,6 +24,7 @@ from typing import Any, Literal
 from finestore.rl.curation import ActorCensusInput
 from marin.execution.artifact import read_record
 from marina.client import applet_query
+from pydantic import ValidationError
 
 from experiments.post_training.task_curation.datasets.derived_contract_measurements import (
     derived_contract_receipts,
@@ -248,7 +249,7 @@ def census_input_rows(declarations: list[DeclarationPin], sources: dict[str, Any
         row = {"population": population.model_dump(mode="json"), "input": binding.model_dump(mode="json")}
         try:
             DerivedContractCensusInput.model_validate(row)
-        except Exception as error:
+        except ValidationError as error:
             unrunnable.append(
                 f"derived-contract census: {declaration.source_id} population "
                 f"{population.dataset_id}@{population.dataset_revision} disagrees with its census binding "
