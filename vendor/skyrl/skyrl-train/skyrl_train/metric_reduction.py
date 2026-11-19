@@ -5,7 +5,6 @@ import math
 from typing import Literal, Protocol
 
 import torch
-from loguru import logger
 
 
 def linear_quantiles(values: torch.Tensor, probabilities: tuple[float, ...]) -> list[float]:
@@ -54,10 +53,10 @@ class LocalReduction:
 class WorldReduction:
     """Count one contribution per ordinary DP slice in world-wide diagnostics."""
 
-    def __init__(self, all_reduce: Callable, contributes: bool, collective_device: torch.device | None = None):
+    def __init__(self, all_reduce: Callable, gather: Callable[[torch.Tensor], torch.Tensor], contributes: bool):
         self.all_reduce = all_reduce
         self.contributes = contributes
-        self.collective_device = collective_device
+        self.gather = gather
 
     def combine(self, values: torch.Tensor, operation: Literal["sum", "max"]) -> torch.Tensor:
         values = values.clone()
@@ -82,24 +81,8 @@ class WorldReduction:
         return (square_sum / (count - 1)) ** 0.5 if count > 1 else math.nan
 
     def quantiles(self, values: torch.Tensor, probabilities: tuple[float, ...]) -> list[float]:
-        """Gather the DP owners' values to world rank zero and share its quantiles."""
-        if not torch.distributed.is_initialized():
-            return linear_quantiles(values, probabilities)
-        values = (values if self.contributes else values[:0]).to(self.collective_device)
-        world_size, rank = torch.distributed.get_world_size(), torch.distributed.get_rank()
-        size = values.new_zeros(world_size, dtype=torch.int64)
-        size[rank] = values.numel()
-        sizes = self.all_reduce(size, "sum").tolist()
-        sizes = sizes if rank == 0 else [0] * world_size
-        received = values.new_empty(sum(sizes))
-        torch.distributed.all_to_all_single(
-            received,
-            values,
-            output_split_sizes=sizes,
-            input_split_sizes=[values.numel(), *([0] * (world_size - 1))],
-        )
-        result = values.new_zeros(len(probabilities))
-        if rank == 0:
-            logger.debug(f"Batch mismatch quantile gather: {received.nbytes} bytes")
+        received = self.gather(values if self.contributes else values[:0])
+        result = received.new_zeros(len(probabilities))
+        if received.numel():
             result = result.new_tensor(linear_quantiles(received.cpu(), probabilities))
         return self.all_reduce(result, "sum").tolist()

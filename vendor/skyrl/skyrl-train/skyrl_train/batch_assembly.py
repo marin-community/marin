@@ -107,10 +107,14 @@ def plan_worker_batch(
             ),
         ):
             if unsupported:
-                raise ValueError(f"Policy-worker batch assembly: group {group.uid!r} does not support {reason}")
+                raise ValueError(
+                    f"Policy-worker batch assembly: group {group.uid!r} does not support {reason}. "
+                    "Set trainer.batch_builder=driver to train these rows."
+                )
     if sum(len(group.response_len) for group in facts) % dp_size:
         raise ValueError(
-            f"Policy-worker batch assembly: groups {tuple(group.uid for group in groups)!r}: rows requiring DP padding"
+            f"Policy-worker batch assembly: groups {tuple(group.uid for group in groups)!r}: rows requiring DP padding. "
+            "Set trainer.batch_builder=driver to train these rows."
         )
     fields = BatchFields.from_groups([group.fields for group in facts])
     if not replay:

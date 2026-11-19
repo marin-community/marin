@@ -65,8 +65,8 @@ def ratio_statistics(
         return result
     absolute = delta.abs()
     quantiles = reduction.quantiles(absolute, (0.95, 0.99, 0.999))
-    maximum = reduction.combine(delta.amax() if delta.numel() else delta.new_tensor(-math.inf), "max")
-    absolute_max = reduction.combine(absolute.amax() if absolute.numel() else absolute.new_tensor(-math.inf), "max")
+    maxima = torch.stack([delta.amax(), absolute.amax()]) if delta.numel() else delta.new_full((2,), -math.inf)
+    maximum, absolute_max = reduction.combine(maxima, "max")
     weights = (delta - maximum).exp()
     weight_sum, weight_square_sum = reduction.combine(torch.stack([weights.sum(), weights.square().sum()]), "sum")
     clipped_ratio = delta.clamp(-LOG_PROB_DELTA_CLIP, LOG_PROB_DELTA_CLIP).exp()

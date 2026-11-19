@@ -461,10 +461,7 @@ _OUTCOME_LOSSES = frozenset(
 
 
 def worker_batch_refusal(cfg: DictConfig) -> str | None:
-    """Return the first configuration setting unsupported by policy-worker assembly.
-
-    Auto also refuses router replay when the model's expert count cannot be read.
-    """
+    """Return the first configuration setting unsupported by policy-worker assembly."""
     algorithm = cfg.trainer.algorithm
     shaping = parse_trajectory_reward_shaping_config(cfg.generator.get("trajectory_reward_shaping"))
     supported_loss = (
@@ -491,8 +488,7 @@ def worker_batch_refusal(cfg: DictConfig) -> str | None:
             return reason
     megatron = cfg.trainer.policy.megatron_config
     etp = megatron.get("expert_tensor_parallel_size") or megatron.tensor_model_parallel_size
-    auto = cfg.trainer.batch_builder == BatchBuilder.AUTO
-    replay = auto and moe_router_replay_requested(cfg)
+    replay = moe_router_replay_requested(cfg)
     if etp > 1 or replay:
         # Model registration imports utils while initializing the model package.
         from skyrl_train.models import register_local_models
@@ -502,7 +498,7 @@ def worker_batch_refusal(cfg: DictConfig) -> str | None:
         try:
             metadata = AutoConfig.from_pretrained(model.path, trust_remote_code=True, revision=model.get("revision"))
         except Exception as error:
-            if not auto:
+            if cfg.trainer.batch_builder != BatchBuilder.AUTO:
                 raise
             logger.warning("Could not read the policy model configuration for automatic batch assembly ({!r})", error)
             return "model configuration unreadable"

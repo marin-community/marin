@@ -939,7 +939,7 @@ class PolicyWorkerBase(Worker):
         batch["action_log_probs"] = self._forward_loaded_logprobs(forward_input(batch))
         batch["base_action_log_probs"] = None
         reduction = WorldReduction(
-            self.strategy.all_reduce, self.mesh_rank.is_collection_dp_rank(), self.strategy.collective_device()
+            self.strategy.all_reduce, self.strategy.gather_to_first_rank, self.mesh_rank.is_collection_dp_rank()
         )
         metrics = (
             token_staleness_metrics(batch, plan.facts, reduction=reduction) if self.cfg.trainer.training_metrics else {}
