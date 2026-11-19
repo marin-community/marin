@@ -65,7 +65,9 @@ from skyrl_train.utils.policy_math import compute_approx_kl, normalize_advantage
 from skyrl_train.utils.kl_controllers import get_kl_controller, FixedKLController, AdaptiveKLController
 from skyrl_train.utils.algorithm_registry import AdvantageEstimator
 from skyrl_train.utils.advantage_estimators import (
-    GRPO_FLAT_REWARD_STD_TOLERANCE, compute_advantages_and_returns, expand_outcome_to_steps,
+    GRPO_FLAT_REWARD_STD_TOLERANCE,
+    compute_advantages_and_returns,
+    expand_outcome_to_steps,
 )
 from marinskyrl.runtime_options import PolicyLossType, reference_model_required
 from marinskyrl.distillation import (
@@ -112,6 +114,7 @@ from marinskyrl.checkpoint_paths import (
     BEST_CHECKPOINT_FILENAME,
     GLOBAL_STEP_PREFIX,
     LATEST_CHECKPOINT_FILE,
+    protected_native_checkpoint_steps,
     selected_export_step,
 )
 from marinskyrl.process_diagnostics import write_exception_receipt
@@ -1747,7 +1750,9 @@ class RayPPOTrainer:
                 "pad_size": training_input.metadata.get("pad_size", 0),
                 "order_semantics": "assembled learner batch before optimizer update; confirm completion against step metrics",
             }
-            order_path = join_resource_path(self.cfg.trainer.export_path, "training_order", f"step-{self.global_step}.json")
+            order_path = join_resource_path(
+                self.cfg.trainer.export_path, "training_order", f"step-{self.global_step}.json"
+            )
             io.makedirs(join_resource_path(self.cfg.trainer.export_path, "training_order"), exist_ok=True)
             io.write_bytes_atomic(order_path, json.dumps(order).encode())
 
@@ -1895,11 +1900,7 @@ class RayPPOTrainer:
         if cfg.trainer.strategy == "megatron" and cfg.trainer.policy.nccl_buffer_size_bytes is not None:
             policy_actor_env_vars = {NCCL_BUFFER_SIZE_ENV_VAR: str(cfg.trainer.policy.nccl_buffer_size_bytes)}
         ref_actor_env_vars = None
-        if (
-            use_ref_model
-            and cfg.trainer.strategy == "megatron"
-            and cfg.trainer.ref.nccl_buffer_size_bytes is not None
-        ):
+        if use_ref_model and cfg.trainer.strategy == "megatron" and cfg.trainer.ref.nccl_buffer_size_bytes is not None:
             ref_actor_env_vars = {NCCL_BUFFER_SIZE_ENV_VAR: str(cfg.trainer.ref.nccl_buffer_size_bytes)}
 
         if cfg.trainer.placement.colocate_all:
@@ -2337,12 +2338,15 @@ class RayPPOTrainer:
                     expected = torch.as_tensor(logprobs[row], dtype=actual.dtype, device=actual.device)
                     if not torch.equal(actual, expected):
                         raise ValueError("Learner collation changed behavior log probabilities")
-            record_event("learner_projection_audit", {
-                "step": self.global_step,
-                "rows": len(response_ids),
-                "action_tokens": sum(sum(mask) for mask in loss_masks),
-                "router_replay_enabled": moe_router_replay,
-            })
+            record_event(
+                "learner_projection_audit",
+                {
+                    "step": self.global_step,
+                    "rows": len(response_ids),
+                    "action_tokens": sum(sum(mask) for mask in loss_masks),
+                    "router_replay_enabled": moe_router_replay,
+                },
+            )
         training_input.update(distillation_tensors)
         ftpo = ftpo_config(self.cfg.trainer.algorithm)
         if ftpo is not None:
@@ -3337,12 +3341,7 @@ class RayPPOTrainer:
             return
 
         protected_steps = protected_hf_export_steps(self.cfg.trainer.ckpt_path)
-        best_path = join_resource_path(self.cfg.trainer.ckpt_path, BEST_CHECKPOINT_FILENAME)
-        if io.exists(best_path):
-            with io.open_file(best_path, "r") as stream:
-                best = json.load(stream)
-            if best["model_format"] == "native":
-                protected_steps.add(best["step"])
+        protected_steps.update(protected_native_checkpoint_steps(self.cfg.trainer.ckpt_path))
 
         if not self._node_ids:
             self._node_ids = get_node_ids(self.policy_model, self.critic_model, self.ref_model)
@@ -3529,7 +3528,11 @@ class RayPPOTrainer:
 
         best_path = join_resource_path(self.cfg.trainer.ckpt_path, BEST_CHECKPOINT_FILENAME)
         best = json.loads(io.read_bytes(best_path)) if io.exists(best_path) else None
-        export_kind = "best" if best and best["model_format"] == "native" and int(best["step"]) == export_step else "final_not_best"
+        export_kind = (
+            "best"
+            if best and best["model_format"] == "native" and int(best["step"]) == export_step
+            else "final_not_best"
+        )
         io.write_bytes_atomic(
             join_resource_path(self.cfg.trainer.export_path, "export-selection.json"),
             json.dumps({"step": export_step, "selection": export_kind, "checkpoint": checkpoint_path}).encode(),

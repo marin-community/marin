@@ -1,6 +1,6 @@
+import json
 from dataclasses import replace
 
-import pytest
 from rolloutengine.models import ConversationRecord, ModelTurn, RolloutStep, Transition
 from skyrl_gym.verification import VerificationResult
 from taskcompendium.grading_result import GradeResult, Outcome
@@ -19,8 +19,41 @@ def test_checkpoint_retention_keeps_latest_three_and_selected_best(tmp_path):
         (checkpoint / "weights").write_text(str(step))
     cleanup_old_checkpoints(str(tmp_path), 3, protected_steps={2})
     assert {path.name for path in tmp_path.iterdir()} == {
-        "global_step_2", "global_step_4", "global_step_5", "global_step_6"
+        "global_step_2",
+        "global_step_4",
+        "global_step_5",
+        "global_step_6",
     }
+
+
+def test_retention_keeps_best_and_committed_final_even_without_rolling_checkpoints(tmp_path):
+    for step in range(1, 7):
+        checkpoint = tmp_path / f"global_step_{step}"
+        checkpoint.mkdir()
+        (checkpoint / "weights").write_text(str(step))
+    (tmp_path / "best_checkpoint.json").write_text(json.dumps({"step": 2, "model_format": "native"}))
+    (tmp_path / "latest_ckpt_global_step.txt").write_text("6")
+    cleanup_old_checkpoints(str(tmp_path), 0)
+    assert {path.name for path in tmp_path.glob("global_step_*")} == {"global_step_2", "global_step_6"}
+
+
+def test_infrastructure_absence_does_not_turn_into_zero_scores_at_ninety_percent():
+    batch = {
+        "prompt_token_ids": [[1]] * 120,
+        "response_ids": [[2]] * 120,
+        "loss_masks": [[0]] * 120,
+        "rewards": [1.0] * 120,
+        "unshaped_rewards": [1.0] * 120,
+        "exclude_from_baseline": [False] * 108 + [True] * 12,
+        "verification_results": (
+            [VerificationResult.verified(1.0, passed=True)] * 107
+            + [VerificationResult.verified(0.0, passed=False)]
+            + [VerificationResult.verified(1.0, passed=True)] * 12
+        ),
+    }
+    metrics = _calculate_eval_metrics(batch, [str(i) for i in range(120)], ["SWE"] * 120, 1)
+    assert metrics["eval/all/num_scored"] == 108
+    assert metrics["eval/all/avg_verifier_score"] == 107 / 108
 
 
 def test_masked_verifier_pass_is_raw_only_and_episode_tokens_survive_concatenation():

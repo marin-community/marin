@@ -6,7 +6,7 @@ import pytest
 import torch
 from omegaconf import OmegaConf
 
-from marinskyrl.checkpoint_paths import LATEST_CHECKPOINT_FILE, selected_export_step
+from marinskyrl.checkpoint_paths import LATEST_CHECKPOINT_FILE, VALIDATION_RECEIPTS_FILENAME, selected_export_step
 from skyrl_train.callbacks.base import TrainerControl, TrainerState
 from skyrl_train.callbacks.builtin import CheckpointCallback, create_callbacks_from_config
 from skyrl_train.config.callbacks import validate_hf_export_config
@@ -39,11 +39,12 @@ class CheckpointPolicy:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("existing_checkpoint", ["committed", "uploading", "missing", "failed_upload"])
+@pytest.mark.parametrize("retained", [-1, 0])
 async def test_best_selection_reuses_committed_shards_and_recovers_failed_uploads(
-    tmp_path, monkeypatch, existing_checkpoint
+    tmp_path, monkeypatch, existing_checkpoint, retained
 ):
     trainer = RayPPOTrainer.__new__(RayPPOTrainer)
-    trainer.cfg = OmegaConf.create({"trainer": {"ckpt_path": str(tmp_path), "max_ckpts_to_keep": -1}})
+    trainer.cfg = OmegaConf.create({"trainer": {"ckpt_path": str(tmp_path), "max_ckpts_to_keep": retained}})
     trainer.global_step = 10
     trainer._last_saved_step = None
     trainer._pending_checkpoint_upload = None
@@ -58,6 +59,7 @@ async def test_best_selection_reuses_committed_shards_and_recovers_failed_upload
     trainer.tracker = SimpleNamespace(journal=None)
     trainer.all_timings = {}
     trainer.all_metrics = {}
+    trainer._node_ids = ["cpu-boundary"]
     rollout_state = TrainingContextState(PromptLoaderState({"position": 42}, []), [], None)
 
     async def state_dict():
@@ -66,6 +68,7 @@ async def test_best_selection_reuses_committed_shards_and_recovers_failed_upload
     trainer.context = SimpleNamespace(state_dict=state_dict)
     # Replace only the accelerator/Ray boundary; publication, selection and files are real.
     monkeypatch.setattr("skyrl_train.trainer.ray.get", lambda references: references)
+    monkeypatch.setattr("skyrl_train.trainer.run_on_each_node", lambda *args: None)
     state = TrainerState(10, 0, 20, 20)
     if existing_checkpoint == "committed":
         await trainer.save_checkpoints()
@@ -76,13 +79,27 @@ async def test_best_selection_reuses_committed_shards_and_recovers_failed_upload
     (tmp_path / "validation_selection_history.json").write_text(
         json.dumps([{"step": step, "reward": step / 20, "attempted": 1, "scored": 1} for step in (2, 4, 6, 8)])
     )
-    config = OmegaConf.create({"trainer": {"callbacks": [{
-        "type": "best_checkpoint", "initial_model_uri": "base-model", "expected_tasks": 1,
-        "minimum_scored_tasks": 1, "ema_window": 5, "evaluation_interval": 2,
-    }]}})
+    config = OmegaConf.create(
+        {
+            "trainer": {
+                "callbacks": [
+                    {
+                        "type": "best_checkpoint",
+                        "initial_model_uri": "base-model",
+                        "expected_tasks": 1,
+                        "minimum_scored_tasks": 1,
+                        "ema_window": 5,
+                        "evaluation_interval": 2,
+                    }
+                ]
+            }
+        }
+    )
     callback = create_callbacks_from_config(config)[0]
     await callback.on_evaluate_async(
-        state, TrainerControl(), trainer=trainer,
+        state,
+        TrainerControl(),
+        trainer=trainer,
         metrics={"eval/all/num_attempted": 1, "eval/all/num_scored": 1, "eval/all/avg_verifier_score": 0.5},
     )
 
@@ -140,6 +157,9 @@ async def test_delayed_best_selection_preserves_baseline_gates_after_resume(tmp_
     async def save_checkpoints():
         saved_steps.append(current_step)
         (tmp_path / f"weights-{current_step}").write_text("checkpoint")
+        checkpoint = tmp_path / f"global_step_{current_step}"
+        checkpoint.mkdir(exist_ok=True)
+        (checkpoint / "trainer_state.pt").write_bytes(b"committed")
 
     trainer = SimpleNamespace(
         cfg=SimpleNamespace(trainer=SimpleNamespace(ckpt_path=str(tmp_path))), save_checkpoints=save_checkpoints
@@ -193,10 +213,23 @@ async def test_delayed_best_selection_preserves_baseline_gates_after_resume(tmp_
 def test_timed_checkpoint_interval_and_forced_final(monkeypatch, elapsed, periodic):
     clock = [0.0]
     monkeypatch.setattr("rigging.timing.time.monotonic", lambda: clock[0])
-    validate_hf_export_config(OmegaConf.create({"trainer": {"callbacks": [
-        {"type": "checkpoint", "save_steps": -1, "save_interval_seconds": 7200, "save_on_train_end": True},
-        {"type": "hf_model_save", "save_steps": -1, "save_on_train_end": True},
-    ]}}))
+    validate_hf_export_config(
+        OmegaConf.create(
+            {
+                "trainer": {
+                    "callbacks": [
+                        {
+                            "type": "checkpoint",
+                            "save_steps": -1,
+                            "save_interval_seconds": 7200,
+                            "save_on_train_end": True,
+                        },
+                        {"type": "hf_model_save", "save_steps": -1, "save_on_train_end": True},
+                    ]
+                }
+            }
+        )
+    )
     callback = CheckpointCallback(save_steps=-1, save_interval_seconds=7200)
     state = TrainerState(3, 0, 100, 100)
     callback.on_train_begin(state, TrainerControl())
@@ -212,5 +245,110 @@ def test_best_export_falls_back_to_committed_final_and_preserves_native_best(tmp
     (final / "trainer_state.pt").write_bytes(b"committed-control")
     (tmp_path / LATEST_CHECKPOINT_FILE).write_text("7")
     assert selected_export_step(str(tmp_path), "best", 7) == 7
+    (tmp_path / "global_step_5").mkdir()
+    (tmp_path / "global_step_5/trainer_state.pt").write_bytes(b"committed-best")
     (tmp_path / "best_checkpoint.json").write_text(json.dumps({"model_format": "native", "step": 5}))
     assert selected_export_step(str(tmp_path), "best", 7) == 5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scored", [107, 108, 119])
+async def test_validation_coverage_receipt_and_checkpoint_commit(tmp_path, scored):
+    saved = []
+
+    async def save_checkpoints():
+        checkpoint = tmp_path / "global_step_2"
+        checkpoint.mkdir()
+        (checkpoint / "trainer_state.pt").write_bytes(b"committed-after-upload")
+        saved.append(2)
+
+    trainer = SimpleNamespace(
+        cfg=SimpleNamespace(trainer=SimpleNamespace(ckpt_path=str(tmp_path))), save_checkpoints=save_checkpoints
+    )
+    config = OmegaConf.create(
+        {
+            "trainer": {
+                "callbacks": [
+                    {
+                        "type": "best_checkpoint",
+                        "initial_model_uri": "base",
+                        "expected_tasks": 120,
+                        "minimum_scored_tasks": 108,
+                        "ema_window": 5,
+                        "evaluation_interval": 2,
+                    }
+                ]
+            }
+        }
+    )
+    callback = create_callbacks_from_config(config)[0]
+    await callback.on_evaluate_async(
+        TrainerState(2, 0, 20, 20),
+        TrainerControl(),
+        trainer=trainer,
+        metrics={"eval/all/num_attempted": 120, "eval/all/num_scored": scored, "eval/all/avg_verifier_score": 0.5},
+    )
+    (receipt,) = json.loads((tmp_path / VALIDATION_RECEIPTS_FILENAME).read_text())
+    assert receipt["scored_count"] == scored
+    assert receipt["infrastructure_absent"] == 120 - scored
+    assert receipt["eligible"] == (scored >= 108)
+    if scored < 108:
+        assert not saved
+        assert receipt["reason"] == "coverage_below_threshold"
+        assert not (tmp_path / "best_checkpoint.json").exists()
+        return
+    assert saved == [2]
+    assert receipt["improved"] and receipt["ema_score"] == 0.5
+    assert Path(receipt["checkpoint_uri"]).parent.joinpath("trainer_state.pt").exists()
+    assert selected_export_step(str(tmp_path), "best", 20) == 2
+
+
+def test_final_fallback_is_loud_and_refused_if_eligible_selection_is_missing(tmp_path, caplog):
+    final = tmp_path / "global_step_7"
+    final.mkdir()
+    (final / "trainer_state.pt").write_bytes(b"committed")
+    (tmp_path / LATEST_CHECKPOINT_FILE).write_text("7")
+    ledger = tmp_path / VALIDATION_RECEIPTS_FILENAME
+    ledger.write_text(json.dumps([{"step": 2, "eligible": False}]))
+    assert selected_export_step(str(tmp_path), "best", 7) == 7
+    assert "FINAL CHECKPOINT FALLBACK" in caplog.text
+    assert json.loads((tmp_path / "export-fallback.json").read_text())["eligible_validation_count"] == 0
+    ledger.write_text(json.dumps([{"step": 2, "eligible": True}]))
+    with pytest.raises(ValueError, match="refusing final fallback"):
+        selected_export_step(str(tmp_path), "best", 7)
+
+
+@pytest.mark.asyncio
+async def test_eligible_checkpoint_failure_never_publishes_best_or_falls_back(tmp_path):
+    async def save_checkpoints():
+        raise OSError("rank upload failed")
+
+    trainer = SimpleNamespace(
+        cfg=SimpleNamespace(trainer=SimpleNamespace(ckpt_path=str(tmp_path))), save_checkpoints=save_checkpoints
+    )
+    config = OmegaConf.create(
+        {
+            "trainer": {
+                "callbacks": [
+                    {
+                        "type": "best_checkpoint",
+                        "initial_model_uri": "base",
+                        "expected_tasks": 120,
+                        "minimum_scored_tasks": 108,
+                        "ema_window": 5,
+                    }
+                ]
+            }
+        }
+    )
+    callback = create_callbacks_from_config(config)[0]
+    with pytest.raises(OSError, match="rank upload failed"):
+        await callback.on_evaluate_async(
+            TrainerState(1, 0, 20, 20),
+            TrainerControl(),
+            trainer=trainer,
+            metrics={"eval/all/num_attempted": 120, "eval/all/num_scored": 108, "eval/all/avg_verifier_score": 0.5},
+        )
+    assert not (tmp_path / "best_checkpoint.json").exists()
+    with pytest.raises(ValueError, match="refusing final fallback"):
+        selected_export_step(str(tmp_path), "best", 1)

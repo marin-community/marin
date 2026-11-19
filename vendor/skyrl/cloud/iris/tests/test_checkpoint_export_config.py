@@ -17,7 +17,7 @@ from cloud.iris.export_hf_checkpoint import (
 )
 from cloud.iris.launch_config import derive_launch_topology
 
-from cloud.iris.launch_config import load_launch_config, validate_iris_allocation, validate_launch_config
+from cloud.iris.launch_config import load_launch_config, validate_launch_config
 from cloud.iris.tests.launch_config_fixtures import raw_launch_config
 from cloud.iris.role_plan import derive_num_nodes, derive_policy_export_role_plan, derive_role_plan
 from skyrl_train.callbacks.base import CallbackHandler, TrainerControl, TrainerState
@@ -216,6 +216,8 @@ def test_nested_export_reads_cluster_config_relative_to_parent_launch(tmp_path: 
 
 
 def test_export_selection_distinguishes_best_saved_step_from_latest(tmp_path: Path) -> None:
+    (tmp_path / "global_step_15").mkdir()
+    (tmp_path / "global_step_15/trainer_state.pt").write_bytes(b"committed-best")
     (tmp_path / "best_checkpoint.json").write_text(json.dumps({"step": 15, "model_format": "native"}))
     assert selected_export_step(str(tmp_path), "best", 20) == 15
     assert selected_export_step(str(tmp_path), "latest", 20) == 20
@@ -372,10 +374,12 @@ def test_export_journal_preserves_success_at_step_path(tmp_path, monkeypatch):
     result = SimpleNamespace(step=20, export_path=str(tmp_path / "model"))
     exporter = SimpleNamespace(run=lambda: result)
     monkeypatch.setattr(checkpoint_export, "checkpoint_exporter", lambda _cfg: exporter)
-    cfg = OmegaConf.create({
-        "trainer": {"native_telemetry_root": str(tmp_path / "telemetry"), "run_name": "export-test"},
-        "checkpoint_export": {"step": 20},
-    })
+    cfg = OmegaConf.create(
+        {
+            "trainer": {"native_telemetry_root": str(tmp_path / "telemetry"), "run_name": "export-test"},
+            "checkpoint_export": {"step": 20},
+        }
+    )
 
     assert checkpoint_export.run_checkpoint_export._function(cfg) is result
 
