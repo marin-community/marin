@@ -44,6 +44,7 @@ from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.rl.deletion_tuning import read_mask_artifact
 from marin.training.training import TrainLmOnPodConfig
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.deletion_tuning.levanter_train import DeletionHFModel, run_deletion_train_lm
 from experiments.deletion_tuning.v1_sft import VERSION, v1_data_release, v1_deletion_config, v1_optimizer
