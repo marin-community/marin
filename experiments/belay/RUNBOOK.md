@@ -100,7 +100,7 @@ A human then decides what happens. Never work around a refusal.
         - `control: the recipe's finished <track> run <name>; no new control` (a competitive rung);
         - `reusing the running control <run>` (another idea's control at the same code and seed is still
           running, so the two share it);
-        - neither: the spec launches its own control;
+        - `control: a new same-commit control, launched with the variant` (no control to reuse);
      3. `checks passed: ...`;
      4. `wrote the X#### thread: ...` (the idea's post on the page's agent log: status `plan`, the planned runs
         with their steps);
