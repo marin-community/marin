@@ -796,3 +796,15 @@ def test_resolved_nccl_buffers_override_inherited_small_buffer(
         nccl_buffer_size_bytes=resolved.trainer.policy.nccl_buffer_size_bytes
     )
     assert runtime_env["env_vars"]["NCCL_BUFFSIZE"] == "8388608"
+
+
+def test_curriculum_provenance_survives_the_structured_launch_boundary(tmp_path):
+    raw = raw_launch_config()
+    curriculum = {"identity": "fixture@2026.11.18:abcd1234", "mode": "weighted", "seed": 17,
+                  "sampling": {"kind": "domain-weighted", "domain_weights": {"source-a": .6, "source-b": .4},
+                               "seed": 17}, "sources": [], "stages": []}
+    raw["inputs"]["curriculum"] = curriculum
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    loaded = load_launch_config(path)
+    assert OmegaConf.to_container(loaded.inputs.curriculum, resolve=True) == curriculum

@@ -12,11 +12,12 @@ from pathlib import Path
 import click
 from iris.cluster.client.job_info import get_job_info
 from marin.execution.build_context import resolve_version
-from marin.execution.lazy import ArtifactStep
+from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.rl.cli import rl_build_options
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.evaluation.micro210_policy import Micro210Model, micro210_evaluation
 from experiments.post_training.long_loop.__main__ import validate_graph
 from experiments.post_training.long_loop.exp3_production import (
     GEOMETRY,
@@ -39,6 +40,39 @@ OUTPUT_PREFIX = "s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp4"
 REFERENCE_URI = "s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp3/evidence/restart53/frozen51-reference.json"
 REFERENCE_SHA256 = "897f22035802380a63fb748739ae8a66ef208ea67f1fe1e5470bbec417b3e1bb"
 
+QUALIFIED_V7 = StoragePin(
+    "s3://marin-us-east-08a/marin/users/benfeuer/exp3-data-mix/2026.11.18-v7-option-g/release-v7/release-complete-v7.json",
+    "9ad020729305cd9d9ca0ae554850abc6a2575611145a5e7369ef0f656c1a617b",
+)
+
+
+def verify_v7_admission(*, output: str, publication: str, qualified: str, native_check: str) -> None:
+    document = json.loads(QUALIFIED_V7.read())
+    publisher = StoragePin(**document["publisher_manifest"])
+    if (
+        publisher.uri != publication
+        or qualified != QUALIFIED_V7.uri
+        or native_check != document["artifact_graph"]["uri"]
+    ):
+        raise ValueError("V7 graph dependencies differ from the sealed qualification")
+    publisher.read()
+    if document["training_ready"] is not True:
+        raise ValueError("V7 is not data-qualified")
+    StoragePin(**{k: v for k, v in document["artifact_graph"].items() if k in {"uri", "sha256"}}).read()
+    (StoragePath(output) / "admission.json").write_text(
+        json.dumps(
+            {
+                "qualification": {"uri": QUALIFIED_V7.uri, "sha256": QUALIFIED_V7.sha256},
+                "training_ready": True,
+                "readiness_scope": document["readiness_scope"],
+                "gpu_training_approved_by_data_owner": document["gpu_training_approved"],
+                "publisher": document["publisher_manifest"],
+                "native_check": document["artifact_graph"],
+            },
+            indent=2,
+        )
+    )
+
 
 def release_artifact(uri: str, sha256: str, *, require_ready: bool) -> tuple[DataRelease, ArtifactStep]:
     """Reconstruct the published handle only after its record and members verify."""
@@ -48,7 +82,10 @@ def release_artifact(uri: str, sha256: str, *, require_ready: bool) -> tuple[Dat
     record = json.loads(raw)
     configuration = record["config"]
     manifest = StoragePin(record["source"], configuration["sha256"])
-    document = json.loads(manifest.read())
+    manifest.read()
+    document = json.loads(QUALIFIED_V7.read())
+    if document["publisher_manifest"] != {"uri": manifest.uri, "sha256": manifest.sha256}:
+        raise ValueError("Qualified V7 seal belongs to another publication")
     geometry = document["geometry"]
     if geometry != {
         "updates": GEOMETRY.updates,
@@ -74,7 +111,31 @@ def release_artifact(uri: str, sha256: str, *, require_ready: bool) -> tuple[Dat
     handle = ArtifactStep.adopt(record["name"], record["version"], record["source"], config=configuration)
     if handle.fingerprint() != record["fingerprint"]:
         raise ValueError("Reconstructed V7 handle differs from its published identity")
-    return DataRelease(manifest, document["training_ready"], members, {}, data, document), handle
+    if data["num_validation_sequences"] != document["num_validation_sequences"]:
+        raise ValueError("V7 validation reservations differ from the qualified seal")
+    evidence = {
+        key: StoragePin(**document[key]) for key in ("inventory", "native_consumer_receipt", "native_measurement_job")
+    }
+    for pin in evidence.values():
+        pin.read()
+    native = {key: value for key, value in document["artifact_graph"].items() if key in {"uri", "sha256"}}
+    StoragePin(**native).read()
+    qualified_handle = ArtifactStep.adopt(
+        "sft-mixes/exp3-v7/qualified-seal", "2026.11.18", QUALIFIED_V7.uri, config={"sha256": QUALIFIED_V7.sha256}
+    )
+    native_handle = ArtifactStep.adopt(
+        "sft-mixes/exp3-v7/native-check-record", "2026.11.18", native["uri"], config={"sha256": native["sha256"]}
+    )
+    admission = apply(
+        "long-loop-exp4/v7-admission",
+        verify_v7_admission,
+        version="2026.11.18",
+        output=OUT,
+        publication=handle,
+        qualified=qualified_handle,
+        native_check=native_handle,
+    )
+    return DataRelease(QUALIFIED_V7, document["training_ready"], members, evidence, data, document), admission
 
 
 def exp4_plan(release: DataRelease, source_revision: str, version: str) -> dict:
@@ -104,8 +165,21 @@ def exp4_plan(release: DataRelease, source_revision: str, version: str) -> dict:
     resolved["name"] = "long-loop-exp4/round4"
     resolved["storage"]["output_prefix"] = OUTPUT_PREFIX
     resolved["execution"]["coordinator"]["coordinator_name"] = "mochi-exp4"
-    resolved["evaluation"]["name"] = "users/benfeuer/checkpoints/mochi-exp4-micro210"
-    resolved["evaluation"]["expected_rollouts"] = 440
+    canonical = micro210_evaluation(
+        Micro210Model(
+            "s3://unresolved/terminal",
+            "sha256:" + "0" * 64,
+            resolved["tokenizer"]["repo"],
+            resolved["tokenizer"]["revision"],
+        ),
+        run_id=f"mochi-exp4@{version}",
+        output_uri="<resolved-at-build>",
+    )
+    resolved["evaluation"] = {
+        **canonical.policy()["evaluation"],
+        "name": "users/benfeuer/checkpoints/mochi-exp4-micro210",
+        "expected_rollouts": 440,
+    }
     for route in ("agentic", "nonagentic"):
         resolved["datasets"][route]["uri"] = f"{OUTPUT_PREFIX}/long-loop-exp4/rl-pool-{route}/{version}"
         resolved["datasets"][route]["data_file"] = "train.parquet"
@@ -149,16 +223,36 @@ def main(
     produced = pool_steps(pool_version)
     pools = {}
     for route, producer in produced.items():
-        record = StoragePath(producer.path(OUTPUT_PREFIX)) / ".artifact.json"
-        if click.get_current_context().params["do_run"] and not record.exists():
-            raise ValueError(f"Regional Exp4 pool not committed: {record}")
+        path = producer.path(OUTPUT_PREFIX)
+        record_bytes = (StoragePath(path) / ".artifact.json").read_bytes()
+        producer_record = json.loads(record_bytes)
+        if producer_record["fingerprint"] != producer.fingerprint():
+            raise ValueError(f"Regional Exp4 pool producer differs: {route}")
+        manifest_bytes = (StoragePath(path) / "manifest.json").read_bytes()
+        manifest = json.loads(manifest_bytes)
+        if manifest["curriculum"] != exp4_rl_curriculum().identity:
+            raise ValueError("Regional pool was prepared for another curriculum")
+        pins = [
+            {"uri": path + "/train.parquet", "sha256": manifest["sha256"]},
+            {"uri": path + "/manifest.json", "sha256": hashlib.sha256(manifest_bytes).hexdigest()},
+        ]
         pools[route] = ArtifactStep.adopt(
             producer.name,
             producer.version,
-            producer.path(OUTPUT_PREFIX),
-            config={"producer_fingerprint": producer.fingerprint()},
+            path,
+            config={
+                "producer_fingerprint": producer.fingerprint(),
+                "producer_record_sha256": hashlib.sha256(record_bytes).hexdigest(),
+                "files": pins,
+            },
         )
-        resolved["datasets"][route]["uri"] = producer.path(OUTPUT_PREFIX)
+        resolved["datasets"][route].update(
+            uri=path,
+            rows=manifest["rows"],
+            files=pins,
+            source_names=[NEMOTRON_SOURCE if label == "nemotron_if" else label for label in manifest["source_counts"]],
+            teacher_routes=manifest["source_counts"],
+        )
     terminal = build_spec_graph(
         resolved, version, through="archive", data_artifacts=pools, curriculum=exp4_rl_curriculum(), sft_release=handle
     )

@@ -176,6 +176,7 @@ class InputsConfig:
     train_data: list[dict[str, Any]] = field(default_factory=list)
     validation_data: list[dict[str, Any]] = field(default_factory=list)
     starting_checkpoint: NativeCheckpointLocator | None = None
+    curriculum: dict[str, Any] | None = None
 
 
 @dataclass

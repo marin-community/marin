@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from marin.rl.skyrl import SkyRLRun
 
-from experiments.post_training.long_loop.rl_selection import validate_selection_receipts
+from experiments.post_training.long_loop.rl_selection import validate_full_selection, validate_selection_receipts
 
 
 def test_selected_export_requires_complete_five_step_winning_history():
@@ -43,3 +44,28 @@ def test_two_step_cadence_preserves_five_observation_selection():
     assert validate_selection_receipts(best, history, 10) == best
     with pytest.raises(ValueError, match="validation window"):
         validate_selection_receipts(best, history[1:], 10)
+
+
+def test_final_native_fallback_requires_the_committed_final_marker(tmp_path):
+    root = tmp_path / "native"
+    checkpoint = root / "global_step_2"
+    checkpoint.mkdir(parents=True)
+    (checkpoint / "trainer_state.pt").write_bytes(b"committed trainer state")
+    marker = root / "latest_ckpt_global_step.txt"
+    marker.write_text("2")
+    run = SkyRLRun(
+        path=str(tmp_path / "run"),
+        hf_model_uri=str(tmp_path / "exports/global_step_2/policy"),
+        global_step=2,
+        tokenizer_uri="fixture",
+        tokenizer_revision="a" * 40,
+        checkpoint_root=str(root),
+        draft_checkpoint_root=None,
+        terminal_manifest_uri=str(tmp_path / "terminal.json"),
+        iris_job_id="/fixture/rl",
+    )
+    receipt = validate_full_selection(run)
+    assert receipt == {"selection": "final_native_not_best", "step": 2, "model_uri": str(checkpoint / "policy")}
+    marker.write_text("1")
+    with pytest.raises(ValueError, match="No committed"):
+        validate_full_selection(run)

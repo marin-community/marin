@@ -49,9 +49,9 @@ from experiments.post_training.long_loop.hf_archive import (
     verify_hf_checkpoint,
 )
 from experiments.post_training.long_loop.recipe_bundle import verify_recipe_bundle, write_recipe_bundle
-from experiments.post_training.long_loop.rl_selection import VALIDATION_EMA_WINDOW
+from experiments.post_training.long_loop.rl_selection import VALIDATION_EMA_WINDOW, validate_full_selection
 from experiments.post_training.long_loop.sft_accounting import sft_accounting_inputs
-from vendor.skyrl.marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME
+from vendor.skyrl.marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME, LATEST_CHECKPOINT_FILE
 
 REQUIRED_CATEGORIES = {"source", "config", "dataset", "timing", "eval_trace", "wandb"}
 INCOMPLETE_HISTORY_EXCEPTION = "wandb.apis.public.runhistory.downloads.IncompleteRunHistoryError"
@@ -148,9 +148,13 @@ def archive_selected_run(*, output: str, plan: dict, trained: str, completed_rep
         raise ValueError("Selected RL run has no committed HF export")
     fs, root = filesystem_for(run.checkpoint_root)
     best_uri = prefix_join(run.checkpoint_root, BEST_CHECKPOINT_FILENAME)
-    best = json.loads(fs.cat_file(prefix_join(root, BEST_CHECKPOINT_FILENAME)))
+    best_key = prefix_join(root, BEST_CHECKPOINT_FILENAME)
+    best = json.loads(fs.cat_file(best_key)) if fs.isfile(best_key) else None
+    if best is None or best["model_format"] != "native":
+        best = validate_full_selection(run)
+        best_uri = prefix_join(run.checkpoint_root, LATEST_CHECKPOINT_FILE)
     selected = prefix_join(run.checkpoint_root, f"global_step_{best['step']}")
-    if (
+    if best.get("selection") != "final_native_not_best" and (
         best["step"] != run.global_step
         or best["model_uri"] != prefix_join(selected, "policy")
         or best["ema_window"] != VALIDATION_EMA_WINDOW
@@ -208,7 +212,12 @@ def archive_selected_run(*, output: str, plan: dict, trained: str, completed_rep
         "retained": [prefix_join(run.checkpoint_root, name) for name in sorted(retained)],
         "disposable_files": disposable,
     }
-    for filename in (BEST_CHECKPOINT_FILENAME, "validation_selection_history.json"):
+    selection_files = (
+        (LATEST_CHECKPOINT_FILE,)
+        if best.get("selection") == "final_native_not_best"
+        else (BEST_CHECKPOINT_FILENAME, "validation_selection_history.json")
+    )
+    for filename in selection_files:
         resolved["inputs"].append(
             {
                 "source": prefix_join(run.checkpoint_root, filename),
@@ -653,11 +662,17 @@ def derive_archive_plan(
     )
     if evaluation["result_uri"] != evaluated:
         raise ValueError("Evaluation report belongs to another run")
+    selection = validate_full_selection(run)
+    selection_description = (
+        "final native checkpoint; no eligible trained best checkpoint"
+        if selection.get("selection") == "final_native_not_best"
+        else "five-step EMA validation reward"
+    )
     card = (
         "---\nlicense: openmdw-1.1\n---\n\n# Long-loop selected checkpoint\n\n"
         + WARNING
         + "\n\n"
-        + f"Selected RL step: {run.global_step}. Selection: five-step EMA validation reward. "
+        + f"Selected RL step: {run.global_step}. Selection: {selection_description}. "
         + f"Marin source commit: `{revision}`. Scored evaluation attempts: {evaluation['verified_rollouts']} "
         + f"of {evaluation['completed_rollouts']}. Unscored attempts are excluded from reward means.\n\n"
         + "This is an experimental training result, not a quality-parity claim. "
