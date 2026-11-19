@@ -57,7 +57,7 @@ class ReportTool(ValidatedTool[ReportArgs]):
         try:
             findings = tuple(
                 [
-                    AdversaryClaim(finding.claim, await read_candidate(ctx, finding.candidate), finding.expected)
+                    AdversaryClaim(finding.claim, await read_candidate(ctx, finding.candidate, self.task), finding.expected)
                     for finding in args.findings
                 ]
             )
