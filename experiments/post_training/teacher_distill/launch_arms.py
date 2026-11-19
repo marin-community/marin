@@ -47,13 +47,15 @@ from experiments.post_training.long_loop.sft_runtime.train import (
 )
 
 ROOT = Path(__file__).resolve().parents[3]
-TEMPLATE_ID = "e12-grown-fresh-onehour-fp32-treatment-20261118"
-TEMPLATE_PREFIX = "tmp/ttl=30d/long-loop-436/e12/grown-fresh-onehour-fp32-treatment-20261118"
 ROWS = "s3://marin-us-east-02a/tmp/ttl=14d/teacher-distill-504/rows"
 ARMS = {"a": ("hard", 0.0), "b": ("soft", 0.5)}
 TOP = 20
-SUBSTITUTED_ROWS = 480
-BLOCK = 1920
+# Per run length: the teacher-row cache, the most rows it may substitute, the outer block, and the run timeout.
+# Both lengths substitute the same share of Mochi rows (472 scored of 1,920 in the 1 h run).
+LENGTHS = {
+    "1h": {"cache": "train", "max_rows": 480, "block": 1920, "timeout_hours": 4},
+    "8h": {"cache": "train8h-all", "max_rows": 3784, "block": 15360, "timeout_hours": 12},
+}
 
 
 def runtime_env(profile: dict) -> dict:
@@ -83,11 +85,16 @@ def worker(config, output, settings):
     _run_grug_local(config)
 
 
-def build(template: Path, arm: str, date: str, profile_steps: int = 0):
+def build(template: Path, arm: str, date: str, length: str = "1h", profile_steps: int = 0):
     label, alpha = ARMS[arm]
-    run_id = f"task504-distill-{arm}-{label}-{date}" + ("-profile" if profile_steps else "")
+    spec = LENGTHS[length]
+    run_id = f"task504-distill-{length}-{arm}-{label}-{date}" + ("-profile" if profile_steps else "")
     text = (template / "config.json").read_text()
-    text = text.replace(TEMPLATE_PREFIX, f"tmp/ttl=14d/teacher-distill-504/runs/{run_id}").replace(TEMPLATE_ID, run_id)
+    template_id = json.loads(text)["trainer"]["trainer"]["tracker"]["id"]
+    template_prefix = "tmp/ttl=30d/long-loop-436/e12/" + template_id.removeprefix("e12-")
+    if template_prefix not in text:
+        raise ValueError(f"template outputs are not under {template_prefix}")
+    text = text.replace(template_prefix, f"tmp/ttl=14d/teacher-distill-504/runs/{run_id}").replace(template_id, run_id)
     raw = json.loads(text)
     trainer = raw["trainer"]
     trainer["distill_alpha"] = alpha
@@ -100,13 +107,13 @@ def build(template: Path, arm: str, date: str, profile_steps: int = 0):
     config = draccus.decode(GrugRunConfig, raw)
     settings = json.loads((template / "data-settings.json").read_text())
     # A scoring time cap drops whole cells, so substitute exactly the rows that were assembled.
-    rows = json.loads(StoragePath(f"{ROWS}/train-summary.json").read_text())["rows"]
-    if not 0 < rows <= SUBSTITUTED_ROWS:
+    rows = json.loads(StoragePath(f"{ROWS}/{spec['cache']}-summary.json").read_text())["rows"]
+    if not 0 < rows <= spec["max_rows"]:
         raise ValueError(f"unexpected teacher-scored train rows: {rows}")
     settings.update(
-        repair_cache=f"{ROWS}/train",
-        repair_row_weight=rows / BLOCK,
-        outer_block_size=BLOCK,
+        repair_cache=f"{ROWS}/{spec['cache']}",
+        repair_row_weight=rows / spec["block"],
+        outer_block_size=spec["block"],
         repair_once=True,
         control_only=False,
         teacher_topk=TOP,
@@ -134,7 +141,7 @@ def build(template: Path, arm: str, date: str, profile_steps: int = 0):
         replicas=8,
         # Both arms may not fit at once; the second can queue behind the first.
         scheduling_timeout=Duration.from_seconds(10800),
-        timeout=Duration.from_seconds(14400),
+        timeout=Duration.from_seconds(spec["timeout_hours"] * 3600),
         max_retries_failure=0,
         max_retries_preemption=0,
         max_task_failures=0,
@@ -151,12 +158,13 @@ def main():
     parser.add_argument("--arm", choices=sorted(ARMS), required=True)
     parser.add_argument("--date", default="20261119")
     parser.add_argument("--scheduling-hours", type=float, default=3.0)
+    parser.add_argument("--length", choices=sorted(LENGTHS), default="1h")
     parser.add_argument("--profile-steps", type=int, default=0, help="run a short job that profiles this many steps")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     os.chdir(ROOT)
     configure_coreweave_s3()
-    kwargs, plan = build(args.template, args.arm, args.date, args.profile_steps)
+    kwargs, plan = build(args.template, args.arm, args.date, args.length, args.profile_steps)
     kwargs["scheduling_timeout"] = Duration.from_seconds(args.scheduling_hours * 3600)
     print(json.dumps(plan, indent=2))
     if args.dry_run:
