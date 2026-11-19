@@ -20,6 +20,7 @@ from experiments.grug.checkpointing import load_grug_checkpoint
 from experiments.grug.moe.optimizer import GrugMoeMuonHConfig  # noqa: F401 -- register optimizer
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
 from experiments.post_training.long_loop.execution_policy import DEFAULT_TASK_TIMEOUT_SECONDS
+from experiments.post_training.long_loop.run_spec import FilePin, read_pin
 from experiments.post_training.long_loop.serving import SNOWBALL_CONTEXT_LIMIT
 from experiments.post_training.long_loop.sft_runtime.export_writer import ExportConfig, export_weights
 from experiments.post_training.long_loop.sft_runtime.model import GrugModelConfig, Transformer
@@ -51,6 +52,10 @@ def fresh_sft_config(
     """Build a fresh weights-only start; this entrypoint never implicitly resumes."""
     # A fresh decoded copy preserves the identity-bearing template supplied by the artifact.
     config = json.loads(json.dumps(recipe))
+    for name, pin in config.pop("data_sections", {}).items():
+        config["data"][name] = read_pin(draccus.decode(FilePin, pin), SMOKE_CONFIG.parent)
+    if "train_weight_phases" in config:
+        config["data"]["train_weights"] = config["data"]["train_weights"][: config.pop("train_weight_phases")]
     config["resources"]["target_cluster"] = None  # Already running inside the RNO2A coordinator.
     trainer = config["trainer"]["trainer"]
     watchdog = trainer.setdefault("progress_watchdog", {})

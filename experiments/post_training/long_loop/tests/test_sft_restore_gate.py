@@ -149,6 +149,7 @@ def test_first_step_restore_gate_reloads_permanent_root_when_permanent_request_q
         assert not (temp / "step-1").exists()
 
 
+@pytest.mark.integration
 def test_smoke_recipe_saves_final_only_and_final_checkpoint_writes_once(tmp_path):
     recipe = yaml.safe_load(SMOKE_CONFIG.read_text())
     cfg = fresh_sft_config(

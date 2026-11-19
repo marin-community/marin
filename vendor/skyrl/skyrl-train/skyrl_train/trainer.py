@@ -28,6 +28,7 @@ from skyrl_train.dataset import PromptDataset
 from skyrl_train.utils.tracking import Tracking
 from skyrl_train.training_batch import TrainingInputBatch, TrainingOutputBatch
 from skyrl_train.rollouts.buffer import RolloutGroup
+from skyrl_train.json_serialization import to_jsonable
 from skyrl_train.rollouts.context import TrainingContext, TrainingContextState
 from skyrl_train.trajectory_selection import trajectory_selector_from_config
 from skyrl_train.trajectory_runners.base import (
@@ -243,6 +244,7 @@ class RayPPOTrainer:
     # Set at startup when generator.weight_sync_transport is expert_block.
     _expert_block_sync: ExpertBlockSync | None = None
     _policy_version_step: int | None = None
+    first_optimizer_step_time: float | None = None
 
     _training_metrics_enabled: bool = False
     _rollout_spans_enabled: bool = False
@@ -1189,6 +1191,8 @@ class RayPPOTrainer:
         summary: BatchSummary,
         duration_seconds: float,
     ) -> None:
+        if self.first_optimizer_step_time is None:
+            self.first_optimizer_step_time = time.monotonic()
         self.all_metrics.update(summary.stop_metrics)
         if self._training_metrics_enabled:
             record_consumed_work(summary.work, step=self.global_step)
@@ -1688,6 +1692,17 @@ class RayPPOTrainer:
         # Batch replay runs this prefix outside an optimizer step, without a step wall clock.
         if step_wall is not None:
             step_wall.start("advantages")
+        if self.cfg.trainer.dump_training_order:
+            order = {
+                "global_step": self.global_step,
+                "uids": to_jsonable(training_input.metadata["uids"]),
+                "trajectory_ids": to_jsonable(training_input.metadata["trajectory_ids"]),
+                "pad_size": training_input.metadata.get("pad_size", 0),
+                "order_semantics": "assembled learner batch before optimizer update; confirm completion against step metrics",
+            }
+            root = join_resource_path(self.cfg.trainer.export_path, "training_order")
+            io.makedirs(root, exist_ok=True)
+            io.write_bytes_atomic(join_resource_path(root, f"step-{self.global_step}.json"), json.dumps(order).encode())
         with Timer("compute_advantages_and_returns", self.all_timings):
             training_input = self.compute_advantages(training_input)
             training_input = self.finalize_advantages_for_training(training_input)
@@ -2297,18 +2312,19 @@ class RayPPOTrainer:
                         training_input.get("ftpo_repair_mask"),
                     )
                 )
-        if self.cfg.trainer.step_wise_training:
+        if self.cfg.trainer.step_wise_training or self.cfg.trainer.dump_training_order:
             assert "trajectory_ids" in trajectory_batch, (
                 "Expected `trajectory_ids` in trajectory batch for step wise training"
             )
             training_input.metadata["trajectory_ids"] = [
                 trajectory_id.to_string() for trajectory_id in trajectory_batch["trajectory_ids"]
             ]
-            training_input.metadata["avg_response_length"] = sum(
-                len(sample_response_ids)
-                for sample_response_ids, is_last_step in zip(response_ids, trajectory_batch["is_last_step"])
-                if is_last_step
-            ) / len(response_ids)
+            if self.cfg.trainer.step_wise_training:
+                training_input.metadata["avg_response_length"] = sum(
+                    len(sample_response_ids)
+                    for sample_response_ids, is_last_step in zip(response_ids, trajectory_batch["is_last_step"])
+                    if is_last_step
+                ) / len(response_ids)
         elif ftpo is not None:
             training_input.metadata["avg_response_length"] = sum(map(len, response_ids)) / len(response_ids)
 

@@ -261,19 +261,50 @@ vLLM applies these sampling values to requests that omit them. SkyRL rollouts
 send explicit sampling parameters, and behavior-logprob training sets
 `generation_config: vllm` so the checkpoint's defaults never reach rollouts.
 
+With `SkyRLSpec`, configuration rendering binds the `best_checkpoint` callback's
+`initial_model_uri` to the resolved model input before artifact fingerprinting.
+Standalone recipes must set this URI explicitly.
+
 The `best_checkpoint` callback accepts a `selection_metric` whose values must be
 finite normalized scores in [0, 1], with larger values preferred. Set
 `save_after_fraction` to delay trained-checkpoint selection until that fraction
-of the total steps has elapsed. Step-zero evaluation still records the initial
-model as a candidate without saving weights; if it remains best, load the
+of the total steps has elapsed. With the default one-observation window,
+step-zero evaluation records the initial model as a candidate without saving
+weights; if it remains best, load the
 `model_uri` recorded in `best_checkpoint.json`. Optional `preservation_max_drop`
 entries map metric names to allowed absolute drops from their step-zero values;
 all gates must pass before a candidate can replace the best checkpoint. The
-step-zero evaluation must meet the configured coverage and eligibility checks
-when preservation gates are set; otherwise the callback fails immediately. The
+candidate must attempt `expected_tasks`, score at least `minimum_scored_tasks`,
+and pass `eval/selection_eligible`. With preservation gates, an ineligible
+step-zero evaluation fails immediately. The
 baseline and selection policy are recorded in `best_checkpoint.json` and the
 baseline is restored on resume. Keep metric definitions and the selection policy
 unchanged on resume.
+
+For selection over several evaluations, set `ema_window` and
+`evaluation_interval` on `best_checkpoint`. A window of five with interval two
+combines `selection_metric` at the five scheduled optimizer steps ending at the
+current step. The newest observation has weight one; each older observation's
+weight is multiplied by `1 - 2 / (5 + 1)`. Divide the weighted sum by the sum of
+the weights. A missing observation leaves the window ineligible. Preservation
+gates still use the current evaluation. The callback records observation history
+and selection settings; changing the window or interval on resume fails.
+
+For asynchronous mixtures, `trainer.rollout_buffer.consumed_route_quotas` sets
+the number of prompt groups from each route in every consumed batch.
+`source_routes` maps each input's `data_source` to a route. Quotas require
+`batch_policy: full_batch` and must sum to the training batch size in prompt
+groups. Rejected groups are replaced within their route. Generation slots
+rotate between routes so one repeatedly failing route cannot occupy every slot.
+
+The `wall_time_budget` callback stops after a completed update when `seconds`
+have elapsed since this process's first optimizer completion. Startup is
+excluded; subsequent evaluation and checkpoint work counts toward the budget.
+Set `groups_per_step` to the prompt-group batch size. The callback writes
+`training-budget.json` under the export root. Its `drain_margin` records the
+planned allowance in seconds for finalization; it does not enforce a deadline.
+Normal trainer finalization drains work after the stop. A fresh
+process starts a fresh clock, including when it restores a checkpoint.
 
 The temporary checkpoint root is derived from the RL artifact name and version.
 After runtime changes, use a fresh RL artifact version. Reusing the old

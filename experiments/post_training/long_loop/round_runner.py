@@ -20,22 +20,29 @@ test asserts.
 import dataclasses
 import hashlib
 import json
+import math
 import os
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 
 import click
+import draccus
 import yaml
 from iris.cluster.client.job_info import get_job_info
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep
 from marin.rl.cli import rl_build_options
+from marin.rl.skyrl import ArtifactDataSource, ArtifactHfModel, MegatronGeometry, SkyRLRolePlan
+from marin.training.training import LevanterCheckpoint
+from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.evaluation.micro210 import Micro210ServingProfile, micro210_artifact_step
 from experiments.evaluation.micro210_policy import Micro210Model, micro210_evaluation
 from experiments.post_training.long_loop.__main__ import validate_graph
+from experiments.post_training.long_loop.adopted_sft import pinned_json
 from experiments.post_training.long_loop.archive import PERMANENT_TMP_SEGMENT
 from experiments.post_training.long_loop.exp3_production import (
     INITIALIZER_RECEIPT,
@@ -55,10 +62,12 @@ from experiments.post_training.long_loop.exp4 import (
     release_artifact,
 )
 from experiments.post_training.long_loop.exp4_data import NEMOTRON_SOURCE, pool_steps
+from experiments.post_training.long_loop.nvl72 import MochiProfile, build_run, validate_model_geometry
 from experiments.post_training.long_loop.optimizer_admission import optimizer_group_receipt
 from experiments.post_training.long_loop.recipe_bundle import require_clean_revision, runtime_source_manifest
+from experiments.post_training.long_loop.run_spec import FilePin, read_pin
 from experiments.post_training.long_loop.shared_sft import native_sft_step, shared_sft_spec
-from experiments.post_training.long_loop.spec_pipeline import build_spec_graph
+from experiments.post_training.long_loop.spec_pipeline import CompletedSft, build_spec_graph, runtime_execution
 from experiments.post_training.task_curation.exp4_curriculum import SOURCE_ROUTES, exp4_rl_curriculum
 from experiments.sft.launcher import SFTSpec
 
@@ -108,6 +117,78 @@ class RoundSpec:
     evaluation: str
     initializer: str
     sft: RoundSft
+
+
+@dataclass(frozen=True)
+class RoundAdoptedHf:
+    name: str
+    version: str
+    uri: str
+    export_manifest_sha256: str
+    config_sha256: str
+    checkpoint_step: int
+    tokenizer_uri: str
+    tokenizer_revision: str
+
+
+@dataclass(frozen=True)
+class RoundServing:
+    gpu_variant: str
+    role_plan: dict
+    execution: dict
+    generator: dict
+    engine_init_kwargs: dict
+    cuda_allocator_config: str
+    judge_gpu_count: int
+
+
+@dataclass(frozen=True)
+class AdoptedHfRound:
+    schema: int
+    name: str
+    version: str
+    slug: str
+    cluster: str
+    storage: RoundStorage
+    evaluation: str
+    adopted_model: RoundAdoptedHf
+    serving: RoundServing
+
+
+@dataclass(frozen=True)
+class RoundRl:
+    role_plan: dict
+    megatron: dict
+    execution: dict
+    recipe: dict
+    train_data: dict
+    validation_data: dict
+    max_steps: int
+    selection_eligibility: str
+    native_checkpoint: str | None = None
+
+
+@dataclass(frozen=True)
+class AdoptedRlRound:
+    schema: int
+    name: str
+    version: str
+    slug: str
+    cluster: str
+    storage: RoundStorage
+    adopted_model: RoundAdoptedHf
+    rl: RoundRl
+
+
+@dataclass(frozen=True)
+class RecoveryRound:
+    schema: int
+    name: str
+    version: str
+    slug: str
+    cluster: str
+    storage: RoundStorage
+    resolved_plan: FilePin
 
 
 @dataclass(frozen=True)
@@ -186,15 +267,189 @@ def _decode_strict(section: dict, target: type, label: str):
     return target(**values)
 
 
-def load_round(path: Path) -> RoundSpec:
+def load_round(path: Path) -> RoundSpec | AdoptedHfRound | AdoptedRlRound | RecoveryRound:
     """Load a round YAML into the strict schema; unknown or mistyped keys fail."""
     document = yaml.safe_load(path.read_text())
     if not isinstance(document, dict):
         raise ValueError(f"{path} must contain a mapping")
-    spec = _decode_strict(document, RoundSpec, str(path))
+    target = (
+        RecoveryRound
+        if "resolved_plan" in document
+        else (
+            AdoptedRlRound
+            if "adopted_model" in document and "rl" in document
+            else AdoptedHfRound if "adopted_model" in document else RoundSpec
+        )
+    )
+    spec = _decode_strict(document, target, str(path))
     if spec.schema != 1:
         raise ValueError(f"{path} has unsupported schema {spec.schema}")
     return spec
+
+
+def recovery_round_graph(spec: RecoveryRound, *, through: str, source_revision: str) -> tuple[dict, ArtifactStep]:
+    """Rebuild a recorded downstream round while retaining its completed SFT inputs."""
+    plan = read_pin(spec.resolved_plan, Path.cwd())
+    if plan["name"] != spec.name or plan["storage"] != dataclasses.asdict(spec.storage):
+        raise ValueError("Recovery round identity differs from the pinned plan")
+    if plan["rl"]["execution"]["cluster"] != spec.cluster:
+        raise ValueError("Recovery round cluster differs from the pinned plan")
+    # Main removed this unused recipe flag in #10660. Keep its historical value in the pinned source plan.
+    plan["rl"]["config"]["trainer"]["algorithm"].pop("tis_splice")
+    plan["marin_revision"] = source_revision
+    plan["runtime_source"] = runtime_source_manifest(Path(__file__).resolve().parents[3], source_revision)
+    plan["resolved_sha256"] = hashlib.sha256(
+        json.dumps({key: value for key, value in plan.items() if key != "resolved_sha256"}, sort_keys=True).encode()
+    ).hexdigest()
+    expected = plan["continuation"]["expected_completed_inputs"]
+    adopted = {}
+    for label, suffix in (("sft", "sft"), ("handoff", "sft-handoff")):
+        pin = expected[label]
+        record = json.loads((StoragePath(pin["uri"]) / ".artifact.json").read_bytes())
+        if record["fingerprint"] != pin["fingerprint"] or record["version"] != pin["version"]:
+            raise ValueError(f"Recovery input completion changed: {label}")
+        adopted[label] = ArtifactStep.adopt(f"{spec.name}/{suffix}", spec.version, pin["uri"], config=pin)
+    pools = {}
+    for route, producer in pool_steps(POOLS["exp4-regional"].version).items():
+        uri = plan["datasets"][route]["uri"]
+        raw = (StoragePath(uri) / ".artifact.json").read_bytes()
+        record = json.loads(raw)
+        if record["fingerprint"] != producer.fingerprint():
+            raise ValueError(f"Recovery data producer changed: {route}")
+        pools[route] = ArtifactStep.adopt(
+            producer.name,
+            producer.version,
+            uri,
+            config={
+                "producer_fingerprint": producer.fingerprint(),
+                "producer_record_sha256": hashlib.sha256(raw).hexdigest(),
+                "files": plan["datasets"][route]["files"],
+            },
+        )
+    return plan, build_spec_graph(
+        plan,
+        spec.version,
+        through=through,
+        data_artifacts=pools,
+        curriculum=exp4_rl_curriculum(),
+        completed_sft=CompletedSft(adopted["sft"], adopted["handoff"]),
+    )
+
+
+def adopted_round_rl(spec: AdoptedRlRound, *, smoke: bool = False) -> ArtifactStep:
+    """Adopt a schema-3 HF export or a native RL checkpoint without an SFT stage."""
+    model = spec.adopted_model
+    manifest = pinned_json(f"{model.uri}/export-manifest.json", model.export_manifest_sha256)
+    config = pinned_json(f"{model.uri}/config.json", model.config_sha256)
+    if config["grugmoe_artifact_schema_version"] != 3:
+        raise ValueError("RL adoption requires a schema-3 HF export")
+    if not manifest["request"]["config"]["checkpoint"].endswith(f"/step-{model.checkpoint_step}"):
+        raise ValueError("Adopted HF export checkpoint step changed")
+    rl = spec.rl
+    roles = draccus.decode(SkyRLRolePlan, rl.role_plan)
+    execution = runtime_execution(rl.execution)
+    job_limit = 2 * 3600 if smoke else 48 * 3600
+    if execution.cluster != spec.cluster or execution.job_timeout_seconds != job_limit:
+        raise ValueError("Adopted RL requires the round cluster and a 48-hour job limit (two hours for smoke)")
+    recipe = json.loads(json.dumps(rl.recipe))
+    if rl.selection_eligibility not in {"covered", "complete_window"}:
+        raise ValueError("Unknown checkpoint selection eligibility")
+    for callback in recipe["trainer"]["callbacks"]:
+        if callback["type"] == "best_checkpoint":
+            callback["minimum_scored_tasks"] = (
+                callback["expected_tasks"]
+                if rl.selection_eligibility == "complete_window"
+                else math.ceil(0.9 * callback["expected_tasks"])
+            )
+            callback["selection_eligibility"] = rl.selection_eligibility
+    adopted = ArtifactStep.adopt(
+        model.name, model.version, model.uri, kind=LevanterCheckpoint, config=dataclasses.asdict(model)
+    )
+    profile = MochiProfile(spec.name, roles, draccus.decode(MegatronGeometry, rl.megatron), execution)
+    validate_model_geometry(config, profile)
+    training = []
+    heldout = None
+    for label, pin in (*rl.train_data.items(), ("heldout", rl.validation_data)):
+        if len(pin["sha256"]) != 64 or any(c not in "0123456789abcdef" for c in pin["sha256"]):
+            raise ValueError(f"Round data requires a SHA-256 pin: {label}")
+        source = ArtifactStep.adopt(f"{spec.name}/{label}", spec.version, pin["uri"], config=pin)
+        data = ArtifactDataSource(source, relative_path=pin["file"])
+        if label == "heldout":
+            heldout = data
+        else:
+            training.append(data)
+    if not training or heldout is None:
+        raise ValueError("Adopted RL requires training and held-out data")
+    resume = (
+        ArtifactStep.adopt(f"{spec.name}/native-input", spec.version, rl.native_checkpoint)
+        if rl.native_checkpoint
+        else None
+    )
+    step = build_run(
+        profile=profile,
+        name=spec.name,
+        version=spec.version,
+        model=ArtifactHfModel(adopted, model.tokenizer_uri, model.tokenizer_revision, relative_path=""),
+        train_data=tuple(training),
+        validation_data=(heldout,),
+        max_steps=rl.max_steps,
+        resume=resume,
+        smoke=smoke,
+        recipe_document=recipe,
+    )
+    original_build = step.build_config
+
+    def verified_build(context):
+        if not context.is_fingerprint:
+            for pin in (*rl.train_data.values(), rl.validation_data):
+                fs, key = filesystem_for(f"{pin['uri']}/{pin['file']}")
+                with fs.open(key, "rb") as stream:
+                    actual = hashlib.file_digest(stream, "sha256").hexdigest()
+                if actual != pin["sha256"]:
+                    raise ValueError(f"Round data changed: {pin['uri']}/{pin['file']}")
+        return original_build(context)
+
+    return dataclasses.replace(step, build_config=verified_build)
+
+
+def adopted_round_evaluation(spec: AdoptedHfRound) -> ArtifactStep:
+    """Bind a pinned HF export directly to evaluation, without training stages."""
+    if spec.evaluation != "frozen-micro210":
+        raise ValueError("Adopted evaluation rounds require frozen-micro210")
+    model = spec.adopted_model
+    manifest = pinned_json(f"{model.uri}/export-manifest.json", model.export_manifest_sha256)
+    config = pinned_json(f"{model.uri}/config.json", model.config_sha256)
+    if not manifest["request"]["config"]["checkpoint"].endswith(f"/step-{model.checkpoint_step}"):
+        raise ValueError("Adopted HF export does not match the requested checkpoint step")
+    serving = spec.serving
+    roles = draccus.decode(SkyRLRolePlan, serving.role_plan)
+    execution = runtime_execution(serving.execution)
+    if execution.cluster != spec.cluster:
+        raise ValueError("Round cluster and serving execution cluster disagree")
+    if config["num_experts"] % roles.inference_engine_expert_parallel_size:
+        raise ValueError("Adopted model experts do not divide the serving expert parallelism")
+    binding = Micro210Model(
+        model.uri, "sha256:" + model.export_manifest_sha256, model.tokenizer_uri, model.tokenizer_revision
+    )
+    adopted = ArtifactStep.adopt(
+        model.name, model.version, model.uri, kind=LevanterCheckpoint, config=dataclasses.asdict(model)
+    )
+    return micro210_artifact_step(
+        ArtifactHfModel(adopted, model.tokenizer_uri, model.tokenizer_revision, relative_path=""),
+        name=f"{spec.name}/eval",
+        version=spec.version,
+        model_binding=binding,
+        model_manifest_filename="export-manifest.json",
+        serving_profile=Micro210ServingProfile(
+            gpu_variant=serving.gpu_variant,
+            role_plan=roles,
+            execution=execution,
+            generator=serving.generator,
+            engine_init_kwargs=serving.engine_init_kwargs,
+            cuda_allocator_config=serving.cuda_allocator_config,
+            judge_gpu_count=serving.judge_gpu_count,
+        ),
+    )
 
 
 def round_sft_spec(round_spec: RoundSpec, name: str, version: str, recipe: dict) -> SFTSpec:
@@ -358,7 +613,7 @@ def resolve_round_pools(round_spec: RoundSpec, resolved: dict) -> dict[str, Arti
     return pools
 
 
-def require_permanent_round_storage(round_spec: RoundSpec) -> None:
+def require_permanent_round_storage(round_spec: RoundSpec | AdoptedHfRound | AdoptedRlRound | RecoveryRound) -> None:
     """R1: a round's outputs live at a permanent path, never under a scratch TTL prefix."""
     path = StoragePath(round_spec.storage.output_prefix)
     if PERMANENT_TMP_SEGMENT in path.segments:
@@ -380,8 +635,10 @@ def require_archive_binds_final_sft_checkpoint(resolved: dict) -> None:
 @click.option("--round", "round_path", required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--source-revision", required=True)
 @click.option("--validation-output", type=click.Path(path_type=Path), required=True)
+@click.option("--through", type=click.Choice(["sft", "rl", "eval", "archive"]), default="archive", show_default=True)
+@click.option("--smoke", is_flag=True, help="Use two rollout groups for an adopted RL round with max_steps=2.")
 @rl_build_options
-def main(round_path: Path, source_revision: str, validation_output: Path) -> ArtifactStep:
+def main(round_path: Path, source_revision: str, validation_output: Path, through: str, smoke: bool) -> ArtifactStep:
     configure_coreweave_s3()
     round_spec = load_round(round_path)
     if click.get_current_context().params["default_version"] != round_spec.version:
@@ -389,13 +646,78 @@ def main(round_path: Path, source_revision: str, validation_output: Path) -> Art
     workspace = Path(__file__).resolve().parents[3]
     if get_job_info() is None:
         require_clean_revision(workspace, source_revision)
+    require_permanent_round_storage(round_spec)
+    if smoke and (not isinstance(round_spec, AdoptedRlRound) or round_spec.rl.max_steps != 2):
+        raise click.UsageError("--smoke requires an adopted RL round with rl.max_steps=2")
+    if isinstance(round_spec, RecoveryRound):
+        if through not in {"rl", "archive"}:
+            raise click.UsageError("A recovery round requires --through rl or archive")
+        os.environ.update(
+            MARIN_PREFIX=round_spec.storage.output_prefix, MARIN_TEMP_PREFIX=round_spec.storage.temporary_prefix
+        )
+        resolved, terminal = recovery_round_graph(round_spec, through=through, source_revision=source_revision)
+        validation_output.mkdir(parents=True, exist_ok=True)
+        (validation_output / "resolved-plan.json").write_text(json.dumps(resolved, indent=2))
+        model = verified_initializer_model(INITIALIZER_RECEIPT, INITIALIZER_SHA256)
+        validate_graph(
+            terminal,
+            validation_output,
+            round_spec.storage.output_prefix,
+            model_config=(StoragePath(model) / "config.json").read_bytes(),
+        )
+        return terminal
+    if isinstance(round_spec, AdoptedRlRound):
+        if through != "rl":
+            raise click.UsageError("An adopted RL round requires --through rl")
+        os.environ.update(
+            MARIN_PREFIX=round_spec.storage.output_prefix, MARIN_TEMP_PREFIX=round_spec.storage.temporary_prefix
+        )
+        terminal = adopted_round_rl(round_spec, smoke=smoke)
+        validation_output.mkdir(parents=True, exist_ok=True)
+        (validation_output / "resolved-plan.json").write_text(
+            json.dumps(
+                {
+                    **dataclasses.asdict(round_spec),
+                    "marin_revision": source_revision,
+                    "runtime_source": runtime_source_manifest(workspace, source_revision),
+                },
+                indent=2,
+            )
+        )
+        validate_graph(
+            terminal,
+            validation_output,
+            round_spec.storage.output_prefix,
+            model_config=(StoragePath(round_spec.adopted_model.uri) / "config.json").read_bytes(),
+        )
+        return terminal
+    if isinstance(round_spec, AdoptedHfRound):
+        if through != "eval":
+            raise click.UsageError("An adopted HF round requires --through eval")
+        os.environ.update(
+            MARIN_PREFIX=round_spec.storage.output_prefix, MARIN_TEMP_PREFIX=round_spec.storage.temporary_prefix
+        )
+        terminal = adopted_round_evaluation(round_spec)
+        validation_output.mkdir(parents=True, exist_ok=True)
+        resolved = {
+            **dataclasses.asdict(round_spec),
+            "through": through,
+            "runtime_source": runtime_source_manifest(workspace, source_revision),
+        }
+        (validation_output / "resolved-plan.json").write_text(json.dumps(resolved, indent=2))
+        validate_graph(
+            terminal,
+            validation_output,
+            round_spec.storage.output_prefix,
+            model_config=(StoragePath(round_spec.adopted_model.uri) / "config.json").read_bytes(),
+        )
+        return terminal
     binding = DATA_RELEASES[round_spec.data_release]
     release, handle = release_artifact(
         binding.record, binding.record_sha256, require_ready=click.get_current_context().params["do_run"]
     )
     version = resolve_version(round_spec.slug, round_spec.version)
     resolved = round_plan(round_spec, release, source_revision, version)
-    require_permanent_round_storage(round_spec)
     resolved["runtime_source"] = runtime_source_manifest(workspace, source_revision)
     os.environ.update(
         MARIN_PREFIX=round_spec.storage.output_prefix, MARIN_TEMP_PREFIX=round_spec.storage.temporary_prefix
@@ -411,7 +733,7 @@ def main(round_path: Path, source_revision: str, validation_output: Path) -> Art
     terminal = build_spec_graph(
         resolved,
         version,
-        through="archive",
+        through=through,
         data_artifacts=pools,
         curriculum=exp4_rl_curriculum(),
         sft_release=handle,

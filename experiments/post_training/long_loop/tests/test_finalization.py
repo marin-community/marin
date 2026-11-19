@@ -3,6 +3,7 @@
 
 import json
 import subprocess
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -47,12 +48,12 @@ def test_terminal_rl_queues_same_finalization_graph_or_records_no_checkpoint(tmp
         ),
     }
 
-    def launch(command):
+    def launch(command, *, env_vars):
         Path(output.terminal_manifest_uri).write_text(json.dumps({"result": result}))
         return subprocess.CompletedProcess(command, 1, json.dumps(result), "")
 
     monkeypatch.setattr("marin.rl.skyrl._run_launcher", launch)
-    trained = ArtifactStep("rl", "2026.11.13", SkyRLRun, run_skyrl, lambda _ctx: config)
+    trained = ArtifactStep("rl", "2026.11.13", SkyRLRun, partial(run_skyrl, env_vars={}), lambda _ctx: config)
     finalized = apply("finalize", record_finalization, version="2026.11.13", output=OUT, trained=trained)
     dispatched = []
 
@@ -99,7 +100,8 @@ def test_failed_export_does_not_look_like_no_checkpoint(tmp_path, monkeypatch):
     }
     monkeypatch.setattr("marin.rl.skyrl.record_rollout_run", lambda _record: None)
     monkeypatch.setattr(
-        "marin.rl.skyrl._run_launcher", lambda command: subprocess.CompletedProcess(command, 1, json.dumps(response), "")
+        "marin.rl.skyrl._run_launcher",
+        lambda command, *, env_vars: subprocess.CompletedProcess(command, 1, json.dumps(response), ""),
     )
     with pytest.raises(RuntimeError, match="RL stalled"):
-        run_skyrl(config)
+        run_skyrl(config, env_vars={})

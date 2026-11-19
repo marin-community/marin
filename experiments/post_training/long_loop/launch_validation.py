@@ -12,7 +12,7 @@ from pathlib import Path
 
 import yaml
 from marin.rl.skyrl import skyrl_cpu_command
-from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.long_loop.serving import serving_release
 

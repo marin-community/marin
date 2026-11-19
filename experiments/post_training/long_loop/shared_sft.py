@@ -204,18 +204,6 @@ def select_time_limited_sft(*, output: str, maximum_updates: int, budget: Traini
     (StoragePath(output) / "selected.json").write_text(json.dumps({**selection, "training_completion": completion}))
 
 
-def select_shared_sft(*, output: str, completed_updates: int) -> None:
-    """Bind native zero-based checkpoint indices to the completed update count."""
-    step = completed_updates - 1
-    checkpoint = prefix_join(output, f"checkpoints/step-{step}")
-    metadata = read_json(prefix_join(checkpoint, "metadata.json"))
-    if metadata["step"] != step or metadata["is_temporary"]:
-        raise ValueError("Shared SFT did not commit its final native checkpoint")
-    (StoragePath(output) / "selected.json").write_text(
-        json.dumps({"checkpoint": checkpoint, "step": step, "completed_updates": completed_updates, "format": "SFTSpec"})
-    )
-
-
 def export_shared_sft(*, output: str, trained: str, context_limit: int, source_revision: str) -> None:
     """Bind the native trainer's HF export to the existing RL handoff layout."""
     selected = read_json(prefix_join(trained, "selected.json"))

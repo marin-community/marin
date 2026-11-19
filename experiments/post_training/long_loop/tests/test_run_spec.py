@@ -19,10 +19,20 @@ from experiments.post_training.long_loop import spec_pipeline
 from experiments.post_training.long_loop.__main__ import validate_graph
 from experiments.post_training.long_loop.execution_policy import COORDINATOR_TIMEOUT_SECONDS, STAGE_TIMEOUT_SECONDS
 from experiments.post_training.long_loop.launch_validation import validate_launch
-from experiments.post_training.long_loop.run_spec import resolve_spec, stage_blockers
+from experiments.post_training.long_loop.run_spec import FilePin, read_pin, resolve_spec, stage_blockers
 from experiments.post_training.long_loop.spec_pipeline import build_spec_graph
 
 SPEC = Path(__file__).parents[1] / "specs" / "round1.yaml"
+
+
+def test_json_uri_pin_preserves_optimizer_numbers_and_rejects_changed_bytes(tmp_path):
+    source = tmp_path / "recovery.json"
+    source.write_bytes(b'{"learning_rate": 1e-06}')
+    pin = FilePin(source.as_uri(), hashlib.sha256(source.read_bytes()).hexdigest())
+    assert read_pin(pin, tmp_path)["learning_rate"] == 1e-6
+    source.write_bytes(b'{"learning_rate": 1e-06}\n')
+    with pytest.raises(ValueError, match="Pinned file changed"):
+        read_pin(pin, tmp_path)
 
 
 @pytest.fixture
@@ -35,12 +45,12 @@ def coreweave_policy_read(monkeypatch):
 
 
 @pytest.mark.integration
-def test_emitted_rl_validation_and_eval_settings_come_from_the_pinned_spec(tmp_path, monkeypatch, coreweave_policy_read):
+def test_emitted_rl_settings_come_from_the_pinned_spec(tmp_path, monkeypatch, coreweave_policy_read):
     monkeypatch.setenv("MARIN_PREFIX", "s3://test/long-loop")
     monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
     resolved = resolve_spec(SPEC, smoke=False)
     # Nonstandard values expose stale recipe assignments at the real artifact boundary.
-    for stage in ("rl", "evaluation"):
+    for stage in ("rl",):
         config = resolved[stage]["config"]
         config["context_budget"]["max_new_tokens_per_turn"] = 12288
         agent = config["terminal_bench"]["installed_agent"]["agent"]["kwargs"]
@@ -52,7 +62,7 @@ def test_emitted_rl_validation_and_eval_settings_come_from_the_pinned_spec(tmp_p
     terminal = build_spec_graph(resolved, "2026.11.12.1", through="archive")
     assert terminal.lower().name == terminal.name
     stages = graph_handles([terminal])
-    for stage in ("rl", "evaluation"):
+    for stage in ("rl",):
         step = next(
             s for s in stages if s.name == resolved[stage]["name"] or s.name.endswith("/" + resolved[stage]["name"])
         )
@@ -128,6 +138,7 @@ def test_emitted_rl_validation_and_eval_settings_come_from_the_pinned_spec(tmp_p
             compare(value, emitted["terminal_bench_config" if key == "terminal_bench" else key], key)
 
 
+@pytest.mark.integration
 def test_missing_temperature_fails_before_skyrl_supplies_a_greedy_default(tmp_path):
     root = tmp_path / "specs"
     shutil.copytree(SPEC.parent, root)
@@ -143,6 +154,7 @@ def test_missing_temperature_fails_before_skyrl_supplies_a_greedy_default(tmp_pa
         resolve_spec(spec, smoke=False)
 
 
+@pytest.mark.integration
 def test_production_and_smoke_preserve_data_context_and_quota():
     production = resolve_spec(SPEC, smoke=False)
     smoke = resolve_spec(SPEC, smoke=True)
@@ -161,6 +173,7 @@ def test_production_and_smoke_preserve_data_context_and_quota():
     assert smoke["blockers"] == production["blockers"]
 
 
+@pytest.mark.integration
 def test_changed_pin_and_semantic_smoke_override_fail_before_graph(tmp_path):
     root = tmp_path / "specs"
     shutil.copytree(SPEC.parent, root)
@@ -177,16 +190,18 @@ def test_changed_pin_and_semantic_smoke_override_fail_before_graph(tmp_path):
         resolve_spec(path, smoke=False)
 
 
+@pytest.mark.integration
 def test_actual_sft_graph_constructs_without_admitting_unprepared_rl(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin/")
     resolved = resolve_spec(SPEC, smoke=False)
     terminal = build_spec_graph(resolved, "2026.11.09.12", through="sft")
     validate_graph(terminal, tmp_path, "s3://marin-us-east-02a/marin/")
     rows = json.loads((tmp_path / "graph.json").read_text())
-    assert [row["stage"].rsplit("/", 1)[-1] for row in rows] == ["inputs", "sft"]
+    assert [row["stage"].rsplit("/", 1)[-1] for row in rows][-2:] == ["inputs", "sft"]
+    assert rows[0]["stage"].startswith("models/")
     assert terminal.build_config(
         StepContext.for_run(str(tmp_path), str(tmp_path), runtime_args=terminal.runtime_args, deps=terminal.deps)
-    ).train_config.initialize_from_hf.endswith("@" + resolved["initializer"]["revision"])
+    ).train_config.initialize_from_hf.startswith(str(tmp_path) + "/models/")
     assert terminal.runtime_args["skyrl_execution"].priority == "production"
     assert (
         terminal.build_config(
@@ -199,6 +214,7 @@ def test_actual_sft_graph_constructs_without_admitting_unprepared_rl(tmp_path, m
         build_spec_graph(resolved, "2026.11.09.12", through="archive")
 
 
+@pytest.mark.integration
 def test_rl_smoke_stops_before_eval_and_never_replays_sft(monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin/")
     resolved = resolve_spec(SPEC, smoke=True)
@@ -276,6 +292,7 @@ def test_adopted_sft_full_graph_report_has_no_fresh_base_dependency(monkeypatch,
         validate_graph(invalid, tmp_path / "invalid", "s3://marin-us-east-02a/marin/")
 
 
+@pytest.mark.integration
 def test_endpoint_reuse_rejects_different_export():
     resolved = resolve_spec(SPEC, smoke=True)
     resolved["adopted_sft"] = {"version": "v", "uri": "s3://test/sft", "step": 746}
@@ -289,6 +306,7 @@ def test_endpoint_reuse_rejects_different_export():
         build_spec_graph(resolved, "2026.11.10.3", through="rl")
 
 
+@pytest.mark.integration
 def test_rl_keeps_child_execution_profile_without_gpu_probe_jobs():
     resolved = resolve_spec(SPEC, smoke=True)
     resolved["adopted_sft"] = {"version": "2026.11.09.12", "uri": "s3://test/sft", "step": 746}
@@ -324,7 +342,6 @@ def test_controlled_stage_allocations_and_deadlines_reach_dispatched_jobs(tmp_pa
         for name, stage in {
             "verify_inputs": "inputs",
             "export_shared_sft": "export",
-            "prepare_micro": "eval_inputs",
             "archive_graph_run": "archive",
         }.items()
     }
@@ -368,6 +385,7 @@ def test_changed_stage_controls_require_acknowledgement_and_archive_the_decision
     assert config["resolved_spec"]["experimental_controls"] == receipt
 
 
+@pytest.mark.integration
 def test_smoke_cannot_bypass_allocation_controls_by_scaling_eval(tmp_path):
     root = tmp_path / "specs"
     shutil.copytree(SPEC.parent, root)

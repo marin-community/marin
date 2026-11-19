@@ -12,6 +12,8 @@ from typing import Any
 
 import draccus
 import yaml
+from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.long_loop.execution_policy import bind_stage_timeouts, experimental_controls
 from experiments.post_training.long_loop.stage_config import validate_stage_config
@@ -70,11 +72,12 @@ SCALE_PATHS = {
 
 
 def read_pin(pin: FilePin, directory: Path) -> Any:
-    path = directory / pin.path
-    content = path.read_bytes()
+    path = StoragePath(pin.path if "://" in pin.path else str(directory / pin.path))
+    fs, key = filesystem_for(str(path))
+    content = fs.cat_file(key)
     if hashlib.sha256(content).hexdigest() != pin.sha256:
         raise ValueError(f"Pinned file changed: {path}")
-    return yaml.safe_load(content)
+    return json.loads(content) if pin.path.endswith(".json") else yaml.safe_load(content)
 
 
 def resolve_spec(

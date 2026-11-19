@@ -76,7 +76,7 @@ def test_close_preserves_workload_result_and_reports_upload_timeout(local_ray, m
     training_error = RuntimeError("training failed")
 
     def workload():
-        with Tracking("project", "experiment", backends="wandb", config=OmegaConf.create({})) as tracker:
+        with Tracking("project", "experiment", backends="wandb", config=OmegaConf.create({"trainer": {"wandb_entity": "test"}})) as tracker:
             tracker.log({"loss": 0.5}, step=7)
             if training_fails:
                 raise training_error

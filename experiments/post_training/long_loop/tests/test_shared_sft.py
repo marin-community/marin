@@ -8,9 +8,11 @@ from datetime import timedelta
 from pathlib import Path
 
 import draccus
+import jax.numpy as jnp
 import numpy as np
 import pytest
 import yaml
+from draccus.utils import ParsingError
 from fray.types import ResourceConfig
 from haliax import Axis
 from levanter.checkpoint import save_checkpoint
@@ -77,15 +79,17 @@ def test_time_bound_selects_the_actual_final_checkpoint_without_shortening_the_m
         time_limited_sft_input(str(tmp_path), consumed)
 
 
+@pytest.mark.integration
 def test_native_sft_retains_sources_and_token_schedule_while_using_shared_defaults(tmp_path):
     resolved = resolve_spec(SPEC, smoke=False)
     spec = shared_sft_spec("test/sft", "2026.11.13.1", resolved["sft"])
     step = sft_step(spec, draccus.decode(ResourceConfig, resolved["sft"]["resources"]))
-    context = StepContext.for_run(str(tmp_path), str(tmp_path), runtime_args=step.runtime_args)
+    context = StepContext.for_run(str(tmp_path), str(tmp_path), runtime_args=step.runtime_args, deps=step.deps)
     pod = step.build_config(context)
     config = pod.train_config
     assert pod.env_vars["XLA_FLAGS"].split() == resolved["sft"]["xla_flags"]
     assert config.optimizer == SNOWBALL_SFT.optimizer
+    assert jnp.dtype(config.trainer.mp.param_dtype) == jnp.float32
     assert config.train_seq_len == resolved["sft"]["seq_len"]
     assert config.trainer.train_batch_size == resolved["sft"]["batch_size"]
     assert config.trainer.per_device_parallelism == resolved["sft"]["per_device_parallelism"]
@@ -109,6 +113,7 @@ def test_native_sft_retains_sources_and_token_schedule_while_using_shared_defaul
             assert updated_children[child_name]["format"]["type"] == expected
 
 
+@pytest.mark.integration
 def test_legacy_grug_requires_acknowledgement_and_keeps_original_recipe(tmp_path):
     recipe = yaml.safe_load(SMOKE_CONFIG.read_text())
     base = ArtifactStep.adopt("test/base", "2026.11.13.1", source=str(tmp_path / "base"))
@@ -122,7 +127,16 @@ def test_legacy_grug_requires_acknowledgement_and_keeps_original_recipe(tmp_path
     assert actual.recipe["trainer"] == recipe["trainer"]
     assert actual.recipe["model"] == recipe["model"]
 
+    bf16_recipe = copy.deepcopy(recipe)
+    bf16_recipe["trainer"]["trainer"]["mp"] = "compute=bfloat16,params=bfloat16,output=bfloat16"
+    bf16_step = legacy_sft_step("test/sft-bf16", "2026.11.13.1", bf16_recipe, base, acknowledge=True)
+    with pytest.raises(ParsingError) as exc_info:
+        bf16_step.build_config(context)
+    assert isinstance(exc_info.value.__cause__, ValueError)
+    assert "float32 parameters" in str(exc_info.value.__cause__)
 
+
+@pytest.mark.integration
 def test_native_sft_validates_real_multinode_layout_before_submitting(tmp_path):
     resolved = resolve_spec(SPEC, smoke=True)
     recipe = resolved["sft"]
@@ -133,7 +147,9 @@ def test_native_sft_validates_real_multinode_layout_before_submitting(tmp_path):
         shared_sft_spec("test/sft", "2026.11.13.4", broken)
     spec = shared_sft_spec("test/sft", "2026.11.13.4", recipe)
     step = sft_step(spec, draccus.decode(ResourceConfig, recipe["resources"]))
-    config = step.build_config(StepContext.for_run(str(tmp_path), str(tmp_path), runtime_args=step.runtime_args))
+    config = step.build_config(
+        StepContext.for_run(str(tmp_path), str(tmp_path), runtime_args=step.runtime_args, deps=step.deps)
+    )
     ici, dcn = config.train_config.trainer.mesh.axis_shapes(num_devices=256, num_slices=32)
     assert ici["expert"] == 8
     assert dcn["context"] == 32
@@ -166,6 +182,7 @@ def test_native_handoff_preserves_exported_weights_and_declares_rl_context(tmp_p
     )
 
 
+@pytest.mark.integration
 def test_chat_recipe_packs_256_documents_without_changing_replay_or_loss_masks(tmp_path):
     resolved = resolve_spec(SPEC, smoke=True)
     spec = shared_sft_spec("test/sft", "2026.11.13.6", resolved["sft"])
@@ -200,6 +217,7 @@ def test_chat_recipe_packs_256_documents_without_changing_replay_or_loss_masks(t
                 assert leaf["pack"] is None and leaf["format"]["type"] == "text"
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("per_device_parallelism", [1, 2])
 def test_large_global_batch_preserves_explicit_microbatch_and_native_mesh(tmp_path, per_device_parallelism):
     resolved = resolve_spec(SPEC, smoke=False)
@@ -212,7 +230,9 @@ def test_large_global_batch_preserves_explicit_microbatch_and_native_mesh(tmp_pa
     )
     spec = shared_sft_spec("test/sft", "2026.11.13.11", recipe)
     step = sft_step(spec, draccus.decode(ResourceConfig, recipe["resources"]))
-    pod = step.build_config(StepContext.for_run(str(tmp_path), str(tmp_path), runtime_args=step.runtime_args))
+    pod = step.build_config(
+        StepContext.for_run(str(tmp_path), str(tmp_path), runtime_args=step.runtime_args, deps=step.deps)
+    )
     trainer = pod.train_config.trainer
     assert trainer.train_batch_size == 256
     assert trainer.per_device_parallelism == per_device_parallelism

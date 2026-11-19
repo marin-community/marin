@@ -1,17 +1,23 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, NotRequired, TypedDict
 
 import numpy as np
-from draccus import PluginRegistry
+from draccus import PluginRegistry, decode
 
 from levanter.data._preprocessor import BatchProcessor
 from levanter.tokenizers import MarinTokenizer, chat_template_has_generation_block
 
 from ._batch_tokenizer import BatchTokenizer
+
+
+@decode.register(Callable)
+def _decode_loss_weight_transform(value) -> Callable[[np.ndarray], np.ndarray]:
+    # Draccus resolves the Callable decoder even when the optional field contains null.
+    raise ValueError("Loss-weight transforms must be supplied programmatically")
 
 
 class TokenSeqDict(TypedDict):
@@ -108,6 +114,7 @@ class PrebuiltLmDatasetFormat(LmDatasetFormatBase):
 
     input_ids_key: str = "input_ids"
     loss_weights_key: str | None = None
+    loss_weight_transform: Callable[[np.ndarray], np.ndarray] | None = None
 
     @property
     def token_data_key(self) -> str:

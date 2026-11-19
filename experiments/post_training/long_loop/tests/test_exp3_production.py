@@ -139,6 +139,7 @@ def test_whole_run_preflight_rejects_the_inherited_flat_prefix_and_wrong_decay(p
         whole_run_lr_receipt(flat)
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("final_step", [4, 5])
 @pytest.mark.parametrize("profile", ["snowball_exp3", "snowball_h100"])
 def test_production_checkpoints_obey_two_hours_and_select_the_forced_final_state(

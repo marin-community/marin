@@ -110,9 +110,9 @@ PROFILES = MappingProxyType(
             role_plan=replace(
                 ROLE_PLAN,
                 policy_num_nodes=16,
-                num_inference_engines=2,
-                inference_engine_data_parallel_size=64,
-                inference_engine_expert_parallel_size=64,
+                num_inference_engines=8,
+                inference_engine_data_parallel_size=16,
+                inference_engine_expert_parallel_size=16,
             ),
             megatron=replace(MEGATRON, pipeline_model_parallel_size=16),
             execution=EXECUTION,
@@ -123,7 +123,9 @@ PROFILES = MappingProxyType(
                 ),
                 trainer=sections.Trainer(
                     project_name="mochi-three-rack",
+                    rollout_buffer=sections.RolloutBuffer(max_in_flight=128),
                     policy=sections.Policy(
+                        nccl_buffer_size_bytes=262144,
                         megatron_config=sections.PolicyMegatronConfig(
                             transformer_config_kwargs={
                                 "bias_activation_fusion": True,
@@ -132,6 +134,7 @@ PROFILES = MappingProxyType(
                         ),
                     ),
                     ref=sections.Ref(
+                        nccl_buffer_size_bytes=262144,
                         megatron_config=sections.RefMegatronConfig(
                             transformer_config_kwargs={
                                 "bias_activation_fusion": True,
@@ -142,14 +145,30 @@ PROFILES = MappingProxyType(
                 ),
                 generator=sections.Generator(
                     expert_block_sync=sections.ExpertBlockSync(verify=True, timeout_seconds=1800),
-                    # The 0.75 KV budget missed the full-context startup requirement by 0.47 GiB.
-                    gpu_memory_utilization=0.80,
-                    max_num_seqs=64,
+                    vllm_attention_backend="FLASHINFER",
+                    gpu_memory_utilization=0.90,
+                    max_num_seqs=128,
+                    max_num_batched_tokens=2048,
+                    enable_prefix_caching=False,
+                    engine_init_kwargs={
+                        "compilation_config": {
+                            "mode": 3,
+                            "cudagraph_mode": "PIECEWISE",
+                            "inductor_compile_config": {
+                                "enable_auto_functionalized_v2": False,
+                                "combo_kernels": True,
+                                "benchmark_combo_kernel": True,
+                            },
+                        },
+                    },
                     trajectory_retention=sections.TrajectoryRetention(
                         max_bytes_per_step=256 * 1024**2, max_bytes_per_run=1024**3
                     ),
                 ),
                 extra_env={
+                    "NCCL_NET": "IB",
+                    "NCCL_IB_DISABLE": "0",
+                    "NCCL_IB_HCA": "ibp",
                     "NCCL_DEBUG": "INFO",
                     "NCCL_DEBUG_SUBSYS": "INIT,NET",
                 },
@@ -212,6 +231,7 @@ def build_run(
     checkpoint_interval: int | None = None,
     resume: ArtifactStep[Artifact] | None = None,
     recipe_path: Path = RECIPE_PATH,
+    recipe_document: dict | None = None,
     max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
     data_sha256: str | None = None,
     execution: IrisSkyRLExecution | None = None,
@@ -240,11 +260,13 @@ def build_run(
     profile = replace(
         profile, role_plan=replace(profile.role_plan, train_batch_size=groups, policy_mini_batch_size=groups)
     )
-    recipe = SkyRLRecipe.from_document(yaml.safe_load(recipe_path.read_text())).merge(profile.patch)
+    recipe = SkyRLRecipe.from_document(
+        recipe_document if recipe_document is not None else yaml.safe_load(recipe_path.read_text())
+    ).merge(profile.patch)
     eval_interval = recipe.trainer.eval_interval if eval_interval is None else eval_interval
-    if not smoke and checkpoint_interval is not None:
-        raise ValueError("Real NVL72 runs use two-hour periodic checkpoints and a final checkpoint")
-    checkpoint_interval = (checkpoint_interval or 1) if smoke else -1
+    checkpoint_interval = (
+        checkpoint_interval if checkpoint_interval is not None else 1 if smoke else recipe.trainer.ckpt_interval
+    )
     context = recipe.context_budget.replace(max_new_tokens_per_turn=max_new_tokens)
     callback_updates = {
         "checkpoint": {"save_steps": checkpoint_interval},

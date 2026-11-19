@@ -141,7 +141,6 @@ RAGGED_MOE_IMPLEMENTATION = "ragged_all_to_all"
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
 _RAGGED_REQUIRED_XLA_FLAG_NAMES = frozenset(flag.partition("=")[0] for flag in RAGGED_REQUIRED_XLA_FLAGS)
 PJRT_DISTRIBUTION = "jax-cuda13-pjrt"
-_FP32_POLICY = jmp.get_policy("params=float32,compute=float32,output=float32")
 
 
 class WatchMode(StrEnum):
@@ -151,22 +150,74 @@ class WatchMode(StrEnum):
     DIAGNOSTIC = "diagnostic"
 
 
-class MasterParamMode(StrEnum):
-    """Where the authoritative fp32 weights live.
-
-    DEVICE keeps them as the device params themselves, with no separate master copy;
-    FP32_PINNED_HOST keeps a pinned-host fp32 master while the device params are its bf16 cast.
-    """
-
-    DEVICE = "device"
-    FP32_PINNED_HOST = "fp32_pinned_host"
-
-
 class TrainingDataMode(StrEnum):
     """Source of training batches."""
 
     MIXTURE = "mixture"
     SYNTHETIC = "synthetic"
+
+
+def require_fp32_param_policy(mp: jmp.Policy) -> None:
+    """Require FP32 stored parameters; compute and output precision may stay BF16."""
+    if jnp.dtype(mp.param_dtype) != jnp.float32:
+        raise ValueError(
+            f"Long-loop SFT requires float32 parameters; got mp.param_dtype={mp.param_dtype} "
+            f"(compute={mp.compute_dtype}, output={mp.output_dtype})"
+        )
+
+
+def _is_floating_leaf(leaf: object) -> bool:
+    dtype = getattr(leaf, "dtype", None)
+    if dtype is None:
+        return False
+    return bool(jnp.issubdtype(jnp.dtype(dtype), jnp.floating))
+
+
+def _non_fp32_floating_leaves(tree: object, prefix: str) -> tuple[int, list[str]]:
+    floating_count = 0
+    bad: list[str] = []
+    for path, leaf in jax.tree_util.tree_leaves_with_path(tree):
+        if not _is_floating_leaf(leaf):
+            continue
+        floating_count += 1
+        dtype = jnp.dtype(leaf.dtype)
+        if dtype != jnp.float32:
+            bad.append(f"{prefix}{jax.tree_util.keystr(path)}={dtype}")
+    return floating_count, bad
+
+
+def assert_fp32_train_state(state: "GrugTrainState") -> None:
+    """Verify stored parameters and optimizer moments are FP32 before training."""
+    if state.master_params is not None:
+        raise ValueError("Long-loop SFT keeps FP32 parameters on device; master_params must be None")
+    param_count, bad_params = _non_fp32_floating_leaves(state.params, "params")
+    if param_count == 0:
+        raise ValueError("Long-loop SFT train state has no floating-point parameter leaves")
+    bad = list(bad_params)
+    if state.ema_params is not None:
+        _, bad_ema = _non_fp32_floating_leaves(state.ema_params, "ema_params")
+        bad.extend(bad_ema)
+    _, bad_opt = _non_fp32_floating_leaves(state.opt_state, "opt_state")
+    bad.extend(bad_opt)
+    _, bad_betas = _non_fp32_floating_leaves(state.pending_qb_betas, "pending_qb_betas")
+    bad.extend(bad_betas)
+    if bad:
+        preview = ", ".join(bad[:8])
+        suffix = f" (and {len(bad) - 8} more)" if len(bad) > 8 else ""
+        raise ValueError(
+            f"Long-loop SFT requires FP32 stored parameters and optimizer moments; found non-FP32 leaves: "
+            f"{preview}{suffix}"
+        )
+
+
+@eqx.filter_jit
+def _upcast_bf16_leaves_to_fp32(tree):
+    return jax.tree.map(
+        lambda leaf: (
+            leaf.astype(jnp.float32) if eqx.is_inexact_array(leaf) and jnp.dtype(leaf.dtype) == jnp.bfloat16 else leaf
+        ),
+        tree,
+    )
 
 
 def restore_template_from(state):
@@ -227,18 +278,10 @@ def restore_first_checkpoint(state, checkpointer, mesh):
     return restored
 
 
-def template_for_candidate_layout(
-    state: "GrugTrainState", candidate: str, run_mode: MasterParamMode
-) -> "GrugTrainState":
+def template_for_candidate_layout(state: "GrugTrainState", candidate: str) -> "GrugTrainState":
     """Return a restore template that selects the checkpoint's authoritative fp32 parameters."""
-    has_master = checkpoint_stores_master(candidate)
-    if has_master == (run_mode != MasterParamMode.DEVICE):
+    if not checkpoint_stores_master(candidate):
         return state
-    if not has_master:
-        raise ValueError(
-            f"checkpoint {candidate} stores no master parameters, but this run trains with {run_mode}. "
-            "Synthesizing a master from stored weights is not a conversion this supports."
-        )
     logger.info("Checkpoint %s stores a pinned-host fp32 master; restoring it as the parameters.", candidate)
     return dataclasses.replace(state, params=None, master_params=state.params)
 
@@ -359,7 +402,6 @@ class GrugTrainerConfig:
     # Keep disabled except on model sizes where Grace-Blackwell host offload has been measured.
     # The d6144 EP64 runs used it; d5120 required a 135 GiB pinned-host arena and regressed.
     offload_opt_state: bool = False
-    master_param_mode: MasterParamMode = MasterParamMode.DEVICE
     training_data_mode: TrainingDataMode = TrainingDataMode.MIXTURE
     # Inline watch computes statistics on every step and uses the watch interval only for logging.
     # This keeps one training executable resident. A diagnostic watch repeats forward and backward
@@ -389,8 +431,7 @@ class GrugTrainerConfig:
     def __post_init__(self):
         if self.gradient_accumulation_steps < 1:
             raise ValueError("gradient_accumulation_steps must be positive")
-        if self.master_param_mode != MasterParamMode.DEVICE:
-            raise ValueError("Snowball SFT uses the original device parameter update path")
+        require_fp32_param_policy(self.trainer.mp)
         if len(self.special_token_ids) != len(self.anchor_token_ids):
             raise ValueError("Each special token needs one anchor")
         if self.gc_interval is not None and self.gc_interval <= 0:
@@ -766,10 +807,31 @@ def scale_special_token_updates(updates: Transformer, token_ids: tuple[int, ...]
     )
 
 
+def _bf16_leaf_stats(tree: object, prefix: str) -> tuple[int, int]:
+    """Count BF16 leaves and elements; reject floating leaves that are neither FP32 nor BF16."""
+    bf16_leaves = 0
+    bf16_elements = 0
+    unexpected: list[str] = []
+    for path, leaf in jax.tree_util.tree_leaves_with_path(tree):
+        if not _is_floating_leaf(leaf):
+            continue
+        dtype = jnp.dtype(leaf.dtype)
+        if dtype == jnp.bfloat16:
+            bf16_leaves += 1
+            bf16_elements += int(leaf.size)
+        elif dtype != jnp.float32:
+            unexpected.append(f"{prefix}{jax.tree_util.keystr(path)}={dtype}")
+    if unexpected:
+        raise ValueError(
+            f"Long-loop SFT starting checkpoint contains unsupported floating dtypes: {', '.join(unexpected[:8])}"
+        )
+    return bf16_leaves, bf16_elements
+
+
 def initialize_snowball_sft(
     state: GrugTrainState, checkpoint: str, mesh: Mesh, config: GrugTrainerConfig
 ) -> GrugTrainState:
-    """Load the legacy single-shared-expert base and seed the SFT LM-head rows."""
+    """Load the legacy single-shared-expert base, upcast BF16 HF starts to FP32, and seed LM-head rows."""
     shared = state.params.stacked_blocks.stacked.shared
     if shared is None or len(shared) != 1:
         raise ValueError("The Snowball base has exactly one shared expert")
@@ -778,13 +840,36 @@ def initialize_snowball_sft(
     loaded = init_weights_only_from_checkpoint(
         legacy_state, checkpoint, mesh=mesh, allow_partial=False, additional_weight_fields=("pending_qb_betas",)
     )
+    loaded_params = loaded.params
+    loaded_betas = loaded.pending_qb_betas
+    bf16_param_leaves, bf16_param_elements = _bf16_leaf_stats(loaded_params, "params")
+    bf16_beta_leaves, bf16_beta_elements = _bf16_leaf_stats(loaded_betas, "pending_qb_betas")
+    if bf16_param_leaves or bf16_beta_leaves:
+        logger.info(
+            "Upcasting BF16 starting checkpoint %s to float32 (%d parameter leaves, %d elements; "
+            "%d pending_qb_betas leaves, %d elements)",
+            checkpoint,
+            bf16_param_leaves,
+            bf16_param_elements,
+            bf16_beta_leaves,
+            bf16_beta_elements,
+        )
+        loaded_params = _upcast_bf16_leaves_to_fp32(loaded_params)
+        loaded_betas = _upcast_bf16_leaves_to_fp32(loaded_betas)
     params = eqx.tree_at(
         lambda model: model.stacked_blocks.stacked.shared,
-        loaded.params,
-        (loaded.params.stacked_blocks.stacked.shared,),
+        loaded_params,
+        (loaded_params.stacked_blocks.stacked.shared,),
     )
     params = reseed_lm_head(params, config.special_token_ids, config.anchor_token_ids)
-    return dataclasses.replace(loaded, params=params, ema_params=params if state.ema_params is not None else None)
+    result = dataclasses.replace(
+        loaded,
+        params=params,
+        ema_params=params if state.ema_params is not None else None,
+        pending_qb_betas=loaded_betas,
+    )
+    assert_fp32_train_state(result)
+    return result
 
 
 @eqx.filter_jit
@@ -824,29 +909,23 @@ def initial_state(
     key: PRNGKeyArray,
     ema_beta: float | None,
     offload_opt_state: bool = False,
-    master_param_mode: MasterParamMode = MasterParamMode.DEVICE,
 ) -> GrugTrainState:
     initialized_params = Transformer.init(model_config, key=key)
     num_moe_layers = model_config.num_layers
-    if master_param_mode == MasterParamMode.FP32_PINNED_HOST:
-        master_params = _FP32_POLICY.cast_to_param(initialized_params)
-        params = mp.cast_to_param(master_params)
-        opt_state = optimizer.init(master_params)
-        master_params = _tree_to_memory_kind(master_params, "pinned_host")
-    else:
-        params = mp.cast_to_param(initialized_params)
-        master_params = None
-        opt_state = optimizer.init(params)
+    params = mp.cast_to_param(initialized_params)
+    opt_state = optimizer.init(params)
     if offload_opt_state:
         opt_state = _tree_to_memory_kind(opt_state, "pinned_host")
-    return GrugTrainState(
+    state = GrugTrainState(
         step=jax.sharding.reshard(jnp.array(0, dtype=jnp.int32), P()),
         params=params,
-        master_params=master_params,
+        master_params=None,
         opt_state=opt_state,
         ema_params=params if ema_beta is not None else None,
-        pending_qb_betas=jnp.zeros((num_moe_layers, model_config.num_experts)),
+        pending_qb_betas=jnp.zeros((num_moe_layers, model_config.num_experts), dtype=jnp.float32),
     )
+    assert_fp32_train_state(state)
+    return state
 
 
 def _drop_metrics(
@@ -1228,7 +1307,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 key=model_rng,
                 ema_beta=config.trainer.ema_beta,
                 offload_opt_state=config.trainer.offload_opt_state,
-                master_param_mode=config.trainer.master_param_mode,
             )
 
         with timing.span("model_initialization_and_restore"):
@@ -1243,18 +1321,16 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 load_checkpoint_setting=trainer.load_checkpoint,
                 mesh=mesh,
                 allow_partial=trainer.allow_partial_checkpoint,
-                template_for_candidate=lambda candidate: template_for_candidate_layout(
-                    state, candidate, config.trainer.master_param_mode
-                ),
+                template_for_candidate=lambda candidate: template_for_candidate_layout(state, candidate),
             )
-            if config.trainer.master_param_mode == MasterParamMode.DEVICE:
-                state = take_master_as_params(state)
+            state = take_master_as_params(state)
             if released_initial_state and any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state)):
                 state = _init_state(model_key)
             if int(state.step) == 0:
                 if trainer.initialize_from is None:
                     raise ValueError("Snowball SFT requires an explicit base checkpoint")
                 state = initialize_snowball_sft(state, trainer.initialize_from, mesh, config.trainer)
+            assert_fp32_train_state(state)
         dump_grug_state_sharding_run_artifact(
             state,
             log_dir=trainer.log_dir,
@@ -1625,7 +1701,8 @@ __all__ = [
     "GrugRunConfig",
     "GrugTrainState",
     "GrugTrainerConfig",
-    "MasterParamMode",
+    "assert_fp32_train_state",
     "initial_state",
+    "require_fp32_param_policy",
     "run_grug",
 ]

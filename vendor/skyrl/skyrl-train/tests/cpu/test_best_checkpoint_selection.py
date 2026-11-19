@@ -51,6 +51,9 @@ async def test_delayed_best_selection_preserves_baseline_gates_after_resume(tmp_
     async def save_checkpoints():
         saved_steps.append(current_step)
         (tmp_path / f"weights-{current_step}").write_text("checkpoint")
+        checkpoint = tmp_path / f"global_step_{current_step}"
+        checkpoint.mkdir()
+        (checkpoint / "trainer_state.pt").write_bytes(b"committed")
 
     trainer = SimpleNamespace(
         cfg=SimpleNamespace(trainer=SimpleNamespace(ckpt_path=str(tmp_path))), save_checkpoints=save_checkpoints

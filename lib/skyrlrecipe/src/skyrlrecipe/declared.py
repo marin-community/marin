@@ -104,6 +104,7 @@ class BestCheckpointCallback(Section):
     expected_tasks: int
     minimum_scored_tasks: int
     ema_window: PositiveInt = unset_field()
+    selection_eligibility: Literal["covered", "complete_window"] = unset_field()
     evaluation_interval: PositiveInt = unset_field()
     selection_metric: str = unset_field()
     save_after_fraction: int | float = unset_field()

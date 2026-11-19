@@ -436,6 +436,9 @@ class Algorithm(Section):
 
 
 class RolloutBuffer(Section):
+    consumed_route_quotas: OpenMap = field({})
+    "Exact consumed-group quotas, enforced at lease admission; full_batch only."
+    source_routes: OpenMap = field({})
     max_staleness_steps: NonNegativeInt = field(0)
     "How many steps the generating policy may lag the step that trains on its group. colocate_all requires 0."
     batch_policy: Literal["full_batch", "rolling"] = field("full_batch")
@@ -586,6 +589,9 @@ class Trainer(Section):
     flash_attn: bool = field(False)
     disable_fast_tokenizer: bool = field(False)
     project_name: str = field("skyrl")
+    wandb_entity: str | None = field(None)
+    native_telemetry_root: str | None = field(None)
+    dump_training_order: bool = field(False)
     run_name: str | None = field("test_run")
     logger: LoggingBackend | tuple[LoggingBackend, ...] = field("wandb")
     tracker_commit_each_step: bool = field(True)

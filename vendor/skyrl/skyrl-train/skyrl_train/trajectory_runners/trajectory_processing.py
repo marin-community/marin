@@ -125,8 +125,9 @@ def normalized_verifier_scores(trajectory_batch: TrajectoryBatch) -> List[float 
     if len(results) != len(trajectory_batch["rewards"]):
         raise ValueError("verification_results must have one entry per reward")
     scores: List[float | None] = []
-    for result in results:
-        if result is None or result.status is not VerificationStatus.VERIFIED:
+    excluded = trajectory_batch.get("exclude_from_baseline") or [False] * len(results)
+    for result, masked in zip(results, excluded, strict=True):
+        if masked or result is None or result.status is not VerificationStatus.VERIFIED:
             scores.append(None)
         else:
             scores.append(normalized_verifier_score(result))
@@ -156,11 +157,14 @@ def get_trajectory_passes(trajectory_batch: TrajectoryBatch) -> List[bool]:
     """Return task success, honoring explicit verifier verdicts when available."""
     outcomes = get_outcome_rewards(trajectory_batch)
     results = trajectory_batch.get("verification_results")
+    excluded = trajectory_batch.get("exclude_from_baseline") or [False] * len(outcomes)
     if results is None:
-        return [outcome > 0.0 for outcome in outcomes]
+        return [outcome > 0.0 and not masked for outcome, masked in zip(outcomes, excluded, strict=True)]
     passes = []
-    for outcome, result in zip(outcomes, results, strict=True):
-        if result is None:
+    for outcome, result, masked in zip(outcomes, results, excluded, strict=True):
+        if masked:
+            passes.append(False)
+        elif result is None:
             passes.append(outcome > 0.0)
         elif result.status is not VerificationStatus.VERIFIED:
             passes.append(False)
@@ -418,7 +422,7 @@ def normalize_trajectory_batches(
         result["exclude_from_baseline"] = baseline_exclusions_concat
 
     _concatenate_environment_metrics(result, trajectory_batches, fields=fields)
-    for key in ("verification_results", "evidence_messages"):
+    for key in ("verification_results", "evidence_messages", "episode_statistics"):
         if key in fields.present:
             result[key] = [
                 value
@@ -455,6 +459,8 @@ def concatenate_trajectory_batches(
             result.get("env_metrics"),
             result.get("env_classes"),
             verification_results=result.get("verification_results"),
+            episode_statistics=result.get("episode_statistics"),
+            excluded=result.get("exclude_from_baseline"),
         )
         metrics.update(
             rollout_counter_metrics(
@@ -617,6 +623,8 @@ def get_rollout_metrics(
     env_metrics: Optional[List[Dict[str, Any]]] = None,
     env_classes: Optional[List[str]] = None,
     verification_results: Optional[List[Optional[VerificationResult]]] = None,
+    episode_statistics: Optional[List[dict[str, int]]] = None,
+    excluded: Optional[List[bool]] = None,
 ):
     """
     Computes rollout metrics including token statistics and optional environment-specific metrics.
@@ -632,7 +640,16 @@ def get_rollout_metrics(
         Dictionary of aggregated metrics
     """
     successes = rollout_successes(rewards, verification_results)
-    return rollout_length_metrics([len(response) for response in responses], successes, env_metrics, env_classes)
+    if excluded is not None:
+        successes = [success and not masked for success, masked in zip(successes, excluded, strict=True)]
+    optimized_lengths = [len(response) for response in responses]
+    lengths = (
+        optimized_lengths if episode_statistics is None else [value["generated_tokens"] for value in episode_statistics]
+    )
+    metrics = rollout_length_metrics(lengths, successes, env_metrics, env_classes)
+    if episode_statistics is not None:
+        metrics["generate/optimized_avg_num_tokens"] = float(np.mean(optimized_lengths))
+    return metrics
 
 
 def rollout_successes(

@@ -39,7 +39,7 @@ def test_masked_verifier_pass_is_raw_only_and_episode_tokens_survive_concatenati
             ],
         }
 
-    joined = concatenate_trajectory_batches([batch(True, 3138), batch(False, 4000)], tis_lcs_alert_threshold=0.0)
+    joined = concatenate_trajectory_batches([batch(True, 3138), batch(False, 4000)])
     assert joined["rollout_metrics"]["generate/avg_num_tokens"] == 3569
     assert joined["rollout_metrics"]["generate/optimized_avg_num_tokens"] == 24
     metrics = _calculate_eval_metrics(joined, ["failed", "healthy"], ["SWE", "SWE"], 1)

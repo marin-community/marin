@@ -6,7 +6,7 @@
 import hashlib
 import json
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 import draccus
 from fray.types import DeviceConfig, GpuConfig, ResourceConfig
@@ -17,6 +17,7 @@ from marin.rl.curriculum import RlCurriculum
 from marin.rl.skyrl import ArtifactDataSource, ArtifactHfModel, IrisSkyRLExecution, SkyRLRolePlan
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.timing import Duration
+from skyrlrecipe.locality import RoleTopologyMode
 
 from experiments.evaluation.micro210 import PREPARED_INPUTS, micro210_artifact_step
 from experiments.post_training.long_loop.adopted_sft import verify_adopted_sft
@@ -32,6 +33,14 @@ from experiments.post_training.long_loop.sft_accounting import write_sft_account
 from experiments.post_training.long_loop.shared_sft import export_shared_sft, legacy_sft_step, native_sft_step
 
 
+@dataclass(frozen=True)
+class CompletedSft:
+    """Adopt a completed native SFT and its model handoff for downstream recovery."""
+
+    trained: ArtifactStep
+    handoff: ArtifactStep
+
+
 def runtime_execution(value: dict) -> IrisSkyRLExecution:
     value = {
         "job_timeout_seconds": COORDINATOR_TIMEOUT_SECONDS,
@@ -44,6 +53,9 @@ def runtime_execution(value: dict) -> IrisSkyRLExecution:
             **value,
             "coordinator_gpu": GpuConfig(**gpu) if gpu is not None else None,
             "required_env_vars": tuple(value["required_env_vars"]),
+            "role_topology": (
+                RoleTopologyMode(value["role_topology"]) if value.get("role_topology") is not None else None
+            ),
         }
     )
 
@@ -78,6 +90,7 @@ def build_spec_graph(
     data_artifacts: dict[str, ArtifactStep] | None = None,
     curriculum: RlCurriculum | None = None,
     sft_release: ArtifactStep | None = None,
+    completed_sft: CompletedSft | None = None,
     sft_step_builder: Callable[[str, str, dict], ArtifactStep] = native_sft_step,
 ) -> ArtifactStep:
     blockers = stage_blockers(resolved, through)
@@ -112,7 +125,16 @@ def build_spec_graph(
     sft_evidence = [verified]
     recipe = {**resolved["sft"], "task_timeout_seconds": timeouts["sft"]}
     sft_pin = resolved.get("adopted_sft")
-    if sft_pin is not None:
+    if completed_sft is not None:
+        if through == "sft" or sft_pin is not None or resolved.get("adopted_handoff") is not None:
+            raise ValueError("Completed SFT handles require an unambiguous downstream continuation")
+        if not completed_sft.trained.adopt_source or not completed_sft.handoff.adopt_source:
+            raise ValueError("Completed SFT handles must be adopted; recovery cannot replay SFT")
+        base_manifest = resolved["initializer"]
+        base = ArtifactStep.adopt(f"{name}/base", version, base_manifest["uri"], config=base_manifest)
+        sft_evidence.append(base)
+        trained = completed_sft.trained
+    elif sft_pin is not None:
         if through == "sft":
             raise ValueError("An adopted SFT input is for downstream continuation, not an SFT stage")
         if sft_pin["version"] == version:
@@ -151,7 +173,9 @@ def build_spec_graph(
         return replace(trained, runtime_args={**trained.runtime_args, "skyrl_execution": coordinator})
     tokenizer = resolved["tokenizer"]
     handoff = resolved.get("adopted_handoff")
-    if handoff is not None:
+    if completed_sft is not None:
+        exported = replace(completed_sft.handoff, deps=(*completed_sft.handoff.deps, trained))
+    elif handoff is not None:
         if sft_pin is None or handoff["source_checkpoint"] != prefix_join(
             sft_pin["uri"], f"checkpoints/step-{sft_pin['step']}"
         ):

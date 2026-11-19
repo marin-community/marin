@@ -657,7 +657,7 @@ with one adopted artifact directory; `data_file` defaults to `train.parquet`.
 `validation_data_uri` list; its default file is `validation.parquet`.
 
 Mochi profiles are `one-rack` (48 trainer + 12 inference GPUs, 65,536 context)
-and `three-rack` (64 trainer + two 64-GPU inference engines, 262,144 context).
+and `three-rack` (64 trainer + eight 16-GPU inference engines, 262,144 context).
 Snowball parity profiles are `snowball-one-rack` (32 + 8 GPUs) and
 `snowball-three-rack` (64 + two 64-GPU engines). Snowball uses PP2 because its
 26 layers cannot use Mochi's PP12 or PP16. The profiles request physical NVLink
@@ -714,3 +714,67 @@ Run without `--run` first, with `--reference`, `--reference-sha256`,
 `--source-revision`, `--validation-output`, and a fresh `--version`. Inspect the
 resolved launch diff and the cross-node InfiniBand probe receipt before adding
 `--run`. Both the coordinator and child job names use the `mochi-` prefix.
+
+## Consolidated adopted rounds
+
+Use `round_runner` for the Mochi profiles in `rounds/mochi-one-rack.yaml` and
+`rounds/mochi-three-rack.yaml`. Both adopt the pinned schema-3 SFT export and
+regional train/held-out pools. Their graphs contain no SFT producer. Model
+metadata and data-file SHA-256 pins are checked before the training allocation.
+
+| Round | Trainer | Inference | Context |
+| --- | --- | --- | --- |
+| Mochi one rack | 48 GB200, TP1/PP12/CP4/EP4 | 12 GB200, DP12/EP12 | 65,536 |
+| Mochi three racks | 64 GB200, TP1/PP16/CP4/EP4 | 8 engines of 16 GB200, DP16/EP16 | 262,144 |
+
+The three-rack profile uses FlashInfer, PIECEWISE graphs and verified expert-block
+weight publication. Both profiles keep compilation and graphs enabled and use
+the published BF16 SkyRL wheel `marin-vllm-gpu-20261113-0ac9dcb157ee`, pinned
+in the `vllm` extra in [SkyRL dependencies](../../../vendor/skyrl/pyproject.toml).
+These are configuration ports. CPU validation does not establish GPU fit, serving readiness or throughput.
+
+```bash
+uv run python -m experiments.post_training.long_loop.round_runner \
+  --round experiments/post_training/long_loop/rounds/mochi-one-rack.yaml \
+  --through rl --version 2026.11.19.201 \
+  --source-revision "$(git rev-parse HEAD)" \
+  --validation-output /tmp/mochi-round-validation
+```
+
+The command validates without submitting. Normal runs use a 10-hour learning
+clock that starts after the first optimizer update and starts again after process
+recovery. The separate GPU-job limit is 48 hours. `rl.max_steps` is an absolute
+optimizer-step target. Set `rl.native_checkpoint` to adopt native model, optimizer
+and trainer state; same-version recovery first uses that output version's own
+latest checkpoint. Keep `rl.role_plan`, `rl.megatron`, the adopted model pins,
+`rl.recipe.trainer.callbacks` and `rl.selection_eligibility` fixed for recovery.
+
+`rl.selection_eligibility` is the single eligibility choice. Its current value,
+`covered`, requires verifier scores for at least 108 of the 120 held-out task
+attempts. Each eligible evaluation is one observation. Evaluations run every two
+optimizer updates; selection can begin at update two. The adjusted EMA uses up to
+the last five eligible observations during warmup and saves every improved best
+immediately. `complete_window` requires all 120 scores and five consecutive
+scheduled evaluations; with the two-update cadence, selection can begin at update
+ten. Missing evaluations invalidate that window.
+The choice is pending a user decision; the shipped rounds use `covered`.
+Completed selection history survives same-version recovery.
+
+For a proposed two-update smoke, make an explicit new round with `rl.max_steps: 2`,
+a fresh version and `rl.execution.job_timeout_seconds: 7200`, then add `--smoke`.
+Smoke uses two groups of eight samples, two rollout workers, no evaluation or
+best selection, a one-hour learning clock and a native save on every update.
+This does not authorize GPU submission. Mochi smokes depend on serving readiness.
+
+`rounds/exp4-recovery.yaml` rebuilds the downstream RL recovery graph for version `2026.11.19.82` from a
+hash-pinned plan and completed SFT/handoff records. It preserves the recorded
+72-hour job limit and 12-hour learning budget for historical reproduction.
+Its only recipe migration removes the unused `tis_splice` flag rejected by main;
+TIS remains selected through `off_policy_correction`. The already-submitted recovery version `2026.11.19.82` is unchanged. Use `--through rl` or `--through archive` for this round.
+
+The legacy `sft-smoke.yaml` is a 300-line source config. It expands the two pinned
+JSON objects in `s3://marin-us-east-08a/marin/long-loop/config/2026.11.19/` at launch
+and verifies their SHA-256 hashes. It uses the original step-zero mixture weights only. The full 19-phase schedule
+remains pinned by `specs/sft-data.yaml` for production SFT. Stored parameters must
+be FP32. Tests that read these production pins are CPU
+integration tests; ordinary offline tests do not require object-store access.
