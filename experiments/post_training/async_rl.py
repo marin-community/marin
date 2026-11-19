@@ -142,8 +142,11 @@ SNOWBALL_RECIPE = TrainingRecipe(
         expert_tensor_parallel_size=1,
     ),
     host_memory="1800GB",
-    # The Triton MoE kernels; the fused defaults do not cover this expert layout.
-    engine_init_kwargs=MappingProxyType({"moe_backend": "triton"}),
+    # The Triton MoE kernels; the fused defaults do not cover this expert layout. Snowball's chat template
+    # emits Hermes <tool_call> blocks, which vLLM parses only when auto tool choice is enabled.
+    engine_init_kwargs=MappingProxyType(
+        {"moe_backend": "triton", "enable_auto_tool_choice": True, "tool_call_parser": "hermes"}
+    ),
 )
 
 
