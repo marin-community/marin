@@ -148,17 +148,30 @@ def lower_harbor_task(directory: Path, task: TaskSpec, *, session: Mapping[str, 
 
     Full Harbor trials bind the task.toml-declared agent and verifier deadlines into the row
     limits: the trial runtime turns row limits into Harbor ``override_timeout_sec`` values, so a
-    session default here would replace the task's own deadlines.
+    session default here would replace the task's own deadlines. The attempt deadline grows to
+    cover the declared phases when the session value is shorter, because Harbor cancels the
+    whole trial when the attempt expires.
     """
     config = TaskConfig.model_validate_toml((directory / "task.toml").read_text())
 
     if session["task_session"] == HARBOR_TRIAL_SESSION:
+        agent_timeout = config.agent.timeout_sec
+        verifier_timeout = config.verifier.timeout_sec
+        cleanup_timeout = session["cleanup_timeout"]
+        # Environment build or start, the declared agent and verifier phases, and cleanup must
+        # all fit inside the attempt deadline. An agent section that declares no timeout leaves
+        # its phase to the deployment settings, which also own the attempt deadline there.
+        phase_total = (
+            config.environment.build_timeout_sec + (agent_timeout or 0.0) + verifier_timeout + cleanup_timeout
+        )
+        attempt_timeout = max(session["attempt_timeout"], phase_total)
         return rollout_spec(
             task,
             {
                 **session,
-                "total_turn_timeout": config.agent.timeout_sec,
-                "verifier_timeout": config.verifier.timeout_sec,
+                "total_turn_timeout": agent_timeout,
+                "verifier_timeout": verifier_timeout,
+                "attempt_timeout": attempt_timeout,
             },
         )
 

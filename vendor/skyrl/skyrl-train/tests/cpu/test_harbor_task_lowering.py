@@ -49,9 +49,26 @@ timeout_sec = 1800.0
     assert lowered.limits.verifier_timeout == 1800.0
     assert lowered.limits.total_turn_timeout == 1800.0
     # Other limits still come from the caller's session.
-    assert lowered.limits.attempt_timeout == 2460.0
     assert lowered.limits.max_turns == 1024
     assert lowered.harness == HARBOR_TRIAL_SESSION
+    # The attempt deadline covers build + agent + verifier + cleanup (600 + 1800 + 1800 + 60).
+    assert lowered.limits.attempt_timeout == 4260.0
+
+
+def test_trial_lowering_attempt_covers_a_long_declared_verifier(tmp_path):
+    lowered = lowered_trial_task(
+        tmp_path,
+        text_task("tb2/slow-verifier"),
+        """
+[verifier]
+timeout_sec = 7200.0
+
+[agent]
+timeout_sec = 1800.0
+""",
+    )
+    # 600 build + 1800 agent + 7200 verifier + 60 cleanup.
+    assert lowered.limits.attempt_timeout == 9660.0
 
 
 def test_trial_lowering_defaults_to_harbor_defaults_when_task_toml_is_silent(tmp_path):
@@ -60,3 +77,5 @@ def test_trial_lowering_defaults_to_harbor_defaults_when_task_toml_is_silent(tmp
     assert lowered.limits.verifier_timeout == 600.0
     # A missing [agent] section declares no agent deadline; the deployment settings govern it.
     assert lowered.limits.total_turn_timeout is None
+    # The session attempt deadline already covers the 600 s verifier default.
+    assert lowered.limits.attempt_timeout == 2460.0
