@@ -4,6 +4,7 @@
 """Keep archived assessment evidence across catalog refreshes and source retirement."""
 
 from collections.abc import Mapping
+from types import MappingProxyType
 
 from marina.client import AppletQuery
 
@@ -11,7 +12,7 @@ from marina.client import AppletQuery
 ASSESSMENT_TABLES = ("populations", "items", "packets", "assessments")
 # Copy only a small page of missing task IDs at a time. The primary key supports
 # these lookups without scanning a whole pipeline once per hash bucket.
-RETAIN_COPY_BATCH_ROWS = {"items": 32, "packets": 8}
+RETAIN_COPY_BATCH_ROWS = MappingProxyType({"items": 32, "packets": 8})
 
 
 def retain_prior_assessments(
@@ -21,6 +22,9 @@ def retain_prior_assessments(
 
     Existing task rows and complete target assessment headers are left unchanged.
     Copy headers last, after every missing item and packet has been staged.
+
+    Returns:
+        Newly inserted row counts keyed by assessment table name.
     """
     copied = {}
     for table in ASSESSMENT_TABLES:

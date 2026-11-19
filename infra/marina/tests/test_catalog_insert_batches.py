@@ -17,7 +17,7 @@ from infra.marina.apps.rl_data_catalog.server.schema import SCHEMA_SQL
 COMMITTED_PREFIX_ROWS = 13
 
 
-def execute_batch(engine, sql, parameters):
+def execute_statement(engine, sql, parameters):
     validate_query(sql)
     with engine.begin() as connection:
         connection.execute(text("SET LOCAL statement_timeout = '2s'"))
@@ -72,7 +72,7 @@ def test_indexed_item_batches_resume_without_overwriting_evidence(batch_database
         assert size <= 5
         assert len(body.encode()) <= 35_000
         started = time.monotonic()
-        result = execute_batch(batch_database, sql, parameters)
+        result = execute_statement(batch_database, sql, parameters)
         timings.append(time.monotonic() - started)
         batch_sizes.append(size)
         bodies.append(len(body.encode()))
@@ -109,7 +109,7 @@ def test_large_packets_stay_intact_in_single_row_statements(batch_database):
 
     def query(sql, parameters):
         assert len(json.loads(parameters["rows"])) == 1
-        return execute_batch(batch_database, sql, parameters)
+        return execute_statement(batch_database, sql, parameters)
 
     assert insert_rows(query, "atlas_packets", TABLE_COLUMNS["packets"], "large", packets) == 3
     with batch_database.begin() as connection:
@@ -141,7 +141,7 @@ def test_retained_history_copies_only_bounded_missing_rows(batch_database, recor
     ]
 
     def seed(sql, parameters):
-        return execute_batch(batch_database, sql, parameters)
+        return execute_statement(batch_database, sql, parameters)
 
     assessment = {
         "pipeline_key": "retired",
@@ -187,7 +187,7 @@ def test_retained_history_copies_only_bounded_missing_rows(batch_database, recor
     def query(sql, parameters):
         before = retained_counts()
         started = time.monotonic()
-        result = execute_batch(batch_database, sql, parameters)
+        result = execute_statement(batch_database, sql, parameters)
         elapsed.append(time.monotonic() - started)
         after = retained_counts()
         for table, limit in (("items", 32), ("packets", 8)):
@@ -218,3 +218,4 @@ def test_retained_history_copies_only_bounded_missing_rows(batch_database, recor
     record_property("retained_max_item_rows", maximum["items"])
     record_property("retained_max_packet_rows", maximum["packets"])
     record_property("retained_max_statement_seconds", max(elapsed))
+
