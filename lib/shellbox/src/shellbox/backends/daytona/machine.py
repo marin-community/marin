@@ -116,24 +116,35 @@ async def _create_sandbox(
 
 
 async def _delete_named_sandbox(client: AsyncDaytona, name: str) -> None:
-    """Delete the sandbox, retrying gateway errors and state changes until the interrupt deadline."""
+    """Delete the sandbox, retrying gateway errors and state changes until the interrupt deadline.
+
+    When the deadline expires, raise the last retried provider error rather than a bare timeout.
+    """
     backoff = ExponentialBackoff(initial=1, maximum=4, factor=2, jitter=0)
-    async with asyncio.timeout(INTERRUPT_TIMEOUT):
-        while True:
-            try:
-                sandbox = await client.get(name)
-                await client.delete(sandbox)
-                return
-            except DaytonaNotFoundError:
-                return
-            except DaytonaConflictError as error:
-                # Daytona refuses deletion while the sandbox is still starting or stopping.
-                logger.warning("Retrying Daytona sandbox deletion during a state change: %s: %s", name, error)
-            except DaytonaError as error:
-                if error.status_code not in TRANSIENT_DAYTONA_STATUS:
-                    raise
-                logger.warning("Retrying Daytona sandbox deletion after HTTP %s: %s", error.status_code, name)
-            await sleep(backoff.next_interval())
+    retried: DaytonaError | None = None
+    try:
+        async with asyncio.timeout(INTERRUPT_TIMEOUT):
+            while True:
+                try:
+                    sandbox = await client.get(name)
+                    await client.delete(sandbox)
+                    return
+                except DaytonaNotFoundError:
+                    return
+                except DaytonaConflictError as error:
+                    # Daytona refuses deletion while the sandbox is still starting or stopping.
+                    logger.warning("Retrying Daytona sandbox deletion during a state change: %s: %s", name, error)
+                    retried = error
+                except DaytonaError as error:
+                    if error.status_code not in TRANSIENT_DAYTONA_STATUS:
+                        raise
+                    logger.warning("Retrying Daytona sandbox deletion after HTTP %s: %s", error.status_code, name)
+                    retried = error
+                await sleep(backoff.next_interval())
+    except TimeoutError:
+        if retried is None:
+            raise
+        raise retried from None
 
 
 class DaytonaImageBuild(StrEnum):
