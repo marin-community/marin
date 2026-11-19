@@ -77,7 +77,7 @@ def select(split_index: int, rows_needed: int, rng: np.random.Generator, taken: 
         while got < want:
             candidates = [int(x) for x in rng.choice(total, size=512, replace=False) if int(x) not in taken[name]]
             batch = cache.get_batch_sync(candidates)
-            for index, entry in zip(candidates, batch):
+            for index, entry in zip(candidates, batch, strict=True):
                 taken[name].add(index)
                 ids = np.asarray(entry["input_ids"], np.int32)
                 if len(ids) > MAX_DOC or (ids[:-1] == EOS).any():
