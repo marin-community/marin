@@ -7,7 +7,7 @@ import logging
 from argparse import Namespace
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import override
@@ -31,7 +31,7 @@ from taskforge.llm.glm_client import EndpointSource
 from taskforge.model.controls import CONTROL, Candidate, Control, ControlKind, RewardBand
 from taskforge.model.llm import Completion, FinishReason, ToolCall
 from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal
-from taskforge.model.review import Abandon, BandRules, Budget, Decision, Incomplete, Modify
+from taskforge.model.review import Abandon, Accept, BandRules, Budget, Decision, Incomplete, Modify, Retry
 from taskforge.model.stage import Stage
 from taskforge.model.workpiece import WORKPIECE, Conversation, Terminal, Workpiece
 from taskforge.policy import Policy, load_policy
@@ -44,6 +44,7 @@ from taskforge.resources.inference import FakeInference, InferenceRequest
 from taskforge.resources.rollouts import Engine, RolloutResource
 from taskforge.resources.verifier import RoundVerifier
 from taskforge.resources.web import FakeWeb
+from taskforge.stages.classify import replayable_grade
 from taskforge.wiring import build_config, install
 
 
@@ -206,6 +207,25 @@ async def test_validation_retry_budget_holds_without_restarting_author(proposal:
     assert len(wp.decisions) == settings.budget.max_validation_retries + 1
     stages = [r.event.stage for r in log.records if isinstance(r.event, StageCompleted)]
     assert stages == ["author", *[stage for _ in wp.decisions for stage in ("validate", "review")]]
+
+
+async def test_unavailable_control_grade_is_regraded_on_validation_retry(proposal: TaskProposal) -> None:
+    @dataclass(slots=True)
+    class OnceUnavailable(Engine):
+        calls: int = 0
+
+        @override
+        async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
+            self.calls += 1
+            if self.calls == 1:
+                return GradedRollout(Rollout(run_id or "grade", (), "stop"), GradeResult(Outcome.UNAVAILABLE, None))
+            return await CandidateEngine().run_task(spec, model, run_id=run_id)
+
+    without_grade_tool = tuple(c for c in script("S") if c.tool_calls[0].name != "grade")
+    bundle = replace(resources(Envs(), without_grade_tool), grading=GradingResource(OnceUnavailable(), "grader"))
+    wp = await run_workpiece(proposal, config("S"), bundle, EventLog(replayable=replayable_grade), install=install)
+    assert [type(decision) for decision in wp.decisions] == [Retry, Accept]
+    assert wp.terminal == Terminal.ACCEPTED
 
 
 @pytest.fixture
