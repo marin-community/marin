@@ -4,7 +4,7 @@ name: AdamC decay on head, router and embeddings
 category: Optimizers
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: approved
+status: running
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6998574819
@@ -12,3 +12,17 @@ intake:
   approved_by: armorfaye (trusted)
 code_commits:
 - e07a23462367d74c509c6338a600d42964b89866
+trials:
+- id: t001
+  variant: MuonC 12.5 + AdamC on head, router and embed
+  rung: speedrun
+  protocol: equal_steps
+  batch: X0245
+  date: '2026-11-19'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0245
+  wandb: []
+  settings:
+    muonc_decay_mult: '12.5'
+    adamc_head_router_embed: 'true'
+  commit: 4f1f3d92dd
+  priority: interactive
