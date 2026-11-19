@@ -129,7 +129,7 @@ models:
   - name: Mochi SFT step 400407
     # Unreleased: the exported BF16 checkpoint. Runs came from a branch ahead of main with serving configs for this
     # checkpoint: three-stage pipeline serving on H100, and for math500, aime24, mmlu-pro, cruxeval and nupa the
-    # four-host GB200 DP16 layout from #11528.
+    # four-host GB200 DP16 layout.
     location: s3://marin-us-east-02a/marin/exports/mochi-sft/hero-sft-fullab-step393k-v2/step-400407/2af3f828aa-cpu-a1
     cells:
       math500: {run_id: 20261117-205052-mochi-sft-step400407-dp16-6657e944d2d748229fa5efff212c85ab-math500-444e04cfeb7a57faa4b9616f79d54d1e, label: unofficial}

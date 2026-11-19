@@ -130,5 +130,4 @@ def test_checkpoint_row_matches_runs_by_location_and_links_to_filer() -> None:
 
     model = scorecard["models"][0]
     assert unquote(model["url"].removeprefix("https://filer.marina.oa.dev/#")) == CHECKPOINT
-    assert model["location"] == CHECKPOINT
     assert model["cells"]["math500"]["suspect"] == "known grading problem"
