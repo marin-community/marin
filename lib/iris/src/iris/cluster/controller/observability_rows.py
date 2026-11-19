@@ -36,6 +36,7 @@ from itertools import batched
 from typing import NamedTuple, Protocol
 
 from finelog.client.log_client import Table as FinelogTable
+from rigging.provenance import LAUNCH_PROVENANCE_ENV, Provenance
 from rigging.timing import Timestamp
 from sqlalchemy import select, tuple_
 from sqlalchemy.engine.cursor import CursorResult
@@ -43,7 +44,7 @@ from sqlalchemy.engine.cursor import CursorResult
 from iris.cluster.constraints import get_device_variant
 from iris.cluster.controller.codec import proto_from_json
 from iris.cluster.controller.schema import job_config_table, jobs_table, task_attempts_table, tasks_table
-from iris.cluster.redaction import redact_observability_row_env_vars, redact_string
+from iris.cluster.redaction import redact_string
 from iris.cluster.stats.tables import IrisJob, IrisJobConfig, IrisJobTask, IrisTaskAttempt, stats_timestamp
 from iris.cluster.types import LOCAL_CLUSTER, JobName, WorkerId, get_gpu_count, get_tpu_count
 from iris.rpc import job_pb2
@@ -204,6 +205,20 @@ def _dt_from_ms(epoch_ms: int | None) -> datetime | None:
     return Timestamp.from_ms(epoch_ms).as_naive_utc() if epoch_ms is not None else None
 
 
+def _launch_provenance(environment_json: str) -> Provenance | None:
+    """The job's ``MARIN_PROVENANCE``, or ``None`` when it is unset or malformed.
+
+    A malformed value drops only the ``provenance_*`` columns, never the job's rows.
+    """
+    raw = proto_from_json(environment_json, job_pb2.EnvironmentConfig).env_vars.get(LAUNCH_PROVENANCE_ENV)
+    if raw is None:
+        return None
+    try:
+        return Provenance.from_json(raw)
+    except ValueError:
+        return None
+
+
 def _free_text(value: str | None) -> str | None:
     """Error and status text stay readable, with token-like strings redacted."""
     return redact_string(value) if value is not None else None
@@ -283,6 +298,7 @@ def _snapshot_configs(cur: RowCursor, tables: ObservabilityRowTables, marked: _M
         )
         for r in cur.execute(query):
             accelerator = _accelerator(r.res_device_json)
+            provenance = _launch_provenance(r.environment_json)
             marked.config_rows.append(
                 IrisJobConfig(
                     cluster=tables.cluster,
@@ -314,9 +330,10 @@ def _snapshot_configs(cur: RowCursor, tables: ObservabilityRowTables, marked: _M
                     fail_if_exists=bool(r.fail_if_exists),
                     container_profile=job_pb2.ContainerProfile.Name(r.container_profile),
                     egress_policy=job_pb2.EgressPolicy.Name(r.egress_policy),
-                    env_vars=redact_observability_row_env_vars(
-                        proto_from_json(r.environment_json, job_pb2.EnvironmentConfig).env_vars
-                    ),
+                    provenance_base_commit=provenance.base_commit if provenance else None,
+                    provenance_tree_hash=provenance.tree_hash if provenance else None,
+                    provenance_dirty=provenance.dirty if provenance else None,
+                    provenance_branch=_free_text(provenance.branch) if provenance else None,
                     ts=ts,
                 )
             )

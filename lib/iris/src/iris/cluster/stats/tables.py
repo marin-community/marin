@@ -289,8 +289,9 @@ class IrisJobConfig:
     Copies the controller ``job_config`` columns whose values the controller or
     a fixed vocabulary writes. Text the user wrote is not copied: the
     environment, command lines, setup scripts, egress hosts, ports and bundle id.
-    The one exception is ``env_vars``: the allowlisted environment variables,
-    redacted. ``docs/observability-rows.md`` lists each excluded column.
+    From the environment only the launch's git identity is kept, as the
+    ``provenance_*`` columns. ``docs/observability-rows.md`` lists each excluded
+    column.
     """
 
     key_column: ClassVar[str] = "root_job_id"
@@ -330,10 +331,15 @@ class IrisJobConfig:
     fail_if_exists: bool
     container_profile: str
     egress_policy: str
-    # The allowlisted environment variables (iris.cluster.redaction.
-    # OBSERVABILITY_ROW_ENV_VARS) as a JSON object, each value redacted; NULL when
-    # the job sets none. MARIN_PROVENANCE is stored as its parsed fields.
-    env_vars: str | None
+    # The launch's git identity from its MARIN_PROVENANCE environment variable:
+    # the commit, the content hash of the tree it ran, whether the tree had
+    # uncommitted changes, and the branch (token-like strings redacted). All NULL
+    # when the variable is unset or malformed; the branch is also NULL for a
+    # detached HEAD.
+    provenance_base_commit: str | None
+    provenance_tree_hash: str | None
+    provenance_dirty: bool | None
+    provenance_branch: str | None
     ts: datetime
 
 
