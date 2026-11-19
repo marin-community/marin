@@ -35,7 +35,7 @@ from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.field_dtype_overrides import hf_load_dtype
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
-from levanter.models.snowball import SnowballConfig
+from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.trainer_state import trainables_only
@@ -129,6 +129,7 @@ def preserve_hf_runtime_settings(reloaded: LmConfig, requested: LmConfig) -> LmC
         moe_implementation=requested.moe_implementation,
         moe_capacity_factor=requested.moe_capacity_factor,
         fp32_activations=requested.fp32_activations,
+        report_capacity_overflow=requested.report_capacity_overflow,
         reference_checkpoint=requested.reference_checkpoint,
         tokenizer=requested.tokenizer,
     )
@@ -236,6 +237,8 @@ def main(config: TrainLmConfig):
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
     def loss_function(model: LmHeadModel, example: LmExample, *, key=None):
+        if isinstance(model, SnowballLMHeadModel) and model.config.report_capacity_overflow:
+            return model._loss_with_capacity_overflow(example, logsumexp_weight=config.z_loss_weight)
         return model.compute_next_token_loss(example, key=key, logsumexp_weight=config.z_loss_weight)
 
     # Using the trainer as a context manager does 3 things:

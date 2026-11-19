@@ -3,6 +3,8 @@
 
 import dataclasses
 import json
+import os
+import subprocess
 from pathlib import Path
 from threading import Lock
 
@@ -20,6 +22,7 @@ from safetensors.numpy import load_file
 
 import experiments.grug.moe_hero_ep.ops.export_cpu as cpu_export
 import experiments.grug.moe_hero_ep.ops.export_vllm as hero_export
+import experiments.grug.moe_hero_ep.sft_model as mochi_sft
 from experiments.grug.moe_hero_ep.model import GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY, GrugModelConfig, Transformer
 from experiments.grug.moe_hero_ep.ops.export_vllm import ExportConfig, export
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
@@ -175,6 +178,67 @@ def test_export_recovery_verifies_shards_and_preserves_completed_output(tmp_path
     with pytest.raises(FileExistsError):
         export(request)
     assert {path.name: path.read_bytes() for path in root.iterdir()} == before
+
+
+def test_mochi_sft_exports_the_latest_permanent_checkpoint_for_skyrl(tmp_path, monkeypatch):
+    root = tmp_path / "override"
+    placement = "expert-placement-test"
+    checkpoints = root / placement / "checkpoints"
+    native, _ = native_fixture(str(checkpoints / "step-17"), master=True)
+    metadata = json.loads((checkpoints / "step-17" / "metadata.json").read_text())
+    temporary = checkpoints / "step-18"
+    temporary.mkdir()
+    (temporary / "metadata.json").write_text(json.dumps({**metadata, "step": 18, "is_temporary": True}))
+    monkeypatch.setattr(mochi_sft, "HERO_MODEL_CONFIG", native.model)
+    monkeypatch.setattr(mochi_sft, "configure_coreweave_s3", lambda: None)
+    output = tmp_path / "output"
+    mochi_sft._export_final_sft(
+        output=str(output),
+        trained=str(tmp_path / "sft"),
+        checkpoint_root=str(root),
+        placement_label=placement,
+        capacity_factor=native.model.capacity_factor,
+        source_revision=native.source_revision,
+    )
+
+    hf = output / "hf"
+    assert (hf / "export-manifest.json").is_file()
+    skyrl = Path(__file__).resolve().parents[4] / "vendor" / "skyrl"
+    subprocess.run(
+        [
+            "uv",
+            "run",
+            "--frozen",
+            "--extra",
+            "cpu",
+            "--group",
+            "dev",
+            "python",
+            "-c",
+            """
+import json
+import sys
+from pathlib import Path
+from cloud.iris.hf_model_cache import stage_artifact_model
+from skyrl_train.models.grug_moe import GRUG_SPLIT_EXPERT_SCHEMA_VERSION, GrugMoeConfig, select_routed_expert_schema
+
+root = Path(sys.argv[2])
+stage_artifact_model(sys.argv[1], "mochi-sft-test@dev", str(root))
+config = GrugMoeConfig.from_pretrained(root)
+index = json.loads((root / "model.safetensors.index.json").read_text())
+assert config.grugmoe_artifact_schema_version == 3
+assert str(config.dtype) == "torch.bfloat16"
+layout = select_routed_expert_schema(config.grugmoe_artifact_schema_version, set(index["weight_map"]))
+assert layout == GRUG_SPLIT_EXPERT_SCHEMA_VERSION
+""",
+            str(hf),
+            str(tmp_path / "staged"),
+        ],
+        cwd=skyrl,
+        env=os.environ | {"PYTHONPATH": "skyrl-train:skyrl-gym"},
+        check=True,
+        timeout=300,
+    )
 
 
 def test_cpu_export_resumes_completed_shards_after_lowering_execution_limits(tmp_path, monkeypatch):

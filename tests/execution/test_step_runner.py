@@ -25,6 +25,7 @@ from marin.execution.step_spec import StepSpec
 from marin.execution.step_status import StatusFile, worker_id
 from pydantic import BaseModel
 from rigging.filesystem.step_status import STATUS_SUCCESS
+from rigging.timing import Duration
 
 # ---------------------------------------------------------------------------
 # Artifact types
@@ -802,8 +803,9 @@ def test_step_resources_dispatch_uses_device_extra(tmp_path: Path, fray_client):
 
 def test_remote_resources_dispatch_uses_device_extra(tmp_path: Path, fray_client):
     resources = ResourceConfig.with_gpu("H100", count=8)
+    timeout = Duration.from_seconds(72_000)
 
-    @remote(resources=resources)
+    @remote(resources=resources, timeout=timeout)
     def my_step(output_path: str) -> Artifact:
         return Artifact(path=output_path)
 
@@ -813,7 +815,9 @@ def test_remote_resources_dispatch_uses_device_extra(tmp_path: Path, fray_client
         fn=my_step,
     )
 
-    _assert_single_submit_extras(_run_step_with_submit_spy(step, fray_client), ["gpu"])
+    submissions = _run_step_with_submit_spy(step, fray_client)
+    _assert_single_submit_extras(submissions, ["gpu"])
+    assert submissions[0].timeout == timeout
 
 
 def test_remote_dependency_groups_can_override_device_extra(tmp_path: Path, fray_client):
@@ -834,12 +838,15 @@ def test_remote_dependency_groups_can_override_device_extra(tmp_path: Path, fray
 
 def test_remote_direct_call_uses_device_extra(fray_client):
     resources = ResourceConfig.with_gpu("H100", count=8)
+    timeout = Duration.from_seconds(72_000)
 
-    @remote(resources=resources)
+    @remote(resources=resources, timeout=timeout)
     def my_step() -> None:
         return None
 
-    _assert_single_submit_extras(_call_remote_with_submit_spy(my_step, fray_client), ["gpu"])
+    submissions = _call_remote_with_submit_spy(my_step, fray_client)
+    _assert_single_submit_extras(submissions, ["gpu"])
+    assert submissions[0].timeout == timeout
 
 
 def test_remote_direct_call_dependency_groups_can_override_device_extra(fray_client):

@@ -8,23 +8,43 @@ the optimizer starts fresh. This recipe keeps conversations separate (``pack=Fal
 Snowball also supports Levanter's packed-document attention mask.
 """
 
+from fray.types import ResourceConfig
+from levanter.models.snowball import SnowballConfig
 from levanter.optim.config import AdamConfig
 from levanter.utils.mesh import MeshConfig
 from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 
-from experiments.sft.launcher import DatasetSpec, HFModel, SFTSpec, run_sft_cli
+from experiments.sft.launcher import DatasetSpec, HFModel, LevanterSft, SFTSpec, run_sft_cli
 
 HF_MODEL = "open-athena/snowball-67b-a2b-base-262k-qk175-skew8"
 HF_REVISION = "058ecaf27b9e4f37219df221a51e7d490d58ec3d"
 DATASET_REVISION = "45fb28fcc38d352133cb28a1c8a43a2f14fea97b"
+NODES = 4
+
+
+def resources(nodes: int) -> ResourceConfig:
+    """Allocate eight H100s per Snowball training node."""
+    return ResourceConfig.with_gpu("H100", count=8, cpu=32, ram="512g", disk="256g", replicas=nodes, preemptible=False)
+
+
+def snowball_mesh(nodes: int) -> MeshConfig:
+    """Shard sequence positions across nodes and experts within each node."""
+    return MeshConfig(
+        axes={"data": 1, "replica": 1, "model": 1, "expert": -1},
+        dcn_axes={"context": nodes},
+        compute_mapping={"batch": ["replica_dcn", "data", "expert"], "position": "context", "vocab": "model"},
+    )
+
+
+RESOURCES = resources(NODES)
 
 SPEC = SFTSpec(
     name="checkpoints/snowball-openthoughts-agent-sft",
-    version="2026.09.23",
+    version="2026.11.19.1",
     model=HFModel(
         model_ref=f"{HF_MODEL}@{HF_REVISION}",
         tokenizer_path=HF_MODEL,
-        model_type="snowball",
+        model=SnowballConfig(report_capacity_overflow=True),
         eos_token_ids=(128001, 128009),
     ),
     chat_template=MARIN_CHAT_TEMPLATE,
@@ -47,20 +67,15 @@ SPEC = SFTSpec(
         lr_schedule="cosine",
         warmup=0.0,
     ),
-    mesh=MeshConfig(
-        axes={"data": 1, "replica": 1, "model": 1, "context": 4, "expert": -1},
-        compute_mapping={
-            "batch": ["replica_dcn", "data", "expert"],
-            "position": "context",
-        },
-    ),
+    mesh=snowball_mesh(NODES),
     seq_len=32768,
     pack=False,
     batch_size=8,
     num_train_steps=10,
     wandb_project="snowball-sft",
 )
+SFT = LevanterSft(SPEC)
 
 
 if __name__ == "__main__":
-    run_sft_cli(SPEC)
+    run_sft_cli(SFT, RESOURCES)

@@ -64,15 +64,19 @@ that has them).
 """
 from __future__ import annotations
 
+import dataclasses
 import hashlib
+import json
 import math
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
+from functools import partial
 from typing import Protocol, runtime_checkable
 
 import click
+import draccus
 import jax.numpy as jnp
 import jmp
 from fray.types import ANY_REGION, GpuConfig, ResourceConfig
@@ -81,6 +85,8 @@ from levanter.data.text.datasets import DatasetComponent, LmDataConfig, UrlDatas
 from levanter.data.text.formats import ChatLmDatasetFormat
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.lm_model import LmConfig
+from levanter.models.qwen import Qwen3Config
+from levanter.models.snowball import SnowballConfig
 from levanter.optim.config import OptimizerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import DEFAULT_JAX_CONFIG, TrainerConfig
@@ -92,9 +98,11 @@ from marin.execution.step_runner import StepRunner
 from marin.experiment.checkpoints import HfToLevanterCheckpoint
 from marin.processing.tokenize.tokenize import TokenizeConfig, TokenizedCache
 from marin.processing.tokenize.tokenize import tokenize as run_tokenize
+from marin.rl.skyrl import ArtifactHfModel
 from marin.training.levanter import run_levanter_train_lm
 from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.timing import Duration
 
 from experiments.datasets.instruction import (
     InstructionDatasetConfig,
@@ -272,9 +280,16 @@ def _levanter_pod_config(
     )
 
 
-def _levanter_train_job(pod_config: TrainLmOnPodConfig) -> None:
+def _levanter_train_job(
+    pod_config: TrainLmOnPodConfig, *, xla_flags: tuple[str, ...] = (), task_timeout_seconds: int | None = None
+) -> None:
     """Dispatch a Levanter ``train_lm`` config as its own Fray training job."""
-    remote(run_levanter_train_lm, resources=pod_config.resources)(pod_config)
+    remote(
+        run_levanter_train_lm,
+        resources=pod_config.resources,
+        env_vars={"XLA_FLAGS": " ".join(xla_flags)} if xla_flags else None,
+        timeout=Duration.from_seconds(task_timeout_seconds) if task_timeout_seconds is not None else None,
+    )(pod_config)
 
 
 @dataclass(frozen=True)
@@ -282,15 +297,14 @@ class HFModel:
     """Init from an HF checkpoint used verbatim: ``initialize_from_hf`` + ``use_hf_model_config``.
 
     ``model_ref`` is an HF hub id or a staged directory; ``tokenizer_path`` defaults to it (the
-    common case). ``model_type`` is the Levanter model-registry key; ``use_hf_model_config``
-    re-derives the arch from the checkpoint, so it only has to match the architecture (Delphi and
-    the Qwen3 smoke are both ``qwen3``).
+    common case). The checkpoint supplies architecture fields and ``model`` supplies runtime settings.
     """
 
     model_ref: str  # HF id or staged prepared-checkpoint dir
     tokenizer_path: str | None = None  # defaults to model_ref
-    model_type: str = "qwen3"
+    model: LmConfig = field(default_factory=Qwen3Config)
     eos_token_ids: Sequence[int] = LLAMA3_CHAT_EOS_TOKEN_IDS
+    task_timeout_seconds: int | None = None
 
     def tokenizer_cache_key(self) -> str:
         return self.tokenizer_path or self.model_ref
@@ -319,8 +333,7 @@ class HFModel:
             data_config,
             resources,
             num_train_steps,
-            # use_hf_model_config re-derives the arch from the checkpoint, so only the class matters.
-            model_config=LmConfig.get_choice_class(self.model_type)(),
+            model_config=self.model,
             initialize_from_hf=self.model_ref,
             initialize_model_from_checkpoint_path=None,
             use_hf_model_config=True,
@@ -515,6 +528,15 @@ class LevanterCheckpointModel:
 
 
 @dataclass(frozen=True)
+class PreparedData:
+    """A published LM data manifest and its tokenizer identity."""
+
+    step: ArtifactStep
+    file: str
+    tokenizer: str
+
+
+@dataclass(frozen=True)
 class SFTSpec:
     """A full chat-SFT run: the data and the training hyperparameters.
 
@@ -541,6 +563,9 @@ class SFTSpec:
     num_train_epochs: int | None = None
     hf_save_dtype: str | None = None
     wandb_project: str = "marin-sft-launcher"
+    prepared_data: PreparedData | None = None
+    per_device_parallelism: int = -1
+    xla_flags: tuple[str, ...] = ()
     checkpointer: CheckpointerConfig = field(
         default_factory=lambda: CheckpointerConfig(
             save_interval=timedelta(minutes=30), keep=None, keep_last_temporary_checkpoints=1
@@ -560,6 +585,34 @@ class SFTSpec:
                 f"num_train_epochs is only defined for a single dataset (got {len(self.datasets)}); "
                 "use num_train_steps for a mixture."
             )
+        if self.prepared_data is not None:
+            if self.datasets:
+                raise ValueError("prepared_data and datasets are mutually exclusive")
+            if self.prepared_data.tokenizer != self.model.tokenizer_cache_key():
+                raise ValueError("prepared_data.tokenizer must match the SFT model's tokenizer")
+
+
+class SftRecipe(Protocol):
+    def trained(self, resources: ResourceConfig) -> ArtifactHfModel: ...
+
+
+def sft_model(recipe: SftRecipe, resources: ResourceConfig) -> ArtifactHfModel:
+    """Build the SFT step and return its exported model."""
+    return recipe.trained(resources)
+
+
+@dataclass(frozen=True)
+class LevanterSft:
+    spec: SFTSpec
+
+    def trained(self, resources: ResourceConfig) -> ArtifactHfModel:
+        if not isinstance(self.spec.model, (HFModel, PreparedModel, ConvertedCheckpointModel, LevanterCheckpointModel)):
+            raise ValueError(f"{type(self.spec.model).__name__} writes no Hugging Face export for SFT")
+        steps = self.spec.num_train_steps
+        return ArtifactHfModel(
+            step=sft_step(self.spec, resources),
+            relative_path=f"hf/step-{steps - 1}" if steps is not None else None,
+        )
 
 
 # Accelerator strings: "<count>x<gpu>" (e.g. "8xH100") for GPU, else a TPU slice variant ("v4-64").
@@ -684,7 +737,7 @@ def _trainer(
         steps_per_eval=500,
         jax_config=jax_config,
         mp=jmp.get_policy(_MARIN_PRECISION),
-        per_device_parallelism=-1,  # auto microbatch; raise on OOM (math-equivalent)
+        per_device_parallelism=spec.per_device_parallelism,
         use_explicit_mesh_axes=use_explicit_mesh_axes,
         mesh=spec.mesh if spec.mesh is not None else MeshConfig(),
         tracker=WandbConfig(
@@ -780,57 +833,87 @@ def sft_step(spec: SFTSpec, resources: ResourceConfig) -> ArtifactStep[LevanterC
       the step count resolves from its token total, and training reads the pre-built cache.
     """
     model = spec.model
+    run = model.run
+    if isinstance(resources.device, GpuConfig) and spec.mesh is not None:
+        try:
+            spec.mesh.axis_shapes(resources.device.count * resources.replicas, resources.replicas)
+        except ValueError as error:
+            raise ValueError(f"mesh does not fit SFT resources: {error}") from error
+    timeout = model.task_timeout_seconds if isinstance(model, HFModel) else None
+    if run is _levanter_train_job and (spec.xla_flags or timeout is not None):
+        run = partial(_levanter_train_job, xla_flags=spec.xla_flags, task_timeout_seconds=timeout)
     transform_deps = _dataset_deps(spec)
 
-    if spec.num_train_epochs is not None:
+    def train_config(ctx: StepContext, data: LmDataConfig, steps: int) -> object:
+        config = model.build_train_config(ctx, spec, data, ctx.runtime_arg(_TRAIN_RESOURCES), steps)
+        if ctx.is_fingerprint and isinstance(config, TrainLmOnPodConfig):
+            lm_config = config.train_config
+            if isinstance(lm_config, TrainLmConfig) and isinstance(lm_config.model, SnowballConfig):
+                if not lm_config.model.report_capacity_overflow:
+                    payload = dataclasses.asdict(config)
+                    del payload["train_config"]["model"]["report_capacity_overflow"]
+                    return payload
+        return config
+
+    if (prepared := spec.prepared_data) is not None:
+        deps = (prepared.step, *model.init_deps())
+
+        def build_config(ctx: StepContext) -> object:
+            path = prefix_join(ctx.artifact_path(prepared.step), prepared.file)
+            if ctx.is_fingerprint:
+                data_config = LmDataConfig(tokenizer=prepared.tokenizer, cache_catalog=path, auto_build_caches=False)
+            else:
+                with StoragePath(path).open("r") as stream:
+                    data_config = draccus.decode(LmDataConfig, json.load(stream))
+                if data_config.tokenizer != prepared.tokenizer:
+                    raise ValueError("prepared_data file tokenizer does not match prepared_data.tokenizer")
+            assert spec.num_train_steps is not None
+            return train_config(ctx, data_config, spec.num_train_steps)
+
+    elif spec.num_train_epochs is not None:
         chat_caches = tuple(
             chat_tokenize(spec, dataset, dep) for dataset, dep in zip(spec.datasets, transform_deps, strict=True)
         )
         deps: tuple[ArtifactStep, ...] = (*chat_caches, *model.init_deps())
 
         def build_config(ctx: StepContext) -> object:
-            run_resources = ctx.runtime_arg(_TRAIN_RESOURCES)
             tokenizer = model.resolve_tokenizer(ctx)
             data_config = _prebuilt_chat_data_config(spec, [ctx.artifact_path(c) for c in chat_caches], tokenizer)
             num_train_steps = _resolve_epoch_steps(ctx, spec, chat_caches[0])
-            return model.build_train_config(ctx, spec, data_config, run_resources, num_train_steps)
+            return train_config(ctx, data_config, num_train_steps)
 
     else:
         assert spec.num_train_steps is not None
         deps = (*transform_deps, *model.init_deps())
 
         def build_config(ctx: StepContext) -> object:
-            run_resources = ctx.runtime_arg(_TRAIN_RESOURCES)
             tokenizer = model.resolve_tokenizer(ctx)
             data_config = build_chat_data_config(spec, [ctx.artifact_path(dep) for dep in transform_deps], tokenizer)
-            return model.build_train_config(ctx, spec, data_config, run_resources, spec.num_train_steps)
+            return train_config(ctx, data_config, spec.num_train_steps)
 
     return ArtifactStep(
         name=spec.name,
         version=spec.version,
         artifact_type=LevanterCheckpoint,
-        run=model.run,
+        run=run,
         build_config=build_config,
         deps=deps,
         runtime_args={_TRAIN_RESOURCES: resources},
     )
 
 
-def run_sft_cli(spec: SFTSpec) -> None:
-    """Click entry point: launch ``spec`` on the accelerator named by ``--accelerator``.
-
-    A config module ends with ``if __name__ == "__main__": run_sft_cli(SPEC)``; the user then runs
-    ``python -m experiments.sft.configs.<name> --accelerator <accel>``.
-    """
+def run_sft_cli(recipe: SftRecipe, resources: ResourceConfig | None = None) -> None:
+    """Run an SFT recipe using its resources or the accelerator selected on the command line."""
 
     @click.command()
     @click.option(
         "--accelerator",
-        required=True,
+        required=resources is None,
         help="Accelerator: '<count>x<gpu>' (e.g. '8xH100') or a TPU slice variant (e.g. 'v4-64').",
     )
-    def _cli(accelerator: str) -> None:
-        resources = resources_from_accelerator(accelerator)
-        StepRunner().run([lower(sft_step(spec, resources))])
+    def _cli(accelerator: str | None) -> None:
+        selected = resources_from_accelerator(accelerator) if accelerator is not None else resources
+        assert selected is not None
+        StepRunner().run([lower(sft_model(recipe, selected).step)])
 
     _cli()

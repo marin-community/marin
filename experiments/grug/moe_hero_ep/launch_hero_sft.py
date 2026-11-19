@@ -310,6 +310,17 @@ def checkpoint_step(checkpoint: str) -> int:
     return step
 
 
+def sft_resources(dp_racks: int) -> ResourceConfig:
+    return ResourceConfig.with_gpu(
+        "GB200",
+        count=HERO_GPUS_PER_NODE,
+        cpu=HERO_NODE_CPU,
+        ram=HERO_NODE_RAM,
+        disk=HERO_NODE_DISK,
+        replicas=HERO_EP_NODES * dp_racks,
+    )
+
+
 def build_sft_run(
     *,
     run_id: str,
@@ -401,14 +412,7 @@ def build_sft_run(
         special_tokens=special_token_init(start_step),
         expert_placement=expert_placement,
     )
-    train_resources = ResourceConfig.with_gpu(
-        "GB200",
-        count=HERO_GPUS_PER_NODE,
-        cpu=HERO_NODE_CPU,
-        ram=HERO_NODE_RAM,
-        disk=HERO_NODE_DISK,
-        replicas=HERO_EP_NODES * dp_racks,
-    )
+    train_resources = sft_resources(dp_racks)
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
     validation = validation_datasets() if eval_every > 0 else []
