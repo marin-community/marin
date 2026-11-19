@@ -19,7 +19,8 @@ from skyrl_train.evaluation_profiles import (
     validate_generation_profiles,
 )
 from skyrl_train.config.rollout_validation import EntrypointOperation
-from skyrl_train.entrypoints.main_base import BasePPOExp, validate_generation_driver_config
+from skyrl_train.config.driver_validation import validate_generation_driver_config
+from skyrl_train.entrypoints.main_base import BasePPOExp
 from skyrl_train.entrypoints.evaluation_progress import forward_evaluation_progress, wait_for_evaluation
 from skyrl_train.inference_engines.base import NamedWeightsUpdateRequest, lora_disk_load_request
 from skyrl_train.inference_engines.vllm.stats import IntervalReadMode

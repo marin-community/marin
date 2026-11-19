@@ -26,12 +26,11 @@ import asyncio
 import multiprocessing as mp
 
 from skyrl_train.config.placement_geometry import num_rollout_gpus
-from skyrl_train.config.utils import normalize_logging_backends
+from skyrl_train.config.driver_validation import validate_driver_config
 from skyrl_train.evaluation_profiles import EvaluationProfile, resolve_evaluation_profiles
 from skyrl_train.inference_engines.chat_template import get_custom_chat_template
 from skyrl_train.config.rollout_validation import (
     EntrypointOperation,
-    validate_rollout_launch,
 )
 from marinskyrl.speculative_decoding import (
     STANDARD_TRAINING_ENTRYPOINT,
@@ -745,31 +744,6 @@ def skyrl_entrypoint(cfg: DictConfig):
     # make sure that the training loop is not run on the head node.
     exp = BasePPOExp(cfg)
     exp.run()
-
-
-def validate_driver_config(
-    cfg: DictConfig, operation: EntrypointOperation, *, check_runtime_resources: bool = True
-) -> None:
-    """Apply the shared Ray driver's pre-start configuration checks."""
-    from skyrl_train import objective  # noqa: F401, PLC0415 - register losses for training validation
-    from skyrl_train.rollouts.harbor_tasks import HarborTaskSettings  # noqa: PLC0415 - optional training dependencies
-    from skyrl_train.utils import validate_cfg  # noqa: PLC0415
-    from skyrl_train.utils.progress import configure_progress  # noqa: PLC0415 - keep launcher imports Torch-free
-
-    normalize_logging_backends(cfg)
-    validate_rollout_launch(cfg, operation)
-    if cfg.get("terminal_bench_config") is not None:
-        HarborTaskSettings.from_config(cfg.terminal_bench_config)
-    validate_cfg(cfg, check_runtime_resources=check_runtime_resources)
-    configure_progress(cfg.trainer.progress)
-
-
-def validate_generation_driver_config(cfg: DictConfig, *, check_runtime_resources: bool = True) -> None:
-    """Apply the evaluation-only driver's pre-start configuration checks."""
-    from skyrl_train.utils.utils import validate_generator_cfg  # noqa: PLC0415 - keep launcher imports Torch-free
-
-    normalize_logging_backends(cfg)
-    validate_generator_cfg(cfg, check_runtime_resources=check_runtime_resources)
 
 
 def run_ray_driver(

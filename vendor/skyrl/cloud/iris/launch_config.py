@@ -322,11 +322,11 @@ def validate_launch_driver_config(config: DictConfig) -> None:
     if config.run.mode == RunMode.CHECKPOINT_EXPORT:
         return
 
-    from skyrl_train.entrypoints.main_base import (  # noqa: PLC0415 - driver checks use the SkyRL CPU environment
+    from skyrl_train.config.driver_validation import (  # noqa: PLC0415
         validate_driver_config,
         validate_generation_driver_config,
     )
-    from skyrl_train.utils.utils import configured_ray_worker_environment  # noqa: PLC0415
+    from skyrl_train.config.worker_environment import configured_ray_worker_environment  # noqa: PLC0415
 
     entrypoint = config.runtime.entrypoint
     if entrypoint == RL_ENTRYPOINTS[RLEntrypoint.GENERATE]:
