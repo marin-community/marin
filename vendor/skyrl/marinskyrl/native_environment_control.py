@@ -6,6 +6,7 @@ import importlib.metadata
 import json
 import multiprocessing
 import os
+import shlex
 import socket
 import subprocess
 import sys
@@ -13,7 +14,6 @@ from pathlib import Path
 from typing import Any
 
 from rigging.network import interface_for_ipv4
-from skyrl_train.worker_setup import configure_worker_process as configure_skyrl_worker
 
 CONTROL_KEY = "MOCHI_NATIVE_ENVIRONMENT_CONTROL"
 
@@ -22,17 +22,16 @@ def actor_runtime_env(profile: dict[str, Any], inherited: dict[str, Any] | None)
     """Project the native library search before Ray starts an inference worker."""
     result = dict(inherited or {})
     environment = dict(result.get("env_vars", {}))
-    for key in list(environment):
-        if controlled_name(key, profile):
-            environment[key] = ""
+    # Positive values are safe before the worker bootstrap. Absence needs an
+    # exec prelude: empty strings can be invalid typed settings in dependencies.
     for key, value in profile["values"].items():
-        if key not in profile["dynamic_names"]:
-            environment[key] = value or ""
-    # LD_LIBRARY_PATH must be empty at exec, before loading torch or vLLM.
+        environment.pop(key, None)
+        if value is not None and key not in profile["dynamic_names"]:
+            environment[key] = value
     environment["LD_LIBRARY_PATH"] = ""
     environment[CONTROL_KEY] = json.dumps(profile, sort_keys=True)
     result["env_vars"] = environment
-    result["worker_process_setup_hook"] = "marinskyrl.native_environment_control.configure_worker_process"
+    result["py_executable"] = shlex.join([sys.executable, "-m", "marinskyrl.native_environment_worker"])
     return result
 
 
@@ -59,7 +58,12 @@ def record_environment(phase: str, *, rank: int | None = None) -> None:
     if CONTROL_KEY not in os.environ:
         return
     profile = json.loads(os.environ[CONTROL_KEY])
-    keys = set(profile["values"]) | {"CUDA_VISIBLE_DEVICES"}
+    keys = set(profile["values"]) | set(profile["preserve"])
+    modules = {}
+    for name in ("huggingface_hub", "transformers", "vllm"):
+        module = sys.modules.get(name)
+        if module is not None:
+            modules[name] = module.__file__
     values = {key: os.environ.get(key) for key in sorted(keys)}
     receipt = {
         "phase": phase,
@@ -68,6 +72,9 @@ def record_environment(phase: str, *, rank: int | None = None) -> None:
         "host": socket.gethostname(),
         "process_name": multiprocessing.current_process().name,
         "environment": values,
+        "python_executable": sys.executable,
+        "python_prefix": sys.prefix,
+        "loaded_module_paths": modules,
         "profile_sha256": hashlib.sha256(os.environ[CONTROL_KEY].encode()).hexdigest(),
     }
     directory = Path(os.environ["IRIS_OUTPUT_DIR"]) / "native-environment-control"
@@ -86,24 +93,24 @@ def _link(target: Path, destination: Path) -> None:
 
 
 def prepare_paths(profile: dict[str, Any], runtime: Path) -> None:
-    """Recreate the native dependency prefix without changing the interpreter."""
+    """Recreate native CUDA paths without aliasing Python packages or executables."""
     alias = Path(profile["venv_alias"])
-    (alias / "lib/python3.12").mkdir(parents=True, exist_ok=True)
-    _link(runtime / "lib/python3.12/site-packages", alias / "lib/python3.12/site-packages")
-    _link(runtime / "bin", alias / "bin")
     cuda = Path(profile["values"]["CUDA_HOME"])
+    cuda.mkdir(parents=True, exist_ok=True)
+    source_cuda = runtime / "lib/python3.12/site-packages/nvidia/cu13"
+    for item in source_cuda.iterdir():
+        if item.name != "lib64":
+            _link(item, cuda / item.name)
+    _link(cuda / "lib", cuda / "lib64")
     _link(cuda / "lib/libcudart.so.13", alias / "lib/libcudart.so")
-    # Keep the frozen installation immutable; alias lib64 through the native root.
-    if not (cuda / "lib64").exists():
-        _link(cuda / "lib", cuda / "lib64")
     config = Path(profile["values"]["AWS_CONFIG_FILE"])
     config.write_text("[default]\ns3 =\n    addressing_style = virtual\n")
     template = Path(profile["native_cli"][profile["native_cli"].index("--chat-template") + 1])
     template.write_text(profile["chat_template"])
 
 
-def configure_worker_process() -> None:
-    """Prepare native paths before the inference actor imports CUDA libraries."""
+def prepare_worker_process() -> None:
+    """Prepare native GPU settings before exec starts the unchanged Python worker."""
     if "torch" in sys.modules or "vllm" in sys.modules:
         raise RuntimeError("Native environment control must precede torch/vLLM import")
     if os.environ.get("LD_LIBRARY_PATH"):
@@ -131,8 +138,7 @@ def configure_worker_process() -> None:
             raise RuntimeError("Native environment preparation belongs to a different control profile")
     host = os.environ["IRIS_ADVERTISE_HOST"]
     apply_environment(profile, host)
-    configure_skyrl_worker()
-    record_environment("worker-bootstrap")
+    record_environment("worker-pre-exec")
 
 
 def finalize_actor_environment(rank: int | None) -> None:
