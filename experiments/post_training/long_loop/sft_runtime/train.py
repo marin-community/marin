@@ -202,26 +202,23 @@ def checkpoint_samples(state) -> tuple:
     return tuple(samples)
 
 
-def _is_permanent_step(step_policies, step: int) -> bool:
-    policy = next((p for p in step_policies if p.until is None or p.until >= step), None)
-    return policy is not None and step % policy.every == 0
-
-
 def restore_first_checkpoint(state, checkpointer, mesh):
     """Commit and reload the first full state before continuing optimization.
 
     Requests a temporary checkpoint so an unlisted restore-gate step rolls away
     under the checkpointer's retention policy while preserving any explicitly
-    scheduled permanent milestone at that step.
+    scheduled or queued permanent checkpoint at that step.
     """
     step = int(state.step)
+    if step <= 0:
+        raise ValueError(f"First-step restore gate requires step >= 1, got {step}")
     expected = checkpoint_samples(state)
     checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
     checkpointer.on_step(tree=state, step=step)
     checkpointer.wait_until_finished()
-    use_temporary_root = checkpointer.temporary_base_path is not None and not _is_permanent_step(
-        checkpointer.step_policies, step
-    )
+    if checkpointer._last_save_step != step:
+        raise ValueError(f"First-step restore gate did not commit a checkpoint at step {step}")
+    use_temporary_root = checkpointer.temporary_base_path is not None and not checkpointer._last_save_permanent
     save_root = checkpointer.temporary_base_path if use_temporary_root else checkpointer.base_path
     template = restore_template_from(state)
     restored = load_grug_checkpoint(

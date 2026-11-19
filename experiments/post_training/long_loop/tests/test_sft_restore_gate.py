@@ -127,6 +127,28 @@ def test_first_step_restore_gate_preserves_named_permanent_step_one(tmp_path):
         assert not (temp / "step-1").exists()
 
 
+def test_first_step_restore_gate_reloads_permanent_root_when_permanent_request_queued(tmp_path):
+    mesh = Mesh(np.asarray(jax.devices("cpu")[:1]), ("data",))
+    perm = tmp_path / "checkpoints"
+    temp = tmp_path / "temporary-checkpoints"
+    with jax.set_mesh(mesh):
+        state1 = State(jnp.array(1), jnp.arange(16, dtype=jnp.float32), jnp.full(16, 0.25))
+        expected = [np.asarray(x).copy() for x in state1]
+        checkpointer = Checkpointer(
+            perm,
+            save_interval=None,
+            step_policies=[],
+            temporary_base_path=temp,
+            keep_last_temporary_checkpoints=1,
+        )
+        checkpointer.request_checkpoint(CheckpointRetention.PERMANENT)
+        restored = restore_first_checkpoint(state1, checkpointer, mesh)
+        for actual, wanted in zip(restored, expected, strict=True):
+            np.testing.assert_array_equal(actual, wanted)
+        assert json.loads((perm / "step-1" / "metadata.json").read_text())["is_temporary"] is False
+        assert not (temp / "step-1").exists()
+
+
 def test_named_permanent_steps_and_final_checkpoint_write_once(tmp_path):
     recipe = yaml.safe_load(SMOKE_CONFIG.read_text())
     default_cfg = fresh_sft_config(
