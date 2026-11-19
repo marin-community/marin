@@ -4,6 +4,7 @@
 from dataclasses import dataclass
 from typing import override
 
+from pydantic import TypeAdapter
 from taskcompendium.models import TaskSpec
 
 from taskforge.effects.context import Context
@@ -12,6 +13,7 @@ from taskforge.harness.tools.base import FILE_ERRORS, ValidatedTool
 from taskforge.harness.tools.grade import CandidateArgs, read_candidate
 from taskforge.lowering import check_candidates
 from taskforge.model.controls import Candidate, RewardBand
+from taskforge.model.llm import ToolSchema
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +43,7 @@ class ReportArgs:
 @dataclass(frozen=True, slots=True)
 class ReportTool(ValidatedTool[ReportArgs]):
     task: TaskSpec
+    max_findings: int
     name = "report"
     description = (
         "Report demonstrated grading defects. Each finding needs a claim, candidate reply/files, and expected "
@@ -52,8 +55,19 @@ class ReportTool(ValidatedTool[ReportArgs]):
     def __post_init__(self) -> None:
         object.__setattr__(self, "task", self.task.model_copy(deep=True))
 
+    @property
+    @override
+    def schema(self) -> ToolSchema:
+        description = f"{self.description} Report at most {self.max_findings} findings, the strongest."
+        return ToolSchema(self.name, description, TypeAdapter(self.args_type).json_schema())
+
     @override
     async def run(self, ctx: Context, args: ReportArgs) -> ToolResult | ReturnRequest[AdversaryReport]:
+        if len(args.findings) > self.max_findings:
+            return ToolResult(
+                f"Invalid report: {len(args.findings)} findings exceed the limit of {self.max_findings}. "
+                f"Report again with the {self.max_findings} strongest."
+            )
         try:
             findings = tuple(
                 [

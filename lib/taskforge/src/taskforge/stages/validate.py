@@ -27,7 +27,15 @@ from taskforge.lowering import (
 from taskforge.model.controls import Control
 from taskforge.model.llm import Message, Role
 from taskforge.model.proposal import render
-from taskforge.model.review import AdversaryFinding, AdversaryResult, Cause, ControlResult, TrialResult, ValidationResult
+from taskforge.model.review import (
+    AdversaryFinding,
+    AdversaryResult,
+    AdversaryStatus,
+    Cause,
+    ControlResult,
+    TrialResult,
+    ValidationResult,
+)
 from taskforge.model.workpiece import Conversation, Workpiece
 from taskforge.resources.bundle import Resources
 from taskforge.resources.env import WriteFiles
@@ -68,10 +76,12 @@ async def adversary_result(
         except* OutputBudgetExhausted:
             await ctx.emit(Note(f"Adversary {name}: output budget exhausted on attempt {retry + 1} of 2"))
         except* Hold as error:
-            result = AdversaryResult(name, False, (), failure_reasons(error))
+            result = AdversaryResult(name, AdversaryStatus.FAILED, (), failure_reasons(error))
         if result is not None:
             return result
-    return AdversaryResult(name, True, (), ("output budget exhausted",))
+    return AdversaryResult(
+        name, AdversaryStatus.EXHAUSTED, (), ("output budget exhausted twice without a report; counted as passed",)
+    )
 
 
 def failure_reasons(error: BaseException) -> tuple[str, ...]:
@@ -117,7 +127,10 @@ async def run_adversary(
                     )
                 )
             )
-            tools = {**config.tools[name], "report": ReportTool(spec.task)}
+            tools = {
+                **config.tools[name],
+                "report": ReportTool(spec.task, config.policy.setting("adversary.max_findings", int)),
+            }
             session = Conversation(
                 (
                     Message(
@@ -138,7 +151,8 @@ async def run_adversary(
             )
             outcome = await config.adversaries[name].run(ctx, session, resources.inference_for("adversary"), tools)
             if isinstance(outcome, Stopped) and outcome.reason is StopReason.CONTEXT_LIMIT:
-                return AdversaryResult(name, True, (), ("adversary exhausted its window without a report",))
+                reason = "context window exhausted without a report; counted as passed"
+                return AdversaryResult(name, AdversaryStatus.EXHAUSTED, (), (reason,))
             if (
                 not isinstance(outcome, Returned)
                 or outcome.tool != "report"
@@ -149,11 +163,11 @@ async def run_adversary(
                     if isinstance(outcome, Stopped)
                     else f"Expected report, got {type(outcome).__name__}"
                 )
-                return AdversaryResult(name, False, (), (reason,))
+                return AdversaryResult(name, AdversaryStatus.FAILED, (), (reason,))
             report = outcome.payload
             async with asyncio.TaskGroup() as group:
                 findings = [group.create_task(claim_result(ctx, spec, claim)) for claim in report.findings]
-            return AdversaryResult(name, True, tuple(finding.result() for finding in findings))
+            return AdversaryResult(name, AdversaryStatus.REPORTED, tuple(finding.result() for finding in findings))
     finally:
         await close_resource(env.close, ctx.emit)
 

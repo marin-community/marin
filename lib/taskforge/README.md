@@ -17,7 +17,7 @@ file covers how to run it.
 | `src/taskforge/effects/` | effect types, the event log, replay, observers, `Hold`/`Restart`/`Transient` |
 | `src/taskforge/resources/` | executors: inference (per-role waiting backend), environments, grading, rollouts, the round-owned verifier machine |
 | `src/taskforge/harness/` | the agentic loop and its tools (`shell`, `read_file`, `write_file`, `grade`, `submit`, `validate`, `report`, `finish`, web) |
-| `src/taskforge/stages/` | `triage`, `author`, `validate`, `review`; the review rules; prompt summaries. `triage` and its proposal check are present, but no transition reaches them yet |
+| `src/taskforge/stages/` | `author`, `validate`, `review`; the review rules; prompt summaries |
 | `src/taskforge/model/` | frozen data: proposal, workpiece, task spec, verdicts, decisions |
 | `src/taskforge/llm/` | the GLM transport kept from the previous Taskforge: client, policy, structured output, wire helpers |
 | `src/taskforge/policy/` | the policy record: `defaults/policy.json` and `defaults/prompts/<role>/*.md` |
@@ -163,10 +163,11 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
 - **Review band**: `band.low`/`band.high` on the solver pass rate; `solver.k` trials. A task
   that is *too easy* gets one hardening round and is then accepted with `accepted_with: too_easy`,
   reverting to the earlier submission if the hardening broke something.
-- **Budgets**: `budget.max_modify_rounds`, `budget.max_validation_retries`, `budget.max_triage_repairs`.
+- **Budgets**: `budget.max_modify_rounds`, `budget.max_validation_retries`.
 - **Adversary**: `adversary.roster` (names of adversary harnesses; empty by default),
-  `adversary.image`. A finding is a demonstrated claim with a candidate and an expected grade;
-  the review counts only claims the grader confirms, re-graded on a fresh machine.
+  `adversary.image`, `adversary.max_findings` (the most findings one report may carry). A finding
+  is a demonstrated claim with a candidate and an expected grade; the review counts only claims
+  the grader confirms, re-graded on a fresh machine.
 - **Sandboxes**: `author.image`, `author.workdir`, `sandbox.memory_mb`, `grader.timeout`,
   `solver.*` timeouts (the turn and attempt timeouts are raised to cover `provider.unavailable_wait`).
 - **Provider**: `provider.unavailable_wait` (a busy provider is waited out, with

@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
-import time
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
@@ -55,12 +54,17 @@ print(int(clean and Path('/app/answer.txt').read_text() == '12'))
 
 
 class CountedMachine(Machine):
-    def __init__(self, machine: Machine, die: bool, failure: RuntimeError | None = None) -> None:
+    def __init__(
+        self, machine: Machine, die: bool, failure: RuntimeError | None = None, grader_delay: float = 0
+    ) -> None:
         self.machine, self.die, self.closed = machine, die, False
-        self.failure = failure
+        self.failure, self.grader_delay = failure, grader_delay
 
     @override
     async def run(self, command: Command) -> Result:
+        if command.argv == ("python3", "/tests/grade.py"):
+            # A slow grader: the engine's verifier deadline runs on the event loop clock.
+            await asyncio.sleep(self.grader_delay)
         if self.die and command.argv == ("python3", "/tests/grade.py"):
             self.die = False
             raise self.failure or MachineTerminated("killed during grader") from RuntimeError(
@@ -96,11 +100,11 @@ class CountedMachine(Machine):
 class CountedFactory(MachineFactory):
     backend = Backend.SHELLSIM
 
-    def __init__(self, *, die: bool = False, failure: RuntimeError | None = None) -> None:
+    def __init__(self, *, die: bool = False, failure: RuntimeError | None = None, grader_delay: float = 0) -> None:
         self.factory = shellsim_factory()
         self.machines: list[CountedMachine] = []
         self.die = die
-        self.failure = failure
+        self.failure, self.grader_delay = failure, grader_delay
 
     @override
     def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
@@ -108,9 +112,9 @@ class CountedFactory(MachineFactory):
 
     @override
     async def create(self, spec: MachineSpec) -> Machine:
-        # A controlled startup cost makes the avoided factory call measurable without cluster traffic.
-        await asyncio.sleep(0.05)
-        machine = CountedMachine(await self.factory.create(spec), self.die and not self.machines, self.failure)
+        machine = CountedMachine(
+            await self.factory.create(spec), self.die and not self.machines, self.failure, self.grader_delay
+        )
         self.machines.append(machine)
         return machine
 
@@ -118,7 +122,7 @@ class CountedFactory(MachineFactory):
 def setup(factory: CountedFactory) -> tuple[RoundVerifier, GradingResource]:
     engine = rollout_engine({"shellsim": factory}, command_timeout=1)
     holder = RoundVerifier(engine, 5)
-    return holder, GradingResource(holder, "test", engine)
+    return holder, GradingResource(holder.grades, "test", engine)
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -163,22 +167,15 @@ async def twelve(request: ModelRequest) -> ModelTurn:
 async def test_grades_and_solver_share_clean_machine_and_rehydrate_resources() -> None:
     factory = CountedFactory()
     pool, resource = setup(factory)
-    durations = []
     try:
         for expected, candidate in [(1, event()), (1, event()), (0, event(SCRIPT.replace(b"== '12'", b"== '9'")))]:
-            started = time.perf_counter()
             result = await resource.grade(candidate)
-            durations.append(time.perf_counter() - started)
             assert result.reward == expected, result
-        solver = RolloutResource(resource.engine, twelve, "test")
+        solver = RolloutResource(pool.rollouts, twelve, "test")
         result = await solver.run(SolverRollout(event().spec, 0, 0))
         assert result.grade.reward == 1
         assert result.grade.diagnostics["verifier_lease"] == 4
         assert len(factory.machines) == 1 and not factory.machines[0].closed
-        print(
-            f"grade seconds: cold={durations[0]:.6f}, warm={durations[1]:.6f}, "
-            f"rehydrated={durations[2]:.6f}; startup=0.050"
-        )
     finally:
         await pool.close()
     assert factory.machines[0].closed
@@ -266,6 +263,21 @@ async def test_parallel_grades_are_serialized_on_one_machine() -> None:
         await pool.close()
 
 
+# ravwojdyla-agent on #11110: a lease taken inside the engine's deadline expired the third and fourth grade.
+async def test_queued_grades_wait_outside_the_verifier_deadline() -> None:
+    factory = CountedFactory(grader_delay=1.0)
+    pool, resource = setup(factory)
+    candidate = event()
+    limits = candidate.spec.limits.model_copy(update={"verifier_timeout": 2.5})
+    candidate = replace(candidate, spec=candidate.spec.model_copy(update={"limits": limits}))
+    try:
+        results = await asyncio.gather(*(resource.grade(candidate) for _ in range(4)))
+        assert [result.reward for result in results] == [1, 1, 1, 1]
+        assert sorted(result.diagnostics["verifier_lease"] for result in results) == [1, 2, 3, 4]
+    finally:
+        await pool.close()
+
+
 async def test_fresh_adversary_result_overrides_shared_confirmation() -> None:
     shared = FakeEngine((GradedRollout(Rollout("shared", (), "stop"), GradeResult(Outcome.GRADED, 1)),))
     fresh = FakeEngine((GradedRollout(Rollout("fresh", (), "stop"), GradeResult(Outcome.GRADED, 0)),))
@@ -320,7 +332,7 @@ print(int(clean and valid and rootfile.exists() == expected and (not expected or
 async def test_backend_without_reset_is_recreated() -> None:
     engine = rollout_engine({"shellsim": shellsim_factory()}, command_timeout=1)
     holder = RoundVerifier(engine, 5)
-    resource = GradingResource(holder, "test")
+    resource = GradingResource(holder.grades, "test")
     try:
         assert (await resource.grade(event())).reward == 1
         original = holder.machine
@@ -368,7 +380,7 @@ async def test_solver_machines_run_concurrently_before_shared_grading() -> None:
 
     try:
         async with asyncio.TaskGroup() as group:
-            trials = [group.create_task(pool.run_task(spec, model)) for _ in range(3)]
+            trials = [group.create_task(pool.rollouts.run_task(spec, model)) for _ in range(3)]
         assert all(trial.result().grade.reward == 1 for trial in trials)
         assert sorted(trial.result().grade.diagnostics["verifier_lease"] for trial in trials) == [1, 2, 3]
         assert len(factory.machines) == 4

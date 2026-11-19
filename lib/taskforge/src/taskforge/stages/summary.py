@@ -66,7 +66,7 @@ def validation_summary(result: ValidationResult, path: PurePosixPath, limit: int
             "adversary": [
                 {
                     "name": a.name,
-                    "completed": a.completed,
+                    "status": a.status,
                     "reasons": [excerpt(reason) for reason in a.reasons],
                     "unconfirmed": sum(not f.met for f in a.findings),
                     "confirmed": [

@@ -5,7 +5,7 @@
   "solver.k": 3,
   "adversary.roster": [],
   "adversary.image": "${GRADER_BASE_IMAGE}",
-  "budget.max_triage_repairs": 1,
+  "adversary.max_findings": 3,
   "budget.max_validation_retries": 2,
   "budget.max_modify_rounds": 2,
   "tools.output_chars": 20000,
