@@ -149,6 +149,21 @@ def test_levanter_tree_cache_pack_and_roundtrip(tokenizer, tmp_path: Path):
     assert report["verified_segments"] == 12
     assert report["packed_rows"] >= 2
     assert report["target_tokens"] == sum(r["target_tokens"] for r in rows)
+    assert report["supervised_token_count"] == report["target_tokens"]
+    assert report["effective_loss_weight_sum"] == pytest.approx(float(report["target_tokens"]))
+
+    # Also test loss_weight_scale=30.0 (dose knob: loss_weights strictly in {0.0, 30.0})
+    scaled_rows = [{**r, "loss_weights": [30.0 if v > 0.0 else 0.0 for v in r["loss_weights"]]} for r in rows]
+    scaled_rep = write_and_verify_levanter_cache(
+        scaled_rows,
+        tmp_path / "cache_w30" / "train",
+        seq_len=4096,
+        loss_weight_scale=30.0,
+    )
+    assert scaled_rep["readback_exact"] is True
+    assert scaled_rep["loss_weight_scale"] == 30.0
+    assert scaled_rep["supervised_token_count"] == report["supervised_token_count"]
+    assert scaled_rep["effective_loss_weight_sum"] == pytest.approx(30.0 * report["supervised_token_count"])
 
 
 def test_disjointness_audit_clean_and_contaminated(tokenizer, tmp_path: Path):

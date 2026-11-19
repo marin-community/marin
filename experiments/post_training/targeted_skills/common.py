@@ -193,6 +193,8 @@ def pack_rows_greedy(
     def finish() -> None:
         used = len(ids)
         pad = seq_len - used
+        sup_count = sum(1 for v in weights if v > 0.0)
+        eff_sum = float(sum(weights))
         packs.append(
             (
                 {
@@ -204,7 +206,9 @@ def pack_rows_greedy(
                     "segment_lengths": list(seg_lengths),
                     "real_positions": used,
                     "padding_positions": pad,
-                    "target_tokens": round(sum(weights)),
+                    "target_tokens": sup_count,
+                    "supervised_token_count": sup_count,
+                    "effective_loss_weight_sum": round(eff_sum, 4),
                 },
             )
         )
@@ -238,8 +242,11 @@ def write_and_verify_levanter_cache(
     cache_dir: Path,
     *,
     seq_len: int = SEQ_LEN,
+    loss_weight_scale: float = 1.0,
 ) -> dict[str, Any]:
     """Pack ``rows`` into a Levanter ``TreeCache``, verify exact array readback and per-segment mask round-trip."""
+    if loss_weight_scale <= 0.0:
+        raise ValueError(f"loss_weight_scale must be positive, got {loss_weight_scale}")
     if cache_dir.exists():
         raise FileExistsError(f"Refusing to overwrite existing cache directory: {cache_dir}")
     cache_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -256,15 +263,17 @@ def write_and_verify_levanter_cache(
     if len(reader) != len(packs):
         raise ValueError(f"Readback pack count mismatch: {len(reader)} != {len(packs)}")
 
+    scale_f32 = np.float32(loss_weight_scale)
     row_by_id = {r["id"]: r for r in rows}
     verified_segments = 0
     for idx, (want, meta) in enumerate(packs):
         got = reader[idx]
         for key in want:
             np.testing.assert_array_equal(want[key], got[key])
-        # Verify per-segment boundaries and exact target round-trip inside the packed row.
         got_ids = got["input_ids"]
         got_w = got["loss_weights"]
+        if not np.all((got_w == 0.0) | (got_w == scale_f32)):
+            raise ValueError(f"Pack {idx} has loss_weights outside {{0.0, {loss_weight_scale}}}")
         pos = 0
         for rid, slen in zip(meta["rows"], meta["segment_lengths"], strict=True):
             src = row_by_id[rid]
@@ -276,15 +285,22 @@ def write_and_verify_levanter_cache(
                 raise ValueError(f"Pack {idx} segment {rid} missing EOS boundary with zero weight")
             pos += slen
             verified_segments += 1
-        # Verify all padding positions are EOS with weight 0.
         if pos < seq_len:
             if not np.all(got_ids[pos:] == EOS_ID) or not np.all(got_w[pos:] == 0.0):
                 raise ValueError(f"Pack {idx} padding region corrupted")
 
-    total_src_targets = round(sum(sum(r["loss_weights"]) for r in rows))
-    total_pack_targets = sum(m["target_tokens"] for _, m in packs)
-    if total_src_targets != total_pack_targets:
-        raise ValueError(f"Target token conservation failed: {total_src_targets} != {total_pack_targets}")
+    total_src_sup = sum(sum(1 for v in r["loss_weights"] if v > 0.0) for r in rows)
+    total_pack_sup = sum(m["supervised_token_count"] for _, m in packs)
+    if total_src_sup != total_pack_sup:
+        raise ValueError(f"Supervised token count conservation failed: {total_src_sup} != {total_pack_sup}")
+
+    total_src_w = float(sum(sum(r["loss_weights"]) for r in rows))
+    total_pack_w = float(sum(m["effective_loss_weight_sum"] for _, m in packs))
+    expected_w = total_src_sup * float(loss_weight_scale)
+    if abs(total_src_w - expected_w) > 1e-2 or abs(total_pack_w - expected_w) > 1e-2:
+        raise ValueError(
+            f"Effective weight conservation failed: src={total_src_w}, pack={total_pack_w}, exp={expected_w}"
+        )
 
     total_real = sum(m["real_positions"] for _, m in packs)
     total_capacity = len(packs) * seq_len
@@ -292,11 +308,14 @@ def write_and_verify_levanter_cache(
         "packed_rows": len(packs),
         "source_rows": len(rows),
         "verified_segments": verified_segments,
-        "target_tokens": total_src_targets,
+        "loss_weight_scale": float(loss_weight_scale),
+        "target_tokens": total_src_sup,
+        "supervised_token_count": total_src_sup,
+        "effective_loss_weight_sum": round(total_src_w, 4),
         "real_positions": total_real,
         "padding_positions": total_capacity - total_real,
         "packing_utilization": round(total_real / total_capacity, 6) if total_capacity else 0.0,
-        "target_token_density": round(total_src_targets / total_capacity, 6) if total_capacity else 0.0,
+        "target_token_density": round(total_src_sup / total_capacity, 6) if total_capacity else 0.0,
         "readback_exact": True,
         "row_manifest": [meta for _, meta in packs],
     }

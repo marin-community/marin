@@ -118,8 +118,30 @@ def _write_parquet(rows: list[dict[str, Any]], path: Path) -> str:
     return sha256_file(path)
 
 
-def audit_parquet_splits(skill: str, out_dir: Path, tokenizer_path: Path) -> dict[str, Any]:
+def _apply_loss_weight_scale(rows: list[dict[str, Any]], scale: float) -> list[dict[str, Any]]:
+    """Scale binary ``{0.0, 1.0}`` loss weights to ``{0.0, scale}`` without touching ``input_ids``."""
+    if scale <= 0.0:
+        raise ValueError(f"loss_weight_scale must be positive, got {scale}")
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        w = r["loss_weights"]
+        if any(v not in (0.0, 1.0) for v in w):
+            raise ValueError(f"{r['id']}: source loss_weights must be binary {{0.0, 1.0}} before scaling")
+        scaled = [float(scale) if v > 0.0 else 0.0 for v in w]
+        out.append({**r, "loss_weights": scaled})
+    return out
+
+
+def audit_parquet_splits(
+    skill: str,
+    out_dir: Path,
+    tokenizer_path: Path,
+    *,
+    loss_weight_scale: float = 1.0,
+) -> dict[str, Any]:
     """Standalone readback row-audit matching E12-B audit_parquet.py plus full shifted-mask checks."""
+    if loss_weight_scale <= 0.0:
+        raise ValueError(f"loss_weight_scale must be positive, got {loss_weight_scale}")
     tok = AutoTokenizer.from_pretrained(str(tokenizer_path), local_files_only=True)
     split_ids: dict[str, set[str]] = {}
     summary: dict[str, Any] = {}
@@ -158,8 +180,12 @@ def audit_parquet_splits(skill: str, out_dir: Path, tokenizer_path: Path) -> dic
             nz = [i for i, v in enumerate(w) if v > 0.0]
             if not nz:
                 raise ValueError(f"{r['id']}: zero supervised tokens")
-            if round(sum(w)) != int(r["target_tokens"]):
-                raise ValueError(f"{r['id']}: target_tokens column disagrees with sum(loss_weights)")
+            if any(v != 0.0 and abs(v - loss_weight_scale) > 1e-5 for v in w):
+                raise ValueError(f"{r['id']}: loss_weights outside {{0.0, {loss_weight_scale}}}")
+            if len(nz) != int(r["target_tokens"]):
+                raise ValueError(f"{r['id']}: target_tokens column disagrees with supervised_token_count")
+            if abs(sum(w) - len(nz) * loss_weight_scale) > 1e-2:
+                raise ValueError(f"{r['id']}: sum(loss_weights) disagrees with scale * supervised_token_count")
             # Every contiguous run of weighted positions must start right after ASSISTANT_HEADER_IDS
             # (meaning ids[run_start - 3 : run_start + 1] == ASSISTANT_HEADER_IDS) and score EOT at its end.
             run_starts = [nz[0]] + [nz[j] for j in range(1, len(nz)) if nz[j] != nz[j - 1] + 1]
@@ -275,8 +301,11 @@ def audit_parquet_splits(skill: str, out_dir: Path, tokenizer_path: Path) -> dic
         summary[split] = {
             "parquet_sha256": sha256_file(ppath),
             "rows": len(rows),
+            "loss_weight_scale": float(loss_weight_scale),
             "total_sequence_tokens": sum(seq_lens),
+            "supervised_token_count": sum(tgt_lens),
             "total_supervised_target_tokens": sum(tgt_lens),
+            "effective_loss_weight_sum": round(sum(tgt_lens) * float(loss_weight_scale), 4),
             "mean_sequence_tokens": round(sum(seq_lens) / len(seq_lens), 1),
             "min_sequence_tokens": seq_lens[0],
             "median_sequence_tokens": seq_lens[len(seq_lens) // 2],
@@ -298,12 +327,14 @@ def audit_parquet_splits(skill: str, out_dir: Path, tokenizer_path: Path) -> dic
     return {
         "pass": True,
         "skill": skill,
+        "loss_weight_scale": float(loss_weight_scale),
         "checks": [
             "parquet list<int32>/list<float32> schema",
             "split row-ID disjointness",
             "BOS=128000 / EOS=128001 boundary / final loss_weight=0.0",
+            f"loss_weights strictly in {{0.0, {float(loss_weight_scale)}}}",
             "shifted mask aligned to assistant header [128006, 78191, 128007, 198] through EOT=128009",
-            "target_tokens exact sum(loss_weights) conservation",
+            "supervised_token_count and effective_loss_weight_sum exact conservation",
             "zero think-marker leak in /nothink targets",
         ],
         "splits": summary,
@@ -324,58 +355,78 @@ def build_skill_dataset(
     bfcl_root: Path | None,
     workers: int,
     upload_dest: str | None,
+    loss_weight_scale: float = 1.0,
+    from_parquet_dir: Path | None = None,
 ) -> dict[str, Any]:
     t0 = time.monotonic()
+    if loss_weight_scale <= 0.0:
+        raise ValueError(f"loss_weight_scale must be positive, got {loss_weight_scale}")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    extra_blocked_tools: list[str] | None = None
-    if skill == "skill_b" and bfcl_root is not None and bfcl_root.is_dir():
-        _, bfcl_names = extract_bfcl_names_and_payloads(bfcl_root)
-        extra_blocked_tools = sorted(bfcl_names)
-
-    # Oversample candidate counts safely to guarantee exact pack target fill before greedy trimming.
-    rows_per_pack_est = 12 if skill == "skill_a" else 560
-    split_targets = {"train": train_packs, "validation": val_packs, "test": test_packs}
-    gen_fn = _gen_one_skill_a if skill == "skill_a" else _gen_one_skill_b
-
     parquet_shas: dict[str, str] = {}
-    with ProcessPoolExecutor(
-        max_workers=workers,
-        initializer=_init_worker,
-        initargs=(str(tokenizer_path), str(template_path) if template_path else None, extra_blocked_tools),
-    ) as pool:
-        for split, n_packs in split_targets.items():
-            # Generate in batches until greedy packing exceeds n_packs, then trim to exact n_packs.
-            rows: list[dict[str, Any]] = []
-            next_idx = 0
-            batch_sz = max(n_packs * rows_per_pack_est, 20 if skill == "skill_a" else 600)
-            while True:
-                tasks = [(split, i) for i in range(next_idx, next_idx + batch_sz)]
-                rows.extend(pool.map(gen_fn, tasks, chunksize=4 if skill == "skill_a" else 64))
-                next_idx += batch_sz
-                # Check how many full packs we have
-                packs_closed = 0
-                cur = 0
-                for r in rows:
-                    rl = len(r["input_ids"])
-                    if cur and cur + rl > SEQ_LEN:
-                        packs_closed += 1
-                        cur = 0
-                    cur += rl
-                total_packs = packs_closed + (1 if cur > 0 else 0)
-                if total_packs > n_packs or (total_packs == n_packs and cur >= int(SEQ_LEN * 0.90)):
-                    break
-                batch_sz = max(rows_per_pack_est * max(1, n_packs - total_packs + 1), 12 if skill == "skill_a" else 500)
-
-            trimmed = _trim_rows_to_exact_packs(rows, n_packs, SEQ_LEN)
-            parquet_shas[split] = _write_parquet(trimmed, out_dir / f"{split}.parquet")
+    if from_parquet_dir is not None:
+        for split in ("train", "validation", "test"):
+            src_rows = pq.read_table(from_parquet_dir / f"{split}.parquet").to_pylist()
+            scaled_rows = _apply_loss_weight_scale(src_rows, loss_weight_scale)
+            parquet_shas[split] = _write_parquet(scaled_rows, out_dir / f"{split}.parquet")
             print(
-                f"[{skill}:{split}] wrote {len(trimmed)} rows -> {n_packs} packs (sha256={parquet_shas[split][:12]})",
+                f"[{skill}:{split}] rescaled {len(scaled_rows)} rows (w={loss_weight_scale}) "
+                f"(sha256={parquet_shas[split][:12]})",
                 flush=True,
             )
+    else:
+        extra_blocked_tools: list[str] | None = None
+        if skill == "skill_b" and bfcl_root is not None and bfcl_root.is_dir():
+            _, bfcl_names = extract_bfcl_names_and_payloads(bfcl_root)
+            extra_blocked_tools = sorted(bfcl_names)
+
+        # Oversample candidate counts safely to guarantee exact pack target fill before greedy trimming.
+        rows_per_pack_est = 12 if skill == "skill_a" else 560
+        split_targets = {"train": train_packs, "validation": val_packs, "test": test_packs}
+        gen_fn = _gen_one_skill_a if skill == "skill_a" else _gen_one_skill_b
+
+        with ProcessPoolExecutor(
+            max_workers=workers,
+            initializer=_init_worker,
+            initargs=(str(tokenizer_path), str(template_path) if template_path else None, extra_blocked_tools),
+        ) as pool:
+            for split, n_packs in split_targets.items():
+                # Generate in batches until greedy packing exceeds n_packs, then trim to exact n_packs.
+                rows: list[dict[str, Any]] = []
+                next_idx = 0
+                batch_sz = max(n_packs * rows_per_pack_est, 20 if skill == "skill_a" else 600)
+                while True:
+                    tasks = [(split, i) for i in range(next_idx, next_idx + batch_sz)]
+                    rows.extend(pool.map(gen_fn, tasks, chunksize=4 if skill == "skill_a" else 64))
+                    next_idx += batch_sz
+                    packs_closed = 0
+                    cur = 0
+                    for r in rows:
+                        rl = len(r["input_ids"])
+                        if cur and cur + rl > SEQ_LEN:
+                            packs_closed += 1
+                            cur = 0
+                        cur += rl
+                    total_packs = packs_closed + (1 if cur > 0 else 0)
+                    if total_packs > n_packs or (total_packs == n_packs and cur >= int(SEQ_LEN * 0.90)):
+                        break
+                    batch_sz = max(
+                        rows_per_pack_est * max(1, n_packs - total_packs + 1),
+                        12 if skill == "skill_a" else 500,
+                    )
+
+                trimmed = _trim_rows_to_exact_packs(rows, n_packs, SEQ_LEN)
+                if loss_weight_scale != 1.0:
+                    trimmed = _apply_loss_weight_scale(trimmed, loss_weight_scale)
+                parquet_shas[split] = _write_parquet(trimmed, out_dir / f"{split}.parquet")
+                print(
+                    f"[{skill}:{split}] wrote {len(trimmed)} rows -> {n_packs} packs "
+                    f"(w={loss_weight_scale}, sha256={parquet_shas[split][:12]})",
+                    flush=True,
+                )
 
     # 1. Row audit
-    row_audit = audit_parquet_splits(skill, out_dir, tokenizer_path)
+    row_audit = audit_parquet_splits(skill, out_dir, tokenizer_path, loss_weight_scale=loss_weight_scale)
     (out_dir / "row-audit-receipt.json").write_text(json.dumps(row_audit, indent=2) + "\n")
 
     # 2. 8-gram disjointness audit
@@ -397,7 +448,12 @@ def build_skill_dataset(
     for split in ("train", "validation", "test"):
         ppath = out_dir / f"{split}.parquet"
         rows = pq.read_table(ppath, columns=["id", "input_ids", "loss_weights"]).to_pylist()
-        rep = write_and_verify_levanter_cache(rows, cache_root / split, seq_len=SEQ_LEN)
+        rep = write_and_verify_levanter_cache(
+            rows,
+            cache_root / split,
+            seq_len=SEQ_LEN,
+            loss_weight_scale=loss_weight_scale,
+        )
         rep["source_parquet_sha256"] = parquet_shas[split]
         packing_reports[split] = rep
     (cache_root / "packing-manifest.json").write_text(json.dumps(packing_reports, indent=2) + "\n")
@@ -410,6 +466,7 @@ def build_skill_dataset(
     elapsed = round(time.monotonic() - t0, 1)
     summary = {
         "skill": skill,
+        "loss_weight_scale": float(loss_weight_scale),
         "elapsed_seconds": elapsed,
         "row_audit_pass": row_audit["pass"],
         "disjointness_pass": decon["pass"],
@@ -442,6 +499,18 @@ def main() -> None:
     parser.add_argument("--bfcl-root", type=Path, default=None)
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--upload-dest", type=str, default=None)
+    parser.add_argument(
+        "--loss-weight-scale",
+        type=float,
+        default=1.0,
+        help="Positive float multiplier on supervised loss_weights (e.g. 30.0 for ~1.39%% loss share; dose knob).",
+    )
+    parser.add_argument(
+        "--from-parquet-dir",
+        type=Path,
+        default=None,
+        help="Optional existing w=1.0 Parquet directory to rescale and re-audit/re-pack with identical input_ids.",
+    )
     args = parser.parse_args()
 
     probe_paths = {"probe1": args.probe1, "probe2": args.probe2, "probe3": args.probe3}
@@ -461,6 +530,8 @@ def main() -> None:
         bfcl_root=args.bfcl_root,
         workers=args.workers,
         upload_dest=args.upload_dest,
+        loss_weight_scale=args.loss_weight_scale,
+        from_parquet_dir=args.from_parquet_dir,
     )
 
 
