@@ -144,7 +144,7 @@ def main(
     resolved = exp4_plan(release, source_revision, version)
     resolved["runtime_source"] = runtime_source_manifest(workspace, source_revision)
     os.environ.update(MARIN_PREFIX=OUTPUT_PREFIX, MARIN_TEMP_PREFIX="s3://marin-us-east-08a/tmp")
-    pool_version = "2026.11.18.exp4-data.1"
+    pool_version = "2026.11.18.71"
     produced = pool_steps(pool_version)
     pools = {}
     for route, producer in produced.items():
