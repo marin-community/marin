@@ -23,6 +23,8 @@ from functools import cache, cached_property
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+import tomli
+import tomli_w
 import verifyit
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath
@@ -35,7 +37,13 @@ from shellbox.machine import Backend, HostImage, MachineFactory, MachineSpec, Mo
 
 from taskcompendium.models import DEFAULT_WORKSPACE, EnvironmentRequirements, require_resolved_environment
 
-RUNTIME_PACKAGES = (Path(verifyit.__file__).parent,)
+# The grader machine installs nothing, so staging ships every package directory the verifyit
+# runtime imports: verifyit itself, the tomllib backport, and the spec writer.
+RUNTIME_PACKAGES = (
+    Path(verifyit.__file__).parent,
+    Path(tomli.__file__).parent,
+    Path(tomli_w.__file__).parent,
+)
 LOCK_FILE = "requirements.lock"
 FILES_ARCHIVE = "files.tar"
 """The environment's placed files, stored beside the lock as a tar of paths relative to ``/``."""

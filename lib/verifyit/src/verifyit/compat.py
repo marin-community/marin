@@ -1,10 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Backports for grader machines below Python 3.11.
+"""Backports for grader interpreters below Python 3.11.
 
-The staged runtime runs on the grader machine's own interpreter, and the catalog's declared
-environments include Python 3.10 workspace images.
+The staged runtime imports verifyit on the grader machine's own interpreter, and the declared
+grader environments include Python 3.10 images.
 """
 
 import sys

@@ -1,30 +1,37 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The staged verifyit runtime runs on the grader machine's own interpreter.
+"""The staged verifyit runtime imports and grades on the grader machine's own interpreter.
 
-The catalog declares Python 3.10 workspace images, so the package must grade with the
-compat backports instead of the 3.11 standard library, and 3.11 machines must keep
-working (issue #11721).
+Staging copies package directories onto the machine and puts them on ``sys.path``; no
+dependency metadata ships with them. ``RUNTIME_PACKAGES`` in ``taskcompendium.runtime.local``
+is the production counterpart of the staging below. The declared grader environments include
+Python 3.10 images, so the runtime must import with the compat backports and the staged
+tomli, and 3.11 machines must keep working (issue #11721).
 """
 
 import json
+import os
+import shutil
 import subprocess
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
+import tomli
+import tomli_w
+import verifyit
 from verifyit.spec import NumericSpec, render_spec
 
-VERIFYIT_ROOT = Path(__file__).resolve().parents[1]
-
-# The declared grader machines below the repo's 3.12 floor. 3.12 is exercised by every
-# other test in this suite.
 GRADER_INTERPRETERS = ("3.10", "3.11")
 
 # Extras too heavy for the ephemeral venv; their modules may raise ImportError on the
 # missing third-party root, never on the staged package's own imports.
 UNINSTALLED_EXTRA_ROOTS = ("reasoning_gym", "sympy", "math_verify")
+
+# The third-party roots of the judge and schema extras, installed into the grader venv the
+# way an environment's own package lock provides a mode's dependencies.
+EXTRA_ROOT_PACKAGES = ("openai", "jsonschema", "pyyaml")
 
 # Cold uv caches download the interpreter and wheels; the pytest and subprocess budgets stay in step.
 TIMEOUT_SECONDS = 300
@@ -56,34 +63,47 @@ if broken:
 
 
 @pytest.fixture(scope="session", params=GRADER_INTERPRETERS, ids=lambda version: f"python-{version}")
-def grader_venv(tmp_path_factory, request):
-    """An installed verifyit in a uv-managed venv on one grader interpreter version.
-
-    The install resolves ``requires-python`` and the conditional tomli dependency.
-    """
+def staged_runtime(tmp_path_factory, request):
+    """A staged runtime directory and a bare uv-managed venv, the way a runtime build stages them."""
     interpreter = request.param
-    venv = tmp_path_factory.mktemp(f"grader-{interpreter.replace('.', '')}")
+    base = tmp_path_factory.mktemp(f"grader-{interpreter.replace('.', '')}")
+    venv = base / "venv"
     for command in (
         ["uv", "venv", "--python", interpreter, str(venv)],
-        ["uv", "pip", "install", "--python", str(venv / "bin" / "python"), f"{VERIFYIT_ROOT}[judge,schema]"],
+        ["uv", "pip", "install", "--python", str(venv / "bin" / "python"), *EXTRA_ROOT_PACKAGES],
     ):
         subprocess.run(command, check=True, capture_output=True, text=True)
-    return venv
+    runtime = base / "runtime"
+    for package in (verifyit, tomli, tomli_w):
+        shutil.copytree(
+            Path(package.__file__).parent,
+            runtime / package.__name__,
+            ignore=shutil.ignore_patterns("__pycache__"),
+        )
+    return runtime, venv
 
 
-@pytest.mark.timeout(TIMEOUT_SECONDS)
-def test_staged_imports_survive_the_grader_interpreter(grader_venv):
-    result = subprocess.run(
-        [str(grader_venv / "bin" / "python"), "-c", SWEEP_SCRIPT],
+def _run_on_grader(staged_runtime, script, *arguments, cwd="/"):
+    """Run one command on the grader interpreter with the staged packages importable."""
+    runtime, venv = staged_runtime
+    return subprocess.run(
+        [str(venv / "bin" / "python"), "-c", script, *arguments],
+        cwd=cwd,
+        env={**os.environ, "PYTHONPATH": str(runtime)},
         capture_output=True,
         text=True,
         timeout=TIMEOUT_SECONDS,
     )
+
+
+@pytest.mark.timeout(TIMEOUT_SECONDS)
+def test_staged_imports_survive_the_grader_interpreter(staged_runtime):
+    result = _run_on_grader(staged_runtime, SWEEP_SCRIPT)
     assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.timeout(TIMEOUT_SECONDS)
-def test_entry_grades_on_the_grader_interpreter(tmp_path, grader_venv):
+def test_entry_grades_on_the_grader_interpreter(tmp_path, staged_runtime):
     config = tmp_path / "verifier.toml"
     config.write_text(
         render_spec(
@@ -92,18 +112,14 @@ def test_entry_grades_on_the_grader_interpreter(tmp_path, grader_venv):
     )
     (tmp_path / "answer.txt").write_text("0.3")
     logs = tmp_path / "logs"
-    result = subprocess.run(
-        [
-            str(grader_venv / "bin" / "verifyit"),
-            str(config),
-            "--logs-dir",
-            str(logs),
-            "--workspace",
-            str(tmp_path),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=TIMEOUT_SECONDS,
+    result = _run_on_grader(
+        staged_runtime,
+        "from verifyit.grade import main; raise SystemExit(main())",
+        str(config),
+        "--logs-dir",
+        str(logs),
+        "--workspace",
+        str(tmp_path),
     )
     assert result.returncode == 0, result.stderr
     assert json.loads((logs / "reward.json").read_text()) == {"reward": 1.0}
