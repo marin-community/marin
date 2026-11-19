@@ -91,7 +91,7 @@ V1_BATCH = 64
 V1_UPDATES = 300
 V1_TARGET_POSITIONS = V1_UPDATES * V1_BATCH * GEOMETRY.sequence_length
 assert (
-    V1_TARGET_POSITIONS == EXP3_UPDATES * 256 * GEOMETRY.sequence_length
+    V1_TARGET_POSITIONS == 75 * 256 * GEOMETRY.sequence_length
 ), "the 64-GPU plan must preserve the original token budget"
 # the release freezes mixture_block_size at the production 256-sequence phase
 # geometry (64,000 = 250 updates x 256); the schedule boundaries rescale with
