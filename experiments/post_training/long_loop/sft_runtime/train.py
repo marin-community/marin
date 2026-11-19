@@ -63,6 +63,7 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 from levanter.utils.mesh import MeshConfig
+from levanter.utils.thread_utils import blocking_wait
 from rigging.filesystem.storage_path import prefix_join
 from rigging.timing import Duration
 
@@ -637,39 +638,127 @@ def build_tagged_evaluator(
     )
 
 
-def build_teacher_evaluators(
-    *,
-    data_config: E12DataConfig,
-    max_seq_len: int,
-    mesh: Mesh,
-    eval_cfg: GrugEvalConfig,
-    mp: jmp.Policy,
-) -> tuple[TaggedEvaluator, TaggedEvaluator]:
-    """Build the held-out NLL and teacher-KL evaluators over the teacher-scored eval sets.
+def teacher_row_sums(
+    per_pos_nll: jax.Array, per_pos_kl: jax.Array, loss_weight: jax.Array, teacher_mask: jax.Array
+) -> jax.Array:
+    """Reduce ``[B, S]`` per-position values to ``[4, B]`` per-row sums.
 
-    The KL evaluator's "loss" is the mean of ``KL(q || p_student)`` over teacher-valid
-    positions, where ``q`` is the teacher top-K renormalized.
+    The rows are: loss-weighted NLL, loss weight, KL over teacher-valid loss positions, and the
+    count of those positions.
     """
-    pos = Axis("position", max_seq_len if eval_cfg.max_seq_len is None else eval_cfg.max_seq_len)
-    teacher_sets = data_config.teacher_eval_sets(pos)
-    eval_array_sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
-
-    def teacher_kl_loss_fn(model: Transformer, batch: TeacherLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
-        model = mp.cast_to_compute(model)
-        per_pos_kl = model.teacher_kl(batch.tokens, batch.teacher, mask=batch.attn_mask)
-        per_pos_weight = batch.teacher.mask * (batch.loss_weight > 0).astype(batch.teacher.mask.dtype)
-        per_pos_token_id = jnp.pad(batch.tokens[:, 1:], ((0, 0), (0, 1)))
-        return (
-            jax.sharding.reshard(per_pos_kl, eval_array_sharding),
-            jax.sharding.reshard(per_pos_weight, eval_array_sharding),
-            per_pos_token_id,
-        )
-
-    nll = _tagged_evaluator(
-        teacher_sets, _next_token_eval_loss_fn(mesh, mp, None), tokenizer=None, mesh=mesh, eval_cfg=eval_cfg
+    kl_weight = teacher_mask * (loss_weight > 0).astype(teacher_mask.dtype)
+    return jnp.stack(
+        [
+            jnp.sum(per_pos_nll * loss_weight, axis=1),
+            jnp.sum(loss_weight, axis=1),
+            jnp.sum(per_pos_kl * kl_weight, axis=1),
+            jnp.sum(kl_weight, axis=1),
+        ]
     )
-    kl = _tagged_evaluator(teacher_sets, teacher_kl_loss_fn, tokenizer=None, mesh=mesh, eval_cfg=eval_cfg)
-    return nll, kl
+
+
+@dataclass(frozen=True)
+class TeacherRowSums:
+    """Per-row sums over the evaluated held-out teacher rows, in cache order."""
+
+    nll: np.ndarray
+    loss_weight: np.ndarray
+    kl: np.ndarray
+    tokens: np.ndarray
+
+
+class TeacherEvaluator:
+    """Score held-out teacher rows for hard-label NLL and ``KL(q || p_student)``, per row.
+
+    ``q`` is the teacher top-K renormalized. With ``max_eval_batches`` set, only the first
+    ``max_eval_batches * eval_batch_size`` rows are evaluated, as in the tagged evaluators.
+    """
+
+    def __init__(self, dataset: AsyncDataset[TeacherLmExample], *, mesh: Mesh, eval_cfg: GrugEvalConfig, mp: jmp.Policy):
+        if eval_cfg.max_eval_batches is not None:
+            dataset = dataset.take(eval_cfg.max_eval_batches * eval_cfg.eval_batch_size)
+        self.num_rows = blocking_wait(dataset.async_len())
+        # The loader zero-pads the final batch; padded rows land past `num_rows`.
+        self.loader = DataLoader(
+            dataset,
+            Axis("batch", eval_cfg.eval_batch_size),
+            max_buffered_batches=100,
+            mesh=mesh,
+            axis_resources={"batch": _BATCH_AXES},
+        )
+        rows = NamedSharding(mesh, P(_BATCH_AXES, None))
+        replicated = NamedSharding(mesh, P())
+
+        def row_sums(model: Transformer, batch: TeacherLmExample) -> jax.Array:
+            model = mp.cast_to_compute(model)
+            # The per-position loss comes back scaled by the weight passed in; unit weights give the plain NLL.
+            nll = model.next_token_loss(
+                batch.tokens,
+                jnp.ones_like(batch.loss_weight),
+                mask=batch.attn_mask,
+                reduction="none",
+                logsumexp_weight=None,
+            )
+            kl = model.teacher_kl(batch.tokens, batch.teacher, mask=batch.attn_mask)
+            # Gather each row's positions from the context shards, then sum within the row.
+            per_pos = [jax.sharding.reshard(x, rows) for x in (nll, kl, batch.loss_weight, batch.teacher.mask)]
+            return jax.sharding.reshard(teacher_row_sums(*per_pos), replicated)
+
+        self._row_sums = jax.jit(row_sums)
+
+    def evaluate(self, model: Transformer) -> TeacherRowSums:
+        batches = [np.asarray(self._row_sums(model, batch)) for batch in self.loader]
+        nll, loss_weight, kl, tokens = np.concatenate(batches, axis=1)[:, : self.num_rows]
+        return TeacherRowSums(nll=nll, loss_weight=loss_weight, kl=kl, tokens=tokens)
+
+
+def teacher_log_dict(sums: TeacherRowSums, *, prefix: str, model_tag: str = "") -> dict[str, float]:
+    """Aggregate and per-row teacher metrics, e.g. ``eval/teacher_kl/loss`` and ``eval/teacher_kl/row/007``."""
+    tag = f"/{model_tag}" if model_tag else ""
+    nll, kl, rows = f"{prefix}/teacher_nll{tag}", f"{prefix}/teacher_kl{tag}", f"{prefix}/teacher_rows"
+    log = {
+        f"{nll}/loss": float(sums.nll.sum() / sums.loss_weight.sum()),
+        f"{kl}/loss": float(sums.kl.sum() / sums.tokens.sum()),
+    }
+    for row in range(len(sums.tokens)):
+        key = f"{row:03d}"
+        log[f"{rows}/tokens/{key}"] = float(sums.tokens[row])
+        log[f"{rows}/loss_weight/{key}"] = float(sums.loss_weight[row])
+        if sums.loss_weight[row] > 0:
+            log[f"{nll}/row/{key}"] = float(sums.nll[row] / sums.loss_weight[row])
+        if sums.tokens[row] > 0:
+            log[f"{kl}/row/{key}"] = float(sums.kl[row] / sums.tokens[row])
+    return log
+
+
+def teacher_eval_hook(
+    evaluator: TeacherEvaluator, *, prefix: str, eval_current: bool, eval_ema: bool
+) -> Callable[..., None]:
+    """Log teacher metrics for the current and/or EMA model, once per step, as ``cb_tagged_evaluate`` does."""
+    last_eval_step: int | None = None
+
+    def hook(step, *args, **kwargs):
+        nonlocal last_eval_step
+        step_count = int(step.step)
+        if step_count < 0 or step_count == last_eval_step:
+            return
+        with (
+            callbacks.progress_event_scope(
+                step.emit_event,
+                callbacks.ProgressEvent.EVALUATION_STARTED,
+                callbacks.ProgressEvent.EVALUATION_FINISHED,
+            ),
+            jax_config.enable_pgle(False),
+        ):
+            log: dict[str, float] = {}
+            if eval_current:
+                log |= teacher_log_dict(evaluator.evaluate(step.model), prefix=prefix)
+            if eval_ema:
+                log |= teacher_log_dict(evaluator.evaluate(step.eval_model), prefix=prefix, model_tag="ema")
+            levanter.tracker.log(log, step=step_count)
+        last_eval_step = step_count
+
+    return hook
 
 
 def _tagged_evaluator(tagged_eval_sets, loss_fn, *, tokenizer, mesh: Mesh, eval_cfg: GrugEvalConfig) -> TaggedEvaluator:
@@ -1437,7 +1526,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         eval_cfg = config.eval
         evaluator = None
-        teacher_evaluators = None
+        teacher_evaluator = None
         dropless_evaluator = None
         dropless_eval_mesh = None
         eval_ema = False
@@ -1454,12 +1543,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     mp=trainer.mp,
                 )
                 if isinstance(config.data, E12DataConfig) and config.data.teacher_validation_cache:
-                    teacher_evaluators = build_teacher_evaluators(
-                        data_config=config.data,
-                        max_seq_len=config.model.max_seq_len,
-                        mesh=mesh,
-                        eval_cfg=eval_cfg,
-                        mp=trainer.mp,
+                    pos = Axis("position", eval_cfg.max_seq_len or config.model.max_seq_len)
+                    teacher_evaluator = TeacherEvaluator(
+                        config.data.teacher_eval_dataset(pos), mesh=mesh, eval_cfg=eval_cfg, mp=trainer.mp
                     )
             # Expert-parallel runs drop tokens over capacity; a second evaluator scores the same
             # weights dropless under the local backend on an expert-collapsed mesh (expert folded
@@ -1562,16 +1648,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             eval_ema=eval_ema,
                         )
                     )
-            if teacher_evaluators is not None:
-                for teacher_evaluator, suffix in zip(teacher_evaluators, ("teacher_nll", "teacher_kl"), strict=True):
-                    eval_hooks.append(
-                        cb_tagged_evaluate(
-                            teacher_evaluator,
-                            prefix=f"{eval_cfg.prefix}/{suffix}",
-                            eval_current=eval_cfg.eval_current,
-                            eval_ema=eval_ema,
-                        )
+            if teacher_evaluator is not None:
+                eval_hooks.append(
+                    teacher_eval_hook(
+                        teacher_evaluator, prefix=eval_cfg.prefix, eval_current=eval_cfg.eval_current, eval_ema=eval_ema
                     )
+                )
             if dropless_evaluator is not None and dropless_eval_mesh is not None:
                 # The training loop runs under `set_mesh(mesh)` (expert-parallel). The dropless
                 # evaluator runs under the expert-collapsed mesh, so the model params -- sharded on

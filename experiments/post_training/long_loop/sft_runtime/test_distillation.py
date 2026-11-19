@@ -9,13 +9,20 @@ import optax
 import pytest
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
+from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.examples import GrugLmExample
 from levanter.grug.attention import AttentionMask
 from levanter.testing.devices import use_cpu_devices
 
 from experiments.post_training.long_loop.sft_runtime.model import GrugModelConfig, student_topk_logprobs
 from experiments.post_training.long_loop.sft_runtime.teacher_targets import TeacherLmExample, TeacherTopK
-from experiments.post_training.long_loop.sft_runtime.train import _accumulated_loss_and_grads, initial_state
+from experiments.post_training.long_loop.sft_runtime.train import (
+    GrugEvalConfig,
+    TeacherEvaluator,
+    _accumulated_loss_and_grads,
+    initial_state,
+    teacher_log_dict,
+)
 
 VOCAB = 32
 K = 3
@@ -202,3 +209,82 @@ def test_blocked_student_logprobs_and_teacher_kl_match_dense():
             student = _dense_gather(jax.nn.log_softmax(logits, axis=-1), batch.teacher.ids)
             log_q = _replicated(jax.nn.log_softmax(batch.teacher.logprobs, axis=-1))
             np.testing.assert_allclose(kl, jnp.sum(jnp.exp(log_q) * (log_q - student), axis=-1), rtol=1e-4, atol=1e-6)
+
+
+def _teacher_rows(num_rows: int) -> list[TeacherLmExample]:
+    rng = np.random.default_rng(2)
+    rows = []
+    for r in range(num_rows):
+        weight = rng.choice([0.0, 0.5, 1.0], size=8).astype(np.float32)
+        example = GrugLmExample.causal(
+            tokens=jnp.asarray(rng.integers(1, VOCAB, size=8).astype(np.int32)), loss_weight=jnp.asarray(weight)
+        )
+        mask = (np.asarray(example.loss_weight) > 0).astype(np.float32)
+        if r == 1:
+            mask[:] = 0  # A row without teacher targets: KL undefined, NLL still scored.
+        teacher = TeacherTopK(
+            ids=np.stack([rng.permutation(VOCAB)[:K] for _ in range(8)]).astype(np.int32),
+            logprobs=np.log(rng.dirichlet(np.ones(K), size=8) * 0.9).astype(np.float32),
+            mask=mask,
+        )
+        rows.append(
+            TeacherLmExample(
+                tokens=example.tokens, loss_weight=example.loss_weight, attn_mask=example.attn_mask, teacher=teacher
+            )
+        )
+    return rows
+
+
+def _reference_row_metrics(mesh: Mesh, params, rows: list[TeacherLmExample]):
+    """Per-row NLL and teacher KL from dense logits, one row at a time, in numpy."""
+    nll, kl, tokens, loss_weight = [], [], [], []
+    logits_fn = jax.jit(lambda p, t: p.logits(t, mask=AttentionMask.causal()))
+    for row in rows:
+        batch = jax.device_put(np.tile(np.asarray(row.tokens), (4, 1)), NamedSharding(mesh, P("data", None)))
+        logits = logits_fn(params, batch)
+        logp = np.asarray(jax.nn.log_softmax(_replicated(logits)[0].astype(jnp.float32), axis=-1))
+        labels = np.pad(np.asarray(row.tokens)[1:], (0, 1))
+        weight = np.asarray(row.loss_weight)
+        per_pos_nll = -logp[np.arange(8), labels]
+        log_q = np.asarray(jax.nn.log_softmax(row.teacher.logprobs, axis=-1))
+        per_pos_kl = np.sum(np.exp(log_q) * (log_q - np.take_along_axis(logp, row.teacher.ids, axis=-1)), axis=-1)
+        kl_weight = row.teacher.mask * (weight > 0)
+        nll.append(np.sum(per_pos_nll * weight) / np.sum(weight))
+        kl.append(np.sum(per_pos_kl * kl_weight) / np.sum(kl_weight) if kl_weight.sum() else None)
+        tokens.append(kl_weight.sum())
+        loss_weight.append(weight.sum())
+    return nll, kl, tokens, loss_weight
+
+
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize("max_eval_batches,expected_rows", [(None, 6), (1, 4)])
+def test_teacher_evaluator_per_row_metrics_match_dense_reference(max_eval_batches, expected_rows):
+    with use_cpu_devices(4):
+        mesh = _mesh()
+        with jax.set_mesh(mesh):
+            state = initial_state(CONFIG, optimizer=optax.adam(1e-3), mp=MP, key=jax.random.key(1), ema_beta=None)
+            rows = _teacher_rows(6)
+            # Batches of 4 split over `data` and positions over `context`; 6 rows pad the second batch.
+            eval_cfg = GrugEvalConfig(eval_batch_size=4, max_eval_batches=max_eval_batches)
+            evaluator = TeacherEvaluator(ListAsyncDataset(rows), mesh=mesh, eval_cfg=eval_cfg, mp=MP)
+            sums = evaluator.evaluate(state.params)
+            log = teacher_log_dict(sums, prefix="eval")
+            nll, kl, tokens, loss_weight = _reference_row_metrics(mesh, state.params, rows[:expected_rows])
+
+            assert len(sums.tokens) == expected_rows
+            assert not any(key.endswith(f"/{expected_rows:03d}") for key in log)
+            for r in range(expected_rows):
+                key = f"{r:03d}"
+                np.testing.assert_allclose(log[f"eval/teacher_nll/row/{key}"], nll[r], rtol=1e-5)
+                assert log[f"eval/teacher_rows/tokens/{key}"] == tokens[r]
+                assert log[f"eval/teacher_rows/loss_weight/{key}"] == loss_weight[r]
+                if kl[r] is None:
+                    assert f"eval/teacher_kl/row/{key}" not in log
+                else:
+                    np.testing.assert_allclose(log[f"eval/teacher_kl/row/{key}"], kl[r], rtol=1e-4, atol=1e-6)
+            weights = np.asarray(loss_weight)
+            np.testing.assert_allclose(
+                log["eval/teacher_nll/loss"], np.sum(np.asarray(nll) * weights) / weights.sum(), rtol=1e-5
+            )
+            kl_numerator = sum(k * t for k, t in zip(kl, tokens, strict=True) if k is not None)
+            np.testing.assert_allclose(log["eval/teacher_kl/loss"], kl_numerator / sum(tokens), rtol=1e-4)
