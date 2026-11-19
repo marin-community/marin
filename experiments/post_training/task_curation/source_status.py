@@ -182,6 +182,9 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     payload = json.dumps(status_extras(), indent=2) + "\n"
+    # The release's clean frontend build empties dist/ before the build command runs,
+    # so the output's parent directories cannot be assumed to exist.
+    args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(payload)
     print(f"wrote {args.output} ({len(payload.encode())} bytes)", file=sys.stderr)
 
