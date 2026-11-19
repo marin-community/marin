@@ -52,6 +52,8 @@ from experiments.post_training.rl_tests.fixtures import (
 from experiments.post_training.rl_tests.fixtures import write_json as _json
 from experiments.post_training.skyrl_test_support import assert_revisioned_native_configs, native_json
 from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, SELECTION_PREFIX
+from experiments.sft.configs import snowball_h100
+from experiments.sft.launcher import LevanterSft, sft_model
 
 pytestmark = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(180)]
 
@@ -92,6 +94,11 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
     producer = apply("tests/computed-init", export_model, version="2026.11.17", output=OUT)
     own_model = ArtifactHfModel(producer)
     train = snowball_model.SNOWBALL.by_name["train-long"]
+    dev_sft = LevanterSft(replace(snowball_h100.SPEC, version="dev"))
+    dev_model = sft_model(dev_sft, snowball_h100.RESOURCES)
+
+    with pytest.raises(click.BadParameter, match="the initializer requires an immutable artifact version"):
+        snowball.build_run(train, init=dev_model, table=snowball_model.SNOWBALL)
 
     def reject_export_read(*args, **kwargs):
         raise AssertionError("planning read an unbuilt export")
