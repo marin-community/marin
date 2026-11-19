@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import base64
 import hashlib
 import io
 import json
@@ -27,6 +28,7 @@ from taskcompendium.pipeline.conversion import convert_record, convert_row
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import NormalizedTask, RawRow
 from taskcompendium.pipeline.sources import conversion_shards, staged_file_rows
+from taskcompendium.pipeline.transforms import admit_converted_row
 from taskcompendium.runtime.grading import grade_in_sandbox
 from taskcompendium.runtime.resources import resource_bytes
 
@@ -101,7 +103,7 @@ storage_mb = 4096
         {
             "release": RELEASE,
             "task_ref": f"skill2env/{name}@sha256:{digest.hexdigest()}",
-            "files": files,
+            "files": {path: base64.b64encode(blob).decode("ascii") for path, blob in files.items()},
             "modes": {path: "755" if path.endswith(".sh") else "644" for path in files},
         },
     )
@@ -114,7 +116,8 @@ def write_selection(root: Path, selection) -> None:
     for row in selection:
         digest = hashlib.sha256(row.data["task_ref"].encode()).hexdigest()
         with tarfile.open(root / "tasks" / f"{digest}.tar.gz", "w:gz") as archive:
-            for name, blob in row.data["files"].items():
+            for name, encoded in row.data["files"].items():
+                blob = base64.b64decode(encoded)
                 member = tarfile.TarInfo(name)
                 member.size = len(blob)
                 member.mode = int(row.data["modes"][name], 8)
@@ -138,7 +141,8 @@ def test_prepared_selections_keep_distinct_stable_task_ids(tmp_path):
             for record in staged_file_rows(str(root), shard, recipe.source, context):
                 converted = convert_record(record, recipe)
                 assert isinstance(converted.result, NormalizedTask)
-                tasks[record["data"]["task_ref"]] = converted.result.task.id
+                admitted = admit_converted_row(converted, recipe)
+                tasks[record["data"]["task_ref"]] = admitted["audit"]["normalized"]["id"]
         assert len(tasks) == len(selection)
         identities.append(tasks)
     first_ids, second_ids, combined_ids = identities
@@ -156,7 +160,8 @@ def test_selected_archive_tampering_is_rejected(tmp_path):
     # Replacing an archive under its original immutable filename must fail before conversion.
     payload = next((root / "tasks").glob("*.tar.gz"))
     with tarfile.open(payload, "w:gz") as archive:
-        for name, blob in first.data["files"].items():
+        for name, encoded in first.data["files"].items():
+            blob = base64.b64decode(encoded)
             if name == "instruction.md":
                 blob = b"Changed instruction"
             member = tarfile.TarInfo(name)
@@ -208,7 +213,7 @@ def test_conversion_retains_hidden_files_and_detects_modified_exports():
     assert restored.source == row.source
     contract = next(resource for resource in restored.resources.verifier if resource.path == "curation-contract.json")
     assert json.loads(resource_bytes(contract))["task_ref"] == row.data["task_ref"]
-    changed = {**row.data, "files": {**row.data["files"], "tests/test.sh": b"exit 0"}}
+    changed = {**row.data, "files": {**row.data["files"], "tests/test.sh": base64.b64encode(b"exit 0").decode("ascii")}}
     with pytest.raises(ValueError, match="differ from the pinned task"):
         convert_task(replace(row, data=changed), ConversionContext({}, None))
 
@@ -216,12 +221,17 @@ def test_conversion_retains_hidden_files_and_detects_modified_exports():
 def test_shared_image_stages_only_public_inputs(monkeypatch):
     row = exported_row(working_directory="/workspace/inputs")
     # The release fixtures are external; opt this generated package into the same staging contract.
-    files = dict(row.data["files"])
+    files = {path: base64.b64decode(encoded) for path, encoded in row.data["files"].items()}
     files["environment/inputs/checker.txt"] = files.pop("environment/workspace/inputs/checker.txt")
     files["environment/Dockerfile"] = b"FROM python:3.12-slim\nWORKDIR /workspace\nCOPY inputs /workspace/inputs\n"
     digest = content_digest(files)
     modes = {path: row.data["modes"].get(path, "644") for path in files}
-    data = {**row.data, "files": files, "modes": modes, "task_ref": f"skill2env/fixture@sha256:{digest}"}
+    data = {
+        **row.data,
+        "files": {path: base64.b64encode(blob).decode("ascii") for path, blob in files.items()},
+        "modes": modes,
+        "task_ref": f"skill2env/fixture@sha256:{digest}",
+    }
     monkeypatch.setitem(STAGED_INPUT_DIRECTORIES, f"sha256:{digest}", "inputs")
     task = convert_task(replace(row, data=data), ConversionContext({}, None))
     assert isinstance(task, TaskSpec)

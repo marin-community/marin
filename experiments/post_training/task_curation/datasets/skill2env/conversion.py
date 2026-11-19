@@ -3,6 +3,7 @@
 
 """Convert offline Skill2Env tasks without rewriting native tests."""
 
+import base64
 import hashlib
 import json
 import re
@@ -266,7 +267,12 @@ def read_task(path: StoragePath, _context: ConversionContext) -> Iterator[dict]:
     task_ref = f"{config['task']['name']}@sha256:{content_digest(files)}"
     if path.name != hashlib.sha256(task_ref.encode()).hexdigest() + ".tar.gz":
         raise ValueError("Archive contents differ from the pinned task filename")
-    yield {"release": RELEASE, "task_ref": task_ref, "files": files, "modes": modes}
+    yield {
+        "release": RELEASE,
+        "task_ref": task_ref,
+        "files": {path: base64.b64encode(blob).decode("ascii") for path, blob in files.items()},
+        "modes": modes,
+    }
 
 
 def native_build_contexts(
@@ -310,7 +316,7 @@ def convert_task(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportR
         raise ValueError("Input belongs to another Skill2Env release")
     if "unsupported" in data:
         return unsupported(data["unsupported"], "Native export could not preserve this task")
-    files = data["files"]
+    files = {path: base64.b64decode(value, validate=True) for path, value in data["files"].items()}
     task_name, task_digest = data["task_ref"].rsplit("@", 1)
     if task_digest != f"sha256:{content_digest(files)}":
         raise ValueError("Exported files differ from the pinned task")
