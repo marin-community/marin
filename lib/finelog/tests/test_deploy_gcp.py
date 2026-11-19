@@ -100,3 +100,19 @@ def test_bootstrap_sets_the_configured_telemetry_migration_mode() -> None:
     script = render_bootstrap_for(cfg, "ghcr.io/example/finelog@sha256:abc")
 
     assert "-e FINELOG_TELEMETRY_MIGRATION_MODE=dual-write" in script
+
+
+def test_bootstrap_names_the_local_cluster_only_when_configured() -> None:
+    base = dict(
+        name="finelog-marin",
+        port=10001,
+        image="ghcr.io/example/finelog:latest",
+        remote_log_dir="gs://bucket/finelog/marin",
+        deployment=Deployment(gcp=GcpDeployment(project="proj", zone="us-central1-a")),
+    )
+
+    named = render_bootstrap_for(FinelogConfig(**base, cluster="marin"), "ghcr.io/example/finelog@sha256:abc")
+    unnamed = render_bootstrap_for(FinelogConfig(**base), "ghcr.io/example/finelog@sha256:abc")
+
+    assert "-e FINELOG_CLUSTER=marin " in named
+    assert "FINELOG_CLUSTER" not in unnamed

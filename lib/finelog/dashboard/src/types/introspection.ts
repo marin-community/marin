@@ -23,6 +23,8 @@ export interface ProcessInfo {
 }
 
 export interface StoreInfo {
+  /** This server's own cluster name; empty when none is configured. */
+  cluster: string
   dataDir: string
   remoteLogDir: string
   namespaces: number

@@ -290,6 +290,30 @@ def test_forwarding_cluster_must_be_named() -> None:
         ForwardingConfig(target="https://finelog.oa.dev", cluster="", signing_key=("env:K",))
 
 
+def test_a_forwarding_server_must_stamp_under_its_forwarding_cluster(tmp_path: Path) -> None:
+    """The forwarder ships rows that carry its own name. A server stamping local rows
+    with any other name would make them look forwarded, so they would never leave."""
+    cfg_path = tmp_path / "finelog-cw.yaml"
+    cfg_path.write_text(textwrap.dedent(_FORWARDING_YAML) + "cluster: cw-other\n")
+    with pytest.raises(ValueError, match=r"differs from forwarding\.cluster"):
+        load_finelog_config(str(cfg_path))
+
+
+@pytest.mark.parametrize("value", ["123", "Cw_Rno2a"])
+def test_load_config_rejects_a_malformed_local_cluster(tmp_path: Path, value: str) -> None:
+    """An unquoted number loads as an int and must get the same error as a bad name."""
+    cfg_path = tmp_path / "finelog-cw.yaml"
+    cfg_path.write_text(textwrap.dedent(_FORWARDING_YAML) + f"cluster: {value}\n")
+    with pytest.raises(ValueError, match="cluster must match"):
+        load_finelog_config(str(cfg_path))
+
+
+def test_load_config_parses_the_local_cluster(tmp_path: Path) -> None:
+    cfg_path = tmp_path / "finelog-cw.yaml"
+    cfg_path.write_text(textwrap.dedent(_FORWARDING_YAML) + "cluster: cw-rno2a\n")
+    assert load_finelog_config(str(cfg_path)).cluster == "cw-rno2a"
+
+
 def _bundled_configs() -> dict[str, FinelogConfig]:
     """Every config shipped in `lib/finelog/config/`, keyed by name.
 

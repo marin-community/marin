@@ -110,6 +110,8 @@ def _container_env(config: FinelogConfig) -> list[k8s.core.v1.EnvVarArgs]:
         env.append(k8s.core.v1.EnvVarArgs(name="FINELOG_AUTH_POLICY", value=auth_policy_json(config.auth)))
     if config.forwarding:
         env.append(k8s.core.v1.EnvVarArgs(name="FINELOG_FORWARDING", value=config.forwarding.to_env_json()))
+    if config.cluster is not None:
+        env.append(k8s.core.v1.EnvVarArgs(name="FINELOG_CLUSTER", value=config.cluster))
     return env
 
 
