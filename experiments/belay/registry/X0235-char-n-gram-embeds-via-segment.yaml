@@ -113,7 +113,8 @@ trials:
   step_time_change: 0%
 potential:
   score: 7
-  rationale: −0.0131 at equal time (step time within 1%); ladder in progress (d1024 rung failed), MFU not run → 7
+  rationale: −0.0131 at equal time; ladder mixed so far (d512 −0.004, d768 −0.0055, d1280 +0.0001), d1024 still running; MFU
+    not run → 7
   model: claude-opus-5-5
-  date: '2026-11-17'
-  inputs_digest: 41793f421181
+  date: '2026-11-19'
+  inputs_digest: f7c02e4c4945
