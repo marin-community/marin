@@ -58,6 +58,17 @@ MARIN_PREFIX=s3://marin-us-east-02a/marin uv run python -m experiments.post_trai
   --preset train-long --version 2026.11.19.1
 ```
 
+The Mochi RL presets default to the completed production Mochi SFT export. The export
+supplies its own tokenizer. Native resume also uses this export. Use
+`--init NAME@VERSION` to start a new run from another published model.
+Use the Mochi SFT-to-RL module to build the production export and pass its model into
+RL. The command below prints that plan.
+
+```bash
+MARIN_PREFIX=s3://marin-us-east-02a/marin uv run python -m experiments.post_training.mochi_sft_then_rl \
+  --preset train-medium --version 2026.11.19.1 --plan
+```
+
 The Snowball and Mochi preset commands use `--resume NAME@VERSION` to start from
 the latest committed native checkpoint of a finished run. Use a checkpointing
 preset and an immutable version. If the source checkpoint advances between

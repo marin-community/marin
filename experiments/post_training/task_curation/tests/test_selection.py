@@ -343,9 +343,9 @@ def test_selection_imports_image_graders_from_admitted_components(tmp_path):
         }
     summary = json.loads((output / "summary.json").read_text())
     assert summary["grader_kind_counts"] == {
-        "train": {"package": 4, "image": 1, "remote_judge": 0, "in_process": 0},
-        "validation": {"package": 80, "image": 0, "remote_judge": 0, "in_process": 20},
-        "full_validation": {"package": 84, "image": 0, "remote_judge": 0, "in_process": 21},
+        "train": {"package": 4, "image": 1, "remote_judge": 0, "in_process": 0, "harness": 0},
+        "validation": {"package": 80, "image": 0, "remote_judge": 0, "in_process": 20, "harness": 0},
+        "full_validation": {"package": 84, "image": 0, "remote_judge": 0, "in_process": 21, "harness": 0},
     }
 
 
@@ -390,22 +390,22 @@ def test_selection_mixes_released_and_curated_tasks(tmp_path):
         released=(release,),
     )
     curated = {one_turn: admitted_source(tmp_path / "curated", [one_turn_task])}
-    root = Path(run(task_selection_step(curated, settings))[0].path)
+    step = task_selection_step(curated, settings)
+    changed = settings.model_copy(update={"released": (release.model_copy(update={"sha256": "0" * 64}),)})
+    assert step.fingerprint() != task_selection_step(curated, changed).fingerprint()
+    root = Path(run(step)[0].path)
     summary = json.loads((root / "summary.json").read_text())
     assert summary["training_family_counts"] == {"agentic": 1, "nonagentic": 1}
     assert summary["harness_graded_datasets"] == ["long-loop-smartie-swesmith"]
     assert summary["grader_kind_counts"]["train"]["harness"] == 1
-    assert summary["released_sources"] == [
-        {
-            "uri": release.uri,
-            "sha256": release.sha256,
-            "license": release.license,
-            "rows_read": 3,
-            "rows_admitted": 1,
-            "rows_removed": {"heldout_overlap": 1, "duplicate": 1, "quota": 0},
-        }
-    ]
     assert summary["recipe"]["released"] == [release.model_dump(mode="json")]
+    assert summary["source_counts"][release.uri] == {
+        "input": 3,
+        "selected": 1,
+        "eligible": 1,
+        "heldout_overlap": 1,
+        "duplicate": 1,
+    }
     rows = pq.read_table(root / TRAIN_FILENAME).to_pylist()
     labels = {}
     for row in rows:
@@ -431,7 +431,7 @@ def test_selection_mixes_released_and_curated_tasks(tmp_path):
 )
 def test_selection_refuses_invalid_released_tasks(tmp_path, fault, message):
     task = source_task("agent-task", image=fault == "grader")
-    if fault in ("count", "schema"):
+    if fault == "schema":
         task = task.model_copy(update={"schema_version": "0.27"})
     if fault == "tag":
         task = task.model_copy(update={"tags": ("agentic",)})

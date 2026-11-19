@@ -12,7 +12,7 @@ from enum import StrEnum
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Literal
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -128,6 +128,7 @@ class HeldoutSource(BaseModel):
 
 
 class ReleasedSource(HeldoutSource):
+    format: Literal[PanelFormat.TASK_SPEC]
     family: str
     sha256: str
     agentic: bool
@@ -366,11 +367,7 @@ def _panel_source_tasks(
     elif source.format == PanelFormat.HISTORICAL:
         tasks = (validation_task(row, grader_environments) for row in _parquet_rows(root, LOWERED_TASK_SPEC_COLUMN))
     else:
-        release = source if isinstance(source, ReleasedSource) else None
-        tasks = (
-            TaskSpec.model_validate_json(row[TASK_SPEC_COLUMN])
-            for row in _parquet_rows(root, TASK_SPEC_COLUMN, release=release)
-        )
+        tasks = (TaskSpec.model_validate_json(row[TASK_SPEC_COLUMN]) for row in _parquet_rows(root, TASK_SPEC_COLUMN))
     for task in tasks:
         count += 1
         yield task
@@ -378,19 +375,9 @@ def _panel_source_tasks(
         raise ValueError(f"Panel source row count changed: {source.uri}: expected {source.rows}, read {count}")
 
 
-def _parquet_rows(path: StoragePath, column: str, *, release: ReleasedSource | None = None) -> Iterator[dict[str, Any]]:
+def _parquet_rows(path: StoragePath, column: str) -> Iterator[dict[str, Any]]:
     with path.open("rb") as stream:
-        if release is not None:
-            if hashlib.file_digest(stream, "sha256").hexdigest() != release.sha256:
-                raise ValueError(f"Released source SHA-256 mismatch: {release.uri}")
-            stream.seek(0)
-        parquet = pq.ParquetFile(stream)
-        if release is not None and parquet.metadata.num_rows != release.rows:
-            raise ValueError(
-                f"Released source row count changed: {release.uri}: "
-                f"expected {release.rows}, read {parquet.metadata.num_rows}"
-            )
-        for batch in parquet.iter_batches(batch_size=PARQUET_BATCH_ROWS, columns=[column]):
+        for batch in pq.ParquetFile(stream).iter_batches(batch_size=PARQUET_BATCH_ROWS, columns=[column]):
             yield from batch.to_pylist()
 
 
@@ -441,11 +428,10 @@ def _admitted_records(source: SelectionInput) -> Iterator[dict[str, str]]:
 
 
 def _released_records(source: ReleasedSource) -> Iterator[tuple[TaskSpec, str]]:
-    if source.format != PanelFormat.TASK_SPEC:
-        raise ValueError(f"Released source requires task_spec format: {source.uri}")
+    with StoragePath(source.uri).open("rb") as stream:
+        if hashlib.file_digest(stream, "sha256").hexdigest() != source.sha256:
+            raise ValueError(f"Released source SHA-256 mismatch: {source.uri}")
     for task in _panel_source_tasks(source, {}):
-        if "schema_version" not in task.model_fields_set:
-            raise ValueError(f"Released task {task.id} must declare TaskSpec schema {SCHEMA_VERSION}")
         tagged = "agentic" in task.tags
         if tagged and not source.agentic:
             raise ValueError(f"Released task {task.id} contradicts the source's agentic declaration")
@@ -509,7 +495,7 @@ def _manifest_records(tasks: tuple[TaskSpec, ...], active: set[str]) -> Iterator
 def _grader_counts(path: Path) -> dict[str, int]:
     rows = _parquet_rows(StoragePath(str(path)), TASK_SPEC_COLUMN)
     counts = Counter(_grader_kind(TaskSpec.model_validate_json(row[TASK_SPEC_COLUMN])) for row in rows)
-    return {kind.value: counts[kind] for kind in GraderKind if kind != GraderKind.HARNESS or counts[kind]}
+    return {kind.value: counts[kind] for kind in GraderKind}
 
 
 def write_training(
@@ -628,10 +614,11 @@ def prepare(config: SelectionConfig) -> None:
             for batch in pq.ParquetFile(directory / TRAIN_FILENAME).iter_batches(batch_size=PARQUET_BATCH_ROWS):
                 for value in batch.to_pylist():
                     task = TaskSpec.model_validate_json(value[TASK_SPEC_COLUMN])
-                    if isinstance(task.grader, NoGrader):
-                        harness_datasets.add(task.source.dataset)
                     tags = TaskStrata.model_validate({key: value[key] for key in TaskStrata.model_fields})
-                    yield _selection_row(task, tags, state=MembershipState.ACTIVE).model_dump(mode="json")
+                    row = _selection_row(task, tags, state=MembershipState.ACTIVE)
+                    if row.grader_kind == GraderKind.HARNESS:
+                        harness_datasets.add(task.source.dataset)
+                    yield row.model_dump(mode="json")
 
         write_parquet_file(manifest_rows(), str(directory / TASK_MANIFEST_FILENAME), schema=TASK_MANIFEST_SCHEMA)
         recipe_document = config.recipe.model_dump(mode="json")
@@ -656,25 +643,6 @@ def prepare(config: SelectionConfig) -> None:
             "validation_family_counts": selection.family_counts,
             "validation_task_ids": [task.id for task in selection.sample],
         }
-        if config.recipe.released:
-            released_summary = []
-            for source in config.recipe.released:
-                count = counts[source.uri]
-                released_summary.append(
-                    {
-                        "uri": source.uri,
-                        "sha256": source.sha256,
-                        "license": source.license,
-                        "rows_read": count.input,
-                        "rows_admitted": count.selected,
-                        "rows_removed": {
-                            "heldout_overlap": count.heldout_overlap,
-                            "duplicate": count.duplicate,
-                            "quota": count.eligible - count.selected,
-                        },
-                    }
-                )
-            summary["released_sources"] = released_summary
         if harness_datasets:
             summary["harness_graded_datasets"] = sorted(harness_datasets)
         task_files = (TRAIN_FILENAME, VALIDATION_FILENAME, FULL_VALIDATION_FILENAME)

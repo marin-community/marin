@@ -127,7 +127,6 @@ _DEFAULT_PATCH = RecipePatch(
         weight_sync_backend="nccl",
         weight_sync_pause=sections.WeightSyncPause(mode="keep", clear_cache=True),
         weight_sync_transport="expert_block",
-        # The agentic layouts use the same weight-sync deadline as the Snowball control.
         expert_block_sync=sections.ExpertBlockSync(timeout_seconds=600, verify=False),
         gpu_memory_utilization=0.75,
         max_num_seqs=1024,
@@ -418,7 +417,7 @@ _TRAIN_LONG_AGENTIC = agentic(
         export="best",
         evaluations=(replace(_TASK_SET, every=2),),
         checkpoint_every=2,
-        gaps=("harbor-on-daytona",),
+        gaps=(*(gap for gap in _TRAIN_LONG.gaps if gap != "no-agentic-tasks"), "harbor-on-daytona"),
     ),
     name="train-long-agentic",
     layout=_CAMPAIGN_LAYOUT,

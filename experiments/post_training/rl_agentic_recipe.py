@@ -57,10 +57,10 @@ _AGENTIC_RECIPE = RecipePatch(
 def agentic_limits(
     *,
     attempt_timeout: int,
+    session_attempt_timeout: int,
     model_turn_timeout: int,
     ttl_minutes: int,
     stall_timeout: int,
-    session_attempt_timeout: int | None = None,
 ) -> RecipePatch:
     return RecipePatch(
         environment=sections.Environment(
@@ -68,9 +68,7 @@ def agentic_limits(
                 "daytona": {"ttl_minutes": ttl_minutes},
                 "task_spec": {
                     "session": {
-                        "attempt_timeout": (
-                            attempt_timeout if session_attempt_timeout is None else session_attempt_timeout
-                        ),
+                        "attempt_timeout": session_attempt_timeout,
                         "total_turn_timeout": model_turn_timeout,
                         "model_turn_timeout": model_turn_timeout,
                     }

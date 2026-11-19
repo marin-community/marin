@@ -280,7 +280,8 @@ def published_model(value: str, *, preset: Preset) -> SkyRLModelSource:
     )
 
 
-def run_reference(value: str) -> tuple[str, str]:
+def published_checkpoint(value: str, *, preset: Preset) -> presets.StoredResume:
+    """Pin the latest committed native checkpoint of a finished run."""
     name, separator, version = value.rpartition("@")
     if not name or not separator or is_mutable_version(version):
         raise click.BadParameter("use NAME@VERSION with an immutable run version")
@@ -289,12 +290,6 @@ def run_reference(value: str) -> tuple[str, str]:
         validate_path_segment("version", version)
     except ValueError as error:
         raise click.BadParameter(str(error)) from error
-    return name, version
-
-
-def published_checkpoint(value: str, *, preset: Preset) -> presets.StoredResume:
-    """Pin the latest committed native checkpoint of a finished run."""
-    name, version = run_reference(value)
     try:
         config = read_skyrl_launch_config(run_path(preset.recipe.layout.cluster, name, version))
         root = StoragePath(config["artifacts"]["checkpoint_root"])

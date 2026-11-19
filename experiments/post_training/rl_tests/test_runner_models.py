@@ -14,14 +14,15 @@ import yaml
 from click.testing import CliRunner
 from iris.cluster.types import JobName
 from marin.execution.artifact import Artifact
-from marin.execution.lazy import OUT, apply, materialized_config
+from marin.execution.lazy import OUT, ArtifactStep, apply, materialized_config
 from marin.rl.skyrl import ArtifactHfModel, IrisSkyRLExecution
 from marin.rl.skyrl_records import RESOLVED_LAUNCH_FILENAME
 from skyrlrecipe import RecipePatch
 from skyrlrecipe.documents import set_path
 from skyrlrecipe.locality import RoleTopologyMode
 
-from experiments.post_training import mochi_rl, rl, rl_gate, rl_recipe
+from experiments.post_training import rl, rl_gate, rl_recipe
+from experiments.post_training.mochi_rl import MOCHI
 from experiments.post_training.rl_presets import BatchMix
 from experiments.post_training.rl_tests.fixtures import SELECTION_IDENTITY
 from experiments.post_training.skyrl_test_support import assert_revisioned_native_configs
@@ -30,31 +31,32 @@ from experiments.post_training.snowball_sft import MIXTURE_262K_32NODE
 
 
 @pytest.fixture
-def table(request, monkeypatch):
-    if request.param == "snowball":
-        return SNOWBALL
+def table(request):
+    return {"snowball": SNOWBALL, "mochi": MOCHI}[request.param]
 
+
+@pytest.fixture
+def mochi_sft_preset(monkeypatch):
+    from experiments.grug.moe_hero_ep import launch_hero_sft, sft_recipe  # noqa: PLC0415
     from experiments.post_training.mochi_sft import MIXTURE_262K_176NODE  # noqa: PLC0415
 
-    def export_model(path):
-        return Artifact(path=path)
+    monkeypatch.setattr(sft_recipe, "checkpoint_step", lambda _path: 393491)
+    monkeypatch.setattr(launch_hero_sft, "special_token_init", lambda _step: None)
+    return MIXTURE_262K_176NODE
 
-    model = ArtifactHfModel(
-        replace(
-            apply("fixture/mochi-sft-export", export_model, version="2026.11.10", path=OUT),
-            override_path="s3://fixture-models/mochi-sft-export",
-        ),
-        relative_path="hf",
-    )
 
-    def sft_model(preset):
-        assert preset is MIXTURE_262K_176NODE
-        return model
-
-    monkeypatch.setattr(type(MIXTURE_262K_176NODE), "model", sft_model)
-    model_table = mochi_rl._model_presets()
-    assert all(preset.model is model for preset in model_table.presets)
-    return model_table
+def test_mochi_default_matches_production_sft_export(mochi_sft_preset):
+    produced = mochi_sft_preset.model()
+    for preset in MOCHI.presets:
+        model = preset.model
+        assert isinstance(model, ArtifactHfModel)
+        prefix = rl_recipe.artifact_prefix(preset.recipe.layout.cluster)
+        assert (model.step.name, model.step.version, model.step.path(prefix)) == (
+            produced.step.name,
+            produced.step.version,
+            produced.step.path(prefix),
+        )
+        assert model.relative_path == produced.relative_path and model.tokenizer_uri is None
 
 
 @pytest.mark.parametrize(
@@ -63,11 +65,11 @@ def table(request, monkeypatch):
         (
             "mochi",
             {
-                "train-medium": {"2026.11.19.1": "d59b1881"},
-                "train-long": {"2026.11.19.1": "584b0726"},
-                "train-long-3rack": {"2026.11.19.1": "8dac7255"},
-                "train-long-agentic": {"2026.11.19.1": "ba6726dc"},
-                "train-long-agentic-3rack": {"2026.11.19.1": "aace9297"},
+                "train-medium": {"2026.11.19.1": "8b5a970e"},
+                "train-long": {"2026.11.19.1": "db854d78"},
+                "train-long-3rack": {"2026.11.19.1": "a0e17c94"},
+                "train-long-agentic": {"2026.11.19.1": "da5ac9be"},
+                "train-long-agentic-3rack": {"2026.11.19.1": "185f5443"},
             },
         ),
         (
@@ -223,8 +225,8 @@ def test_plan_requires_harness_grading_mapping(selection, dataset, harness_overr
         assert "harbor_trial in harness_by_dataset" in result.output and dataset in result.output
 
 
-def test_resume_pins_the_native_checkpoint(selection, tmp_path):
-    preset = SNOWBALL.by_name["train-long"]
+@pytest.fixture
+def stored_checkpoint(tmp_path):
     root = tmp_path / "checkpoints" / "previous" / "2026.11.19.1"
     checkpoint = root / "scratch" / "global_step_4"
     checkpoint.mkdir(parents=True)
@@ -232,6 +234,12 @@ def test_resume_pins_the_native_checkpoint(selection, tmp_path):
         yaml.safe_dump({"config": {"artifacts": {"checkpoint_root": str(checkpoint.parent)}}})
     )
     (checkpoint.parent / "latest_ckpt_global_step.txt").write_text("4")
+    return checkpoint
+
+
+def test_resume_pins_the_native_checkpoint(selection, tmp_path, stored_checkpoint):
+    preset = SNOWBALL.by_name["train-long"]
+    checkpoint = stored_checkpoint
     with pytest.raises(click.BadParameter, match="source run's retention period"):
         rl_recipe.published_checkpoint("checkpoints/previous@2026.11.19.1", preset=preset)
     (checkpoint / "trainer_state.pt").write_bytes(b"trainer checkpoint")
@@ -248,9 +256,31 @@ def test_resume_pins_the_native_checkpoint(selection, tmp_path):
         rl.build_run(preset, table=SNOWBALL, resume=resume, init=preset.model)
 
 
+@pytest.mark.parametrize("resume", (False, True), ids=("fresh", "resume"))
+def test_mochi_plan_refuses_an_incomplete_default_export(selection, tmp_path, stored_checkpoint, resume):
+    preset = MOCHI.by_name["train-long"]
+    model = preset.model
+    assert isinstance(model, ArtifactHfModel)
+    root = tmp_path / "model"
+    (root / "hf").mkdir(parents=True)
+    (root / "hf" / "config.json").write_text("{}")
+    model = replace(model, step=ArtifactStep.adopt(model.step.name, model.step.version, str(root)))
+    table = replace(MOCHI, presets=(replace(preset, model=model, export="none"),))
+    args = ("--preset", preset.name, "--version", preset.revision, "--plan")
+    if resume:
+        (stored_checkpoint / "trainer_state.pt").write_bytes(b"trainer checkpoint")
+        args += ("--resume", "checkpoints/previous@2026.11.19.1")
+    result = CliRunner().invoke(rl.command(table, argv=args), args)
+    assert result.exit_code == 4, (result.output, result.exception)
+    assert f"{model.step.name}@{model.step.version}" in result.output
+    assert "mochi_sft_then_rl.py" in result.output and "--init NAME@VERSION" in result.output
+
+
 @pytest.mark.usefixtures("source_provenance")
-def test_sft_composition_reenters_its_own_module(selection, monkeypatch):
-    module = "experiments.post_training.snowball_sft_then_rl"
+@pytest.mark.parametrize("model", ("snowball", "mochi"))
+def test_sft_composition_reenters_its_own_module(selection, monkeypatch, model, request):
+    module = f"experiments.post_training.{model}_sft_then_rl"
+    sft = MIXTURE_262K_32NODE if model == "snowball" else request.getfixturevalue("mochi_sft_preset")
     argv = ("--preset", "train-long", "--version", "2026.11.19.1", "--no-issue", "--run")
     prefix = "s3://fixture-models/shared"
     monkeypatch.setenv("MARIN_PREFIX", prefix)
@@ -262,7 +292,7 @@ def test_sft_composition_reenters_its_own_module(selection, monkeypatch):
     def submit(entry_module, handles, _max_concurrent, _env, *, argv):
         assert entry_module == module
         (run,) = handles
-        initializer = MIXTURE_262K_32NODE.model()
+        initializer = sft.model()
         producer = next(step for step in run.deps if step.name == initializer.step.name)
         assert producer.fingerprint() == initializer.step.fingerprint()
         document = yaml.safe_load(materialized_config(run, prefix).launch_config_yaml)

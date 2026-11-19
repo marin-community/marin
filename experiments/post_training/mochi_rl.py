@@ -1,13 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run reinforcement learning from the production Mochi SFT preset's model."""
+"""Run reinforcement learning from the production Mochi SFT export."""
 
 from dataclasses import replace
 from pathlib import Path
 
-from marin.rl.skyrl import MegatronGeometry, SkyRLRetentionPolicy, SkyRLRolePlan
-from rigging.filesystem.s3_compat import configure_coreweave_s3
+from marin.execution.lazy import ArtifactStep
+from marin.rl.skyrl import ArtifactHfModel, MegatronGeometry, SkyRLRetentionPolicy, SkyRLRolePlan
 from skyrlrecipe import ContextBudget, RecipePatch, sections
 from skyrlrecipe.declared import EvaluationSampling
 from skyrlrecipe.locality import RoleTopologyMode
@@ -26,6 +26,15 @@ from experiments.post_training.rl_presets import (
 from experiments.post_training.task_curation.selection import VALIDATION_FILENAME
 
 _STOP_TOKEN_IDS = (128001, 128009)
+
+_MODEL = ArtifactHfModel(
+    ArtifactStep.adopt(
+        "grug/hero-sft-fullab-step393k-v2-hf",
+        "2026.11.10",
+        "s3://marin-us-east-02a/marin/grug/hero-sft-fullab-step393k-v2-hf/2026.11.10",
+    ),
+    relative_path="hf",
+)
 
 _ONE_RACK_PLAN = SkyRLRolePlan(
     colocate_all=False,
@@ -227,69 +236,63 @@ _EVALUATION = Evaluation(
 
 # Four hours covers the trial; eight hours covers the trial and one retry.
 _AGENTIC_LIMITS = agentic_limits(
-    attempt_timeout=14_400, model_turn_timeout=10_800, ttl_minutes=240, stall_timeout=28_800
+    attempt_timeout=14_400,
+    session_attempt_timeout=14_400,
+    model_turn_timeout=10_800,
+    ttl_minutes=240,
+    stall_timeout=28_800,
 ).merge(RecipePatch(terminal_bench={"harbor": {"override_memory_mb": 4096}}))
 
 
-def _model_presets() -> ModelPresets:
-    # The SFT module needs training dependencies only when building the table.
-    from experiments.post_training.mochi_sft import MIXTURE_262K_176NODE  # noqa: PLC0415
+_TRAIN_LONG = Preset(
+    name="train-long",
+    revision="2026.11.19.1",
+    recipe=Recipe(layout=ONE_RACK, fixed_reply_tokens=None, config=_ONE_TURN),
+    updates=10_000,
+    measured=range(1, 10_001),
+    tasks_input="optional",
+    accepts_settings=True,
+    accepts_init=True,
+    publishes=False,
+    controls=None,
+    checkpoint_every=2,
+    owned_keys=frozenset({"generator.run_engines_locally"}),
+    data_settings=frozenset({"shuffle"}),
+    tasks="snowball-100k@2026.11.19.1",
+    model=_MODEL,
+    eval_lite="eval-lite@2026.11.17.1",
+    evaluations=(_EVALUATION,),
+    seed=20261020,
+    sample_namespace="datasets/mochi-rl",
+    wandb_entity="marin-community",
+    retention=SkyRLRetentionPolicy(resume_checkpoint_count=2, temporary_storage_ttl_days=3),
+    export="best",
+)
+_TRAIN_LONG_3RACK = replace(
+    _TRAIN_LONG,
+    name="train-long-3rack",
+    recipe=replace(_TRAIN_LONG.recipe, layout=THREE_RACK, config=_ONE_TURN.merge(_THREE_RACK_PATCH)),
+)
+_TRAIN_MEDIUM = replace(
+    _TRAIN_LONG.with_updates(2),
+    name="train-medium",
+    evaluations=(),
+    export="none",
+)
 
-    model = MIXTURE_262K_176NODE.model()
-    train_long = Preset(
-        name="train-long",
-        revision="2026.11.19.1",
-        recipe=Recipe(layout=ONE_RACK, fixed_reply_tokens=None, config=_ONE_TURN),
-        updates=10_000,
-        measured=range(1, 10_001),
-        tasks_input="optional",
-        accepts_settings=True,
-        accepts_init=True,
-        publishes=False,
-        controls=None,
-        checkpoint_every=2,
-        owned_keys=frozenset({"generator.run_engines_locally"}),
-        data_settings=frozenset({"shuffle"}),
-        tasks="snowball-100k@2026.11.19.1",
-        model=model,
-        eval_lite="eval-lite@2026.11.17.1",
-        evaluations=(_EVALUATION,),
-        seed=20261020,
-        sample_namespace="datasets/mochi-rl",
-        wandb_entity="marin-community",
-        retention=SkyRLRetentionPolicy(resume_checkpoint_count=2, temporary_storage_ttl_days=3),
-        export="best",
-    )
-    train_long_3rack = replace(
-        train_long,
-        name="train-long-3rack",
-        recipe=replace(train_long.recipe, layout=THREE_RACK, config=_ONE_TURN.merge(_THREE_RACK_PATCH)),
-    )
-    train_medium = replace(
-        train_long.with_updates(2),
-        name="train-medium",
-        evaluations=(),
-        export="none",
-    )
-
-    return ModelPresets(
-        model="mochi",
-        presets=(
-            train_medium,
-            train_long,
-            train_long_3rack,
-            agentic(train_long, name="train-long-agentic", limits=_AGENTIC_LIMITS),
-            agentic(train_long_3rack, name="train-long-agentic-3rack", limits=_AGENTIC_LIMITS),
-        ),
-        namespace="mochi-rl",
-        controls={},
-    )
-
-
-def main() -> int:
-    configure_coreweave_s3()
-    return rl.main(_model_presets())
+MOCHI = ModelPresets(
+    model="mochi",
+    presets=(
+        _TRAIN_MEDIUM,
+        _TRAIN_LONG,
+        _TRAIN_LONG_3RACK,
+        agentic(_TRAIN_LONG, name="train-long-agentic", limits=_AGENTIC_LIMITS),
+        agentic(_TRAIN_LONG_3RACK, name="train-long-agentic-3rack", limits=_AGENTIC_LIMITS),
+    ),
+    namespace="mochi-rl",
+    controls={},
+)
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(rl.main(MOCHI))

@@ -32,13 +32,14 @@ from marin.execution.artifact import is_mutable_version
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.lazy import run as build_artifacts
-from marin.execution.step_runner import step_is_built
+from marin.execution.step_runner import check_cache, step_is_built
 from marin.execution.step_status import get_status_path
 from marin.experiment.cli import build_options_with_runner
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.cli import submit_or_run, validate_coordinator_graph
 from marin.rl.skyrl import (
     IRIS_HUB_CLUSTER_CONFIG,
+    ArtifactHfModel,
     IrisSkyRLExecution,
     SkyRLModelSource,
     SkyRLPolicyModel,
@@ -156,10 +157,7 @@ def build_run(
         raise click.BadParameter("this preset accepts no --set")
     if preset.tasks_input == "required":
         if tasks is None and not control:
-            message = "data presets require --tasks and accept no --set"
-            if preset.accepts_settings:
-                message = f"{preset.name} requires --tasks"
-            raise click.BadParameter(message)
+            raise click.BadParameter(f"{preset.name} requires --tasks")
     elif preset.tasks_input == "forbidden" and tasks is not None:
         raise click.BadParameter("this preset does not accept --tasks")
     if not preset.accepts_init and init is not None:
@@ -672,6 +670,19 @@ def command(
                 table=table,
             )
             click.get_current_context().meta["rl_training_type"] = validated["runtime"]["training_type"]
+        model = preset.model
+        if (
+            init is None
+            and init_name is None
+            and isinstance(model, ArtifactHfModel)
+            and model.step.adopt_source is not None
+            and model.tokenizer_uri is None
+            and not check_cache(model.step.path())
+        ):
+            raise click.BadParameter(
+                f"default model {model.step.name}@{model.step.version} has no completed HF export. "
+                f"Build it with {table.model}_sft_then_rl.py or start a new run with --init NAME@VERSION."
+            )
         snapshot = _status(
             replace(run, gate=rl_gate.completed_gate(run.gate)), preset, stored_only=do_run, issue=recorded_issue
         )

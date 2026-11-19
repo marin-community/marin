@@ -7,6 +7,8 @@ from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import ArtifactStep, materialized_config
@@ -17,6 +19,7 @@ from rigging.filesystem.storage_path import StoragePath
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import rl_recipe as recipe
 from experiments.post_training.rl_presets import ModelPresets
+from experiments.post_training.task_curation.selection import TRAIN_FILENAME
 
 
 def with_current_control_revisions(table: ModelPresets) -> ModelPresets:
@@ -34,6 +37,12 @@ def selection_summary(full_rows: int) -> dict:
         "full_validation_rows": full_rows,
         "grader_kind_counts": {"train": {}, "validation": {}, "full_validation": {}},
     }
+
+
+def write_training_families(root: StoragePath, counts: Mapping[str, int]) -> None:
+    families = [family for family, count in counts.items() for _ in range(count)]
+    with (root / TRAIN_FILENAME).open("wb") as stream:
+        pq.write_table(pa.table({"family": families}), stream)
 
 
 def native_json(*uv_options: str):

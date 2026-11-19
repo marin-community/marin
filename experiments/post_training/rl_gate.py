@@ -542,9 +542,11 @@ def compose_configs(paths: Sequence[str]) -> list[dict]:
     native_root = str(recipe.REPO_ROOT / "vendor/skyrl")
     program = (
         "import json,sys\nfrom pathlib import Path\nfrom omegaconf import OmegaConf\n"
+        "from rigging.filesystem.s3_compat import configure_coreweave_s3\n"
         "from cloud.iris import launch_config\nimport skyrl_train,marinskyrl\n"
         f"assert all(Path(module.__file__).resolve().is_relative_to({native_root!r}) "
         "for module in (launch_config,skyrl_train,marinskyrl))\n"
+        "configure_coreweave_s3()\n"
         "print(json.dumps([OmegaConf.to_container(launch_config.load_launch_config(path), resolve=True) "
         "for path in sys.argv[1:]]))\n"
     )

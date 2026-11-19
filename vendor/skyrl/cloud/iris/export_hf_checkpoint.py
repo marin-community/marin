@@ -248,7 +248,7 @@ def argument_parser() -> argparse.ArgumentParser:
         required=True,
         help="the complete resolved launch document for the training run",
     )
-    ap.add_argument("--recover-best", action="store_true", help="export the best native checkpoint of an ended run")
+    ap.add_argument("--recover-best", action="store_true", help="export the best checkpoint using only --launch-config")
     ap.add_argument("--model_path", help="base model path, as at training time")
     ap.add_argument("--model-source-uri", help="object-store model source for a task-local --model_path")
     ap.add_argument("--model-source-identity", help="immutable identity for --model-source-uri")
@@ -487,9 +487,6 @@ def main() -> None:
     parser = argument_parser()
     args = parser.parse_args()
     if args.recover_best:
-        recovery_defaults = parser.parse_args(["--launch-config", args.launch_config, "--recover-best"])
-        if args != recovery_defaults:
-            parser.error("--recover-best uses only the saved --launch-config")
         export_terminal_policy(Path(args.launch_config), recover_best=True)
         return
     if args.gpu_variant is None:
