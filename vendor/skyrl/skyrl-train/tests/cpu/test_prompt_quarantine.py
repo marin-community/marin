@@ -3,7 +3,7 @@
 import pytest
 
 from skyrl_train.group_admission import AdmissionRejection
-from skyrl_train.rollouts.loader import QUARANTINED_PROMPTS_METRIC, PromptLoader, SeededPasses
+from skyrl_train.rollouts.loader import QUARANTINE_STEPS, QUARANTINED_PROMPTS_METRIC, PromptLoader, SeededPasses
 
 UNUSABLE = AdmissionRejection.BELOW_MINIMUM_GROUP_SIZE.value
 
@@ -40,13 +40,16 @@ def offered(prompts: PromptLoader, count: int) -> list[str]:
 
 
 @pytest.mark.parametrize("max_unusable_groups", [1, 2])
-def test_unusable_prompt_stops_being_offered(max_unusable_groups: int):
+def test_unusable_prompt_sits_out_then_returns(max_unusable_groups: int):
     prompts = loader(num_rows=4, batch_size=3, max_unusable_groups=max_unusable_groups)
     for _ in range(max_unusable_groups):
         prompts.record_disposition("0", UNUSABLE)
 
-    assert "0" not in offered(prompts, 6)
-    assert prompts.observe([])[QUARANTINED_PROMPTS_METRIC] == 1.0
+    for _ in range(QUARANTINE_STEPS - 1):
+        assert "0" not in offered(prompts, 6)
+        assert prompts.observe([])[QUARANTINED_PROMPTS_METRIC] == 1.0
+    assert prompts.observe([])[QUARANTINED_PROMPTS_METRIC] == 0.0
+    assert "0" in offered(prompts, 4)
 
 
 def test_usable_group_resets_the_count():

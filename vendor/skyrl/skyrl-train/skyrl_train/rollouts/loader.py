@@ -14,6 +14,8 @@ from skyrl_train.group_admission import AdmissionRejection
 
 STALE_RETRIES_EXHAUSTED_METRIC = "async/stale_retries_exhausted"
 QUARANTINED_PROMPTS_METRIC = "async/quarantined_prompts"
+# Training steps a quarantined prompt sits out before the loader offers it again.
+QUARANTINE_STEPS = 10
 # Rejections of a group training cannot use: no loss tokens, or too few graded samples for its baseline. A broken
 # grader causes them, and so does an infrastructure failure, whose samples are masked.
 UNUSABLE_GROUP_REJECTIONS = frozenset(
@@ -118,10 +120,10 @@ class PromptLoader:
     after that it waits until the prompt order offers it again.
 
     A prompt whose last ``max_unusable_groups`` groups were all unusable, for example because its grader failed on
-    every sample, is quarantined: the loader stops offering it for the rest of the run. Quarantine never leaves fewer
-    usable prompts than one batch needs, so an outage that masks every sample cannot empty the dataset; a batch that
-    still cannot fill ends at the admission stall timeout. Retry counts and quarantine restart empty when a run
-    resumes.
+    every sample, is quarantined: the loader does not offer it for the next ``QUARANTINE_STEPS`` training steps, then
+    offers it again with a fresh count. The same rejections follow an infrastructure failure, so a prompt must be
+    able to return. Quarantine never leaves fewer usable prompts than one batch needs; a batch that still cannot fill
+    ends at the admission stall timeout. Retry counts and quarantine restart empty when a run resumes.
 
     The sequence never ends; the trainer decides when to stop.
     """
@@ -152,7 +154,9 @@ class PromptLoader:
         self._max_stale_retries = max_stale_retries
         self._max_unusable_groups = max_unusable_groups
         self._unusable_groups: dict[str, int] = {}
-        self._quarantined: set[str] = set()
+        # Quarantined uid to the training step that releases it.
+        self._quarantined: dict[str, int] = {}
+        self._step = 0
         self._retries: collections.deque[dict] = collections.deque()
         self._stale_retries: dict[str, int] = {}
         self._retries_exhausted = 0
@@ -219,10 +223,11 @@ class PromptLoader:
                 usable,
             )
             return
-        self._quarantined.add(uid)
+        self._quarantined[uid] = self._step + QUARANTINE_STEPS
         logger.warning(
-            "Quarantined prompt {} after {} unusable groups in a row (last: {}); {} usable prompts remain",
+            "Quarantined prompt {} for {} steps after {} unusable groups in a row (last: {}); {} usable prompts remain",
             uid,
+            QUARANTINE_STEPS,
             count,
             disposition,
             usable - 1,
@@ -231,9 +236,12 @@ class PromptLoader:
     def observe(self, groups: Sequence[JudgedGroup]) -> dict[str, float]:
         """Report one training step's judged groups to the prompt order and return its metrics.
 
-        The metrics include how many stale prompts used up their regenerations since the previous call and how many
-        prompts are quarantined.
+        Each call is one training step: prompts whose quarantine has run out become available again. The metrics
+        include how many stale prompts used up their regenerations since the previous call and how many prompts are
+        quarantined.
         """
+        self._step += 1
+        self._quarantined = {uid: release for uid, release in self._quarantined.items() if release > self._step}
         exhausted, self._retries_exhausted = self._retries_exhausted, 0
         return {
             **self._order.observe(groups),
