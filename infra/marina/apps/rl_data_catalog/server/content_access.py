@@ -3,6 +3,7 @@
 
 """Withhold task content without changing a source's stored data tier or admission."""
 
+import hashlib
 from typing import Any
 
 from finestore.rl.licenses import LicenseDecisionKind, LicenseReceipt
@@ -89,7 +90,19 @@ def backend_metadata(capabilities: dict[str, Any] | None) -> dict[str, Any] | No
         return None
     return {
         "source_id": capabilities.get("source_id"),
-        "backends": {name: {"support": fit["support"]} for name, fit in (capabilities.get("backends") or {}).items()},
+        "basis": capabilities.get("basis", "unassessed"),
+        "task_count": capabilities.get("task_count", 0),
+        "backends": {
+            name: {
+                "support": fit["support"],
+                **{key: fit.get(key, {}) for key in ("roles", "task_counts", "blockers", "not_applicable")},
+                "validation_errors": {
+                    "withheld:" + hashlib.sha256(message.encode()).hexdigest(): count
+                    for message, count in (fit.get("validation_errors") or {}).items()
+                },
+            }
+            for name, fit in (capabilities.get("backends") or {}).items()
+        },
     }
 
 

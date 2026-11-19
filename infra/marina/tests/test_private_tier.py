@@ -735,6 +735,28 @@ def test_license_ban_redacts_existing_content_and_invalidates_inventory_cache(
             text("UPDATE curriculum_sources SET declaration=declaration-'id' WHERE source_id=:source"),
             {"source": OPEN_SOURCE_ID},
         )
+        capabilities = {
+            "source_id": OPEN_SOURCE_ID,
+            "basis": "converted_spec_census",
+            "task_count": 3,
+            "backends": {
+                "daytona": {
+                    "support": "unsupported",
+                    "roles": {"agent": {"unsupported": 3}, "grader": {"role_absent": 3}},
+                    "task_counts": {"unsupported": 3},
+                    "blockers": {"agent:non_root_user": 3},
+                    "not_applicable": {},
+                    "validation_errors": {canary: 3},
+                },
+            },
+        }
+        connection.execute(
+            text(
+                "INSERT INTO atlas_backend_sources VALUES (:load,:source,CAST(:caps AS JSONB)) "
+                "ON CONFLICT (load_id,source_id) DO UPDATE SET capabilities=EXCLUDED.capabilities"
+            ),
+            {"load": load_id, "source": OPEN_SOURCE_ID, "caps": json.dumps(capabilities)},
+        )
         connection.execute(
             text(
                 "UPDATE atlas_sources SET source_fingerprint=CAST(:fingerprint AS JSONB) "
@@ -800,6 +822,12 @@ def test_license_ban_redacts_existing_content_and_invalidates_inventory_cache(
                 assert response.status_code == 200, (endpoint, response.text)
                 assert canary not in response.text, endpoint
                 assert OPEN_PROMPT not in response.text, endpoint
+            metadata = client.get("/source", params={"source_id": OPEN_SOURCE_ID}).json()["backend_capabilities"]
+            assert metadata["task_count"] == 3 and metadata["basis"] == "converted_spec_census"
+            fit = metadata["backends"]["daytona"]
+            assert fit["roles"] == capabilities["backends"]["daytona"]["roles"]
+            assert list(fit["validation_errors"].values()) == [3]
+            assert all(key.startswith("withheld:") for key in fit["validation_errors"])
             evidence = client.get("/evidence", params={"source_id": OPEN_SOURCE_ID, "task_id": "one"}).json()
             assert evidence["packet"]["content"] is None
             assert evidence["packet"]["content_withheld"] is True

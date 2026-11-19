@@ -15,6 +15,7 @@ from playwright.sync_api import expect
 from sqlalchemy import text
 
 from infra.marina.apps.rl_data_catalog.server.app import migrate
+from infra.marina.apps.rl_data_catalog.server.content_access import backend_metadata
 from infra.marina.apps.rl_data_catalog.server.evidence_content import pack_content
 
 APP_ID = UUID("fb11c931-5861-4878-8bb5-a964d652b45f")
@@ -243,6 +244,25 @@ def test_license_withheld_pages_do_not_request_task_content(journey: Journey, wi
         page.goto(f"{journey.origin}/a/{APP_ID}/v/1/{path}")
         expect(page.locator("#message")).to_have_text(marker)
         page.screenshot(path=str(journey.shots / f"withheld-{path.split('.')[0]}-{theme}-{width}.png"))
+    capabilities = backend_metadata(
+        {
+            "source_id": "Marin:clean",
+            "basis": "converted_spec_census",
+            "task_count": 1,
+            "backends": {
+                "daytona": {
+                    "support": "unsupported",
+                    "roles": {"agent": {"unsupported": 1}},
+                    "task_counts": {"unsupported": 1},
+                    "blockers": {},
+                    "validation_errors": {"private task text": 1},
+                }
+            },
+        }
+    )
+    fits = page.evaluate("source => backendLabels(source)", {"backend_capabilities": capabilities})
+    assert fits[0]["fit"]["support"] == "unsupported"
+    assert fits[0]["fit"]["roles"]["agent"] == {"unsupported": 1}
     assert not any(
         "/api/difficulty-attempts?" in url or "/api/difficulty-rollout?" in url or "/api/assessment?" in url
         for url in requests
