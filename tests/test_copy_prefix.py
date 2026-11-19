@@ -1,17 +1,20 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from scripts.ops.storage.copy_prefix import pack_shards, pending_files
+from scripts.ops.storage.copy_prefix import SourceFile, pack_shards, shard_id
 
 
-def test_rerun_copies_only_missing_and_resized_files() -> None:
-    source = {"a/0.parquet": 10, "a/1.parquet": 20, "b/0.parquet": 30}
-    destination = {"a/0.parquet": 10, "a/1.parquet": 7, "stale.parquet": 5}
+def test_shards_cover_every_file_once_in_key_order_and_close_at_the_byte_target() -> None:
+    files = [SourceFile("d", 4, "e4"), SourceFile("a", 6, "e1"), SourceFile("c", 5, "e3"), SourceFile("b", 1, "e2")]
 
-    assert pending_files(source, destination) == {"a/1.parquet": 20, "b/0.parquet": 30}
+    shards = pack_shards(files, target_bytes=7)
+
+    assert [[f.path for f in shard] for shard in shards] == [["a", "b"], ["c", "d"]]
 
 
-def test_shards_cover_every_file_once_and_close_at_the_byte_target() -> None:
-    files = {"d.parquet": 4, "a.parquet": 6, "c.parquet": 5, "b.parquet": 1}
+def test_a_rewritten_source_file_renames_its_shard_so_a_rerun_recopies_it() -> None:
+    shard = (SourceFile("a", 10, "etag-1"), SourceFile("b", 20, "etag-2"))
+    rewritten = (SourceFile("a", 10, "etag-1"), SourceFile("b", 20, "etag-3"))
 
-    assert pack_shards(files, target_bytes=7) == [("a.parquet", "b.parquet"), ("c.parquet", "d.parquet")]
+    assert shard_id(shard) == shard_id(tuple(shard))
+    assert shard_id(rewritten) != shard_id(shard)

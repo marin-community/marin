@@ -65,19 +65,25 @@ export CW_KEY_ID=<key-id> CW_KEY_SECRET=<key-secret>
 uv run scripts/ops/storage/copy_prefix.py \
   --from s3://marin-us-east-02a/marin/<prefix> \
   --to s3://marin-us-east-08a/marin/<prefix> \
-  --dry-run                       # list both sides from this machine; submits no job
+  --dry-run                       # list the source and shard records from this machine; submits no job
 ```
 
-The job copies each source file whose destination copy is missing or has a
-different size, then lists the destination again and fails if any file is
-still missing or differs in size. Rerun the same command to resume an
-interrupted copy. `--max-workers` (default 100) bounds the Zephyr pool; each
-worker copies eight files at a time.
+The job packs source files, in key order, into 32 GiB shards. Each Zephyr
+worker copies one shard eight files at a time with the per-object checks of
+`fsutil verified-copy`. Uploads use fixed 50 MiB parts and publish only when
+complete. Each upload's ETag is checked against the bytes read, and objects
+smaller than one part are read back and hashed. After every file in a shard
+passes, the worker writes the shard's record under
+`<destination>.copy-status/shards/`. When all shards are done, the job checks
+every destination object's size and ETag against the records and writes
+`<destination>.copy-status/complete.json` last.
 
-Use this bulk path for immutable datakit outputs. It compares files by size
-only, so a rerun can skip changed source content when its size is unchanged.
-It writes no completion manifest. Use [fsutil verified-copy](../../../docs/references/fsutil.md)
-when content verification or a completion marker is required.
+Rerunning the same command resumes the copy one whole shard at a time: shards
+with a record are skipped and every other shard is copied again in full. A
+shard's ID covers its files' keys, sizes, and source ETags, so a changed source
+file is copied again. Destination files outside the source are left untouched
+and unchecked. `--max-workers` (default 50, at 2 CPUs and 8 GB each) bounds the
+Zephyr pool so the copy fits in the CPU node pool.
 
 CoreWeave rejects `CopyObject` between buckets in different regions
 (`InvalidRegion`), so every byte passes through a worker. Only CoreWeave

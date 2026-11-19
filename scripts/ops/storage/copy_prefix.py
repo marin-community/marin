@@ -2,25 +2,30 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Copy every object below one CoreWeave prefix to another, as an Iris job.
+"""Copy and verify every object below one CoreWeave prefix to another, as an Iris job.
 
 The operator's machine submits a coordinator job through the ``marin`` federation hub,
 which hands it off to the CoreWeave peer cluster in the source's region, or in the
 destination's with ``--run-near destination``. The script streams the job's logs.
-The coordinator lists both prefixes, plans each source file whose
-destination copy is missing or has a different size, packs the plan into shards of
-about ``TARGET_SHARD_BYTES``, and runs a Zephyr pipeline whose workers stream each
-shard's files. It then lists the destination again and fails if any source file is
-missing or has a different size there. Rerunning the same command resumes the copy:
-files already at the destination with the source's size are skipped.
+
+The coordinator lists the source and packs its files, in key order, into shards of about
+``TARGET_SHARD_BYTES``. A shard's ID hashes each file's key, size, and source ETag. Zephyr
+workers copy each shard with ``rigging.fsutil.verified_copy``: an upload in fixed parts
+publishes only when complete, and its size and ETag are checked against the streamed
+bytes; smaller objects are read back and hashed. Each source ETag is checked again after
+its copy. A worker writes the shard's record under ``<destination>.copy-status/shards/``
+only after every file in the shard passes.
+
+Resume is per shard and all-or-nothing: a rerun skips shards with a record and recopies
+every file of every other shard. A changed source file changes its shard's ID, so that
+shard is copied again. After the copy, the coordinator lists the destination, checks every
+file's size and ETag against the shard records, and writes
+``<destination>.copy-status/complete.json`` last.
 
 CoreWeave rejects ``CopyObject`` between buckets in different regions with
-``InvalidRegion``, so workers read and rewrite every byte. This bulk path is for
-immutable datakit outputs. It compares files by size only: a rerun can skip changed
-source content when its size is unchanged. It writes no completion manifest. Use
-``fsutil verified-copy`` when content verification or a completion marker is required.
-
-Only CoreWeave URLs are accepted. Hugging Face buckets and R2 are not supported yet.
+``InvalidRegion``, so workers read and rewrite every byte. Only CoreWeave URLs are
+accepted. Hugging Face buckets and R2 are not supported yet. ``fsutil verified-copy``
+gives the same per-object checks from one process, with a staging prefix.
 
 Usage:
     ./scripts/ops/storage/copy_prefix.py \\
@@ -35,14 +40,18 @@ Iris refuses CoreWeave jobs without the submitter's object-storage key, so expor
 running; follow it with ``uv run iris --cluster=marin job logs -f <job id>``.
 """
 
+import hashlib
+import json
 import logging
 import sys
-from collections.abc import Iterable, Mapping
+import time
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 
 import click
 from fray.types import ResourceConfig
@@ -50,11 +59,17 @@ from iris.cli.connect import open_iris_client
 from iris.cluster.config import load_config
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
-from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.buckets import S3UploadPolicy, filesystem_for
 from rigging.filesystem.cluster_config import StoreType, data_buckets
 from rigging.filesystem.storage_path import StoragePath
-from rigging.filesystem.transfer import CopyAction, TransferLocation, execute_copies
 from rigging.fsutil.listing import metadata_listing_pages
+from rigging.fsutil.verified_copy import (
+    ETAG_IDENTITY_PREFIX,
+    VerifiedCopyError,
+    copy_with_hash,
+    object_etag,
+    verify_destination,
+)
 from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
@@ -65,15 +80,20 @@ COREWEAVE_CLUSTER_PREFIX = "cw-"
 # Jobs go through the federation hub, which hands them off to the named CoreWeave peer.
 HUB_CLUSTER = "marin"
 HUB_CONFIG = REPO_ROOT / "lib" / "iris" / "config" / f"{HUB_CLUSTER}.yaml"
-DEFAULT_MAX_WORKERS = 100
-# One shard is the unit Zephyr retries; at about 40 MB per file this is ~800 files.
-TARGET_SHARD_BYTES = 32 * 1024**3
+# Sized to stay inside the CPU node pool so the copy does not spill onto GPU nodes.
+DEFAULT_MAX_WORKERS = 50
+WORKER_RESOURCES = ResourceConfig(cpu=2, ram="8g", disk="10g")
 COPY_THREADS_PER_WORKER = 8
-WORKER_RESOURCES = ResourceConfig(cpu=4, ram="16g", disk="10g")
-# The coordinator holds both listings in memory: about 1M paths fit well below this.
+# One shard is the unit of retry and resume; at about 80 MB per file this is ~400 files.
+TARGET_SHARD_BYTES = 32 * 1024**3
+# The coordinator holds the source listing and the destination listing in memory.
 COORDINATOR_RESOURCES = ResourceSpec(cpu=4, memory="16GB", disk="5GB")
+RECORD_READ_THREADS = 64
 DIRECTORY_TYPE = "directory"
 SUPPORTED_STORES = frozenset({StoreType.COREWEAVE})
+STATUS_SUFFIX = ".copy-status"
+SHARD_RECORDS = "shards"
+COMPLETION_RECORD = "complete.json"
 
 
 class RunNear(StrEnum):
@@ -83,13 +103,33 @@ class RunNear(StrEnum):
     DESTINATION = "destination"
 
 
+@dataclass(frozen=True, order=True)
+class SourceFile:
+    """One source object: its key relative to the source prefix, size, and ETag."""
+
+    path: str
+    size: int
+    etag: str
+
+
 @dataclass(frozen=True)
 class CopyShard:
-    """Files that one Zephyr task copies, as paths relative to both roots."""
+    """Files that one Zephyr task copies and verifies together."""
 
+    shard_id: str
     source_url: str
     destination_url: str
-    relative_paths: tuple[str, ...]
+    files: tuple[SourceFile, ...]
+
+
+@dataclass(frozen=True)
+class CopiedObject:
+    """A verified destination object, as recorded in its shard's record."""
+
+    path: str
+    size: int
+    source_etag: str
+    destination_identity: str
 
 
 def storage_prefix(url: str) -> str:
@@ -125,32 +165,56 @@ def cluster_for(url: str) -> str:
     return cluster
 
 
-def file_sizes(url: str) -> dict[str, int]:
-    """Map each file below *url* to its size, keyed by path relative to *url*."""
-    root = StoragePath(url)
-    sizes = {}
+def status_url(destination_url: str) -> str:
+    return destination_url + STATUS_SUFFIX
+
+
+def shard_record_url(destination_url: str, shard_id: str) -> str:
+    return f"{status_url(destination_url)}/{SHARD_RECORDS}/{shard_id}.json"
+
+
+def list_objects(url: str) -> dict[str, dict[str, Any]]:
+    """Map each object below *url* to its listing entry, keyed by its exact key relative to *url*."""
+    _, root = filesystem_for(url)
+    prefix = f"{root}/"
+    objects = {}
     for page in metadata_listing_pages(url):
         for entry in page.entries:
             if entry["type"] == DIRECTORY_TYPE:
                 continue
-            # S3 listings name objects as "<bucket>/<key>".
-            sizes[StoragePath(f"{root.scheme}://{entry['name']}").relative_to(root)] = entry["size"]
-    return sizes
+            name = entry["name"]
+            if not name.startswith(prefix):
+                raise ValueError(f"listing of {url} returned {name}")
+            # Object keys are opaque: StoragePath would merge "a//b" into "a/b" and collide distinct keys.
+            objects[name[len(prefix) :]] = entry
+    return objects
 
 
-def pending_files(source: Mapping[str, int], destination: Mapping[str, int]) -> dict[str, int]:
-    """Return the source files whose destination copy is missing or has a different size."""
-    return {path: size for path, size in source.items() if destination.get(path) != size}
+def source_files(url: str) -> list[SourceFile]:
+    """List the objects below *url* with the size and ETag each copy is checked against."""
+    files = []
+    for path, entry in list_objects(url).items():
+        etag = object_etag(entry)
+        if etag is None:
+            raise ValueError(f"{url}/{path} has no ETag")
+        files.append(SourceFile(path, int(entry["size"]), etag))
+    return files
 
 
-def pack_shards(files: Mapping[str, int], target_bytes: int) -> list[tuple[str, ...]]:
-    """Group files, in path order, into shards that each hold about *target_bytes*."""
-    shards: list[tuple[str, ...]] = []
-    current: list[str] = []
+def shard_id(files: Sequence[SourceFile]) -> str:
+    """Name a shard by its files' keys, sizes, and ETags, so any source change renames it."""
+    encoded = json.dumps([[f.path, f.size, f.etag] for f in files]).encode()
+    return hashlib.sha256(encoded).hexdigest()[:32]
+
+
+def pack_shards(files: Sequence[SourceFile], target_bytes: int) -> list[tuple[SourceFile, ...]]:
+    """Group files, in key order, into shards that each hold about *target_bytes*."""
+    shards: list[tuple[SourceFile, ...]] = []
+    current: list[SourceFile] = []
     current_bytes = 0
-    for path in sorted(files):
-        current.append(path)
-        current_bytes += files[path]
+    for file in sorted(files):
+        current.append(file)
+        current_bytes += file.size
         if current_bytes >= target_bytes:
             shards.append(tuple(current))
             current, current_bytes = [], 0
@@ -159,22 +223,65 @@ def pack_shards(files: Mapping[str, int], target_bytes: int) -> list[tuple[str, 
     return shards
 
 
-def _copy_shard(shard: CopyShard) -> int:
-    """Zephyr task: copy one shard's files and return the number of files copied."""
-    source_fs, source_root = filesystem_for(shard.source_url)
-    destination_fs, destination_root = filesystem_for(shard.destination_url)
-    source = TransferLocation(shard.source_url, source_fs, source_root)
-    destination = TransferLocation(shard.destination_url, destination_fs, destination_root)
+def recorded_shard_ids(destination_url: str) -> set[str]:
+    """IDs of the shards whose record exists below the destination's status prefix."""
+    records = list_objects(f"{status_url(destination_url)}/{SHARD_RECORDS}")
+    return {path.removesuffix(".json") for path in records if path.endswith(".json")}
 
-    def copy_one(relative_path: str) -> None:
-        action = CopyAction(source.child(relative_path), destination.child(relative_path))
-        execute_copies((action,))
+
+def _write_json(url: str, value: Any) -> None:
+    filesystem, path = filesystem_for(url)
+    with filesystem.open(path, "w") as file:
+        json.dump(value, file)
+
+
+def _read_json(url: str) -> Any:
+    filesystem, path = filesystem_for(url)
+    with filesystem.open(path, "r") as file:
+        return json.load(file)
+
+
+def _copy_shard(shard: CopyShard) -> int:
+    """Zephyr task: copy and verify every file of one shard, then write its record."""
+    source_fs, source_root = filesystem_for(shard.source_url)
+    destination_fs, destination_root = filesystem_for(shard.destination_url, s3_upload_policy=S3UploadPolicy.FIXED_PARTS)
+
+    shard_bytes = sum(file.size for file in shard.files)
+    _report(
+        f"shard {shard.shard_id}: {len(shard.files)} files, {_format_bytes(shard_bytes)}, "
+        f"{shard.source_url} -> {shard.destination_url}"
+    )
+
+    def copy_one(file: SourceFile) -> CopiedObject:
+        started = time.monotonic()
+        source_path = f"{source_root}/{file.path}"
+        destination_path = f"{destination_root}/{file.path}"
+        copied = copy_with_hash(source_fs, source_path, destination_fs, destination_path)
+        source_fs.invalidate_cache(source_path)
+        if copied.size != file.size or object_etag(source_fs.info(source_path)) != file.etag:
+            raise VerifiedCopyError(f"source changed while copying {file.path}")
+        identity = verify_destination(
+            destination_fs,
+            destination_path,
+            expected_size=file.size,
+            expected_sha256=copied.sha256,
+            expected_etag=copied.expected_etag,
+        )
+        elapsed = time.monotonic() - started
+        _report(
+            f"shard {shard.shard_id}: verified {file.path} ({_format_bytes(file.size)}) "
+            f"in {elapsed:.0f}s, {file.size / max(elapsed, 1e-3) / 1e6:.0f} MB/s"
+        )
         counters.pipeline.update_counter("files_copied", 1)
+        counters.pipeline.update_counter("bytes_copied", file.size)
+        return CopiedObject(file.path, file.size, file.etag, identity)
 
     with ThreadPoolExecutor(max_workers=COPY_THREADS_PER_WORKER) as pool:
-        # list() re-raises the first failed copy so Zephyr retries the shard.
-        list(pool.map(copy_one, shard.relative_paths))
-    return len(shard.relative_paths)
+        # list() re-raises the first failure, so Zephyr retries the whole shard and no record is written.
+        copied = list(pool.map(copy_one, shard.files))
+    _write_json(shard_record_url(shard.destination_url, shard.shard_id), [asdict(c) for c in copied])
+    _report(f"shard {shard.shard_id}: recorded {len(copied)} verified files")
+    return len(copied)
 
 
 def _report(message: str) -> None:
@@ -183,47 +290,85 @@ def _report(message: str) -> None:
 
 
 def _format_bytes(size: int) -> str:
-    return f"{size / 1e12:.2f} TB" if size >= 1e12 else f"{size / 1e9:.2f} GB"
+    if size >= 1e12:
+        return f"{size / 1e12:.2f} TB"
+    if size >= 1e9:
+        return f"{size / 1e9:.2f} GB"
+    return f"{size / 1e6:.1f} MB"
 
 
-def _summary(label: str, files: Iterable[int]) -> str:
-    sizes = list(files)
-    return f"{label}: {len(sizes)} files, {_format_bytes(sum(sizes))}"
+def _shard_bytes(shards: Sequence[CopyShard]) -> int:
+    return sum(file.size for shard in shards for file in shard.files)
 
 
-def _plan(source_url: str, destination_url: str) -> tuple[dict[str, int], dict[str, int]]:
-    """List both prefixes, report the plan, and return the source files and those still to copy."""
-    source = file_sizes(source_url)
-    if not source:
+def _plan(source_url: str, destination_url: str) -> tuple[list[CopyShard], list[CopyShard]]:
+    """Shard the source, report progress, and return all shards and those without a record."""
+    files = source_files(source_url)
+    if not files:
         raise ValueError(f"{source_url} holds no files")
-    pending = pending_files(source, file_sizes(destination_url))
-    _report(_summary("source", source.values()))
-    _report(_summary("already at destination", (source[p] for p in source.keys() - pending.keys())))
-    _report(_summary("to copy", pending.values()))
-    return source, pending
+    shards = [
+        CopyShard(shard_id(group), source_url, destination_url, group)
+        for group in pack_shards(files, TARGET_SHARD_BYTES)
+    ]
+    recorded = recorded_shard_ids(destination_url)
+    pending = [shard for shard in shards if shard.shard_id not in recorded]
+    _report(f"source: {len(files)} files, {_format_bytes(_shard_bytes(shards))} in {len(shards)} shards")
+    _report(f"already copied: {len(shards) - len(pending)} shards")
+    _report(f"to copy: {len(pending)} shards, {_format_bytes(_shard_bytes(pending))}")
+    return shards, pending
+
+
+def _verify(shards: Sequence[CopyShard], destination_url: str) -> None:
+    """Check every destination object against its shard record, then write the completion record."""
+    with ThreadPoolExecutor(max_workers=RECORD_READ_THREADS) as pool:
+        records = pool.map(lambda shard: _read_json(shard_record_url(destination_url, shard.shard_id)), shards)
+        copied = [CopiedObject(**item) for record in records for item in record]
+    destination = list_objects(destination_url)
+    mismatched = []
+    for item in copied:
+        entry = destination.get(item.path)
+        if (
+            entry is None
+            or int(entry["size"]) != item.size
+            or f"{ETAG_IDENTITY_PREFIX}{object_etag(entry)}" != item.destination_identity
+        ):
+            mismatched.append(item.path)
+    expected_files = sum(len(shard.files) for shard in shards)
+    if mismatched or len(copied) != expected_files:
+        sample = ", ".join(sorted(mismatched)[:10])
+        raise RuntimeError(
+            f"{len(mismatched)} of {expected_files} files are missing or differ at {destination_url}: {sample}"
+        )
+    _write_json(
+        f"{status_url(destination_url)}/{COMPLETION_RECORD}",
+        {
+            "source": shards[0].source_url,
+            "destination": destination_url,
+            "total_files": expected_files,
+            "total_bytes": _shard_bytes(shards),
+            "shards": [shard.shard_id for shard in shards],
+            "completed_at": datetime.now(UTC).isoformat(),
+        },
+    )
+    _report(f"verified {expected_files} files at {destination_url}")
 
 
 def _copy_job(source_url: str, destination_url: str, max_workers: int) -> None:
-    """Iris-side entrypoint: plan, copy, and verify."""
-    source, pending = _plan(source_url, destination_url)
-    if not pending:
-        return
-
-    shards = [CopyShard(source_url, destination_url, paths) for paths in pack_shards(pending, TARGET_SHARD_BYTES)]
-    _report(f"copying in {len(shards)} shards on up to {max_workers} workers")
-    ctx = ZephyrContext(name="copy-prefix", resources=WORKER_RESOURCES, max_workers=max_workers)
-    ctx.execute(Dataset.from_list(shards).map(_copy_shard))
-
-    remaining = pending_files(source, file_sizes(destination_url))
-    if remaining:
-        sample = ", ".join(sorted(remaining)[:10])
-        raise RuntimeError(f"{len(remaining)} files are missing or differ in size at {destination_url}: {sample}")
-    _report(f"verified {len(source)} files at {destination_url}")
+    """Iris-side entrypoint: plan, copy the shards without a record, and verify."""
+    shards, pending = _plan(source_url, destination_url)
+    if pending:
+        filesystem, completion = filesystem_for(f"{status_url(destination_url)}/{COMPLETION_RECORD}")
+        if filesystem.exists(completion):
+            filesystem.rm(completion)
+        _report(f"copying {len(pending)} shards on up to {max_workers} workers")
+        ctx = ZephyrContext(name="copy-prefix", resources=WORKER_RESOURCES, max_workers=max_workers)
+        ctx.execute(Dataset.from_list(pending).map(_copy_shard))
+    _verify(shards, destination_url)
 
 
 @click.command()
 @click.option("--from", "source_url", required=True, help="Source prefix, e.g. s3://marin-us-east-02a/marin/x.")
-@click.option("--to", "destination_url", required=True, help="Destination prefix; files keep their relative paths.")
+@click.option("--to", "destination_url", required=True, help="Destination prefix; files keep their relative keys.")
 @click.option(
     "--run-near",
     type=click.Choice(list(RunNear), case_sensitive=False),
@@ -238,14 +383,14 @@ def _copy_job(source_url: str, destination_url: str, max_workers: int) -> None:
     type=click.IntRange(min=1),
     help=f"Zephyr workers; each copies {COPY_THREADS_PER_WORKER} files at a time.",
 )
-@click.option("--dry-run", is_flag=True, help="List both prefixes from this machine and report what would be copied.")
+@click.option("--dry-run", is_flag=True, help="List the source and shard records from this machine and report.")
 def main(source_url: str, destination_url: str, run_near: str, max_workers: int, dry_run: bool) -> None:
     """Copy a CoreWeave prefix to another CoreWeave prefix on an Iris cluster."""
     # Iris reports submission progress and streams the job's log lines through logging.
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     source = storage_prefix(source_url)
     destination = storage_prefix(destination_url)
-    if prefixes_overlap(source, destination):
+    if prefixes_overlap(source, destination) or prefixes_overlap(source, status_url(destination)):
         raise click.BadParameter("source and destination prefixes overlap")
     if dry_run:
         # Listing is metadata only, so it runs here and avoids Iris dropping a short job's final output.

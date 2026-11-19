@@ -76,7 +76,9 @@ class _DestinationFile:
 
 
 @dataclass(frozen=True)
-class _CopiedFile:
+class CopiedFile:
+    """What a streamed copy read: the source's SHA-256 and size, and the ETag its upload should carry."""
+
     sha256: str
     size: int
     expected_etag: str | None
@@ -329,7 +331,7 @@ def _copy_or_resume(
             ):
                 return _CopyOutcome(expected, _CopyDisposition.RESUMED)
 
-    copied = _copy_with_hash(source_fs, source.source_path, destination_fs, staging_path)
+    copied = copy_with_hash(source_fs, source.source_path, destination_fs, staging_path)
     if copied.size != source.size:
         destination_fs.rm(staging_path)
         raise VerifiedCopyError(f"source size changed while copying {source.path}")
@@ -340,7 +342,7 @@ def _copy_or_resume(
         destination_fs.rm(staging_path)
         raise VerifiedCopyError(f"source identity changed while copying {source.path}")
     try:
-        staging_identity = _verify_destination(
+        staging_identity = verify_destination(
             destination_fs,
             staging_path,
             expected_size=source.size,
@@ -425,12 +427,18 @@ def _promote(
     filesystem.rm(staging_path)
 
 
-def _copy_with_hash(
+def copy_with_hash(
     source_fs: AbstractFileSystem,
     source_path: str,
     destination_fs: AbstractFileSystem,
     destination_path: str,
-) -> _CopiedFile:
+) -> CopiedFile:
+    """Stream one object to *destination_path*, hashing the bytes as they pass.
+
+    S3 destinations publish only after the whole upload succeeds, so a failed copy leaves no
+    object behind. A destination filesystem built with ``S3UploadPolicy.FIXED_PARTS`` also
+    yields the multipart ETag the upload must carry, for objects of at least one part.
+    """
     parent, separator, _ = destination_path.rpartition("/")
     if separator:
         destination_fs.makedirs(parent, exist_ok=True)
@@ -469,10 +477,10 @@ def _copy_with_hash(
     expected_etag = (
         multipart_etag.etag(copied_size) if multipart_etag is not None and copied_size >= S3_UPLOAD_PART_BYTES else None
     )
-    return _CopiedFile(digest.hexdigest(), copied_size, expected_etag)
+    return CopiedFile(digest.hexdigest(), copied_size, expected_etag)
 
 
-def _verify_destination(
+def verify_destination(
     filesystem: AbstractFileSystem,
     path: str,
     *,
@@ -480,6 +488,11 @@ def _verify_destination(
     expected_sha256: str,
     expected_etag: str | None,
 ) -> str:
+    """Check a copied object's size and content, and return its destination identity.
+
+    An object with an expected ETag is checked by metadata; any other object is read back and
+    hashed. Raises ``VerifiedCopyError`` on a mismatch.
+    """
     filesystem.invalidate_cache(path)
     info = filesystem.info(path)
     if int(info.get("size") or 0) != expected_size:
@@ -489,7 +502,7 @@ def _verify_destination(
             raise VerifiedCopyError(f"destination hash mismatch for {path}")
         return _destination_identity(info) or f"{SHA256_IDENTITY_PREFIX}{expected_sha256}"
 
-    actual_etag = _etag(info)
+    actual_etag = object_etag(info)
     if actual_etag != expected_etag:
         raise VerifiedCopyError(f"destination ETag mismatch for {path}")
     return f"{ETAG_IDENTITY_PREFIX}{actual_etag}"
@@ -664,7 +677,7 @@ def _source_identity(info: dict[str, Any], *, matching: str | None = None) -> st
 
 
 def _destination_identity(info: dict[str, Any]) -> str | None:
-    etag = _etag(info)
+    etag = object_etag(info)
     if etag is not None:
         return f"{ETAG_IDENTITY_PREFIX}{etag}"
     for key in ("ChecksumSHA256", "checksum", "md5Hash", "crc32c", "version_id", "VersionId"):
@@ -674,7 +687,8 @@ def _destination_identity(info: dict[str, Any]) -> str | None:
     return None
 
 
-def _etag(info: dict[str, Any]) -> str | None:
+def object_etag(info: dict[str, Any]) -> str | None:
+    """The object's ETag from listing or ``info`` metadata, without quotes."""
     value = info.get("etag") or info.get("ETag")
     if value is None:
         return None
