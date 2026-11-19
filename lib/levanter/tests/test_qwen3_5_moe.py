@@ -85,7 +85,7 @@ def _randomized_torch_model(hf_config: HfQwen3_5MoeTextConfig):
             if "norm" in name or name.endswith(("A_log", "dt_bias")):
                 parameter.add_(0.3 * torch.randn_like(parameter))
             else:
-                parameter.mul_(8.0)
+                parameter.mul_(4.0)
     return model
 
 
