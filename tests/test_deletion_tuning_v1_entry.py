@@ -108,6 +108,11 @@ def _production_recipe() -> dict:
     """The Exp3 production recipe shape V1 overlays (only the fields V1 reads)."""
     model = draccus.encode(_tiny_snowball())
     model.pop("type", None)
+    _mesh = {
+        "axes": {"data": 1, "expert": 8, "model": 1, "replica": 1},
+        "dcn_axes": {"context": 32, "replica_dcn": 1},
+        "compute_mapping": {"batch": ["replica_dcn", "data", "expert"], "position": "context"},
+    }
     return {
         "format": "sft_spec",
         "profile": "snowball_exp3",
@@ -118,9 +123,21 @@ def _production_recipe() -> dict:
         "target_positions": 746 * 256 * 262144,
         "stage_guard": {"h100_hour_limit": 5120},
         "initial_eval_match": {"reference_path": "s3://ref"},
+        "mesh": dict(_mesh),
+        "resources": {
+            "device": {"variant": "H100", "kind": "gpu", "count": 8},
+            "replicas": 32,
+            "cpu": 64,
+            "ram": "1500GB",
+            "disk": "512GB",
+            "preemptible": False,
+        },
         "trainer": {
             "num_train_steps": 746,
+            "train_batch_size": 256,
+            "progress_watchdog": {"startup_timeout": "45m"},
             "training_budget": {"duration": "20h", "finalization_reserve": "40m", "update_reserve": "10m"},
+            "mesh": dict(_mesh),
         },
         "model": model,
     }

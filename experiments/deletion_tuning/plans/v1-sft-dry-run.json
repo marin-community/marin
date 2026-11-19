@@ -11,7 +11,7 @@
   },
   "dispatch": {
     "entrypoint": "experiments.deletion_tuning.levanter_train:run_deletion_train_lm",
-    "job_name": "sft-v1-sft-2026.11.18.1-7f2c80860163",
+    "job_name": "sft-v1-sft-2026.11.19.1-99763363c6f5",
     "output_path": "s3://marin-us-east-02a/marin/users/benfeuer/snowball-deletion-tuning",
     "resources": {
       "container_profile": null,
@@ -27,26 +27,26 @@
       "preemptible": false,
       "ram": "1500GB",
       "regions": null,
-      "replicas": 32,
+      "replicas": 8,
       "target_cluster": null,
       "zone": null
     },
-    "timeout_seconds": 18000
+    "timeout_seconds": 43200
   },
-  "fingerprint": "bd818f0f",
+  "fingerprint": "a221ea88",
   "initial_eval_match": null,
   "job_shape": {
     "calibration_batches": 64,
-    "duration_hours": 5.0,
-    "global_batch": 256,
+    "duration_hours": 12.0,
+    "global_batch": 64,
     "gpus": {
       "count": 8,
-      "replicas": 32,
-      "total": 256,
+      "replicas": 8,
+      "total": 64,
       "variant": "H100"
     },
-    "h100_hour_guard": 1280,
-    "h100_hour_point_estimate": 969,
+    "h100_hour_guard": 768,
+    "h100_hour_point_estimate": 645,
     "mesh": {
       "axes": {
         "data": 1,
@@ -63,11 +63,11 @@
         "position": "context"
       },
       "dcn_axes": {
-        "context": 32,
+        "context": 8,
         "replica_dcn": 1
       }
     },
-    "num_train_steps": 75,
+    "num_train_steps": 300,
     "sequence_length": 262144,
     "target_positions": 5033164800
   },
@@ -105,5 +105,5 @@
     "training_ready": true,
     "uri": "s3://marin-us-east-08a/marin/users/benfeuer/exp3-data-mix/2026.11.15-candidate-v1/release-v5/release-complete-v5.json"
   },
-  "version": "2026.11.18.1"
+  "version": "2026.11.19.1"
 }
