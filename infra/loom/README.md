@@ -359,7 +359,7 @@ The `belay-dispatch` script watch runs every minute with no agent
 in a checkout of `marin_belay_v1_recipe` at `/home/app/marin_belay_dispatch` that
 it updates each round): it reports Belay runs that ended to the Belay app, then
 launches a `belay` session as soon as the app has queued events. The `belay`
-agent watch runs every 30 minutes ([prompt](watches/belay.md)) as the full sync
+agent watch runs every 10 minutes ([prompt](watches/belay.md)) as the full sync
 and backstop: it re-queues the events of a session that ended without reporting,
 reports W&B progress, storage, registry results and #9514 intake, and runs a
 runbook session that works through the queued events only when events wait.

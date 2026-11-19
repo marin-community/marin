@@ -554,10 +554,11 @@ config:
       program: /home/app/marin_belay_dispatch/experiments/belay/dispatch_watch.py
       capabilities: [launch]
     # Marin Belay's full sync and backstop: W&B progress, storage, registry and #9514 intake, then a session if
-    # events wait. Sessions claim work only while dispatch is on in the app.
+    # events wait. Sessions claim work only while dispatch is on in the app. Every 10 minutes until #9514 comments
+    # reach the app from the belay-intake workflow (PR #11707); then it can slow to 30.
     belay:
       enabled: true
-      every: 30m
+      every: 10m
       runTimeoutSeconds: 14400
       profile: belay
       repo: marin-community/marin
