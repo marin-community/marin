@@ -7,9 +7,11 @@ from dataclasses import replace
 from pathlib import Path
 
 import draccus
+import jax.numpy as jnp
 import numpy as np
 import pytest
 import yaml
+from draccus.utils import ParsingError
 from fray.types import ResourceConfig
 from haliax import Axis
 from levanter.checkpoint import save_checkpoint
@@ -41,6 +43,7 @@ def test_native_sft_retains_sources_and_token_schedule_while_using_shared_defaul
     config = pod.train_config
     assert pod.env_vars["XLA_FLAGS"].split() == resolved["sft"]["xla_flags"]
     assert config.optimizer == SNOWBALL_SFT.optimizer
+    assert jnp.dtype(config.trainer.mp.param_dtype) == jnp.float32
     assert config.train_seq_len == resolved["sft"]["seq_len"]
     assert config.trainer.train_batch_size == resolved["sft"]["batch_size"]
     assert config.trainer.per_device_parallelism == resolved["sft"]["per_device_parallelism"]
@@ -76,6 +79,14 @@ def test_legacy_grug_requires_acknowledgement_and_keeps_original_recipe(tmp_path
     assert actual.recipe["optimizer"] == recipe["optimizer"]
     assert actual.recipe["trainer"] == recipe["trainer"]
     assert actual.recipe["model"] == recipe["model"]
+
+    bf16_recipe = copy.deepcopy(recipe)
+    bf16_recipe["trainer"]["trainer"]["mp"] = "compute=bfloat16,params=bfloat16,output=bfloat16"
+    bf16_step = legacy_sft_step("test/sft-bf16", "2026.11.13.1", bf16_recipe, base, acknowledge=True)
+    with pytest.raises(ParsingError) as exc_info:
+        bf16_step.build_config(context)
+    assert isinstance(exc_info.value.__cause__, ValueError)
+    assert "float32 parameters" in str(exc_info.value.__cause__)
 
 
 def test_native_sft_validates_real_multinode_layout_before_submitting(tmp_path):

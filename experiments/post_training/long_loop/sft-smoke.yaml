@@ -8053,7 +8053,6 @@ trainer:
   expert_axis_size: 1
   gc_interval: 1
   log_every: 1
-  master_param_mode: device
   offload_opt_state: true
   replica_axis_size: 1
   save_checkpoints: true
@@ -8128,7 +8127,7 @@ trainer:
         embed: data
       shared_mapping: *id191
     model_averaging: null
-    mp: compute=bfloat16,params=bfloat16,output=bfloat16
+    mp: compute=bfloat16,params=float32,output=bfloat16
     num_train_steps: 4750
     per_device_eval_parallelism: -1
     per_device_parallelism: -1
