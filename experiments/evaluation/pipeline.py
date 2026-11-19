@@ -29,7 +29,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from evalrecords.records import read_record, record_path
+from evalrecords.records import RLRunRef, read_record, record_path
 from iris.client.client import iris_ctx
 from iris.rpc import job_pb2
 from marin.evaluation.hardware import default_platform
@@ -52,6 +52,7 @@ _ACCELERATOR_RUNTIME_ARG = "accelerator"
 _SUBMISSION_CLUSTER_RUNTIME_ARG = "submission_cluster"
 _FEDERATED_CLUSTER_RUNTIME_ARG = "federated_cluster"
 _INSTANCES_RUNTIME_ARG = "instances"
+_TASK_TIMEOUT_RUNTIME_ARG = "task_timeout_seconds"
 
 
 @dataclass(frozen=True)
@@ -68,6 +69,9 @@ class EvalStepConfig:
     federated_cluster: str | None
     version: str
     instances: int = 1
+    judge: ModelConfig | None = None
+    rl_run: RLRunRef | None = None
+    task_timeout_seconds: int | None = None
 
 
 @dataclass(frozen=True)
@@ -104,6 +108,9 @@ def run_eval_pipeline_step(config: EvalStepConfig) -> EvaluationResult:
         federated_cluster=config.federated_cluster,
         priority_band=job_pb2.PRIORITY_BAND_INHERIT,
         version=config.version,
+        judge_model=config.judge,
+        rl_run=config.rl_run,
+        task_timeout_seconds=config.task_timeout_seconds,
         cache_key=None if is_mutable_version(config.version) else config.artifact_path,
     )
     submitted = launch_group(prepare_evaluation_batch(spec), iris_ctx().client)
@@ -133,6 +140,8 @@ def eval_step(
     accelerator: str | None = None,
     submission_cluster: str = EVALUATION_CONTROLLER_CLUSTER,
     federated_cluster: str | None = None,
+    judge: ModelConfig | None = None,
+    task_timeout_seconds: int | None = None,
 ) -> ArtifactStep[EvaluationResult]:
     """Evaluate a model with curated TaskSpec corpora and Harbor.
 
@@ -142,16 +151,17 @@ def eval_step(
     ``instances`` starts candidate serving workers behind one broker when greater than one.
     """
 
-    def build_config(ctx: StepContext) -> EvalStepConfig | EvalStepFingerprint:
+    def build_config(ctx: StepContext) -> EvalStepConfig | EvalStepFingerprint | tuple[EvalStepFingerprint, ModelConfig]:
         resolved_model = resolve_model(ctx) if resolve_model is not None else model
         if ctx.is_fingerprint:
-            return EvalStepFingerprint(
+            fingerprint = EvalStepFingerprint(
                 model=resolved_model,
                 dependencies=tuple(artifact_identity(dep) for dep in deps),
                 evals=evals,
                 limit=limit,
                 version=version,
             )
+            return fingerprint if judge is None else (fingerprint, judge)
         return EvalStepConfig(
             model=resolved_model,
             evals=evals,
@@ -163,6 +173,8 @@ def eval_step(
             submission_cluster=ctx.runtime_arg(_SUBMISSION_CLUSTER_RUNTIME_ARG),
             federated_cluster=ctx.runtime_arg(_FEDERATED_CLUSTER_RUNTIME_ARG),
             version=version,
+            judge=judge,
+            task_timeout_seconds=ctx.runtime_arg(_TASK_TIMEOUT_RUNTIME_ARG),
         )
 
     return ArtifactStep(
@@ -177,6 +189,7 @@ def eval_step(
             _SUBMISSION_CLUSTER_RUNTIME_ARG: submission_cluster,
             _FEDERATED_CLUSTER_RUNTIME_ARG: federated_cluster,
             _INSTANCES_RUNTIME_ARG: instances,
+            _TASK_TIMEOUT_RUNTIME_ARG: task_timeout_seconds,
         },
     )
 

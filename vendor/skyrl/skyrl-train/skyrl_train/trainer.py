@@ -3110,7 +3110,7 @@ class RayPPOTrainer:
             model_source_uri=model.source_uri,
             model_source_identity=model.source_identity,
             hf_hub_repo_id=self.cfg.trainer.get("hf_hub_repo_id"),
-            hf_hub_private=self.cfg.trainer.get("hf_hub_private", False),
+            hf_hub_private=self.cfg.trainer.get("hf_hub_private", True),
             hf_hub_revision=self.cfg.trainer.get("hf_hub_revision", DEFAULT_HF_HUB_REVISION),
             hf_upload_mode=HFUploadMode(self.cfg.trainer.get("hf_upload_mode", DEFAULT_HF_UPLOAD_MODE)),
         )

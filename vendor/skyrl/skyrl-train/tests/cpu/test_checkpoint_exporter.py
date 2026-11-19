@@ -1,9 +1,15 @@
+import hashlib
 import os
+from fnmatch import fnmatchcase
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
+from huggingface_hub import RepoFile
+from safetensors.torch import save_file
 
+from marinskyrl.model_manifest import MODEL_MANIFEST_FILENAME, write_local_model_manifest
 from skyrl_train.checkpoint_exporter import CheckpointExportPlan, CheckpointExporter, RayPolicyExportWorkers
 from skyrl_train.hf_export_schema import HFUploadMode
 from skyrl_train.hf_model_io import verify_hf_model_export
@@ -63,15 +69,53 @@ class FakeRayActorGroup:
 
 
 class FakeHubApi:
-    def __init__(self):
-        self.repositories = []
-        self.uploads = []
+    def __init__(self, root, private, corrupt):
+        self.root = root
+        self.private = private
+        self.corrupt = corrupt
+        self.commits = {}
 
-    def create_repo(self, **kwargs):
-        self.repositories.append(kwargs)
+    def create_repo(self, *, private, **_kwargs):
+        if self.private is None:
+            self.private = private
 
-    def upload_folder(self, **kwargs):
-        self.uploads.append(kwargs)
+    def model_info(self, _repo_id):
+        return SimpleNamespace(private=self.private)
+
+    def upload_folder(self, *, folder_path, path_in_repo, allow_patterns=None, **_kwargs):
+        source = Path(folder_path)
+        previous = list(self.commits.values())[-1] if self.commits else {}
+        files = previous.copy()
+        for file in sorted(source.rglob("*")):
+            if not file.is_file():
+                continue
+            relative_path = file.relative_to(source).as_posix()
+            if allow_patterns is not None and not any(fnmatchcase(relative_path, pattern) for pattern in allow_patterns):
+                continue
+            content = file.read_bytes()
+            path = (Path(path_in_repo) / relative_path).as_posix()
+            files[path] = bytes([content[0] ^ 1]) + content[1:] if path == self.corrupt else content
+        commit = f"commit-{len(self.commits)}"
+        self.commits[commit] = files
+        return SimpleNamespace(oid=commit)
+
+    def get_paths_info(self, _repo_id, paths, *, revision, **_kwargs):
+        snapshot = self.commits[revision]
+        for path in paths:
+            if path in snapshot:
+                content = snapshot[path]
+                lfs = (
+                    {"size": len(content), "oid": hashlib.sha256(content).hexdigest(), "pointerSize": 128}
+                    if path.endswith(".safetensors")
+                    else None
+                )
+                yield RepoFile(path=path, size=len(content), oid="blob", lfs=lfs)
+
+    def hf_hub_download(self, _repo_id, filename, *, revision, **_kwargs):
+        target = self.root / revision / filename
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(self.commits[revision][filename])
+        return str(target)
 
 
 class FakePublisher:
@@ -191,23 +235,49 @@ def test_ray_policy_export_workers_loads_model_state_without_training_state():
     assert group.killed
 
 
-def test_hf_publisher_publishes_root_and_requested_archive(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("visibility", "requested", "corrupt", "error"),
+    [
+        (None, None, None, None),
+        (False, False, None, None),
+        (False, None, None, "visibility differs"),
+        (True, False, None, "visibility differs"),
+        (True, None, "config.json", "differs from the model manifest"),
+        (True, None, "checkpoints/step_12/model.safetensors", "differs from the model manifest"),
+    ],
+)
+def test_hf_publisher_checks_visibility_and_uploaded_files(tmp_path, monkeypatch, visibility, requested, corrupt, error):
     export_path = tmp_path / "exports" / "global_step_12" / "policy"
     export_path.mkdir(parents=True)
-    (export_path / "model.safetensors").write_bytes(b"weights")
-    api = FakeHubApi()
+    save_file({"weight": torch.tensor([0.0])}, export_path / "model.safetensors")
+    for filename in ("config.json", "tokenizer_config.json", "tokenizer.json"):
+        (export_path / filename).write_text("{}")
+    manifest = write_local_model_manifest(export_path)
+    (export_path / "worker.log").write_text("worker log")
+    api = FakeHubApi(tmp_path / "downloads", visibility, corrupt)
     publisher = HuggingFacePublisher(
         repo_id="org/model",
-        private=True,
         revision="main",
         upload_mode=HFUploadMode.ALL,
         api=api,
+        **({"private": requested} if requested is not None else {}),
     )
     monkeypatch.setenv("HF_HUB_OFFLINE", "1")
 
+    if error:
+        with pytest.raises(ValueError, match=error):
+            publisher.publish(str(export_path), step=12)
+        if corrupt is None:
+            assert not api.commits
+            assert api.private is visibility
+        return
+
     publisher.publish(str(export_path), step=12)
 
-    assert api.repositories == [{"repo_id": "org/model", "repo_type": "model", "private": True, "exist_ok": True}]
-    assert [upload["path_in_repo"] for upload in api.uploads] == ["", "checkpoints/step_12"]
-    assert all(upload["folder_path"] == str(export_path) for upload in api.uploads)
+    assert api.private is (True if requested is None else requested)
+    paths = [file.path for file in manifest.files] + [MODEL_MANIFEST_FILENAME]
+    first, last = api.commits.values()
+    expected = {path: (export_path / path).read_bytes() for path in paths}
+    assert first == expected
+    assert last == {**expected, **{f"checkpoints/step_12/{path}": data for path, data in expected.items()}}
     assert os.environ["HF_HUB_OFFLINE"] == "1"

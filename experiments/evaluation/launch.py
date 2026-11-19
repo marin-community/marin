@@ -29,6 +29,7 @@ from evalrecords.records import (
     ModelConfigRef,
     ModelRef,
     PromptFormat,
+    RLRunRef,
     RunStatus,
     list_records,
     scoring_settings,
@@ -77,6 +78,7 @@ from rigging.config_discovery import resolve_cluster_config
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.secrets import SecretSpec, resolve_secret_spec
+from rigging.timing import Duration
 from zephyr.context import ZephyrContext
 
 from experiments.evaluation.curated import (
@@ -174,6 +176,8 @@ class LaunchSpec:
     """Reuse evaluation records for this key and the same resolved configuration."""
     run_id: str | None = None
     policy_finalization: PolicyFinalization | None = None
+    rl_run: RLRunRef | None = None
+    task_timeout_seconds: int | None = None
 
 
 # EvalDash scans these record roots (`DEFAULT_SCAN_PREFIXES` adds read-only legacy roots).
@@ -378,6 +382,8 @@ def build_evaluation_batch(
             raise ValueError("--run-id and pipeline cache_key cannot be combined")
     if spec.max_concurrent < 1:
         raise ValueError("max_concurrent must be at least 1")
+    if spec.task_timeout_seconds is not None and spec.task_timeout_seconds <= 0:
+        raise ValueError("task_timeout_seconds must be positive")
     if spec.instances < 1:
         raise ValueError("instances must be at least 1")
     if spec.instances > 1 and spec.model.serve.pipeline_parallel_size > 1:
@@ -536,6 +542,8 @@ def build_evaluation_batch(
         user=user,
         version=spec.version,
         description=spec.description,
+        rl_run=spec.rl_run,
+        task_timeout_seconds=spec.task_timeout_seconds,
         records_prefix=records_prefix,
         model=model,
         accelerator=accelerator,
@@ -717,6 +725,7 @@ def launch_group(batch: EvaluationBatch, client: IrisClient) -> SubmittedEvaluat
         ),
         constraints=constraints,
         egress_allow=batch.egress_allow,
+        timeout=Duration.from_seconds(batch.task_timeout_seconds) if batch.task_timeout_seconds is not None else None,
         max_retries_failure=0,
         priority_band=batch.priority_band,
     )

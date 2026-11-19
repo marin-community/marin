@@ -43,6 +43,7 @@ from marin.rl.skyrl import (
     ArtifactHfModel,
     IrisSkyRLExecution,
     MegatronGeometry,
+    SkyRLPolicyModel,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
     SkyRLRun,
@@ -66,7 +67,7 @@ from experiments.post_training.curriculum_rl.pool import (
     VALIDATION_FILENAME,
     pool_step,
 )
-from experiments.post_training.skyrl_evaluation import SKYRL_POLICY_LOCATION, skyrl_eval_step
+from experiments.post_training.skyrl_evaluation import evaluate
 
 logger = logging.getLogger(__name__)
 
@@ -599,8 +600,7 @@ def evaluation_model_config(policy: PolicySpec, preset: ScalePreset, name: str) 
     ``serve_*`` fields and the preset's context window."""
     return ModelConfig(
         name=name,
-        location=SKYRL_POLICY_LOCATION,
-        tokenizer=policy.tokenizer_uri,
+        location=SNOWBALL_SFT_EXPORT_URI if policy.adopted_model is not None else QWEN3_MODEL,
         apply_chat_template=True,
         resource_hint=ResourceHint(gpu={GPU_VARIANT: policy.serve_gpus}, memory=policy.serve_memory),
         serve=ServeConfig(
@@ -678,8 +678,8 @@ def build_arm(
     evaluation_base_name = f"evals/{evaluation_model_name}/{preset.evals}"
     evaluation_version = version or resolve_version(evaluation_base_name, None)
     evaluation_model = evaluation_model_config(policy, preset, evaluation_model_name)
-    evaluation = skyrl_eval_step(
-        rl,
+    evaluation = evaluate(
+        SkyRLPolicyModel(rl),
         evaluation_model,
         resolve_evaluations(preset.evals),
         version=evaluation_version,

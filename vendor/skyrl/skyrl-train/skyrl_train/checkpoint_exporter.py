@@ -212,7 +212,7 @@ def hub_publisher(cfg: DictConfig) -> HuggingFacePublisher | None:
         return None
     return HuggingFacePublisher(
         repo_id=str(repo_id),
-        private=bool(cfg.checkpoint_export.get("hf_hub_private", False)),
+        private=bool(cfg.checkpoint_export.get("hf_hub_private", True)),
         revision=str(cfg.checkpoint_export.get("hf_hub_revision", DEFAULT_HF_HUB_REVISION)),
         upload_mode=HFUploadMode(cfg.checkpoint_export.get("hf_upload_mode", DEFAULT_HF_UPLOAD_MODE)),
     )

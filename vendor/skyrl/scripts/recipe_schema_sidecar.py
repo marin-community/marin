@@ -214,7 +214,7 @@ UNDECLARED = MappingProxyType(
         "data.kind": ('Literal["tasks", "parquet"]', "tasks"),
         "trainer.enable_db_registration": ("bool", True),
         "trainer.hf_hub_repo_id": ("str | None", None),
-        "trainer.hf_hub_private": ("bool", False),
+        "trainer.hf_hub_private": ("bool", True),
         "trainer.hf_hub_revision": ("str", "main"),
         "generator.sampling_params.min_tokens": ("NonNegativeInt", Ellipsis),
         "generator.eval_sampling_params.min_tokens": ("NonNegativeInt", Ellipsis),

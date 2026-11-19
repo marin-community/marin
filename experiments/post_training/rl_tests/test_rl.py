@@ -816,6 +816,7 @@ def test_control_refuses_actual_untracked_source_before_execution(selection, tmp
         ("python-init-conflict",),
         ("python-init-rescore",),
         ("--set", "trainer.dump_eval_results=false"),
+        ("--set", "trainer.hf_hub_repo_id=org/model"),
         ("--set", 'trainer={"algorithm":{"off_policy_correction":"none"}}'),
         ("--set", "trainer.policy.optimizer_config.lr=wrong"),
     ],
@@ -854,6 +855,8 @@ def test_refusals_use_exit_four(selection, arguments, capsys, tmp_path):
         assert "Python init and --init" in result.output
     if "trainer.dump_eval_results=false" in arguments:
         assert "owned" in result.output
+    if "trainer.hf_hub_repo_id=org/model" in arguments:
+        assert "use the preset's declared owned keys" in result.output
 
 
 def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations(

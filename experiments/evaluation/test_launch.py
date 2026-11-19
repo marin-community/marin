@@ -14,11 +14,12 @@ from types import SimpleNamespace
 
 import pytest
 from click.testing import CliRunner
-from evalrecords.records import RunStatus
+from evalrecords.records import RunStatus, record_path
 from iris.client.client import IrisClient
 from iris.cluster.client import remote_client
 from iris.rpc import controller_pb2, job_pb2
 from marin.evaluation.hardware import Platform
+from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.runner import (
     EvaluationBatch,
     EvaluationError,
@@ -26,16 +27,21 @@ from marin.evaluation.runner import (
     SubmittedEvaluationBatch,
     _record,
 )
+from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
+from marin.execution.lazy import ArtifactStep, materialized_config
 from marin.execution.step_runner import StepRunner
 from marin.inference.iris import RemoteInferenceStartupError
+from marin.rl.skyrl import ArtifactHfModel, SkyRLPolicyModel, SkyRLRun
 
 import experiments.evaluation.launch as launch_module
+import experiments.evaluation.pipeline as pipeline_module
 import experiments.evaluation.policy_finalization as policy_module
 from experiments.evaluation.cli import cli
 from experiments.evaluation.curated import load_evaluations
 from experiments.evaluation.evals import resolve_evaluations
 from experiments.evaluation.launch import LaunchSpec, build_evaluation_steps, prepare_evaluation_batch
 from experiments.evaluation.models import models
+from experiments.post_training.skyrl_evaluation import evaluate
 
 
 @pytest.fixture
@@ -434,6 +440,65 @@ def _pipeline_spec(tmp_path):
         cache_key="caller-owned-immutable-artifact",
         version="2026.10.19",
     )
+
+
+@pytest.mark.parametrize("source_kind", ["rl", "legacy-rl", "hf"])
+def test_evaluate_records_producing_rl_attempt(tmp_path, monkeypatch, source_kind):
+    root = tmp_path / "model"
+    export = root / "policy"
+    export.mkdir(parents=True)
+    version = "2026.10.26"
+    ids = {"run_id": "training-run", "attempt_id": "training-attempt"}
+    task_timeout = 180 if source_kind == "rl" else None
+    if source_kind == "hf":
+        source = ArtifactHfModel(ArtifactStep.adopt("tests/model", version, str(export)), relative_path="")
+    else:
+        run = SkyRLRun(
+            path=str(root),
+            hf_model_uri=str(export),
+            global_step=100,
+            tokenizer_uri=None,
+            tokenizer_revision=None,
+            checkpoint_root=str(root / "checkpoints"),
+            draft_checkpoint_root=None,
+            terminal_manifest_uri=str(root / "terminal.json"),
+            iris_job_id="/test/run",
+            **(ids if source_kind == "rl" else {}),
+        )
+        payload = run.model_dump(mode="json", exclude_unset=True, exclude={"path"})
+        record = ArtifactRecord(result_type=result_type_name(SkyRLRun), result=payload)
+        (root / RECORD_FILENAME).write_text(record.model_dump_json())
+        source = SkyRLPolicyModel(ArtifactStep.adopt("tests/model", version, str(root), kind=SkyRLRun))
+
+    class Client:
+        def submit(self, *, entrypoint, timeout=None, **_kwargs):
+            assert (None if timeout is None else timeout.to_ms()) == (180_000 if source_kind == "rl" else None)
+            _, (batch,), _ = entrypoint.resolve()
+            for evaluation in batch.evaluations:
+                _record(batch, evaluation.identity, RunStatus.SUCCEEDED, None, {}, {}, {})
+            return SimpleNamespace(wait=lambda **_kwargs: None)
+
+    monkeypatch.setattr(pipeline_module, "iris_ctx", lambda: SimpleNamespace(client=Client()))
+    monkeypatch.setattr(launch_module, "CW_RECORDS_PREFIX", str(tmp_path / "records"))
+    evaluation = evaluate(
+        source,
+        ModelConfig(name="candidate", location=str(root)),
+        resolve_evaluations("smoke"),
+        version=version,
+        accelerator="H100x1",
+        submission_cluster="marin",
+        federated_cluster="cw-rno2a",
+        task_timeout_seconds=task_timeout,
+    )
+    result = evaluation.run(materialized_config(evaluation, str(tmp_path)))
+
+    assert len(result.run_ids) == 2
+    for run_id in result.run_ids:
+        record_json = json.loads(Path(record_path(result.records_prefix, run_id)).read_text())
+        if source_kind == "rl":
+            assert record_json["rl_run"] == ids
+        else:
+            assert "rl_run" not in record_json
 
 
 def test_curated_group_submission_authorizes_nested_grader_profile(tmp_path, monkeypatch):

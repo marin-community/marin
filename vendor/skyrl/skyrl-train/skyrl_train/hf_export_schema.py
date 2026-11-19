@@ -37,7 +37,7 @@ class HFExportRequest:
     schema_version: int = HF_EXPORT_REQUEST_SCHEMA_VERSION
     status: HFExportStatus = HFExportStatus.PENDING
     hf_hub_repo_id: str | None = None
-    hf_hub_private: bool = False
+    hf_hub_private: bool = True
     hf_hub_revision: str = DEFAULT_HF_HUB_REVISION
     hf_upload_mode: HFUploadMode = DEFAULT_HF_UPLOAD_MODE
     attempts: int = 0

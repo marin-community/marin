@@ -77,7 +77,8 @@ from rigging.filesystem import cluster_config
 from rigging.filesystem.step_status import STATUS_SUCCESS
 from skyrlrecipe.locality import RoleTopologyMode
 
-from experiments.post_training.skyrl_evaluation import SKYRL_POLICY_LOCATION, resolve_skyrl_model
+from experiments.evaluation.evals import resolve_evaluations
+from experiments.post_training.skyrl_evaluation import evaluate
 
 
 def _model_step() -> ArtifactStep[LevanterCheckpoint]:
@@ -1456,24 +1457,41 @@ def test_finished_policy_resolves_terminal_export_as_model_input(tmp_path, token
         tokenizer,
         "tokenizer-commit" if tokenizer else None,
     )
-    evaluation = ModelConfig(name="finished", location=SKYRL_POLICY_LOCATION, tokenizer="declared/tokenizer")
-    evaluated = resolve_skyrl_model(context, source, evaluation)
+    serving = ModelConfig(name="finished", location=str(root), tokenizer="declared/tokenizer")
+    evaluation = evaluate(
+        model,
+        serving,
+        resolve_evaluations("gsm8k-smoke"),
+        version="2026.10.26",
+        accelerator=None,
+        submission_cluster="test",
+        federated_cluster=None,
+    )
+    evaluated = materialized_config(evaluation, str(tmp_path)).model
     assert (evaluated.location, evaluated.tokenizer, evaluated.tokenizer_revision) == (
         str(root / "policy"),
         tokenizer or str(root / "policy"),
         "tokenizer-commit" if tokenizer else None,
     )
-    fingerprint = StepContext.for_fingerprint({}, model.deps())
-    policy_identity = model.resolve(fingerprint)
-    evaluation_identity = resolve_skyrl_model(fingerprint, source, evaluation)
-    assert (evaluation_identity.location, evaluation_identity.tokenizer, evaluation_identity.tokenizer_revision) == (
-        policy_identity.uri,
-        policy_identity.tokenizer_uri or policy_identity.uri,
-        policy_identity.tokenizer_revision,
+    assert evaluated.identity == f"tests/finished@2026.10.26:{source.fingerprint()}"
+
+
+def test_evaluate_uses_the_discovered_hf_export(tmp_path):
+    export = tmp_path / "sft" / "hf" / "step-3"
+    export.mkdir(parents=True)
+    (export / "config.json").write_text("{}")
+    (export / "tokenizer_config.json").write_text("{}")
+    source = ArtifactStep.adopt("tests/sft", "2026.10.26", str(tmp_path / "sft"))
+
+    evaluation = evaluate(
+        ArtifactHfModel(source),
+        ModelConfig(name="sft", location=str(tmp_path / "sft")),
+        resolve_evaluations("gsm8k-smoke"),
+        version="2026.10.26",
+        accelerator=None,
+        submission_cluster="test",
+        federated_cluster=None,
     )
-    assert evaluated.identity == evaluation_identity.identity == f"tests/finished@2026.10.26:{source.fingerprint()}"
-    assert evaluation_identity.location == f"tests/finished@2026.10.26:{source.fingerprint()}/policy"
-    other = ArtifactStep.adopt("tests/other-policy", "2026.10.27", str(root), kind=SkyRLRun)
-    other_model = resolve_skyrl_model(StepContext.for_fingerprint({}, (other,)), other, evaluation)
-    assert other_model.identity == f"tests/other-policy@2026.10.27:{other.fingerprint()}"
-    assert other_model.location == f"tests/other-policy@2026.10.27:{other.fingerprint()}/policy"
+
+    evaluated = materialized_config(evaluation, str(tmp_path)).model
+    assert (evaluated.location, evaluated.tokenizer) == (str(export), str(export))
