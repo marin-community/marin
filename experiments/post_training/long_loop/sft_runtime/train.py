@@ -78,7 +78,9 @@ from experiments.grug.moe_hero_ep.coordinated_gc import GC_TIME_METRIC, GC_WARMU
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 from experiments.post_training.long_loop.execution_policy import DEFAULT_TASK_TIMEOUT_SECONDS
 from experiments.post_training.long_loop.runs.e12.carried_restore import restore_1005_carried_state
+from experiments.post_training.long_loop.runs.e12.mixed_data import E12DataConfig
 from experiments.post_training.long_loop.sft_runtime.model import (
+    DISTILL_SOFT_CE_METRIC,
     OFFLOAD_CARRY_REMAT_MODE,
     GrugModelConfig,
     RematMode,
@@ -86,6 +88,7 @@ from experiments.post_training.long_loop.sft_runtime.model import (
     _histogram_from_expert_counts,
 )
 from experiments.post_training.long_loop.sft_runtime.state_rebind import HostRebindConfig, rebind_first_state
+from experiments.post_training.long_loop.sft_runtime.teacher_targets import TeacherLmExample
 from experiments.post_training.long_loop.sft_runtime.validation_checkpoint import (
     BestValidationCheckpoint,
     best_validation_callback,
@@ -350,6 +353,9 @@ class GrugTrainerConfig:
     gc_interval: int | None = None
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
     z_loss_weight: float = 1e-4  # Weight on final-logit logsumexp z-loss stabilization term.
+    # Weight on the soft cross-entropy against stored teacher top-K targets. 0 trains on the hard
+    # loss alone, through the same code path as a run without teacher data.
+    distill_alpha: float = 0.0
     # Keep disabled except on model sizes where Grace-Blackwell host offload has been measured.
     # The d6144 EP64 runs used it; d5120 required a 135 GiB pinned-host arena and regressed.
     offload_opt_state: bool = False
@@ -389,6 +395,8 @@ class GrugTrainerConfig:
             raise ValueError("Each special token needs one anchor")
         if self.gc_interval is not None and self.gc_interval <= 0:
             raise ValueError("GC interval must be positive")
+        if self.distill_alpha < 0:
+            raise ValueError("distill_alpha must be nonnegative")
 
 
 def grug_trainer_mesh_config(context_axis_size: int) -> MeshConfig:
@@ -492,6 +500,9 @@ def build_train_dataset(
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
 _TRAIN_LOADER_BUFFER_SIZE = 512
+# Buffered batches are device arrays. Teacher top-20 targets add 42 MB per 262,144-position row,
+# so 512 buffered batches would hold ~21 GB per batch shard; 32 holds ~1.3 GB.
+_TEACHER_TRAIN_LOADER_BUFFER_SIZE = 32
 # On one GB200 tray, four-batch requests delivered the first data in 3.7s and sustained 3.4 batches/s.
 _TRAIN_LOADER_FETCH_BATCH_SIZE = 4
 
@@ -537,6 +548,7 @@ def build_train_loader(
     *,
     batch_schedule: BatchSchedule,
     mesh: Mesh,
+    max_buffered_batches: int = _TRAIN_LOADER_BUFFER_SIZE,
 ) -> DataLoader[GrugLmExample]:
     # DataLoader uses this batch axis mapping to shard batches across the distributed mesh.
     # `compact_grug_mesh` always carries (replica_dcn, data, context, expert, model); length-1 axes
@@ -544,7 +556,7 @@ def build_train_loader(
     return DataLoader(
         dataset,
         batch_schedule.schedule,
-        max_buffered_batches=_TRAIN_LOADER_BUFFER_SIZE,
+        max_buffered_batches=max_buffered_batches,
         mesh=mesh,
         axis_resources={"__BATCH__": _BATCH_AXES},
         fetch_batch_size=_TRAIN_LOADER_FETCH_BATCH_SIZE,
@@ -615,16 +627,71 @@ def build_tagged_evaluator(
     if len(tagged_eval_sets) == 0:
         logger.warning("No evaluation datasets provided.")
         return None
+    tokenizer = data_config.the_tokenizer if eval_cfg.compute_bpb else None
+    return _tagged_evaluator(
+        tagged_eval_sets,
+        _next_token_eval_loss_fn(mesh, mp, model_transform),
+        tokenizer=tokenizer,
+        mesh=mesh,
+        eval_cfg=eval_cfg,
+    )
 
+
+def build_teacher_evaluators(
+    *,
+    data_config: E12DataConfig,
+    max_seq_len: int,
+    mesh: Mesh,
+    eval_cfg: GrugEvalConfig,
+    mp: jmp.Policy,
+) -> tuple[TaggedEvaluator, TaggedEvaluator]:
+    """Build the held-out NLL and teacher-KL evaluators over the teacher-scored eval sets.
+
+    The KL evaluator's "loss" is the mean of ``KL(q || p_student)`` over teacher-valid
+    positions, where ``q`` is the teacher top-K renormalized.
+    """
+    pos = Axis("position", max_seq_len if eval_cfg.max_seq_len is None else eval_cfg.max_seq_len)
+    teacher_sets = data_config.teacher_eval_sets(pos)
+    eval_array_sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
+
+    def teacher_kl_loss_fn(model: Transformer, batch: TeacherLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
+        model = mp.cast_to_compute(model)
+        per_pos_kl = model.teacher_kl(batch.tokens, batch.teacher, mask=batch.attn_mask)
+        per_pos_weight = batch.teacher.mask * (batch.loss_weight > 0).astype(batch.teacher.mask.dtype)
+        per_pos_token_id = jnp.pad(batch.tokens[:, 1:], ((0, 0), (0, 1)))
+        return (
+            jax.sharding.reshard(per_pos_kl, eval_array_sharding),
+            jax.sharding.reshard(per_pos_weight, eval_array_sharding),
+            per_pos_token_id,
+        )
+
+    nll = _tagged_evaluator(
+        teacher_sets, _next_token_eval_loss_fn(mesh, mp, None), tokenizer=None, mesh=mesh, eval_cfg=eval_cfg
+    )
+    kl = _tagged_evaluator(teacher_sets, teacher_kl_loss_fn, tokenizer=None, mesh=mesh, eval_cfg=eval_cfg)
+    return nll, kl
+
+
+def _tagged_evaluator(tagged_eval_sets, loss_fn, *, tokenizer, mesh: Mesh, eval_cfg: GrugEvalConfig) -> TaggedEvaluator:
     max_examples_per_dataset = None
     if eval_cfg.max_eval_batches is not None:
         max_examples_per_dataset = eval_cfg.max_eval_batches * eval_cfg.eval_batch_size
-
-    tokenizer = data_config.the_tokenizer if eval_cfg.compute_bpb else None
     # `compact_grug_mesh` always carries (replica_dcn, data, context, expert, model); length-1 axes
     # are kept so we can name "expert" unconditionally.
-    eval_axis_mapping = {"batch": _BATCH_AXES}
-    eval_batch = Axis("batch", eval_cfg.eval_batch_size)
+    return TaggedEvaluator(
+        EvalBatch=Axis("batch", eval_cfg.eval_batch_size),
+        tagged_eval_sets=tagged_eval_sets,
+        loss_fn=loss_fn,
+        tokenizer=tokenizer,
+        device_mesh=mesh,
+        axis_mapping={"batch": _BATCH_AXES},
+        max_examples_per_dataset=max_examples_per_dataset,
+    )
+
+
+def _next_token_eval_loss_fn(
+    mesh: Mesh, mp: jmp.Policy, model_transform: Callable[[Transformer], Transformer] | None
+) -> Callable[[Transformer, LmExample | GrugLmExample], tuple[jax.Array, jax.Array, jax.Array]]:
     eval_array_sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
 
     def eval_loss_fn(model: Transformer, batch: LmExample | GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
@@ -649,15 +716,7 @@ def build_tagged_evaluator(
         per_pos_token_id = jnp.pad(batch.tokens[:, 1:], ((0, 0), (0, 1)))
         return per_pos_loss, per_pos_weight, per_pos_token_id
 
-    return TaggedEvaluator(
-        EvalBatch=eval_batch,
-        tagged_eval_sets=tagged_eval_sets,
-        loss_fn=eval_loss_fn,
-        tokenizer=tokenizer,
-        device_mesh=mesh,
-        axis_mapping=eval_axis_mapping,
-        max_examples_per_dataset=max_examples_per_dataset,
-    )
+    return eval_loss_fn
 
 
 def _compute_flops(
@@ -936,14 +995,22 @@ def balance_attention_rows(batch: GrugLmExample) -> GrugLmExample:
         return jax.sharding.reshard(gathered, jax.typeof(x).sharding.spec)
 
     # The model reads only the q segment ids, so gather them once and reuse them for kv.
-    return GrugLmExample(
+    balanced = replace(
+        batch,
         tokens=permute(batch.tokens),
         loss_weight=permute(batch.loss_weight),
         attn_mask=batch.attn_mask.with_segment_ids(permute(q_segment_ids)),
     )
+    if isinstance(batch, TeacherLmExample):
+        balanced = replace(balanced, teacher=jax.tree.map(permute, batch.teacher))
+    return balanced
 
 
-def _loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None, *, loss_denominator=None):
+def _loss_and_grads(
+    params, batch, mp: jmp.Policy, z_loss: float | None, *, loss_denominator=None, distill_alpha: float = 0.0
+):
+    teacher = batch.teacher if isinstance(batch, TeacherLmExample) else None
+
     def loss_fn(model):
         model = eqx.tree_at(
             lambda m: m.stacked_blocks.stacked.mlp.router_bias,
@@ -958,18 +1025,29 @@ def _loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None, *, loss
             reduction="mean" if loss_denominator is None else "sum",
             logsumexp_weight=z_loss,
             return_router_metrics=True,
+            teacher=teacher,
+            distill_alpha=distill_alpha,
         )
         if loss_denominator is not None:
             loss = loss / loss_denominator
-            metrics = {**metrics, "train/cross_entropy_loss": loss}
+            metrics = {
+                **metrics,
+                **{name: metrics[name] / loss_denominator for name in _LOSS_SUM_METRICS if name in metrics},
+            }
         return loss, metrics
 
     return jax.value_and_grad(loss_fn, has_aux=True)(params)
 
 
-def _accumulated_loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None, steps: int):
+# Loss terms the model sums over tokens when given an external denominator.
+_LOSS_SUM_METRICS = ("train/cross_entropy_loss", DISTILL_SOFT_CE_METRIC)
+
+
+def _accumulated_loss_and_grads(
+    params, batch, mp: jmp.Policy, z_loss: float | None, steps: int, *, distill_alpha: float = 0.0
+):
     if steps == 1:
-        return _loss_and_grads(params, batch, mp, z_loss)
+        return _loss_and_grads(params, batch, mp, z_loss, distill_alpha=distill_alpha)
     batch_size = batch.tokens.shape[0]
     if batch_size % steps:
         raise ValueError(f"Batch size {batch_size} must divide into {steps} microbatches")
@@ -984,14 +1062,16 @@ def _accumulated_loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | N
 
     def accumulate(grads, microbatch):
         microbatch = eqx.combine(microbatch, shared)
-        (loss, metrics), new_grads = _loss_and_grads(params, microbatch, mp, z_loss, loss_denominator=denominator)
+        (loss, metrics), new_grads = _loss_and_grads(
+            params, microbatch, mp, z_loss, loss_denominator=denominator, distill_alpha=distill_alpha
+        )
         grads = jax.tree.map(lambda total, value: total + value.astype(jnp.float32), grads, new_grads)
         return grads, (loss, metrics)
 
     accumulated, (losses, metrics_by_microbatch) = jax.lax.scan(accumulate, accumulated, microbatches)
     grads = jax.tree.map(lambda value, param: value.astype(param.dtype), accumulated, params)
     sum_metrics = {
-        "train/cross_entropy_loss",
+        *_LOSS_SUM_METRICS,
         "train/router/routing_counts_per_layer",
         MOE_DROPPED_ASSIGNMENTS_METRIC,
         MOE_RECEIVER_DROPPED_ASSIGNMENTS_METRIC,
@@ -1014,9 +1094,17 @@ def _accumulated_loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | N
 
 
 def _compute_diagnostic_watch_stats(
-    params, batch, mp: jmp.Policy, z_loss: float | None, watch_config: WatchConfig, accumulation_steps: int
+    params,
+    batch,
+    mp: jmp.Policy,
+    z_loss: float | None,
+    watch_config: WatchConfig,
+    accumulation_steps: int,
+    distill_alpha: float,
 ):
-    (_, _), grads = _accumulated_loss_and_grads(params, batch, mp, z_loss, accumulation_steps)
+    (_, _), grads = _accumulated_loss_and_grads(
+        params, batch, mp, z_loss, accumulation_steps, distill_alpha=distill_alpha
+    )
     return compute_watch_stats(
         watch_targets=watch_config.watch_targets,
         include_norms=watch_config.include_norms,
@@ -1036,6 +1124,7 @@ def _make_diagnostic_watch_step(
     watch_config: WatchConfig,
     balance_rows: bool = False,
     accumulation_steps: int = 1,
+    distill_alpha: float = 0.0,
 ):
     watch_targets = (
         tuple(t.strip() for t in watch_config.watch_targets.split(","))
@@ -1052,7 +1141,9 @@ def _make_diagnostic_watch_step(
     def diagnostic_watch_step(params: Transformer, batch):
         if balance_rows:
             batch = balance_attention_rows(batch)
-        return _compute_diagnostic_watch_stats(params, batch, mp, z_loss, diagnostic_watch_config, accumulation_steps)
+        return _compute_diagnostic_watch_stats(
+            params, batch, mp, z_loss, diagnostic_watch_config, accumulation_steps, distill_alpha
+        )
 
     return diagnostic_watch_step
 
@@ -1069,6 +1160,7 @@ def _make_train_step(
     special_token_ids: tuple[int, ...] = (),
     special_token_lr_multiplier: float = 1.0,
     accumulation_steps: int = 1,
+    distill_alpha: float = 0.0,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
@@ -1091,7 +1183,7 @@ def _make_train_step(
             # Moves rows between batch shards; see `balance_attention_rows` for its effect on the loss.
             batch = balance_attention_rows(batch)
         (loss, summarized_metrics), grads = _accumulated_loss_and_grads(
-            train_params, batch, mp, z_loss, accumulation_steps
+            train_params, batch, mp, z_loss, accumulation_steps, distill_alpha=distill_alpha
         )
         metrics = {"train/loss": loss, **summarized_metrics}
         opt_state_in = _tree_to_memory_kind(state.opt_state, "device") if offload_opt_state else state.opt_state
@@ -1157,6 +1249,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     if config.tensorstore_cache_bytes is not None:
         set_jagged_array_read_cache_bytes(config.tensorstore_cache_bytes)
 
+    if config.trainer.distill_alpha > 0 and not (
+        isinstance(config.data, E12DataConfig)
+        and config.data.teacher_topk > 0
+        and config.trainer.training_data_mode == TrainingDataMode.MIXTURE
+    ):
+        raise ValueError("distill_alpha > 0 needs E12 mixture data with teacher_topk > 0")
     trainer = config.trainer.trainer
     trainer.initialize()
     levanter.tracker.log_configuration(config)
@@ -1176,6 +1274,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             watch_config=watch_config,
             balance_rows=config.trainer.balance_attention_rows,
             accumulation_steps=config.trainer.gradient_accumulation_steps,
+            distill_alpha=config.trainer.distill_alpha,
         )
         inline_watch_config = None
     train_step = _make_train_step(
@@ -1189,6 +1288,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         special_token_ids=config.trainer.special_token_ids,
         special_token_lr_multiplier=config.trainer.special_token_lr_multiplier,
         accumulation_steps=config.trainer.gradient_accumulation_steps,
+        distill_alpha=config.trainer.distill_alpha,
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
@@ -1315,10 +1415,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 batch_schedule=batch_schedule,
                 key=data_key,
             )
+            teacher_rows = isinstance(config.data, E12DataConfig) and config.data.teacher_topk > 0
             train_loader = build_train_loader(
                 train_dataset,
                 batch_schedule=batch_schedule,
                 mesh=mesh,
+                max_buffered_batches=_TEACHER_TRAIN_LOADER_BUFFER_SIZE if teacher_rows else _TRAIN_LOADER_BUFFER_SIZE,
             )
 
         flops_per_example, flops_summary = _compute_flops(model_config=config.model)
@@ -1331,6 +1433,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         eval_cfg = config.eval
         evaluator = None
+        teacher_evaluators = None
         dropless_evaluator = None
         dropless_eval_mesh = None
         eval_ema = False
@@ -1346,6 +1449,14 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     eval_cfg=eval_cfg,
                     mp=trainer.mp,
                 )
+                if isinstance(config.data, E12DataConfig) and config.data.teacher_validation_cache:
+                    teacher_evaluators = build_teacher_evaluators(
+                        data_config=config.data,
+                        max_seq_len=config.model.max_seq_len,
+                        mesh=mesh,
+                        eval_cfg=eval_cfg,
+                        mp=trainer.mp,
+                    )
             # Expert-parallel runs drop tokens over capacity; a second evaluator scores the same
             # weights dropless under the local backend on an expert-collapsed mesh (expert folded
             # into `data`), which the local backend requires. FSDP runs already have expert=1.
@@ -1444,6 +1555,16 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             evaluator,
                             prefix=eval_cfg.prefix,
                             eval_current=eval_cfg.eval_current and eval_cfg.best_checkpoint_path is None,
+                            eval_ema=eval_ema,
+                        )
+                    )
+            if teacher_evaluators is not None:
+                for teacher_evaluator, suffix in zip(teacher_evaluators, ("teacher_nll", "teacher_kl"), strict=True):
+                    eval_hooks.append(
+                        cb_tagged_evaluate(
+                            teacher_evaluator,
+                            prefix=f"{eval_cfg.prefix}/{suffix}",
+                            eval_current=eval_cfg.eval_current,
                             eval_ema=eval_ema,
                         )
                     )

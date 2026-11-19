@@ -8,12 +8,79 @@ import json
 from dataclasses import dataclass
 
 import numpy as np
+from haliax import Axis
+from levanter.data.dataset import AsyncDataset, MappedAsyncDataset
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text.datasets import LmDataConfig, PrebuiltLmDataset
+from levanter.data.text.examples import GrugLmExample
 from levanter.store.cache import TreeCache
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.long_loop.runs.e12.frozen_retention import FrozenRetentionDataset
+from experiments.post_training.long_loop.sft_runtime.teacher_targets import TeacherLmExample, TeacherTopK
+
+EOS_ID = 128001
+_LM_EXEMPLAR = {"input_ids": np.zeros(0, np.int32), "loss_weights": np.zeros(0, np.float32)}
+_TEACHER_EXEMPLAR = {
+    **_LM_EXEMPLAR,
+    "teacher_ids": np.zeros(0, np.int32),
+    "teacher_logprobs": np.zeros(0, np.float32),
+}
+
+
+def _prebuilt_dataset(cache: TreeCache, Pos: Axis, block_cross_document_attention: bool) -> PrebuiltLmDataset:
+    return PrebuiltLmDataset(
+        cache,
+        Pos,
+        input_ids_key="input_ids",
+        loss_weights_key="loss_weights",
+        loss_weight_transform=None,
+        eos_id=EOS_ID,
+        block_cross_document_attention=block_cross_document_attention,
+    )
+
+
+def teacher_dataset(
+    path: str, Pos: Axis, topk: int, block_cross_document_attention: bool
+) -> AsyncDataset[TeacherLmExample]:
+    """Read packed rows with their stored teacher top-K, one row per cache entry.
+
+    ``teacher_ids`` and ``teacher_logprobs`` are flat ``[Pos * topk]`` per entry, row-major
+    ``[Pos, topk]``. A position carries teacher targets where its loss weight is positive.
+    """
+    cache = TreeCache.load(path, _TEACHER_EXEMPLAR)
+    lm = _prebuilt_dataset(cache, Pos, block_cross_document_attention)
+    shape = (Pos.size, topk)
+
+    def attach(row: dict) -> TeacherLmExample:
+        example = lm.fn(row)
+        ids = np.asarray(row["teacher_ids"])
+        logprobs = np.asarray(row["teacher_logprobs"])
+        if ids.size != Pos.size * topk or logprobs.size != Pos.size * topk:
+            raise ValueError(f"Teacher arrays have {ids.size} and {logprobs.size} entries, expected {Pos.size * topk}")
+        mask = (np.asarray(example.loss_weight) > 0).astype(np.float32)
+        teacher = TeacherTopK(ids=ids.reshape(shape), logprobs=logprobs.reshape(shape), mask=mask)
+        return TeacherLmExample(
+            tokens=example.tokens, loss_weight=example.loss_weight, attn_mask=example.attn_mask, teacher=teacher
+        )
+
+    return MappedAsyncDataset(cache, attach)
+
+
+def without_teacher(dataset: AsyncDataset[GrugLmExample], Pos: Axis, topk: int) -> AsyncDataset[TeacherLmExample]:
+    """Give rows without a teacher zero targets and a zero mask, so they mix with teacher rows."""
+    empty = TeacherTopK(
+        ids=np.zeros((Pos.size, topk), np.int32),
+        logprobs=np.zeros((Pos.size, topk), np.float32),
+        mask=np.zeros(Pos.size, np.float32),
+    )
+
+    def attach(example: GrugLmExample) -> TeacherLmExample:
+        return TeacherLmExample(
+            tokens=example.tokens, loss_weight=example.loss_weight, attn_mask=example.attn_mask, teacher=empty
+        )
+
+    return dataset.map(attach)
 
 
 class AlignedReplacementMixture(MixtureDataset):
@@ -50,6 +117,11 @@ class E12DataConfig(LmDataConfig):
     retention_manifest: str = ""
     retention_manifest_sha256: str = ""
     retention_root: str = ""
+    # Number of stored teacher top-K entries per position in the repair cache; 0 reads no
+    # teacher fields. Loading them never changes mixture sampling or row order.
+    teacher_topk: int = 0
+    # Held-out teacher-scored cache, evaluated for NLL and KL to the teacher.
+    teacher_validation_cache: str = ""
 
     def train_mixture(self, Pos, batch_schedule, *, key):
         if not self.repair_cache or not 0 < self.repair_row_weight < 1:
@@ -59,19 +131,12 @@ class E12DataConfig(LmDataConfig):
         general = super().train_mixture(Pos, batch_schedule, key=key)
         if self.control_only:
             return general
-        cache = TreeCache.load(
-            self.repair_cache,
-            {"input_ids": np.zeros(0, np.int32), "loss_weights": np.zeros(0, np.float32)},
-        )
-        repair = PrebuiltLmDataset(
-            cache,
-            Pos,
-            input_ids_key="input_ids",
-            loss_weights_key="loss_weights",
-            loss_weight_transform=None,
-            eos_id=128001,
-            block_cross_document_attention=self.block_cross_document_attention,
-        )
+        if self.teacher_topk > 0:
+            general = without_teacher(general, Pos, self.teacher_topk)
+            repair = teacher_dataset(self.repair_cache, Pos, self.teacher_topk, self.block_cross_document_attention)
+        else:
+            cache = TreeCache.load(self.repair_cache, _LM_EXEMPLAR)
+            repair = _prebuilt_dataset(cache, Pos, self.block_cross_document_attention)
         weights = {"general": 1 - self.repair_row_weight, "e12": self.repair_row_weight}
         if self.repair_once:
             weights = [(0, weights), (self.outer_block_size, {"general": 1.0})]
@@ -102,17 +167,16 @@ class E12DataConfig(LmDataConfig):
             result = list(super().tagged_eval_sets(Pos))
         for label, path in (("validation", self.repair_validation_cache), ("test", self.repair_test_cache)):
             if path:
-                cache = TreeCache.load(
-                    path, {"input_ids": np.zeros(0, np.int32), "loss_weights": np.zeros(0, np.float32)}
-                )
-                dataset = PrebuiltLmDataset(
-                    cache,
-                    Pos,
-                    input_ids_key="input_ids",
-                    loss_weights_key="loss_weights",
-                    loss_weight_transform=None,
-                    eos_id=128001,
-                    block_cross_document_attention=self.block_cross_document_attention,
-                )
+                dataset = _prebuilt_dataset(TreeCache.load(path, _LM_EXEMPLAR), Pos, self.block_cross_document_attention)
                 result.append((dataset, ["e12", "e12/" + label]))
         return result
+
+    def teacher_eval_sets(self, Pos) -> list[tuple[AsyncDataset[TeacherLmExample], list[str]]]:
+        if not self.teacher_validation_cache:
+            return []
+        if self.teacher_topk <= 0:
+            raise ValueError("teacher_validation_cache needs teacher_topk > 0")
+        dataset = teacher_dataset(
+            self.teacher_validation_cache, Pos, self.teacher_topk, self.block_cross_document_attention
+        )
+        return [(dataset, ["e12_teacher/validation"])]

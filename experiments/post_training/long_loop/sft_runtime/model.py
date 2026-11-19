@@ -57,13 +57,15 @@ from levanter.grug.grug_moe import (
     reduce_moe_routing_stats,
     validate_moe_implementation,
 )
-from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
-from levanter.grug.sharding import unshard
+from levanter.grug.loss import BlockSizes, _token_dim_specs, fused_linear_softmax_cross_entropy_loss
+from levanter.grug.sharding import _current_mesh, _reshard_for_shard_map, unshard
 from levanter.kernels.triton.short_conv import short_conv
 from levanter.layers.stacked import ArrayStacked
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
+
+from experiments.post_training.long_loop.sft_runtime.teacher_targets import TeacherTopK
 
 _GATED_NORM_RANK = 128
 _ROUTING_RENORM_SUM = 2.5
@@ -80,6 +82,9 @@ _ROUTING_RENORM_SUM = 2.5
 # one GEMM per vocab block. Measured: forward 171.3 ms -> 81.9 ms, peak HBM +0.04 GiB.
 _CE_TOKENS_PER_RANK = 65_536
 _CE_BLOCK_SIZES = BlockSizes(b_block_size=_CE_TOKENS_PER_RANK, v_block_size=4096)
+# Positions per block when gathering lm-head columns at teacher ids. One block holds a
+# [positions, K, D] slice of the head: 2048 x 20 x 2560 bf16 is 210 MB.
+TEACHER_LOGIT_TOKEN_BLOCK = 2048
 # The embedding is fully replicated for a local lookup. The language-model head
 # is sharded across the data, expert, context, and model axes.
 _EMBED_PARTITION_SPEC = P(None, None)
@@ -94,6 +99,7 @@ GRUG_MOE_MODEL_TYPE = "grug_moe"
 GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 2
+DISTILL_SOFT_CE_METRIC = "train/distill_soft_ce"
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
@@ -217,6 +223,12 @@ def _partition_spec_of(x: jax.Array) -> P | None:
     if isinstance(sharding, NamedSharding):
         return sharding.spec
     return None
+
+
+def _like_sharding(x: jax.Array, like: jax.Array) -> jax.Array:
+    """Reshard ``x`` onto ``like``'s partition spec when ``like`` has one."""
+    spec = _partition_spec_of(like)
+    return x if spec is None else reshard(x, spec)
 
 
 def _sequence_axis_of(x: jax.Array) -> str | None:
@@ -1399,6 +1411,19 @@ class Transformer(eqx.Module):
     def to_state_dict(self, prefix: str | None = None) -> dict[str, jax.Array]:
         return grugmoe_inference_state_dict(self, prefix=prefix)
 
+    def teacher_kl(
+        self,
+        token_ids: Int[Array, "B S"],
+        teacher: TeacherTopK,
+        *,
+        mask: AttentionMask | jax.Array | None = None,
+    ) -> Float[Array, "B S"]:
+        """Per-position KL from the renormalized teacher top-K to the student; unmasked."""
+        hidden, _ = self(token_ids, mask=mask)
+        student = student_topk_logprobs(hidden, self.output_proj, teacher.ids)
+        teacher_log_q = _like_sharding(jax.nn.log_softmax(teacher.logprobs.astype(jnp.float32), axis=-1), student)
+        return jnp.sum(jnp.exp(teacher_log_q) * (teacher_log_q - student), axis=-1)
+
     def next_token_loss(
         self,
         token_ids: Int[Array, "B S"],
@@ -1409,7 +1434,23 @@ class Transformer(eqx.Module):
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype = jnp.float32,
         return_router_metrics: bool = False,
+        teacher: TeacherTopK | None = None,
+        distill_alpha: float = 0.0,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
+        """Next-token cross-entropy, plus ``distill_alpha`` times the teacher soft cross-entropy.
+
+        The soft term is ``-sum_k q_k log p(id_k)`` per position, with ``q`` the teacher top-K
+        renormalized and ``p`` the student's full-vocabulary softmax. It is weighted by
+        ``loss_weight * teacher.mask`` and reduced over the same denominator as the hard loss.
+        With ``distill_alpha == 0`` the teacher is ignored and the loss is the hard loss alone.
+        """
+        if distill_alpha < 0:
+            raise ValueError(f"distill_alpha must be nonnegative, got {distill_alpha}")
+        distill = distill_alpha > 0
+        if distill and teacher is None:
+            raise ValueError("A positive distill_alpha requires teacher targets in the batch")
+        if distill and reduction == "none":
+            raise ValueError("Distillation needs a 'sum' or 'mean' reduction")
         hidden, router_metrics = self(token_ids, mask=mask)
         labels = jnp.pad(token_ids[:, 1:], ((0, 0), (0, 1))).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
@@ -1445,9 +1486,25 @@ class Transformer(eqx.Module):
         )
         # Router z-loss is logged for monitoring only; it is not added to the training loss.
         loss = cross_entropy_loss
+        soft_cross_entropy = None
+        if distill:
+            assert teacher is not None
+            student = student_topk_logprobs(hidden, self.output_proj, teacher.ids)
+            q = _like_sharding(jax.nn.softmax(teacher.logprobs.astype(jnp.float32), axis=-1), student)
+            per_position = _like_sharding(-jnp.sum(q * student, axis=-1), loss_weight)
+            soft_weight = loss_weight * teacher.mask.astype(loss_dtype)
+            soft_cross_entropy = jnp.sum(per_position * soft_weight)
+            if reduction == "mean":
+                denominator = jnp.sum(loss_weight)
+                soft_cross_entropy = jnp.where(
+                    denominator != 0, soft_cross_entropy / denominator, jnp.zeros_like(denominator)
+                )
+            loss = cross_entropy_loss + distill_alpha * soft_cross_entropy
         if return_router_metrics:
             summarized_metrics = _summarize_router_metrics(router_metrics)
             summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
+            if soft_cross_entropy is not None:
+                summarized_metrics[DISTILL_SOFT_CE_METRIC] = soft_cross_entropy
             num_moe_layers = router_metrics["router_z_loss_per_layer"].shape[0]
             summarized_metrics["train/router/z_loss_logging_only"] = (
                 jnp.sum(router_metrics["router_z_loss_per_layer"]) / num_moe_layers
@@ -1472,6 +1529,83 @@ class Transformer(eqx.Module):
                 )
             return loss, summarized_metrics
         return loss
+
+
+def _gathered_logits(
+    hidden: Float[Array, "B S D"],
+    lm_head: Float[Array, "D V"],
+    ids: Int[Array, "B S K"],
+    *,
+    token_block_size: int,
+) -> Float[Array, "B S K"]:
+    """Return ``hidden @ lm_head[:, ids]`` per position without forming vocabulary-wide logits."""
+    hidden_dim = hidden.shape[-1]
+
+    def _local(local_hidden: jax.Array, local_lm_head: jax.Array, local_ids: jax.Array) -> jax.Array:
+        k = local_ids.shape[-1]
+        flat_hidden = local_hidden.reshape(-1, hidden_dim)
+        flat_ids = local_ids.reshape(-1, k).astype(jnp.int32)
+        tokens = flat_ids.shape[0]
+        block = min(token_block_size, tokens)
+        pad = -tokens % block
+        flat_hidden = jnp.pad(flat_hidden, ((0, pad), (0, 0)))
+        flat_ids = jnp.pad(flat_ids, ((0, pad), (0, 0)))
+
+        # The backward recomputes each block's gathered head columns rather than saving them.
+        @jax.checkpoint
+        def _block(args: tuple[jax.Array, jax.Array]) -> jax.Array:
+            block_hidden, block_ids = args
+            columns = jnp.take(local_lm_head, block_ids, axis=1)
+            return jnp.einsum("td,dtk->tk", block_hidden, columns, preferred_element_type=jnp.float32)
+
+        logits = jax.lax.map(_block, (flat_hidden.reshape(-1, block, hidden_dim), flat_ids.reshape(-1, block, k)))
+        return logits.reshape(-1, k)[:tokens].reshape(local_ids.shape)
+
+    mesh = _current_mesh()
+    if mesh is None or mesh.empty:
+        return _local(hidden, lm_head, ids)
+    # Shard tokens as the fused cross-entropy does, so its per-token output lines up.
+    token_dims = _token_dim_specs(hidden)
+    hidden_spec = P(*token_dims, None)
+    ids_spec = P(*token_dims, None)
+    return shard_map(
+        _local,
+        mesh=mesh,
+        in_specs=(hidden_spec, P(None, None), ids_spec),
+        out_specs=ids_spec,
+        check_vma=False,
+    )(
+        _reshard_for_shard_map(hidden, mesh, hidden_spec),
+        _reshard_for_shard_map(lm_head, mesh, P(None, None)),
+        _reshard_for_shard_map(ids, mesh, ids_spec),
+    )
+
+
+def student_topk_logprobs(
+    hidden: Float[Array, "B S D"],
+    lm_head: Float[Array, "D V"],
+    ids: Int[Array, "B S K"],
+    *,
+    token_block_size: int = TEACHER_LOGIT_TOKEN_BLOCK,
+) -> Float[Array, "B S K"]:
+    """Return the student's full-vocabulary log-softmax at ``ids``, differentiably.
+
+    The fused kernel's per-token cross-entropy of ``ids[..., 0]`` is its logsumexp minus its
+    logit, so ``log p(id_k) = logit(id_k) - logit(id_0) - CE(id_0)``. The logsumexp thus comes
+    from the blocked kernel, and the K logits from gathered head columns.
+    """
+    first_cross_entropy = fused_linear_softmax_cross_entropy_loss(
+        hidden,
+        lm_head,
+        ids[..., 0].astype(jnp.int32),
+        reduction="none",
+        logsumexp_weight=None,
+        dtype=jnp.float32,
+        implementation="xla_fast_bwd",
+        block_sizes=_CE_BLOCK_SIZES,
+    )
+    logits = _gathered_logits(hidden, lm_head, ids, token_block_size=token_block_size)
+    return logits - logits[..., :1] - first_cross_entropy[..., None]
 
 
 def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:
