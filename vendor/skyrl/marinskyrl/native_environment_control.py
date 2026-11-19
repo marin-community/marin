@@ -53,7 +53,9 @@ def apply_environment(profile: dict[str, Any], host: str) -> None:
     os.environ["GLOO_SOCKET_IFNAME"] = interface_for_ipv4(host)
 
 
-def record_environment(phase: str, *, rank: int | None = None) -> None:
+def record_environment(
+    phase: str, *, rank: int | None = None, distributions: dict[str, dict[str, str]] | None = None
+) -> None:
     """Persist only the nonsecret keys declared in the sealed control profile."""
     if CONTROL_KEY not in os.environ:
         return
@@ -75,6 +77,7 @@ def record_environment(phase: str, *, rank: int | None = None) -> None:
         "python_executable": sys.executable,
         "python_prefix": sys.prefix,
         "loaded_module_paths": modules,
+        "distributions": distributions or {},
         "profile_sha256": hashlib.sha256(os.environ[CONTROL_KEY].encode()).hexdigest(),
     }
     directory = Path(os.environ["IRIS_OUTPUT_DIR"]) / "native-environment-control"
@@ -82,6 +85,26 @@ def record_environment(phase: str, *, rank: int | None = None) -> None:
     destination = directory / f"{os.getpid()}-{phase}.json"
     destination.write_text(json.dumps(receipt, sort_keys=True) + "\n")
     print("MOCHI_NATIVE_ENV_RECEIPT=" + json.dumps(receipt, sort_keys=True), flush=True)
+
+
+def check_runtime_versions(expected: dict[str, str]) -> None:
+    """Check installed distribution versions before preparing native CUDA aliases."""
+    distributions = {name: importlib.metadata.distribution(name) for name in expected}
+    actual = {name: distribution.version for name, distribution in distributions.items()}
+    record_environment(
+        "worker-runtime-check",
+        distributions={
+            name: {"version": actual[name], "root": str(Path(distribution.locate_file("")).resolve())}
+            for name, distribution in distributions.items()
+        },
+    )
+    mismatches = {
+        name: {"expected": version, "actual": actual[name]}
+        for name, version in expected.items()
+        if actual[name] != version
+    }
+    if mismatches:
+        raise RuntimeError(f"Native control runtime version mismatch in {sys.executable}: {mismatches}")
 
 
 def _link(target: Path, destination: Path) -> None:
@@ -116,9 +139,7 @@ def prepare_worker_process() -> None:
     if os.environ.get("LD_LIBRARY_PATH"):
         raise RuntimeError("Ray did not clear LD_LIBRARY_PATH before process exec")
     profile = json.loads(os.environ[CONTROL_KEY])
-    actual_versions = {name: importlib.metadata.version(name) for name in profile["versions"]}
-    if actual_versions != profile["versions"]:
-        raise RuntimeError(f"Native control runtime version mismatch: {actual_versions}")
+    check_runtime_versions(profile["versions"])
     directory = Path(profile["venv_alias"]).parent
     directory.mkdir(parents=True, exist_ok=True)
     with (directory / "native-control.lock").open("a+b") as lock:

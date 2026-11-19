@@ -9,6 +9,7 @@ import pytest
 import yaml
 from marin.execution.build_context import BuildContext, VersionCodex, build_context
 
+from experiments.post_training.long_loop import nvl72_evaluation
 from experiments.post_training.long_loop.nvl72_evaluation import NVL72EvaluationSpec, evaluation_from_spec
 
 
@@ -54,6 +55,14 @@ def test_adopted_evaluation_has_no_training_input_and_rejects_changed_data(tmp_p
     lowered = step.lower()
     assert lowered.name == step.name
     assert step.runtime_args["skyrl_execution"].coordinator_name == "mochi-mochi-evaluation-2026.11.17.9"
+    native_environment = json.loads(nvl72_evaluation.NATIVE_ENVIRONMENT.read_text())
+    native_environment["versions"]["vllm"] = "0.0.0.dev20261113+marin.0ac9dcb157ee"
+    stale_profile = tmp_path / "native-environment.json"
+    stale_profile.write_text(json.dumps(native_environment))
+    with monkeypatch.context() as patch:
+        patch.setattr(nvl72_evaluation, "NATIVE_ENVIRONMENT", stale_profile)
+        with pytest.raises(ValueError, match="vLLM distribution version differs"):
+            evaluation_from_spec(spec, output)
     with pytest.raises(ValueError, match="checkpoint step"):
         evaluation_from_spec(replace(spec, model_step=393491), output)
     (data / "rollouts.parquet").write_bytes(b"changed input")

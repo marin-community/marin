@@ -30,8 +30,10 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.long_loop.nvl72 import EXECUTION, RECIPE_PATH, SEED
+from experiments.post_training.long_loop.serving import checked_serving_release
 
 RECIPE = Path(__file__).with_name("specs") / "evaluation.yaml"
+NATIVE_ENVIRONMENT = Path(__file__).with_name("native_environment_13.json")
 
 
 @dataclass(frozen=True)
@@ -117,9 +119,10 @@ def evaluation_from_spec(spec: NVL72EvaluationSpec, config_output: Path) -> Arti
     config["extra_env"]["PYTORCH_CUDA_ALLOC_CONF"] = serving_recipe["extra_env"]["PYTORCH_CUDA_ALLOC_CONF"]
     config["generator"]["enforce_eager"] = False
     config["generator"]["engine_init_timeout_seconds"] = 1800
-    config["generator"]["engine_init_kwargs"]["marin_native_environment_control"] = json.loads(
-        Path(__file__).with_name("native_environment_13.json").read_text()
-    )
+    native_environment = json.loads(NATIVE_ENVIRONMENT.read_text())
+    if native_environment["versions"]["vllm"] != checked_serving_release().version:
+        raise ValueError("Native environment vLLM distribution version differs from the pinned serving release")
+    config["generator"]["engine_init_kwargs"]["marin_native_environment_control"] = native_environment
     for role in ("policy", "ref"):
         config["trainer"][role]["megatron_config"]["expert_model_parallel_size"] = 4
     agent = config["terminal_bench"]["installed_agent"]["agent"]["kwargs"]

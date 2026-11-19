@@ -174,7 +174,7 @@
     "114 preserves SkyRL Python/HF resolution; only declared GPU/runtime/library/cache settings are transplanted. Unset values are removed before worker exec, never represented as empty strings."
   ],
   "versions": {
-    "vllm": "0.0.0.dev20261113+marin.0ac9dcb157ee",
+    "vllm": "0.0.0.dev20261113+marin.0ac9dcb157ee.cu132",
     "torch": "2.14.1+cu132",
     "runai-model-streamer": "0.16.1",
     "cuda-toolkit": "13.2.2",
@@ -195,6 +195,6 @@
     "concurrency": 16,
     "max_new_tokens": 256,
     "request_timeout": 600,
-    "receipt_uri": "s3://marin-us-east-08a/marin/users/benfeuer/mochi-bringup/engine-serving-probe/20261119-16-runtime-only/serving-receipt.json"
+    "receipt_uri": "s3://marin-us-east-08a/marin/users/benfeuer/mochi-bringup/engine-serving-probe/20261119-17-runtime-version/serving-receipt.json"
   }
 }
