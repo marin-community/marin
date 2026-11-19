@@ -12,16 +12,19 @@ import argparse
 import asyncio
 import json
 import os
+from collections.abc import Mapping
 from typing import Any
 
 from shellbox.backends.daytona.connection import DEFAULT_DAYTONA_API_URL, DaytonaConnection
 from shellbox.backends.daytona.usage import (
     DEFAULT_HEADROOM,
     AccountUsage,
-    RegionCapacity,
+    ResourceCapacity,
     SandboxProfile,
+    account_resource_capacities,
     account_usage,
     max_concurrency,
+    region_resource_capacities,
     usage_report,
 )
 
@@ -84,40 +87,22 @@ def _over_maximum_line(profile: SandboxProfile, usage: AccountUsage) -> str | No
     return None
 
 
-def _capacity_rows(usage: AccountUsage) -> list[tuple[str, str, str, str]]:
+def _capacity_rows(capacities: Mapping[str, ResourceCapacity]) -> list[tuple[str, str, str, str]]:
     return [
         (name, _number(capacity.quota), _number(capacity.used), _number(capacity.remaining))
-        for name, capacity in (
-            ("cpu", usage.cpu),
-            ("memory_gib", usage.memory_gib),
-            ("disk_gib", usage.disk_gib),
-            ("snapshots", usage.snapshots),
-            ("volumes", usage.volumes),
-        )
-    ]
-
-
-def _region_rows(region: RegionCapacity) -> list[tuple[str, str, str, str]]:
-    return [
-        (name, _number(capacity.quota), _number(capacity.used), _number(capacity.remaining))
-        for name, capacity in (
-            ("cpu", region.cpu),
-            ("memory_gib", region.memory_gib),
-            ("disk_gib", region.disk_gib),
-            ("gpu", region.gpu),
-        )
+        for name, capacity in capacities.items()
     ]
 
 
 def _print_account(usage: AccountUsage, profile: SandboxProfile | None, headroom: float) -> None:
     print(f"organization  {usage.organization_id}")
     print("  " + "  ".join(column.ljust(12) for column in ("resource", "quota", "used", "remaining")))
-    for row in _capacity_rows(usage):
+    for row in _capacity_rows(account_resource_capacities(usage)):
         print("  " + "  ".join(column.ljust(12) for column in row))
     if len(usage.regions) > 1:
         for region in usage.regions:
             print(f"  region {region.region_id} ({region.sandbox_class})")
-            for row in _region_rows(region):
+            for row in _capacity_rows(region_resource_capacities(region)):
                 print("  " + "  ".join(column.ljust(12) for column in row))
     elif usage.regions:
         print(f"  region {usage.regions[0].region_id} ({usage.regions[0].sandbox_class})")
@@ -203,7 +188,7 @@ def _parser() -> argparse.ArgumentParser:
         "--headroom",
         type=float,
         default=None,
-        help="Fraction of remaining capacity kept in reserve (default 20%%).",
+        help=f"Fraction of remaining capacity kept in reserve (default {DEFAULT_HEADROOM * 100:.0f}%%).",
     )
     return parser
 

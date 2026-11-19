@@ -98,18 +98,39 @@ def _summed(capacities: Iterable[ResourceCapacity]) -> ResourceCapacity:
     return ResourceCapacity(quota=total_quota, used=total_used)
 
 
-def _capacity(quota: float, used: float) -> ResourceCapacity:
-    return ResourceCapacity(quota=quota, used=used)
+def account_resource_capacities(usage: AccountUsage) -> dict[str, ResourceCapacity]:
+    """The account-level resources in report order; the one shared resource list."""
+    return {
+        "cpu": usage.cpu,
+        "memory_gib": usage.memory_gib,
+        "disk_gib": usage.disk_gib,
+        "snapshots": usage.snapshots,
+        "volumes": usage.volumes,
+    }
+
+
+def region_resource_capacities(region: RegionCapacity) -> dict[str, ResourceCapacity]:
+    """One region's resources in report order."""
+    return {
+        "cpu": region.cpu,
+        "memory_gib": region.memory_gib,
+        "disk_gib": region.disk_gib,
+        "gpu": region.gpu,
+    }
+
+
+def _capacity_dict(capacity: ResourceCapacity) -> dict[str, float]:
+    return {"quota": capacity.quota, "used": capacity.used, "remaining": capacity.remaining}
 
 
 def _region(row: RegionUsageOverview) -> RegionCapacity:
     return RegionCapacity(
         region_id=row.region_id,
         sandbox_class=row.sandbox_class.value,
-        cpu=_capacity(row.total_cpu_quota, row.current_cpu_usage),
-        memory_gib=_capacity(row.total_memory_quota, row.current_memory_usage),
-        disk_gib=_capacity(row.total_disk_quota, row.current_disk_usage),
-        gpu=_capacity(row.total_gpu_quota, row.current_gpu_usage),
+        cpu=ResourceCapacity(quota=row.total_cpu_quota, used=row.current_cpu_usage),
+        memory_gib=ResourceCapacity(quota=row.total_memory_quota, used=row.current_memory_usage),
+        disk_gib=ResourceCapacity(quota=row.total_disk_quota, used=row.current_disk_usage),
+        gpu=ResourceCapacity(quota=row.total_gpu_quota, used=row.current_gpu_usage),
         max_cpu_per_sandbox=row.max_cpu_per_sandbox,
         max_memory_gib_per_sandbox=row.max_memory_per_sandbox,
         max_disk_gib_per_sandbox=row.max_disk_per_sandbox,
@@ -185,8 +206,8 @@ async def account_usage_from_client(client: AsyncDaytona) -> AccountUsage:
     return AccountUsage(
         organization_id=organization_id,
         regions=tuple(_region(row) for row in overview.region_usage),
-        snapshots=_capacity(overview.total_snapshot_quota, overview.current_snapshot_usage),
-        volumes=_capacity(overview.total_volume_quota, overview.current_volume_usage),
+        snapshots=ResourceCapacity(quota=overview.total_snapshot_quota, used=overview.current_snapshot_usage),
+        volumes=ResourceCapacity(quota=overview.total_volume_quota, used=overview.current_volume_usage),
         sandboxes=len(sandboxes),
         sandbox_states=dict(sorted(state_counts.items())),
     )
@@ -204,32 +225,12 @@ def usage_report(
     """Return one account's usage as the CLI JSON interchange."""
     report: dict[str, Any] = {
         "organization_id": usage.organization_id,
-        "resources": {
-            name: {"quota": capacity.quota, "used": capacity.used, "remaining": capacity.remaining}
-            for name, capacity in (
-                ("cpu", usage.cpu),
-                ("memory_gib", usage.memory_gib),
-                ("disk_gib", usage.disk_gib),
-                ("snapshots", usage.snapshots),
-                ("volumes", usage.volumes),
-            )
-        },
+        "resources": {name: _capacity_dict(capacity) for name, capacity in account_resource_capacities(usage).items()},
         "regions": [
             {
                 "region_id": region.region_id,
                 "sandbox_class": region.sandbox_class,
-                "cpu": {"quota": region.cpu.quota, "used": region.cpu.used, "remaining": region.cpu.remaining},
-                "memory_gib": {
-                    "quota": region.memory_gib.quota,
-                    "used": region.memory_gib.used,
-                    "remaining": region.memory_gib.remaining,
-                },
-                "disk_gib": {
-                    "quota": region.disk_gib.quota,
-                    "used": region.disk_gib.used,
-                    "remaining": region.disk_gib.remaining,
-                },
-                "gpu": {"quota": region.gpu.quota, "used": region.gpu.used, "remaining": region.gpu.remaining},
+                **{name: _capacity_dict(capacity) for name, capacity in region_resource_capacities(region).items()},
                 "max_cpu_per_sandbox": region.max_cpu_per_sandbox,
                 "max_memory_gib_per_sandbox": region.max_memory_gib_per_sandbox,
                 "max_disk_gib_per_sandbox": region.max_disk_gib_per_sandbox,
