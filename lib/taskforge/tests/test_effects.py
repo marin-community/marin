@@ -5,13 +5,12 @@ import asyncio
 from dataclasses import dataclass
 
 import pytest
+from lib.taskforge.tests.effect_fakes import FlakySink, Number
 
 from taskforge.effects.context import Context
 from taskforge.effects.events import Event, Fingerprint, Note, ReplayPolicy, Resolved, ScopeEntered, ScopeExited
 from taskforge.effects.issues import Hold, LogFailure, Restart
 from taskforge.effects.log import EventLog, Missing
-
-from .effect_fakes import FlakySink, Number
 
 pytestmark = pytest.mark.asyncio
 
