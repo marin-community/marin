@@ -165,7 +165,9 @@ def run_job(cells_root: str, output: str, budget_seconds: float) -> None:
     logging.basicConfig(level=logging.INFO)
     configure_coreweave_s3()
     cells = list_cells(cells_root)
-    model = load_model_config(MARIN_ROOT / MODEL_CONFIG)
+    # Resolve in the job: the bundled workspace is the working directory there.
+    root = next(p for p in (Path.cwd(), Path("/app")) if (p / MODEL_CONFIG).exists())
+    model = load_model_config(root / MODEL_CONFIG)
     accelerator = MARIN_EVAL_HARDWARE.select(model, Platform.GPU, None)
     inference = inference_config_for_model(
         model,
