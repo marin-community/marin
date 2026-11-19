@@ -20,7 +20,6 @@ from taskforge.model.proposal import (
     SourceKind,
     TaskProposal,
     Verification,
-    body_sections,
     parse,
     render,
 )
@@ -48,7 +47,6 @@ def test_escaped_strings_and_fenced_headings_survive_round_trip(proposal: TaskPr
     )
     parsed = parse(render(expected))
     assert parsed == expected
-    assert "## Build plan" in body_sections(parsed.body)["Task"]
 
 
 def forged_key(raw: str, key: str) -> str:

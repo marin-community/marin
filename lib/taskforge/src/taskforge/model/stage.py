@@ -8,7 +8,6 @@ from enum import StrEnum
 
 
 class Stage(StrEnum):
-    TRIAGE = "triage"
     AUTHOR = "author"
     VALIDATE = "validate"
     REVIEW = "review"
