@@ -243,8 +243,8 @@ def test_task_timings_survive_projection_concatenation_and_row_selection():
         whole.project(rollouts[part], replace(request, rows=request.rows[part], trajectory_ids=ids[part]))
         for part in (slice(0, 1), slice(1, None))
     ]
-    combined = concatenate_trajectory_batches(batches, tis_lcs_alert_threshold=0.05)
-    combined = concatenate_trajectory_batches([combined], tis_lcs_alert_threshold=0.05)
+    combined = concatenate_trajectory_batches(batches)
+    combined = concatenate_trajectory_batches([combined])
     stepped = StepTaskProjection(*projection_args).project(rollouts, request)
     for batch in (combined, stepped):
         for metrics in (batch["rollout_metrics"], evaluation_response_metrics(batch)):
