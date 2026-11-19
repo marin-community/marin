@@ -1,7 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""A scoped tool loop with explicit limits and no transport retry policy."""
+"""A scoped tool loop with no transport retry policy.
+
+By design there is no turn, token or wall-clock bound: the model's context window bounds a session,
+which otherwise ends through an exit tool or repeated empty or degenerate completions.
+"""
 
 import json
 from collections.abc import Mapping
