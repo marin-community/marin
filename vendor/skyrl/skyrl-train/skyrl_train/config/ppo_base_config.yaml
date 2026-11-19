@@ -273,7 +273,8 @@ trainer:
     # prompt waits until the prompt order offers it again.
     max_stale_retries: 1
     # How many unusable groups in a row (every sample masked, or too few graded samples for the group baseline) a
-    # prompt may produce before the run stops offering it. Training fails if fewer usable prompts than one batch remain.
+    # prompt may produce before the run stops offering it. A prompt stays in rotation when one batch needs every
+    # prompt still offered.
     max_unusable_groups: 3
     # Cap on prompt groups generating at once. An Iris launch replaces null with 1.5 training batches, rounded up; in a
     # run with a terminal_bench_config, at most its Harbor n_concurrent_trials (16 when unset) divided by

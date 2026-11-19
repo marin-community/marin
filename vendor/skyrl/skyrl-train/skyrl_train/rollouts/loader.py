@@ -14,7 +14,8 @@ from skyrl_train.group_admission import AdmissionRejection
 
 STALE_RETRIES_EXHAUSTED_METRIC = "async/stale_retries_exhausted"
 QUARANTINED_PROMPTS_METRIC = "async/quarantined_prompts"
-# Rejections of a group training cannot use: no loss tokens, or too few graded samples for its baseline.
+# Rejections of a group training cannot use: no loss tokens, or too few graded samples for its baseline. A broken
+# grader causes them, and so does an infrastructure failure, whose samples are masked.
 UNUSABLE_GROUP_REJECTIONS = frozenset(
     {AdmissionRejection.FULLY_MASKED.value, AdmissionRejection.BELOW_MINIMUM_GROUP_SIZE.value}
 )
@@ -117,8 +118,10 @@ class PromptLoader:
     after that it waits until the prompt order offers it again.
 
     A prompt whose last ``max_unusable_groups`` groups were all unusable, for example because its grader failed on
-    every sample, is quarantined: the loader stops offering it for the rest of the run. Training fails once fewer
-    usable prompts remain than one batch needs. Retry counts and quarantine restart empty when a run resumes.
+    every sample, is quarantined: the loader stops offering it for the rest of the run. Quarantine never leaves fewer
+    usable prompts than one batch needs, so an outage that masks every sample cannot empty the dataset; a batch that
+    still cannot fill ends at the admission stall timeout. Retry counts and quarantine restart empty when a run
+    resumes.
 
     The sequence never ends; the trainer decides when to stop.
     """
@@ -159,8 +162,9 @@ class PromptLoader:
         """The next prompt whose uid is neither in ``live`` nor quarantined, or None when no such uid remains.
 
         Prompts awaiting regeneration come first, then up to two batches' worth of the prompt order's draws. If those
-        draws find only live uids, a scan of the dataset from where the last scan stopped takes a free row, so an
-        order that keeps drawing live rows cannot stall dispatch; the row may be one the order weights at zero.
+        draws find only live or quarantined uids, a scan of the dataset from where the last scan stopped takes the
+        first other row, so an order that keeps drawing such rows cannot stall dispatch; the row may be one the order
+        weights at zero.
         """
         for position, prompt in enumerate(self._retries):
             if self._available(prompt["uid"], live):
@@ -192,11 +196,7 @@ class PromptLoader:
         self._retries.append(prompt)
 
     def record_disposition(self, uid: str, disposition: str) -> None:
-        """Count a group that left the buffer toward its prompt's quarantine.
-
-        Raises:
-            RuntimeError: Quarantine left fewer usable prompts than one batch needs.
-        """
+        """Count a group that left the buffer toward its prompt's quarantine."""
         if disposition in NEUTRAL_DISPOSITIONS:
             return
         if disposition not in UNUSABLE_GROUP_REJECTIONS:
@@ -206,21 +206,27 @@ class PromptLoader:
         if count < self._max_unusable_groups:
             self._unusable_groups[uid] = count
             return
-        del self._unusable_groups[uid]
-        self._quarantined.add(uid)
+        self._unusable_groups.pop(uid, None)
         usable = self._uid_count - len(self._quarantined)
+        if usable <= self._batch_size:
+            logger.warning(
+                "Prompt {} produced {} unusable groups in a row (last: {}) and stays in rotation: a batch of {} needs "
+                "all {} usable prompts",
+                uid,
+                count,
+                disposition,
+                self._batch_size,
+                usable,
+            )
+            return
+        self._quarantined.add(uid)
         logger.warning(
             "Quarantined prompt {} after {} unusable groups in a row (last: {}); {} usable prompts remain",
             uid,
             count,
             disposition,
-            usable,
+            usable - 1,
         )
-        if usable < self._batch_size:
-            raise RuntimeError(
-                f"{len(self._quarantined)} prompts are quarantined for producing only unusable groups, leaving "
-                f"{usable} usable prompts, fewer than one batch of {self._batch_size}"
-            )
 
     def observe(self, groups: Sequence[JudgedGroup]) -> dict[str, float]:
         """Report one training step's judged groups to the prompt order and return its metrics.

@@ -25,13 +25,13 @@ class Prompts:
         return [{"uid": str(item)} for item in items]
 
 
-def loader(num_rows: int, batch_size: int) -> PromptLoader:
+def loader(num_rows: int, batch_size: int, max_unusable_groups: int = 2) -> PromptLoader:
     return PromptLoader(
         Prompts(num_rows),
         SeededPasses(num_rows, seed=0, shuffle=False),
         batch_size=batch_size,
         max_stale_retries=1,
-        max_unusable_groups=2,
+        max_unusable_groups=max_unusable_groups,
     )
 
 
@@ -39,10 +39,11 @@ def offered(prompts: PromptLoader, count: int) -> list[str]:
     return [prompts.next_prompt(live=())["uid"] for _ in range(count)]
 
 
-def test_unusable_prompt_stops_being_offered():
-    prompts = loader(num_rows=4, batch_size=3)
-    prompts.record_disposition("0", UNUSABLE)
-    prompts.record_disposition("0", UNUSABLE)
+@pytest.mark.parametrize("max_unusable_groups", [1, 2])
+def test_unusable_prompt_stops_being_offered(max_unusable_groups: int):
+    prompts = loader(num_rows=4, batch_size=3, max_unusable_groups=max_unusable_groups)
+    for _ in range(max_unusable_groups):
+        prompts.record_disposition("0", UNUSABLE)
 
     assert "0" not in offered(prompts, 6)
     assert prompts.observe([])[QUARANTINED_PROMPTS_METRIC] == 1.0
@@ -58,11 +59,12 @@ def test_usable_group_resets_the_count():
     assert "0" in offered(prompts, 4)
 
 
-def test_quarantine_below_one_batch_fails():
+def test_quarantine_keeps_one_batch_of_prompts():
+    # Every prompt fails, as in a sandbox outage: only the one spare prompt may leave the rotation.
     prompts = loader(num_rows=4, batch_size=3)
-    for uid in ("0", "1"):
+    for uid in ("0", "1", "2", "3"):
         prompts.record_disposition(uid, UNUSABLE)
-    prompts.record_disposition("0", UNUSABLE)
+        prompts.record_disposition(uid, UNUSABLE)
 
-    with pytest.raises(RuntimeError, match="leaving 2 usable prompts"):
-        prompts.record_disposition("1", UNUSABLE)
+    assert sorted(set(offered(prompts, 6))) == ["1", "2", "3"]
+    assert prompts.observe([])[QUARANTINED_PROMPTS_METRIC] == 1.0
