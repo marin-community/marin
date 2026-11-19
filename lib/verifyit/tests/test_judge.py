@@ -1110,6 +1110,16 @@ def test_judge_reply_sends_the_conversation_and_retries_transient_failures(fake_
     assert [attempt["outcome"] for attempt in reply.detail["transport_attempts"]] == ["failed", "succeeded"]
 
 
+def test_judge_reply_transport_failure_keeps_its_evidence(fake_judge):
+    fake_judge.http_statuses = [400]
+    spec = JudgeSpec(references=("document",), exact_gate=False, transport_attempts=3)
+    with pytest.raises(GradingInfraError) as raised:
+        grade_judge.judge_reply(spec, [{"role": "user", "content": "Check this."}])
+    [attempt] = raised.value.detail["transport_attempts"]
+    assert (attempt["status"], attempt["outcome"]) == (400, "failed")
+    assert raised.value.detail["judge_request"]["messages"] == [{"role": "user", "content": "Check this."}]
+
+
 @pytest.mark.parametrize("fault", [{"finish_reason": "length"}, {"refusal": "Cannot judge"}])
 def test_judge_reply_never_returns_an_incomplete_or_refused_reply(fake_judge, fault):
     fake_judge.finish_reason = fault.get("finish_reason", "stop")

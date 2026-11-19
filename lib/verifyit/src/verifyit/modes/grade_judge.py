@@ -265,6 +265,8 @@ def judge_reply(spec: JudgeSpec, messages: list[ChatCompletionMessageParam]) -> 
         completion = _label_completion(
             spec, client.with_options(max_retries=0), model, messages, spec.max_completion_tokens
         )
+    except GradingInfraError as error:
+        raise GradingInfraError(str(error), model=model, **error.detail) from error
     except RuntimeError as error:
         raise GradingInfraError(str(error), model=model) from error
     detail: dict[str, Any] = {
