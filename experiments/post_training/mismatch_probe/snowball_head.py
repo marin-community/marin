@@ -62,7 +62,7 @@ def snowball_recipe(arm: str, context_parallel_size: int, prompt_count: int, reu
         entrypoint=RLEntrypoint.STANDARD,
         context_budget=ContextBudget(request_window_tokens=4096, max_new_tokens_per_turn=2048, max_turns=1),
         data=sections.Data(kind="parquet", shuffle=False),
-        environment=sections.Environment(task_sessions={"local": {}}),
+        environment=sections.Environment(task_sessions={"local": None, "daytona": None, "remote_judge": None}),
         trainer=sections.Trainer(
             strategy="megatron",
             use_sample_packing=True,
@@ -74,7 +74,7 @@ def snowball_recipe(arm: str, context_parallel_size: int, prompt_count: int, reu
             eval_before_train=False,
             resume_mode="none",
             logger="console",
-            algorithm=sections.Algorithm(advantage_estimator="grpo", use_kl_loss=False),
+            algorithm=sections.Algorithm(advantage_estimator="grpo", use_kl_loss=False, use_kl_in_reward=False),
             policy=sections.Policy(
                 megatron_config=sections.PolicyMegatronConfig(
                     **geometry,
@@ -88,6 +88,7 @@ def snowball_recipe(arm: str, context_parallel_size: int, prompt_count: int, reu
         generator=sections.Generator(
             backend="vllm",
             run_engines_locally=True,
+            enable_http_endpoint=False,
             model_dtype="bfloat16",
             vllm_attention_backend="FLASH_ATTN",
             gpu_memory_utilization=0.75,
@@ -98,7 +99,13 @@ def snowball_recipe(arm: str, context_parallel_size: int, prompt_count: int, reu
             chat_template_kwargs={"enable_thinking": True},
             engine_init_kwargs={"kernel_config": {"moe_backend": "triton"}},
         ),
-        extra_env={"VLLM_LOGGING_LEVEL": "DEBUG", "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"},
+        extra_env={
+            "VLLM_LOGGING_LEVEL": "DEBUG",
+            "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+            "HF_HOME": "/tmp/snowball-head-hf",
+            "HF_HUB_OFFLINE": "0",
+            "TRANSFORMERS_OFFLINE": "0",
+        },
     )
     head_patch = RecipePatch(
         generator=sections.Generator(engine_init_kwargs={"hf_overrides": {"head_dtype": "float32"}})
@@ -184,6 +191,7 @@ def main(
             coordinator_timeout_hours=8,
             job_timeout_seconds=(25 if cp == 5 else 75) * 60,
             scheduling_timeout_seconds=6 * 60 * 60,
+            required_env_vars=("MARIN_PREFIX",),
         ),
         export_hf=False,
     )
