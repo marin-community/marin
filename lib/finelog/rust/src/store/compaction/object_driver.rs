@@ -197,6 +197,7 @@ async fn run(
     let sort_columns = compaction.format.sort_columns().to_vec();
     let key_column = compaction.format.key_column().to_string();
     let max_row_group_rows = compaction.format.max_row_group_rows();
+    let bounds_columns = compaction.format.bounds_columns().to_vec();
     let max_merge_arrow_bytes = compaction.config.max_merge_arrow_bytes;
     let key_bounds: HashMap<String, (Option<String>, Option<String>)> = job
         .inputs
@@ -236,6 +237,7 @@ async fn run(
                     sort_columns: &sort_columns,
                     key_column: &key_column,
                     max_row_group_rows,
+                    bounds_columns: &bounds_columns,
                 },
                 index_config: &index_config,
                 partition_policy: None,
@@ -305,6 +307,7 @@ async fn run(
             row: segment_to_row(compaction.table, &segment),
             source: stored.source,
             artifacts: references,
+            column_bounds: segment.column_bounds.clone(),
         });
         published.push(segment);
     }
@@ -339,15 +342,18 @@ async fn commit_level_bump(
         let record = records
             .get(input)
             .ok_or_else(|| StatsError::Internal(format!("level bump lost input {input}")))?;
+        // The object is reused unchanged, so its recorded bounds still hold.
         let segment = LocalSegment {
             path: input.clone(),
             artifacts: compaction.segments.artifacts(input),
+            column_bounds: record.column_bounds.clone(),
             ..staged
         };
         outputs.push(SegmentDescriptor {
             row: segment_to_row(compaction.table, &segment),
             source: record.source.clone(),
             artifacts: record.artifacts.clone(),
+            column_bounds: record.column_bounds.clone(),
         });
         published.push(segment);
     }

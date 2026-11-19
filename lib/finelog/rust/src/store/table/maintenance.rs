@@ -28,8 +28,8 @@ use crate::store::legacy::archive::{self, LegacyArchive};
 use crate::store::legacy::layout::{self, LocalLayout};
 use crate::store::state_store::object::StateGcPolicy;
 use crate::store::table::index_artifacts::{self, IndexBackfill, INDEX_BUNDLES_PER_TICK};
-use crate::store::table::key_bounds;
 use crate::store::table::runtime::TableRuntime;
+use crate::store::table::segment_bounds;
 use crate::store::table::spec_migration::{self, SpecMigration};
 
 /// Report an object-backed cycle's per-step breakdown when it ran this long.
@@ -64,8 +64,8 @@ pub enum TableWork {
     /// Compact one planner-issued run. `force_compact_l0` makes an L0 run
     /// eligible regardless of the size threshold.
     Compaction { force_compact_l0: bool },
-    /// Recover missing key bounds from immutable object footers.
-    KeyBounds,
+    /// Recover missing key and column bounds from immutable object footers.
+    SegmentBounds,
     /// Build the derived index artifacts segments still owe, or remove them from
     /// a table whose policy disables them.
     IndexArtifacts,
@@ -174,8 +174,8 @@ async fn run_one(runtime: &Arc<TableRuntime>, work: TableWork) -> Result<WorkOut
             ))
         }
         TableWork::Compaction { force_compact_l0 } => compact(runtime, force_compact_l0).await,
-        TableWork::KeyBounds => Ok(WorkOutcome::from_pending(
-            key_bounds::maintain(runtime).await?,
+        TableWork::SegmentBounds => Ok(WorkOutcome::from_pending(
+            segment_bounds::maintain(runtime).await?,
             MaintenanceClass::QueryServing,
         )),
         TableWork::IndexArtifacts => {
@@ -287,23 +287,25 @@ async fn cycle(
         }
         let mut steps = CycleSteps::new(started);
         steps.mark("flush_and_publish");
-        let bounds_pending = run_one(runtime, TableWork::KeyBounds)
-            .await?
-            .has_more_work();
-        steps.mark("key_bounds");
         // The prompt re-poll that pending work earns still queues behind every
         // other table for a shared slot, so drain runs within this visit too.
         let (compaction, runs) = drain_object_compaction(runtime, force_compact_l0).await?;
         steps.mark("compaction");
         runtime.controller.gc_objects().await?;
         steps.mark("state_gc");
-        // Collection and index backfill do not shrink a compaction backlog, yet
-        // they hold the shared slot for minutes on a large table. While runs
-        // remain, hand the slot back: collection waits out its backlog interval
-        // and index backfill waits for the backlog to clear.
+        // Collection and the bounds and index backfills do not shrink a
+        // compaction backlog, yet they hold the shared slot for minutes on a
+        // large table. While runs remain, hand the slot back: collection waits
+        // out its backlog interval and both backfills wait for the backlog to
+        // clear.
         let backlogged = compaction.has_more_work();
         run_one(runtime, TableWork::ObjectCollection { backlogged }).await?;
         steps.mark("object_collection");
+        let bounds_pending = !backlogged
+            && run_one(runtime, TableWork::SegmentBounds)
+                .await?
+                .has_more_work();
+        steps.mark("segment_bounds");
         if !backlogged {
             run_one(runtime, TableWork::IndexArtifacts).await?;
         }

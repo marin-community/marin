@@ -64,6 +64,14 @@ column to every row; producers do not declare it, but SQL queries can select it.
 
 ## Diagnosing query latency
 
+SQL and FetchLogs have separate caps of two and four concurrent requests and a
+read pool sized to the available CPU count, including affinity and cgroup limits
+(`GET /api/server`: `readWorkers`). On Linux, async and blocking read workers run
+at process nice + 10, capped at 19, with all CPUs available; ingestion, cloud HTTP
+I/O, flushes, and maintenance keep the existing Tokio runtime and priority. This
+gives scheduling preference without a hard CPU reservation; non-Linux platforms
+use separate pools without changing priority.
+
 Start with the server's stage timings when unrelated log and SQL requests slow
 down together. For the GCE hub:
 
@@ -655,6 +663,8 @@ up to four namespace turns concurrently, and starts another round immediately
 while work remains. A log turn reads up to one million rows; other tables read
 up to 200,000. Requests retain their byte limit, and log chunks ship serially
 to preserve order. Independent tables can overlap their durable hub writes.
+Scan results remain separate Arrow batches until byte-bounded coalescing, so
+large log reads do not exceed the 2 GiB Utf8 offset limit before request chunking.
 Hub or network failures get three attempts, then leave the affected cursor in place and yield to
 the next namespace. The same batch is retried on the next sweep; exhaustion does
 not discard it.
@@ -714,8 +724,9 @@ wait, run time, and the requested follow-up class. Object-backed relays use the
 
 An object-backed cycle of at least 5 seconds logs `slow maintenance cycle step
 breakdown` with `total_ms`, `compaction_attempts`, and `steps_ms` for
-`flush_and_publish`, `key_bounds`, `compaction`, `state_gc`, `object_collection`,
-and `index_artifacts`. Compare it with `object compaction rewrite finished`
+`flush_and_publish`, `compaction`, `state_gc`, `object_collection`, `segment_bounds`,
+and `index_artifacts`. While compaction still has runs left, the cycle skips the
+`segment_bounds` and `index_artifacts` backfills. Compare it with `object compaction rewrite finished`
 (`merge_ms`, `upload_ms`) to separate merge time from the cycle's other steps.
 A growing `segment_count` in `finelog namespaces <name>`, with `maintenance cycle
 waited for a slot` reporting waits of many minutes, means compaction is falling

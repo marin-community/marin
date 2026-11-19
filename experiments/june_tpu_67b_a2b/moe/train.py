@@ -41,7 +41,7 @@ from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
 from levanter.trainer import TrainerConfig
-from levanter.utils.flop_utils import lm_flops_per_token
+from levanter.utils.flop_utils import lm_attention_flops_per_token, lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
@@ -54,6 +54,8 @@ from experiments.june_tpu_67b_a2b.moe.model import Block, GrugModelConfig, Trans
 # `.agents/skills/change-grug/`.
 
 logger = logging.getLogger(__name__)
+ATTENTION_FLOPS_PER_EXAMPLE_KEY = "throughput/attention_flops_per_example_analytic"
+CAUSAL_ATTENTION_FLOPS_PER_EXAMPLE_KEY = "throughput/causal_attention_flops_per_example_analytic"
 _NUMERIC_DIAGNOSTIC_KEYS = (
     "train/grads_finite",
     "train/updates_finite",
@@ -237,12 +239,24 @@ def _compute_flops(
         num_experts_per_tok=model_config.num_experts_per_token,
         sliding_window=model_config.sliding_window,
         num_full_attention_layers=num_full_attention_layers,
+        head_dim=model_config.inferred_head_dim,
     )
     flops_per_example = 3 * flops_per_token * model_config.max_seq_len
+    attention = lm_attention_flops_per_token(
+        hidden_dim=model_config.hidden_dim,
+        num_heads=model_config.num_heads,
+        num_layers=model_config.num_layers,
+        seq_len=model_config.max_seq_len,
+        sliding_window=model_config.sliding_window,
+        num_full_attention_layers=num_full_attention_layers,
+        head_dim=model_config.inferred_head_dim,
+    )
 
     flops_summary: dict[str, float] = {
         "throughput/flops_per_token_analytic": flops_per_token,
         "throughput/flops_per_example_analytic": flops_per_example,
+        ATTENTION_FLOPS_PER_EXAMPLE_KEY: 3 * attention.noncausal * model_config.max_seq_len,
+        CAUSAL_ATTENTION_FLOPS_PER_EXAMPLE_KEY: 3 * attention.causal * model_config.max_seq_len,
         "throughput/num_full_attention_layers": float(num_full_attention_layers),
         "throughput/num_sliding_attention_layers": float(n - num_full_attention_layers),
         "throughput/sliding_window": float(model_config.sliding_window),

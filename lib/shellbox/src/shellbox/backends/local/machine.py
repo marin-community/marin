@@ -1145,8 +1145,11 @@ class LocalMachineFactory:
     Commands never inherit the host's environment: they get ``bin_dirs`` ahead of a standard ``PATH``,
     ``HOME``, ``LANG``, ``PYTHONHASHSEED`` when the factory has a ``hash_seed``, and the spec's and
     command's variables. ``bin_dirs`` only sets ``PATH``; a directory outside the mounted ones is not
-    visible to commands. The factory discovers a writable cgroup delegation for command containment
-    and attempts aggregate CPU and memory limits there. Unavailable limits produce warnings.
+    visible to commands. The factory discovers a writable cgroup delegation inside the worker's own
+    unit or container scope for command containment and attempts aggregate CPU and memory limits
+    there. When the scope directly contains the worker's processes, discovery moves them into a child
+    leaf group so the scope can enable controllers for children; sandbox groups become siblings of
+    that leaf and never reach a parent above the container. Unavailable limits produce warnings.
     ``cgroup_parent`` overrides discovery. Disk quotas remain unsupported.
 
     ``bwrap`` names the executable to use. By default the factory takes the first of the bundled bwrap

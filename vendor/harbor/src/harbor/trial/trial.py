@@ -420,6 +420,7 @@ class Trial(ABC):
         await self.agent_environment.run_healthcheck()
         await self._upload_injected_skills()
         await self._upload_setup_files()
+        await self._emit(TrialEvent.ENVIRONMENT_READY)
         with self.agent_environment.with_default_user(self.task.config.agent.user):
             await self._setup_agent()
         self.result.agent_info = self.agent.to_agent_info()
@@ -1163,7 +1164,9 @@ class Trial(ABC):
             extra_kwargs["skills_dir"] = self._effective_skills_dir
 
         self.agent = AgentFactory.create_agent_from_config(
-            self.config.agent,
+            self.config.agent.model_copy(
+                update={"env": {**self.task.config.agent.env, **self.config.agent.env}}
+            ),
             guest_environment=self.guest_environment,
             host_capabilities=self.host_capabilities,
             logs_dir=self.paths.agent_dir,
