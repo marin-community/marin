@@ -179,7 +179,7 @@ def selection(tmp_path, monkeypatch):
     monkeypatch.setattr(recipe, "SELECTION_ROOT", str(tmp_path))
     monkeypatch.setattr(recipe, "artifact_prefix", lambda cluster: str(tmp_path))
     training = {preset.tasks for preset in snowball_model.SNOWBALL.by_name.values()}
-    task_sets = {preset.eval_lite for preset in snowball_model.SNOWBALL.by_name.values()}
+    task_sets = {preset.held_out_tasks for preset in snowball_model.SNOWBALL.presets if preset.held_out_tasks}
     summary = selection_summary(910)
     for binding in training:
         write_json(Path(recipe.selection_artifact(binding).path()) / "summary.json", summary)
@@ -223,7 +223,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         spec=ExactSpec(("cat",)),
     )
 
-    for binding in {preset.eval_lite for preset in snowball_model.SNOWBALL.by_name.values()}:
+    for binding in {preset.held_out_tasks for preset in snowball_model.SNOWBALL.presets if preset.held_out_tasks}:
         task_set = Path(recipe.selection_artifact(binding).path())
         tasks = [task.model_copy(update={"id": f"task-{i}"}) for i in range(100)]
         rows = [
@@ -402,7 +402,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
             preset, recipe.selection_artifact(inputs.tasks) if inputs.tasks else None
         )
         for index, evaluation in enumerate(preset.evaluations):
-            source = recipe.evaluation_source(evaluation, selected, default, preset.eval_lite)
+            source = recipe.evaluation_source(evaluation, selected, default, preset.held_out_tasks)
             sources = (
                 launch["inputs"]["validation_data"]
                 if index == 0

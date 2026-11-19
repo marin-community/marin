@@ -25,7 +25,6 @@ from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.client.job_info import JobInfo, set_job_info
 from iris.cluster.types import JobName
 from iris.resources.state import JobState
-from levanter import model_cache
 from marin.execution.artifact import RECORD_FILENAME, Artifact, ArtifactRecord, result_type_name
 from marin.execution.lazy import OUT, ArtifactStep, apply, materialized_config, run
 from marin.rl import skyrl as skyrl_api
@@ -155,7 +154,6 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
         lambda self, path, **kwargs: str(path).removeprefix("s3://") in files | {str(checkpoint).removeprefix("s3://")},
     )
     metadata = {"train_config": {"data": {"tokenizer": "tests/own-tokenizer"}}}
-    monkeypatch.setattr(model_cache, "model_info", lambda *args, **kwargs: SimpleNamespace(sha="a" * 40))
     initializer = ArtifactStep.adopt(
         "tests/checkpoint", "2026.11.10", str(checkpoint), kind=LevanterCheckpoint, config=metadata
     )
@@ -245,9 +243,12 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
     ) == (False, "float16", True, {})
     assert configs[2]["inputs"]["model"]["uri"] == str(export)
     assert configs[2]["iris"]["wandb_entity"] == "test-team"
-    for config, revision in ((configs[2], "tokenizer-revision"), (configs[5], "a" * 40)):
+    for config, tokenizer, revision in (
+        (configs[2], "tests/own-tokenizer", "tokenizer-revision"),
+        (configs[5], None, None),
+    ):
         assert (config["inputs"]["model"]["tokenizer_uri"], config["inputs"]["model"]["tokenizer_revision"]) == (
-            "tests/own-tokenizer",
+            tokenizer,
             revision,
         )
         assert config["inputs"]["model"]["uri"] == str(export)
@@ -327,7 +328,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             for source in config["inputs"].get("evaluation_data", {}).get("eval_lite", []):
                 assert (
                     source["identity"].partition(":")[0]
-                    == f"{SELECTION_PREFIX}/{snowball_model.SNOWBALL.by_name[name].eval_lite}"
+                    == f"{SELECTION_PREFIX}/{snowball_model.SNOWBALL.by_name[name].held_out_tasks}"
                 )
                 assert source["relative_path"] == "full_validation.parquet"
             sampling = profile["sampling_params"] if profile else generator["eval_sampling_params"]
@@ -380,7 +381,7 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     )
     changed_task_set = replace(
         learning,
-        eval_lite=f"{task_set_name}@2026.11.05",
+        held_out_tasks=f"{task_set_name}@2026.11.05",
     )
     pairs = [
         (name(), name(learning, "trainer.policy.optimizer_config.lr=2e-6")),
@@ -423,8 +424,8 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     summary["recipe"]["heldout"] = heldout
     summary_path.write_text(json.dumps(summary))
     for current in (data, snowball_model.SNOWBALL.by_name["data-medium"]):
-        selected = replace(current, eval_lite=f"{task_set_name}@2026.11.05")
-        with pytest.raises(click.BadParameter, match="full EvalLite"):
+        selected = replace(current, held_out_tasks=f"{task_set_name}@2026.11.05")
+        with pytest.raises(click.BadParameter, match="full held-out selection"):
             snowball.build_run(selected, tasks=selection, table=snowball_model.SNOWBALL)
         summary["recipe"]["exclusions"] = [
             {"uri": str(new_task_set / FULL_VALIDATION_FILENAME), "version": "2026.11.05"}
@@ -436,8 +437,12 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     summary["recipe"]["exclusions"] = []
     summary_path.write_text(json.dumps(summary))
     for tasks in (recipe.selection_artifact(snowball_model.SNOWBALL.by_name["learning-medium"].tasks), selection):
-        with pytest.raises(click.BadParameter, match="full EvalLite"):
+        with pytest.raises(click.BadParameter, match="full held-out selection"):
             snowball.build_run(data, tasks=tasks, table=snowball_model.SNOWBALL)
+    with pytest.raises(ValueError, match="held-out evaluations require a held-out task selection"):
+        replace(learning, held_out_tasks=None)
+    training_only = replace(snowball_model.SNOWBALL.by_name["speed-medium"], tasks_input="required")
+    assert snowball.build_run(training_only, tasks=selection, table=snowball_model.SNOWBALL).runs
 
 
 def test_grafana_url_selects_native_run_and_utc_window():

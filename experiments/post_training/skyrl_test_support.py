@@ -59,7 +59,7 @@ def assert_revisioned_native_configs(
     table: ModelPresets, revisions: Mapping[str, Mapping[str, str]], *, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> list[dict]:
     monkeypatch.delenv("WANDB_ENTITY", raising=False)
-    bindings = {binding for preset in table.presets for binding in (preset.tasks, preset.eval_lite)}
+    bindings = {binding for preset in table.presets for binding in (preset.tasks, preset.held_out_tasks) if binding}
     summaries = {
         binding: (Path(recipe.selection_artifact(binding).path()) / recipe.SUMMARY_FILENAME).read_text()
         for binding in bindings

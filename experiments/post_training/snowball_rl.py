@@ -188,13 +188,13 @@ EVALUATIONS = MappingProxyType(
             Evaluation(
                 name="eval_lite",
                 file=Path(FULL_VALIDATION_FILENAME).stem,
-                source="eval_lite",
+                source="held_out",
                 profile=_HELD_OUT_SAMPLING,
             ),
             Evaluation(
                 name="eval_lite_100",
                 file=Path(VALIDATION_FILENAME).stem,
-                source="eval_lite",
+                source="held_out",
                 profile=_HELD_OUT_SAMPLING,
             ),
             Evaluation(
@@ -334,7 +334,7 @@ _SPEED_KEYS = frozenset(
 _LEARNING_MEDIUM = Preset(
     tasks=_DEFAULT_TASKS,
     model=_DEFAULT_MODEL,
-    eval_lite=_DEFAULT_EVAL_LITE,
+    held_out_tasks=_DEFAULT_EVAL_LITE,
     seed=SEED,
     sample_namespace="datasets/snowball-rl",
     wandb_entity="marin-community",
@@ -367,7 +367,7 @@ _PRESETS = (
     Preset(
         tasks=_DEFAULT_TASKS,
         model=_DEFAULT_MODEL,
-        eval_lite=_DEFAULT_EVAL_LITE,
+        held_out_tasks=_DEFAULT_EVAL_LITE,
         seed=SEED,
         sample_namespace="datasets/snowball-rl",
         wandb_entity="marin-community",
@@ -395,7 +395,7 @@ _PRESETS = (
     Preset(
         tasks=_DEFAULT_TASKS,
         model=_DEFAULT_MODEL,
-        eval_lite=_DEFAULT_EVAL_LITE,
+        held_out_tasks=_DEFAULT_EVAL_LITE,
         seed=SEED,
         sample_namespace="datasets/snowball-rl",
         wandb_entity="marin-community",
@@ -423,7 +423,6 @@ _PRESETS = (
     Preset(
         tasks=_DEFAULT_TASKS,
         model=_DEFAULT_MODEL,
-        eval_lite=_DEFAULT_EVAL_LITE,
         seed=SEED,
         sample_namespace="datasets/snowball-rl",
         wandb_entity="marin-community",
@@ -462,7 +461,6 @@ _PRESETS = (
     Preset(
         tasks=_DEFAULT_TASKS,
         model=_DEFAULT_MODEL,
-        eval_lite=_DEFAULT_EVAL_LITE,
         seed=SEED,
         sample_namespace="datasets/snowball-rl",
         wandb_entity="marin-community",
@@ -503,7 +501,7 @@ _PRESETS = (
     Preset(
         tasks=_DEFAULT_TASKS,
         model=_DEFAULT_MODEL,
-        eval_lite=_DEFAULT_EVAL_LITE,
+        held_out_tasks=_DEFAULT_EVAL_LITE,
         seed=SEED,
         sample_namespace="datasets/snowball-rl",
         wandb_entity="marin-community",

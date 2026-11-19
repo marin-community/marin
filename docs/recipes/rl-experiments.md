@@ -284,7 +284,7 @@ supply the GPU width. Presets declare seed, W&B entity, checkpoint retention and
 independently of dashboard publication. Its `__main__` calls `rl.main(SNOWBALL)`.
 
 To add a model, create its own entry file with explicit `Preset.model`, `Preset.tasks`,
-`Preset.eval_lite`, evaluations and recipe configuration, then pass its `ModelPresets` value to
+`Preset.held_out_tasks`, evaluations and recipe configuration, then pass its `ModelPresets` value to
 `rl.main`. The table's namespace owns run and control paths. The shared runner imports no other
 model entries. The native launch-document census counts `rl_recipe.py`, where `SkyRLSpec` is
 constructed; add the new table's builders to `tests/rl/launch_document_census.py` the same way
