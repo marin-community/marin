@@ -27,6 +27,7 @@ from shellbox.backends.daytona.snapshot import list_snapshots
 
 REQUEST_TIMEOUT_SECONDS = 30.0
 DEFAULT_HEADROOM = 0.2
+DEFAULT_SANDBOX_CLASS = "container"
 
 
 @dataclass(frozen=True)
@@ -137,13 +138,27 @@ def _region(row: RegionUsageOverview) -> RegionCapacity:
     )
 
 
-def max_concurrency(usage: AccountUsage, profile: SandboxProfile, *, headroom: float = DEFAULT_HEADROOM) -> int:
-    """Suggest how many additional sandboxes the account can hold.
+def region_for_launch(usage: AccountUsage, *, target: str, sandbox_class: str = DEFAULT_SANDBOX_CLASS) -> RegionCapacity:
+    """The quota row that a launch into ``target`` is charged against.
 
-    The minimum over CPU, memory and disk remaining capacity, each reduced by
-    ``headroom`` (a fraction kept in reserve, default 20%), divided by the
-    profile's per-sandbox request and floored. GPU use is not part of the
-    minimum; a GPU workload must check the gpu capacities itself.
+    Daytona enforces each row's quota per region and sandbox class, so sizing
+    must use that one row; summing the rows over-reports capacity when the org
+    holds quota in several of them.
+    """
+    for region in usage.regions:
+        if region.region_id == target and region.sandbox_class == sandbox_class:
+            return region
+    rows = ", ".join(f"{region.region_id}/{region.sandbox_class}" for region in usage.regions) or "none"
+    raise RuntimeError(f"No {sandbox_class} quota row for region {target}; the org's quota rows: {rows}")
+
+
+def max_concurrency(region: RegionCapacity, profile: SandboxProfile, *, headroom: float = DEFAULT_HEADROOM) -> int:
+    """Suggest how many additional sandboxes one quota row can hold.
+
+    The minimum over the row's CPU, memory and disk remaining capacity, each
+    reduced by ``headroom`` (a fraction kept in reserve, default 20%), divided
+    by the profile's per-sandbox request and floored. GPU use is not part of
+    the minimum; a GPU workload must check the gpu capacity itself.
     """
     if profile.cpu <= 0 or profile.memory_gib <= 0 or profile.disk_gib <= 0:
         raise ValueError(f"Sandbox profile must be positive: {profile}")
@@ -153,9 +168,9 @@ def max_concurrency(usage: AccountUsage, profile: SandboxProfile, *, headroom: f
         0,
         math.floor(
             min(
-                usage.cpu.remaining * (1 - headroom) / profile.cpu,
-                usage.memory_gib.remaining * (1 - headroom) / profile.memory_gib,
-                usage.disk_gib.remaining * (1 - headroom) / profile.disk_gib,
+                region.cpu.remaining * (1 - headroom) / profile.cpu,
+                region.memory_gib.remaining * (1 - headroom) / profile.memory_gib,
+                region.disk_gib.remaining * (1 - headroom) / profile.disk_gib,
             )
         ),
     )
@@ -220,9 +235,19 @@ async def account_usage(connection: DaytonaConnection) -> AccountUsage:
 
 
 def usage_report(
-    usage: AccountUsage, profile: SandboxProfile | None, *, headroom: float = DEFAULT_HEADROOM
+    usage: AccountUsage,
+    profile: SandboxProfile | None,
+    *,
+    target: str,
+    sandbox_class: str = DEFAULT_SANDBOX_CLASS,
+    headroom: float = DEFAULT_HEADROOM,
 ) -> dict[str, Any]:
-    """Return one account's usage as the CLI JSON interchange."""
+    """Return one account's usage as the CLI JSON interchange.
+
+    The resource and region blocks are informational sums over every quota
+    row; ``max_concurrency`` is sized against the row that a launch into
+    ``target`` is charged against.
+    """
     report: dict[str, Any] = {
         "organization_id": usage.organization_id,
         "resources": {name: _capacity_dict(capacity) for name, capacity in account_resource_capacities(usage).items()},
@@ -240,11 +265,14 @@ def usage_report(
         "sandboxes": {"total": usage.sandboxes, "by_state": usage.sandbox_states},
     }
     if profile is not None:
+        region = region_for_launch(usage, target=target, sandbox_class=sandbox_class)
         report["max_concurrency"] = {
+            "region_id": region.region_id,
+            "sandbox_class": region.sandbox_class,
             "cpu": profile.cpu,
             "memory_gib": profile.memory_gib,
             "disk_gib": profile.disk_gib,
             "headroom": headroom,
-            "limit": max_concurrency(usage, profile, headroom=headroom),
+            "limit": max_concurrency(region, profile, headroom=headroom),
         }
     return report

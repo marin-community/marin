@@ -18,12 +18,15 @@ from typing import Any
 from shellbox.backends.daytona.connection import DEFAULT_DAYTONA_API_URL, DaytonaConnection
 from shellbox.backends.daytona.usage import (
     DEFAULT_HEADROOM,
+    DEFAULT_SANDBOX_CLASS,
     AccountUsage,
+    RegionCapacity,
     ResourceCapacity,
     SandboxProfile,
     account_resource_capacities,
     account_usage,
     max_concurrency,
+    region_for_launch,
     region_resource_capacities,
     usage_report,
 )
@@ -69,22 +72,19 @@ def _number(value: float | None) -> str:
     return f"{value:.1f}"
 
 
-def _over_maximum_line(profile: SandboxProfile, usage: AccountUsage) -> str | None:
-    for region in usage.regions:
-        maxima = (
-            ("cpu", profile.cpu, region.max_cpu_per_sandbox),
-            ("memory-gib", profile.memory_gib, region.max_memory_gib_per_sandbox),
-            ("disk-gib", profile.disk_gib, region.max_disk_gib_per_sandbox),
-        )
-        exceeded = [
-            f"--{name} {value} exceeds the per-sandbox maximum {_number(maximum)} "
-            f"in {region.region_id} ({region.sandbox_class}); requests above the maximum fail at creation"
-            for name, value, maximum in maxima
-            if maximum is not None and value > maximum
-        ]
-        if exceeded:
-            return "; ".join(exceeded)
-    return None
+def _over_maximum_line(profile: SandboxProfile, region: RegionCapacity) -> str | None:
+    maxima = (
+        ("cpu", profile.cpu, region.max_cpu_per_sandbox),
+        ("memory-gib", profile.memory_gib, region.max_memory_gib_per_sandbox),
+        ("disk-gib", profile.disk_gib, region.max_disk_gib_per_sandbox),
+    )
+    exceeded = [
+        f"--{name} {value} exceeds the per-sandbox maximum {_number(maximum)} "
+        f"in {region.region_id} ({region.sandbox_class}); requests above the maximum fail at creation"
+        for name, value, maximum in maxima
+        if maximum is not None and value > maximum
+    ]
+    return "; ".join(exceeded) if exceeded else None
 
 
 def _capacity_rows(capacities: Mapping[str, ResourceCapacity]) -> list[tuple[str, str, str, str]]:
@@ -94,29 +94,52 @@ def _capacity_rows(capacities: Mapping[str, ResourceCapacity]) -> list[tuple[str
     ]
 
 
-def _print_account(usage: AccountUsage, profile: SandboxProfile | None, headroom: float) -> None:
+def _print_account(
+    usage: AccountUsage, profile: SandboxProfile | None, headroom: float, region: RegionCapacity | None
+) -> None:
     print(f"organization  {usage.organization_id}")
     print("  " + "  ".join(column.ljust(12) for column in ("resource", "quota", "used", "remaining")))
     for row in _capacity_rows(account_resource_capacities(usage)):
         print("  " + "  ".join(column.ljust(12) for column in row))
     if len(usage.regions) > 1:
-        for region in usage.regions:
-            print(f"  region {region.region_id} ({region.sandbox_class})")
-            for row in _capacity_rows(region_resource_capacities(region)):
+        for row_region in usage.regions:
+            print(f"  region {row_region.region_id} ({row_region.sandbox_class})")
+            for row in _capacity_rows(region_resource_capacities(row_region)):
                 print("  " + "  ".join(column.ljust(12) for column in row))
     elif usage.regions:
         print(f"  region {usage.regions[0].region_id} ({usage.regions[0].sandbox_class})")
     states = "  ".join(f"{state} {count}" for state, count in usage.sandbox_states.items()) or "none"
     print(f"  sandboxes {usage.sandboxes}  states: {states}")
-    if profile is not None:
+    if profile is not None and region is not None:
         print(
-            f"  max concurrency {max_concurrency(usage, profile, headroom=headroom)} sandboxes "
+            f"  max concurrency {max_concurrency(region, profile, headroom=headroom)} sandboxes "
             f"at {profile.cpu}cpu/{_number(profile.memory_gib)}g/{_number(profile.disk_gib)}g, "
-            f"{headroom:.0%} headroom"
+            f"{headroom:.0%} headroom, in {region.region_id} ({region.sandbox_class})"
         )
-        exceeded = _over_maximum_line(profile, usage)
+        exceeded = _over_maximum_line(profile, region)
         if exceeded:
             print(f"  warning: {exceeded}")
+
+
+def _render(
+    usage: AccountUsage,
+    profile: SandboxProfile | None,
+    arguments: argparse.Namespace,
+    headroom: float,
+    *,
+    as_json: bool,
+) -> dict[str, Any] | None:
+    region = (
+        region_for_launch(usage, target=arguments.target, sandbox_class=arguments.sandbox_class)
+        if profile is not None
+        else None
+    )
+    if as_json:
+        return usage_report(
+            usage, profile, target=arguments.target, sandbox_class=arguments.sandbox_class, headroom=headroom
+        )
+    _print_account(usage, profile, headroom, region)
+    return None
 
 
 async def _run(arguments: argparse.Namespace) -> None:
@@ -134,10 +157,10 @@ async def _run(arguments: argparse.Namespace) -> None:
                 continue
             usage = await account_usage(_connection(api_key, arguments))
             if arguments.json:
-                reports[account] = usage_report(usage, profile, headroom=headroom)
+                reports[account] = _render(usage, profile, arguments, headroom, as_json=True)
             else:
                 print(f"account {account}")
-                _print_account(usage, profile, headroom)
+                _render(usage, profile, arguments, headroom, as_json=False)
         if arguments.json:
             print(json.dumps(reports, indent=2, sort_keys=True))
         return
@@ -146,10 +169,9 @@ async def _run(arguments: argparse.Namespace) -> None:
     if api_key is None:
         raise SystemExit(f"Missing Daytona credential environment variable: {arguments.api_key_env}")
     usage = await account_usage(_connection(api_key, arguments))
+    report = _render(usage, profile, arguments, headroom, as_json=arguments.json)
     if arguments.json:
-        print(json.dumps(usage_report(usage, profile, headroom=headroom), indent=2, sort_keys=True))
-    else:
-        _print_account(usage, profile, headroom)
+        print(json.dumps(report, indent=2, sort_keys=True))
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -179,6 +201,11 @@ def _parser() -> argparse.ArgumentParser:
         "--target",
         default=os.environ.get("DAYTONA_TARGET"),
         help="Daytona target region (defaults to DAYTONA_TARGET).",
+    )
+    parser.add_argument(
+        "--sandbox-class",
+        default=DEFAULT_SANDBOX_CLASS,
+        help=f"Sandbox class of the launch (default {DEFAULT_SANDBOX_CLASS}).",
     )
     parser.add_argument("--json", action="store_true", help="Emit JSON.")
     parser.add_argument("--cpu", type=int, help="Per-sandbox CPU request for concurrency sizing.")

@@ -23,6 +23,7 @@ from shellbox.backends.daytona.usage import (
     SandboxProfile,
     account_usage,
     max_concurrency,
+    region_for_launch,
     usage_report,
 )
 
@@ -55,7 +56,7 @@ def _overview(**overrides) -> OrganizationUsageOverview:
         "region_usage": [
             {
                 "region_id": "us",
-                "sandbox_class": "linux-vm",
+                "sandbox_class": "container",
                 "total_cpu_quota": 6000,
                 "current_cpu_usage": 1000,
                 "total_memory_quota": 12000,
@@ -140,6 +141,8 @@ def _install_fakes(monkeypatch, client: FakeDaytonaClient) -> None:
 
 def _region(
     *,
+    region_id: str = "us",
+    sandbox_class: str = "container",
     cpu_quota=6000,
     cpu_used=1000,
     memory_quota=12000,
@@ -148,8 +151,8 @@ def _region(
     disk_used=5000,
 ) -> RegionCapacity:
     return RegionCapacity(
-        region_id="us",
-        sandbox_class="linux-vm",
+        region_id=region_id,
+        sandbox_class=sandbox_class,
         cpu=ResourceCapacity(quota=cpu_quota, used=cpu_used),
         memory_gib=ResourceCapacity(quota=memory_quota, used=memory_used),
         disk_gib=ResourceCapacity(quota=disk_quota, used=disk_used),
@@ -235,28 +238,55 @@ def test_account_usage_fails_when_the_organization_cannot_be_resolved(monkeypatc
     ),
 )
 def test_max_concurrency_is_the_minimum_over_remaining_resources(overrides, profile, headroom, expected) -> None:
-    assert max_concurrency(_account(**overrides), profile, headroom=headroom) == expected
+    assert max_concurrency(_region(**overrides), profile, headroom=headroom) == expected
 
 
 def test_max_concurrency_rejects_an_invalid_profile_and_headroom() -> None:
     with pytest.raises(ValueError, match="must be positive"):
-        max_concurrency(_account(), SandboxProfile(cpu=0, memory_gib=8, disk_gib=10))
+        max_concurrency(_region(), SandboxProfile(cpu=0, memory_gib=8, disk_gib=10))
     with pytest.raises(ValueError, match="Headroom must be in"):
-        max_concurrency(_account(), SandboxProfile(cpu=2, memory_gib=8, disk_gib=10), headroom=1)
+        max_concurrency(_region(), SandboxProfile(cpu=2, memory_gib=8, disk_gib=10), headroom=1)
+
+
+def test_region_for_launch_selects_the_target_row_not_the_sum() -> None:
+    # Two rows with the same free CPU must not double the suggested limit: a
+    # launch into us is charged only against the us row.
+    usage = AccountUsage(
+        organization_id=ORG_ID,
+        regions=(
+            _region(region_id="us", cpu_quota=200, cpu_used=100),
+            _region(region_id="eu", cpu_quota=200, cpu_used=100),
+        ),
+        snapshots=ResourceCapacity(quota=40, used=0),
+        volumes=ResourceCapacity(quota=10, used=0),
+        sandboxes=0,
+        sandbox_states={},
+    )
+    profile = SandboxProfile(cpu=2, memory_gib=8, disk_gib=10)
+    region = region_for_launch(usage, target="us")
+
+    assert region.region_id == "us"
+    assert max_concurrency(region, profile) == 40
+
+    with pytest.raises(RuntimeError, match="No container quota row for region eu-cross"):
+        region_for_launch(usage, target="eu-cross")
+    with pytest.raises(RuntimeError, match="No linux-vm quota row for region us"):
+        region_for_launch(usage, target="us", sandbox_class="linux-vm")
 
 
 def test_usage_report_json_includes_remaining_and_concurrency() -> None:
-    report = usage_report(_account(), SandboxProfile(cpu=2, memory_gib=8, disk_gib=10))
+    report = usage_report(_account(), SandboxProfile(cpu=2, memory_gib=8, disk_gib=10), target="us")
 
     assert report["organization_id"] == ORG_ID
     assert report["resources"]["cpu"] == {"quota": 6000.0, "used": 1000.0, "remaining": 5000.0}
     assert report["sandboxes"] == {"total": 125, "by_state": {"started": 120, "stopped": 5}}
+    assert report["max_concurrency"]["region_id"] == "us"
     assert report["max_concurrency"]["limit"] == 1000
     assert json.dumps(report)  # the interchange is JSON-serializable
 
 
 def test_usage_report_json_omits_concurrency_without_a_profile() -> None:
-    report = usage_report(_account(), None)
+    report = usage_report(_account(), None, target="us")
 
     assert "max_concurrency" not in report
 
