@@ -57,8 +57,8 @@ SELECT p.load_id, p.pipeline_key, p.cohort, p.population, p.sample_count,
 FROM atlas_populations p JOIN atlas_assessments a USING (load_id, pipeline_key)
 LEFT JOIN atlas_items i
     ON i.load_id = p.load_id AND i.pipeline_key = p.pipeline_key AND i.cohort = p.cohort
-    /* selected_items */
-/* selected_population */
+    {item_filter}
+{population_filter}
 GROUP BY p.load_id, p.pipeline_key, p.cohort, p.population, p.sample_count
 """
 
@@ -92,3 +92,8 @@ SELECT load_id, pipeline_key, cohort, population, sample_count, reviewed,
 FROM counts;
 
 """
+
+
+def cohort_counts_sql(*, population_filter: str = "", item_filter: str = "") -> str:
+    """Apply internal SQL predicates; misspelled template fields fail immediately."""
+    return COHORT_COUNTS_SQL.format(population_filter=population_filter, item_filter=item_filter)

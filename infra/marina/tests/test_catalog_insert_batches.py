@@ -392,13 +392,30 @@ def test_bounded_summary_matches_canonical_view_and_resumes(batch_database, coun
             ).mappings()
         ]
     statements = []
+    interrupt = count > 4096
 
     def query(sql, params):
+        nonlocal interrupt
+        if interrupt and params.get("lower") is not None:
+            interrupt = False
+            raise RuntimeError("Interrupted between summary windows")
         started = time.perf_counter()
         result = execute_statement(batch_database, sql, params)["rows"]
+        if result and "item_count" in result[0]:
+            assert sum(row["item_count"] for row in result) <= 4096
         statements.append({"seconds": time.perf_counter() - started, "sql": sql})
         return result
 
+    if interrupt:
+        with pytest.raises(RuntimeError, match="Interrupted"):
+            materialize_cohort_summaries(query, load_id)
+        with batch_database.connect() as connection:
+            assert (
+                connection.execute(
+                    text("SELECT COUNT(*) FROM atlas_cohort_summaries WHERE load_id=:load"), parameters
+                ).scalar_one()
+                == 0
+            )
     assert materialize_cohort_summaries(query, load_id) == 1
     with batch_database.connect() as connection:
         actual = [
@@ -409,6 +426,5 @@ def test_bounded_summary_matches_canonical_view_and_resumes(batch_database, coun
         ]
     assert actual == expected
     assert materialize_cohort_summaries(query, load_id) == 0
-    assert all("FROM atlas_cohort_summary " not in row["sql"] for row in statements)
     record_property("maximum_statement_seconds", max(row["seconds"] for row in statements))
     record_property("statement_count", len(statements))

@@ -7,7 +7,7 @@ import json
 from collections.abc import Callable
 from typing import Any
 
-from .cohort_sql import COHORT_COUNTS_SQL, COHORT_PROJECTION_SQL
+from .cohort_sql import COHORT_PROJECTION_SQL, cohort_counts_sql
 
 COHORT_SUMMARY_VERSION = 1
 COHORT_ITEM_BATCH = 4096
@@ -63,7 +63,7 @@ def materialize_cohort_summaries(query: SummaryQuery, load_id: str, *, pipeline_
 
 
 def bounded_summaries(query: SummaryQuery, load_id: str, pipeline_key: str) -> dict[str, dict]:
-    """Aggregate indexed task-ID windows, then apply the view's exact grade policy."""
+    """Return summary records by cohort using bounded task-ID windows and canonical grading."""
     totals: dict[str, dict] = {}
     lower = None
     parameters = {"load_id": load_id, "pipeline_key": pipeline_key, "batch": COHORT_ITEM_BATCH}
@@ -81,9 +81,10 @@ def bounded_summaries(query: SummaryQuery, load_id: str, pipeline_key: str) -> d
         if lower is not None:
             window += " AND i.task_id>:lower"
         rows = query(
-            COHORT_COUNTS_SQL.replace(
-                "/* selected_population */", "WHERE p.load_id=:load_id AND p.pipeline_key=:pipeline_key"
-            ).replace("/* selected_items */", window),
+            cohort_counts_sql(
+                population_filter="WHERE p.load_id=:load_id AND p.pipeline_key=:pipeline_key",
+                item_filter=window,
+            ),
             {**parameters, "lower": lower, "upper": boundary},
         )
         for row in rows:
@@ -102,7 +103,7 @@ def bounded_summaries(query: SummaryQuery, load_id: str, pipeline_key: str) -> d
         if boundary is None:
             break
         lower = boundary
-    # Two small population rows replace a repeated scan of the full item table.
+    # Aggregate rows per cohort replace repeated scans of the full item table.
     rows = query(
         "WITH counts AS (SELECT * FROM jsonb_to_recordset(CAST(:counts AS JSONB)) AS r("
         "load_id TEXT,pipeline_key TEXT,cohort TEXT,population BIGINT,sample_count BIGINT,"

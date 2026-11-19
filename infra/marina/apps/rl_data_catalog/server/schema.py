@@ -3,7 +3,7 @@
 
 """Postgres storage for one staged curation catalog load."""
 
-from .cohort_sql import COHORT_COUNTS_SQL, COHORT_PROJECTION_SQL
+from .cohort_sql import COHORT_PROJECTION_SQL, cohort_counts_sql
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS atlas_review_batches (
@@ -221,7 +221,7 @@ CREATE TABLE IF NOT EXISTS atlas_backend_cells (
 
 SCHEMA_SQL += (
     "CREATE OR REPLACE VIEW atlas_cohort_summary AS WITH counts AS (\n"
-    + COHORT_COUNTS_SQL.replace("/* selected_population */", "").replace("/* selected_items */", "")
+    + cohort_counts_sql()
     + ")\n"
     + COHORT_PROJECTION_SQL
 )
