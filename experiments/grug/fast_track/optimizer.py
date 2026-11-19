@@ -194,6 +194,17 @@ def _fixed_decoupled_decay(weight_decay: float) -> optax.GradientTransformation:
     return optax.GradientTransformation(lambda params: optax.EmptyState(), update_fn)
 
 
+def _matrix_decoupled_decay(weight_decay) -> optax.GradientTransformation:
+    """``_fixed_decoupled_decay`` on the leaves of rank 2 or more only."""
+
+    def update_fn(updates, state, params=None):
+        if params is None:
+            raise ValueError("_matrix_decoupled_decay requires params")
+        return jax.tree.map(lambda u, p: u + weight_decay * p if p.ndim >= 2 else u, updates, params), state
+
+    return optax.GradientTransformation(lambda params: optax.EmptyState(), update_fn)
+
+
 def _row_norms(x: jax.Array) -> jax.Array:
     return jnp.sqrt(jnp.sum(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True))
 
@@ -499,11 +510,14 @@ KDA_BETA_LR_MULT = 2.0
 ADAMC_ADAM_DECAY = 0.1
 """AdamC ``lambda`` of the ``adamc_adam`` group (``adamc_head_router_embed``): decay ``(lr_t^2 / lr_max) lambda``."""
 ADAMC_ADAM_GROUP = "adamc_adam"
-NONSI_LATE_ANNEAL_FRAC = 0.7937
-"""``muonh_nonsi_anneal``: the late matrix anneal starts at step ``round(NONSI_LATE_ANNEAL_FRAC * num_train_steps)``."""
+LATE_ANNEAL_FRAC = 0.7937
+"""``muonh_nonsi_anneal`` and ``muonc_anneal_decay``: the late matrix anneal starts at step
+``round(LATE_ANNEAL_FRAC * num_train_steps)``."""
 NONSI_RADIUS_B1 = 0.9
 NONSI_RADIUS_B2 = 0.99
 """``muonh_nonsi_anneal``: Adam betas of the log-radius step."""
+MUONC_ANNEAL_ADAMW_DECAY = 0.05
+"""``muonc_anneal_decay``: AdamW decoupled decay of the head and of the rank >= 2 leaves of every Adam group."""
 _ADAM_LEAVES = re.compile(
     r"(?:^|\.)(value_embed|ve_lambda|ve_gate|head_ve_lambda|head_ve_gate|head_ve_gain|qk_mult"
     r"|pointer_w|pointer_b|pointer_open|ngram_cache_w|ngram_cache_b|ngram_cache_open)$"
@@ -585,8 +599,16 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """Learned-radius MuonH ("nonsi") with two anneals, ``s(t) = lr_t / lr_max`` of the MuonH schedule. Each sphere of
     the ``muonh`` and ``kda_beta`` groups outside ``_RADIUS_FROZEN`` learns an unbounded log-radius
     (``scale_with_grug_muonh_radial`` without a softcap, Adam betas ``NONSI_RADIUS_B1``/``NONSI_RADIUS_B2``) at the
-    group's unannealed MuonH LR. The ``adamh`` LR becomes ``lr_max s(t)^2``. From ``t0 = round(NONSI_LATE_ANNEAL_FRAC
+    group's unannealed MuonH LR. The ``adamh`` LR becomes ``lr_max s(t)^2``. From ``t0 = round(LATE_ANNEAL_FRAC
     N)`` the sphere steps of every ``muonh`` and ``kda_beta`` group take ``lr_t s(t) / s(t0)``."""
+    muonc_anneal_decay: float = 0.0
+    """MuonC with ``lambda = muonc_anneal_decay`` and two anneals, ``s(t) = lr_t / lr_max`` of the MuonH schedule. The
+    matrix LR is ``lr_m = lr_t`` until ``t0 = round(LATE_ANNEAL_FRAC N)``, then ``lr_t s(t) / s(t0)``. The ``muonh`` and
+    ``kda_beta`` groups take ``W <- W - lr (O + lambda_t W)``, ``O`` the Muon direction (with its fan scale),
+    ``lambda_t = lambda lr_m / lr_max`` and ``lr`` the group's multiple of ``lr_m``, with no sphere projection. The head
+    takes AdamW at ``lr_max s(t)^2`` with decay ``MUONC_ANNEAL_ADAMW_DECAY``. Every Adam group keeps its LR and takes
+    AdamW decay ``MUONC_ANNEAL_ADAMW_DECAY`` on its rank >= 2 leaves in place of the annealed
+    ``gate_router_weight_decay``. 0: off."""
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -600,8 +622,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             )
         adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
         hyperparams = {"learning_rate": learning_rate_schedule, "adam_lr": adam_lr_schedule}
-        if self.muonh_nonsi_anneal:
-            late_anneal_start = round(NONSI_LATE_ANNEAL_FRAC * num_train_steps)
+        if self.muonh_nonsi_anneal or self.muonc_anneal_decay:
+            late_anneal_start = round(LATE_ANNEAL_FRAC * num_train_steps)
             lr_at_late_anneal_start = learning_rate_schedule(late_anneal_start)
 
             def matrix_lr_schedule(step):
@@ -658,6 +680,21 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 _match_named_update_sharding(),
             )
 
+        def muonc_annealed_at(lr, decay):
+            return optax.chain(
+                _grug_scale_with_muon(
+                    momentum=self.momentum,
+                    nesterov=self.nesterov,
+                    steps=self.backend_steps,
+                    muon_eps=self.muon_epsilon,
+                    coefficient_type=self.coefficient_type,
+                    pre_norm=self.muon_pre_norm,
+                ),
+                _fixed_decoupled_decay(decay),
+                optax.scale(-lr),
+                _match_named_update_sharding(),
+            )
+
         def muon_at(lr):
             return optax.chain(
                 _grug_scale_with_muon(
@@ -692,6 +729,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
         def adam_at(lr, *, decay: bool = False):
             """Adam at ``lr``; ``decay`` adds the annealed decoupled ``gate_router_weight_decay``."""
             adam = adam_moments(self.beta1, self.beta2)
+            if self.muonc_anneal_decay:
+                return optax.chain(adam, _matrix_decoupled_decay(MUONC_ANNEAL_ADAMW_DECAY), optax.scale(-lr))
             if decay and self.gate_router_weight_decay > 0.0:
                 adam = _scale_by_adam_decoupled_decay(adam, self.gate_router_weight_decay, num_train_steps)
             return optax.chain(adam, optax.scale(-lr))
@@ -757,6 +796,15 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 transforms["kda_beta_radial"] = muonh_radial_at(
                     beta_matrix_lr, beta_lr, None, NONSI_RADIUS_B1, NONSI_RADIUS_B2
                 )
+            if self.muonc_anneal_decay:
+                decay = self.muonc_anneal_decay * matrix_lr / self.learning_rate
+                transforms["muonh"] = muonc_annealed_at(matrix_lr, decay)
+                transforms["kda_beta"] = muonc_annealed_at(matrix_lr * KDA_BETA_LR_MULT, decay)
+                transforms["adamh"] = optax.chain(
+                    optax.scale_by_adam(self.beta1, self.beta2, self.epsilon),
+                    _fixed_decoupled_decay(MUONC_ANNEAL_ADAMW_DECAY),
+                    optax.scale(-learning_rate * learning_rate / self.learning_rate),
+                )
             return _multi_transform_when_used(
                 transforms, {FULL_BANDWIDTH_MUON_GROUP: muon_at(learning_rate)}, self.create_mask
             )
@@ -788,6 +836,20 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             )
         if self.muonh_nonsi_anneal and (self.muonh_radial_softcap or self.muonc_decay_mult):
             raise ValueError("muonh_nonsi_anneal excludes muonh_radial_softcap and muonc_decay_mult")
+        if self.muonc_anneal_decay < 0 or (
+            self.muonc_anneal_decay
+            and (
+                self.muonh_radial_softcap
+                or self.muonc_decay_mult
+                or self.muonh_nonsi_anneal
+                or self.embed_lr_mult is not None
+                or self.embed_optimizer != EmbedOptimizer.ADAM_GROUP
+            )
+        ):
+            raise ValueError(
+                "muonc_anneal_decay must be non-negative and excludes muonh_radial_softcap, muonc_decay_mult, "
+                "muonh_nonsi_anneal, embed_lr_mult and embed_optimizer other than adam_group"
+            )
 
     def create_mask(self, params):
         paths = leaf_key_paths(params)
