@@ -114,12 +114,17 @@ def capture_wanda_norms(model, batches, *, num_layers: int, mp) -> tuple[np.ndar
         result = capture_model.transformer._forward(tokens, None, return_routes=False)
         wanda = result.wanda
         assert wanda is not None
-        return (
-            wanda["wanda_input_sums_local"],
-            wanda["wanda_input_counts_local"],
-            wanda["wanda_channel_sums_local"],
-            wanda["wanda_channel_counts_local"],
-        )
+        sums = wanda["wanda_input_sums_local"]
+        counts = wanda["wanda_input_counts_local"]
+        channel_sums = wanda["wanda_channel_sums_local"]
+        channel_counts = wanda["wanda_channel_counts_local"]
+        # reduce the batch/position axes on device: pulling the unreduced sharded
+        # sums materializes the whole logical array on one device (tens of GiB)
+        sums_reduced = sums.sum(axis=tuple(range(sums.ndim - 3)))
+        counts_reduced = counts.sum(axis=tuple(range(counts.ndim - 2)))
+        channel_sums_reduced = channel_sums.sum(axis=tuple(range(channel_sums.ndim - 2)))
+        channel_counts_reduced = channel_counts.sum(axis=tuple(range(channel_counts.ndim - 1)))
+        return (sums_reduced, counts_reduced, channel_sums_reduced, channel_counts_reduced)
 
     sums_total = counts_total = channel_sums_total = channel_counts_total = None
     seen = 0
