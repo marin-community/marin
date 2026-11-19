@@ -10,6 +10,7 @@ from typing import Any
 from finestore.rl.licenses import LicenseBan, LicenseReceipt
 
 from .license_registry import LICENSE_BANS
+from .publication_scope import PUBLICATION_SCOPE_VERSION, publication_scope_decision
 
 
 @cache
@@ -48,9 +49,11 @@ def license_projection(declaration: dict[str, Any]) -> dict[str, Any]:
     """Apply the selected ban version without altering archived declarations or task bytes."""
     if ban := declaration_license_ban(declaration):
         return {**declaration, "status": "Excluded", "license_ban": ban.model_dump(mode="json")}
+    if decision := publication_scope_decision(declaration):
+        return {**declaration, "publication_scope": decision.model_dump(mode="json")}
     return declaration
 
 
 def license_registry_key() -> str:
     """Return the embedded license-decision version for response cache keys."""
-    return "license:" + json.loads(LICENSE_BANS)["version"]
+    return "license:" + json.loads(LICENSE_BANS)["version"] + "|publication:" + PUBLICATION_SCOPE_VERSION
