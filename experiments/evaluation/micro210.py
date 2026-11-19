@@ -43,7 +43,9 @@ from experiments.evaluation.micro210_policy import (
     Micro210Evaluation,
     Micro210Model,
     micro210_evaluation,
+    runtime_policy_config,
 )
+from experiments.post_training.long_loop.launch_validation import validate_before_allocation
 from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 
 PREPARED_INPUTS = (
@@ -84,8 +86,15 @@ def run_micro210(config: Micro210Run) -> SkyRLRun:
     if hashlib.sha256(config.skyrl.launch_config_yaml.encode()).hexdigest() != config.canonical_launch_sha256:
         raise ValueError("Canonical Micro210 refuses modified field: launch_config_yaml")
     validate_inputs(config.evaluation, PREPARED_INPUTS)
+    validate_before_allocation(config.skyrl.launch_config_yaml)
     (StoragePath(config.evaluation.output_uri) / "canonical-evaluation.json").write_text(
-        json.dumps(asdict(config.evaluation.record()), indent=2)
+        json.dumps(
+            {
+                **asdict(config.evaluation.record()),
+                "runtime_field_renames": runtime_policy_config(config.evaluation.policy()).field_renames,
+            },
+            indent=2,
+        )
     )
     policy = config.evaluation.policy()["evaluation"]
     judge = draccus.decode(ModelConfig, policy["judge"])
@@ -156,7 +165,7 @@ def micro210_artifact_step(model: ArtifactModel, *, name: str, version: str) -> 
         SkyRLSpec(
             name=name,
             version=version,
-            config_yaml=yaml.safe_dump(policy["config"]),
+            config_yaml=yaml.safe_dump(runtime_policy_config(frozen).config),
             model=model,
             train_data=(),
             validation_data=(ArtifactDataSource(inputs, relative_path=policy["data_relative_path"]),),

@@ -6,6 +6,7 @@
 import hashlib
 import json
 import re
+from copy import deepcopy
 from dataclasses import dataclass
 
 from rigging.filesystem.storage_path import StoragePath
@@ -13,6 +14,31 @@ from rigging.filesystem.storage_path import StoragePath
 MODEL_IDENTITY_PREFIX = "sha256:"
 POLICY_DIGEST = "e0faa32c68994e8bf01d0ab7177893aa9c29f8c4309b9183de5c3dfcb6fa67aa"
 POLICY_REVISION = "2026.11.18"
+HARBOR_RUNTIME_FIELD_RENAMES = (
+    ("daytona_provisioning", "daytona_image_build"),
+    ("eval_daytona_provisioning", "eval_daytona_image_build"),
+)
+
+
+@dataclass(frozen=True)
+class Micro210RuntimeConfig:
+    config: dict
+    field_renames: dict[str, str]
+
+
+def runtime_policy_config(policy: dict) -> Micro210RuntimeConfig:
+    """Translate only the approved Harbor names, preserving the frozen policy."""
+    config = deepcopy(policy["evaluation"]["config"])
+    harbor = config["terminal_bench"]["harbor"]
+    applied = {}
+    for previous, current in HARBOR_RUNTIME_FIELD_RENAMES:
+        if previous not in harbor:
+            continue
+        if current in harbor:
+            raise ValueError(f"Canonical Micro210 has ambiguous Harbor fields: {previous}, {current}")
+        harbor[current] = harbor.pop(previous)
+        applied[f"terminal_bench.harbor.{previous}"] = f"terminal_bench.harbor.{current}"
+    return Micro210RuntimeConfig(config, applied)
 
 
 @dataclass(frozen=True)
