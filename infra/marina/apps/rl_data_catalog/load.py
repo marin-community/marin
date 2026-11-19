@@ -166,6 +166,11 @@ def ensure_tables(query: AppletQuery, names: tuple[str, ...]) -> None:
         query(statements[name], {})
 
 
+def sql_column_names(columns: str) -> tuple[str, ...]:
+    """Return the field names in an explicit JSON recordset declaration."""
+    return tuple(column.strip().split()[0] for column in columns.split(","))
+
+
 def insert_rows(
     query: AppletQuery,
     table: str,
@@ -184,10 +189,11 @@ def insert_rows(
     ``conflict_updates`` instead replaces only the named fields, allowing a
     lossless transport migration within an existing unselected load.
     """
-    names = ", ".join(column.strip().split()[0] for column in columns.split(","))
+    fields = sql_column_names(columns)
+    names = ", ".join(fields)
     budget = table_batch_bytes(table)
     max_rows = table_batch_rows(table)
-    if conflict_updates and (conflict_nothing or not set(conflict_updates) <= set(names.split(", "))):
+    if conflict_updates and (conflict_nothing or not set(conflict_updates) <= set(fields)):
         raise ValueError("Conflict updates must name inserted columns and exclude conflict_nothing")
     conflict = "ON CONFLICT DO NOTHING" if conflict_nothing else ""
     if conflict_updates:

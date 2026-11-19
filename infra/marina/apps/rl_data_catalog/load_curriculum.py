@@ -26,6 +26,7 @@ from infra.marina.apps.rl_data_catalog.load import (
     batches,
     ensure_tables,
     insert_rows,
+    sql_column_names,
     table_batch_bytes,
     table_batch_rows,
 )
@@ -119,18 +120,16 @@ def release_tasks(paths: list[str]) -> Iterator[dict]:
                     }
 
 
-def preflight_task_text(paths: list[str]) -> dict[str, int | str]:
+def preflight_task_text(paths: list[str]) -> int:
     """Check the exact task encoding and SQL transport limits without any writes."""
     count = 0
-    batch_count = 0
     for body in batches(
         (encode_catalog_value(row) for row in release_tasks(paths)),
         table_batch_bytes("curriculum_tasks"),
         table_batch_rows("curriculum_tasks"),
     ):
         count += len(json.loads(body))
-        batch_count += 1
-    return {"codec": CATALOG_TEXT_CODEC, "tasks": count, "sql_batches": batch_count}
+    return count
 
 
 def atlas_source_restrictions(query: AppletQuery, load_id: str) -> dict[str, dict[str, Any]]:
@@ -223,13 +222,6 @@ def load_curriculum(
         "FROM curriculum_current c JOIN curriculum_loads l USING(load_id) WHERE c.name='latest'",
         {},
     )["rows"]
-    if current and (current[0]["release_id"], current[0]["release_uri"]) == (coverage.coverage_id, release_uri):
-        previous_reference = (current[0]["confidence"] or {}).get("reference")
-        if previous_reference != (confidence.model_dump(mode="json") if confidence else None):
-            raise ValueError("The selected coverage ID already binds different confidence evidence")
-        ensure_tables(query, ("curriculum_source_areas",))
-        materialize_source_areas(lambda sql, bound: query(sql, bound).get("rows", []), current[0]["load_id"])
-        return {"changed": False, "release_id": coverage.coverage_id}
     if text_scan is not None:
         scan = json.loads(manifest_bytes(text_scan))
         if (
@@ -253,7 +245,14 @@ def load_curriculum(
             )
         ):
             raise ValueError("Catalog text preflight does not bind this complete curriculum")
-    if preflight_task_text(coverage.sample_paths)["tasks"] != coverage.sample_task_count:
+    if current and (current[0]["release_id"], current[0]["release_uri"]) == (coverage.coverage_id, release_uri):
+        previous_reference = (current[0]["confidence"] or {}).get("reference")
+        if previous_reference != (confidence.model_dump(mode="json") if confidence else None):
+            raise ValueError("The selected coverage ID already binds different confidence evidence")
+        ensure_tables(query, ("curriculum_source_areas",))
+        materialize_source_areas(lambda sql, bound: query(sql, bound).get("rows", []), current[0]["load_id"])
+        return {"changed": False, "release_id": coverage.coverage_id}
+    if preflight_task_text(coverage.sample_paths) != coverage.sample_task_count:
         raise ValueError("Text preflight sample counts differ from coverage release")
     load_id = resume_load_id or uuid.uuid4().hex
     if resume_load_id is not None:
@@ -282,7 +281,7 @@ def load_curriculum(
         return query(sql, parameters)
 
     def insert(table: str, rows: Iterable[dict]) -> int:
-        updates = tuple(column.strip().split()[0] for column in TABLE_COLUMNS[table].split(","))
+        updates = sql_column_names(TABLE_COLUMNS[table])
         return insert_rows(
             execute,
             f"curriculum_{table}",

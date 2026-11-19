@@ -76,7 +76,10 @@ def decode_catalog_value(value: Any) -> Any:
 
 
 def display_catalog_value(value: Any) -> Any:
-    """Show a marker when the full header survives, even with a truncated payload."""
+    """Replace encoded string values with markers, preserving object field names.
+
+    A truncated payload still produces a marker when its full header survives.
+    """
     if isinstance(value, str) and (match := HEADER.match(value)):
         return f"{BINARY_TEXT_MARKER} SHA-256: {match[2]}"
     if isinstance(value, dict):

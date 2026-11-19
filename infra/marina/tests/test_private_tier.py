@@ -1016,7 +1016,7 @@ def test_binary_curriculum_resume_and_content_marker(catalog_query, tmp_path, ca
         [declaration],
         instructions="res_1vs99.rds\n\x1f\x8b\x08\x00binary",
     )
-    assert preflight_task_text([str(tasks)])["tasks"] == 3
+    assert preflight_task_text([str(tasks)]) == 3
 
     def interrupted(sql, parameters):
         if sql.startswith("INSERT INTO curriculum_matches"):

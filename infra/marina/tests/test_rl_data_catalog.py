@@ -46,10 +46,12 @@ from finestore.rl.curation import (
     ReferenceStatus,
     SamplePanelCurrency,
     SnapshotSource,
-    SourceDeclaration,
     SourceOrigin,
     SourceQualityResult,
     register_catalog,
+)
+from finestore.rl.curation import (
+    QualifiedSourceDeclaration as SourceDeclaration,
 )
 from finestore.rl.difficulty import (
     MEASUREMENTS,
