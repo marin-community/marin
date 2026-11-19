@@ -1,0 +1,13 @@
+experiment: X0251
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: MuonH removes W0 linearly over steps N/3-2N/3
+    flags:
+    - --opt-set
+    - muonh_init_removal=true
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
