@@ -29,6 +29,7 @@ from taskcompendium.models import (
     FinalAction,
     FunctionDefinition,
     PlainText,
+    ReasoningMarkupPolicy,
     ResourceGroups,
     TaskSpec,
     TextMessage,
@@ -210,6 +211,7 @@ def blend_task(
     package: GraderPackage,
     answer_type: AnswerType = AnswerType.TEXT,
     changes: tuple[NormalizationChange, ...] = (),
+    reasoning_markup: ReasoningMarkupPolicy = ReasoningMarkupPolicy.GRADE,
 ) -> NormalizedTask:
     """A conversation task that ``package`` grades in its own machine.
 
@@ -226,6 +228,7 @@ def blend_task(
             answer_type=answer_type,
             answer_format=FinalAction() if answer_type == AnswerType.NATIVE_ACTION else PlainText(),
             grader=package.grader,
+            reasoning_markup=reasoning_markup,
             resources=ResourceGroups(verifier=package.resources),
         ),
         (*changes, *request.changes),

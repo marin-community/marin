@@ -45,6 +45,7 @@ from iris.cluster.types import AcceleratorType, AttemptUid, CapacityType, JobNam
 from iris.cluster.types import TaskAttempt as TaskAttemptId
 from iris.cluster.worker.auth import worker_token_provider
 from iris.cluster.worker.dashboard import WorkerDashboard
+from iris.cluster.worker.egress_dns import EgressDnsFilters
 from iris.cluster.worker.env_probe import (
     EnvironmentProvider,
     HardwareProbe,
@@ -61,6 +62,7 @@ from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.managed_thread import ThreadContainer, get_thread_container
+from iris.preemption import DEFAULT_WORKER_STOP_TIMEOUT_SECONDS, SHUTDOWN_MARGIN
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync, EndpointServiceClientSync
@@ -94,6 +96,8 @@ class WorkerConfig:
     storage_prefix: str = ""
     task_outputs: TaskOutputPolicy | None = None
     auth_token: str = ""
+    # The cluster's additions to the base egress allowlist, in egress rule syntax.
+    egress_allow: list[str] = field(default_factory=list)
 
 
 def worker_config_from_wire(
@@ -135,6 +139,7 @@ def worker_config_from_wire(
         storage_prefix=wire.storage_prefix,
         task_outputs=wire.task_outputs.model_copy(deep=True) if wire.task_outputs is not None else None,
         auth_token=wire.auth_token,
+        egress_allow=list(wire.egress_allow),
     )
 
 
@@ -153,8 +158,10 @@ class Worker:
         log_client: LogClient | None = None,
         profile_interval: Duration = Duration.from_seconds(600),
         profile_duration_seconds: int = DEFAULT_PROFILE_DURATION_SECONDS,
+        egress_dns: EgressDnsFilters | None = None,
     ):
         self._config = config
+        self._egress_dns = egress_dns
         self._profile_interval = profile_interval
         self._profile_duration_seconds = profile_duration_seconds
 
@@ -399,6 +406,7 @@ class Worker:
                 poll_interval_seconds=self._config.poll_interval.to_seconds(),
                 task_outputs=self._config.task_outputs,
                 task_env=self._config.task_env,
+                egress_dns=self._egress_dns,
             )
 
             with self._lock:
@@ -409,10 +417,7 @@ class Worker:
                 a.resume_monitoring()
 
             def _stop_adopted(a: TaskAttempt = attempt) -> None:
-                try:
-                    a.stop(force=True)
-                except RuntimeError:
-                    pass
+                a.kill()
 
             self._task_threads.spawn(
                 target=_run_adopted,
@@ -451,9 +456,8 @@ class Worker:
         """
         if not preserve_containers:
             # Stop task threads first so running tasks exit before infrastructure
-            # tears down. ThreadContainer.stop() signals each thread's stop_event,
-            # which the _run_task watcher bridges to attempt.should_stop + container kill.
-            self._task_threads.stop()
+            # tears down. Each watcher sends SIGTERM and waits before escalating.
+            self._task_threads.stop(timeout=self._task_stop_timeout())
         else:
             logger.info("Preserving %d running containers for adoption by new worker", len(self._tasks))
             # Detach task threads from the parent so _threads.stop() won't
@@ -471,6 +475,8 @@ class Worker:
         if self._log_client is not None:
             self._log_client.close()
         self._bundle_store.close()
+        if self._egress_dns is not None:
+            self._egress_dns.close()
 
     def _run_lifecycle(self, stop_event: threading.Event) -> None:
         """Main lifecycle: register, serve, reset, repeat.
@@ -629,7 +635,7 @@ class Worker:
         # Stop all running task threads so they exit cleanly before we
         # kill containers.  Without this, orphaned threads discover their
         # containers are gone and log confusing "Container not found" errors.
-        self._task_threads.stop()
+        self._task_threads.stop(timeout=self._task_stop_timeout())
 
         # Clear task tracking
         with self._lock:
@@ -642,6 +648,13 @@ class Worker:
         self._cleanup_all_iris_containers()
 
         logger.info("Worker state reset complete")
+
+    def _task_stop_timeout(self) -> Duration:
+        with self._lock:
+            timeout_ms = max(
+                (task.termination_timeout_ms for task in self._tasks), default=DEFAULT_WORKER_STOP_TIMEOUT_SECONDS * 1000
+            )
+        return Duration.from_ms(timeout_ms) + SHUTDOWN_MARGIN
 
     # Task management methods
 
@@ -753,7 +766,7 @@ class Worker:
 
         if should_kill_existing:
             assert current is not None  # set only on the supersede branch above
-            current.kill()
+            current.kill(term_timeout_ms=DEFAULT_WORKER_STOP_TIMEOUT_SECONDS * 1000)
 
         task_id.require_task()
 
@@ -782,21 +795,19 @@ class Worker:
             log_client=self._log_client,
             poll_interval_seconds=self._config.poll_interval.to_seconds(),
             task_outputs=self._config.task_outputs,
+            egress_dns=self._egress_dns,
         )
 
         with self._lock:
             self._tasks.append(attempt)
 
-        # Start execution in a monitored non-daemon thread. When stop() is called,
-        # the on_stop callback kills the container so attempt.run() exits promptly.
+        # Start execution in a monitored non-daemon thread. The on_stop callback
+        # gives the container its configured grace before forcing termination.
         def _run_task(stop_event: threading.Event) -> None:
             attempt.run()
 
         def _stop_task() -> None:
-            try:
-                attempt.stop(force=True)
-            except RuntimeError:
-                pass
+            attempt.kill()
 
         mt = self._task_threads.spawn(target=_run_task, name=f"task-{task_id_wire}", on_stop=_stop_task)
         attempt.thread = mt._thread
@@ -1043,7 +1054,7 @@ class Worker:
             obs.finished_at.CopyFrom(timestamp_to_proto(task.finished_at))
         return obs
 
-    def _kill_async(self, attempt: TaskAttempt, term_timeout_ms: int = 5000) -> None:
+    def _kill_async(self, attempt: TaskAttempt, term_timeout_ms: int | None = None) -> None:
         """Kill ``attempt`` in a daemon thread so an RPC handler does not block on it.
 
         ``TaskAttempt.kill`` runs a stop/wait/force-kill sequence that can take
@@ -1057,7 +1068,7 @@ class Worker:
             daemon=True,
         ).start()
 
-    def kill_task(self, task_id: str, term_timeout_ms: int = 5000) -> bool:
+    def kill_task(self, task_id: str, term_timeout_ms: int | None = None) -> bool:
         """Kill the current (most recent) attempt of a task."""
         current = self.current_attempt(task_id)
         if not current:

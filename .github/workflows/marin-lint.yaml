@@ -29,7 +29,8 @@ jobs:
     - name: Set up Node.js
       uses: actions/setup-node@v6
       with:
-        node-version: '22'
+        node-version: "24"
+        check-latest: true
 
     # Pyrefly type-checks against real installed third-party types
     # (python-interpreter-path = .venv/bin/python in pyproject.toml), so the

@@ -38,7 +38,7 @@ unforgivable error; so is fabricating one.
    MARIN_REVIEW_TRIGGER=ci \
      MARIN_REVIEW_PR_NUMBER=<PR> \
      MARIN_REVIEW_HEAD_SHA="$head_sha" \
-     ./infra/pre-commit.py --review --agent-command='codex exec'
+     ./infra/pre-commit.py --review --calling-agent=codex
    ```
 
    The command writes its raw per-arm prompts/outputs and the

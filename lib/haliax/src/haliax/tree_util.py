@@ -34,14 +34,7 @@ def tree_map(fn, tree, *rest, is_leaf: Callable[[Any], bool] | None = None):
 
 
 def _is_scan_stack_leaf(x) -> bool:
-    return isinstance(x, (haliax.nn.Stacked, haliax.nn.ArrayStacked))
-
-
-def _array_stacked_in_axes(tree, num_layers: int):
-    return jax.tree.map(
-        lambda leaf: 0 if isinstance(leaf, jax.Array) and leaf.ndim > 0 and leaf.shape[0] == num_layers else None,
-        tree,
-    )
+    return isinstance(x, haliax.nn.Stacked)
 
 
 def scan_aware_tree_map(fn, tree, *rest, is_leaf: Callable[[Any], bool] | None = None):
@@ -63,15 +56,6 @@ def scan_aware_tree_map(fn, tree, *rest, is_leaf: Callable[[Any], bool] | None =
     def rec_fn(x, *rest):
         if isinstance(x, haliax.nn.Stacked):
             new_inner = haliax.vmap(mapped_fn, x.Block)(x.stacked, *[r.stacked for r in rest])
-            return dataclasses.replace(x, stacked=new_inner)  # type: ignore
-
-        if isinstance(x, haliax.nn.ArrayStacked):
-            num_layers = x.num_layers
-            in_axes = (
-                _array_stacked_in_axes(x.stacked, num_layers),
-                *[_array_stacked_in_axes(r.stacked, num_layers) for r in rest],
-            )
-            new_inner = jax.vmap(mapped_fn, in_axes=in_axes)(x.stacked, *[r.stacked for r in rest])
             return dataclasses.replace(x, stacked=new_inner)  # type: ignore
 
         return fn(x, *rest)

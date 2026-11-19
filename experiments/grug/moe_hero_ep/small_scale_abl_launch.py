@@ -43,9 +43,10 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_EP_NODES,
     HERO_GPUS_PER_NODE,
     HeroThroughputResult,
+    validate_model_split,
+    validated_batch_axis_size,
 )
 from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
-from experiments.grug.moe_hero_ep.launch_diagnostics import validated_batch_axis_size
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, QbEstimator
 from experiments.grug.moe_hero_ep.train import (
     GrugEvalConfig,
@@ -364,8 +365,6 @@ def build_small_run(
         context_axis_size=context_axis_size,
         expert_axis_size=expert_axis_size,
     )
-    if seq_len % context_axis_size != 0:
-        raise ValueError(f"context_axis_size={context_axis_size} must divide seq_len={seq_len}")
     # ``--transport-capacity-factor`` overrides the Flavor's sender-pool cap; ``None`` keeps the paired
     # 1.15 default. The two pooled-wave gates cap independently, so a run that sweeps only the receiver
     # (``--capacity-factor``) flattens once the sender gate takes over -- vary this to move that gate.
@@ -388,6 +387,7 @@ def build_small_run(
         qb_use_histogram,
         qb_hist_bins,
     )
+    validate_model_split(model, context_axis_size=context_axis_size, expert_axis_size=expert_axis_size)
     if num_train_steps_override is not None:
         num_steps = num_train_steps_override
     else:
@@ -414,21 +414,6 @@ def build_small_run(
         replica_axis_size=dp_racks,
         sharding_dump_path=None,
     )
-    # The bank is stored split over (expert, context), so parameter init needs the product to divide it.
-    bank_shards = expert_axis_size * context_axis_size
-    if model.num_experts % bank_shards != 0:
-        raise ValueError(
-            f"num_experts={model.num_experts} must be divisible by expert ({expert_axis_size}) * "
-            f"context ({context_axis_size}) = {bank_shards}"
-        )
-    # Fail fast here (before the fleet is allocated) on the same divisibility the pooled-wave transport
-    # enforces at runtime, mirroring the hero launcher's pre-allocation check.
-    local_experts = model.num_experts // expert_axis_size
-    if model.moe_implementation == "fixed_pooled_wave_all_to_all" and local_experts % model.num_expert_waves != 0:
-        raise ValueError(
-            f"local expert count={local_experts} (num_experts={model.num_experts} / expert axis "
-            f"{expert_axis_size}) must divide num_expert_waves={model.num_expert_waves}"
-        )
     train_resources = ResourceConfig.with_gpu(
         fleet.accelerator,
         count=fleet.gpus_per_node,

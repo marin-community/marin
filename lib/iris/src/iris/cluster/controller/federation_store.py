@@ -300,6 +300,9 @@ class ControllerFederationStore:
             cur, peer_id, local_job_id, summary
         ):
             return
+        if delta.HasField("limits"):
+            writes.mirror_federated_job_limits(cur, local_job_id, delta.limits)
+            cur.caches[RunTemplatesProjection].invalidate_for_job(cur, local_job_id)
         writes.mirror_federated_job(
             cur,
             job_id=local_job_id,
@@ -349,9 +352,9 @@ class ControllerFederationStore:
         only a defensive guard; the child is re-created on its next delta.
 
         Writes the ``job_config`` companion the dashboard reads join against, so the
-        child renders like any other job. Only the peer-reported resources are known
-        here — the parent never authored a request for this job and never runs it —
-        so the rest of the config keeps its column defaults.
+        child renders like any other job. The peer-reported resources are inserted
+        here and requested limits are applied by the sync. Execution-only fields
+        keep their column defaults because this controller never runs the child.
         """
         parent = local_job_id.parent
         if parent is None:

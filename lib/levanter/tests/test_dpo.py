@@ -720,7 +720,7 @@ class _CapturingConverter:
 
 class _CapturingTrainer:
     run_id = "test-run"
-    config = SimpleNamespace(checkpointer=None)
+    config = SimpleNamespace(checkpointer=None, field_dtype_overrides={"router_bias": jnp.dtype("float32")})
 
     def __init__(self):
         self.hooks = []
@@ -739,6 +739,7 @@ def test_separate_reference_lora_merged_export_saves_policy_model():
     reference = config.build(Vocab, key=reference_key)
     trainer = _CapturingTrainer()
     converter = _CapturingConverter()
+    chat_template = "{% for message in messages %}{{ message.content }}{% endfor %}"
 
     adapter.install_export_hooks(
         trainer=trainer,
@@ -747,6 +748,7 @@ def test_separate_reference_lora_merged_export_saves_policy_model():
         export=AdaptorExportConfig(
             hf_save_steps=1,
             merged_hf_save_path="/tmp/export",
+            chat_template=chat_template,
         ),
     )
 
@@ -754,8 +756,9 @@ def test_separate_reference_lora_merged_export_saves_policy_model():
     hook(SimpleNamespace(step=1, eval_model=DpoModel(policy=policy, reference=reference)))
 
     assert len(converter.calls) == 1
-    saved_model, _, _ = converter.calls[0]
+    saved_model, _, kwargs = converter.calls[0]
     assert isinstance(saved_model, Gpt2LMHeadModel)
+    assert kwargs["chat_template"] == chat_template
 
 
 def test_separate_reference_lora_peft_export_saves_policy_adapter(tmp_path):
@@ -812,12 +815,13 @@ def test_separate_reference_hf_export_passes_generation_config():
     saved_model, _, saved_kwargs = converter.calls[0]
     assert saved_model is model
     assert saved_kwargs["generation_config"] == generation_config
+    assert saved_kwargs["field_dtype_overrides"] == {"router_bias": jnp.dtype("float32")}
 
 
 @pytest.mark.parametrize("updates", [6, 7])
 def test_dpo_exports_completed_update_intervals_and_final_checkpoint(tmp_path, updates):
     class ExportTrainer:
-        config = SimpleNamespace(checkpointer=None)
+        config = SimpleNamespace(checkpointer=None, field_dtype_overrides={})
         run_id = "export-cadence"
         add_hook = Trainer.add_hook
 

@@ -17,13 +17,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
-
 from harbor.job import Job
 from harbor.metrics.mean import Mean
 from harbor.models.job.config import JobConfig
 from harbor.models.job.result import JobResult, JobStats
-from harbor.models.trial.config import TaskConfig, TrialConfig
-from harbor.models.trial.result import AgentInfo, TrialResult
+from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
+from harbor.models.trial.result import AgentInfo, TrialCompletion, TrialResult
 from harbor.models.verifier.result import VerifierResult
 
 _JOB_NAME = "job-config-drift-test"
@@ -36,6 +35,7 @@ def _make_job(
     n_concurrent_trials: int = 4,
 ) -> Job:
     config = JobConfig(
+        agents=[AgentConfig(name="pi")],
         job_name=_JOB_NAME,
         jobs_dir=tmp_path,
         n_concurrent_trials=n_concurrent_trials,
@@ -56,6 +56,8 @@ def _trial_result(trial_config: TrialConfig) -> TrialResult:
         agent_info=AgentInfo(name="test-agent", version="1.0"),
         verifier_result=VerifierResult(rewards={"reward": 1}),
         exception_info=None,
+        finished_at=datetime(2026, 4, 28, tzinfo=timezone.utc),
+        completion=TrialCompletion(trajectory_present=False),
     )
 
 

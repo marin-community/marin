@@ -4,9 +4,19 @@
 """Source declarations and their curation pipeline interfaces."""
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Protocol
 
-from finestore.rl.curation import PipelineReference, SourceDeclaration
+from finestore.rl.curation import (
+    DAYTONA_SAFE_SNAPSHOT_LIMIT,
+    IndependentQC,
+    OracleValidation,
+    OversightEvidence,
+    OversightLevel,
+    PipelineReference,
+    SourceDeclaration,
+    daytona_verdict,
+)
 from marin.execution.lazy import ArtifactStep
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact
@@ -42,6 +52,54 @@ class CatalogConfig(Protocol):
     def files(self) -> tuple[str, ...]: ...
 
 
+class TaskFormat(StrEnum):
+    """The ingested task layout of a source's pinned payload.
+
+    Only task-directory layouts are accepted for agentic sources: a task is a
+    directory with ``task.toml``, its environment and its verifier, in either
+    TaskCompendium's or Harbor's variant. ``MARINSKYRL`` marks a Marin-internal
+    blend whose rows are not task directories; it is accepted only for the
+    sources listed in ``GRANDFATHERED_MARINSKYRL_SOURCES``.
+    """
+
+    TASKCOMPENDIUM = "taskcompendium"
+    HARBOR = "harbor"
+    MARINSKYRL = "marinskyrl"
+
+
+GRANDFATHERED_MARINSKYRL_SOURCES: frozenset[str] = frozenset(
+    {
+        # Nemotron Ultra mix components: JSONL rows produced by Marin's own RL
+        # pipeline, predating the task-directory format.
+        "MarinSkyRL:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/SWE-Gym/SWE-Gym",
+        "MarinSkyRL:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/nebius/SWE-rebench-V2",
+        "MarinSkyRL:nemotron_ultra_mopd/makeshn_ultra_v3_ipi_train",
+        "MarinSkyRL:nemotron_ultra_mopd/swe_pivot_len40k/SWE-Gym/SWE-Gym",
+        "MarinSkyRL:nemotron_ultra_mopd/swe_pivot_len40k/nebius/SWE-rebench-V2",
+        "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_lean",
+        "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_math_tir",
+        "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
+        "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_toolcall_schema",
+        "MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym",
+        "MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2",
+        "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
+        "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_math_tir",
+        "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
+        "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2",
+        "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_tau_pivot",
+        "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_toolcall_schema",
+        "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
+        "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_math_tir",
+        "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
+        "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2",
+        "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_tau_pivot",
+        "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_toolcall_schema",
+        "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
+    }
+)
+"""Marin-internal blend sources admitted before the task-directory requirement."""
+
+
 @dataclass(frozen=True)
 class SourceReference:
     """A pinned dataset reference."""
@@ -49,6 +107,10 @@ class SourceReference:
     name: str
     revision: str | None
     url: str
+
+
+EXCLUDED_TAG = "excluded"
+"""The source tag that keeps a declared source out of admission."""
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -72,6 +134,38 @@ class SourceInfo:
     count: int | None = None
     notes: str = ""
     dataset: SourceReference | None = None
+    independent_qc: IndependentQC | None = None
+    daytona_snapshot_count: int | None = None
+    """Distinct environments the source's own task specs require, as measured.
+
+    Each unique agent or grader image a run provisions is one Daytona snapshot.
+    ``None`` means the count was never taken; it is never inferred from a declaration.
+    """
+
+    daytona_count_basis: str | None = None
+    """Identity rule and payload source behind ``daytona_snapshot_count``."""
+
+    task_format: TaskFormat | None = None
+    """The ingested task layout of this source's pinned payload.
+
+    Required for every runnable agentic source. ``MARINSKYRL`` is accepted only for
+    the sources in ``GRANDFATHERED_MARINSKYRL_SOURCES``; a new agentic source must
+    ingest TaskCompendium or Harbor task directories.
+    """
+
+    daytona_execution_failures: int | None = None
+    """Tasks the Daytona backend refuses on their declared execution requirements."""
+
+    oracle_validation: OracleValidation | None = None
+    """How the source's grader was qualified.
+
+    ``executed`` runs the shipped oracle solutions; ``verifier_executed`` records
+    a negative verdict on an untouched submission without certifying an oracle;
+    ``skipped`` certifies neither. The Atlas shows this value beside the catalog.
+    """
+
+    oversight: OversightEvidence | None = None
+    """The review this source's admission rests on, with its evidence pointers."""
 
 
 @dataclass(frozen=True)
@@ -119,6 +213,11 @@ class RlDataSource[ConfigT: CatalogConfig]:
                 files=list(self.files),
             )
         tags = info.tags
+        safety = daytona_verdict(
+            snapshot_count=info.daytona_snapshot_count,
+            execution_failures=info.daytona_execution_failures,
+            agentic="agentic" in tags,
+        )
         return SourceDeclaration(
             id=info.id,
             name=self.name,
@@ -134,7 +233,12 @@ class RlDataSource[ConfigT: CatalogConfig]:
             type=next(
                 (
                     label
-                    for tag, label in (("rlvr", "RLVR"), ("agentic", "Agentic"), ("alignment", "Alignment"))
+                    for tag, label in (
+                        ("eval", "eval"),
+                        ("rlvr", "RLVR"),
+                        ("agentic", "Agentic"),
+                        ("alignment", "Alignment"),
+                    )
                     if tag in tags
                 ),
                 "",
@@ -145,8 +249,21 @@ class RlDataSource[ConfigT: CatalogConfig]:
             ),
             is_benchmark="benchmark" in tags,
             kind="Generator" if "generator" in tags else "Dataset",
-            status="Excluded" if "excluded" in tags else "Available",
+            status=next(
+                (label for tag, label in (("deprecated", "Deprecated"), (EXCLUDED_TAG, "Excluded")) if tag in tags),
+                "Inventory" if pipeline is None else "Available",
+            ),
             pipeline=invocation,
+            independent_qc=info.independent_qc,
+            daytona_safety=safety,
+            daytona_snapshot_count=info.daytona_snapshot_count,
+            daytona_count_basis=info.daytona_count_basis,
+            oracle_validation=info.oracle_validation,
+            oversight=info.oversight.level if info.oversight else OversightLevel.NONE,
+            oversight_evidence=info.oversight,
+            daytona_snapshot_threshold=(
+                DAYTONA_SAFE_SNAPSHOT_LIMIT if info.daytona_snapshot_count is not None else None
+            ),
         )
 
 

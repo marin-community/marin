@@ -196,6 +196,13 @@ ENV_VAR_SPECS = (
         frozenset({EnvVarScope.RAY_WORKER, EnvVarScope.INFERENCE_WORKER}),
     ),
     EnvVarSpec(
+        "NCCL_MAX_NCHANNELS",
+        "trainer.policy.megatron_config.nccl_max_channels",
+        EnvVarSource.CONFIG,
+        frozenset({EnvVarScope.RAY_WORKER}),
+        frozenset({EnvVarWriter.PYTHON_ASSIGNMENT}),
+    ),
+    EnvVarSpec(
         VLLM_ALLOW_INSECURE_SERIALIZATION_ENV,
         "generator.fuse_weights",
         EnvVarSource.CONFIG,

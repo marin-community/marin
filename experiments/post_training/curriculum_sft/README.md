@@ -74,9 +74,10 @@ The prepared artifacts feed `sft_step` through `ArtifactDatasetSpec`. The shared
 tokenizes the chat, masks user turns from the loss, and trains `SnowballLMHeadModel` from a cached,
 weights-only Levanter conversion of the pinned Hugging Face checkpoint. The conversion is a separate
 artifact dependency with a fixed version, so SFT retries and task variants reuse it without loading
-the 39 HF shards again. Conversations stay separate (`pack=False`) because Snowball does not
-consume packed-document attention masks. The launcher saves a sharded bfloat16 Hugging Face
-checkpoint at the final training step under the training artifact's `hf/` directory.
+the 39 HF shards again. These recipes keep conversations separate (`pack=False`). Snowball supports
+packed-document attention masks. To enable packing, set `SFTSpec.pack=True` and bump `SFTSpec.version`;
+the launcher selects a separate packed preprocessing cache. The launcher saves a sharded bfloat16
+Hugging Face checkpoint at the final training step under the training artifact's `hf/` directory.
 
 `math_trial.py` declares a bounded loop: deterministic OlympiadBench and Math500 on the pinned
 September 20 HF model, three algebra capabilities, four Snowball updates, and the same evaluations

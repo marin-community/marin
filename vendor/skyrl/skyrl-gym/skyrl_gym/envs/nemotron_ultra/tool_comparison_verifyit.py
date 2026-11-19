@@ -4,7 +4,7 @@ import json
 import math
 from typing import Any
 
-from verifyit.adapters.skyrl import grade_literal_candidate
+from verifyit.modes.grade_exact import grade_literal_candidate
 from verifyit.modes.grade_json_schema import grade_json_schema_candidate
 from verifyit.modes.grade_math import grade_numeric_candidate_float
 

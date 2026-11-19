@@ -8,12 +8,13 @@ import re
 from collections import deque
 from collections.abc import Callable, Iterator
 from enum import StrEnum
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, TypedDict
 
 import dupekit
 import pyarrow as pa
 from fray.types import ResourceConfig
 from openai_harmony import Message, Role, TextContent
+from pydantic import BaseModel
 from rigging.filesystem.storage_path import prefix_join
 from zephyr import counters
 from zephyr.context import ZephyrContext
@@ -29,11 +30,34 @@ from marin.datakit.normalize import (
     _discover_files,
     _make_split_writer,
 )
+from marin.datakit.source_key import DatakitArtifactPath
 from marin.execution.step_spec import StepSpec
 
 CHAT_NORMALIZE_VERSION = "2026.09.18.1"
 MAX_REJECTED_RECORD_FRACTION = 0.05
 LONG_FINAL_RESPONSE_ESTIMATED_TOKEN_THRESHOLD = 2_000
+
+
+class ConvertedChatData(BaseModel):
+    """Converted chat Parquet and counters from source filtering and conversion."""
+
+    output_dir: DatakitArtifactPath
+    counters: dict[str, int | float]
+
+
+class ChatStageCounters(TypedDict):
+    """Counters from the two executions that produce a normalized chat source."""
+
+    conversion: dict[str, int | float]
+    normalization: dict[str, int | float]
+
+
+class ChatSourceData(BaseModel):
+    """Normalized chat output with counters grouped by conversion and normalization."""
+
+    main_output_dir: DatakitArtifactPath
+    dup_output_dir: DatakitArtifactPath
+    counters: ChatStageCounters
 
 
 _SAFE_TOOL_IDENTIFIER = re.compile(r"[A-Za-z0-9_.:-]+")
@@ -405,6 +429,20 @@ def normalize_chat_to_parquet(
         main_output_dir=prefix_join(output_path, "outputs/main"),
         dup_output_dir=prefix_join(output_path, "outputs/dups"),
         counters=counters_dict,
+    )
+
+
+def normalize_chat_source(
+    *, source: ConvertedChatData, output_path: str, output_schema: pa.Schema = CHAT_SCHEMA
+) -> ChatSourceData:
+    """Normalize converted chats, retaining each stage's counters in the result."""
+    normalized = normalize_chat_to_parquet(
+        input_path=source.output_dir, output_path=output_path, output_schema=output_schema
+    )
+    return ChatSourceData(
+        main_output_dir=normalized.main_output_dir,
+        dup_output_dir=normalized.dup_output_dir,
+        counters={"conversion": source.counters, "normalization": normalized.counters},
     )
 
 

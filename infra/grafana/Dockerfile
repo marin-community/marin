@@ -11,7 +11,7 @@
 # GF_INSTALL_PLUGINS, so a cold start never depends on grafana.com being reachable.
 # The version is pinned: the provisioned alert rules evaluate through this plugin,
 # so an untested plugin build must never arrive as a side effect of an image build.
-FROM node:24.16.0-bookworm-slim AS infra-panel
+FROM node:24.22.1-bookworm-slim AS infra-panel
 
 WORKDIR /plugin
 COPY marin-infra-panel/package.json marin-infra-panel/package-lock.json ./

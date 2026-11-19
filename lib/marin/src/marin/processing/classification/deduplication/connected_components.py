@@ -56,7 +56,7 @@ class CCNode(TypedDict):
 
 
 class CCInput(TypedDict):
-    bucket: str
+    bucket: int
     id: Any
     file_idx: int
 
@@ -102,7 +102,7 @@ def connected_components(
         num_reduce_shards: Shuffle shard count. Defaults to the context worker cap.
     """
 
-    def _reduce_bucket_to_links(bucket: str, items: Iterator[CCInput]) -> Iterator[dict]:
+    def _reduce_bucket_to_links(bucket: int, items: Iterator[CCInput]) -> Iterator[dict]:
         """Generator reducer: dedup items by id_norm, yield star-topology links.
 
         Streams through items tracking only the current minimum hub RecordId (O(1))
@@ -145,7 +145,7 @@ def connected_components(
         if preserve_singletons and num_unique == 1:
             yield _make_link(hub, hub)
 
-    def _dedup_combiner(bucket: str, items: Iterator[CCInput]) -> Iterator[CCInput]:
+    def _dedup_combiner(bucket: int, items: Iterator[CCInput]) -> Iterator[CCInput]:
         """Local pre-aggregation: deduplicate items by record_id within each scatter buffer."""
         # TODO (rav): replace this with bloom filter? Reduce mem overhead.
         seen: set[str] = set()

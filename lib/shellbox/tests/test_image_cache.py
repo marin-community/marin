@@ -4,12 +4,16 @@
 """Image build reuse across temporary task directories."""
 
 import hashlib
+import io
 import json
 import shutil
 import subprocess
+import tarfile
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from shellbox.backends.local.images import prepare_local_image
 from shellbox.backends.qemu.image import QemuAssets, stage_qemu_image
 from shellbox.image import DockerfileSource, ImageCache, PreparedImage, RegistryImage, prepared_image_workdir
 
@@ -25,11 +29,161 @@ def test_image_working_directory(tmp_path, working_directory, expected):
     manifest = json.dumps({"config": {"digest": f"sha256:{config_digest}"}}).encode()
     manifest_digest = hashlib.sha256(manifest).hexdigest()
     (blobs / manifest_digest).write_bytes(manifest)
+    (tmp_path / "index.json").write_text(
+        json.dumps(
+            {
+                "manifests": [
+                    {
+                        "digest": f"sha256:{manifest_digest}",
+                        "annotations": {"org.opencontainers.image.ref.name": "image"},
+                    }
+                ]
+            }
+        )
+    )
     image = PreparedImage(tmp_path, f"sha256:{manifest_digest}", RegistryImage("fixture"))
     assert prepared_image_workdir(image) == expected
     config_path.write_bytes(json.dumps({"config": {"WorkingDir": "/changed"}}).encode())
     with pytest.raises(ValueError):
         prepared_image_workdir(image)
+
+
+@pytest.fixture
+def layered_oci_image(oci_image):
+    layers = []
+    for files in ({"data/payload": b"original", "data/deleted": b"lower"}, {"data/.wh.deleted": b""}):
+        archive = io.BytesIO()
+        with tarfile.open(fileobj=archive, mode="w") as output:
+            for name, contents in files.items():
+                entry = tarfile.TarInfo(name)
+                entry.size = len(contents)
+                entry.mode = 0o644
+                output.addfile(entry, io.BytesIO(contents))
+        layers.append(archive.getvalue())
+    return oci_image(
+        tuple(layers),
+        {
+            "Env": ["PATH=/bin", "FIXTURE=from=image"],
+            "WorkingDir": "/data",
+            "Entrypoint": ["/bin/service", "--foreground"],
+            "Cmd": ["--port", "8000"],
+            "User": "0:0",
+        },
+    )
+
+
+def test_local_image_unpack_applies_layers_and_keeps_each_member_private(tmp_path, layered_oci_image):
+    umoci = shutil.which("umoci")
+    if umoci is None:
+        pytest.skip("OCI preparation requires umoci; the Shellbox CI lane installs it")
+    first = prepare_local_image(layered_oci_image, tmp_path / "first", umoci=Path(umoci))
+    second = prepare_local_image(layered_oci_image, tmp_path / "second", umoci=Path(umoci))
+    assert (first.root / "data/payload").read_bytes() == b"original"
+    assert not (first.root / "data/deleted").exists()
+    (first.root / "data/payload").write_bytes(b"changed")
+    assert (second.root / "data/payload").read_bytes() == b"original"
+    assert first.environment == {"PATH": "/bin", "FIXTURE": "from=image"}
+    assert first.workdir == "/data"
+    assert first.entrypoint + first.arguments == ("/bin/service", "--foreground", "--port", "8000")
+    assert first.user == "0:0"
+
+
+@pytest.mark.parametrize("tampering", ["config", "tag", "manifest-path"])
+def test_local_image_rejects_changed_or_invalid_identity_before_unpack(tmp_path, layered_oci_image, tampering):
+    image = layered_oci_image
+    if tampering == "config":
+        manifest = json.loads((image.layout / "blobs/sha256" / image.manifest_digest.split(":")[1]).read_bytes())
+        (image.layout / "blobs/sha256" / manifest["config"]["digest"].split(":")[1]).write_bytes(b"{}")
+    elif tampering == "tag":
+        index = json.loads((image.layout / "index.json").read_text())
+        index["manifests"][0]["digest"] = f"sha256:{'0' * 64}"
+        (image.layout / "index.json").write_text(json.dumps(index))
+    else:
+        invalid_digest = "sha256:../../outside"
+        image = replace(image, manifest_digest=invalid_digest)
+        index = json.loads((image.layout / "index.json").read_text())
+        index["manifests"][0]["digest"] = invalid_digest
+        (image.layout / "index.json").write_text(json.dumps(index))
+    destination = tmp_path / "unpacked"
+    with pytest.raises(ValueError):
+        prepare_local_image(image, destination, umoci=tmp_path / "must-not-run")
+    assert not destination.exists()
+
+
+def test_pinned_registry_image_reuses_verified_local_layout_offline(tmp_path, layered_oci_image, monkeypatch):
+    image = layered_oci_image
+    cache_dir = tmp_path / "cache"
+    destination = cache_dir / image.manifest_digest.replace(":", "-")
+    shutil.copytree(image.layout, destination)
+
+    def unavailable(*_args, **_kwargs):
+        pytest.fail("An immutable local cache hit must not invoke an external image tool")
+
+    monkeypatch.setattr(subprocess, "run", unavailable)
+    source = RegistryImage(f"registry.invalid/task@{image.manifest_digest}")
+    prepared = ImageCache(cache_dir).prepare(source)
+    assert prepared.manifest_digest == image.manifest_digest
+    assert prepared.layout == destination
+    assert prepared_image_workdir(prepared) == "/data"
+
+
+@pytest.mark.parametrize("tampering", ["config", "layer", "tag"])
+@pytest.mark.parametrize("already_loaded", [False, True])
+def test_pinned_registry_cache_rejects_corruption(tmp_path, layered_oci_image, monkeypatch, tampering, already_loaded):
+    image = layered_oci_image
+    cache_dir = tmp_path / "cache"
+    destination = cache_dir / image.manifest_digest.replace(":", "-")
+    shutil.copytree(image.layout, destination)
+    cache = ImageCache(cache_dir)
+    source = RegistryImage(f"registry.invalid/task@{image.manifest_digest}")
+    if already_loaded:
+        cache.prepare(source)
+    manifest = json.loads((destination / "blobs/sha256" / image.manifest_digest.split(":")[1]).read_bytes())
+    if tampering == "tag":
+        index = json.loads((destination / "index.json").read_text())
+        index["manifests"][0]["digest"] = manifest["config"]["digest"]
+        (destination / "index.json").write_text(json.dumps(index))
+    else:
+        descriptor = manifest["config"] if tampering == "config" else manifest["layers"][0]
+        (destination / "blobs/sha256" / descriptor["digest"].split(":")[1]).write_bytes(b"corrupt")
+
+    def unavailable(*_args, **_kwargs):
+        pytest.fail("Corrupt local cache entries must fail closed")
+
+    monkeypatch.setattr(subprocess, "run", unavailable)
+    with pytest.raises(ValueError):
+        cache.prepare(source)
+
+
+def test_pinned_registry_cache_still_requires_configured_signature_verification(
+    tmp_path, layered_oci_image, monkeypatch
+):
+    image = layered_oci_image
+    cache_dir = tmp_path / "cache"
+    shutil.copytree(image.layout, cache_dir / image.manifest_digest.replace(":", "-"))
+    policy = tmp_path / "policy.json"
+    policy.write_text(json.dumps({"default": [{"type": "reject"}]}))
+
+    def rejected(args, **_kwargs):
+        return subprocess.CompletedProcess(args, 1, stdout="", stderr="signature verification rejected")
+
+    monkeypatch.setattr(subprocess, "run", rejected)
+    with pytest.raises(RuntimeError, match="signature verification rejected"):
+        ImageCache(cache_dir, policy=policy).prepare(RegistryImage(f"registry.invalid/task@{image.manifest_digest}"))
+
+
+def test_registry_index_pin_can_resolve_platform_manifest_online(tmp_path, layered_oci_image, monkeypatch):
+    image = layered_oci_image
+
+    def copy(args, **_kwargs):
+        destination = Path(args[-1].removeprefix("oci:").removesuffix(":image"))
+        shutil.copytree(image.layout, destination)
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", copy)
+    prepared = ImageCache(tmp_path / "cache").prepare(RegistryImage(f"registry.invalid/task@sha256:{'0' * 64}"))
+    assert prepared.manifest_digest == image.manifest_digest
+    assert prepared_image_workdir(prepared) == "/data"
 
 
 def test_identical_contexts_share_a_build_and_content_changes_rebuild(tmp_path, monkeypatch):

@@ -3,16 +3,55 @@
 
 """Behavior tests for the evaluation archive contract shipped in marin-finestore."""
 
+import pytest
 from finestore.eval import (
     ARCHIVE_SAMPLES_TABLE,
     ARCHIVE_STEPS_TABLE,
     EvalSample,
     EvaluationStore,
     SampleKind,
+    SourceArtifact,
     StepRecord,
     sample_from_archive_row,
 )
 from finestore.reader import ReadView
+from finestore.store import DataStore
+from rigging.filesystem.conditional_object import LocalConditionalObject
+
+
+@pytest.mark.parametrize("trajectory_padding", [0, 128 * 1024])
+def test_source_pair_commit_failure_publishes_neither_file_and_retry_commits_metadata(
+    tmp_path, monkeypatch, trajectory_padding
+):
+    root = str(tmp_path / "archive")
+    sources = [
+        SourceArtifact("attempt/result.json", b'{"reward": 1}', "application/json", {"trajectory_present": True}),
+        SourceArtifact("attempt/trajectory.json", b'{"steps": []}' + b" " * trajectory_padding, "application/json"),
+    ]
+    # A native pair larger than the ordinary buffer must retain one commit,
+    # including when the trajectory uses FineStore's chunked blob encoding.
+    with EvaluationStore(DataStore.open(root, writer_id="harbor", max_buffer_bytes=1024)) as store:
+        original = ReadView(root)
+
+        def fail_commit(self, data, *, expected_version):
+            raise OSError("interrupted HEAD publication")
+
+        with monkeypatch.context() as failure:
+            failure.setattr(LocalConditionalObject, "write", fail_commit)
+            with pytest.raises(OSError, match="interrupted HEAD publication"):
+                store.add_source_artifacts(sources)
+        assert ReadView(root).read_blobs(["sources/attempt/result.json", "sources/attempt/trajectory.json"]) == {}
+        store.add_source_artifacts(sources)
+        committed = ReadView(root)
+        assert committed.read_blobs(["sources/attempt/result.json", "sources/attempt/trajectory.json"]) == {
+            "sources/attempt/result.json": sources[0].raw,
+            "sources/attempt/trajectory.json": sources[1].raw,
+        }
+        assert committed.blob_metadata("sources/attempt/result.json")["trajectory_present"] is True
+        assert original.blob_metadata("sources/attempt/result.json") is None
+        store.add_source_artifacts([SourceArtifact("attempt/result.json", b"new", "text/plain")])
+        assert committed.blob_metadata("sources/attempt/result.json")["trajectory_present"] is True
+        assert "trajectory_present" not in ReadView(root).blob_metadata("sources/attempt/result.json")
 
 
 def test_evaluation_store_round_trips_a_normalized_sample(tmp_path):

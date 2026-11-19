@@ -139,13 +139,7 @@ pub fn open_table_remote(
         .unwrap()
         .to_path_buf();
     let object_store = Arc::new(
-        CachedObjectStore::new(
-            Arc::new(provider.clone()),
-            cache_root.clone(),
-            Arc::new(tokio::sync::RwLock::new(())),
-            None,
-        )
-        .unwrap(),
+        CachedObjectStore::new(Arc::new(provider.clone()), cache_root.clone(), None).unwrap(),
     ) as Arc<dyn ObjectStore>;
     let legacy_object_store = Arc::new(LegacyObjectStore::new(&provider));
     let state_store = Arc::new(ObjectTableStateStore::new(object_store.clone()));

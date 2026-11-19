@@ -20,14 +20,12 @@ Tracking issue: https://github.com/marin-community/marin/issues/8765
 
 from __future__ import annotations
 
-import copy
 import logging
 import shutil
 import tempfile
 from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
 
 import click
 import yaml
@@ -55,7 +53,9 @@ from marin.rl.skyrl import (
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import username_segment
+from skyrlrecipe import ContextBudget, RecipePatch, RLEntrypoint, SkyRLRecipe, sections
 
+from experiments.evaluation.evals import resolve_evaluations
 from experiments.evaluation.models import SNOWBALL_SFT_EXPORT_URI, SNOWBALL_VLLM_ARGS
 from experiments.evaluation.pipeline import EvaluationResult
 from experiments.post_training.curriculum_rl.pool import (
@@ -105,7 +105,7 @@ class PolicySpec:
     serve_gen_kwargs: tuple[tuple[str, str], ...] = ()
     # Pre-existing model artifact; None mirrors the HF model via model_step.
     adopted_model: ArtifactStep[LevanterCheckpoint] | None = None
-    trainer_config: dict[str, Any] = field(default_factory=dict)
+    trainer_config: sections.Trainer = field(default_factory=sections.Trainer)
 
 
 QWEN_POLICY = PolicySpec(
@@ -152,12 +152,14 @@ SNOWBALL_POLICY = PolicySpec(
     serve_gen_kwargs=(("skip_special_tokens", "false"), ("repetition_penalty", "1.1")),
     adopted_model=SNOWBALL_MODEL,
     megatron=MegatronGeometry(1, 2, 1, 8, 1),
-    trainer_config={
-        "flash_attn": False,
-        "gradient_checkpointing": True,
-        "offload_optimizer_during_rollouts": True,
-        "policy": {"megatron_config": {"optimizer_checkpoint_sharding_type": "dp_reshardable"}},
-    },
+    trainer_config=sections.Trainer(
+        flash_attn=False,
+        gradient_checkpointing=True,
+        offload_optimizer_during_rollouts=True,
+        policy=sections.Policy(
+            megatron_config=sections.PolicyMegatronConfig(optimizer_checkpoint_sharding_type="dp_reshardable")
+        ),
+    ),
 )
 POLICIES = {policy.label: policy for policy in (QWEN_POLICY, SNOWBALL_POLICY)}
 
@@ -506,91 +508,84 @@ def model_step(version: str) -> ArtifactStep[LevanterCheckpoint]:
     )
 
 
-def rl_config_yaml(preset: ScalePreset, arm: ArmSpec, policy: PolicySpec) -> str:
-    config = yaml.safe_load(
-        f"""\
-entrypoint: standard
-
-context_budget:
-  request_window_tokens: {preset.request_window_tokens}
-  max_new_tokens_per_turn: {preset.max_new_tokens}
-  max_turns: 1
-
-environment:
-  env_class: gsm8k
-
-trainer:
-  strategy: megatron
-  flash_attn: true
-  use_sample_packing: false
-  algorithm:
-    advantage_estimator: grpo
-    use_kl_loss: true
-  epochs: 50
-  max_steps: {preset.max_steps}
-  update_epochs_per_batch: 1
-  eval_batch_size: 256
-  eval_before_train: {str(preset.eval_interval > 0).lower()}
-  eval_interval: {preset.eval_interval}
-  ckpt_interval: {preset.ckpt_interval}
-  hf_save_interval: {preset.max_steps}
-  resume_mode: latest
-  logger: wandb
-  project_name: {WANDB_PROJECT}
-  policy:
-    optimizer_config:
-      lr: 2.0e-6
-      max_grad_norm: 1.0
-generator:
-  backend: vllm
-  model_dtype: bfloat16
-  vllm_attention_backend: FLASH_ATTN
-  gpu_memory_utilization: 0.75
-  enforce_eager: false
-  run_engines_locally: true
-  weight_sync_backend: nccl
-  sampling_params:
-    temperature: 1.0
-    top_p: 1.0
-
-data:
-  kind: parquet
-  train_data: []
-  val_data: []
-"""
-    )
-    trainer = config["trainer"]
-    trainer.update({key: copy.deepcopy(value) for key, value in policy.trainer_config.items() if key != "policy"})
-    trainer["policy"].update(copy.deepcopy(policy.trainer_config.get("policy", {})))
+def training_recipe(preset: ScalePreset, arm: ArmSpec, policy: PolicySpec) -> SkyRLRecipe:
     geometry = asdict(policy.megatron)
-    trainer["policy"]["megatron_config"] = {
-        **geometry,
-        **trainer["policy"].get("megatron_config", {}),
-    }
-    trainer["ref"] = {"megatron_config": geometry.copy()}
-    generator = config["generator"]
-    data = config["data"]
-    trainer["hf_hub_repo_id"] = None
+    recipe = SkyRLRecipe(
+        entrypoint=RLEntrypoint.STANDARD,
+        context_budget=ContextBudget(
+            request_window_tokens=preset.request_window_tokens,
+            max_new_tokens_per_turn=preset.max_new_tokens,
+            max_turns=1,
+        ),
+        environment=sections.Environment(env_class="gsm8k"),
+        trainer=sections.Trainer(
+            strategy="megatron",
+            flash_attn=True,
+            use_sample_packing=False,
+            algorithm=sections.Algorithm(advantage_estimator="grpo", use_kl_loss=True),
+            epochs=50,
+            max_steps=preset.max_steps,
+            update_epochs_per_batch=1,
+            eval_batch_size=256,
+            eval_before_train=preset.eval_interval > 0,
+            eval_interval=preset.eval_interval,
+            ckpt_interval=preset.ckpt_interval,
+            resume_mode="latest",
+            logger="wandb",
+            project_name=WANDB_PROJECT,
+            policy=sections.Policy(
+                optimizer_config=sections.PolicyOptimizerConfig(lr=2.0e-6, max_grad_norm=1.0),
+                megatron_config=sections.PolicyMegatronConfig(**geometry),
+            ),
+            ref=sections.Ref(megatron_config=sections.RefMegatronConfig(**geometry)),
+            hf_hub_repo_id=None,
+        ),
+        generator=sections.Generator(
+            backend="vllm",
+            model_dtype="bfloat16",
+            vllm_attention_backend="FLASH_ATTN",
+            gpu_memory_utilization=0.75,
+            enforce_eager=False,
+            run_engines_locally=True,
+            weight_sync_backend="nccl",
+            sampling_params=sections.SamplingParams(temperature=1.0, top_p=1.0),
+        ),
+        data=sections.Data(kind="parquet", train_data=(), val_data=()),
+    ).merge(RecipePatch(trainer=policy.trainer_config))
     if policy.enable_thinking is not None:
-        generator["chat_template_kwargs"] = {"enable_thinking": policy.enable_thinking}
+        recipe = recipe.merge(
+            RecipePatch(generator=sections.Generator(chat_template_kwargs={"enable_thinking": policy.enable_thinking}))
+        )
     if arm.sampler is not SamplerKind.NAIVE:
-        data.setdefault("sampling", {})["kind"] = arm.sampler.value
+        recipe = recipe.merge(RecipePatch(data=sections.Data(sampling=sections.Sampling(kind=arm.sampler.value))))
     if arm.sampler in GROUP_INFORMATIVE_SAMPLERS:
-        data.setdefault("sampling", {})["weighting"] = "group-informative"
+        recipe = recipe.merge(RecipePatch(data=sections.Data(sampling=sections.Sampling(weighting="group-informative"))))
     if arm.dapo:
-        trainer["algorithm"]["dynamic_sampling"] = {"type": "filter"}
+        recipe = recipe.merge(
+            RecipePatch(
+                trainer=sections.Trainer(
+                    algorithm=sections.Algorithm(dynamic_sampling=sections.DynamicSampling(type="filter"))
+                )
+            )
+        )
     if preset.trainer_tuning is not None:
         tuning = preset.trainer_tuning
-        optimizer = trainer["policy"]["optimizer_config"]
-        optimizer.update(
-            optimizer=tuning.optimizer,
-            lr=tuning.learning_rate,
-            weight_decay=tuning.weight_decay,
+        recipe = recipe.merge(
+            RecipePatch(
+                trainer=sections.Trainer(
+                    policy=sections.Policy(
+                        optimizer_config=sections.PolicyOptimizerConfig(
+                            optimizer=tuning.optimizer, lr=tuning.learning_rate, weight_decay=tuning.weight_decay
+                        ),
+                        megatron_config=sections.PolicyMegatronConfig(
+                            **asdict(tuning.policy_megatron), transformer_config_kwargs=tuning.transformer_config_kwargs
+                        ),
+                    )
+                ),
+                data=sections.Data(sampling=sections.Sampling(reversion_mass=tuning.sampling_reversion_mass)),
+            )
         )
-        trainer["policy"]["megatron_config"].update(asdict(tuning.policy_megatron))
-        trainer["policy"]["megatron_config"]["transformer_config_kwargs"] = tuning.transformer_config_kwargs.copy()
-        data.setdefault("sampling", {})["reversion_mass"] = tuning.sampling_reversion_mass
-    return yaml.safe_dump(config, sort_keys=False)
+    return recipe
 
 
 @dataclass(frozen=True)
@@ -642,7 +637,7 @@ def build_arm(
         SkyRLSpec(
             name=user_owned_name(rl_base_name),
             version=version or resolve_version(rl_base_name, None),
-            config_yaml=rl_config_yaml(preset, spec, policy),
+            config_yaml=yaml.safe_dump(training_recipe(preset, spec, policy).to_skyrl(), sort_keys=False),
             model=ArtifactHfModel(
                 step=model,
                 tokenizer_uri=policy.tokenizer_uri,
@@ -687,7 +682,7 @@ def build_arm(
     evaluation = skyrl_eval_step(
         rl,
         evaluation_model,
-        preset.evals,
+        resolve_evaluations(preset.evals),
         version=evaluation_version,
         accelerator=f"{GPU_VARIANT}x{policy.serve_gpus}",
         submission_cluster=policy.cluster,

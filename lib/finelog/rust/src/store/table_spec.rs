@@ -234,7 +234,9 @@ impl ValidatedTableSpec {
             ));
         }
 
-        let mut spec = view.to_owned_message();
+        let mut spec = view.to_owned_message().map_err(|error| {
+            StatsError::SchemaValidation(format!("failed to materialize table_spec: {error}"))
+        })?;
         normalize_source_layout(&mut spec, &schema)?;
         normalize_artifact_policy(&mut spec, &schema)?;
         let (cache_policy, l0_mode) = normalize_operating_policy(&mut spec, request_policy)?;

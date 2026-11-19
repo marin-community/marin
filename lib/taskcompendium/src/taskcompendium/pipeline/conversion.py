@@ -123,6 +123,8 @@ def normalization_columns(
         "source_row": source.row,
         "original_path": original_path,
         "task_json": task.model_dump_json() if task is not None else None,
+        "tags": list(task.tags) if task is not None else [],
+        "labels": task.labels if task is not None else {},
         "normalization_kind": rejection.kind.value if rejection is not None else None,
         "normalization_reason": rejection.reason if rejection is not None else None,
         "normalization_detail": rejection.detail if rejection is not None else None,
