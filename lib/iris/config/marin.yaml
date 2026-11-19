@@ -354,6 +354,11 @@ user_budgets:
       - morrisy
     budget_limit: 75000
     max_band: PRIORITY_BAND_INTERACTIVE
+  # Loom's agentic job submissions, such as Marin Belay's speedruns: standard budget, capped at
+  # PRIORITY_BAND_INTERACTIVE.
+  - user_ids: [loom]
+    budget_limit: 75000
+    max_band: PRIORITY_BAND_INTERACTIVE
   # Capped at PRIORITY_BAND_BATCH; higher-band submissions are rejected.
   - user_ids: [principal:human-080, wg0420]
     budget_limit: 0
