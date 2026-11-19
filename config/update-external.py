@@ -25,6 +25,8 @@ ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT / "lib" / "marin" / "src"))
 from marin.inference.vllm_release_schema import (  # noqa: E402
     GPU_RELEASE_REPOSITORY,
+    VllmGpuRelease,
+    VllmGpuWheel,
     gpu_release_url_prefix,
     validate_vllm_gpu_release,
 )
@@ -84,24 +86,6 @@ class DependencyUpdate:
     previous: LockedDependency
     current: LockedDependency
     commits: tuple[UpstreamCommit, ...]
-
-
-@dataclass(frozen=True)
-class VllmGpuWheel:
-    architecture: str
-    sm_targets: tuple[str, ...]
-    url: str
-    sha256: str
-
-
-@dataclass(frozen=True)
-class VllmGpuRelease:
-    release_tag: str
-    source_commit: str
-    version: str
-    torch_backend: str
-    torch_version: str
-    wheels: tuple[VllmGpuWheel, ...]
 
 
 EXTERNAL_PROJECTS: tuple[ExternalProject, ...] = ()
@@ -196,8 +180,7 @@ def locked_dependency(project: ExternalProject) -> LockedDependency:
 def load_vllm_gpu_release(path: Path) -> VllmGpuRelease:
     """Load and validate the promoted vLLM GPU release."""
     config = tomllib.loads(path.read_text())
-    validate_vllm_gpu_release(config, path)
-    return VllmGpuRelease(
+    release = VllmGpuRelease(
         release_tag=config["release_tag"],
         source_commit=config["source_commit"],
         version=config["version"],
@@ -213,6 +196,8 @@ def load_vllm_gpu_release(path: Path) -> VllmGpuRelease:
             for wheel in config["wheels"]
         ),
     )
+    validate_vllm_gpu_release(release, path)
+    return release
 
 
 def render_gpu_release_toml(manifest: dict) -> str:
@@ -331,6 +316,8 @@ come from the root ``uv.lock``.
 from dataclasses import dataclass
 from types import MappingProxyType
 
+from marin.inference.vllm_release_schema import VllmGpuRelease, VllmGpuWheel
+
 
 @dataclass(frozen=True)
 class ExternalDependency:
@@ -349,28 +336,6 @@ class ExternalDependency:
         if extras:
             distribution = f"{{distribution}}[{{','.join(extras)}}]"
         return f"{{distribution}} @ git+{{self.repository}}@{{self.commit}}"
-
-
-@dataclass(frozen=True)
-class VllmGpuWheel:
-    """One architecture-specific wheel from a promoted vLLM GPU release."""
-
-    architecture: str
-    sm_targets: tuple[str, ...]
-    url: str
-    sha256: str
-
-
-@dataclass(frozen=True)
-class VllmGpuRelease:
-    """Immutable artifacts and ABI for a promoted vLLM GPU release."""
-
-    release_tag: str
-    source_commit: str
-    version: str
-    torch_backend: str
-    torch_version: str
-    wheels: tuple[VllmGpuWheel, ...]
 
 
 CUDA_TOOLCHAIN_VERSION_BY_BACKEND = MappingProxyType(

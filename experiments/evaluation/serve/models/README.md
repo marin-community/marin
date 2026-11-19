@@ -151,7 +151,7 @@ uv run marin-serve iris Qwen/Qwen3-0.6B --cluster cw-us-east-08a --gpu GB200x4 \
   --vllm-arg=--enable-prefix-caching
 ```
 
-`--vllm-release` accepts [VllmGpuRelease](../../../../lib/marin/src/marin/external_dependencies.py)
+`--vllm-release` accepts [VllmGpuRelease](../../../../lib/marin/src/marin/inference/vllm_release_schema.py)
 JSON; omitting it uses the normal runtime.
 The isolated `vllm-router==0.1.16` process uses vLLM's global internal DP frontend;
 external/hybrid balancing is unsupported. `/metrics` reports vLLM worker counters.

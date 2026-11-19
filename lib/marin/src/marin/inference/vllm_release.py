@@ -20,7 +20,7 @@ def load_vllm_gpu_release(path: Path | None) -> VllmGpuRelease | None:
         return None
     payload = json.loads(path.read_text())
     release = draccus.decode(VllmGpuRelease, payload)
-    validate_vllm_gpu_release(payload, path)
+    validate_vllm_gpu_release(release, path)
     return release
 
 
