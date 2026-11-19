@@ -440,7 +440,7 @@ rebase conflicts and rerun. Advisory review remains required for non-trivial
 changes. Report the landed SHA to the coordinator. Never force-push or push to
 `main`. This rule ends when CI resumes.
 
-Ruling 60 (2026-11-19) temporarily permits named missing/stale serving-projection
+Ruling 60 (2026-11-19) temporarily permits missing/stale serving-projection
 waivers while the preview load and coordinated refresh complete. Use the explicit
 waiver file for a landing:
 
@@ -449,15 +449,32 @@ atlas-push --waivers experiments/post_training/task_curation/declaration-project
   --test "<affected test command>" --who "<session id>" --what "<change summary>"
 ```
 
-Each entry names a source and projection and records
+The rule evaluates the gaps and per-source declaration drift in the gated audit
+run, so sources and projections added after the rule file was written are covered.
+Only missing/stale serving projections on sources with zero declaration drift
+qualify. Every applied exception records
 `preview projection lag; declaration drift 0; ruling 2026-11-19`. The file binds
-these exceptions to the preview applet and the current/frozen catalog load IDs.
-Selecting the new refresh load automatically expires them; they cannot waive
-production checks. Declaration drift, query errors, conflicting contract summaries,
-and every other non-projection failure still block. The audit records each applied
-`source:projection` waiver. Without `--waivers`, the audit remains strict. After
-the refresh seals, run `python -m
-experiments.post_training.task_curation.declaration_audit` without that option.
+this rule to the preview applet. Each audit resolves its current selected load;
+load changes during an unfinished refresh do not expire waivers. Declaration
+drift, query errors, validation failures and conflicting contract summaries still
+block. Every applied pair, state and reason is included in the gated audit JSON
+and embedded in the atlas-push landing receipt.
+
+After the initial catalog import has sealed and the subsequent declaration,
+contract, and curriculum refresh is complete, finalize that refresh with a strict
+audit:
+
+```bash
+uv run python -m experiments.post_training.task_curation.declaration_audit \
+  --seal-refresh --output /tmp/preview-refresh-seal.json
+```
+
+`--seal-refresh` cannot be combined with `--waivers`. Only a passing strict audit
+records the permanent `atlas_projection_refresh_seals` event and its full audit
+receipt. The event expires all ruling-60 waivers for that preview applet, including
+after later load changes or rollbacks. Failed strict checks record no seal;
+ordinary strict diagnostics without `--seal-refresh` remain read-only. Production
+cannot be sealed by the preview-scoped rule.
 
 ## Atlas workflows
 

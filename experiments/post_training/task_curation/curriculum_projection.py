@@ -52,6 +52,7 @@ PROJECTION_VERSION = "2026.11.13.1"
 METADATA_FIELDS = frozenset(
     {
         "data_restriction",
+        "license_receipt",
         "grading_environment",
         "lexical_contamination",
         "quality_result",

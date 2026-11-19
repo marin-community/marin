@@ -1945,7 +1945,8 @@ def test_migrate_appends_audit_counts_to_the_retained_cohort_view(database_url: 
                 for row in connection.execute(
                     text(
                         "SELECT column_name FROM information_schema.columns "
-                        "WHERE table_name = 'atlas_cohort_summary' ORDER BY ordinal_position"
+                        "WHERE table_schema=current_schema() AND table_name = 'atlas_cohort_summary' "
+                        "ORDER BY ordinal_position"
                     )
                 ).mappings()
             ]

@@ -130,8 +130,8 @@ function render(data, sourceId, auxiliary) {
     $('labels').append(node('span', 'SAMPLE pin-stale', 'chip quality-unassessed'));
   }
   const sections = [];
-  if (data.data_restriction === 'private_always' || d.data_restriction === 'private_always') {
-    $('sections').replaceChildren(card('Private data', [], 'Private data: content is not displayed.'));
+  if (contentWithheld(data)) {
+    $('sections').replaceChildren(card('Content withheld', [], contentWithheldMessage(data)));
     return;
   }
   const difficulty = card('Difficulty', [
@@ -339,7 +339,7 @@ if (!window.AtlasSourceBootstrap) {
     sourceJson(`api/source?${new URLSearchParams({source_id: sourceId})}`, SOURCE_DEADLINE_MS)
       .then(data => {
         // Restricted sources never request supplementary content or task reviews.
-        const auxiliary = data.data_restriction === 'private_always' || data.declaration.data_restriction === 'private_always' ? {} : {
+        const auxiliary = contentWithheld(data) ? {} : {
           progress: sourceJson('measurements/content-progress.json'),
           inventory: sourceJson('measurements/oracle-inventory.json'),
           labels: sourceJson('api/source-labels'),

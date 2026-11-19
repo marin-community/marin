@@ -34,12 +34,15 @@ from experiments.post_training.task_curation.derived_contract_census import (
     DerivedContractReceipt,
 )
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
-from infra.marina.apps.rl_data_catalog.server.derived_contract import INPUT_FIELDS
+from infra.marina.apps.rl_data_catalog.server.contract_selection import INPUT_FIELDS, select_contract_receipts
+from infra.marina.apps.rl_data_catalog.server.schema import PROJECTION_REFRESH_SEAL_SQL
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 LOGGER = logging.getLogger(__name__)
 
 DECLARATION_PIN_PAGE_SIZE = 50
+PROJECTION_REFRESH_SEAL_NAME = "ruling-60-2026-11-19"
+PROJECTION_WAIVER_CONFIG = Path(__file__).with_name("declaration-projection-waivers.json")
 PROJECTION_WAIVER_REASON = "preview projection lag; declaration drift 0; ruling 2026-11-19"
 
 CURRICULUM_DECLARATION_FIELDS = ("dataset_id", "dataset_revision", "pipeline")
@@ -95,6 +98,7 @@ class CatalogSelection:
     marina_url: str
     applet_id: str
     load_id: str
+    refresh_sealed: bool
 
 
 class ProjectionWaiver(BaseModel):
@@ -102,7 +106,8 @@ class ProjectionWaiver(BaseModel):
 
     source_id: str = Field(min_length=1)
     projection: Literal["derived-contract", "curriculum", "served-catalog"]
-    reason: Literal["preview projection lag; declaration drift 0; ruling 2026-11-19"]
+    state: Literal["missing", "stale-pin"]
+    reason: str
 
     @property
     def key(self) -> str:
@@ -110,51 +115,114 @@ class ProjectionWaiver(BaseModel):
 
 
 class ProjectionWaivers(BaseModel):
-    """Landing-only exceptions that expire when the coordinated refresh selects a new load."""
+    """Preview exceptions that expire only after a successful strict refresh seal."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     marina_url: str
     applet_id: str
-    valid_catalog_load_ids: tuple[str, ...] = Field(min_length=1)
-    expires_when: Literal["preview_refresh_seals"] = "preview_refresh_seals"
-    waivers: tuple[ProjectionWaiver, ...]
+    expires_when: Literal["preview_refresh_strict_audit_passes"] = "preview_refresh_strict_audit_passes"
+    rule: Literal["stale-or-missing-serving-projection-without-declaration-drift"]
+    reason: Literal["preview projection lag; declaration drift 0; ruling 2026-11-19"]
 
     def active(self, selection: CatalogSelection) -> bool:
         return (
             self.marina_url == selection.marina_url
             and self.applet_id == selection.applet_id
-            and selection.load_id in self.valid_catalog_load_ids
+            and not selection.refresh_sealed
         )
 
 
+@dataclass(frozen=True)
+class ProjectionWaiverResult:
+    blocking: list[ProjectionGap]
+    waived: list[ProjectionWaiver]
+    notes: list[str]
+
+
 def apply_projection_waivers(
-    gaps: list[ProjectionGap], waivers: ProjectionWaivers | None, selection: CatalogSelection | None
-) -> tuple[list[ProjectionGap], list[str]]:
-    """Apply only named missing/stale projections while the frozen preview scope remains active."""
+    gaps: list[ProjectionGap],
+    waivers: ProjectionWaivers | None,
+    selection: CatalogSelection | None,
+    drift_sources: frozenset[str] | None,
+) -> ProjectionWaiverResult:
+    """Evaluate the temporary rule against gaps and declaration drift from this audit run."""
     if waivers is None:
-        return gaps, []
-    if selection is None:
-        raise ValueError("Projection waivers require the observed catalog selection")
+        return ProjectionWaiverResult(gaps, [], [])
+    if selection is None or drift_sources is None:
+        raise ValueError("Projection waiver rules require catalog selection and declaration drift evidence")
     if not waivers.active(selection):
-        return gaps, ["Projection waivers expired or target differs; all projection checks remain blocking"]
-    named = {waiver.key: waiver for waiver in waivers.waivers}
-    blocking, notes = [], []
+        return ProjectionWaiverResult(
+            gaps, [], ["Projection waivers expired or target differs; all projection checks remain blocking"]
+        )
+    blocking, waived, notes = [], [], []
     for gap in gaps:
-        key = f"{gap.source_id}:{gap.projection}"
-        if key in named and gap.state in {"missing", "stale-pin"}:
-            notes.append(f"waived {key}/{gap.state}: {named[key].reason}; expires when preview refresh seals")
+        if gap.source_id not in drift_sources and gap.state in {"missing", "stale-pin"}:
+            record = ProjectionWaiver(
+                source_id=gap.source_id,
+                projection=gap.projection,
+                state=gap.state,
+                reason=waivers.reason,
+            )
+            waived.append(record)
+            notes.append(f"waived {record.key}/{gap.state}: {record.reason}; expires when preview refresh seals")
         else:
             blocking.append(gap)
-    return blocking, notes
+    return ProjectionWaiverResult(blocking, waived, notes)
 
 
 def atlas_catalog_selection() -> CatalogSelection:
     marina_url, applet_id = target_applet()
-    rows = atlas_applet_query()("SELECT load_id FROM atlas_current WHERE name='latest'", {})["rows"]
+    query = atlas_applet_query()
+    rows = query(
+        "SELECT load_id, to_regclass(:seal_table) IS NOT NULL AS has_seal_table "
+        "FROM atlas_current WHERE name='latest'",
+        {"seal_table": "atlas_projection_refresh_seals"},
+    )["rows"]
     if len(rows) != 1 or not rows[0]["load_id"]:
         raise ValueError("The served catalog has no selected load")
-    return CatalogSelection(marina_url, applet_id, rows[0]["load_id"])
+    # The event table is created by finalization; absence before its first event is unsealed.
+    sealed = False
+    if rows[0]["has_seal_table"]:
+        sealed = query(
+            "SELECT EXISTS(SELECT 1 FROM atlas_projection_refresh_seals WHERE name=:name) AS sealed",
+            {"name": PROJECTION_REFRESH_SEAL_NAME},
+        )["rows"][0]["sealed"]
+    return CatalogSelection(marina_url, applet_id, rows[0]["load_id"], refresh_sealed=sealed)
+
+
+def record_projection_refresh_seal(
+    selection: CatalogSelection, scope: ProjectionWaivers, audit: dict[str, Any]
+) -> CatalogSelection:
+    """Persist the one-way refresh event only for a successful strict preview audit."""
+    if (selection.marina_url, selection.applet_id) != (scope.marina_url, scope.applet_id):
+        raise ValueError("Refresh seals are restricted to the preview applet")
+    if (
+        audit["state"] != "ok"
+        or audit["findings"]
+        or audit["projection_waivers"]
+        or audit["waived_projection_count"] != 0
+        or audit["waiver_scope"] is not None
+        or audit["declaration_drift_sources"]
+        or audit["catalog_load_id"] != selection.load_id
+    ):
+        raise ValueError("Refresh sealing requires a passing strict audit without waivers")
+    query = atlas_applet_query()
+    query(PROJECTION_REFRESH_SEAL_SQL, {})
+    query(
+        "INSERT INTO atlas_projection_refresh_seals(name,load_id,audit) "
+        "SELECT :name,load_id,CAST(:audit AS JSONB) FROM atlas_current "
+        "WHERE name='latest' AND load_id=:load_id ON CONFLICT(name) DO NOTHING",
+        {
+            "name": PROJECTION_REFRESH_SEAL_NAME,
+            "load_id": selection.load_id,
+            "audit": json.dumps({**audit, "refresh_sealed": True}),
+        },
+    )
+    observed = atlas_catalog_selection()
+    if observed.load_id != selection.load_id or not observed.refresh_sealed:
+        raise ValueError("Catalog selection changed during refresh sealing; retry")
+    return observed
 
 
 def contract_receipt_map(receipts: Iterable[DerivedContractReceipt]) -> dict[str, list[DerivedContractReceipt]]:
@@ -340,15 +408,19 @@ def publication_preflight(
     served_pins: dict[str, DeclarationPin] | None = None,
     *,
     selection: CatalogSelection | None = None,
+    drift_sources: frozenset[str] | None = None,
 ) -> list[str]:
     """Refuse a preview or production release while a current pin lacks either projection.
 
-    Waivers name individual source:projection pairs, record the ruling reason, and expire
-    outside their frozen preview catalog selections. Returns notes including each applied waiver.
+    The rule requires current declaration drift evidence and expires outside its frozen
+    preview selections. Returns notes recording each source:projection pair actually waived.
     """
     gaps, notes = projection_gaps(declarations, contract_receipts, curriculum_rows, served_pins=served_pins)
-    blocking, waiver_notes = apply_projection_waivers(gaps, waivers, selection)
-    notes.extend(waiver_notes)
+    result = apply_projection_waivers(gaps, waivers, selection, drift_sources)
+    if waivers is not None and drift_sources:
+        raise ValueError("Declaration drift blocks publication: " + ", ".join(sorted(drift_sources)))
+    blocking = result.blocking
+    notes.extend(result.notes)
     if blocking:
         counts: Counter = Counter((gap.projection, gap.state) for gap in blocking)
         detail = ", ".join(f"{projection}.{state}={count}" for (projection, state), count in sorted(counts.items()))
@@ -376,13 +448,19 @@ def atlas_curriculum_rows() -> dict[str, dict]:
 
 
 def atlas_contract_receipts() -> dict[str, list[DerivedContractReceipt]]:
-    """Read every archived receipt; publication requires evidence in the served applet."""
+    """Read the archive and select only explicitly superseded, input-bound corrections."""
     result = atlas_applet_query()("SELECT source_id, receipt FROM atlas_derived_contracts ORDER BY receipt_id", {})
+    # Select exact archived JSON identities before typed parsing adds legacy defaults.
+    populations = defaultdict(list)
+    for row in result["rows"]:
+        receipt = row["receipt"] if isinstance(row["receipt"], dict) else json.loads(row["receipt"])
+        source = canonical_source_id(row["source_id"])
+        identity = (source, *(receipt["input"][key] for key in INPUT_FIELDS))
+        populations[identity].append(receipt)
     return contract_receipt_map(
-        DerivedContractReceipt.model_validate(
-            row["receipt"] if isinstance(row["receipt"], dict) else json.loads(row["receipt"])
-        )
-        for row in result["rows"]
+        DerivedContractReceipt.model_validate(receipt)
+        for identity, receipts in populations.items()
+        for receipt in select_contract_receipts(identity[0], receipts)
     )
 
 
@@ -500,8 +578,31 @@ def main() -> None:
     print(json.dumps(report, indent=2))
     if args.preflight:
         waivers = ProjectionWaivers.model_validate_json(args.waivers.read_bytes()) if args.waivers else None
+        drift_sources = None
+        if waivers is not None:
+            # The declaration audit imports this module; import here to break that cycle.
+            from experiments.post_training.task_curation.declaration_audit import (  # noqa: PLC0415
+                audit_declarations,
+                canonical_layer,
+            )
+            from experiments.post_training.task_curation.sources import configured_sources  # noqa: PLC0415
+
+            layer, families, releases, _ = canonical_layer()
+            declaration_audit = audit_declarations(
+                families,
+                layer=layer,
+                releases=releases,
+                configured_ids=frozenset(source.info.id for source in configured_sources()),
+            )
+            drift_sources = declaration_audit.drift_sources
         preflight_notes = publication_preflight(
-            pins, contracts, curriculum_rows, waivers, served_pins=served, selection=selection
+            pins,
+            contracts,
+            curriculum_rows,
+            waivers,
+            served_pins=served,
+            selection=selection,
+            drift_sources=drift_sources,
         )
         for note in preflight_notes:
             LOGGER.info("%s", note)

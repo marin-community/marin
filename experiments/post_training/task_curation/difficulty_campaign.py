@@ -9,7 +9,7 @@ import json
 import logging
 import os
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from contextlib import contextmanager, nullcontext
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -242,19 +242,13 @@ def judge_serving(tier: JudgeTier | None, priority: int):
         yield serving.base_url, serving.model, serving.api_key or "EMPTY", [str(job.job_id) for job in session.jobs]
 
 
-def campaign_judge_tier(prepared: list[PreparedSource]) -> JudgeTier | None:
-    """The single judge tier this run must host, when its judged sources need one.
+def queue_judge_tier(judged_models: Iterable[str]) -> JudgeTier | None:
+    """The single hosted judge tier a queue's judge models require, when any.
 
-    A run version serves exactly one judge route. Sources whose judge is the GLM
-    route share the relay; sources declaring a hosted tier model require that
-    tier, and mixing routes inside one queue is a split-the-queue error.
+    A run version serves exactly one judge route. Models on the shared GLM
+    route share the relay; models declaring a hosted tier require that tier,
+    and mixing hosted tiers inside one queue is a split-the-queue error.
     """
-    judged_models = {
-        task.judge_model
-        for source in prepared
-        for task in source.tasks
-        if task.judge_model is not None and task.reason is None
-    }
     tiers = {
         tier
         for tier, definition in JUDGE_TIERS.items()
@@ -268,6 +262,17 @@ def campaign_judge_tier(prepared: list[PreparedSource]) -> JudgeTier | None:
     if tier not in JUDGE_TIER_SERVING:
         raise ValueError(f"Difficulty hosts no model configuration for judge tier {tier.value}")
     return tier
+
+
+def campaign_judge_tier(prepared: list[PreparedSource]) -> JudgeTier | None:
+    """The single judge tier this run must host, when its judged sources need one."""
+    judged_models = {
+        task.judge_model
+        for source in prepared
+        for task in source.tasks
+        if task.judge_model is not None and task.reason is None
+    }
+    return queue_judge_tier(judged_models)
 
 
 def run_trial_worker(

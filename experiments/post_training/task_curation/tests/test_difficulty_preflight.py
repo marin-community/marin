@@ -5,8 +5,9 @@
 
 The preflight exists because hosted-v13 was submitted and only died later in
 the campaign's first prepare call. These tests pin the refusal behavior: a
-mismatched frozen receipt, a changed queue, a wrong serving digest or an
-unsealed parent each refuse with the reason named.
+mismatched frozen receipt, a changed queue, a wrong serving digest, an
+unsealed parent, or a queue mixing hosted judge tiers each refuse with the
+reason named.
 """
 
 import json
@@ -17,7 +18,8 @@ from finestore.rl.difficulty import SampleTask
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.models import TaskSpec
 
-from experiments.post_training.task_curation import difficulty_preflight
+from experiments.post_training.glm import GLM_MODEL
+from experiments.post_training.task_curation import difficulty_preflight, difficulty_prepared
 from experiments.post_training.task_curation.difficulty_contracts import (
     CONTRACT_VINTAGE_ABSENT_OMITTED,
     difficulty_task_contract,
@@ -213,3 +215,82 @@ def test_preflight_receipt_stage_only_skips_staging(tmp_path, monkeypatch, diffi
     monkeypatch.setattr(difficulty_preflight, "prepare_source", unexpected_prepare)
     result = preflight_source(source)
     assert result.error is None
+
+
+def _prepared_source(source, judge_model: str | None):
+    """A prepared source whose single staged task declares the given judge."""
+    return difficulty_prepared.PreparedSource(
+        sample=source.sample,
+        sample_receipt=source.sample_receipt,
+        tasks=[
+            difficulty_prepared.PreparedTask(
+                task_id=source.sample.tasks[0].task_id,
+                runtime_sha256="0" * 64,
+                path="fixture/task",
+                workload="task_spec",
+                backend=source.backend,
+                reason=None,
+                judge_model=judge_model,
+            )
+        ],
+    )
+
+
+def test_preflight_refuses_a_queue_mixing_judge_tiers(tmp_path, monkeypatch, difficulty_source):
+    """large-v21 spent a submission plus its prepare cost before the campaign's
+    own tier check fired inside Iris. Staging knows every source's declared
+    judge, so a queue mixing LIGHT and MEDIUM judges refuses before any submit."""
+    task = _task()
+    light_source = difficulty_source(task)
+    medium_source = difficulty_source(task)
+    prepared = {
+        id(light_source): _prepared_source(light_source, "openai/gpt-oss-120b"),
+        id(medium_source): _prepared_source(medium_source, "MiniMaxAI/MiniMax-M3-MXFP8"),
+    }
+    monkeypatch.setattr(difficulty_preflight, "load_queue_sources", lambda *a, **k: [light_source, medium_source])
+    monkeypatch.setattr(difficulty_preflight, "panel_task_runtimes", lambda panel: ([task], [{}]))
+    monkeypatch.setattr(difficulty_preflight, "prepare_source", lambda source, root: prepared[id(source)])
+    with pytest.raises(ValueError, match="split the source queue"):
+        preflight_continuation(QUEUE, QUEUE_SHA, None, stage_root=tmp_path / "tasks")
+
+
+def test_preflight_records_a_single_judge_tier(tmp_path, monkeypatch, difficulty_source):
+    """A queue whose staged sources all declare one hosted tier passes and the
+    receipt names the tier the campaign must host."""
+    task = _task()
+    source = difficulty_source(task)
+    monkeypatch.setattr(difficulty_preflight, "load_queue_sources", lambda *a, **k: [source])
+    monkeypatch.setattr(difficulty_preflight, "panel_task_runtimes", lambda panel: ([task], [{}]))
+    monkeypatch.setattr(
+        difficulty_preflight,
+        "prepare_source",
+        lambda source, root: _prepared_source(source, "MiniMaxAI/MiniMax-M3-MXFP8"),
+    )
+    receipt = preflight_continuation(QUEUE, QUEUE_SHA, None, stage_root=tmp_path / "tasks")
+    assert receipt["judge_tier"] == "MEDIUM"
+    assert receipt["failures"] == []
+
+
+def test_preflight_records_the_relay_route_without_a_hosted_tier(tmp_path, monkeypatch, difficulty_source):
+    """GLM-judged and unjudged sources share the relay route; the receipt names it."""
+    task = _task()
+    source = difficulty_source(task)
+    monkeypatch.setattr(difficulty_preflight, "load_queue_sources", lambda *a, **k: [source])
+    monkeypatch.setattr(difficulty_preflight, "panel_task_runtimes", lambda panel: ([task], [{}]))
+    monkeypatch.setattr(
+        difficulty_preflight,
+        "prepare_source",
+        lambda source, root: _prepared_source(source, GLM_MODEL),
+    )
+    receipt = preflight_continuation(QUEUE, QUEUE_SHA, None, stage_root=tmp_path / "tasks")
+    assert receipt["judge_tier"] == "relay"
+
+
+def test_preflight_skips_the_tier_gate_without_staging(tmp_path, monkeypatch, difficulty_source):
+    """Receipt-stage-only mode reads no prepared tasks, so it records no tier."""
+    task = _task()
+    source = difficulty_source(task)
+    monkeypatch.setattr(difficulty_preflight, "load_queue_sources", lambda *a, **k: [source])
+    monkeypatch.setattr(difficulty_preflight, "panel_task_runtimes", lambda panel: ([task], [{}]))
+    receipt = preflight_continuation(QUEUE, QUEUE_SHA, None)
+    assert "judge_tier" not in receipt

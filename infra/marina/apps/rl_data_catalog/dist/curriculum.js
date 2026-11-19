@@ -388,6 +388,7 @@ async function openDetail(task) {
   $('task-detail').scrollTop = 0;
   try {
     const {task: detail} = await json(`api/curriculum/task?${params}`);
+    if (contentWithheld(detail)) { $('detail-status').textContent = contentWithheldMessage(detail); return; }
     $('detail-description').textContent = detail.description || detail.reason;
     $('detail-instructions').textContent = detail.task_preview;
     $('preview-note').textContent = detail.preview_truncated ? `Preview: ${number.format(detail.task_preview.length)} of ${number.format(detail.instruction_characters)} instruction characters.` : `${number.format(detail.instruction_characters)} instruction characters.`;

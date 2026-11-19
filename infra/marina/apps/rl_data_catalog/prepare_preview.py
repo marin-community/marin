@@ -41,6 +41,7 @@ RELOCATED_SERVER_FILES = (
     "server/app.py",
     "server/rollouts.py",
     "server/licensing.py",
+    "server/content_access.py",
     "server/admission.py",
     "server/duplicate_folding.py",
     "server/curriculum.py",

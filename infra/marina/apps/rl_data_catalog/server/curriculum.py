@@ -17,10 +17,10 @@ from finestore.rl.status_taxonomy import DataRestriction
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
+from .content_access import content_is_withheld, content_marker
 from .restrictions import (
     PRIVATE_TEXT_MARKER,
     declaration_restriction,
-    private_content_marker,
 )
 from .source_areas import SOURCE_AREA_VERSION
 from .source_identity import canonical_source_id, original_source_id
@@ -325,18 +325,50 @@ def task_response(
     for row in rows[:limit]:
         source = canonical_source_id(row["source_id"])
         restriction = restrictions.get(source)
-        private = restriction is DataRestriction.PRIVATE_ALWAYS
+        withheld = (
+            content_is_withheld(row["source_declaration"])
+            if row.get("source_declaration") is not None
+            else restriction is DataRestriction.PRIVATE_ALWAYS
+        )
         served = {key: value for key, value in row.items() if key != "source_declaration"}
         if restriction is not None:
             served["data_restriction"] = restriction.value
-        if private:
-            served["task_preview"] = PRIVATE_TEXT_MARKER
+        if withheld:
+            served["task_preview"] = (
+                content_marker(row["source_declaration"])["marker"]
+                if row.get("source_declaration") is not None
+                else PRIVATE_TEXT_MARKER
+            )
         tasks.append({**served, "source_id": source})
     return {
         "release_id": metadata["release_id"],
         "tasks": tasks,
         "next_cursor": next_cursor,
     }
+
+
+def current_content_policies(connection: Connection, source_ids: list[str]) -> dict[str, dict[str, Any]]:
+    """Return current policies that withhold historical sample content."""
+    ids = sorted({canonical_source_id(source_id) for source_id in source_ids})
+    if not ids:
+        return {}
+    policies = {
+        canonical_source_id(row["id"]): row["declaration"]
+        for row in connection.execute(
+            text(
+                "SELECT s.id,jsonb_build_object('id',s.id,'dataset_id',s.declaration->'dataset_id',"
+                "'license_receipt',s.declaration->'license_receipt',"
+                "'exclusion_claims',s.declaration->'exclusion_claims') || "
+                "CASE WHEN s.declaration ? 'data_restriction' "
+                "THEN jsonb_build_object('data_restriction',s.declaration->'data_restriction') "
+                "ELSE '{}'::jsonb END AS declaration "
+                "FROM atlas_sources s JOIN atlas_current c USING(load_id) WHERE c.name='latest' "
+                "AND s.id IN (SELECT value FROM jsonb_array_elements_text(CAST(:ids AS JSONB)))"
+            ),
+            {"ids": json.dumps(ids)},
+        ).mappings()
+    }
+    return {source: declaration for source, declaration in policies.items() if content_is_withheld(declaration)}
 
 
 def source_restrictions(rows: list[dict[str, Any]]) -> dict[str, DataRestriction]:
@@ -600,6 +632,14 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
             metadata = loaded_release(connection, filters.release)
             params = task_parameters(metadata, filters, subject_id, node_id, scope, outcome, cursor, limit, sample_pool)
             rows = [dict(row) for row in connection.execute(text(TASKS_SQL), params).mappings()]
+            policies = current_content_policies(connection, [row["source_id"] for row in rows])
+            rows = [
+                {
+                    **row,
+                    "source_declaration": policies.get(canonical_source_id(row["source_id"]), row["source_declaration"]),
+                }
+                for row in rows
+            ]
         return task_response(metadata, rows, limit, source_restrictions(rows))
 
     @api.get("/curriculum/task")
@@ -610,7 +650,8 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
                 connection.execute(
                     text(
                         """
-                SELECT t.detail, s.alignment->>'intended_use' AS intended_use, s.declaration AS source_declaration
+                SELECT t.detail, s.alignment->>'intended_use' AS intended_use,
+                    s.declaration || jsonb_build_object('id',s.source_id) AS source_declaration
                 FROM curriculum_tasks t JOIN curriculum_sources s USING(load_id, source_id)
                 WHERE t.load_id=:load_id AND t.source_id IN (:source_id, :original_source_id) AND t.task_id=:task_id
             """
@@ -625,10 +666,16 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
                 .mappings()
                 .one_or_none()
             )
+            if detail is not None:
+                policies = current_content_policies(connection, [source_id])
+                detail = {
+                    **detail,
+                    "source_declaration": policies.get(canonical_source_id(source_id), detail["source_declaration"]),
+                }
         if detail is None:
             raise HTTPException(404, "Task is outside the loaded alignment population")
-        if declaration_restriction(detail["source_declaration"]) is DataRestriction.PRIVATE_ALWAYS:
-            return {"release_id": metadata["release_id"], "task": private_content_marker()}
+        if content_is_withheld(detail["source_declaration"]):
+            return {"release_id": metadata["release_id"], "task": content_marker(detail["source_declaration"])}
         return {
             "release_id": metadata["release_id"],
             "task": {

@@ -41,7 +41,7 @@ from finestore.rl.curation import (
 )
 from finestore.rl.status_taxonomy import DataRestriction
 from finestore.store import DataStore
-from marina.applets import AppletServices, validate_query
+from marina.applets import MAX_QUERY_RESPONSE_BYTES, AppletServices, validate_query
 from marina.client import AppletQuery
 from marina.testing import test_database
 from rigging.server_auth import VerifiedIdentity, identity_scope
@@ -60,10 +60,13 @@ from taskcompendium.backend_requirements import (
 from taskcompendium.source_fingerprints import SourceIdentitySurvey
 
 from infra.marina.apps.rl_data_catalog.load import load_catalog as load_surveyed_catalog
-from infra.marina.apps.rl_data_catalog.load_curriculum import load_curriculum
-from infra.marina.apps.rl_data_catalog.server import restriction_registry
+from infra.marina.apps.rl_data_catalog.load_curriculum import atlas_source_restrictions, load_curriculum
+from infra.marina.apps.rl_data_catalog.load_rollouts import stage_rollouts
+from infra.marina.apps.rl_data_catalog.server import licensing, restriction_registry
 from infra.marina.apps.rl_data_catalog.server.app import create_api, migrate
+from infra.marina.apps.rl_data_catalog.server.evidence_content import pack_content
 from infra.marina.apps.rl_data_catalog.server.restrictions import (
+    declaration_restriction,
     require_public_data,
     restriction_overrides,
 )
@@ -81,6 +84,7 @@ from infra.marina.apps.rl_data_catalog.tests.private_tier_fixtures import (
 
 OPEN_NOTES = "open-source-notes-served-while-open"
 OPEN_PROMPT = "Count public objects and report the total."
+ABSENT_TAG = "absent"
 
 
 def catalog_backend_map(catalog: CurationCatalog) -> BackendSurvey:
@@ -690,10 +694,6 @@ def test_private_rollout_routes_never_read_attempt_content(catalog_database, cat
     stage_private_catalog(root)
     load_tier_catalog(CurationCatalog(root), catalog_query)
 
-    def reject_content_read(connection, cursor, statement, parameters, context, executemany):
-        if "atlas_rollout" in statement or "FROM atlas_difficulty" in statement:
-            raise AssertionError("Private rollout route read task-level content")
-
     event.listen(catalog_database, "before_cursor_execute", reject_content_read)
     try:
         with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
@@ -715,3 +715,237 @@ def test_private_rollout_routes_never_read_attempt_content(catalog_database, cat
                 assert not canary_in_payload(response.json())
     finally:
         event.remove(catalog_database, "before_cursor_execute", reject_content_read)
+
+
+def test_license_ban_redacts_existing_content_and_invalidates_inventory_cache(
+    catalog_database, catalog_query, tmp_path, monkeypatch
+):
+    root = str(tmp_path / "license-ban-catalog")
+    stage_private_catalog(root)
+    load_tier_catalog(CurationCatalog(root), catalog_query)
+    canary = "LICENSE-BANNED-CONTENT-CANARY-20261119"
+    measurement_id = "banned-measurement"
+    release, coverage, _, _ = curriculum_release_fixture(
+        tmp_path / "license-open-release",
+        [restricted_declaration(OPEN_SOURCE_ID, DataRestriction.OPEN, notes=OPEN_NOTES)],
+        instructions=canary,
+    )
+    load_curriculum(str(release), str(coverage), catalog_query)
+    with catalog_database.begin() as connection:
+        load_id = connection.execute(text("SELECT load_id FROM atlas_current WHERE name='latest'")).scalar_one()
+        connection.execute(
+            text("UPDATE curriculum_sources SET declaration=declaration-'id' WHERE source_id=:source"),
+            {"source": OPEN_SOURCE_ID},
+        )
+        capabilities = {
+            "source_id": OPEN_SOURCE_ID,
+            "basis": "converted_spec_census",
+            "task_count": 3,
+            "backends": {
+                "daytona": {
+                    "support": "unsupported",
+                    "roles": {"agent": {"unsupported": 3}, "grader": {"role_absent": 3}},
+                    "task_counts": {"unsupported": 3},
+                    "blockers": {"agent:non_root_user": 3},
+                    "not_applicable": {},
+                    "validation_errors": {canary: 3},
+                },
+            },
+        }
+        connection.execute(
+            text(
+                "INSERT INTO atlas_backend_sources VALUES (:load,:source,CAST(:caps AS JSONB)) "
+                "ON CONFLICT (load_id,source_id) DO UPDATE SET capabilities=EXCLUDED.capabilities"
+            ),
+            {"load": load_id, "source": OPEN_SOURCE_ID, "caps": json.dumps(capabilities)},
+        )
+        connection.execute(
+            text(
+                "UPDATE atlas_sources SET source_fingerprint=CAST(:fingerprint AS JSONB) "
+                "WHERE load_id=:load AND id=:source"
+            ),
+            {
+                "load": load_id,
+                "source": OPEN_SOURCE_ID,
+                "fingerprint": json.dumps({"task_count": 3, "sample": [{"instruction": canary}]}),
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO atlas_rollout_attempts VALUES (:measurement,'attempt','one', '{}'::jsonb, "
+                "CAST(:detail AS JSONB))"
+            ),
+            {
+                "measurement": measurement_id,
+                "detail": json.dumps(pack_content({"conversation": canary, "verifier": canary})),
+            },
+        )
+        connection.execute(
+            text("INSERT INTO catalog_reviews VALUES ('license-review',:source,CAST(:collection AS JSONB),now())"),
+            {"source": OPEN_SOURCE_ID, "collection": json.dumps({"reviews": [{"prompt": canary}]})},
+        )
+        connection.execute(
+            text("INSERT INTO review_artifacts VALUES ('license-review','raw.txt',:content,:sha)"),
+            {"content": canary, "sha": "f" * 64},
+        )
+    services = cast(AppletServices, CatalogServices(catalog_database))
+    with TestClient(create_api(services)) as client:
+        # Existing content is genuinely served before the ban, including the
+        # cached inventory fingerprint and the historical curriculum sample.
+        assert client.get("/sources").status_code == 200
+        assert canary in client.get("/source-fingerprint", params={"source_id": OPEN_SOURCE_ID}).text
+        assert canary in client.get("/curriculum/tasks").text
+        assert canary in client.get("/curriculum/task", params={"source_id": OPEN_SOURCE_ID, "task_id": "one"}).text
+        assert canary in client.get("/archive/reviews/license-review/artifacts/raw.txt").text
+        registry = json.loads(licensing.LICENSE_BANS)
+        ban = {
+            **registry["bans"][0],
+            "source_id": OPEN_SOURCE_ID,
+            "upstream_id": FIXTURE_DATASET,
+            "upstream_revision": FIXTURE_REVISION,
+            "reason": "Recorded license exclusion",
+        }
+        monkeypatch.setattr(licensing, "LICENSE_BANS", json.dumps({"version": "license-ban-test-v1", "bans": [ban]}))
+        licensing.license_bans.cache_clear()
+        try:
+            for endpoint, parameters in [
+                ("/sources", {}),
+                ("/source-statuses", {}),
+                ("/source", {"source_id": OPEN_SOURCE_ID}),
+                ("/assessment", {"source_id": OPEN_SOURCE_ID}),
+                ("/evidence", {"source_id": OPEN_SOURCE_ID, "task_id": "one"}),
+                ("/source-fingerprint", {"source_id": OPEN_SOURCE_ID}),
+                ("/curriculum/tasks", {}),
+                ("/curriculum/task", {"source_id": OPEN_SOURCE_ID, "task_id": "one"}),
+                ("/archive/reviews/license-review", {}),
+                ("/archive/reviews/license-review/artifacts/raw.txt", {}),
+            ]:
+                response = client.get(endpoint, params=parameters)
+                assert response.status_code == 200, (endpoint, response.text)
+                assert canary not in response.text, endpoint
+                assert OPEN_PROMPT not in response.text, endpoint
+            metadata = client.get("/source", params={"source_id": OPEN_SOURCE_ID}).json()["backend_capabilities"]
+            assert metadata["task_count"] == 3 and metadata["basis"] == "converted_spec_census"
+            fit = metadata["backends"]["daytona"]
+            assert fit["roles"] == capabilities["backends"]["daytona"]["roles"]
+            assert list(fit["validation_errors"].values()) == [3]
+            assert all(key.startswith("withheld:") for key in fit["validation_errors"])
+            evidence = client.get("/evidence", params={"source_id": OPEN_SOURCE_ID, "task_id": "one"}).json()
+            assert evidence["packet"]["content"] is None
+            assert evidence["packet"]["content_withheld"] is True
+            assert evidence["packet"]["data_restriction"] == "open"
+            detail = client.get("/curriculum/task", params={"source_id": OPEN_SOURCE_ID, "task_id": "one"}).json()
+            assert detail["task"]["content_withheld"] is True
+
+            event.listen(catalog_database, "before_cursor_execute", reject_content_read)
+            try:
+                for endpoint, parameters in [
+                    ("/difficulty-attempts", {"source_id": OPEN_SOURCE_ID, "measurement_id": measurement_id}),
+                    (
+                        "/difficulty-rollout",
+                        {"source_id": OPEN_SOURCE_ID, "measurement_id": measurement_id, "attempt_id": "attempt"},
+                    ),
+                ]:
+                    response = client.get(endpoint, params=parameters)
+                    assert response.status_code == 200
+                    assert response.json()["content_withheld"] is True
+                    assert response.json()["content"] is None
+                    assert canary not in response.text
+            finally:
+                event.remove(catalog_database, "before_cursor_execute", reject_content_read)
+            with pytest.raises(ValueError):
+                stage_rollouts({}, restricted_declaration(OPEN_SOURCE_ID, DataRestriction.OPEN), 1)
+        finally:
+            licensing.license_bans.cache_clear()
+
+
+@pytest.mark.parametrize("ruling", ["decision", "exclusion"])
+def test_explicit_license_ruling_withholds_attempts(catalog_database, catalog_query, tmp_path, ruling):
+    root = str(tmp_path / "license-ruling-catalog")
+    stage_private_catalog(root)
+    load_tier_catalog(CurationCatalog(root), catalog_query)
+    with catalog_database.begin() as connection:
+        declaration = connection.execute(
+            text("SELECT declaration FROM atlas_sources WHERE id=:source"), {"source": OPEN_SOURCE_ID}
+        ).scalar_one()
+        if ruling == "decision":
+            declaration["license_receipt"]["decisions"] = [
+                {
+                    "kind": "ban",
+                    "approved": False,
+                    "who": "fixture",
+                    "when": "2026-11-19T15:00:00Z",
+                    "source_id": OPEN_SOURCE_ID,
+                    "dataset_id": FIXTURE_DATASET,
+                    "revision": FIXTURE_REVISION,
+                    "scope": ["train"],
+                    "rationale": "Recorded license exclusion",
+                    "evidence_urls": ["https://example.org/license"],
+                    "issue_url": "https://github.com/marin-community/marin/issues/11497",
+                }
+            ]
+        else:
+            declaration["exclusion_claims"] = [{"reason": "license-ban"}]
+        connection.execute(
+            text("UPDATE atlas_sources SET declaration=CAST(:declaration AS JSONB) WHERE id=:source"),
+            {"source": OPEN_SOURCE_ID, "declaration": json.dumps(declaration)},
+        )
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        response = client.get(
+            "/difficulty-rollout",
+            params={"source_id": OPEN_SOURCE_ID, "measurement_id": "not-read", "attempt_id": "not-read"},
+        )
+        assert response.status_code == 200
+        assert response.json()["content"] is None
+        assert response.json()["content_withheld"] is True
+
+
+def reject_content_read(connection, cursor, statement, parameters, context, executemany):
+    if "atlas_rollout" in statement or "FROM atlas_difficulty" in statement:
+        raise AssertionError("Withheld rollout route read task-level content")
+
+
+@pytest.mark.parametrize("tag", [ABSENT_TAG, None, "private_always"])
+def test_curriculum_policy_read_is_compact_and_preserves_fail_closed_tags(catalog_query, tmp_path, tag):
+    root = str(tmp_path / "compact-curriculum-policy")
+    stage_private_catalog(root)
+    load_tier_catalog(CurationCatalog(root), catalog_query)
+    load_id = catalog_query("SELECT load_id FROM atlas_current WHERE name='latest'", {})["rows"][0]["load_id"]
+    catalog_query(
+        "UPDATE atlas_sources SET declaration=jsonb_set(declaration,'{notes}',to_jsonb(repeat('x',6000000))) "
+        "WHERE load_id=:load AND id=:source",
+        {"load": load_id, "source": OPEN_SOURCE_ID},
+    )
+    if tag == ABSENT_TAG:
+        catalog_query(
+            "UPDATE atlas_sources SET declaration=declaration-'data_restriction' WHERE load_id=:load AND id=:source",
+            {"load": load_id, "source": OPEN_SOURCE_ID},
+        )
+    else:
+        catalog_query(
+            "UPDATE atlas_sources SET declaration=jsonb_set(declaration,'{data_restriction}',CAST(:tag AS JSONB)) "
+            "WHERE load_id=:load AND id=:source",
+            {"load": load_id, "source": OPEN_SOURCE_ID, "tag": json.dumps(tag)},
+        )
+    policies = atlas_source_restrictions(catalog_query, load_id)
+    assert len(json.dumps(policies).encode()) < 1024
+    expected = DataRestriction.OPEN if tag == ABSENT_TAG else DataRestriction.PRIVATE_ALWAYS
+    assert declaration_restriction(policies[OPEN_SOURCE_ID]) is expected
+    assert ("data_restriction" in policies[OPEN_SOURCE_ID]) is (tag != ABSENT_TAG)
+
+    release, coverage, _, _ = curriculum_release_fixture(
+        tmp_path / "compact-open-release",
+        [restricted_declaration(OPEN_SOURCE_ID, DataRestriction.OPEN)],
+        instructions=OPEN_PROMPT,
+    )
+
+    def bounded_query(sql, parameters):
+        result = catalog_query(sql, parameters)
+        assert len(json.dumps(result, default=str).encode()) <= MAX_QUERY_RESPONSE_BYTES
+        return result
+
+    if expected is DataRestriction.OPEN:
+        load_curriculum(str(release), str(coverage), bounded_query)
+    else:
+        with pytest.raises(ValueError, match="PRIVATE_ALWAYS"):
+            load_curriculum(str(release), str(coverage), bounded_query)

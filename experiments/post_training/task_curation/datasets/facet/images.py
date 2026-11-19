@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import shutil
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from functools import partial
 from pathlib import Path
@@ -189,8 +190,15 @@ def image_config(config: ImageConfig, context: StepContext) -> ImageConfig:
     return replace(config, output_path=context.output_path)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+def image_main(
+    *,
+    description: str,
+    artifact_namespace: str,
+    files_for_index: Callable[[dict], dict[str, dict]],
+    producer: Callable[[ImageConfig], PreservedImage],
+) -> None:
+    """Run the shared pristine-SIF artifact CLI with source-specific binding gates."""
+    parser = argparse.ArgumentParser(description=description)
     for name in (
         "index",
         "index-sha256",
@@ -212,11 +220,11 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
     StoragePath(args.artifact_root).relative_to(StoragePath(REGIONAL_PREFIX))
     index = pinned_json(args.index, args.index_sha256)
-    files = image_files(index)
+    files = files_for_index(index)
     tools = pinned_json(args.tools, args.tools_sha256)
     selected = sorted(args.bundle if args.bundle else files)
     if len(set(selected)) != len(selected):
-        raise ValueError("FACET bundle selection repeats an image")
+        raise ValueError("Image bundle selection repeats an image")
     with artifact_prefix(args.artifact_root):
         steps = []
         for bundle in selected:
@@ -237,10 +245,10 @@ def main() -> None:
             )
             steps.append(
                 ArtifactStep(
-                    name="rl-data/facet/pristine-oci/" + bundle,
+                    name=f"rl-data/{artifact_namespace}/pristine-oci/" + bundle,
                     version=args.artifact_version,
                     artifact_type=PreservedImage,
-                    run=preserve_image,
+                    run=producer,
                     build_config=partial(image_config, config),
                 )
             )
@@ -253,6 +261,15 @@ def main() -> None:
         if destination.exists():
             raise FileExistsError(str(destination))
         destination.write_text(json.dumps([result.model_dump(mode="json") for result in results], indent=2) + "\n")
+
+
+def main() -> None:
+    image_main(
+        description="Preserve FACET pristine SIF images as independent artifacts",
+        artifact_namespace="facet",
+        files_for_index=image_files,
+        producer=preserve_image,
+    )
 
 
 if __name__ == "__main__":

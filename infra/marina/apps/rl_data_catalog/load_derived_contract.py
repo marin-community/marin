@@ -13,6 +13,12 @@ from taskcompendium.grader_type import GraderType
 
 from experiments.post_training.task_curation.derived_contract_census import DerivedContractReceipt
 from infra.marina.apps.rl_data_catalog.load import ensure_tables
+from infra.marina.apps.rl_data_catalog.server.contract_selection import (
+    INPUT_FIELDS,
+    receipt_identity,
+    receipt_json,
+    select_contract_receipts,
+)
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 
@@ -24,11 +30,21 @@ def load_contracts(records: list[DerivedContractReceipt], query: AppletQuery) ->
         for key in counts:
             GraderType(key)
     ensure_tables(query, ("atlas_derived_contracts",))
+    archived = query("SELECT source_id,receipt FROM atlas_derived_contracts ORDER BY source_id,receipt_id", {})["rows"]
+    populations = {}
+    for source_id, payload in [
+        *((row["source_id"], row["receipt"]) for row in archived),
+        *((canonical_source_id(row.source_id), row.model_dump(mode="json")) for row in records),
+    ]:
+        identity = (source_id, *(payload["input"][field] for field in INPUT_FIELDS))
+        populations.setdefault(identity, []).append(payload)
+    for identity, payloads in populations.items():
+        select_contract_receipts(identity[0], payloads)
     inserted = 0
     for record in records:
         payload = record.model_dump(mode="json")
-        serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-        identity = hashlib.sha256(serialized.encode()).hexdigest()
+        serialized = receipt_json(payload)
+        identity = receipt_identity(payload)
         params = {"source": canonical_source_id(record.source_id), "identity": identity, "receipt": serialized}
         inserted += query(
             (

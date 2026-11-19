@@ -3,8 +3,10 @@
 
 """The projection currency stage pairs every pin with its grader and curriculum receipts."""
 
+import copy
 import json
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from finestore.rl.curation import ActorCensusInput
@@ -13,7 +15,6 @@ from experiments.post_training.task_curation import ensure_current_projections
 from experiments.post_training.task_curation.ensure_current_projections import (
     CatalogSelection,
     DeclarationPin,
-    ProjectionWaiver,
     ProjectionWaivers,
     projection_gaps,
     publication_preflight,
@@ -186,26 +187,21 @@ def projection_waivers() -> ProjectionWaivers:
     return ProjectionWaivers(
         marina_url="https://marina.example",
         applet_id="preview",
-        valid_catalog_load_ids=("lagging", "frozen-before-refresh"),
-        waivers=(
-            ProjectionWaiver(
-                source_id="Test:source",
-                projection="derived-contract",
-                reason=ensure_current_projections.PROJECTION_WAIVER_REASON,
-            ),
-        ),
+        rule="stale-or-missing-serving-projection-without-declaration-drift",
+        reason=ensure_current_projections.PROJECTION_WAIVER_REASON,
     )
 
 
-@pytest.mark.parametrize("load_id", ["lagging", "frozen-before-refresh"])
-def test_the_preflight_records_each_named_waiver_before_refresh(load_id):
+@pytest.mark.parametrize("load_id", ["lagging", "frozen-before-refresh", "3e3f46aebfe843ddb4c4be3eceb173dc"])
+def test_new_selected_loads_remain_waived_until_the_strict_seal_event(load_id):
     source = declaration()
     notes = publication_preflight(
         [source],
         {"Test:source": [Receipt(revision="9" * 40)]},
         {"Test:source": curriculum_row(source)},
         projection_waivers(),
-        selection=CatalogSelection("https://marina.example", "preview", load_id),
+        drift_sources=frozenset(),
+        selection=CatalogSelection("https://marina.example", "preview", load_id, refresh_sealed=False),
     )
     assert len(notes) == 1
     assert "Test:source:derived-contract/stale-pin" in notes[0]
@@ -215,8 +211,8 @@ def test_the_preflight_records_each_named_waiver_before_refresh(load_id):
 @pytest.mark.parametrize(
     "selection",
     [
-        CatalogSelection("https://marina.example", "preview", "refreshed-and-sealed"),
-        CatalogSelection("https://marina.example", "production", "lagging"),
+        CatalogSelection("https://marina.example", "preview", "r31j-during-refresh", refresh_sealed=True),
+        CatalogSelection("https://marina.example", "production", "lagging", refresh_sealed=False),
     ],
 )
 def test_a_sealed_refresh_or_different_target_cannot_reuse_a_projection_waiver(selection):
@@ -228,6 +224,7 @@ def test_a_sealed_refresh_or_different_target_cannot_reuse_a_projection_waiver(s
             {"Test:source": curriculum_row(source)},
             projection_waivers(),
             selection=selection,
+            drift_sources=frozenset(),
         )
     assert publication_preflight(
         [source],
@@ -235,17 +232,36 @@ def test_a_sealed_refresh_or_different_target_cannot_reuse_a_projection_waiver(s
         {"Test:source": curriculum_row(source)},
         projection_waivers(),
         selection=selection,
+        drift_sources=frozenset(),
     ) == ["Projection waivers expired or target differs; all projection checks remain blocking"]
 
 
-def test_a_waived_contract_does_not_waive_an_unnamed_curriculum_gap():
-    with pytest.raises(ValueError, match="curriculum/missing: Test:source"):
+def test_a_gap_created_after_the_rule_file_is_generated_is_waived(tmp_path):
+    path = tmp_path / "rule.json"
+    path.write_text(projection_waivers().model_dump_json())
+    source = declaration(source_id="New:source-after-file-generation")
+    notes = publication_preflight(
+        [source],
+        {},
+        {},
+        ProjectionWaivers.model_validate_json(path.read_bytes()),
+        selection=CatalogSelection("https://marina.example", "preview", "lagging", refresh_sealed=False),
+        drift_sources=frozenset(),
+    )
+    assert len(notes) == 2
+    assert any("New:source-after-file-generation:derived-contract/missing" in note for note in notes)
+    assert any("New:source-after-file-generation:curriculum/missing" in note for note in notes)
+
+
+def test_the_same_source_declaration_drift_cannot_be_waived():
+    with pytest.raises(ValueError, match="Declaration drift blocks publication: Test:source"):
         publication_preflight(
             [declaration()],
             {},
             {},
             projection_waivers(),
-            selection=CatalogSelection("https://marina.example", "preview", "lagging"),
+            selection=CatalogSelection("https://marina.example", "preview", "lagging", refresh_sealed=False),
+            drift_sources=frozenset({"Test:source"}),
         )
 
 
@@ -299,7 +315,8 @@ def test_conflicting_current_contract_summaries_fail(served_revision):
             {"Test:source": [Receipt(), other]},
             {"Test:source": curriculum_row(source)},
             projection_waivers(),
-            selection=CatalogSelection("https://marina.example", "preview", "lagging"),
+            drift_sources=frozenset(),
+            selection=CatalogSelection("https://marina.example", "preview", "lagging", refresh_sealed=False),
             served_pins={"Test:source": replace(source, dataset_revision=served_revision)},
         )
 
@@ -310,3 +327,29 @@ def test_receipt_grouping_keeps_both_current_and_historical_inputs():
     grouped = ensure_current_projections.contract_receipt_map([current, stale])
     assert grouped["Test:source"] == [current, stale]
     assert ensure_current_projections.contract_state(declaration(), grouped) == ("current", "")
+
+
+def test_served_contract_reader_applies_exact_corrections_before_parsing_legacy_json(monkeypatch):
+    fixture = Path(__file__).parents[4] / "infra/marina/apps/rl_data_catalog/tests/fixtures/contract_supersessions.json"
+    pair = json.loads(fixture.read_text())[0]
+    historical = copy.deepcopy(pair["selected"])
+    historical_revision = "f" * 40
+    historical["input"]["dataset_revision"] = historical_revision
+    rows = [
+        {"source_id": pair["source_id"], "receipt": payload}
+        for payload in [pair["previous"], pair["selected"], historical]
+    ]
+    monkeypatch.setattr(ensure_current_projections, "atlas_applet_query", lambda: lambda _sql, _params: {"rows": rows})
+    receipts = ensure_current_projections.atlas_contract_receipts()[pair["source_id"]]
+    assert len(receipts) == 2
+    assert {receipt.input.dataset_revision for receipt in receipts} == {
+        pair["selected"]["input"]["dataset_revision"],
+        historical["input"]["dataset_revision"],
+    }
+    selected = next(receipt for receipt in receipts if receipt.input.dataset_revision != historical_revision)
+    assert selected.summary.single_turn_count == pair["selected"]["summary"]["single_turn_count"]
+    unlisted = copy.deepcopy(pair["selected"])
+    unlisted["summary"]["single_turn_count"] -= 1
+    rows.append({"source_id": pair["source_id"], "receipt": unlisted})
+    with pytest.raises(ValueError, match="Conflicting derived contract summaries"):
+        ensure_current_projections.atlas_contract_receipts()

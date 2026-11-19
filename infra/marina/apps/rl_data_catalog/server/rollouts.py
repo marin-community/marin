@@ -10,9 +10,9 @@ from finestore.rl.difficulty import DifficultyObservation
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
+from .content_access import content_is_withheld, content_marker
 from .difficulty import matches_current_pin
 from .evidence_content import unpack_content
-from .restrictions import is_private, private_content_marker
 from .source_identity import canonical_source_id, original_source_id
 
 
@@ -28,7 +28,7 @@ def register_rollout_routes(api: FastAPI, engine: Engine) -> None:
         if declaration is None:
             raise HTTPException(404, "Source not found")
         source = {"declaration": declaration}
-        if is_private(declaration):
+        if content_is_withheld(declaration):
             return source, {}
         payload = connection.execute(
             text(
@@ -47,8 +47,8 @@ def register_rollout_routes(api: FastAPI, engine: Engine) -> None:
     ) -> dict[str, Any]:
         with engine.connect() as connection:
             source, payload = measurement(connection, source_id, measurement_id)
-            if is_private(source["declaration"]):
-                return private_content_marker()
+            if content_is_withheld(source["declaration"]):
+                return content_marker(source["declaration"])
             observation = DifficultyObservation.model_validate(
                 {
                     **payload,
@@ -94,8 +94,8 @@ def register_rollout_routes(api: FastAPI, engine: Engine) -> None:
     def rollout(source_id: str, measurement_id: str, attempt_id: str) -> dict[str, Any]:
         with engine.connect() as connection:
             source, _ = measurement(connection, source_id, measurement_id)
-            if is_private(source["declaration"]):
-                return private_content_marker()
+            if content_is_withheld(source["declaration"]):
+                return content_marker(source["declaration"])
             row = (
                 connection.execute(
                     text(

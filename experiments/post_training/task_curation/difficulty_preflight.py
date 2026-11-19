@@ -11,7 +11,10 @@ campaign's receipt-stage work per selected source: verify the panel against
 its frozen census, resolve the receipt's contract vintage, and compare every
 prepared task digest against the frozen sample receipt. It also verifies the
 continuation bindings (queue digest, parent ancestry, parent traffic seal)
-that the trials worker would otherwise refuse after submission. Any failure
+that the trials worker would otherwise refuse after submission. Full local
+staging additionally reads every prepared task's declared judge and refuses a
+queue that mixes hosted judge tiers before anything is submitted (the
+large-v21 class the campaign only caught after Iris prepared it). Any failure
 refuses the launch with the precise diff.
 """
 
@@ -30,6 +33,7 @@ from experiments.post_training.task_curation.difficulty_campaign import (
     TOGETHER_BASE_URL,
     TOGETHER_MODEL,
     hosted_endpoint_liveness,
+    queue_judge_tier,
 )
 from experiments.post_training.task_curation.difficulty_contracts import (
     ContractVintageError,
@@ -51,6 +55,8 @@ class SourcePreflight:
     vintage: str | None
     tasks: int
     error: str | None
+    # Judge models the staged prepared tasks declare; empty without staging.
+    judge_models: tuple[str, ...] = ()
 
     def to_row(self) -> dict:
         row = {"source_id": self.source_id, "tasks": self.tasks, "ok": self.error is None}
@@ -84,9 +90,13 @@ def preflight_source(source: DifficultySource, stage_root: Path | None = None) -
         return SourcePreflight(source.declaration.id, None, len(frozen), str(error))
     if stage_root is not None:
         try:
-            prepare_source(source, stage_root)
+            prepared = prepare_source(source, stage_root)
         except (ContractVintageError, ValueError) as error:
             return SourcePreflight(source.declaration.id, vintage, len(frozen), str(error))
+        judge_models = tuple(
+            sorted({task.judge_model for task in prepared.tasks if task.judge_model is not None and task.reason is None})
+        )
+        return SourcePreflight(source.declaration.id, vintage, len(frozen), None, judge_models)
     return SourcePreflight(source.declaration.id, vintage, len(frozen), None)
 
 
@@ -163,6 +173,14 @@ def preflight_continuation(
         "staged": stage_root is not None,
         "failures": [result.to_row() for result in failures],
     }
+    if stage_root is not None:
+        # The campaign refuses a mixed judge tier only after Iris prepared it
+        # (large-v21 spent a submission and its prepare cost there). Staging
+        # knows every source's declared judge, so refuse the mixed queue here,
+        # before any submit.
+        judged_models = {model for result in results for model in result.judge_models}
+        tier = queue_judge_tier(judged_models)
+        receipt["judge_tier"] = "relay" if tier is None else tier.value
     if failures:
         detail = "\n".join(f"{result.source_id}:\n{result.error}" for result in failures)
         raise ValueError(f"Continuation preflight failed for {len(failures)}/{len(results)} sources:\n{detail}")

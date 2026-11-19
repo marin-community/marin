@@ -51,6 +51,7 @@ from experiments.post_training.task_curation.full_content_results import FullCon
 from experiments.post_training.task_curation.retirement import retired_admission_source_ids
 from experiments.post_training.task_curation.review_quality import quality_result as recompute_review_result
 from infra.marina.apps.rl_data_catalog.historical_assessments import retain_prior_assessments
+from infra.marina.apps.rl_data_catalog.load_counts import staged_row_count
 from infra.marina.apps.rl_data_catalog.prepare_preview import PREVIEW_APP_ID
 from infra.marina.apps.rl_data_catalog.server.admission import (
     backend_admission_review,
@@ -61,12 +62,13 @@ from infra.marina.apps.rl_data_catalog.server.admission import (
     require_sample_pin_currency,
 )
 from infra.marina.apps.rl_data_catalog.server.cohort_summaries import materialize_cohort_summaries
+from infra.marina.apps.rl_data_catalog.server.content_access import content_is_withheld
 from infra.marina.apps.rl_data_catalog.server.filtration import filtration
 from infra.marina.apps.rl_data_catalog.server.quality import Quality, quality_display, review_completeness
-from infra.marina.apps.rl_data_catalog.server.restrictions import is_private
 from infra.marina.apps.rl_data_catalog.server.schema import SCHEMA_SQL
 
 MAX_BATCH_BYTES = 1_000_000
+STAGING_TABLE_PREFIX = "atlas_"
 # The per-task staging tables carry many small rows; their inserts maintain four
 # indexes (including the GIN defects index) on the retained item volume, so their
 # statements stay under the SQL gateway's per-statement timeout only with small
@@ -74,11 +76,11 @@ MAX_BATCH_BYTES = 1_000_000
 # evidence exceed the byte budgets and keep the default.
 TABLE_BATCH_BYTES = {
     "items": 35_000,
-    "packets": 35_000,
 }
 TABLE_BATCH_ROWS = {
     "items": 5,
-    "packets": 5,
+    # Large evidence packets use MAX_BATCH_BYTES and one row per statement.
+    "packets": 1,
 }
 PACKET_READ_BATCH = 512
 DEFAULT_CATALOG_ROOT = "s3://marin-us-east-02a/marin/rl-data/catalog/production"
@@ -145,12 +147,12 @@ def batches(rows: Iterable[dict[str, Any]], budget: int = MAX_BATCH_BYTES, max_r
 
 def table_batch_bytes(table: str) -> int:
     """The SQL batch budget for one staging table."""
-    return TABLE_BATCH_BYTES.get(table, MAX_BATCH_BYTES)
+    return TABLE_BATCH_BYTES.get(table.removeprefix(STAGING_TABLE_PREFIX), MAX_BATCH_BYTES)
 
 
 def table_batch_rows(table: str) -> int | None:
     """The row-count cap for one staging table, when its statements need one."""
-    return TABLE_BATCH_ROWS.get(table)
+    return TABLE_BATCH_ROWS.get(table.removeprefix(STAGING_TABLE_PREFIX))
 
 
 def ensure_tables(query: AppletQuery, names: tuple[str, ...]) -> None:
@@ -437,9 +439,7 @@ def load_catalog(
         # so the staged row count is exactly the committed prefix. ON CONFLICT DO NOTHING
         # absorbs any overlap at the batch boundary.
         if resume_load_id is not None:
-            skip = execute(f"SELECT COUNT(*) AS n FROM atlas_{table} WHERE load_id = :load_id", {"load_id": load_id})[
-                "rows"
-            ][0]["n"]
+            skip = staged_row_count(execute, f"atlas_{table}", load_id)
             if skip:
                 rows = list(rows)
                 rows = rows[skip:]
@@ -645,10 +645,10 @@ def load_catalog(
     }
     all_items = []
     full_counts: dict[str, dict[str, int]] = {}
-    private_pipelines = {
+    withheld_pipelines = {
         source.assessment_key
         for source in sources
-        if source.assessment_key is not None and is_private(source.declaration.model_dump(mode="json"))
+        if source.assessment_key is not None and content_is_withheld(source.declaration.model_dump(mode="json"))
     }
     for source, record in zip(sources, metadata["sources"], strict=True):
         key = source.assessment_key
@@ -736,7 +736,7 @@ def load_catalog(
             for item, packet in catalog.packets(all_items[offset : offset + PACKET_READ_BATCH]):
                 if ("task" in packet) != item.has_task:
                     raise ValueError(f"Packet evidence disagrees with catalog item: {item.task_id}")
-                if item.pipeline_key in private_pipelines:
+                if item.pipeline_key in withheld_pipelines:
                     # A PRIVATE_ALWAYS source's packets stay in its private store:
                     # the served database holds the marker response, never the bytes.
                     continue

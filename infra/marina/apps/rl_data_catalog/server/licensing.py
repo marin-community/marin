@@ -49,3 +49,8 @@ def license_projection(declaration: dict[str, Any]) -> dict[str, Any]:
     if ban := declaration_license_ban(declaration):
         return {**declaration, "status": "Excluded", "license_ban": ban.model_dump(mode="json")}
     return declaration
+
+
+def license_registry_key() -> str:
+    """Return the embedded license-decision version for response cache keys."""
+    return "license:" + json.loads(LICENSE_BANS)["version"]
