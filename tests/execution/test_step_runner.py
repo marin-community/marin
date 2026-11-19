@@ -815,9 +815,9 @@ def test_remote_resources_dispatch_uses_device_extra(tmp_path: Path, fray_client
         fn=my_step,
     )
 
-    submissions = _run_step_with_submit_spy(step, fray_client)
-    _assert_single_submit_extras(submissions, ["gpu"])
-    assert submissions[0].timeout == timeout
+    spy = _run_step_with_submit_spy(step, fray_client)
+    _assert_single_submit_extras(spy, ["gpu"])
+    assert spy.requests[0].timeout == timeout
 
 
 def test_remote_dependency_groups_can_override_device_extra(tmp_path: Path, fray_client):
@@ -844,9 +844,9 @@ def test_remote_direct_call_uses_device_extra(fray_client):
     def my_step() -> None:
         return None
 
-    submissions = _call_remote_with_submit_spy(my_step, fray_client)
-    _assert_single_submit_extras(submissions, ["gpu"])
-    assert submissions[0].timeout == timeout
+    spy = _call_remote_with_submit_spy(my_step, fray_client)
+    _assert_single_submit_extras(spy, ["gpu"])
+    assert spy.requests[0].timeout == timeout
 
 
 def test_remote_direct_call_dependency_groups_can_override_device_extra(fray_client):
