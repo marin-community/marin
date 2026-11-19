@@ -181,16 +181,35 @@ def _is_expression(parsed: list) -> bool:
     return any(not isinstance(item, str) for item in parsed)
 
 
+def _encloses_whole(value: str) -> bool:
+    """Whether ``value[0]`` opens a bracket pair that closes at the last character.
+
+    The text between must balance, so the first opener matches the last closer: ``[1, 2],
+    [3, 4]`` does not match because its first ``[`` closes after ``1, 2``.
+    """
+    stack: list[str] = [CLOSERS[value[0]]]
+    for char in value[1:-1]:
+        if char in CLOSERS:
+            stack.append(CLOSERS[char])
+        elif stack and char == stack[-1]:
+            stack.pop()
+            if not stack:
+                return False
+    return len(stack) == 1
+
+
 def _split_members(text: str) -> list[str]:
     """The comma-separated members of a sequence, ignoring commas nested inside brackets.
 
-    One optional layer of enclosing brackets is dropped, so ``[1, 2]`` and ``1, 2`` read alike.
+    One optional layer of enclosing brackets is dropped, so ``[1, 2]`` and ``1, 2`` read alike,
+    but only when the first bracket opens the whole text: ``[1, 2], [3, 4]`` keeps both
+    bracketed members, and ``(1,2),(3,4)`` keeps both parenthesized pairs.
     """
     value = strip_math_delimiters(text)
     for command in SIZE_COMMANDS:
         value = value.replace(command, "")
     value = value.strip()
-    if len(value) > 1 and value[0] in CLOSERS and value[-1] == CLOSERS[value[0]]:
+    if len(value) > 1 and value[0] in CLOSERS and value[-1] == CLOSERS[value[0]] and _encloses_whole(value):
         value = value[1:-1]
     members: list[str] = []
     stack: list[str] = []

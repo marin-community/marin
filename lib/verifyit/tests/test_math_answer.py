@@ -87,6 +87,36 @@ def test_math_typed_answers_use_their_comparison(tmp_path, expected, math_type, 
     assert grade_math.grade(spec, tmp_path, tmp_path).reward == reward
 
 
+# A HARDMath polynomial_roots answer in the dataset's own form: two \left[…\right] members
+# and no outer brackets (row 122 of the train split, issue #11511).
+HARDMATH_ROOTS_ANSWER = (
+    r"\left[ - \sqrt{\frac{1.00}{\epsilon}}, \  \sqrt{\frac{1.00}{\epsilon}}\right],"
+    r" \left[ \frac{1.00}{\epsilon}, \  -1.00\right]"
+)
+
+
+@pytest.mark.parametrize(
+    "expected, candidate, reward",
+    [
+        # The reply in the dataset's form and the bracketed golden control are the same
+        # two members: the outer brackets are dropped only when they enclose the whole text.
+        (f"[{HARDMATH_ROOTS_ANSWER}]", HARDMATH_ROOTS_ANSWER, 1.0),
+        (f"[{HARDMATH_ROOTS_ANSWER}]", f"[{HARDMATH_ROOTS_ANSWER}]", 1.0),
+        (f"[{HARDMATH_ROOTS_ANSWER}]", HARDMATH_ROOTS_ANSWER.replace("-1.00", "-2.00"), 0.0),
+        # A wrong reply in the dataset's form stays 0.
+        (f"[{HARDMATH_ROOTS_ANSWER}]", HARDMATH_ROOTS_ANSWER.replace("- \\sqrt", "\\sqrt"), 0.0),
+        # A sequence whose members are parenthesized pairs.
+        ("[(1,2),(3,4)]", "(1,2),(3,4)", 1.0),
+        ("[(1,2),(3,4)]", "[(1,2),(3,4)]", 1.0),
+        ("[(1,2),(3,4)]", "(1,2),(3,5)", 0.0),
+        ("[(1,2),(3,4)]", "(1,2),(3,4),(5,6)", 0.0),
+    ],
+)
+def test_list_members_keep_their_own_brackets(expected, candidate, reward):
+    spec = MathSpec(expected=expected, math_type=MathType.LIST)
+    assert grade_math.grade_math_candidate(spec, candidate).reward == reward
+
+
 def test_math_empty_output_scores_zero_with_no_output(tmp_path):
     _answer(tmp_path, "\n  \n")
     result = grade_math.grade(MathSpec(expected="42"), tmp_path, tmp_path)
