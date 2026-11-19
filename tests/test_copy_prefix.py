@@ -1,7 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from scripts.ops.storage.copy_prefix import CopiedObject, CopyShard, SourceFile, pack_shards, shard_id, shard_is_copied
+from scripts.ops.storage.copy_prefix import (
+    CopiedObject,
+    CopyShard,
+    Progress,
+    SourceFile,
+    pack_shards,
+    progress_line,
+    shard_id,
+    shard_is_copied,
+)
 
 
 def test_shards_cover_every_file_once_in_key_order_and_close_at_the_byte_target() -> None:
@@ -33,3 +42,18 @@ def test_a_recorded_shard_is_copied_again_when_a_destination_object_no_longer_ma
     assert not shard_is_copied(shard, record, overwritten)
     assert not shard_is_copied(shard, record, expired)
     assert not shard_is_copied(shard, None, destination)
+
+
+def test_progress_line_reports_share_done_and_time_left() -> None:
+    progress = Progress(
+        done_bytes=20 * 2**40,
+        total_bytes=80 * 2**40,
+        done_files=246512,
+        total_files=985945,
+        done_shards=500,
+        total_shards=2000,
+    )
+
+    line = progress_line(progress, rate=2**30)
+
+    assert line == ("progress: 20.0 TB / 80.0 TB (25.0%), 246512/985945 files, 500/2000 shards, 1.0 GB/s, ETA 17h04m")

@@ -44,9 +44,11 @@ import hashlib
 import json
 import logging
 import sys
+import threading
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -84,6 +86,7 @@ TARGET_SHARD_BYTES = 32 * 1024**3
 # The coordinator holds the source listing and the destination listing in memory.
 COORDINATOR_RESOURCES = ResourceSpec(cpu=4, memory="16GB", disk="5GB")
 RECORD_READ_THREADS = 64
+PROGRESS_INTERVAL = 60
 DIRECTORY_TYPE = "directory"
 SUPPORTED_STORES = frozenset({StoreType.COREWEAVE})
 STATUS_SUFFIX = ".copy-status"
@@ -333,6 +336,77 @@ def _plan(source_url: str, destination_url: str) -> tuple[list[CopyShard], list[
     return shards, pending
 
 
+@dataclass(frozen=True)
+class Progress:
+    """Verified totals so far, out of the whole copy."""
+
+    done_bytes: int
+    total_bytes: int
+    done_files: int
+    total_files: int
+    done_shards: int
+    total_shards: int
+
+
+def progress_line(progress: Progress, rate: float) -> str:
+    """One line of copy progress; *rate* is verified bytes per second during this run."""
+    p = progress
+    line = (
+        f"progress: {format_size(p.done_bytes)} / {format_size(p.total_bytes)} "
+        f"({100 * p.done_bytes / p.total_bytes:.1f}%), {p.done_files}/{p.total_files} files, "
+        f"{p.done_shards}/{p.total_shards} shards"
+    )
+    if rate <= 0:
+        return line
+    eta_minutes = int((p.total_bytes - p.done_bytes) / rate / 60)
+    return f"{line}, {format_size(int(rate))}/s, ETA {eta_minutes // 60}h{eta_minutes % 60:02d}m"
+
+
+@contextmanager
+def _progress_reports(shards: Sequence[CopyShard], pending: Sequence[CopyShard], destination_url: str) -> Iterator[None]:
+    """Report verified progress every ``PROGRESS_INTERVAL`` seconds while the copy runs.
+
+    A pending shard counts once its record is rewritten during this run; a stale record from an
+    earlier run does not count until it is replaced.
+    """
+    pending_by_id = {shard.shard_id: shard for shard in pending}
+    total_bytes = _shard_bytes(shards)
+    total_files = sum(len(shard.files) for shard in shards)
+    earlier_bytes = total_bytes - _shard_bytes(pending)
+    earlier_files = total_files - sum(len(shard.files) for shard in pending)
+    records_url = f"{status_url(destination_url)}/{SHARD_RECORDS}"
+    started_at = datetime.now(UTC)
+    started = time.monotonic()
+    stop = threading.Event()
+
+    def report() -> None:
+        while not stop.wait(PROGRESS_INTERVAL):
+            written = {
+                path.removesuffix(SHARD_RECORD_SUFFIX)
+                for path, entry in list_objects(records_url).items()
+                if entry["LastModified"] >= started_at
+            }
+            copied = [shard for shard_id, shard in pending_by_id.items() if shard_id in written]
+            copied_bytes = _shard_bytes(copied)
+            progress = Progress(
+                done_bytes=earlier_bytes + copied_bytes,
+                total_bytes=total_bytes,
+                done_files=earlier_files + sum(len(shard.files) for shard in copied),
+                total_files=total_files,
+                done_shards=len(shards) - len(pending) + len(copied),
+                total_shards=len(shards),
+            )
+            _report(progress_line(progress, copied_bytes / (time.monotonic() - started)))
+
+    thread = threading.Thread(target=report, name="copy-progress", daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join()
+
+
 def _copy_job(source_url: str, destination_url: str, max_workers: int) -> None:
     """Iris-side entrypoint: plan, copy the pending shards, verify, and write the completion record."""
     shards, pending = _plan(source_url, destination_url)
@@ -343,7 +417,8 @@ def _copy_job(source_url: str, destination_url: str, max_workers: int) -> None:
             filesystem.rm(completion)
         _report(f"copying {len(pending)} shards on up to {max_workers} workers")
         ctx = ZephyrContext(name="copy-prefix", resources=WORKER_RESOURCES, max_workers=max_workers)
-        ctx.execute(Dataset.from_list(pending).map(_copy_shard))
+        with _progress_reports(shards, pending, destination_url):
+            ctx.execute(Dataset.from_list(pending).map(_copy_shard))
 
     remaining = _pending_shards(shards, destination_url)
     if remaining:
