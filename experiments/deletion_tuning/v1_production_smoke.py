@@ -200,17 +200,11 @@ def run_production_smoke(output_root: Path | None = None) -> dict:
 
 def _pod_train_config(spec: SFTSpec, output_path: str):
     """The pod config the launcher would dispatch, built against a local output path."""
+    from types import SimpleNamespace
 
-    class _Ctx:
-        is_fingerprint = False
-        output_path = output_path
-
-        @staticmethod
-        def runtime_arg(_key):
-            return _gpu_resources()
-
+    ctx = SimpleNamespace(is_fingerprint=False, output_path=output_path)
     return _levanter_pod_config(
-        _Ctx(),
+        ctx,
         spec,
         spec.prepared_data,
         _gpu_resources(),
