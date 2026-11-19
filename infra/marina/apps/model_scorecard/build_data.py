@@ -53,6 +53,18 @@ class Link:
 
 
 @dataclass(frozen=True)
+class Trials:
+    """Agentic trial outcomes behind a score, which averages reward over the scored trials.
+
+    Trials that hit the agent time limit are scored with reward 0; infrastructure failures are unscored.
+    """
+
+    attempted: int
+    scored: int
+    timeouts: int
+
+
+@dataclass(frozen=True)
 class ScoredCell:
     score: float
     label: Label
@@ -61,6 +73,7 @@ class ScoredCell:
     note: str | None = None
     suspect: str | None = None
     """Why the score may not reflect the model, e.g. a known grading or protocol problem."""
+    trials: Trials | None = None
 
 
 @dataclass(frozen=True)
@@ -115,6 +128,15 @@ def model_link(model: Mapping[str, Any]) -> str:
     return HF_URL.format(repo=model["hf_repo"], revision=model["revision"])
 
 
+def parse_trials(spec: Mapping[str, int] | None) -> Trials | None:
+    if spec is None:
+        return None
+    trials = Trials(**spec)
+    if not 0 <= trials.timeouts <= trials.scored <= trials.attempted:
+        raise ValueError(f"Trial counts need 0 <= timeouts <= scored <= attempted: {dict(spec)}")
+    return trials
+
+
 def resolve_cell(
     eval_name: str, spec: Mapping[str, Any] | None, model: Mapping[str, Any], fetch_record: FetchRecord
 ) -> Cell:
@@ -125,6 +147,7 @@ def resolve_cell(
     label = Label(spec["label"])
     note = spec.get("note")
     suspect = spec.get("suspect")
+    trials = parse_trials(spec.get("trials"))
     if "run_id" in spec:
         record = fetch_record(spec["run_id"])
         if record.evaluation.name != eval_name:
@@ -137,12 +160,14 @@ def resolve_cell(
                 f"Run {record.run_id} evaluates {record.model.location!r}@{revision!r}, "
                 f"not {location!r}@{expected_revision!r}"
             )
-        return ScoredCell(headline_score(record), label, run_link(record.run_id), record.run_id, note, suspect)
+        return ScoredCell(headline_score(record), label, run_link(record.run_id), record.run_id, note, suspect, trials)
     if "source" in spec:
         score = float(spec["score"])
         if not 0 <= score <= 100:
             raise ValueError(f"{eval_name} source score {score} is outside 0-100")
-        return ScoredCell(round(score, SCORE_DECIMALS), label, source_link(spec["source"]), note=note, suspect=suspect)
+        return ScoredCell(
+            round(score, SCORE_DECIMALS), label, source_link(spec["source"]), note=note, suspect=suspect, trials=trials
+        )
     raise ValueError(f"{eval_name} cell needs run_id, source, or missing: {dict(spec)}")
 
 

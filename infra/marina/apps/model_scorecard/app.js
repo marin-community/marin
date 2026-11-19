@@ -1,4 +1,6 @@
 const LABEL_TEXT = { official: "Official", unofficial: "Unofficial" };
+// Marin publishes an agentic score only when at least this share of trials was scored.
+const MIN_COMPLETION = 0.9;
 const LINK_TEXT = { evaldash: "Click to open the run in EvalDash", storage: "Click to open the raw results in Filer" };
 
 function element(tag, attributes = {}, text) {
@@ -13,6 +15,28 @@ function headerText(name) {
   return name.replace(/(bench|plus)$/, "\u200b$1");
 }
 
+function percent(part, whole) {
+  return `${Math.round((100 * part) / whole)}%`;
+}
+
+function trialsLine(trials) {
+  const line = element("span", { class: "trials" });
+  const completion = element("span", {}, percent(trials.scored, trials.attempted));
+  if (trials.scored < MIN_COMPLETION * trials.attempted) completion.className = "low-completion";
+  line.append(completion, ` · ${percent(trials.timeouts, trials.attempted)} t/o`);
+  return line;
+}
+
+function trialsText(trials) {
+  const unscored = trials.attempted - trials.scored;
+  return [
+    `Trials: ${trials.scored} of ${trials.attempted} scored (${percent(trials.scored, trials.attempted)}; ` +
+      `Marin requires ${percent(MIN_COMPLETION, 1)})`,
+    `${trials.timeouts} hit the agent time limit and score 0`,
+    `${unscored} failed in infrastructure and are unscored`,
+  ];
+}
+
 function scoreCell(cell, column) {
   const td = element("td", { "data-col": column });
   if ("missing" in cell) {
@@ -25,6 +49,7 @@ function scoreCell(cell, column) {
   link.append(element("span", { class: "score" }, cell.score.toFixed(2)));
   if (cell.suspect) link.append(element("span", { class: "suspect-mark", "aria-label": "suspect" }, "!"));
   else if (cell.note) link.append(element("span", { class: "note-mark" }, "*"));
+  if (cell.trials) link.append(trialsLine(cell.trials));
   td.append(link);
   return td;
 }
@@ -38,6 +63,7 @@ function tooltipLines(model, evalName, cell) {
   }
   lines.push([cell.score.toFixed(2), "tip-score"], [LABEL_TEXT[cell.label]]);
   if (cell.suspect) lines.push([`Suspect: ${cell.suspect}`, "tip-suspect"]);
+  if (cell.trials) lines.push(...trialsText(cell.trials).map((text) => [text]));
   if (cell.note) lines.push([cell.note]);
   lines.push([LINK_TEXT[cell.link.kind]]);
   if (cell.run_id) lines.push([cell.run_id, "tip-id"]);

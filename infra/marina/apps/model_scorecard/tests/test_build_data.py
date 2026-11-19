@@ -96,6 +96,22 @@ def test_source_in_a_run_directory_links_to_evaldash() -> None:
     assert link.url == f"https://marina.oa.dev/evaldash/runs/{RUN_ID}"
 
 
+def test_agentic_source_cell_carries_its_trial_counts() -> None:
+    uri = f"s3://marin-us-east-02a/marin/evals/{RUN_ID}/results/harbor_jobs/job"
+    trials = {"attempted": 500, "scored": 454, "timeouts": 204}
+    cell = {"source": uri, "score": 43.612, "label": "unofficial", "trials": trials, "suspect": "Run failed"}
+
+    scorecard = build_scorecard(manifest({"math500": cell}), lambda _: record())
+
+    assert scorecard["models"][0]["cells"]["math500"] == {
+        "score": 43.61,
+        "label": "unofficial",
+        "link": {"kind": "evaldash", "url": f"https://marina.oa.dev/evaldash/runs/{RUN_ID}"},
+        "suspect": "Run failed",
+        "trials": trials,
+    }
+
+
 def test_source_outside_a_run_directory_links_to_filer() -> None:
     uri = "s3://marin-us-east-02a/marin/evals/ablations/regrade-1/results/math500/model.json"
     link = source_link(uri)

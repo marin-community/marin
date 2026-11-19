@@ -62,7 +62,7 @@ a:focus-visible {
 
 table {
   width: 100%;
-  min-width: 1500px;
+  min-width: 1800px;
   table-layout: fixed;
   border-collapse: separate;
   border-spacing: 2px;
@@ -154,6 +154,25 @@ td.suspect .score {
 }
 
 .tooltip .tip-suspect {
+  color: var(--suspect);
+  font-weight: 600;
+}
+
+.trials {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.trials-sample {
+  margin-right: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.trials .low-completion {
   color: var(--suspect);
   font-weight: 600;
 }
