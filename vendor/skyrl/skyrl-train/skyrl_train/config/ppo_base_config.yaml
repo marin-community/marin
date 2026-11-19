@@ -150,6 +150,11 @@ trainer:
   ref:
     # Keep the standard buffer even when reference workers share a GPU.
     # Null delegates sizing to the process environment and NCCL config.
+    # The explicit 4-MiB buffer works around NCCL 2.30.7's NVLSTree chunk exceeding the SIMPLE FIFO slot
+    # (https://github.com/marin-community/marin/issues/11649).
+    # The NVLSTree chunk tuning in NCCL 2.32.6
+    # (https://github.com/NVIDIA/nccl/commit/b89a40883e4868c6bb44610c3c75d4a8b7a40530) is a possible path back to
+    # smaller buffers once an upgrade is validated.
     nccl_buffer_size_bytes: *nccl_standard_buffer_bytes
     model:
       path: ${trainer.policy.model.path}
