@@ -414,7 +414,7 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
                     task_id=task_id,
                     data_source="fixture",
                     strata=annotations[task_id].strata,
-                    agentic=False,
+                    task_digest=annotations[task_id].task_digest,
                     score=None,
                     outcome="mixed",
                     error_type=None,
@@ -551,9 +551,56 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
     ]
     updated.append(
         updated[-1].model_copy(
-            update={"task_id": "addition", "strata": child.tasks["addition"].strata, "answers": addition_answers}
+            update={
+                "task_id": "addition",
+                "task_digest": child.tasks["addition"].task_digest,
+                "strata": child.tasks["addition"].strata,
+                "answers": addition_answers,
+            }
         )
     )
+    # Use the later evaluation's full pool to recover both versions, including the retired task.
+    complete = [
+        row.model_copy(
+            update={
+                "answers": [
+                    row.answers[0].model_copy(
+                        update={
+                            "verifier_score": 0.0 if row.task_id == "bounded" else 1.0,
+                            "verification_status": "verified",
+                            "error_type": None,
+                            "error_treatment": None,
+                        }
+                    )
+                ]
+            }
+        )
+        for row in updated
+        if row.step == 25
+    ]
+    version_export = str(tmp_path / "version-scoring")
+    write_evaluations(version_export, complete)
+    stored = read_evaluations(version_export, attempt_id=attempt_id, evaluation="eval/", step=25)
+    parent = read_selection_strata(str(selection))
+    assert parent is not None
+    assert scoring.score_eval_lite_version(stored, parent) == scoring.EvalLiteVersionScore(5 / 6, 6, (), ())
+    assert scoring.score_eval_lite_version(stored, child) == scoring.EvalLiteVersionScore(1.0, 6, (), ())
+
+    damaged = [
+        (
+            row.model_copy(update={"task_digest": "different-content"})
+            if row.task_id == "coding"
+            else row.model_copy(update={"answers": []}) if row.task_id == "general" else row
+        )
+        for row in stored
+        if row.task_id != "stem"
+    ]
+    assert scoring.score_eval_lite_version(damaged, parent) == scoring.EvalLiteVersionScore(
+        None, 3, ("general", "stem"), ("coding",)
+    )
+    with pytest.raises(ValueError, match="select one evaluation, attempt and step"):
+        scoring.score_eval_lite_version([*stored, stored[0].model_copy(update={"step": 0})], parent)
+
     write_evaluations(export, updated)
     source.update(uri=successor_root, relative_path=FULL_VALIDATION_FILENAME)
     write_receipt(tmp_path, native)

@@ -63,6 +63,7 @@ class RecordedLaunch(BaseModel):
     run_id: str = Field(validation_alias=AliasPath("run", "id"))
     attempt_id: str = Field(validation_alias=AliasPath("run", "attempt_id"))
     run_mode: str = Field(validation_alias=AliasPath("run", "mode"))
+    model_name: str | None = Field(default=None, validation_alias=AliasPath("run", "model"))
     coordinator_iris_job_id: str | None = Field(validation_alias=AliasPath("run", "coordinator_iris_job_id"))
     export_root: str = Field(validation_alias=AliasPath("artifacts", "export_root"))
     cluster: str = Field(validation_alias=AliasPath("iris", "cluster"))

@@ -91,7 +91,7 @@ def build_record(
     receipt: AttemptRecord,
     report: gate.GateReport | None = None,
     gate_name: str | None = None,
-    issue: int | None = None,
+    evaldash_run_ids: tuple[str, ...] | None = None,
 ) -> RunSummary:
     """Build a terminal progress record from stored native outputs without live lookups."""
     launch, result = recorded_launch(receipt), receipt.native.result
@@ -157,7 +157,9 @@ def build_record(
         attempt_id=attempt_id,
         label=label(inputs),
         series=preset.name,
-        issue=issue,
+        model=launch.model_name,
+        issue=receipt.issue,
+        evaldash_run_ids=list(dict.fromkeys(evaldash_run_ids)) if evaldash_run_ids is not None else None,
         gate=gate_name,
         gate_result=(
             GateResult(
@@ -207,11 +209,13 @@ def publish_runs(
     *,
     table: presets.ModelPresets,
     gate_path: str | None = None,
-    issue: int | None = None,
     service_url: str | None = None,
     attempt_id: str | None = None,
+    evaldash_run_ids: tuple[str, ...] | None = None,
 ) -> PublicationOutcome:
     """Rebuild and upsert each stored attempt, isolating publication failures."""
+    if evaldash_run_ids is not None and (len(outputs) != 1 or attempt_id is None):
+        raise ValueError("EvalDash run IDs require exactly one output and its explicit attempt ID")
     result = PublicationOutcome()
     snapshots = {}
     for path in outputs:
@@ -259,7 +263,7 @@ def publish_runs(
                     receipt=receipt,
                     report=current_report,
                     gate_name=read_record(gate_path).name if current_report is not None else None,
-                    issue=issue if selected_id == current_id else None,
+                    evaldash_run_ids=evaldash_run_ids,
                 )
                 url = publish_result(record, service_url)
                 result.served_records.append(destination)
@@ -308,14 +312,24 @@ def command(table: presets.ModelPresets) -> click.Command:
     @click.option("--url", help="Marina origin (defaults to the Marina service).")
     @click.option("--output", "run_output", help="Stored native run output; requires --attempt.")
     @click.option("--attempt", help="Publish this stored attempt from --output, without native execution.")
-    def command(preset_name: str, url: str | None, run_output: str | None, attempt: str | None) -> None:
+    @click.option("--evaldash-run-id", multiple=True, help="Link an EvalDash run to this attempt. Repeatable.")
+    def command(
+        preset_name: str, url: str | None, run_output: str | None, attempt: str | None, evaldash_run_id: tuple[str, ...]
+    ) -> None:
         """Publish pinned controls or one stored native attempt."""
         if (run_output is None) != (attempt is None):
             raise click.UsageError("--output and --attempt are required together")
+        if evaldash_run_id and attempt is None:
+            raise click.UsageError("--evaldash-run-id requires --output and --attempt")
         if run_output is not None:
             configure_coreweave_s3()
             result = publish_runs(
-                [run_output], table.by_name[preset_name], table=table, service_url=url, attempt_id=attempt
+                [run_output],
+                table.by_name[preset_name],
+                table=table,
+                service_url=url,
+                attempt_id=attempt,
+                evaldash_run_ids=evaldash_run_id or None,
             )
             if result.unserved_records:
                 result.retry = "Repeat this publication command with --output and --attempt."

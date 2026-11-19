@@ -21,6 +21,7 @@ from finestore.rl.run_records import (
     read_evaluations,
     run_records_root,
     update_attempt,
+    write_attempt,
     write_evaluations,
 )
 from finestore.store import DataStore
@@ -249,13 +250,12 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     def stored():
         return {row["attempt_id"]: row for row in client.get(f"/a/{publication.APPLET_ID}/api/runs").json()["runs"]}
 
-    def publish(gate_path, issue=None):
+    def publish(gate_path):
         return publication.publish_runs(
             [str(root) for root in sources],
             preset,
             table=table,
             gate_path=gate_path,
-            issue=issue,
             service_url="http://localhost",
         )
 
@@ -272,8 +272,10 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         boundary.setattr(
             "marina.client.marina_request", lambda *args, **kwargs: pytest.fail("Invalid record reached Marina")
         )
-        rejected = publish(first_gate, issue="invalid")
-        assert len(rejected.unserved_records) == 2 and all("issue" in error for error in rejected.errors)
+        rejected = publication.publish_runs(
+            [str(sources[0])], preset, table=table, attempt_id="native-0", evaldash_run_ids=("",)
+        )
+        assert len(rejected.unserved_records) == 1 and "evaldash_run_ids" in rejected.errors[0]
     report_file = Path(first_gate) / RECORD_FILENAME
     original = report_file.read_bytes()
     invalid_count = json.loads(original)
@@ -294,7 +296,14 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         return response
 
     monkeypatch.setattr("marina.client.marina_request", unavailable_readback)
-    first = publish(first_gate, issue=73)
+    for index, source in enumerate(sources):
+        attempt_id = f"native-{index}"
+        attempt = read_stored_skyrl_attempts(str(source))[1][attempt_id]
+        write_attempt(
+            str(source / "exports"),
+            AttemptRecord(run_id=attempt.run_id, attempt_id=attempt_id, issue=73 if index == 0 else "opted_out"),
+        )
+    first = publish(first_gate)
     assert len(first.served_records) == 1 and first.errors == ["Response unavailable after insert"]
     persisted = stored()
     assert set(persisted) == {"native-0", "native-1"} and persisted["native-0"]["issue"] == 73
@@ -307,7 +316,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
             datetime.fromisoformat(receipt["result"]["started_at"]) + timedelta(hours=2)
         ).isoformat()
     monkeypatch.setattr("marina.client.marina_request", request)
-    repeated = publish(second_gate, issue=74)
+    repeated = publish(second_gate)
     assert repeated.unserved_records == [] and repeated.errors == []
     payload = client.get(f"/a/{publication.APPLET_ID}/api/runs").json()
     assert payload["skipped_records"] == [] and len(payload["runs"]) == 2
@@ -343,6 +352,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         (relative_key, "requirement"),
     }
 
+    run_ids = ("eval-initial-policy", "eval-terminal-policy")
     for index in range(2):
 
         @click.command()
@@ -360,6 +370,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
                         str(sources[index]),
                         "--attempt",
                         f"native-{index}",
+                        *[value for run_id in run_ids for value in ("--evaldash-run-id", run_id)],
                     ],
                     init=ArtifactHfModel(
                         ArtifactStep.adopt("tests/unbuilt-init", "2026.11.17", "s3://unused/init", kind=Artifact)
@@ -371,14 +382,16 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         assert republished.exit_code == 0, (republished.output, republished.exception)
         retained = stored()[f"native-{index}"]
         assert retained["gate_result"] == expected and retained["gate"] == rows[f"native-{index}"]["gate"]
-        assert retained["issue"] == 74 and retained["wandb_url"] == rows[f"native-{index}"]["wandb_url"]
+        assert retained["issue"] == (73 if index == 0 else "opted_out")
+        assert retained["evaldash_run_ids"] == list(run_ids)
+        assert retained["wandb_url"] == rows[f"native-{index}"]["wandb_url"]
         assert (retained["status"], retained["failed_facts"]) == (
             rows[f"native-{index}"]["status"],
             rows[f"native-{index}"]["failed_facts"],
         )
     assert rows["native-0"]["status"] == "succeeded" and rows["native-0"]["failed_facts"] == []
     assert rows["native-1"]["status"] == "failed" and rows["native-1"]["failed_facts"] == ["require/policy/entropy"]
-    assert rows["native-0"]["elapsed_seconds"] == 7200 and rows["native-0"]["issue"] == 74
+    assert rows["native-0"]["elapsed_seconds"] == 7200 and rows["native-0"]["issue"] == 73
     grafana = urlparse(rows["native-0"]["grafana_url"])
     assert grafana.path == "/d/marin-rl-runs/rl-post-training"
     query = parse_qs(grafana.query)
@@ -415,7 +428,20 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     assert fresh.unserved_records == [] and fresh.errors == []
     assert fresh_report.run.attempt_ids == ("native-retry", "native-1")
     historical = stored()["native-0"]
-    assert historical["issue"] == 74
+    assert historical["issue"] == 73 and historical["evaldash_run_ids"] == list(run_ids)
+    with pytest.raises(ValueError, match="one output and its explicit attempt ID"):
+        publication.publish_runs([str(sources[0])], preset, table=table, evaldash_run_ids=run_ids)
+    with pytest.raises(ValueError, match="one output and its explicit attempt ID"):
+        publication.publish_runs(
+            list(map(str, sources)), preset, table=table, attempt_id="native-retry", evaldash_run_ids=run_ids
+        )
+    linked = publication.publish_runs(
+        [str(sources[0])], preset, table=table, attempt_id="native-retry", evaldash_run_ids=("eval-for-retry",)
+    )
+    assert linked.served_records == [(receipt["config"]["run"]["id"], "native-retry")] and not linked.errors
+    linked_rows = stored()
+    assert linked_rows["native-retry"]["evaldash_run_ids"] == ["eval-for-retry"]
+    assert linked_rows["native-0"]["evaldash_run_ids"] == list(run_ids)
     saved_evaluations = {}
     for root in sources:
         current_id, _ = read_stored_skyrl_attempts(str(root))

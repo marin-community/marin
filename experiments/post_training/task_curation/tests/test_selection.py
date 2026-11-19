@@ -190,10 +190,14 @@ def test_selection_filters_full_heldout_and_duplicates_before_sampling(tmp_path,
             }
         )
     )
-    original = source_task("training-a")
+    training = {
+        identifier: source_task(identifier).model_copy(update={"tags": ("agentic",)})
+        for identifier in ("training-a", "training-b", "training-c")
+    }
+    original = training["training-a"]
     duplicate = original.model_copy(update={"id": "alias"})
-    first = admitted_source(tmp_path / "first", [original, source_task("training-b"), *leaked], mode=mode)
-    second = admitted_source(tmp_path / "second", [duplicate, source_task("training-c")], mode=mode)
+    first = admitted_source(tmp_path / "first", [original, training["training-b"], *leaked], mode=mode)
+    second = admitted_source(tmp_path / "second", [duplicate, training["training-c"]], mode=mode)
     curated = {"fixture:first": first, "fixture:second": second}
     selection_step = task_selection_step(curated, settings)
     artifact = run(selection_step)[0]
@@ -202,12 +206,13 @@ def test_selection_filters_full_heldout_and_duplicates_before_sampling(tmp_path,
     assert len(tasks) == 2
     assert {task.id for task in tasks} <= {"training-a", "training-b", "training-c"}
     for task in tasks:
-        assert task == source_task(task.id)
+        assert task == training[task.id]
     panel = read_selection_strata(str(output))
     assert panel is not None
     carried = pq.read_table(output / TRAIN_FILENAME).to_pylist()
     assert {row["family"] for row in carried} == {"calendar"}
     assert {row["aai_category"] for row in carried} == {AAII_CATEGORIES["calendar"]}
+    assert all(row["agentic"] is True for row in carried)
     assert all(
         row["source"] == json.loads(row["task_spec"])["source"]["dataset"]
         and row["topic"] == row["difficulty"] == "untagged"
@@ -230,6 +235,9 @@ def test_selection_filters_full_heldout_and_duplicates_before_sampling(tmp_path,
     assert subset.identity(sampled[0].id) == panel.identity(sampled[0].id)
 
     full = read_tasks(output / FULL_VALIDATION_FILENAME)
+    for row in pq.read_table(output / FULL_VALIDATION_FILENAME).to_pylist():
+        task = json.loads(row["task_spec"])
+        assert row["agentic"] == ("agentic" in task["tags"]) == panel.identity(task["id"]).strata.agentic
     sample = read_tasks(output / VALIDATION_FILENAME)
     families = {f"heldout-{family}-{index}": family for family in FAMILIES for index in range(21)}
     assert [task.id for task in full] == list(families)
@@ -710,6 +718,9 @@ def test_eval_lite_publication_preserves_untouched_strata_and_joins_initializer_
     assert panel is not None
     annotations = panel.tasks
     assert list(annotations) == [task.id for task in full]
+    for filename in (FULL_VALIDATION_FILENAME, VALIDATION_FILENAME):
+        for row in pq.read_table(provisional / filename).to_pylist():
+            assert row["agentic"] == (json.loads(row["task_spec"])["id"] in agents)
     for task in full:
         row = annotations[task.id]
         agent = task.id in agents

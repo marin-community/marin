@@ -74,7 +74,7 @@ def assert_revisioned_native_configs(
     paths = []
     for name in revisions:
         preset = table.by_name[name]
-        step = recipe.run_step(preset, recipe.run_spec(preset, name="fixture-default-" + name))
+        step = recipe.run_step(preset, recipe.run_spec(preset, name="fixture-default-" + name, model_name=table.model))
         path = tmp_path / f"{name}.yaml"
         path.write_text(materialized_config(step, f"/{namespace}-pin-prefix").launch_config_yaml)
         paths.append(str(path))
@@ -89,6 +89,7 @@ def assert_revisioned_native_configs(
         allocation = config["iris"]["allocation"]
         assert (allocation["num_nodes"], allocation["gpus_per_node"]) == (plan.num_nodes, plan.gpus_per_node)
         assert config["iris"]["wandb_entity"] == preset.wandb_entity
+        assert config["run"]["model"] == table.model
         staleness = preset.recipe.config.trainer.rollout_buffer.max_staleness_steps
         if staleness is not None:
             assert config["skyrl"]["trainer"]["rollout_buffer"]["max_staleness_steps"] == staleness

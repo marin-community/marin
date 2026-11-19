@@ -58,7 +58,7 @@ MODEL_REVISION = "fe666478454e79fe6027a0bab0388d9abd68f51a"
 
 MODEL_URI = "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 
-DEFAULT_SELECTION_VERSION = "2026.11.17.1"
+DEFAULT_SELECTION_VERSION = "2026.11.19.1"
 
 DEFAULT_EVAL_LITE_NAME = "eval-lite"
 
@@ -345,7 +345,7 @@ _LEARNING_MEDIUM = Preset(
     retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
     export_hf=True,
     name="learning-medium",
-    revision="2026.11.17.1",
+    revision="2026.11.19.1",
     recipe=_ASYNC_P40,
     updates=25,
     measured=range(21, 26),
@@ -404,7 +404,7 @@ _TRAIN_LONG = Preset(
     retention=SkyRLRetentionPolicy(resume_checkpoint_count=5),
     export_hf=True,
     name="train-long",
-    revision="2026.11.17.1",
+    revision="2026.11.19.1",
     recipe=_ASYNC_P40,
     updates=100,
     measured=range(1, 101),
@@ -431,7 +431,7 @@ _PRESETS = (
         retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
         export_hf=False,
         name="speed-short",
-        revision="2026.11.17.1",
+        revision="2026.11.19.1",
         recipe=replace(_GENERATING, fixed_reply_tokens=4096),
         updates=0,
         measured=range(1),
@@ -459,7 +459,7 @@ _PRESETS = (
         retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
         export_hf=False,
         name="data-short",
-        revision="2026.11.17.1",
+        revision="2026.11.19.1",
         recipe=_GENERATING,
         updates=0,
         measured=range(1),
@@ -488,7 +488,7 @@ _PRESETS = (
         export_hf=False,
         evaluations=(),
         name="speed-medium",
-        revision="2026.11.17.1",
+        revision="2026.11.19.1",
         recipe=replace(
             _ASYNC_P40,
             fixed_reply_tokens=4096,
@@ -527,7 +527,7 @@ _PRESETS = (
         export_hf=False,
         evaluations=(),
         name="speed-long",
-        revision="2026.11.17.1",
+        revision="2026.11.19.1",
         recipe=_ASYNC_P40,
         updates=20,
         measured=range(3, 21),
@@ -561,7 +561,7 @@ _PRESETS = (
     replace(
         _TRAIN_LONG,
         name="train-long-harbor",
-        revision="2026.11.18.1",
+        revision="2026.11.19.1",
         harbor=_harbor_evaluation(),
         gaps=(*_TRAIN_LONG.gaps, "harbor-on-daytona"),
         recipe=replace(
@@ -572,6 +572,7 @@ _PRESETS = (
 )
 
 SNOWBALL = ModelPresets(
+    model="snowball",
     presets=_PRESETS,
     namespace="snowball-rl",
     controls={

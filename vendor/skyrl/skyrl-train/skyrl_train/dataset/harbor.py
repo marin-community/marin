@@ -19,7 +19,13 @@ from taskcompendium.models import NoGrader, ScriptGrader, Source, TaskSpec, Veri
 
 from marinskyrl.packed_tasks import PackedTaskMaterializer, PackedTaskReference, select_task_references
 from marinskyrl.task_sources import DirectoryDataSource, TaskTroveParquetSource, data_source
-from skyrl_train.dataset.tasks import TASK_EVALUATION_IDENTITY, TASK_ROLLOUT_COLUMN, TaskDataset, cache_tasks
+from skyrl_train.dataset.tasks import (
+    TASK_EVALUATION_IDENTITY,
+    TASK_ROLLOUT_COLUMN,
+    TaskDataset,
+    cache_tasks,
+    task_evaluation_identity,
+)
 from skyrl_train.dataset.harbor_import import (
     HARBOR_TRIAL_SESSION,
     EnvironmentConfig,
@@ -182,8 +188,9 @@ def _parquet_evaluation_identities(
         with pq.ParquetFile(source) as parquet:
             for batch in parquet.iter_batches(columns=[TASK_ROLLOUT_COLUMN], batch_size=MATERIALIZATION_BATCH_SIZE):
                 for raw in batch.column(0).to_pylist():
-                    task_id = json.loads(raw)["task"]["id"]
-                    identity = panel.identity(task_id) if panel is not None else None
+                    task = json.loads(raw)["task"]
+                    task_id = task["id"]
+                    identity = task_evaluation_identity(task, panel)
                     if task_id in identities and identities[task_id] != identity:
                         raise ValueError(f"task has conflicting selection identities in one input set: {task_id}")
                     identities[task_id] = identity

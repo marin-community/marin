@@ -650,6 +650,7 @@ class SkyRLSpec:
     seed: int
     evaluation_data: tuple[tuple[str, tuple[SkyRLDataSource, ...]], ...] = ()
     starting_checkpoint: ArtifactStep[Artifact] | None = None
+    model_name: str | None = None
 
     def __post_init__(self) -> None:
         _validate_skyrl_recipe(self.config_yaml, self.topology)
@@ -827,6 +828,8 @@ class SkyRLRun(Artifact):
     draft_checkpoint_root: str | None
     terminal_manifest_uri: str
     iris_job_id: str
+    run_id: str | None = None
+    attempt_id: str | None = None
 
 
 def skyrl_cpu_command(*arguments: str) -> list[str]:
@@ -927,6 +930,8 @@ def run_skyrl(config: SkyRLRunConfig, *, forward_env: tuple[str, ...] = ()) -> S
             draft_checkpoint_root=config.draft_checkpoint_root,
             terminal_manifest_uri=config.output.terminal_manifest_uri,
             iris_job_id=response.iris_job_id,
+            run_id=config.run_id,
+            attempt_id=config.attempt_id,
         )
     except Exception:
         _record_skyrl_run(config, "failed", response)
@@ -1016,6 +1021,7 @@ def _launch_config_yaml(
             "mode": "train",
             "submission": "wait",
             "export_hf": export_hf,
+            **({"model": spec.model_name} if spec.model_name is not None else {}),
             **({"coordinator_iris_job_id": coordinator_iris_job_id} if coordinator_iris_job_id is not None else {}),
         },
         "runtime": {

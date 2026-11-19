@@ -10,7 +10,9 @@ constraints and invariants, then verdict and label. Replicate counts identify ag
 results. Attempts without report details remain descriptive; unknown measurements are explicit.
 A run-only link (`#run=<run_id>`) selects its latest attempt. Add
 `&attempt=<attempt_id>` to select a particular attempt. W&B links use the recorded
-run URL; the Grafana link uses the recorded native execution window. An `issue` field links to the experiment's GitHub issue. The detail view includes per-step family, AAII-category and difficulty means and scored/attempted answer counts.
+run URL; the Grafana link uses the recorded native execution window. The Model column can filter by
+the recorded model. The issue number links to GitHub, and the opt-out is shown in the attempt details.
+Linked EvalDash evaluations open the recorded run IDs. The detail view includes per-step family, AAII-category and difficulty means and scored/attempted answer counts.
 
 Malformed records are skipped individually and named in a visible note.
 
@@ -18,7 +20,7 @@ Malformed records are skipped individually and named in a visible note.
 
 The app's release migration creates its `rl_runs` table in the application schema.
 Each native `(run_id, attempt_id)` identifies one updatable JSON record. Repeat
-publication refreshes that attempt's record; null issue, gate and gate-result values
+publication refreshes that attempt's record; null model, issue, EvalDash links, gate and gate-result values
 preserve their stored values. Other attempts remain separate.
 
 Native failures and failed training or evaluation invariants set `status: failed` and name `failed_facts`.
