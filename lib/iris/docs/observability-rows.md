@@ -28,7 +28,7 @@ know what ran; a container runtime rejects credentials in a reference, and
 registry auth comes from the node's credential helper. There are three
 exceptions: the free-text `error` and `status_message` columns, redacted; the
 launch's git identity, read from the environment into the `provenance_*`
-columns, both below; and job tags. Job tags (`job_config.tags_json`, copied to
+columns (both described below); and job tags. Job tags (`job_config.tags_json`, copied to
 `iris.controller_db__jobs.tags`) are user-written but exist for reporting, so
 they are copied with token-like strings in each value redacted, best-effort
 like `error` (see **Free text** below). Rows are kept forever, so any other
