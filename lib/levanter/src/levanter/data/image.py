@@ -14,6 +14,7 @@ from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Union
 import datasets
 import jax
 import numpy as np
+from datasets.fingerprint import Hasher
 from draccus import field
 
 from levanter.data.mixture import MixtureDataset, StopStrategy
@@ -166,13 +167,15 @@ class BatchMultimodalProcessor(BatchProcessor[ConversationDict, ImageTextDict]):
             prompt = self.processor.apply_chat_template(messages, tokenize=False, **template_args)
         text_options: dict[str, Any] = dict(
             return_tensors="np",
-            add_special_tokens=self.template is None,
             return_attention_mask=True,
             padding="max_length" if truncate and self.padding else False,
             truncation=truncate,
             max_length=self.max_length if truncate else None,
         )
-        encoded = self.processor(text=[prompt], images=images or None, **text_options)
+        if self.template is not None:
+            text_options["add_special_tokens"] = False
+        # Keep all images for this prompt in one sample, as in ProcessorMixin.apply_chat_template.
+        encoded = self.processor(text=[prompt], images=[images] if images else None, **text_options)
         # Only text fields have a batch axis we can safely remove.
         sequence_keys = {*tokenizer.model_input_names, "input_ids", "attention_mask", "mm_token_type_ids"}
         result = {key: np.asarray(value[0] if key in sequence_keys else value) for key, value in encoded.items()}
@@ -223,6 +226,9 @@ class BatchMultimodalProcessor(BatchProcessor[ConversationDict, ImageTextDict]):
     def metadata(self) -> dict[str, Any]:
         return {
             "processor": self.processor.to_dict(),
+            "tokenizer": self.processor.tokenizer.name_or_path,
+            "padding_side": self.processor.tokenizer.padding_side,
+            "truncation_side": self.processor.tokenizer.truncation_side,
             "template": self.template,
             "max_length": self.max_length,
             "padding": self.padding,
@@ -360,6 +366,7 @@ class ImageTaskConfig(abc.ABC):
     processor: str
     max_length: int = 2048
     padding: bool = True
+    mask_prompt: bool = True
 
     @cached_property
     def loaded_processor(self) -> ProcessorMixin:
@@ -411,16 +418,23 @@ class ProcessedImageCache(AsyncDataset[ImageTextDict]):
         messages_key: str = "messages",
         images_key: str = "images",
         cache_options: CacheOptions = CacheOptions.default(),
+        *,
+        mask_prompt: bool = True,
     ) -> "ProcessedImageCache":
         batch_processor = BatchMultimodalProcessor(
             processor,
             max_length=max_length,
             padding=padding,
+            mask_prompt=mask_prompt,
             messages_key=messages_key,
             images_key=images_key,
         )
+        fingerprint = Hasher.hash(batch_processor.metadata)
         cache = build_or_load_cache(
-            prefix_join(cache_dir, "processor-inputs-v1"), source, batch_processor, options=cache_options
+            prefix_join(cache_dir, f"processor-inputs-v2/{fingerprint}"),
+            source,
+            batch_processor,
+            options=cache_options,
         )
 
         if cache.is_finished:
@@ -465,6 +479,7 @@ class ImageIODatasetConfig(ImageTaskConfig):
             self.loaded_processor,
             max_length=self.max_length,
             padding=self.padding,
+            mask_prompt=self.mask_prompt,
             cache_options=cache_options,
         )
 
@@ -565,6 +580,7 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
                 processor=self.processor,
                 max_length=self.max_length,
                 padding=self.padding,
+                mask_prompt=self.mask_prompt,
                 source=source,
                 cache_dir=cache_dir,
             )

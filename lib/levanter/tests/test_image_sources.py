@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections.abc import Iterator
+from dataclasses import replace
 from typing import Any
 
 import json
@@ -25,6 +26,9 @@ from transformers import (
     CLIPProcessor,
     LlavaNextImageProcessor,
     LlavaNextProcessor,
+    LlavaOnevisionImageProcessorPil,
+    LlavaOnevisionProcessor,
+    LlavaOnevisionVideoProcessor,
     PreTrainedTokenizerFast,
     Siglip2ImageProcessorPil,
     Siglip2Processor,
@@ -260,19 +264,41 @@ def test_image_mixture_caches_processor_pixels_and_unpadded_targets(
         np.testing.assert_array_equal(item["loss_mask"], [0] * 6 + [1] * (length - 6))
     restored = config.train_set(options=CacheOptions(batch_size=1))
     np.testing.assert_array_equal(asyncio.run(restored.get_batch([1]))[0]["input_ids"], second["input_ids"])
+    if source_kind == "conversation":
+        caption_processor.chat_template = caption_processor.chat_template.replace("{% generation %}", "").replace(
+            "{% endgeneration %}", ""
+        )
+        with set_current_client(LocalClient()):
+            dataset = replace(config, mask_prompt=False).train_set(options=CacheOptions(batch_size=1))
+            row = asyncio.run(dataset.get_batch([0]))[0]
+        np.testing.assert_array_equal(row["loss_mask"], row["attention_mask"])
 
 
-def test_multi_image_expansion_preserves_processor_features_and_assistant_targets(caption_processor) -> None:
-    hf_processor = LlavaNextProcessor(
-        image_processor=LlavaNextImageProcessor(
-            size={"shortest_edge": 4}, crop_size={"height": 4, "width": 4}, image_grid_pinpoints=[[8, 8]]
-        ),
-        tokenizer=caption_processor.tokenizer,
-        patch_size=2,
-        vision_feature_select_strategy="full",
-        num_additional_image_tokens=0,
-        chat_template=caption_processor.chat_template,
-    )
+@pytest.mark.parametrize("onevision", [False, True], ids=["llava-next", "onevision"])
+def test_multi_image_expansion_preserves_processor_features_and_assistant_targets(
+    caption_processor, onevision
+) -> None:
+    if onevision:
+        hf_processor = LlavaOnevisionProcessor(
+            image_processor=LlavaOnevisionImageProcessorPil(
+                size={"height": 8, "width": 8}, image_grid_pinpoints=[[8, 8]]
+            ),
+            tokenizer=caption_processor.tokenizer,
+            video_processor=LlavaOnevisionVideoProcessor(),
+            num_image_tokens=4,
+            chat_template=caption_processor.chat_template,
+        )
+    else:
+        hf_processor = LlavaNextProcessor(
+            image_processor=LlavaNextImageProcessor(
+                size={"shortest_edge": 4}, crop_size={"height": 4, "width": 4}, image_grid_pinpoints=[[8, 8]]
+            ),
+            tokenizer=caption_processor.tokenizer,
+            patch_size=2,
+            vision_feature_select_strategy="full",
+            num_additional_image_tokens=0,
+            chat_template=caption_processor.chat_template,
+        )
     processor = BatchMultimodalProcessor(hf_processor, max_length=128)
     images = [Image.new("RGB", (8, 8), color) for color in ("red", "blue")]
     record = image_caption_to_conversation({"image": images[0], "text": "red"})
@@ -280,10 +306,11 @@ def test_multi_image_expansion_preserves_processor_features_and_assistant_target
     record["messages"][0]["content"].append({"type": "image"})
     output = processor([record])[0]
     prompt = hf_processor.apply_chat_template(record["messages"], tokenize=False)
-    expected = hf_processor(images=images, text=[prompt], return_tensors="np")
+    expected = hf_processor(images=[images], text=[prompt], return_tensors="np")
     np.testing.assert_array_equal(output["pixel_values"], expected["pixel_values"])
     np.testing.assert_array_equal(output["image_sizes"], expected["image_sizes"])
     ids = output["input_ids"]
+    np.testing.assert_array_equal(ids[output["attention_mask"].astype(bool)], expected["input_ids"][0])
     assert (ids == hf_processor.image_token_id).sum() > 2
     selected = ids[output["loss_mask"].astype(bool)]
     assert selected.tolist() == hf_processor.tokenizer.convert_tokens_to_ids(["red", "</turn>"])

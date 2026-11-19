@@ -211,7 +211,7 @@ Choose a source from `levanter.data.image`:
 
 Set `id` for a Hugging Face dataset, or list JSON, JSONL, or Parquet files in `train_urls` and `validation_urls`. Images can be encoded bytes, paths, or URLs.
 
-The cache keeps the image fields and shapes returned by the Hugging Face processor. Single image-caption pairs work without a chat template. For assistant-only loss in conversations, wrap the assistant response in `{% generation %}…{% endgeneration %}` in the template.
+The cache keeps the image fields and shapes returned by the Hugging Face processor. Single image-caption pairs work without a chat template. For assistant-only loss in conversations, wrap the assistant response in `{% generation %}…{% endgeneration %}` in the template. Set `mask_prompt: false` to train on all text tokens instead.
 
 # API
 
