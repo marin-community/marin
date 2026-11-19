@@ -11,6 +11,8 @@ import pytest
 import yaml
 from marin.execution.lazy import StepContext
 from marin.experiment.cli import graph_handles
+from rigging.filesystem.cluster_config import StoreType
+from rigging.filesystem.s3_compat import configure_coreweave_s3, s3_credentials
 from rigging.timing import Duration
 
 from experiments.post_training.long_loop import spec_pipeline
@@ -23,7 +25,17 @@ from experiments.post_training.long_loop.spec_pipeline import build_spec_graph
 SPEC = Path(__file__).parents[1] / "specs" / "round1.yaml"
 
 
-def test_emitted_rl_validation_and_eval_settings_come_from_the_pinned_spec(tmp_path, monkeypatch):
+@pytest.fixture
+def coreweave_policy_read(monkeypatch):
+    """The pinned canonical Micro210 policy is read from CoreWeave storage."""
+    configure_coreweave_s3()
+    if s3_credentials(StoreType.COREWEAVE) is None:
+        pytest.skip("CoreWeave credentials are required for the canonical Micro210 policy read")
+    return None
+
+
+@pytest.mark.integration
+def test_emitted_rl_validation_and_eval_settings_come_from_the_pinned_spec(tmp_path, monkeypatch, coreweave_policy_read):
     monkeypatch.setenv("MARIN_PREFIX", "s3://test/long-loop")
     monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
     resolved = resolve_spec(SPEC, smoke=False)
@@ -201,7 +213,8 @@ def test_rl_smoke_stops_before_eval_and_never_replays_sft(monkeypatch):
     assert terminal.runtime_args["skyrl_execution"].priority == "production"
 
 
-def test_adopted_sft_full_graph_report_has_no_fresh_base_dependency(monkeypatch, tmp_path):
+@pytest.mark.integration
+def test_adopted_sft_full_graph_report_has_no_fresh_base_dependency(monkeypatch, tmp_path, coreweave_policy_read):
     monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin/")
     monkeypatch.setenv("WANDB_API_KEY", "offline-validation-fixture")
     resolved = resolve_spec(SPEC, smoke=True)
@@ -290,7 +303,8 @@ def test_rl_keeps_child_execution_profile_without_gpu_probe_jobs():
         build_spec_graph(resolved, "2026.11.10.4", through="rl")
 
 
-def test_controlled_stage_allocations_and_deadlines_reach_dispatched_jobs(tmp_path, monkeypatch):
+@pytest.mark.integration
+def test_controlled_stage_allocations_and_deadlines_reach_dispatched_jobs(tmp_path, monkeypatch, coreweave_policy_read):
     monkeypatch.setenv("MARIN_PREFIX", "s3://test/long-loop")
     monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
     resolved = resolve_spec(SPEC, smoke=False)
@@ -321,7 +335,10 @@ def test_controlled_stage_allocations_and_deadlines_reach_dispatched_jobs(tmp_pa
         assert execution.coordinator_timeout_hours * 3600 == COORDINATOR_TIMEOUT_SECONDS
 
 
-def test_changed_stage_controls_require_acknowledgement_and_archive_the_decision(tmp_path, monkeypatch):
+@pytest.mark.integration
+def test_changed_stage_controls_require_acknowledgement_and_archive_the_decision(
+    tmp_path, monkeypatch, coreweave_policy_read
+):
     monkeypatch.setenv("MARIN_PREFIX", "s3://test/long-loop")
     root = tmp_path / "specs"
     shutil.copytree(SPEC.parent, root)

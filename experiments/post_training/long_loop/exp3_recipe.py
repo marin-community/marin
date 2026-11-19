@@ -81,7 +81,7 @@ def exp3_controls() -> SnowballSftConfig:
     return SnowballSftConfig(TOKEN_IDS, ANCHOR_IDS, math.sqrt(32), True, True)
 
 
-def whole_run_lr_receipt(spec: SFTSpec) -> dict:
+def whole_run_lr_receipt(spec: SFTSpec, *, min_lr_ratio: float = 0.1) -> dict:
     """Validate whole-run annealing against the optimizer's actual update indices."""
     horizon = spec.optimizer_num_train_steps
     if horizon != spec.num_train_steps or spec.trainer_config is None or horizon != spec.trainer_config.num_train_steps:
@@ -91,8 +91,8 @@ def whole_run_lr_receipt(spec: SFTSpec) -> dict:
         raise ValueError("Whole-run SFT annealing requires the qualified GrugMoeMuonH optimizer")
     if optimizer.warmup != 0 or optimizer.decay != horizon or optimizer.lr_schedule != "linear":
         raise ValueError("SFT requires zero warmup and linear decay across the entire horizon")
-    if optimizer.min_lr_ratio != 0.1:
-        raise ValueError("SFT requires min_lr_ratio=0.1")
+    if optimizer.min_lr_ratio != min_lr_ratio:
+        raise ValueError(f"SFT requires min_lr_ratio={min_lr_ratio}")
     assert horizon is not None
     samples = []
     for fraction in (0, 0.25, 0.5, 0.75, 1):
@@ -101,7 +101,8 @@ def whole_run_lr_receipt(spec: SFTSpec) -> dict:
         for name, peak in (("muonh", optimizer.learning_rate), ("adam", optimizer.adam_lr)):
             schedule = optimizer.lr_scheduler(horizon, override_lr=peak)
             rates[name] = float(schedule(index))
-            if fraction == 1 and abs(rates[name] - peak * 0.1) > peak * 0.1 * 0.1:
+            floor = peak * min_lr_ratio
+            if fraction == 1 and abs(rates[name] - floor) > floor * 0.1:
                 raise ValueError(f"SFT final-update {name} LR is not within 10% of min_lr")
         samples.append({"fraction": fraction, "optimizer_update_index": index, "learning_rates": rates})
     return {"num_train_steps": horizon, "optimizer_num_train_steps": horizon, "samples": samples}
@@ -194,5 +195,5 @@ def exp3_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
         ),
         optimizer_num_train_steps=schedule["horizon"],
     )
-    whole_run_lr_receipt(spec)
+    whole_run_lr_receipt(spec, min_lr_ratio=schedule["min_lr_ratio"])
     return spec

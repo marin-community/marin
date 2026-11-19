@@ -583,6 +583,50 @@ not certify downstream admission. After approval, the same frozen command with
 `--run` submits through Iris; keep the runtime commit and artifact version
 unchanged between approval and submission.
 
+## Defining a new round
+
+Round configuration lives in YAML under `experiments/post_training/long_loop/rounds/`;
+code holds the mechanism and the invariants. `round_runner` loads a round YAML
+into a strict schema (unknown or mistyped fields fail), resolves its named
+references through the code registry (data release, curriculum pools, evaluation
+policy, initializer), re-derives the resolved plan through the shared pipeline,
+and enforces the shared invariants: whole-run annealing (optimizer horizon equals
+the updates actually run, final LR near min_lr), the special-token LR multiplier
+default of 1.0 with explicit-override semantics (R2), a permanent output prefix,
+and the final-SFT-checkpoint retention rule (R1, enforced again at archive time).
+
+To define a new round:
+
+1. Copy the previous round's YAML, for example `rounds/exp5.yaml` to
+   `rounds/exp6.yaml`.
+2. Change the identity fields: `name`, `version`, `slug`, `storage.output_prefix`
+   and the `archive` prefixes. Change recipe knobs only when the round intends
+   them: `sft.updates`, `sft.batch_size`, `sft.min_lr_ratio`,
+   `sft.learning_rate`, `sft.adam_learning_rate`,
+   `sft.special_token_lr_multiplier`, `sft.mesh`, `sft.resources`, `cluster`,
+   and the registry bindings `data_release`, `pools`, `evaluation`,
+   `initializer`. The runner requires `--version` to equal the YAML's version.
+3. Run the dry run in region (no `--run`; the Mac cannot read the pinned
+   storage inputs):
+
+```bash
+uv run iris --cluster=cw-rno2a job run \
+  --job-name round6-preflight-dryrun --priority interactive --timeout 21600 \
+  --cpu 8 --memory 16GB --enable-extra-resources --no-wait \
+  -e WANDB_API_KEY "$WANDB_API_KEY" \
+  -- python -m experiments.post_training.long_loop.round_runner \
+    --round experiments/post_training/long_loop/rounds/exp6.yaml \
+    --version "<the YAML version>" \
+    --source-revision "<the runtime commit>" \
+    --validation-output '$IRIS_OUTPUT_DIR/round6-preflight'
+```
+
+The dry run writes `resolved-plan.json`, `optimizer-groups.json` and
+`sft-lr-schedule.json` plus per-stage launch validation receipts to the
+validation output, and prints the resolved artifact plan. Submitting the round
+(`--run`) is a separate, explicitly approved step; keep the runtime commit and
+the YAML version unchanged between approval and submission.
+
 ## NVL72 profiles
 
 Use this package's artifact main for adopted Snowball and Mochi RL inputs:

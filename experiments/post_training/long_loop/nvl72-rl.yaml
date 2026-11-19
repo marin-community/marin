@@ -53,7 +53,6 @@ trainer:
     advantage_batch_normalize: false
     rloo_n_filter_zero_reward_groups: true
     use_entropy_loss: false
-    tis_splice: true
     group_admission:
       stall_timeout: 18000
   policy:
