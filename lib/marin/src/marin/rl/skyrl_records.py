@@ -138,23 +138,20 @@ def read_stored_skyrl_attempt(run_output: str) -> AttemptRecord | None:
         config = read_skyrl_launch_config(run_output)
     except FileNotFoundError:
         return None
-    terminal = None
-    fs, key = filesystem_for(prefix_join(run_output, TERMINAL_RECEIPT_FILENAME))
-    if fs.exists(key):
-        terminal = LaunchReceipt.model_validate_json(fs.cat(key))
     attempt_id = config["run"]["attempt_id"]
     record = read_attempt(config["artifacts"]["export_root"], attempt_id)
-    if (
-        terminal is not None
-        and terminal.config["run"]["id"] == config["run"]["id"]
-        and terminal.config["run"]["attempt_id"] == attempt_id
-    ):
-        if record is None:
-            record = AttemptRecord(
-                run_id=config["run"]["id"], attempt_id=attempt_id, config=terminal.config, result=terminal.result
-            )
-        elif record.result is None:
-            record = record.model_copy(update={"result": terminal.result})
+    if record is None or record.result is None:
+        fs, key = filesystem_for(prefix_join(run_output, TERMINAL_RECEIPT_FILENAME))
+        if fs.exists(key):
+            terminal = LaunchReceipt.model_validate_json(fs.cat(key))
+            if (terminal.config["run"]["id"], terminal.config["run"]["attempt_id"]) == (config["run"]["id"], attempt_id):
+                record = (
+                    AttemptRecord(
+                        run_id=config["run"]["id"], attempt_id=attempt_id, config=terminal.config, result=terminal.result
+                    )
+                    if record is None
+                    else record.model_copy(update={"result": terminal.result})
+                )
     if record is None:
         return None
     if record.run_id != config["run"]["id"]:
