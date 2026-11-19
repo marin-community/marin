@@ -6,6 +6,7 @@ import copy
 import logging as pylogging
 import statistics
 from dataclasses import dataclass
+from collections.abc import Sequence
 from datetime import timedelta
 from typing import Optional
 
@@ -65,6 +66,33 @@ def compute_instant_throughput(
         if theoretical_flops is not None:
             mfu = model_flops_per_second / theoretical_flops * 100.0
     return InstantThroughput(examples_per_second, tokens_per_second, model_flops_per_second, mfu)
+
+
+def log_throughput_summary(
+    step_durations: Sequence[float],
+    batch_size: int,
+    tokens_per_example: int,
+    flops_per_example: float | None,
+    *,
+    first_step: int,
+    last_step: int,
+) -> None:
+    """Log, from process 0, the median of ``step_durations`` (steps ``first_step``-``last_step``) as a rate and MFU."""
+    if jax.process_index() != 0:
+        return
+    median = statistics.median(step_durations)
+    throughput = compute_instant_throughput(
+        batch_size, median, tokens_per_example, flops_per_example, aggregate_device_flops()
+    )
+    logger.info(
+        "median step over steps %d-%d: %.3f s  %s tokens/s  %s model TFLOP/s  MFU %s%%",
+        first_step,
+        last_step,
+        median,
+        f"{throughput.tokens_per_second:,.0f}" if throughput.tokens_per_second is not None else "n/a",
+        f"{throughput.model_flops_per_second / 1e12:.1f}" if throughput.model_flops_per_second is not None else "n/a",
+        f"{throughput.mfu:.2f}" if throughput.mfu is not None else "n/a",
+    )
 
 
 def log_step_info(total_steps: Optional[int], batch_schedule: Optional[BatchSchedule] = None):

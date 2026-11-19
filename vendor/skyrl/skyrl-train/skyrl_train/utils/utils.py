@@ -1177,7 +1177,7 @@ def configure_ray_worker_logging() -> None:
             except ValueError:
                 level = record.levelno
             message = record.getMessage()
-            if record.exc_info is not None and record.exc_info[1] is not None:
+            if record.exc_info and record.exc_info[1] is not None:
                 message = f"{message}\n{format_exception_text(record.exc_info[1])}"
             logger.opt(depth=6).log(level, message)
 
