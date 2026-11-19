@@ -101,9 +101,8 @@ def harbor_task_workspace():
         yield root
 
 
-def test_launch_preflights_prepared_task_with_hosted_judge(
-    tmp_path, submitted_batches, monkeypatch, harbor_task_workspace
-):
+@pytest.fixture
+def hosted_judge_policy(monkeypatch, harbor_task_workspace):
     monkeypatch.setattr(launch_module, "_capability_origin", lambda _cluster: "https://iris.example")
     for key in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "TOGETHER_API_KEY", "CUSTOM_API_KEY"):
         monkeypatch.delenv(key, raising=False)
@@ -127,12 +126,16 @@ def test_launch_preflights_prepared_task_with_hosted_judge(
             }
         )
     )
+    return policy
+
+
+def test_launch_preflights_prepared_task_with_hosted_judge(tmp_path, submitted_batches, hosted_judge_policy):
     command = [
         "launch",
         "--model",
         "qwen3-8b",
         "--harbor-config",
-        str(policy),
+        str(hosted_judge_policy),
         "--platform",
         "gpu",
         "--accelerator",
@@ -158,6 +161,8 @@ def test_launch_preflights_prepared_task_with_hosted_judge(
     assert json.loads(config.stable_policy_json)["environment"]["kwargs"] == {"judge_access": "runtime"}
     assert batch.judge.api_model == "qwen3-0.6b"
 
+
+def test_evaluate_binds_hosted_judge(tmp_path, submitted_batches, monkeypatch, hosted_judge_policy):
     def launch_for_artifact(batch, _client, **_kwargs):
         submitted_batches.append(batch)
         return SubmittedEvaluationBatch(
@@ -171,13 +176,14 @@ def test_launch_preflights_prepared_task_with_hosted_judge(
     monkeypatch.setattr(pipeline_module, "launch_group", launch_for_artifact)
     monkeypatch.setattr(pipeline_module, "iris_ctx", lambda: SimpleNamespace(client=None))
     monkeypatch.setattr(launch_module, "CW_RECORDS_PREFIX", str(tmp_path / "artifact-records"))
-    source = ArtifactHfModel(ArtifactStep.adopt("tests/model", "2026.10.26", str(root)), relative_path="")
+    source = ArtifactHfModel(ArtifactStep.adopt("tests/model", "2026.10.26", str(tmp_path)), relative_path="")
     kwargs = dict(version="2026.10.26", accelerator="H100x1", submission_cluster="marin", federated_cluster="cw-rno2a")
     serving = models()["qwen3-8b"]
-    evals = (HarborDefinition(name="test", config_path=policy),)
+    evals = (HarborDefinition(name="test", config_path=hosted_judge_policy),)
     judge = replace(models()["qwen3-0.6b"], resource_hint=ResourceHint(gpu={"H100": 1}))
     step = evaluate(source, serving, evals, judge=judge, **kwargs)
-    assert step.fingerprint() != evaluate(source, serving, evals, **kwargs).fingerprint()
+    other = evaluate(source, serving, evals, judge=replace(judge, name="other-judge"), **kwargs)
+    assert step.fingerprint() != other.fingerprint()
     step.run(materialized_config(step, str(tmp_path)))
     assert submitted_batches[-1].judge.api_model == "qwen3-0.6b"
 
