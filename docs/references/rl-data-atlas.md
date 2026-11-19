@@ -14,9 +14,10 @@ The checked-in app also reads immutable curriculum-matching releases. The
 curriculum pane shows task coverage by subject, group, capability and source.
 Its loader and selected release are independent of the sampled grading catalog.
 
-The 95% control pass threshold permits curation to skip validation of unsampled
-tasks. Below that threshold, curation validates each task and retains individual
-passes. The Result thresholds below grade a reviewed sample of the retained output.
+Oracle filtering covers every oracle-bearing task in SAMPLE and FULL. Workspace
+graders also require a non-passing NoP control for every candidate task. A sampled
+control pass rate never exempts unsampled tasks. The Result thresholds below grade
+content reviews of the retained output.
 Curation supplies the tasks and evidence; the grade does not change admission.
 
 ```mermaid
@@ -145,18 +146,59 @@ assessment page shows the curation associated with its selected grade.
 
 ## Getting started page
 
-**Getting started** (`guide.html`) explains, for a reader new to Marin, every
-path from a candidate dataset to an Atlas source: the task format gate,
-environment fidelity, curation modes, qualification, Daytona safety and
-publication. It states what each outcome guarantees and links each step to the
-normative section of the [task curation reference](task-curation.md) and to the
-enforcing code. Per-outcome counts, Daytona labels and oracle-validation counts
-are computed in the browser from the same `/sources` response as **By source**,
-so they follow each catalog load without a code release. Each source's Quality
-label is derived from its current-pin QA evidence by the curation pipeline, so
-the levels cannot drift from the evidence they point at. Edit the rules in the
-reference first, then the page text in
-`infra/marina/apps/rl_data_catalog/dist/guide.html`, and release the app.
+**Getting started** (`guide.html`) gives each Atlas workflow one diagram:
+ingestion, repair of Excluded items, task replacement, drift analysis,
+deprecation, banning/unbanning, overlap resolution, enrichment, quality review
+and publication. Each stage links to its normative procedure and the code that
+checks its evidence. Each flow links to the glossary. The full stage map,
+per-reason repair paths, version re-entry rules and required drift identity live
+in [Atlas workflows](task-curation.md#atlas-workflows).
+
+Source status and attribute state are separate. The guide names only states that
+exist in code. It identifies the required drift scheduler and repair-union checks
+as implementation gaps. Keep policy text in the guide and this reference;
+main-table cells, tooltips and Evidence cards show state, counts, reasons and
+receipt links. Guide counts come from the selected `/sources` snapshot. Edit the
+normative reference first, then the guide, and follow the release procedure.
+
+### Publication lifecycle
+
+Publication consumes an admitted source version and its pinned attribute records.
+It produces a checked serving load and app revision with provenance; it does not
+change the source's status. Ingestion, Repair or drift analysis can start this side
+flow when they produce a new version. The order is catalog load → projection
+refresh → audit gate → private preview → production under explicit release authority.
+A failed gate stops publication and preserves the previous selection.
+
+1. Stage the intended catalog load, verify every staged table and its source pins,
+   then select the checked load explicitly. Preserve earlier loads and their archived
+   task-review packets: the task contract, reviewer input/output and provenance.
+2. Rebuild serving projections from that load and the intended measurement and
+   curriculum pins. A source-code release alone does not refresh these inputs.
+3. Pass the declaration audit, input/count reconciliation, ban propagation and
+   public-route redaction, privacy checks, API checks and light/dark browser checks.
+   Redaction of banned content is a required preview-builder gate; it must be
+   verified separately from private-tier redaction.
+4. Publish the checked private preview package and verify its immutable hosted
+   revision against the preflight baseline. Keep production at the revision specified
+   by the coordinator’s recorded release hold.
+5. Production is a separate authorized release of a checked cut. Preview success
+   alone does not authorize it. Record the final app ID, revision and receipts.
+
+There is no publication lifecycle-status enum. The actual
+[`ReleaseReceipt`](https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/release_receipts.py)
+uses `phase` literals `preflight`, `hosted`, `postpublish`, a `passed` boolean and
+the active or failing `gate`. Catalog snapshot ID, Postgres load ID, selected
+pointer, package hash and numeric app revision name different objects. Keep all
+of them in the publication evidence. Drift in any projection input invalidates
+that projection's currency and starts this flow again.
+
+Use the [staged loader](#updating-atlas) and the
+[release procedure](https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/RELEASE.md)
+for commands and release gates. The existing implementation is in
+[load.py](https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/load.py),
+[prepare_preview.py](https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/prepare_preview.py)
+and [release_check.py](https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/release_check.py).
 
 ## Browsing sources
 
