@@ -20,7 +20,7 @@ from iris.cluster.controller.observability_rows import ObservabilityRowTables
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.federation.store import HandoffAdmission, HandoffSpec
-from iris.cluster.stats.tables import IrisJob, IrisJobConfig, IrisJobTask, IrisTaskAttempt
+from iris.cluster.stats.tables import IrisJob, IrisJobConfig, IrisTask, IrisTaskAttempt
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from iris.test_util import FakeStatsTable
@@ -58,8 +58,8 @@ class RecordedRows:
         return self._rows(self.tables.job_config_table)
 
     @property
-    def tasks(self) -> list[IrisJobTask]:
-        return self._rows(self.tables.job_task_table)
+    def tasks(self) -> list[IrisTask]:
+        return self._rows(self.tables.task_table)
 
     @property
     def attempts(self) -> list[IrisTaskAttempt]:
@@ -71,7 +71,7 @@ def _attach(state: ControllerTestState, cluster: str) -> RecordedRows:
         cluster=cluster,
         job_table=FakeStatsTable(),
         job_config_table=FakeStatsTable(),
-        job_task_table=FakeStatsTable(),
+        task_table=FakeStatsTable(),
         task_attempt_table=FakeStatsTable(),
     )
     state._db.attach_observability_rows(tables)
@@ -122,7 +122,6 @@ def test_submit_writes_one_job_row_and_one_config_row(state):
     assert job.root_job_id == "/test-user/train"
     assert job.state == "JOB_STATE_PENDING"
     assert job.placement == "local"
-    assert job.tags is None
     assert len(rows.job_configs) == 1
     config = rows.job_configs[0]
     assert (config.root_job_id, config.root_submitted_at_ms) == (job.root_job_id, job.root_submitted_at_ms)
@@ -242,7 +241,7 @@ def test_failed_write_commits_and_runs_later_post_commit_hooks(state):
             cluster="marin",
             job_table=_ClosedTable(),
             job_config_table=FakeStatsTable(),
-            job_task_table=FakeStatsTable(),
+            task_table=FakeStatsTable(),
             task_attempt_table=FakeStatsTable(),
         )
     )
@@ -427,7 +426,7 @@ def test_job_config_stores_no_environment_command_lines_or_other_user_text(state
         "made-up-argv-value",
     ]:
         assert value not in written
-    assert rows.job_configs[0].env_vars is None
+    assert rows.job_configs[0].provenance_base_commit is None
 
 
 _MADE_UP_TOKEN = "ghp_madeUpToken0123456789abcdefghijkl"
@@ -448,7 +447,7 @@ def _provenance_json(**overrides: object) -> str:
     return json.dumps(fields)
 
 
-def test_job_config_keeps_launch_provenance_redacted_field_by_field(state):
+def test_job_config_keeps_only_the_launch_git_identity(state):
     rows = _attach(state, "marin")
     request = make_job_request("train")
     request.environment.env_vars.update({"MARIN_PROVENANCE": _provenance_json(), "SERVICE_URL": "made-up-env-value"})
@@ -456,73 +455,42 @@ def test_job_config_keeps_launch_provenance_redacted_field_by_field(state):
 
     submit_job(state, "train", request)
 
-    assert json.loads(rows.job_configs[0].env_vars) == {
-        "MARIN_PROVENANCE": {
-            "tree_hash": "1a2b3c4d5e",
-            "base_commit": "6f7a8b9c0d",
-            "dirty": True,
-            "branch": "made-up-branch",
-            "built_by": "made-up-user",
-            "git_remote": "https://github.com/made-up-org/repo.git",
-            "created_at": "2026-01-02T03:04:05+00:00",
-            "command_line": ["python", "train.py", "--api-key", "[REDACTED]", "--password=[REDACTED]", "--lr", "0.1"],
-        }
-    }
+    config = rows.job_configs[0]
+    assert (
+        config.provenance_base_commit,
+        config.provenance_tree_hash,
+        config.provenance_dirty,
+        config.provenance_branch,
+    ) == ("6f7a8b9c0d", "1a2b3c4d5e", True, "made-up-branch")
+    written = repr(config)
+    for value in [
+        "made-up-user",
+        "made-up-password",
+        "made-up-org",
+        "made-up-key",
+        "made-up-pw",
+        "train.py",
+        "2026-01-02",
+    ]:
+        assert value not in written
 
 
-def test_job_config_redacts_a_secret_under_an_allowed_key(state):
+def test_job_config_redacts_a_token_in_the_launch_branch(state):
     rows = _attach(state, "marin")
     request = make_job_request("train")
-    request.environment.env_vars["MARIN_PROVENANCE"] = _provenance_json(
-        branch=f"fix-{_MADE_UP_TOKEN}", command_line=["python", "train.py", _MADE_UP_TOKEN]
-    )
+    request.environment.env_vars["MARIN_PROVENANCE"] = _provenance_json(branch=f"fix-{_MADE_UP_TOKEN}")
 
     submit_job(state, "train", request)
 
-    env_vars = rows.job_configs[0].env_vars
-    assert _MADE_UP_TOKEN not in env_vars
-    provenance = json.loads(env_vars)["MARIN_PROVENANCE"]
-    assert "[REDACTED]" in provenance["branch"]
-    assert provenance["command_line"] == ["python", "train.py", "[REDACTED]"]
-
-
-def test_job_config_row_is_written_despite_a_malformed_git_remote(state):
-    rows = _attach(state, "marin")
-    request = make_job_request("train")
-    request.environment.env_vars["MARIN_PROVENANCE"] = _provenance_json(
-        git_remote="https://made-up-user:made-up-password@example.com:abc/repo.git"
-    )
-
-    submit_job(state, "train", request)
-
-    provenance = json.loads(rows.job_configs[0].env_vars)["MARIN_PROVENANCE"]
-    assert provenance["git_remote"] == "https://example.com:abc/repo.git"
+    branch = rows.job_configs[0].provenance_branch
+    assert _MADE_UP_TOKEN not in branch
+    assert "[REDACTED]" in branch
 
 
 @pytest.mark.parametrize(
     "raw",
-    [
-        "made-up-not-json",
-        "[" * 100_000,
-        "null",
-        "[]",
-        json.dumps({"tree_hash": "1a2b3c4d5e"}),
-        _provenance_json(git_remote=42),
-        _provenance_json(branch=["made-up-branch"]),
-        _provenance_json(command_line=["python", 42]),
-        _provenance_json(command_line="python train.py"),
-    ],
-    ids=[
-        "not-json",
-        "deeply-nested",
-        "null",
-        "list",
-        "missing-fields",
-        "int-remote",
-        "list-branch",
-        "int-arg",
-        "string-command-line",
-    ],
+    ["made-up-not-json", "[" * 100_000, _provenance_json(dirty="yes")],
+    ids=["not-json", "deeply-nested", "string-dirty"],
 )
 def test_job_config_drops_a_malformed_launch_provenance_and_keeps_the_rows(state, raw):
     rows = _attach(state, "marin")
@@ -531,7 +499,8 @@ def test_job_config_drops_a_malformed_launch_provenance_and_keeps_the_rows(state
 
     submit_job(state, "train", request)
 
-    assert rows.job_configs[0].env_vars is None
+    config = rows.job_configs[0]
+    assert (config.provenance_base_commit, config.provenance_tree_hash, config.provenance_dirty) == (None, None, None)
     assert len(rows.jobs) == 1
     assert rows.tasks
 
@@ -610,22 +579,23 @@ _COLUMNS: dict[str, _Classified] = {
             # The stated exception to "no user-written text": kept for reporting,
             # each value token-redacted like `error`.
             "tags_json": "jobs.tags",
-            # Only the allowlisted variables, redacted; other variables and every
-            # secret are dropped (iris.cluster.redaction.OBSERVABILITY_ROW_ENV_VARS).
-            "environment_json": "env_vars",
         },
         {
             "name": "duplicate",
+            # Only MARIN_PROVENANCE's git identity is read from it, into provenance_*.
+            "environment_json": "user-text",
             "entrypoint_json": "user-text",
             "submit_argv_json": "user-text",
             "bundle_id": "user-text",
             "ports_json": "user-text",
             "egress_allow_json": "user-text",
         },
-        _JOB_KEY | {"accelerator_kind", "accelerator_type", "accelerators_per_task"},
+        _JOB_KEY
+        | {"accelerator_kind", "accelerator_type", "accelerators_per_task"}
+        | {"provenance_base_commit", "provenance_tree_hash", "provenance_dirty", "provenance_branch"},
     ),
     "tasks": _Classified(
-        IrisJobTask,
+        IrisTask,
         {
             "task_id": "task_id",
             "job_id": "job_id",
@@ -639,18 +609,19 @@ _COLUMNS: dict[str, _Classified] = {
             "max_retries_failure": "max_retries_failure",
             "max_retries_preemption": "max_retries_preemption",
             "current_attempt_id": "current_attempt_id",
-            "priority_neg_depth": "priority_neg_depth",
             "priority_root_submitted_ms": "priority_root_submitted_ms",
-            "priority_insertion": "priority_insertion",
             "priority_band": "priority_band",
             "container_id": "container_id",
             "status_message": "status_message",
             "current_worker_id": "current_worker_id",
-            "current_worker_address": "current_worker_address",
             "backend_id": "backend_id",
             "cluster": "placement",
         },
-        {},
+        {
+            "priority_neg_depth": "scheduler-queue-order",
+            "priority_insertion": "scheduler-queue-order",
+            "current_worker_address": "in-iris.worker",
+        },
         _JOB_KEY,
     ),
     "task_attempts": _Classified(

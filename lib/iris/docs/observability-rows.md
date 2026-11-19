@@ -26,23 +26,27 @@ the constraint keys.
 `task_image` is an image reference (`registry/path:tag`), which is needed to
 know what ran; a container runtime rejects credentials in a reference, and
 registry auth comes from the node's credential helper. There are three
-exceptions, all redacted: the free-text `error` and `status_message` columns
-and the allowlisted environment variables in `env_vars`, both below, and job
-tags. Job tags (`job_config.tags_json`, copied to
+exceptions: the free-text `error` and `status_message` columns, redacted; the
+launch's git identity, read from the environment into the `provenance_*`
+columns, both below; and job tags. Job tags (`job_config.tags_json`, copied to
 `iris.controller_db__jobs.tags`) are user-written but exist for reporting, so
 they are copied with token-like strings in each value redacted, best-effort
-like `error` (see **Free text** below).
-Rows are kept forever, so any other column that fails the rule is left out, not
-redacted and kept.
+like `error` (see **Free text** below). Rows are kept forever, so any other
+column that fails the rule is left out, not redacted and kept.
 
 Not copied, all from `job_config`:
 
 | DB column | Why |
 | --- | --- |
-| `environment_json` | Environment variables and secrets, except the allowlisted variables copied to `env_vars` (below) |
+| `environment_json` | Environment variables and secrets; only the launch's git identity is read from it, into `provenance_*` (below) |
 | `entrypoint_json`, `submit_argv_json` | Command lines and setup commands the user wrote |
 | `bundle_id`, `ports_json`, `egress_allow_json` | User-written ids, ports and hosts |
 | `name` | Same as `iris.controller_db__jobs.name` |
+
+Not copied from `tasks`: `priority_neg_depth` and `priority_insertion`, the
+scheduler's queue order, which no question about past work needs; and
+`current_worker_address`, which `iris.worker` records per worker. A column can be
+added later when a query needs it, but never removed.
 
 Copied columns that differ from the controller DB:
 
@@ -51,7 +55,7 @@ Copied columns that differ from the controller DB:
 | `iris.controller_db__jobs.tags` | Added: `job_config.tags_json`, each value token-redacted |
 | `iris.controller_db__jobs.placement` | The DB's `jobs.cluster` ("local" or the peer the job was handed to), renamed because `cluster` here is the writing controller |
 | `iris.controller_db__job_config.accelerator_*` | Added: the device request flattened (below) |
-| `iris.controller_db__job_config.env_vars` | From `environment_json`: only the allowlisted environment variables, redacted (below) |
+| `iris.controller_db__job_config.provenance_*` | Added: four fields of `environment_json`'s `MARIN_PROVENANCE` (below) |
 | `iris.controller_db__tasks.placement` | The DB's `tasks.cluster`, as for jobs |
 | `iris.controller_db__tasks.task_submitted_at` | The DB's `tasks.submitted_at_ms`, renamed because `submitted_at_ms` here is the job key |
 
@@ -63,35 +67,28 @@ on a column it does not list. A new DB column needs a one-line decision there by
 the rule above; copying it also adds a nullable field to the row dataclass. A
 dropped DB column that was copied moves to RETIRED: its Finelog field stays,
 becomes `| None = None`, and reads NULL from then on; add its name and the date
-to the list below. Finelog columns are never removed or renamed.
-
-Retired columns (DB column → Finelog field, NULL since): none yet.
+to a list of retired columns here. Finelog columns are never removed or renamed.
 
 **Free text:** the `error` columns of jobs, tasks and attempts, and
 `tasks.status_message` (the backend's reason a task is not running yet, such as
 a scheduler or Kueue message), stay readable, with token-like strings redacted. That redaction is
 best-effort: an error can still echo a short value or URL from a command.
 
-**Environment variables:** `iris.controller_db__job_config.env_vars` is a JSON
-object holding the job's allowlisted environment variables, or NULL when it sets
-none. The allowlist is `OBSERVABILITY_ROW_ENV_VARS` in
-`iris/cluster/redaction.py`, the module the dashboard's masking also uses. Every
-other variable, and every secret, is dropped. It holds one variable,
-`MARIN_PROVENANCE`, the launch's git provenance, which is stored as its parsed
-fields: `tree_hash`, `base_commit`, `dirty`, `branch`, `built_by`,
-`git_remote`, `created_at` and `command_line`. A value that does not parse, or
-whose fields do not have the types `Provenance` writes, is dropped; the job's
-rows are still written. `git_remote` loses any `user:password@` part, `command_line` is
-redacted like a submitted argv (the value after a flag named like a secret,
-such as `--api-key`, is masked), and every field then goes through the shared
-value redactor, so a token-like value under an allowed key is still masked. Like
-the free text, this is best-effort, and long identifiers can be masked too.
-The column holds the object as a JSON string.
+**Launch provenance:** `iris.controller_db__job_config` keeps four fields of
+the job's `MARIN_PROVENANCE` environment variable, as parsed by
+`rigging.provenance.Provenance.from_json`: `provenance_base_commit`,
+`provenance_tree_hash`, `provenance_dirty` and `provenance_branch` (token-like
+strings redacted, as for the free text). The rest of that variable is not
+copied: the command line and the remote URL are user text that can hold a
+credential, and the user and launch time are already in
+`iris.controller_db__jobs`. Every other environment variable, and every secret,
+is dropped. All four are NULL when the variable is unset or does not parse; the
+job's rows are still written.
 
 **The one place a row is not written on every change:** an `iris.controller_db__tasks`
 row is written at submit and when the task's state, current attempt, current
 worker, error or exit code changes. A change to any other column alone
-(`status_message`, `container_id`, `current_worker_address`, `backend_id`)
+(`status_message`, `container_id`, `backend_id`)
 writes no row, because Kubernetes rewrites the pending reason on every
 reconcile. So those columns hold their value as of the row's change, and
 pending-reason history is kept only at those trigger points.

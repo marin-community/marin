@@ -36,6 +36,7 @@ from itertools import batched
 from typing import NamedTuple, Protocol
 
 from finelog.client.log_client import Table as FinelogTable
+from rigging.provenance import LAUNCH_PROVENANCE_ENV, Provenance
 from rigging.timing import Timestamp
 from sqlalchemy import select, tuple_
 from sqlalchemy.engine.cursor import CursorResult
@@ -43,8 +44,8 @@ from sqlalchemy.engine.cursor import CursorResult
 from iris.cluster.constraints import get_device_variant
 from iris.cluster.controller.codec import proto_from_json
 from iris.cluster.controller.schema import job_config_table, jobs_table, task_attempts_table, tasks_table
-from iris.cluster.redaction import redact_job_tags, redact_observability_row_env_vars, redact_string
-from iris.cluster.stats.tables import IrisJob, IrisJobConfig, IrisJobTask, IrisTaskAttempt, stats_timestamp
+from iris.cluster.redaction import redact_job_tags, redact_string
+from iris.cluster.stats.tables import IrisJob, IrisJobConfig, IrisTask, IrisTaskAttempt, stats_timestamp
 from iris.cluster.types import LOCAL_CLUSTER, JobName, WorkerId, get_gpu_count, get_tpu_count
 from iris.rpc import job_pb2
 
@@ -65,7 +66,7 @@ class ObservabilityRowTables:
     cluster: str
     job_table: FinelogTable
     job_config_table: FinelogTable
-    job_task_table: FinelogTable
+    task_table: FinelogTable
     task_attempt_table: FinelogTable
 
 
@@ -94,7 +95,7 @@ class _Marked:
     removed_workers: dict[tuple[JobName, int], WorkerId] = field(default_factory=dict)
     job_rows: list[IrisJob] = field(default_factory=list)
     config_rows: list[IrisJobConfig] = field(default_factory=list)
-    task_rows: list[IrisJobTask] = field(default_factory=list)
+    task_rows: list[IrisTask] = field(default_factory=list)
     attempt_rows: list[IrisTaskAttempt] = field(default_factory=list)
 
 
@@ -170,7 +171,7 @@ def _write(tables: ObservabilityRowTables, marked: _Marked) -> None:
     for table, rows in (
         (tables.job_table, marked.job_rows),
         (tables.job_config_table, marked.config_rows),
-        (tables.job_task_table, marked.task_rows),
+        (tables.task_table, marked.task_rows),
         (tables.task_attempt_table, marked.attempt_rows),
     ):
         if not rows:
@@ -200,8 +201,18 @@ def _accelerator(device_json: str | None) -> _Accelerator:
     return _Accelerator(None, get_device_variant(device), 0)
 
 
-def _dt_from_ms(epoch_ms: int | None) -> datetime | None:
-    return Timestamp.from_ms(epoch_ms).as_naive_utc() if epoch_ms is not None else None
+def _launch_provenance(environment_json: str) -> Provenance | None:
+    """The job's ``MARIN_PROVENANCE``, or ``None`` when it is unset or malformed.
+
+    A malformed value drops only the ``provenance_*`` columns, never the job's rows.
+    """
+    raw = proto_from_json(environment_json, job_pb2.EnvironmentConfig).env_vars.get(LAUNCH_PROVENANCE_ENV)
+    if raw is None:
+        return None
+    try:
+        return Provenance.from_json(raw)
+    except ValueError:
+        return None
 
 
 def _free_text(value: str | None) -> str | None:
@@ -269,7 +280,11 @@ def _snapshot_jobs(cur: RowCursor, tables: ObservabilityRowTables, marked: _Mark
                     exit_code=r.exit_code,
                     error=_free_text(r.error),
                     num_tasks=r.num_tasks,
-                    scheduling_deadline_at=_dt_from_ms(r.scheduling_deadline_epoch_ms),
+                    scheduling_deadline_at=(
+                        _dt(Timestamp.from_ms(r.scheduling_deadline_epoch_ms))
+                        if r.scheduling_deadline_epoch_ms is not None
+                        else None
+                    ),
                     backend_id=r.backend_id,
                     placement=r.cluster,
                     ts=ts,
@@ -289,6 +304,7 @@ def _snapshot_configs(cur: RowCursor, tables: ObservabilityRowTables, marked: _M
         )
         for r in cur.execute(query):
             accelerator = _accelerator(r.res_device_json)
+            provenance = _launch_provenance(r.environment_json)
             marked.config_rows.append(
                 IrisJobConfig(
                     cluster=tables.cluster,
@@ -320,9 +336,10 @@ def _snapshot_configs(cur: RowCursor, tables: ObservabilityRowTables, marked: _M
                     fail_if_exists=bool(r.fail_if_exists),
                     container_profile=job_pb2.ContainerProfile.Name(r.container_profile),
                     egress_policy=job_pb2.EgressPolicy.Name(r.egress_policy),
-                    env_vars=redact_observability_row_env_vars(
-                        proto_from_json(r.environment_json, job_pb2.EnvironmentConfig).env_vars
-                    ),
+                    provenance_base_commit=provenance.base_commit if provenance else None,
+                    provenance_tree_hash=provenance.tree_hash if provenance else None,
+                    provenance_dirty=provenance.dirty if provenance else None,
+                    provenance_branch=_free_text(provenance.branch) if provenance else None,
                     ts=ts,
                 )
             )
@@ -338,7 +355,7 @@ def _snapshot_tasks(cur: RowCursor, tables: ObservabilityRowTables, marked: _Mar
         )
         for r in cur.execute(query):
             marked.task_rows.append(
-                IrisJobTask(
+                IrisTask(
                     cluster=tables.cluster,
                     root_job_id=r.root_job_id,
                     root_submitted_at_ms=r.root_submitted_at_ms.epoch_ms(),
@@ -355,14 +372,11 @@ def _snapshot_tasks(cur: RowCursor, tables: ObservabilityRowTables, marked: _Mar
                     max_retries_failure=r.max_retries_failure,
                     max_retries_preemption=r.max_retries_preemption,
                     current_attempt_id=r.current_attempt_id,
-                    priority_neg_depth=r.priority_neg_depth,
                     priority_root_submitted_ms=r.priority_root_submitted_ms,
-                    priority_insertion=r.priority_insertion,
                     priority_band=job_pb2.PriorityBand.Name(r.priority_band),
                     container_id=r.container_id,
                     status_message=_free_text(r.status_message),
                     current_worker_id=str(r.current_worker_id) if r.current_worker_id is not None else None,
-                    current_worker_address=r.current_worker_address,
                     backend_id=r.backend_id,
                     placement=r.cluster,
                     ts=ts,

@@ -35,7 +35,7 @@ from iris.test_util import FakeStatsTable
 # clears it on finished attempts, and the rows keep the old value on purpose.
 _JOB_COLUMNS = tuple(column.name for column in jobs_table.columns)
 _ATTEMPT_COLUMNS = tuple(column.name for column in task_attempts_table.columns if column.name != "worker_id")
-# A task row is written only when one of these changes (see IrisJobTask).
+# A task row is written only when one of these changes (see IrisTask).
 _TASK_TRIGGER_COLUMNS = ("state", "current_attempt_id", "current_worker_id", "error", "exit_code")
 _PACKAGE_TESTS_DIR = str(Path(iris.__file__).resolve().parents[2] / "tests") + os.sep
 
@@ -103,7 +103,7 @@ def _written_keys(tables: ObservabilityRowTables, marks: dict[int, int]) -> _Wri
 
     return _WrittenKeys(
         jobs=keys(tables.job_table, lambda row: row.job_id),
-        tasks=keys(tables.job_task_table, lambda row: row.task_id),
+        tasks=keys(tables.task_table, lambda row: row.task_id),
         attempts=keys(tables.task_attempt_table, lambda row: (row.task_id, row.attempt_id)),
     )
 
@@ -111,7 +111,7 @@ def _written_keys(tables: ObservabilityRowTables, marks: dict[int, int]) -> _Wri
 def _write_marks(tables: ObservabilityRowTables) -> dict[int, int]:
     return {
         id(table): len(table.writes)
-        for table in (tables.job_table, tables.job_task_table, tables.task_attempt_table)
+        for table in (tables.job_table, tables.task_table, tables.task_attempt_table)
         if isinstance(table, FakeStatsTable)
     }
 
@@ -127,7 +127,7 @@ def install(db: ControllerDB) -> None:
             cluster="test",
             job_table=FakeStatsTable(),
             job_config_table=FakeStatsTable(),
-            job_task_table=FakeStatsTable(),
+            task_table=FakeStatsTable(),
             task_attempt_table=FakeStatsTable(),
         )
     )

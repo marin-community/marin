@@ -49,7 +49,7 @@ TASK_STATE_NAMESPACE = "iris.task_state"
 JOB_NAMESPACE = "iris.controller_db__jobs"
 JOB_CONFIG_NAMESPACE = "iris.controller_db__job_config"
 TASK_ATTEMPT_NAMESPACE = "iris.controller_db__task_attempts"
-JOB_TASK_NAMESPACE = "iris.controller_db__tasks"
+TASK_NAMESPACE = "iris.controller_db__tasks"
 
 
 class TaskEventSeverity(StrEnum):
@@ -85,7 +85,7 @@ _OBSERVABILITY_ROWS_MAX_AGE = 5 * 365 * 24 * 60 * 60
 JOB_STORAGE_POLICY = StoragePolicy(max_bytes=4 * 1024**3, max_age_seconds=_OBSERVABILITY_ROWS_MAX_AGE)
 JOB_CONFIG_STORAGE_POLICY = StoragePolicy(max_bytes=4 * 1024**3, max_age_seconds=_OBSERVABILITY_ROWS_MAX_AGE)
 TASK_ATTEMPT_STORAGE_POLICY = StoragePolicy(max_bytes=8 * 1024**3, max_age_seconds=_OBSERVABILITY_ROWS_MAX_AGE)
-JOB_TASK_STORAGE_POLICY = StoragePolicy(max_bytes=8 * 1024**3, max_age_seconds=_OBSERVABILITY_ROWS_MAX_AGE)
+TASK_STORAGE_POLICY = StoragePolicy(max_bytes=8 * 1024**3, max_age_seconds=_OBSERVABILITY_ROWS_MAX_AGE)
 
 
 def stats_timestamp() -> datetime:
@@ -288,8 +288,9 @@ class IrisJobConfig:
     Copies the controller ``job_config`` columns whose values the controller or
     a fixed vocabulary writes. Text the user wrote is not copied: the
     environment, command lines, setup scripts, egress hosts, ports and bundle id.
-    The one exception is ``env_vars``: the allowlisted environment variables,
-    redacted. ``docs/observability-rows.md`` lists each excluded column.
+    From the environment only the launch's git identity is kept, as the
+    ``provenance_*`` columns. ``docs/observability-rows.md`` lists each excluded
+    column.
     """
 
     key_column: ClassVar[str] = "root_job_id"
@@ -329,23 +330,32 @@ class IrisJobConfig:
     fail_if_exists: bool
     container_profile: str
     egress_policy: str
-    # The allowlisted environment variables (iris.cluster.redaction.
-    # OBSERVABILITY_ROW_ENV_VARS) as a JSON object, each value redacted; NULL when
-    # the job sets none. MARIN_PROVENANCE is stored as its parsed fields.
-    env_vars: str | None
+    # The launch's git identity from its MARIN_PROVENANCE environment variable:
+    # the commit, the content hash of the tree it ran, whether the tree had
+    # uncommitted changes, and the branch (token-like strings redacted). All NULL
+    # when the variable is unset or malformed; the branch is also NULL for a
+    # detached HEAD.
+    provenance_base_commit: str | None
+    provenance_tree_hash: str | None
+    provenance_dirty: bool | None
+    provenance_branch: str | None
     ts: datetime
 
 
 @dataclass
-class IrisJobTask:
-    """A snapshot of one controller ``tasks`` row: every column, plus the job key.
+class IrisTask:
+    """A snapshot of one controller ``tasks`` row, plus the job key.
+
+    Every column except the scheduler's queue order (``priority_neg_depth``,
+    ``priority_insertion``) and ``current_worker_address``, which ``iris.worker``
+    records per worker.
 
     Written at submit and whenever the task's state, current attempt, current
     worker, error or exit code changes. Unlike the other observability rows, a change
     to any other column alone writes no row: Kubernetes rewrites the pending
     reason (``status_message``) on every reconcile. So every column other than
-    those five (``status_message``, ``container_id``, ``current_worker_address``,
-    ``backend_id``, ...) holds its value as of the task's last written change.
+    those five (``status_message``, ``container_id``, ``backend_id``, ...) holds
+    its value as of the task's last written change.
     """
 
     key_column: ClassVar[str] = "task_id"
@@ -366,15 +376,12 @@ class IrisJobTask:
     max_retries_failure: int
     max_retries_preemption: int
     current_attempt_id: int
-    priority_neg_depth: int
     priority_root_submitted_ms: int
-    priority_insertion: int
     priority_band: str
     container_id: str | None
     # The backend's reason a task is not running yet, as of this row's change.
     status_message: str | None
     current_worker_id: str | None
-    current_worker_address: str | None
     backend_id: str
     # The controller DB's tasks.cluster, named as on iris.controller_db__jobs.
     placement: str
