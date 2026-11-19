@@ -50,9 +50,15 @@ from experiments.post_training.long_loop.hf_archive import (
     verify_hf_checkpoint,
 )
 from experiments.post_training.long_loop.recipe_bundle import verify_recipe_bundle, write_recipe_bundle
-from experiments.post_training.long_loop.rl_selection import VALIDATION_EMA_WINDOW, validate_full_selection
+from experiments.post_training.long_loop.rl_selection import validate_full_selection
 from experiments.post_training.long_loop.sft_accounting import sft_accounting_inputs
-from vendor.skyrl.marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME, LATEST_CHECKPOINT_FILE
+from vendor.skyrl.marinskyrl.checkpoint_paths import (
+    BEST_CHECKPOINT_FILENAME,
+    EXPORT_FALLBACK_FILENAME,
+    LATEST_CHECKPOINT_FILE,
+    VALIDATION_RECEIPTS_FILENAME,
+    protected_native_checkpoint_steps,
+)
 
 REQUIRED_CATEGORIES = {"source", "config", "dataset", "timing", "eval_trace", "wandb"}
 INCOMPLETE_HISTORY_EXCEPTION = "wandb.apis.public.runhistory.downloads.IncompleteRunHistoryError"
@@ -155,18 +161,14 @@ def archive_selected_run(*, output: str, plan: dict, trained: str, completed_rep
         raise ValueError("Selected RL run has no committed HF export")
     fs, root = filesystem_for(run.checkpoint_root)
     best_uri = prefix_join(run.checkpoint_root, BEST_CHECKPOINT_FILENAME)
-    best_key = prefix_join(root, BEST_CHECKPOINT_FILENAME)
-    best = json.loads(fs.cat_file(best_key)) if fs.isfile(best_key) else None
-    if best is None or best["model_format"] != "native":
-        best = validate_full_selection(run)
+    best = validate_full_selection(run)
+    if best.get("selection") == "final_native_not_best":
         best_uri = prefix_join(run.checkpoint_root, LATEST_CHECKPOINT_FILE)
     selected = prefix_join(run.checkpoint_root, f"global_step_{best['step']}")
-    if best.get("selection") != "final_native_not_best" and (
-        best["step"] != run.global_step
-        or best["model_uri"] != prefix_join(selected, "policy")
-        or best["ema_window"] != VALIDATION_EMA_WINDOW
-    ):
-        raise ValueError("Exported RL step differs from the five-step validation selection")
+    final_step = int(fs.cat_file(prefix_join(root, LATEST_CHECKPOINT_FILE)).strip())
+    final = prefix_join(run.checkpoint_root, f"global_step_{final_step}")
+    if not fs.isfile(prefix_join(root, f"global_step_{final_step}/trainer_state.pt")):
+        raise ValueError(f"Final RL checkpoint is not committed: step {final_step}")
     launch = _read_document(prefix_join(trained, "resolved-launch.yaml"))
     max_checkpoints = launch["config"]["skyrl"]["trainer"]["max_ckpts_to_keep"]
     if max_checkpoints == 0:
@@ -179,7 +181,7 @@ def archive_selected_run(*, output: str, plan: dict, trained: str, completed_rep
             checkpoint_names.add(component)
     ordered = sorted(checkpoint_names, key=lambda name: int(name.removeprefix("global_step_")))
     retained = set(ordered if max_checkpoints < 0 else ordered[-max_checkpoints:])
-    retained.add(f"global_step_{best['step']}")
+    retained.update(f"global_step_{step}" for step in protected_native_checkpoint_steps(run.checkpoint_root))
     request_sha = hashlib.sha256(
         json.dumps(
             {"plan": plan, "trained": trained, "report": completed_report, "max_ckpts_to_keep": max_checkpoints},
@@ -214,15 +216,19 @@ def archive_selected_run(*, output: str, plan: dict, trained: str, completed_rep
     resolved["provenance"]["checkpoint_inventory"] = {
         "root": run.checkpoint_root,
         "selected": selected,
+        "final": final,
         "ttl": resolved["native_checkpoint_ttl"],
         "max_ckpts_to_keep": max_checkpoints,
         "retained": [prefix_join(run.checkpoint_root, name) for name in sorted(retained)],
         "disposable_files": disposable,
     }
-    selection_files = (
-        (LATEST_CHECKPOINT_FILE,)
-        if best.get("selection") == "final_native_not_best"
-        else (BEST_CHECKPOINT_FILENAME, "validation_selection_history.json")
+    selection_files = [LATEST_CHECKPOINT_FILE]
+    if best.get("selection") != "final_native_not_best":
+        selection_files.extend((BEST_CHECKPOINT_FILENAME, "validation_selection_history.json"))
+    selection_files.extend(
+        filename
+        for filename in (VALIDATION_RECEIPTS_FILENAME, EXPORT_FALLBACK_FILENAME)
+        if fs.isfile(prefix_join(root, filename))
     )
     for filename in selection_files:
         resolved["inputs"].append(

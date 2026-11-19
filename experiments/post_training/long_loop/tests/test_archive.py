@@ -213,6 +213,10 @@ def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(
             },
         },
     }
+    exported = tmp_path / "exports" / "global_step_5" / "policy"
+    exported.parent.mkdir(parents=True)
+    Path(plan["hf_upload"]["source"]).rename(exported)
+    plan["hf_upload"]["source"] = str(exported)
     workspace = tmp_path / "runtime"
     workspace.mkdir()
     (workspace / "recipe.py").write_text("BATCH = 256\n")
@@ -284,6 +288,12 @@ def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(
     (Path(trained_path) / "resolved-launch.yaml").write_text(
         json.dumps({"config": {"skyrl": {"trainer": {"max_ckpts_to_keep": max_checkpoints}}}})
     )
+    final = selected.parent / "global_step_6"
+    final.mkdir()
+    (final / "trainer_state.pt").write_bytes(b"committed-final-state")
+    (final / "weights.distcp").write_bytes(b"final-native-weights")
+    (selected.parent / LATEST_CHECKPOINT_FILE).write_text("6")
+    # Failed uploads with higher step numbers must not displace the committed final.
     recent = []
     for step in (8, 10, 12):
         checkpoint = selected.parent / f"global_step_{step}"
@@ -314,6 +324,16 @@ def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(
     assert manifest["provenance"]["checkpoint_inventory"]["ttl"] == "14d"
     assert not any("weight" in item["destination"] for item in manifest["objects"])
     assert weight.read_bytes() == b"selected-native-weights"
+    assert (final / "weights.distcp").read_bytes() == b"final-native-weights"
+    assert (final / "trainer_state.pt").read_bytes() == b"committed-final-state"
+    inventory = manifest["provenance"]["checkpoint_inventory"]
+    assert inventory["final"] == str(final)
+    assert str(final) in inventory["retained"]
+    evidence = {item["destination"] for item in manifest["objects"]}
+    assert {
+        str(Path(root) / "objects" / "selection" / filename)
+        for filename in (LATEST_CHECKPOINT_FILE, VALIDATION_RECEIPTS_FILENAME)
+    } <= evidence
     assert [path.read_bytes() for path in recent] == [b"native-8", b"native-10", b"native-12"]
     assert manifest["provenance"]["checkpoint_inventory"]["max_ckpts_to_keep"] == max_checkpoints
     assert manifest["provenance"]["evaluation_complete"] is not unscored
