@@ -5,7 +5,9 @@
 
 Preserves Marin Evalchemy's CompletionResponse normalization and MMLU-Pro's
 content-first extraction policy. A length-limited reasoning trace is not a
-complete final answer under the latter policy.
+complete final answer under the latter policy. ``final_only`` matches
+Evalchemy's ``final_only`` content policy: graders such as LLM judges see the
+final answer and never the reasoning, even when the final answer is empty.
 """
 
 import re
@@ -18,6 +20,8 @@ from taskcompendium.evaluation.spec import ResponseSelection
 def completion_text(message: Mapping[str, Any], stop_reason: str, selection: ResponseSelection) -> str:
     content = message.get("content") or ""
     reasoning = message.get("reasoning_content") or message.get("reasoning") or ""
+    if selection == "final_only":
+        return content
     if selection == "final_or_complete_boxed_reasoning":
         return content or (
             reasoning if stop_reason != "length" and re.search(r"\\(?:boxed|fbox)\s*\{", reasoning) else ""

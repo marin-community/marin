@@ -597,7 +597,7 @@ class Job:
             )
 
     @staticmethod
-    async def _resolve_task_configs(config: JobConfig) -> list[TaskConfig]:
+    async def resolve_task_configs(config: JobConfig) -> list[TaskConfig]:
         task_configs, _ = await Job._resolve_task_configs_and_metadata(config)
         return task_configs
 

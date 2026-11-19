@@ -419,6 +419,85 @@ groups:
               conditions:
                 - evaluator: { type: lt, params: [16] }
 
+  # The bridge decides idleness (b200_utilization_alert.py) and reports it as
+  # value 0|1. A, B and D read one endpoint and keep the same labels so that
+  # $values can join them; B and D only feed the summary.
+  - orgId: 1
+    name: b200-capacity
+    folder: Alerts
+    interval: 5m
+    rules:
+      - uid: b200-cluster-underutilized
+        title: B200ClusterUnderutilized
+        condition: C
+        for: 30m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: warning
+          notification: slack
+        annotations:
+          summary: "{{ $labels.cluster }}: {{ $values.B.Value }}% of {{ $values.D.Value }} Ready B200 GPUs active"
+          dashboard_url: "https://grafana.oa.dev/d/marin-accel?var-cluster={{ $labels.cluster }}"
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/b200_utilization
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: state, text: state, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: B
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: B
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/b200_utilization
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: state, text: state, type: string }
+                - { selector: active_percent, text: value, type: number }
+          - refId: D
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: D
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/b200_utilization
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: state, text: state, type: string }
+                - { selector: ready_gpus, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
   # The marin datasource combines a query-path probe of the GCE hub with the
   # HTTP-readiness state of each CoreWeave finelog Deployment. K8s marks a pod
   # NotReady when /health misses its fifteen-second deadline; the hub reports its

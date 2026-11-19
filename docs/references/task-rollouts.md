@@ -72,10 +72,12 @@ Each attempt creates a fresh verifier machine from that selection.
 SkyRL accepts Parquet rows with a `task_spec` JSON column. Its dataset loader turns
 each canonical `TaskSpec` into a `TaskRolloutSpec` when it loads the data, using
 `environment.task_sessions.task_spec` from the training configuration for limits,
-harness selection and verifier machines. The curation
-[task-selection artifact](task-curation.md#final-task-selection) uses the
-assistant-prefix harness for `structure-closure` tasks and Shellbox for the other
-families. Image graders use the configured image verifier backend; package
+harness selection and verifier machines. A task whose context ends in an assistant
+message runs under the assistant-prefix harness. The `structure-closure` tasks of the
+curation [task-selection artifact](task-curation.md#final-task-selection) end this way.
+Other tasks use `harness_by_dataset[task.source.dataset]` when configured, or
+`default_harness`, which defaults to Shellbox.
+Image graders use the configured image verifier backend; package
 graders use the configured local verifier. The inventory artifact contains the
 task and private grader, so changing rollout resources or deadlines does not
 rewrite the task Parquet.
@@ -113,6 +115,15 @@ Machine setup commands run as trusted root before task operations.
 When the execution user is set, the task machine runs an execution-user probe after root setup and before model inference.
 An explicit command user overrides that default.
 The verifier machine uses its own configured default user.
+
+Original Harbor trials run each `setup_commands` entry as root with `sh`, after
+environment staging and before agent installation. An entry's nonzero exit status
+fails the trial; output stays separate from model traces, and setup uses the
+configured installed-agent `setup_timeout` while counting toward the whole
+trial's time limit.
+For these trials, the Harbor task package defines the image, environment variables
+and agent user. TaskSpec may add `setup_commands` and their setup-only
+`working_directory`; other TaskSpec machine-environment overrides are rejected.
 
 ## Harnesses
 
@@ -175,6 +186,13 @@ and token limits:
 - `record(*, observations=(), data=None, metrics=None)` adds to the step of the last turn, between model
   requests: final observations that the model never receives, the harness's data, and metrics. A turn with
   recorded observations takes no `reply`.
+
+Harnesses declare `context_recovery`: `NEVER` stops or fails the attempt using the original error, `ALWAYS`
+permits recovery, and `AFTER_TURN` permits it after a completed model turn anywhere in the attempt.
+Model adapters report context refusals by raising `ContextRejected(original_error, message)`; when recovery
+is permitted, the session raises `ContextWindowExceeded` without recording the refused request, spending a
+model turn or resetting cumulative limits or attempt deadlines. SkyRL's native agent harness uses `ALWAYS`,
+and full Harbor trials use `AFTER_TURN`.
 
 The session applies these rules:
 

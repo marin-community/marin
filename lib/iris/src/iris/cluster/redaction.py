@@ -147,12 +147,40 @@ def redact_job_tags(tags_json: str | None) -> str | None:
     return json.dumps({name: redact_string(value) for name, value in json.loads(tags_json).items()})
 
 
+# Each launch provenance field and the JSON types it may hold. The first three
+# are required.
+_PROVENANCE_FIELD_TYPES: dict[str, tuple[type, ...]] = {
+    "tree_hash": (str,),
+    "base_commit": (str,),
+    "dirty": (bool,),
+    "branch": (str, type(None)),
+    "built_by": (str, type(None)),
+    "git_remote": (str, type(None)),
+    "created_at": (str,),
+    "command_line": (list,),
+}
+_REQUIRED_PROVENANCE_FIELDS = ("tree_hash", "base_commit", "dirty")
+
+
+def _is_provenance_object(decoded: object) -> bool:
+    """Whether *decoded* has the shape ``Provenance.to_json`` writes, so redacting it cannot raise."""
+    if not isinstance(decoded, dict) or not all(field in decoded for field in _REQUIRED_PROVENANCE_FIELDS):
+        return False
+    for field, types in _PROVENANCE_FIELD_TYPES.items():
+        if field in decoded and not isinstance(decoded[field], types):
+            return False
+    return all(isinstance(arg, str) for arg in decoded.get("command_line", ()))
+
+
 def _redacted_provenance(raw: str) -> dict[str, object] | None:
-    """The launch provenance's fields, each redacted; ``None`` if *raw* does not parse."""
+    """The launch provenance's fields, each redacted; ``None`` if *raw* is not a well-formed provenance."""
     try:
-        provenance = Provenance.from_json(raw)
-    except (ValueError, KeyError, TypeError):
+        decoded = json.loads(raw)
+    except (ValueError, RecursionError):  # RecursionError: nesting deeper than the parser's stack
         return None
+    if not _is_provenance_object(decoded):
+        return None
+    provenance = Provenance.from_json(raw)
     fields = dataclasses.asdict(provenance)
     if provenance.git_remote is not None:
         fields["git_remote"] = strip_url_userinfo(provenance.git_remote)
@@ -163,21 +191,22 @@ def _redacted_provenance(raw: str) -> dict[str, object] | None:
 # The environment variables whose values the controller copies into its Finelog
 # rows (``iris.controller_db__job_config.env_vars``), each with its redactor.
 # Every other variable, and every secret, is dropped.
-CONTROLLER_ROW_ENV_VARS: dict[str, Callable[[str], object | None]] = {
+OBSERVABILITY_ROW_ENV_VARS: dict[str, Callable[[str], object | None]] = {
     LAUNCH_PROVENANCE_ENV: _redacted_provenance,
 }
 
 
-def redact_controller_row_env_vars(env_vars: Mapping[str, str]) -> str | None:
-    """The :data:`CONTROLLER_ROW_ENV_VARS` among *env_vars*, redacted, as a JSON object.
+def redact_observability_row_env_vars(env_vars: Mapping[str, str]) -> str | None:
+    """The :data:`OBSERVABILITY_ROW_ENV_VARS` among *env_vars*, redacted, as a JSON object.
 
     ``MARIN_PROVENANCE`` is stored parsed, as its ``Provenance`` fields: the
     remote URL loses its userinfo, the command line is redacted like a submit
     argv, and every value then goes through the shared value redactor. A value
-    that does not parse is dropped. ``None`` when no allowed key is set.
+    that does not parse or is not shaped like a ``Provenance`` is dropped. ``None``
+    when no allowed key is set.
     """
     inputs: dict[str, object] = {}
-    for key, redact in CONTROLLER_ROW_ENV_VARS.items():
+    for key, redact in OBSERVABILITY_ROW_ENV_VARS.items():
         raw = env_vars.get(key)
         value = redact(raw) if raw is not None else None
         if value is not None:

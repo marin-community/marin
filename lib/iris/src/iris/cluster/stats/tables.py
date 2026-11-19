@@ -26,7 +26,7 @@ from here; ``LogStack`` resolves every table from this catalog.
 - ``iris.controller_db__{jobs,job_config,tasks,task_attempts}`` — durable copies of
   the controller DB tables of the same names: one ``job_config`` row per job, at
   submit, and one job, task or attempt row per change, written by the controller
-  that executes the work (producer: ``iris.cluster.controller.controller_rows``).
+  that executes the work (producer: ``iris.cluster.controller.observability_rows``).
 """
 
 from dataclasses import dataclass
@@ -81,11 +81,11 @@ TASK_EVENT_STORAGE_POLICY = StoragePolicy(
 # window. Their history stays in the archive (remote retention is retain_forever);
 # these policies only bound the hub's local copy, and older segments are read
 # back from the archive.
-_CONTROLLER_ROWS_MAX_AGE = 5 * 365 * 24 * 60 * 60
-JOB_STORAGE_POLICY = StoragePolicy(max_bytes=4 * 1024**3, max_age_seconds=_CONTROLLER_ROWS_MAX_AGE)
-JOB_CONFIG_STORAGE_POLICY = StoragePolicy(max_bytes=4 * 1024**3, max_age_seconds=_CONTROLLER_ROWS_MAX_AGE)
-TASK_ATTEMPT_STORAGE_POLICY = StoragePolicy(max_bytes=8 * 1024**3, max_age_seconds=_CONTROLLER_ROWS_MAX_AGE)
-JOB_TASK_STORAGE_POLICY = StoragePolicy(max_bytes=8 * 1024**3, max_age_seconds=_CONTROLLER_ROWS_MAX_AGE)
+_OBSERVABILITY_ROWS_MAX_AGE = 5 * 365 * 24 * 60 * 60
+JOB_STORAGE_POLICY = StoragePolicy(max_bytes=4 * 1024**3, max_age_seconds=_OBSERVABILITY_ROWS_MAX_AGE)
+JOB_CONFIG_STORAGE_POLICY = StoragePolicy(max_bytes=4 * 1024**3, max_age_seconds=_OBSERVABILITY_ROWS_MAX_AGE)
+TASK_ATTEMPT_STORAGE_POLICY = StoragePolicy(max_bytes=8 * 1024**3, max_age_seconds=_OBSERVABILITY_ROWS_MAX_AGE)
+JOB_TASK_STORAGE_POLICY = StoragePolicy(max_bytes=8 * 1024**3, max_age_seconds=_OBSERVABILITY_ROWS_MAX_AGE)
 
 
 def stats_timestamp() -> datetime:
@@ -289,7 +289,7 @@ class IrisJobConfig:
     a fixed vocabulary writes. Text the user wrote is not copied: the
     environment, command lines, setup scripts, egress hosts, ports and bundle id.
     The one exception is ``env_vars``: the allowlisted environment variables,
-    redacted. ``docs/controller-rows.md`` lists each excluded column.
+    redacted. ``docs/observability-rows.md`` lists each excluded column.
     """
 
     key_column: ClassVar[str] = "root_job_id"
@@ -313,6 +313,9 @@ class IrisJobConfig:
     has_coscheduling: bool
     # The worker attribute coscheduled tasks share, such as "tpu-name".
     coscheduling_group_by: str
+    # The requested locality group sizes as a JSON list of task counts; "[]" when
+    # the job asks for none.
+    coscheduling_group_sizes: str
     priority_band: str
     preemption_policy: str
     existing_job_policy: str
@@ -327,7 +330,7 @@ class IrisJobConfig:
     container_profile: str
     egress_policy: str
     # The allowlisted environment variables (iris.cluster.redaction.
-    # CONTROLLER_ROW_ENV_VARS) as a JSON object, each value redacted; NULL when
+    # OBSERVABILITY_ROW_ENV_VARS) as a JSON object, each value redacted; NULL when
     # the job sets none. MARIN_PROVENANCE is stored as its parsed fields.
     env_vars: str | None
     ts: datetime
@@ -338,7 +341,7 @@ class IrisJobTask:
     """A snapshot of one controller ``tasks`` row: every column, plus the job key.
 
     Written at submit and whenever the task's state, current attempt, current
-    worker, error or exit code changes. Unlike the other controller rows, a change
+    worker, error or exit code changes. Unlike the other observability rows, a change
     to any other column alone writes no row: Kubernetes rewrites the pending
     reason (``status_message``) on every reconcile. So every column other than
     those five (``status_message``, ``container_id``, ``current_worker_address``,
@@ -412,6 +415,9 @@ class IrisTaskAttempt:
     pod_name: str
     pod_uid: str
     backend_id: str
+    # The topology domains the scheduler selected, keyed by node label, as a JSON
+    # object; "{}" until assigned or when the backend exposes none.
+    topology_json: str
     ts: datetime
 
 

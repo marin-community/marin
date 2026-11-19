@@ -487,7 +487,7 @@ class Controller:
         # (their finelog handles are constructor args), so the controller only holds
         # the stack for its own logging and shuts it down at stop().
         self._log_stack = log_stack
-        self._db.attach_controller_rows(log_stack.controller_row_tables(config.cluster_id))
+        self._db.attach_observability_rows(log_stack.observability_row_tables(config.cluster_id))
         self._log_client = log_stack.client
         self._log_service_address = log_stack.address
         self._log_handler = RemoteLogHandler(self._log_client, key=CONTROLLER_LOG_KEY)

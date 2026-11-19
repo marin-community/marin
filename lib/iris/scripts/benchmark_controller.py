@@ -2367,7 +2367,7 @@ class SyntheticReconcileState:
     worker_ids: list[WorkerId]
     task_ids: list[JobName]
     address: str  # all workers share this loopback address
-    # Embedded finelog the controller-row tables write to, as on a real controller.
+    # Embedded finelog the observability-row tables write to, as on a real controller.
     log_stack: LogStack
 
 
@@ -2391,7 +2391,7 @@ def _build_synthetic_reconcile_state(
     log_stack = build_log_stack(
         log_service_address="", local_log_dir=db_dir / "log-server", host="127.0.0.1", worker_token_provider=None
     )
-    db.attach_controller_rows(log_stack.controller_row_tables("benchmark"))
+    db.attach_observability_rows(log_stack.observability_row_tables("benchmark"))
     health = WorkerHealthTracker()
     txns = ControllerTestState(db, health=health)
 

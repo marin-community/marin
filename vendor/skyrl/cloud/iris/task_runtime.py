@@ -49,6 +49,7 @@ import huggingface_hub.constants
 from filelock import FileLock
 from omegaconf import DictConfig, OmegaConf
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
+from rigging.timing import RateLimiter
 
 from cloud.iris.artifacts import (
     ArtifactSource,
@@ -98,13 +99,14 @@ from marinskyrl.process_diagnostics import (
 )
 from cloud.iris.paths import resolve_repo_path
 from cloud.iris.ray_ports import RayPort, allocated_ray_port, resolve_ray_ports
+from cloud.iris.role_topology import RoleTopology
 from cloud.iris.ray_storage import (
     RaySpillBackend,
     RaySpillTarget,
     resolve_ray_spill_target,
     validate_ray_spill_dir,
 )
-from cloud.iris.launch_config import RunMode, hugging_face_models, load_launch_config
+from cloud.iris.launch_config import RunMode, derive_launch_topology, hugging_face_models, load_launch_config
 from cloud.iris.rl_config_translation import materialize_launch_config
 from cloud.iris.rl_config_translation import TaskLocalSkyRLValues, apply_task_local_values
 from cloud.iris.runtime_environment import RuntimeProfile
@@ -207,6 +209,8 @@ def _ray_bin() -> str:
 DEFAULT_RENDEZVOUS_TIMEOUT = 1800
 DEFAULT_CLUSTER_JOIN_TIMEOUT = 1800
 POLL_INTERVAL = 5
+STARTUP_POLL_INTERVAL = 1.0
+RENDEZVOUS_REWRITE_INTERVAL = 5.0
 # Tolerates clock skew between nodes and the time rank-0 needs to start Ray.
 RENDEZVOUS_FRESHNESS_SLACK = 60
 # Bound the rank-0 rendezvous PutObject: unbounded fsspec/s3fs put can wedge the
@@ -581,7 +585,7 @@ def prepare_draft_model(
     else:
         source_uri = model.source_uri
         manifest = load_model_manifest(source_uri)
-        if model.source_identity.startswith("sha256:") and model.source_identity != manifest.identity:
+        if model.source_identity != manifest.identity:
             raise ValueError(
                 f"Draft manifest identity mismatch: requested {model.source_identity}, "
                 f"found {manifest.identity} at {source_uri}"
@@ -1094,7 +1098,7 @@ def poll_rendezvous(
             raise
         except Exception as exc:  # transient object-store hiccup
             _log(f"rendezvous poll error (will retry): {exc}")
-        time.sleep(POLL_INTERVAL)
+        time.sleep(STARTUP_POLL_INTERVAL)
     raise TimeoutError(
         f"Worker rank {_rank()} timed out after {timeout}s waiting for "
         f"rank-0 rendezvous at {uri}. Did the head task fail to start?"
@@ -1229,6 +1233,8 @@ def _ray_mem_flags() -> list[str]:
 def ray_start_head(
     head_ip: str,
     spill_target: RaySpillTarget,
+    *,
+    labels: dict[str, str] | None = None,
 ) -> None:
     spill_target.prepare_node()
     cmd = [
@@ -1243,6 +1249,7 @@ def ray_start_head(
         *_ray_port_flags(),
         *_ray_mem_flags(),
         *spill_target.head_flags(),
+        *([f"--labels={','.join(f'{key}={value}' for key, value in labels.items())}"] if labels else []),
     ]
     _log(spill_target.description())
     _log(f"Starting Ray HEAD: {' '.join(cmd)}")
@@ -1256,6 +1263,8 @@ def ray_start_worker(
     ray_port: int,
     node_ip: str,
     spill_target: RaySpillTarget,
+    *,
+    labels: dict[str, str] | None = None,
 ) -> None:
     spill_target.prepare_node()
     cmd = [
@@ -1266,6 +1275,7 @@ def ray_start_worker(
         *_ray_port_flags(),
         *_ray_mem_flags(),
         *spill_target.worker_flags(),
+        *([f"--labels={','.join(f'{key}={value}' for key, value in labels.items())}"] if labels else []),
     ]
     _log(spill_target.description())
     _log(f"Starting Ray WORKER: {' '.join(cmd)}")
@@ -1294,27 +1304,32 @@ def ray_stop() -> None:
     _log(f"Ray stop completed (exit {completed.returncode})")
 
 
-def wait_for_nodes(ray_address: str, expected_nodes: int, timeout: int, rewrite_cb=None) -> None:
+def wait_for_nodes(
+    ray_address: str,
+    expected_nodes: int,
+    timeout: int,
+    rewrite_cb=None,
+) -> None:
     """Block until the Ray cluster reports ``expected_nodes`` alive nodes.
 
-    ``rewrite_cb`` (head only): a no-arg callable invoked on every poll to RE-PUBLISH
-    the rendezvous so its ``written_at`` stays fresh. A worker pod on a cold node can
-    start >RENDEZVOUS_FRESHNESS_SLACK (60s) after the head wrote the rendezvous; its
-    ``poll_rendezvous(min_written_at=worker_start)`` would then reject the head's
-    one-shot rendezvous as "stale" and wait forever while the head waits for that node —
-    a mutual deadlock. Rewriting each poll keeps the timestamp ahead of any late worker's
-    freshness threshold without weakening the prior-ATTEMPT protection (a stale file from
-    a dead PRIOR attempt is still never refreshed).
+    ``rewrite_cb`` (head only) re-publishes the rendezvous at most once per ``RENDEZVOUS_REWRITE_INTERVAL`` seconds
+    so ``written_at`` stays fresh. A worker pod on a cold node can start >RENDEZVOUS_FRESHNESS_SLACK (60s) after the
+    head wrote the rendezvous; its ``poll_rendezvous(min_written_at=worker_start)`` would then reject the head's
+    one-shot rendezvous as "stale" and wait forever while the head waits for that node — a mutual deadlock. Periodic
+    rewrites keep the timestamp ahead of any late worker's freshness threshold without weakening the prior-ATTEMPT
+    protection (a stale file from a dead PRIOR attempt is still never refreshed).
     """
     import ray
 
     deadline = time.time() + timeout
+    limiter = RateLimiter(RENDEZVOUS_REWRITE_INTERVAL)
+    limiter.mark_run()
     _log(f"Waiting for {expected_nodes} Ray node(s) at {ray_address} (timeout {timeout}s)...")
     ray.init(address=ray_address, ignore_reinit_error=True)
     try:
         last_count = -1
         while time.time() < deadline:
-            if rewrite_cb is not None:
+            if rewrite_cb is not None and limiter.should_run():
                 try:
                     rewrite_cb()
                 except Exception as exc:
@@ -1327,7 +1342,7 @@ def wait_for_nodes(ray_address: str, expected_nodes: int, timeout: int, rewrite_
             if count >= expected_nodes:
                 _log(f"All {expected_nodes} Ray node(s) joined. Resources: {ray.cluster_resources()}")
                 return
-            time.sleep(POLL_INTERVAL)
+            time.sleep(STARTUP_POLL_INTERVAL)
         raise TimeoutError(f"Only {last_count}/{expected_nodes} Ray nodes joined within {timeout}s.")
     finally:
         ray.shutdown()
@@ -1964,6 +1979,7 @@ def run_head(
     ray_start_head(
         head_ip,
         resolve_ray_spill_target(args.rendezvous_dir, args.ray_spill_backend, args.ray_spill_dir),
+        labels=args.ray_labels,
     )
     _log("Ray head bootstrap complete; entering rendezvous / cluster-join phase.")
 
@@ -1980,8 +1996,6 @@ def run_head(
             f"[task-runtime] Ray head subprocess returned; writing rendezvous -> {_rendezvous_uri(args.rendezvous_dir)}"
         )
         write_rendezvous(args.rendezvous_dir, head_ip, ray_port, gang_epoch)
-        # Re-publish the rendezvous each poll so a late cold-node worker never sees it
-        # as "stale" (see wait_for_nodes docstring — prevents the freshness deadlock).
         wait_for_nodes(
             ray_address,
             num_tasks,
@@ -2089,6 +2103,7 @@ def run_worker(args: argparse.Namespace, *, debug_mode: DebugMode = DebugMode.LI
         ray_port,
         node_ip,
         resolve_ray_spill_target(args.rendezvous_dir, args.ray_spill_backend, args.ray_spill_dir),
+        labels=args.ray_labels,
     )
     wait_for_nodes(ray_address, num_tasks, args.cluster_join_timeout)
     _log(f"Worker rank {rank} joined Ray cluster at {ray_address}; parking until the head finishes.")
@@ -2172,6 +2187,8 @@ def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
     offline = task_env.get("HF_HUB_OFFLINE", "").lower() in {"1", "true", "yes", "on"}
     prestage_model = model_uri if not is_cloud_uri(model_uri) and (model.chat_template or offline) else ""
     return argparse.Namespace(
+        role_topology=derive_launch_topology(_container(config)).role_topology,
+        ray_labels={},
         ray_spill_dir=validate_ray_spill_dir(str(config.ray.spill_dir)),
         ray_spill_backend=RaySpillBackend(str(config.ray.spill_backend)),
         rendezvous_dir=str(config.ray.rendezvous_dir),
@@ -2296,6 +2313,8 @@ def main() -> None:
     launch_config = load_launch_config(config_path)
     args = _runtime_namespace(launch_config)
     os.environ.update(args.task_env)
+    if args.role_topology is not None:
+        args.ray_labels = args.role_topology.node_labels(_rank())
     _print_env_snapshot()
     # Pin virtual-hosted S3 addressing for the boto3 path (Ray object-spill IO workers)
     # BEFORE any `ray start`, on head + every worker — CoreWeave R2 rejects path-style.

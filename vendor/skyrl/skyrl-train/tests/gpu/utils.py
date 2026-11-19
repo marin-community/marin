@@ -362,7 +362,6 @@ def ray_init_for_tests():
     # to remove duplicate code
     env_vars["PYTHONPATH"] = os.environ.get("PYTHONPATH", "")
     env_vars["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
-    env_vars["NVTE_FUSED_ATTN"] = "0"
     env_vars["LD_LIBRARY_PATH"] = os.environ.get("LD_LIBRARY_PATH")
     ray.init(runtime_env={"env_vars": env_vars})
 
@@ -407,6 +406,7 @@ def init_inference_engines(
         seed=42,
         vllm_v1_disable_multiproc=True,
         enable_prefix_caching=True,
+        enable_chunked_prefill=cfg.generator.enable_chunked_prefill,
         enforce_eager=False,
         shared_pg=pg,
         engine_init_timeout_seconds=cfg.generator.engine_init_timeout_seconds,
@@ -498,7 +498,6 @@ def init_remote_inference_servers(
     engines = create_remote_inference_engines(
         urls=[f"localhost:{engine_port}"],
         model_name=model,
-        engine_backend=backend,
         tensor_parallel_size=tp_size,
         data_parallel_size=1,
         expert_parallel_size=1,

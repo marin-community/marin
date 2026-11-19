@@ -241,6 +241,12 @@ def _record_failure(
 def execute_launch(config_path: Path, *, backend: LaunchBackend | None = None) -> LaunchResult:
     """Execute the lifecycle declared by one resolved launch config."""
     config = _prepare_config(load_launch_config(config_path))
+    previous_path = StoragePath(str(config.artifacts.resolved_config_uri))
+    if previous_path.exists():
+        previous = OmegaConf.create(previous_path.read_text())
+        previous = previous.get("config", previous)
+        if previous.inputs.get("starting_checkpoint") != config.inputs.starting_checkpoint:
+            raise ValueError("inputs.starting_checkpoint changed for an existing run; use a new RL artifact version")
     terminal_manifest_uri = str(config.artifacts.terminal_manifest_uri)
     if StoragePath(terminal_manifest_uri).exists():
         raise ValueError(f"Terminal manifest is immutable and already exists: {terminal_manifest_uri}")

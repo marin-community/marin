@@ -6,6 +6,7 @@
 
 import bz2
 import gzip
+import hashlib
 import io
 import json
 import lzma
@@ -394,6 +395,56 @@ def test_verified_copy_same_size_source_overwrite_invalidates_completion(tmp_pat
     source_file.write_bytes(b"second!")
     os.utime(source_file, ns=(original_mtime + 1_000_000_000, original_mtime + 1_000_000_000))
 
+    with pytest.raises(VerifiedCopyError, match="source identity changed"):
+        verified_copy_prefix(str(source), str(destination), workers=1)
+
+    assert (destination / "weights.bin").read_bytes() == b"first!!"
+
+
+@pytest.mark.parametrize(
+    ("listed_version", "head_version"),
+    [(None, "null"), (None, "version-1"), ("null", "null")],
+)
+def test_verified_copy_s3_head_metadata_preserves_copy_and_detects_overwrite(
+    tmp_path, monkeypatch, listed_version, head_version
+):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    source_file = source / "weights.bin"
+    source_file.write_bytes(b"first!!")
+    source_filesystem, source_path = verified_copy_module.filesystem_for(str(source))
+    original_filesystem_for = verified_copy_module.filesystem_for
+
+    def object_info(path, version):
+        info = source_filesystem.info(path)
+        result = {"name": path, "size": info["size"], "type": info["type"]}
+        result["ETag"] = f'"{hashlib.md5(Path(path).read_bytes(), usedforsecurity=False).hexdigest()}"'
+        if version is not None:
+            result["VersionId"] = version
+        return result
+
+    class S3Source:
+        def __getattr__(self, name):
+            return getattr(source_filesystem, name)
+
+        def find(self, path, *, detail):
+            return {name: object_info(name, listed_version) for name in source_filesystem.find(path)}
+
+        def info(self, path):
+            return object_info(path, head_version)
+
+    def route(url, *, s3_upload_policy=S3UploadPolicy.STANDARD):
+        if url == str(source):
+            return S3Source(), source_path
+        return original_filesystem_for(url, s3_upload_policy=s3_upload_policy)
+
+    monkeypatch.setattr(verified_copy_module, "filesystem_for", route)
+    result = verified_copy_prefix(str(source), str(destination), workers=1)
+    assert result.copied_files == 1
+    assert (destination / "weights.bin").read_bytes() == b"first!!"
+
+    source_file.write_bytes(b"second!")
     with pytest.raises(VerifiedCopyError, match="source identity changed"):
         verified_copy_prefix(str(source), str(destination), workers=1)
 

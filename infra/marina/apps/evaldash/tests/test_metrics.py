@@ -4,19 +4,19 @@
 """The evaldash panel and comparison views: cross-cohort selection, coverage filtering, qualified
 aggregates, and head-to-head difference intervals."""
 
-from dataclasses import asdict
 
 import pytest
 from evaldash.app import MemoryRecordStore
 from evaldash.metrics import build_comparison, build_meta, build_model_detail, build_panel, eval_suites, panel_request
-from marin.evaluation.eval_policy import EVALCHEMY_COMMIT
-from marin.evaluation.eval_policy_sources import POLICY_SOURCE_DIGESTS
-from marin.evaluation.eval_stats import Completeness, MissingPolicy
-from marin.evaluation.model_config import GenerationConfig, ModelConfig, ServeConfig
-from marin.evaluation.model_identity import model_config_digest
-from marin.evaluation.records import (
+from evalrecords.eval_policy import EVALCHEMY_COMMIT
+from evalrecords.eval_policy_sources import POLICY_SOURCE_DIGESTS
+from evalrecords.eval_stats import Completeness, MissingPolicy
+from evalrecords.model_identity import model_config_digest
+from evalrecords.records import (
     BenchmarkMetadataRef,
     BenchmarkMetricRef,
+    CuratedRef,
+    CuratedSettings,
     EvalchemyRef,
     EvalRef,
     EvalRunRecord,
@@ -24,14 +24,58 @@ from marin.evaluation.records import (
     HarborRef,
     HardwareRef,
     MetricKind,
+    ModelAgentConfig,
     ModelConfigRef,
+    ModelGenerationConfig,
     ModelRef,
+    ModelResourceConfig,
+    ModelServeConfig,
     Provenance,
+    ResolvedEvaluationSelection,
     RunStatus,
     TaskCoverage,
 )
 
 ITEMS = 1000
+
+
+def _model_config(
+    *,
+    name: str,
+    location: str,
+    revision: str | None = None,
+    max_model_len: int | None = None,
+    max_gen_toks: int | None = None,
+    chat_template_kwargs: dict[str, bool | str] | None = None,
+) -> ModelConfigRef:
+    """The model configuration a launch stores when the model YAML sets only these fields."""
+    return ModelConfigRef(
+        name=name,
+        location=location,
+        revision=revision,
+        tokenizer=None,
+        apply_chat_template=True,
+        resource_hint=ModelResourceConfig(hbm_gb=None, gpu={}, cpu=None, memory=None, disk=None),
+        serve=ModelServeConfig(
+            backend="vllm",
+            tensor_parallel_size=None,
+            data_parallel_size=None,
+            max_model_len=max_model_len,
+            max_num_batched_tokens=None,
+            max_num_seqs=None,
+            hf_overrides=None,
+            limit_mm_per_prompt=None,
+            tool_call_parser=None,
+            reasoning_parser=None,
+            vllm_extra_args=(),
+            chat_template=None,
+            auto_overrides=True,
+        ),
+        generation=ModelGenerationConfig(
+            max_gen_toks=max_gen_toks, extra_gen_kwargs={}, chat_template_kwargs=chat_template_kwargs or {}
+        ),
+        agent=ModelAgentConfig(agent_kwargs={}),
+    )
 
 
 def _record(
@@ -661,7 +705,7 @@ def test_meta_reports_suites_facets_and_archived_models():
 
 
 def test_eval_suites_groups_known_evals_and_buckets_the_rest():
-    grouped = {group["suite"]: group["evals"] for group in eval_suites({"mmlu", "drop", "math500", "mystery"})}
+    grouped = {group["suite"]: group["evals"] for group in eval_suites({"mmlu", "drop", "math500", "mystery"}, {})}
 
     assert grouped["NLP"] == ["drop", "mmlu"]
     assert grouped["Chat / Math"] == ["math500"]
@@ -753,14 +797,8 @@ def test_comparison_honours_the_benchmark_selection_it_was_asked_for():
 def test_policy_comparison_excludes_wrong_mode_and_groups_model_yamls():
     def policy_run(thinking: bool, config_thinking: bool, created_at: str, name: str = "same-name") -> EvalRunRecord:
         record = _record(name, "math500", "eval-policy-2026-09-24-verified", created_at, 0.5)
-        model_config = ModelConfigRef.model_validate(
-            asdict(
-                ModelConfig(
-                    name=name,
-                    location="org/model",
-                    generation=GenerationConfig(chat_template_kwargs={"enable_thinking": config_thinking}),
-                )
-            )
+        model_config = _model_config(
+            name=name, location="org/model", chat_template_kwargs={"enable_thinking": config_thinking}
         )
         return record.model_copy(
             update={
@@ -831,16 +869,8 @@ def test_panel_groups_tau_context_override_with_other_evals_despite_archived_con
                 )
             },
         )
-        config = ModelConfigRef.model_validate(
-            asdict(
-                ModelConfig(
-                    name="grug",
-                    location="org/grug",
-                    revision="1" * 40,
-                    serve=ServeConfig(max_model_len=context),
-                    generation=GenerationConfig(max_gen_toks=tokens),
-                )
-            )
+        config = _model_config(
+            name="grug", location="org/grug", revision="1" * 40, max_model_len=context, max_gen_toks=tokens
         )
         records.append(
             record.model_copy(
@@ -894,3 +924,65 @@ def test_historical_policy_label_keeps_its_scores_for_marked_comparisons():
 
     assert panel["rows"][0]["cells"]["mmlu"]["value"] == pytest.approx(0.6)
     assert panel["policy_rejections"] == []
+
+
+def test_comparison_keeps_protocol_variants_and_matches_historical_shots():
+    historical = [
+        _record("old", name, "historical", "2026-01-01", 0.6, num_fewshot=shots, metric="exact_match,flexible-extract")
+        for name, shots in (("gsm8k-0shot", 0), ("gsm8k", 5))
+    ]
+    native = []
+    for shots, created in ((0, "2026-02-01"), (5, "2026-03-01")):
+        record = _record(
+            "new",
+            f"configured-{shots}",
+            None,
+            created,
+            0.7,
+            num_fewshot=shots,
+            metric="exact_match,strict-match",
+            primary_metric="accuracy",
+            metric_kind=MetricKind.BINARY,
+            coverage={
+                f"configured-{shots}": TaskCoverage(
+                    n_benchmark=ITEMS, n_attempted=ITEMS, n_scored=ITEMS, n_correct=700, errors={}
+                )
+            },
+        )
+        reference = record.evaluation.model_copy(
+            update={
+                "mechanism": "curated",
+                "evalchemy": None,
+                "curated": CuratedRef(
+                    datasets=("fixture",),
+                    settings=CuratedSettings(),
+                    selection=ResolvedEvaluationSelection(
+                        benchmark="gsm8k", protocol="harness", num_fewshot=shots, prompt_format="completion"
+                    ),
+                ),
+            }
+        )
+        native.append(record.model_copy(update={"evaluation": reference}))
+    records = historical + native
+    comparison = build_comparison(records, panel_request(), ("old", "new"))
+    rows = {row["benchmark"]: row for row in comparison["rows"]}
+    for shots in (0, 5):
+        row = rows[f"gsm8k [harness; {shots}-shot; completion]"]
+        assert row["cells"]["old"]["value"] == 0.6
+        assert row["cells"]["new"]["value"] == 0.7
+        assert row["cells"]["new"]["num_fewshot"] == shots
+    assert len(rows) == 2
+    metadata = build_meta(records)
+    family = next(entry for entry in metadata["families"] if entry["family"] == "gsm8k")
+    assert set(family["variants"]) == set(rows)
+    selected = "gsm8k [harness; 0-shot; completion]"
+    request = panel_request(benchmarks=(selected,), cohort="historical")
+    panel = build_panel(records, request)
+    assert panel["rows"][0]["cells"][selected]["value"] == 0.6
+    assert panel["rows"][0]["missing"] == {}
+    assert panel["families"] == [{"family": "gsm8k", "variants": [selected], "default": selected}]
+    comparison = build_comparison(records, request, ("old",))
+    assert comparison["rows"][0]["benchmark"] == selected
+    detail = build_model_detail(records, "old")
+    assert detail is not None
+    assert set(detail["history"]) == set(rows)

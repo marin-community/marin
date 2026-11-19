@@ -47,10 +47,10 @@ models:
       mmlu-pro: {run_id: 20261111-225936-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-3eb22c543c054758874ec1ccac49cde5-mmlu-pro-fe310b5a1e325d61a2df788ddac59aaa, label: unofficial}
       gpqa-diamond: {missing: "Pending: the gated GPQA dataset was not readable"}
       cruxeval: {run_id: 20261111-225936-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-3eb22c543c054758874ec1ccac49cde5-cruxeval-b3ed5986f901513fabf4a367b7ad2390, label: unofficial}
-      financebench: {run_id: 20261111-225936-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-3eb22c543c054758874ec1ccac49cde5-financebench-15102163af7c5400b8acc671245f5b27, label: unofficial}
-      ifbench: {missing: "Pending: run in progress"}
-      mrcr: {missing: "Pending: run in progress"}
-      nupa: {missing: "Pending: run in progress"}
+      financebench: {run_id: 20261111-225936-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-3eb22c543c054758874ec1ccac49cde5-financebench-15102163af7c5400b8acc671245f5b27, label: unofficial, note: "Graded by the MiniMax judge used on Marin main since Oct 30, not the policy pin's judge; Qwen 3.6 scores 42 here against 62-74 in its policy runs"}
+      ifbench: {run_id: 20261111-225936-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-3eb22c543c054758874ec1ccac49cde5-ifbench-46228c701fa358689706496d3846d72b, label: unofficial}
+      mrcr: {run_id: 20261111-225936-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-3eb22c543c054758874ec1ccac49cde5-mrcr-6ea7338c72a054f0be52c877c8baa96f, label: unofficial}
+      nupa: {run_id: 20261111-225936-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-3eb22c543c054758874ec1ccac49cde5-nupa-1011c7e39c0c5f9eb6507421dcaafb90, label: unofficial}
 
   - name: DeepSeek V4 Flash
     hf_repo: deepseek-ai/DeepSeek-V4-Flash
@@ -70,10 +70,10 @@ models:
       mmlu-pro: {run_id: 20261111-225948-deepseek-ai-DeepSeek-V4-Flash-a3e27da31d9f4808987f2a45854f9217-mmlu-pro-ead7ab20db605f70992498ba18d40e48, label: unofficial}
       gpqa-diamond: {missing: "Pending: the gated GPQA dataset was not readable"}
       cruxeval: {run_id: 20261111-225948-deepseek-ai-DeepSeek-V4-Flash-a3e27da31d9f4808987f2a45854f9217-cruxeval-5afe8509bd94506ba1821bc7d070fe9a, label: unofficial}
-      financebench: {run_id: 20261111-225948-deepseek-ai-DeepSeek-V4-Flash-a3e27da31d9f4808987f2a45854f9217-financebench-aea3c2b0a3c8556b941b5157b46efd0a, label: unofficial}
+      financebench: {run_id: 20261111-225948-deepseek-ai-DeepSeek-V4-Flash-a3e27da31d9f4808987f2a45854f9217-financebench-aea3c2b0a3c8556b941b5157b46efd0a, label: unofficial, note: "Graded by the MiniMax judge used on Marin main since Oct 30, not the policy pin's judge; Qwen 3.6 scores 42 here against 62-74 in its policy runs"}
       ifbench: {run_id: 20261111-225948-deepseek-ai-DeepSeek-V4-Flash-a3e27da31d9f4808987f2a45854f9217-ifbench-35e10d60836e5898a34bceda51f4beeb, label: unofficial}
       mrcr: {missing: "Not scored: Evalchemy's MRCR applies a Hugging Face chat template locally, and this model ships none"}
-      nupa: {missing: "Pending: run in progress"}
+      nupa: {run_id: 20261111-225948-deepseek-ai-DeepSeek-V4-Flash-a3e27da31d9f4808987f2a45854f9217-nupa-2fc3e046d79d535e87ebacff45c0d854, label: unofficial}
 
   - name: Muse Glimmer 30B
     hf_repo: meta-models/Muse-Glimmer-30B
@@ -83,17 +83,40 @@ models:
       humanevalplus: {run_id: 20261111-231015-meta-models-Muse-Glimmer-30B-5aa4022255034502bbeeeb9e108be950-humanevalplus-67cef8d99f3a5cb89b7c6b411c31d289, label: unofficial}
       aime24: {run_id: 20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-aime24-e8452634e2ea54b698f3d72ea6ad98da, label: unofficial}
       boolq: {run_id: 20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-boolq-23d83afca89a5fc1b3046f05413ea6b4, label: unofficial}
-      gsm8k-0shot: {missing: "Pending: run in progress; its score will be affected by scorer bug #11226"}
+      gsm8k-0shot: {missing: "Held back: the run finished, but scorer bug #11226 affects its score"}
       gpqa-diamond: {missing: "Pending: the gated GPQA dataset was not readable"}
-      mbppplus: {missing: "Pending: run in progress"}
-      olympiadbench: {missing: "Pending: run in progress"}
-      piqa: {missing: "Pending: run in progress"}
-      winogrande: {missing: "Pending: run in progress"}
-      truthfulqa: {missing: "Pending: run in progress"}
-      triviaqa: {missing: "Pending: run in progress"}
-      mmlu-pro: {missing: "Pending: run in progress"}
-      cruxeval: {missing: "Pending: run in progress"}
-      financebench: {missing: "Pending: run in progress"}
-      ifbench: {missing: "Pending: run in progress"}
-      mrcr: {missing: "Pending: run in progress"}
-      nupa: {missing: "Pending: run in progress"}
+      mbppplus: {run_id: 20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-mbppplus-10d30cc9cdb754aa8d0f3f2cb3b54b23, label: unofficial}
+      olympiadbench: {missing: "Held back: 227 of 300 attempts end without a final answer in the format the grader extracts"}
+      piqa: {run_id: 20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-piqa-95247f90f998500bb38faffa46b89d3e, label: unofficial}
+      winogrande: {run_id: 20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-winogrande-271b780c5954593c989661585cba3816, label: unofficial}
+      truthfulqa: {run_id: 20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-truthfulqa-83006148d9d35e34b99d37c6ea3d089b, label: unofficial}
+      triviaqa: {missing: "Held back: Glimmer's outputs often restate a question and a stray answer before the real one, and the exact-match extractor picks the wrong one"}
+      mmlu-pro: {run_id: 20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-mmlu-pro-113a0d61a3155890af5d74d5dd8ded53, label: unofficial}
+      cruxeval: {run_id: 20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-cruxeval-3f2b9963b88d52a18d9c7aafa4179b8b, label: unofficial}
+      financebench: {run_id: 20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-financebench-651c3b4fddbc530eba27f457620c4996, label: unofficial, note: "Graded by the MiniMax judge used on Marin main since Oct 30, not the policy pin's judge; Qwen 3.6 scores 42 here against 62-74 in its policy runs"}
+      ifbench: {missing: "Held back: Glimmer's reasoning text reaches the scorer with its answer, so this format-sensitive score is not meaningful"}
+      mrcr: {missing: "Held back: Glimmer's reasoning text reaches the scorer with its answer, so this format-sensitive score is not meaningful"}
+      nupa: {run_id: 20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-nupa-04b804e787e55b419dda140f1c17427f, label: unofficial}
+
+  - name: Qwen 3.6 35B-A3B
+    hf_repo: Qwen/Qwen3.6-35B-A3B
+    revision: 995ad96eacd98c81ed38be0c5b274b04031597b0
+    cells:
+      math500: {run_id: 20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-math500-7380a099b3a25603bc62835a4137fdd5, label: unofficial}
+      humanevalplus: {run_id: 20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-humanevalplus-86fcdd5f457158119d1514ac087a7293, label: unofficial}
+      mbppplus: {run_id: 20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-mbppplus-c6b70a85def15b3fad167366fa912b37, label: unofficial}
+      olympiadbench: {run_id: 20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-olympiadbench-92441062476859a58360a429e42d7418, label: unofficial, note: "106 of 300 attempts unanswered, a rate similar to its policy runs"}
+      gsm8k-0shot: {run_id: 20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-gsm8k-0shot-fc4b959f9b095511a6da121ca456f7fb, label: unofficial}
+      piqa: {run_id: 20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-piqa-e45a070ebe235888a580002fbbbda8f0, label: unofficial}
+      winogrande: {run_id: 20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-winogrande-9702f5ab0e305ad48e4bb461fa9a8b2e, label: unofficial}
+      boolq: {run_id: 20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-boolq-444e12a28d255c41bcf3bce28b375c59, label: unofficial}
+      truthfulqa: {run_id: 20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-truthfulqa-1edadd39ffca597ca8ec5662fb238132, label: unofficial}
+      triviaqa: {run_id: 20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-triviaqa-30a18d53cac4503f8b4cd9dca7e2efd4, label: unofficial}
+      aime24: {run_id: 20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-aime24-dc6ac4719c86509a8b13faadaa51b130, label: unofficial}
+      mmlu-pro: {run_id: 20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-mmlu-pro-ae4ddcdd708751019588a5c91d0583a9, label: unofficial}
+      gpqa-diamond: {missing: "Pending: the gated GPQA dataset was not readable"}
+      cruxeval: {run_id: 20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-cruxeval-36d2e3fd43535ce890a9be2b96bf4138, label: unofficial}
+      financebench: {run_id: 20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-financebench-0f744332780f532381e8cbacc8caa681, label: unofficial, note: "Graded by the MiniMax judge used on Marin main since Oct 30, not the policy pin's judge; Qwen 3.6 scores 42 here against 62-74 in its policy runs"}
+      ifbench: {run_id: 20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-ifbench-d0cde4316c1959fba4a8599a89c9f8c0, label: unofficial}
+      mrcr: {run_id: 20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-mrcr-c1cfa24e65b9553694dbb06cdfa984c8, label: unofficial}
+      nupa: {run_id: 20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-nupa-eeb49865a9e4540780dfada8705a1741, label: unofficial}
