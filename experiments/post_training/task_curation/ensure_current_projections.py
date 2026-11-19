@@ -34,7 +34,7 @@ from experiments.post_training.task_curation.derived_contract_census import (
     DerivedContractReceipt,
 )
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
-from infra.marina.apps.rl_data_catalog.server.contract_selection import INPUT_FIELDS
+from infra.marina.apps.rl_data_catalog.server.contract_selection import INPUT_FIELDS, select_contract_receipts
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 LOGGER = logging.getLogger(__name__)
@@ -401,11 +401,17 @@ def atlas_curriculum_rows() -> dict[str, dict]:
 def atlas_contract_receipts() -> dict[str, list[DerivedContractReceipt]]:
     """Read every archived receipt; publication requires evidence in the served applet."""
     result = atlas_applet_query()("SELECT source_id, receipt FROM atlas_derived_contracts ORDER BY receipt_id", {})
+    # Select exact archived JSON identities before typed parsing adds legacy defaults.
+    populations = defaultdict(list)
+    for row in result["rows"]:
+        receipt = row["receipt"] if isinstance(row["receipt"], dict) else json.loads(row["receipt"])
+        source = canonical_source_id(row["source_id"])
+        identity = (source, *(receipt["input"][key] for key in INPUT_FIELDS))
+        populations[identity].append(receipt)
     return contract_receipt_map(
-        DerivedContractReceipt.model_validate(
-            row["receipt"] if isinstance(row["receipt"], dict) else json.loads(row["receipt"])
-        )
-        for row in result["rows"]
+        DerivedContractReceipt.model_validate(receipt)
+        for identity, receipts in populations.items()
+        for receipt in select_contract_receipts(identity[0], receipts)
     )
 
 

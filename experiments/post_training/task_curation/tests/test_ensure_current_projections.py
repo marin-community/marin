@@ -3,8 +3,10 @@
 
 """The projection currency stage pairs every pin with its grader and curriculum receipts."""
 
+import copy
 import json
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from finestore.rl.curation import ActorCensusInput
@@ -326,3 +328,30 @@ def test_receipt_grouping_keeps_both_current_and_historical_inputs():
     grouped = ensure_current_projections.contract_receipt_map([current, stale])
     assert grouped["Test:source"] == [current, stale]
     assert ensure_current_projections.contract_state(declaration(), grouped) == ("current", "")
+
+
+def test_served_contract_reader_applies_exact_corrections_before_parsing_legacy_json(monkeypatch):
+    fixture = Path(__file__).parents[4] / "infra/marina/apps/rl_data_catalog/tests/fixtures/contract_supersessions.json"
+    pair = json.loads(fixture.read_text())[0]
+    historical = copy.deepcopy(pair["selected"])
+    historical["input"]["dataset_revision"] = "f" * 40
+    rows = [
+        {"source_id": pair["source_id"], "receipt": payload}
+        for payload in [pair["previous"], pair["selected"], historical]
+    ]
+    monkeypatch.setattr(ensure_current_projections, "atlas_applet_query", lambda: lambda sql, params: {"rows": rows})
+    receipts = ensure_current_projections.atlas_contract_receipts()[pair["source_id"]]
+    assert len(receipts) == 2
+    assert {receipt.input.dataset_revision for receipt in receipts} == {
+        pair["selected"]["input"]["dataset_revision"],
+        historical["input"]["dataset_revision"],
+    }
+    assert (
+        next(receipt for receipt in receipts if receipt.input.dataset_revision != "f" * 40).summary.single_turn_count
+        == pair["selected"]["summary"]["single_turn_count"]
+    )
+    unlisted = copy.deepcopy(pair["selected"])
+    unlisted["summary"]["single_turn_count"] -= 1
+    rows.append({"source_id": pair["source_id"], "receipt": unlisted})
+    with pytest.raises(ValueError, match="Conflicting derived contract summaries"):
+        ensure_current_projections.atlas_contract_receipts()
