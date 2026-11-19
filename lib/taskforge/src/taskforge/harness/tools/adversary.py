@@ -41,6 +41,7 @@ class ReportArgs:
 @dataclass(frozen=True, slots=True)
 class ReportTool(ValidatedTool[ReportArgs]):
     task: TaskSpec
+    max_findings: int
     name = "report"
     description = (
         "Report demonstrated grading defects. Each finding needs a claim, candidate reply/files, and expected "
@@ -54,6 +55,11 @@ class ReportTool(ValidatedTool[ReportArgs]):
 
     @override
     async def run(self, ctx: Context, args: ReportArgs) -> ToolResult | ReturnRequest[AdversaryReport]:
+        if len(args.findings) > self.max_findings:
+            return ToolResult(
+                f"Invalid report: {len(args.findings)} findings exceed the limit of {self.max_findings}. "
+                f"Report again with the {self.max_findings} strongest."
+            )
         try:
             findings = tuple(
                 [
