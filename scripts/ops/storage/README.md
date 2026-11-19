@@ -78,8 +78,9 @@ passes, the worker writes the shard's record under
 every destination object's size and ETag against the records and writes
 `<destination>.copy-status/complete.json` last.
 
-Rerunning the same command resumes the copy one whole shard at a time: shards
-with a record are skipped and every other shard is copied again in full. A
+Rerunning the same command resumes the copy one whole shard at a time. A shard
+is skipped when its record exists and every destination object still matches
+it; every other shard is copied again in full. A
 shard's ID covers its files' keys, sizes, and source ETags, so a changed source
 file is copied again. Destination files outside the source are left untouched
 and unchecked. `--max-workers` (default 50, at 2 CPUs and 8 GB each) bounds the

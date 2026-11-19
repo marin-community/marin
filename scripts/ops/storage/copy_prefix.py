@@ -16,11 +16,11 @@ bytes; smaller objects are read back and hashed. Each source ETag is checked aga
 its copy. A worker writes the shard's record under ``<destination>.copy-status/shards/``
 only after every file in the shard passes.
 
-Resume is per shard and all-or-nothing: a rerun skips shards with a record and recopies
-every file of every other shard. A changed source file changes its shard's ID, so that
-shard is copied again. After the copy, the coordinator lists the destination, checks every
-file's size and ETag against the shard records, and writes
-``<destination>.copy-status/complete.json`` last.
+Resume is per shard and all-or-nothing. A shard counts as copied when its record exists
+and every destination object still has the recorded size and ETag; a rerun copies every
+file of every other shard again. A changed source file changes its shard's ID, so that
+shard is copied again. After the copy, the coordinator runs the same check on every shard
+and writes ``<destination>.copy-status/complete.json`` last.
 
 CoreWeave rejects ``CopyObject`` between buckets in different regions with
 ``InvalidRegion``, so workers read and rewrite every byte. Only CoreWeave URLs are
@@ -45,7 +45,7 @@ import json
 import logging
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -284,8 +284,41 @@ def _shard_bytes(shards: Sequence[CopyShard]) -> int:
     return sum(file.size for shard in shards for file in shard.files)
 
 
+def shard_is_copied(shard: CopyShard, record: Sequence[CopiedObject] | None, destination: Mapping[str, Any]) -> bool:
+    """Whether *record* covers every file of *shard* and each destination object still matches it."""
+    if record is None:
+        return False
+    recorded = {item.path: item for item in record}
+    for file in shard.files:
+        item = recorded.get(file.path)
+        entry = destination.get(file.path)
+        if (
+            item is None
+            or entry is None
+            or item.source_identity != file.identity
+            or int(entry["size"]) != file.size
+            or f"{ETAG_IDENTITY_PREFIX}{object_etag(entry)}" != item.destination_identity
+        ):
+            return False
+    return True
+
+
+def _pending_shards(shards: Sequence[CopyShard], destination_url: str) -> list[CopyShard]:
+    """Shards without a record, or with a destination object that no longer matches it."""
+    recorded = recorded_shard_ids(destination_url)
+    with_record = [shard for shard in shards if shard.shard_id in recorded]
+    with ThreadPoolExecutor(max_workers=RECORD_READ_THREADS) as pool:
+        records = pool.map(lambda shard: _read_json(shard_record_url(destination_url, shard.shard_id)), with_record)
+        by_id = {
+            shard.shard_id: [CopiedObject(**item) for item in record]
+            for shard, record in zip(with_record, records, strict=True)
+        }
+    destination = list_objects(destination_url)
+    return [shard for shard in shards if not shard_is_copied(shard, by_id.get(shard.shard_id), destination)]
+
+
 def _plan(source_url: str, destination_url: str) -> tuple[list[CopyShard], list[CopyShard]]:
-    """Shard the source, report progress, and return all shards and those without a record."""
+    """Shard the source, report progress, and return all shards and those still to copy."""
     files = source_files(source_url)
     if not files:
         raise ValueError(f"{source_url} holds no files")
@@ -293,60 +326,45 @@ def _plan(source_url: str, destination_url: str) -> tuple[list[CopyShard], list[
         CopyShard(shard_id(group), source_url, destination_url, group)
         for group in pack_shards(files, TARGET_SHARD_BYTES)
     ]
-    recorded = recorded_shard_ids(destination_url)
-    pending = [shard for shard in shards if shard.shard_id not in recorded]
+    pending = _pending_shards(shards, destination_url)
     _report(f"source: {len(files)} files, {format_size(_shard_bytes(shards))} in {len(shards)} shards")
-    _report(f"already copied: {len(shards) - len(pending)} shards")
+    _report(f"already copied and matching: {len(shards) - len(pending)} shards")
     _report(f"to copy: {len(pending)} shards, {format_size(_shard_bytes(pending))}")
     return shards, pending
 
 
-def _verify(shards: Sequence[CopyShard], destination_url: str) -> None:
-    """Check every destination object against its shard record, then write the completion record."""
-    with ThreadPoolExecutor(max_workers=RECORD_READ_THREADS) as pool:
-        records = pool.map(lambda shard: _read_json(shard_record_url(destination_url, shard.shard_id)), shards)
-        copied = [CopiedObject(**item) for record in records for item in record]
-    destination = list_objects(destination_url)
-    mismatched = []
-    for item in copied:
-        entry = destination.get(item.path)
-        if (
-            entry is None
-            or int(entry["size"]) != item.size
-            or f"{ETAG_IDENTITY_PREFIX}{object_etag(entry)}" != item.destination_identity
-        ):
-            mismatched.append(item.path)
-    expected_files = sum(len(shard.files) for shard in shards)
-    if mismatched or len(copied) != expected_files:
-        sample = ", ".join(sorted(mismatched)[:10])
-        raise RuntimeError(
-            f"{len(mismatched)} of {expected_files} files are missing or differ at {destination_url}: {sample}"
-        )
-    _write_json(
-        f"{status_url(destination_url)}/{COMPLETION_RECORD}",
-        {
-            "source": shards[0].source_url,
-            "destination": destination_url,
-            "total_files": expected_files,
-            "total_bytes": _shard_bytes(shards),
-            "shards": [shard.shard_id for shard in shards],
-            "completed_at": datetime.now(UTC).isoformat(),
-        },
-    )
-    _report(f"verified {expected_files} files at {destination_url}")
-
-
 def _copy_job(source_url: str, destination_url: str, max_workers: int) -> None:
-    """Iris-side entrypoint: plan, copy the shards without a record, and verify."""
+    """Iris-side entrypoint: plan, copy the pending shards, verify, and write the completion record."""
     shards, pending = _plan(source_url, destination_url)
+    completion_url = f"{status_url(destination_url)}/{COMPLETION_RECORD}"
     if pending:
-        filesystem, completion = filesystem_for(f"{status_url(destination_url)}/{COMPLETION_RECORD}")
+        filesystem, completion = filesystem_for(completion_url)
         if filesystem.exists(completion):
             filesystem.rm(completion)
         _report(f"copying {len(pending)} shards on up to {max_workers} workers")
         ctx = ZephyrContext(name="copy-prefix", resources=WORKER_RESOURCES, max_workers=max_workers)
         ctx.execute(Dataset.from_list(pending).map(_copy_shard))
-    _verify(shards, destination_url)
+
+    remaining = _pending_shards(shards, destination_url)
+    if remaining:
+        sample = ", ".join(file.path for file in remaining[0].files[:5])
+        raise RuntimeError(
+            f"{len(remaining)} shards are unrecorded or differ at {destination_url}; rerun to copy them again. "
+            f"First shard {remaining[0].shard_id} holds {sample}"
+        )
+    total_files = sum(len(shard.files) for shard in shards)
+    _write_json(
+        completion_url,
+        {
+            "source": source_url,
+            "destination": destination_url,
+            "total_files": total_files,
+            "total_bytes": _shard_bytes(shards),
+            "shards": [shard.shard_id for shard in shards],
+            "completed_at": datetime.now(UTC).isoformat(),
+        },
+    )
+    _report(f"verified {total_files} files at {destination_url}")
 
 
 @click.command()
