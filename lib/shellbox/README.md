@@ -52,6 +52,25 @@ the command's other temporary files.
 If command execution fails or is cancelled, later sandbox-deletion failures are
 attached as exception notes. Cleanup failure after a successful command still
 raises an error.
+
+Daytona runs each command in a provider session and waits using short status
+requests. Commands can outlast the synchronous gateway limit. The caller's deadline
+covers preparation and execution. Output collection has its own deadline.
+Status polling backs off from 0.2 to about 5 seconds and retries transient
+request failures without resubmitting the command. Logs report status-request
+and failure counts. Five consecutive transient status errors stop the command.
+Each command creates and deletes a provider session.
+Command environment names must be valid shell variable names.
+
+The session stays open through output collection, so a failure to read the output
+files can still include provider diagnostics, limited to 4,096 characters.
+If the command has no working directory and the machine's `workdir` is empty,
+commands use the image's working directory. Each command enters that directory anew,
+including after a command deletes and recreates it.
+After cleaning up a failed session creation, the sandbox can run another command.
+A failed submission can have started the command. Cleanup must then stop that
+process group or close the sandbox.
+
 Daytona sandboxes and Iris jobs default to a six-hour lifetime. Iris scans for
 expired jobs about once a minute. An expired, killed or preempted machine raises
 `MachineTerminated`; uncertain command failures are not replayed.
