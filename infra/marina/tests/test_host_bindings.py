@@ -15,7 +15,7 @@ def test_public_hosts_reach_only_the_public_reader_and_stay_bindable_through_the
 
 
 def test_a_host_cannot_be_both_authenticated_and_public() -> None:
-    with pytest.raises(ValueError, match="atlas.oa.dev"):
+    with pytest.raises(ValueError, match=r"atlas\.oa\.dev"):
         applet_host_access(["atlas.oa.dev"], ["atlas.oa.dev"])
 
 
