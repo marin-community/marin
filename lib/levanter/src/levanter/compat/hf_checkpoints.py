@@ -291,8 +291,8 @@ class HFCompatConfig(LmConfig["LmWithHfSerializationMixin"]):
         pass
 
     @abc.abstractmethod
-    def hf_checkpoint_converter(cls) -> "HfLanguageCheckpointConverter":
-        """The default HfLanguageCheckpointConverter to use for this config class. We recommend that you
+    def hf_checkpoint_converter(cls) -> "HfLmCheckpointConverter":
+        """The default HfLmCheckpointConverter to use for this config class. We recommend that you
         define this as a @cached_property on your config class."""
         pass
 
@@ -1045,7 +1045,7 @@ class HfCheckpointIO(Generic[LevConfig]):
 
 
 @dataclass_with_default_init(frozen=True)
-class HfLanguageCheckpointConverter(HfCheckpointIO[MConfig]):
+class HfLmCheckpointConverter(HfCheckpointIO[MConfig]):
     """Convert language-model checkpoints, including vocabulary and tokenizer metadata."""
 
     tokenizer: Any = None
@@ -1068,7 +1068,7 @@ class HfLanguageCheckpointConverter(HfCheckpointIO[MConfig]):
         # stupid python won't let you have a custom constructor with a frozen dataclass
 
         ref = _coerce_to_rr(reference_checkpoint) if reference_checkpoint is not None else None
-        HfConfigClass = HfLanguageCheckpointConverter._infer_config_class(HfConfigClass, ref, trust_remote_code)
+        HfConfigClass = HfLmCheckpointConverter._infer_config_class(HfConfigClass, ref, trust_remote_code)
         tokenizer = self._infer_tokenizer(tokenizer, ref, trust_remote_code)
 
         self.__default_init__(  # type: ignore
@@ -1083,17 +1083,15 @@ class HfLanguageCheckpointConverter(HfCheckpointIO[MConfig]):
         )
 
     @staticmethod
-    def from_hf(
-        model_name_or_path: Union[RepoRef, str], trust_remote_code: bool = False
-    ) -> "HfLanguageCheckpointConverter":
+    def from_hf(model_name_or_path: Union[RepoRef, str], trust_remote_code: bool = False) -> "HfLmCheckpointConverter":
         ref = _coerce_to_rr(model_name_or_path)
         # Trigger LmConfig plugin discovery (imports every `levanter.models` module) before resolving
         # the HF config. Models with a custom HF config not built into transformers — e.g. snowball's
         # `grug_moe` — register it with `AutoConfig` at import time, so `AutoConfig.from_pretrained`
         # inside `_infer_config_class` needs those imports to have already run.
         LmConfig.get_known_choices()
-        config_class = HfLanguageCheckpointConverter._infer_config_class(None, ref, trust_remote_code)
-        tokenizer = HfLanguageCheckpointConverter._infer_tokenizer(None, ref, trust_remote_code)
+        config_class = HfLmCheckpointConverter._infer_config_class(None, ref, trust_remote_code)
+        tokenizer = HfLmCheckpointConverter._infer_tokenizer(None, ref, trust_remote_code)
 
         # TODO: this is very hacky, we should add another registry or something
         # attempt to find the Levanter config class by checking the registry
@@ -1119,7 +1117,7 @@ class HfLanguageCheckpointConverter(HfCheckpointIO[MConfig]):
         else:
             raise ValueError(f"No Levanter config found for {config_class}")
 
-        return HfLanguageCheckpointConverter(
+        return HfLmCheckpointConverter(
             LevConfigClass=LevConfigClass,
             reference_checkpoint=ref,
             HfConfigClass=config_class,
@@ -1133,7 +1131,7 @@ class HfLanguageCheckpointConverter(HfCheckpointIO[MConfig]):
         tokenizer: Optional[Union[str, PreTrainedTokenizerBase]] = None,
         feature_extractor: Optional["FeatureExtractionMixin"] = None,
         trust_remote_code: Optional[bool] = None,
-    ) -> "HfLanguageCheckpointConverter":
+    ) -> "HfLmCheckpointConverter":
         replacements: dict = {}
         if reference_checkpoint is not None:
             replacements["reference_checkpoint"] = reference_checkpoint
@@ -1148,7 +1146,7 @@ class HfLanguageCheckpointConverter(HfCheckpointIO[MConfig]):
 
     def with_tokenizer_padded_to_match_model(
         self, ref: Optional[Union[str, RepoRef]] = None
-    ) -> "HfLanguageCheckpointConverter":
+    ) -> "HfLmCheckpointConverter":
         """
         Returns a new converter with the tokenizer padded to match the model's vocab size.
 
@@ -1161,7 +1159,7 @@ class HfLanguageCheckpointConverter(HfCheckpointIO[MConfig]):
                  If None, uses the converter's reference_checkpoint.
 
         Returns:
-            A new HfLanguageCheckpointConverter with the tokenizer padded to match the model vocab.
+            A new HfLmCheckpointConverter with the tokenizer padded to match the model vocab.
         """
         hf_config = self.hf_config_from_hf_checkpoint(ref)
         model_vocab_size = hf_config.vocab_size
@@ -1433,7 +1431,7 @@ class HfLanguageCheckpointConverter(HfCheckpointIO[MConfig]):
 
 
 @dataclass_with_default_init(frozen=True)
-class HfVisionLanguageCheckpointConverter(HfCheckpointIO[VisionConfig]):
+class HfVisionLmCheckpointConverter(HfCheckpointIO[VisionConfig]):
     """Convert standalone vision encoder checkpoints."""
 
     processor: Optional["ProcessorMixin | BaseImageProcessor"] = None
@@ -1530,7 +1528,7 @@ def _is_url_like(path):
 
 def save_hf_checkpoint_callback(
     base_path,
-    converter: HfLanguageCheckpointConverter,
+    converter: HfLmCheckpointConverter,
     upload_to_hf: Union[bool, str, RepoRef] = False,
     save_dtype: Optional[jnp.dtype] = None,
     generation_config: Optional[GenerationConfigDict] = None,

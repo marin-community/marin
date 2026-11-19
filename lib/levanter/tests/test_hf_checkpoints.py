@@ -47,8 +47,8 @@ from levanter.compat.hf_checkpoints import (
     SAFE_TENSORS_MODEL,
     ModelWithHfSerializationMixin,
     VisionModelWithHfSerializationMixin,
-    HfLanguageCheckpointConverter,
-    HfVisionLanguageCheckpointConverter,
+    HfLmCheckpointConverter,
+    HfVisionLmCheckpointConverter,
     RepoRef,
     _causal_lm_architecture_name,
     _convert_to_jnp,
@@ -806,7 +806,7 @@ def test_vision_converter_restores_weights_and_missing_buffers(tmp_path, prefix)
     config.to_hf_config().save_pretrained(tmp_path)
     weights = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.float32)
     safetensors.numpy.save_file({with_prefix(prefix, "weight"): weights}, str(tmp_path / SAFE_TENSORS_MODEL))
-    converter = HfVisionLanguageCheckpointConverter(
+    converter = HfVisionLmCheckpointConverter(
         TinyVisionConfig, reference_checkpoint=RepoRef(str(tmp_path)), HfConfigClass=HfViTConfig, ignore_prefix=prefix
     )
     pixels = jnp.array([2, 3, 4], dtype=jnp.float32)
@@ -826,7 +826,7 @@ def test_vision_converter_exports_bundled_processor(tmp_path, local_gpt2_tokeniz
         image_processor=transformers.CLIPImageProcessorPil(crop_size={"height": 48, "width": 48}),
         tokenizer=transformers.AutoTokenizer.from_pretrained(local_gpt2_tokenizer_path),
     )
-    converter = HfVisionLanguageCheckpointConverter(TinyVisionConfig, HfConfigClass=HfViTConfig, processor=processor)
+    converter = HfVisionLmCheckpointConverter(TinyVisionConfig, HfConfigClass=HfViTConfig, processor=processor)
     with use_test_mesh():
         model = TinyVisionModel.init(TinyVisionConfig(width=2), key=PRNGKey(0))
         converter.save_pretrained(model, str(tmp_path), save_reference_code=False)
@@ -840,9 +840,7 @@ def test_vision_converter_exports_bundled_processor(tmp_path, local_gpt2_tokeniz
 @pytest.mark.parametrize("resize", [False, True])
 def test_lm_converter_preserves_or_resizes_checkpoint_vocabulary(tmp_path, local_gpt2_tokenizer_path, resize):
     config = Gpt2Config(max_seq_len=8, hidden_dim=8, num_layers=1, num_heads=1, use_flash_attention=False)
-    converter = HfLanguageCheckpointConverter(
-        Gpt2Config, HfConfigClass=HfGpt2Config, tokenizer=local_gpt2_tokenizer_path
-    )
+    converter = HfLmCheckpointConverter(Gpt2Config, HfConfigClass=HfGpt2Config, tokenizer=local_gpt2_tokenizer_path)
     checkpoint_vocab = converter.Vocab.resize(converter.Vocab.size + 3)
     with use_test_mesh():
         original = Gpt2LMHeadModel.init(checkpoint_vocab, config, key=PRNGKey(7))
