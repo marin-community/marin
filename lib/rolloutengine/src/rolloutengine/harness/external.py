@@ -14,7 +14,7 @@ from taskcompendium.models import TaskSpec
 from rolloutengine.cleanup import _retain_task
 from rolloutengine.harness.core import HarnessContext, ModelSession, reply_options_match
 from rolloutengine.harness.shell import task_prompt
-from rolloutengine.models import ContextRecovery, ModelTurn, Prompt, RolloutEnded, RolloutLimits
+from rolloutengine.models import LENGTH_STOP_REASON, ContextRecovery, ModelTurn, Prompt, RolloutEnded, RolloutLimits
 
 
 class AgentCompletion(Protocol):
@@ -63,9 +63,15 @@ async def complete_agent_prompt(
         if prompt == previous:
             return turn
         history = (*previous.messages, turn.message)
-        if reply_options_match(previous.options, prompt.options) and messages_equal(
-            prompt.messages[: len(history)], history
-        ):
+        prefix = prompt.messages[: len(history)]
+        exact_reply = prefix == history and prompt.options == previous.options
+        text_reply = (
+            prompt.token_ids is None
+            and turn.stop_reason != LENGTH_STOP_REASON
+            and reply_options_match(previous.options, prompt.options)
+            and messages_equal(prefix, history)
+        )
+        if exact_reply or text_reply:
             return await session.reply(
                 prompt.messages[len(history) :], token_ids=prompt.token_ids, options=prompt.options
             )
@@ -77,12 +83,13 @@ class AgentHarness:
     """A harness for an agent that owns its prompts and tool loop.
 
     Each completion call sends one prompt and returns the exact ``ModelTurn``, also from tasks that the agent
-    does not await, such as HTTP handlers. A prompt that extends the last history is a reply when only the
-    output limits may have changed. Other prompts start a new conversation. The last prompt again gets
-    the same turn. One model request can be open at a time. When the attempt ends, calls wait until the
-    cleanup, after grading; the cleanup then cancels the agent. ``check`` rejects tools that the agent does
-    not get, such as an answer tool or a tool provider. The task rollout reference gives the rules for
-    cancelled calls and for the shutdown of the agent.
+    does not await, such as HTTP handlers. A prompt that extends the last history with the same options is
+    a reply. After a turn that finishes within its token limit, a prompt without pinned tokens can also
+    reply with equivalent messages and updated output caps. Other prompts start a new conversation.
+    The last prompt again gets the same turn. One model request can be open at a time. When the attempt
+    ends, calls wait until the cleanup after grading, when the cleanup cancels the agent. ``check``
+    rejects tools outside the harness, such as an answer tool or a tool provider. The task rollout
+    reference gives the rules for cancelled calls and for agent shutdown.
     """
 
     context_recovery = ContextRecovery.ALWAYS

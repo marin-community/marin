@@ -38,11 +38,14 @@ async def test_rejected_rollout_reopens_the_same_family_slot():
             None if rejected else GroupRewards((0.0, 1.0), (0.0, 1.0), True),
             GeneratedWork(2, 2, 20),
         )
-        await buffer.commit(lease.lease_id, {"family": lease.family}, verdict, PayloadReference(lease.lease_id))
+        payload = PayloadReference(None if rejected else lease.lease_id)
+        await buffer.commit(lease.lease_id, {"family": lease.family}, verdict, payload)
 
     async with asyncio.timeout(5):
         await buffer.publish(1)
-        rejected, *others = [await buffer.acquire_lease() for _ in range(4)]
+        first, rejected, *later = [await buffer.acquire_lease() for _ in range(4)]
+        assert (first.family, rejected.family) == ("agentic", "math")
+        others = [first, *later]
         for lease in reversed(others):
             await commit(lease)
         await commit(rejected, rejected=True)
@@ -55,5 +58,8 @@ async def test_rejected_rollout_reopens_the_same_family_slot():
                 await buffer.publish(step)
             admission = await buffer.admit(1)
             assert admission.selection is not None
+            assert set(buffer.payload_refs(step, [rollout.index for rollout in admission.admitted])) == (
+                {first.lease_id, replacement.lease_id} if step == 1 else {lease.lease_id for lease in later}
+            )
             assert admission.selection.metrics["async/consumed_family/agentic"] == 1
             assert admission.selection.metrics["async/consumed_family/math"] == 1

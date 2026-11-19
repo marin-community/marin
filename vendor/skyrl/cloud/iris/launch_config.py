@@ -261,7 +261,8 @@ def _compose_source_recipe(config: DictConfig) -> DictConfig:
 def load_launch_config(path: Path) -> DictConfig:
     """Load and validate one complete SkyRL launch document."""
     config = compose_launch_config(OmegaConf.load(path))
-    if _is_source_recipe(config):
+    is_source_recipe = _is_source_recipe(config)
+    if is_source_recipe:
         if config.run.mode != RunMode.TRAIN:
             raise ValueError("checkpoint_export launch configs must already contain a composed SkyRL subtree")
         config = _compose_source_recipe(config)
@@ -270,6 +271,11 @@ def load_launch_config(path: Path) -> DictConfig:
         artifact_root = posixpath.dirname(str(config.artifacts.resolved_config_uri))
         probe.archive_uri = join_resource_path(artifact_root, "mismatch_probe")
     validate_launch_config(config)
+    if is_source_recipe:
+        buffer = config.skyrl.trainer.rollout_buffer
+        if buffer.family_quotas:
+            inputs = OmegaConf.to_container(config.inputs, resolve=True)
+            _validate_launch_family_pools(inputs, dict(buffer.family_quotas), buffer.max_staleness_steps)
     return config
 
 
@@ -400,9 +406,7 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
     if run["mode"] == RunMode.TRAIN:
         validate_objective(config.skyrl)
         validate_hf_export_config(config.skyrl)
-        quotas = validate_family_quota_config(config.skyrl)
-        if quotas:
-            _validate_launch_family_pools(raw["inputs"], quotas, config.skyrl.trainer.rollout_buffer.max_staleness_steps)
+        validate_family_quota_config(config.skyrl)
     runtime = raw["runtime"]
     entrypoint = runtime["entrypoint"]
     registered_rl_entrypoint_module(entrypoint)

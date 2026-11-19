@@ -48,6 +48,7 @@ from skyrl_train.rollout_observability import rollout_phase
 # The per-turn output limit, as the trainer config (`max_generate_length`) and vLLM (`max_tokens`) spell it. Chat
 # requests carry it only as `max_completion_tokens`, which vLLM prefers over `max_tokens`.
 _OUTPUT_LIMIT_KEYS = ("max_generate_length", "max_tokens")
+_CHAT_OUTPUT_LIMIT_KEYS = ("max_completion_tokens", "max_output_tokens", "max_tokens")
 _CHAT_SAMPLING_EXCLUSIONS = frozenset({*_OUTPUT_LIMIT_KEYS, "logprobs", "stop"})
 
 
@@ -293,7 +294,7 @@ class DirectModelClient:
         skip_special_tokens = options.get("skip_special_tokens", sampling.get("skip_special_tokens", True))
         requested_tokens = [
             int(options[key])
-            for key in ("max_completion_tokens", "max_output_tokens")
+            for key in _CHAT_OUTPUT_LIMIT_KEYS
             if options.get(key) is not None
         ]
         token_budget = _generation_token_budget(request, prompt_ids, requested_tokens)
@@ -333,21 +334,14 @@ class DirectModelClient:
         )
 
     @staticmethod
-    def _chat_options(options: dict[str, Any], sampling_params: dict[str, Any]) -> dict[str, Any]:
+    def _chat_options(options: dict[str, Any]) -> dict[str, Any]:
         result = dict(options)
         result.pop("input", None)
         if not result.get("tools"):
             result.pop("tools", None)
-        if "max_output_tokens" in result:
-            result["max_completion_tokens"] = result.pop("max_output_tokens")
-        for key in _OUTPUT_LIMIT_KEYS:
-            if sampling_params.get(key) is None:
-                continue
-            configured_max = int(sampling_params[key])
-            requested_max = result.get("max_completion_tokens")
-            result["max_completion_tokens"] = (
-                configured_max if requested_max is None else min(configured_max, int(requested_max))
-            )
+        requested_limits = [int(value) for key in _CHAT_OUTPUT_LIMIT_KEYS if (value := result.pop(key, None)) is not None]
+        if requested_limits:
+            result["max_completion_tokens"] = min(requested_limits)
         return result
 
     async def _generate_chat(self, request: InferenceEngineInput) -> ModelClientOutput:
@@ -370,7 +364,7 @@ class DirectModelClient:
                 if continuation is not None:
                     raise ValueError("An initial assistant prefix cannot reuse a sampled chat continuation")
                 return await self._generate_assistant_prefix(request, messages, row_options, session_id)
-            chat_options = self._chat_options(row_options, sampling_params)
+            chat_options = self._chat_options(row_options)
             tokenize_options = {key: value for key, value in chat_options.items() if key in CHAT_TOKENIZE_FIELDS}
             render_request = {
                 "json": {
@@ -388,10 +382,7 @@ class DirectModelClient:
             )
             token_budget = _generation_token_budget(request, prompt_ids, requested_tokens)
             if token_budget is not None:
-                # Preserve chat's explicit-null handling when context supplies a budget.
-                chat_options["max_completion_tokens"] = min(
-                    int(chat_options.get("max_completion_tokens", token_budget)), token_budget
-                )
+                chat_options["max_completion_tokens"] = token_budget
 
             body = {
                 "model": self._client.model_name,

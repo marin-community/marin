@@ -541,18 +541,22 @@ async def test_agent_harness_receives_engine_turns_and_controls_next_history(cha
     )
 
 
-@pytest.mark.parametrize("compact", [False, True])
-async def test_agent_harness_replays_exact_tokens_on_later_turns(compact):
+@pytest.mark.parametrize("change", ["none", "compaction", "output-limit"])
+async def test_agent_harness_replays_exact_tokens_on_later_turns(change):
     first = ({"role": "user", "content": "Start."},)
     # The task's grader reads this chat, so the observation is a user message: the turn makes no tool call.
     observation = {"role": "user", "content": "Done."}
-    replay = (501, 502) if compact else (10, 11, 20, 90, 91)
+    restart = change != "none"
+    replay = (501, 502) if restart else (10, 11, 20, 90, 91)
     requests = []
 
     async def agent(complete):
         turn = await complete(Prompt(first, {}))
-        messages = ({"role": "user", "content": "Finish."},) if compact else (*first, turn.message, observation)
-        await complete(Prompt(messages, {}, token_ids=replay))
+        messages = (
+            ({"role": "user", "content": "Finish."},) if change == "compaction" else (*first, turn.message, observation)
+        )
+        options = {"max_tokens": 64} if change == "output-limit" else {}
+        await complete(Prompt(messages, options, token_ids=replay))
 
     async def model(request):
         requests.append(request)
@@ -567,9 +571,9 @@ async def test_agent_harness_replays_exact_tokens_on_later_turns(compact):
     result = await rollout_engine.run_task(rollout_spec(arithmetic_task(), harness="agent"), model)
 
     assert result.grade.reward == 1.0
-    assert result.rollout.conversations[-1].prompt_token_ids == (replay if compact else (10, 11))
-    assert result.rollout.conversations[-1].response_token_ids == ((21,) if compact else (20, 90, 91, 21))
-    assert result.rollout.conversations[-1].loss_mask == ((1,) if compact else (1, 0, 0, 1))
+    assert result.rollout.conversations[-1].prompt_token_ids == (replay if restart else (10, 11))
+    assert result.rollout.conversations[-1].response_token_ids == ((21,) if restart else (20, 90, 91, 21))
+    assert result.rollout.conversations[-1].loss_mask == ((1,) if restart else (1, 0, 0, 1))
 
 
 async def test_agent_harness_is_cancelled_when_engine_generation_is_cancelled():

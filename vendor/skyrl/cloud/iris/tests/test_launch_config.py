@@ -683,15 +683,17 @@ def test_source_launch_preserves_nested_open_mappings(tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("policy", "quotas", "count", "error"),
+    ("policy", "quotas", "staleness", "count", "error"),
     [
-        ("rolling", {"math": 4, "code": 4}, 4, "requires batch_policy=full_batch"),
-        ("full_batch", {"math": 3, "code": 4}, 4, "sums to 7, expected train_batch_size=8"),
-        ("full_batch", {"math": 4, "code": 4}, 3, "requires 4 rows for family 'code', found 3"),
+        ("rolling", {"math": 4, "code": 4}, 0, 8, "requires batch_policy=full_batch"),
+        ("full_batch", {"math": 3, "code": 4}, 0, 8, "sums to 7, expected train_batch_size=8"),
+        ("full_batch", {"math": 4, "code": 4}, 1, 7, "requires 8 rows for family 'code', found 7"),
+        ("full_batch", {"math": 4, "code": 4}, 1, 8, None),
     ],
 )
-def test_launch_rejects_unfillable_family_quotas(tmp_path, policy, quotas, count, error):
-    pq.write_table(pa.table({"family": ["math"] * 4 + ["code"] * count}), tmp_path / "tasks.parquet")
+def test_launch_preflights_family_quotas(tmp_path, policy, quotas, staleness, count, error):
+    data_path = tmp_path / "tasks.parquet"
+    pq.write_table(pa.table({"family": ["math"] * 8 + ["code"] * count}), data_path)
     raw = raw_launch_config()
     raw["inputs"]["data_kind"] = "parquet"
     raw["inputs"]["train_data"] = [
@@ -699,12 +701,27 @@ def test_launch_rejects_unfillable_family_quotas(tmp_path, policy, quotas, count
          "relative_path": "tasks.parquet"}
     ]
     raw["skyrl"]["data"] = {"kind": "parquet"}
-    raw["skyrl"]["trainer"]["rollout_buffer"] = {"batch_policy": policy, "family_quotas": quotas}
+    trainer = raw["skyrl"]["trainer"]
+    trainer["rollout_buffer"] = {
+        "batch_policy": policy,
+        "family_quotas": quotas,
+        "max_staleness_steps": staleness,
+    }
+    trainer["placement"]["colocate_all"] = False
+    trainer["algorithm"]["off_policy_correction"] = "none"
+    raw["iris"]["allocation"]["num_nodes"] = 2
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw))
 
-    with pytest.raises(ValueError, match=rf"trainer\.rollout_buffer\.family_quotas {error}"):
-        load_launch_config(path)
+    if error:
+        with pytest.raises(ValueError, match=rf"trainer\.rollout_buffer\.family_quotas {error}"):
+            load_launch_config(path)
+        return
+
+    resolved = load_launch_config(path)
+    OmegaConf.save(resolved, path)
+    data_path.unlink()
+    assert load_launch_config(path) == resolved
 
 
 def test_first_train_submission_validates_recipe_and_resolved_reload(tmp_path):
