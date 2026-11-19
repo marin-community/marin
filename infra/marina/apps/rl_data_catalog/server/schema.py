@@ -219,6 +219,16 @@ CREATE TABLE IF NOT EXISTS atlas_backend_cells (
 );
 """
 
+
+PROJECTION_REFRESH_SEAL_SQL = """
+CREATE TABLE IF NOT EXISTS atlas_projection_refresh_seals (
+    name TEXT PRIMARY KEY, load_id TEXT NOT NULL, audit JSONB NOT NULL,
+    sealed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+"""
+
+SCHEMA_SQL += PROJECTION_REFRESH_SEAL_SQL
+
 SCHEMA_SQL += (
     "CREATE OR REPLACE VIEW atlas_cohort_summary AS WITH counts AS (\n"
     + cohort_counts_sql()

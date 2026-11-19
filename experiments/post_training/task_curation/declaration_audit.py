@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from experiments.post_training.task_curation.ensure_current_projections import (
+    PROJECTION_WAIVER_CONFIG,
     DeclarationPin,
     ProjectionWaivers,
     apply_projection_waivers,
@@ -28,6 +29,7 @@ from experiments.post_training.task_curation.ensure_current_projections import (
     atlas_contract_receipts,
     atlas_curriculum_rows,
     projection_gaps,
+    record_projection_refresh_seal,
     served_declaration_pins,
     served_pin_map,
 )
@@ -371,7 +373,11 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, help="Write the audit summary JSON here")
-    parser.add_argument("--waivers", type=Path, help="Source:projection landing waivers with preview refresh expiry")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--waivers", type=Path, help="Projection landing rule with strict refresh-seal expiry")
+    mode.add_argument(
+        "--seal-refresh", action="store_true", help="Record refresh completion after a passing strict audit"
+    )
     args = parser.parse_args()
     waivers = ProjectionWaivers.model_validate_json(args.waivers.read_bytes()) if args.waivers else None
 
@@ -442,9 +448,14 @@ def main() -> None:
         "waived_projection_count": len(projection_findings) - len(projection_blocking),
         "waiver_scope": waivers.model_dump(mode="json") if waivers else None,
         "catalog_load_id": selection.load_id,
+        "refresh_sealed": selection.refresh_sealed,
         "staged_for_intake": notes,
         "state": "mismatched" if findings else "ok-with-waivers" if projection_findings else "ok",
     }
+    if args.seal_refresh and not findings:
+        scope = ProjectionWaivers.model_validate_json(PROJECTION_WAIVER_CONFIG.read_bytes())
+        selection = record_projection_refresh_seal(selection, scope, summary)
+        summary["refresh_sealed"] = selection.refresh_sealed
     print(json.dumps(summary, indent=2))
     if args.output is not None:
         args.output.write_text(json.dumps(summary, indent=2) + "\n")

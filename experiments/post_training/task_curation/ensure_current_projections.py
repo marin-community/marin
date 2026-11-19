@@ -35,11 +35,14 @@ from experiments.post_training.task_curation.derived_contract_census import (
 )
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from infra.marina.apps.rl_data_catalog.server.contract_selection import INPUT_FIELDS, select_contract_receipts
+from infra.marina.apps.rl_data_catalog.server.schema import PROJECTION_REFRESH_SEAL_SQL
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 LOGGER = logging.getLogger(__name__)
 
 DECLARATION_PIN_PAGE_SIZE = 50
+PROJECTION_REFRESH_SEAL_NAME = "ruling-60-2026-11-19"
+PROJECTION_WAIVER_CONFIG = Path(__file__).with_name("declaration-projection-waivers.json")
 PROJECTION_WAIVER_REASON = "preview projection lag; declaration drift 0; ruling 2026-11-19"
 
 CURRICULUM_DECLARATION_FIELDS = ("dataset_id", "dataset_revision", "pipeline")
@@ -95,6 +98,7 @@ class CatalogSelection:
     marina_url: str
     applet_id: str
     load_id: str
+    refresh_sealed: bool = False
 
 
 class ProjectionWaiver(BaseModel):
@@ -111,14 +115,13 @@ class ProjectionWaiver(BaseModel):
 
 
 class ProjectionWaivers(BaseModel):
-    """Landing-only exceptions that expire when the coordinated refresh selects a new load."""
+    """Preview exceptions that expire only after a successful strict refresh seal."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     marina_url: str
     applet_id: str
-    valid_catalog_load_ids: tuple[str, ...] = Field(min_length=1)
-    expires_when: Literal["preview_refresh_seals"] = "preview_refresh_seals"
+    expires_when: Literal["preview_refresh_strict_audit_passes"] = "preview_refresh_strict_audit_passes"
     rule: Literal["stale-or-missing-serving-projection-without-declaration-drift"]
     reason: Literal["preview projection lag; declaration drift 0; ruling 2026-11-19"]
 
@@ -126,7 +129,7 @@ class ProjectionWaivers(BaseModel):
         return (
             self.marina_url == selection.marina_url
             and self.applet_id == selection.applet_id
-            and selection.load_id in self.valid_catalog_load_ids
+            and not selection.refresh_sealed
         )
 
 
@@ -170,10 +173,56 @@ def apply_projection_waivers(
 
 def atlas_catalog_selection() -> CatalogSelection:
     marina_url, applet_id = target_applet()
-    rows = atlas_applet_query()("SELECT load_id FROM atlas_current WHERE name='latest'", {})["rows"]
+    query = atlas_applet_query()
+    rows = query(
+        "SELECT load_id, to_regclass(:seal_table) IS NOT NULL AS has_seal_table "
+        "FROM atlas_current WHERE name='latest'",
+        {"seal_table": "atlas_projection_refresh_seals"},
+    )["rows"]
     if len(rows) != 1 or not rows[0]["load_id"]:
         raise ValueError("The served catalog has no selected load")
-    return CatalogSelection(marina_url, applet_id, rows[0]["load_id"])
+    # The event table is created by finalization; absence before its first event is unsealed.
+    sealed = False
+    if rows[0]["has_seal_table"]:
+        sealed = query(
+            "SELECT EXISTS(SELECT 1 FROM atlas_projection_refresh_seals WHERE name=:name) AS sealed",
+            {"name": PROJECTION_REFRESH_SEAL_NAME},
+        )["rows"][0]["sealed"]
+    return CatalogSelection(marina_url, applet_id, rows[0]["load_id"], refresh_sealed=sealed)
+
+
+def record_projection_refresh_seal(
+    selection: CatalogSelection, scope: ProjectionWaivers, audit: dict[str, Any]
+) -> CatalogSelection:
+    """Persist the one-way refresh event only for a successful strict preview audit."""
+    if (selection.marina_url, selection.applet_id) != (scope.marina_url, scope.applet_id):
+        raise ValueError("Refresh seals are restricted to the preview applet")
+    if (
+        audit["state"] != "ok"
+        or audit["findings"]
+        or audit["projection_waivers"]
+        or audit["waived_projection_count"] != 0
+        or audit["waiver_scope"] is not None
+        or audit["declaration_drift_sources"]
+        or audit["catalog_load_id"] != selection.load_id
+    ):
+        raise ValueError("Refresh sealing requires a passing strict audit without waivers")
+    query = atlas_applet_query()
+    query(PROJECTION_REFRESH_SEAL_SQL, {})
+    query(
+        "INSERT INTO atlas_projection_refresh_seals(name,load_id,audit) "
+        "SELECT :name,load_id,CAST(:audit AS JSONB) FROM atlas_current "
+        "WHERE name='latest' AND load_id=:load_id ON CONFLICT(name) DO NOTHING",
+        {
+            "name": PROJECTION_REFRESH_SEAL_NAME,
+            "load_id": selection.load_id,
+            "audit": json.dumps({**audit, "refresh_sealed": True}),
+        },
+    )
+    observed = atlas_catalog_selection()
+    if observed.load_id != selection.load_id or not observed.refresh_sealed:
+        raise ValueError("Catalog selection changed during refresh sealing; retry")
+    return observed
 
 
 def contract_receipt_map(receipts: Iterable[DerivedContractReceipt]) -> dict[str, list[DerivedContractReceipt]]:

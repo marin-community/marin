@@ -3,7 +3,9 @@
 
 """The declaration audit pairs every Atlas receipt family with the canonical layer."""
 
+import json
 import sys
+from dataclasses import replace
 
 import pytest
 
@@ -186,7 +188,6 @@ def waived_audit_cli(monkeypatch, tmp_path):
     waivers = ensure_current_projections.ProjectionWaivers(
         marina_url="https://marina.example",
         applet_id="preview",
-        valid_catalog_load_ids=("lagging",),
         rule="stale-or-missing-serving-projection-without-declaration-drift",
         reason=ensure_current_projections.PROJECTION_WAIVER_REASON,
     )
@@ -248,7 +249,6 @@ def test_a_same_source_drift_leaves_its_projection_gap_blocking():
     rule = ensure_current_projections.ProjectionWaivers(
         marina_url="https://marina.example",
         applet_id="preview",
-        valid_catalog_load_ids=("lagging",),
         rule="stale-or-missing-serving-projection-without-declaration-drift",
         reason=ensure_current_projections.PROJECTION_WAIVER_REASON,
     )
@@ -263,3 +263,32 @@ def test_a_same_source_drift_leaves_its_projection_gap_blocking():
     assert result.drift_sources == {"Test:declared-source"}
     assert waived.blocking == [gap]
     assert waived.waived == []
+
+
+def test_only_a_passing_strict_finalizer_records_the_refresh_seal(waived_audit_cli, monkeypatch, tmp_path):
+    path = tmp_path / "strict.json"
+    monkeypatch.setattr(sys, "argv", ["declaration_audit", "--seal-refresh", "--output", str(path)])
+    monkeypatch.setattr(declaration_audit, "PROJECTION_WAIVER_CONFIG", tmp_path / "waivers.json")
+    calls = []
+
+    def record(selection, scope, audit):
+        calls.append(audit)
+        return replace(selection, refresh_sealed=True)
+
+    monkeypatch.setattr(declaration_audit, "record_projection_refresh_seal", record)
+    with pytest.raises(SystemExit, match="1 mismatches"):
+        waived_audit_cli()
+    assert calls == []
+    families = {
+        "census receipts": {},
+        "lexical receipts": {},
+        "grading census receipts": {},
+        "within-source dedup": {},
+    }
+    monkeypatch.setattr(declaration_audit, "canonical_layer", lambda: (layer(), families, {}, {}))
+    waived_audit_cli()
+    receipt = json.loads(path.read_text())
+    assert len(calls) == 1
+    assert receipt["refresh_sealed"] is True
+    assert receipt["waived_projection_count"] == 0
+    assert receipt["waiver_scope"] is None

@@ -187,14 +187,13 @@ def projection_waivers() -> ProjectionWaivers:
     return ProjectionWaivers(
         marina_url="https://marina.example",
         applet_id="preview",
-        valid_catalog_load_ids=("lagging", "frozen-before-refresh"),
         rule="stale-or-missing-serving-projection-without-declaration-drift",
         reason=ensure_current_projections.PROJECTION_WAIVER_REASON,
     )
 
 
-@pytest.mark.parametrize("load_id", ["lagging", "frozen-before-refresh"])
-def test_the_preflight_records_each_named_waiver_before_refresh(load_id):
+@pytest.mark.parametrize("load_id", ["lagging", "frozen-before-refresh", "3e3f46aebfe843ddb4c4be3eceb173dc"])
+def test_new_selected_loads_remain_waived_until_the_strict_seal_event(load_id):
     source = declaration()
     notes = publication_preflight(
         [source],
@@ -212,7 +211,7 @@ def test_the_preflight_records_each_named_waiver_before_refresh(load_id):
 @pytest.mark.parametrize(
     "selection",
     [
-        CatalogSelection("https://marina.example", "preview", "refreshed-and-sealed"),
+        CatalogSelection("https://marina.example", "preview", "r31j-during-refresh", refresh_sealed=True),
         CatalogSelection("https://marina.example", "production", "lagging"),
     ],
 )

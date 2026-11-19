@@ -1,11 +1,7 @@
 {
   "marina_url": "https://marina.oa.dev",
   "applet_id": "c9742a15-fb46-4d56-bc88-aa916351ebd3",
-  "valid_catalog_load_ids": [
-    "1350a2a4303e411ebb2acfc1b0ca8296",
-    "578facacf9034b85984d6d30e4a4c46"
-  ],
-  "expires_when": "preview_refresh_seals",
+  "expires_when": "preview_refresh_strict_audit_passes",
   "rule": "stale-or-missing-serving-projection-without-declaration-drift",
   "reason": "preview projection lag; declaration drift 0; ruling 2026-11-19"
 }
