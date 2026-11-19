@@ -23,10 +23,10 @@ from rolloutengine.models import GradedRollout, ModelRequest, ModelTurn
 from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.machine import MachineFactory
 from taskcompendium.grading_result import GradeResult
-from taskcompendium.models import EnvironmentRequirements, TaskResource
+from taskcompendium.models import EnvironmentRequirements
 
 from taskforge.arms import transitions
-from taskforge.config import TaskforgeConfig, WorkspaceHydration
+from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
 from taskforge.effects.events import Note, Resolved
 from taskforge.effects.issues import Hold
@@ -48,7 +48,7 @@ from taskforge.lowering import (
 )
 from taskforge.model.content_hash import digest
 from taskforge.model.review import BandOutcome, BandRules, Budget
-from taskforge.model.workpiece import Submission, Workpiece
+from taskforge.model.workpiece import Submission
 from taskforge.policy import Policy, load_policy, resolution_lines
 from taskforge.policy import sampling as policy_sampling
 from taskforge.resources.bundle import Resources
@@ -219,10 +219,6 @@ def submit_gate(
     return ()
 
 
-def hydration(_wp: Workpiece, _policy: Policy) -> tuple[TaskResource, ...]:
-    return ()
-
-
 def prompt_limit(policy: Policy, role: str = "author") -> int:
     """Use the served model context without reserving an output allowance."""
     return policy.setting(f"{role}.context_tokens", int)
@@ -286,7 +282,6 @@ def build_config(policy: Policy, arm: str, factories: Mapping[str, MachineFactor
         policy,
         author,
         adversaries,
-        WorkspaceHydration((), hydration),
         tools,
         gate,
         default_review,

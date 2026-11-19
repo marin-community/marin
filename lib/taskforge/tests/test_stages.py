@@ -15,14 +15,14 @@ from lib.taskforge.tests.stage_fakes import CandidateEngine, Environments, Recor
 from rolloutengine.models import GradedRollout, Model, TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task, rollout_spec
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
-from taskcompendium.models import EnvironmentRequirements, TaskResource, TaskSpec
+from taskcompendium.models import EnvironmentRequirements, TaskSpec
 from taskcompendium.runtime.resources import inline_resource
 
 from taskforge.arms import decided, validated
-from taskforge.config import TaskforgeConfig, WorkspaceHydration
+from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
 from taskforge.effects.events import Note, Resolved
-from taskforge.effects.issues import Hold, OutputBudgetExhausted, Restart
+from taskforge.effects.issues import ContextExceeded, Hold, OutputBudgetExhausted, Restart
 from taskforge.effects.log import EventLog
 from taskforge.harness.loop import AgenticHarness
 from taskforge.harness.protocol import Returned, Stopped, StopReason, Submitted
@@ -53,10 +53,10 @@ from taskforge.model.review import (
     ValidationResult,
 )
 from taskforge.model.workpiece import WORKPIECE, Conversation, Submission, Terminal, Workpiece
-from taskforge.policy import GRADER_BASE_IMAGE, Policy, load_policy, sampling
+from taskforge.policy import GRADER_BASE_IMAGE, load_policy, sampling
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.grading import GradeCandidate, GradingResource, grade
-from taskforge.resources.inference import ContextExceeded, FakeInference
+from taskforge.resources.inference import FakeInference
 from taskforge.resources.rollouts import SolverRollout
 from taskforge.stages.author import author
 from taskforge.stages.classify import grade_cause, replayable_grade
@@ -84,15 +84,10 @@ def workpiece(proposal: TaskProposal) -> Workpiece:
     return Workpiece("test", proposal, submission=Submission(arithmetic_task(), controls, "authored"))
 
 
-def rendered_files(workpiece: Workpiece, policy: Policy) -> tuple[TaskResource, ...]:
-    return (inline_resource("workspace/notes", workpiece.proposal.header.id.encode()),)
-
-
 def config(harness: RecordingHarness | None = None) -> TaskforgeConfig:
     return replace(
         build_config(load_policy(DEFAULTS_DIR), "S", {}),
         author=harness or RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ()))),
-        workspace=WorkspaceHydration((inline_resource("workspace/notes", b"static"),), rendered_files),
     )
 
 
@@ -149,7 +144,6 @@ async def test_author_new_session_and_failed_harness_close_environment(workpiece
         proposal=render(workpiece.proposal)
     )
     assert isinstance(bundle.envs, Environments)
-    assert bundle.envs.created[0].files[PurePosixPath("/workspace/notes")] == b"sum"
     assert bundle.envs.created[0].closed
 
 
