@@ -15,6 +15,8 @@ Marin libraries and Harbor as editable dependencies from this checkout, using
 the paths in `vendor/skyrl/pyproject.toml`. Marin calls SkyRL through the executable.
 See [launching RL experiments](../references/rl-launching.md)
 for the artifact entry point, launch document, and resource configuration.
+For model-owned preset selection, experiment status and saved results, see the
+[RL experiments recipe](../recipes/rl-experiments.md).
 
 The Marin CLI uses SkyRL's `cpu` extra. Set `environment.task_sessions.local: {}`
 to enable the local task backend, which probes Linux bubblewrap before task
