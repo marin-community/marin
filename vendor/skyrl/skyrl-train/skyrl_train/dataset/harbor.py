@@ -19,7 +19,7 @@ from taskcompendium.models import NoGrader, ScriptGrader, Source, TaskSpec, Veri
 
 from marinskyrl.packed_tasks import PackedTaskMaterializer, PackedTaskReference, select_task_references
 from marinskyrl.task_sources import DirectoryDataSource, TaskTroveParquetSource, data_source
-from skyrl_train.dataset.tasks import TASK_EVALUATION_IDENTITY, TASK_ROLLOUT_COLUMN, TaskDataset, cache_tasks
+from skyrl_train.dataset.tasks import TASK_ROLLOUT_COLUMN, TaskDataset, cache_tasks, with_evaluation_identities
 from skyrl_train.dataset.harbor_import import (
     HARBOR_TRIAL_SESSION,
     EnvironmentConfig,
@@ -196,11 +196,13 @@ def materialize_harbor_tasks(
     cache_dir: Path,
     session: Mapping[str, Any],
     grader_override: NoGrader | None = None,
+    identities: Mapping[str, TaskEvaluationIdentity | None] | None = None,
 ) -> Path:
     """Combine Harbor packages and pre-lowered task Parquet for one worker pool."""
     task_files = [source for source in data_files if isinstance(source, str) and source.endswith(".parquet")]
     sources = TerminalBenchTaskDataset([source for source in data_files if source not in task_files])
-    identities = _parquet_evaluation_identities(data_files)
+    if identities is None:
+        identities = _parquet_evaluation_identities(task_files)
     if not len(sources) and not task_files:
         raise ValueError("No Harbor tasks matched the configured sources")
 
@@ -284,14 +286,13 @@ class HarborTaskDataset(TaskDataset):
         identities = _parquet_evaluation_identities(data_files)
 
         def prepare_source(_source, dataset):
-            encoded = []
-            for raw in dataset[TASK_ROLLOUT_COLUMN]:
-                identity = identities.get(json.loads(raw)["task"]["id"])
-                encoded.append(identity.model_dump_json() if identity is not None else None)
-            return dataset.add_column(TASK_EVALUATION_IDENTITY, encoded)
+            return with_evaluation_identities(
+                dataset, (identities.get(json.loads(raw)["task"]["id"]) for raw in dataset[TASK_ROLLOUT_COLUMN])
+            )
 
         self.task_path = materialize_harbor_tasks(
-            data_files, cache_dir=cache_dir.expanduser(), session=session, grader_override=grader_override
+            data_files, cache_dir=cache_dir.expanduser(), session=session, grader_override=grader_override,
+            identities=identities,
         )
         super().__init__(
             [str(self.task_path)], tokenizer, max_prompt_length, num_workers=num_workers, prepare_source=prepare_source

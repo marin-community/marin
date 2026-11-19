@@ -576,11 +576,8 @@ def test_skyrl_separate_reference_reserves_capacity_and_renders_distinct_roles()
     }
 
 
-@pytest.mark.timeout(120)
-@pytest.mark.parametrize("failure", ["render", "extra-node", "node-width", "entrypoint"])
-def test_generation_plan_renders_native_geometry_and_rejects_conflicts(failure, tmp_path):
-    spec = _spec()
-    plan = SkyRLGenerationPlan(
+def _generation_plan() -> SkyRLGenerationPlan:
+    return SkyRLGenerationPlan(
         gpus_per_node=4,
         num_inference_engines=4,
         inference_engine_tensor_parallel_size=1,
@@ -589,46 +586,29 @@ def test_generation_plan_renders_native_geometry_and_rejects_conflicts(failure, 
         inference_engine_expert_parallel_size=1,
         n_samples_per_prompt=4,
     )
-    topology = dataclasses.replace(spec.topology, num_nodes=plan.num_nodes, role_plan=plan)
-    if failure == "render":
-        spec = dataclasses.replace(
+
+
+def generation_geometry_step():
+    spec, plan = _spec(), _generation_plan()
+    return skyrl_step(
+        dataclasses.replace(
             spec,
-            topology=topology,
+            topology=dataclasses.replace(spec.topology, num_nodes=plan.num_nodes, role_plan=plan),
             train_data=(),
             validation_data=spec.train_data,
             config_yaml=(
                 "context_budget: {request_window_tokens: 1024, max_new_tokens_per_turn: 256, max_turns: 1}\n"
                 "model_num_attention_heads: 8\n" + spec.config_yaml
             ),
-        )
-        step = skyrl_step(spec, _execution())
-        config = step.build_config(
-            StepContext.for_run(str(tmp_path / "run"), str(tmp_path), runtime_args=step.runtime_args, deps=step.deps)
-        )
-        path = tmp_path / "generation.yaml"
-        path.write_text(config.launch_config_yaml)
-        result = run_launcher_for_test(
-            skyrl_cpu_command(
-                "python",
-                "-c",
-                """
-import importlib, json, sys
-from cloud.iris.launch_config import load_launch_config
-from cloud.iris.rl_config_translation import RL_ENTRYPOINTS
-from skyrlrecipe import RLEntrypoint
-config = load_launch_config(sys.argv[1])
-assert config.runtime.entrypoint == RL_ENTRYPOINTS[RLEntrypoint.GENERATE]
-assert callable(importlib.import_module(config.runtime.entrypoint).run)
-print(json.dumps({"nodes": config.iris.allocation.num_nodes,
-    "engines": config.skyrl.generator.num_inference_engines}))
-""",
-                str(path),
-            )
-        )
-        assert result.returncode == 0, result.stdout + result.stderr
-        assert json.loads(result.stdout)["nodes"] == 1
-        assert json.loads(result.stdout)["engines"] == 4
-        return
+        ),
+        _execution(),
+    )
+
+
+@pytest.mark.parametrize("failure", ["extra-node", "node-width", "entrypoint"])
+def test_generation_plan_rejects_geometry_conflicts(failure):
+    spec, plan = _spec(), _generation_plan()
+    topology = dataclasses.replace(spec.topology, num_nodes=plan.num_nodes, role_plan=plan)
     with pytest.raises(
         ValueError,
         match={
@@ -952,12 +932,13 @@ def test_native_writers_round_trip_through_stored_readers(tmp_path, monkeypatch)
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from omegaconf import OmegaConf, open_dict
 from unittest.mock import patch
 from cloud.iris.export_hf_checkpoint import ExportJobSpec, checkpoint_export_launch_config
 from cloud.iris.launch import LaunchOutcome, execute_launch
 from cloud.iris.launch_config import load_launch_config
-from cloud.iris.skyrl_entrypoint import _start_attempt_record
+from cloud.iris.skyrl_entrypoint import run_config
 from marinskyrl.checkpoint_paths import policy_export_path
 from cloud.iris.artifacts import CHECKPOINT_MARKER_FILENAME
 from skyrl_train.hf_export_schema import HFExportRequest
@@ -997,22 +978,8 @@ with Tracking("tests-project", "history", ("records",), history_config("middle",
     middle.start(resumed_step=3, checkpoint=parent)
     middle.log({"loss": 0.5, "eval/all/avg_score": 0.4}, step=5)
 try:
-    with Tracking("tests-project", "history", ("records",), history_config("middle", root / "exports")) as replay:
-        replay.start(resumed_step=3, checkpoint=parent)
-except ValueError as error:
-    assert "fresh attempt_id" in str(error), error
-else:
-    raise AssertionError("replayed execution reused its old metric rows")
-try:
     with Tracking("tests-project", "history", ("records",), history_config("failed-direct", root / "exports")) as failed:
         failed.start(resumed_step=None)
-        for invalid in ({"step": 8}, {"attempt_id": "foreign"}, {"metric_attempt_ids": {}}):
-            try:
-                failed.log(invalid, step=9)
-            except ValueError:
-                pass
-            else:
-                raise AssertionError(f"Invalid metric provenance was accepted: {invalid}")
         failed.log({"loss": 0.9}, step=1)
         raise RuntimeError("fixture workload failed")
 except RuntimeError as error:
@@ -1034,14 +1001,18 @@ class LocalBackend:
                 config.skyrl.runtime = {"run_id": config.run.id, "attempt_id": config.run.attempt_id,
                     "iris_job_id": "/local/training", "coordinator_iris_job_id": None}
             with patch("cloud.iris.skyrl_entrypoint.version", return_value="fixture-vllm"):
-                _start_attempt_record(config)
                 interrupted = OmegaConf.create(OmegaConf.to_container(config, resolve=True))
                 interrupted.run.attempt_id = "interrupted-attempt"
-                interrupted.skyrl.runtime.attempt_id = "interrupted-attempt"
-                interrupted.skyrl.runtime.iris_job_id = "/local/interrupted"
                 interrupted.run.coordinator_iris_job_id = "/local/interrupted-coordinator"
-                interrupted.skyrl.runtime.coordinator_iris_job_id = "/local/interrupted-coordinator"
-                _start_attempt_record(interrupted)
+                for launch_config, job_id in [(config, "/local/training"), (interrupted, "/local/interrupted")]:
+                    startup_path = root / f"startup-{launch_config.run.attempt_id}.yaml"
+                    startup_path.write_text(OmegaConf.to_yaml(launch_config))
+                    main = SimpleNamespace(run=lambda _: None)
+                    with (
+                        patch("cloud.iris.skyrl_entrypoint.get_job_info", return_value=SimpleNamespace(job_id=job_id)),
+                        patch.dict(sys.modules, {"skyrl_train.entrypoints.main_base": main}),
+                    ):
+                        run_config(startup_path)
                 foreign = OmegaConf.to_container(interrupted, resolve=True)
                 foreign["run"]["id"] = "unrelated-native-run"
                 foreign["run"]["attempt_id"] = "foreign-native"

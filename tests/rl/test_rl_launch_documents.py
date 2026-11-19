@@ -4,13 +4,15 @@
 import inspect
 import json
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 from marin.rl.skyrl import SkyRLSpec, skyrl_cpu_command
 from marin.rl.skyrl import _run_launcher as run_launcher_for_test
 
-from tests.rl.launch_document_census import render_launch_census
+from tests.rl.launch_document_census import render_launch_census, runtime_launch
+from tests.rl.test_skyrl import generation_geometry_step
 
 
 # A cold SkyRL environment sync and the full batch of compositions share this deadline.
@@ -29,6 +31,8 @@ def test_rl_launch_documents_load_with_the_vendored_launcher(tmp_path: Path, mon
     monkeypatch.setattr(uuid, "uuid4", lambda: uuid.UUID(hex="104e63883176".ljust(32, "0")))
     documents, failures = render_launch_census(tmp_path / "artifacts")
     assert not failures, failures
+    with contextmanager(runtime_launch)(tmp_path) as render:
+        documents["native/generation"] = render(generation_geometry_step()).launch_config_yaml
     root = Path(__file__).resolve().parents[2]
     authored = {
         str(path.relative_to(root)) for path in (root / "experiments").rglob("*.py") if "SkyRLSpec(" in path.read_text()

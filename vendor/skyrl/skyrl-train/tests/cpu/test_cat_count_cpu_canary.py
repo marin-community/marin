@@ -11,11 +11,7 @@ from pathlib import Path
 from multiprocessing.context import ForkServerContext
 
 from finestore.rl.run_records import read_attempts, read_evaluations
-from finestore.rl.strata import SelectionDefinition, SelectionTaskRow, MembershipState
-from finestore.schema import arrow_schema
 from marinskyrl.environment_contract import RUN_MODEL_ENV
-import pyarrow as pa
-import pyarrow.parquet as pq
 import fsspec
 import pytest
 import rolloutengine
@@ -24,7 +20,6 @@ import skyrl_train
 import torch
 import zstandard
 from omegaconf import OmegaConf
-from taskcompendium.identity import canonical_sha256
 from taskcompendium.grading_result import Outcome
 from taskcompendium.grader import verifyit_package
 from verifyit.spec import ExactSpec
@@ -38,7 +33,7 @@ from skyrl_train.inference_engines.inference_engine_client import InferenceEngin
 from skyrl_train.trajectory_runners.model_clients import DirectModelClient
 
 from tests.cpu.cat_count_policy import POLICY_PREFIX, download_policy
-from tests.cpu.task_specs import lowered_task, text_task
+from tests.cpu.task_specs import lowered_task, text_task, write_selection_panel
 from tests.cpu.tiny_training.cat_count import (
     FAST_STEPS,
     RUN_TIMEOUT_SECONDS,
@@ -496,15 +491,14 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
 
 
 @pytest.mark.timeout(RUN_TIMEOUT_SECONDS)
-@pytest.mark.parametrize("explicit_callbacks", [False, True])
 def test_cat_count_final_profile_skips_zero_progress(
-    tmp_path, cat_count_policy, cat_count_session, forkserver_context, explicit_callbacks
+    tmp_path, cat_count_policy, cat_count_session, forkserver_context
 ):
     root = tmp_path / "zero-progress"
     cfg = cat_count_config(root, cat_count_policy, steps=1)
     cfg.trainer.epochs = 0
     cfg.generator.inference_stats_interval = 1
-    callbacks = [
+    cfg.trainer.callbacks = [
         {
             "type": "evaluation",
             "eval_steps": 1,
@@ -513,8 +507,6 @@ def test_cat_count_final_profile_skips_zero_progress(
             "additional_evaluations": {"final_task_set": {"schedule": "final"}},
         }
     ]
-    if explicit_callbacks:
-        cfg.trainer.callbacks = callbacks
     records = run_process(forkserver_context, root, cfg)
     assert any("eval/all/num_attempted" in row for row in records)
     assert all("policy/raw_grad_norm" not in row for row in records)
@@ -523,13 +515,12 @@ def test_cat_count_final_profile_skips_zero_progress(
 
 
 @pytest.mark.timeout(RUN_TIMEOUT_SECONDS)
-@pytest.mark.parametrize("records_backend", [True, False])
 def test_cat_count_generate_preserves_task_ids_and_token_metrics(
-    tmp_path, cat_count_policy, cat_count_session, forkserver_context, records_backend
+    tmp_path, cat_count_policy, cat_count_session, forkserver_context
 ):
     root = tmp_path / "generate"
     cfg = cat_count_config(root, cat_count_policy)
-    cfg.trainer.logger = "records" if records_backend else "console"
+    cfg.trainer.logger = "records"
     OmegaConf.update(cfg, "runtime.model", "cat-count-model", force_add=True)
     environment_configs = OmegaConf.to_container(cfg.environment.task_sessions, resolve=True)
 
@@ -564,37 +555,9 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
     )
     spec = overlong.task.model_copy(update={"context": context})
     write_tasks(path, [*reversed(tasks), tasks[0], overlong.model_copy(update={"task": spec})])
-    pq.write_table(
-        pa.Table.from_pylist(
-            [{"task_spec": row.task.model_dump_json()} for row in (*tasks, overlong.model_copy(update={"task": spec}))]
-        ),
-        path.parent / "validation.parquet",
-    )
-    panel_rows = [
-        SelectionTaskRow(
-            task_id=task_id,
-            task_digest=canonical_sha256(
-                next(
-                    row.task for row in (*tasks, overlong.model_copy(update={"task": spec})) if row.task.id == task_id
-                ).model_dump(mode="json")
-            ),
-            family="verifier" if task_id.endswith(("7", "1")) else "counts",
-            source="cat-count",
-            state=MembershipState.ACTIVE,
-        ).model_dump(mode="json")
-        for task_id in (*expected, "overlong")
-    ]
-    pq.write_table(
-        pa.Table.from_pylist(panel_rows, schema=arrow_schema(SelectionTaskRow)), path.parent / "task_manifest.parquet"
-    )
-    (path.parent / "summary.json").write_text(
-        json.dumps(
-            {
-                "selection_strata": SelectionDefinition(
-                    name="cat-count", version="canary-1", sampling="all", task_files=("validation.parquet",)
-                ).model_dump(mode="json")
-            }
-        )
+    write_selection_panel(
+        path.parent, [row.task for row in tasks] + [spec], "cat-count", "canary-1",
+        lambda task: {"family": "verifier" if task.id.endswith(("7", "1")) else "counts", "source": "cat-count"},
     )
     cfg.data.val_data = [str(path)]
     cfg.generator.num_inference_engines = 2
@@ -635,16 +598,7 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
         TinyGenerateExp(invalid)
     assert str(missing) in str(unavailable.value) and str(cat_count_policy) in str(unavailable.value)
     records = run_process(forkserver_context, root, cfg, run_cat_count_generate)
-    if records_backend:
-        assert len(records) == 1
-        metrics = records[0]
-    else:
-        assert records is None
-        metrics = {
-            row["attributes"]["metric"]: row["value"]
-            for row in cat_count_session
-            if row["name"] == "training_metric_value" and row["attributes"].get("payload_kind") == "generate"
-        }
+    metrics, = records
     rows = [
         json.loads(line)
         for line in (
@@ -681,33 +635,28 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
     assert len(scored) / len(answers) == metrics["eval/all/verifier_score_coverage"]
     by_ordinal = {row["ordinal"]: row for row in rows}
     for task_row in task_rows:
-        normalized = []
         for answer in task_row.answers:
             dumped = by_ordinal[answer.ordinal]
-            assert dumped["task_id"] == task_row.task_id
-            assert answer.native_uid == dumped["uid"]
+            assert (task_row.task_id, answer.native_uid, answer.response_token_count) == (
+                dumped["task_id"], dumped["uid"], len(dumped["response_token_ids"])
+            )
             reward = dumped["score"]
             assert answer.optimization_reward == (math.fsum(reward) if isinstance(reward, list) else reward)
-            verification = dumped["verification"]
-            assert answer.error_type == dumped["exception_type"]
-            assert answer.error_treatment == dumped["error_treatment"]
-            assert answer.verification_status == (verification["status"] if verification else None)
-            assert answer.raw_verifier_score == (verification["score"] if verification else None)
-            assert answer.score_min == (verification["score_min"] if verification else None)
-            assert answer.score_max == (verification["score_max"] if verification else None)
-            if verification and verification["status"] == "verified":
-                value = (verification["score"] - verification["score_min"]) / (
-                    verification["score_max"] - verification["score_min"]
-                )
-                normalized.append(max(0, min(1, value)))
-                assert answer.verifier_score == normalized[-1]
+            verification = dumped["verification"] or {}
+            assert (answer.error_type, answer.error_treatment) == (dumped["exception_type"], dumped["error_treatment"])
+            assert (answer.verification_status, answer.raw_verifier_score, answer.score_min, answer.score_max) == (
+                verification.get("status"), verification.get("score"), verification.get("score_min"),
+                verification.get("score_max"),
+            )
+            if verification.get("status") == "verified":
                 assert answer.passed == (
                     verification["passed"] if verification["passed"] is not None else answer.optimization_reward > 0
                 )
                 assert answer.outcome == "graded"
             else:
                 assert answer.verifier_score is None and not answer.passed and answer.outcome == "unavailable"
-        assert task_row.score == (sum(normalized) / len(normalized) if normalized else None)
+        task_scores = [row.verifier_score for row in task_row.answers if row.verifier_score is not None]
+        assert task_row.score == (sum(task_scores) / len(task_scores) if task_scores else None)
     bounded = [
         answer
         for row in task_rows

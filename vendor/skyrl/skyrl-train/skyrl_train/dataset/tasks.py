@@ -46,6 +46,12 @@ TASK_SCHEMA = pa.schema([pa.field(TASK_ROLLOUT_COLUMN, pa.string(), nullable=Fal
 PARQUET_BATCH_SIZE = 1024
 
 
+def with_evaluation_identities(dataset: Dataset, identities: Iterable[TaskEvaluationIdentity | None]) -> Dataset:
+    return dataset.add_column(
+        TASK_EVALUATION_IDENTITY, [identity.model_dump_json() if identity is not None else None for identity in identities]
+    )
+
+
 def task_prompt(lowered: TaskRolloutSpec) -> dict:
     """Prepare public messages and private worker inputs from a lowered task."""
     task = lowered.task
@@ -275,12 +281,12 @@ class SourceTaskDataset(TaskDataset):
         def prepare_source(source: str, dataset: Dataset) -> Dataset:
             panel = read_selection_strata(str(Path(source).parent))
             column = TASK_SPEC_COLUMN if TASK_SPEC_COLUMN in dataset.column_names else TASK_ROLLOUT_COLUMN
-            encoded = []
+            annotations = []
             for row in dataset:
                 if column not in row:
                     if panel is not None:
                         raise ValueError(f"selection input has no canonical task identity: {source}")
-                    encoded.append(None)
+                    annotations.append(None)
                     continue
                 task = json.loads(row[column])
                 task_id = task["id"] if column == TASK_SPEC_COLUMN else task["task"]["id"]
@@ -292,8 +298,8 @@ class SourceTaskDataset(TaskDataset):
                 if task_id in identities and identities[task_id] != identity:
                     raise ValueError(f"task has conflicting selection identities in one input set: {task_id}")
                 identities[task_id] = identity
-                encoded.append(identity.model_dump_json() if identity is not None else None)
-            return dataset.add_column(TASK_EVALUATION_IDENTITY, encoded)
+                annotations.append(identity)
+            return with_evaluation_identities(dataset, annotations)
 
         super().__init__(
             list(datasets),

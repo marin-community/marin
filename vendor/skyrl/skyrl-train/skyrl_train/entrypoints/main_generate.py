@@ -96,6 +96,13 @@ class EvalOnlyEntrypoint(BasePPOExp):
         trajectory_sink = make_trajectory_sink(self.cfg.generator, self.tokenizer)
         trajectory_runner.set_trajectory_sink(trajectory_sink)
         local_engines = self.cfg.generator.run_engines_locally
+
+        async def publish_engine_stats():
+            snapshot = await inference_engine_client.get_stats(read_mode=IntervalReadMode.RESET)
+            for sink in configured_inference_sinks():
+                sink.publish(snapshot, 0)
+            return snapshot
+
         try:
             await trajectory_runner.startup()
             started = time.perf_counter()
@@ -117,9 +124,7 @@ class EvalOnlyEntrypoint(BasePPOExp):
                 }
             )
             if local_engines:
-                snapshot = await inference_engine_client.get_stats(read_mode=IntervalReadMode.RESET)
-                for sink in configured_inference_sinks():
-                    sink.publish(snapshot, 0)
+                snapshot = await publish_engine_stats()
                 generated_tokens = sum(engine.cumulative.generation_tokens for engine in snapshot.engines)
                 results.update(
                     {
@@ -145,9 +150,7 @@ class EvalOnlyEntrypoint(BasePPOExp):
                 )
                 results.update(named_evaluation_metrics(profile_results, name))
             if local_engines and profiles:
-                snapshot = await inference_engine_client.get_stats(read_mode=IntervalReadMode.RESET)
-                for sink in configured_inference_sinks():
-                    sink.publish(snapshot, 0)
+                await publish_engine_stats()
         finally:
             try:
                 await trajectory_runner.shutdown()

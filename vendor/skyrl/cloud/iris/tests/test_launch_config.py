@@ -547,14 +547,23 @@ def test_qwen_smoke_hugging_face_model_input_reaches_the_runner_without_a_model_
     assert seen[0].model_source_uri is None
 
 
-@pytest.mark.parametrize("entrypoint", ["standard", "generate"])
-def test_forwarded_launch_metadata_reaches_attempt_startup_record(tmp_path: Path, monkeypatch, entrypoint) -> None:
+@pytest.mark.parametrize(
+    ("entrypoint", "records_enabled"), [("standard", True), ("generate", True), ("generate", False)]
+)
+def test_forwarded_launch_metadata_reaches_attempt_startup_record(
+    tmp_path: Path, monkeypatch, entrypoint, records_enabled
+) -> None:
     destination = tmp_path / "launch.yaml"
     document = raw_launch_config()
     document["run"]["coordinator_iris_job_id"] = "/tests/coordinator"
     document["run"]["model"] = "test-policy"
     document["iris"]["max_retries"] = 0
-    document["skyrl"]["trainer"]["logger"] = "records" if entrypoint == "standard" else ["console", "records", "wandb"]
+    backends = ["console"]
+    if records_enabled:
+        backends.append("records")
+        if entrypoint == "generate":
+            backends.append("wandb")
+    document["skyrl"]["trainer"]["logger"] = backends
     document["skyrl"]["entrypoint"] = entrypoint
     document["artifacts"]["export_root"] = str(tmp_path / "exports")
     contents = yaml.safe_dump(document).encode()
@@ -591,6 +600,10 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(tmp_path: Path
             raise RuntimeError("workload initialization failed")
         with Tracking("project", "display-name", config.trainer.logger, config) as tracker:
             tracker.start(resumed_step=None)
+            if entrypoint == "standard":
+                for invalid in ({"step": 8}, {"attempt_id": "foreign"}, {"metric_attempt_ids": {}}):
+                    with pytest.raises(ValueError, match="active execution|reserved for metric provenance"):
+                        tracker.log(invalid, step=9)
             tracker.log({"startup/ready": 1}, step=0)
 
     monkeypatch.setattr(skyrl_entrypoint, "get_job_info", lambda: SimpleNamespace(job_id="/tests/bootstrap-trainer"))
@@ -623,11 +636,20 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(tmp_path: Path
     fail = False
     skyrl_entrypoint.run_config(destination)
     final = read_attempt(export_root, "attempt-1")
-    assert final is not None and final.metrics_started_at is not None
+    assert final is not None
+    if not records_enabled:
+        assert final.iris_job_id == "/tests/bootstrap-trainer" and final.metrics_started_at is None
+        assert read_attempt_metrics(export_root, "attempt-1") == {}
+        return
+    assert final.metrics_started_at is not None
     assert final.started_at == attempt.started_at and final.vllm_version == attempt.vllm_version
     assert read_attempt_metrics(export_root, "attempt-1")[0]["startup/ready"] == 1
     assert final.iris_job_id == "/tests/bootstrap-trainer"
     assert final.native.result.iris_job_id == "/tests/bootstrap-trainer"
+    if entrypoint == "standard":
+        with pytest.raises(ValueError, match="fresh attempt_id"):
+            skyrl_entrypoint.run_config(destination)
+        assert read_attempt_metrics(export_root, "attempt-1")[0]["startup/ready"] == 1
     if entrypoint == "generate":
         assert [(run["id"], run["group"], run["resume"]) for run in wandb_runs] == [("attempt-1", "smoke", "allow")]
         assert wandb_runs[0]["tags"] == ["test-policy"]
@@ -753,8 +775,8 @@ def test_named_evaluation_data_is_staged_and_bound_in_training_driver(
         )
     elif case == "missing-profile":
         document["skyrl"]["trainer"]["callbacks"] = []
-    path.write_text(yaml.safe_dump(document))
     if error is not None:
+        path.write_text(yaml.safe_dump(document))
         with pytest.raises(ValueError, match=error):
             load_launch_config(path)
         return

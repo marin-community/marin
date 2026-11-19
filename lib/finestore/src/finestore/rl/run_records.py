@@ -89,7 +89,7 @@ class AttemptRecord(BaseModel):
     parent: CheckpointReference | None = None
     config: dict[str, Any] | None = None
     result: LaunchResult | None = None
-    issue: int | Literal["opted_out"] | None = None
+    issue: int | None = None
 
     @property
     def native(self) -> LaunchReceipt:
@@ -132,6 +132,7 @@ class EvaluationAnswerRow(BaseModel):
     outcome: str
     error_type: str | None
     error_treatment: str | None
+    response_token_count: int | None = None
 
 
 class EvaluationTaskRow(BaseModel):
@@ -151,23 +152,11 @@ class EvaluationTaskRow(BaseModel):
     model: str | None = None
 
 
-ROW_MODELS: dict[str, type[BaseModel]] = {
-    METRICS_TABLE: MetricRow,
-    ATTEMPTS_TABLE: AttemptRow,
-    EVALUATIONS_TABLE: EvaluationTaskRow,
+_TABLES: dict[str, tuple[type[BaseModel], tuple[str, ...]]] = {
+    METRICS_TABLE: (MetricRow, ("attempt_id", "step", "name")),
+    ATTEMPTS_TABLE: (AttemptRow, ("attempt_id", "field")),
+    EVALUATIONS_TABLE: (EvaluationTaskRow, ("attempt_id", "step", "evaluation", "task_id")),
 }
-PRIMARY_KEYS = {
-    METRICS_TABLE: ("attempt_id", "step", "name"),
-    ATTEMPTS_TABLE: ("attempt_id", "field"),
-    EVALUATIONS_TABLE: ("attempt_id", "step", "evaluation", "task_id"),
-}
-
-
-@dataclass(frozen=True)
-class RunTables:
-    metrics: DataTable
-    attempts: DataTable
-    evaluations: DataTable
 
 
 @dataclass(frozen=True)
@@ -181,18 +170,12 @@ def run_records_root(export_root: str) -> str:
     return prefix_join(export_root, RUN_RECORDS_SUBDIRECTORY)
 
 
-def register_run_tables(store: DataStore) -> RunTables:
+def register_run_tables(store: DataStore) -> dict[str, DataTable]:
     """Register the run tables with their shared schemas and primary keys."""
-    tables = {
-        name: store.table(
-            name,
-            primary_key=PRIMARY_KEYS[name],
-            schema=arrow_schema(model),
-            on_conflict=OnConflict.SUPERSEDE,
-        )
-        for name, model in ROW_MODELS.items()
+    return {
+        name: store.table(name, primary_key=key, schema=arrow_schema(model), on_conflict=OnConflict.SUPERSEDE)
+        for name, (model, key) in _TABLES.items()
     }
-    return RunTables(tables[METRICS_TABLE], tables[ATTEMPTS_TABLE], tables[EVALUATIONS_TABLE])
 
 
 def update_attempt(store: DataStore, record: AttemptRecord) -> None:
@@ -203,7 +186,7 @@ def update_attempt(store: DataStore, record: AttemptRecord) -> None:
         AttemptRow(attempt_id=record.attempt_id, field=name, value_json=json.dumps(value)).model_dump()
         for name, value in values.items()
     ]
-    register_run_tables(store).attempts.extend(rows)
+    register_run_tables(store)[ATTEMPTS_TABLE].extend(rows)
     store.flush()
 
 
@@ -217,6 +200,9 @@ def _records(rows: Iterable[dict[str, Any]]) -> dict[str, AttemptRecord]:
     records: dict[str, dict[str, Any]] = {}
     for row in rows:
         records.setdefault(row["attempt_id"], {})[row["field"]] = json.loads(row["value_json"])
+    for values in records.values():
+        if values.get("issue") == "opted_out":
+            values["issue"] = None
     return {attempt_id: AttemptRecord(attempt_id=attempt_id, **values) for attempt_id, values in records.items()}
 
 
@@ -291,7 +277,7 @@ def read_attempt_metrics(export_root: str, attempt_id: str) -> dict[int, dict[st
 def write_evaluations(export_root: str, rows: Sequence[EvaluationTaskRow]) -> None:
     """Commit one evaluation's task answers in the run's canonical records store."""
     with DataStore.open(run_records_root(export_root)) as store:
-        register_run_tables(store).evaluations.extend(row.model_dump(mode="json") for row in rows)
+        register_run_tables(store)[EVALUATIONS_TABLE].extend(row.model_dump(mode="json") for row in rows)
         store.flush()
 
 

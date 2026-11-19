@@ -4,6 +4,7 @@
 import json
 import sys
 import tempfile
+from importlib import import_module
 from pathlib import Path
 
 from cloud.iris import launch_config
@@ -32,6 +33,10 @@ def load_documents(source: Path, output: Path) -> None:
                     and config.runtime.entrypoint != RL_ENTRYPOINTS[RLEntrypoint.TASKCOMPENDIUM]
                 ):
                     raise ValueError("inventory training must resolve to the taskcompendium entrypoint")
+                if case == "native/generation":
+                    assert config.runtime.entrypoint == RL_ENTRYPOINTS[RLEntrypoint.GENERATE]
+                    assert callable(import_module(config.runtime.entrypoint).run)
+                    assert (config.iris.allocation.num_nodes, config.skyrl.generator.num_inference_engines) == (1, 4)
                 loaded = config.run.attempt_id
                 written = safe_load(yaml)["run"]["attempt_id"]
                 assert loaded == written, f"run.attempt_id {written!r} loads as {loaded!r}"

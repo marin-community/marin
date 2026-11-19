@@ -301,14 +301,12 @@ class BasePPOExp:
         self._configure_log_level()
         self.tokenizer = self.get_tokenizer()
         model = cfg.trainer.policy.model
-        runtime = cfg.get("runtime") or {}
-        tokenizer_identity = runtime.get("tokenizer_identity") or str(model.tokenizer_path)
         validate_checkpoint_vocabulary(
             self.tokenizer,
             checkpoint_path=model.path,
             checkpoint_revision=model.get("revision"),
-            checkpoint_identity=runtime.get("checkpoint_identity") or model.get("source_identity") or model.path,
-            tokenizer_identity=tokenizer_identity,
+            checkpoint_identity=model.path,
+            tokenizer_identity=str(model.tokenizer_path),
             disable_fast_tokenizer=cfg.trainer.disable_fast_tokenizer,
         )
         self.train_dataset = self.get_train_dataset()

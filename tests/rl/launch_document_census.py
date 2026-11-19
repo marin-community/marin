@@ -3,6 +3,7 @@
 
 import inspect
 from collections.abc import Callable
+from contextlib import contextmanager
 from functools import partial
 from itertools import product
 from pathlib import Path
@@ -174,19 +175,25 @@ def _seed_dependency_metadata(step: ArtifactStep[SkyRLRun], artifact_root: str) 
             (checkpoint / "tokenizer_config.json").write_text("{}")
 
 
-def runtime_launch(tmp_path: Path):
+@contextmanager
+def _memory_s3():
     source_class = get_filesystem_class("s3")
     register_implementation("s3", _MemoryObjectStore, clobber=True)
+    try:
+        yield
+    finally:
+        register_implementation("s3", source_class, clobber=True)
+
+
+def runtime_launch(tmp_path: Path):
     prefix = "s3://launcher-test/" + tmp_path.name
 
     def render(step):
         _seed_dependency_metadata(step, prefix)
         return materialized_config(step, prefix)
 
-    try:
+    with _memory_s3():
         yield render
-    finally:
-        register_implementation("s3", source_class, clobber=True)
 
 
 def render_launch_census(artifact_root: Path) -> tuple[dict[str, str], dict[str, str]]:
@@ -194,19 +201,14 @@ def render_launch_census(artifact_root: Path) -> tuple[dict[str, str], dict[str,
     builders = launch_builders(artifact_root)
     documents = {}
     failures = {}
-    source_class = get_filesystem_class("s3")
-    register_implementation("s3", _MemoryObjectStore, clobber=True)
     prefix = "s3://launch-census/" + artifact_root.name
-    try:
-        with build_context(BuildContext(versions=VersionCodex(default=VERSION))):
-            for name, build in builders.items():
-                try:
-                    step = build()
-                    _seed_dependency_metadata(step, prefix)
-                    config = materialized_config(step, prefix)
-                    documents[name] = config.launch_config_yaml
-                except Exception as error:
-                    failures[name] = f"{type(error).__name__}: {error}"
-    finally:
-        register_implementation("s3", source_class, clobber=True)
+    with _memory_s3(), build_context(BuildContext(versions=VersionCodex(default=VERSION))):
+        for name, build in builders.items():
+            try:
+                step = build()
+                _seed_dependency_metadata(step, prefix)
+                config = materialized_config(step, prefix)
+                documents[name] = config.launch_config_yaml
+            except Exception as error:
+                failures[name] = f"{type(error).__name__}: {error}"
     return documents, failures

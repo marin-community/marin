@@ -55,18 +55,22 @@ from transformers import AutoTokenizer
 @dataclass
 class _EvaluationRollouts:
     batch: TrajectoryBatch
-    env_classes: List[str]
-    data_sources: List[str | None]
     uids: List[str]
     metadata: List[TrajectoryMetadata]
     ordinals: List[int]
     example_prompt: ConversationType
     example_batch: TrajectoryBatch
 
+    @property
+    def env_classes(self) -> List[str]:
+        return [row.metric_class for row in self.metadata]
+
+    @property
+    def data_sources(self) -> List[str | None]:
+        return [row.data_source for row in self.metadata]
+
 
 class _EvaluationAccumulator(Protocol):
-    env_classes: List[str]
-    data_sources: List[str | None]
     uids: List[str]
     metadata: List[TrajectoryMetadata]
 
@@ -81,15 +85,11 @@ def evaluation_dump_dir(export_path: str, global_step: int | None, *, attempt_id
 
 @dataclass
 class _WholeTrajectoryAccumulator:
-    env_classes: List[str]
-    data_sources: List[str | None]
     uids: List[str]
     metadata: List[TrajectoryMetadata]
 
     def record(self, request: TrajectoryRequestBatch, batch: TrajectoryBatch, uids: List[str]) -> None:
         validate_trajectory_batch(len(request.metadata), batch)
-        self.env_classes.extend(row.metric_class for row in request.metadata)
-        self.data_sources.extend(row.data_source for row in request.metadata)
         self.uids.extend(uids)
         self.metadata.extend(request.metadata)
         if isinstance(request, TaskRequestBatch):
@@ -100,8 +100,6 @@ class _WholeTrajectoryAccumulator:
 
 @dataclass
 class _StepWiseAccumulator:
-    env_classes: List[str]
-    data_sources: List[str | None]
     uids: List[str]
     metadata: List[TrajectoryMetadata]
 
@@ -129,10 +127,7 @@ class _StepWiseAccumulator:
         for trajectory_id in output_ids:
             if trajectory_id.instance_id not in inputs_by_id:
                 raise ValueError(f"Trajectory ID {trajectory_id.instance_id} not found in input")
-            metadata = inputs_by_id[trajectory_id.instance_id]
-            self.metadata.append(metadata)
-            self.env_classes.append(metadata.metric_class)
-            self.data_sources.append(metadata.data_source)
+            self.metadata.append(inputs_by_id[trajectory_id.instance_id])
             self.uids.append(trajectory_id.instance_id)
 
 
@@ -199,8 +194,6 @@ async def _collect_evaluation_rollouts(
             trajectory_batches,
             tis_lcs_alert_threshold=float(cfg.trainer.algorithm.tis_lcs_alert_threshold),
         ),
-        env_classes=accumulator.env_classes,
-        data_sources=accumulator.data_sources,
         uids=accumulator.uids,
         metadata=accumulator.metadata,
         ordinals=list(range(len(accumulator.uids))),
@@ -296,6 +289,7 @@ def _evaluation_task_rows(
                 outcome=batch["task_outcomes"][index].value,
                 error_type=(batch.get("exception_types") or [None] * count)[index],
                 error_treatment=(batch.get("error_treatments") or [None] * count)[index],
+                response_token_count=len(batch["response_ids"][index]),
             )
         )
     rows = []
@@ -404,7 +398,7 @@ async def evaluate(
     owns_sink = trajectory_sink is None
     active_sink = trajectory_sink or make_trajectory_sink(cfg.generator, tokenizer)
     try:
-        accumulator = _WholeTrajectoryAccumulator([], [], [], [])
+        accumulator = _WholeTrajectoryAccumulator([], [])
         session = (
             nullcontext(evaluation_pool)
             if evaluation_pool is not None
@@ -470,7 +464,7 @@ async def evaluate_step_wise(
     Returns:
         Dict[str, float]: evaluation metrics
     """
-    accumulator = _StepWiseAccumulator([], [], [], [])
+    accumulator = _StepWiseAccumulator([], [])
     session = (
         nullcontext(evaluation_pool)
         if evaluation_pool is not None
@@ -496,24 +490,15 @@ async def evaluate_step_wise(
             ]
     uids_last_step = [uid for uid, is_last_step in zip(rollouts.uids, is_last_step_mask) if is_last_step]
     trajectory_batch_last_step["rollout_metrics"] = concatenated_batch.get("rollout_metrics") or {}
-    data_sources_last_step = [
-        data_source for data_source, is_last_step in zip(concat_data_sources, is_last_step_mask) if is_last_step
-    ]
-
-    eval_metrics = _calculate_eval_metrics(
-        trajectory_batch_last_step,
-        uids_last_step,
-        data_sources_last_step,
-        cfg.generator.eval_n_samples_per_prompt,
-    )
     final_rollouts = replace(
         rollouts,
         batch=trajectory_batch_last_step,
         uids=uids_last_step,
-        data_sources=data_sources_last_step,
         metadata=[row for row, final in zip(rollouts.metadata, is_last_step_mask, strict=True) if final],
         ordinals=[ordinal for ordinal, final in zip(rollouts.ordinals, is_last_step_mask, strict=True) if final],
-        env_classes=[env for env, final in zip(rollouts.env_classes, is_last_step_mask, strict=True) if final],
+    )
+    eval_metrics = _calculate_eval_metrics(
+        final_rollouts.batch, final_rollouts.uids, final_rollouts.data_sources, cfg.generator.eval_n_samples_per_prompt
     )
     _persist_evaluation(cfg, global_step, val_set_name, final_rollouts, records_export_root)
     _dump_eval_results(cfg, global_step, tokenizer, rollouts, concat_data_sources, eval_metrics)
