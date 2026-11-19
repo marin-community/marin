@@ -14,6 +14,7 @@ from verifyit.modes import grade_judge
 from verifyit.spec import (
     Constraint,
     EmptyOutputPolicy,
+    JudgeCompletionPolicy,
     JudgeSpec,
     parse_spec,
     render_spec,
@@ -1118,6 +1119,13 @@ def test_judge_reply_transport_failure_keeps_its_evidence(fake_judge):
     [attempt] = raised.value.detail["transport_attempts"]
     assert (attempt["status"], attempt["outcome"]) == (400, "failed")
     assert raised.value.detail["judge_request"]["messages"] == [{"role": "user", "content": "Check this."}]
+
+
+def test_judge_reply_rejects_the_content_policy_before_any_request(fake_judge):
+    spec = JudgeSpec(references=("document",), exact_gate=False, completion_policy=JudgeCompletionPolicy.CONTENT)
+    with pytest.raises(InvalidTask):
+        grade_judge.judge_reply(spec, [{"role": "system", "content": "Be strict."}, {"role": "user", "content": "Hi."}])
+    assert fake_judge.requests == []
 
 
 @pytest.mark.parametrize("fault", [{"finish_reason": "length"}, {"refusal": "Cannot judge"}])

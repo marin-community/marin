@@ -257,15 +257,18 @@ class JudgeReply:
 def judge_reply(spec: JudgeSpec, messages: list[ChatCompletionMessageParam]) -> JudgeReply:
     """Return the judge's reply to ``messages``, retrying transient transport failures.
 
-    For chat completions, ``COMPLETED_TEXT`` rejects incomplete, empty, and refused replies;
-    ``CONTENT`` may return empty or truncated content.
+    Only the chat completions API with the completed-text policy is supported. An incomplete, empty or
+    refused reply raises ``GradingInfraError``.
     """
     _validate_spec(spec)
+    if spec.api != "chat_completions" or spec.completion_policy is not JudgeCompletionPolicy.COMPLETED_TEXT:
+        raise InvalidTask("judge_reply needs the chat_completions API and the completed_text policy")
     client, model = _client(spec, None)
     try:
-        completion = _label_completion(
-            spec, client.with_options(max_retries=0), model, messages, spec.max_completion_tokens
-        )
+        with client:
+            completion = _label_completion(
+                spec, client.with_options(max_retries=0), model, messages, spec.max_completion_tokens
+            )
     except GradingInfraError as error:
         raise GradingInfraError(str(error), model=model, **error.detail) from error
     except RuntimeError as error:
