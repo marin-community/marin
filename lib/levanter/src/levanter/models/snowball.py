@@ -39,7 +39,7 @@ from haliax import Axis, NamedArray
 from haliax.jax_utils import named_call
 from haliax.state_dict import ModuleWithStateDictSerialization, StateDict
 
-from levanter.compat.hf_checkpoints import HfLmCheckpointConverter, HFCompatConfig
+from levanter.compat.hf_checkpoints import HfLanguageCheckpointConverter, HFCompatConfig
 from levanter.grug._moe.common import MoeDispatchCounts, _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS
 from levanter.grug.attention import (
     AttentionMask,
@@ -202,7 +202,7 @@ class SnowballConfig(HFCompatConfig):
     Only shape/size knobs are configurable; the architectural switches (QB-routed MoE, GatedNorm,
     XSA, half-RoPE on short layers, NoPE + full-causal on long layers, PKO disabled) are pinned to
     the June recipe. All fields are defaulted so the config is no-arg constructible, which the HF
-    discovery path (``HfLmCheckpointConverter.from_hf``) requires.
+    discovery path (``HfLanguageCheckpointConverter.from_hf``) requires.
     """
 
     vocab_size: int = 128256
@@ -343,9 +343,9 @@ class SnowballConfig(HFCompatConfig):
 
     def hf_checkpoint_converter(  # pyrefly: ignore[bad-override]
         self, ref_checkpoint: Optional[str] = None
-    ) -> HfLmCheckpointConverter["SnowballConfig"]:  # type: ignore[type-var]
+    ) -> HfLanguageCheckpointConverter["SnowballConfig"]:  # type: ignore[type-var]
         ref = self.reference_checkpoint if ref_checkpoint is None else ref_checkpoint
-        return HfLmCheckpointConverter(
+        return HfLanguageCheckpointConverter(
             self.__class__,
             reference_checkpoint=ref,
             HfConfigClass=GrugMoeHfConfig,

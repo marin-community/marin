@@ -18,7 +18,7 @@ from haliax.jax_utils import named_call, shaped_rng_split
 from haliax.nn.scan import Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization
 
-from levanter.compat.hf_checkpoints import HfLmCheckpointConverter, HFCompatConfig, ModelWithHfSerializationMixin
+from levanter.compat.hf_checkpoints import HfLanguageCheckpointConverter, HFCompatConfig, ModelWithHfSerializationMixin
 from levanter.layers.attention import AttentionBackend, AttentionMask, dot_product_attention
 from levanter.models.asr_model import ASRConfig, ASRMixin
 from levanter.models.lm_model import LmConfig
@@ -75,8 +75,8 @@ class WhisperConfig(HFCompatConfig, ASRConfig):
 
     def hf_checkpoint_converter(
         self, ref_checkpoint: str = "openai/whisper-base"
-    ) -> HfLmCheckpointConverter["WhisperModel"]:  # type: ignore
-        return HfLmCheckpointConverter(self, reference_checkpoint=ref_checkpoint, ignore_prefix="model")
+    ) -> HfLanguageCheckpointConverter["WhisperModel"]:  # type: ignore
+        return HfLanguageCheckpointConverter(self, reference_checkpoint=ref_checkpoint, ignore_prefix="model")
 
     # Axis
     MelPos = property(lambda self: Axis(name="position", size=self.max_source_positions * 2))

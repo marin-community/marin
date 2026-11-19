@@ -47,7 +47,7 @@ from levanter.compat.hf_checkpoints import (
     SAFE_TENSORS_MODEL,
     ModelWithHfSerializationMixin,
     VisionModelWithHfSerializationMixin,
-    HfLmCheckpointConverter,
+    HfLanguageCheckpointConverter,
     HfVisionLanguageCheckpointConverter,
     RepoRef,
     _causal_lm_architecture_name,
@@ -824,7 +824,9 @@ def test_vision_converter_restores_weights_and_missing_buffers(tmp_path, prefix)
 @pytest.mark.parametrize("resize", [False, True])
 def test_lm_converter_preserves_or_resizes_checkpoint_vocabulary(tmp_path, local_gpt2_tokenizer_path, resize):
     config = Gpt2Config(max_seq_len=8, hidden_dim=8, num_layers=1, num_heads=1, use_flash_attention=False)
-    converter = HfLmCheckpointConverter(Gpt2Config, HfConfigClass=HfGpt2Config, tokenizer=local_gpt2_tokenizer_path)
+    converter = HfLanguageCheckpointConverter(
+        Gpt2Config, HfConfigClass=HfGpt2Config, tokenizer=local_gpt2_tokenizer_path
+    )
     checkpoint_vocab = converter.Vocab.resize(converter.Vocab.size + 3)
     with use_test_mesh():
         original = Gpt2LMHeadModel.init(checkpoint_vocab, config, key=PRNGKey(7))

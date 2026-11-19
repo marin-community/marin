@@ -163,7 +163,7 @@ def test_snowball_hf_config_does_not_initialize_jax_backend():
 
 
 def test_snowball_hf_converter_matches_config_class():
-    # This is exactly the match HfLmCheckpointConverter.from_hf performs (by HfConfigClass name).
+    # This is exactly the match HfLanguageCheckpointConverter.from_hf performs (by HfConfigClass name).
     converter = SnowballConfig().hf_checkpoint_converter()
     assert converter.HfConfigClass is GrugMoeHfConfig
 

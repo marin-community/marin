@@ -19,7 +19,7 @@ from haliax.jax_utils import maybe_rng_split, named_call, shaped_rng_split
 from haliax.nn.scan import BlockFoldable, BlockSeq, Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization, StateDict
 
-from levanter.compat.hf_checkpoints import HfLmCheckpointConverter
+from levanter.compat.hf_checkpoints import HfLanguageCheckpointConverter
 from levanter.compat.hf_config import hf_config_from_kwargs, hf_rope_config
 from levanter.layers.attention import Attention, AttentionBackend, AttentionMask
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig, RotaryEmbeddingsConfig
@@ -119,8 +119,8 @@ class Qwen3MoeConfig(LlamaConfig):
     # config-reuse subclass narrows to its own HF config/model type (LSP narrowing; pyrefly flags the same)
     def hf_checkpoint_converter(  # pyrefly: ignore[bad-override]
         self, ref_checkpoint: Optional[str] = None
-    ) -> HfLmCheckpointConverter["Qwen3MoeConfig"]:  # type: ignore
-        return HfLmCheckpointConverter(
+    ) -> HfLanguageCheckpointConverter["Qwen3MoeConfig"]:  # type: ignore
+        return HfLanguageCheckpointConverter(
             self.__class__,
             reference_checkpoint=self.reference_checkpoint if ref_checkpoint is None else ref_checkpoint,
             trust_remote_code=True,
