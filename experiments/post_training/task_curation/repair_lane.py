@@ -1223,10 +1223,8 @@ def build_and_push_actor_image(
             if not tar.is_file():
                 raise RuntimeError("The kaniko build produced no image tar")
             return ""
-        push = ["skopeo", "copy", "--retry-times", "3", f"docker-archive:{tar}", f"docker://{repository}:{tag}"]
-        if authfile is not None:
-            push += ["--authfile", str(authfile)]
-        subprocess.run(push, check=True)
+        # Without no_push, kaniko pushed to the destination itself with its DOCKER_CONFIG
+        # credential and wrote no tar: the docker-archive push would only fail on it.
     inspect = subprocess.run(
         ["skopeo", "inspect", "--format", "{{.Digest}}", f"docker://{repository}:{tag}"],
         capture_output=True,
