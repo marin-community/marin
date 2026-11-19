@@ -140,17 +140,17 @@ def test_mixed_candidate_uses_the_selected_tasks_and_preserves_authored_concurre
 )
 def test_runner_refuses_incompatible_launches(selection, tmp_path, monkeypatch, case, value, error):
     preset = SNOWBALL.by_name["train-medium-agentic"]
+    if case == "owner":
+        key, setting = value
+        with pytest.raises(click.BadParameter, match=error):
+            rl_recipe.run_spec(preset, name="settings-test", tasks=selection, settings=(f"{key}={json.dumps(setting)}",))
+        error = "recipe settings are derived by the runner"
     with pytest.raises((ValueError, click.BadParameter), match=error):
         if case in ("recipe", "owner"):
             key, setting = value
             patch = {}
             set_path(patch, key, setting)
             config = preset.recipe.config.merge(RecipePatch.from_document(patch))
-            if case == "owner":
-                with pytest.raises(click.BadParameter, match=error):
-                    rl_recipe.run_spec(
-                        preset, name="settings-test", tasks=selection, settings=(f"{key}={json.dumps(setting)}",)
-                    )
             rl_recipe.run_spec(
                 replace(preset, recipe=replace(preset.recipe, config=config)), name="recipe-test", tasks=selection
             )
