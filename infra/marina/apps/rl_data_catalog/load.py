@@ -699,10 +699,19 @@ def load_catalog(
         metadata["items"].extend(row.model_dump(mode="json") for row in items)
         all_items.extend(items)
     counts = {table: insert(table, rows) for table, rows in metadata.items()}
+    # On a resumed load the inserts absorb re-staged rows (the primary keys deduplicate),
+    # so the inserted-row counts understate the staged totals; verify the completeness
+    # against the database's own staged rows.
+    backend_counts = {
+        table: execute(f"SELECT COUNT(*) AS n FROM atlas_{table} WHERE load_id = :load_id", {"load_id": load_id})[
+            "rows"
+        ][0]["n"]
+        for table in ("backend_sources", "backend_surveys", "backend_cells")
+    }
     if (
-        counts["backend_sources"] != len(sources)
-        or counts["backend_surveys"] != 1
-        or counts["backend_cells"] != len(backend_map.matrix)
+        backend_counts["backend_sources"] != len(sources)
+        or backend_counts["backend_surveys"] != 1
+        or backend_counts["backend_cells"] != len(backend_map.matrix)
     ):
         raise ValueError("Backend survey import is incomplete")
 
