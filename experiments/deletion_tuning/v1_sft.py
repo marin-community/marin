@@ -162,8 +162,9 @@ def v1_recipe(production_recipe: dict) -> dict:
     # compile only)
     trainer["progress_watchdog"]["startup_timeout"] = draccus.encode(V1_STARTUP_TIMEOUT)
     # the 64-GPU mesh: EP=8 within a node, CP=8 across the 8 nodes
-    trainer["mesh"]["dcn_axes"]["context"] = V1_NODES
-    trainer["mesh"]["dcn_axes"]["replica_dcn"] = 1
+    for mesh_dict in (trainer["mesh"], recipe["mesh"]):
+        mesh_dict["dcn_axes"]["context"] = V1_NODES
+        mesh_dict["dcn_axes"]["replica_dcn"] = 1
     recipe["stop_after_steps"] = V1_UPDATES
     recipe["batch_size"] = V1_BATCH
     recipe["task_timeout_seconds"] = int(V1_DURATION.total_seconds())
