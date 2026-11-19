@@ -34,15 +34,18 @@ from experiments.post_training.long_loop.graph import execute_local_graph
 from experiments.post_training.long_loop.hf_archive import file_identity, upload_checkpoint
 from experiments.post_training.long_loop.recipe_bundle import runtime_source_manifest, verify_recipe_bundle
 from experiments.post_training.long_loop.tests.test_hf_archive import upload_config
-from vendor.skyrl.marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME
+from vendor.skyrl.marinskyrl.checkpoint_paths import (
+    BEST_CHECKPOINT_FILENAME,
+    LATEST_CHECKPOINT_FILE,
+    VALIDATION_RECEIPTS_FILENAME,
+    ValidationReceipt,
+)
 
 
 def write_native_selection(root: Path, step: int = 5, reward: float = 0.5, attempted: int = 2) -> None:
-    """Write a complete native best selection with its trailing-five validation history."""
+    """Write a committed first-eligible native selection at the requested step."""
     root.mkdir(parents=True, exist_ok=True)
-    history = [
-        {"step": index, "reward": reward, "attempted": attempted, "scored": attempted} for index in range(1, step + 1)
-    ]
+    history = [{"step": step, "reward": reward, "attempted": attempted, "scored": attempted}]
     (root / "validation_selection_history.json").write_text(json.dumps(history))
     (root / BEST_CHECKPOINT_FILENAME).write_text(
         json.dumps(
@@ -54,11 +57,33 @@ def write_native_selection(root: Path, step: int = 5, reward: float = 0.5, attem
                 "ema_alpha": 2 / 6,
                 "attempted": attempted,
                 "scored": attempted,
+                "expected_tasks": attempted,
+                "minimum_scored_tasks": attempted,
+                "eligible": True,
                 "accuracy": reward,
                 "evaluation_interval": 1,
             }
         )
     )
+    checkpoint = root / f"global_step_{step}"
+    checkpoint.mkdir(exist_ok=True)
+    (checkpoint / "trainer_state.pt").write_bytes(b"committed-fixture-state")
+    (root / LATEST_CHECKPOINT_FILE).write_text(str(step))
+    receipt = ValidationReceipt(
+        step,
+        attempted,
+        attempted,
+        attempted,
+        attempted,
+        0,
+        True,
+        "best_checkpoint_committed",
+        reward,
+        ema_score=reward,
+        improved=True,
+        checkpoint_uri=str(checkpoint / "policy"),
+    )
+    (root / VALIDATION_RECEIPTS_FILENAME).write_text(json.dumps([asdict(receipt)]))
 
 
 def test_archive_survives_source_loss_and_detects_corruption(tmp_path):
