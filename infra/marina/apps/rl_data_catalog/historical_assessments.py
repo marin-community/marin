@@ -12,9 +12,10 @@ ASSESSMENT_TABLES = ("populations", "items", "packets", "assessments")
 # The per-task tables copy in task-identity hash buckets: their rows dominate the
 # retained volume and the gateway's per-statement timeout bounds the copy size.
 # The bucket count stays a power of two so the mask avoids a literal modulo, which
-# the SQL gateway's parameter parser would read as a placeholder.
+# the SQL gateway's parameter parser would read as a placeholder; 128 buckets keep the
+# biggest retained pipeline's per-statement row count near a thousand.
 RETAIN_BUCKETED_TABLES = ("items", "packets")
-RETAIN_COPY_BUCKETS = 16
+RETAIN_COPY_BUCKETS = 128
 
 
 def retain_prior_assessments(
