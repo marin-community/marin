@@ -117,8 +117,10 @@ uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-usage \
 ```
 
 `--all` reads the three known accounts in one sweep (eval =
-`DAYTONA_API_KEY`, which some launchers load as `DAYTONA_EVAL_API_KEY`;
-rl = `DAYTONA_RL_API_KEY`; data = `DAYTONA_DATA_API_KEY`). `--json` emits the
+`DAYTONA_EVAL_API_KEY`; rl = `DAYTONA_RL_API_KEY`;
+data = `DAYTONA_DATA_API_KEY`). `DAYTONA_API_KEY` is never an account
+selector here: the SDK treats it as an ambient variable, and some launchers
+load the RL key into it. `--json` emits the
 machine-readable report, including per-region rows with the provider's
 per-sandbox maxima.
 

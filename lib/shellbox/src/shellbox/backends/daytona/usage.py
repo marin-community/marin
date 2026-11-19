@@ -238,34 +238,34 @@ def usage_report(
     usage: AccountUsage,
     profile: SandboxProfile | None,
     *,
-    target: str,
-    sandbox_class: str = DEFAULT_SANDBOX_CLASS,
+    region: RegionCapacity | None = None,
     headroom: float = DEFAULT_HEADROOM,
 ) -> dict[str, Any]:
     """Return one account's usage as the CLI JSON interchange.
 
     The resource and region blocks are informational sums over every quota
-    row; ``max_concurrency`` is sized against the row that a launch into
-    ``target`` is charged against.
+    row; ``max_concurrency`` is sized against ``region``, the row that a
+    launch into the target region is charged against.
     """
     report: dict[str, Any] = {
         "organization_id": usage.organization_id,
         "resources": {name: _capacity_dict(capacity) for name, capacity in account_resource_capacities(usage).items()},
         "regions": [
             {
-                "region_id": region.region_id,
-                "sandbox_class": region.sandbox_class,
-                **{name: _capacity_dict(capacity) for name, capacity in region_resource_capacities(region).items()},
-                "max_cpu_per_sandbox": region.max_cpu_per_sandbox,
-                "max_memory_gib_per_sandbox": region.max_memory_gib_per_sandbox,
-                "max_disk_gib_per_sandbox": region.max_disk_gib_per_sandbox,
+                "region_id": row.region_id,
+                "sandbox_class": row.sandbox_class,
+                **{name: _capacity_dict(capacity) for name, capacity in region_resource_capacities(row).items()},
+                "max_cpu_per_sandbox": row.max_cpu_per_sandbox,
+                "max_memory_gib_per_sandbox": row.max_memory_gib_per_sandbox,
+                "max_disk_gib_per_sandbox": row.max_disk_gib_per_sandbox,
             }
-            for region in usage.regions
+            for row in usage.regions
         ],
         "sandboxes": {"total": usage.sandboxes, "by_state": usage.sandbox_states},
     }
     if profile is not None:
-        region = region_for_launch(usage, target=target, sandbox_class=sandbox_class)
+        if region is None:
+            raise ValueError("Sizing a profile requires the launch's quota row")
         report["max_concurrency"] = {
             "region_id": region.region_id,
             "sandbox_class": region.sandbox_class,

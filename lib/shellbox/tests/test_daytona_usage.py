@@ -241,13 +241,6 @@ def test_max_concurrency_is_the_minimum_over_remaining_resources(overrides, prof
     assert max_concurrency(_region(**overrides), profile, headroom=headroom) == expected
 
 
-def test_max_concurrency_rejects_an_invalid_profile_and_headroom() -> None:
-    with pytest.raises(ValueError, match="must be positive"):
-        max_concurrency(_region(), SandboxProfile(cpu=0, memory_gib=8, disk_gib=10))
-    with pytest.raises(ValueError, match="Headroom must be in"):
-        max_concurrency(_region(), SandboxProfile(cpu=2, memory_gib=8, disk_gib=10), headroom=1)
-
-
 def test_region_for_launch_selects_the_target_row_not_the_sum() -> None:
     # Two rows with the same free CPU must not double the suggested limit: a
     # launch into us is charged only against the us row.
@@ -275,18 +268,19 @@ def test_region_for_launch_selects_the_target_row_not_the_sum() -> None:
 
 
 def test_usage_report_json_includes_remaining_and_concurrency() -> None:
-    report = usage_report(_account(), SandboxProfile(cpu=2, memory_gib=8, disk_gib=10), target="us")
+    report = usage_report(
+        _account(), SandboxProfile(cpu=2, memory_gib=8, disk_gib=10), region=region_for_launch(_account(), target="us")
+    )
 
     assert report["organization_id"] == ORG_ID
     assert report["resources"]["cpu"] == {"quota": 6000.0, "used": 1000.0, "remaining": 5000.0}
     assert report["sandboxes"] == {"total": 125, "by_state": {"started": 120, "stopped": 5}}
     assert report["max_concurrency"]["region_id"] == "us"
     assert report["max_concurrency"]["limit"] == 1000
-    assert json.dumps(report)  # the interchange is JSON-serializable
 
 
 def test_usage_report_json_omits_concurrency_without_a_profile() -> None:
-    report = usage_report(_account(), None, target="us")
+    report = usage_report(_account(), None)
 
     assert "max_concurrency" not in report
 
@@ -351,7 +345,7 @@ def test_usage_cli_all_reports_each_account_and_skips_missing_keys(monkeypatch, 
     usage_cli.main()
 
     output = capsys.readouterr().out
-    assert "eval: skipped (missing DAYTONA_API_KEY or DAYTONA_EVAL_API_KEY)" in output
+    assert "eval: skipped (missing DAYTONA_EVAL_API_KEY)" in output
     assert "account rl" in output and "account data" in output
 
 

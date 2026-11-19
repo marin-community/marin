@@ -31,10 +31,12 @@ from shellbox.backends.daytona.usage import (
     usage_report,
 )
 
-# The three known accounts in report order. The eval account's key is
-# DAYTONA_API_KEY; some launchers load the same key as DAYTONA_EVAL_API_KEY.
+# The three known accounts in report order. Each maps to one unambiguous key
+# name: the eval account's key is DAYTONA_EVAL_API_KEY (DAYTONA_API_KEY is the
+# SDK's ambient variable and some launchers load the RL key into it, so it is
+# never an account selector).
 ALL_ACCOUNTS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("eval", ("DAYTONA_API_KEY", "DAYTONA_EVAL_API_KEY")),
+    ("eval", ("DAYTONA_EVAL_API_KEY",)),
     ("rl", ("DAYTONA_RL_API_KEY",)),
     ("data", ("DAYTONA_DATA_API_KEY",)),
 )
@@ -121,27 +123,6 @@ def _print_account(
             print(f"  warning: {exceeded}")
 
 
-def _render(
-    usage: AccountUsage,
-    profile: SandboxProfile | None,
-    arguments: argparse.Namespace,
-    headroom: float,
-    *,
-    as_json: bool,
-) -> dict[str, Any] | None:
-    region = (
-        region_for_launch(usage, target=arguments.target, sandbox_class=arguments.sandbox_class)
-        if profile is not None
-        else None
-    )
-    if as_json:
-        return usage_report(
-            usage, profile, target=arguments.target, sandbox_class=arguments.sandbox_class, headroom=headroom
-        )
-    _print_account(usage, profile, headroom, region)
-    return None
-
-
 async def _run(arguments: argparse.Namespace) -> None:
     profile = _profile(arguments)
     headroom = DEFAULT_HEADROOM if arguments.headroom is None else arguments.headroom
@@ -156,11 +137,16 @@ async def _run(arguments: argparse.Namespace) -> None:
                     print(f"{account}: skipped (missing {' or '.join(names)})")
                 continue
             usage = await account_usage(_connection(api_key, arguments))
+            region = (
+                region_for_launch(usage, target=arguments.target, sandbox_class=arguments.sandbox_class)
+                if profile is not None
+                else None
+            )
             if arguments.json:
-                reports[account] = _render(usage, profile, arguments, headroom, as_json=True)
+                reports[account] = usage_report(usage, profile, region=region, headroom=headroom)
             else:
                 print(f"account {account}")
-                _render(usage, profile, arguments, headroom, as_json=False)
+                _print_account(usage, profile, headroom, region)
         if arguments.json:
             print(json.dumps(reports, indent=2, sort_keys=True))
         return
@@ -169,9 +155,15 @@ async def _run(arguments: argparse.Namespace) -> None:
     if api_key is None:
         raise SystemExit(f"Missing Daytona credential environment variable: {arguments.api_key_env}")
     usage = await account_usage(_connection(api_key, arguments))
-    report = _render(usage, profile, arguments, headroom, as_json=arguments.json)
+    region = (
+        region_for_launch(usage, target=arguments.target, sandbox_class=arguments.sandbox_class)
+        if profile is not None
+        else None
+    )
     if arguments.json:
-        print(json.dumps(report, indent=2, sort_keys=True))
+        print(json.dumps(usage_report(usage, profile, region=region, headroom=headroom), indent=2, sort_keys=True))
+    else:
+        _print_account(usage, profile, headroom, region)
 
 
 def _parser() -> argparse.ArgumentParser:
