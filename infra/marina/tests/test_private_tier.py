@@ -41,7 +41,7 @@ from finestore.rl.curation import (
 )
 from finestore.rl.status_taxonomy import DataRestriction
 from finestore.store import DataStore
-from marina.applets import AppletServices, validate_query
+from marina.applets import MAX_QUERY_RESPONSE_BYTES, AppletServices, validate_query
 from marina.client import AppletQuery
 from marina.testing import test_database
 from rigging.server_auth import VerifiedIdentity, identity_scope
@@ -84,6 +84,7 @@ from infra.marina.apps.rl_data_catalog.tests.private_tier_fixtures import (
 
 OPEN_NOTES = "open-source-notes-served-while-open"
 OPEN_PROMPT = "Count public objects and report the total."
+ABSENT_TAG = "absent"
 
 
 def catalog_backend_map(catalog: CurationCatalog) -> BackendSurvey:
@@ -904,7 +905,7 @@ def reject_content_read(connection, cursor, statement, parameters, context, exec
         raise AssertionError("Withheld rollout route read task-level content")
 
 
-@pytest.mark.parametrize("tag", ["absent", None, "private_always"])
+@pytest.mark.parametrize("tag", [ABSENT_TAG, None, "private_always"])
 def test_curriculum_policy_read_is_compact_and_preserves_fail_closed_tags(catalog_query, tmp_path, tag):
     root = str(tmp_path / "compact-curriculum-policy")
     stage_private_catalog(root)
@@ -915,7 +916,7 @@ def test_curriculum_policy_read_is_compact_and_preserves_fail_closed_tags(catalo
         "WHERE load_id=:load AND id=:source",
         {"load": load_id, "source": OPEN_SOURCE_ID},
     )
-    if tag == "absent":
+    if tag == ABSENT_TAG:
         catalog_query(
             "UPDATE atlas_sources SET declaration=declaration-'data_restriction' WHERE load_id=:load AND id=:source",
             {"load": load_id, "source": OPEN_SOURCE_ID},
@@ -928,6 +929,23 @@ def test_curriculum_policy_read_is_compact_and_preserves_fail_closed_tags(catalo
         )
     policies = atlas_source_restrictions(catalog_query, load_id)
     assert len(json.dumps(policies).encode()) < 1024
-    expected = DataRestriction.OPEN if tag == "absent" else DataRestriction.PRIVATE_ALWAYS
+    expected = DataRestriction.OPEN if tag == ABSENT_TAG else DataRestriction.PRIVATE_ALWAYS
     assert declaration_restriction(policies[OPEN_SOURCE_ID]) is expected
-    assert ("data_restriction" in policies[OPEN_SOURCE_ID]) is (tag != "absent")
+    assert ("data_restriction" in policies[OPEN_SOURCE_ID]) is (tag != ABSENT_TAG)
+
+    release, coverage, _, _ = curriculum_release_fixture(
+        tmp_path / "compact-open-release",
+        [restricted_declaration(OPEN_SOURCE_ID, DataRestriction.OPEN)],
+        instructions=OPEN_PROMPT,
+    )
+
+    def bounded_query(sql, parameters):
+        result = catalog_query(sql, parameters)
+        assert len(json.dumps(result, default=str).encode()) <= MAX_QUERY_RESPONSE_BYTES
+        return result
+
+    if expected is DataRestriction.OPEN:
+        load_curriculum(str(release), str(coverage), bounded_query)
+    else:
+        with pytest.raises(ValueError, match="PRIVATE_ALWAYS"):
+            load_curriculum(str(release), str(coverage), bounded_query)
