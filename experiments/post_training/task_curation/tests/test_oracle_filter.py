@@ -24,6 +24,8 @@ from taskcompendium.pipeline.models import Controls, IntendedUse
 from taskcompendium.pipeline.oracle_filter import (
     ExecutabilityRunReceipt,
     OracleExclusionReason,
+    RecollectionTrialBinding,
+    RecollectionWaiver,
     load_oracle_filter,
     require_oracle_filter,
 )
@@ -41,6 +43,7 @@ from experiments.post_training.task_curation.oracle_filter import (
     collect_trials,
     harbor_inspection,
     native_requirements,
+    require_recollection_binding,
     write_task_map,
 )
 from experiments.post_training.task_curation.oracle_filter import (
@@ -736,3 +739,115 @@ def test_capacity_only_verifier_table_cannot_hide_a_shared_to_separate_grader_ch
     with (staged / "task.toml").open("a") as output:
         output.write("[verifier.environment]\ncpus=1\nmemory_mb=2048\nstorage_mb=2048\n")
     assert calibration_package_identity(original, "original") != calibration_package_identity(staged, "original")
+
+
+_RECOLLECTION_REASON = "campaign-era prepared package unrecoverable; content hashes bind"
+_RECOLLECTION_RULING = "2026-11-19 option (a), coordinator ruling 61"
+
+
+def _recollected_trial_fixture(tmp_path, task, sealed_checksum):
+    """A minimal native package and a sealed trial document bound to the sealed checksum."""
+    native = tmp_path / "native"
+    for name in ("environment", "tests"):
+        (native / name).mkdir(parents=True)
+    (native / "environment/Dockerfile").write_text("FROM fixture@sha256:" + "a" * 64 + "\n")
+    (native / "instruction.md").write_text("Answer the original task.")
+    (native / "tests/test.sh").write_text("true\n")
+    (native / "task.toml").write_text(
+        "[environment]\ncpus=1\nmemory_mb=2048\nstorage_mb=2048\n"
+        "[agent]\ntimeout_sec=300\n[verifier]\ntimeout_sec=60\n"
+    )
+    measured = harbor_inspection("tasks", [str(native)])[str(native)]["task_checksum"]
+    trial = tmp_path / "jobs/trial"
+    trial.mkdir(parents=True)
+    result = {
+        "id": str(uuid4()),
+        "task_name": task.id,
+        "trial_name": "oracle",
+        "trial_uri": trial.as_uri(),
+        "task_id": {"path": str(native)},
+        "task_checksum": sealed_checksum,
+        "config": {
+            "task": {"path": str(native)},
+            "agent": {"name": "terminus-2", "model_name": "openai/glm-5.3", "kwargs": {"max_turns": 3}},
+            "environment": {"type": "local"},
+            "resolved_timeouts": {"agent": 300, "verifier": 60, "agent_setup": 360, "environment_build": 600},
+            "trials_dir": str(trial),
+            "trial_name": "oracle",
+        },
+        "agent_info": {"name": "terminus-2", "version": "1"},
+        "verifier_result": {"rewards": {"reward": 1.0}},
+        "finished_at": datetime(2026, 11, 19, tzinfo=UTC).isoformat(),
+        "completion": {"trajectory_present": True},
+        "exception_info": None,
+    }
+    (trial / "result.json").write_text(json.dumps(result))
+    (trial / "config.json").write_text(json.dumps(result["config"]))
+    return native, measured, result, trial
+
+
+def test_recollection_accepts_content_matched_rebuild(tmp_path):
+    task = TaskSpec.model_validate(json.loads(prebuilt_task("native-grade")["lowered_task_spec"])["task"])
+    sealed = "b" * 64
+    _, measured, _, trial = _recollected_trial_fixture(tmp_path, task, sealed)
+    assert measured != sealed
+    waiver = RecollectionWaiver(
+        reason=_RECOLLECTION_REASON,
+        ruling=_RECOLLECTION_RULING,
+        bindings={
+            task.id: RecollectionTrialBinding(
+                task_sha256=canonical_sha256(task.model_dump(mode="json")),
+                runtime_sha256=canonical_sha256({}),
+                package_checksum=sealed,
+            )
+        },
+    )
+    receipt = collect_trials(trial.parent, recollection=waiver)[(task.id, sealed)][0]
+    assert receipt.result["task_checksum"] == sealed
+    assert receipt.result_sha256 == canonical_sha256(json.loads((trial / "result.json").read_text()))
+    with pytest.raises(ValueError, match="Native task changed after its oracle trial"):
+        collect_trials(trial.parent)
+
+
+def test_recollection_rejects_content_hash_mismatch(tmp_path):
+    task = TaskSpec.model_validate(json.loads(prebuilt_task("native-grade")["lowered_task_spec"])["task"])
+    task_sha256 = canonical_sha256(task.model_dump(mode="json"))
+    runtime_sha256 = canonical_sha256({})
+    package_checksum = "2" * 64
+    mapping = {"task_sha256": task_sha256, "runtime_sha256": runtime_sha256, "task_checksum": package_checksum}
+
+    def waiver(**overrides):
+        binding = RecollectionTrialBinding(
+            task_sha256=overrides.get("task_sha256", task_sha256),
+            runtime_sha256=overrides.get("runtime_sha256", runtime_sha256),
+            package_checksum=overrides.get("package_checksum", package_checksum),
+        )
+        return RecollectionWaiver(reason=_RECOLLECTION_REASON, ruling=_RECOLLECTION_RULING, bindings={task.id: binding})
+
+    oracle_filter.require_recollection_binding(task, mapping, waiver())
+    with pytest.raises(ValueError, match="differs from its sealed binding"):
+        require_recollection_binding(task, mapping, waiver(task_sha256="3" * 64))
+    with pytest.raises(ValueError, match="differs from its sealed binding"):
+        require_recollection_binding(task, mapping, waiver(runtime_sha256="4" * 64))
+    with pytest.raises(ValueError, match="differs from its sealed binding"):
+        require_recollection_binding(task, mapping, waiver(package_checksum="5" * 64))
+
+
+def test_recollection_waiver_rejects_unbound_trial(tmp_path):
+    task = TaskSpec.model_validate(json.loads(prebuilt_task("native-grade")["lowered_task_spec"])["task"])
+    _recollected_trial_fixture(tmp_path, task, "b" * 64)
+    other = RecollectionTrialBinding(
+        task_sha256=canonical_sha256(task.model_dump(mode="json")),
+        runtime_sha256=canonical_sha256({}),
+        package_checksum="c" * 64,
+    )
+    waiver = RecollectionWaiver(reason=_RECOLLECTION_REASON, ruling=_RECOLLECTION_RULING, bindings={"other-task": other})
+    with pytest.raises(ValueError, match="lacks a sealed binding"):
+        collect_trials(tmp_path / "jobs", recollection=waiver)
+
+
+def test_default_mode_still_rejects_changed_native(tmp_path):
+    task = TaskSpec.model_validate(json.loads(prebuilt_task("native-grade")["lowered_task_spec"])["task"])
+    _recollected_trial_fixture(tmp_path, task, "b" * 64)
+    with pytest.raises(ValueError, match="Native task changed after its oracle trial"):
+        collect_trials(tmp_path / "jobs")

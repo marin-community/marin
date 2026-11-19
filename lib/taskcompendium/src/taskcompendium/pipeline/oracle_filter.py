@@ -5,6 +5,7 @@
 
 import hashlib
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Annotated, Any, Literal
@@ -1683,6 +1684,39 @@ class NegativeControlPolicy(BaseModel):
     decision: ContentEvidenceReference
 
 
+class RecollectionTrialBinding(BaseModel):
+    """The sealed trial binding one rebuilt package must match by content."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    task_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    runtime_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    package_checksum: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class RecollectionWaiver(BaseModel):
+    """Typed waiver re-collecting sealed trials over preserved rebuilt packages.
+
+    The campaign-era prepared packages are unrecoverable (ruling-recorded); the rebuilt
+    packages bind to the sealed trials by exact task and runtime content hashes, verified
+    against the sealed receipt entries, while the sealed, control-validated package
+    checksums remain the binding of record. The rebuilt packages' own measured checksums
+    are recorded beside them as ``source_task_checksum``.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    reason: str = Field(min_length=1)
+    ruling: str = Field(min_length=1)
+    bindings: Mapping[str, RecollectionTrialBinding] = Field(min_length=1)
+
+    def binding(self, task_name: str) -> RecollectionTrialBinding:
+        binding = self.bindings.get(task_name)
+        if binding is None:
+            raise ValueError(f"Re-collection waiver lacks a sealed binding for {task_name}")
+        return binding
+
+
 class OracleFilterReceipt(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     version: Literal[2, 3, 4, 5] = 4
@@ -1691,6 +1725,7 @@ class OracleFilterReceipt(BaseModel):
         default=None, exclude_if=lambda value: value is None
     )
     no_oracle_source: NoOracleSourceContext | None = Field(default=None, exclude_if=lambda value: value is None)
+    recollection: RecollectionWaiver | None = Field(default=None, exclude_if=lambda value: value is None)
     recipe_identity: str | None
     input_cohort_sha256: str
     input_rows: int = Field(ge=0)

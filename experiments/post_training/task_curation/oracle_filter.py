@@ -11,7 +11,7 @@ import subprocess
 import time
 import tomllib
 from collections import Counter
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import nullcontext
 from itertools import islice
@@ -59,6 +59,7 @@ from taskcompendium.pipeline.oracle_filter import (
     OracleTrialReceipt,
     PostGradeTeardownEvidence,
     PriorPhaseFailureReceipt,
+    RecollectionWaiver,
     ResourceCalibrationReceipt,
     SourcePytestEnvironment,
     SourceVerifierError,
@@ -234,11 +235,22 @@ def receipt_from_trial(
     document: dict,
     native_checksum: str,
     native_grade: NativeVerifierGrade | None = None,
+    *,
+    recollection: RecollectionWaiver | None = None,
 ) -> OracleTrialReceipt:
     """Read a trial's evidence against its measured native checksum."""
     native = Path(document["config"]["task"]["path"])
-    if native_checksum != document["task_checksum"]:
-        raise ValueError(f"Native task changed after its oracle trial: {native}")
+    if recollection is None:
+        if native_checksum != document["task_checksum"]:
+            raise ValueError(f"Native task changed after its oracle trial: {native}")
+    else:
+        # Typed re-collection (ruling 2026-11-19): the sealed trial document binds the
+        # campaign-era package checksum, which the preserved rebuilt package cannot
+        # reproduce; the binding of record is the waiver's sealed, control-validated
+        # checksum, accepted only for the trial it names.
+        sealed = recollection.binding(document["task_name"])
+        if document["task_checksum"] != sealed.package_checksum:
+            raise ValueError(f"Re-collected trial differs from its sealed checksum binding: {native}")
     verdict_path = path.parent / "verifier/verdict.json"
     verdict = decode_json_value(verdict_path.read_text()) if verdict_path.exists() else None
     exit_path = path.parent / "agent/exit-code.txt"
@@ -284,6 +296,23 @@ def receipt_from_trial(
             TaskNetworkPolicyReceipt.model_validate_json(network_path.read_text()) if network_path.exists() else None
         ),
     )
+
+
+def require_recollection_binding(task: TaskSpec, mapping: Mapping, recollection: RecollectionWaiver) -> None:
+    """Typed re-collection: the mapping must bind exactly the sealed entry's content hashes.
+
+    The rebuilt package is accepted only when its mapping carries the sealed entry's task
+    and runtime content hashes and the sealed, control-validated package checksum (ruling
+    2026-11-19, option a); the rebuild's own measured checksum travels separately as
+    ``source_task_checksum``.
+    """
+    binding = recollection.binding(task.id)
+    if (
+        mapping["task_sha256"] != binding.task_sha256
+        or mapping.get("runtime_sha256") != binding.runtime_sha256
+        or mapping["task_checksum"] != binding.package_checksum
+    ):
+        raise ValueError(f"Re-collection mapping differs from its sealed binding: {task.id}")
 
 
 def row_task(row: dict) -> TaskSpec | None:
@@ -341,7 +370,7 @@ def trial_result_paths(jobs: Path) -> list[Path]:
 
 
 def collect_trials(
-    jobs: Path, *, additional_inputs: tuple[Path, ...] = ()
+    jobs: Path, *, additional_inputs: tuple[Path, ...] = (), recollection: RecollectionWaiver | None = None
 ) -> dict[tuple[str, str], list[OracleTrialReceipt]]:
     trials: dict[tuple[str, str], list[OracleTrialReceipt]] = {}
     seen = {}
@@ -372,6 +401,7 @@ def collect_trials(
             document,
             packages[native]["task_checksum"],
             NativeVerifierGrade.model_validate(grade) if grade is not None else None,
+            recollection=recollection,
         )
         trials.setdefault((document["task_name"], document["task_checksum"]), []).append(receipt)
     return trials
@@ -450,6 +480,7 @@ def filter_cohort(
     additional_trial_inputs: tuple[Path, ...] = (),
     legacy_producer_1485_qualification_evidence: LegacyProducer1485QualificationEvidence | None = None,
     source_verifier_errors: Path | None = None,
+    recollection: RecollectionWaiver | None = None,
 ) -> OracleFilterReceipt:
     """Filter exact converted bytes; missing tasks, stale maps and incomplete populations fail closed."""
     for path in (
@@ -510,7 +541,7 @@ def filter_cohort(
             if task_id in source_errors or task_id not in mappings:
                 raise ValueError(f"Duplicate or unknown source-verifier exception: {task_id}")
             source_errors[task_id] = SourceVerifierError.model_validate(record["receipt"])
-    trials = collect_trials(jobs, additional_inputs=additional_trial_inputs)
+    trials = collect_trials(jobs, additional_inputs=additional_trial_inputs, recollection=recollection)
     controls = {}
     if executability_runs is not None:
         for line in executability_runs.read_text().splitlines():
@@ -606,6 +637,8 @@ def filter_cohort(
                         raise ValueError(f"Task changed after Harbor export: {task.id}")
                     if mapping.get("runtime_sha256") != row_runtime_hash(row):
                         raise ValueError(f"Runtime changed after Harbor export: {task.id}")
+                    if recollection is not None:
+                        require_recollection_binding(task, mapping, recollection)
                     key = (mapping["task_name"], mapping["task_checksum"])
                     if key in matched:
                         raise ValueError("Two TaskSpecs are mapped to the same Harbor trial")
@@ -747,7 +780,15 @@ def filter_cohort(
                     runtime_sha256=row_runtime_hash(row),
                     harbor_task_checksum=checksum,
                     source_task_sha256=mapping["task_sha256"],
-                    source_task_checksum=mapping.get("source_task_checksum", checksum),
+                    source_task_checksum=(
+                        # Typed re-collection: the control and oracle trials consumed the
+                        # sealed, control-validated package, so the original source anchor
+                        # stays the sealed checksum; the rebuild's own measured checksum
+                        # travels on the task map as ``source_task_checksum``.
+                        recollection.binding(task.id).package_checksum
+                        if recollection is not None
+                        else mapping.get("source_task_checksum", checksum)
+                    ),
                     native_success_policy=policy,
                     legacy_role_qualification=qualification,
                     negative_control=negative_control,
@@ -784,6 +825,7 @@ def filter_cohort(
     )
     receipt = OracleFilterReceipt(
         negative_control_policy=negative_control_policy,
+        recollection=recollection,
         recipe_identity=manifest["oracle_recipe_identity"] if manifest else None,
         input_cohort_sha256=cohort_hash,
         input_rows=input_rows,
