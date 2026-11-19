@@ -98,12 +98,14 @@ def main():
     parser.add_argument("--plan", required=True)
     parser.add_argument("--teacher", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--splits", nargs="+", default=["heldout", "train"])
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     configure_coreweave_s3()
     scored = {c["cell"] for c in json.loads(StoragePath(prefix_join(args.teacher, "summary.json")).read_text())["cells"]}
-    summary = {split: build_split(args.plan, args.teacher, args.output, split, scored) for split in ("heldout", "train")}
-    StoragePath(prefix_join(args.output, "summary.json")).write_text(json.dumps(summary, indent=2) + "\n")
+    summary = {split: build_split(args.plan, args.teacher, args.output, split, scored) for split in args.splits}
+    for split, values in summary.items():
+        StoragePath(prefix_join(args.output, f"{split}-summary.json")).write_text(json.dumps(values, indent=2) + "\n")
     print(json.dumps(summary, indent=2))
 
 
