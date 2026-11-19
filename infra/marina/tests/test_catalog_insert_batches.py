@@ -173,14 +173,27 @@ def test_retained_history_copies_only_bounded_missing_rows(batch_database, recor
     maximum = {"items": 0, "packets": 0}
     elapsed = []
 
+    def retained_counts():
+        with batch_database.begin() as connection:
+            return dict(
+                connection.execute(
+                    text(
+                        "SELECT 'items', count(*) FROM atlas_items WHERE load_id='new' "
+                        "UNION ALL SELECT 'packets', count(*) FROM atlas_packets WHERE load_id='new'"
+                    )
+                ).all()
+            )
+
     def query(sql, parameters):
+        before = retained_counts()
         started = time.monotonic()
         result = execute_batch(batch_database, sql, parameters)
         elapsed.append(time.monotonic() - started)
+        after = retained_counts()
         for table, limit in (("items", 32), ("packets", 8)):
-            if sql.startswith(f"INSERT INTO atlas_{table}"):
-                assert result["row_count"] <= limit
-                maximum[table] = max(maximum[table], result["row_count"])
+            inserted = after[table] - before[table]
+            assert inserted <= limit
+            maximum[table] = max(maximum[table], inserted)
         return result
 
     copied = retain_prior_assessments(query, TABLE_COLUMNS, "old", "new")

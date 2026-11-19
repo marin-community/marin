@@ -45,7 +45,6 @@ def test_refresh_retains_prior_evidence_without_overwriting_current_assessments(
                 "retired-source": f"archived-{table}",
                 "active-source": "current",
             }
-        # This small fixture needs one copy per missing pipeline in each table.
         copies = [statement for statement in statements if statement.startswith("INSERT")]
         assert len(copies) == len(columns) * 1  # one missing pipeline per table
         assert retain_prior_assessments(query, columns, "prior", "new") == dict.fromkeys(columns, 0)

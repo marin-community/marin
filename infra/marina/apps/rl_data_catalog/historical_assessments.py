@@ -17,7 +17,7 @@ RETAIN_COPY_BATCH_ROWS = {"items": 32, "packets": 8}
 def retain_prior_assessments(
     query: AppletQuery, columns: Mapping[str, str], prior_load_id: str, load_id: str
 ) -> dict[str, int]:
-    """Preserve prior assessment units using bounded, restartable task-ID pages.
+    """Preserve prior assessment units absent from the target's assessment headers.
 
     Existing task rows and complete target assessment headers are left unchanged.
     Copy headers last, after every missing item and packet has been staged.
