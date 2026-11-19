@@ -52,10 +52,12 @@ from pathlib import Path
 import click
 import draccus
 from fray.types import ResourceConfig
+from iris.rpc.proto_display import priority_band_value
 from levanter.models.snowball import SnowballConfig
 from levanter.models.snowball_deletion import DeletionTuningConfig, DeletionTuningScope
 from levanter.optim.config import AdamConfig
 from marin.execution.lazy import StepContext
+from marin.execution.step_runner import StepRunner
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 from experiments.deletion_tuning.levanter_train import DeletionHFModel, run_deletion_train_lm
@@ -208,13 +210,14 @@ def deletion_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
         prepared_data=prepared,
         optimizer=v1_optimizer(),
         optimizer_num_train_steps=None,
+        # the user decision runs Deletion Tuning at interactive priority
         model=DeletionHFModel(
             model_ref=model.model_ref,
             tokenizer_path=model.tokenizer_path,
             model_type=model.model_type,
             eos_token_ids=model.eos_token_ids,
             task_timeout_seconds=model.task_timeout_seconds,
-            priority=model.priority,
+            priority=priority_band_value("interactive"),
         ),
     )
 
@@ -343,9 +346,28 @@ def _deletion_summary(train_config: dict) -> dict:
     return dt
 
 
+def launch_run() -> str:
+    """Run the V1 launch through the shared SFT launcher (a Fray training sub-job).
+
+    Called inside an Iris CPU coordinator job: the runner resolves the release,
+    builds the launch step, and the step's dispatch submits the training job
+    and waits on it.
+    """
+    configure_coreweave_s3()
+    release = v1_data_release(require_ready=True)
+    step, _spec, _resources = v1_step(release)
+    StepRunner().run([step.lower()])
+    return step.path()
+
+
 @click.command(help=__doc__)
 @click.option("--output", type=click.Path(path_type=Path), default=None, help="Write the resolution summary JSON here.")
-def main(output: Path | None) -> None:
+@click.option("--launch", is_flag=True, help="Submit and run the full V1 launch (an Iris CPU coordinator job).")
+def main(output: Path | None, launch: bool) -> None:
+    if launch:
+        path = launch_run()
+        click.echo(f"v1 launch complete: {path}")
+        return
     summary = dry_run(output)
     click.echo(json.dumps(summary, indent=2, sort_keys=True))
 
