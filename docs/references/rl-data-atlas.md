@@ -1163,9 +1163,12 @@ replacement public-input manifests.
 It requires the live source set to equal the archived set minus retired sources.
 Registered converter Use is authoritative; a benchmark marker does not override
 an explicit TRAIN Use. QC metadata updates are recorded separately from
-task-producing inputs. Changed
-pins require a complete task-ID and public-input comparison; only an exact match
-permits reusing scores while rebinding TaskSpec hashes and source keys.
+task-producing inputs. Changed pins require a complete public-input comparison.
+Stable task IDs must match exactly. Changed IDs require a unique bijection of
+the full public inputs, with matching content hashes, source, population and Use.
+Ambiguous or changed public inputs cannot reuse scores. The projection records
+old/new task IDs and TaskSpec hashes in an immutable mapping; TaskSpec, count and
+QA receipts keep their own input bindings.
 
 The CPU pass filters full assignment files, verifies every retained value after
 readback, and rebuilds statistics and deterministic review samples for the selected
