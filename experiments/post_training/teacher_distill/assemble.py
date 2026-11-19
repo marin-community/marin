@@ -12,10 +12,12 @@ token i + 1, zero where the position carries no loss). Packed rows whose cell wa
 """
 
 import argparse
+import datetime
 import gzip
 import io
 import json
 import logging
+import time
 
 import numpy as np
 from levanter.store.cache import SerialCacheWriter
@@ -102,9 +104,19 @@ def main():
     parser.add_argument("--teacher", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--splits", nargs="+", default=["heldout", "train"])
+    parser.add_argument(
+        "--wait-idle-seconds", type=float, default=0, help="first wait until the scorer summary is this long unchanged"
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     configure_coreweave_s3()
+    if args.wait_idle_seconds:
+        summary_path = StoragePath(prefix_join(args.teacher, "summary.json"))
+        while (
+            age := (datetime.datetime.now(datetime.UTC) - summary_path.mtime()).total_seconds()
+        ) < args.wait_idle_seconds:
+            logger.info("scorer summary updated %.0f s ago; waiting", age)
+            time.sleep(60)
     scored = {c["cell"] for c in json.loads(StoragePath(prefix_join(args.teacher, "summary.json")).read_text())["cells"]}
     summary = {split: build_split(args.plan, args.teacher, args.output, split, scored) for split in args.splits}
     for split, values in summary.items():
