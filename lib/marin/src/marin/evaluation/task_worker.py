@@ -20,6 +20,7 @@ from shellbox.machine import Backend, NetworkPolicy
 from verifyit.modes.grade_judge import JudgeConnection
 
 from marin.rollouts.evaluation import EvaluationInfrastructureError, EvaluationRunConfig, run_evaluation
+from marin.rollouts.reasoning_format import inline_reasoning_format
 
 DEFAULT_MAX_ATTEMPTS = 3
 # The Iris image's native build exposes the Linux namespace and pidfd APIs Shellbox requires.
@@ -78,6 +79,7 @@ async def execute(
             likelihood=VllmLikelihood(client, config.model.name, tokenizer, config.model.context_window, prefix),
             machine_factories=machines,
             tokenizer=tokenizer,
+            reasoning_format=inline_reasoning_format(tokenizer),
             judge_connection=judge_connection,
         )
 
