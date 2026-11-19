@@ -45,7 +45,7 @@ from marin.training.training import TrainLmOnPodConfig
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 from experiments.deletion_tuning.levanter_train import DeletionHFModel, run_deletion_train_lm
-from experiments.deletion_tuning.v1_sft import VERSION, v1_data_release, v1_optimizer
+from experiments.deletion_tuning.v1_sft import VERSION, v1_data_release, v1_deletion_config, v1_optimizer
 from experiments.post_training.long_loop.exp3_production import production_sft_recipe
 from experiments.post_training.long_loop.exp3_recipe import exp3_controls
 from experiments.post_training.long_loop.source_loss import prepared_supervision_data, source_loss_metadata
@@ -103,7 +103,7 @@ def _smoke_spec(release) -> SFTSpec:
     recipe["stage_guard"] = {"h100_hour_limit": 8 * 4}
 
     model = draccus.decode(SnowballConfig, recipe["model"])
-    dt = dataclasses.replace(model.deletion_tuning, calibration_sequences=SMOKE_CALIBRATION_BATCHES)
+    dt = dataclasses.replace(v1_deletion_config(), calibration_sequences=SMOKE_CALIBRATION_BATCHES)
     model = dataclasses.replace(model, deletion_tuning=dt)
     recipe["model"] = draccus.encode(model)
     recipe["model"].pop("type", None)
