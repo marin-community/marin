@@ -46,6 +46,7 @@ class TaskforgeConfig:
     initial_stage: Stage = Stage.AUTHOR
 
     def __post_init__(self) -> None:
+        # A frozen dataclass does not freeze the mappings it holds; read-only views keep the config immutable.
         object.__setattr__(self, "adversaries", MappingProxyType(dict(self.adversaries)))
         object.__setattr__(
             self, "tools", MappingProxyType({name: MappingProxyType(dict(tools)) for name, tools in self.tools.items()})
