@@ -35,7 +35,7 @@ TRAINER_SCORER = "trainer"
 UPDATE_PREFIX = "update@"
 
 ANALYSIS_VERSION = 2
-HEADLINE_METRICS = ("abs_p99", "k3", "share_beyond_2x")
+HEADLINE_METRICS = ("abs_mean", "abs_p99", "k3", "chosen_token_binary_kl", "share_beyond_2x")
 NATIVE_MODE = "native"
 REPEAT_MODE = "repeat"
 BOOTSTRAP_DRAWS = 1000
@@ -224,9 +224,11 @@ def _comparison_definitions(scores: dict[str, dict[str, ScoreRow]]) -> dict[str,
         return uncached if uncached in names else _rescore_scoring(update, "on")
 
     add("implementation_mismatch", NATIVE_SCORING, GENERATION_SCORING)
+    add("frozen_implementation_mismatch", NATIVE_SCORING, reread(0))
     add("trainer_floor", _trainer_scoring(0, REPEAT_MODE), NATIVE_SCORING)
     for mode in _trainer_modes(scores):
         add(f"{mode}_vs_generation", _trainer_scoring(0, mode), GENERATION_SCORING)
+        add(f"{mode}_frozen", _trainer_scoring(0, mode), reread(0))
     updates = sorted({row.update for rows in scores.values() for row in rows.values() if row.update > 0})
     for update in updates:
         add(f"trainer_drift_after_{update}", _trainer_scoring(update, NATIVE_MODE), NATIVE_SCORING)

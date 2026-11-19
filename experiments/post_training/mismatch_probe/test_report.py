@@ -3,6 +3,7 @@
 
 import json
 import math
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -27,6 +28,7 @@ from experiments.post_training.mismatch_probe.report import (
     render_markdown,
     write_plots,
 )
+from experiments.post_training.mismatch_probe.snowball_head_report import summarize
 
 
 def _archive(
@@ -179,6 +181,50 @@ def _archive(
             transaction.table(MANIFEST_TABLE).add(manifest.model_dump())
 
 
+def test_head_precision_summary_uses_fresh_scores_and_rejects_route_changes(tmp_path):
+    root = tmp_path / "archive"
+    _archive(root, with_routes=True)
+    archived = report_module.load_archive(str(root))
+    manifest = archived.manifest.model_copy(
+        update={
+            "scored_updates": [0],
+            "optimizer_steps_per_update": 0,
+            "config_json": json.dumps(
+                {"generator": {"engine_init_kwargs": {}}, "trainer": {"policy": {"megatron_config": {}}}}
+            ),
+            "batch_layout_json": json.dumps(
+                {
+                    "sample_ids": [row.sample_id for row in archived.probes],
+                    "native_order": list(range(4)),
+                    "padded_rows": 0,
+                    "native_micro_batch_size": 1,
+                }
+            ),
+            "timing_json": json.dumps({"trainer@0:router_replay/seconds": 2.0, "vllm.rescore@0/seconds": 4.0}),
+        }
+    )
+    baseline = replace(archived, manifest=manifest)
+    repeat_manifest = manifest.model_copy(update={"source_probe_archive": manifest.archive})
+    reread = baseline.scores["vllm.rescore@0"]
+    repeat_scores = baseline.scores | {
+        "vllm.rescore@0": {
+            key: row.model_copy(update={"logprobs": [score - 0.05 for score in row.logprobs]})
+            for key, row in reread.items()
+        }
+    }
+    repeat = replace(baseline, manifest=repeat_manifest, scores=repeat_scores)
+    summary = summarize({"bf16": baseline, "bf16-repeat": repeat})
+    assert summary["arms"]["bf16"]["abs_mean"] == pytest.approx(0.02)
+    assert summary["arms"]["bf16-repeat"]["abs_mean"] == pytest.approx(0.03)
+    assert summary["arms"]["bf16-repeat"]["serve_scored_tokens_per_second"] == 2.0
+    assert summary["bf16_repeat"]["serve"]["abs_p99"] == pytest.approx(0.05)
+
+    first, *rest = repeat.probes
+    changed = first.model_copy(update={"routed_experts": b"\0" * len(first.routed_experts)})
+    with pytest.raises(ValueError, match="captured routes"):
+        summarize({"bf16": baseline, "bf16-repeat": replace(repeat, probes=[changed, *rest])})
+
+
 def test_report_recovers_same_weight_modes_paired_intervals_and_drift(tmp_path, monkeypatch):
     root = tmp_path / "archive"
     _archive(root)
@@ -197,6 +243,11 @@ def test_report_recovers_same_weight_modes_paired_intervals_and_drift(tmp_path, 
     assert known["abs_max"] == pytest.approx(math.log(4), abs=1e-6)
     assert known["share_beyond_2x"] == pytest.approx(2 / 3)
     assert known["k3"] == pytest.approx(sum(ratio - 1 - math.log(ratio) for ratio in (0.25, 0.5, 1)) / 3, abs=1e-6)
+    reference_events = np.array([[math.exp(-2), 1 - math.exp(-2)], [math.exp(-3), 1 - math.exp(-3)]])
+    target_chosen = reference_events[:, 0] * np.array([0.25, 0.5])
+    target_events = np.column_stack((target_chosen, 1 - target_chosen))
+    expected_binary_kl = np.sum(reference_events * np.log(reference_events / target_events)) / 3
+    assert known["chosen_token_binary_kl"] == pytest.approx(expected_binary_kl, abs=1e-8)
     assert known["token_ess_fraction_raw"] == pytest.approx(49 / (3 * 21))
     assert known["token_ess_fraction_capped"] == pytest.approx(25 / (3 * 9))
     assert known["sequence_ess_fraction_raw"] == pytest.approx(81 / (2 * 65))
@@ -204,6 +255,9 @@ def test_report_recovers_same_weight_modes_paired_intervals_and_drift(tmp_path, 
     assert report["comparisons"]["implementation_mismatch"]["metrics"]["abs_p99"] > 0.09
     assert report["comparisons"]["trainer_floor"]["metrics"]["abs_p99"] == 0.0
     assert report["paired_improvements"]["router_replay"]["abs_p99"]["ci95"][0] > 0
+    frozen_replay = report["comparisons"]["router_replay_frozen"]
+    assert frozen_replay["reference"] == "vllm.rescore@0"
+    assert frozen_replay["metrics"]["abs_mean"] == pytest.approx(0.02)
     assert report["paired_improvements"]["router_replay_filtered"]["abs_p99"]["ci95"][0] > 0
     assert report["comparisons"]["fp32_head_vs_generation"]["metrics"]["abs_p99"] == pytest.approx(0.03)
     assert report["paired_improvements"]["fp32_head"]["abs_p99"]["ci95"] == pytest.approx([0.07, 0.07])

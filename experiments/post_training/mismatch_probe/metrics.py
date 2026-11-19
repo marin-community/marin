@@ -56,16 +56,20 @@ def comparison_metrics(
     if not (len(target) == len(reference) == len(masks)):
         raise ValueError("comparison rows must align one-for-one")
     pieces = []
+    binary_kl_pieces = []
     per_sequence = []
     for index, (left, right, mask) in enumerate(zip(target, reference, masks, strict=True)):
         if not (len(left) == len(right) == len(mask)):
             raise ValueError(f"comparison token lengths differ in sample {index}")
         selected = np.asarray(mask, dtype=bool)
-        delta = np.asarray(left, dtype=np.float64)[selected] - np.asarray(right, dtype=np.float64)[selected]
+        target_logprob = np.asarray(left, dtype=np.float64)[selected]
+        reference_logprob = np.asarray(right, dtype=np.float64)[selected]
+        delta = target_logprob - reference_logprob
         if not np.isfinite(delta).all():
             raise ValueError(f"comparison has nonfinite logprobability in sample {index}")
         if delta.size:
             pieces.append(delta)
+            binary_kl_pieces.append(_chosen_token_binary_kl(target_logprob, reference_logprob))
             per_sequence.append(float(delta.sum()))
     if not pieces:
         raise ValueError("comparison has no unmasked tokens")
@@ -93,6 +97,7 @@ def comparison_metrics(
         "abs_mean": float(absolute.mean()),
         "k1": float(-delta.mean()),
         "k3": float(k3_terms.mean()),
+        "chosen_token_binary_kl": float(np.concatenate(binary_kl_pieces).mean()),
         "chi2_sample_moment": mean_exp_2delta - 1.0,
         "mean_ratio": mean_exp_delta,
         "token_ess_fraction_raw": _ess_fraction(delta),
@@ -112,6 +117,21 @@ def comparison_metrics(
         result["sequence_ess_fraction_capped"] = _ess_fraction(np.asarray(capped_sequence))
         result["tis_cap_occupancy"] = float(np.mean(delta > math.log(tis_cap)))
     return result
+
+
+def _chosen_token_binary_kl(target: np.ndarray, reference: np.ndarray) -> np.ndarray:
+    """Compute KL(reference || target) for the chosen token and its complement."""
+    if np.any(target > 0) or np.any(reference > 0):
+        raise ValueError("binary KL requires nonpositive log probabilities")
+    target_rest = -np.expm1(target)
+    reference_rest = -np.expm1(reference)
+    rest_contribution = np.zeros_like(reference)
+    nonzero = reference_rest > 0
+    with np.errstate(divide="ignore"):
+        rest_contribution[nonzero] = reference_rest[nonzero] * (
+            np.log(reference_rest[nonzero]) - np.log(target_rest[nonzero])
+        )
+    return np.exp(reference) * (reference - target) + rest_contribution
 
 
 def prompt_cluster_bootstrap(
