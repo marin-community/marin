@@ -13,8 +13,8 @@ from collections.abc import Iterator
 import pytest
 from evaldash import app as evaldash_app
 from evaldash import fixtures, metrics, samples
-from marin.evaluation.eval_measurements import measurement_from_record
-from marin.evaluation.records import EvalRunRecord, list_records, write_record
+from evalrecords.eval_measurements import measurement_from_record
+from evalrecords.records import EvalRunRecord, list_records, write_record
 from marina.apps import RegisteredApi
 from starlette.testclient import TestClient
 

@@ -1,11 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Difficulty reason parsing, including known legacy spellings."""
+"""Difficulty gaps are typed: workers emit enum members and typed evidence only."""
 
 import pytest
 from finestore.rl.difficulty import (
     DifficultyGap,
+    DifficultyMeasurement,
+    MeasurementStatus,
     difficulty_gap_evidence,
     difficulty_gap_reason,
     difficulty_gaps,
@@ -13,14 +15,57 @@ from finestore.rl.difficulty import (
     require_difficulty_gaps,
 )
 
+# Every not-measured reason spelling observed in served measurements and
+# campaign catalogs (2026-11-16, atlas-preview-20261116-r20-v1 and the
+# 2026.11.14.47 qualified snapshot), normalized to one spelling per form.
+LEGACY_REASONS = {
+    "Awaiting scored coverage": {DifficultyGap.AWAITING_SCORED_COVERAGE},
+    "Selected tasks still lack scored solver attempts.": {DifficultyGap.AWAITING_SCORED_COVERAGE},
+    "A candidate prompt exceeded the protocol input budget before dispatch. No solver score was assigned.": {
+        DifficultyGap.PROTOCOL_INPUT_BUDGET_EXCEEDED
+    },
+    "Awaiting shared model provider capacity; provider waits are excluded from task attempts.": {
+        DifficultyGap.PROVIDER_CAPACITY_WAIT
+    },
+    "daytona_snapshot_preflight_pending": {DifficultyGap.DAYTONA_SNAPSHOT_PREFLIGHT_PENDING},
+    "faithful_daytona_task_spec_factory_pending": {DifficultyGap.DAYTONA_TASK_SPEC_FACTORY_PENDING},
+    "Faithful Daytona TaskSpec actor factory pending": {DifficultyGap.DAYTONA_TASK_SPEC_FACTORY_PENDING},
+    "Daytona snapshot and original runtime qualification pending": {DifficultyGap.DAYTONA_RUNTIME_QUALIFICATION_PENDING},
+    "Awaiting qualified production Harbor trials with the original source runtime packet": {
+        DifficultyGap.PRODUCTION_HARBOR_TRIALS_PENDING
+    },
+    "No qualified Harbor measurement has been recorded for this source/model in this snapshot.": {
+        DifficultyGap.NO_QUALIFIED_MEASUREMENT_RECORDED
+    },
+    "math_verifier_deadline": {DifficultyGap.MATH_VERIFIER_DEADLINE},
+    "native_client_effective_context_unqualified": {DifficultyGap.HOSTED_NATIVE_CONTEXT_UNQUALIFIED},
+    "prior_hosted_timeout_grades_unqualified": {DifficultyGap.HOSTED_TIMEOUT_GRADES_UNQUALIFIED},
+    "prior_hosted_timeout_grade_unqualified": {DifficultyGap.HOSTED_TIMEOUT_GRADES_UNQUALIFIED},
+    "interrupted_hosted_dispatch_unsealed": {DifficultyGap.HOSTED_DISPATCH_INTERRUPTED},
+    "interrupted_hosted_judge_canary_unsealed": {DifficultyGap.HOSTED_JUDGE_CANARY_INTERRUPTED},
+    "prior_hosted_unserved_requests_with_raw_zero_grades": {DifficultyGap.HOSTED_UNSERVED_RAW_ZERO_GRADES},
+    "unsupported_compose_document": {DifficultyGap.UNSUPPORTED_COMPOSE_DOCUMENT},
+    "network_policy_violation": {DifficultyGap.NETWORK_POLICY_VIOLATION},
+    "missing_environment_artifact:prepared_image": {DifficultyGap.ENVIRONMENT_ARTIFACT_MISSING},
+    "no_executable_task_spec_grader": {DifficultyGap.NO_EXECUTABLE_GRADER},
+    "task_spec_state_capture_required": {DifficultyGap.STATE_CAPTURE_REQUIRED},
+    "task_spec_tool_provider_required": {DifficultyGap.TOOL_PROVIDER_REQUIRED},
+    "task_spec_shared_executor_required": {DifficultyGap.SHARED_EXECUTOR_REQUIRED},
+    "task_spec_provider_contract_invalid": {DifficultyGap.PROVIDER_CONTRACT_INVALID},
+    "task_spec_unresolved_build": {DifficultyGap.UNRESOLVED_DOCKER_BUILD},
+    "invalid_expected_target_in_frozen_sample": {DifficultyGap.INVALID_REFERENCE},
+}
+
+
+@pytest.mark.parametrize("reason", sorted(LEGACY_REASONS))
+def test_every_historical_reason_maps_to_typed_gaps(reason):
+    gaps = {gap for gap, _ in difficulty_gaps(reason)}
+    assert gaps == LEGACY_REASONS[reason]
+
 
 @pytest.mark.parametrize(
     "reason,expected",
     [
-        (
-            "missing_environment_artifact:prepared_image",
-            [(DifficultyGap.ENVIRONMENT_ARTIFACT_MISSING, "prepared_image")],
-        ),
         (
             "awaiting_executability_filtered_admission_population:task_spec_tool_provider_required",
             [(DifficultyGap.EXECUTABILITY_ADMISSION_PENDING, "task_spec_tool_provider_required")],
@@ -106,6 +151,47 @@ def test_unmapped_reasons_are_rejected(reason):
         require_difficulty_gaps(reason)
 
 
+def _measurement(reason: str | None, status: MeasurementStatus) -> DifficultyMeasurement:
+    payload = {
+        "measurement_id": "fixture-measurement",
+        "protocol_id": "atlas-difficulty-v3",
+        "created_at": "2026-11-16T00:00:00+00:00",
+        "source_id": "Fixture:source",
+        "release": {"repo": "fixture/repo", "revision": "r1", "url": "https://example.invalid/r1"},
+        "converter_version": "1",
+        "solver": "small",
+        "status": status,
+        "reason": reason,
+        "sample": None,
+        "sample_receipt": None,
+        "model": None,
+        "settings": None,
+        "n": 0,
+        "solved": 0,
+        "wilson_95": None,
+        "infrastructure_attempts": 0,
+        "pending_tasks": 0,
+        "blocked_tasks": 0,
+        "attempts_receipt": None,
+        "gpu_hours": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+    }
+    return DifficultyMeasurement.model_validate(payload)
+
+
+def test_not_measured_records_carry_only_typed_gaps():
+    reason = difficulty_gap_reason(DifficultyGap.ENVIRONMENT_ARTIFACT_MISSING, "s3://marin/images/env-1/lock")
+    measurement = _measurement(reason, MeasurementStatus.NOT_MEASURED)
+    assert {gap for gap, _ in difficulty_gaps(measurement.reason)} == {DifficultyGap.ENVIRONMENT_ARTIFACT_MISSING}
+    # A historical record keeps its original spelling and stays typed.
+    legacy = _measurement(
+        "missing_environment_artifact: s3://marin-us-east-02a/marin/images/env-1/2026.10.08/requirements.lock",
+        MeasurementStatus.NOT_MEASURED,
+    )
+    assert {gap for gap, _ in difficulty_gaps(legacy.reason)} == {DifficultyGap.ENVIRONMENT_ARTIFACT_MISSING}
+
+
 def test_composed_reasons_never_drift_from_the_parser():
     reason = join_difficulty_gap_reasons(
         [
@@ -115,20 +201,6 @@ def test_composed_reasons_never_drift_from_the_parser():
     )
     require_difficulty_gaps(reason)
     assert difficulty_gaps(reason) == [
-        (DifficultyGap.DAYTONA_TASK_SPEC_FACTORY_PENDING, None),
-        (DifficultyGap.ENVIRONMENT_ARTIFACT_MISSING, "s3://lock"),
-    ]
-    # The canonical join sorts and deduplicates its segments; the parser reads
-    # them back in that order, and the detail can no longer swallow the segment
-    # that follows it.
-    reversed_reason = join_difficulty_gap_reasons(
-        [
-            difficulty_gap_reason(DifficultyGap.ENVIRONMENT_ARTIFACT_MISSING, "s3://lock"),
-            difficulty_gap_reason(DifficultyGap.DAYTONA_TASK_SPEC_FACTORY_PENDING),
-        ]
-    )
-    require_difficulty_gaps(reversed_reason)
-    assert difficulty_gaps(reversed_reason) == [
         (DifficultyGap.DAYTONA_TASK_SPEC_FACTORY_PENDING, None),
         (DifficultyGap.ENVIRONMENT_ARTIFACT_MISSING, "s3://lock"),
     ]

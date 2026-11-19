@@ -3,9 +3,10 @@
 
 """The Atlas source-status taxonomy: statuses, exclusion reasons and their evidence.
 
-Every source status and exclusion reason is defined exactly here. Each
-``ExclusionReason`` member has exactly one ``REASON_EXPLANATIONS`` entry, and
-``ExclusionClaim.explanation`` returns that entry for the claim's reason.
+This module is the single source of truth for every source status and exclusion
+reason. The catalog writer attaches typed claims to declarations, the Atlas
+status page renders them, and the guide and docs render the same explanation
+metadata from here. Nothing else may define status or reason labels.
 """
 
 from enum import StrEnum
@@ -25,6 +26,24 @@ class SourceStatus(StrEnum):
     AVAILABLE = "Available"
     EXCLUDED = "Excluded"
     DEPRECATED = "Deprecated"
+
+
+class DataRestriction(StrEnum):
+    """Typed restriction tier of a source population.
+
+    The tier is orthogonal to license, intended use and catalog status: an
+    ``Open`` source can be license-restricted and a ``PRIVATE_ALWAYS`` source
+    can be ``Available``. Every source declares the tier explicitly in code on
+    its ``SourceInfo``; the declaration, every derived artifact and every
+    published record carry it, and a downgrade or a missing tag on a derived
+    artifact is refused. A ``PRIVATE_ALWAYS`` source's task text, prompts,
+    answers, resources, samples and transcripts never leave its private store:
+    the Atlas shows counts, statuses, hashes, receipts and a visible private
+    data marker instead of content, no matter what else changes.
+    """
+
+    OPEN = "open"
+    PRIVATE_ALWAYS = "private_always"
 
 
 class PendingStage(StrEnum):
@@ -67,8 +86,8 @@ class ExclusionEvidenceKind(StrEnum):
 class ExclusionReason(StrEnum):
     """Every reason a source can be Excluded, with one canonical explanation.
 
-    Each member's explanation is exactly its ``REASON_EXPLANATIONS`` entry; a
-    reason without an entry there is invalid.
+    The explanation for each member is the single ``REASON_EXPLANATIONS`` entry
+    below; the status page, guide and docs all render from it.
     """
 
     LICENSE_BAN = "license-ban"
@@ -178,8 +197,9 @@ REASON_EXPLANATIONS: dict[ExclusionReason, ReasonExplanation] = {
     ),
     ExclusionReason.OVERSIGHT_MISSING: ReasonExplanation(
         label="Oversight missing",
-        meaning="No evidence-derived SAMPLE or FULL oversight with verification exists.",
-        clears="A SAMPLE or FULL review receipt with recorded verification.",
+        meaning="No oversight evidence exists at all: neither a QUICK conversion receipt "
+        "nor a SAMPLE or FULL review receipt with recorded verification.",
+        clears="A QUICK conversion receipt, or a SAMPLE or FULL review receipt with recorded verification.",
     ),
     ExclusionReason.AGENTIC_TASK_FORMAT_MISSING: ReasonExplanation(
         label="Agentic task format missing",

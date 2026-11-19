@@ -28,7 +28,9 @@ from marinskyrl.speculative_decoding import SpeculativeDecodingMethod
 
 
 def _literal(choices) -> str:
-    return "Literal[" + ", ".join(repr(choice.value if isinstance(choice, Enum) else choice) for choice in choices) + "]"
+    return (
+        "Literal[" + ", ".join(repr(choice.value if isinstance(choice, Enum) else choice) for choice in choices) + "]"
+    )
 
 
 CORRECTION_PRESETS = tuple(
@@ -46,6 +48,7 @@ TYPES = MappingProxyType(
     {
         "terminal_bench": "OpenMap | None",
         "trainer.strategy": 'Literal["megatron"]',
+        "trainer.batch_builder": _literal(runtime_options.BatchBuilder),
         "trainer.hf_export_checkpoint": 'Literal["latest", "best"]',
         "trainer.policy.optimizer_config.lr_decay_steps": "int | None",
         "trainer.critic.optimizer_config.lr_decay_steps": "int | None",
@@ -105,6 +108,7 @@ TYPES = MappingProxyType(
         "trainer.step_phase_budgets.checkpoint_work": "Annotated[int | float, Field(ge=0)]",
         "trainer.step_phase_budgets.evaluation": "Annotated[int | float, Field(ge=0)]",
         "trainer.step_phase_budgets.unaccounted": "Annotated[int | float, Field(ge=0)]",
+        "trainer.rollout_buffer.max_unusable_groups": "PositiveInt",
         "trainer.train_batch_size": "PositiveInt",
         "trainer.policy_mini_batch_size": "PositiveInt",
         "trainer.critic_mini_batch_size": "PositiveInt",

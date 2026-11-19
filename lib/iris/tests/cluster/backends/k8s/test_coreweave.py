@@ -239,6 +239,14 @@ def _seed_prerequisites(k8s: InMemoryK8sService, cluster_config: IrisClusterConf
     k8s.apply_json(cluster_role_binding_manifest(role_name, namespace, service_account))
     k8s.apply_json(task_secret_role_manifest(namespace))
     k8s.apply_json(task_secret_binding_manifest(namespace, service_account))
+    k8s.apply_json(
+        {
+            "apiVersion": "node.k8s.io/v1",
+            "kind": "RuntimeClass",
+            "metadata": {"name": cluster_config.kubernetes_provider.sandbox_runtime_class},
+            "handler": "runsc",
+        }
+    )
 
     for name, sg in cluster_config.scale_groups.items():
         cw = sg.slice_template.coreweave if sg.slice_template is not None else None
@@ -761,6 +769,7 @@ def test_verify_prerequisites_raises_when_nothing_provisioned():
     assert "ClusterRole/iris-controller-iris" in message
     assert "ClusterRoleBinding/iris-controller-iris" in message
     assert "NodePool/iris-cpu-erapids" in message
+    assert "RuntimeClass/gvisor" in message
     assert "ClusterQueue/iris-cq" in message
     assert "pulumi up" in message
     provider.shutdown()
@@ -824,6 +833,18 @@ def test_verify_prerequisites_reports_missing_cluster_queue_flavor():
     message = str(exc_info.value)
     assert f"ResourceFlavor/{RESOURCE_FLAVOR_NAME}" in message
     assert "ClusterQueue/iris-cq" not in message
+    provider.shutdown()
+
+
+def test_verify_prerequisites_reports_missing_configured_runtime_class():
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config()
+    cluster_config.kubernetes_provider.sandbox_runtime_class = "iris-gvisor-cpu"
+    _seed_prerequisites(k8s, cluster_config)
+    k8s.delete(K8sResource.RUNTIME_CLASSES, "iris-gvisor-cpu")
+
+    with pytest.raises(PrerequisitesNotProvisionedError, match="RuntimeClass/iris-gvisor-cpu"):
+        provider.verify_prerequisites(cluster_config)
     provider.shutdown()
 
 

@@ -73,6 +73,10 @@ PROTOCOLS = MappingProxyType(
         )
     }
 )
+SOLVER_MODELS = PROTOCOLS[PROTOCOL_ID].models
+"""The protocol's pinned solver models; the Marina server reads this directly."""
+SOLVER_THINKING = PROTOCOLS[PROTOCOL_ID].thinking
+"""The protocol's pinned thinking policies; the Marina server reads this directly."""
 
 
 class MeasurementStatus(StrEnum):
