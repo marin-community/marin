@@ -20,6 +20,7 @@ import hashlib
 import json
 import logging
 import struct
+import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from rigging.filesystem.buckets import filesystem_for
@@ -125,8 +126,6 @@ def main(dry_run: bool = False, destination: str = DEFAULT_DESTINATION) -> None:
     except Exception:
         # the direct-cluster log path is not always fetchable; the failure
         # lands beside the destination either way
-        import traceback
-
         StoragePath(prefix_join(destination, "staging-error.txt")).write_text(traceback.format_exc())
         raise
 
