@@ -168,7 +168,7 @@ def _redacted_provenance(raw: str) -> dict[str, object] | None:
     """The launch provenance's fields, each redacted; ``None`` if *raw* is not a well-formed provenance."""
     try:
         decoded = json.loads(raw)
-    except ValueError:
+    except (ValueError, RecursionError):  # RecursionError: nesting deeper than the parser's stack
         return None
     if not _is_provenance_object(decoded):
         return None

@@ -463,6 +463,7 @@ def test_job_config_row_is_written_despite_a_malformed_git_remote(state):
     "raw",
     [
         "made-up-not-json",
+        "[" * 100_000,
         "null",
         "[]",
         json.dumps({"tree_hash": "1a2b3c4d5e"}),
@@ -471,7 +472,17 @@ def test_job_config_row_is_written_despite_a_malformed_git_remote(state):
         _provenance_json(command_line=["python", 42]),
         _provenance_json(command_line="python train.py"),
     ],
-    ids=["not-json", "null", "list", "missing-fields", "int-remote", "list-branch", "int-arg", "string-command-line"],
+    ids=[
+        "not-json",
+        "deeply-nested",
+        "null",
+        "list",
+        "missing-fields",
+        "int-remote",
+        "list-branch",
+        "int-arg",
+        "string-command-line",
+    ],
 )
 def test_job_config_drops_a_malformed_launch_provenance_and_keeps_the_rows(state, raw):
     rows = _attach(state, "marin")
