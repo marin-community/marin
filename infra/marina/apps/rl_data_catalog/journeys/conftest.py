@@ -10,7 +10,7 @@ from pathlib import Path
 from uuid import UUID
 
 import pytest
-from finestore.rl.curation import ActorCensusInput, SourceDeclaration
+from finestore.rl.curation import ActorCensusInput, QualifiedSourceDeclaration
 from finestore.rl.difficulty import Solver
 from marina.applets import applet_schema
 from marina.db import DatabaseSpec, engine_for
@@ -79,7 +79,7 @@ def marina_kernel(marina_database: DatabaseSpec, tmp_path_factory: pytest.TempPa
             continue
         declaration = with_declaration_admission_census(declaration)
         if declaration.name == "clean":
-            declaration = SourceDeclaration.model_validate(
+            declaration = QualifiedSourceDeclaration.model_validate(
                 {**declaration.model_dump(mode="json"), "actor_census_input": ACTOR_INPUT}
             )
         observation = count_evidence(
@@ -114,7 +114,7 @@ def lexical_catalog(marina_kernel: Kernel, marina_database: DatabaseSpec) -> Ite
                 if declaration.name in {"clean", "eval", "required"}:
                     declaration = with_declaration_admission_census(declaration)
                 if declaration.id == "Marin:clean":
-                    declaration = SourceDeclaration.model_validate(
+                    declaration = QualifiedSourceDeclaration.model_validate(
                         {
                             **declaration.model_dump(mode="json"),
                             "daytona_safety": "unsafe",
@@ -140,7 +140,7 @@ def lexical_catalog(marina_kernel: Kernel, marina_database: DatabaseSpec) -> Ite
                         }
                     )
                 if declaration.id == "Marin:stale-clean":
-                    declaration = SourceDeclaration.model_validate(
+                    declaration = QualifiedSourceDeclaration.model_validate(
                         {
                             **declaration.model_dump(mode="json"),
                             "actor_census_input": {**ACTOR_INPUT, "dataset_revision": declaration.dataset_revision},
@@ -215,7 +215,7 @@ def lexical_catalog(marina_kernel: Kernel, marina_database: DatabaseSpec) -> Ite
                     "AND id IN ('Marin:clean','Marin:eval')"
                 )
             ).scalars():
-                declaration = SourceDeclaration.model_validate(payload)
+                declaration = QualifiedSourceDeclaration.model_validate(payload)
                 for solver in Solver:
                     solved = 3 if (declaration.name == "clean") == (solver == Solver.SMALL) else 1
                     measurement = difficulty_measurement(declaration, solver, solved)
