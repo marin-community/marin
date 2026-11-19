@@ -10,13 +10,11 @@ from dataclasses import replace
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from finestore.rl.strata import MembershipState, SelectionDefinition, SelectionTaskRow
-from finestore.schema import arrow_schema
-from taskcompendium.identity import canonical_sha256
 from omegaconf import OmegaConf
 from transformers import AutoTokenizer
 from rolloutengine.models import ModelTurn
 from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExitCodeReward, ScriptGrader
 
 from skyrl_train.batch_sampling import filter_trajectory_batch
@@ -33,7 +31,7 @@ from skyrl_train.trajectory_runners.trajectory_processing import (
 )
 from skyrl_train.trajectory_runners.types import TaskRequestBatch, TrajectoryID
 from skyrl_train.utils.trainer_utils import evaluation_response_metrics
-from tests.cpu.task_specs import NATIVE_ENVIRONMENT, lowered_task, task_input, text_task
+from tests.cpu.task_specs import NATIVE_ENVIRONMENT, lowered_task, task_input, text_task, write_selection_panel
 from tests.cpu.tiny_training.tiny_model import build_tiny_policy
 
 
@@ -61,32 +59,10 @@ def test_final_profiles_build_primary_and_named_datasets_without_periodic_evalua
             )
         else:
             write_tasks(path, [lowered_task(task)])
-        pq.write_table(
-            pa.Table.from_pylist([{"task_spec": task.model_dump_json()}]), path.parent / "validation.parquet"
-        )
-        row = SelectionTaskRow(
-            task_id=task.id,
-            task_digest=digest,
-            family=path.parent.name,
-            source="declared-source",
-            aai_category="general",
-            topic="algebra",
-            difficulty="hard",
-            agentic=True,
-            state=MembershipState.ACTIVE,
-        )
-        pq.write_table(
-            pa.Table.from_pylist([row.model_dump(mode="json")], schema=arrow_schema(SelectionTaskRow)),
-            path.parent / "task_manifest.parquet",
-        )
-        (path.parent / "summary.json").write_text(
-            json.dumps(
-                {
-                    "selection_strata": SelectionDefinition(
-                        name=path.parent.name, version="1", sampling="all", task_files=("validation.parquet",)
-                    ).model_dump(mode="json")
-                }
-            )
+        write_selection_panel(
+            path.parent, [task], path.parent.name, "1",
+            lambda _: {"family": path.parent.name, "source": "declared-source",
+                       "aai_category": "general", "topic": "algebra", "difficulty": "hard", "agentic": True},
         )
     config.data.val_data = [str(primary)]
     config.data.task_cache_dir = str(tmp_path / "task-cache")

@@ -8,8 +8,10 @@ from finestore.layout import OnConflict
 from finestore.reader import ReadView
 from finestore.rl.run_records import (
     EVALUATIONS_TABLE,
-    PRIMARY_KEYS,
+    ATTEMPTS_TABLE,
+    METRICS_TABLE,
     AttemptRecord,
+    AttemptRow,
     CheckpointReference,
     EvaluationTaskRow,
     LaunchResult,
@@ -29,7 +31,7 @@ from finestore.store import DataStore
 def _write(export_root, attempt_id, metrics=None, **fields):
     with DataStore.open(run_records_root(str(export_root))) as store:
         update_attempt(store, AttemptRecord(run_id="history", attempt_id=attempt_id, **fields))
-        table = register_run_tables(store).metrics
+        table = register_run_tables(store)[METRICS_TABLE]
         for step, values in (metrics or {}).items():
             table.extend(
                 [
@@ -58,7 +60,7 @@ def test_evaluations_read_legacy_strata_alongside_current_rows(tmp_path):
     }
     with DataStore.open(run_records_root(export)) as store:
         store.table(
-            EVALUATIONS_TABLE, primary_key=PRIMARY_KEYS[EVALUATIONS_TABLE], on_conflict=OnConflict.SUPERSEDE
+            EVALUATIONS_TABLE, primary_key=("attempt_id", "step", "evaluation", "task_id"), on_conflict=OnConflict.SUPERSEDE
         ).extend([legacy, {**legacy, "task_id": "unknown", "agentic": None}])
     current = EvaluationTaskRow.model_validate(
         {
@@ -82,6 +84,11 @@ def test_metric_history_bounds_checkpoint_ancestors_and_detects_damaged_lineage(
     _write(ancestor, "original", {0: {"ancestor_only": 77}})
     parent = CheckpointReference(export_root=ancestor, attempt_id="original", step=3)
     _write(root, "middle", {4: {"loss": 0.4}, 5: {"loss": 0.5}, 9: {"loss": 0.9}}, resumed_step=3, parent=parent)
+    with DataStore.open(run_records_root(root)) as store:
+        register_run_tables(store)[ATTEMPTS_TABLE].extend(
+            [AttemptRow(attempt_id="middle", field="issue", value_json='"opted_out"').model_dump()]
+        )
+    assert read_attempt(root, "middle").issue is None
     _write(root, "sibling", {4: {"loss": 9.9}}, resumed_step=3, parent=parent)
     assert [row["loss"] for row in read_attempt_metrics(root, "middle").values()] == [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.9]
     _write(root, "rewind", {2: {"loss": 2.5}}, resumed_step=1, parent=parent.model_copy(update={"step": 1}))

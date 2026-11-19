@@ -35,6 +35,7 @@ from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 from finestore.rl.run_records import (
     METRIC_ATTEMPT_IDS,
     METRIC_METADATA_KEYS,
+    METRICS_TABLE,
     AttemptRecord,
     write_attempt,
     CheckpointReference,
@@ -83,22 +84,6 @@ class WandbNodeLogger:
 
     def close(self) -> None:
         self.wandb.finish()
-
-
-class _TrackingAdapter:
-    def start(self, *, resumed_step: int | None, checkpoint: CheckpointReference | None = None) -> None:
-        """Initialize the adapter at the selected checkpoint boundary."""
-
-
-class _SdkAdapter(_TrackingAdapter):
-    def __init__(self, sdk):
-        self.sdk = sdk
-
-    def log(self, **kwargs):
-        self.sdk.log(**kwargs)
-
-    def finish(self, **kwargs):
-        self.sdk.finish(**kwargs)
 
 
 # TODO(tgriggs): Test all backends.
@@ -176,7 +161,7 @@ class Tracking:
             run_id = run.id
             run.define_metric(_WANDB_STEP_METRIC)
             run.define_metric("*", step_metric=_WANDB_STEP_METRIC)
-            self.logger["wandb"] = _SdkAdapter(run)
+            self.logger["wandb"] = run
             self._prepare_worker_nodes_systems_logging_wandb(
                 project_name, experiment_name, run_id, tracking_config, current_node_ip
             )
@@ -201,7 +186,7 @@ class Tracking:
                 logdir=SWANLAB_LOG_DIR,
                 mode=SWANLAB_MODE,
             )
-            self.logger["swanlab"] = _SdkAdapter(swanlab)
+            self.logger["swanlab"] = swanlab
 
         if "tensorboard" in backends:
             self.logger["tensorboard"] = _TensorboardAdapter()
@@ -262,8 +247,8 @@ class Tracking:
 
     def start(self, *, resumed_step: int | None, checkpoint: CheckpointReference | None = None) -> None:
         """Record the checkpoint boundary for this execution's metric history."""
-        for adapter in self.logger.values():
-            adapter.start(resumed_step=resumed_step, checkpoint=checkpoint)
+        if records := self.logger.get("records"):
+            records.start(resumed_step=resumed_step, checkpoint=checkpoint)
 
     def log(self, data, step, commit=True):
         for logger_name, logger_instance in self.logger.items():
@@ -300,13 +285,13 @@ class Tracking:
                 logger.warning("Tracker backend {} shutdown failed: {}", name, error)
 
 
-class _RecordsAdapter(_TrackingAdapter):
+class _RecordsAdapter:
     def __init__(self, export_root: str, run_id: str, attempt_id: str):
         self.export_root = export_root
         self.run_id = run_id
         self.attempt_id = attempt_id
         self.store = DataStore.open(run_records_root(export_root))
-        self.tables = register_run_tables(self.store)
+        self.metrics = register_run_tables(self.store)[METRICS_TABLE]
 
     def start(self, *, resumed_step: int | None, checkpoint: CheckpointReference | None) -> None:
         record = read_attempt(self.export_root, self.attempt_id)
@@ -318,7 +303,6 @@ class _RecordsAdapter(_TrackingAdapter):
                 run_id=self.run_id,
                 attempt_id=self.attempt_id,
                 metrics_started_at=datetime.now(timezone.utc).isoformat(),
-                evaluation_storage_version=1,
                 resumed_step=resumed_step,
                 parent=checkpoint,
             ),
@@ -335,14 +319,14 @@ class _RecordsAdapter(_TrackingAdapter):
                     raise ValueError(f"Metric metadata {name} differs from the active execution")
                 continue
             rows.append(MetricRow(attempt_id=self.attempt_id, step=step, name=name, value=float(value)).model_dump())
-        self.tables.metrics.extend(rows)
+        self.metrics.extend(rows)
         self.store.flush()
 
     def finish(self) -> None:
         self.store.close()
 
 
-class ConsoleLogger(_TrackingAdapter):
+class ConsoleLogger:
     def __init__(self):
         pass
 
@@ -367,7 +351,7 @@ class ConsoleLogger(_TrackingAdapter):
         return obj
 
 
-class _TensorboardAdapter(_TrackingAdapter):
+class _TensorboardAdapter:
     def __init__(self):
         import os
 
@@ -386,7 +370,7 @@ class _TensorboardAdapter(_TrackingAdapter):
         self.writer.close()
 
 
-class _MlflowLoggingAdapter(_TrackingAdapter):
+class _MlflowLoggingAdapter:
     def __init__(self, project_name, experiment_name, config):
         import os
 
