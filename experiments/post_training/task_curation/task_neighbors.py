@@ -15,7 +15,7 @@ from typing import Literal
 
 import dupekit
 import pyarrow as pa
-from marin.evaluation.eval_stats import wilson_interval
+from evalrecords.eval_stats import wilson_interval
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec, TextMessage, format_conversation
 from taskcompendium.pipeline.sampling import seeded_order
