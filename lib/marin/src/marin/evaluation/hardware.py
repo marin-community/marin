@@ -34,6 +34,7 @@ class AcceleratorChoice:
     region: str | None = None
     target_cluster: str | None = None
     geometry: ServingGeometry | None = None
+    preemptible: bool = True
 
     @property
     def label(self) -> str:

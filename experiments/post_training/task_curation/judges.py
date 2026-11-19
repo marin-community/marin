@@ -143,12 +143,40 @@ class RelayJudgeEndpoint:
 
 @dataclass(frozen=True)
 class LocalJudgeModel:
-    """Explicit checkpoint, API name and context required by local serving."""
+    """Explicit checkpoint, API name and context required for local serving."""
 
     model_identity: str
     model_revision: str
     api_model: str
     context_window_tokens: int
+
+
+GB200_UNPLACABLE_CLUSTERS = frozenset({"cw-us-east-02a"})
+"""Clusters whose Kueue topology can never place a 4xGB200 serving request.
+
+A serving job queued there does not fail; Kueue silently gates it, so the
+failure only surfaces as a reviewer that never reviews. Only ROOT jobs
+federate in Iris: a job's whole tree stays on the root's peer, so a
+``target_cluster`` on the child serving request is ignored and the root's
+placement governs the tree.
+"""
+
+
+def require_review_serving_root(target_cluster: str | None) -> str:
+    """Refuse a review-job root whose tree will request 4xGB200 serving it cannot place.
+
+    The root job's peer hosts the entire tree, child serving requests included, so a
+    root on (or unpinned and able to federate onto) a gated cluster silently gates the
+    reviewer forever. Returns the validated root cluster.
+    """
+    if target_cluster is None or target_cluster in GB200_UNPLACABLE_CLUSTERS:
+        raise ValueError(
+            "A review tree that requests 4xGB200 serving must root on a cluster that places it; "
+            f"an unpinned root can federate onto {sorted(GB200_UNPLACABLE_CLUSTERS)}, whose Kueue "
+            "topology gates 4xGB200 silently (child serving pins are ignored - only roots federate)"
+        )
+    return target_cluster
+
 
 
 @dataclass(frozen=True)
@@ -169,6 +197,7 @@ class LocalJudgeEndpoint:
     worker_setup_scripts: tuple[str, ...] = ()
     worker_timeout: Duration | None = None
     job_ids: list[str] = field(default_factory=list, repr=False, compare=False)
+
 
     @property
     def identity(self) -> dict[str, Any]:

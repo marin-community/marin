@@ -159,11 +159,22 @@ def qualify_reviewer(reviewer) -> ReviewRecord:
 
 
 def _local_endpoint(model_config: Path, context_window_tokens: int) -> LocalJudgeEndpoint:
+    # Placement note: only ROOT jobs federate in Iris, so this child serving request's
+    # cluster would be ignored - the submitter roots the review job on a cluster that
+    # places 4xGB200 (require_review_serving_root enforces it at submission time). The
+    # serving holds non-preemptible capacity: long reviewer serving must not be evicted
+    # mid-review.
     return LocalJudgeEndpoint(
         tier=JudgeTier.HEAVY,
         model_config=model_config,
         context_window_tokens=context_window_tokens,
-        accelerator=AcceleratorChoice(Platform.GPU, gpu_type="GB200", gpu_count=4, region=ANY_REGION),
+        accelerator=AcceleratorChoice(
+            Platform.GPU,
+            gpu_type="GB200",
+            gpu_count=4,
+            region=ANY_REGION,
+            preemptible=False,
+        ),
         priority=job_pb2.PRIORITY_BAND_BATCH,
         env_vars={"MARIN_TEMP_PREFIX": "s3://marin-us-east-08a"},
         worker_image=WORKER_IMAGE,
