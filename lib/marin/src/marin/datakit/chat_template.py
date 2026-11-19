@@ -8,10 +8,6 @@
 The template must remain self-contained so Hugging Face and vLLM can load it
 from tokenizer artifacts without importing Marin. Generation blocks identify
 assistant output without changing the rendered text.
-
-In ``/think`` mode the generation prompt ends with ``<|start_think|>``, so the
-completion begins inside the reasoning span: everything before the first
-``<|end_think|>`` is reasoning. Rendered assistant turns are unchanged.
 """
 
 MARIN_CHAT_TEMPLATE = """
@@ -132,19 +128,36 @@ You can use the following tools in your python code like regular functions:
 {%- endfor -%}
 {%- if add_generation_prompt -%}
   {{- '<|start_header_id|>assistant<|end_header_id|>\n' -}}
-  {%- if _reasoning_mode == "/think" -%}
-    {{- '<|start_think|>' -}}
-  {%- endif -%}
 {%- endif -%}
 """.strip()
 
-_UNSET_REASONING_MODE = "{%- set _reasoning_mode = none -%}"
-assert MARIN_CHAT_TEMPLATE.count(_UNSET_REASONING_MODE) == 1
-
-MARIN_INFERENCE_CHAT_TEMPLATE = MARIN_CHAT_TEMPLATE.replace(
-    _UNSET_REASONING_MODE, '{%- set _reasoning_mode = "/think" -%}'
+_TRAINING_UNSET_MODE = "{%- set _reasoning_mode = none -%}"
+_INFERENCE_UNSET_MODE = '{%- set _reasoning_mode = "/think" -%}'
+_TRAINING_GENERATION_PROMPT = "{{- '<|start_header_id|>assistant<|end_header_id|>\n' -}}"
+_INFERENCE_GENERATION_PROMPT = (
+    _TRAINING_GENERATION_PROMPT
+    + """
+  {%- if _reasoning_mode == "/think" -%}
+    {{- '<|start_think|>' -}}
+  {%- endif -%}"""
 )
-"""Template served with released Grug SFT exports: omitting ``enable_thinking`` selects ``/think``.
 
-Training data renders with ``MARIN_CHAT_TEMPLATE``, where an omitted mode writes no reasoning line.
+
+def _replace_once(template: str, old: str, new: str) -> str:
+    if template.count(old) != 1:
+        raise ValueError(f"Expected exactly one {old!r} in the Marin chat template")
+    return template.replace(old, new)
+
+
+MARIN_INFERENCE_CHAT_TEMPLATE = _replace_once(
+    _replace_once(MARIN_CHAT_TEMPLATE, _TRAINING_UNSET_MODE, _INFERENCE_UNSET_MODE),
+    _TRAINING_GENERATION_PROMPT,
+    _INFERENCE_GENERATION_PROMPT,
+)
+"""Template served with released Grug SFT exports.
+
+Omitting ``enable_thinking`` selects ``/think``. In ``/think`` mode the
+generation prompt ends with ``<|start_think|>``, so the completion begins inside
+the reasoning span: everything before the first ``<|end_think|>`` is reasoning.
+Rendered conversations match ``MARIN_CHAT_TEMPLATE``, which training data uses.
 """

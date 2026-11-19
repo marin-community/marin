@@ -168,7 +168,7 @@ ASSISTANT_HEADER = "<|start_header_id|>assistant<|end_header_id|>\n"
 @pytest.mark.parametrize(
     "template,template_kwargs,reasoning_line,prompt_suffix",
     [
-        (MARIN_CHAT_TEMPLATE, {"enable_thinking": True}, "Reasoning: /think", ASSISTANT_HEADER + "<|start_think|>"),
+        (MARIN_CHAT_TEMPLATE, {"enable_thinking": True}, "Reasoning: /think", ASSISTANT_HEADER),
         (MARIN_CHAT_TEMPLATE, {"enable_thinking": False}, "Reasoning: /nothink", ASSISTANT_HEADER),
         (MARIN_CHAT_TEMPLATE, {}, None, ASSISTANT_HEADER),
         (
@@ -189,7 +189,7 @@ ASSISTANT_HEADER = "<|start_header_id|>assistant<|end_header_id|>\n"
         "inference-unset",
     ],
 )
-def test_generation_prompt_opens_think_span_only_in_think_mode(
+def test_only_inference_think_prompts_open_think_span(
     marin_tokenizer, template, template_kwargs, reasoning_line, prompt_suffix
 ):
     question = [{"role": "user", "content": "What is 2 + 2?"}]
@@ -208,16 +208,20 @@ def test_generation_prompt_opens_think_span_only_in_think_mode(
         assert reasoning_line in prompt
 
 
-@pytest.mark.parametrize("template", [MARIN_CHAT_TEMPLATE, MARIN_INFERENCE_CHAT_TEMPLATE], ids=["training", "inference"])
-def test_think_prompt_plus_completion_matches_rendered_assistant_turn(marin_tokenizer, template):
+@pytest.mark.parametrize("template_kwargs", [{"enable_thinking": True}, {}], ids=["think", "unset"])
+def test_inference_prompt_plus_completion_matches_training_render(marin_tokenizer, template_kwargs):
     """A completion that starts inside the opened span reproduces the training render of the turn."""
     question = [{"role": "user", "content": "What is 2 + 2?"}]
     answered = [*question, {"role": "assistant", "reasoning_content": "Add two and two.", "content": "4"}]
     prompt = marin_tokenizer.apply_chat_template(
-        question, chat_template=template, tokenize=False, add_generation_prompt=True, enable_thinking=True
+        question,
+        chat_template=MARIN_INFERENCE_CHAT_TEMPLATE,
+        tokenize=False,
+        add_generation_prompt=True,
+        **template_kwargs,
     )
     rendered = marin_tokenizer.apply_chat_template(
-        answered, chat_template=template, tokenize=False, enable_thinking=True
+        answered, chat_template=MARIN_CHAT_TEMPLATE, tokenize=False, enable_thinking=True
     )
 
     assert prompt + "Add two and two.<|end_think|>4<|eot_id|>" == rendered
