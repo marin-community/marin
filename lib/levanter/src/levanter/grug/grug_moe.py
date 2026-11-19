@@ -73,7 +73,7 @@ from levanter.grug.sharding import (
     keep_reduced,
     replicate_keeping_reduced,
 )
-from levanter.kernels.pallas.kth_largest import kth_largest
+from levanter.kernels.pallas.radix_select import radix_select
 from levanter.utils.activation import ActivationFunctionEnum
 
 MOE_DROPPED_ASSIGNMENTS_METRIC = "moe/dropped_assignments"
@@ -217,14 +217,14 @@ def qb_beta_topk_shard(
     """Return per-expert QB thresholds and the shard's valid-token count.
 
     Each threshold is the ``logical_count``-th largest valid score. AMD Instinct GPUs select it with an exact radix
-    select (:func:`kth_largest`) instead of ``lax.top_k``, which they lower to a full sort of every row. At a
+    select (:func:`radix_select`) instead of ``lax.top_k``, which they lower to a full sort of every row. At a
     signed-zero tie the two may return different zero bit patterns.
     """
     valid_count = jnp.sum(valid_local, dtype=jnp.int32)
     scores = jnp.where(valid_local[None, :], s_local.T, -jnp.inf)
     logical_count = jnp.clip(valid_count * num_experts_per_token // num_experts, 1, physical_count)
     if is_amd_instinct():
-        beta = kth_largest(scores, logical_count)
+        beta = radix_select(scores, logical_count)
     else:
         topk_values, _ = jax.lax.top_k(scores, physical_count)
         beta = jnp.take(topk_values, logical_count - 1, axis=1)
