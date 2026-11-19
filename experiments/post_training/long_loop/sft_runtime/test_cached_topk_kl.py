@@ -755,3 +755,50 @@ def test_cached_topk_end_to_end_reader_rebind_train_step_and_watch_ratio(tmp_pat
             ):
                 if isinstance(got, jax.Array):
                     np.testing.assert_allclose(np.asarray(got), np.asarray(wanted), rtol=1e-6, atol=1e-6)
+
+
+def test_cached_topk_mixture_reader_resolve_under_explicit_mesh(tmp_path):
+    """Cold-cache CachedTopKMixtureReader.resolve_mixture_indices must work inside an Explicit mesh."""
+    rng = np.random.default_rng(2026)
+    tokens = rng.integers(1, 20, size=(8, 6), dtype=np.int32)
+    ids = rng.integers(0, 20, size=(8, 6, 3), dtype=np.int32)
+    logprobs = -rng.uniform(0.5, 2.0, size=(8, 6, 3)).astype(np.float32)
+    cache_dir = tmp_path / "src_a_cache"
+    write_cached_topk_source(
+        str(cache_dir),
+        ids=ids,
+        logprobs=logprobs,
+        tokens=tokens,
+        vocab_size=20,
+        rows_per_shard=4,
+    )
+
+    with use_cpu_devices(2):
+        mix = MixtureDataset(
+            datasets={
+                "src_a": ListAsyncDataset([{"tokens": tokens[i]} for i in range(8)]),
+                "src_b": ListAsyncDataset([{"tokens": tokens[i]} for i in range(8)]),
+            },
+            weights={"src_a": 0.5, "src_b": 0.5},
+            key=77,
+            block_size=8,
+            stop_strategy="restart",
+        )
+        reader = CachedTopKMixtureReader(
+            mix,
+            source_paths={"src_a": str(cache_dir)},
+            seq_len=6,
+            vocab_size=20,
+            verify_token_hashes=True,
+        )
+        expected = reader.resolve_mixture_indices(range(16, 24))
+        mix._get_block.cache_clear()
+
+        mesh = Mesh(
+            np.asarray(jax.devices()).reshape(1, 2, 1, 1, 1),
+            ("replica_dcn", "data", "context", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
+        )
+        with jax.set_mesh(mesh):
+            got = reader.resolve_mixture_indices(range(16, 24))
+    assert got == expected

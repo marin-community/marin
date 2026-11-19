@@ -32,6 +32,7 @@ from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 
 from levanter.data.mixture import MixtureDataset, StopStrategy
+from levanter.utils.jax_utils import local_cpu_mesh
 from levanter.utils.thread_utils import blocking_wait
 
 from experiments.post_training.long_loop.sft_runtime.temperature_matching import CachedTeacherTopK
@@ -355,17 +356,20 @@ class CachedTopKMixtureReader:
         resolved: list[tuple[str, int]] = []
         block_size = self.dataset.block_size
         dataset_index = self.dataset.dataset_index
-        for raw_index in indices:
-            rel_index = self.dataset._relative_index(int(raw_index))
-            block_id = rel_index // block_size
-            block = self.dataset._get_block(int(block_id))
-            packed_id = int(block[rel_index % block_size])
-            dataset_id, source_row_idx = self.dataset._index_into_dataset_for_id(packed_id, int(block_id))
-            source_name = dataset_index[dataset_id]
-            source_len = self._source_lengths.get(source_name)
-            if source_len is not None:
-                source_row_idx = source_row_idx % source_len
-            resolved.append((source_name, int(source_row_idx)))
+        # MixtureDataset.__init__ places self.key under local_cpu_mesh() (Auto); match that mesh
+        # so cold-cache _get_block() calls work inside an active Explicit training mesh.
+        with local_cpu_mesh():
+            for raw_index in indices:
+                rel_index = self.dataset._relative_index(int(raw_index))
+                block_id = rel_index // block_size
+                block = self.dataset._get_block(int(block_id))
+                packed_id = int(block[rel_index % block_size])
+                dataset_id, source_row_idx = self.dataset._index_into_dataset_for_id(packed_id, int(block_id))
+                source_name = dataset_index[dataset_id]
+                source_len = self._source_lengths.get(source_name)
+                if source_len is not None:
+                    source_row_idx = source_row_idx % source_len
+                resolved.append((source_name, int(source_row_idx)))
         return resolved
 
     def _read_batch_row(
