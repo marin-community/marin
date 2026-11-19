@@ -30,7 +30,13 @@ from taskcompendium.pipeline.sources import conversion_shards, staged_file_rows
 from taskcompendium.runtime.grading import grade_in_sandbox
 from taskcompendium.runtime.resources import resource_bytes
 
-from experiments.post_training.task_curation.datasets.skill2env.conversion import CAPTURE_ROOTS, RELEASE, convert_task
+from experiments.post_training.task_curation.datasets.skill2env.conversion import (
+    CAPTURE_ROOTS,
+    RELEASE,
+    STAGED_INPUT_DIRECTORIES,
+    content_digest,
+    convert_task,
+)
 from experiments.post_training.task_curation.datasets.skill2env.tasks import sources
 from experiments.post_training.task_curation.pipeline import source_recipe
 
@@ -205,6 +211,26 @@ def test_conversion_retains_hidden_files_and_detects_modified_exports():
     changed = {**row.data, "files": {**row.data["files"], "tests/test.sh": b"exit 0"}}
     with pytest.raises(ValueError, match="differ from the pinned task"):
         convert_task(replace(row, data=changed), ConversionContext({}, None))
+
+
+def test_shared_image_stages_only_public_inputs(monkeypatch):
+    row = exported_row(working_directory="/workspace/inputs")
+    # The release fixtures are external; opt this generated package into the same staging contract.
+    files = dict(row.data["files"])
+    files["environment/inputs/checker.txt"] = files.pop("environment/workspace/inputs/checker.txt")
+    files["environment/Dockerfile"] = b"FROM python:3.12-slim\nWORKDIR /workspace\nCOPY inputs /workspace/inputs\n"
+    digest = content_digest(files)
+    modes = {path: row.data["modes"].get(path, "644") for path in files}
+    data = {**row.data, "files": files, "modes": modes, "task_ref": f"skill2env/fixture@sha256:{digest}"}
+    monkeypatch.setitem(STAGED_INPUT_DIRECTORIES, f"sha256:{digest}", "inputs")
+    task = convert_task(replace(row, data=data), ConversionContext({}, None))
+    assert isinstance(task, TaskSpec)
+    require_resolved_environment(task.environment_requirements)
+    require_resolved_environment(task.grader.environment)
+    assert task.environment_requirements.docker_image == task.grader.environment.docker_image
+    assert {file.path: resource_bytes(file) for file in task.resources.worker} == {
+        "workspace/inputs/checker.txt": b"original"
+    }
 
 
 def test_unbuilt_export_preserves_contexts_and_private_roles_but_cannot_execute():
