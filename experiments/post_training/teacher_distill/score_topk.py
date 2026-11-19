@@ -20,7 +20,6 @@ of scoring has passed no new cell starts, so a cap drops whole cells (whole pack
 """
 
 import argparse
-import dataclasses
 import gzip
 import io
 import json
@@ -176,9 +175,7 @@ def run_job(cells_root: str, output: str, budget_seconds: float) -> None:
         priority=job_pb2.PRIORITY_BAND_PRODUCTION,
         api_model="teacher",
     )
-    # Keep the serving job on 08a; the lowering leaves its placement open.
-    resources = dataclasses.replace(inference.iris.worker_resources, target_cluster=CLUSTER)
-    inference = dataclasses.replace(inference, iris=dataclasses.replace(inference.iris, worker_resources=resources))
+    # The coordinator already runs on 08a, so the serving child stays there without a cluster pin.
     summaries = []
     serve_started = time.monotonic()
     with remote_inference(inference) as session:
