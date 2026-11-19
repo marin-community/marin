@@ -431,7 +431,7 @@ _OUTCOME_LOSSES = frozenset(
 )
 
 
-def require_worker_batch_config(cfg: DictConfig) -> None:
+def require_worker_batch_config(cfg: DictConfig, *, check_runtime_resources: bool = True) -> None:
     """Reject configuration settings unsupported by policy-worker assembly."""
     algorithm = cfg.trainer.algorithm
     shaping = parse_trajectory_reward_shaping_config(cfg.generator.get("trajectory_reward_shaping"))
@@ -439,13 +439,20 @@ def require_worker_batch_config(cfg: DictConfig) -> None:
     expert_tensor_parallel = megatron.get("expert_tensor_parallel_size") or megatron.tensor_model_parallel_size
     moe_etp = False
     if expert_tensor_parallel > 1:
-        # Model registration imports utils while initializing the model package.
-        from skyrl_train.models import register_local_models
-
-        register_local_models()
         model = cfg.trainer.policy.model
-        metadata = AutoConfig.from_pretrained(model.path, trust_remote_code=True, revision=model.get("revision"))
-        moe_etp = model_expert_count(metadata) is not None
+        # The plan can check MoE expert parallelism when model metadata is already staged.
+        if check_runtime_resources or os.path.isfile(os.path.join(model.path, "config.json")):
+            # Model registration imports utils while initializing the model package.
+            from skyrl_train.models import register_local_models
+
+            register_local_models()
+            metadata = AutoConfig.from_pretrained(
+                model.path,
+                trust_remote_code=True,
+                revision=model.get("revision"),
+                local_files_only=not check_runtime_resources,
+            )
+            moe_etp = model_expert_count(metadata) is not None
     supported_loss = (
         algorithm.policy_loss_type in _OUTCOME_LOSSES and algorithm.advantage_estimator in OUTCOME_ADVANTAGE_ESTIMATORS
     ) or (
@@ -469,9 +476,9 @@ def require_worker_batch_config(cfg: DictConfig) -> None:
             raise ValueError(f"trainer.batch_builder=worker does not support {reason}")
 
 
-def validate_cfg(cfg: DictConfig):
+def validate_cfg(cfg: DictConfig, *, check_runtime_resources: bool = True):
     if BatchBuilder(cfg.trainer.batch_builder) is BatchBuilder.WORKER:
-        require_worker_batch_config(cfg)
+        require_worker_batch_config(cfg, check_runtime_resources=check_runtime_resources)
     validate_training_settings(cfg)
     validate_mismatch_probe_config(cfg)
     distillation_plan = compile_distillation_plan_from_config(cfg)
@@ -494,7 +501,7 @@ def validate_cfg(cfg: DictConfig):
     spec = PolicyLossRegistry.spec(cfg.trainer.algorithm.policy_loss_type)
     validate_objective(cfg, loss_spec=spec)
     resolve_weight_sync_pause_policy(cfg.generator)
-    validate_generator_cfg(cfg)
+    validate_generator_cfg(cfg, check_runtime_resources=check_runtime_resources)
     validate_batch_invariant_config(cfg)
     validate_hf_export_config(cfg)
     try:
@@ -555,7 +562,7 @@ def validate_cfg(cfg: DictConfig):
         configure_behavior_logprob_sampling(cfg.generator)
 
 
-def validate_generator_cfg(cfg: DictConfig):
+def validate_generator_cfg(cfg: DictConfig, *, check_runtime_resources: bool = True):
     """Validate generation settings before engine startup."""
 
     if cfg.generator.backend != "vllm":
@@ -578,8 +585,8 @@ def validate_generator_cfg(cfg: DictConfig):
             "num_inference_engines should be equal to the number of remote_inference_engine_urls"
         )
 
-    # TODO(tgriggs): use a more modular config validation
-    if "wandb" in cfg.trainer.logger:
+    # W&B credentials are supplied by the launch environment.
+    if check_runtime_resources and "wandb" in cfg.trainer.logger:
         require_secret("WANDB_API_KEY")
 
     if cfg.generator.override_existing_update_group == "auto":
@@ -605,7 +612,7 @@ def validate_generator_cfg(cfg: DictConfig):
         )
 
     # Validate inference engine Decode Context Parallel (DCP).
-    _validate_dcp_cfg(cfg)
+    _validate_dcp_cfg(cfg, local_files_only=not check_runtime_resources)
 
 
 def _is_mla_arch(model_cfg) -> bool:
@@ -632,7 +639,7 @@ def _is_mla_arch(model_cfg) -> bool:
     return False
 
 
-def _resolve_num_kv_heads(model_path: str):
+def _resolve_num_kv_heads(model_path: str, *, local_files_only: bool):
     """Resolve (num_kv_heads, is_mla, model_cfg) from an HF model config, offline-safe.
 
     Returns (None, False, None) if the config cannot be resolved without a network
@@ -649,7 +656,7 @@ def _resolve_num_kv_heads(model_path: str):
         # Respect offline / cached configs: do not force a network download at
         # validate-time. If the config isn't locally resolvable, transformers raises
         # (offline) or we let any error fall through to the graceful-degrade path.
-        model_cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+        model_cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True, local_files_only=local_files_only)
     except Exception:
         return None, False, None
 
@@ -695,7 +702,7 @@ def _assert_dcp_capable_arch(model_cfg, dcp: int):
         )
 
 
-def _validate_dcp_cfg(cfg: DictConfig):
+def _validate_dcp_cfg(cfg: DictConfig, *, local_files_only: bool):
     """Validate the vLLM Decode Context Parallel (DCP) generator config (Stages 0–2).
 
     vLLM DCP shards the KV cache along the token dim across `dcp` ranks *inside* the
@@ -750,7 +757,7 @@ def _validate_dcp_cfg(cfg: DictConfig):
 
     # (b)/(f) model-aware bounds: resolve the HF config offline-safely.
     model_path = cfg.trainer.policy.model.path
-    num_kv_heads, is_mla, model_cfg = _resolve_num_kv_heads(model_path)
+    num_kv_heads, is_mla, model_cfg = _resolve_num_kv_heads(model_path, local_files_only=local_files_only)
     if num_kv_heads is None:
         # Could not resolve the config without a network download -> degrade gracefully:
         # keep the cheap dcp<=tp bound (already asserted) and warn, leaning on vLLM's own

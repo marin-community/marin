@@ -747,6 +747,31 @@ def skyrl_entrypoint(cfg: DictConfig):
     exp.run()
 
 
+def validate_driver_config(
+    cfg: DictConfig, operation: EntrypointOperation, *, check_runtime_resources: bool = True
+) -> None:
+    """Apply the shared Ray driver's pre-start configuration checks."""
+    from skyrl_train import objective  # noqa: F401, PLC0415 - register losses for training validation
+    from skyrl_train.rollouts.harbor_tasks import HarborTaskSettings  # noqa: PLC0415 - optional training dependencies
+    from skyrl_train.utils import validate_cfg  # noqa: PLC0415
+    from skyrl_train.utils.progress import configure_progress  # noqa: PLC0415 - keep launcher imports Torch-free
+
+    normalize_logging_backends(cfg)
+    validate_rollout_launch(cfg, operation)
+    if cfg.get("terminal_bench_config") is not None:
+        HarborTaskSettings.from_config(cfg.terminal_bench_config)
+    validate_cfg(cfg, check_runtime_resources=check_runtime_resources)
+    configure_progress(cfg.trainer.progress)
+
+
+def validate_generation_driver_config(cfg: DictConfig, *, check_runtime_resources: bool = True) -> None:
+    """Apply the evaluation-only driver's pre-start configuration checks."""
+    from skyrl_train.utils.utils import validate_generator_cfg  # noqa: PLC0415 - keep launcher imports Torch-free
+
+    normalize_logging_backends(cfg)
+    validate_generator_cfg(cfg, check_runtime_resources=check_runtime_resources)
+
+
 def run_ray_driver(
     cfg: DictConfig,
     entrypoint: RemoteFunction,
@@ -758,20 +783,10 @@ def run_ray_driver(
     from skyrl_train.entrypoints.ray_lifecycle import exit_without_ray_destructors, shutdown_ray  # noqa: PLC0415
     from marinskyrl.process_diagnostics import write_exception_receipt  # noqa: PLC0415
     from skyrl_train.telemetry import DRIVER_ROLE, process_telemetry  # noqa: PLC0415
-    from skyrl_train import objective  # noqa: F401, PLC0415 - register losses when the training runtime loads
-    from skyrl_train.rollouts.harbor_tasks import HarborTaskSettings  # noqa: PLC0415 - optional training dependencies
-    from skyrl_train.utils import validate_cfg  # noqa: PLC0415
     from skyrl_train.utils.logging_utils import log_exception_as_text  # noqa: PLC0415
-    from skyrl_train.utils.progress import configure_progress  # noqa: PLC0415 - keep launcher imports Torch-free
     from skyrl_train.utils.utils import initialize_ray  # noqa: PLC0415
 
-    normalize_logging_backends(cfg)
-    validate_rollout_launch(cfg, operation)
-    if cfg.get("terminal_bench_config") is not None:
-        HarborTaskSettings.from_config(cfg.terminal_bench_config)
-    validate_cfg(cfg)
-    configure_progress(cfg.trainer.progress)
-
+    validate_driver_config(cfg, operation)
     initialize_ray(cfg)
 
     with process_telemetry(DRIVER_ROLE):
