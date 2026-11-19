@@ -1,16 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Evaluate pinned HF policies through the shared NVL72 long-loop entrypoint."""
+"""Run a bounded Mochi engine proof through the generation-only SkyRL entrypoint."""
 
 import hashlib
 import json
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-import draccus
 import yaml
-from marin.evaluation.model_config import ModelConfig
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext, materialized_config
@@ -21,15 +19,16 @@ from marin.rl.skyrl import (
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
     SkyRLRun,
+    SkyRLRunConfig,
     SkyRLSpec,
     SkyRLTopology,
     _materialize_role_plan_config,
+    run_skyrl,
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.long_loop.eval_runtime.judge import JudgedEvaluation, run_judged
 from experiments.post_training.long_loop.nvl72 import EXECUTION, RECIPE_PATH, SEED
 
 RECIPE = Path(__file__).with_name("specs") / "evaluation.yaml"
@@ -95,6 +94,8 @@ def evaluation_from_spec(spec: NVL72EvaluationSpec, config_output: Path) -> Arti
             raise ValueError("Pinned micro evaluation data differs from its SHA-256")
     recipe = yaml.safe_load(RECIPE.read_text())
     config = recipe["config"]
+    config["environment"]["task_sessions"].pop("remote_judge")
+    config["extra_env"].pop("JUDGE_BASE_URL")
     _materialize_role_plan_config(config, plan)
     config["context_budget"].update(
         request_window_tokens=spec.context_tokens, max_new_tokens_per_turn=spec.max_new_tokens
@@ -115,6 +116,7 @@ def evaluation_from_spec(spec: NVL72EvaluationSpec, config_output: Path) -> Arti
     config["generator"]["engine_init_kwargs"]["moe_backend"] = serving["moe_backend"]
     config["extra_env"]["PYTORCH_CUDA_ALLOC_CONF"] = serving_recipe["extra_env"]["PYTORCH_CUDA_ALLOC_CONF"]
     config["generator"]["enforce_eager"] = False
+    config["generator"]["engine_init_timeout_seconds"] = 1800
     config["generator"]["engine_init_kwargs"]["marin_native_environment_control"] = json.loads(
         Path(__file__).with_name("native_environment_13.json").read_text()
     )
@@ -162,15 +164,9 @@ def evaluation_from_spec(spec: NVL72EvaluationSpec, config_output: Path) -> Arti
         ),
         export_hf=False,
     )
-    judge = draccus.decode(ModelConfig, recipe["judge"])
-    judge = replace(
-        judge,
-        resource_hint=replace(judge.resource_hint, gpu={"GB200": 4}),
-        serve=replace(judge.serve, tensor_parallel_size=4, pipeline_parallel_size=1),
-    )
     original = step.build_config
 
-    def build_config(ctx: StepContext) -> JudgedEvaluation:
+    def build_config(ctx: StepContext) -> SkyRLRunConfig:
         run = original(ctx)
         launch = yaml.safe_load(run.launch_config_yaml)
         locator = launch["inputs"]["model"]
@@ -178,9 +174,9 @@ def evaluation_from_spec(spec: NVL72EvaluationSpec, config_output: Path) -> Arti
             model_path=locator["uri"], model_source_identity=locator["identity"], model_checkpoint_step=spec.model_step
         )
         run = replace(run, launch_config_yaml=yaml.safe_dump(launch))
-        return JudgedEvaluation(run, judge, "https://iris.oa.dev", 4, "GB200", "cw-us-east-08a")
+        return run
 
-    step = replace(step, build_config=build_config, run=run_judged)
+    step = replace(step, build_config=build_config, run=run_skyrl)
     step = replace(step, expected_fingerprint=step.fingerprint())
-    config_output.write_text(materialized_config(step, spec.output_prefix).skyrl.launch_config_yaml)
+    config_output.write_text(materialized_config(step, spec.output_prefix).launch_config_yaml)
     return step
