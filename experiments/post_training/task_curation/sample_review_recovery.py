@@ -40,6 +40,7 @@ from experiments.post_training.task_curation.lexical_artifacts import SourceText
 from experiments.post_training.task_curation.registry import RegistryReference, read_registry_document
 from experiments.post_training.task_curation.review_carry_forward import (
     ContractNormalization,
+    EquivalenceAllowance,
     GraderEnvironmentReceipt,
     GraderEnvironmentRefused,
     NormalizationRefused,
@@ -193,6 +194,7 @@ def recover_target(
     target: RecoveryTarget,
     output_root: str,
     normalization_fields: tuple[str, ...],
+    allowances: tuple[EquivalenceAllowance, ...] = (),
 ) -> tuple[SampleRecovery, list[PriorOutcome]]:
     """Recover one source's carried reviews and its augmented SAMPLE outcome."""
     current_receipt = read_receipt_reference(target.current, target.source_id)
@@ -213,7 +215,7 @@ def recover_target(
     for reference in target.prior:
         try:
             outcome = _recover_prior(
-                target, output_root, normalization_fields, reference, current_population, current_identities
+                target, output_root, normalization_fields, allowances, reference, current_population, current_identities
             )
         except ValueError as error:
             logger.warning("Prior receipt refused for %s from %s: %s", target.source_id, reference.revision[:12], error)
@@ -246,6 +248,7 @@ def _recover_prior(
     target: RecoveryTarget,
     output_root: str,
     normalization_fields: tuple[str, ...],
+    allowances: tuple[EquivalenceAllowance, ...],
     reference: ReceiptReference,
     current_population: SourceTextPopulation,
     current_identities,
@@ -282,6 +285,7 @@ def _recover_prior(
                 prior_population.path,
                 current_population.path,
                 _grader_environment_evidence_url(output_root, target, reference),
+                allowances=allowances,
             )
         except GraderEnvironmentRefused as error:
             logger.info(
@@ -331,11 +335,22 @@ def _grader_environment_evidence_url(output_root: str, target: RecoveryTarget, r
     return prefix_join(output_root, f"grader-environment/{key}.parquet")
 
 
-def recover_queue(queue: RecoveryQueue, output_root: str, normalization_fields: tuple[str, ...]) -> list[dict]:
+def _equivalence_allowances(requested: tuple[str, ...]) -> tuple[EquivalenceAllowance, ...]:
+    """The typed allowances a recovery run requests, by name."""
+    known = {allowance.value: allowance for allowance in EquivalenceAllowance}
+    unknown = sorted(set(requested) - set(known))
+    if unknown:
+        raise ValueError(f"Unknown equivalence allowances: {unknown}")
+    return tuple(known[name] for name in sorted(set(requested)))
+
+
+def recover_queue(
+    queue: RecoveryQueue, output_root: str, normalization_fields: tuple[str, ...], allowances=()
+) -> list[dict]:
     """Recover every queued source and write its record beside the summary."""
     records = []
     for target in queue.targets:
-        recovery, priors = recover_target(target, output_root, normalization_fields)
+        recovery, priors = recover_target(target, output_root, normalization_fields, allowances)
         record = {
             "source_id": recovery.source_id,
             "retained": recovery.retained,
@@ -389,6 +404,12 @@ def main() -> None:
     recover.add_argument("--queue-sha256", required=True)
     recover.add_argument("--output-root", required=True)
     recover.add_argument("--normalization-field", action="append", default=[])
+    recover.add_argument(
+        "--allowance",
+        action="append",
+        default=[],
+        help="Typed equivalence allowance to attempt (calibration_completion, actor_setup_pinning, lock_resources)",
+    )
     recover.add_argument("--run", action="store_true")
     args = parser.parse_args()
     configure_coreweave_s3()
@@ -406,7 +427,8 @@ def main() -> None:
         print(json.dumps({"targets": len(queue.targets)}))
         return
     fields = tuple(args.normalization_field) or DEFAULT_NORMALIZATION_FIELDS
-    records = recover_queue(queue, args.output_root, fields)
+    allowances = _equivalence_allowances(tuple(args.allowance))
+    records = recover_queue(queue, args.output_root, fields, allowances)
     summary = {
         "targets": len(queue.targets),
         "sources": [

@@ -29,6 +29,7 @@ import json
 import logging
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
+from enum import StrEnum
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -73,6 +74,7 @@ GRADER_ENVIRONMENT_EVIDENCE_SCHEMA = pa.schema(
         ("original_sha256", pa.string()),
         ("reissued_sha256", pa.string()),
         ("differing_paths", pa.large_string()),
+        ("allowances", pa.large_string()),
     ]
 )
 
@@ -137,6 +139,31 @@ class GraderEnvironmentRefused(ValueError):
     """The grading-environment-only equivalence does not hold for this population pair."""
 
 
+class EquivalenceAllowance(StrEnum):
+    """A typed contract change a grading-environment equivalence may also cover.
+
+    The base equivalence covers ``grader.environment`` only (ruling 54). Each
+    further allowance names one reviewed, bounded contract change; a value
+    change outside them still refuses the record.
+    """
+
+    CALIBRATION_COMPLETION = "calibration_completion"
+    """``execution_requirements`` / ``verifier_execution_requirements`` go
+    from absent-or-null on the prior side to calibrated values on the
+    re-issued side. A value-to-value change is not a completion and refuses."""
+    ACTOR_SETUP_PINNING = "actor_setup_pinning"
+    """``environment_requirements.setup_commands`` replaces floating pip
+    installs with the hashed ``--require-hashes`` actor lock install."""
+    LOCK_RESOURCES = "lock_resources"
+    """``resources.worker`` / ``resources.verifier`` gain appended lock
+    resources."""
+
+
+_CALIBRATION_FIELDS = ("execution_requirements", "verifier_execution_requirements")
+_ACTOR_SETUP_PREFIX = "environment_requirements.setup_commands"
+_LOCK_RESOURCE_PREFIXES = ("resources.worker", "resources.verifier")
+
+
 def _differing_paths(left: dict, right: dict, *, prefix: str = "") -> list[str]:
     """Every JSON path where two task documents differ, recursively.
 
@@ -172,12 +199,13 @@ class GraderEnvironmentReceipt(BaseModel):
     ``grader.environment`` (for example a packages-lock exchange for the
     task's own workspace image) keeps its prior SAMPLE reviews. This record
     binds the two population digests after verifying, per shared task, that
-    every differing contract path lies inside ``grader.environment`` and
-    everything outside it is byte-identical. The evidence parquet records
-    both task digests and the exact differing paths; ``identity_sha256``
-    digests the per-task identity pairs, so a plan re-derives it from its own
-    identity maps and cannot drift from the evidence. ``task_identity`` is
-    never changed.
+    every differing contract path lies inside ``grader.environment`` or within
+    one of the receipt's typed ``allowances``, and that everything else is
+    byte-identical. The evidence parquet records both task digests, the exact
+    differing paths, and the allowances each task applied;
+    ``identity_sha256`` digests the per-task identity pairs, so a plan
+    re-derives it from its own identity maps and cannot drift from the
+    evidence. ``task_identity`` is never changed.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -186,6 +214,8 @@ class GraderEnvironmentReceipt(BaseModel):
     original: PopulationDigest
     reissued: PopulationDigest
     shared_tasks: int = Field(gt=0)
+    allowances: tuple[EquivalenceAllowance, ...] = ()
+    """The verified non-base allowances; empty means grader.environment only."""
     identity_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     evidence_url: str
 
@@ -199,20 +229,59 @@ class GraderEnvironmentReceipt(BaseModel):
         )
 
 
+def _allowance_for_path(
+    path: str,
+    prior_document: dict,
+    allowances: tuple[EquivalenceAllowance, ...],
+) -> EquivalenceAllowance | None:
+    """The typed allowance that covers one differing contract path, if any.
+
+    ``grader.environment`` is the base equivalence and always allowed. Every
+    other path needs its allowance active, and the calibration completion
+    additionally requires the prior side to be absent-or-null: a calibration
+    completes missing declarations, it does not change existing ones.
+    """
+    if path == GRADER_ENVIRONMENT_PREFIX or path.startswith(f"{GRADER_ENVIRONMENT_PREFIX}."):
+        return None
+    field = path.split(".")[0]
+    if field in _CALIBRATION_FIELDS:
+        if EquivalenceAllowance.CALIBRATION_COMPLETION not in allowances:
+            return None
+        prior_value = prior_document.get(field)
+        if prior_value is None:
+            return EquivalenceAllowance.CALIBRATION_COMPLETION
+        raise GraderEnvironmentRefused(
+            f"Equivalence refused for the calibration allowance at {path}: the prior contract already declares "
+            "values, so this is a value-to-value change and not a completion"
+        )
+    if EquivalenceAllowance.ACTOR_SETUP_PINNING in allowances and (
+        path == _ACTOR_SETUP_PREFIX or path.startswith(f"{_ACTOR_SETUP_PREFIX}.")
+    ):
+        return EquivalenceAllowance.ACTOR_SETUP_PINNING
+    if EquivalenceAllowance.LOCK_RESOURCES in allowances and any(
+        path == prefix or path.startswith(f"{prefix}.") for prefix in _LOCK_RESOURCE_PREFIXES
+    ):
+        return EquivalenceAllowance.LOCK_RESOURCES
+    return None
+
+
 def build_grader_environment_receipt(
     source_id: str,
     original_artifact: str,
     reissued_artifact: str,
     evidence_url: str,
+    allowances: tuple[EquivalenceAllowance, ...] = (),
 ) -> GraderEnvironmentReceipt:
     """Verify a grading-environment-only change and record the equivalence.
 
     For every task the two populations share, every differing contract path
-    must lie inside ``grader.environment``; anything else, on either side,
-    refuses the record for the whole pair. The evidence parquet records each
-    shared task's two contract digests and its exact differing paths.
-    ``identity_sha256`` digests the per-task identity pairs, so a plan can
-    recompute it from its own identity maps.
+    must lie inside ``grader.environment`` or within one of the requested
+    ``allowances``; anything else refuses the record for the whole pair. The
+    calibration completion additionally requires the prior side to be
+    absent-or-null. The evidence parquet records each shared task's two
+    contract digests, its exact differing paths, and the allowances it
+    applied. ``identity_sha256`` digests the per-task identity pairs, so a
+    plan can recompute it from its own identity maps.
     """
     original = SourceTextPopulation.raw_load(original_artifact)
     reissued = SourceTextPopulation.raw_load(reissued_artifact)
@@ -225,6 +294,7 @@ def build_grader_environment_receipt(
         raise GraderEnvironmentRefused(f"Equivalence refused: the populations share no tasks: {source_id}")
     identity_pairs: dict[str, list[str]] = {}
     evidence_rows = []
+    applied: set[EquivalenceAllowance] = set()
     for task_id in shared:
         earlier_document, current_document = original_documents[task_id], reissued_documents[task_id]
         earlier_payload = {
@@ -234,35 +304,41 @@ def build_grader_environment_receipt(
             key: value for key, value in current_document.items() if key not in TASK_IDENTITY_EXCLUDED_FIELDS
         }
         paths = _differing_paths(earlier_payload, current_payload)
-        outside = [
-            path
-            for path in paths
-            if path != GRADER_ENVIRONMENT_PREFIX and not path.startswith(f"{GRADER_ENVIRONMENT_PREFIX}.")
-        ]
-        if outside:
-            raise GraderEnvironmentRefused(
-                f"Equivalence refused for {task_id}: contract changes outside {GRADER_ENVIRONMENT_PREFIX}: {outside[:3]}"
-            )
+        task_allowances: set[EquivalenceAllowance] = set()
+        for path in paths:
+            allowance = _allowance_for_path(path, earlier_document, allowances)
+            if allowance is None and not (
+                path == GRADER_ENVIRONMENT_PREFIX or path.startswith(f"{GRADER_ENVIRONMENT_PREFIX}.")
+            ):
+                raise GraderEnvironmentRefused(
+                    f"Equivalence refused for {task_id}: contract change at {path} is outside "
+                    f"{GRADER_ENVIRONMENT_PREFIX} and every requested allowance"
+                )
+            if allowance is not None:
+                task_allowances.add(allowance)
         original_digest = contract_identity(earlier_document)
         reissued_digest = contract_identity(current_document)
         identity_pairs[task_id] = [original_digest, reissued_digest]
+        applied |= task_allowances
         evidence_rows.append(
             {
                 "task_id": task_id,
                 "original_sha256": original_digest,
                 "reissued_sha256": reissued_digest,
                 "differing_paths": json.dumps(paths),
+                "allowances": json.dumps(sorted(allowance.value for allowance in task_allowances)),
             }
         )
     table = pa.Table.from_pylist(evidence_rows, schema=GRADER_ENVIRONMENT_EVIDENCE_SCHEMA)
     with StoragePath(evidence_url).open("wb", auto_mkdir=True) as stream:
         pq.write_table(table, stream, compression="zstd")
     logger.info(
-        "Grading-environment equivalence %s: %d shared tasks verified across %s and %s",
+        "Grading-environment equivalence %s: %d shared tasks verified across %s and %s with allowances %s",
         source_id,
         len(shared),
         original.task_specs_sha256[:12],
         reissued.task_specs_sha256[:12],
+        sorted(allowance.value for allowance in applied),
     )
     return GraderEnvironmentReceipt(
         source_id=source_id,
@@ -273,6 +349,7 @@ def build_grader_environment_receipt(
             artifact=reissued_artifact, task_specs_sha256=reissued.task_specs_sha256, task_count=reissued.task_count
         ),
         shared_tasks=len(shared),
+        allowances=tuple(sorted(applied)),
         identity_sha256=canonical_sha256(identity_pairs),
         evidence_url=evidence_url,
     )

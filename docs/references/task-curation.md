@@ -234,6 +234,15 @@ until its current-pin admission receipt exists.
   the plan re-derives the verified pairs from them. Any change outside
   `grader.environment` refuses the record for the whole pair, and
   `task_identity` is never changed.
+  Further contract changes ride the record only as typed allowances, each
+  recorded per task in the evidence parquet: `calibration_completion` lets
+  `execution_requirements` / `verifier_execution_requirements` go from
+  absent-or-null to calibrated values (a value-to-value change refuses);
+  `actor_setup_pinning` lets `environment_requirements.setup_commands`
+  replace floating pip installs with the hashed lock install; and
+  `lock_resources` lets `resources.worker` / `resources.verifier` gain
+  appended lock resources. The recovery runner enables them per run with
+  `--allowance`; without the flag only `grader.environment` rides.
 - *Recovered SAMPLE evidence.* `sample_recovery_outcome` joins carried prior
   reviews onto one source's fixed panel under the augmented rules. The Result
   stays computed from the fixed panel alone, so carried reviews cannot bias

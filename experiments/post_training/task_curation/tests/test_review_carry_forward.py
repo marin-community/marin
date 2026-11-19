@@ -36,6 +36,7 @@ from experiments.post_training.task_curation.full_qc_review import RECORD_SCHEMA
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.review_carry_forward import (
     CarriedReview,
+    EquivalenceAllowance,
     GraderEnvironmentRefused,
     build_grader_environment_receipt,
     build_normalization_receipt,
@@ -481,6 +482,172 @@ def test_plan_refuses_grader_environment_for_another_pair(tmp_path):
             population_identities(earlier_population),
             population_identities(other_current),
             grader_environment=equivalence,
+        )
+
+
+def test_calibration_completion_carries(tmp_path):
+    earlier_tasks = grader_tasks("registry.example/old-image:1")
+    current_tasks = grader_tasks("registry.example/workspace-image:2")
+    for document in current_tasks.values():
+        document["execution_requirements"] = {"cpus": 1, "memory_mb": 2048, "agent_timeout_sec": 900.0}
+        document["verifier_execution_requirements"] = {"cpus": 1, "verifier_timeout_sec": 720.0}
+    earlier_population = write_population(tmp_path, "earlier", earlier_tasks)
+    current_population = write_population(
+        tmp_path, "current", current_tasks, dataset_id=CURRENT_PIN, dataset_revision=CURRENT_REVISION
+    )
+    equivalence = build_grader_environment_receipt(
+        SOURCE_ID,
+        earlier_population.path,
+        current_population.path,
+        str(tmp_path / "grader-evidence.parquet"),
+        allowances=(EquivalenceAllowance.CALIBRATION_COMPLETION,),
+    )
+    assert equivalence.allowances == (EquivalenceAllowance.CALIBRATION_COMPLETION,)
+    reviews = {task_id: good_review(task_id) for task_id in earlier_tasks}
+    receipt = write_receipt(tmp_path, earlier_population, earlier_tasks, reviews)
+    evidence = earlier_panel_evidence(
+        receipt, ContentEvidenceReference(uri=str(tmp_path / "receipt-document.json"), sha256="d" * 64)
+    )
+    plan = plan_review_carry_forward(
+        SOURCE_ID,
+        evidence,
+        earlier_population,
+        current_population,
+        population_identities(earlier_population),
+        population_identities(current_population),
+        grader_environment=equivalence,
+    )
+    assert plan.population.model_dump() == {"carried": 6, "changed": 0, "new": 0, "dropped": 0}
+    assert len(plan.carried_reviews) == 6
+    with StoragePath(equivalence.evidence_url).open("rb") as stream:
+        rows = pq.read_table(stream).to_pylist()
+    assert json.loads(rows[0]["allowances"]) == ["calibration_completion"]
+    assert "grader.environment.docker_image" in json.loads(rows[0]["differing_paths"])
+
+
+def test_calibration_refuses_value_to_value_change(tmp_path):
+    earlier_tasks = grader_tasks("registry.example/old-image:1")
+    current_tasks = grader_tasks("registry.example/workspace-image:2")
+    for document in earlier_tasks.values():
+        document["execution_requirements"] = {"cpus": 2, "memory_mb": 4096}
+    for document in current_tasks.values():
+        document["execution_requirements"] = {"cpus": 1, "memory_mb": 2048}
+    earlier_population = write_population(tmp_path, "earlier", earlier_tasks)
+    current_population = write_population(
+        tmp_path, "current", current_tasks, dataset_id=CURRENT_PIN, dataset_revision=CURRENT_REVISION
+    )
+    with pytest.raises(GraderEnvironmentRefused, match=r"value-to-value change"):
+        build_grader_environment_receipt(
+            SOURCE_ID,
+            earlier_population.path,
+            current_population.path,
+            str(tmp_path / "grader-evidence.parquet"),
+            allowances=(EquivalenceAllowance.CALIBRATION_COMPLETION,),
+        )
+
+
+def test_calibration_refuses_reverse_direction(tmp_path):
+    earlier_tasks = grader_tasks("registry.example/old-image:1")
+    current_tasks = grader_tasks("registry.example/workspace-image:2")
+    for document in earlier_tasks.values():
+        document["execution_requirements"] = {"cpus": 1, "memory_mb": 2048}
+    earlier_population = write_population(tmp_path, "earlier", earlier_tasks)
+    current_population = write_population(
+        tmp_path, "current", current_tasks, dataset_id=CURRENT_PIN, dataset_revision=CURRENT_REVISION
+    )
+    with pytest.raises(GraderEnvironmentRefused, match=r"value-to-value change"):
+        build_grader_environment_receipt(
+            SOURCE_ID,
+            earlier_population.path,
+            current_population.path,
+            str(tmp_path / "grader-evidence.parquet"),
+            allowances=(EquivalenceAllowance.CALIBRATION_COMPLETION,),
+        )
+
+
+def pinned_tasks() -> tuple[dict[str, dict], dict[str, dict]]:
+    """v1 tasks and their pinned re-conversion: setup pinning plus lock resources."""
+    earlier_tasks = grader_tasks("registry.example/old-image:1")
+    current_tasks = grader_tasks("registry.example/old-image:1")
+    for document in current_tasks.values():
+        document["environment_requirements"] = {
+            "command_semantics": "linux_process",
+            "setup_commands": ["python3 -m pip install --no-cache-dir --require-hashes -r /locks/actor.lock"],
+        }
+        earlier_tasks[document["id"]]["environment_requirements"] = {
+            "command_semantics": "linux_process",
+            "setup_commands": ["pip install pytest", "pip install hypothesis"],
+        }
+        document["resources"] = {
+            "worker": [{"path": "locks/actor.lock", "source": {"content_base64": "x"}}],
+            "verifier": [{"path": "locks/grader.lock", "source": {"content_base64": "y"}}],
+        }
+        earlier_tasks[document["id"]]["resources"] = {"worker": [], "verifier": []}
+    return earlier_tasks, current_tasks
+
+
+def test_actor_setup_and_lock_resources_allowances_carries(tmp_path):
+    earlier_tasks, current_tasks = pinned_tasks()
+    earlier_population = write_population(tmp_path, "earlier", earlier_tasks)
+    current_population = write_population(
+        tmp_path, "current", current_tasks, dataset_id=CURRENT_PIN, dataset_revision=CURRENT_REVISION
+    )
+    allowances = (EquivalenceAllowance.ACTOR_SETUP_PINNING, EquivalenceAllowance.LOCK_RESOURCES)
+    equivalence = build_grader_environment_receipt(
+        SOURCE_ID,
+        earlier_population.path,
+        current_population.path,
+        str(tmp_path / "grader-evidence.parquet"),
+        allowances=allowances,
+    )
+    assert set(equivalence.allowances) == set(allowances)
+    reviews = {task_id: good_review(task_id) for task_id in earlier_tasks}
+    receipt = write_receipt(tmp_path, earlier_population, earlier_tasks, reviews)
+    evidence = earlier_panel_evidence(
+        receipt, ContentEvidenceReference(uri=str(tmp_path / "receipt-document.json"), sha256="d" * 64)
+    )
+    plan = plan_review_carry_forward(
+        SOURCE_ID,
+        evidence,
+        earlier_population,
+        current_population,
+        population_identities(earlier_population),
+        population_identities(current_population),
+        grader_environment=equivalence,
+    )
+    assert plan.population.model_dump() == {"carried": 6, "changed": 0, "new": 0, "dropped": 0}
+    with StoragePath(equivalence.evidence_url).open("rb") as stream:
+        rows = pq.read_table(stream).to_pylist()
+    assert json.loads(rows[0]["allowances"]) == ["actor_setup_pinning", "lock_resources"]
+
+
+def test_pinning_paths_refused_without_allowances(tmp_path):
+    earlier_tasks, current_tasks = pinned_tasks()
+    earlier_population = write_population(tmp_path, "earlier", earlier_tasks)
+    current_population = write_population(
+        tmp_path, "current", current_tasks, dataset_id=CURRENT_PIN, dataset_revision=CURRENT_REVISION
+    )
+    with pytest.raises(GraderEnvironmentRefused, match=r"outside grader\.environment"):
+        build_grader_environment_receipt(
+            SOURCE_ID, earlier_population.path, current_population.path, str(tmp_path / "grader-evidence.parquet")
+        )
+
+
+def test_unknown_path_refuses_even_with_all_allowances(tmp_path):
+    earlier_tasks, current_tasks = pinned_tasks()
+    current_tasks["task-001"]["context"] = {"events": [{"role": "user", "content": "changed"}]}
+    earlier_population = write_population(tmp_path, "earlier", earlier_tasks)
+    current_population = write_population(
+        tmp_path, "current", current_tasks, dataset_id=CURRENT_PIN, dataset_revision=CURRENT_REVISION
+    )
+    all_allowances = tuple(EquivalenceAllowance)
+    with pytest.raises(GraderEnvironmentRefused, match=r"outside grader\.environment"):
+        build_grader_environment_receipt(
+            SOURCE_ID,
+            earlier_population.path,
+            current_population.path,
+            str(tmp_path / "grader-evidence.parquet"),
+            allowances=all_allowances,
         )
 
 
