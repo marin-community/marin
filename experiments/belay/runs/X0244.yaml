@@ -1,0 +1,13 @@
+experiment: X0244
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: MuonC, lambda = 25 * lr_max / 2
+    flags:
+    - --opt-set
+    - muonc_decay_mult=12.5
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
