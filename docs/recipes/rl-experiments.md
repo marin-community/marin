@@ -238,8 +238,8 @@ on Daytona at each evaluation. Each sandbox builds its pinned task environment i
 Set `DAYTONA_EVAL_API_KEY` and `DAYTONA_TARGET` before submission. Checkpoint choice
 requires at least 99% native coverage and 90% in each Harbor cohort; `eval/all` pools native and
 Harbor scored rewards. Per-cohort metrics are `eval/harbor/<cohort>/*`; `eval/harbor/wall_seconds` measures the
-complete Harbor collection callback. The agent input allowance reserves its output tokens within the
-engine serving window. SWE-bench uses the pinned harness's 3,000-second verifier timeout. A trial
+complete Harbor collection callback. Harbor uses the engine serving window as its total context limit
+and caps replies within that window. SWE-bench uses the pinned harness's 3,000-second verifier timeout. A trial
 can retry once for a phase cancellation, sandbox command timeout or Daytona conflict. Teardown
 errors after verification retain the reward and are recorded alongside it. Trial artifacts live under
 `exports/inline_harbor/`. A Harbor error stops training; rerunning the same command resumes from

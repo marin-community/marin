@@ -306,7 +306,8 @@ for launch in (config, changed):
     for cohort in harbor.cohorts:
         job = JobConfig.model_validate(OmegaConf.to_container(cohort.job, resolve=True))
         model_info = job.agents[0].kwargs["model_info"]
-        assert model_info["max_input_tokens"] + model_info["max_output_tokens"] == window
+        assert model_info["max_input_tokens"] == window, model_info
+        assert model_info["max_output_tokens"] < window
         assert job.retry.max_retries == 1
         assert job.retry.include_exceptions == {"PhaseCancellationError", "TimeoutError", "DaytonaConflictError"}
         if cohort.name == "swebench-verified":
@@ -455,7 +456,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
         "data-medium": {"2026.11.12.1": "ba638a12", "2026.11.17.1": "2be6e5e2", "2026.11.19.1": "4aa3aed9"},
         "speed-long": {"2026.11.11.1": "cd0a5f4e", "2026.11.17.1": "f29155cc", "2026.11.19.1": "9edc7b70"},
         "train-long": {"2026.11.11.1": "4945b701", "2026.11.17.1": "b411c765", "2026.11.19.1": "e56a62fa"},
-        "train-long-harbor": {"2026.11.17.2": "5a71e7e8", "2026.11.18.1": "7c3c9478", "2026.11.19.1": "6fba772c"},
+        "train-long-harbor": {"2026.11.17.2": "5a71e7e8", "2026.11.18.1": "7c3c9478", "2026.11.19.1": "3f50c3ec"},
     }
     configs = assert_revisioned_native_configs(
         snowball_model.SNOWBALL, revisions, tmp_path=tmp_path, monkeypatch=monkeypatch

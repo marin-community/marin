@@ -94,6 +94,7 @@ def _materialize_context_budget(raw: Dict[str, Any], budget: ContextBudget) -> D
     materialized = copy.deepcopy(raw)
     for path, value in budget.derived_values(materialized.get("terminal_bench")).items():
         set_path(materialized, path, value)
+    serving_window_tokens = budget.effective_serving_window_tokens
     for callback in materialized.get("trainer", {}).get("callbacks") or ():
         if callback["type"] != "harbor_evaluation":
             continue
@@ -102,10 +103,10 @@ def _materialize_context_budget(raw: Dict[str, Any], budget: ContextBudget) -> D
                 model_info = agent.get("kwargs", {}).get("model_info", {})
                 if "max_output_tokens" not in model_info:
                     continue
-                input_tokens = budget.effective_serving_window_tokens - model_info["max_output_tokens"]
-                if input_tokens <= 0:
+                if model_info["max_output_tokens"] >= serving_window_tokens:
                     raise ValueError("Harbor output tokens must leave room for input in the serving window")
-                model_info["max_input_tokens"] = input_tokens
+                # Harbor counts both prompt and reply tokens in max_input_tokens.
+                model_info["max_input_tokens"] = serving_window_tokens
     return materialized
 
 
