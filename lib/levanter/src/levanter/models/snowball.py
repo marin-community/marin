@@ -59,6 +59,7 @@ from levanter.grug.sharding import (
     unshard,
 )
 from levanter.layers.attention import AttentionMask as LmHeadAttentionMask
+from levanter.metrics import Metric, ReductionType
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.logging import silence_transformer_nag
@@ -1022,7 +1023,11 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         assert counts is not None
         loss = self._loss_from_activations(example, activations, **kwargs)
         assignments = example.tokens.array.size * self.config.num_experts_per_token * self.config.num_layers
-        return loss, {"moe/dropped_assignment_fraction": counts.dropped.sum() / assignments}
+        return loss, {
+            "moe/dropped_assignment_fraction": Metric.from_value(
+                counts.dropped.sum() / assignments, ReductionType.MEAN
+            )
+        }
 
     def get_lm_head(self) -> NamedArray:
         return hax.named(reshard(self.transformer.output_proj, P(None, "model")), (self.Embed, self.Vocab))

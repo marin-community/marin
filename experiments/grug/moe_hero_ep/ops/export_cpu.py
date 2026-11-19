@@ -243,7 +243,7 @@ def export(config: CpuExportConfig, *, accept_completed: bool = False) -> None:
         if not accept_completed or not manifest.exists():
             raise
         if json.loads(manifest.read_text()).get("export_id") != digest(request):
-            raise FileExistsError(f"Completed Mochi export differs from the selected checkpoint: {manifest}") from None
+            raise FileExistsError(f"Completed export differs from the selected checkpoint: {manifest}") from None
         return
     reader = CpuCheckpointWeights(config)
     shapes = reader.shapes()

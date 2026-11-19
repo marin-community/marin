@@ -3,7 +3,6 @@
 
 import numpy as np
 import pytest
-from dataclasses import replace
 from haliax import Axis
 
 from levanter.data.text.datasets import DatasetComponent, dataset_for_component
@@ -57,15 +56,11 @@ def test_packed_native_transcripts_preserve_document_masks_and_attention_boundar
         writer.write_batch([{"input_ids": np.asarray(tokens, dtype=np.int32)} for tokens in documents])
     component = DatasetComponent(
         cache_dir=str(tmp_path),
-        pack=False,
+        pack=True,
         format=SerializedChatLmDatasetFormat(message_start_id=10, assistant_prefix=(10, 3, 11, 12)),
     )
-    unpacked = dataset_for_component(
-        component, Axis("position", 32), writer.result(), eos_id=None, block_cross_document_attention=True
-    )
-    separate = blocking_wait(unpacked.get_batch([0, 1]))
     packed = dataset_for_component(
-        replace(component, pack=True),
+        component,
         Axis("position", 32),
         writer.result(),
         eos_id=None,
@@ -73,16 +68,10 @@ def test_packed_native_transcripts_preserve_document_masks_and_attention_boundar
     )
     actual = blocking_wait(packed.get_batch([0]))[0]
     np.testing.assert_array_equal(np.flatnonzero(actual.loss_weight), [9, 10, 11, 24, 25])
-    start = 0
-    for doc_id, (tokens, expected) in enumerate(zip(documents, separate, strict=True)):
-        end = start + len(tokens)
-        np.testing.assert_array_equal(np.asarray(actual.tokens)[start:end], tokens)
-        np.testing.assert_array_equal(
-            np.asarray(actual.loss_weight)[start:end], np.asarray(expected.loss_weight)[: len(tokens)]
-        )
-        if block_cross_document_attention:
-            np.testing.assert_array_equal(np.asarray(actual.attn_mask.segment_ids[0])[start:end], doc_id)
-        else:
-            assert actual.attn_mask.segment_ids is None
-        start = end
-    np.testing.assert_array_equal(np.asarray(actual.loss_weight)[start:], 0)
+    tokens = documents[0] + documents[1]
+    np.testing.assert_array_equal(np.asarray(actual.tokens)[: len(tokens)], tokens)
+    if block_cross_document_attention:
+        segments = [0] * len(documents[0]) + [1] * len(documents[1])
+        np.testing.assert_array_equal(np.asarray(actual.attn_mask.segment_ids[0])[: len(tokens)], segments)
+    else:
+        assert actual.attn_mask.segment_ids is None

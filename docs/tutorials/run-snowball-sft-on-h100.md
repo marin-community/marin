@@ -2,9 +2,9 @@
 
 The [Snowball SFT presets](https://github.com/marin-community/marin/blob/main/experiments/post_training/snowball_sft.py) train Levanter's `SnowballLMHeadModel` from pinned Hugging Face weights. The `openthoughts-32k-4node` preset transforms OpenThoughts Agent conversations, supervises assistant tokens, and saves a native Levanter checkpoint and a Hugging Face export.
 
-This is a 32,768-token, ten-step starting recipe on 32 H100s. A prior [Snowball training run](https://github.com/marin-community/marin/pull/9144) demonstrated the 67B model on 32 learner H100s at 4,096 tokens. That run used GRPO; this longer SFT recipe has not completed an end-to-end accelerator run. Do not assume the model's 262K position limit is a validated training length.
+The preset is a 32,768-token, ten-step recipe on 32 H100s. A four-node smoke completed five updates and saved a native checkpoint and Hugging Face export. [Four-node run](https://iris.oa.dev/#/job/%2Fatqamar%2Fclaude-one-loop-sft-h100-stack-sync)
 
-The mesh splits each sequence across four nodes and shards experts across eight H100s within a node. Attention keeps local queries and gathers the full keys and values. Large weight and optimizer leaves are sharded over both axes. The OpenThoughts preset keeps conversations separate (`pack=False`). Its scan layers are checkpointed during reverse mode to bound activation memory.
+The mesh splits each sequence across four nodes and shards experts across eight H100s within a node. Attention keeps local queries and gathers the full keys and values. Large weight and optimizer leaves are sharded over both axes. The OpenThoughts preset puts one conversation in each sequence and keeps its first 32,768 tokens. Its scan layers are checkpointed during reverse mode to bound activation memory.
 
 ## Prepare
 
@@ -50,12 +50,12 @@ from datetime import timedelta
 
 from levanter.checkpoint import CheckpointerConfig
 
-from experiments.post_training.snowball_sft import OPENTHOUGHTS_SFT
+from experiments.post_training.snowball_sft import OPENTHOUGHTS_32K_4NODE, OPENTHOUGHTS_SPEC
 
 preset = replace(
-    OPENTHOUGHTS_SFT,
+    OPENTHOUGHTS_32K_4NODE,
     recipe=replace(
-        OPENTHOUGHTS_SFT.recipe,
+        OPENTHOUGHTS_SPEC,
         checkpointer=CheckpointerConfig(
             save_interval=timedelta(minutes=30),
             keep_last_temporary_checkpoints=2,
