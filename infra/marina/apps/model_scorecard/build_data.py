@@ -20,6 +20,7 @@ from urllib.parse import quote
 import yaml
 from evalrecords.eval_measurements import measurement_from_record
 from evalrecords.records import CW_RECORDS_PREFIX, EvalRunRecord, RunStatus, read_record, record_path
+from marin.evaluation.harbor.runner import DEFAULT_MIN_COMPLETION_RATE
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.step_status import STATUS_SUCCESS
 
@@ -197,7 +198,7 @@ def build_scorecard(manifest: Mapping[str, Any], fetch_record: FetchRecord) -> d
                 "cells": {name: cell_json(resolve_cell(name, cells.get(name), model, fetch_record)) for name in evals},
             }
         )
-    return {"evals": evals, "models": models}
+    return {"evals": evals, "models": models, "min_completion": DEFAULT_MIN_COMPLETION_RATE}
 
 
 def fetch_eval_record(run_id: str) -> EvalRunRecord:

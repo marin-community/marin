@@ -1,6 +1,4 @@
 const LABEL_TEXT = { official: "Official", unofficial: "Unofficial" };
-// Marin publishes an agentic score only when at least this share of trials was scored.
-const MIN_COMPLETION = 0.9;
 const LINK_TEXT = { evaldash: "Click to open the run in EvalDash", storage: "Click to open the raw results in Filer" };
 
 function element(tag, attributes = {}, text) {
@@ -19,25 +17,25 @@ function percent(part, whole) {
   return `${Math.round((100 * part) / whole)}%`;
 }
 
-function trialsLine(trials) {
+function trialsLine(trials, minCompletion) {
   const line = element("span", { class: "trials" });
   const completion = element("span", {}, percent(trials.scored, trials.attempted));
-  if (trials.scored < MIN_COMPLETION * trials.attempted) completion.className = "low-completion";
+  if (trials.scored < minCompletion * trials.attempted) completion.className = "low-completion";
   line.append(completion, ` · ${percent(trials.timeouts, trials.attempted)} t/o`);
   return line;
 }
 
-function trialsText(trials) {
+function trialsText(trials, minCompletion) {
   const unscored = trials.attempted - trials.scored;
   return [
     `Trials: ${trials.scored} of ${trials.attempted} scored (${percent(trials.scored, trials.attempted)}; ` +
-      `Marin requires ${percent(MIN_COMPLETION, 1)})`,
+      `Marin's bar is ${percent(minCompletion, 1)})`,
     `${trials.timeouts} hit the agent time limit and score 0`,
     `${unscored} failed in infrastructure and are unscored`,
   ];
 }
 
-function scoreCell(cell, column) {
+function scoreCell(cell, column, minCompletion) {
   const td = element("td", { "data-col": column });
   if ("missing" in cell) {
     td.className = "missing";
@@ -49,12 +47,12 @@ function scoreCell(cell, column) {
   link.append(element("span", { class: "score" }, cell.score.toFixed(2)));
   if (cell.suspect) link.append(element("span", { class: "suspect-mark", "aria-label": "suspect" }, "!"));
   else if (cell.note) link.append(element("span", { class: "note-mark" }, "*"));
-  if (cell.trials) link.append(trialsLine(cell.trials));
+  if (cell.trials) link.append(trialsLine(cell.trials, minCompletion));
   td.append(link);
   return td;
 }
 
-function tooltipLines(model, evalName, cell) {
+function tooltipLines(model, evalName, cell, minCompletion) {
   const lines = [[`${model.name} · ${evalName}`, "tip-title"]];
   if ("missing" in cell) {
     lines.push(["No score"]);
@@ -63,7 +61,7 @@ function tooltipLines(model, evalName, cell) {
   }
   lines.push([cell.score.toFixed(2), "tip-score"], [LABEL_TEXT[cell.label]]);
   if (cell.suspect) lines.push([`Suspect: ${cell.suspect}`, "tip-suspect"]);
-  if (cell.trials) lines.push(...trialsText(cell.trials).map((text) => [text]));
+  if (cell.trials) lines.push(...trialsText(cell.trials, minCompletion).map((text) => [text]));
   if (cell.note) lines.push([cell.note]);
   lines.push([LINK_TEXT[cell.link.kind]]);
   if (cell.run_id) lines.push([cell.run_id, "tip-id"]);
@@ -91,7 +89,7 @@ function renderBody(table, data) {
     const name = element("th", { class: "model", scope: "row" });
     name.append(element("a", { href: model.url, target: "_blank", rel: "noopener", title: model.location }, model.name));
     tr.append(name);
-    data.evals.forEach((evalName, column) => tr.append(scoreCell(model.cells[evalName], column)));
+    data.evals.forEach((evalName, column) => tr.append(scoreCell(model.cells[evalName], column, data.min_completion)));
   });
   return body;
 }
@@ -120,7 +118,7 @@ function attachHover(body, headers, data) {
     const model = data.models[Number(row.dataset.row)];
     const evalName = data.evals[column];
     tooltip.replaceChildren(
-      ...tooltipLines(model, evalName, model.cells[evalName]).map(([text, cls]) =>
+      ...tooltipLines(model, evalName, model.cells[evalName], data.min_completion).map(([text, cls]) =>
         element("div", cls ? { class: cls } : {}, text),
       ),
     );
