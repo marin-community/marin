@@ -306,18 +306,20 @@ def scale_with_grug_muonh_radial(
     steps: int,
     muon_eps: float,
     learning_rate,
+    radius_learning_rate,
     coefficient_type: CoefficientType,
     pre_norm: str,
-    softcap: float,
+    softcap: float | None,
     b1: float,
     b2: float,
     eps: float,
 ) -> optax.GradientTransformation:
-    """MuonH with a learned, bounded radius per sphere: ``W = r0 exp(s) W_hat``.
+    """MuonH with a learned radius per sphere: ``W = r0 exp(s) W_hat``.
 
-    ``W_hat`` takes the MuonH hyperball step. The log-radius ``s`` (zero at init, ``r0`` the init norm) takes an Adam
-    step at ``learning_rate`` on the radial gradient ``<dL/dW, W>``; a step away from ``s = 0`` is scaled by
-    ``1 - (s / softcap)**2`` and a step toward it is taken in full, and ``s`` is clipped to ``[-softcap, softcap]``.
+    ``W_hat`` takes the MuonH hyperball step at ``learning_rate``. The log-radius ``s`` (zero at init, ``r0`` the init
+    norm) takes an Adam step at ``radius_learning_rate`` on the radial gradient ``<dL/dW, W>``. With a ``softcap``, a
+    step away from ``s = 0`` is scaled by ``1 - (s / softcap)**2`` and a step toward it is taken in full, and ``s`` is
+    clipped to ``[-softcap, softcap]``; with None, ``s`` is unbounded.
     """
     muon_transform = _grug_scale_with_muon(
         momentum=momentum,
@@ -354,7 +356,9 @@ def scale_with_grug_muonh_radial(
         nu_hat = otu.tree_bias_correction(nu, b2, count)
 
         def step_log_radius(s, m, v):
-            step = -learning_rate * m / (jnp.sqrt(v) + eps)
+            step = -radius_learning_rate * m / (jnp.sqrt(v) + eps)
+            if softcap is None:
+                return s + step
             outward = step * s > 0
             step = jnp.where(outward, step * jnp.maximum(1.0 - jnp.square(s / softcap), 0.0), step)
             return jnp.clip(s + step, -softcap, softcap)
@@ -495,6 +499,11 @@ KDA_BETA_LR_MULT = 2.0
 ADAMC_ADAM_DECAY = 0.1
 """AdamC ``lambda`` of the ``adamc_adam`` group (``adamc_head_router_embed``): decay ``(lr_t^2 / lr_max) lambda``."""
 ADAMC_ADAM_GROUP = "adamc_adam"
+NONSI_LATE_ANNEAL_FRAC = 0.7937
+"""``muonh_nonsi_anneal``: the late matrix anneal starts at step ``round(NONSI_LATE_ANNEAL_FRAC * num_train_steps)``."""
+NONSI_RADIUS_B1 = 0.9
+NONSI_RADIUS_B2 = 0.99
+"""``muonh_nonsi_anneal``: Adam betas of the log-radius step."""
 _ADAM_LEAVES = re.compile(
     r"(?:^|\.)(value_embed|ve_lambda|ve_gate|head_ve_lambda|head_ve_gate|head_ve_gain|qk_mult"
     r"|pointer_w|pointer_b|pointer_open|ngram_cache_w|ngram_cache_b|ngram_cache_open)$"
@@ -506,7 +515,7 @@ FULL_BANDWIDTH_MUON_GROUP = "full_bandwidth_muon"
 # Matrices whose output passes through a scale-removing norm, so their radial gradient is zero: the softmax layers'
 # q/k projections under the q/k norms (``qk_norm``, or ``mla_q_norm``/``mla_k_norm``), the MLA KV down-projection
 # (``kv_latent_norm``) and the MoE latent down-projection (``latent_norm``). They keep plain MuonH under
-# ``muonh_radial_softcap``.
+# ``muonh_radial_softcap`` and ``muonh_nonsi_anneal``.
 _RADIUS_FROZEN = re.compile(r"(?:^|\.)(?:stacked_blocks\.stacked\.attn\.(?:w_q|w_k|w_uk|w_dkv)|mlp\.w_latent_down)$")
 
 
@@ -572,6 +581,12 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     takes ``scale_by_adamc`` with ``muonc_decay_mult``. The MoE router weights and ``token_embed`` move to the
     ``adamc_adam`` group: the ``adam`` group's moments plus decay ``(adam_lr_t^2 / adam_lr) ADAMC_ADAM_DECAY``, which
     replaces the router's annealed ``gate_router_weight_decay``."""
+    muonh_nonsi_anneal: bool = False
+    """Learned-radius MuonH ("nonsi") with two anneals, ``s(t) = lr_t / lr_max`` of the MuonH schedule. Each sphere of
+    the ``muonh`` and ``kda_beta`` groups outside ``_RADIUS_FROZEN`` learns an unbounded log-radius
+    (``scale_with_grug_muonh_radial`` without a softcap, Adam betas ``NONSI_RADIUS_B1``/``NONSI_RADIUS_B2``) at the
+    group's unannealed MuonH LR. The ``adamh`` LR becomes ``lr_max s(t)^2``. From ``t0 = round(NONSI_LATE_ANNEAL_FRAC
+    N)`` the sphere steps of every ``muonh`` and ``kda_beta`` group take ``lr_t s(t) / s(t0)``."""
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -584,8 +599,18 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 self.muonh_decay_power,
             )
         adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
+        hyperparams = {"learning_rate": learning_rate_schedule, "adam_lr": adam_lr_schedule}
+        if self.muonh_nonsi_anneal:
+            late_anneal_start = round(NONSI_LATE_ANNEAL_FRAC * num_train_steps)
+            lr_at_late_anneal_start = learning_rate_schedule(late_anneal_start)
 
-        def muonh_radial_at(lr):
+            def matrix_lr_schedule(step):
+                lr = learning_rate_schedule(step)
+                return jnp.where(step >= late_anneal_start, lr * lr / lr_at_late_anneal_start, lr)
+
+            hyperparams["matrix_lr"] = matrix_lr_schedule
+
+        def muonh_radial_at(lr, radius_lr, softcap, b1, b2):
             return optax.chain(
                 scale_with_grug_muonh_radial(
                     momentum=self.momentum,
@@ -593,11 +618,12 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     steps=self.backend_steps,
                     muon_eps=self.muon_epsilon,
                     learning_rate=lr,
+                    radius_learning_rate=radius_lr,
                     coefficient_type=self.coefficient_type,
                     pre_norm=self.muon_pre_norm,
-                    softcap=self.muonh_radial_softcap,
-                    b1=self.beta1,
-                    b2=self.beta2,
+                    softcap=softcap,
+                    b1=b1,
+                    b2=b2,
                     eps=self.epsilon,
                 ),
                 _match_named_update_sharding(),
@@ -688,7 +714,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 )
             return optax.chain(scale_by_adamh(self.beta1, self.beta2, self.epsilon, lr))
 
-        def optimizer(learning_rate, adam_lr):
+        def optimizer(learning_rate, adam_lr, matrix_lr=None):
             transforms = {
                 "muonh": muonc_at(learning_rate) if self.muonc_decay_mult else muonh_at(learning_rate),
                 "adamh": adamh_at(learning_rate),
@@ -715,13 +741,27 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     optax.scale(-adam_lr),
                 )
             if self.muonh_radial_softcap:
-                transforms["muonh_radial"] = muonh_radial_at(learning_rate)
-                transforms["kda_beta_radial"] = muonh_radial_at(learning_rate * KDA_BETA_LR_MULT)
+                cap = self.muonh_radial_softcap
+                transforms["muonh_radial"] = muonh_radial_at(learning_rate, learning_rate, cap, self.beta1, self.beta2)
+                transforms["kda_beta_radial"] = muonh_radial_at(
+                    learning_rate * KDA_BETA_LR_MULT, learning_rate * KDA_BETA_LR_MULT, cap, self.beta1, self.beta2
+                )
+            if self.muonh_nonsi_anneal:
+                beta_lr, beta_matrix_lr = learning_rate * KDA_BETA_LR_MULT, matrix_lr * KDA_BETA_LR_MULT
+                transforms["muonh"] = muonh_at(matrix_lr)
+                transforms["kda_beta"] = muonh_at(beta_matrix_lr)
+                transforms["adamh"] = adamh_at(learning_rate * learning_rate / self.learning_rate)
+                transforms["muonh_radial"] = muonh_radial_at(
+                    matrix_lr, learning_rate, None, NONSI_RADIUS_B1, NONSI_RADIUS_B2
+                )
+                transforms["kda_beta_radial"] = muonh_radial_at(
+                    beta_matrix_lr, beta_lr, None, NONSI_RADIUS_B1, NONSI_RADIUS_B2
+                )
             return _multi_transform_when_used(
                 transforms, {FULL_BANDWIDTH_MUON_GROUP: muon_at(learning_rate)}, self.create_mask
             )
 
-        return optax.inject_hyperparams(optimizer)(learning_rate=learning_rate_schedule, adam_lr=adam_lr_schedule)
+        return optax.inject_hyperparams(optimizer)(**hyperparams)
 
     def __post_init__(self):
         if self.kda_beta_group not in ("kda_beta", "adam"):
@@ -746,13 +786,16 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "adamc_head_router_embed needs muonc_decay_mult, router_lr_mult 1, no embed_lr_mult and "
                 "embed_optimizer adam_group"
             )
+        if self.muonh_nonsi_anneal and (self.muonh_radial_softcap or self.muonc_decay_mult):
+            raise ValueError("muonh_nonsi_anneal excludes muonh_radial_softcap and muonc_decay_mult")
 
     def create_mask(self, params):
         paths = leaf_key_paths(params)
 
         def mask_fn(param, path):
             label = group_fn(param, path)
-            if not self.muonh_radial_softcap or label not in ("muonh", "kda_beta") or param.ndim < 2:
+            radial = self.muonh_radial_softcap or self.muonh_nonsi_anneal
+            if not radial or label not in ("muonh", "kda_beta") or param.ndim < 2:
                 return label
             path_lower = (".".join(path) if isinstance(path, (list, tuple)) else str(path)).lower()
             return label if _RADIUS_FROZEN.search(path_lower) else f"{label}_radial"
