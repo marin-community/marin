@@ -277,7 +277,7 @@ trainer:
     batch_policy: full_batch
     # Prompt groups of each task family per batch, keyed by the rows' family column. Quotas require full_batch and
     # the counts must sum to train_batch_size. An empty map leaves the mix to the prompt order.
-    family_quotas: {}
+    groups_per_family: {}
     # How many times in a row rolling regenerates a prompt whose group missed the staleness window; after that the
     # prompt waits until the prompt order offers it again.
     max_stale_retries: 1

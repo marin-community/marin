@@ -26,7 +26,7 @@ async def test_rejected_rollout_reopens_the_same_family_slot():
             batch_policy=BatchPolicy.FULL_BATCH,
             dynamic_sampling=None,
             max_candidate_groups=None,
-            family_quotas={"agentic": 1, "math": 1},
+            groups_per_family={"agentic": 1, "math": 1},
         )
     )
 

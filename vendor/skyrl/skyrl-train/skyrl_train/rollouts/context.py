@@ -21,7 +21,7 @@ from marinskyrl.runtime_options import PolicyLossType
 from marinskyrl.distillation import DistillationObjectiveKind, compile_distillation_plan_from_config
 from skyrl_train.config.rollout_validation import (
     FAMILY_COLUMN,
-    FAMILY_QUOTAS_KEY,
+    GROUPS_PER_FAMILY_KEY,
     BatchPolicy,
     validate_family_pools,
     validate_family_quota_config,
@@ -187,7 +187,7 @@ class TrainingContext:
         )
         batch_size = config.trainer.train_batch_size
         max_sample_batches = int(dynamic_sampling.max_sample_batches)
-        family_quotas = validate_family_quota_config(config)
+        groups_per_family = validate_family_quota_config(config)
         buffer_config = RolloutBufferConfig(
             batch_size=batch_size,
             max_in_flight=config.trainer.rollout_buffer.max_in_flight,
@@ -195,16 +195,16 @@ class TrainingContext:
             batch_policy=BatchPolicy(config.trainer.rollout_buffer.batch_policy),
             dynamic_sampling=selection.sampling_type,
             max_candidate_groups=max_sample_batches * batch_size if max_sample_batches > 0 else None,
-            family_quotas=family_quotas,
+            groups_per_family=groups_per_family,
         )
         families: dict[str, str] = {}
-        if family_quotas:
+        if groups_per_family:
             if not isinstance(dataset, PromptDataset) or FAMILY_COLUMN not in dataset.dataframe.column_names:
-                raise ValueError(f"{FAMILY_QUOTAS_KEY} requires a {FAMILY_COLUMN} column in the training rows")
+                raise ValueError(f"{GROUPS_PER_FAMILY_KEY} requires a {FAMILY_COLUMN} column in the training rows")
             column = dataset.dataframe.with_format(None)[FAMILY_COLUMN]
             families = {dataset.uid(index): family for index, family in enumerate(column)}
             validate_family_pools(
-                family_quotas, collections.Counter(families.values()), buffer_config.max_staleness_steps
+                groups_per_family, collections.Counter(families.values()), buffer_config.max_staleness_steps
             )
         plan = compile_distillation_plan_from_config(config)
         admission = GroupAdmissionPolicy(
