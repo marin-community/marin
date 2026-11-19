@@ -63,13 +63,8 @@ from rigging.filesystem.buckets import S3UploadPolicy, filesystem_for
 from rigging.filesystem.cluster_config import StoreType, data_buckets
 from rigging.filesystem.storage_path import StoragePath
 from rigging.fsutil.listing import metadata_listing_pages
-from rigging.fsutil.verified_copy import (
-    ETAG_IDENTITY_PREFIX,
-    VerifiedCopyError,
-    copy_with_hash,
-    object_etag,
-    verify_destination,
-)
+from rigging.fsutil.render import format_size
+from rigging.fsutil.verified_copy import ETAG_IDENTITY_PREFIX, copy_verified_object, object_etag, source_identity
 from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
@@ -93,6 +88,7 @@ DIRECTORY_TYPE = "directory"
 SUPPORTED_STORES = frozenset({StoreType.COREWEAVE})
 STATUS_SUFFIX = ".copy-status"
 SHARD_RECORDS = "shards"
+SHARD_RECORD_SUFFIX = ".json"
 COMPLETION_RECORD = "complete.json"
 
 
@@ -105,11 +101,11 @@ class RunNear(StrEnum):
 
 @dataclass(frozen=True, order=True)
 class SourceFile:
-    """One source object: its key relative to the source prefix, size, and ETag."""
+    """One source object: its key relative to the source prefix, size, and version identity."""
 
     path: str
     size: int
-    etag: str
+    identity: str
 
 
 @dataclass(frozen=True)
@@ -128,7 +124,7 @@ class CopiedObject:
 
     path: str
     size: int
-    source_etag: str
+    source_identity: str
     destination_identity: str
 
 
@@ -170,7 +166,7 @@ def status_url(destination_url: str) -> str:
 
 
 def shard_record_url(destination_url: str, shard_id: str) -> str:
-    return f"{status_url(destination_url)}/{SHARD_RECORDS}/{shard_id}.json"
+    return f"{status_url(destination_url)}/{SHARD_RECORDS}/{shard_id}{SHARD_RECORD_SUFFIX}"
 
 
 def list_objects(url: str) -> dict[str, dict[str, Any]]:
@@ -191,19 +187,19 @@ def list_objects(url: str) -> dict[str, dict[str, Any]]:
 
 
 def source_files(url: str) -> list[SourceFile]:
-    """List the objects below *url* with the size and ETag each copy is checked against."""
+    """List the objects below *url* with the size and identity each copy is checked against."""
     files = []
     for path, entry in list_objects(url).items():
-        etag = object_etag(entry)
-        if etag is None:
-            raise ValueError(f"{url}/{path} has no ETag")
-        files.append(SourceFile(path, int(entry["size"]), etag))
+        identity = source_identity(entry)
+        if identity is None:
+            raise ValueError(f"{url}/{path} has no version identity")
+        files.append(SourceFile(path, int(entry["size"]), identity))
     return files
 
 
 def shard_id(files: Sequence[SourceFile]) -> str:
-    """Name a shard by its files' keys, sizes, and ETags, so any source change renames it."""
-    encoded = json.dumps([[f.path, f.size, f.etag] for f in files]).encode()
+    """Name a shard by its files' keys, sizes, and identities, so any source change renames it."""
+    encoded = json.dumps([[f.path, f.size, f.identity] for f in files]).encode()
     return hashlib.sha256(encoded).hexdigest()[:32]
 
 
@@ -226,7 +222,7 @@ def pack_shards(files: Sequence[SourceFile], target_bytes: int) -> list[tuple[So
 def recorded_shard_ids(destination_url: str) -> set[str]:
     """IDs of the shards whose record exists below the destination's status prefix."""
     records = list_objects(f"{status_url(destination_url)}/{SHARD_RECORDS}")
-    return {path.removesuffix(".json") for path in records if path.endswith(".json")}
+    return {path.removesuffix(SHARD_RECORD_SUFFIX) for path in records if path.endswith(SHARD_RECORD_SUFFIX)}
 
 
 def _write_json(url: str, value: Any) -> None:
@@ -248,33 +244,28 @@ def _copy_shard(shard: CopyShard) -> int:
 
     shard_bytes = sum(file.size for file in shard.files)
     _report(
-        f"shard {shard.shard_id}: {len(shard.files)} files, {_format_bytes(shard_bytes)}, "
+        f"shard {shard.shard_id}: {len(shard.files)} files, {format_size(shard_bytes)}, "
         f"{shard.source_url} -> {shard.destination_url}"
     )
 
     def copy_one(file: SourceFile) -> CopiedObject:
         started = time.monotonic()
-        source_path = f"{source_root}/{file.path}"
-        destination_path = f"{destination_root}/{file.path}"
-        copied = copy_with_hash(source_fs, source_path, destination_fs, destination_path)
-        source_fs.invalidate_cache(source_path)
-        if copied.size != file.size or object_etag(source_fs.info(source_path)) != file.etag:
-            raise VerifiedCopyError(f"source changed while copying {file.path}")
-        identity = verify_destination(
+        verified = copy_verified_object(
+            source_fs,
+            f"{source_root}/{file.path}",
             destination_fs,
-            destination_path,
+            f"{destination_root}/{file.path}",
             expected_size=file.size,
-            expected_sha256=copied.sha256,
-            expected_etag=copied.expected_etag,
+            expected_identity=file.identity,
         )
         elapsed = time.monotonic() - started
         _report(
-            f"shard {shard.shard_id}: verified {file.path} ({_format_bytes(file.size)}) "
+            f"shard {shard.shard_id}: verified {file.path} ({format_size(file.size)}) "
             f"in {elapsed:.0f}s, {file.size / max(elapsed, 1e-3) / 1e6:.0f} MB/s"
         )
         counters.pipeline.update_counter("files_copied", 1)
         counters.pipeline.update_counter("bytes_copied", file.size)
-        return CopiedObject(file.path, file.size, file.etag, identity)
+        return CopiedObject(file.path, file.size, file.identity, verified.destination_identity)
 
     with ThreadPoolExecutor(max_workers=COPY_THREADS_PER_WORKER) as pool:
         # list() re-raises the first failure, so Zephyr retries the whole shard and no record is written.
@@ -287,14 +278,6 @@ def _copy_shard(shard: CopyShard) -> int:
 def _report(message: str) -> None:
     # The job's stdout reaches the submitter's terminal; the worker's logging setup filters INFO.
     print(message, flush=True)
-
-
-def _format_bytes(size: int) -> str:
-    if size >= 1e12:
-        return f"{size / 1e12:.2f} TB"
-    if size >= 1e9:
-        return f"{size / 1e9:.2f} GB"
-    return f"{size / 1e6:.1f} MB"
 
 
 def _shard_bytes(shards: Sequence[CopyShard]) -> int:
@@ -312,9 +295,9 @@ def _plan(source_url: str, destination_url: str) -> tuple[list[CopyShard], list[
     ]
     recorded = recorded_shard_ids(destination_url)
     pending = [shard for shard in shards if shard.shard_id not in recorded]
-    _report(f"source: {len(files)} files, {_format_bytes(_shard_bytes(shards))} in {len(shards)} shards")
+    _report(f"source: {len(files)} files, {format_size(_shard_bytes(shards))} in {len(shards)} shards")
     _report(f"already copied: {len(shards) - len(pending)} shards")
-    _report(f"to copy: {len(pending)} shards, {_format_bytes(_shard_bytes(pending))}")
+    _report(f"to copy: {len(pending)} shards, {format_size(_shard_bytes(pending))}")
     return shards, pending
 
 

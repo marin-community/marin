@@ -76,9 +76,20 @@ class _DestinationFile:
 
 
 @dataclass(frozen=True)
-class CopiedFile:
-    """What a streamed copy read: the source's SHA-256 and size, and the ETag its upload should carry."""
+class VerifiedObject:
+    """A copied object that passed verification.
 
+    Attributes:
+        sha256: SHA-256 of the bytes read from the source.
+        destination_identity: The destination's ETag or hash, as ``etag=...`` or ``sha256=...``.
+    """
+
+    sha256: str
+    destination_identity: str
+
+
+@dataclass(frozen=True)
+class _CopiedFile:
     sha256: str
     size: int
     expected_etag: str | None
@@ -271,7 +282,7 @@ def _source_files(filesystem: AbstractFileSystem, root: str) -> list[_SourceFile
     files = []
     for path, info in _find_files(filesystem, root).items():
         relative = _relative_path(path, root)
-        files.append(_SourceFile(relative, path, int(info.get("size") or 0), _source_identity(info)))
+        files.append(_SourceFile(relative, path, int(info.get("size") or 0), source_identity(info)))
     files.sort(key=lambda file: file.path)
     return files
 
@@ -331,27 +342,15 @@ def _copy_or_resume(
             ):
                 return _CopyOutcome(expected, _CopyDisposition.RESUMED)
 
-    copied = copy_with_hash(source_fs, source.source_path, destination_fs, staging_path)
-    if copied.size != source.size:
-        destination_fs.rm(staging_path)
-        raise VerifiedCopyError(f"source size changed while copying {source.path}")
-    current_info = source_fs.info(source.source_path)
-    current_size = int(current_info.get("size") or 0)
-    current_identity = _source_identity(current_info, matching=source.identity)
-    if current_size != source.size or current_identity != source.identity:
-        destination_fs.rm(staging_path)
-        raise VerifiedCopyError(f"source identity changed while copying {source.path}")
-    try:
-        staging_identity = verify_destination(
-            destination_fs,
-            staging_path,
-            expected_size=source.size,
-            expected_sha256=copied.sha256,
-            expected_etag=copied.expected_etag,
-        )
-    except VerifiedCopyError:
-        destination_fs.rm(staging_path)
-        raise
+    copied = copy_verified_object(
+        source_fs,
+        source.source_path,
+        destination_fs,
+        staging_path,
+        expected_size=source.size,
+        expected_identity=source.identity,
+    )
+    staging_identity = copied.destination_identity
     verified = VerifiedFile(source.path, source.size, copied.sha256, source.identity)
     _write_json_atomic(
         status_fs,
@@ -427,18 +426,59 @@ def _promote(
     filesystem.rm(staging_path)
 
 
-def copy_with_hash(
+def copy_verified_object(
     source_fs: AbstractFileSystem,
     source_path: str,
     destination_fs: AbstractFileSystem,
     destination_path: str,
-) -> CopiedFile:
-    """Stream one object to *destination_path*, hashing the bytes as they pass.
+    *,
+    expected_size: int,
+    expected_identity: str | None,
+) -> VerifiedObject:
+    """Stream one object, check that the source did not change, and verify the destination.
 
-    S3 destinations publish only after the whole upload succeeds, so a failed copy leaves no
-    object behind. A destination filesystem built with ``S3UploadPolicy.FIXED_PARTS`` also
-    yields the multipart ETag the upload must carry, for objects of at least one part.
+    S3 destinations publish only after the whole upload succeeds. A destination filesystem built
+    with ``S3UploadPolicy.FIXED_PARTS`` is checked by its multipart ETag; any other destination
+    object, and any object smaller than one part, is read back and hashed. A destination that
+    fails a check is removed.
+
+    Args:
+        expected_size: Source size recorded before the copy.
+        expected_identity: Source identity from :func:`source_identity`, recorded before the copy.
+
+    Raises:
+        VerifiedCopyError: If the source changed during the copy or the destination does not match.
     """
+    copied = _copy_with_hash(source_fs, source_path, destination_fs, destination_path)
+    if copied.size != expected_size:
+        destination_fs.rm(destination_path)
+        raise VerifiedCopyError(f"source size changed while copying {source_path}")
+    source_fs.invalidate_cache(source_path)
+    current_info = source_fs.info(source_path)
+    current_identity = source_identity(current_info, matching=expected_identity)
+    if int(current_info.get("size") or 0) != expected_size or current_identity != expected_identity:
+        destination_fs.rm(destination_path)
+        raise VerifiedCopyError(f"source identity changed while copying {source_path}")
+    try:
+        identity = _verify_destination(
+            destination_fs,
+            destination_path,
+            expected_size=expected_size,
+            expected_sha256=copied.sha256,
+            expected_etag=copied.expected_etag,
+        )
+    except VerifiedCopyError:
+        destination_fs.rm(destination_path)
+        raise
+    return VerifiedObject(copied.sha256, identity)
+
+
+def _copy_with_hash(
+    source_fs: AbstractFileSystem,
+    source_path: str,
+    destination_fs: AbstractFileSystem,
+    destination_path: str,
+) -> _CopiedFile:
     parent, separator, _ = destination_path.rpartition("/")
     if separator:
         destination_fs.makedirs(parent, exist_ok=True)
@@ -477,10 +517,10 @@ def copy_with_hash(
     expected_etag = (
         multipart_etag.etag(copied_size) if multipart_etag is not None and copied_size >= S3_UPLOAD_PART_BYTES else None
     )
-    return CopiedFile(digest.hexdigest(), copied_size, expected_etag)
+    return _CopiedFile(digest.hexdigest(), copied_size, expected_etag)
 
 
-def verify_destination(
+def _verify_destination(
     filesystem: AbstractFileSystem,
     path: str,
     *,
@@ -488,11 +528,6 @@ def verify_destination(
     expected_sha256: str,
     expected_etag: str | None,
 ) -> str:
-    """Check a copied object's size and content, and return its destination identity.
-
-    An object with an expected ETag is checked by metadata; any other object is read back and
-    hashed. Raises ``VerifiedCopyError`` on a mismatch.
-    """
     filesystem.invalidate_cache(path)
     info = filesystem.info(path)
     if int(info.get("size") or 0) != expected_size:
@@ -650,7 +685,11 @@ def _validate_completed_source(
             raise VerifiedCopyError(f"source content changed after destination completion: {source.path}")
 
 
-def _source_identity(info: dict[str, Any], *, matching: str | None = None) -> str | None:
+def source_identity(info: dict[str, Any], *, matching: str | None = None) -> str | None:
+    """A ``key=value`` string naming this version of an object, from the first metadata key it has.
+
+    With *matching*, read only the key that *matching* names, so a later read compares like with like.
+    """
     keys: tuple[str, ...] = (
         "generation",
         "version_id",

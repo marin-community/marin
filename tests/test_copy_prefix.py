@@ -13,8 +13,9 @@ def test_shards_cover_every_file_once_in_key_order_and_close_at_the_byte_target(
 
 
 def test_a_rewritten_source_file_renames_its_shard_so_a_rerun_recopies_it() -> None:
-    shard = (SourceFile("a", 10, "etag-1"), SourceFile("b", 20, "etag-2"))
-    rewritten = (SourceFile("a", 10, "etag-1"), SourceFile("b", 20, "etag-3"))
+    shard = (SourceFile("a", 10, "ETag=1"), SourceFile("b", 20, "ETag=2"))
+    relisted = (SourceFile("a", 10, "ETag=1"), SourceFile("b", 20, "ETag=2"))
+    rewritten = (SourceFile("a", 10, "ETag=1"), SourceFile("b", 20, "ETag=3"))
 
-    assert shard_id(shard) == shard_id(tuple(shard))
+    assert shard_id(relisted) == shard_id(shard)
     assert shard_id(rewritten) != shard_id(shard)
