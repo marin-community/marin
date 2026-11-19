@@ -307,25 +307,3 @@ class ExclusionClaim(BaseModel):
     @property
     def explanation(self) -> ReasonExplanation:
         return REASON_EXPLANATIONS[self.reason]
-
-
-DIFFICULTY_GAP_EXCLUSION_REASONS: dict[str, ExclusionReason] = {
-    "ENVIRONMENT_ARTIFACT_MISSING": ExclusionReason.ENVIRONMENT_ARTIFACT_MISSING,
-    "TOOL_PROVIDER_REQUIRED": ExclusionReason.NO_SUPPORTED_BACKEND,
-    "UNSUPPORTED_COMPOSE_DOCUMENT": ExclusionReason.NO_SUPPORTED_BACKEND,
-    "STATE_CAPTURE_REQUIRED": ExclusionReason.NO_SUPPORTED_BACKEND,
-    "UNRESOLVED_DOCKER_BUILD": ExclusionReason.NO_SUPPORTED_BACKEND,
-    "NO_EXECUTABLE_GRADER": ExclusionReason.NO_SUPPORTED_BACKEND,
-    "PROVIDER_CONTRACT_INVALID": ExclusionReason.NO_SUPPORTED_BACKEND,
-    "NETWORK_POLICY_VIOLATION": ExclusionReason.NO_SUPPORTED_BACKEND,
-    "JUDGE_ROUTE_UNQUALIFIED": ExclusionReason.GRADER_JUDGE_UNAVAILABLE,
-    "JUDGE_API_UNQUALIFIED": ExclusionReason.GRADER_JUDGE_UNAVAILABLE,
-    "INVALID_REFERENCE": ExclusionReason.INVALID_REFERENCE,
-}
-"""Mapping from DifficultyGap member names to their Atlas exclusion reasons.
-
-Keyed by member NAME (not value) so the two enums stay decoupled; keep this
-the single definition and have ``finestore.rl.difficulty`` resolve its gaps
-through it. The shared owner rule: PIPELINE-owned gaps never exclude a source;
-SOURCE-owned gaps carry the reason above with the gap's own evidence.
-"""

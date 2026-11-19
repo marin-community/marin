@@ -3,7 +3,7 @@
 
 """Complete three-task measurements for installed Atlas API and browser tests."""
 
-from finestore.rl.curation import SourceDeclaration
+from finestore.rl.curation import QualifiedSourceDeclaration as SourceDeclaration
 from finestore.rl.difficulty import PROTOCOL_ID, SOLVER_MODELS, SOLVER_THINKING, DifficultyMeasurement, Solver
 
 

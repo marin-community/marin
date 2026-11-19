@@ -9,6 +9,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from finestore.schema import SHA256_PATTERN
+
 # Licenses a candidate may have: every rating of the Blue Oak Council's list of permissive licenses
 # (https://blueoakcouncil.org/list.json, version 16), by SPDX id, and OpenMDW, a permissive license for models and
 # data. A lowercased SPDX id is the Hugging Face card id. The list holds software licenses only, so the data licenses
@@ -48,7 +50,8 @@ BLUE_OAK_LICENSES_BY_RATING = {
         "Wsuipa WTFPL xinetd XSkat Zed Zend-2.0 ZPL-1.1"
     ),
 }
-# Hugging Face card ids of CC BY, CC BY-SA (every version) and ODC-By.
+# Hugging Face card ids of CC BY, CC BY-SA (every version), ODC-By, and the
+# public-domain dedications PDDL and ODC-PDDL.
 DATA_LICENSES = frozenset(
     {f"cc-by{sa}-{v}" for sa in ("", "-sa") for v in ("1.0", "2.0", "2.5", "3.0", "4.0")}
     | {"odc-by", "odc-by-1.0", "pddl-1.0", "odc-pddl"}
@@ -60,6 +63,10 @@ ALLOWED_LICENSES = DATA_LICENSES | frozenset(
 OPENMDW_LICENSE_PATTERN = "openmdw-[0-9].[0-9]"
 # Card ids that name a license a person must read: custom terms, or no stated terms.
 REVIEW_LICENSES = frozenset({"other", "unknown"})
+# The evidence kind that names the task's own license, not the dataset card's.
+TASK_LICENSE_FILE_KIND = "task_license_file"
+# The license id a receipt reports when its card names no license.
+MISSING_LICENSE_ID = "missing"
 # Card id fragments that forbid a use Marin needs: non-commercial or no derivatives.
 REJECTED_LICENSE_FRAGMENTS = ("-nc", "-nd", "noncommercial")
 
@@ -107,7 +114,7 @@ class LicenseEvidence(BaseModel):
 
     url: str = Field(min_length=1)
     kind: str
-    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    sha256: str = Field(pattern=SHA256_PATTERN)
     license_ids: list[str]
     quoted_lines: list[str] = Field(min_length=1)
     restrictive_terms: bool = False
@@ -119,6 +126,20 @@ class LicenseDecisionKind(StrEnum):
     BUNDLED_THIRD_PARTY = "bundled_third_party"
     MODEL_GENERATED_OUTPUTS = "model_generated_outputs"
     BAN = "ban"
+
+
+def _timestamp_with_timezone(value: str, what: str) -> str:
+    """Require an ISO timestamp that names its timezone."""
+    if datetime.fromisoformat(value).tzinfo is None:
+        raise ValueError(f"{what} must include a timezone")
+    return value
+
+
+def _registry_issue_url(value: str) -> str:
+    """Require a blocked-source registry issue link, optionally with an anchor."""
+    if value.split("#")[0] != LICENSE_REGISTRY_ISSUE:
+        raise ValueError("License decisions must link to the blocked-source registry")
+    return value
 
 
 class LicenseDecision(BaseModel):
@@ -141,16 +162,12 @@ class LicenseDecision(BaseModel):
     @field_validator("when")
     @classmethod
     def validate_time(cls, value: str) -> str:
-        if datetime.fromisoformat(value).tzinfo is None:
-            raise ValueError("License decision time must include a timezone")
-        return value
+        return _timestamp_with_timezone(value, "License decision time")
 
     @field_validator("issue_url")
     @classmethod
     def validate_issue(cls, value: str) -> str:
-        if value.split("#")[0] != LICENSE_REGISTRY_ISSUE:
-            raise ValueError("License decisions must link to the blocked-source registry")
-        return value
+        return _registry_issue_url(value)
 
 
 class LicenseSourcePin(BaseModel):
@@ -184,9 +201,7 @@ class LicenseReceipt(BaseModel):
     @field_validator("resolved_at")
     @classmethod
     def validate_time(cls, value: str) -> str:
-        if datetime.fromisoformat(value).tzinfo is None:
-            raise ValueError("License resolution time must include a timezone")
-        return value
+        return _timestamp_with_timezone(value, "License resolution time")
 
     @model_validator(mode="after")
     def validate_decisions(self) -> "LicenseReceipt":
@@ -201,8 +216,8 @@ class LicenseReceipt(BaseModel):
 
     @property
     def license_ids(self) -> tuple[str, ...]:
-        ids = {item for evidence in self.evidence for item in evidence.license_ids} - {"missing"}
-        return tuple(sorted(ids)) or ("missing",)
+        ids = {item for evidence in self.evidence for item in evidence.license_ids} - {MISSING_LICENSE_ID}
+        return tuple(sorted(ids)) or (MISSING_LICENSE_ID,)
 
     @property
     def classification(self) -> LicenseClass:
@@ -212,33 +227,11 @@ class LicenseReceipt(BaseModel):
         verdict = license_verdict(licenses)
         if verdict is LicenseVerdict.REJECTED:
             return LicenseClass.RESTRICTED
-        if licenses == ("missing",):
+        if licenses == (MISSING_LICENSE_ID,):
             return LicenseClass.MISSING
         if verdict is LicenseVerdict.ALLOWED:
             return LicenseClass.PERMISSIVE
         return LicenseClass.UNKNOWN
-
-
-def require_license(
-    receipt: LicenseReceipt | None, source_id: str, dataset_id: str | None, revision: str | None, use: str
-) -> None:
-    """Fail closed before ingest or new admission, including on stale evidence and bans."""
-    if receipt is None or not receipt.evidence:
-        raise ValueError(f"License evidence is missing: {source_id}")
-    if (receipt.source_id, receipt.dataset_id, receipt.revision) != (source_id, dataset_id, revision):
-        raise ValueError(f"License evidence belongs to another source revision: {source_id}")
-    if receipt.resolver_version != LICENSE_RESOLVER_VERSION:
-        raise ValueError(f"License receipt needs resolution with the current resolver: {source_id}")
-    scoped = [item for item in receipt.decisions if use in item.scope]
-    decisions = {item.kind: item for item in scoped}
-    if any(not item.approved or item.kind is LicenseDecisionKind.BAN for item in scoped):
-        raise ValueError(f"License decision bans this source: {source_id}")
-    check = check_license(receipt)
-    if check.verdict is not LicenseCheckVerdict.PASS and LicenseDecisionKind.EXCEPTION not in decisions:
-        raise ValueError(
-            f"License {receipt.classification.value} blocks ingest and admission: {source_id}; "
-            f"{check.verdict.value} {check.rule_id.value}: {check.quote} ({check.evidence_url})"
-        )
 
 
 class LicenseBan(BaseModel):
@@ -255,7 +248,46 @@ class LicenseBan(BaseModel):
     evidence_urls: list[str] = Field(min_length=1)
     decided_at: str = Field(min_length=1)
     decision_by: str = Field(min_length=1)
-    issue_url: str = Field(pattern=r"^https://github.com/marin-community/marin/issues/11497(?:#.*)?$")
+    issue_url: str
+
+    @field_validator("issue_url")
+    @classmethod
+    def validate_issue(cls, value: str) -> str:
+        return _registry_issue_url(value)
+
+
+def require_license(
+    receipt: LicenseReceipt | None,
+    source_id: str,
+    dataset_id: str | None,
+    revision: str | None,
+    use: str,
+    *,
+    ban: LicenseBan | None,
+) -> None:
+    """Fail closed before ingest or admission, including on stale evidence, bans and registry bans.
+
+    ``ban`` is the source's registry ban, or None after the caller checked the
+    registry; every caller states that it looked.
+    """
+    if ban is not None and ban.source_id != source_id:
+        raise ValueError(f"The registry ban names another source: {ban.source_id}")
+    if receipt is None or not receipt.evidence:
+        raise ValueError(f"License evidence is missing: {source_id}")
+    if (receipt.source_id, receipt.dataset_id, receipt.revision) != (source_id, dataset_id, revision):
+        raise ValueError(f"License evidence belongs to another source revision: {source_id}")
+    if receipt.resolver_version != LICENSE_RESOLVER_VERSION:
+        raise ValueError(f"License receipt needs resolution with the current resolver: {source_id}")
+    scoped = [item for item in receipt.decisions if use in item.scope]
+    decisions = {item.kind: item for item in scoped}
+    if any(not item.approved or item.kind is LicenseDecisionKind.BAN for item in scoped):
+        raise ValueError(f"License decision bans this source: {source_id}")
+    check = check_license(receipt, ban)
+    if check.verdict is not LicenseCheckVerdict.PASS and LicenseDecisionKind.EXCEPTION not in decisions:
+        raise ValueError(
+            f"License {receipt.classification.value} blocks ingest and admission: {source_id}; "
+            f"{check.verdict.value} {check.rule_id.value}: {check.quote} ({check.evidence_url})"
+        )
 
 
 class LicenseCheckVerdict(StrEnum):
@@ -309,10 +341,10 @@ def check_license(receipt: LicenseReceipt, ban: LicenseBan | None = None) -> Lic
         None,
     )
     terms = next((item for item in evidence if item.unidentified_third_party_terms), None)
-    signals = [item for item in evidence if set(item.license_ids) - {"missing"}]
+    signals = [item for item in evidence if set(item.license_ids) - {MISSING_LICENSE_ID}]
     permissive = [item for item in signals if license_verdict(tuple(item.license_ids)) is LicenseVerdict.ALLOWED]
     unknown = [item for item in signals if license_verdict(tuple(item.license_ids)) is not LicenseVerdict.ALLOWED]
-    dataset_permissive = [item for item in permissive if item.kind != "task_license_file"]
+    dataset_permissive = [item for item in permissive if item.kind != TASK_LICENSE_FILE_KIND]
     if restricted is not None:
         verdict, rule, selected = LicenseCheckVerdict.FAIL, LicenseCheckRule.RESTRICTED, restricted
     elif terms is not None:

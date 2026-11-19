@@ -294,7 +294,9 @@ def test_the_queue_emits_only_needs_measurement_sources_with_their_declarations(
 
 
 def test_an_unmapped_reason_fails_loudly():
-    with pytest.raises(ValueError, match="carries an unmapped reason"):
+    # The observation constructor validates the reason against the typed gaps,
+    # so an unmapped reason is rejected before the server-level check runs.
+    with pytest.raises(ValueError, match="Unmapped difficulty gap reason"):
         source_coverage(
             declaration(),
             [

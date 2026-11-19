@@ -74,3 +74,13 @@ def test_cpu_flavor_is_preferred_without_splitting_accelerator_resources_or_chan
     assert set(quotas) == set(group["coveredResources"])
     assert quotas["nvidia.com/gpu"] == "0" and quotas["rdma/ib"] == "0"
     assert queue["spec"]["preemption"] == original["spec"]["preemption"]
+
+
+def test_cpu_flavor_lists_covered_resources_in_queue_order_regardless_of_mapping_order():
+    """Kueue validates every flavor's resources against one coveredResources order."""
+    scrambled = {"rdma/ib": "0", "memory": "1Pi", "nvidia.com/gpu": "0", "cpu": "1G", "ephemeral-storage": "1Pi"}
+    queue = build_cluster_queue("iris-cq", cpu_nominal_quotas=scrambled)
+    group = queue["spec"]["resourceGroups"][0]
+    covered = group["coveredResources"]
+    for flavor in group["flavors"]:
+        assert [entry["name"] for entry in flavor["resources"]] == covered

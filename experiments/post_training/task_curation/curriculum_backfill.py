@@ -17,7 +17,7 @@ from uuid import uuid4
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from finestore.rl.curation import SourceDeclaration
+from finestore.rl.curation import QualifiedSourceDeclaration, SourceDeclaration
 from finestore.schema import arrow_schema
 from fray.types import ResourceConfig
 from marin.execution.artifact import ArtifactRecord, result_type_name, write_record
@@ -275,7 +275,7 @@ def run_stage(
     if device == "cuda" and parity_receipt_uri is None:
         raise ValueError("CUDA embedding requires an accepted --parity-receipt")
     corpus = json.loads(StoragePath(corpus_uri).read_text())
-    inventory = [canonical_declaration(SourceDeclaration.model_validate(row)) for row in corpus["inventory"]]
+    inventory = [canonical_declaration(QualifiedSourceDeclaration.model_validate(row)) for row in corpus["inventory"]]
     curated = {}
     for row in corpus["sources"]:
         manifest = json.loads((StoragePath(row["root"]) / "manifest.json").read_text())

@@ -89,7 +89,7 @@ def build_group(config: ImageConfig) -> GroupedInputImage:
     for info in infos:
         source = info.id
         receipt = LicenseReceipt.model_validate(licenses[source]["receipt"])
-        require_license(receipt, source, DATASET, REVISION, "train")
+        require_license(receipt, source, DATASET, REVISION, "train", ban=None)
         require_unbanned(source, DATASET, receipt)
     qualification_raw = StoragePath(config.qualifications_uri).read_bytes()
     if hashlib.sha256(qualification_raw).hexdigest() != config.qualifications_sha256:

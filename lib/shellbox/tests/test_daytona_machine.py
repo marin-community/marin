@@ -2066,3 +2066,40 @@ def test_declarative_daytona_preserves_task_image_and_cleans_up_without_snapshot
         assert client.deleted and client.closed
 
     asyncio.run(scenario())
+
+
+def test_daytona_recreated_workdir_reopens_path_for_next_command(tmp_path: Path, inherit_image_workdir: bool) -> None:
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    original_inode = workdir.stat().st_ino
+
+    class StaleWorkdirProcess(LocalProcess):
+        def __init__(self):
+            super().__init__()
+            self.workdir_replaced = False
+
+        async def exec(self, command, cwd=None, env=None, timeout=None):
+            if cwd is None:
+                if self.workdir_replaced:
+                    raise OSError("Provider process retained the deleted working directory")
+                cwd = str(workdir)
+            result = await super().exec(command, cwd=cwd, env=env, timeout=timeout)
+            self.workdir_replaced = workdir.stat().st_ino != original_inode
+            return result
+
+    async def scenario():
+        client = LocalDaytona()
+        client.sandbox.process = StaleWorkdirProcess()
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir="" if inherit_image_workdir else str(workdir))
+        )
+        try:
+            replaced = await machine.run(Command(("sh", "-c", 'rm -rf "$PWD" && mkdir -p "$PWD" && printf recreated')))
+            assert (replaced.exit_code, replaced.stdout) == (0, b"recreated")
+            following = await machine.run(Command((sys.executable, "-c", "import os; print(os.getcwd())")))
+            assert (following.exit_code, following.stdout) == (0, f"{workdir}\n".encode())
+            assert workdir.stat().st_ino != original_inode
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())

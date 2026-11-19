@@ -5,7 +5,8 @@
 
 from typing import Any
 
-from finestore.rl.curation import LexicalContaminationEvidence, SourceDeclaration
+from finestore.rl.curation import LexicalContaminationEvidence
+from finestore.rl.curation import QualifiedSourceDeclaration as SourceDeclaration
 
 from experiments.post_training.task_curation.tests.license_fixtures import fixture_license
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence

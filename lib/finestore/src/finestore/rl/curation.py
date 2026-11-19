@@ -391,11 +391,31 @@ class DaytonaSafety(StrEnum):
 
     SAFE = "safe"
     UNSAFE = "unsafe"
+    UNASSESSED = "unassessed"
     NOT_APPLICABLE = "not_applicable"
 
 
 DAYTONA_SAFE_SNAPSHOT_LIMIT = 10
 """The unique-snapshot budget a source must fit to count as Daytona-safe."""
+
+
+def daytona_verdict(*, snapshot_count: int | None, execution_failures: int | None, agentic: bool) -> DaytonaSafety:
+    """Derive a source's Daytona verdict from its measurement.
+
+    Sources that provision no sandbox are safe regardless of any count. An agentic
+    source without a measured count is unassessed: a count that was never taken
+    cannot establish safety, and a declared value must not stand in for one.
+    Otherwise the source is unsafe when its unique environment count exceeds
+    ``DAYTONA_SAFE_SNAPSHOT_LIMIT`` or when the Daytona backend refuses a task's
+    declared execution requirements.
+    """
+    if not agentic:
+        return DaytonaSafety.SAFE
+    if snapshot_count is None:
+        return DaytonaSafety.UNASSESSED
+    if snapshot_count > DAYTONA_SAFE_SNAPSHOT_LIMIT or execution_failures:
+        return DaytonaSafety.UNSAFE
+    return DaytonaSafety.SAFE
 
 
 class CurationMode(StrEnum):
@@ -835,6 +855,50 @@ class SourceDeclaration(CatalogRecord):
     id: str
     name: str
     display_name: str
+    origin: str
+    build_path: str = "unmeasured"
+    upstream_dataset: str = "unmeasured"
+    upstream_name: str = "unmeasured"
+    family: str
+    tags: list[str]
+    task_count: int | None
+    notes: str
+    dataset_id: str | None
+    dataset_revision: str | None
+    url: str | None
+    type: str
+    turns: str
+    is_benchmark: bool
+    kind: str
+    status: str
+    pipeline: PipelineReference | None
+    independent_qc: IndependentQC | None = None
+    # Non-agentic sources never provision Daytona sandboxes; an agentic source stays
+    # UNASSESSED until its unique snapshot count is assessed against DAYTONA_SAFE_SNAPSHOT_LIMIT.
+    daytona_safety: DaytonaSafety = DaytonaSafety.UNASSESSED
+    # Measured distinct snapshot identities, required for any agentic SAFE/UNSAFE verdict.
+    # A verdict without a count stays UNASSESSED; counts are never inferred. The basis
+    # records the rule behind the measurement so a reader can check it.
+    daytona_snapshot_count: int | None = None
+    daytona_snapshot_threshold: int | None = None
+    daytona_count_basis: str | None = None
+    # How the grader's execution was qualified: oracle runs, an executed verifier, or neither.
+    oracle_validation: OracleValidation | None = None
+    # The weakest review behind the admission, with the pointers that establish it.
+    oversight: OversightLevel = OversightLevel.NONE
+    oversight_evidence: OversightEvidence | None = None
+    # The Atlas admission flow binds license evidence on the declaration itself.
+    license_receipt: LicenseReceipt | None = None
+
+
+class QualifiedSourceDeclaration(SourceDeclaration):
+    """Measured source contract with exact-pin checks, layered over the legacy
+    declaration: subclassing keeps every ``SourceDeclaration``-typed field and
+    reader accepting the strict contract without touching main's legacy model."""
+
+    id: str
+    name: str
+    display_name: str
     origin: SourceOrigin
     build_path: str
     upstream_dataset: str
@@ -868,7 +932,9 @@ class SourceDeclaration(CatalogRecord):
     pipeline: PipelineReference | None
     license_receipt: LicenseReceipt | None = None
     independent_qc: IndependentQC | None = None
-    daytona_safety: DaytonaSafety | None
+    # Widens the legacy default (UNASSESSED) to an explicit tri-state: a grandfathered
+    # exempt source stores None, distinct from a taken-but-unassessed measurement.
+    daytona_safety: DaytonaSafety | None  # pyrefly: ignore[bad-override]
     daytona_exemption: str | None = Field(default=None, min_length=1)
     daytona_snapshot_count: int | None = None
     daytona_snapshot_threshold: int | None = None
@@ -931,7 +997,7 @@ class SourceDeclaration(CatalogRecord):
     """Typed exclusion reasons with evidence; an Excluded source carries at least one."""
 
     @model_validator(mode="after")
-    def _canonical_identity(self) -> "SourceDeclaration":
+    def _canonical_identity(self) -> "QualifiedSourceDeclaration":
         dedup = self.within_source_dedup
         if self.pipeline is None or (dedup.source_dataset_id, dedup.source_revision, dedup.converter_version) != (
             self.dataset_id,
@@ -1105,13 +1171,31 @@ class AssessmentItem(CatalogRecord):
 class SnapshotSource(CatalogRecord):
     snapshot_id: str
     id: str
-    declaration: SourceDeclaration
+    declaration: QualifiedSourceDeclaration | SourceDeclaration
     assessment_key: str | None
     latest_attempt_key: str | None
     latest_attempt_status: AssessmentStatus
     reason: str | None
     curation: CurationSummary | None = None
     diagnostics: list[ArchivedFile] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _era_declaration_columns(cls, value: Any) -> Any:
+        """Drop the struct-fill nulls the qualified schema writes over legacy declarations.
+
+        The inventory table pins the qualified declaration struct, so a legacy-era
+        declaration round-trips with explicit nulls in qualified-only columns. Those
+        nulls are storage fill, not data: dropping them lets each row validate against
+        its own era's contract instead of failing both union members.
+        """
+        if not isinstance(value, dict) or not isinstance(value.get("declaration"), dict):
+            return value
+        qualified_only = QualifiedSourceDeclaration.model_fields.keys() - SourceDeclaration.model_fields.keys()
+        declaration = {
+            name: item for name, item in value["declaration"].items() if not (item is None and name in qualified_only)
+        }
+        return {**value, "declaration": declaration}
 
 
 class CatalogSnapshot(CatalogRecord):

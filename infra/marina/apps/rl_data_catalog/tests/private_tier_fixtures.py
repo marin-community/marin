@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from finestore.rl.curation import SourceDeclaration
+from finestore.rl.curation import QualifiedSourceDeclaration as SourceDeclaration
 from finestore.rl.status_taxonomy import DataRestriction
 from sqlalchemy import text
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, CurriculumCoverage

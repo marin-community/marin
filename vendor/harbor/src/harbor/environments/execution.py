@@ -3,8 +3,6 @@
 
 """Adapt Shellbox command results to Harbor's environment interface."""
 
-import shlex
-
 from harbor.environments.base import EXEC_OUTPUT_LIMIT_BYTES, ExecResult, SandboxDiskFullError
 from shellbox.machine import Command, ExitReason, Machine, ResourceLimit, ResourceLimitExceeded
 
@@ -27,14 +25,15 @@ async def execute_shellbox_command(
 ) -> ExecResult:
     """Use Bash when available and preserve bounded command output metadata."""
     # Terminus uses Bash pipelines; minimal task images may provide only sh.
+    # Pass the script once; quoting it into both branches inflates remote argv.
     shell_command = (
-        "if [ -x /bin/bash ]; then set -- /bin/bash; else set -- /bin/sh; fi; "
-        f'exec "$@" -c {shlex.quote(command)}'
+        'if [ -x /bin/bash ]; then exec /bin/bash -c "$1"; '
+        'else exec /bin/sh -c "$1"; fi'
     )
     try:
         result = await machine.run(
             Command(
-                ("/bin/sh", "-c", shell_command),
+                ("/bin/sh", "-c", shell_command, "harbor-command", command),
                 cwd=cwd,
                 env=env,
                 timeout=timeout_sec,

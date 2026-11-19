@@ -10,18 +10,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import httpx
 import openai
 import pytest
+from evalrecords.records import JudgeIdentity
+from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT
 from finestore.eval import ARCHIVE_SAMPLES_TABLE, sample_from_archive_row
 from finestore.reader import ReadView
 from fray.local_backend import LocalClient
-from marin.evaluation.records import JudgeIdentity
-from marin.rollouts.evaluation import (
-    ATTEMPTS_TABLE,
-    RUN_OBJECT,
-    EvaluationInfrastructureError,
-    EvaluationRunConfig,
-    ModelIdentity,
-    run_evaluation,
-)
+from marin.rollouts.evaluation import EvaluationInfrastructureError, EvaluationRunConfig, ModelIdentity, run_evaluation
 from rolloutengine.chat import ChatModel
 from rolloutengine.completion import CompletionModel
 from rolloutengine.likelihood import VllmLikelihood

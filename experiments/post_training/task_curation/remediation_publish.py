@@ -263,7 +263,7 @@ def publish_plan(
         raise ValueError(f"Staged release plan declares no restriction tier: {plan.source_id}")
     require_public_data(plan.data_restriction, plan.source_id, plan.lexical_use.value + " release")
     require_license(
-        license_receipt, plan.source_id, plan.source_dataset_id, plan.source_revision, plan.lexical_use.value
+        license_receipt, plan.source_id, plan.source_dataset_id, plan.source_revision, plan.lexical_use.value, ban=None
     )
     require_unbanned(plan.source_id, plan.source_dataset_id, license_receipt)
     snapshot_required = (
@@ -462,6 +462,7 @@ def main() -> None:
             plan.source_dataset_id,
             plan.source_revision,
             plan.lexical_use.value,
+            ban=None,
         )
     staged_measurements = None
     if args.lexical_receipts is not None:

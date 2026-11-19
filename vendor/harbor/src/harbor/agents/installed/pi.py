@@ -5,7 +5,7 @@ import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from upath import UPath
@@ -33,7 +33,6 @@ from harbor.models.trajectories.observation_result import ObservationResult
 from harbor.models.trajectories.step import Step
 from harbor.models.trajectories.tool_call import ToolCall
 from harbor.models.trajectories.trajectory import Trajectory
-from harbor.models.trial.paths import EnvironmentPaths
 from harbor.llms.vllm_tokenization import tokenize_url
 from harbor.models.agent.name import AgentName
 from harbor.utils.artifact_writer import get_artifact_writer
@@ -66,10 +65,9 @@ class Pi(BaseInstalledAgent):
     _SUPPORTED_THINKING_FORMATS = frozenset({"chat-template", "qwen-chat-template"})
     _API_BASE_ENV = "HARBOR_PI_API_BASE"
     _API_KEY_ENV = "HARBOR_PI_API_KEY"
-    # Root uploads must remain outside persisted logs, even if agent exec never starts.
-    _RUNTIME_DIR = Path("/run/harbor-pi")
-    _ENDPOINT_ENV_PATH = str(_RUNTIME_DIR / "harbor-pi-endpoint.env")
-    _CONTEXT_BUDGET_EXTENSION_PATH = str(_RUNTIME_DIR / "harbor-pi-context-budget.js")
+    _STAGING_DIR_TEMPLATE = "/tmp/harbor-pi.XXXXXXXX"
+    _ENDPOINT_ENV_FILENAME = "harbor-pi-endpoint.env"
+    _CONTEXT_BUDGET_EXTENSION_FILENAME = "harbor-pi-context-budget.js"
     _MCP_EXTENSION_PATH = "/opt/harbor-pi/node_modules/pi-mcp-extension/src/index.ts"
     _MCP_CONFIGURE_PATH = "/installed-agent/pi_configure_mcp.cjs"
     _PROVIDER_CONFIG_RELATIVE_PATH = ".pi/agent/models.json"
@@ -468,13 +466,16 @@ export default function (pi) {
         if provider_command is None:
             raise RuntimeError("Pi provider registration command was not created")
 
-        await self._stage_endpoint_env(environment)
-        endpoint_path = shlex.quote(self._ENDPOINT_ENV_PATH)
+        staging_dir = await self._create_staging_dir(environment)
+        endpoint_file = staging_dir / self._ENDPOINT_ENV_FILENAME
+        await self._stage_endpoint_env(environment, endpoint_file)
+        endpoint_path = shlex.quote(str(endpoint_file))
+        staging_path = shlex.quote(str(staging_dir))
         await self.exec_as_agent(
             environment,
             command=(
                 "set -euo pipefail; "
-                f"trap 'rm -f {endpoint_path}' EXIT; "
+                f"trap 'rm -rf {staging_path}' EXIT; "
                 f". {endpoint_path}; {provider_command}; rm -f {endpoint_path}"
             ),
         )
@@ -571,7 +572,17 @@ export default function (pi) {
             f"{shlex.quote(self._SETTINGS_CONFIG_RELATIVE_PATH)}"
         )
 
-    async def _stage_endpoint_env(self, environment: BaseEnvironment) -> None:
+    async def _create_staging_dir(self, environment: BaseEnvironment) -> PurePosixPath:
+        # Create as the agent so it can unlink provider-owned uploads. Keep
+        # capability URLs outside collected logs even when cleanup is killed.
+        result = await self.exec_as_agent(
+            environment, command=f"mktemp -d {shlex.quote(self._STAGING_DIR_TEMPLATE)}"
+        )
+        return PurePosixPath(result.stdout.strip())
+
+    async def _stage_endpoint_env(
+        self, environment: BaseEnvironment, target_path: PurePosixPath
+    ) -> None:
         """Upload the endpoint variables without placing their values in a command."""
         if self._api_base is None:
             raise ValueError("api_base is required to stage the endpoint environment")
@@ -580,14 +591,27 @@ export default function (pi) {
             f"export {self._API_BASE_ENV}={shlex.quote(self._api_base)}\n"
             f"export {self._API_KEY_ENV}={shlex.quote(self._api_key)}\n"
         )
-        await environment.ensure_dirs([self._RUNTIME_DIR], chmod=True)
         with tempfile.TemporaryDirectory() as temp_dir:
             local_path = Path(temp_dir) / "endpoint.env"
             local_path.write_text(contents)
-            await environment.upload_file(local_path, self._ENDPOINT_ENV_PATH)
+            await self._upload_staged_file(environment, local_path, target_path)
+
+    async def _upload_staged_file(
+        self, environment: BaseEnvironment, source_path: Path, target_path: PurePosixPath
+    ) -> None:
+        await environment.upload_file(source_path, str(target_path))
+        # The parent was created by the task user; uploads can be root-owned.
+        quoted_path = shlex.quote(str(target_path))
+        await self.exec_as_root(
+            environment,
+            command=(
+                f"chown --reference={shlex.quote(str(target_path.parent))} -- {quoted_path} && "
+                f"chmod 600 -- {quoted_path}"
+            ),
+        )
 
     async def _stage_context_budget_extension(
-        self, environment: BaseEnvironment
+        self, environment: BaseEnvironment, target_path: PurePosixPath
     ) -> None:
         """Stage exact vLLM request budgeting for the hosted Pi provider."""
         if self._api_base is None:
@@ -600,13 +624,10 @@ export default function (pi) {
             ).replace("__CONTEXT_WINDOW__", str(self._model_limits.context_window))
             + "\n"
         )
-        await environment.ensure_dirs([self._RUNTIME_DIR], chmod=True)
         with tempfile.TemporaryDirectory() as temp_dir:
-            local_path = Path(temp_dir) / "harbor-pi-context-budget.js"
+            local_path = Path(temp_dir) / self._CONTEXT_BUDGET_EXTENSION_FILENAME
             local_path.write_text(extension)
-            await environment.upload_file(
-                local_path, self._CONTEXT_BUDGET_EXTENSION_PATH
-            )
+            await self._upload_staged_file(environment, local_path, target_path)
 
     @with_prompt_template
     async def run(
@@ -689,14 +710,18 @@ export default function (pi) {
                 raise ValueError(
                     "Provider registration command is required with api_base"
                 )
-            await self._stage_endpoint_env(environment)
-            await self._stage_context_budget_extension(environment)
-            endpoint_path = shlex.quote(self._ENDPOINT_ENV_PATH)
-            extension_path = shlex.quote(self._CONTEXT_BUDGET_EXTENSION_PATH)
+            staging_dir = await self._create_staging_dir(environment)
+            endpoint_file = staging_dir / self._ENDPOINT_ENV_FILENAME
+            extension_file = staging_dir / self._CONTEXT_BUDGET_EXTENSION_FILENAME
+            await self._stage_endpoint_env(environment, endpoint_file)
+            await self._stage_context_budget_extension(environment, extension_file)
+            endpoint_path = shlex.quote(str(endpoint_file))
+            extension_path = shlex.quote(str(extension_file))
+            staging_path = shlex.quote(str(staging_dir))
             provider_path = f'"$HOME/{self._PROVIDER_CONFIG_RELATIVE_PATH}"'
             runtime_prelude = (
                 "set -e; "
-                f"trap 'rm -f {endpoint_path} {extension_path} {provider_path}' EXIT; "
+                f"trap 'rm -rf {staging_path} {provider_path}' EXIT; "
                 f"{runtime_prelude}"
                 f". {endpoint_path}; {provider_command}; rm -f {endpoint_path}; "
             )

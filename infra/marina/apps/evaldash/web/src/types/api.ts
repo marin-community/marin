@@ -44,7 +44,7 @@ export const INTERVAL_KIND = {
 
 export type IntervalKind = (typeof INTERVAL_KIND)[keyof typeof INTERVAL_KIND]
 
-// Properties of a measurement worth showing beside it. `marin.evaluation.eval_stats.ResultFlag` is
+// Properties of a measurement worth showing beside it. `evalrecords.eval_stats.ResultFlag` is
 // the full set; these are the ones the panel annotates a cell with.
 export const RESULT_FLAG = {
   NO_ANSWERS: 'no_answers',

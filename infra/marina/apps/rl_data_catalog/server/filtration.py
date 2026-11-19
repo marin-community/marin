@@ -5,7 +5,8 @@
 
 from typing import Any
 
-from finestore.rl.curation import OracleFiltrationEvidence, OracleValidation, SourceDeclaration
+from finestore.rl.curation import OracleFiltrationEvidence, OracleValidation
+from finestore.rl.curation import QualifiedSourceDeclaration as SourceDeclaration
 
 from .admission import (
     require_content_result,

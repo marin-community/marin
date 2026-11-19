@@ -22,10 +22,7 @@ logger = logging.getLogger(__name__)
 _PREPARE_TIMEOUT = Duration.from_hours(4)
 _PREPARE_CPU = 4
 _PREPARE_RAM = "8g"
-# The streaming populate downloads one repo file at a time into scratch before
-# uploading, so the disk must hold the largest single file in the served repos:
-# openai/gpt-oss-120b ships a 65 GB metal/model.bin alongside its safetensors.
-_PREPARE_DISK = "96g"
+_PREPARE_DISK = "64g"
 
 
 @dataclass(frozen=True)
@@ -103,7 +100,7 @@ def prepare_hf_models(
             job = client.submit(_prepare_job_request(entry, iris, environment))
             logger.info("preparing %s in job %s", entry, job.job_id)
             jobs.append(job)
-        wait_all(jobs, timeout=(iris.worker_timeout or _PREPARE_TIMEOUT).to_seconds())
+        wait_all(jobs, timeout=_PREPARE_TIMEOUT.to_seconds())
     except BaseException as exc:
         # Includes KeyboardInterrupt, so an interactive caller does not leave mirror jobs running.
         for job in jobs:
@@ -153,7 +150,7 @@ def _prepare_job_request(entry: str, iris: IrisConfig, environment: EnvironmentC
         ),
         environment=environment,
         priority=iris.priority,
-        timeout=iris.worker_timeout or _PREPARE_TIMEOUT,
+        timeout=_PREPARE_TIMEOUT,
         max_retries_failure=1,
     )
 

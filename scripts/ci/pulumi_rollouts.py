@@ -55,10 +55,10 @@ ROLLOUTS = (
         source_roots=(
             *CLOUD_RUN_SOURCE_ROOTS,
             "config",
+            "lib/evalrecords",
             "lib/finelog",
             "lib/finestore",
             "lib/iris",
-            "lib/marin/src/marin/evaluation",
             "lib/rigging",
         ),
         # App packages have their own release lifecycle.

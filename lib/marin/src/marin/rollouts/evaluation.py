@@ -7,10 +7,11 @@ import asyncio
 import dataclasses
 import json
 from collections.abc import Mapping
-from enum import StrEnum
 from functools import partial
 from typing import Any
 
+from evalrecords.records import DEFAULT_EVALUATION_CONCURRENCY, JudgeIdentity, scoring_settings
+from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT, Attempt, AttemptPhase
 from finestore.eval import (
     ARCHIVE_ROLLOUTS_TABLE,
     ARCHIVE_SAMPLES_TABLE,
@@ -69,10 +70,6 @@ from taskcompendium.models import ScriptGrader, TaskSpec, VerifyitGrader, grades
 from taskcompendium.submission import conversation_messages
 from verifyit.modes.grade_judge import JudgeConnection
 
-from marin.evaluation.records import DEFAULT_EVALUATION_CONCURRENCY, JudgeIdentity, scoring_settings
-
-ATTEMPTS_TABLE = "evaluation_attempts"
-RUN_OBJECT = "evaluation/run.json"
 # Bump when execution semantics change so resume cannot mix terminal grades from different implementations.
 EVALUATION_EXECUTION_REVISION = "2026.11.05.1"
 
@@ -111,26 +108,6 @@ class EvaluationRunConfig(RunModel):
     task_machine: MachineRuntimeSpec | None = None
     verifier_machine: MachineRuntimeSpec | None = None
     judge: JudgeIdentity | None = None
-
-
-class AttemptPhase(StrEnum):
-    STARTED = "started"
-    FINISHED = "finished"
-
-
-class Attempt(RunModel):
-    dataset: str
-    task_id: str
-    source_row: str
-    trial: int
-    retry: int
-    phase: AttemptPhase
-    seed: int | None
-    outcome: Outcome | None
-    error: str | None
-    result_blob: str | None
-    prompt_tokens: int | None
-    completion_tokens: int | None
 
 
 def generation_options(protocol: EvaluationProtocol, config: EvaluationRunConfig, trial: int) -> dict[str, Any]:

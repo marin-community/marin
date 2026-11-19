@@ -56,6 +56,7 @@ from verifyit.spec import (
 )
 
 from taskforge.sandbox.images import GRADER_BASE_IMAGE
+from taskforge.sandbox.test_support import FixtureImageFactory, PortlessShellSimFactory
 from taskforge.spec.draft import (
     ANSWER_PATH,
     FILESYSTEM_CAPABILITY,
@@ -81,9 +82,6 @@ from taskforge.spec.draft import (
     script_grader,
 )
 from taskforge.spec.verdict import GRADER_VERDICT_PATH, GraderCheck, grader_checks, verdict_json
-
-# Pytest uses different package prefixes under the root and Taskforge configs.
-from ..sandbox.fixture_images import FixtureImageFactory, PortlessShellSimFactory  # noqa: TID252
 
 SOURCE = Source(dataset="taskforge-test", revision="r1", row="0", importer_revision="test")
 PLAIN = PlainText()

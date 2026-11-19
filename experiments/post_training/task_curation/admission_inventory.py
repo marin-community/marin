@@ -12,7 +12,7 @@ from functools import partial
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from finestore.rl.curation import SourceDeclaration
+from finestore.rl.curation import QualifiedSourceDeclaration, SourceDeclaration
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
@@ -126,7 +126,8 @@ def main() -> None:
     args = parser.parse_args()
     configure_coreweave_s3()
     declarations = [
-        SourceDeclaration.model_validate(row) for row in json.loads(StoragePath(args.declarations).read_text()).values()
+        QualifiedSourceDeclaration.model_validate(row)
+        for row in json.loads(StoragePath(args.declarations).read_text()).values()
     ]
     if len({row.id for row in declarations}) != len(declarations):
         raise ValueError("Inventory requires distinct current declarations")

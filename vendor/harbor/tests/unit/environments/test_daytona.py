@@ -712,7 +712,9 @@ def test_host_connection_prevents_sdk_ambient_auth_and_destination_fallback(
 
 
 async def _provider_exec(command, **kwargs):
-    """Stand in for the guest's command probe with a successful no-op."""
+    """Stand in for the guest's command probes with an image workdir of `/`."""
+    if kwargs.get("cwd") is None:
+        return SimpleNamespace(exit_code=0, result="/\n")
     return SimpleNamespace(exit_code=0, result="")
 
 

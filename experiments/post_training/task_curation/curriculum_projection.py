@@ -15,7 +15,7 @@ from uuid import uuid4
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
-from finestore.rl.curation import LexicalUse, SourceDeclaration
+from finestore.rl.curation import LexicalUse, QualifiedSourceDeclaration, SourceDeclaration
 from finestore.rl.status_taxonomy import DataRestriction
 from fray.types import ResourceConfig
 from marin.execution.lazy import OUT, ArtifactStep, apply, run
@@ -205,7 +205,7 @@ def task_rebinding(archive: AlignmentSource, replacement: SourceReplacement) -> 
         if before.source_key != archive.source_key or after.source_key != source_key:
             raise ValueError(f"Public task source key differs from its manifest: {identifier}")
     identifiers = tuple(sorted(new))
-    declaration = canonical_declaration(SourceDeclaration.model_validate(manifest["input"]["declaration"]))
+    declaration = canonical_declaration(QualifiedSourceDeclaration.model_validate(manifest["input"]["declaration"]))
     if declaration.id != archive.source_id or manifest["intended_use"] != archive.intended_use:
         raise ValueError("Replacement manifest identifies a different source or intended use")
     source = archive.model_copy(
@@ -349,7 +349,7 @@ def project_curriculum(
     ):
         raise ValueError("Archive verification refers to different curriculum manifests")
     inventory = [
-        canonical_declaration(SourceDeclaration.model_validate(row))
+        canonical_declaration(QualifiedSourceDeclaration.model_validate(row))
         for row in json.loads(manifest_bytes(inputs.live_inventory))
     ]
     private = sorted(

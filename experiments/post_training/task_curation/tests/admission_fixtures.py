@@ -8,7 +8,13 @@ import json
 from dataclasses import replace
 
 import pytest
-from finestore.rl.curation import ActorCensusInput, GradingEnvironmentEvidence, SourceDeclaration
+from finestore.rl.curation import (
+    ActorCensusInput,
+    GradingEnvironmentEvidence,
+)
+from finestore.rl.curation import (
+    QualifiedSourceDeclaration as SourceDeclaration,
+)
 
 from experiments.post_training.task_curation import registry, retirement
 from experiments.post_training.task_curation.source import RlDataSource

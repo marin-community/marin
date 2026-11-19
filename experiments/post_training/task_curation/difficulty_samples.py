@@ -10,7 +10,7 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
-from finestore.rl.curation import ContentEvidenceReference, SourceDeclaration
+from finestore.rl.curation import ContentEvidenceReference, QualifiedSourceDeclaration, SourceDeclaration
 from finestore.rl.difficulty import DifficultySample, SampleTask
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -278,7 +278,7 @@ def main() -> None:
         for row in (SampleInventory.model_validate(item) for item in json.loads(inventory_path.read_text()))
     }
     declarations = [
-        SourceDeclaration.model_validate(row) for row in json.loads(StoragePath(args.declarations).read_text())
+        QualifiedSourceDeclaration.model_validate(row) for row in json.loads(StoragePath(args.declarations).read_text())
     ]
     if len({row.id for row in declarations}) != len(declarations):
         raise ValueError("Difficulty sources must be unique")

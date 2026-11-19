@@ -749,7 +749,14 @@ class DaytonaMachineFactory:
                     wait_policy=self.provider_wait_policy,
                 )
                 record_sandbox_lifecycle(SandboxLifecycleEvent.CREATED, name, sandbox.id)
-            machine = DaytonaMachine(sandbox, spec, lifetime, self.provider_wait_policy)
+            effective_spec = spec
+            if not spec.workdir:
+                default_cwd = await sandbox.process.exec(_control_command("pwd -L"), timeout=INTERRUPT_TIMEOUT)
+                image_workdir = default_cwd.result.removesuffix("\n")
+                if default_cwd.exit_code or not PurePosixPath(image_workdir).is_absolute():
+                    raise RuntimeError(f"Cannot resolve Daytona image workdir: {default_cwd.result!r}")
+                effective_spec = replace(spec, workdir=image_workdir)
+            machine = DaytonaMachine(sandbox, effective_spec, lifetime, self.provider_wait_policy)
             prepared = await machine._control_exec(
                 _control_command("command -v setsid"), cwd=CONTROL_CWD, timeout=INTERRUPT_TIMEOUT
             )

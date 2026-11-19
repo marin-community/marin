@@ -3,7 +3,7 @@
 
 """Complete sample and unfinished full-population review panels."""
 
-from finestore.rl.curation import SourceDeclaration
+from finestore.rl.curation import QualifiedSourceDeclaration as SourceDeclaration
 
 from experiments.post_training.task_curation.tests.license_fixtures import fixture_license
 from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations

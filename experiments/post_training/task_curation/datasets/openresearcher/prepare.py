@@ -119,7 +119,7 @@ def source_licenses(config: PreparationConfig) -> dict[str, LicenseReceipt]:
     for dataset in (DATASET, CORPUS):
         source_id = "OpenResearcher:" + dataset.split("/")[1]
         receipt = LicenseReceipt.model_validate(rows[source_id])
-        require_license(receipt, source_id, dataset, EXPECTED_PINS[dataset], "train")
+        require_license(receipt, source_id, dataset, EXPECTED_PINS[dataset], "train", ban=None)
         receipts[source_id] = receipt
     return receipts
 

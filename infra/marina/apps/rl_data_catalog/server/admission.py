@@ -19,9 +19,11 @@ from finestore.rl.curation import (
     LexicalUse,
     OversightLevel,
     SamplePanelCurrency,
-    SourceDeclaration,
     SourceUse,
     require_decontamination,
+)
+from finestore.rl.curation import (
+    QualifiedSourceDeclaration as SourceDeclaration,
 )
 from finestore.rl.licenses import require_license
 
@@ -141,6 +143,7 @@ def _require_declaration_license(declaration: SourceDeclaration) -> None:
         declaration.dataset_id,
         declaration.dataset_revision,
         declaration.intended_use.value if declaration.intended_use else "unknown",
+        ban=None,
     )
 
 

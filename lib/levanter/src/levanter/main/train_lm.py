@@ -6,7 +6,7 @@ import functools
 import logging
 import os
 from dataclasses import dataclass, field, replace
-from typing import Optional
+from typing import Any, Optional
 
 import equinox as eqx
 import haliax as hax
@@ -74,6 +74,7 @@ class TrainLmConfig:
     hf_save_chat_template: Optional[str] = None
     """Chat template embedded in the HF export's tokenizer instead of the tokenizer's own."""
     hf_generation_eos_token_ids: Optional[list[int]] = None
+    hf_generation_config_defaults: dict[str, Any] | None = None
 
     adapter: AdaptorConfig = field(default_factory=NoAdaptorConfig)
     peft_save_path: Optional[str] = None
@@ -419,6 +420,7 @@ def main(config: TrainLmConfig):
                 hf_save_steps=config.hf_save_steps,
                 hf_save_dtype=config.hf_save_dtype,
                 generation_config=build_generation_config(tokenizer, config.hf_generation_eos_token_ids),
+                generation_config_defaults=config.hf_generation_config_defaults,
                 chat_template=config.hf_save_chat_template,
                 peft_save_path=config.peft_save_path,
                 peft_hf_upload=config.peft_hf_upload,

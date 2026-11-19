@@ -6,26 +6,27 @@
 
 The box is one non-preemptible task under ``CONTAINER_PROFILE_PRIVILEGED``, so bubblewrap sandboxes,
 in-pod Docker and grader liveness checks behave as they do on curation workers. ``allocate`` returns
-once the pod runs; the holder job ends at ``--max-lifetime`` or on ``release``.
+once the pod runs; the holder job ends at ``--max-lifetime`` or on ``release``. The holder never
+retries, so ``--max-lifetime`` is a hard limit and a lost pod ends the box; allocate a new one.
 """
 
 import json
 import logging
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 import click
 from iris.cli.job import validate_system_reason
 from iris.client.client import IrisClient, Job, JobAlreadyExists
 from iris.cluster.config import load_config
-from iris.cluster.constraints import Constraint, preemptible_constraint
+from iris.cluster.constraints import preemptible_constraint
 from iris.cluster.redaction import redact_submit_argv
 from iris.cluster.types import Entrypoint, JobName, ResourceSpec
 from iris.rpc import job_pb2
 from rigging.timing import Duration
 
-from scripts.iris.dev_gpu import (
+from scripts.iris.coreweave_dev_pod import (
     HOLDER_COMMAND,
     PRIORITY_BANDS,
     CoreweaveTarget,
@@ -33,8 +34,10 @@ from scripts.iris.dev_gpu import (
     Priority,
     controller_client,
     is_job_active,
-    kubectl_base,
     kubectl_connect_cmd,
+    kubectl_copy_from_cmd,
+    kubectl_copy_to_cmd,
+    kubectl_exec_cmd,
     release_holder_job,
     require_coreweave_platform,
     run_logged,
@@ -44,6 +47,10 @@ from scripts.iris.dev_gpu import (
 )
 
 STATE_DIR = Path.home() / ".cache" / "marin" / "dev_cpu_iris"
+POD_RESOLVE_TIMEOUT = 120
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -59,18 +66,17 @@ class HolderJob:
     def job_name(self) -> str:
         return f"dev-cpu-{self.name}"
 
-    def constraints(self) -> list[Constraint]:
-        return [preemptible_constraint(False)]
-
     def submit(self, client: IrisClient) -> Job:
         return client.submit(
             entrypoint=Entrypoint.from_command("python", "-c", HOLDER_COMMAND),
             name=self.job_name,
             resources=self.resources,
-            constraints=self.constraints(),
+            constraints=[preemptible_constraint(False)],
             timeout=Duration.from_seconds(self.max_lifetime),
             priority_band=PRIORITY_BANDS[self.priority],
             container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
+            # A retry would land on an empty pod and restart the lifetime clock.
+            max_retries_preemption=0,
             submit_argv=redact_submit_argv(list(sys.argv)),
         )
 
@@ -82,9 +88,9 @@ class DevCpuState:
     session_name: str
     config_file: str
     job_id: str
+    task_id: str
     priority: Priority
     target: CoreweaveTarget
-    pod: PodRef
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=2, sort_keys=True)
@@ -96,32 +102,37 @@ class DevCpuState:
             session_name=data["session_name"],
             config_file=data["config_file"],
             job_id=data["job_id"],
+            task_id=data["task_id"],
             priority=Priority(data["priority"]),
             target=CoreweaveTarget(**data["target"]),
-            pod=PodRef(**data["pod"]),
         )
 
 
-def kubectl_exec_cmd(target: CoreweaveTarget, pod: PodRef, command: tuple[str, ...]) -> list[str]:
-    return [*kubectl_base(target), "exec", pod.pod_name, "-c", pod.container, "--", *command]
+def save_state(state_dir: Path, state: DevCpuState) -> None:
+    path = state_path(state_dir, state.session_name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(state.to_json())
 
 
-def kubectl_copy_to_cmd(target: CoreweaveTarget, pod: PodRef, local: str, remote: str) -> list[str]:
-    return [*kubectl_base(target), "cp", "-c", pod.container, local, f"{pod.pod_name}:{remote}"]
+def resolve_pod(state: DevCpuState, *, timeout: int = POD_RESOLVE_TIMEOUT) -> PodRef:
+    """Resolve the holder task's Running pod."""
+    return wait_for_running_pod(state.target, state.task_id, timeout=timeout)
 
 
-def kubectl_copy_from_cmd(target: CoreweaveTarget, pod: PodRef, remote: str, local: str) -> list[str]:
-    return [*kubectl_base(target), "cp", "-c", pod.container, f"{pod.pod_name}:{remote}", local]
+def job_is_active(state: DevCpuState) -> bool:
+    """Ask the controller whether the box's holder job is still running."""
+    with controller_client(state.config_file) as client:
+        return is_job_active(client, state.job_id)
 
 
-def session_summary(state: DevCpuState) -> str:
+def session_summary(state: DevCpuState, pod: PodRef | None) -> str:
     return "\n".join(
         [
             f"Session: {state.session_name}",
             f"Job: {state.job_id}",
             f"Config: {state.config_file}",
             f"Priority: {state.priority.value}",
-            f"Pod: {state.pod.pod_name} (namespace={state.pod.namespace}, container={state.pod.container})",
+            f"Pod: {pod.pod_name} (namespace={pod.namespace}, container={pod.container})" if pod else "Pod: none",
         ]
     )
 
@@ -136,10 +147,20 @@ def load_state(path: Path) -> DevCpuState:
 class Context:
     config_file: str | None
     session_name: str
-    state_dir: Path = STATE_DIR
+    state_dir: Path = field(default_factory=lambda: STATE_DIR)
 
     def state(self) -> DevCpuState:
         return load_state(state_path(self.state_dir, self.session_name))
+
+
+def load_active_pod(obj: Context) -> tuple[DevCpuState, PodRef]:
+    """Resolve the box's pod only while its holder job is still active."""
+    state = obj.state()
+    if not job_is_active(state):
+        raise click.ClickException(f"Dev CPU box '{state.session_name}' has ended; release it")
+    if not state.task_id:
+        raise click.ClickException(f"Dev CPU box '{state.session_name}' has not started its task yet")
+    return state, resolve_pod(state)
 
 
 @click.group()
@@ -173,7 +194,9 @@ def cli(ctx, config: str | None, session_name: str, verbose: bool) -> None:
     help="Seconds before Iris ends the holder job, e.g. 259200 for three days.",
 )
 @click.option("--timeout", default=900, show_default=True, help="Seconds to wait for the task to run.")
-@click.option("--pod-timeout", default=120, show_default=True, help="Seconds to wait for the pod to run.")
+@click.option(
+    "--pod-timeout", default=POD_RESOLVE_TIMEOUT, show_default=True, help="Seconds to wait for the pod to run."
+)
 @click.pass_obj
 def allocate(
     obj: Context,
@@ -206,24 +229,41 @@ def allocate(
         try:
             job = holder.submit(client)
         except JobAlreadyExists as exc:
-            raise click.ClickException(f"Job already exists for dev CPU box '{obj.session_name}': {exc}") from exc
+            raise click.ClickException(
+                f"A holder job already exists for dev CPU box '{obj.session_name}' ({holder.job_name})."
+                f" If its session file is gone, stop it with: uv run iris job cancel {holder.job_name}"
+            ) from exc
+        # The job id exists from submission on, so the state file is written
+        # immediately: an interrupted allocate always leaves a recoverable box.
+        state = DevCpuState(
+            session_name=obj.session_name,
+            config_file=obj.config_file,
+            job_id=str(job.job_id),
+            task_id="",
+            priority=holder.priority,
+            target=target,
+        )
+        save_state(obj.state_dir, state)
         try:
             (task_id,) = wait_for_running_tasks(job, node_count=1, timeout=timeout)
             pod = wait_for_running_pod(target, task_id, timeout=pod_timeout)
         except BaseException:
-            client.cancel_job(JobName.from_wire(str(job.job_id)))
+            try:
+                client.cancel_job(JobName.from_wire(str(job.job_id)))
+            except Exception:
+                # The holder may still run; keep the state file so `release` can stop it.
+                logger.warning(
+                    "Failed to cancel holder job %s after a failed allocation; the box may still hold its"
+                    " resources. Run `release` to stop it.",
+                    job.job_id,
+                    exc_info=True,
+                )
+                raise
+            state_file.unlink(missing_ok=True)
             raise
-    state = DevCpuState(
-        session_name=obj.session_name,
-        config_file=obj.config_file,
-        job_id=str(job.job_id),
-        priority=holder.priority,
-        target=target,
-        pod=pod,
-    )
-    state_file.parent.mkdir(parents=True, exist_ok=True)
-    state_file.write_text(state.to_json())
-    print(session_summary(state))
+    state = replace(state, task_id=task_id)
+    save_state(obj.state_dir, state)
+    print(session_summary(state, pod))
 
 
 @cli.command("exec", context_settings={"ignore_unknown_options": True})
@@ -231,16 +271,16 @@ def allocate(
 @click.pass_obj
 def exec_command(obj: Context, command: tuple[str, ...]) -> None:
     """Run one command in the box and exit with its status."""
-    state = obj.state()
-    raise SystemExit(run_logged(kubectl_exec_cmd(state.target, state.pod, command)).returncode)
+    state, pod = load_active_pod(obj)
+    raise SystemExit(run_logged(kubectl_exec_cmd(state.target, pod, command)).returncode)
 
 
 @cli.command("shell")
 @click.pass_obj
 def shell(obj: Context) -> None:
     """Open an interactive login shell in the box."""
-    state = obj.state()
-    run_logged(kubectl_connect_cmd(state.target, state.pod), check=True)
+    state, pod = load_active_pod(obj)
+    run_logged(kubectl_connect_cmd(state.target, pod), check=True)
 
 
 @cli.command("cp-to")
@@ -249,8 +289,8 @@ def shell(obj: Context) -> None:
 @click.pass_obj
 def copy_to(obj: Context, local: str, remote: str) -> None:
     """Copy a local file or directory into the box."""
-    state = obj.state()
-    run_logged(kubectl_copy_to_cmd(state.target, state.pod, local, remote), check=True)
+    state, pod = load_active_pod(obj)
+    run_logged(kubectl_copy_to_cmd(state.target, pod, local, remote), check=True)
 
 
 @cli.command("cp-from")
@@ -259,8 +299,8 @@ def copy_to(obj: Context, local: str, remote: str) -> None:
 @click.pass_obj
 def copy_from(obj: Context, remote: str, local: str) -> None:
     """Copy a file or directory out of the box."""
-    state = obj.state()
-    run_logged(kubectl_copy_from_cmd(state.target, state.pod, remote, local), check=True)
+    state, pod = load_active_pod(obj)
+    run_logged(kubectl_copy_from_cmd(state.target, pod, remote, local), check=True)
 
 
 @cli.command("status")
@@ -268,9 +308,9 @@ def copy_from(obj: Context, remote: str, local: str) -> None:
 def status(obj: Context) -> None:
     """Show the session and whether its holder job is still active."""
     state = obj.state()
-    with controller_client(state.config_file) as client:
-        active = is_job_active(client, state.job_id)
-    print(session_summary(state))
+    active = job_is_active(state)
+    pod = resolve_pod(state) if active and state.task_id else None
+    print(session_summary(state, pod))
     print(f"Active: {active}")
 
 

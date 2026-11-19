@@ -94,7 +94,12 @@ def prepare_context(config: ContextConfig) -> ActorImageContext:
     for dataset in (DATASET, CORPUS):
         source_id = "OpenResearcher:" + dataset.split("/")[1]
         require_license(
-            LicenseReceipt.model_validate(licenses[source_id]), source_id, dataset, EXPECTED_PINS[dataset], "train"
+            LicenseReceipt.model_validate(licenses[source_id]),
+            source_id,
+            dataset,
+            EXPECTED_PINS[dataset],
+            "train",
+            ban=None,
         )
     index = BM25Index.model_validate_json(pinned_document(config.index_receipt, config.index_receipt_sha256))
     if index.stage_receipt_sha256 != config.stage_receipt_sha256 or index.content_mismatches:

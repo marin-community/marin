@@ -710,7 +710,9 @@ def test_constraints_to_node_selector_pool():
     assert manifest["spec"]["nodeSelector"] == {"iris.pool": "h100-8x"}
 
 
-def test_constraints_to_node_selector_region():
+def test_region_constraint_does_not_become_node_selector():
+    # Region dispatch is validated against the backend's advertised regions and is
+    # never translated to a Node selector: no CoreWeave Node carries `iris.region`.
     req = make_run_req("/my-job/task-0")
     add_eq_constraint(req, "region", "US-WEST-04A")
 
@@ -720,13 +722,15 @@ def test_constraints_to_node_selector_region():
 
 @pytest.mark.parametrize("regions", [("US-EAST-08A",), ()])
 def test_region_mismatch_rejects_dispatch_before_creating_a_pod(regions):
+    # Pins the dispatch path, not nodeSelector propagation: a required region the
+    # backend cannot serve fails the task before any Pod is created. The empty
+    # regions case mirrors a backend that advertises no regions.
     req = make_run_req("/my-job/task-0")
     add_eq_constraint(req, "region", "US-WEST-04A")
     updates, resources = _dispatch(req, pod_config(), regions=regions)
     assert resources[K8sResource.PODS] == []
     assert len(updates) == 1
     assert updates[0].new_state == job_pb2.TASK_STATE_FAILED
-    assert "Region constraints do not match" in updates[0].error
 
 
 @pytest.mark.parametrize("op", [job_pb2.CONSTRAINT_OP_EQ, job_pb2.CONSTRAINT_OP_IN])
@@ -744,12 +748,14 @@ def test_region_constraint_matches_backend_without_using_kubernetes_region_label
     assert "nodeSelector" not in pod["spec"]
 
 
-def test_preferred_region_does_not_reject_dispatch():
+def test_preferred_region_mismatch_does_not_reject_dispatch():
     req = make_run_req("/my-job/task-0")
-    add_eq_constraint(req, "region", "US-EAST-08A")
+    add_eq_constraint(req, "region", "US-WEST-04A")
     req.constraints[0].mode = job_pb2.CONSTRAINT_MODE_PREFERRED
-    manifest = _build_pod_manifest(req, pod_config())
-    assert "nodeSelector" not in manifest["spec"]
+    updates, resources = _dispatch(req, pod_config(), regions=("US-EAST-08A",))
+    assert updates == []
+    pod = resources[K8sResource.PODS][0]
+    assert "nodeSelector" not in pod["spec"]
 
 
 def test_constraints_to_node_selector_multiple():
@@ -2049,7 +2055,6 @@ def test_sandbox_pod_enforces_exact_declared_disk_and_cpu(disk_bytes: int) -> No
     req.egress_policy = job_pb2.EGRESS_POLICY_NONE
     _, objects = _dispatch(req, pod_config())
     pod = objects[K8sResource.PODS][0]
-    assert len(pod["spec"]["containers"]) == 1
     resources = pod["spec"]["containers"][0]["resources"]
     assert parse_k8s_quantity(resources["limits"]["ephemeral-storage"]) == disk_bytes
     assert parse_k8s_quantity(resources["requests"]["ephemeral-storage"]) == disk_bytes

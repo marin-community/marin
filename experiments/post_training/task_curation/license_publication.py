@@ -110,7 +110,7 @@ def _prepare_package_publication(receipt: LicenseReceipt, evidence: LicenseEvide
 
 def prepare_license_publication(receipt: LicenseReceipt, output: Path, *, use: str) -> LicensePublication:
     """Archive the pinned grant and notices after validating the exact input receipt."""
-    require_license(receipt, receipt.source_id, receipt.dataset_id, receipt.revision, use)
+    require_license(receipt, receipt.source_id, receipt.dataset_id, receipt.revision, use, ban=None)
     require_unbanned(receipt.source_id, receipt.dataset_id, receipt)
     package_evidence = [
         item

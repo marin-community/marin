@@ -295,7 +295,7 @@ def main() -> None:
     parser.add_argument("--run", action="store_true")
     args = parser.parse_args()
     receipt = read_license_receipts(LICENSE_RECEIPT_INDEX)[EVAL_SOURCE_ID]
-    require_license(receipt, EVAL_SOURCE_ID, EVAL_DATASET, IFBENCH_REVISION, "eval")
+    require_license(receipt, EVAL_SOURCE_ID, EVAL_DATASET, IFBENCH_REVISION, "eval", ban=None)
     require_unbanned(EVAL_SOURCE_ID, EVAL_DATASET, receipt)
     if file_sha256(StoragePath(str(args.populations))) != args.populations_sha256:
         raise ValueError("Frozen shared DF population inventory changed")
@@ -309,6 +309,7 @@ def main() -> None:
         train.dataset_id,
         train.dataset_revision,
         "train",
+        ban=None,
     )
     require_unbanned(TRAIN_SOURCE_ID, train.dataset_id)
     configure_coreweave_s3()

@@ -3,7 +3,7 @@
 
 """Current private filtration outputs, separate from positive admission proof."""
 
-from finestore.rl.curation import SourceDeclaration
+from finestore.rl.curation import QualifiedSourceDeclaration as SourceDeclaration
 
 from experiments.post_training.task_curation.tests.license_fixtures import fixture_license
 from infra.marina.apps.rl_data_catalog.server.source_counts import NO_ORACLE_POLICY_SHA256, SourceCountEvidence

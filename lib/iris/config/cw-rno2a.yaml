@@ -49,6 +49,7 @@ provisioning:
   coreweave:
     cluster: { name: marin-rn02a, zone: RNO2A }
     kueue:
+      cpu_scale_group: cpu-turin
       flavor_topology: infiniband  # H100 IB cluster: bind the flavor to the infiniband topology
     ingress:
       ingress_class: traefik

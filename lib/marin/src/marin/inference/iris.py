@@ -66,6 +66,7 @@ from marin.inference.iris_vllm import (
     wait_for_iris_vllm_shutdown,
 )
 from marin.inference.model_cache import ModelPreparationError, prepare_hf_models
+from marin.inference.model_feedback import model_feedback_prefix
 from marin.inference.proxy import serve_inference_proxy
 from marin.inference.serve import LocalInferenceSession, local_inference
 from marin.inference.types import (
@@ -503,6 +504,7 @@ def _register_dashboard(
         info=info,
         request_timeout_seconds=service.controller_proxy_timeout_seconds,
         web_search=parallel_web_search_from_secret(),
+        feedback_prefix=model_feedback_prefix(),
     )
     with serve_app_background(app, serving_socket):
         address = f"http://{job_info.advertise_host}:{serving_port}"

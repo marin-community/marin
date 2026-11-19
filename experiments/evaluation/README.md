@@ -145,8 +145,13 @@ Each evaluation has its own generated `run_id` and writes:
 
 The record contains the resolved model and evaluator settings, runtime
 provenance, hardware, status, result path, and Iris job IDs. Harbor also writes
-metrics and coverage there. Curated metric maps remain empty until Evaldash
-derives scores and coverage in its own catalog.
+metrics and coverage there. Curated metric maps remain empty; Evaldash
+derives scores and coverage in its own catalog. When the launcher waits, it
+prints each run's derived coverage and scores. Print them later with:
+
+```bash
+uv run python -m experiments.evaluation.cli scores gs://marin-eval-metadata/evals/<run_id>
+```
 Evaluations in one launch share a `group_id`, which is the launch ID set by
 `--run-id` when supplied. Failure records include available child log tails.
 
@@ -234,8 +239,9 @@ To extend the catalog:
 
 - Add model YAML under `serve/models/<org>/<model>.yaml`; see the
   [model schema](serve/models/README.md).
-- Add benchmark data and supported evaluation configurations under `experiments/evaluation/benchmarks/`
-  and expose their supported protocols through `benchmarks()`. Add suite choices or run overrides in [configs/evalchemy.yaml](configs/evalchemy.yaml); ordinary default selections need no menu entry.
+- Add a curated benchmark by following
+  [Add an evaluation benchmark](../../docs/tutorials/add-evaluation.md). It covers
+  source pins, prompts, scorers, protocols, catalog registration and validation.
 - Add Harbor files under `configs/harbor/` and register them with
   `harbor_definition()`. Add keys to `SUITES` when they belong in a suite.
 

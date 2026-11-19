@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import cast
 
 import click
-from finestore.rl.curation import LexicalContaminationEvidence, SourceDeclaration
+from finestore.rl.curation import LexicalContaminationEvidence, QualifiedSourceDeclaration, SourceDeclaration
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
@@ -273,7 +273,7 @@ class _CorpusSources:
 
 def _corpus_sources(corpus: str) -> _CorpusSources:
     document = json.loads(StoragePath(corpus).read_text())
-    inventory = [canonical_declaration(SourceDeclaration.model_validate(row)) for row in document["inventory"]]
+    inventory = [canonical_declaration(QualifiedSourceDeclaration.model_validate(row)) for row in document["inventory"]]
     roots = {}
     for row in document["sources"]:
         manifest = json.loads((StoragePath(row["root"]) / "manifest.json").read_text())

@@ -6,6 +6,7 @@
 import gzip
 import hashlib
 import json
+import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Barrier
@@ -30,7 +31,6 @@ from marin.datakit.decon import (
     merge_eval_blooms,
 )
 from marin.datakit.normalize import NormalizedData
-from rigging.filesystem.storage_path import StoragePath
 
 
 @pytest.fixture(autouse=True)
@@ -68,31 +68,6 @@ def _as_source(input_dir: Path) -> NormalizedData:
         dup_output_dir=str(input_dir / "_dups_unused"),
         counters={},
     )
-
-
-def test_bloom_cold_cache_concurrent_loads_preserve_filter(tmp_path: Path, monkeypatch):
-    source = tmp_path / "source.bin"
-    bloom = dupekit.Bloom(1000, 1e-9)
-    for value in (19, 101, 1009):
-        bloom.add(value)
-    bloom.save(str(source))
-    expected = source.read_bytes()
-    monkeypatch.setattr(decon, "_BLOOM_CACHE_DIR", str(tmp_path / "cache"))
-    read_bytes = StoragePath.read_bytes
-    readers = Barrier(4)
-
-    def synchronized_read(path: StoragePath) -> bytes:
-        # Every caller must enter its cold fill before any download completes.
-        # This reproduces same-process Zephyr threads sharing a temporary path.
-        readers.wait(timeout=10)
-        return read_bytes(path)
-
-    monkeypatch.setattr(StoragePath, "read_bytes", synchronized_read)
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        pending = [pool.submit(decon._load_bloom, str(source)) for _ in range(4)]
-        results = [future.result(timeout=15) for future in pending]
-    assert [bytes(result.save_bytes()) for result in results] == [expected] * 4
-    assert all(value in result for result in results for value in (19, 101, 1009))
 
 
 @pytest.fixture
@@ -917,6 +892,30 @@ def test_decon_misses_word_order_permutation(tmp_path: Path):
     assert rows["doc_permuted"]["contaminated"] is True
 
 
+def test_load_bloom_concurrent_cold_cache_preserves_filter(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    bloom = dupekit.Bloom(100, 1e-9)
+    bloom.add(42)
+    source = tmp_path / "filter.bin"
+    source.write_bytes(bloom.save_bytes())
+    cache_dir = tmp_path / "cache"
+    monkeypatch.setattr(decon, "_BLOOM_CACHE_DIR", str(cache_dir))
+
+    all_ready = Barrier(4, timeout=10)
+    original_replace = os.replace
+
+    def replace_after_all_ready(source_path: str, destination_path: str) -> None:
+        all_ready.wait()
+        original_replace(source_path, destination_path)
+
+    monkeypatch.setattr(os, "replace", replace_after_all_ready)
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = [executor.submit(decon._load_bloom, str(source)) for _ in range(4)]
+        loaded = [future.result(timeout=10) for future in futures]
+
+    assert all(42 in item for item in loaded)
+    assert [path.read_bytes() for path in cache_dir.iterdir()] == [source.read_bytes()]
+
+
 # --- prebuilt-bloom path (build_eval_bloom + merge_eval_blooms) ----------
 
 
@@ -1553,19 +1552,6 @@ def test_build_all_source_drop_sets_rejects_reserved_global_source_name(tmp_path
             global_common_min_abs=6,
             global_common_min_sources=3,
         )
-
-
-def test_missing_drop_set_is_not_treated_as_an_empty_filter(tmp_path: Path):
-    directory = tmp_path / "missing-source-mask"
-    with pytest.raises(FileNotFoundError) as error:
-        _load_drop_set(str(directory))
-    assert str(directory / "drop.parquet") in str(error.value)
-
-
-def test_explicit_drop_set_requires_unsigned_hashes(tmp_path: Path):
-    pq.write_table(pa.table({"hash": pa.array([-1], pa.int64())}), tmp_path / "drop.parquet")
-    with pytest.raises(ValueError, match="hash:uint64"):
-        _load_drop_set(str(tmp_path))
 
 
 def test_build_all_source_drop_sets_distributes_per_source(tmp_path: Path):

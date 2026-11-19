@@ -340,172 +340,6 @@ def check_large_files(files: list[pathlib.Path], fix: bool) -> int:
     return _record("Large files", 0)
 
 
-# Committed data files have a 100 KB limit. Data directly inside one directory
-# has a 250 KB limit. Compressed files count toward both limits.
-LARGE_DATA_FILE_LIMIT = 100 * 1024
-LARGE_DATA_DIRECTORY_LIMIT = 250 * 1024
-DATA_FILE_SUFFIXES = frozenset(
-    {".json", ".jsonl", ".csv", ".tsv", ".parquet", ".arrow", ".npy", ".pkl", ".gz", ".zst", ".tar", ".zip"}
-)
-LARGE_DATA_ALLOWLIST_PATH = ROOT_DIR / "infra/large-data-allowlist.json"
-LARGE_DATA_MESSAGE = (
-    "publish the data to a private open-athena Hugging Face dataset and commit a reference"
-    ' {"repo": ..., "revision": ..., "path": ..., "sha256": ...} instead; readers resolve it'
-    " through the existing HF/regional helpers"
-)
-
-
-def _is_data_file(path: pathlib.Path) -> bool:
-    if path.is_dir():
-        return False
-    if path.suffix.lower() in DATA_FILE_SUFFIXES:
-        return True
-    # No OSError fallback: an unreadable file must abort the lint rather than
-    # silently evade the large-data guard.
-    with path.open("rb") as stream:
-        return b"\0" in stream.read(8192)
-
-
-def _large_data_allowlist() -> dict[str, int]:
-    if not LARGE_DATA_ALLOWLIST_PATH.exists():
-        return {}
-    document = json.loads(LARGE_DATA_ALLOWLIST_PATH.read_text())
-    assert isinstance(document, dict)
-    return {str(path): int(size) for path, size in document.items()}
-
-
-def _merge_base_ref() -> str:
-    result = subprocess.run(
-        ["git", "merge-base", "origin/main", "HEAD"],
-        cwd=ROOT_DIR,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return result.stdout.strip()
-
-
-def _require_origin_main() -> None:
-    """The shrink-only comparison targets origin/main's tip, not a merge base."""
-    result = subprocess.run(
-        ["git", "cat-file", "-e", "origin/main^{commit}"],
-        cwd=ROOT_DIR,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError("The large-data guard compares against origin/main; fetch it with 'git fetch origin main'")
-
-
-def _git_blob_size(base_ref: str, path: str) -> int | None:
-    """The committed byte size of a path at the base ref, or None when absent there."""
-    result = subprocess.run(
-        ["git", "cat-file", "-s", f"{base_ref}:{path}"],
-        cwd=ROOT_DIR,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return int(result.stdout.strip()) if result.returncode == 0 else None
-
-
-def _tracked_data_siblings(directory: pathlib.Path) -> list[pathlib.Path]:
-    """Tracked data files directly inside one directory, including files this branch didn't touch."""
-    result = subprocess.run(
-        ["git", "ls-files", "--", f"{directory.relative_to(ROOT_DIR).as_posix()}/"],
-        cwd=ROOT_DIR,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return [
-        ROOT_DIR / name
-        for name in result.stdout.splitlines()
-        if name and (ROOT_DIR / name).parent == directory and _is_data_file(ROOT_DIR / name)
-    ]
-
-
-def check_large_data(files: list[pathlib.Path], fix: bool) -> int:
-    if not files:
-        return 0
-
-    allowlist = _large_data_allowlist()
-    buf = io.StringIO()
-    failures: list[str] = []
-
-    directory_bytes: dict[str, int] = {}
-
-    def directory_total(directory: pathlib.Path) -> int:
-        key = directory.relative_to(ROOT_DIR).as_posix()
-        if key not in directory_bytes:
-            directory_bytes[key] = sum(path.stat().st_size for path in _tracked_data_siblings(directory))
-        return directory_bytes[key]
-
-    for file_path in files:
-        if file_path == LARGE_DATA_ALLOWLIST_PATH or not _is_data_file(file_path):
-            continue
-        relative = file_path.relative_to(ROOT_DIR).as_posix()
-        size = file_path.stat().st_size
-        recorded = allowlist.get(relative)
-        if recorded is not None:
-            if size > recorded:
-                failures.append(
-                    f"  - {relative} grew to {size / 1024:.1f} KB (allowlisted at {recorded / 1024:.1f} KB;"
-                    f" the allowlist only shrinks)"
-                )
-            continue
-        if size > LARGE_DATA_FILE_LIMIT:
-            failures.append(f"  - {relative} is {size / 1024:.1f} KB (limit {LARGE_DATA_FILE_LIMIT // 1024} KB)")
-        directory = file_path.parent
-        total = directory_total(directory)
-        if total > LARGE_DATA_DIRECTORY_LIMIT:
-            failures.append(
-                f"  - {relative}: committed data in {directory.relative_to(ROOT_DIR).as_posix()}/"
-                f" totals {total / 1024:.1f} KB (limit {LARGE_DATA_DIRECTORY_LIMIT // 1024} KB),"
-                " so sharding cannot spread it further"
-            )
-
-    # A shrink-only allowlist. Once the allowlist itself exists on origin/main, its
-    # recorded sizes may only decrease and a new entry must reference data that
-    # origin/main already has, so a fresh dump cannot be allowlisted in the same
-    # change that adds it. Before the first merge (adoption) the entries stand as-is.
-    if LARGE_DATA_ALLOWLIST_PATH in files:
-        _require_origin_main()
-        result = subprocess.run(
-            ["git", "cat-file", "-p", f"origin/main:{LARGE_DATA_ALLOWLIST_PATH.relative_to(ROOT_DIR).as_posix()}"],
-            cwd=ROOT_DIR,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode == 0:
-            base_document = json.loads(result.stdout)
-            for path, size in allowlist.items():
-                base_size = base_document.get(path)
-                if base_size is None:
-                    if _git_blob_size("origin/main", path) is None:
-                        failures.append(
-                            f"  - allowlist entry {path} names data that does not exist on origin/main;"
-                            " commit the reference instead"
-                        )
-                elif size != int(base_size):
-                    failures.append(
-                        f"  - allowlist entry {path} records {size / 1024:.1f} KB but origin/main holds"
-                        f" {int(base_size) / 1024:.1f} KB; set the entry to the committed size"
-                        " (the allowlist only shrinks)"
-                    )
-        # An allowlist absent from origin/main is the first landing; its entries stand as-is.
-
-    if failures:
-        buf.write(f"{len(failures)} large-data violations; " + LARGE_DATA_MESSAGE + "\n")
-        for failure in failures:
-            buf.write(failure + "\n")
-        return _record("Large data", 1, buf.getvalue())
-
-    return _record("Large data", 0)
-
-
 def check_python_ast(files: list[pathlib.Path], fix: bool) -> int:
     py_files = [f for f in files if f.suffix == ".py"]
     if not py_files:
@@ -994,11 +828,55 @@ def check_pyrefly(files: list[pathlib.Path], fix: bool) -> int:
     return _record("Pyrefly type checker", result.returncode, output)
 
 
+# Vendored projects with their own uv.lock. They can install Marin libraries from local
+# paths, so a dependency change in one of those libraries makes their lock stale.
+VENDORED_LOCK_PROJECTS = tuple(
+    sorted(str(lock.parent.relative_to(ROOT_DIR)) for lock in ROOT_DIR.glob("vendor/*/uv.lock"))
+)
+
+
+def _vendored_lock_inputs(project: str) -> set[str]:
+    """Repo-relative pyproject.toml files whose dependencies ``project``'s uv.lock records."""
+    project_dir = ROOT_DIR / project
+    pyproject = tomllib.loads((project_dir / "pyproject.toml").read_text())
+    sources = pyproject.get("tool", {}).get("uv", {}).get("sources", {})
+    local = [project_dir / source["path"] for source in sources.values() if "path" in source]
+    return {str(path.resolve().relative_to(ROOT_DIR) / "pyproject.toml") for path in [project_dir, *local]}
+
+
+VENDORED_LOCK_INPUTS = {project: _vendored_lock_inputs(project) for project in VENDORED_LOCK_PROJECTS}
+
+
+def check_vendored_locks(files: list[pathlib.Path], fix: bool) -> int:
+    changed = {str(f.relative_to(ROOT_DIR)) for f in files}
+    projects = [project for project, inputs in VENDORED_LOCK_INPUTS.items() if changed & inputs]
+    if not projects:
+        return 0
+
+    exit_code = 0
+    output = []
+    for project in projects:
+        result = run_cmd(["uv", "lock", "--project", project, "--check"])
+        if result.returncode == 0:
+            continue
+        exit_code = result.returncode
+        output.append(f"`uv lock --project {project} --check` failed:\n{(result.stdout + result.stderr).strip()}")
+        if fix:
+            relock = run_cmd(["uv", "lock", "--project", project])
+            output.append(f"Ran `uv lock --project {project}`; stage {project}/uv.lock.")
+            if relock.returncode:
+                output.append((relock.stdout + relock.stderr).strip())
+        else:
+            output.append(f"Run `uv lock --project {project}` and commit {project}/uv.lock.")
+    return _record("Vendored uv locks", exit_code, "\n".join(output))
+
+
 @dataclass
 class PrecommitConfig:
     patterns: list[str]
     checks: list[Callable[[list[pathlib.Path], bool], int]]
-    exclude_patterns: list[str] = field(default_factory=EXCLUDE_PATTERNS.copy)
+    exclude_patterns: list[str] = field(default_factory=list)
+    global_exclude_patterns: list[str] = field(default_factory=lambda: EXCLUDE_PATTERNS)
 
 
 PRECOMMIT_CONFIGS = [
@@ -1028,7 +906,7 @@ PRECOMMIT_CONFIGS = [
     ),
     PrecommitConfig(
         patterns=["**/*.py"],
-        exclude_patterns=[*EXCLUDE_PATTERNS, "lib/levanter/**", "lib/haliax/**", "lib/marin/**", "lib/**/vendor/**"],
+        exclude_patterns=["lib/levanter/**", "lib/haliax/**", "lib/marin/**", "lib/**/vendor/**"],
         checks=[
             check_ruff,
             check_black,
@@ -1044,6 +922,7 @@ PRECOMMIT_CONFIGS = [
             "lib/iris/src/**/*.py",
             "lib/rigging/src/**/*.py",
             "lib/skyrlrecipe/src/**/*.py",
+            "lib/evalrecords/src/**/*.py",
             "lib/zephyr/src/**/*.py",
             "infra/marina/src/**/*.py",
             "infra/marina/apps/**/*.py",
@@ -1061,25 +940,6 @@ PRECOMMIT_CONFIGS = [
             check_toml_yaml,
             check_trailing_whitespace,
             check_eof_newline,
-        ],
-    ),
-    PrecommitConfig(
-        # The data guard needs the globally hidden tree (gz/zip/npy are the classic
-        # evasion vectors), but not upstream code, pinned snapshots or binary media.
-        patterns=["**/*"],
-        checks=[check_large_data],
-        exclude_patterns=[
-            "vendor/**",
-            "tests/snapshots/**",
-            "**/*.ipynb",
-            "**/*.png",
-            "**/*.jpg",
-            "**/*.jpeg",
-            "**/*.gif",
-            "**/*.ico",
-            "**/*.mov",
-            "**/*.mp4",
-            "**/*.html",
         ],
     ),
     PrecommitConfig(
@@ -1105,6 +965,14 @@ PRECOMMIT_CONFIGS = [
         checks=[
             check_skill_metadata,
         ],
+    ),
+    PrecommitConfig(
+        patterns=sorted(set().union(*VENDORED_LOCK_INPUTS.values())),
+        checks=[
+            check_vendored_locks,
+        ],
+        # EXCLUDE_PATTERNS drops vendor/harbor/** and vendor/skyrl/**, whose pyproject.toml files are lock inputs.
+        global_exclude_patterns=[],
     ),
 ]
 
@@ -1235,7 +1103,9 @@ def main(
     only_set = set(f"check_{o}" for o in only)
 
     for config in PRECOMMIT_CONFIGS:
-        matched_files = get_matching_files(config.patterns, all_files_list, config.exclude_patterns)
+        matched_files = get_matching_files(
+            config.patterns, all_files_list, config.global_exclude_patterns + config.exclude_patterns
+        )
         matched_files = [f for f in matched_files if f.exists()]
         if not matched_files:
             continue

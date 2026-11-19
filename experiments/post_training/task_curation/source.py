@@ -29,13 +29,15 @@ from finestore.rl.curation import (
     QualityResultFinalization,
     RecipeQAHistoricalNotes,
     RoleExecutionEvidence,
-    SourceDeclaration,
     SourceOrigin,
     SourceQualityResult,
     SourceUse,
     WithinSourceDedupEvidence,
     source_identifier,
     source_title,
+)
+from finestore.rl.curation import (
+    QualifiedSourceDeclaration as SourceDeclaration,
 )
 from finestore.rl.licenses import LicenseReceipt, require_license
 from finestore.rl.status_taxonomy import (
@@ -320,6 +322,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             dataset.name if dataset else None,
             dataset.revision if dataset else None,
             self.intended_use.value,
+            ban=None,
         )
 
     @property
