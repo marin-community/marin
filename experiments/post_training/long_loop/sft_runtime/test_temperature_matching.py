@@ -540,7 +540,7 @@ def test_per_source_switch_masks_disabled_rows_and_handles_all_disabled_graceful
 
             # Check balance_attention_rows permutes row_mask in lockstep with tokens.
             row_ids = jax.device_put(np.array([10.0, 20.0, 30.0, 40.0], dtype=np.float32), NamedSharding(mesh, P("data")))
-            bal_batch, bal_mask = _balance_attention_rows_with_mask(batch, row_ids)
+            bal_batch, bal_mask, _ = _balance_attention_rows_with_mask(batch, row_ids)
             bal_tokens_np = np.asarray(bal_batch.tokens)
             orig_tokens_np = np.asarray(batch.tokens)
             bal_mask_np = np.asarray(bal_mask)

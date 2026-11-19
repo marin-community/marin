@@ -83,9 +83,14 @@ from experiments.post_training.long_loop.sft_runtime.model import (
     Transformer,
     _histogram_from_expert_counts,
 )
+from experiments.post_training.long_loop.sft_runtime.cached_topk_cache import CachedTopKMixtureReader
 from experiments.post_training.long_loop.sft_runtime.state_rebind import HostRebindConfig, rebind_first_state
 from experiments.post_training.long_loop.sft_runtime.temperature_matching import (
+    CachedTeacherTopK,
+    TeacherMatchingMode,
     TemperatureMatchingConfig,
+    cached_topk_has_valid_entries,
+    chunked_linear_cached_topk_kl_weighted_sum,
     chunked_linear_tempered_kl_weighted_sum,
     global_l2_norm,
     tm_row_mask_for_mixture_indices,
@@ -952,11 +957,12 @@ def balance_attention_rows(batch: GrugLmExample) -> GrugLmExample:
 def _balance_attention_rows_with_mask(
     batch: GrugLmExample,
     row_mask: jax.Array | None,
-) -> tuple[GrugLmExample, jax.Array | None]:
-    """Permute ``batch`` and an optional per-row TM mask in lockstep."""
+    teacher_topk: CachedTeacherTopK | None = None,
+) -> tuple[GrugLmExample, jax.Array | None, CachedTeacherTopK | None]:
+    """Permute ``batch``, an optional per-row TM mask, and optional cached teacher top-k in lockstep."""
     source_row = _attention_row_permutation(batch)
     if source_row is None:
-        return batch, row_mask
+        return batch, row_mask, teacher_topk
     segment_ids = batch.attn_mask.segment_ids
     assert segment_ids is not None
     q_segment_ids = segment_ids[0]
@@ -966,7 +972,15 @@ def _balance_attention_rows_with_mask(
         attn_mask=batch.attn_mask.with_segment_ids(_permute_batch_rows(q_segment_ids, source_row)),
     )
     balanced_mask = _permute_batch_rows(row_mask, source_row) if row_mask is not None else None
-    return balanced_batch, balanced_mask
+    balanced_topk = (
+        jax.tree.map(
+            lambda leaf: _permute_batch_rows(leaf, source_row) if isinstance(leaf, jax.Array) else leaf,
+            teacher_topk,
+        )
+        if teacher_topk is not None
+        else None
+    )
+    return balanced_batch, balanced_mask, balanced_topk
 
 
 def cast_teacher_params(params: Transformer, mp: jmp.Policy) -> Transformer:
@@ -1164,8 +1178,6 @@ def _teacher_hiddens_for_microbatches(
 def _loss_and_grads_with_tm(
     params: Transformer,
     batch: GrugLmExample,
-    teacher_hidden: jax.Array,
-    teacher_output_proj: jax.Array,
     tm_weight: jax.Array,
     mp: jmp.Policy,
     z_loss: float | None,
@@ -1173,8 +1185,10 @@ def _loss_and_grads_with_tm(
     ce_denominator: jax.Array,
     tm_coeff: jax.Array,
     tm_config: TemperatureMatchingConfig,
+    teacher_hidden: jax.Array | None = None,
+    teacher_output_proj: jax.Array | None = None,
+    teacher_topk: CachedTeacherTopK | None = None,
 ):
-    assert tm_config.temperature is not None
     ce_scale = jnp.asarray(tm_config.ce_weight, dtype=jnp.float32)
 
     def loss_fn(model):
@@ -1195,20 +1209,31 @@ def _loss_and_grads_with_tm(
             return_router_metrics=True,
         )
         ce_loss = ce_sum / ce_denominator
-        t_out = (
-            _tree_to_memory_kind(teacher_output_proj, "device")
-            if tm_config.offload_teacher
-            else teacher_output_proj
-        )
-        kl_sum = chunked_linear_tempered_kl_weighted_sum(
-            hidden,
-            compute_params.output_proj,
-            teacher_hidden,
-            jax.lax.stop_gradient(t_out),
-            tm_weight,
-            temperature=tm_config.temperature,
-            token_block_size=tm_config.token_block_size,
-        )
+        if tm_config.mode == TeacherMatchingMode.FULL_VOCAB_TEMPERATURE:
+            assert teacher_hidden is not None and teacher_output_proj is not None and tm_config.temperature is not None
+            t_out = (
+                _tree_to_memory_kind(teacher_output_proj, "device")
+                if tm_config.offload_teacher
+                else teacher_output_proj
+            )
+            kl_sum = chunked_linear_tempered_kl_weighted_sum(
+                hidden,
+                compute_params.output_proj,
+                teacher_hidden,
+                jax.lax.stop_gradient(t_out),
+                tm_weight,
+                temperature=tm_config.temperature,
+                token_block_size=tm_config.token_block_size,
+            )
+        else:
+            assert teacher_topk is not None
+            kl_sum = chunked_linear_cached_topk_kl_weighted_sum(
+                hidden,
+                compute_params.output_proj,
+                teacher_topk,
+                tm_weight,
+                token_block_size=tm_config.token_block_size,
+            )
         total_loss = ce_scale * ce_loss + tm_coeff * kl_sum
         metrics = {**metrics, "train/cross_entropy_loss": ce_loss, "train/tm/kl_sum": kl_sum}
         return total_loss, metrics
@@ -1219,16 +1244,15 @@ def _loss_and_grads_with_tm(
 def _tm_only_loss_and_grads(
     params: Transformer,
     batch: GrugLmExample,
-    teacher_hidden: jax.Array,
-    teacher_output_proj: jax.Array,
     tm_weight: jax.Array,
     mp: jmp.Policy,
     *,
     tm_coeff: jax.Array,
     tm_config: TemperatureMatchingConfig,
+    teacher_hidden: jax.Array | None = None,
+    teacher_output_proj: jax.Array | None = None,
+    teacher_topk: CachedTeacherTopK | None = None,
 ):
-    assert tm_config.temperature is not None
-
     def loss_fn(model):
         model = eqx.tree_at(
             lambda m: m.stacked_blocks.stacked.mlp.router_bias,
@@ -1237,20 +1261,31 @@ def _tm_only_loss_and_grads(
         )
         compute_params = mp.cast_to_compute(model)
         hidden, _ = compute_params(batch.tokens, mask=batch.attn_mask)
-        t_out = (
-            _tree_to_memory_kind(teacher_output_proj, "device")
-            if tm_config.offload_teacher
-            else teacher_output_proj
-        )
-        kl_sum = chunked_linear_tempered_kl_weighted_sum(
-            hidden,
-            compute_params.output_proj,
-            teacher_hidden,
-            jax.lax.stop_gradient(t_out),
-            tm_weight,
-            temperature=tm_config.temperature,
-            token_block_size=tm_config.token_block_size,
-        )
+        if tm_config.mode == TeacherMatchingMode.FULL_VOCAB_TEMPERATURE:
+            assert teacher_hidden is not None and teacher_output_proj is not None and tm_config.temperature is not None
+            t_out = (
+                _tree_to_memory_kind(teacher_output_proj, "device")
+                if tm_config.offload_teacher
+                else teacher_output_proj
+            )
+            kl_sum = chunked_linear_tempered_kl_weighted_sum(
+                hidden,
+                compute_params.output_proj,
+                teacher_hidden,
+                jax.lax.stop_gradient(t_out),
+                tm_weight,
+                temperature=tm_config.temperature,
+                token_block_size=tm_config.token_block_size,
+            )
+        else:
+            assert teacher_topk is not None
+            kl_sum = chunked_linear_cached_topk_kl_weighted_sum(
+                hidden,
+                compute_params.output_proj,
+                teacher_topk,
+                tm_weight,
+                token_block_size=tm_config.token_block_size,
+            )
         return tm_coeff * kl_sum
 
     return jax.value_and_grad(loss_fn)(params)
@@ -1261,6 +1296,9 @@ def _split_tm_microbatches(
     tm_row_mask: jax.Array | None,
     steps: int,
     tm_count: int,
+    *,
+    teacher_topk: CachedTeacherTopK | None = None,
+    vocab_size: int | None = None,
 ):
     batch_size = batch.tokens.shape[0]
     if batch_size % steps:
@@ -1277,31 +1315,64 @@ def _split_tm_microbatches(
     ce_only_mbs = jax.tree.map(lambda value: value[tm_count:], microbatches)
     tm_row_mask_mbs = row_mask_mbs[:tm_count]
     tm_weights_selected = tm_mbs.loss_weight.astype(jnp.float32) * tm_row_mask_mbs[:, :, None]
+
+    tm_topk_mbs = None
+    if teacher_topk is not None:
+        assert vocab_size is not None
+        topk_mbs = jax.tree.map(
+            lambda value: reshape_array_into_microbatches(value, steps) if isinstance(value, jax.Array) else value,
+            teacher_topk,
+        )
+        tm_topk_mbs = jax.tree.map(
+            lambda value: value[:tm_count] if isinstance(value, jax.Array) else value,
+            topk_mbs,
+        )
+        tm_weights_selected = tm_weights_selected * cached_topk_has_valid_entries(tm_topk_mbs, vocab_size)
+
     tm_weight_sum = jnp.sum(tm_weights_selected, dtype=jnp.float32)
     tm_supervised_sum = jnp.sum(tm_mbs.loss_weight, dtype=jnp.float32)
-    return shared, tm_mbs, ce_only_mbs, tm_weights_selected, tm_weight_sum, tm_supervised_sum
+    return shared, tm_mbs, ce_only_mbs, tm_topk_mbs, tm_weights_selected, tm_weight_sum, tm_supervised_sum
 
 
 def _accumulated_loss_and_grads_with_tm(
     params: Transformer,
     batch: GrugLmExample,
-    teacher_params: Transformer,
+    teacher_params: Transformer | None,
     tm_row_mask: jax.Array | None,
     mp: jmp.Policy,
     z_loss: float | None,
     steps: int,
     tm_config: TemperatureMatchingConfig,
+    *,
+    teacher_topk: CachedTeacherTopK | None = None,
 ):
-    """Accumulate CE over all ``steps`` microbatches and full-vocab TM over ``tm_config.microbatch_count``."""
+    """Accumulate CE over all ``steps`` microbatches and teacher matching over ``tm_config.microbatch_count``."""
     assert tm_config.microbatch_count is not None and tm_config.weight is not None
     tm_count = tm_config.microbatch_count
-    shared, tm_mbs, ce_only_mbs, tm_weights_selected, tm_weight_sum, tm_supervised_sum = _split_tm_microbatches(
-        batch, tm_row_mask, steps, tm_count
+    is_full_vocab = tm_config.mode == TeacherMatchingMode.FULL_VOCAB_TEMPERATURE
+    if is_full_vocab and teacher_params is None:
+        raise ValueError("teacher_params must be passed for mode=full_vocab_temperature")
+    if not is_full_vocab and teacher_topk is None:
+        raise ValueError("teacher_topk must be passed for mode=cached_topk_kl")
+
+    shared, tm_mbs, ce_only_mbs, tm_topk_mbs, tm_weights_selected, tm_weight_sum, tm_supervised_sum = (
+        _split_tm_microbatches(
+            batch,
+            tm_row_mask,
+            steps,
+            tm_count,
+            teacher_topk=None if is_full_vocab else teacher_topk,
+            vocab_size=params.config.vocab_size,
+        )
     )
 
-    # Phase 1: decoupled frozen-teacher forward so teacher backbone exits HBM before student backward.
-    teacher_hiddens = _teacher_hiddens_for_microbatches(
-        teacher_params, tm_mbs, shared, stream_from_host=tm_config.offload_teacher
+    # Phase 1 (full-vocab mode only): decoupled frozen-teacher forward so teacher backbone exits HBM before backward.
+    teacher_hiddens = (
+        _teacher_hiddens_for_microbatches(
+            teacher_params, tm_mbs, shared, stream_from_host=tm_config.offload_teacher
+        )
+        if is_full_vocab
+        else None
     )
 
     denom_ce = jnp.maximum(jnp.sum(batch.loss_weight, dtype=jnp.float32), 1.0)
@@ -1315,27 +1386,54 @@ def _accumulated_loss_and_grads_with_tm(
     # Phase 2: single FP32 gradient accumulator across TM microbatches and CE-only microbatches.
     accumulated = jax.tree.map(lambda value: jnp.zeros_like(value, dtype=jnp.float32), params)
 
-    def accumulate_tm(grads, item):
-        mb, t_hidden, tm_w = item
-        microbatch = eqx.combine(mb, shared)
-        (loss, metrics), new_grads = _loss_and_grads_with_tm(
-            params,
-            microbatch,
-            t_hidden,
-            teacher_params.output_proj,
-            tm_w,
-            mp,
-            z_loss,
-            ce_denominator=denom_ce,
-            tm_coeff=tm_coeff,
-            tm_config=tm_config,
-        )
-        grads = jax.tree.map(lambda total, value: total + value.astype(jnp.float32), grads, new_grads)
-        return grads, (loss, metrics)
+    if is_full_vocab:
+        assert teacher_params is not None and teacher_hiddens is not None
 
-    accumulated, (tm_losses, tm_metrics_by_mb) = jax.lax.scan(
-        accumulate_tm, accumulated, (tm_mbs, teacher_hiddens, tm_weights_selected)
-    )
+        def accumulate_tm(grads, item):
+            mb, t_hidden, tm_w = item
+            microbatch = eqx.combine(mb, shared)
+            (loss, metrics), new_grads = _loss_and_grads_with_tm(
+                params,
+                microbatch,
+                tm_w,
+                mp,
+                z_loss,
+                ce_denominator=denom_ce,
+                tm_coeff=tm_coeff,
+                tm_config=tm_config,
+                teacher_hidden=t_hidden,
+                teacher_output_proj=teacher_params.output_proj,
+            )
+            grads = jax.tree.map(lambda total, value: total + value.astype(jnp.float32), grads, new_grads)
+            return grads, (loss, metrics)
+
+        accumulated, (tm_losses, tm_metrics_by_mb) = jax.lax.scan(
+            accumulate_tm, accumulated, (tm_mbs, teacher_hiddens, tm_weights_selected)
+        )
+    else:
+        assert tm_topk_mbs is not None
+
+        def accumulate_topk(grads, item):
+            mb, topk_mb, tm_w = item
+            microbatch = eqx.combine(mb, shared)
+            (loss, metrics), new_grads = _loss_and_grads_with_tm(
+                params,
+                microbatch,
+                tm_w,
+                mp,
+                z_loss,
+                ce_denominator=denom_ce,
+                tm_coeff=tm_coeff,
+                tm_config=tm_config,
+                teacher_topk=topk_mb,
+            )
+            grads = jax.tree.map(lambda total, value: total + value.astype(jnp.float32), grads, new_grads)
+            return grads, (loss, metrics)
+
+        accumulated, (tm_losses, tm_metrics_by_mb) = jax.lax.scan(
+            accumulate_topk, accumulated, (tm_mbs, tm_topk_mbs, tm_weights_selected)
+        )
+
     kl_sums = tm_metrics_by_mb.pop("train/tm/kl_sum")
 
     if tm_count < steps:
@@ -1383,28 +1481,35 @@ def _make_tm_grad_ratio_step(
     accumulation_steps: int = 1,
     temperature_matching: TemperatureMatchingConfig,
 ):
-    """Build a JIT step computing exact ||grad_TM|| / ||grad_CE|| using one gradient buffer sequentially."""
+    """Build a JIT step computing exact ||grad_KL|| / ||grad_CE|| using one gradient buffer sequentially."""
     z_loss = z_loss_weight if z_loss_weight > 0 else None
+    is_full_vocab = temperature_matching.mode == TeacherMatchingMode.FULL_VOCAB_TEMPERATURE
 
     @jax.jit
     def tm_grad_ratio_step(
         params: Transformer,
         batch: GrugLmExample,
-        teacher_params: Transformer,
+        teacher_params: Transformer | None = None,
         tm_row_mask: jax.Array | None = None,
+        teacher_topk: CachedTeacherTopK | None = None,
     ) -> dict[str, jax.Array]:
         if balance_rows:
-            batch, tm_row_mask = _balance_attention_rows_with_mask(batch, tm_row_mask)
+            batch, tm_row_mask, teacher_topk = _balance_attention_rows_with_mask(batch, tm_row_mask, teacher_topk)
 
         # Pass 1: pure full-batch CE gradient norm (scaled by ce_weight as applied in train_step).
         _, grads_ce = _accumulated_loss_and_grads(params, batch, mp, z_loss, accumulation_steps)
         ce_grad_norm = jnp.asarray(temperature_matching.ce_weight, dtype=jnp.float32) * global_l2_norm(grads_ce)
 
-        # Pass 2: pure scaled TM gradient norm on the selected microbatches.
+        # Pass 2: pure scaled KL gradient norm on the selected microbatches.
         assert temperature_matching.microbatch_count is not None and temperature_matching.weight is not None
         tm_count = temperature_matching.microbatch_count
-        shared, tm_mbs, _, tm_weights_selected, tm_weight_sum, _ = _split_tm_microbatches(
-            batch, tm_row_mask, accumulation_steps, tm_count
+        shared, tm_mbs, _, tm_topk_mbs, tm_weights_selected, tm_weight_sum, _ = _split_tm_microbatches(
+            batch,
+            tm_row_mask,
+            accumulation_steps,
+            tm_count,
+            teacher_topk=None if is_full_vocab else teacher_topk,
+            vocab_size=params.config.vocab_size,
         )
         denom_tm = jnp.maximum(tm_weight_sum, 1.0)
         tm_coeff = jnp.where(
@@ -1412,28 +1517,51 @@ def _make_tm_grad_ratio_step(
             jnp.asarray(temperature_matching.weight, dtype=jnp.float32) / denom_tm,
             jnp.asarray(0.0, dtype=jnp.float32),
         )
-        teacher_hiddens = _teacher_hiddens_for_microbatches(
-            teacher_params, tm_mbs, shared, stream_from_host=temperature_matching.offload_teacher
-        )
         accum_tm = jax.tree.map(lambda value: jnp.zeros_like(value, dtype=jnp.float32), params)
 
-        def accumulate_tm_only(grads, item):
-            mb, t_hidden, tm_w = item
-            microbatch = eqx.combine(mb, shared)
-            _, new_grads = _tm_only_loss_and_grads(
-                params,
-                microbatch,
-                t_hidden,
-                teacher_params.output_proj,
-                tm_w,
-                mp,
-                tm_coeff=tm_coeff,
-                tm_config=temperature_matching,
+        if is_full_vocab:
+            assert teacher_params is not None
+            teacher_hiddens = _teacher_hiddens_for_microbatches(
+                teacher_params, tm_mbs, shared, stream_from_host=temperature_matching.offload_teacher
             )
-            grads = jax.tree.map(lambda total, value: total + value.astype(jnp.float32), grads, new_grads)
-            return grads, None
 
-        accum_tm, _ = jax.lax.scan(accumulate_tm_only, accum_tm, (tm_mbs, teacher_hiddens, tm_weights_selected))
+            def accumulate_tm_only(grads, item):
+                mb, t_hidden, tm_w = item
+                microbatch = eqx.combine(mb, shared)
+                _, new_grads = _tm_only_loss_and_grads(
+                    params,
+                    microbatch,
+                    tm_w,
+                    mp,
+                    tm_coeff=tm_coeff,
+                    tm_config=temperature_matching,
+                    teacher_hidden=t_hidden,
+                    teacher_output_proj=teacher_params.output_proj,
+                )
+                grads = jax.tree.map(lambda total, value: total + value.astype(jnp.float32), grads, new_grads)
+                return grads, None
+
+            accum_tm, _ = jax.lax.scan(accumulate_tm_only, accum_tm, (tm_mbs, teacher_hiddens, tm_weights_selected))
+        else:
+            assert tm_topk_mbs is not None
+
+            def accumulate_topk_only(grads, item):
+                mb, topk_mb, tm_w = item
+                microbatch = eqx.combine(mb, shared)
+                _, new_grads = _tm_only_loss_and_grads(
+                    params,
+                    microbatch,
+                    tm_w,
+                    mp,
+                    tm_coeff=tm_coeff,
+                    tm_config=temperature_matching,
+                    teacher_topk=topk_mb,
+                )
+                grads = jax.tree.map(lambda total, value: total + value.astype(jnp.float32), grads, new_grads)
+                return grads, None
+
+            accum_tm, _ = jax.lax.scan(accumulate_topk_only, accum_tm, (tm_mbs, tm_topk_mbs, tm_weights_selected))
+
         tm_grad_norm = global_l2_norm(accum_tm)
         ratio = jnp.where(ce_grad_norm > 0, tm_grad_norm / ce_grad_norm, jnp.asarray(0.0, dtype=jnp.float32))
         return {
@@ -1553,6 +1681,7 @@ def _make_train_step(
         batch,
         teacher_params: Transformer | None = None,
         tm_row_mask: jax.Array | None = None,
+        teacher_topk: CachedTeacherTopK | None = None,
     ):
         # HF initialization already carries the effective router biases. SFT
         # freezes those values rather than applying pretraining QB state again.
@@ -1561,10 +1690,15 @@ def _make_train_step(
 
         if tm_enabled:
             assert temperature_matching is not None
-            if teacher_params is None:
-                raise ValueError("teacher_params must be passed when temperature_matching.enabled is True")
+            if (
+                temperature_matching.mode == TeacherMatchingMode.FULL_VOCAB_TEMPERATURE
+                and teacher_params is None
+            ):
+                raise ValueError("teacher_params must be passed when mode=full_vocab_temperature")
+            if temperature_matching.mode == TeacherMatchingMode.CACHED_TOPK_KL and teacher_topk is None:
+                raise ValueError("teacher_topk must be passed when mode=cached_topk_kl")
             if balance_rows:
-                batch, tm_row_mask = _balance_attention_rows_with_mask(batch, tm_row_mask)
+                batch, tm_row_mask, teacher_topk = _balance_attention_rows_with_mask(batch, tm_row_mask, teacher_topk)
             (loss, summarized_metrics), grads = _accumulated_loss_and_grads_with_tm(
                 train_params,
                 batch,
@@ -1574,6 +1708,7 @@ def _make_train_step(
                 z_loss,
                 accumulation_steps,
                 temperature_matching,
+                teacher_topk=teacher_topk,
             )
         else:
             if balance_rows:
@@ -1761,7 +1896,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     raise ValueError("Snowball SFT requires an explicit base checkpoint")
                 state = initialize_snowball_sft(state, trainer.initialize_from, mesh, config.trainer)
             teacher_params = (
-                prepare_frozen_teacher(state, config=config, mesh=mesh) if tm_cfg.enabled else None
+                prepare_frozen_teacher(state, config=config, mesh=mesh)
+                if tm_cfg.enabled and tm_cfg.mode == TeacherMatchingMode.FULL_VOCAB_TEMPERATURE
+                else None
             )
         dump_grug_state_sharding_run_artifact(
             state,
@@ -1774,6 +1911,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         train_dataset = None
         train_loader = None
+        cached_topk_reader = None
         if config.trainer.training_data_mode == TrainingDataMode.MIXTURE:
             train_dataset = build_train_dataset(
                 config.data,
@@ -1782,11 +1920,22 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 key=data_key,
             )
             validate_tm_source_names(train_dataset, tm_cfg)
+            if tm_cfg.enabled and tm_cfg.mode == TeacherMatchingMode.CACHED_TOPK_KL:
+                cached_topk_reader = CachedTopKMixtureReader(
+                    train_dataset,
+                    tm_cfg.cached_topk_paths,
+                    seq_len=config.model.max_seq_len,
+                    vocab_size=config.model.vocab_size,
+                    verify_token_hashes=tm_cfg.verify_cached_topk_token_hashes,
+                    require_full_source_coverage=tm_cfg.require_full_cached_source_coverage,
+                )
             train_loader = build_train_loader(
                 train_dataset,
                 batch_schedule=batch_schedule,
                 mesh=mesh,
             )
+        elif tm_cfg.enabled and tm_cfg.mode == TeacherMatchingMode.CACHED_TOPK_KL:
+            raise ValueError("temperature_matching.mode=cached_topk_kl requires TrainingDataMode.MIXTURE")
         elif tm_cfg.enabled and (tm_cfg.disabled_sources or tm_cfg.enabled_sources is not None):
             raise ValueError(
                 "temperature_matching.disabled_sources / enabled_sources require TrainingDataMode.MIXTURE"
@@ -1993,19 +2142,28 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 with timing.span("data_loading", step=current_step), jax.profiler.TraceAnnotation("load_batch"):
                     batch = next(iterator)
                 tm_row_mask = None
+                teacher_topk = None
                 if tm_cfg.enabled:
                     batch_size_now = batch.tokens.shape[0]
+                    offset = batch_schedule.global_data_offset_by_step(current_step)
+                    step_indices = range(offset, offset + batch_size_now)
                     if train_dataset is not None and (tm_cfg.disabled_sources or tm_cfg.enabled_sources is not None):
-                        offset = batch_schedule.global_data_offset_by_step(current_step)
-                        row_mask_np = tm_row_mask_for_mixture_indices(
-                            train_dataset, range(offset, offset + batch_size_now), tm_cfg
-                        )
+                        row_mask_np = tm_row_mask_for_mixture_indices(train_dataset, step_indices, tm_cfg)
                     else:
                         row_mask_np = np.ones((batch_size_now,), dtype=np.float32)
                     row_mask_sharding = NamedSharding(mesh, P(_BATCH_AXES))
                     tm_row_mask = jax.make_array_from_callback(
                         row_mask_np.shape, row_mask_sharding, lambda index, arr=row_mask_np: arr[index]
                     )
+                    if tm_cfg.mode == TeacherMatchingMode.CACHED_TOPK_KL:
+                        assert cached_topk_reader is not None
+                        with timing.span("cached_topk_loading", step=current_step):
+                            teacher_topk = cached_topk_reader.load_batch_topk(
+                                step_indices,
+                                mesh=mesh,
+                                batch_axis_spec=_BATCH_AXES,
+                                batch_tokens=batch.tokens,
+                            )
                 watch_due = (
                     watch_config.is_enabled and watch_config.interval > 0 and current_step % watch_config.interval == 0
                 )
@@ -2022,12 +2180,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     watch_stats = None
                 tm_watch_stats = None
                 if tm_grad_ratio_due and tm_grad_ratio_step is not None:
-                    assert teacher_params is not None
-                    tm_watch_stats = tm_grad_ratio_step(state.params, batch, teacher_params, tm_row_mask)
+                    tm_watch_stats = tm_grad_ratio_step(
+                        state.params, batch, teacher_params, tm_row_mask, teacher_topk
+                    )
                     jax.block_until_ready(tm_watch_stats)
                 step_start = time.perf_counter()
                 state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_STARTED)
-                step_extra_args = (teacher_params, tm_row_mask) if tm_cfg.enabled else ()
+                step_extra_args = (teacher_params, tm_row_mask, teacher_topk) if tm_cfg.enabled else ()
                 first_rebind_cfg = config.first_step_host_rebind if current_step == initial_step else None
                 state = _compile_first_step_and_rebind(
                     train_step,
@@ -2075,6 +2234,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             step=step,
                         )
                     tm_metrics = {key: value for key, value in metrics.items() if key.startswith("train/tm/")}
+                    if cached_topk_reader is not None:
+                        tm_metrics["train/tm/uncovered_cached_rows"] = cached_topk_reader.last_uncovered_rows
                     if tm_metrics:
                         levanter.tracker.log(tm_metrics, step=step)
                     if MOE_DROPPED_ASSIGNMENTS_METRIC in metrics:
