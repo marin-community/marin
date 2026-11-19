@@ -24,9 +24,11 @@ from zephyr.readers import load_parquet
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.curriculum_projection import (
     ProjectionInputs,
+    ProjectionSourceMissing,
     SourceReplacement,
     curriculum_projection_step,
     filter_assignment_file,
+    projection_inventory,
     projection_selection,
     task_rebinding,
 )
@@ -80,6 +82,19 @@ def use_bindings(declarations):
         )
         for row in declarations
     ]
+
+
+def test_projection_inventory_resolves_archived_alias_and_names_missing_source():
+    current = declaration("gpqa").model_copy(update={"origin": "GPQA", "id": "MarinSkyRL:gpqa"})
+    selected = projection_inventory(["GPQA:gpqa"], [current])
+    assert len(selected) == 1
+    assert selected[0].id == "GPQA:gpqa"
+    assert selected[0].dataset_revision == current.dataset_revision
+    assert selected[0].task_count == current.task_count
+    with pytest.raises(ProjectionSourceMissing) as failure:
+        projection_inventory(["GPQA:gpqa"], [])
+    assert failure.value.source_id == "GPQA:gpqa"
+    assert failure.value.code == "projection_source_missing"
 
 
 def reference(path):
