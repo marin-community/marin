@@ -83,7 +83,7 @@ def evaluation_from_spec(spec: NVL72EvaluationSpec, config_output: Path) -> Arti
     if not producer["request"]["config"]["checkpoint"].endswith(f"/step-{spec.model_step}"):
         raise ValueError("Evaluation checkpoint step differs from the pinned export producer")
     plan = SkyRLRolePlan(
-        colocate_all=True,
+        colocate_all=False,
         policy_num_nodes=4,
         policy_num_gpus_per_node=4,
         num_inference_engines=1,
