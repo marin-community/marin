@@ -10,8 +10,8 @@ Evalchemy's ``final_only`` content policy: graders such as LLM judges see the
 final answer and never the reasoning, even when the final answer is empty.
 
 A reply served without a reasoning parser can carry its reasoning inline,
-between a chat template's delimiters. ``split_inline_reasoning`` moves that
-reasoning into the reasoning channel so every selection policy means the same
+between a chat template's delimiters. ``split_inline_reasoning`` separates it and
+``inline_reasoning_message`` moves it into the reasoning channel, so every selection policy means the same
 thing for both serving modes. ``combine`` renders inline reasoning back as one
 well-formed span, so scorers that find the answer after the closing delimiter
 keep that boundary.
