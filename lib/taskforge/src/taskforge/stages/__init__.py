@@ -13,7 +13,6 @@ from taskforge.model.workpiece import Workpiece
 from taskforge.resources.bundle import Resources
 from taskforge.stages.author import author
 from taskforge.stages.review import review
-from taskforge.stages.triage import triage
 from taskforge.stages.validate import validate
 
 type StageFn = Callable[[Context, Workpiece, TaskforgeConfig, Resources], Awaitable[Exit]]
@@ -23,6 +22,5 @@ STAGES: Mapping[Stage, StageFn] = MappingProxyType(
         Stage.AUTHOR: author,
         Stage.VALIDATE: validate,
         Stage.REVIEW: review,
-        Stage.TRIAGE: triage,
     }
 )

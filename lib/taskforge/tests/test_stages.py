@@ -41,6 +41,7 @@ from taskforge.model.review import (
     Accept,
     AdversaryFinding,
     AdversaryResult,
+    AdversaryStatus,
     BandOutcome,
     BandRules,
     Budget,
@@ -60,10 +61,9 @@ from taskforge.resources.inference import FakeInference
 from taskforge.resources.rollouts import SolverRollout
 from taskforge.stages.author import author
 from taskforge.stages.classify import grade_cause, replayable_grade
-from taskforge.stages.exits import Decided, Triaged, TriageRejected, Validated
+from taskforge.stages.exits import Decided, Validated
 from taskforge.stages.review import review
 from taskforge.stages.rules import default_review
-from taskforge.stages.triage import triage
 from taskforge.stages.validate import adversary_result, claim_result, control_result, solver_result, validate
 from taskforge.wiring import build_config
 
@@ -228,7 +228,7 @@ async def test_validate_adversary_reports_are_graded_and_environment_closed(
     evidence = (await validate(ctx, workpiece, setup, bundle)).result
     await ctx.drain()
     finding = evidence.adversary[0].findings[0]
-    assert evidence.adversary[0].completed and finding.candidate.reply == reply
+    assert evidence.adversary[0].status is AdversaryStatus.REPORTED and finding.candidate.reply == reply
     assert harness.client is adversary_client
     assert finding.grade is not None and finding.grade.reward == float(confirmed)
     assert finding.met is confirmed
@@ -237,29 +237,6 @@ async def test_validate_adversary_reports_are_graded_and_environment_closed(
     )
     assert isinstance(bundle.envs, Environments) and bundle.envs.created[0].closed
     assert bundle.envs.requested[0].docker_image == GRADER_BASE_IMAGE
-
-
-@pytest.mark.parametrize("repair_budget", [0, 1])
-async def test_triage_repairs_sections_only_when_budget_allows(workpiece: Workpiece, repair_budget: int) -> None:
-    inference = FakeInference((Completion(render(workpiece.proposal)),))
-    ctx = Context(log=EventLog())
-    bundle = replace(resources(ctx), role_inference={"author": inference})
-    damaged = workpiece.with_(proposal=replace(workpiece.proposal, body="## Task\nToo short"))
-    setup = config()
-    setup = replace(
-        setup, policy=setup.policy.overlaid({"budget.max_triage_repairs": repair_budget, "sampling.temperature": 0.25})
-    )
-    result = await triage(ctx, damaged, setup, bundle)
-    await ctx.drain()
-    if repair_budget:
-        assert isinstance(result, Triaged) and result.proposal.header == workpiece.proposal.header
-        assert inference.requests[0].sampling.temperature == 0.25
-    else:
-        assert isinstance(result, TriageRejected) and result.reasons
-    assert len(inference.requests) == repair_budget
-    assert isinstance(await triage(ctx, workpiece, setup, bundle), Triaged)
-    assert len(inference.requests) == repair_budget
-    await ctx.drain()
 
 
 # "control" stands for every defect Modify (grader checks, adversary findings): revert keys on placement alone.
@@ -385,7 +362,7 @@ async def test_validate_summary_hydrates_full_evidence_before_author_resumes(wor
         workpiece.submission.digest,
         (TrialResult(0, grade),),
         (ControlResult(0, grade, True),),
-        (AdversaryResult("finder", True, (finding,)),),
+        (AdversaryResult("finder", AdversaryStatus.REPORTED, (finding,)),),
     )
     session = Conversation((Message(Role.ASSISTANT, "", (ToolCall("v1", "validate", "{}"),)),), ())
     resumed = validated(
@@ -463,7 +440,17 @@ async def test_output_budget_retry(workpiece: Workpiece, solver: bool, failures:
         harness.run = run
         setup = replace(config(), adversaries={"finder": harness}, tools={"finder": {}})
         result = await adversary_result(ctx, workpiece, setup, bundle, rollout_spec(arithmetic_task()), "finder")
-        assert result == AdversaryResult("finder", True, (), ("output budget exhausted",) if failures == 2 else ())
+        expected = (
+            AdversaryResult(
+                "finder",
+                AdversaryStatus.EXHAUSTED,
+                (),
+                ("output budget exhausted twice without a report; counted as passed",),
+            )
+            if failures == 2
+            else AdversaryResult("finder", AdversaryStatus.REPORTED, ())
+        )
+        assert result == expected
         assert isinstance(bundle.envs, Environments) and len(bundle.envs.created) == 2
         assert all(env.closed for env in bundle.envs.created)
         evidence = ValidationResult(
@@ -606,7 +593,11 @@ def test_grader_failure_classification_and_repair(workpiece: Workpiece, failure:
         cause,
     )
     final = decide(
-        workpiece.with_(evidence=(replace(evidence(), adversary=(AdversaryResult("adversary", True, (finding,)),)),))
+        workpiece.with_(
+            evidence=(
+                replace(evidence(), adversary=(AdversaryResult("adversary", AdversaryStatus.REPORTED, (finding,)),)),
+            )
+        )
     )
     assert final.round == 1 and final.terminal is None and final.session is not None
     assert all(
@@ -648,7 +639,7 @@ async def test_adversary_interruptions_preserve_cause_and_close_environment(
         result = (await validate(ctx, workpiece, setup, bundle)).result
         restored = WORKPIECE.validate_json(WORKPIECE.dump_json(workpiece.with_(evidence=(result,))))
         reason = "Hold: unavailable"
-        assert restored.evidence[0].adversary == (AdversaryResult("finder", False, (), (reason,)),)
+        assert restored.evidence[0].adversary == (AdversaryResult("finder", AdversaryStatus.FAILED, (), (reason,)),)
         assert len(result.solver) == 3 and len(result.controls) == 2
         decision = default_review(restored, setup.band, setup.budget)
         assert isinstance(decision, Incomplete) and decision.reasons == (f"finder: {reason}",)
@@ -657,9 +648,10 @@ async def test_adversary_interruptions_preserve_cause_and_close_environment(
 
 
 # full-s-20261108/S at f929478063: window exhaustion after 20 turns held otherwise reviewable tasks.
+# Owner ruling on #11111: an exhausted search counts as passed; its note explains an Accept, never a Modify.
 @pytest.mark.parametrize("overflow", ["estimate", "provider"])
 @pytest.mark.parametrize("verdict", [Accept, Modify, Retry])
-async def test_adversary_window_exhaustion_completes_and_explains_review(
+async def test_adversary_window_exhaustion_passes_and_notes_only_an_accept(
     workpiece: Workpiece, overflow: str, verdict: type[Accept] | type[Modify] | type[Retry]
 ) -> None:
     assert workpiece.submission is not None
@@ -678,7 +670,8 @@ async def test_adversary_window_exhaustion_completes_and_explains_review(
     ctx = Context(log=EventLog())
     bundle = replace(resources(ctx), role_inference={"adversary": client})
     result = await adversary_result(ctx, workpiece, setup, bundle, rollout_spec(arithmetic_task()), "finder")
-    assert result == AdversaryResult("finder", True, (), ("adversary exhausted its window without a report",))
+    note = "context window exhausted without a report; counted as passed"
+    assert result == AdversaryResult("finder", AdversaryStatus.EXHAUSTED, (), (note,))
     current = replace(evidence(), task_digest=workpiece.submission.digest, adversary=(result,))
     if verdict is Modify:
         current = replace(current, controls=(replace(current.controls[0], met=False),))
@@ -687,10 +680,16 @@ async def test_adversary_window_exhaustion_completes_and_explains_review(
     wp = workpiece.with_(evidence=(current,))
     decision = (await review(ctx, wp, setup, bundle)).decision
     assert isinstance(decision, verdict)
-    notes = decision.findings if isinstance(decision, Modify) else decision.reasons
-    assert "finder: adversary exhausted its window without a report" in notes
+    author = Conversation((Message(Role.SYSTEM, "author"),), ())
+    after = decided(wp.with_(session=author), Decided(decision), budget=setup.budget, policy=setup.policy)
+    if isinstance(decision, Accept):
+        assert f"finder: {note}" in decision.reasons and after.terminal is Terminal.ACCEPTED
+    if isinstance(decision, Modify):
+        assert after.session is not None and after.session.messages[-1].role == Role.USER
+        assert not any(note in text for text in (*decision.findings, after.session.messages[-1].content))
     saved = WORKPIECE.validate_json(WORKPIECE.dump_json(wp.with_(decisions=(decision,))))
     assert saved.decisions[-1] == decision
+    assert saved.evidence[-1].adversary[0].status is AdversaryStatus.EXHAUSTED
     assert len(client.requests) == 1
     assert isinstance(bundle.envs, Environments) and bundle.envs.created[0].closed
     await ctx.drain()

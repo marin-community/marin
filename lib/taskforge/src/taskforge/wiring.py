@@ -169,7 +169,7 @@ def build_resources(
     settings = lowering_settings(policy)
     command_timeout = policy.setting("solver.command_timeout", float)
     base_engine = rollout_engine(factories, command_timeout=command_timeout)
-    engine = verifiers = RoundVerifier(base_engine, settings.limits.cleanup_timeout)
+    verifiers = RoundVerifier(base_engine, settings.limits.cleanup_timeout)
     execution = digest((settings, command_timeout))
     provider = {key: value for key, value in policy.entries.items() if key.startswith("provider.")}
     sampling = policy_sampling(policy)
@@ -191,11 +191,11 @@ def build_resources(
         Environments(factories, settings),
         inference["author"],
         RolloutResource(
-            engine,
+            verifiers.rollouts,
             partial(solver_turn, clients["solver"], sampling),
             digest((provider, clients["solver"].model, sampling, execution)),
         ),
-        GradingResource(engine, execution, base_engine),
+        GradingResource(verifiers.grades, execution, base_engine),
         Clock(),
         Ids(),
         factories,
