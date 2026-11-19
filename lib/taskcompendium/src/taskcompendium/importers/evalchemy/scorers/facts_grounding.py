@@ -15,6 +15,7 @@ import re
 from collections.abc import Callable
 from typing import Any
 
+from openai.types.chat import ChatCompletionMessageParam
 from verifyit.grade import Reward, scored
 from verifyit.modes.grade_judge import JudgeReply
 
@@ -142,7 +143,7 @@ Example: "The response states, `This is the way it goes`". DO NOT attempt any es
 
 MAJOR_ISSUES = "Major Issue(s)"
 
-Ask = Callable[[list[dict[str, str]]], JudgeReply]
+Ask = Callable[[list[ChatCompletionMessageParam]], JudgeReply]
 
 
 def extract_instruction_json(ans: str) -> dict:
