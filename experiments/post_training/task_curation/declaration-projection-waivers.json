@@ -2,6 +2,7 @@
   "marina_url": "https://marina.oa.dev",
   "applet_id": "c9742a15-fb46-4d56-bc88-aa916351ebd3",
   "valid_catalog_load_ids": [
+    "3e3f46aebfe843ddb4c4be3eceb173dc",
     "1350a2a4303e411ebb2acfc1b0ca8296",
     "578facacf9034b85984d6d30e4a4c46"
   ],
@@ -900,6 +901,91 @@
     {
       "source_id": "pafitis:hardmath@rhs",
       "projection": "served-catalog",
+      "reason": "preview projection lag; declaration drift 0; ruling 2026-11-19"
+    },
+    {
+      "source_id": "Evalchemy:humaneval",
+      "projection": "served-catalog",
+      "reason": "preview projection lag; declaration drift 0; ruling 2026-11-19"
+    },
+    {
+      "source_id": "Evalchemy:humanevalplus",
+      "projection": "served-catalog",
+      "reason": "preview projection lag; declaration drift 0; ruling 2026-11-19"
+    },
+    {
+      "source_id": "Evalchemy:mbppplus",
+      "projection": "served-catalog",
+      "reason": "preview projection lag; declaration drift 0; ruling 2026-11-19"
+    },
+    {
+      "source_id": "Evalchemy:cruxeval",
+      "projection": "served-catalog",
+      "reason": "preview projection lag; declaration drift 0; ruling 2026-11-19"
+    },
+    {
+      "source_id": "Evalchemy:ifeval",
+      "projection": "served-catalog",
+      "reason": "preview projection lag; declaration drift 0; ruling 2026-11-19"
+    },
+    {
+      "source_id": "Evalchemy:ifbench",
+      "projection": "served-catalog",
+      "reason": "preview projection lag; declaration drift 0; ruling 2026-11-19"
+    },
+    {
+      "source_id": "Evalchemy:JEEBench",
+      "projection": "served-catalog",
+      "reason": "preview projection lag; declaration drift 0; ruling 2026-11-19"
+    },
+    {
+      "source_id": "Evalchemy:amc23",
+      "projection": "served-catalog",
+      "reason": "preview projection lag; declaration drift 0; ruling 2026-11-19"
+    },
+    {
+      "source_id": "Evalchemy:gpqa-diamond",
+      "projection": "served-catalog",
+      "reason": "preview projection lag; declaration drift 0; ruling 2026-11-19"
+    },
+    {
+      "source_id": "Evalchemy:mmlu-pro",
+      "projection": "served-catalog",
+      "reason": "preview projection lag; declaration drift 0; ruling 2026-11-19"
+    },
+    {
+      "source_id": "Evalchemy:mrcr",
+      "projection": "served-catalog",
+      "reason": "preview projection lag; declaration drift 0; ruling 2026-11-19"
+    },
+    {
+      "source_id": "Evalchemy:mrcr-32k",
+      "projection": "served-catalog",
+      "reason": "preview projection lag; declaration drift 0; ruling 2026-11-19"
+    },
+    {
+      "source_id": "Evalchemy:mrcr-65k",
+      "projection": "served-catalog",
+      "reason": "preview projection lag; declaration drift 0; ruling 2026-11-19"
+    },
+    {
+      "source_id": "Evalchemy:graphwalks",
+      "projection": "served-catalog",
+      "reason": "preview projection lag; declaration drift 0; ruling 2026-11-19"
+    },
+    {
+      "source_id": "Evalchemy:NUPA-Loose",
+      "projection": "served-catalog",
+      "reason": "preview projection lag; declaration drift 0; ruling 2026-11-19"
+    },
+    {
+      "source_id": "Evalchemy:NUPA5K-Loose",
+      "projection": "served-catalog",
+      "reason": "preview projection lag; declaration drift 0; ruling 2026-11-19"
+    },
+    {
+      "source_id": "TaskTrove:tasktrove-codeforces-rebuilt-v1",
+      "projection": "curriculum",
       "reason": "preview projection lag; declaration drift 0; ruling 2026-11-19"
     }
   ]
