@@ -80,7 +80,7 @@ COMPOSITE_WEIGHT_TOLERANCE = 1e-6
 
 
 class Grounding(StrEnum):
-    """Whether the proposal's factual claims were checked against a real source before triage."""
+    """Whether the proposal's factual claims were checked against a real source."""
 
     UNVERIFIED = "unverified"
     GROUNDED = "grounded"
@@ -219,20 +219,6 @@ def _heading_lines(lines: list[str]) -> list[tuple[int, str]]:
 
 def _headings(body: str) -> list[str]:
     return [heading for _, heading in _heading_lines(body.split("\n"))]
-
-
-def body_sections(body: str) -> dict[str, str]:
-    """Map each level-two heading in ``body`` to the text under it, up to the next level-two heading.
-
-    Headings inside fenced code blocks are ignored; a repeated heading's sections are joined.
-    """
-    lines = body.split("\n")
-    headings = _heading_lines(lines)
-    ends = [i for i, _ in headings[1:]] + [len(lines)]
-    sections: dict[str, list[str]] = {}
-    for (start, heading), end in zip(headings, ends, strict=True):
-        sections.setdefault(heading, []).extend(lines[start + 1 : end])
-    return {heading: "\n".join(text).strip() for heading, text in sections.items()}
 
 
 def _check_headings(body: str) -> None:
