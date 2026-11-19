@@ -1,0 +1,12 @@
+id: X0247
+slug: muonc-with-s-head-and-late
+name: MuonC with s² head and late-matrix anneal
+category: Optimizers
+summary: 🤖 Posted on behalf of @WhenWen.
+source: intake
+status: approved
+track: speedrun
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-7019433555
+  author: WhenWen
+  approved_by: WhenWen (trusted)
