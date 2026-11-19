@@ -218,6 +218,26 @@ def test_head_precision_summary_uses_fresh_scores_and_rejects_route_changes(tmp_
     assert summary["arms"]["bf16-repeat"]["abs_mean"] == pytest.approx(0.03)
     assert summary["arms"]["bf16-repeat"]["serve_scored_tokens_per_second"] == 2.0
     assert summary["bf16_repeat"]["serve"]["abs_p99"] == pytest.approx(0.05)
+    assert summary["paired_mean_gap_reduction"]["bf16-repeat"]["nats"] == pytest.approx(
+        summary["arms"]["bf16"]["abs_mean"] - summary["arms"]["bf16-repeat"]["abs_mean"]
+    )
+
+    sample_id = baseline.probes[0].sample_id
+    singular = reread[sample_id].model_copy(update={"logprobs": [0.0, reread[sample_id].logprobs[1]]})
+    singular_repeat = replace(repeat, scores=repeat_scores | {"vllm.rescore@0": reread | {sample_id: singular}})
+    summary = summarize({"bf16": baseline, "bf16-repeat": singular_repeat})
+    serve_repeat = summary["bf16_repeat"]["serve"]
+    assert serve_repeat["chosen_token_binary_kl_infinite_tokens"] == 1
+    assert serve_repeat["chosen_token_binary_kl_finite_mean"] == pytest.approx(0.0)
+    assert serve_repeat["binary_kl_support_examples"] == [
+        {
+            "sample_id": sample_id,
+            "response_position": 0,
+            "token_id": baseline.probes[0].vllm_output_ids[0],
+            "baseline_logprob": -2.0,
+            "repeat_logprob": 0.0,
+        }
+    ]
 
     first, *rest = repeat.probes
     changed = first.model_copy(update={"routed_experts": b"\0" * len(first.routed_experts)})

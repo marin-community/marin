@@ -7,8 +7,9 @@ import hashlib
 import json
 
 import click
+import numpy as np
 
-from experiments.post_training.mismatch_probe.metrics import comparison_metrics
+from experiments.post_training.mismatch_probe.metrics import comparison_metrics, prompt_cluster_bootstrap
 from experiments.post_training.mismatch_probe.report import (
     ArchiveData,
     _comparison_rows,
@@ -20,7 +21,15 @@ from experiments.post_training.mismatch_probe.snowball_head import HEAD_PRECISIO
 
 REPLAY = "trainer@0:router_replay"
 SERVING = "vllm.rescore@0"
-METRICS = ("tokens", "abs_mean", "abs_p99", "k3", "chosen_token_binary_kl")
+METRICS = (
+    "tokens",
+    "abs_mean",
+    "abs_p99",
+    "k3",
+    "chosen_token_binary_kl",
+    "chosen_token_binary_kl_infinite_tokens",
+    "chosen_token_binary_kl_finite_mean",
+)
 
 
 def _frozen_identity(archive: ArchiveData) -> tuple:
@@ -49,6 +58,44 @@ def _route_hash(archive: ArchiveData) -> str:
         digest.update(json.dumps(metadata).encode())
         digest.update(row.routed_experts)
     return digest.hexdigest()
+
+
+def _absolute_gap_sums(archive: ArchiveData) -> np.ndarray:
+    rows = _comparison_rows(archive.probes, archive.scores, REPLAY, SERVING)
+    return np.asarray(
+        [
+            np.abs(np.asarray(target, dtype=np.float64) - reference)[mask].sum()
+            for target, reference, mask in zip(rows.target, rows.reference, rows.masks, strict=True)
+        ]
+    )
+
+
+def _repeat_metrics(baseline: ArchiveData, repeat: ArchiveData, scoring: str) -> dict:
+    original_rows = [baseline.scores[scoring][row.sample_id].logprobs for row in baseline.probes]
+    repeat_rows = [repeat.scores[scoring][row.sample_id].logprobs for row in baseline.probes]
+    scores = comparison_metrics(repeat_rows, original_rows, [row.loss_mask for row in baseline.probes])
+    summary = {metric: scores[metric] for metric in METRICS}
+    if scores["chosen_token_binary_kl_infinite_tokens"]:
+        support_examples = []
+        for row, original_scores, repeat_scores in zip(baseline.probes, original_rows, repeat_rows, strict=True):
+            for position, (original, repeated, valid) in enumerate(
+                zip(original_scores, repeat_scores, row.loss_mask, strict=True)
+            ):
+                # The reference assigns mass to other tokens and the target assigns none.
+                if valid and original < 0.0 and repeated == 0.0:
+                    support_examples.append(
+                        {
+                            "sample_id": row.sample_id,
+                            "response_position": position,
+                            "token_id": row.vllm_output_ids[position],
+                            "baseline_logprob": original,
+                            "repeat_logprob": repeated,
+                        }
+                    )
+            if len(support_examples) >= 10:
+                break
+        summary["binary_kl_support_examples"] = support_examples[:10]
+    return summary
 
 
 def summarize(archives: dict[str, ArchiveData]) -> dict:
@@ -90,14 +137,37 @@ def summarize(archives: dict[str, ArchiveData]) -> dict:
             "trainer_scored_tokens_per_second": scores["tokens"] / timing[f"{REPLAY}/seconds"],
         }
     repeat = archives["bf16-repeat"]
-    result["bf16_repeat"] = {}
-    for role, scoring in (("serve", SERVING), ("trainer", REPLAY)):
-        scores = comparison_metrics(
-            [repeat.scores[scoring][row.sample_id].logprobs for row in baseline.probes],
-            [baseline.scores[scoring][row.sample_id].logprobs for row in baseline.probes],
-            [row.loss_mask for row in baseline.probes],
-        )
-        result["bf16_repeat"][role] = {metric: scores[metric] for metric in METRICS}
+    result["bf16_repeat"] = {
+        "serve": _repeat_metrics(baseline, repeat, SERVING),
+        "trainer": _repeat_metrics(baseline, repeat, REPLAY),
+    }
+    if "both-fp32" in archives:
+        result["fp32_repeat"] = {
+            "serve": _repeat_metrics(archives["vllm-fp32"], archives["both-fp32"], SERVING),
+            "trainer": _repeat_metrics(archives["megatron-fp32"], archives["both-fp32"], REPLAY),
+        }
+
+    baseline_sums = _absolute_gap_sums(baseline)
+    repeat_sums = _absolute_gap_sums(repeat)
+    averaged_sums = (baseline_sums + repeat_sums) / 2
+    token_counts = np.asarray([sum(row.loss_mask) for row in baseline.probes])
+    prompt_ids = [row.prompt_id for row in baseline.probes]
+    result["paired_mean_gap_reduction"] = {}
+    for arm, archive in archives.items():
+        if arm == "bf16":
+            continue
+        # Positive means a smaller train-serve gap. Use the original BF16
+        # run as reference for the repeat contrast and both controls for FP32.
+        reduction = baseline_sums - repeat_sums if arm == "bf16-repeat" else averaged_sums - _absolute_gap_sums(archive)
+
+        def paired_reduction(indices: list[int], reduction: np.ndarray = reduction) -> dict[str, float]:
+            return {"nats": float(reduction[indices].sum() / token_counts[indices].sum())}
+
+        paired = prompt_cluster_bootstrap(prompt_ids, paired_reduction, seed=baseline.manifest.bootstrap_seed)
+        result["paired_mean_gap_reduction"][arm] = {
+            "nats": paired.point["nats"],
+            "prompt_bootstrap_ci95": paired.intervals.get("nats"),
+        }
     return _finite_json(result)
 
 

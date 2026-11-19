@@ -74,6 +74,8 @@ def comparison_metrics(
     if not pieces:
         raise ValueError("comparison has no unmasked tokens")
     delta = np.concatenate(pieces)
+    binary_kl = np.concatenate(binary_kl_pieces)
+    finite_binary_kl = binary_kl[np.isfinite(binary_kl)]
     absolute = np.abs(delta)
     quantiles = np.percentile(absolute, PERCENTILES)
     logs = np.asarray(per_sequence, dtype=np.float64)
@@ -97,7 +99,9 @@ def comparison_metrics(
         "abs_mean": float(absolute.mean()),
         "k1": float(-delta.mean()),
         "k3": float(k3_terms.mean()),
-        "chosen_token_binary_kl": float(np.concatenate(binary_kl_pieces).mean()),
+        "chosen_token_binary_kl": float(binary_kl.mean()),
+        "chosen_token_binary_kl_infinite_tokens": int(np.count_nonzero(np.isinf(binary_kl))),
+        "chosen_token_binary_kl_finite_mean": float(finite_binary_kl.mean()) if finite_binary_kl.size else math.nan,
         "chi2_sample_moment": mean_exp_2delta - 1.0,
         "mean_ratio": mean_exp_delta,
         "token_ess_fraction_raw": _ess_fraction(delta),
