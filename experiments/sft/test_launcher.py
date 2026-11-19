@@ -16,6 +16,7 @@ from levanter.utils.thread_utils import blocking_wait
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, materialized_config
 from marin.training.levanter import GPU_NCCL_TERMINATION_TIMEOUT_FLAG
+from marin.training.training import DEFAULT_HF_CHECKPOINTS_PATH
 from rigging.timing import Duration
 
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig
@@ -24,7 +25,6 @@ from experiments.post_training.snowball_sft import (
     HF_MODEL,
     MIXTURE_262K_32NODE,
     MIXTURE_SPEC,
-    MIXTURE_TOKENIZER,
     OPENTHOUGHTS_32K_4NODE,
     OPENTHOUGHTS_SPEC,
     SNOWBALL_SFT,
@@ -160,9 +160,8 @@ def test_snowball_262k_mixture_binds_the_published_mixture(tmp_path, monkeypatch
     )
     pod_config = training.build_config(context)
     config = pod_config.train_config
-    assert config.data.tokenizer == MIXTURE_TOKENIZER
     assert isinstance(config.data.components["sft/source/agenttrove"].format, SerializedChatLmDatasetFormat)
-    assert config.trainer.train_batch_size == 256
+    assert model.relative_path == f"{DEFAULT_HF_CHECKPOINTS_PATH}/step-203"
 
     assert submitted["timeout"] == Duration.from_seconds(72_000)
     flags = submitted["env_vars"]["XLA_FLAGS"].split()

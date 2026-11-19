@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import replace
+
 from levanter.models.snowball import SnowballConfig
 from levanter.utils.mesh import MeshConfig
 
@@ -42,7 +43,7 @@ def test_sft_recipe_identities(monkeypatch):
     assert [(step.name, step.version, step.fingerprint()) for step in steps] == [
         ("checkpoints/snowball-openthoughts-agent-sft", "2026.09.23", "bf7978a7"),
         ("checkpoints/snowball-openthoughts-agent-sft", "2026.11.19.1", "752359a5"),
-        ("checkpoints/snowball/mixture-262k-32node", "2026.11.19.1", "unrecorded"),
+        ("checkpoints/snowball/mixture-262k-32node", "2026.11.19.1", "f96a792b"),
         ("checkpoints/delphi-1e22-magpie-warmup-levanter-sft", "2026.07.15", "681c760f"),
         ("checkpoints/delphi-1e22-wc50m-warmup-levanter-sft", "2026.07.15", "cb1e1554"),
         ("checkpoints/iceball-micro-sft", "2026.11.19.1", "03dbbead"),

@@ -35,6 +35,7 @@ from levanter.optim.config import OptimizerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
+from rigging.timing import Duration
 
 from marin.evaluation.evaluation_config import EvalTaskConfig, convert_to_levanter_task_config
 from marin.execution.build_context import resolve_version
@@ -45,7 +46,6 @@ from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.levanter import resolve_training_env, run_levanter_train_lm
 from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig
-from rigging.timing import Duration
 
 # Compute in bf16, keep master params and optimizer state in f32. The universal marin
 # precision policy; it bears identity (it changes numerics), so overriding it is a

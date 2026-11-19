@@ -332,10 +332,10 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         )
 
     def next_token_loss_and_metrics(
-        self, example: LmExample, **kwargs
-    ) -> tuple[jnp.ndarray | NamedArray, dict[str, jnp.ndarray | Metric]]:
+        self, example: LmExample, *, key=None, **kwargs
+    ) -> tuple[jnp.ndarray | NamedArray, dict[str, Metric]]:
         """Compute the training loss and any metrics returned by its forward pass."""
-        return self.compute_next_token_loss(example, **kwargs), {}
+        return self.compute_next_token_loss(example, key=key, **kwargs), {}
 
     def _loss_from_activations(
         self,

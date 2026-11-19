@@ -1024,7 +1024,9 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         loss = self._loss_from_activations(example, activations, **kwargs)
         assignments = example.tokens.array.size * self.config.num_experts_per_token * self.config.num_layers
         return loss, {
-            "moe/dropped_assignment_fraction": Metric.from_value(counts.dropped.sum() / assignments, ReductionType.MEAN)
+            "moe/dropped_assignment_fraction": Metric.from_value(
+                counts.dropped.sum() / assignments, ReductionType.MEAN
+            )
         }
 
     def get_lm_head(self) -> NamedArray:

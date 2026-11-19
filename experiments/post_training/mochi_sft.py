@@ -48,7 +48,9 @@ MOCHI_SPEC = GrugHeroSFT(
 MIXTURE_262K_176NODE = SFTPreset(
     "mixture-262k-176node",
     MOCHI_SPEC,
-    replace(launch_hero_sft.sft_resources(MOCHI_SPEC.dp_racks), regions=("US-EAST-08A",), target_cluster="cw-us-east-08a"),
+    replace(
+        launch_hero_sft.sft_resources(MOCHI_SPEC.dp_racks), regions=("US-EAST-08A",), target_cluster="cw-us-east-08a"
+    ),
 )
 MOCHI_SFT = (MIXTURE_262K_176NODE,)
 

@@ -69,9 +69,9 @@ def test_packed_native_transcripts_preserve_document_masks_and_attention_boundar
     actual = blocking_wait(packed.get_batch([0]))[0]
     np.testing.assert_array_equal(np.flatnonzero(actual.loss_weight), [9, 10, 11, 24, 25])
     tokens = documents[0] + documents[1]
-    np.testing.assert_array_equal(np.asarray(actual.tokens)[:len(tokens)], tokens)
+    np.testing.assert_array_equal(np.asarray(actual.tokens)[: len(tokens)], tokens)
     if block_cross_document_attention:
         segments = [0] * len(documents[0]) + [1] * len(documents[1])
-        np.testing.assert_array_equal(np.asarray(actual.attn_mask.segment_ids[0])[:len(tokens)], segments)
+        np.testing.assert_array_equal(np.asarray(actual.attn_mask.segment_ids[0])[: len(tokens)], segments)
     else:
         assert actual.attn_mask.segment_ids is None
