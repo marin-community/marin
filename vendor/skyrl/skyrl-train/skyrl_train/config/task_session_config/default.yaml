@@ -23,6 +23,8 @@ task_spec:
   harness_by_dataset: {}
   max_turns_by_dataset: {}
   task_machine_by_dataset: {}
+  # Task machines keyed by environment_requirements.command_semantics, for datasets without a binding.
+  task_machine_by_command_semantics: {}
   session:
     max_turns: 1
     max_total_tokens: null

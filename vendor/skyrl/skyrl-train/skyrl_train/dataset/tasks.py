@@ -206,6 +206,9 @@ def _canonical_task_prompt(row: dict, _index: int, *, environment_configs: Mappi
     if task.source.dataset in config["max_turns_by_dataset"]:
         session["max_turns"] = config["max_turns_by_dataset"][task.source.dataset]
     machine = config["task_machine_by_dataset"].get(task.source.dataset)
+    if machine is None:
+        # A dataset mixing shell-simulator and Linux tasks binds machines by command semantics.
+        machine = config["task_machine_by_command_semantics"].get(task.environment_requirements.command_semantics)
     task_machine = (
         MachineRuntimeSpec.model_validate(machine)
         if machine is not None and task_machine_reason(task) is not None

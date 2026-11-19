@@ -51,6 +51,32 @@ REQUEST_WINDOW_TOKENS = 24_576
 MAX_NEW_TOKENS = 8_192
 EVALUATION_API_KEY_ENV = "DAYTONA_EVAL_API_KEY"
 JUDGE_API_KEY_ENV = "TOGETHER_API_KEY"
+FORGE_DATASET = "forge-task-records"
+FORGE_MAX_TURNS = 16
+TASK_MACHINE_TIMEOUTS = {"startup_timeout": 600, "cleanup_timeout": 60}
+# Agentic tasks run their shell on a machine that matches the task's command semantics.
+TASK_MACHINES = {
+    "shell_simulator": {
+        "backend": "shellsim",
+        "network": "deny",
+        "cpus": None,
+        "memory_mb": None,
+        "storage_mb": None,
+        "gpus": 0,
+        "user": None,
+        **TASK_MACHINE_TIMEOUTS,
+    },
+    "linux_process": {
+        "backend": "daytona",
+        "network": "allow",
+        "cpus": 1,
+        "memory_mb": 2048,
+        "storage_mb": 10240,
+        "gpus": 0,
+        "user": None,
+        **TASK_MACHINE_TIMEOUTS,
+    },
+}
 
 
 def training_recipe(steps: int, *, reproducible_serving: bool = False) -> SkyRLRecipe:
@@ -77,6 +103,10 @@ def training_recipe(steps: int, *, reproducible_serving: bool = False) -> SkyRLR
                 "local": {},
                 "daytona": {"api_key_env": EVALUATION_API_KEY_ENV, "ttl_minutes": 60},
                 "remote_judge": {"base_url": "https://api.together.xyz/v1", "api_key_env": JUDGE_API_KEY_ENV},
+                "task_spec": {
+                    "max_turns_by_dataset": {FORGE_DATASET: FORGE_MAX_TURNS},
+                    "task_machine_by_command_semantics": TASK_MACHINES,
+                },
             }
         ),
         extra_env={
