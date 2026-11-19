@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import json
 from collections import Counter
 from collections.abc import Callable
@@ -63,10 +64,13 @@ from experiments.post_training.task_curation.selection import (
     GraderKind,
     HeldoutSource,
     PanelFormat,
+    ReleasedSource,
+    SelectionConfig,
     SelectionRecipe,
     eval_lite_step,
     task_selection_step,
     validation_task,
+    write_training,
 )
 from experiments.post_training.task_curation.tests.conversion import converted_task
 
@@ -346,6 +350,99 @@ def test_selection_imports_image_graders_from_admitted_components(tmp_path):
     }
 
 
+def released_file(path: Path, *tasks: TaskSpec) -> HeldoutSource:
+    pq.write_table(pa.table({"task_spec": [task.model_dump_json() for task in tasks]}), path)
+    return HeldoutSource(uri=str(path), version="2026.11.19.1", format=PanelFormat.TASK_SPEC, rows=len(tasks))
+
+
+def released_training(path: Path, *tasks: TaskSpec) -> ReleasedSource:
+    source = released_file(path, *tasks)
+    return ReleasedSource(
+        **source.model_dump(),
+        family="agentic",
+        sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+        agentic=True,
+        license="Apache-2.0",
+    )
+
+
+def test_selection_mixes_released_and_curated_tasks(tmp_path):
+    repeated = source_task("evaluation-overlap")
+    release = released_training(tmp_path / "release.parquet", source_task("agent-task"), repeated)
+    heldout = source_task("validation")
+    heldout = heldout.model_copy(update={"source": heldout.source.model_copy(update={"dataset": "structure-closure"})})
+    one_turn = "fixture:first"
+    settings = SelectionRecipe(
+        name="mixed",
+        version="2026.11.19.1",
+        sources={one_turn: "nonagentic"},
+        family_limits={"nonagentic": 1, "agentic": 1},
+        source_limits={one_turn: 1, release.uri: 1},
+        heldout=(released_file(tmp_path / "heldout.parquet", heldout),),
+        exclusions=(released_file(tmp_path / "evallite.parquet", repeated),),
+        validation_per_family=1,
+        seed=20261023,
+        released=(release,),
+    )
+    curated = {one_turn: admitted_source(tmp_path / "curated", [source_task("one-turn")])}
+    root = Path(run(task_selection_step(curated, settings))[0].path)
+    summary = json.loads((root / "summary.json").read_text())
+    assert summary["training_family_counts"] == {"agentic": 1, "nonagentic": 1}
+    assert summary["released_sources"] == [
+        {
+            "uri": release.uri,
+            "sha256": release.sha256,
+            "rows_read": 2,
+            "rows_admitted": 1,
+            "rows_removed": {"heldout_overlap": 1, "duplicate": 0, "quota": 0},
+        }
+    ]
+    assert summary["recipe"]["released"] == [release.model_dump(mode="json")]
+    rows = pq.read_table(root / TRAIN_FILENAME).to_pylist()
+    labels = {}
+    for row in rows:
+        task = TaskSpec.model_validate_json(row["task_spec"])
+        labels[task.id] = (row["family"], row["aai_category"], row["agentic"], row["difficulty"], task.tags)
+    assert labels == {
+        "agent-task": ("agentic", "coding", True, "unrated", ("agentic",)),
+        "one-turn": ("nonagentic", "untagged", False, "untagged", ()),
+    }
+
+
+@pytest.mark.parametrize(
+    ("fault", "message"),
+    [
+        ("digest", "SHA-256 mismatch"),
+        ("count", "row count changed"),
+        ("schema", "Unsupported TaskSpec schema"),
+        ("tag", "contradicts the source"),
+        ("grader", "does not admit image graders"),
+    ],
+)
+def test_selection_refuses_invalid_released_tasks(tmp_path, fault, message):
+    task = source_task("agent-task", image=fault == "grader")
+    if fault == "schema":
+        task = task.model_copy(update={"schema_version": "0.27"})
+    if fault == "tag":
+        task = task.model_copy(update={"tags": ("agentic",)})
+    release = released_training(tmp_path / "release.parquet", task)
+    update = {"digest": {"sha256": "0" * 64}, "count": {"rows": 2}, "tag": {"agentic": False}}
+    release = release.model_copy(update=update.get(fault, {}))
+    settings = SelectionRecipe(
+        name="released",
+        version="2026.11.19.1",
+        sources={},
+        family_limits={"agentic": 1},
+        heldout=(),
+        validation_per_family=1,
+        seed=20261023,
+        released=(release,),
+    )
+    config = SelectionConfig((), settings, (), str(tmp_path), ())
+    with pytest.raises(ValueError, match=message):
+        write_training(config, (), (), tmp_path / TRAIN_FILENAME)
+
+
 def test_grader_admission_preserves_published_selection_fingerprints():
     recipes = Path(__file__).parents[1] / "recipes"
     training = SelectionRecipe.model_validate_json((recipes / "snowball-100k.json").read_text())
@@ -358,6 +455,7 @@ def test_grader_admission_preserves_published_selection_fingerprints():
         }
 
     training_sources = curated(training.sources)
+    assert "released" not in training.model_dump(mode="json")
     assert task_selection_step(training_sources, training).fingerprint() == "7fb51836"
     explicit = training.model_copy(update={"admitted_graders": LOCAL_GRADERS | {GraderKind.IMAGE}})
     assert task_selection_step(training_sources, explicit).fingerprint() != "7fb51836"

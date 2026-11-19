@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Select training and evaluation task sets from admitted curation artifacts."""
+"""Select training and evaluation task sets from curated and released task files."""
 
 import hashlib
 import json
@@ -31,7 +31,7 @@ from finestore.schema import arrow_schema
 from marin.execution.artifact import Artifact
 from marin.execution.fingerprint import register_fingerprint
 from marin.execution.lazy import ArtifactStep, StepContext
-from pydantic import BaseModel, ConfigDict, PositiveInt
+from pydantic import BaseModel, ConfigDict, Field, PositiveInt
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.answers import source_evidence
 from taskcompendium.convert.structure_closure import structure_closure_task
@@ -88,6 +88,7 @@ HELDOUT_FAMILIES = MappingProxyType(
 )
 AAII_CATEGORIES = MappingProxyType(
     {
+        "agentic": "coding",
         "calendar": "format",
         "competitive_coding": "coding",
         "reasoning_gym": "scientific_reasoning",
@@ -124,6 +125,13 @@ class HeldoutSource(BaseModel):
     format: PanelFormat
 
 
+class ReleasedSource(HeldoutSource):
+    family: str
+    sha256: str
+    agentic: bool
+    license: str
+
+
 class SelectionRecipe(BaseModel):
     """An explicit source allowlist, family quotas and fixed evaluation input."""
 
@@ -139,6 +147,7 @@ class SelectionRecipe(BaseModel):
     validation_per_family: PositiveInt
     seed: int
     admitted_graders: frozenset[GraderKind] = LOCAL_GRADERS
+    released: tuple[ReleasedSource, ...] = Field(default=(), exclude_if=lambda sources: not sources)
 
 
 def _selection_recipe_fingerprint(recipe: SelectionRecipe) -> dict[str, Any]:
@@ -146,6 +155,8 @@ def _selection_recipe_fingerprint(recipe: SelectionRecipe) -> dict[str, Any]:
     fields = vars(recipe).copy()
     if recipe.admitted_graders == LOCAL_GRADERS:
         fields.pop("admitted_graders")
+    if not recipe.released:
+        fields.pop("released")
     recipe_type = type(recipe)
     return {"__repr__": f"{recipe_type.__module__}.{recipe_type.__qualname__}", "vars": fields}
 
@@ -413,6 +424,41 @@ def _admitted_records(source: SelectionInput) -> Iterator[dict[str, str]]:
         yield from _parquet_rows(path, TASK_JSON_COLUMN)
 
 
+def _released_records(source: ReleasedSource) -> Iterator[tuple[TaskSpec, str]]:
+    if source.format != PanelFormat.TASK_SPEC:
+        raise ValueError(f"Released source requires task_spec format: {source.uri}")
+    with StoragePath(source.uri).open("rb") as stream:
+        if hashlib.file_digest(stream, "sha256").hexdigest() != source.sha256:
+            raise ValueError(f"Released source SHA-256 mismatch: {source.uri}")
+        stream.seek(0)
+        parquet = pq.ParquetFile(stream)
+        actual_rows = parquet.metadata.num_rows
+        if actual_rows != source.rows:
+            raise ValueError(
+                f"Released source row count changed: {source.uri}: expected {source.rows}, read {actual_rows}"
+            )
+        for batch in parquet.iter_batches(batch_size=PARQUET_BATCH_ROWS, columns=[TASK_SPEC_COLUMN]):
+            for row in batch.to_pylist():
+                raw = row[TASK_SPEC_COLUMN]
+                task = TaskSpec.model_validate_json(raw)
+                if "schema_version" not in task.model_fields_set:
+                    raise ValueError(f"Released task {task.id} must declare TaskSpec schema {SCHEMA_VERSION}")
+                tagged = "agentic" in task.tags
+                if tagged and not source.agentic:
+                    raise ValueError(f"Released task {task.id} contradicts the source's agentic declaration")
+                if source.agentic and not tagged:
+                    task = task.model_copy(update={"tags": (*task.tags, "agentic")})
+                    raw = task.model_dump_json()
+                yield task, raw
+
+
+def _training_inputs(config: SelectionConfig) -> tuple[SelectionInput, ...]:
+    return (
+        *config.sources,
+        *(SelectionInput(source.uri, source.family, source.uri) for source in config.recipe.released),
+    )
+
+
 def _grader_environments(sources: tuple[SelectionInput, ...]) -> dict[str, EnvironmentRequirements]:
     from experiments.post_training.task_curation.datasets.nemotron_ultra.components import (  # noqa: PLC0415 - curation-only dependency
         BLENDS,
@@ -475,14 +521,25 @@ def write_training(
     excluded_keys = {key for task in (*heldout, *exclusions) for key in _panel_keys(task).exclusion}
     selected_ids: set[str] = set()
     selected_contracts: set[str] = set()
-    counts = {source.source_id: SourceCounts() for source in config.sources}
+    inputs = _training_inputs(config)
+    counts = {source.source_id: SourceCounts() for source in inputs}
+    families = {source.source_id: source.family for source in inputs}
+    releases = {source.uri: source for source in config.recipe.released}
 
     def candidates(sources: tuple[SelectionInput, ...]) -> Iterator[Candidate]:
         seen_ids: set[str] = set()
         seen_contracts: set[str] = set()
         for source in sources:
-            for row in _admitted_records(source):
-                task = TaskSpec.model_validate_json(row[TASK_JSON_COLUMN])
+            release = releases.get(source.source_id)
+            rows = (
+                _released_records(release)
+                if release is not None
+                else (
+                    (TaskSpec.model_validate_json(row[TASK_JSON_COLUMN]), row[TASK_JSON_COLUMN])
+                    for row in _admitted_records(source)
+                )
+            )
+            for task, task_json in rows:
                 source_counts = counts[source.source_id]
                 source_counts.input += 1
                 grader = _grader_kind(task)
@@ -503,14 +560,14 @@ def write_training(
                 seen_ids.add(task.id)
                 seen_contracts.add(contract)
                 source_counts.eligible += 1
-                yield Candidate(task.id, row[TASK_JSON_COLUMN], source.source_id, contract)
+                yield Candidate(task.id, task_json, source.source_id, contract)
 
     def selected_records() -> Iterator[dict[str, Any]]:
         groups = (
-            [(source.source_id, config.recipe.source_limits[source.source_id], (source,)) for source in config.sources]
+            [(source.source_id, config.recipe.source_limits[source.source_id], (source,)) for source in inputs]
             if config.recipe.source_limits is not None
             else [
-                (family, limit, tuple(source for source in config.sources if source.family == family))
+                (family, limit, tuple(source for source in inputs if source.family == family))
                 for family, limit in sorted(config.recipe.family_limits.items())
             ]
         )
@@ -525,13 +582,14 @@ def write_training(
                 selected_contracts.add(row.contract)
                 counts[row.source_id].selected += 1
                 task = TaskSpec.model_validate_json(row.task_json)
-                family = next(source.family for source in config.sources if source.source_id == row.source_id)
+                family = families[row.source_id]
                 yield {
                     TASK_SPEC_COLUMN: row.task_json,
                     **TaskStrata(
                         family=family,
                         aai_category=AAII_CATEGORIES.get(family, "untagged"),
                         source=task.source.dataset,
+                        difficulty="unrated" if row.source_id in releases else "untagged",
                         agentic="agentic" in task.tags,
                     ).model_dump(),
                 }
@@ -574,6 +632,9 @@ def prepare(config: SelectionConfig) -> None:
         write_parquet_file(manifest_rows(), str(directory / TASK_MANIFEST_FILENAME), schema=TASK_MANIFEST_SCHEMA)
         recipe_document = config.recipe.model_dump(mode="json")
         recipe_document["admitted_graders"] = sorted(config.recipe.admitted_graders)
+        family_counts: Counter[str] = Counter()
+        for source in _training_inputs(config):
+            family_counts[source.family] += counts[source.source_id].selected
         summary = {
             "selection_strata": (
                 SelectionDefinition(
@@ -588,15 +649,30 @@ def prepare(config: SelectionConfig) -> None:
             "sources": [asdict(source) for source in config.sources],
             "source_counts": {source: asdict(count) for source, count in counts.items()},
             "training_rows": sum(count.selected for count in counts.values()),
-            "training_family_counts": {
-                family: sum(counts[source.source_id].selected for source in config.sources if source.family == family)
-                for family in sorted(config.recipe.family_limits)
-            },
+            "training_family_counts": {family: family_counts[family] for family in sorted(config.recipe.family_limits)},
             "validation_rows": len(selection.sample),
             "full_validation_rows": len(selection.full),
             "validation_family_counts": selection.family_counts,
             "validation_task_ids": [task.id for task in selection.sample],
         }
+        if config.recipe.released:
+            released_summary = []
+            for source in config.recipe.released:
+                count = counts[source.uri]
+                released_summary.append(
+                    {
+                        "uri": source.uri,
+                        "sha256": source.sha256,
+                        "rows_read": count.input,
+                        "rows_admitted": count.selected,
+                        "rows_removed": {
+                            "heldout_overlap": count.heldout_overlap,
+                            "duplicate": count.duplicate,
+                            "quota": count.eligible - count.selected,
+                        },
+                    }
+                )
+            summary["released_sources"] = released_summary
         task_files = (TRAIN_FILENAME, VALIDATION_FILENAME, FULL_VALIDATION_FILENAME)
         _publish_selection(directory, config.output_path, task_files, summary)
 
@@ -637,14 +713,17 @@ def task_selection_step(curated: dict[str, ArtifactStep], recipe: SelectionRecip
     missing = recipe.sources.keys() - curated.keys()
     if missing:
         raise ValueError(f"Selection requires curation sources: {', '.join(sorted(missing))}")
-    if not recipe.sources or set(recipe.sources.values()) != recipe.family_limits.keys():
+    source_families = {**recipe.sources, **{source.uri: source.family for source in recipe.released}}
+    if len(source_families) != len(recipe.sources) + len(recipe.released):
+        raise ValueError("Selection sources must have distinct IDs")
+    if not source_families or set(source_families.values()) != recipe.family_limits.keys():
         raise ValueError("Selection sources must cover exactly the families with quotas")
     if recipe.source_limits is not None:
-        if recipe.source_limits.keys() != recipe.sources.keys():
+        if recipe.source_limits.keys() != source_families.keys():
             raise ValueError("Source quotas must cover exactly the selection sources")
         family_totals: Counter[str] = Counter()
         for source, limit in recipe.source_limits.items():
-            family_totals[recipe.sources[source]] += limit
+            family_totals[source_families[source]] += limit
         if family_totals != recipe.family_limits:
             raise ValueError("Source quotas must sum to each family quota")
     heldout = _pinned_inputs(f"{recipe.name}-heldout", recipe.heldout)
