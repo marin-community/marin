@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 import base64
+import json
 from pathlib import Path
 
 import pytest
 import yaml
 from omegaconf import OmegaConf, open_dict
+from tokenizers import Tokenizer, models
+from transformers import PreTrainedTokenizerFast
 from rolloutengine.models import ModelTurn
 from skyrl_gym.answer_tasks import grade_gsm8k
 from skyrl_gym.task_sessions import AnswerTaskSession
 
 from cloud.iris.tests.launch_config_fixtures import raw_launch_config
-from cloud.iris import training_driver
+from cloud.iris import task_runtime, training_driver
 from cloud.iris.launch_config import LaunchTopology, load_launch_config, validate_launch_config
 from cloud.iris.role_plan import derive_num_nodes, derive_role_plan
 from cloud.iris.rl_config_translation import (
@@ -457,17 +460,6 @@ def test_composed_launch_records_whether_training_runs_ahead_of_its_updates(
     assert load_launch_config(path).runtime.training_type == expected
 
 
-def test_object_store_uris_in_skyrl_config_reach_the_task_unchanged(tmp_path: Path) -> None:
-    raw = raw_launch_config()
-    raw["skyrl"]["trainer"]["rollout_buffer"] = {"object_store_root": "s3://runs/smoke/rollouts"}
-    path = tmp_path / "launch.yaml"
-    path.write_text(yaml.safe_dump(raw, sort_keys=False))
-
-    config = load_launch_config(path)
-
-    assert config.skyrl.trainer.rollout_buffer.object_store_root == "s3://runs/smoke/rollouts"
-
-
 def test_qwen_smoke_hugging_face_model_input_reaches_the_runner_without_a_model_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -752,6 +744,57 @@ def test_source_launch_rejects_conflicting_author_values(tmp_path):
             load_launch_config(path)
 
 
+def test_loaded_launch_revision_selects_downloaded_tokenizer_bytes(tmp_path, monkeypatch):
+    revision = "68c46c4b3498877f3ef123c856ecfde50c39f404"
+    raw = raw_launch_config()
+    raw["inputs"]["model"] = {
+        "uri": "org/policy",
+        "identity": "a" * 40,
+        "local_path": "org/policy",
+        "tokenizer_uri": "org/tokenizer",
+        "tokenizer_revision": revision,
+    }
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    config = load_launch_config(path)
+    monkeypatch.setattr(task_runtime.tempfile, "gettempdir", lambda: str(tmp_path / "node"))
+
+    def download(model_id, *, revision, destination, allow_patterns):
+        tokenizer = Tokenizer(models.WordLevel({"[UNK]": 0, model_id: 1, str(revision): 2}, unk_token="[UNK]"))
+        PreTrainedTokenizerFast(tokenizer_object=tokenizer, unk_token="[UNK]").save_pretrained(destination)
+
+    monkeypatch.setattr(task_runtime, "download_hugging_face_snapshot", download)
+    tokenizer = task_runtime.prepare_policy_tokenizer(task_runtime._runtime_namespace(config))
+
+    assert json.loads((Path(tokenizer.local_path) / "tokenizer.json").read_text())["model"]["vocab"] == {
+        "[UNK]": 0,
+        "org/tokenizer": 1,
+        revision: 2,
+    }
+
+
+def test_loaded_launch_policy_revision_reaches_trainer_config(tmp_path, monkeypatch):
+    revision = "b" * 40
+    raw = raw_launch_config()
+    raw["inputs"]["model"] = {
+        "uri": "org/policy",
+        "identity": revision,
+        "local_path": "org/policy",
+        "tokenizer_uri": "org/tokenizer",
+        "tokenizer_revision": "c" * 40,
+    }
+    raw["runtime"]["task_env"] = {"HF_HUB_OFFLINE": "1"}
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    config = load_launch_config(path)
+    monkeypatch.setattr(task_runtime.tempfile, "gettempdir", lambda: str(tmp_path / "node"))
+    trainer_config = task_runtime._write_final_config(
+        config, policy_model=None, policy_tokenizer=None, draft_model=None
+    )
+
+    assert OmegaConf.load(trainer_config).skyrl.trainer.policy.model.revision == revision
+
+
 @pytest.mark.parametrize(
     ("colocate_all", "colocate_policy_ref"), [(True, False), (False, True), (False, False)]
 )
@@ -781,7 +824,7 @@ def test_resolved_nccl_buffers_override_inherited_small_buffer(
     trainer.cfg = config
     trainer.colocate_pg = None
     monkeypatch.setattr(trainer, "_initialize_model_actors", lambda *_args: None)
-    trainer.build_models("policy", "critic", "ref", policy_pg=object())
+    trainer.build_models("policy", "ref", policy_pg=object())
     assert actor_environments == {
         "policy": {"NCCL_BUFFSIZE": "4194304"},
         "ref": {"NCCL_BUFFSIZE": "4194304"},

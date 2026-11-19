@@ -37,6 +37,7 @@ DEPENDENCIES = {
     "zeroeval_mcqa": ("zeroeval.py",),
     "mrcr": ("long_context.py",),
     "graphwalks": ("long_context.py",),
+    "longbench_v2": ("longbench_v2.py",),
     "nupa": ("nupa.py", "nupa_preparation.py"),
     "jee": ("jee.py", "amc.py"),
     "harness_generation": ("harness_generation.py", "minerva.py", "amc.py"),

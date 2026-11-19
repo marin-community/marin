@@ -36,6 +36,8 @@ class SessionAPI:
         self.delete_release = asyncio.Event()
         self.delete_release.set()
         self.corrupt_output = None
+        self.withheld_tail = 0
+        self.leaked_marker = b""
 
     async def create_session(self, name, request_timeout):
         self.sessions[name] = None
@@ -67,8 +69,17 @@ class SessionAPI:
             return
 
         async def pump(pipe, callback):
+            # Daytona's SDK may withhold the last bytes of output until more
+            # arrives, and may pass a stream-marker byte through after a line.
+            pending = b""
             while data := await pipe.read(337):
-                await callback(data.decode("ascii"))
+                pending += data.replace(b"\n", b"\n" + self.leaked_marker)
+                cut = max(len(pending) - self.withheld_tail, 0)
+                if cut:
+                    await callback(pending[:cut].decode("ascii"))
+                    pending = pending[cut:]
+            if pending:
+                await callback(pending.decode("ascii"))
 
         await asyncio.gather(pump(process.stdout, stdout), pump(process.stderr, stderr))
         await process.wait()
@@ -181,6 +192,30 @@ sys.exit(7)
             await session.close()
             assert not api.sessions
             assert len(api.requests) == 1 and api.requests[0].suppress_input_echo is True
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.requires_linux_process_api
+def test_daytona_process_survives_withheld_tails_and_leaked_stream_markers(session_machine):
+    script = "import sys; print('request', flush=True); print(sys.stdin.readline().upper(), end='', flush=True)"
+
+    async def scenario():
+        machine, api = session_machine
+        api.withheld_tail = 2
+        api.leaked_marker = b"\x01"
+        try:
+            session = await machine.open_process(Command((sys.executable, "-c", script)))
+            line = b""
+            while not line.endswith(b"\n"):
+                line += await asyncio.wait_for(session.read(), 5)
+            assert line == b"request\n"
+            await session.write(b"reply\n")
+            assert await asyncio.wait_for(output(session), 5) == b"REPLY\n"
+            assert await session.wait() == 0
+            await session.close()
         finally:
             await machine.close()
 

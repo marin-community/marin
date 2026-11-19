@@ -101,6 +101,9 @@ class PromptDataset:
     def uid(self, index: int) -> str:
         return str(index)
 
+    def label(self, index: int) -> str:
+        return self.uid(index)
+
     def __len__(self):
         return len(self.dataframe)
 
