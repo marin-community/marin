@@ -35,7 +35,10 @@ def load_cell(plan: str, teacher: str, split: str, index: int):
     name = f"{split}/docs-{index:03d}"
     docs = {
         d["row"]: d
-        for d in (json.loads(x) for x in gzip.decompress(StoragePath(prefix_join(plan, name + ".jsonl.gz")).read_bytes()).splitlines())
+        for d in (
+            json.loads(x)
+            for x in gzip.decompress(StoragePath(prefix_join(plan, name + ".jsonl.gz")).read_bytes()).splitlines()
+        )
     }
     scored = np.load(io.BytesIO(StoragePath(prefix_join(teacher, name + ".npz")).read_bytes()))
     offsets = scored["doc_offsets"]
