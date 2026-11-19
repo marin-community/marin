@@ -59,6 +59,16 @@ LEGACY_REASONS = {
 }
 
 
+ARCHIVED_JUDGE_REASONS = (
+    (
+        "production_judge_route_or_temperature_not_qualified:openai/gpt-oss-120b:temperature=0.0",
+        "openai/gpt-oss-120b:temperature=0.0",
+    ),
+    ("production_judge_route_or_temperature_not_qualified:gpt-4o-mini:temperature=0.0", "gpt-4o-mini:temperature=0.0"),
+    ("production_judge_route_or_temperature_not_qualified::temperature=0.0", ":temperature=0.0"),
+)
+
+
 @pytest.mark.parametrize("reason", sorted(LEGACY_REASONS))
 def test_every_historical_reason_maps_to_typed_gaps(reason):
     gaps = {gap for gap, _ in difficulty_gaps(reason)}
@@ -99,22 +109,15 @@ def test_every_historical_reason_maps_to_typed_gaps(reason):
             "Production judge route or temperature qualification pending: glm-5.3 at temperature 0.0",
             [(DifficultyGap.JUDGE_QUALIFICATION_PENDING, "glm-5.3 at temperature 0.0")],
         ),
-        (
-            "production_judge_route_or_temperature_not_qualified:openai/gpt-oss-120b:temperature=0.0",
-            [(DifficultyGap.JUDGE_QUALIFICATION_PENDING, "openai/gpt-oss-120b:temperature=0.0")],
-        ),
-        (
-            "production_judge_route_or_temperature_not_qualified:gpt-4o-mini:temperature=0.0",
-            [(DifficultyGap.JUDGE_QUALIFICATION_PENDING, "gpt-4o-mini:temperature=0.0")],
-        ),
-        (
-            "production_judge_route_or_temperature_not_qualified::temperature=0.0",
-            [(DifficultyGap.JUDGE_QUALIFICATION_PENDING, ":temperature=0.0")],
-        ),
     ],
 )
 def test_parameterized_legacy_reasons_keep_their_typed_detail(reason, expected):
     assert difficulty_gaps(reason) == expected
+
+
+@pytest.mark.parametrize("reason,detail", ARCHIVED_JUDGE_REASONS)
+def test_archived_judge_reasons_keep_the_qualification_gap_and_detail(reason, detail):
+    assert difficulty_gaps(reason) == [(DifficultyGap.JUDGE_QUALIFICATION_PENDING, detail)]
 
 
 def test_legacy_missing_separator_is_still_typed():
@@ -225,7 +228,7 @@ def test_free_text_after_a_gap_fails_validation():
         require_difficulty_gaps("invalid_reference:the snapshot is broken; whatever")
 
 
-def test_observation_requires_typed_gaps_and_preserves_archived_judge_reasons():
+def test_not_measured_observation_rejects_untyped_gaps_and_preserves_judge_reasons():
     release = {
         "repo": "open-athena/marin-eval-data",
         "revision": "a" * 40,
@@ -266,11 +269,7 @@ def test_observation_requires_typed_gaps_and_preserves_archived_judge_reasons():
         DifficultyObservation.model_validate(evidence_only)
     typed = {**base, "reason": DifficultyGap.ENVIRONMENT_ARTIFACT_MISSING.value}
     assert DifficultyObservation.model_validate(typed).reason == DifficultyGap.ENVIRONMENT_ARTIFACT_MISSING.value
-    for recorded_reason in (
-        "production_judge_route_or_temperature_not_qualified:openai/gpt-oss-120b:temperature=0.0",
-        "production_judge_route_or_temperature_not_qualified:gpt-4o-mini:temperature=0.0",
-        "production_judge_route_or_temperature_not_qualified::temperature=0.0",
-    ):
+    for recorded_reason, _ in ARCHIVED_JUDGE_REASONS:
         recorded = {**base, "reason": recorded_reason}
         assert DifficultyObservation.model_validate(recorded).model_dump(mode="json") == recorded
 
