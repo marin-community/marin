@@ -7,7 +7,19 @@ import json
 from collections.abc import Callable
 from typing import Any
 
+from .cohort_sql import COHORT_COUNTS_SQL, COHORT_PROJECTION_SQL
+
 COHORT_SUMMARY_VERSION = 1
+COHORT_ITEM_BATCH = 4096
+COUNTER_FIELDS = (
+    "reviewed",
+    "missing_evidence",
+    "packets_with_omissions",
+    "item_count",
+    "good_count",
+    "conclusive_count",
+)
+COUNT_MAP_FIELDS = ("verdict_counts", "defect_counts", "confidence_counts")
 SummaryQuery = Callable[[str, dict[str, Any]], list[dict[str, Any]]]
 
 
@@ -28,31 +40,7 @@ def materialize_cohort_summaries(query: SummaryQuery, load_id: str, *, pipeline_
         parameters,
     )
     for pipeline in pipelines:
-        summaries = {}
-        cohorts = None
-        projections = (
-            "population,sample_count,reviewed",
-            "missing_evidence,packets_with_omissions",
-            "verdict_counts",
-            "grade,good_fraction,result_reviewed,issue_count",
-            "grade_reason,issue_rate,uncertain_count,unavailable_count",
-            "defect_counts",
-            "confidence_counts",
-        )
-        for fields in projections:
-            rows = query(
-                f"SELECT cohort,{fields} FROM atlas_cohort_summary "
-                "WHERE load_id=:load_id AND pipeline_key=:pipeline_key ORDER BY cohort",
-                {**parameters, "pipeline_key": pipeline["pipeline_key"]},
-            )
-            current = {row["cohort"] for row in rows}
-            if not current or (cohorts is not None and current != cohorts):
-                raise ValueError("Cohort populations changed during canonical summary projection")
-            cohorts = current
-            for row in rows:
-                summaries.setdefault(row["cohort"], {}).update(
-                    {name: value for name, value in row.items() if name != "cohort"}
-                )
+        summaries = bounded_summaries(query, load_id, pipeline["pipeline_key"])
         query(
             """
                 INSERT INTO atlas_cohort_summaries (load_id,pipeline_key,cohort,version,summary)
@@ -72,3 +60,58 @@ def materialize_cohort_summaries(query: SummaryQuery, load_id: str, *, pipeline_
             },
         )
     return len(pipelines)
+
+
+def bounded_summaries(query: SummaryQuery, load_id: str, pipeline_key: str) -> dict[str, dict]:
+    """Aggregate indexed task-ID windows, then apply the view's exact grade policy."""
+    totals: dict[str, dict] = {}
+    lower = None
+    parameters = {"load_id": load_id, "pipeline_key": pipeline_key, "batch": COHORT_ITEM_BATCH}
+    while True:
+        after = "AND task_id>:lower" if lower is not None else ""
+        boundary = query(
+            "SELECT MAX(task_id) AS upper FROM (SELECT task_id FROM atlas_items "
+            f"WHERE load_id=:load_id AND pipeline_key=:pipeline_key {after} "
+            "ORDER BY task_id LIMIT :batch) page",
+            {**parameters, "lower": lower},
+        )[0]["upper"]
+        if boundary is None and totals:
+            break
+        window = "AND FALSE" if boundary is None else "AND i.task_id<=:upper"
+        if lower is not None:
+            window += " AND i.task_id>:lower"
+        rows = query(
+            COHORT_COUNTS_SQL.replace(
+                "/* selected_population */", "WHERE p.load_id=:load_id AND p.pipeline_key=:pipeline_key"
+            ).replace("/* selected_items */", window),
+            {**parameters, "lower": lower, "upper": boundary},
+        )
+        for row in rows:
+            cohort = row["cohort"]
+            if cohort not in totals:
+                totals[cohort] = dict(row)
+                continue
+            total = totals[cohort]
+            if any(total[key] != row[key] for key in ("population", "sample_count")):
+                raise ValueError("Cohort population changed during summary aggregation")
+            for field in COUNTER_FIELDS:
+                total[field] += row[field]
+            for field in COUNT_MAP_FIELDS:
+                for key, value in row[field].items():
+                    total[field][key] += value
+        if boundary is None:
+            break
+        lower = boundary
+    # Two small population rows replace a repeated scan of the full item table.
+    rows = query(
+        "WITH counts AS (SELECT * FROM jsonb_to_recordset(CAST(:counts AS JSONB)) AS r("
+        "load_id TEXT,pipeline_key TEXT,cohort TEXT,population BIGINT,sample_count BIGINT,"
+        "reviewed BIGINT,missing_evidence BIGINT,packets_with_omissions BIGINT,"
+        "verdict_counts JSONB,defect_counts JSONB,confidence_counts JSONB,"
+        "item_count BIGINT,good_count BIGINT,conclusive_count BIGINT)) " + COHORT_PROJECTION_SQL,
+        {"counts": json.dumps(list(totals.values()), allow_nan=False)},
+    )
+    return {
+        row["cohort"]: {key: value for key, value in row.items() if key not in ("load_id", "pipeline_key", "cohort")}
+        for row in rows
+    }

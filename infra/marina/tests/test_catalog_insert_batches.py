@@ -14,6 +14,7 @@ from sqlalchemy import create_engine, text
 from infra.marina.apps.rl_data_catalog.historical_assessments import retain_prior_assessments
 from infra.marina.apps.rl_data_catalog.load import TABLE_COLUMNS, insert_rows
 from infra.marina.apps.rl_data_catalog.parallel_history import CHECKPOINT_TABLE, retain_prior_assessments_parallel
+from infra.marina.apps.rl_data_catalog.server.cohort_summaries import materialize_cohort_summaries
 from infra.marina.apps.rl_data_catalog.server.schema import SCHEMA_SQL
 
 COMMITTED_PREFIX_ROWS = 13
@@ -337,3 +338,77 @@ def test_parallel_ranges_resume_after_copy_commits_before_checkpoint(batch_datab
     ) == dict.fromkeys(result, 0)
     record_property("parallel_copy_threads", len(worker_threads))
     record_property("max_parallel_query_wall_seconds", max(durations))
+
+
+@pytest.mark.parametrize("count,scope", [(0, "sample"), (1, "sample"), (8193, "full"), (110600, "full")])
+def test_bounded_summary_matches_canonical_view_and_resumes(batch_database, count, scope, record_property):
+    load_id = f"summary-{scope}-{count}"
+    parameters = {"load": load_id, "count": count, "scope": scope}
+    with batch_database.begin() as connection:
+        connection.execute(text("INSERT INTO atlas_loads VALUES (:load,'fixture',:load,now(),now())"), parameters)
+        connection.execute(
+            text(
+                "INSERT INTO atlas_assessments VALUES (:load,'summary','source',:scope,"
+                "'{}','fixture','{}','s3://fixture','[]')"
+            ),
+            parameters,
+        )
+        connection.execute(
+            text(
+                "INSERT INTO atlas_populations VALUES "
+                "(:load,'summary','admitted',:count,(:count+1)/2),"
+                "(:load,'summary','excluded',:count,:count/2),"
+                "(:load,'summary','empty',0,0)"
+            ),
+            parameters,
+        )
+        connection.execute(
+            text(
+                """
+            INSERT INTO atlas_items (load_id,pipeline_key,task_id,cohort,status,verdict,explanation,
+                evidence_ids,packet_uri,has_task,omissions,confidence,reference_status,defects)
+            SELECT :load,'summary',lpad(n::text,8,'0'),
+                CASE WHEN mod(n,2)=1 THEN 'admitted' ELSE 'excluded' END,
+                CASE WHEN mod(n,11)=0 THEN 'unavailable' ELSE 'reviewed' END,
+                (ARRAY['good','some_issues','bad','unknown'])[mod(n,4)+1],repeat('Frozen evidence ',100),
+                '[]'::jsonb,'s3://fixture',mod(n,3)=0,
+                CASE WHEN mod(n,13)=0 THEN '["missing"]'::jsonb ELSE '[]'::jsonb END,
+                (ARRAY['high','medium','low',NULL])[mod(n,4)+1],
+                CASE WHEN mod(n,17)=0 THEN 'conflict' ELSE NULL END,
+                CASE WHEN mod(n,7)=0 THEN '["wrong_reference","ambiguity"]'::jsonb ELSE '[]'::jsonb END
+            FROM generate_series(1,:count) n
+        """
+            ),
+            parameters,
+        )
+        expected = [
+            dict(row)
+            for row in connection.execute(
+                text(
+                    "SELECT cohort,to_jsonb(s)-'load_id'-'pipeline_key'-'cohort' AS summary "
+                    "FROM atlas_cohort_summary s WHERE load_id=:load ORDER BY cohort"
+                ),
+                parameters,
+            ).mappings()
+        ]
+    statements = []
+
+    def query(sql, params):
+        started = time.perf_counter()
+        result = execute_statement(batch_database, sql, params)["rows"]
+        statements.append({"seconds": time.perf_counter() - started, "sql": sql})
+        return result
+
+    assert materialize_cohort_summaries(query, load_id) == 1
+    with batch_database.connect() as connection:
+        actual = [
+            dict(row)
+            for row in connection.execute(
+                text("SELECT cohort,summary FROM atlas_cohort_summaries WHERE load_id=:load ORDER BY cohort"), parameters
+            ).mappings()
+        ]
+    assert actual == expected
+    assert materialize_cohort_summaries(query, load_id) == 0
+    assert all("FROM atlas_cohort_summary " not in row["sql"] for row in statements)
+    record_property("maximum_statement_seconds", max(row["seconds"] for row in statements))
+    record_property("statement_count", len(statements))
