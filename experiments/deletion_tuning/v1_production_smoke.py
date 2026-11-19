@@ -119,6 +119,10 @@ def _smoke_spec(release, output_path: Path) -> SFTSpec:
         packing_cap=recipe["packing_cap"],
         lookahead=recipe["packing_lookahead"],
     )
+    # the release freezes mixture_block_size at the production 256-sequence phase
+    # geometry; the schedule boundaries rescale with the batch, so the block must
+    # follow (the shuffle granularity is a recorded smoke override)
+    data = dataclasses.replace(data, mixture_block_size=SMOKE_BATCH)
     trainer_config = draccus.decode(TrainerConfig, trainer)
     trainer_config = dataclasses.replace(
         trainer_config,
