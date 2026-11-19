@@ -73,7 +73,7 @@
     }
   ],
   "rule_approval": {
-    "path": "rule-approval-v3.json",
-    "sha256": "98b5839fdbd6ca000eeb2845e4da033ad9e9252564aec5d8fec0b8de15b4c257"
+    "path": "rule-approval-v4.json",
+    "sha256": "dec5475c7752405df571aac9248b1e995cdf414b48d10763905aaee750c21243"
   }
 }

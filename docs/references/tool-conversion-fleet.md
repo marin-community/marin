@@ -64,3 +64,9 @@ the driver reports that reconciliation is required.
 Deterministic mappings are accepted only when the pinned rule approval covers
 every applied rule and matches the rule version and implementation hashes.
 Changed approval artifacts or implementations fail verification.
+
+`rule-approval-v4.json` carries the original sample audit forward after removal
+of unused declarations from `native_seed.py` and `candidate.py`. Its
+`implementation_equivalence` records the approved and cleaned hashes, source
+commits, removed symbols and matching retained-module AST hashes. The original
+`rule-approval-v3.json` remains available for historical provenance.

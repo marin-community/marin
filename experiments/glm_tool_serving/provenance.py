@@ -19,7 +19,7 @@ REQUIRED_PROVENANCE_FILES = (
     "experiments/glm_tool_serving/assets.py",
     "experiments/tool_normalization/environments.json",
     "experiments/tool_normalization/opencode-tools.json",
-    "experiments/glm_tool_serving/production_data/rule-approval-v3.json",
+    "experiments/glm_tool_serving/production_data/rule-approval-v4.json",
 )
 
 
