@@ -42,6 +42,7 @@ from iris.cluster.backends.k8s.output_contract import (
     OUTPUT_RELEASE_PATH,
     output_uploader_environment,
 )
+from iris.cluster.bundle import WORKDIR_FILE_OFFLOAD_THRESHOLD
 from iris.cluster.config import EgressAllowlistConfig, NodeHealthConfig, TaskOutputPolicy
 from iris.cluster.constraints import AttributeValue, Constraint, evaluate_constraint
 from iris.cluster.controller.backend import (
@@ -2681,6 +2682,17 @@ class K8sTaskProvider:
         return None
 
     def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
+        if request.egress_policy in (job_pb2.EGRESS_POLICY_NONE, job_pb2.EGRESS_POLICY_INTERNET) and (
+            request.bundle_blob
+            or request.bundle_id
+            or request.entrypoint.workdir_file_refs
+            or any(len(data) > WORKDIR_FILE_OFFLOAD_THRESHOLD for data in request.entrypoint.workdir_files.values())
+        ):
+            policy = job_pb2.EgressPolicy.Name(request.egress_policy)
+            return (
+                f"{policy} blocks the Iris controller; Kubernetes cannot fetch workspace bundles or offloaded "
+                "workdir files. Use a self-contained image or a policy that reaches the controller."
+            )
         if error := _region_constraint_error(
             request.constraints, sorted(self.descriptor.advertised_attributes.get(WellKnownAttribute.REGION, ()))
         ):
