@@ -225,15 +225,7 @@ def test_free_text_after_a_gap_fails_validation():
         require_difficulty_gaps("invalid_reference:the snapshot is broken; whatever")
 
 
-@pytest.mark.parametrize(
-    "recorded_reason",
-    [
-        "production_judge_route_or_temperature_not_qualified:openai/gpt-oss-120b:temperature=0.0",
-        "production_judge_route_or_temperature_not_qualified:gpt-4o-mini:temperature=0.0",
-        "production_judge_route_or_temperature_not_qualified::temperature=0.0",
-    ],
-)
-def test_not_measured_observation_rejects_untyped_reasons(recorded_reason):
+def test_observation_requires_typed_gaps_and_preserves_archived_judge_reasons():
     release = {
         "repo": "open-athena/marin-eval-data",
         "revision": "a" * 40,
@@ -274,10 +266,13 @@ def test_not_measured_observation_rejects_untyped_reasons(recorded_reason):
         DifficultyObservation.model_validate(evidence_only)
     typed = {**base, "reason": DifficultyGap.ENVIRONMENT_ARTIFACT_MISSING.value}
     assert DifficultyObservation.model_validate(typed).reason == DifficultyGap.ENVIRONMENT_ARTIFACT_MISSING.value
-    archived = DifficultyObservation.model_validate({**base, "reason": recorded_reason})
-    assert archived.reason == recorded_reason
-    assert archived.status is MeasurementStatus.NOT_MEASURED
-    assert (archived.n, archived.solved, archived.wilson_95) == (0, 0, None)
+    for recorded_reason in (
+        "production_judge_route_or_temperature_not_qualified:openai/gpt-oss-120b:temperature=0.0",
+        "production_judge_route_or_temperature_not_qualified:gpt-4o-mini:temperature=0.0",
+        "production_judge_route_or_temperature_not_qualified::temperature=0.0",
+    ):
+        recorded = {**base, "reason": recorded_reason}
+        assert DifficultyObservation.model_validate(recorded).model_dump(mode="json") == recorded
 
 
 def test_blocked_attempt_rejects_untyped_reasons():
