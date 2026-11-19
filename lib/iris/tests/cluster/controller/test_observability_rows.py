@@ -122,7 +122,6 @@ def test_submit_writes_one_job_row_and_one_config_row(state):
     assert job.root_job_id == "/test-user/train"
     assert job.state == "JOB_STATE_PENDING"
     assert job.placement == "local"
-    assert job.tags is None
     assert len(rows.job_configs) == 1
     config = rows.job_configs[0]
     assert (config.root_job_id, config.root_submitted_at_ms) == (job.root_job_id, job.root_submitted_at_ms)
@@ -509,7 +508,7 @@ _COLUMNS: dict[str, _Classified] = {
             "cluster": "placement",
         },
         {},
-        frozenset({"cluster", "ts", "tags"}),
+        frozenset({"cluster", "ts"}),
     ),
     "job_config": _Classified(
         IrisJobConfig,
@@ -566,18 +565,19 @@ _COLUMNS: dict[str, _Classified] = {
             "max_retries_failure": "max_retries_failure",
             "max_retries_preemption": "max_retries_preemption",
             "current_attempt_id": "current_attempt_id",
-            "priority_neg_depth": "priority_neg_depth",
             "priority_root_submitted_ms": "priority_root_submitted_ms",
-            "priority_insertion": "priority_insertion",
             "priority_band": "priority_band",
             "container_id": "container_id",
             "status_message": "status_message",
             "current_worker_id": "current_worker_id",
-            "current_worker_address": "current_worker_address",
             "backend_id": "backend_id",
             "cluster": "placement",
         },
-        {},
+        {
+            "priority_neg_depth": "scheduler-queue-order",
+            "priority_insertion": "scheduler-queue-order",
+            "current_worker_address": "in-iris.worker",
+        },
         _JOB_KEY,
     ),
     "task_attempts": _Classified(

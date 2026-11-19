@@ -40,6 +40,11 @@ Not copied, all from `job_config`:
 | `bundle_id`, `ports_json`, `egress_allow_json` | User-written ids, ports and hosts |
 | `name` | Same as `iris.controller_db__jobs.name` |
 
+Not copied from `tasks`: `priority_neg_depth` and `priority_insertion`, the
+scheduler's queue order, which no question about past work needs; and
+`current_worker_address`, which `iris.worker` records per worker. A column can be
+added later when a query needs it, but never removed.
+
 Copied columns that differ from the controller DB:
 
 | Column | Differs from the controller DB |
@@ -81,7 +86,7 @@ job's rows are still written.
 **The one place a row is not written on every change:** an `iris.controller_db__tasks`
 row is written at submit and when the task's state, current attempt, current
 worker, error or exit code changes. A change to any other column alone
-(`status_message`, `container_id`, `current_worker_address`, `backend_id`)
+(`status_message`, `container_id`, `backend_id`)
 writes no row, because Kubernetes rewrites the pending reason on every
 reconcile. So those columns hold their value as of the row's change, and
 pending-reason history is kept only at those trigger points.
@@ -144,10 +149,6 @@ WHERE a.rn = 1 AND a.started_at IS NOT NULL AND a.finished_at IS NOT NULL
 GROUP BY a.root_job_id, c.accelerator_type
 ORDER BY accelerator_hours DESC;
 ```
-
-`iris.controller_db__jobs.tags` is reserved for submit-time job tags as a JSON object
-(`json_get(tags, 'category')`); it is NULL until Iris accepts job tags at
-submit.
 
 `error` is not truncated, but token-like strings in it are redacted (see
 **Free text** above).

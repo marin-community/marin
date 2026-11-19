@@ -277,9 +277,6 @@ class IrisJob:
     # Named placement because this table's cluster is the writing controller.
     placement: str
     ts: datetime
-    # Reserved for submit-time job tags as a JSON object, e.g. {"project": ...,
-    # "category": ...}. Always NULL until Iris accepts job tags at submit.
-    tags: str | None = None
 
 
 @dataclass
@@ -345,14 +342,18 @@ class IrisJobConfig:
 
 @dataclass
 class IrisJobTask:
-    """A snapshot of one controller ``tasks`` row: every column, plus the job key.
+    """A snapshot of one controller ``tasks`` row, plus the job key.
+
+    Every column except the scheduler's queue order (``priority_neg_depth``,
+    ``priority_insertion``) and ``current_worker_address``, which ``iris.worker``
+    records per worker.
 
     Written at submit and whenever the task's state, current attempt, current
     worker, error or exit code changes. Unlike the other observability rows, a change
     to any other column alone writes no row: Kubernetes rewrites the pending
     reason (``status_message``) on every reconcile. So every column other than
-    those five (``status_message``, ``container_id``, ``current_worker_address``,
-    ``backend_id``, ...) holds its value as of the task's last written change.
+    those five (``status_message``, ``container_id``, ``backend_id``, ...) holds
+    its value as of the task's last written change.
     """
 
     key_column: ClassVar[str] = "task_id"
@@ -373,15 +374,12 @@ class IrisJobTask:
     max_retries_failure: int
     max_retries_preemption: int
     current_attempt_id: int
-    priority_neg_depth: int
     priority_root_submitted_ms: int
-    priority_insertion: int
     priority_band: str
     container_id: str | None
     # The backend's reason a task is not running yet, as of this row's change.
     status_message: str | None
     current_worker_id: str | None
-    current_worker_address: str | None
     backend_id: str
     # The controller DB's tasks.cluster, named as on iris.controller_db__jobs.
     placement: str
