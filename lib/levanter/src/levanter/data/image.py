@@ -61,7 +61,7 @@ class ConversationDict(TypedDict, total=False):
 
 
 def image_source_urls(urls: Sequence[str]) -> list[str]:
-    """Expand shard patterns and recursively discover parquet files in directories."""
+    """Expand shard patterns and find Parquet files under directories."""
     result: list[str] = []
     for specification in urls:
         for path in StoragePath(specification).expand_glob():
@@ -73,7 +73,7 @@ def image_source_urls(urls: Sequence[str]) -> list[str]:
 
 
 def conversation_fields(record: Mapping[str, Any], messages_key: str, images_key: str) -> ConversationDict:
-    """Normalize source field names and retain optional modality references."""
+    """Read chat turns and media references from a source record."""
     return {
         "messages": record[messages_key],
         "images": record.get(images_key, []),
@@ -120,7 +120,7 @@ def load_image(image_data: Any) -> Image.Image:
 
 
 class BatchMultimodalProcessor(BatchProcessor[ConversationDict, ImageTextDict]):
-    """Cache native processor arrays and a loss mask aligned to the expanded token sequence."""
+    """Prepare processor outputs and a token-level loss mask for caching."""
 
     def __init__(
         self,
@@ -173,7 +173,7 @@ class BatchMultimodalProcessor(BatchProcessor[ConversationDict, ImageTextDict]):
             max_length=self.max_length if truncate else None,
         )
         encoded = self.processor(text=[prompt], images=images or None, **text_options)
-        # Image tensors keep the processor's dimensions, including any image, tile, or patch axes.
+        # Only text fields have a batch axis we can safely remove.
         sequence_keys = {*tokenizer.model_input_names, "input_ids", "attention_mask", "mm_token_type_ids"}
         result = {key: np.asarray(value[0] if key in sequence_keys else value) for key, value in encoded.items()}
         ids = result["input_ids"]
@@ -182,8 +182,7 @@ class BatchMultimodalProcessor(BatchProcessor[ConversationDict, ImageTextDict]):
         text = active & ~np.isin(ids, image_ids)
         loss = text.astype(np.float32)
         if self.mask_prompt and self.template is not None:
-            # The template marks the original text. Image expansion may insert many tokens
-            # before an assistant turn, so align only the surviving text tokens.
+            # Image expansion shifts token positions. Match the remaining text to its template mask.
             original = tokenizer.apply_chat_template(
                 messages, tokenize=True, return_dict=True, return_assistant_tokens_mask=True, **template_args
             )
@@ -255,12 +254,12 @@ def _image_split_urls(split: str, split_urls: Mapping[str, Sequence[str]]) -> Li
 
 @dataclass
 class ImageDatasetSourceConfig:
-    """Configuration for a simple image-text dataset source (single image + text pairs)."""
+    """Read one image and caption per record."""
 
-    id: Optional[str] = None  # HuggingFace dataset id or path
-    name: Optional[str] = None  # Dataset configuration name
+    id: Optional[str] = None  # Hugging Face dataset ID or path
+    name: Optional[str] = None  # Hugging Face dataset configuration
 
-    stream: bool = True  # Whether to use streaming
+    stream: bool = True
     image_key: str = "image"
     text_key: str = "text"
 
@@ -271,7 +270,7 @@ class ImageDatasetSourceConfig:
     cache_dir: Optional[str] = None
 
     def get_shard_source(self, split: str) -> Optional[ShardedDataSource[ConversationDict]]:
-        """Get a sharded data source for the specified split."""
+        """Return the split as conversations, or None if it has no data."""
         source = self._caption_source(split)
         return None if source is None else source.map(image_caption_to_conversation)
 
@@ -291,7 +290,7 @@ class ImageDatasetSourceConfig:
         return {"image": record[self.image_key], "text": record[self.text_key]}
 
     def doc_iterator(self, split: str) -> Iterator[Dict[str, Any]]:
-        """Iterate over normalized image-caption pairs."""
+        """Yield records with image and text fields."""
         if self.id is not None:
             data = datasets.load_dataset(self.id, split=split, name=self.name, streaming=self.stream)
             for doc in data:
@@ -309,14 +308,14 @@ class ImageDatasetSourceConfig:
 
 @dataclass
 class ConversationDatasetSourceConfig:
-    """Read conversations whose image placeholders consume image references in order."""
+    """Read chat turns with one image reference per placeholder, in order."""
 
-    id: Optional[str] = None  # HuggingFace dataset id or path
-    name: Optional[str] = None  # Dataset configuration name
+    id: Optional[str] = None  # Hugging Face dataset ID or path
+    name: Optional[str] = None  # Hugging Face dataset configuration
 
-    stream: bool = True  # Whether to use streaming
-    messages_key: str = "messages"  # Key for messages field
-    images_key: str = "images"  # Key for images field
+    stream: bool = True
+    messages_key: str = "messages"
+    images_key: str = "images"
 
     train_split: str = "train"
     validation_split: str = "validation"
@@ -325,7 +324,7 @@ class ConversationDatasetSourceConfig:
     cache_dir: Optional[str] = None
 
     def get_shard_source(self, split: str) -> Optional[ShardedDataSource[ConversationDict]]:
-        """Get a sharded data source for the specified split."""
+        """Return the split as conversations, or None if it has no data."""
         if self.id is not None:
             source = datasource_from_hf_or_none(self.id, split=split, name=self.name, streaming=self.stream)
             if source is None:
@@ -387,9 +386,7 @@ class ImageTaskConfig(abc.ABC):
 
 
 class ProcessedImageCache(AsyncDataset[ImageTextDict]):
-    """
-    Cache for preprocessed image-text data.
-    """
+    """Read cached processor outputs by example index."""
 
     def __init__(self, cache: TreeCache[ImageTextDict]) -> None:
         super().__init__()
@@ -479,15 +476,12 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
     cache_dir: Optional[str] = "cache/"
 
     configs: Dict[str, Union[ImageDatasetSourceConfig, ConversationDatasetSourceConfig]] = field(default_factory=dict)
-    """Configuration of each dataset source (URLs, HF dataset ID, etc.)"""
     train_weights: Dict[str, float] = field(default_factory=dict)
-    """Weights for each dataset source. They will be normalized to sum to 1."""
+    """Relative sampling weights, keyed by source name."""
     shuffle: bool | int = False
-    """Shuffle each source before mixing: True for a full shuffle, False to preserve order,
-    or an integer for the per-source shuffle era length."""
+    """Use True for a full shuffle, False to keep source order, or an integer to shuffle within eras of that size."""
     stop_strategy: str = field(default=StopStrategy.RESTART_STRATEGY)
     mixture_block_size: int = 2048
-    """Block size for the mixture dataset."""
 
     def __post_init__(self) -> None:
         if len(self.configs) == 0:
@@ -513,7 +507,7 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
 
         mix_key, shuffle_key = jax.random.split(key)
 
-        # Shuffle components, not the overall mixture, to preserve "stable batch" property
+        # Shuffling within sources keeps the mixture’s source order stable.
         def shuffle_ds(ds: AsyncDataset[ImageTextDict], key: PRNGKeyArray) -> AsyncDataset[ImageTextDict]:
             if self.shuffle is True:
                 ds = ds.shuffle(key)

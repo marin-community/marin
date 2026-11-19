@@ -192,19 +192,26 @@ Direct datasets are expected to yield `LmExample` instances that already include
 ---
 
 
-## Image-caption and image-conversation records
+## Image captions and conversations
 
-Use `ImageDatasetSourceConfig` in `levanter.data.image` for files with one image and one caption per record. Add the files to `train_urls` or `validation_urls`, and set `image_key` and `text_key` if your columns have different names. A caption pair becomes a conversation with a user image and an assistant caption.
+Choose a source from `levanter.data.image`:
 
-Use `ConversationDatasetSourceConfig` if the records already contain turns. Each `{"type": "image"}` entry takes the next reference from the record's `images` list.
+- `ImageDatasetSourceConfig` reads one image and caption per row. It expects columns named `image` and `text`. Set `image_key` and `text_key` to use other names.
+- `ConversationDatasetSourceConfig` reads chat turns from `messages`. Each `{"type": "image"}` uses the next item in `images`, in order.
 
-```jsonl
-{"messages":[{"role":"user","content":[{"type":"image"},{"type":"text","text":"What color is the car?"}]},{"role":"assistant","content":[{"type":"text","text":"Red."}]}],"images":["images/car.jpg"]}
+```json
+{
+  "images": ["images/car.jpg"],
+  "messages": [
+    {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What color is the car?"}]},
+    {"role": "assistant", "content": [{"type": "text", "text": "Red."}]}
+  ]
+}
 ```
 
-Both source configs accept JSON, JSONL, and Parquet files. Image references can be encoded bytes, local paths, or URLs.
+Set `id` for a Hugging Face dataset, or list JSON, JSONL, or Parquet files in `train_urls` and `validation_urls`. Images can be encoded bytes, paths, or URLs.
 
-The image cache preserves the configured Hugging Face processor’s visual inputs and their dimensions. A processor without a chat template can encode single image-caption pairs directly. For conversations, assistant-only loss uses the chat template’s `{% generation %}` blocks.
+The cache keeps the image fields and shapes returned by the Hugging Face processor. Single image-caption pairs work without a chat template. For assistant-only loss in conversations, wrap the assistant response in `{% generation %}…{% endgeneration %}` in the template.
 
 # API
 

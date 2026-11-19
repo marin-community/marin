@@ -1,18 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Preview a bounded sample of a Hugging Face image dataset.
+"""Save a grid of up to 16 images from a Hugging Face dataset.
 
-Defaults to LLaVA-558K metadata and images hosted on Hugging Face:
+Preview four images from the hosted LLaVA-558K ZIP:
     uv run python scripts/preview_images.py --count 4
 
-Select another dataset's native image/caption columns and default data files:
+Use another dataset's default files and columns:
     uv run python scripts/preview_images.py --dataset ORG/DATASET \\
         --data-files --image-column image --caption-column caption
 
-For extracted LLaVA images, use --image-column image --image-root /path/to/images.
-The default reads selected images from the hosted ZIP using range requests.
-Use --image-column url for original website URLs, which may have expired.
+For extracted LLaVA images, pass --image-root /path/to/images.
+To fetch the original web images, pass --image-column url. Some links may have expired.
 """
 
 import argparse
@@ -69,16 +68,16 @@ def _parse_args() -> argparse.Namespace:
         "--data-files",
         nargs="*",
         default=DEFAULT_DATA_FILES,
-        help="Data files or glob patterns. Pass this option with no values to use the dataset's default files.",
+        help="Files or glob patterns. Pass --data-files alone to use default dataset files.",
     )
     parser.add_argument("--split", default="train")
     parser.add_argument("--image-column", default="image")
     parser.add_argument(
-        "--caption-column", default="blip_caption", help="Caption column; use an empty string for no captions"
+        "--caption-column", default="blip_caption", help="Caption column (pass an empty string to hide captions)"
     )
     parser.add_argument("--count", type=int, default=4)
     parser.add_argument("--image-root", type=Path, help="Prefix for relative paths in the image column")
-    parser.add_argument("--image-archive", help="ZIP containing image-column paths; defaults to the hosted LLaVA ZIP")
+    parser.add_argument("--image-archive", help="ZIP containing the images (LLaVA uses its hosted ZIP by default)")
     parser.add_argument("--output", type=Path, default=Path("preview_images.png"))
     args = parser.parse_args()
     if not 1 <= args.count <= 16:
