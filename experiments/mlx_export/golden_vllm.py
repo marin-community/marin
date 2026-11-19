@@ -136,6 +136,7 @@ def run_golden_job(repo: str, revision: str, cases: list, gpus: int, release_tag
                 "--enable-expert-parallel",
                 "--max-logprobs",
                 str(LOGPROBS_K),
+                # Score each golden case with a fresh prefill.
                 "--no-enable-prefix-caching",
                 "--revision",
                 revision,

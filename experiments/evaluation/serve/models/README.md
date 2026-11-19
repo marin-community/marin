@@ -110,14 +110,16 @@ fails to build. For Hero BF16 on 16 GB200 GPUs with full decode graphs, it raise
 
 ## Hero serving settings
 
-Hero BF16 was measured on 16 GB200 GPUs at TP1/DP16/EP16; see
-[issue #11430](https://github.com/marin-community/marin/issues/11430) for the results. ShortConv
-models need `cudagraph_mode: PIECEWISE` with `vllm::unified_attention_with_output`,
-`vllm::unified_kv_cache_update` and `vllm::grug_moe_short_conv` in
-`compilation_config.splitting_ops`. On the pinned wheel, any other graph mode or a missing split op
-runs without CUDA graphs. Use `max_num_seqs: 128` for 1K outputs and about 96 for 4K outputs, which
-avoids KV-cache waiting. The catalog cannot launch this topology yet: it needs data parallelism
-across hosts.
+Use the measured Hero BF16 recipes for the launch topology and serving settings. Check whether
+full decode graphs were qualified for your vLLM wheel. Confirm the resolved CUDA graph mode in
+the worker startup logs. [Hero recipes](https://github.com/marin-community/marin/issues/11430) ·
+[Full decode graph qualification](https://github.com/marin-community/vllm/pull/130) ·
+[Marin wheel adoption](https://github.com/marin-community/marin/pull/11635).
+
+Leave prefix caching unset for normal eval and chat serving so vLLM uses its model-specific
+default. Keep the explicit cache-off setting when reproducing the BFCL parity baseline.
+[vLLM default selection](https://github.com/marin-community/vllm/blob/47a8e415bff17b9376f02d9b92edcc67e962eaee/vllm/engine/arg_utils.py#L2858) ·
+[BFCL parity preset](https://github.com/marin-community/marin/pull/11528).
 
 ## Multi-node GPU serving
 
