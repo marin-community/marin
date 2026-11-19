@@ -115,9 +115,9 @@ def run_micro210(config: Micro210Run) -> SkyRLRun:
         )
 
 
-def micro210_step(model: Micro210Model, *, name: str, version: str, **overrides) -> ArtifactStep[SkyRLRun]:
-    """Build the canonical evaluation graph; reject all policy override fields."""
-    binding = micro210_evaluation(model, run_id=f"{name}@{version}", output_uri="<resolved-at-build>", **overrides)
+def micro210_step(model: Micro210Model, *, name: str, version: str) -> ArtifactStep[SkyRLRun]:
+    """Build the canonical evaluation graph for a model and run identity."""
+    binding = micro210_evaluation(model, run_id=f"{name}@{version}", output_uri="<resolved-at-build>")
     frozen = binding.policy()
     policy = frozen["evaluation"]
     model_artifact = ArtifactStep.adopt(

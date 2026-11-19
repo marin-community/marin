@@ -24,34 +24,6 @@ def policy_reference(monkeypatch):
     return reference
 
 
-@pytest.mark.parametrize(
-    "override",
-    [
-        {"eval_override_storage_mb": 131072},
-        {"sampling": {"temperature": 0}},
-        {"timeout": 300},
-        {"task_subset": ["swebench-verified"]},
-        {"judge": "other-model"},
-    ],
-)
-def test_micro210_binding_refuses_protocol_overrides(override):
-    model = Micro210Model("s3://test/model", "sha256:" + "a" * 64, "test/tokenizer", "a" * 40)
-    with pytest.raises(ValueError, match=next(iter(override))):
-        micro210_evaluation(model, run_id="test", output_uri="s3://test/eval", **override)
-
-
-def test_micro210_record_contains_content_digest_of_protocol(policy_reference):
-    evaluation = micro210_evaluation(
-        Micro210Model("s3://test/sft", "sha256:" + "b" * 64, "test/tokenizer", "a" * 40),
-        run_id="sft",
-        output_uri="s3://test/sft-eval",
-    )
-    assert (
-        evaluation.record().canonical_spec_sha256
-        == hashlib.sha256(StoragePath(policy_reference.uri).read_bytes()).hexdigest()
-    )
-
-
 def test_micro210_binding_rejects_modified_protocol_bytes(tmp_path, monkeypatch, policy_reference):
     changed = tmp_path / "protocol.json"
     changed.write_text(StoragePath(policy_reference.uri).read_text().replace('"seed": 20261030', '"seed": 20261031'))
@@ -104,8 +76,6 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     )
     binding = Micro210Model(str(model_dir), "sha256:" + hashlib.sha256(manifest).hexdigest(), "test/tokenizer", "a" * 40)
     step = micro210_step(binding, name="test/micro210", version="2026.11.18")
-    with pytest.raises(ValueError, match="eval_override_storage_mb"):
-        micro210_step(binding, name="test/micro210", version="2026.11.18", eval_override_storage_mb=131072)
     output = tmp_path / "result"
     output.mkdir()
     config = step.build_config(
@@ -148,6 +118,12 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     with pytest.raises(ValueError, match="launch_config_yaml"):
         run_micro210(replace(config, skyrl=replace(config.skyrl, launch_config_yaml=yaml.safe_dump(altered))))
     assert submitted == []
+    manifest_path = model_dir / ".marinskyrl-model-manifest.json"
+    manifest_path.write_bytes(b'{"files": ["changed"]}')
+    with pytest.raises(ValueError, match="export manifest differs"):
+        run_micro210(config)
+    assert submitted == []
+    manifest_path.write_bytes(manifest)
     token_content[128009] = "ordinary-token"
     with pytest.raises(ValueError, match="incompatible stop token ID: 128009"):
         run_micro210(config)

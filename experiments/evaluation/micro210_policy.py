@@ -23,6 +23,7 @@ class Micro210PolicyReference:
     byte_size: int
 
 
+# Human-readable copy (sha256: e0faa32c68994e8bf01d0ab7177893aa9c29f8c4309b9183de5c3dfcb6fa67aa): https://gist.github.com/penfever/b9b7be780c14969634e897621454deef/0b5add0ef2843418eaded61258a91f51f3b1b69a
 POLICY_REFERENCE = Micro210PolicyReference(
     uri=(
         "s3://marin-us-east-08a/marin/users/benfeuer/evaluation-policies/micro210/"
@@ -80,10 +81,8 @@ class Micro210Evaluation:
         return Micro210Record(POLICY_REFERENCE.sha256, self.model, self.run_id, self.output_uri, POLICY_REFERENCE)
 
 
-def micro210_evaluation(model: Micro210Model, *, run_id: str, output_uri: str, **overrides) -> Micro210Evaluation:
-    """Construct the canonical evaluation; name the first forbidden override."""
-    if overrides:
-        raise ValueError(f"Canonical Micro210 refuses override field: {next(iter(overrides))}")
+def micro210_evaluation(model: Micro210Model, *, run_id: str, output_uri: str) -> Micro210Evaluation:
+    """Verify the frozen policy and bind the model and run identity."""
     request = Micro210Evaluation(model, run_id, output_uri)
     request.policy()
     return request
