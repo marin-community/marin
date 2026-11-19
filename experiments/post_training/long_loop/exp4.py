@@ -30,6 +30,7 @@ from experiments.post_training.long_loop.exp3_production import (
 from experiments.post_training.long_loop.exp3_recipe import verified_initializer_model
 from experiments.post_training.long_loop.exp3_rl_restart import restart_recipe
 from experiments.post_training.long_loop.exp4_data import NEMOTRON_SOURCE, pool_steps
+from experiments.post_training.long_loop.optimizer_admission import optimizer_group_receipt
 from experiments.post_training.long_loop.recipe_bundle import require_clean_revision, runtime_source_manifest
 from experiments.post_training.long_loop.spec_pipeline import build_spec_graph
 from experiments.post_training.task_curation.exp4_curriculum import SOURCE_ROUTES, exp4_rl_curriculum
@@ -163,6 +164,9 @@ def main(
     )
     validation_output.mkdir(parents=True, exist_ok=True)
     (validation_output / "resolved-plan.json").write_text(json.dumps(resolved, indent=2))
+    (validation_output / "optimizer-groups.json").write_text(
+        json.dumps(optimizer_group_receipt(resolved["sft"]), indent=2)
+    )
     model = verified_initializer_model(INITIALIZER_RECEIPT, INITIALIZER_SHA256)
     validate_graph(
         terminal, validation_output, OUTPUT_PREFIX, model_config=(StoragePath(model) / "config.json").read_bytes()
