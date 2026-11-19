@@ -91,7 +91,6 @@ def install_env(ctx: Context, env: Env) -> None:
 async def author(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, resources: Resources) -> Exit:
     policy = config.policy
     workdir = PurePosixPath(policy.setting("author.workdir", str))
-    files = (*config.workspace.static, *config.workspace.rendered(workpiece, policy))
     requested = requirements(
         image=policy.setting("author.image", str) or None,
         packages=policy.setting("author.packages", tuple),
@@ -101,7 +100,7 @@ async def author(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, re
     try:
         async with ctx.scope("author"):
             install_env(ctx, env)
-            writes = [(PurePosixPath("/", file.path), resource_bytes(file)) for file in files]
+            writes: list[tuple[PurePosixPath, bytes]] = []
             submission = workpiece.submission
             if submission is not None:
                 writes.extend(

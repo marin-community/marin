@@ -8,8 +8,6 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Protocol, cast
 
-from taskcompendium.models import TaskResource
-
 from taskforge.harness.protocol import Harness, Tool
 from taskforge.harness.tools.submit import Gate
 from taskforge.model.review import BandRules, Budget, Decision
@@ -20,12 +18,6 @@ from taskforge.policy import Policy
 
 class ReviewRules(Protocol):
     def __call__(self, workpiece: Workpiece, band: BandRules, budget: Budget) -> Decision: ...
-
-
-@dataclass(frozen=True, slots=True)
-class WorkspaceHydration:
-    static: tuple[TaskResource, ...]
-    rendered: Callable[[Workpiece, Policy], tuple[TaskResource, ...]]
 
 
 type Target = Stage | None | Callable[[Workpiece], Stage | None]
@@ -45,7 +37,6 @@ class TaskforgeConfig:
     policy: Policy
     author: Harness
     adversaries: Mapping[str, Harness]
-    workspace: WorkspaceHydration
     tools: Mapping[str, Mapping[str, Tool[object]]]
     submit_gate: Gate
     review: ReviewRules
