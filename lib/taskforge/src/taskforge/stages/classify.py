@@ -21,12 +21,12 @@ from taskforge.effects.issues import Hold
 from taskforge.model.review import Cause, Incomplete, Modify, Reject, Retry
 from taskforge.model.verdict import grader_checks
 
-# One review disposition per cause; solver generation limits are handled as failed trials.
+# One review disposition per cause; solver generation limits are handled as failed trials. GRADER_INFRA
+# has none: the grader_infra_unavailable observer holds validation before review sees such a grade.
 CAUSE_DECISIONS = MappingProxyType(
     {
         None: None,
         Cause.AGENT_TIMEOUT: Retry,
-        Cause.GRADER_INFRA: Retry,
         Cause.NO_GRADE: Retry,
         Cause.BUDGET_EXHAUSTED: Reject,
         Cause.GENERATION_LIMIT: Incomplete,
