@@ -61,9 +61,11 @@ Copied columns that differ from the controller DB:
 tables as COPIED (with its Finelog field) or EXCLUDED (with a reason), and fails
 on a column it does not list. A new DB column needs a one-line decision there by
 the rule above; copying it also adds a nullable field to the row dataclass. A
-dropped DB column that was copied moves to RETIRED: its Finelog field stays,
-becomes `| None = None`, and reads NULL from then on; add its name and the date
-to a list of retired columns here. Finelog columns are never removed or renamed.
+dropped DB column that was copied keeps its Finelog field, which becomes
+`| None = None` and reads NULL from then on: that change adds a retired
+classification to the test, which checks the field defaults to None, and lists
+the column and the date here. Finelog columns
+are never removed or renamed.
 
 **Free text:** the `error` columns of jobs, tasks and attempts, and
 `tasks.status_message` (the backend's reason a task is not running yet, such as

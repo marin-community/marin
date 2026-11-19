@@ -5,6 +5,7 @@
 
 import dataclasses
 import json
+import logging
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
@@ -38,7 +39,7 @@ from iris.testing.controller import (
 )
 from iris.testing.controller_state import ControllerTestState
 from iris.testing.transitions import WorkerTaskUpdates, apply_task_observations
-from rigging.timing import Timestamp
+from rigging.timing import RateLimiter, Timestamp
 
 
 @dataclass
@@ -452,17 +453,22 @@ def test_job_config_redacts_a_token_in_the_launch_branch(state):
     ["made-up-not-json", "[" * 100_000, _provenance_json(dirty="yes")],
     ids=["not-json", "deeply-nested", "string-dirty"],
 )
-def test_job_config_drops_a_malformed_launch_provenance_and_keeps_the_rows(state, raw):
+def test_job_config_drops_a_malformed_launch_provenance_and_keeps_the_rows(state, raw, monkeypatch, caplog):
+    monkeypatch.setattr(observability_rows, "_malformed_provenance_log", RateLimiter(interval_seconds=0))
     rows = _attach(state, "marin")
     request = make_job_request("train")
     request.environment.env_vars["MARIN_PROVENANCE"] = raw
 
-    submit_job(state, "train", request)
+    with caplog.at_level(logging.WARNING, logger=observability_rows.__name__):
+        submit_job(state, "train", request)
 
     config = rows.job_configs[0]
     assert (config.provenance_base_commit, config.provenance_tree_hash, config.provenance_dirty) == (None, None, None)
     assert len(rows.jobs) == 1
     assert rows.tasks
+    (warning,) = [r.getMessage() for r in caplog.records if "malformed MARIN_PROVENANCE" in r.getMessage()]
+    assert "/test-user/train" in warning
+    assert raw[:20] not in warning
 
 
 @dataclass(frozen=True)
@@ -478,9 +484,6 @@ class _Classified:
     # Finelog fields not copied from a DB column: the keys from the job, the
     # writing cluster, the snapshot time and values derived in the copy.
     derived: frozenset[str]
-    # DB column that was copied and no longer exists -> its Finelog field,
-    # which stays and reads NULL.
-    retired: dict[str, str] = dataclasses.field(default_factory=dict)
 
 
 _JOB_KEY = frozenset({"cluster", "ts", "root_job_id", "root_submitted_at_ms", "submitted_at_ms"})
@@ -611,7 +614,7 @@ _RULE = 'lib/iris/docs/observability-rows.md, "Which columns are copied"'
 @pytest.mark.parametrize("table", sorted(_COLUMNS))
 def test_every_controller_db_column_is_classified(tmp_path, table):
     classified = _COLUMNS[table]
-    copied, excluded, retired = classified.copied, classified.excluded, classified.retired
+    copied, excluded = classified.copied, classified.excluded
     ControllerDB(db_dir=tmp_path).close()
     with closing(sqlite3.connect(tmp_path / ControllerDB.DB_FILENAME)) as conn:
         db_columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
@@ -623,23 +626,17 @@ def test_every_controller_db_column_is_classified(tmp_path, table):
     )
     gone = sorted((copied.keys() | excluded.keys()) - db_columns)
     assert not gone, (
-        f"controller DB table {table!r} no longer has column(s) {gone}: drop an EXCLUDED one, and move a "
-        f"COPIED one to RETIRED (column -> field) with its field made `| None = None` and a doc line, in "
-        f"{_THIS_TEST}; see {_RULE}"
+        f"controller DB table {table!r} no longer has column(s) {gone}: drop an EXCLUDED one; a COPIED one "
+        f"keeps its Finelog field, made `| None = None`, so classify that field as retired in {_THIS_TEST}; "
+        f"see {_RULE}"
     )
     fields = {field.name: field for field in dataclasses.fields(classified.row_class)}
-    sources = set(copied.values()) | set(retired.values()) | classified.derived
+    sources = set(copied.values()) | classified.derived
     # Exact, so an EXCLUDED column copied anyway, or under a new name, fails too.
     assert fields.keys() == sources, (
         f"{classified.row_class.__name__} fields without a classified source: {sorted(fields.keys() - sources)}; "
         f"classified sources without a field: {sorted(sources - fields.keys())}; see {_RULE}"
     )
-    assert not set(retired.values()) & (set(copied.values()) | classified.derived), "a retired field is still live"
-    for column, field in retired.items():
-        assert column not in db_columns
-        assert (
-            fields[field].default is None
-        ), f"retired field {classified.row_class.__name__}.{field} must default to None"
 
 
 def test_task_rows_follow_state_and_placement_but_not_the_pending_reason(state):

@@ -37,7 +37,7 @@ from typing import NamedTuple, Protocol
 
 from finelog.client.log_client import Table as FinelogTable
 from rigging.provenance import LAUNCH_PROVENANCE_ENV, Provenance
-from rigging.timing import Timestamp
+from rigging.timing import RateLimiter, Timestamp
 from sqlalchemy import select, tuple_
 from sqlalchemy.engine.cursor import CursorResult
 
@@ -54,6 +54,9 @@ logger = logging.getLogger(__name__)
 _MEMO_KEY = "observability_rows"
 # Keeps each IN list under SQLite's 999 bound parameters (an attempt key is two).
 _ID_CHUNK_SIZE = 400
+# A submitter that sends a malformed MARIN_PROVENANCE usually sends it on every job.
+_MALFORMED_PROVENANCE_LOG_INTERVAL = 60.0
+_malformed_provenance_log = RateLimiter(interval_seconds=_MALFORMED_PROVENANCE_LOG_INTERVAL)
 
 
 @dataclass(frozen=True)
@@ -201,17 +204,27 @@ def _accelerator(device_json: str | None) -> _Accelerator:
     return _Accelerator(None, get_device_variant(device), 0)
 
 
-def _launch_provenance(environment_json: str) -> Provenance | None:
+def _launch_provenance(job_id: str, environment_json: str) -> Provenance | None:
     """The job's ``MARIN_PROVENANCE``, or ``None`` when it is unset or malformed.
 
     A malformed value drops only the ``provenance_*`` columns, never the job's rows.
+    The warning names the job and the error, never the value, which is user text.
     """
     raw = proto_from_json(environment_json, job_pb2.EnvironmentConfig).env_vars.get(LAUNCH_PROVENANCE_ENV)
     if raw is None:
         return None
     try:
         return Provenance.from_json(raw)
-    except ValueError:
+    except ValueError as error:
+        if _malformed_provenance_log.should_run():
+            logger.warning(
+                "observability rows: job %s has a malformed %s (%s); its provenance columns are NULL "
+                "(at most one such warning per %.0f s)",
+                job_id,
+                LAUNCH_PROVENANCE_ENV,
+                type(error).__name__,
+                _MALFORMED_PROVENANCE_LOG_INTERVAL,
+            )
         return None
 
 
@@ -298,7 +311,7 @@ def _snapshot_configs(cur: RowCursor, tables: ObservabilityRowTables, marked: _M
         )
         for r in cur.execute(query):
             accelerator = _accelerator(r.res_device_json)
-            provenance = _launch_provenance(r.environment_json)
+            provenance = _launch_provenance(r.job_id.to_wire(), r.environment_json)
             marked.config_rows.append(
                 IrisJobConfig(
                     cluster=tables.cluster,
