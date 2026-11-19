@@ -464,63 +464,6 @@ class WorkerWrap:
             device=self.device,
         )
 
-    @staticmethod
-    def _apply_fp8_weight_loader_patches(*, fuse_weights: bool = False):
-        """Patch Fp8LinearMethod.process_weights_after_loading to preserve weight_loader.
-
-        Following verl's approach: after FP8 processing creates new Parameter objects,
-        copy custom attributes (weight_loader, output_dim, input_dim, subclass_type)
-        from the original specialized parameter so weight sync can reload weights.
-        """
-        if not fuse_weights:
-            return
-
-        try:
-            from vllm.model_executor.layers.quantization.fp8 import Fp8LinearMethod
-        except ImportError:
-            return
-
-        original_process = Fp8LinearMethod.process_weights_after_loading
-
-        def patched_process(self_method, layer, *args, **kwargs):
-            # Save original param attributes before processing
-            saved_attrs = {}
-            for pname, param in layer.named_parameters():
-                attrs = {}
-                for attr in (
-                    "weight_loader",
-                    "output_dim",
-                    "input_dim",
-                    "_output_dim",
-                    "_input_dim",
-                    "packed_dim",
-                    "packed_factor",
-                    "tp_rank",
-                    "tp_size",
-                    "logical_widths",
-                    "output_sizes",
-                ):
-                    if hasattr(param, attr):
-                        attrs[attr] = getattr(param, attr)
-                attrs["subclass_type"] = type(param)
-                saved_attrs[pname] = attrs
-
-            # Call original process_weights_after_loading
-            result = original_process(layer, *args, **kwargs)
-
-            # Restore attributes on new parameters
-            for pname, param in layer.named_parameters():
-                if pname in saved_attrs:
-                    for attr, value in saved_attrs[pname].items():
-                        try:
-                            setattr(param, attr, value)
-                        except (AttributeError, TypeError):
-                            pass
-
-            return result
-
-        Fp8LinearMethod.process_weights_after_loading = patched_process
-
     def skyrl_begin_weight_reload(self) -> None:
         """RENAMED from ``start_weight_update`` AND NOW WIRED (the #1685 fix).
 

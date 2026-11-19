@@ -92,7 +92,6 @@ def _padded_batch(
             "action_log_probs": zeros.clone(),
             "base_action_log_probs": zeros.clone(),
             "rollout_logprobs": zeros.clone(),
-            "returns": zeros.clone(),
             "advantages": advantages,
             "loss_mask": response_mask.clone(),
             "response_mask": response_mask.clone(),

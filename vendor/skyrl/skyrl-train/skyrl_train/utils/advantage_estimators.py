@@ -30,7 +30,7 @@ GRPO_FLAT_REWARD_STD_TOLERANCE = 1e-6
 
 
 def apply_loop_advantages(data: TrainingInputBatch) -> TrainingInputBatch:
-    """Add masked loop credit after normalization, preserving the outcome returns."""
+    """Add masked loop credit to policy advantages."""
     loop_advantages = data.get("loop_advantages")
     if loop_advantages is None:
         return data

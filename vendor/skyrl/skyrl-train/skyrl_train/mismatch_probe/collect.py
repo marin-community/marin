@@ -273,7 +273,7 @@ class ProbeCollector:
                 trajectory = trainer.postprocess_trajectory_batch(trajectory, uids)
             training_input = trainer.convert_to_training_input(trajectory, uids)
             if self.source_manifest is None:
-                training_input = trainer.compute_advantages_and_returns(training_input)
+                training_input = trainer.compute_advantages(training_input)
         finally:
             trainer.group_advantage_invariant = original_contract
             trainer.all_metrics = original_metrics

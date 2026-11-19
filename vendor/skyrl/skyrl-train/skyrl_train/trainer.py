@@ -1689,7 +1689,7 @@ class RayPPOTrainer:
         if step_wall is not None:
             step_wall.start("advantages")
         with Timer("compute_advantages_and_returns", self.all_timings):
-            training_input = self.compute_advantages_and_returns(training_input)
+            training_input = self.compute_advantages(training_input)
             training_input = self.finalize_advantages_for_training(training_input)
 
         if self.cfg.trainer.dump_data_batch:
@@ -1701,7 +1701,7 @@ class RayPPOTrainer:
         if step_wall is not None:
             step_wall.start("policy_training")
         with Timer("train_critic_and_policy", self.all_timings), critical_phase("train_step", self.global_step):
-            status = await asyncio.to_thread(self.train_critic_and_policy, training_input)
+            status = await asyncio.to_thread(self.train_policy, training_input)
         self._policy_version_step = self.global_step
 
         ftpo = ftpo_config(self.cfg.trainer.algorithm)
@@ -1807,11 +1807,9 @@ class RayPPOTrainer:
             )
         return training_input
 
-    def build_models(self, PolicyWorker, CriticWorker, RefWorker, policy_pg: Optional[PlacementGroup] = None):
+    def build_models(self, PolicyWorker, RefWorker, policy_pg: Optional[PlacementGroup] = None):
         """
         Initialize the actors for training, and handle colocation logic
-
-        CriticWorker is unused.
 
         Args:
             policy_pg: Optional placement group reserved before inference
@@ -2395,8 +2393,8 @@ class RayPPOTrainer:
         return selection.trajectory_batch, selection.uids
 
     @torch.no_grad()
-    def compute_advantages_and_returns(self, data: TrainingInputBatch) -> TrainingInputBatch:
-        """Calculate advantages and returns for the data batch.
+    def compute_advantages(self, data: TrainingInputBatch) -> TrainingInputBatch:
+        """Calculate advantages for the data batch.
 
         Expects:
             - `["sequences"]`: Integer[torch.Tensor, "batch_size seqlen"]
@@ -2407,7 +2405,6 @@ class RayPPOTrainer:
 
         Adds:
             - `["advantages"]`: Float[torch.Tensor, "batch_size seqlen"]
-            - `["returns"]`: Float[torch.Tensor, "batch_size seqlen"]
         """
         token_level_rewards = data["rewards"]
 
@@ -2421,7 +2418,7 @@ class RayPPOTrainer:
             grpo_norm_by_std = self.cfg.trainer.algorithm.grpo_norm_by_std
             last_step_rewards = token_level_rewards[is_last_step]
             # compatible with any advantage estimator
-            last_step_advantages, last_step_returns = compute_advantages_and_returns(
+            last_step_advantages, _ = compute_advantages_and_returns(
                 token_level_rewards=last_step_rewards,
                 response_mask=response_mask[is_last_step],
                 index=index[is_last_step.cpu().numpy()],
@@ -2439,12 +2436,10 @@ class RayPPOTrainer:
                 f"number of groups {num_groups} doesn't match the number of trajectories as given by `is_last_step` {len(last_step_advantages)}. The `is_last_step` tensor is likely malformed"
             )
             advantages = last_step_advantages[traj_ids]
-            returns = last_step_returns[traj_ids]
         else:
-            advantages, returns = batch_advantages(
+            advantages, _ = batch_advantages(
                 data, self.cfg.trainer.algorithm, invariant=self.group_advantage_invariant
             )
-        data["returns"] = returns
         data["advantages"] = advantages
 
         data = data.to("cpu")
@@ -2734,7 +2729,7 @@ class RayPPOTrainer:
 
         return data
 
-    def train_critic_and_policy(self, data: TrainingInputBatch):
+    def train_policy(self, data: TrainingInputBatch):
         """
         Run the policy training step.
         """

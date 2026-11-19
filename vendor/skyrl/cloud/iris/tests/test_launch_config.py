@@ -824,7 +824,7 @@ def test_resolved_nccl_buffers_override_inherited_small_buffer(
     trainer.cfg = config
     trainer.colocate_pg = None
     monkeypatch.setattr(trainer, "_initialize_model_actors", lambda *_args: None)
-    trainer.build_models("policy", "critic", "ref", policy_pg=object())
+    trainer.build_models("policy", "ref", policy_pg=object())
     assert actor_environments == {
         "policy": {"NCCL_BUFFSIZE": "4194304"},
         "ref": {"NCCL_BUFFSIZE": "4194304"},

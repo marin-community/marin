@@ -639,7 +639,7 @@ class BasePPOExp:
         # Pass the policy placement group reserved before inference startup.
         logger.info("Starting policy workers: strategy={}", self.cfg.trainer.strategy)
         try:
-            trainer.build_models(PolicyWorker, None, RefWorker, policy_pg=self.policy_pg)
+            trainer.build_models(PolicyWorker, RefWorker, policy_pg=self.policy_pg)
             logger.info(
                 "Policy workers ready: strategy={} count={}",
                 self.cfg.trainer.strategy,

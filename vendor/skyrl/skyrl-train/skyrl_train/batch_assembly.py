@@ -335,7 +335,6 @@ def install_plan_advantages(
             group_advantage_invariant=invariant,
         )
         batch["advantages"] = advantages[rows.start : rows.stop] * batch["response_mask"]
-        batch["returns"] = batch["advantages"]
     else:
-        batch["advantages"], batch["returns"] = batch_advantages(batch, algorithm, invariant=invariant)
+        batch["advantages"], _ = batch_advantages(batch, algorithm, invariant=invariant)
     return scores
