@@ -28,7 +28,7 @@ def test_levanter_sft_refuses_grug_without_hf_export():
         model=GrugModelConfig(vocab_size=32), tokenizer_path="fixture", init_from="/checkpoint", expert_parallel=1
     )
     recipe = LevanterSft(replace(snowball_h100.SPEC, model=grug))
-    with pytest.raises(ValueError, match="GrugModel.*Hugging Face export"):
+    with pytest.raises(ValueError, match=r"GrugModel.*Hugging Face export"):
         sft_model(recipe, snowball_h100.RESOURCES)
 
 
@@ -47,7 +47,9 @@ def test_prepared_data_uses_the_manifest_and_matches_the_model_tokenizer(tmp_pat
     assert step.deps == (artifact,)
     ctx = StepContext.for_run(str(tmp_path / "output"), str(tmp_path), runtime_args=step.runtime_args, deps=step.deps)
     path = tmp_path / source.file
-    data = LmDataConfig(tokenizer=spec.model.tokenizer_cache_key(), cache_catalog="/catalog.json", auto_build_caches=False)
+    data = LmDataConfig(
+        tokenizer=spec.model.tokenizer_cache_key(), cache_catalog="/catalog.json", auto_build_caches=False
+    )
     path.write_text(json.dumps(draccus.encode(data)))
     config = step.build_config(ctx)
     assert config.train_config.data == data

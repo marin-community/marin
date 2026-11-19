@@ -3,6 +3,7 @@
 
 """Train Snowball on the published Round 1 mixture and export the final checkpoint."""
 
+import gzip
 import hashlib
 from dataclasses import replace
 from pathlib import Path
@@ -15,7 +16,9 @@ from experiments.sft.configs import snowball_h100
 from experiments.sft.launcher import LevanterSft, PreparedData, run_sft_cli
 
 NODES = 32
-RESOURCES = ResourceConfig.with_gpu("H100", count=8, cpu=64, ram="1500GB", disk="500GB", replicas=NODES, preemptible=False)
+RESOURCES = ResourceConfig.with_gpu(
+    "H100", count=8, cpu=64, ram="1500GB", disk="500GB", replicas=NODES, preemptible=False
+)
 TOKENIZER = "s3://marin-us-east-02a/marin/grug_sft/tokenizer/2026.09.18"
 
 # The 377 components and 19 weight phases come from the pinned campaign
@@ -26,7 +29,7 @@ _MANIFEST_SHA256 = "5fe5daea24431f1ce864058a3153c0656b5cd69d711f8fd66bda892ba231
 
 
 def _publish_data_manifest(*, output: str, sha256: str) -> None:
-    contents = Path(__file__).with_name(_MANIFEST).read_bytes()
+    contents = gzip.decompress(Path(__file__).with_name(f"{_MANIFEST}.gz").read_bytes())
     if hashlib.sha256(contents).hexdigest() != sha256:
         raise ValueError("Snowball Round 1 data manifest does not match its SHA-256 pin")
     directory = StoragePath(output)

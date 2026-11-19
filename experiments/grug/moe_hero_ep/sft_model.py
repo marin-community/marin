@@ -97,7 +97,9 @@ def _export_final_sft(
         root = prefix_join(root, placement_label)
     directory = prefix_join(root, "checkpoints")
     candidates = discover_checkpoint_candidates(directory)
-    final = next((candidate for candidate in reversed(candidates) if candidate.metadata.get("is_temporary") is False), None)
+    final = next(
+        (candidate for candidate in reversed(candidates) if candidate.metadata.get("is_temporary") is False), None
+    )
     if final is None:
         raise ValueError(f"Mochi SFT has no permanent checkpoint in {directory}")
     model = with_transport_remat_mode(replace(HERO_MODEL_CONFIG, capacity_factor=capacity_factor))
