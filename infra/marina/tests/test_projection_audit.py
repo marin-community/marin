@@ -54,9 +54,22 @@ def test_pin_audit_projects_active_identity_under_the_gateway_bound(database_url
                 ),
                 {
                     "declaration": json.dumps(
-                        {"dataset_id": "dataset", "dataset_revision": "revision", "pipeline": pipeline}
+                        {
+                            "dataset_id": "dataset",
+                            "dataset_revision": "revision",
+                            "pipeline": pipeline,
+                        }
                     )
                 },
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO curriculum_sources SELECT 'active','source-' || lpad(n::text,3,'0'),"
+                    "jsonb_build_object('dataset_id','dataset','dataset_revision','revision',"
+                    "'pipeline',CAST(:pipeline AS JSONB),'notes',repeat('x',60000)),'example','{}'::jsonb "
+                    "FROM generate_series(1,103) n"
+                ),
+                {"pipeline": json.dumps(pipeline)},
             )
             connection.execute(text("UPDATE curriculum_current SET load_id='active' WHERE name='latest'"))
             connection.execute(
@@ -66,12 +79,18 @@ def test_pin_audit_projects_active_identity_under_the_gateway_bound(database_url
                 ),
                 {
                     "declaration": json.dumps(
-                        {"dataset_id": "dataset", "dataset_revision": "revision", "pipeline": pipeline}
+                        {
+                            "dataset_id": "dataset",
+                            "dataset_revision": "revision",
+                            "pipeline": pipeline,
+                            "notes": "x" * 6_000_000,
+                        }
                     )
                 },
             )
 
         pages = []
+        curriculum_pages = []
 
         def query(sql, parameters):
             validate_query(sql)
@@ -82,6 +101,11 @@ def test_pin_audit_projects_active_identity_under_the_gateway_bound(database_url
                 if len(pages) == 1:
                     with engine.begin() as connection:
                         connection.execute(text("UPDATE atlas_current SET load_id='staged' WHERE name='latest'"))
+            if "FROM curriculum_sources" in sql:
+                curriculum_pages.append(len(rows))
+                if len(curriculum_pages) == 1:
+                    with engine.begin() as connection:
+                        connection.execute(text("UPDATE curriculum_current SET load_id='staged' WHERE name='latest'"))
             assert len(json.dumps(rows).encode()) < 5_242_880
             return {"rows": rows}
 
@@ -96,6 +120,9 @@ def test_pin_audit_projects_active_identity_under_the_gateway_bound(database_url
         assert projected.pipeline == pipeline
         assert projected.actor_binding.model_dump(mode="json", exclude_unset=True) == actor
         curriculum = ensure_current_projections.atlas_curriculum_rows()
+        assert sorted(curriculum) == [pin.source_id for pin in pins]
+        assert curriculum_pages == [50, 50, 4]
+        assert set(curriculum["source"]["declaration"]) == {"dataset_id", "dataset_revision", "pipeline"}
         assert ensure_current_projections.curriculum_state(projected, curriculum) == ("current", None)
     finally:
         engine.dispose()
