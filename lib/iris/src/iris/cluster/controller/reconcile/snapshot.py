@@ -60,6 +60,7 @@ class TaskUpdate:
     node_name: str | None = None
     terminal_reason: str | None = None
     output_archive: job_pb2.TaskOutputArchive | None = None
+    topology: dict[str, str] | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -3,6 +3,7 @@
 
 """Publish complete evaluation populations from the shared conversion pipeline."""
 
+import json
 from collections.abc import Iterator, Mapping
 from functools import partial
 
@@ -28,7 +29,7 @@ from taskcompendium.evaluation.corpus import (
 )
 from taskcompendium.evaluation.spec import EvaluationProtocol
 from taskcompendium.pipeline.inputs import SourceFileOverride
-from taskcompendium.pipeline.models import IntendedUse, SourceRecipe
+from taskcompendium.pipeline.models import IntendedUse, SourceRecipe, SourceStatus
 from taskcompendium.pipeline.source_processing import ConversionResult, SourceProcessingMode, run_source_pipeline
 
 ITEM_SCHEMA = pa.schema([("task_id", pa.string()), ("source_row", pa.string()), ("evaluation_json", pa.string())])
@@ -86,11 +87,15 @@ def publish_evaluation_corpus(
     output_path: str,
     *,
     source_overrides: Mapping[str, SourceFileOverride] | None = None,
+    curation_identity: str | None = None,
+    protocol_name: str | None = None,
 ) -> EvaluationManifest:
     """Convert all selected rows and publish a manifest only after population and sidecar checks pass.
 
     Conversion keeps duplicates at different source positions. Grader controls and old/new semantic
     comparison are independent checks; this manifest certifies conversion integrity, not grader parity.
+    ``curation_identity`` binds the semantic recipe independently of storage placement; the
+    canonical curation graph supplies it for dashboard comparisons across regional builds.
     """
     if recipe.intended_use is not IntendedUse.EVAL:
         raise ValueError("An evaluation corpus requires an evaluation source recipe")
@@ -145,12 +150,32 @@ def publish_evaluation_corpus(
         (shard for row in published.results if (shard := EvaluationShard.model_validate(row)).rows),
         key=lambda shard: source_order(shard.first_source_row),
     )
+    conversion_path = output / "manifest.json"
+    conversion = json.loads(conversion_path.read_text())
+    conversion.update(
+        status=SourceStatus.COMPLETED.value,
+        mode=SourceProcessingMode.QUICK.value,
+        source=recipe.name,
+        source_dataset=recipe.source.dataset,
+        source_revision=recipe.source.revision,
+        recipe_revision=recipe.version,
+        intended_use=IntendedUse.EVAL.value,
+        raw_population_count=result.input_rows,
+        raw_sample_count=result.input_rows,
+        raw_population_census=True,
+        full_expansion=True,
+        processed_rows=result.converted_rows,
+        unprocessed_rows=0,
+    )
+    conversion_path.write_text(json.dumps(conversion, indent=2))
     manifest = EvaluationManifest(
         source_dataset=recipe.source.dataset,
         source_revision=recipe.source.revision,
         importer_revision=recipe.version,
         protocol_hash=protocol.fingerprint,
-        conversion_manifest_sha256=file_sha256(output / "manifest.json"),
+        conversion_manifest_sha256=file_sha256(conversion_path),
+        curation_identity=curation_identity,
+        protocol_name=protocol_name,
         rows=result.input_rows,
         shards=tuple(shards),
     )

@@ -8,15 +8,11 @@ import tarfile
 from collections.abc import Sequence
 from pathlib import PurePosixPath
 
-from shellbox.machine import Command, ExitReason, Machine
+from shellbox.machine import Command, Machine
 
 _MISSING_PATH_EXIT = 44
 _LINKED_PATH_EXIT = 45
 _METADATA_BYTES = 1024 * 1024
-
-
-class LinkedDownloadPath(RuntimeError):
-    """A selected download path or its parent is a symbolic link."""
 
 
 async def download_files(
@@ -59,13 +55,8 @@ async def download_files(
         )
         if inspected.exit_code == _MISSING_PATH_EXIT:
             continue
-        if inspected.reason is ExitReason.EXITED and inspected.exit_code == _LINKED_PATH_EXIT:
-            raise LinkedDownloadPath(f"Download path contains a link: {path}")
         if inspected.exit_code != 0 or inspected.stdout_truncated:
-            raise RuntimeError(
-                f"Cannot inspect download path: {path}; exit={inspected.exit_code}; "
-                f"{inspected.stderr.decode(errors='replace')[-2000:]}"
-            )
+            raise RuntimeError(f"Cannot inspect download path (links are not allowed): {path}")
         if inspected.stdout not in (b"directory", b"file"):
             raise RuntimeError(f"Invalid download path kind: {path}")
         directory = inspected.stdout == b"directory"

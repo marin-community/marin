@@ -72,6 +72,8 @@ class ReconcileRow:
     attempt_state: int
     job_id: JobName
     attempt_uid: AttemptUid
+    # The task state belongs to the newer attempt when this is true.
+    superseded: bool = False
 
 
 @dataclass(frozen=True)
@@ -147,6 +149,9 @@ def _reconcile_worker(
 
     for row in rows:
         wire_task_id = row.task_id.to_wire()
+        if row.superseded:
+            desired.append(_superseded_attempt_intent(row))
+            continue
         if row.task_state in _ASSIGNED_STATES:
             if hold_assigned_dispatch:
                 continue
@@ -250,6 +255,19 @@ def _reconcile_worker(
         ),
         attempts=tuple(rows),
     )
+
+
+def _superseded_attempt_intent(row: ReconcileRow) -> worker_pb2.Worker.DesiredAttempt:
+    """Build a stop or status probe from the old attempt's state."""
+    if row.attempt_state not in TERMINAL_TASK_STATES:
+        return worker_pb2.Worker.DesiredAttempt(attempt_uid=row.attempt_uid, run=worker_pb2.Worker.AttemptSpec())
+    if row.attempt_state == job_pb2.TASK_STATE_PREEMPTED:
+        stop_reason = worker_pb2.Worker.STOP_REASON_PREEMPTED
+    elif row.attempt_state == job_pb2.TASK_STATE_KILLED:
+        stop_reason = worker_pb2.Worker.STOP_REASON_CANCELLED
+    else:
+        stop_reason = worker_pb2.Worker.STOP_REASON_JOB_TERMINATED
+    return worker_pb2.Worker.DesiredAttempt(attempt_uid=row.attempt_uid, stop=stop_reason)
 
 
 # ---------------------------------------------------------------------------

@@ -18,7 +18,7 @@ import hashlib
 import json
 import re
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from functools import lru_cache, partial
 from typing import Any
@@ -79,7 +79,7 @@ from experiments.post_training.task_curation.pipeline import (
     RowDecoder,
     process_rows,
 )
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 
 ULTRA_REPO = "nvidia/Nemotron-RL-Ultra-Training-Blends"
 ULTRA_REVISION = "482392c14c6418e26804ea2e5d10359df9877df4"
@@ -1120,7 +1120,7 @@ def _source(blend: str, path: str) -> RlDataSource[CurationRecipe]:
     inputs = {SWE_GYM.repo: SWE_GYM} if split else dict(component.inputs)
     return RlDataSource(
         pipeline=process_rows,
-        info=BLENDS[blend][path],
+        info=replace(BLENDS[blend][path], task_format=TaskFormat.MARINSKYRL),
         config=CurationRecipe(
             name=pipeline_name(blend, path),
             source=HfSource(

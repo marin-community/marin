@@ -36,6 +36,7 @@ from shellbox.machine import (
     MachineTerminated,
     NetworkPolicy,
     PackageSpec,
+    ProcessScope,
     Result,
     ShellStatus,
     ShellUpdate,
@@ -230,6 +231,9 @@ class ShellSimMachine:
         if self._closed:
             raise MachineTerminated("Machine is closed")
         return self._shell
+
+    async def open_process_scope(self) -> ProcessScope:
+        raise UnsupportedMachineSpec("ShellSim does not provide confirmed scoped job teardown")
 
     async def run(self, command: Command) -> Result:
         if not command.argv:

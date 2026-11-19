@@ -12,7 +12,6 @@ from dataclasses import asdict, dataclass, replace
 
 from shellbox.machine import DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, Machine, MachineFactory, MachineSpec
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
-from taskcompendium.models import SubmissionFailure
 from taskcompendium.runtime.output_capture import captured_output_files
 
 from rolloutengine.cleanup import _Cleanup
@@ -113,16 +112,17 @@ class RolloutEngine:
         events go to the observer within the cleanup deadline after the attempt releases its resources, and
         ``Rollout.metrics`` counts the events that the observer did not receive. An attempt that fails raises
         ``GradedRolloutInterrupted`` with the rollout so far and its grade.
-        ``verifier``, if supplied, acquires a machine from the prepared spec; the caller owns its cleanup.
+        ``verifier``, if supplied, acquires the verifier machine from the prepared spec; the caller owns its cleanup.
         """
         self.check(spec)
+        harness = self.harnesses[spec.harness]
         run_id = uuid.uuid4().hex if run_id is None else run_id
         events = _EventDelivery(self.observer, run_id, spec.task.id)
         attempt = _Attempt(
             spec,
-            self.harnesses[spec.harness],
+            harness,
             run_id,
-            _Recorder(model, spec.limits, spec.trace, events),
+            _Recorder(model, spec.limits, spec.trace, events, context_recovery=harness.context_recovery),
             _Cleanup(spec.limits.cleanup_timeout),
             events,
             GradeResult(Outcome.UNAVAILABLE, None, "Execution has no final grade"),
@@ -225,8 +225,6 @@ class RolloutEngine:
                     stop_reason=recorder.stop_reason,
                     verifier=attempt.verifier,
                 )
-        except SubmissionFailure as error:
-            grade = GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
         except TimeoutError as error:
             attempt.grade = GradeResult(
                 Outcome.INFRA_ERROR, None, "Verifier deadline expired", failure=GradingFailure.TIMEOUT

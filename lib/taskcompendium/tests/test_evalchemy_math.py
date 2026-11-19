@@ -47,6 +47,7 @@ def test_gsm8k_flexible_grader_preserves_complete_final_box(response, reference,
     )
     assert verdict.detail["extracted"]["flexible-extract"] == extracted
     assert verdict.detail["metrics"]["exact_match,flexible-extract"] == expected
+    assert verdict.reward == expected
 
 
 @pytest.mark.parametrize("threaded", [False, True])

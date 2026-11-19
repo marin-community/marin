@@ -10,7 +10,6 @@ from typing import ClassVar, Protocol, runtime_checkable
 
 from shellbox.image import DockerfileSource, PreparedImage, RegistryImage
 
-DEFAULT_WORKDIR = "/workspace"
 DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES = 1_048_576
 
 
@@ -151,7 +150,7 @@ class MachineSpec:
     """
 
     source: QemuBundle | DockerImage | PreparedImage | RegistryImage | DockerfileSource | PackageSpec | HostImage
-    workdir: str = DEFAULT_WORKDIR
+    workdir: str = "/workspace"
     env: dict[str, str] = field(default_factory=dict)
     network: NetworkPolicy = NetworkPolicy.DENY
     memory_mb: int | None = None
@@ -220,14 +219,6 @@ class MachineTerminated(RuntimeError):
     """The machine ended before ``close``: killed, expired, preempted, or lost with its host."""
 
 
-class MachineUnavailable(ConnectionError):
-    """The machine controller remained unavailable through its bounded retry budget."""
-
-
-class MachineCancelled(RuntimeError):
-    """The machine or its owning job was cancelled before the operation completed."""
-
-
 class MachineResourceExhausted(MachineTerminated):
     """The machine exhausted its resource budget; recreating it cannot repair the task."""
 
@@ -236,8 +227,16 @@ class MachineOutputLimitExceeded(MachineResourceExhausted):
     """The machine exhausted its cumulative output budget."""
 
 
+class MachineUnavailable(ConnectionError):
+    """The machine's controller stayed unreachable through its bounded retry budget."""
+
+
+class MachineCancelled(RuntimeError):
+    """The machine or the job that owns it was cancelled before the operation completed."""
+
+
 class ExecSetupFailed(RuntimeError):
-    """Transport setup failed before the command was sent, so retry is safe."""
+    """The command transport failed before the command was sent, so a retry cannot run it twice."""
 
 
 class Machine(Protocol):
@@ -254,20 +253,32 @@ class Machine(Protocol):
 
 @runtime_checkable
 class ResettableMachine(Protocol):
-    """Optional exclusive reset of task files and processes, preserving the runtime.
+    """A machine that can clear task files and processes between uses while keeping its runtime.
 
-    Call before the first use to establish the baseline, then between uses. Machines
-    without this capability must be closed and recreated. Reset failure requires replacement.
+    Call ``reset`` before the first use to record the baseline, then between uses. A failed reset
+    closes the machine; machines without this capability are closed and recreated instead.
     """
 
     async def reset(self) -> None: ...
 
 
-@runtime_checkable
-class FileReader(Protocol):
-    """Optional byte-range reads that reject directories without downloading them."""
+class ProcessScope(Protocol):
+    """A machine-owned command boundary separate from setup and verifier work.
 
-    async def read_file(self, path: str, *, offset: int = 0, limit: int | None = None) -> bytes: ...
+    Scoped commands may leave background descendants. ``terminate`` closes
+    admission and waits until every descendant is gone, or raises. It is safe
+    to call repeatedly. Ordinary machine commands remain outside the scope.
+    """
+
+    async def run(self, command: Command) -> Result: ...
+
+    async def terminate(self) -> None: ...
+
+
+class ProcessScopeMachine(Machine, Protocol):
+    """A machine that can reject or create a scoped command boundary."""
+
+    async def open_process_scope(self) -> ProcessScope: ...
 
 
 class MachineFactory(Protocol):

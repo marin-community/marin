@@ -38,7 +38,7 @@ from iris.cluster.config import TaskOutputPolicy
 from iris.cluster.controller.backend import ProviderError, TaskTarget
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.platforms.k8s.coreweave_topology import RACK_SIZE
-from iris.cluster.platforms.k8s.types import ExecResult, ExecSetupError, ExecStatusError, K8sResource, KubectlError
+from iris.cluster.platforms.k8s.types import ExecResult, K8sResource, KubectlError
 from iris.cluster.stats.tables import ProfileTrigger
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
@@ -48,6 +48,7 @@ from iris.testing.k8s import (
     make_batch,
     make_pod,
     make_run_req,
+    observe_pod_update,
     pod_config,
     populate_node,
     populate_pod,
@@ -57,6 +58,34 @@ from rigging.timing import Duration
 # ---------------------------------------------------------------------------
 # sync(): tasks_to_run
 # ---------------------------------------------------------------------------
+
+
+def test_kueue_assigned_topology_is_exposed_without_unrelated_selectors():
+    update = observe_pod_update(
+        {
+            "metadata": {"annotations": {"kueue.x-k8s.io/podset-required-topology": "ds.coreweave.com/nvlink.domain"}},
+            "spec": {
+                "nodeName": "host-8",
+                "nodeSelector": {
+                    "kubernetes.io/hostname": "host-8",
+                    "node.kubernetes.io/instance-type": "gb200-4x",
+                },
+            },
+            "status": {"phase": "Running"},
+        },
+        node={
+            "metadata": {
+                "name": "host-8",
+                "labels": {
+                    "ds.coreweave.com/nvlink.domain": "rack-b",
+                    "kubernetes.io/hostname": "host-8",
+                    "node.kubernetes.io/instance-type": "gb200-4x",
+                },
+            },
+        },
+    )
+    assert update.topology == {"ds.coreweave.com/nvlink.domain": "rack-b", "kubernetes.io/hostname": "host-8"}
+    assert update.node_name == "host-8"
 
 
 def test_sync_applies_pods_for_tasks_to_run(provider, k8s):
@@ -1887,47 +1916,3 @@ def test_gc_skips_gang_with_active_sibling(provider, k8s):
 
     assert k8s.get_json(K8sResource.PODS, "early-failed-gang-pod") is None
     assert k8s.get_json(K8sResource.WORKLOADS, group) is None
-
-
-@pytest.mark.parametrize(
-    "error,ended",
-    [
-        (ExecStatusError("invalid literal for int(): error executing command in container"), False),
-        (ExecStatusError('container not found ("output-uploader")', container_missing=True), True),
-        (ExecSetupError("Websocket setup failed (status 0): connection reset"), False),
-    ],
-)
-def test_output_exec_failure_does_not_block_other_tasks(k8s, error, ended):
-    provider = K8sTaskProvider(
-        descriptor=k8s_backend_descriptor(),
-        kubectl=k8s,
-        pods=pod_config(task_outputs=TaskOutputPolicy()),
-        cluster_scan_interval=0.0,
-    )
-    entries = []
-    for index in range(2):
-        entry = RunningTaskEntry(
-            task_id=JobName.from_wire(f"/job/finalize-{index}"), attempt_id=0, attempt_uid=f"{index:016x}"
-        )
-        entries.append(entry)
-        name = _pod_name(entry.task_id, 0, entry.attempt_uid)
-        pod = make_pod(name, "Running")
-        pod["kind"] = "Pod"
-        pod["metadata"]["labels"] = {_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE}
-        pod["status"]["containerStatuses"] = [
-            {"name": "task", "state": {"terminated": {"exitCode": 0, "reason": "Completed"}}},
-            {"name": "output-uploader", "state": {"running": {}}},
-        ]
-        k8s.seed_resource(K8sResource.PODS, name, pod)
-    k8s.inject_failure("exec", error)
-    try:
-        updates = provider.sync(make_batch(running_tasks=entries))
-        assert len(updates) == 2
-        assert updates[0].new_state == (job_pb2.TASK_STATE_SUCCEEDED if ended else job_pb2.TASK_STATE_RUNNING)
-        if ended:
-            assert updates[0].output_archive.error == "container_not_found"
-        assert updates[1].new_state == job_pb2.TASK_STATE_RUNNING
-        name = _pod_name(entries[1].task_id, 0, entries[1].attempt_uid)
-        assert k8s.read_file(name, OUTPUT_RELEASE_PATH, container="output-uploader") == b""
-    finally:
-        provider.close()

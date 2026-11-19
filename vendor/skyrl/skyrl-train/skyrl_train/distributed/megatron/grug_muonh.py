@@ -7,10 +7,12 @@ The BF16 Newton--Schulz transform is adapted from NVIDIA NeMo
 Emerging-Optimizers at 6ef41445b246d2c64c2e6f82cc56fbc9c9c07937.
 """
 
+import re
 from collections.abc import Iterable
 from typing import Any, Literal
 
 import torch
+import torch.distributed as dist
 from torch import Tensor
 from torch.optim import Optimizer
 
@@ -24,6 +26,9 @@ _QUINTIC_COEFFICIENTS = (
     (2.8769, -3.1427, 1.2046),
     (2.8366, -3.0525, 1.2012),
 )
+# JAX's weak scalar coefficients are converted to the matrix's BF16 dtype.
+# Torch otherwise multiplies using the unrounded Python scalar in FP32.
+_BF16_QUINTIC_COEFFICIENTS = torch.tensor(_QUINTIC_COEFFICIENTS, dtype=torch.bfloat16, device="cpu").tolist()
 _HYPERBALL_EPS = 1e-10
 
 
@@ -31,12 +36,17 @@ def _muon_direction(matrix: Tensor, *, steps: int, eps: float) -> Tensor:
     """Return Marin's BF16 quintic direction with its matrix shape scale."""
     original_dtype = matrix.dtype
     x = matrix.to(torch.bfloat16)
-    x = x / (torch.linalg.vector_norm(x, dim=(-2, -1), keepdim=True) + eps)
-    transposed = x.shape[-2] > x.shape[-1]
+    # Hero's compiled JAX norm accumulates squares in FP32, rounds the sum
+    # to BF16, then takes sqrt. vector_norm rounds only after sqrt instead.
+    norm = x.float().square_().sum(dim=(-2, -1), keepdim=True).to(torch.bfloat16).sqrt_()
+    x = x / (norm + eps)
+    # Linear weights are transposed relative to Levanter. Break square ties in
+    # the opposite direction so BF16 contractions use the same orientation.
+    transposed = x.shape[-2] >= x.shape[-1]
     if transposed:
         x = x.mT
     for index in range(steps):
-        a, b, c = _QUINTIC_COEFFICIENTS[index % len(_QUINTIC_COEFFICIENTS)]
+        a, b, c = _BF16_QUINTIC_COEFFICIENTS[index % len(_BF16_QUINTIC_COEFFICIENTS)]
         gram = x @ x.mT
         polynomial = b * gram + c * (gram @ gram)
         x = a * x + polynomial @ x
@@ -97,6 +107,39 @@ def megatron_grug_route(name: str, parameter: Tensor) -> MegatronGrugRoute:
     if "linear_fc1.weight" in lower and (".experts." in lower or ".shared_experts." in lower):
         return "grug_muonh_gate_up"
     return "grug_muonh" if parameter.ndim in (2, 3) else "adam"
+
+
+def megatron_grug_expert_bank(name: str) -> str | None:
+    """Identify a routed projection; reject unsupported routed expert names."""
+    match = re.fullmatch(r"(.*\.mlp\.experts\.(?:experts\.)?linear_fc[12])\.weight\d*", name)
+    if match is None and ".mlp.experts." in name:
+        raise ValueError(f"Unsupported routed expert parameter for whole-bank normalization: {name}")
+    return match[1] if match is not None else None
+
+
+def _expert_bank_step_(
+    matrices: list[tuple[Tensor, Tensor]], *, lr: float, expert_parallel_group: dist.ProcessGroup | None
+) -> None:
+    """Update a routed bank on one Frobenius sphere; consume its directions."""
+    # Reduce norm scalars across expert owners without gathering their matrices.
+    norms = torch.stack(
+        [
+            torch.stack([_matrix_norm(value).square().sum() for value, _ in matrices]).sum(),
+            torch.stack([_matrix_norm(direction).square().sum() for _, direction in matrices]).sum(),
+        ]
+    )
+    if expert_parallel_group is not None:
+        dist.all_reduce(norms, group=expert_parallel_group)
+    parameter_norm, direction_norm = norms.sqrt().unbind()
+    scale = parameter_norm / direction_norm.clamp_min(_HYPERBALL_EPS)
+    for parameter, direction in matrices:
+        direction.mul_(scale).mul_(-lr).add_(parameter)
+    candidate_norm = torch.stack([_matrix_norm(direction).square().sum() for _, direction in matrices]).sum()
+    if expert_parallel_group is not None:
+        dist.all_reduce(candidate_norm, group=expert_parallel_group)
+    scale = parameter_norm / candidate_norm.sqrt().clamp_min_(_HYPERBALL_EPS)
+    for parameter, direction in matrices:
+        parameter.copy_(direction.mul_(scale))
 
 
 def _muon_update_(
@@ -203,9 +246,12 @@ class MegatronGrugMuonH(Optimizer):
         muon_eps: float,
         qkv_split_shapes: tuple[int, int, int],
         offload_momentum: bool = False,
+        parameter_banks: dict[Tensor, str] | None = None,
+        expert_parallel_group: dist.ProcessGroup | None = None,
     ) -> None:
         self.qkv_split_shapes = qkv_split_shapes
         self.offload_momentum = offload_momentum
+        self.expert_parallel_group = expert_parallel_group
         super().__init__(
             params,
             defaults={
@@ -219,6 +265,13 @@ class MegatronGrugMuonH(Optimizer):
                 "weight_decay": 0.0,
             },
         )
+        # Megatron replaces BF16 tensors with FP32 masters after construction,
+        # preserving parameter/group order. Keep labels outside checkpointed
+        # param_groups: their local lists differ between PP/EP ranks.
+        banks = parameter_banks or {}
+        self.parameter_bank_ids = [
+            [banks.get(parameter) for parameter in group["params"]] for group in self.param_groups
+        ]
 
     def initialize_state(self) -> None:
         """Materialize all moments before Megatron builds a checkpoint load template."""
@@ -277,11 +330,12 @@ class MegatronGrugMuonH(Optimizer):
             with torch.enable_grad():
                 loss = closure()
 
-        for group in self.param_groups:
+        expert_banks: dict[tuple[str, int], tuple[float, list[tuple[Tensor, Tensor]]]] = {}
+        for group, bank_ids in zip(self.param_groups, self.parameter_bank_ids, strict=True):
             route = group.get("optimizer", "grug_muonh")
             if route not in ("grug_muonh", "grug_muonh_qkv", "grug_muonh_gate_up", "grug_adamh"):
                 raise ValueError(f"Unsupported Grug Megatron optimizer route: {route}")
-            for parameter in group["params"]:
+            for parameter, bank_id in zip(group["params"], bank_ids, strict=True):
                 gradient = parameter.grad
                 if gradient is None:
                     continue
@@ -321,8 +375,21 @@ class MegatronGrugMuonH(Optimizer):
                     direction = (
                         gradient.add_(momentum_buffer, alpha=group["momentum"])
                         if group["nesterov"]
-                        else momentum_buffer
+                        else gradient.copy_(momentum_buffer)
                     )
+                if bank_id is not None:
+                    parts = (
+                        zip(parameter.chunk(2, dim=-2), direction.chunk(2, dim=-2), strict=True)
+                        if route == "grug_muonh_gate_up"
+                        else [(parameter, direction)]
+                    )
+                    for part_index, (parameter_part, direction_part) in enumerate(parts):
+                        direction_part.copy_(
+                            _muon_direction(direction_part, steps=group["ns_steps"], eps=group["muon_eps"])
+                        )
+                        _, matrices = expert_banks.setdefault((bank_id, part_index), (group["lr"], []))
+                        matrices.append((parameter_part, direction_part))
+                    continue
                 _muon_update_(
                     parameter,
                     direction,
@@ -332,4 +399,7 @@ class MegatronGrugMuonH(Optimizer):
                     route=route,
                     qkv_split_shapes=self.qkv_split_shapes,
                 )
+        for key in sorted(expert_banks):
+            lr, matrices = expert_banks[key]
+            _expert_bank_step_(matrices, lr=lr, expert_parallel_group=self.expert_parallel_group)
         return loss

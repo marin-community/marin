@@ -8,9 +8,11 @@ from pathlib import Path
 import harbor.environments.factory as environment_factory
 import harbor.utils.artifact_writer as artifact_writer
 import pytest
+from harbor.agents.factory import AgentFactory
 from harbor.environments.base import ExecResult
 from harbor.job import Job
 from harbor.metrics.mean import Mean
+from harbor.models.agent.name import AgentName
 from harbor.models.job.config import JobConfig
 from harbor.models.job.result import JobResult, JobStats
 from harbor.models.metric.config import MetricConfig
@@ -31,6 +33,7 @@ from harbor.models.verifier.result import VerifierResult
 from harbor.trial.hooks import TrialEvent, TrialHookEvent
 from harbor.utils.artifact_writer import ArtifactWriter, get_artifact_writer
 
+from tests.unit.fake_agent import FakeAgent
 from tests.unit.test_trial_cleanup import MountedEnvironment
 
 
@@ -79,6 +82,7 @@ def _make_job(
     release_trial_payloads_in_memory: bool = False,
 ) -> Job:
     config = JobConfig(
+        agents=[AgentConfig(name="pi")],
         job_name="job-progress-test",
         jobs_dir=tmp_path,
         release_trial_payloads_in_memory=release_trial_payloads_in_memory,
@@ -188,7 +192,7 @@ async def test_explicit_task_source_preserves_completed_metrics(
             tasks=[TaskConfig(path=task_dir, source="named-dataset")],
             n_attempts=2,
             metrics=[] if metric_type is None else [MetricConfig(type=metric_type)],
-            agents=[AgentConfig(name="nop")],
+            agents=[AgentConfig(name="pi")],
             environment=EnvironmentConfig(),
         )
     )
@@ -556,3 +560,8 @@ async def test_job_resume_releases_persisted_trial_payloads_from_memory(
     assert persisted_child.verifier_result is not None
     assert persisted_child.verifier_result.stdout == trial_result.verifier_result.stdout
     assert persisted_child.verifier_result.stderr == trial_result.verifier_result.stderr
+
+
+@pytest.fixture(autouse=True)
+def register_test_agents(monkeypatch):
+    monkeypatch.setitem(AgentFactory._AGENT_MAP, AgentName.PI, FakeAgent)

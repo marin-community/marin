@@ -41,6 +41,7 @@ from taskcompendium.submission import (
 from rolloutengine.harness.core import HarnessContext, ModelSession
 from rolloutengine.models import (
     LENGTH_STOP_REASON,
+    ContextRecovery,
     EventSink,
     ModelTurn,
     Prompt,
@@ -48,7 +49,6 @@ from rolloutengine.models import (
     ToolCallCompleted,
     Transition,
 )
-from rolloutengine.validation import InvalidTaskSpec, check_grader
 
 UNKNOWN_TOOL_ERROR = "Unknown tool"
 DEFAULT_SHELL_TOOL = ShellToolConfig()
@@ -176,6 +176,8 @@ def _provider_tools(
 class ShellHarness:
     """Serve a shell tool on the task machine and host tools from registered providers, and end on a final response."""
 
+    context_recovery = ContextRecovery.NEVER
+
     command_timeout: float | None
     """The limit of each shell command. A timed-out command returns an observation, and the model can continue."""
     output_limit_bytes: int = DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES
@@ -193,13 +195,7 @@ class ShellHarness:
             raise ValueError(f"The output limit must be a positive number of bytes: {self.output_limit_bytes!r}")
 
     def check(self, task: TaskSpec, limits: RolloutLimits) -> None:
-        check_grader(task.grader)
-        try:
-            shell_tool = resolve_shell_tool(task, self.shell_tool)
-            if task.answer_type in CONVERSATION_ANSWERS:
-                require_submission_compatibility(task)
-        except ValueError as error:
-            raise InvalidTaskSpec(str(error)) from error
+        shell_tool = resolve_shell_tool(task, self.shell_tool)
         turn_limit = limits.tool_turn_timeout
         if self.command_timeout is not None and turn_limit is not None and self.command_timeout >= turn_limit:
             raise ValueError("The command timeout must be less than the tool-turn timeout")

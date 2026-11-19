@@ -22,10 +22,9 @@ from shellbox.machine import (
     MachineResourceExhausted,
     MachineSpec,
     PackageSpec,
-    Result,
     ShellStatus,
 )
-from shellbox.transfer import LinkedDownloadPath, download_files
+from shellbox.transfer import download_files
 
 UNSUPPORTED_COMMAND = "unsupported-native-command-with-a-long-name-for-output-truncation-testing"
 UNSUPPORTED_OUTPUT_LIMIT_BYTES = 64
@@ -408,33 +407,6 @@ def test_shell_session_unsupported_command_returns_failed_update(tmp_path: Path)
             assert (followup.exit_code, followup.output) == (0, b"1\n2\n")
         finally:
             await machine.close()
-
-    asyncio.run(check())
-
-
-@pytest.mark.parametrize(
-    "code,reason,linked",
-    [
-        (45, ExitReason.EXITED, True),
-        (2, ExitReason.EXITED, False),
-        (137, ExitReason.EXITED, False),
-        (45, ExitReason.TIMED_OUT, False),
-    ],
-)
-def test_download_only_types_confirmed_path_links(code, reason, linked):
-    class Inspection:
-        async def run(self, command):
-            return Result(code, b"", b"inspection error", False, False, reason)
-
-    async def check():
-        with pytest.raises(RuntimeError) as caught:
-            await download_files(
-                Inspection(), ("/workspace/output",), timeout=10, max_files=1, max_bytes=1024, max_file_bytes=1024
-            )
-        assert isinstance(caught.value, LinkedDownloadPath) is linked
-        if not linked:
-            assert f"exit={code}" in str(caught.value)
-            assert "inspection error" in str(caught.value)
 
     asyncio.run(check())
 

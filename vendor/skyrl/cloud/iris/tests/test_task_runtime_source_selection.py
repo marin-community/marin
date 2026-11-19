@@ -95,6 +95,8 @@ def _runtime_args(
         ray_spill_backend=task_runtime.RaySpillBackend.LOCAL,
         ray_spill_dir=str(tmp_path / "spill"),
         cluster_join_timeout=1,
+        ray_labels={},
+        role_topology=None,
         driver_liveness_timeout=liveness_timeout,
     )
 
@@ -105,7 +107,7 @@ def _isolate_head_runtime(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(task_runtime, "FAILURE_ARTIFACT_TIMEOUT", 2)
     monkeypatch.setattr(task_runtime, "_num_tasks", lambda: 1)
     monkeypatch.setattr(task_runtime, "_own_ip", lambda: "127.0.0.1")
-    monkeypatch.setattr(task_runtime, "ray_start_head", lambda *_args: None)
+    monkeypatch.setattr(task_runtime, "ray_start_head", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(task_runtime, "ray_stop", lambda: None)
     monkeypatch.setattr(task_runtime.signal, "signal", lambda *_args: None)
     monkeypatch.setattr(task_runtime, "training_driver_env", lambda _ifname: {"SKYRL_HOME": str(tmp_path)})

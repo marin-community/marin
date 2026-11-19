@@ -29,15 +29,14 @@ from unittest import mock
 from unittest.mock import AsyncMock
 
 import pytest
-from upath import UPath
-
-from harbor.models.trial.config import TaskConfig, TrialConfig
+from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
 from harbor.trial import artifact_handler as artifact_handler_module
 from harbor.trial import trial as trial_module
 from harbor.trial.artifact_handler import ArtifactHandler
 from harbor.trial.single_step import SingleStepTrial
 from harbor.utils.artifact_writer import ArtifactWriter
 from harbor.verifier.verifier import Verifier
+from upath import UPath
 
 
 class _ThreadRecordingWriter:
@@ -60,6 +59,7 @@ class _ThreadRecordingWriter:
 
 def _configure_trial_for_init_result(trial: SingleStepTrial, tmp_path: Path) -> None:
     trial.config = TrialConfig(
+        agent=AgentConfig(name="pi"),
         task=TaskConfig(path=tmp_path),
         trial_name="t0",
     )
@@ -83,7 +83,9 @@ async def test_finalize_writes_result_json_off_event_loop(
 
     trial = object.__new__(SingleStepTrial)
     trial._attempt_index = None
-    trial.config = TrialConfig(task=TaskConfig(path=tmp_path))
+    trial.config = TrialConfig(
+        task=TaskConfig(path=tmp_path), agent=AgentConfig(name="pi")
+    )
     trial._artifact_persistence_failure = None
     trial._pending_cleanup_tasks = set()
     trial._is_agent_environment_stopped = True
