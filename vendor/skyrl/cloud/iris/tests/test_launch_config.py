@@ -539,6 +539,7 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(
     destination = tmp_path / "launch.yaml"
     document = raw_launch_config()
     document["run"]["coordinator_iris_job_id"] = "/tests/coordinator"
+    document["run"]["model"] = "test-policy"
     if own_tokenizer:
         document["inputs"]["model"].update(tokenizer_uri=None, tokenizer_revision=None)
     document["iris"]["max_retries"] = 0
@@ -621,6 +622,8 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(
     assert final.native.result.iris_job_id == "/tests/bootstrap-trainer"
     if entrypoint == "generate":
         assert [(run["id"], run["group"], run["resume"]) for run in wandb_runs] == [("attempt-1", "smoke", "allow")]
+        assert wandb_runs[0]["tags"] == ["test-policy"]
+        assert wandb_runs[0]["config"]["model"] == "test-policy"
 
 
 def test_evaluation_metric_names_survive_iris_path_resolution(tmp_path: Path) -> None:

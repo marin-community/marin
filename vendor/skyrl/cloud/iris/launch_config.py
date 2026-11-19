@@ -80,6 +80,7 @@ class RunConfig:
     mode: str = RunMode.TRAIN.value
     submission: str = SubmissionMode.WAIT.value
     export_hf: bool = False
+    model: str | None = None
 
 
 @dataclass
@@ -214,6 +215,9 @@ def compose_launch_config(raw: Mapping[str, Any] | DictConfig) -> DictConfig:
     if not composed.inputs.evaluation_data:
         with open_dict(composed.inputs):
             del composed.inputs.evaluation_data
+    if composed.run.get("model") is None:
+        with open_dict(composed.run):
+            del composed.run.model
     return composed
 
 

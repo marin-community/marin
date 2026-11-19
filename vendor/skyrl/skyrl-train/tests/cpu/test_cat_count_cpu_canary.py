@@ -13,6 +13,7 @@ from multiprocessing.context import ForkServerContext
 from finestore.rl.run_records import read_attempts, read_evaluations
 from finestore.rl.strata import SelectionDefinition, SelectionTaskRow, MembershipState
 from finestore.schema import arrow_schema
+from marinskyrl.environment_contract import RUN_MODEL_ENV
 import pyarrow as pa
 import pyarrow.parquet as pq
 import fsspec
@@ -74,7 +75,7 @@ def cat_count_session(monkeypatch):
             if self.headers.get("Content-Encoding") == "zstd":
                 payload = zstandard.ZstdDecompressor().decompress(payload, max_output_size=1 << 28)
             batch = json.loads(payload)
-            rows.extend(batch["records"])
+            rows.extend({**record, "resource": batch["resource"]} for record in batch["records"])
             self.send_response(200)
             self.end_headers()
             self.wfile.write(json.dumps({"batch_id": batch["batch_id"], "status": "accepted"}).encode())
@@ -88,6 +89,7 @@ def cat_count_session(monkeypatch):
     telemetry_env = {
         "SKYRL_TELEMETRY_ENDPOINT": f"http://127.0.0.1:{server.server_port}/v1/ingest",
         "SKYRL_RUN_ID": "cat-count-cpu",
+        RUN_MODEL_ENV: "cat-count-model",
         "SKYRL_EXECUTION_UID": "cat-count-cpu-attempt",
     }
     for key, value in telemetry_env.items():
@@ -124,7 +126,10 @@ def train(
 
 
 def run_process(forkserver_context, root, cfg, runner=run_cat_count):
-    worker_env = {key: os.environ[key] for key in ("SKYRL_TELEMETRY_ENDPOINT", "SKYRL_RUN_ID", "SKYRL_EXECUTION_UID")}
+    worker_env = {
+        key: os.environ[key]
+        for key in ("SKYRL_TELEMETRY_ENDPOINT", "SKYRL_RUN_ID", "SKYRL_EXECUTION_UID", RUN_MODEL_ENV)
+    }
     start = time.perf_counter()
     process = forkserver_context.Process(target=runner, args=(cfg, worker_env))
     process.start()
@@ -525,6 +530,7 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
     root = tmp_path / "generate"
     cfg = cat_count_config(root, cat_count_policy)
     cfg.trainer.logger = "records" if records_backend else "console"
+    OmegaConf.update(cfg, "runtime.model", "cat-count-model", force_add=True)
     environment_configs = OmegaConf.to_container(cfg.environment.task_sessions, resolve=True)
 
     def task(n, identifier, extra_info):
@@ -657,6 +663,7 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
     assert attempts[attempt_id].evaluation_storage_version == 1
     task_rows = read_evaluations(str(root / "exports"), attempt_id=attempt_id, step=-1, evaluation="eval/")
     assert {row.task_id for row in task_rows} == expected.keys()
+    assert {row.model for row in task_rows} == {"cat-count-model"}
     assert {row.task_id: len(row.answers) for row in task_rows} == {
         task_id: 4 if task_id.endswith("7") else 2 for task_id in expected
     }
@@ -750,6 +757,10 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
         if row["name"] == "training_metric_value" and row["attributes"].get("payload_kind") == "generate"
     }
     assert {"generate/wall_seconds", "generate/response_tokens", "eval/all/num_attempted"} <= mirrored
+    assert {
+        (row["resource"]["service"], row["resource"]["attributes"].get("model"))
+        for row in cat_count_session if row["name"] == "training_metric_value"
+    } == {("marinskyrl", "cat-count-model")}
     engine_rows = [row for row in cat_count_session if row["name"] == "generation_tokens_total"]
     assert metrics["eval/named_profile/all/num_attempted"] == len(expected) + 1
     assert len(engine_rows) == 4
