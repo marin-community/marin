@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import asdict, replace
 from datetime import datetime
 from pathlib import Path, PurePosixPath
@@ -461,6 +461,15 @@ def run_spec(
     default, selection = task_selections(preset, tasks)
     summary = selection_summary(selection)
     _refuse_judged(summary, "train")
+    harness_by_dataset = get_path(authored, "environment.task_sessions.task_spec.harness_by_dataset")
+    harnesses = harness_by_dataset if isinstance(harness_by_dataset, Mapping) else {}
+    if missing_harnesses := sorted(
+        dataset for dataset in summary.get("harness_graded_datasets", ()) if harnesses.get(dataset) != "harbor_trial"
+    ):
+        raise click.BadParameter(
+            f"training datasets with harness graders require harbor_trial in harness_by_dataset: "
+            f"{', '.join(missing_harnesses)}"
+        )
     chosen = preset.evaluations
     workload = preset.recipe.layout.workload
     if preset.batch_mix is not None:

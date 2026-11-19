@@ -6,6 +6,7 @@ import runpy
 import sys
 from dataclasses import replace
 from fractions import Fraction
+from pathlib import Path
 
 import click
 import pytest
@@ -198,6 +199,28 @@ def test_plan_print_rejects_invalid_native_config(table, name, settings, error, 
     result = CliRunner().invoke(rl.command(table, argv=tuple(args)), args)
     assert result.exit_code == 4, (result.output, result.exception)
     assert "native configuration cannot be composed" in result.output and error in result.output
+
+
+@pytest.mark.parametrize(
+    ("dataset", "harness_override", "exit_code"),
+    [
+        ("long-loop-smartie-swesmith", None, 0),
+        ("fixture-unmapped", None, 4),
+        ("long-loop-smartie-swesmith", "shellbox", 4),
+    ],
+)
+def test_plan_requires_harness_grading_mapping(selection, dataset, harness_override, exit_code):
+    summary_path = Path(selection.path()) / rl_recipe.SUMMARY_FILENAME
+    summary = json.loads(summary_path.read_text())
+    summary["harness_graded_datasets"] = [dataset]
+    summary_path.write_text(json.dumps(summary))
+    args = ["--preset", "train-medium-agentic", "--version", "dev", "--plan", "--tasks", SELECTION_IDENTITY]
+    if harness_override:
+        args += ["--set", f"environment.task_sessions.task_spec.harness_by_dataset.{dataset}={harness_override}"]
+    result = CliRunner().invoke(rl.command(SNOWBALL, argv=tuple(args)), args)
+    assert result.exit_code == exit_code, (result.output, result.exception)
+    if exit_code:
+        assert "harbor_trial in harness_by_dataset" in result.output and dataset in result.output
 
 
 def test_resume_pins_the_native_checkpoint(selection, tmp_path):

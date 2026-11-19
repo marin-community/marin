@@ -27,6 +27,7 @@ from taskcompendium.models import (
     ConversationInput,
     DockerBuildContext,
     EnvironmentRequirements,
+    NoGrader,
     PlainText,
     ResourceGroups,
     ScriptGrader,
@@ -65,12 +66,10 @@ from experiments.post_training.task_curation.selection import (
     HeldoutSource,
     PanelFormat,
     ReleasedSource,
-    SelectionConfig,
     SelectionRecipe,
     eval_lite_step,
     task_selection_step,
     validation_task,
-    write_training,
 )
 from experiments.post_training.task_curation.tests.conversion import converted_task
 
@@ -350,13 +349,8 @@ def test_selection_imports_image_graders_from_admitted_components(tmp_path):
     }
 
 
-def released_file(path: Path, *tasks: TaskSpec) -> HeldoutSource:
-    pq.write_table(pa.table({"task_spec": [task.model_dump_json() for task in tasks]}), path)
-    return HeldoutSource(uri=str(path), version="2026.11.19.1", format=PanelFormat.TASK_SPEC, rows=len(tasks))
-
-
 def released_training(path: Path, *tasks: TaskSpec) -> ReleasedSource:
-    source = released_file(path, *tasks)
+    source = task_file(path, list(tasks))
     return ReleasedSource(
         **source.model_dump(),
         family="agentic",
@@ -368,7 +362,17 @@ def released_training(path: Path, *tasks: TaskSpec) -> ReleasedSource:
 
 def test_selection_mixes_released_and_curated_tasks(tmp_path):
     repeated = source_task("evaluation-overlap")
-    release = released_training(tmp_path / "release.parquet", source_task("agent-task"), repeated)
+    one_turn_task = source_task("one-turn")
+    alias = one_turn_task.model_copy(update={"id": "cross-source-alias"})
+    agent_task = source_task("agent-task")
+    agent_task = agent_task.model_copy(
+        update={
+            "source": agent_task.source.model_copy(update={"dataset": "long-loop-smartie-swesmith"}),
+            "grader": NoGrader(reason="The harness grades the completed trial"),
+            "tags": ("harbor",),
+        }
+    )
+    release = released_training(tmp_path / "release.parquet", agent_task, repeated, alias)
     heldout = source_task("validation")
     heldout = heldout.model_copy(update={"source": heldout.source.model_copy(update={"dataset": "structure-closure"})})
     one_turn = "fixture:first"
@@ -378,23 +382,27 @@ def test_selection_mixes_released_and_curated_tasks(tmp_path):
         sources={one_turn: "nonagentic"},
         family_limits={"nonagentic": 1, "agentic": 1},
         source_limits={one_turn: 1, release.uri: 1},
-        heldout=(released_file(tmp_path / "heldout.parquet", heldout),),
-        exclusions=(released_file(tmp_path / "evallite.parquet", repeated),),
+        heldout=(task_file(tmp_path / "heldout.parquet", [heldout]),),
+        exclusions=(task_file(tmp_path / "evallite.parquet", [repeated]),),
         validation_per_family=1,
         seed=20261023,
+        admitted_graders=LOCAL_GRADERS | {GraderKind.HARNESS},
         released=(release,),
     )
-    curated = {one_turn: admitted_source(tmp_path / "curated", [source_task("one-turn")])}
+    curated = {one_turn: admitted_source(tmp_path / "curated", [one_turn_task])}
     root = Path(run(task_selection_step(curated, settings))[0].path)
     summary = json.loads((root / "summary.json").read_text())
     assert summary["training_family_counts"] == {"agentic": 1, "nonagentic": 1}
+    assert summary["harness_graded_datasets"] == ["long-loop-smartie-swesmith"]
+    assert summary["grader_kind_counts"]["train"]["harness"] == 1
     assert summary["released_sources"] == [
         {
             "uri": release.uri,
             "sha256": release.sha256,
-            "rows_read": 2,
+            "license": release.license,
+            "rows_read": 3,
             "rows_admitted": 1,
-            "rows_removed": {"heldout_overlap": 1, "duplicate": 0, "quota": 0},
+            "rows_removed": {"heldout_overlap": 1, "duplicate": 1, "quota": 0},
         }
     ]
     assert summary["recipe"]["released"] == [release.model_dump(mode="json")]
@@ -404,7 +412,7 @@ def test_selection_mixes_released_and_curated_tasks(tmp_path):
         task = TaskSpec.model_validate_json(row["task_spec"])
         labels[task.id] = (row["family"], row["aai_category"], row["agentic"], row["difficulty"], task.tags)
     assert labels == {
-        "agent-task": ("agentic", "coding", True, "unrated", ("agentic",)),
+        "agent-task": ("agentic", "coding", True, "unrated", ("harbor", "agentic")),
         "one-turn": ("nonagentic", "untagged", False, "untagged", ()),
     }
 
@@ -417,16 +425,25 @@ def test_selection_mixes_released_and_curated_tasks(tmp_path):
         ("schema", "Unsupported TaskSpec schema"),
         ("tag", "contradicts the source"),
         ("grader", "does not admit image graders"),
+        ("harness", "does not admit harness graders"),
+        ("harness-without-tag", "harness grader requires the harbor tag"),
     ],
 )
 def test_selection_refuses_invalid_released_tasks(tmp_path, fault, message):
     task = source_task("agent-task", image=fault == "grader")
-    if fault == "schema":
+    if fault in ("count", "schema"):
         task = task.model_copy(update={"schema_version": "0.27"})
     if fault == "tag":
         task = task.model_copy(update={"tags": ("agentic",)})
+    if fault in ("harness", "harness-without-tag"):
+        task = task.model_copy(
+            update={
+                "grader": NoGrader(reason="The harness grades the completed trial"),
+                "tags": ("harbor",) if fault == "harness" else (),
+            }
+        )
     release = released_training(tmp_path / "release.parquet", task)
-    update = {"digest": {"sha256": "0" * 64}, "count": {"rows": 2}, "tag": {"agentic": False}}
+    update = {"digest": {"sha256": "0" * 64, "rows": 2}, "count": {"rows": 2}, "tag": {"agentic": False}}
     release = release.model_copy(update=update.get(fault, {}))
     settings = SelectionRecipe(
         name="released",
@@ -436,11 +453,14 @@ def test_selection_refuses_invalid_released_tasks(tmp_path, fault, message):
         heldout=(),
         validation_per_family=1,
         seed=20261023,
+        admitted_graders=LOCAL_GRADERS | {GraderKind.HARNESS} if fault == "harness-without-tag" else LOCAL_GRADERS,
         released=(release,),
     )
-    config = SelectionConfig((), settings, (), str(tmp_path), ())
-    with pytest.raises(ValueError, match=message):
-        write_training(config, (), (), tmp_path / TRAIN_FILENAME)
+    step = task_selection_step({}, settings)
+    with pytest.raises(RuntimeError) as error:
+        run(step)
+    assert message in error_chain(error.value)
+    assert not (Path(step.path()) / TRAIN_FILENAME).exists()
 
 
 def test_grader_admission_preserves_published_selection_fingerprints():

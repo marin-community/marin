@@ -44,6 +44,7 @@ from taskcompendium.models import (
     SCHEMA_VERSION,
     ConversationInput,
     EnvironmentRequirements,
+    NoGrader,
     ScriptGrader,
     Source,
     TaskSpec,
@@ -104,6 +105,7 @@ class GraderKind(StrEnum):
     IMAGE = "image"
     REMOTE_JUDGE = "remote_judge"
     IN_PROCESS = "in_process"
+    HARNESS = "harness"
 
 
 LOCAL_GRADERS = frozenset((GraderKind.IN_PROCESS, GraderKind.PACKAGE))
@@ -364,7 +366,11 @@ def _panel_source_tasks(
     elif source.format == PanelFormat.HISTORICAL:
         tasks = (validation_task(row, grader_environments) for row in _parquet_rows(root, LOWERED_TASK_SPEC_COLUMN))
     else:
-        tasks = (TaskSpec.model_validate_json(row[TASK_SPEC_COLUMN]) for row in _parquet_rows(root, TASK_SPEC_COLUMN))
+        release = source if isinstance(source, ReleasedSource) else None
+        tasks = (
+            TaskSpec.model_validate_json(row[TASK_SPEC_COLUMN])
+            for row in _parquet_rows(root, TASK_SPEC_COLUMN, release=release)
+        )
     for task in tasks:
         count += 1
         yield task
@@ -372,9 +378,19 @@ def _panel_source_tasks(
         raise ValueError(f"Panel source row count changed: {source.uri}: expected {source.rows}, read {count}")
 
 
-def _parquet_rows(path: StoragePath, column: str) -> Iterator[dict[str, Any]]:
+def _parquet_rows(path: StoragePath, column: str, *, release: ReleasedSource | None = None) -> Iterator[dict[str, Any]]:
     with path.open("rb") as stream:
-        for batch in pq.ParquetFile(stream).iter_batches(batch_size=PARQUET_BATCH_ROWS, columns=[column]):
+        if release is not None:
+            if hashlib.file_digest(stream, "sha256").hexdigest() != release.sha256:
+                raise ValueError(f"Released source SHA-256 mismatch: {release.uri}")
+            stream.seek(0)
+        parquet = pq.ParquetFile(stream)
+        if release is not None and parquet.metadata.num_rows != release.rows:
+            raise ValueError(
+                f"Released source row count changed: {release.uri}: "
+                f"expected {release.rows}, read {parquet.metadata.num_rows}"
+            )
+        for batch in parquet.iter_batches(batch_size=PARQUET_BATCH_ROWS, columns=[column]):
             yield from batch.to_pylist()
 
 
@@ -427,36 +443,16 @@ def _admitted_records(source: SelectionInput) -> Iterator[dict[str, str]]:
 def _released_records(source: ReleasedSource) -> Iterator[tuple[TaskSpec, str]]:
     if source.format != PanelFormat.TASK_SPEC:
         raise ValueError(f"Released source requires task_spec format: {source.uri}")
-    with StoragePath(source.uri).open("rb") as stream:
-        if hashlib.file_digest(stream, "sha256").hexdigest() != source.sha256:
-            raise ValueError(f"Released source SHA-256 mismatch: {source.uri}")
-        stream.seek(0)
-        parquet = pq.ParquetFile(stream)
-        actual_rows = parquet.metadata.num_rows
-        if actual_rows != source.rows:
-            raise ValueError(
-                f"Released source row count changed: {source.uri}: expected {source.rows}, read {actual_rows}"
-            )
-        for batch in parquet.iter_batches(batch_size=PARQUET_BATCH_ROWS, columns=[TASK_SPEC_COLUMN]):
-            for row in batch.to_pylist():
-                raw = row[TASK_SPEC_COLUMN]
-                task = TaskSpec.model_validate_json(raw)
-                if "schema_version" not in task.model_fields_set:
-                    raise ValueError(f"Released task {task.id} must declare TaskSpec schema {SCHEMA_VERSION}")
-                tagged = "agentic" in task.tags
-                if tagged and not source.agentic:
-                    raise ValueError(f"Released task {task.id} contradicts the source's agentic declaration")
-                if source.agentic and not tagged:
-                    task = task.model_copy(update={"tags": (*task.tags, "agentic")})
-                    raw = task.model_dump_json()
-                yield task, raw
-
-
-def _training_inputs(config: SelectionConfig) -> tuple[SelectionInput, ...]:
-    return (
-        *config.sources,
-        *(SelectionInput(source.uri, source.family, source.uri) for source in config.recipe.released),
-    )
+    for task in _panel_source_tasks(source, {}):
+        if "schema_version" not in task.model_fields_set:
+            raise ValueError(f"Released task {task.id} must declare TaskSpec schema {SCHEMA_VERSION}")
+        tagged = "agentic" in task.tags
+        if tagged and not source.agentic:
+            raise ValueError(f"Released task {task.id} contradicts the source's agentic declaration")
+        published = task
+        if source.agentic and not tagged:
+            published = task.model_copy(update={"tags": (*task.tags, "agentic")})
+        yield task, published.model_dump_json()
 
 
 def _grader_environments(sources: tuple[SelectionInput, ...]) -> dict[str, EnvironmentRequirements]:
@@ -480,6 +476,8 @@ def _grader_environments(sources: tuple[SelectionInput, ...]) -> dict[str, Envir
 
 
 def _grader_kind(task: TaskSpec) -> GraderKind:
+    if isinstance(task.grader, NoGrader):
+        return GraderKind.HARNESS
     if grades_with_judge(task.grader):
         return GraderKind.REMOTE_JUDGE
     if grades_in_process(task.grader):
@@ -511,7 +509,7 @@ def _manifest_records(tasks: tuple[TaskSpec, ...], active: set[str]) -> Iterator
 def _grader_counts(path: Path) -> dict[str, int]:
     rows = _parquet_rows(StoragePath(str(path)), TASK_SPEC_COLUMN)
     counts = Counter(_grader_kind(TaskSpec.model_validate_json(row[TASK_SPEC_COLUMN])) for row in rows)
-    return {kind.value: counts[kind] for kind in GraderKind}
+    return {kind.value: counts[kind] for kind in GraderKind if kind != GraderKind.HARNESS or counts[kind]}
 
 
 def write_training(
@@ -521,10 +519,10 @@ def write_training(
     excluded_keys = {key for task in (*heldout, *exclusions) for key in _panel_keys(task).exclusion}
     selected_ids: set[str] = set()
     selected_contracts: set[str] = set()
-    inputs = _training_inputs(config)
+    releases = {source.uri: source for source in config.recipe.released}
+    inputs = (*config.sources, *(SelectionInput(uri, source.family, uri) for uri, source in releases.items()))
     counts = {source.source_id: SourceCounts() for source in inputs}
     families = {source.source_id: source.family for source in inputs}
-    releases = {source.uri: source for source in config.recipe.released}
 
     def candidates(sources: tuple[SelectionInput, ...]) -> Iterator[Candidate]:
         seen_ids: set[str] = set()
@@ -545,6 +543,8 @@ def write_training(
                 grader = _grader_kind(task)
                 if grader not in config.recipe.admitted_graders:
                     raise ValueError(f"Training selection does not admit {grader} graders: {task.id}")
+                if grader == GraderKind.HARNESS and "harbor" not in task.tags:
+                    raise ValueError(f"Training task with a harness grader requires the harbor tag: {task.id}")
                 if not excluded_keys.isdisjoint(_panel_keys(task).exclusion):
                     source_counts.heldout_overlap += 1
                     continue
@@ -621,20 +621,21 @@ def prepare(config: SelectionConfig) -> None:
             task_records(iter(selection.full), strata), str(directory / FULL_VALIDATION_FILENAME), schema=TASK_SCHEMA
         )
 
+        harness_datasets: set[str] = set()
+
         def manifest_rows():
             yield from annotations
             for batch in pq.ParquetFile(directory / TRAIN_FILENAME).iter_batches(batch_size=PARQUET_BATCH_ROWS):
                 for value in batch.to_pylist():
                     task = TaskSpec.model_validate_json(value[TASK_SPEC_COLUMN])
+                    if isinstance(task.grader, NoGrader):
+                        harness_datasets.add(task.source.dataset)
                     tags = TaskStrata.model_validate({key: value[key] for key in TaskStrata.model_fields})
                     yield _selection_row(task, tags, state=MembershipState.ACTIVE).model_dump(mode="json")
 
         write_parquet_file(manifest_rows(), str(directory / TASK_MANIFEST_FILENAME), schema=TASK_MANIFEST_SCHEMA)
         recipe_document = config.recipe.model_dump(mode="json")
         recipe_document["admitted_graders"] = sorted(config.recipe.admitted_graders)
-        family_counts: Counter[str] = Counter()
-        for source in _training_inputs(config):
-            family_counts[source.family] += counts[source.source_id].selected
         summary = {
             "selection_strata": (
                 SelectionDefinition(
@@ -649,7 +650,7 @@ def prepare(config: SelectionConfig) -> None:
             "sources": [asdict(source) for source in config.sources],
             "source_counts": {source: asdict(count) for source, count in counts.items()},
             "training_rows": sum(count.selected for count in counts.values()),
-            "training_family_counts": {family: family_counts[family] for family in sorted(config.recipe.family_limits)},
+            "training_family_counts": dict(sorted(config.recipe.family_limits.items())),
             "validation_rows": len(selection.sample),
             "full_validation_rows": len(selection.full),
             "validation_family_counts": selection.family_counts,
@@ -663,6 +664,7 @@ def prepare(config: SelectionConfig) -> None:
                     {
                         "uri": source.uri,
                         "sha256": source.sha256,
+                        "license": source.license,
                         "rows_read": count.input,
                         "rows_admitted": count.selected,
                         "rows_removed": {
@@ -673,6 +675,8 @@ def prepare(config: SelectionConfig) -> None:
                     }
                 )
             summary["released_sources"] = released_summary
+        if harness_datasets:
+            summary["harness_graded_datasets"] = sorted(harness_datasets)
         task_files = (TRAIN_FILENAME, VALIDATION_FILENAME, FULL_VALIDATION_FILENAME)
         _publish_selection(directory, config.output_path, task_files, summary)
 
@@ -713,6 +717,8 @@ def task_selection_step(curated: dict[str, ArtifactStep], recipe: SelectionRecip
     missing = recipe.sources.keys() - curated.keys()
     if missing:
         raise ValueError(f"Selection requires curation sources: {', '.join(sorted(missing))}")
+    if uncategorized := sorted({source.family for source in recipe.released} - AAII_CATEGORIES.keys()):
+        raise ValueError(f"Released families require AAII categories: {', '.join(uncategorized)}")
     source_families = {**recipe.sources, **{source.uri: source.family for source in recipe.released}}
     if len(source_families) != len(recipe.sources) + len(recipe.released):
         raise ValueError("Selection sources must have distinct IDs")
