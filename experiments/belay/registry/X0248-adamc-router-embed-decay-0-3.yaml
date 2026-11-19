@@ -20,7 +20,8 @@ trials:
   batch: X0248
   date: '2026-11-19'
   comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0248
-  wandb: []
+  wandb:
+  - belay-X0248-seed0
   settings:
     muonc_decay_mult: '12.5'
     adamc_head_router_embed: 'true'
