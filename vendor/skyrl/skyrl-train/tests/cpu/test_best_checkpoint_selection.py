@@ -312,7 +312,7 @@ def test_final_fallback_is_loud_and_refused_if_eligible_selection_is_missing(tmp
     ledger.write_text(json.dumps([{"step": 2, "eligible": False}]))
     assert selected_export_step(str(tmp_path), "best", 7) == 7
     assert "FINAL CHECKPOINT FALLBACK" in caplog.text
-    assert json.loads((tmp_path / "export-fallback.json").read_text())["eligible_validation_count"] == 0
+    assert not (tmp_path / "export-fallback.json").exists()
     ledger.write_text(json.dumps([{"step": 2, "eligible": True}]))
     with pytest.raises(ValueError, match="refusing final fallback"):
         selected_export_step(str(tmp_path), "best", 7)

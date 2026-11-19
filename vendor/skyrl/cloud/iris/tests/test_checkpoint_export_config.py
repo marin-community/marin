@@ -229,8 +229,12 @@ def test_export_selection_does_not_substitute_training_for_best_initializer(tmp_
         selected_export_step(str(tmp_path), "best", 20)
 
 
-@pytest.mark.parametrize(("selection", "expected_step"), [("best", 15), ("latest", 20)])
-def test_trainer_records_export_request_for_selected_checkpoint(tmp_path: Path, selection, expected_step) -> None:
+@pytest.mark.parametrize(
+    ("selection", "best_step", "expected_step"), [("best", 15, 15), ("latest", 15, 20), ("best", None, 20)]
+)
+def test_trainer_records_export_request_for_selected_checkpoint(
+    tmp_path: Path, selection, best_step, expected_step
+) -> None:
     config = get_default_config()
     config.trainer.ckpt_path = str(tmp_path / "checkpoints")
     config.trainer.export_path = str(tmp_path / "exports")
@@ -242,7 +246,9 @@ def test_trainer_records_export_request_for_selected_checkpoint(tmp_path: Path, 
         checkpoint = root / f"global_step_{step}"
         checkpoint.mkdir(parents=True)
         (checkpoint / "trainer_state.pt").write_bytes(b"complete")
-    (root / "best_checkpoint.json").write_text(json.dumps({"step": 15, "model_format": "native"}))
+    (root / "latest_ckpt_global_step.txt").write_text("20")
+    if best_step is not None:
+        (root / "best_checkpoint.json").write_text(json.dumps({"step": best_step, "model_format": "native"}))
     trainer = RayPPOTrainer.__new__(RayPPOTrainer)
     trainer.cfg = config
     trainer.global_step = 20
@@ -257,6 +263,10 @@ def test_trainer_records_export_request_for_selected_checkpoint(tmp_path: Path, 
     assert request.model_path == "org/policy"
     other_step = 20 if expected_step == 15 else 15
     assert read_hf_export_request(str(root / f"global_step_{other_step}")) is None
+    if selection == "best" and best_step is None:
+        assert json.loads((root / "export-fallback.json").read_text())["eligible_validation_count"] == 0
+    else:
+        assert not (root / "export-fallback.json").exists()
 
 
 @pytest.mark.asyncio

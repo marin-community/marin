@@ -93,14 +93,6 @@ def selected_export_step(checkpoint_root: str, selection: str, latest_step: int)
     marker = StoragePath(join_resource_path(checkpoint_root, LATEST_CHECKPOINT_FILE))
     if not final_state.exists() or not marker.exists() or int(marker.read_text().strip()) != latest_step:
         raise ValueError("No committed best or final native checkpoint is available")
-    fallback = {
-        "selection": "final_native_not_best",
-        "reason": "no_eligible_trained_validation",
-        "eligible_validation_count": 0,
-        "validation_receipt_count": len(receipts),
-        "step": latest_step,
-    }
-    StoragePath(join_resource_path(checkpoint_root, EXPORT_FALLBACK_FILENAME)).write_text(json.dumps(fallback))
     logger.warning("FINAL CHECKPOINT FALLBACK: no eligible trained validation; exporting final step %s", latest_step)
     return latest_step
 

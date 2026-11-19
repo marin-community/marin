@@ -112,6 +112,7 @@ from skyrl_train.group_admission import (
 )
 from marinskyrl.checkpoint_paths import (
     BEST_CHECKPOINT_FILENAME,
+    EXPORT_FALLBACK_FILENAME,
     GLOBAL_STEP_PREFIX,
     LATEST_CHECKPOINT_FILE,
     protected_native_checkpoint_steps,
@@ -3533,6 +3534,18 @@ class RayPPOTrainer:
             if best and best["model_format"] == "native" and int(best["step"]) == export_step
             else "final_not_best"
         )
+        if export_kind == "final_not_best" and self.cfg.trainer.hf_export_checkpoint == "best":
+            io.write_bytes_atomic(
+                join_resource_path(self.cfg.trainer.ckpt_path, EXPORT_FALLBACK_FILENAME),
+                json.dumps(
+                    {
+                        "selection": "final_native_not_best",
+                        "reason": "no_eligible_trained_validation",
+                        "eligible_validation_count": 0,
+                        "step": export_step,
+                    }
+                ).encode(),
+            )
         io.write_bytes_atomic(
             join_resource_path(self.cfg.trainer.export_path, "export-selection.json"),
             json.dumps({"step": export_step, "selection": export_kind, "checkpoint": checkpoint_path}).encode(),
