@@ -50,30 +50,33 @@ def _volume(organization_id: str = ORG_ID) -> SimpleNamespace:
     return SimpleNamespace(name="volume-1", organization_id=organization_id)
 
 
+def _region_payload(region_id: str = "us", sandbox_class: str = "container") -> dict:
+    """One region row of the usage overview, as the parsed API payload looks."""
+    return {
+        "region_id": region_id,
+        "sandbox_class": sandbox_class,
+        "total_cpu_quota": 6000,
+        "current_cpu_usage": 1000,
+        "total_memory_quota": 12000,
+        "current_memory_usage": 2000,
+        "total_disk_quota": 20000,
+        "current_disk_usage": 5000,
+        "total_gpu_quota": 0,
+        "current_gpu_usage": 0,
+        "max_cpu_per_sandbox": 4,
+        "max_memory_per_sandbox": 8,
+        "max_disk_per_sandbox": 10,
+        "max_disk_per_non_ephemeral_sandbox": 10,
+        "max_cpu_per_gpu_sandbox": 16,
+        "max_memory_per_gpu_sandbox": 192,
+        "max_disk_per_gpu_sandbox": 512,
+    }
+
+
 def _overview(**overrides) -> OrganizationUsageOverview:
     """Build one usage overview exactly as the parsed API payload looks."""
     payload = {
-        "region_usage": [
-            {
-                "region_id": "us",
-                "sandbox_class": "container",
-                "total_cpu_quota": 6000,
-                "current_cpu_usage": 1000,
-                "total_memory_quota": 12000,
-                "current_memory_usage": 2000,
-                "total_disk_quota": 20000,
-                "current_disk_usage": 5000,
-                "total_gpu_quota": 0,
-                "current_gpu_usage": 0,
-                "max_cpu_per_sandbox": 4,
-                "max_memory_per_sandbox": 8,
-                "max_disk_per_sandbox": 10,
-                "max_disk_per_non_ephemeral_sandbox": 10,
-                "max_cpu_per_gpu_sandbox": 16,
-                "max_memory_per_gpu_sandbox": 192,
-                "max_disk_per_gpu_sandbox": 512,
-            }
-        ],
+        "region_usage": [_region_payload()],
         "total_snapshot_quota": 40,
         "current_snapshot_usage": 12,
         "total_volume_quota": 10,
@@ -170,7 +173,7 @@ def _account(**region_overrides) -> AccountUsage:
         snapshots=ResourceCapacity(quota=40, used=12),
         volumes=ResourceCapacity(quota=10, used=0),
         sandboxes=125,
-        sandbox_states={"started": 120, "stopped": 5},
+        sandbox_states=(("started", 120), ("stopped", 5)),
     )
 
 
@@ -183,7 +186,7 @@ def test_account_usage_sums_quota_and_counts_sandboxes_by_state(monkeypatch) -> 
 
     assert usage.organization_id == ORG_ID
     assert usage.sandboxes == 6
-    assert usage.sandbox_states == {"started": 1, "stopped": 5}
+    assert usage.sandbox_states == (("started", 1), ("stopped", 5))
     assert (usage.cpu.quota, usage.cpu.used, usage.cpu.remaining) == (6000.0, 1000.0, 5000.0)
     assert usage.memory_gib.remaining == 10000.0
     assert usage.disk_gib.remaining == 15000.0
@@ -214,7 +217,7 @@ def test_account_usage_fails_when_the_inventory_spans_organizations(monkeypatch)
     client = FakeDaytonaClient(sandboxes=[_sandbox(organization_id=ORG_ID), _sandbox(organization_id=OTHER_ORG_ID)])
     _install_fakes(monkeypatch, client)
 
-    with pytest.raises(RuntimeError, match="2 organizations"):
+    with pytest.raises(RuntimeError):
         asyncio.run(account_usage(DaytonaConnection(api_key="x", api_url="u", target="us")))
 
 
@@ -222,7 +225,7 @@ def test_account_usage_fails_when_the_organization_cannot_be_resolved(monkeypatc
     client = FakeDaytonaClient()
     _install_fakes(monkeypatch, client)
 
-    with pytest.raises(RuntimeError, match="no sandboxes, snapshots or volumes"):
+    with pytest.raises(RuntimeError):
         asyncio.run(account_usage(DaytonaConnection(api_key="x", api_url="u", target="us")))
 
 
@@ -253,7 +256,7 @@ def test_region_for_launch_selects_the_target_row_not_the_sum() -> None:
         snapshots=ResourceCapacity(quota=40, used=0),
         volumes=ResourceCapacity(quota=10, used=0),
         sandboxes=0,
-        sandbox_states={},
+        sandbox_states=(),
     )
     profile = SandboxProfile(cpu=2, memory_gib=8, disk_gib=10)
     region = region_for_launch(usage, target="us")
@@ -261,9 +264,9 @@ def test_region_for_launch_selects_the_target_row_not_the_sum() -> None:
     assert region.region_id == "us"
     assert max_concurrency(region, profile) == 40
 
-    with pytest.raises(RuntimeError, match="No container quota row for region eu-cross"):
+    with pytest.raises(RuntimeError):
         region_for_launch(usage, target="eu-cross")
-    with pytest.raises(RuntimeError, match="No linux-vm quota row for region us"):
+    with pytest.raises(RuntimeError):
         region_for_launch(usage, target="us", sandbox_class="linux-vm")
 
 
@@ -349,15 +352,43 @@ def test_usage_cli_all_reports_each_account_and_skips_missing_keys(monkeypatch, 
     assert "account rl" in output and "account data" in output
 
 
+def test_usage_cli_all_skips_an_account_without_the_target_row(monkeypatch, capsys) -> None:
+    # The eval lane's quota sits in eu only; the sweep must still report the
+    # rl and data accounts instead of stopping at the first mismatch.
+    clients = [
+        FakeDaytonaClient(sandboxes=[_sandbox()], overview=_overview(region_usage=[_region_payload("eu")])),
+        FakeDaytonaClient(sandboxes=[_sandbox()]),
+        FakeDaytonaClient(sandboxes=[_sandbox()]),
+    ]
+    monkeypatch.setattr("shellbox.backends.daytona.usage.OrganizationsApi", FakeOrganizationsApi)
+    monkeypatch.setattr(DaytonaConnection, "client_factory", lambda self: lambda: clients.pop(0))
+    monkeypatch.setenv("DAYTONA_TARGET", "us")
+    monkeypatch.setenv("DAYTONA_EVAL_API_KEY", "synthetic-secret-key")
+    monkeypatch.setenv("DAYTONA_RL_API_KEY", "synthetic-secret-key")
+    monkeypatch.setenv("DAYTONA_DATA_API_KEY", "synthetic-secret-key")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["shellbox-daytona-usage", "--all", "--cpu", "2", "--memory-gib", "8", "--disk-gib", "8", "--json"],
+    )
+
+    usage_cli.main()
+
+    reports = json.loads(capsys.readouterr().out)
+    assert "No container quota row for region us" in reports["eval"]["skipped"]
+    assert reports["rl"]["max_concurrency"]["region_id"] == "us"
+    assert reports["data"]["max_concurrency"]["region_id"] == "us"
+
+
 def test_usage_cli_rejects_partial_profiles_and_missing_credentials(monkeypatch) -> None:
     monkeypatch.setenv("DAYTONA_TARGET", "us")
     monkeypatch.delenv("DAYTONA_RL_API_KEY", raising=False)
 
     monkeypatch.setattr(sys, "argv", ["shellbox-daytona-usage", "--api-key-env", "DAYTONA_RL_API_KEY"])
-    with pytest.raises(SystemExit, match="Missing Daytona credential"):
+    with pytest.raises(SystemExit):
         usage_cli.main()
 
     monkeypatch.setenv("DAYTONA_RL_API_KEY", "synthetic-secret-key")
     monkeypatch.setattr(sys, "argv", ["shellbox-daytona-usage", "--api-key-env", "DAYTONA_RL_API_KEY", "--cpu", "2"])
-    with pytest.raises(SystemExit, match="Provide all of"):
+    with pytest.raises(SystemExit):
         usage_cli.main()

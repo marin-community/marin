@@ -75,7 +75,7 @@ class AccountUsage:
     snapshots: ResourceCapacity
     volumes: ResourceCapacity
     sandboxes: int
-    sandbox_states: dict[str, int]
+    sandbox_states: tuple[tuple[str, int], ...]
 
     @property
     def cpu(self) -> ResourceCapacity:
@@ -224,7 +224,7 @@ async def account_usage_from_client(client: AsyncDaytona) -> AccountUsage:
         snapshots=ResourceCapacity(quota=overview.total_snapshot_quota, used=overview.current_snapshot_usage),
         volumes=ResourceCapacity(quota=overview.total_volume_quota, used=overview.current_volume_usage),
         sandboxes=len(sandboxes),
-        sandbox_states=dict(sorted(state_counts.items())),
+        sandbox_states=tuple(sorted(state_counts.items())),
     )
 
 
@@ -262,7 +262,7 @@ def usage_report(
             }
             for row in usage.regions
         ],
-        "sandboxes": {"total": usage.sandboxes, "by_state": usage.sandbox_states},
+        "sandboxes": {"total": usage.sandboxes, "by_state": dict(usage.sandbox_states)},
     }
     if profile is not None:
         if region is None:

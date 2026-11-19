@@ -100,7 +100,7 @@ def _print_account(
                 print("  " + "  ".join(column.ljust(12) for column in row))
     elif usage.regions:
         print(f"  region {usage.regions[0].region_id} ({usage.regions[0].sandbox_class})")
-    states = "  ".join(f"{state} {count}" for state, count in usage.sandbox_states.items()) or "none"
+    states = "  ".join(f"{state} {count}" for state, count in usage.sandbox_states) or "none"
     print(f"  sandboxes {usage.sandboxes}  states: {states}")
     if profile is not None and region is not None:
         print(
@@ -111,6 +111,15 @@ def _print_account(
         exceeded = _over_maximum_line(profile, region)
         if exceeded:
             print(f"  warning: {exceeded}")
+
+
+def _launch_region(
+    usage: AccountUsage, arguments: argparse.Namespace, profile: SandboxProfile | None
+) -> RegionCapacity | None:
+    """The quota row the launch is charged against, or None when nothing sizes."""
+    if profile is None:
+        return None
+    return region_for_launch(usage, target=arguments.target, sandbox_class=arguments.sandbox_class)
 
 
 async def _run(arguments: argparse.Namespace) -> None:
@@ -127,11 +136,16 @@ async def _run(arguments: argparse.Namespace) -> None:
                     print(f"{account}: skipped (missing {name})")
                 continue
             usage = await account_usage(_connection(api_key, arguments))
-            region = (
-                region_for_launch(usage, target=arguments.target, sandbox_class=arguments.sandbox_class)
-                if profile is not None
-                else None
-            )
+            try:
+                region = _launch_region(usage, arguments, profile)
+            except RuntimeError as error:
+                # One account's missing quota row must not lose the reports
+                # already read for the rest of the sweep.
+                if arguments.json:
+                    reports[account] = {"skipped": str(error)}
+                else:
+                    print(f"{account}: skipped ({error})")
+                continue
             if arguments.json:
                 reports[account] = usage_report(usage, profile, region=region, headroom=headroom)
             else:
@@ -145,11 +159,7 @@ async def _run(arguments: argparse.Namespace) -> None:
     if not api_key:
         raise SystemExit(f"Missing Daytona credential environment variable: {arguments.api_key_env}")
     usage = await account_usage(_connection(api_key, arguments))
-    region = (
-        region_for_launch(usage, target=arguments.target, sandbox_class=arguments.sandbox_class)
-        if profile is not None
-        else None
-    )
+    region = _launch_region(usage, arguments, profile)
     if arguments.json:
         print(json.dumps(usage_report(usage, profile, region=region, headroom=headroom), indent=2, sort_keys=True))
     else:
