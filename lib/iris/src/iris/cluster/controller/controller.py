@@ -349,6 +349,10 @@ class ControllerConfig:
     Sent as the ``requester_id`` on each ``FederationSync``, and the tag
     a minted capability URL carries so a federation parent can relay it back here."""
 
+    observability_rows: bool = True
+    """Copy the controller DB rows to Finelog (cluster config ``finelog.controller_rows``).
+    False attaches no row tables, so write transactions mark, read and write none."""
+
     dashboard_url: str = ""
     """This cluster's public origin (cluster config ``dashboard_url``); the local origin
     a minted capability URL uses when no public parent is configured."""
@@ -487,7 +491,10 @@ class Controller:
         # (their finelog handles are constructor args), so the controller only holds
         # the stack for its own logging and shuts it down at stop().
         self._log_stack = log_stack
-        self._db.attach_observability_rows(log_stack.observability_row_tables(config.cluster_id))
+        if config.observability_rows:
+            self._db.attach_observability_rows(log_stack.observability_row_tables(config.cluster_id))
+        else:
+            logger.warning("observability rows are off (finelog.controller_rows: false)")
         self._log_client = log_stack.client
         self._log_service_address = log_stack.address
         self._log_handler = RemoteLogHandler(self._log_client, key=CONTROLLER_LOG_KEY)

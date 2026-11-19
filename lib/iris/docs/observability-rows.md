@@ -180,3 +180,50 @@ History is kept in the archive (remote retention is `retain_forever`). The
 storage policies (5 years; 8 GiB each for `tasks` and `task_attempts`, 4 GiB
 each for `jobs` and `job_config`) bound only the hub's local copy; older segments are read back from
 the archive.
+
+## Cost to the controller, and turning the copy off
+
+The rows are read just before each write transaction commits and enqueued just
+after, both under the controller's write lock, so every other writer waits for
+them. Each minute the controller emits these to `telemetry_v1.iris`
+(`service = 'iris-controller'`), as native delta counters and a gauge:
+
+| Name | Meaning |
+| --- | --- |
+| `iris_controller_write_lock_held_seconds` | Total time write transactions held the lock (not maintenance such as WAL checkpoints) |
+| `iris_observability_rows_seconds` | The part of that spent on observability rows: snapshot plus enqueue |
+| `iris_observability_rows_count` | Rows snapshotted and enqueued |
+| `iris_observability_rows_max_seconds` | The slowest single transaction's row time in the minute |
+
+A transaction whose rows take over 100 ms also logs `observability rows: N rows
+took M ms under the write lock`, at most once a minute.
+
+The row cost as a share of lock time, per hour:
+
+```sql
+SELECT date_trunc('hour', to_timestamp_millis(timestamp_ms)) AS hour,
+       sum(value) FILTER (WHERE name = 'iris_observability_rows_seconds')
+         / nullif(sum(value) FILTER (WHERE name = 'iris_controller_write_lock_held_seconds'), 0)
+         AS row_share_of_lock_time,
+       sum(value) FILTER (WHERE name = 'iris_observability_rows_seconds') AS row_seconds
+FROM "telemetry_v1.iris"
+WHERE service = 'iris-controller'
+  AND name IN ('iris_observability_rows_seconds', 'iris_controller_write_lock_held_seconds')
+  AND timestamp_ms >= <start_ms> AND timestamp_ms < <end_ms>
+GROUP BY 1
+ORDER BY 1;
+```
+
+To turn the copy off, set it in the cluster config and restart the controller:
+
+```yaml
+finelog:
+  config: marin
+  controller_rows: false
+```
+
+The controller then attaches no row tables: write transactions mark, read and
+write no rows, and the controller logs `observability rows are off` at start.
+It still emits `iris_controller_write_lock_held_seconds`, so lock time before and
+after the switch can be compared. Rows for changes made while it is off are not
+written later.

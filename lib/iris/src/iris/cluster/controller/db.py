@@ -57,9 +57,11 @@ from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.engine.cursor import CursorResult
 
+from iris.cluster.controller import write_lock_cost
 from iris.cluster.controller.caches import CacheRegistry
 from iris.cluster.controller.observability_rows import ObservabilityRowTables
 from iris.cluster.controller.schema import metadata, schema_migrations_table
+from iris.cluster.controller.write_lock_cost import CostWindow
 
 logger = logging.getLogger(__name__)
 
@@ -159,10 +161,13 @@ class Tx:
         seq: int,
         task_event_table: Table | None = None,
         observability_rows: ObservabilityRowTables | None = None,
+        lock_cost: CostWindow | None = None,
     ):
         self.conn = conn
         self.task_event_table = task_event_table
         self.observability_rows = observability_rows
+        # The owning DB's write-lock cost window; None on a read snapshot.
+        self.lock_cost = lock_cost
         self._pre_commit_hooks: list[Callable[[], None]] = []
         self._hooks: list[Callable[[], None]] = []
         # The DB commit sequence sampled just BEFORE this cursor's snapshot was
@@ -226,6 +231,7 @@ def write_transaction(
     write_engine: Engine,
     write_lock: threading.RLock,
     caches: CacheRegistry,
+    lock_cost: CostWindow,
     task_event_table: Table | None = None,
     observability_rows: ObservabilityRowTables | None = None,
 ) -> Iterator[Tx]:
@@ -239,15 +245,20 @@ def write_transaction(
     ``caches`` is the owning DB's per-controller cache registry, mirrored onto
     the yielded ``Tx`` as ``tx.caches`` so write sinks can reach a memo through
     the cursor (see :mod:`iris.cluster.controller.caches`).
+
+    The time from acquiring ``write_lock`` to releasing it is added to
+    ``lock_cost``, which emits a summary each minute
+    (:mod:`iris.cluster.controller.write_lock_cost`).
     """
     write_lock.acquire()
+    acquired_at = time.monotonic()
     conn: Connection | None = None
     try:
         conn = write_engine.connect()
         # Sample the commit sequence BEFORE opening the snapshot (conservative).
         seq = caches.commit_seq
         conn.execute(text("BEGIN IMMEDIATE"))
-        tx = Tx(conn, caches, seq, task_event_table, observability_rows)
+        tx = Tx(conn, caches, seq, task_event_table, observability_rows, lock_cost)
         try:
             yield tx
             tx._fire_pre_commit_hooks()
@@ -263,6 +274,10 @@ def write_transaction(
     finally:
         if conn is not None:
             conn.close()
+        now = time.monotonic()
+        cost = lock_cost.add_lock_held(now - acquired_at, now)
+        if cost is not None:
+            write_lock_cost.emit(cost)
         write_lock.release()
 
 
@@ -309,6 +324,7 @@ class ControllerDB:
         self._reopen_hooks: list[Callable[[], None]] = []
         self._task_event_table: Table | None = None
         self._observability_rows: ObservabilityRowTables | None = None
+        self._lock_cost = CostWindow(started=time.monotonic())
         # Per-controller cache registry, mirrored onto every Tx this DB mints as
         # ``tx.caches``. Built before the engines so no cursor is ever minted
         # without it. Populated by higher layers (each per-controller memo
@@ -440,6 +456,7 @@ class ControllerDB:
             self._sa_write_engine,
             self._lock,
             self._caches,
+            self._lock_cost,
             self._task_event_table,
             self._observability_rows,
         ) as tx:

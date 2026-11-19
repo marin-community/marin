@@ -689,3 +689,28 @@ def test_removing_a_worker_writes_the_task_rows_that_pointed_at_it(state):
     assert [(t.task_id, t.state, t.current_worker_id) for t in new] == [
         (task.task_id.to_wire(), "TASK_STATE_RUNNING", None)
     ]
+
+
+def test_a_controller_with_observability_rows_off_attaches_no_row_tables(make_controller, tmp_path):
+    on = make_controller(local_state_dir=tmp_path / "on")
+    off = make_controller(observability_rows=False, local_state_dir=tmp_path / "off")
+
+    with on._db.transaction() as tx:
+        assert tx.observability_rows is not None
+    with off._db.transaction() as tx:
+        assert tx.observability_rows is None
+
+
+def test_slow_rows_are_logged_and_counted_in_the_dbs_lock_cost(state, monkeypatch, caplog):
+    monkeypatch.setattr(observability_rows, "SLOW_ROWS_SECONDS", 0.0)
+    monkeypatch.setattr(observability_rows, "_slow_rows_log", RateLimiter(interval_seconds=0))
+    _attach(state, "marin")
+
+    with caplog.at_level(logging.WARNING, logger=observability_rows.__name__):
+        submit_job(state, "train", make_job_request("train"))
+
+    (warning,) = [r.getMessage() for r in caplog.records if "under the write lock" in r.getMessage()]
+    assert "finelog.controller_rows: false" in warning
+    lock_cost = state._db._lock_cost
+    assert lock_cost.rows > 0
+    assert 0 < lock_cost.row_seconds <= lock_cost.lock_held_seconds

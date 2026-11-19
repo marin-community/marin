@@ -29,6 +29,7 @@ rolls back the controller's own writes or stops its later post-commit hooks.
 
 import json
 import logging
+import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -44,6 +45,7 @@ from sqlalchemy.engine.cursor import CursorResult
 from iris.cluster.constraints import get_device_variant
 from iris.cluster.controller.codec import proto_from_json
 from iris.cluster.controller.schema import job_config_table, jobs_table, task_attempts_table, tasks_table
+from iris.cluster.controller.write_lock_cost import CostWindow
 from iris.cluster.redaction import redact_string
 from iris.cluster.stats.tables import IrisJob, IrisJobConfig, IrisTask, IrisTaskAttempt, stats_timestamp
 from iris.cluster.types import LOCAL_CLUSTER, JobName, WorkerId, get_gpu_count, get_tpu_count
@@ -57,6 +59,10 @@ _ID_CHUNK_SIZE = 400
 # A submitter that sends a malformed MARIN_PROVENANCE usually sends it on every job.
 _MALFORMED_PROVENANCE_LOG_INTERVAL = 60.0
 _malformed_provenance_log = RateLimiter(interval_seconds=_MALFORMED_PROVENANCE_LOG_INTERVAL)
+# Rows this slow to snapshot and enqueue hold every other writer up noticeably.
+SLOW_ROWS_SECONDS = 0.1
+_SLOW_ROWS_LOG_INTERVAL = 60.0
+_slow_rows_log = RateLimiter(interval_seconds=_SLOW_ROWS_LOG_INTERVAL)
 
 
 @dataclass(frozen=True)
@@ -77,6 +83,7 @@ class RowCursor(Protocol):
     """The write-transaction surface this module needs (``db.Tx``)."""
 
     observability_rows: ObservabilityRowTables | None
+    lock_cost: CostWindow | None
     memo: dict[str, object]
 
     def execute(self, stmt, params=None) -> CursorResult: ...
@@ -100,6 +107,8 @@ class _Marked:
     config_rows: list[IrisJobConfig] = field(default_factory=list)
     task_rows: list[IrisTask] = field(default_factory=list)
     attempt_rows: list[IrisTaskAttempt] = field(default_factory=list)
+    # Time spent reading the rows before commit, under the write lock.
+    snapshot_seconds: float = 0.0
 
 
 def _marked(cur: RowCursor) -> _Marked | None:
@@ -110,8 +119,10 @@ def _marked(cur: RowCursor) -> _Marked | None:
     if marked is None:
         marked = _Marked()
         cur.memo[_MEMO_KEY] = marked
-        cur.register_pre_commit(lambda: _snapshot_or_drop(cur, tables, marked))
-        cur.register(lambda: _write(tables, marked))
+        lock_cost = cur.lock_cost
+        assert lock_cost is not None, "observability rows need a write transaction"
+        cur.register_pre_commit(lambda: _snapshot_or_drop(cur, tables, marked, lock_cost))
+        cur.register(lambda: _write(tables, marked, lock_cost))
     assert isinstance(marked, _Marked)
     return marked
 
@@ -169,8 +180,13 @@ def record_worker_removal(cur: RowCursor, worker_id: WorkerId) -> None:
     marked.tasks.update(dict.fromkeys(cur.execute(select(t.task_id).where(t.current_worker_id == worker_id)).scalars()))
 
 
-def _write(tables: ObservabilityRowTables, marked: _Marked) -> None:
-    """Enqueue the snapshotted rows; a table whose write fails is logged and its rows dropped."""
+def _write(tables: ObservabilityRowTables, marked: _Marked, lock_cost: CostWindow) -> None:
+    """Enqueue the snapshotted rows; a table whose write fails is logged and its rows dropped.
+
+    This runs after commit but still under the write lock, so its time counts with
+    the snapshot's as the rows' cost, and a slow total is logged.
+    """
+    started = time.monotonic()
     for table, rows in (
         (tables.job_table, marked.job_rows),
         (tables.job_config_table, marked.config_rows),
@@ -185,6 +201,19 @@ def _write(tables: ObservabilityRowTables, marked: _Marked) -> None:
         # committed transaction and skip the hooks registered after it (cache invalidations).
         except Exception:
             logger.exception("observability rows: write failed, dropping %d %s rows", len(rows), type(rows[0]).__name__)
+    enqueue_seconds = time.monotonic() - started
+    lock_cost.add_row_time(enqueue_seconds)
+    seconds = marked.snapshot_seconds + enqueue_seconds
+    rows = len(marked.job_rows) + len(marked.config_rows) + len(marked.task_rows) + len(marked.attempt_rows)
+    lock_cost.add_row_transaction(seconds, rows)
+    if seconds >= SLOW_ROWS_SECONDS and _slow_rows_log.should_run():
+        logger.warning(
+            "observability rows: %d rows took %.0f ms under the write lock "
+            "(at most one such warning per %.0f s; set finelog.controller_rows: false to turn the rows off)",
+            rows,
+            seconds * 1000,
+            _SLOW_ROWS_LOG_INTERVAL,
+        )
 
 
 class _Accelerator(NamedTuple):
@@ -237,11 +266,14 @@ def _dt(value: Timestamp | None) -> datetime | None:
     return value.as_naive_utc() if value is not None else None
 
 
-def _snapshot_or_drop(cur: RowCursor, tables: ObservabilityRowTables, marked: _Marked) -> None:
+def _snapshot_or_drop(cur: RowCursor, tables: ObservabilityRowTables, marked: _Marked, lock_cost: CostWindow) -> None:
     """Snapshot the marked rows; on failure, log and drop them so the transaction still commits.
 
-    These rows are a telemetry copy: a bug here must not block scheduling.
+    These rows are a telemetry copy: a bug here must not block scheduling. The
+    snapshot runs under the write lock, so its time is recorded (see
+    :mod:`iris.cluster.controller.write_lock_cost`).
     """
+    started = time.monotonic()
     try:
         _snapshot(cur, tables, marked)
     except Exception:
@@ -256,6 +288,8 @@ def _snapshot_or_drop(cur: RowCursor, tables: ObservabilityRowTables, marked: _M
         marked.config_rows.clear()
         marked.task_rows.clear()
         marked.attempt_rows.clear()
+    marked.snapshot_seconds = time.monotonic() - started
+    lock_cost.add_row_time(marked.snapshot_seconds)
 
 
 def _snapshot(cur: RowCursor, tables: ObservabilityRowTables, marked: _Marked) -> None:
