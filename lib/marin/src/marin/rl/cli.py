@@ -22,14 +22,14 @@ from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from iris.rpc.proto_display import priority_band_value
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from rigging.config_discovery import find_project_root
 from rigging.timing import Duration
 
 from marin.execution.lazy import ArtifactStep, run
 from marin.execution.remote import sanitize_job_name
 from marin.experiment.cli import BuildResult, build_options_with_runner, graph_handles
-from marin.rl.skyrl import IrisSkyRLExecution
+from marin.rl.skyrl import IrisSkyRLExecution, skyrl_execution
 
 _COORDINATOR_CPU = 4
 _COORDINATOR_MEMORY = "16GB"
@@ -61,35 +61,21 @@ class _CoordinatorRun(BaseModel):
     forward_env: tuple[str, ...]
 
 
-class _CoordinatorGraph(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    runs: tuple[_CoordinatorRun, ...]
+_COORDINATOR_GRAPH = TypeAdapter(tuple[_CoordinatorRun, ...])
 
 
-def _coordinator_graph(handles: list[ArtifactStep]) -> _CoordinatorGraph:
-    return _CoordinatorGraph(
-        runs=tuple(
-            _CoordinatorRun(
-                name=step.name,
-                version=step.version,
-                forward_env=(
-                    tuple(sorted(set(step.run.keywords.get("forward_env", ())))) if isinstance(step.run, partial) else ()
-                ),
-                required_env_vars=tuple(
-                    sorted(
-                        {
-                            name
-                            for value in step.runtime_args.values()
-                            if isinstance(value, IrisSkyRLExecution)
-                            for name in value.required_env_vars
-                        }
-                    )
-                ),
-            )
-            for step in graph_handles(handles)
-            if any(isinstance(value, IrisSkyRLExecution) for value in step.runtime_args.values())
-        ),
+def _coordinator_graph(handles: list[ArtifactStep]) -> tuple[_CoordinatorRun, ...]:
+    return tuple(
+        _CoordinatorRun(
+            name=step.name,
+            version=step.version,
+            forward_env=(
+                tuple(sorted(set(step.run.keywords.get("forward_env", ())))) if isinstance(step.run, partial) else ()
+            ),
+            required_env_vars=tuple(sorted(set(execution.required_env_vars))),
+        )
+        for step in graph_handles(handles)
+        if (execution := skyrl_execution(step)) is not None
     )
 
 
@@ -99,14 +85,14 @@ def validate_coordinator_graph(handles: list[ArtifactStep]) -> None:
     if payload is None:
         raise click.UsageError("submitted RL graph identity is missing from the coordinator")
     try:
-        submitted = _CoordinatorGraph.model_validate_json(payload, strict=True)
+        submitted = _COORDINATOR_GRAPH.validate_json(payload, strict=True)
     except ValidationError as error:
         raise click.UsageError("submitted RL graph identity is malformed") from error
     rebuilt = _coordinator_graph(handles)
     if rebuilt != submitted:
         raise click.UsageError(
             "coordinator rebuilt a different RL graph: "
-            f"submitted={submitted.model_dump_json()}, rebuilt={rebuilt.model_dump_json()}"
+            f"submitted={payload}, rebuilt={_COORDINATOR_GRAPH.dump_json(rebuilt).decode()}"
         )
 
 
@@ -120,12 +106,7 @@ def _module_name(module: ModuleType) -> str:
 
 
 def _skyrl_executions(handles: list[ArtifactStep]) -> tuple[IrisSkyRLExecution, ...]:
-    executions = {
-        execution
-        for handle in graph_handles(handles)
-        for execution in handle.runtime_args.values()
-        if isinstance(execution, IrisSkyRLExecution)
-    }
+    executions = {execution for handle in graph_handles(handles) if (execution := skyrl_execution(handle)) is not None}
     if not executions:
         raise ValueError("RL experiment did not construct a SkyRL artifact step")
     return tuple(executions)
@@ -167,7 +148,7 @@ def _coordinator_request(
     for execution in executions:
         for name in execution.required_env_vars:
             selected_env[name] = env_vars[name]
-    selected_env[_COORDINATOR_GRAPH_ENV] = _coordinator_graph(handles).model_dump_json()
+    selected_env[_COORDINATOR_GRAPH_ENV] = _COORDINATOR_GRAPH.dump_json(_coordinator_graph(handles)).decode()
     route = _submission_route(executions)
     terminal = graph_handles(handles)[-1]
     job_name = sanitize_job_name(f"{terminal.name}-{terminal.version}-coordinator-{uuid.uuid4().hex[:8]}")

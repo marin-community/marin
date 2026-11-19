@@ -10,13 +10,11 @@ from dataclasses import replace
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from finestore.rl.strata import MembershipState, SelectionDefinition, SelectionTaskRow
-from finestore.schema import arrow_schema
-from taskcompendium.identity import canonical_sha256
 from omegaconf import OmegaConf
 from transformers import AutoTokenizer
 from rolloutengine.models import ModelTurn
 from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExitCodeReward, ScriptGrader
 
 from skyrl_train.batch_sampling import filter_trajectory_batch
@@ -33,7 +31,7 @@ from skyrl_train.trajectory_runners.trajectory_processing import (
 )
 from skyrl_train.trajectory_runners.types import TaskRequestBatch, TrajectoryID
 from skyrl_train.utils.trainer_utils import evaluation_response_metrics
-from tests.cpu.task_specs import NATIVE_ENVIRONMENT, lowered_task, task_input, text_task
+from tests.cpu.task_specs import NATIVE_ENVIRONMENT, lowered_task, task_input, text_task, write_selection_panel
 from tests.cpu.tiny_training.tiny_model import build_tiny_policy
 
 
@@ -61,35 +59,15 @@ def test_final_profiles_build_primary_and_named_datasets_without_periodic_evalua
             )
         else:
             write_tasks(path, [lowered_task(task)])
-        pq.write_table(
-            pa.Table.from_pylist([{"task_spec": task.model_dump_json()}]), path.parent / "validation.parquet"
-        )
-        row = SelectionTaskRow(
-            task_id=task.id,
-            task_digest=digest,
-            family=path.parent.name,
-            source="declared-source",
-            aai_category="general",
-            topic="algebra",
-            difficulty="hard",
-            agentic=True,
-            state=MembershipState.ACTIVE,
-        )
-        pq.write_table(
-            pa.Table.from_pylist([row.model_dump(mode="json")], schema=arrow_schema(SelectionTaskRow)),
-            path.parent / "task_manifest.parquet",
-        )
-        (path.parent / "summary.json").write_text(
-            json.dumps(
-                {
-                    "selection_strata": SelectionDefinition(
-                        name=path.parent.name, version="1", sampling="all", task_files=("validation.parquet",)
-                    ).model_dump(mode="json")
-                }
-            )
+        write_selection_panel(
+            path.parent, [task], path.parent.name, "1",
+            lambda _: {"family": path.parent.name, "source": "declared-source",
+                       "aai_category": "general", "topic": "algebra", "difficulty": "hard", "agentic": True},
         )
     config.data.val_data = [str(primary)]
     config.data.task_cache_dir = str(tmp_path / "task-cache")
+    manifest_path = primary.parent / "summary.json"
+    faults = [(manifest_path, b'{"selection_strata": null}', "SelectionDefinition")]
     if experiment_type is TerminalBenchExp:
         OmegaConf.update(config, "terminal_bench_config", {}, force_add=True)
     config.trainer.eval_interval = 0
@@ -179,22 +157,28 @@ def test_final_profiles_build_primary_and_named_datasets_without_periodic_evalua
         mismatched = original.set_column(
             original.schema.get_field_index("family"), "family", pa.array(["wrong-family"])
         )
-        pq.write_table(mismatched, primary)
-        with pytest.raises(ValueError, match="row strata differ from selection manifest"):
-            experiment.get_eval_dataset([str(primary)])
-        pq.write_table(original, primary)
         membership_path = primary.parent / "validation.parquet"
         membership = pq.read_table(membership_path)
         changed_task = json.loads(membership["task_spec"][0].as_py())
         changed_task["id"] = "edited"
-        pq.write_table(pa.table({"task_spec": [json.dumps(changed_task)]}), membership_path)
-        with pytest.raises(ValueError, match="manifest population differs"):
-            experiment.get_eval_dataset([str(primary)])
-        pq.write_table(membership, membership_path)
+        faults.extend(
+            [
+                (primary, mismatched, "row strata differ from selection manifest"),
+                (membership_path, pa.table({"task_spec": [json.dumps(changed_task)]}), "manifest population differs"),
+            ]
+        )
     config.data.val_data = [str(primary)]
-    (primary.parent / "summary.json").write_text('{"selection_strata": null}')
-    with pytest.raises(ValueError, match="SelectionDefinition"):
-        experiment.get_eval_dataset()
+    for path, replacement, expected in faults:
+        original = path.read_bytes()
+        if isinstance(replacement, bytes):
+            path.write_bytes(replacement)
+        else:
+            pq.write_table(replacement, path)
+        try:
+            with pytest.raises(ValueError, match=expected):
+                experiment.get_eval_dataset()
+        finally:
+            path.write_bytes(original)
 
 
 @pytest.mark.parametrize("per_token", [False, True])
@@ -210,8 +194,7 @@ def test_evaluation_mean_survives_cancellation_and_completion_order(per_token):
 
 
 def test_task_timings_survive_projection_concatenation_and_row_selection():
-    config = get_default_config().generator
-    tokenizer = SimpleNamespace(eos_token_id=2)
+    projection_args = get_default_config().generator, SimpleNamespace(eos_token_id=2)
     inputs, rollouts = [], []
     turn = ModelTurn(
         message={"role": "assistant", "content": "answer"},
@@ -231,7 +214,6 @@ def test_task_timings_survive_projection_concatenation_and_row_selection():
                 metric_class="taskcompendium" if index % 2 else "other",
             )
         )
-        turns = (turn,) * turn_count
         rollouts.append(
             TrainingRollout(
                 task_id=task.id,
@@ -245,26 +227,25 @@ def test_task_timings_survive_projection_concatenation_and_row_selection():
                 steps=tuple(
                     TrainingStep(
                         turn,
-                        TrainingTransition(done=i == turn_count - 1, reward=float(i == turn_count - 1)),
+                        TrainingTransition(done=last, reward=float(last)),
                         i,
                         (),
                     )
-                    for i, turn in enumerate(turns)
+                    for i, last in enumerate((False,) * (turn_count - 1) + (True,))
                 ),
                 metrics={} if duration is None else {"timing/grading": duration, "timing/setup": duration - 1},
             )
         )
-    request = TaskRequestBatch(
-        rows=tuple(inputs), trajectory_ids=tuple(TrajectoryID(str(i), 0) for i in range(len(inputs)))
-    )
-    whole = WholeTaskProjection(config, tokenizer)
+    ids = tuple(TrajectoryID(str(i), 0) for i in range(len(inputs)))
+    request = TaskRequestBatch(rows=tuple(inputs), trajectory_ids=ids)
+    whole = WholeTaskProjection(*projection_args)
     batches = [
-        whole.project(rollouts[:1], replace(request, rows=request.rows[:1], trajectory_ids=request.trajectory_ids[:1])),
-        whole.project(rollouts[1:], replace(request, rows=request.rows[1:], trajectory_ids=request.trajectory_ids[1:])),
+        whole.project(rollouts[part], replace(request, rows=request.rows[part], trajectory_ids=ids[part]))
+        for part in (slice(0, 1), slice(1, None))
     ]
     combined = concatenate_trajectory_batches(batches, tis_lcs_alert_threshold=0.05)
     combined = concatenate_trajectory_batches([combined], tis_lcs_alert_threshold=0.05)
-    stepped = StepTaskProjection(config, tokenizer).project(rollouts, request)
+    stepped = StepTaskProjection(*projection_args).project(rollouts, request)
     for batch in (combined, stepped):
         for metrics in (batch["rollout_metrics"], evaluation_response_metrics(batch)):
             assert {key: metrics[f"timing/grading/{key}"] for key in ("mean", "p50", "p95", "max")} == pytest.approx(

@@ -121,14 +121,14 @@ def test_mixed_candidate_uses_the_selected_tasks_and_preserves_authored_concurre
     [
         ("recipe", ("environment.task_sessions.daytona.ttl_minutes", 60), "ttl_minutes"),
         ("recipe", ("trainer.algorithm.group_admission.stall_timeout", 9000), "stall_timeout"),
-        ("owner", ("trainer.hf_export_checkpoint", "best"), "derived by the runner"),
+        ("owner", ("trainer.hf_export_checkpoint", "best"), "owned by the preset"),
         pytest.param(
             "owner",
             ("trainer.placement.policy_num_nodes", 10),
-            "derived by the runner",
+            "owned by the preset",
             id="authored-placement",
         ),
-        ("owner", ("trainer.rollout_buffer.groups_per_family", {"agentic": 32}), "derived by the runner"),
+        ("owner", ("trainer.rollout_buffer.groups_per_family", {"agentic": 32}), "owned by the preset"),
         ("mix", {"agentic": Fraction(1, 4), "nonagentic": Fraction(1, 4)}, "sum to 1"),
         ("mix", {"agentic": Fraction(1, 3), "nonagentic": Fraction(2, 3)}, "whole number of groups"),
         ("mix", {"agentic": Fraction(1, 2), "math": Fraction(1, 2)}, "training selection has"),
@@ -281,7 +281,7 @@ def test_mochi_plan_refuses_an_incomplete_default_export(selection, tmp_path, st
 def test_sft_composition_reenters_its_own_module(selection, monkeypatch, model, request):
     module = f"experiments.post_training.{model}_sft_then_rl"
     sft = MIXTURE_262K_32NODE if model == "snowball" else request.getfixturevalue("mochi_sft_preset")
-    argv = ("--preset", "train-long", "--version", "2026.11.19.1", "--no-issue", "--run")
+    argv = ("--preset", "train-long", "--version", "2026.11.19.1", "--run")
     prefix = "s3://fixture-models/shared"
     monkeypatch.setenv("MARIN_PREFIX", prefix)
     monkeypatch.setattr(rl_recipe, "artifact_prefix", lambda _cluster: prefix)

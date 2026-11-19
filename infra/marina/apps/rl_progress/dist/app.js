@@ -55,7 +55,7 @@ function showDetails(run) {
   body.append(links);
   const fields = element('dl', null, { class: 'detail-grid' });
   const facts = [
-    ['Model', run.model], ['Issue', run.issue === 'opted_out' ? 'Opted out at launch' : run.issue],
+    ['Model', run.model], ['Issue', run.issue],
     ['Series', series(run)], ['Run ID', run.run_id], ['Attempt ID', run.attempt_id], ['Iris job', run.iris_job_id],
     ['Verdict', run.gate_result?.verdict], ['Label', run.gate_result?.label], ['Gate', run.gate], ['Failed facts', (run.failed_facts ?? []).join(', ') || null],
     ['Status', `${run.status} · ${run.optimizer_steps ?? 'Unknown'} optimizer updates`],

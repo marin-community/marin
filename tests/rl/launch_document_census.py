@@ -4,6 +4,7 @@
 import inspect
 import json
 from collections.abc import Callable
+from contextlib import contextmanager
 from functools import partial
 from itertools import product
 from pathlib import Path
@@ -18,10 +19,9 @@ from marin.rl.skyrl import SkyRLRun
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training import iceball_micro, rl, rl_presets, skyrl_port_smoke, snowball_online_eagle
+from experiments.post_training import iceball_micro, rl, skyrl_port_smoke, snowball_online_eagle
 from experiments.post_training import mochi_rl as mochi_model
 from experiments.post_training import rl_recipe as recipe
-from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.cat_count_canary import launcher as canary
 from experiments.post_training.curriculum_rl import launch as curriculum
 from experiments.post_training.mismatch_probe import launch as mismatch
@@ -49,9 +49,9 @@ def _curriculum_step(scale, policy, arm) -> ArtifactStep[SkyRLRun]:
     return curriculum.build_arms(specs=(arm,), scale=scale, policy=policy, version=VERSION)[arm.name].rl
 
 
-def _preset_step(
-    table: rl_presets.ModelPresets, preset: rl_presets.Preset, settings: tuple[str, ...] = ()
-) -> ArtifactStep[SkyRLRun]:
+def _mochi_mixed_step() -> ArtifactStep[SkyRLRun]:
+    table = mochi_model.MOCHI
+    preset = table.by_name["train-medium-agentic"]
     selection = recipe.selection_artifact(preset.tasks)
     summary = selection_summary(910)
     sources = [(selection, summary)]
@@ -72,12 +72,7 @@ def _preset_step(
             summary["training_family_counts"] = counts
             write_training_families(path.parent, counts)
         path.write_text(json.dumps(summary))
-    return rl.build_run(
-        preset,
-        tasks=selection if preset.tasks_input == "required" else None,
-        settings=settings,
-        table=table,
-    ).runs[0]
+    return rl.build_run(preset, tasks=selection, table=table).runs[0]
 
 
 def _iceball_step() -> ArtifactStep[SkyRLRun]:
@@ -113,23 +108,7 @@ def launch_builders(
         if (policy is curriculum.SNOWBALL_POLICY) != scale.startswith("snowball-"):
             continue
         builders[name] = partial(_curriculum_step, scale, policy, arm)
-    for label, preset in snowball_model.SNOWBALL.by_name.items():
-        builders[f"snowball/{label}"] = partial(_preset_step, snowball_model.SNOWBALL, preset)
-    builders["snowball/settings/optimizer"] = partial(
-        _preset_step,
-        snowball_model.SNOWBALL,
-        snowball_model.SNOWBALL.by_name["learning-medium"],
-        ("trainer.policy.optimizer_config.lr=2e-6",),
-    )
-    builders["snowball/settings/context-budget"] = partial(
-        _preset_step,
-        snowball_model.SNOWBALL,
-        snowball_model.SNOWBALL.by_name["train-long"],
-        ("context_budget.request_window_tokens=32768",),
-    )
-    builders["mochi/train-medium-agentic"] = partial(
-        _preset_step, mochi_model.MOCHI, mochi_model.MOCHI.by_name["train-medium-agentic"]
-    )
+    builders["mochi/train-medium-agentic"] = _mochi_mixed_step
     canary_base = {"preset": "dry", "lane": "async", "model": canary.DEFAULT_MODEL, "checkpoint": False, "export": False}
     canary_axes = {
         "preset": canary.PRESETS,
@@ -210,19 +189,25 @@ def _seed_dependency_metadata(step: ArtifactStep[SkyRLRun], artifact_root: str) 
             (checkpoint / "tokenizer_config.json").write_text("{}")
 
 
-def runtime_launch(tmp_path: Path):
+@contextmanager
+def _memory_s3():
     source_class = get_filesystem_class("s3")
     register_implementation("s3", _MemoryObjectStore, clobber=True)
+    try:
+        yield
+    finally:
+        register_implementation("s3", source_class, clobber=True)
+
+
+def runtime_launch(tmp_path: Path):
     prefix = "s3://launcher-test/" + tmp_path.name
 
     def render(step):
         _seed_dependency_metadata(step, prefix)
         return materialized_config(step, prefix)
 
-    try:
+    with _memory_s3():
         yield render
-    finally:
-        register_implementation("s3", source_class, clobber=True)
 
 
 def render_launch_census(artifact_root: Path) -> tuple[dict[str, str], dict[str, str]]:
@@ -230,19 +215,14 @@ def render_launch_census(artifact_root: Path) -> tuple[dict[str, str], dict[str,
     builders = launch_builders(artifact_root)
     documents = {}
     failures = {}
-    source_class = get_filesystem_class("s3")
-    register_implementation("s3", _MemoryObjectStore, clobber=True)
     prefix = "s3://launch-census/" + artifact_root.name
-    try:
-        with build_context(BuildContext(versions=VersionCodex(default=VERSION))):
-            for name, build in builders.items():
-                try:
-                    step = build()
-                    _seed_dependency_metadata(step, prefix)
-                    config = materialized_config(step, prefix)
-                    documents[name] = config.launch_config_yaml
-                except Exception as error:
-                    failures[name] = f"{type(error).__name__}: {error}"
-    finally:
-        register_implementation("s3", source_class, clobber=True)
+    with _memory_s3(), build_context(BuildContext(versions=VersionCodex(default=VERSION))):
+        for name, build in builders.items():
+            try:
+                step = build()
+                _seed_dependency_metadata(step, prefix)
+                config = materialized_config(step, prefix)
+                documents[name] = config.launch_config_yaml
+            except Exception as error:
+                failures[name] = f"{type(error).__name__}: {error}"
     return documents, failures

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from types import MappingProxyType
 
@@ -45,23 +46,14 @@ from experiments.post_training.task_curation.selection import (
 )
 
 SEED = 20261020
-
 MODEL_ID = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
-
 MODEL_REVISION = "fe666478454e79fe6027a0bab0388d9abd68f51a"
-
 MODEL_URI = "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
-
 DEFAULT_SELECTION_VERSION = "2026.11.19.1"
-
 DEFAULT_EVAL_LITE_NAME = "eval-lite"
-
 DEFAULT_EVAL_LITE_VERSION = "2026.11.17.1"
-
 EVAL_REPLY_TOKENS = 8192
-
 _DEFAULT_TASKS = f"snowball-100k@{DEFAULT_SELECTION_VERSION}"
-
 _DEFAULT_EVAL_LITE = f"{DEFAULT_EVAL_LITE_NAME}@{DEFAULT_EVAL_LITE_VERSION}"
 
 _DEFAULT_MODEL = ArtifactHfModel(
@@ -180,31 +172,10 @@ EVALUATIONS = MappingProxyType(
     {
         evaluation.name: evaluation
         for evaluation in (
-            Evaluation(
-                name="eval_lite",
-                file=Path(FULL_VALIDATION_FILENAME).stem,
-                source="held_out",
-                profile=_HELD_OUT_SAMPLING,
-            ),
-            Evaluation(
-                name="eval_lite_100",
-                file=Path(VALIDATION_FILENAME).stem,
-                source="held_out",
-                profile=_HELD_OUT_SAMPLING,
-            ),
-            Evaluation(
-                name="speed_512x4",
-                file=Path(TRAIN_FILENAME).stem,
-                sample=512,
-                profile=_THROUGHPUT_SAMPLING,
-            ),
-            Evaluation(
-                name="screen_256x4",
-                file=Path(TRAIN_FILENAME).stem,
-                source="tasks",
-                sample=256,
-                profile=_SCREENING_SAMPLING,
-            ),
+            Evaluation("eval_lite", Path(FULL_VALIDATION_FILENAME).stem, _HELD_OUT_SAMPLING, source="held_out"),
+            Evaluation("eval_lite_100", Path(VALIDATION_FILENAME).stem, _HELD_OUT_SAMPLING, source="held_out"),
+            Evaluation("speed_512x4", Path(TRAIN_FILENAME).stem, _THROUGHPUT_SAMPLING, sample=512),
+            Evaluation("screen_256x4", Path(TRAIN_FILENAME).stem, _SCREENING_SAMPLING, source="tasks", sample=256),
         )
     }
 )
@@ -275,54 +246,47 @@ _ASYNC_P40 = Recipe(
 
 _GENERATING = Recipe(layout=E8, fixed_reply_tokens=None, config=_DEFAULT_PATCH, training_plan=_P40_PLAN)
 
-_GAPS = (
-    "aaii-coverage",
-    "no-agentic-tasks",
-    "no-image-sandbox",
-)
+_GAPS = ("aaii-coverage", "no-agentic-tasks", "no-image-sandbox")
 
 _TASK_SET = EVALUATIONS["eval_lite_100"]
 
 _BATCH_KEYS = frozenset(BATCH_SETTINGS)
 
-_OWNED_KEYS = frozenset({"generator.run_engines_locally", "generator.trajectory_retention", *_MODE_KEYS})
-
-_GATED_KEYS = frozenset(
-    {
-        "trainer.max_steps",
-        "trainer.logger",
-        "trainer.project_name",
-        "context_budget",
-        "generator.sampling_params.ignore_eos",
-        "generator.sampling_params.min_tokens",
-    }
-)
+_OWNED_KEYS = frozenset(_MODE_KEYS)
 
 _SPEED_KEYS = frozenset(
     {"generator.sampling_params.logprobs", "trainer.training_metrics", "generator.apply_overlong_filtering"}
 )
 
-_LEARNING_MEDIUM = Preset(
+_SPEED_OBJECTIVES = (Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.PHASE_SUM_MEDIAN),)
+_SPEED_GUARDS = (
+    *_SPEED_OBJECTIVES,
+    Metric("policy/mismatch/staleness0/kl_k3", False, WindowStatistic.SELECTED_TOKEN_WEIGHTED_MEAN),
+)
+
+_snowball = partial(
+    Preset,
+    revision="2026.11.19.1",
     tasks=_DEFAULT_TASKS,
     model=_DEFAULT_MODEL,
-    held_out_tasks=_DEFAULT_EVAL_LITE,
     seed=SEED,
     sample_namespace="datasets/snowball-rl",
     wandb_entity="marin-community",
     retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
+    owned_keys=_OWNED_KEYS,
+    gaps=_GAPS,
+)
+
+_LEARNING_MEDIUM = _snowball(
+    held_out_tasks=_DEFAULT_EVAL_LITE,
     export="latest",
     name="learning-medium",
-    revision="2026.11.19.1",
     recipe=_ASYNC_P40,
     updates=25,
     measured=range(21, 26),
-    tasks_input="forbidden",
-    accepts_settings=True,
     accepts_init=True,
     publishes=True,
     controls="learning-medium",
-    checkpoint_every=None,
-    owned_keys=_OWNED_KEYS | _GATED_KEYS,
     data_settings=frozenset({"shuffle", "sampling"}),
     evaluations=(replace(EVALUATIONS["eval_lite"], at_start=True),),
     guards=(Metric("eval_lite/family_mean", True),),
@@ -330,35 +294,24 @@ _LEARNING_MEDIUM = Preset(
         Metric("eval_lite/family_mean", True),
         Metric("eval_lite/family_mean/gain_per_h100_hour", True, WindowStatistic.GAIN_PER_GPU_HOUR),
     ),
-    gaps=_GAPS,
     budget="asynchronous runtime unmeasured",
 )
 
 
-_TRAIN_LONG = Preset(
-    tasks=_DEFAULT_TASKS,
-    model=_DEFAULT_MODEL,
+_TRAIN_LONG = _snowball(
     held_out_tasks=_DEFAULT_EVAL_LITE,
-    seed=SEED,
-    sample_namespace="datasets/snowball-rl",
-    wandb_entity="marin-community",
     retention=SkyRLRetentionPolicy(resume_checkpoint_count=5),
     export="latest",
     name="train-long",
-    revision="2026.11.19.1",
     recipe=_ASYNC_P40,
     updates=100,
     measured=range(1, 101),
     tasks_input="optional",
-    accepts_settings=True,
     accepts_init=True,
     publishes=True,
-    controls=None,
     checkpoint_every=10,
-    owned_keys=_OWNED_KEYS,
     data_settings=frozenset({"shuffle", "sampling"}),
     evaluations=(replace(_TASK_SET, every=10, at_start=True),),
-    gaps=_GAPS,
 )
 
 _CAMPAIGN_PLAN = replace(
@@ -445,73 +398,37 @@ _TRAIN_MEDIUM_AGENTIC = replace(
 )
 
 _PRESETS = (
-    Preset(
-        tasks=_DEFAULT_TASKS,
-        model=_DEFAULT_MODEL,
+    _snowball(
         held_out_tasks=_DEFAULT_EVAL_LITE,
-        seed=SEED,
-        sample_namespace="datasets/snowball-rl",
-        wandb_entity="marin-community",
-        retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
-        export="none",
         name="speed-short",
-        revision="2026.11.19.1",
         recipe=replace(_GENERATING, fixed_reply_tokens=4096),
         updates=0,
         measured=range(1),
-        tasks_input="forbidden",
-        accepts_settings=True,
-        accepts_init=False,
-        publishes=False,
         controls="speed-short",
-        checkpoint_every=None,
-        owned_keys=_OWNED_KEYS | _GATED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
-        data_settings=frozenset(),
+        owned_keys=_OWNED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
         evaluations=(EVALUATIONS["speed_512x4"], EVALUATIONS["eval_lite"]),
         guards=(Metric("generate/tokens_per_second_per_gpu", True), Metric("eval_lite/family_mean", True)),
         objectives=(Metric("generate/tokens_per_second_per_gpu", True),),
-        gaps=_GAPS,
         budget="14-17 min; 2 H100-h",
     ),
-    Preset(
-        tasks=_DEFAULT_TASKS,
-        model=_DEFAULT_MODEL,
+    _snowball(
         held_out_tasks=_DEFAULT_EVAL_LITE,
-        seed=SEED,
-        sample_namespace="datasets/snowball-rl",
-        wandb_entity="marin-community",
-        retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
-        export="none",
         name="data-short",
-        revision="2026.11.19.1",
         recipe=_GENERATING,
         updates=0,
         measured=range(1),
         tasks_input="required",
         accepts_settings=False,
-        accepts_init=False,
-        publishes=False,
         controls="data-short",
-        checkpoint_every=None,
-        owned_keys=_OWNED_KEYS | _GATED_KEYS | _BATCH_KEYS,
-        data_settings=frozenset(),
+        owned_keys=_OWNED_KEYS | _BATCH_KEYS,
         evaluations=(EVALUATIONS["screen_256x4"],),
         guards=(Metric("screen_256x4/mixed_fraction", True),),
         objectives=(Metric("screen_256x4/mixed_fraction", True),),
-        gaps=_GAPS,
         budget="10-15 min; 2 H100-h",
     ),
-    Preset(
-        tasks=_DEFAULT_TASKS,
-        model=_DEFAULT_MODEL,
-        seed=SEED,
-        sample_namespace="datasets/snowball-rl",
-        wandb_entity="marin-community",
-        retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
-        export="none",
+    _snowball(
         evaluations=(),
         name="speed-medium",
-        revision="2026.11.19.1",
         recipe=replace(
             _ASYNC_P40,
             fixed_reply_tokens=4096,
@@ -523,49 +440,23 @@ _PRESETS = (
         ),
         updates=10,
         measured=range(2, 11),
-        tasks_input="forbidden",
-        accepts_settings=True,
-        accepts_init=False,
-        publishes=False,
         controls="speed-medium",
-        checkpoint_every=None,
-        owned_keys=_OWNED_KEYS | _GATED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
-        data_settings=frozenset(),
-        guards=(
-            Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.PHASE_SUM_MEDIAN),
-            Metric("policy/mismatch/staleness0/kl_k3", False, WindowStatistic.SELECTED_TOKEN_WEIGHTED_MEAN),
-        ),
-        objectives=(Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.PHASE_SUM_MEDIAN),),
+        owned_keys=_OWNED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
+        guards=_SPEED_GUARDS,
+        objectives=_SPEED_OBJECTIVES,
         gaps=(*_GAPS, "mismatch-is-agreement", "layout-p40-only"),
         budget="asynchronous runtime unmeasured",
     ),
-    Preset(
-        tasks=_DEFAULT_TASKS,
-        model=_DEFAULT_MODEL,
-        seed=SEED,
-        sample_namespace="datasets/snowball-rl",
-        wandb_entity="marin-community",
-        retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
-        export="none",
+    _snowball(
         evaluations=(),
         name="speed-long",
-        revision="2026.11.19.1",
         recipe=_ASYNC_P40,
         updates=20,
         measured=range(3, 21),
-        tasks_input="forbidden",
-        accepts_settings=True,
-        accepts_init=False,
-        publishes=False,
         controls="speed-long",
-        checkpoint_every=None,
-        owned_keys=_OWNED_KEYS | _GATED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
-        data_settings=frozenset(),
-        guards=(
-            Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.PHASE_SUM_MEDIAN),
-            Metric("policy/mismatch/staleness0/kl_k3", False, WindowStatistic.SELECTED_TOKEN_WEIGHTED_MEAN),
-        ),
-        objectives=(Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.PHASE_SUM_MEDIAN),),
+        owned_keys=_OWNED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
+        guards=_SPEED_GUARDS,
+        objectives=_SPEED_OBJECTIVES,
         gaps=(*_GAPS, "layout-p40-only"),
         budget="45-75 min; 30-50 H100-h",
     ),

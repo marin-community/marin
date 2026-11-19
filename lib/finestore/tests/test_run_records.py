@@ -7,9 +7,11 @@ import pytest
 from finestore.layout import OnConflict
 from finestore.reader import ReadView
 from finestore.rl.run_records import (
+    ATTEMPTS_TABLE,
     EVALUATIONS_TABLE,
-    PRIMARY_KEYS,
+    METRICS_TABLE,
     AttemptRecord,
+    AttemptRow,
     CheckpointReference,
     EvaluationTaskRow,
     LaunchResult,
@@ -29,7 +31,7 @@ from finestore.store import DataStore
 def _write(export_root, attempt_id, metrics=None, **fields):
     with DataStore.open(run_records_root(str(export_root))) as store:
         update_attempt(store, AttemptRecord(run_id="history", attempt_id=attempt_id, **fields))
-        table = register_run_tables(store).metrics
+        table = register_run_tables(store)[METRICS_TABLE]
         for step, values in (metrics or {}).items():
             table.extend(
                 [
@@ -41,6 +43,20 @@ def _write(export_root, attempt_id, metrics=None, **fields):
 
 def test_evaluations_read_legacy_strata_alongside_current_rows(tmp_path):
     export = str(tmp_path)
+    answer = {
+        "ordinal": 0,
+        "native_uid": "answer",
+        "optimization_reward": 0.0,
+        "verifier_score": None,
+        "raw_verifier_score": None,
+        "score_min": None,
+        "score_max": None,
+        "verification_status": None,
+        "passed": False,
+        "outcome": "unavailable",
+        "error_type": None,
+        "error_treatment": None,
+    }
     legacy = {
         "attempt_id": "attempt",
         "step": 1,
@@ -54,11 +70,13 @@ def test_evaluations_read_legacy_strata_alongside_current_rows(tmp_path):
         "score": None,
         "outcome": "unavailable",
         "error_type": None,
-        "answers": [],
+        "answers": [answer],
     }
     with DataStore.open(run_records_root(export)) as store:
         store.table(
-            EVALUATIONS_TABLE, primary_key=PRIMARY_KEYS[EVALUATIONS_TABLE], on_conflict=OnConflict.SUPERSEDE
+            EVALUATIONS_TABLE,
+            primary_key=("attempt_id", "step", "evaluation", "task_id"),
+            on_conflict=OnConflict.SUPERSEDE,
         ).extend([legacy, {**legacy, "task_id": "unknown", "agentic": None}])
     current = EvaluationTaskRow.model_validate(
         {
@@ -66,11 +84,13 @@ def test_evaluations_read_legacy_strata_alongside_current_rows(tmp_path):
             "task_id": "current",
             "task_digest": "digest",
             "strata": {"family": "agents", "agentic": False},
+            "answers": [answer | {"response_token_count": 12}],
         }
     )
     write_evaluations(export, [current])
     rows = {row.task_id: row for row in read_evaluations(export, attempt_id="attempt", evaluation="eval/")}
     assert rows["legacy"].strata.agentic is True and rows["legacy"].task_digest is None
+    assert rows["legacy"].answers[0].response_token_count is None
     assert rows["unknown"].strata.agentic is False and rows["unknown"].task_digest is None
     assert rows["current"] == current and rows["current"].strata.agentic is False
 
@@ -82,6 +102,11 @@ def test_metric_history_bounds_checkpoint_ancestors_and_detects_damaged_lineage(
     _write(ancestor, "original", {0: {"ancestor_only": 77}})
     parent = CheckpointReference(export_root=ancestor, attempt_id="original", step=3)
     _write(root, "middle", {4: {"loss": 0.4}, 5: {"loss": 0.5}, 9: {"loss": 0.9}}, resumed_step=3, parent=parent)
+    with DataStore.open(run_records_root(root)) as store:
+        register_run_tables(store)[ATTEMPTS_TABLE].extend(
+            [AttemptRow(attempt_id="middle", field="issue", value_json='"opted_out"').model_dump()]
+        )
+    assert read_attempt(root, "middle").issue is None
     _write(root, "sibling", {4: {"loss": 9.9}}, resumed_step=3, parent=parent)
     assert [row["loss"] for row in read_attempt_metrics(root, "middle").values()] == [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.9]
     _write(root, "rewind", {2: {"loss": 2.5}}, resumed_step=1, parent=parent.model_copy(update={"step": 1}))

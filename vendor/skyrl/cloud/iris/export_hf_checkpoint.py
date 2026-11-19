@@ -431,23 +431,11 @@ def _export_job_spec(training_config: DictConfig, request: HFExportRequest) -> E
 
 
 def _training_export_request(training_config: DictConfig, step: int) -> HFExportRequest:
-    trainer = training_config.skyrl.trainer
-    model, placement = trainer.policy.model, trainer.placement
-    checkpoint_root = str(training_config.artifacts.checkpoint_root)
-    return HFExportRequest(
+    return HFExportRequest.from_trainer(
+        training_config.skyrl.trainer,
         step=step,
-        checkpoint_base_path=checkpoint_root,
-        checkpoint_path=join_resource_path(checkpoint_root, f"{GLOBAL_STEP_PREFIX}{step}"),
-        export_path=str(training_config.artifacts.export_root),
-        model_path=model.path,
-        num_nodes=placement.policy_num_nodes,
-        gpus_per_node=placement.policy_num_gpus_per_node,
-        model_source_uri=model.source_uri,
-        model_source_identity=model.source_identity,
-        hf_hub_repo_id=trainer.get("hf_hub_repo_id"),
-        hf_hub_private=trainer.get("hf_hub_private", False),
-        hf_hub_revision=trainer.get("hf_hub_revision", DEFAULT_HF_HUB_REVISION),
-        hf_upload_mode=HFUploadMode(trainer.get("hf_upload_mode", DEFAULT_HF_UPLOAD_MODE)),
+        checkpoint_root=str(training_config.artifacts.checkpoint_root),
+        export_root=str(training_config.artifacts.export_root),
     )
 
 
