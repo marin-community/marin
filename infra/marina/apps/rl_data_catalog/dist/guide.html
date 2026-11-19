@@ -6,6 +6,21 @@
   <title>Getting started · RL Data Atlas</title>
   <link rel="stylesheet" href="style.css"><link rel="stylesheet" href="guide.css">
   <script src="common.js" defer></script><script src="guide.js" defer></script>
+  <style>
+    .guide-body { min-width: 0; }
+    .workflow { margin: 28px 0 40px; }
+    .workflow figure { margin: 16px 0; min-width: 0; max-width: 100%; }
+    .workflow .flow-scroller { box-sizing: border-box; width: 100%; max-width: 100%; }
+    .workflow .flow-scroller.linear .flow { display: block; }
+    .workflow .flow-scroller.linear .flow-text { display: none; }
+    .workflow .flow { min-width: 71.42857em; }
+    .workflow .flow-link { fill: var(--green); text-decoration: underline; }
+    .workflow .route-label { fill: var(--muted); font-size: 12px; }
+    .workflow svg a:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+    .workflow figcaption { color: var(--muted); font-size: max(var(--type-min), 12px); line-height: 1.6; margin-top: 8px; }
+    .glossary dl { grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); }
+    .glossary dt { scroll-margin-top: 20px; }
+  </style>
 </head>
 <body class="guide">
 <main>
@@ -14,7 +29,7 @@
 
   <section class="page-heading guide-heading">
     <div>
-      <h1>From a candidate dataset to an Atlas source</h1>
+      <h1>Atlas workflows: from candidate to versioned source</h1>
       <p id="message" role="status" aria-live="polite">Loading the catalog…</p>
     </div>
   </section>
@@ -22,7 +37,7 @@
   <div class="guide-body">
   <section class="lede">
     <p>The RL Data Atlas lists every RL task source that <em>Marin</em> — the open training project whose job scheduler, dataset processing and app host this Atlas runs on — has declared, with its review state and evidence. A <em>source</em> is one pinned population of tasks, for example one Hugging Face dataset revision. A <em>task</em> is one RL problem stored as a <a href="https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/models.py">TaskSpec</a>: the prompt, the machine environment the agent works in, the answer contract and the grader (also called the verifier).</p>
-    <p>This page shows each path a dataset can take into the Atlas and what each outcome lets you rely on. Being listed is not the same as being approved for training: see the <a href="#eligibility">eligibility matrix</a>, and the <a href="#use-a-source">reader workflow</a> for using an existing source. The counts come from the catalog snapshot that the Atlas currently serves, so they change when an operator loads a new snapshot. The normative rules live in the <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md">task curation reference</a>; the steps below link to the maintained procedures. Synced to preview revision 31 (2026-11-18).</p>
+    <p>This page shows each flow that creates or changes an Atlas source and what each outcome lets you rely on. Being listed is not the same as being approved for training: see the <a href="#eligibility">eligibility matrix</a>, and the <a href="#use-a-source">reader workflow</a> for using an existing source. The counts come from the catalog snapshot that the Atlas currently serves, so they change when an operator loads a new snapshot. The normative rules live in the <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md">task curation reference</a>; the steps below link to the maintained procedures. Synced to preview revision 31 (2026-11-18).</p>
   </section>
 
   <section aria-labelledby="policy-title" id="policy">
@@ -48,152 +63,301 @@
     </ul>
   </section>
 
-  <section aria-labelledby="flow-title">
-    <h2 id="flow-title">The paths</h2>
-    <p class="hint">Solid edges are the path a candidate takes; dashed edges leave it for an outcome or an alternate route. Agentic tasks need a machine (a shell, files or tools). Non-agentic tasks skip machine provisioning and every other agent-only check; every source still needs a grading-boundary assessment. Select an outcome to list its sources.</p>
-    <div class="flow-scroller" tabindex="0" aria-label="Ingestion paths">
-    <svg class="flow" viewBox="0 0 1000 1240" role="img" aria-labelledby="flow-svg-title flow-svg-desc">
-      <title id="flow-svg-title">Ingestion paths for an RL Data Atlas source</title>
-      <desc id="flow-svg-desc">Seven steps from a candidate dataset to an admitted source. Non-agentic sources bypass the agentic format gate and still assess grading boundaries. Environment failures drop one task while the surviving tasks continue. Deprecation is drawn on the older source a qualified release replaces. Execution oversight and content-review Quality are distinct; neither alone establishes training eligibility.</desc>
-      <defs>
-        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="arrowhead"/></marker>
-      </defs>
-
-      <!-- spine connectors -->
-      <g class="edge">
-        <path d="M245,78 V116" marker-end="url(#arrow)"/>
-        <path d="M245,188 V228" marker-end="url(#arrow)"/>
-        <path d="M245,314 V368" marker-end="url(#arrow)"/>
-        <path d="M245,492 V530" marker-end="url(#arrow)"/>
-        <path d="M245,602 V640" marker-end="url(#arrow)"/>
-        <path d="M245,808 V846" marker-end="url(#arrow)"/>
-        <path d="M245,932 V970" marker-end="url(#arrow)"/>
-        <path d="M245,1056 V1098" marker-end="url(#arrow)"/>
-        <path d="M245,1056 V1078 H742 V1098" marker-end="url(#arrow)"/>
-        <!-- non-agentic bypass around the agentic format and environment gates -->
-        <path d="M30,160 H16 V420 H28" marker-end="url(#arrow)"/>
-      </g>
-      <!-- per-task drop-and-continue loop -->
-      <g class="edge exit">
-        <path d="M680,454 V520 H253" marker-end="url(#arrow)"/>
-      </g>
-      <!-- exits -->
-      <g class="edge exit">
-        <path d="M460,250 H524 V260 H588" marker-end="url(#arrow)"/>
-        <path d="M460,296 H524 V340 H588" marker-end="url(#arrow)"/>
-        <path d="M460,422 H588" marker-end="url(#arrow)"/>
-        <path d="M460,562 H588" marker-end="url(#arrow)"/>
-        <path d="M460,744 H524 V776 H588" marker-end="url(#arrow)"/>
-        <path d="M460,1013 H524 V1002 H588" marker-end="url(#arrow)"/>
-      </g>
-      <g class="elabel">
-        <text x="253" y="212">pipeline present</text>
-        <text x="255" y="345">accepted format</text>
-        <text x="270" y="514">drop this task; survivors continue</text>
-        <text x="255" y="624">SAMPLE or FULL assessment</text>
-        <text x="255" y="830">qualification passed</text>
-        <text x="255" y="1092">execution evidence covers a documented sample</text>
-        <text x="480" y="1070">execution evidence covers every retained task</text>
-        <text transform="rotate(-90 12 400)" x="12" y="400">non-agentic: go to 3</text>
-      </g>
-
-      <!-- spine nodes -->
-      <g class="node start"><rect x="30" y="20" width="430" height="58" rx="10"/>
-        <text x="50" y="45" class="nt">Candidate dataset</text>
-        <text x="50" y="66" class="ns">Pinned HF commit, URL + SHA-256, or Harbor Hub digest</text></g>
-
-      <g class="node"><rect x="30" y="116" width="430" height="72" rx="10"/>
-        <text x="50" y="141" class="nt"><tspan class="step">1</tspan> Declare an RlDataSource</text>
-        <text x="50" y="162" class="ns">Registered: stable ID, pinned input, origin, family</text>
-        <text x="50" y="179" class="ns">Every entry has a registered converter</text></g>
-
-      <g class="node"><rect x="30" y="228" width="430" height="86" rx="10"/>
-        <text x="50" y="253" class="nt"><tspan class="step">2</tspan> Task format gate (agentic only)</text>
-        <text x="50" y="274" class="ns">Accepted: TaskCompendium or Harbor task directories</text>
-        <text x="50" y="291" class="ns">MarinSkyRL blends only from the frozen list</text>
-        <text x="50" y="307" class="ns muted-text">Checked by runnable_sources() before any run starts</text></g>
-
-      <g class="node"><rect x="30" y="368" width="430" height="124" rx="10"/>
-        <text x="50" y="393" class="nt"><tspan class="step">3</tspan> Fidelity and grading boundary</text>
-        <text x="50" y="414" class="ns">Each task runs in exactly its specified environment:</text>
-        <text x="62" y="433" class="ns">· grading: SHARED or SEPARATE from the task contract</text>
-        <text x="62" y="451" class="ns">· workspace state requires SHARED execution</text>
-        <text x="62" y="469" class="ns">· repairs need complete specs, new pins and QA</text>
-        <text x="50" y="486" class="ns muted-text">a grading mismatch or missing environment rejects the task</text></g>
-
-      <g class="node"><rect x="30" y="530" width="430" height="72" rx="10"/>
-        <text x="50" y="555" class="nt"><tspan class="step">4</tspan> Convert, deduplicate and decontaminate</text>
-        <text x="50" y="576" class="ns">QUICK: converted without review; QA follows remediation</text>
-        <text x="50" y="593" class="ns muted-text" data-fill="modes">Modes in this snapshot: loading…</text></g>
-
-      <g class="node"><rect x="30" y="640" width="430" height="168" rx="10"/>
-        <text x="50" y="665" class="nt"><tspan class="step">5</tspan> Calibrate, oracle-filter and assess QA</text>
-        <text x="62" y="687" class="ns">· exact pins, conversion fidelity and drop accounting</text>
-        <text x="62" y="706" class="ns">· full-population oracle filter in both QA modes</text>
-        <text x="62" y="725" class="ns">· no oracle: retained minus typed static blockers</text>
-        <text x="62" y="744" class="ns">· pinned judge tier and end-to-end qualification</text>
-        <text x="62" y="763" class="ns">· content QC reports issues; it never rejects tasks</text>
-        <text x="50" y="789" class="ns muted-text" data-fill="oracle">Oracle: loading…</text></g>
-
-      <g class="node"><rect x="30" y="846" width="430" height="86" rx="10"/>
-        <text x="50" y="871" class="nt"><tspan class="step">6</tspan> Daytona capacity and compatibility</text>
-        <text x="50" y="892" class="ns">Actor-only: identities from the declared task specs</text>
-        <text x="50" y="909" class="ns">via the naming path; no API calls, no quota tested</text>
-        <text x="50" y="926" class="ns" data-fill="daytona-rule">beyond the snapshot cap or refused: still ingested</text></g>
-
-      <g class="node"><rect x="30" y="970" width="430" height="86" rx="10"/>
-        <text x="50" y="995" class="nt"><tspan class="step">7</tspan> Publish, then load</text>
-        <text x="50" y="1016" class="ns">Private open-athena HF release, TaskCompendium format</text>
-        <text x="50" y="1033" class="ns">Publish a complete catalog; load the chosen app</text>
-        <text x="50" y="1050" class="ns muted-text">qualified ≠ published ≠ loaded, three separate operations</text></g>
-
-      <!-- outcome pills -->
-      <g class="pill rejected"><rect x="590" y="228" width="380" height="64" rx="10"/>
-        <text x="608" y="248" class="pc">No declared format, or MarinSkyRL off the list</text><text x="608" y="268" class="pt">Rejected at selection</text>
-        <text x="608" y="285" class="pn">Fails before any run; not cataloged as runnable</text></g>
-
-      <g class="pill grandfathered" data-leaf="grandfathered" tabindex="0" role="button" aria-label="Grandfathered blends: list sources"><rect x="590" y="308" width="380" height="64" rx="10"/>
-        <text x="608" y="328" class="pc">MarinSkyRL blend on the frozen grandfather list</text><text x="608" y="348" class="pt">Grandfathered blend</text>
-        <text x="608" y="365" class="pn" data-count="grandfathered">…</text></g>
-
-      <g class="pill rejected"><rect x="590" y="390" width="380" height="64" rx="10"/>
-        <text x="608" y="410" class="pc">Runtime differs from spec: class (c)</text><text x="608" y="430" class="pt">Task rejected, source continues</text>
-        <text x="608" y="447" class="pn">Drop the task, keep the reason, survivors continue</text></g>
-
-      <g class="pill needs-qa" data-leaf="unreviewed" tabindex="0" role="button" aria-label="Execution oversight pending: list sources"><rect x="590" y="530" width="380" height="64" rx="10"/>
-        <text x="608" y="550" class="pc">Execution oversight not recorded</text><text x="608" y="570" class="pt">Qualification pending</text>
-        <text x="608" y="587" class="pn" data-count="unreviewed">…</text></g>
-
-      <g class="pill excluded" data-leaf="excluded" tabindex="0" role="button" aria-label="Excluded: list sources"><rect x="590" y="744" width="380" height="64" rx="10"/>
-        <text x="608" y="764" class="pc">Explicit source exclusion with a recorded reason</text><text x="608" y="784" class="pt">Excluded, with the reason</text>
-        <text x="608" y="801" class="pn" data-count="excluded">…</text></g>
-
-      <g class="pill deprecated" data-leaf="deprecated" tabindex="0" role="button" aria-label="Deprecated: list sources"><rect x="590" y="970" width="380" height="64" rx="10"/>
-        <text x="608" y="990" class="pc">The qualified release replaces it, or it is withdrawn</text><text x="608" y="1010" class="pt">Older source: Deprecated</text>
-        <text x="608" y="1027" class="pn" data-count="deprecated">…</text></g>
-
-      <!-- admitted outcomes -->
-      <g class="pill admitted" data-leaf="sample" tabindex="0" role="button" aria-label="Admitted at SAMPLE oversight: list sources"><rect x="30" y="1100" width="455" height="118" rx="12"/>
-        <text x="50" y="1126" class="pt">Execution oversight SAMPLE</text>
-        <text x="50" y="1148" class="ns">Execution evidence covers a recorded sample</text>
-        <text x="50" y="1172" class="pn" data-count="sample">…</text>
-        <text x="50" y="1194" class="pn" data-coverage="sample">…</text>
-        <text x="50" y="1216" class="pn" data-daytona="sample">…</text></g>
-
-      <g class="pill admitted full" data-leaf="full" tabindex="0" role="button" aria-label="Admitted at FULL oversight: list sources"><rect x="515" y="1100" width="455" height="118" rx="12"/>
-        <text x="535" y="1126" class="pt">Execution oversight FULL</text>
-        <text x="535" y="1148" class="ns">Recorded execution covers the retained population</text>
-        <text x="535" y="1172" class="pn" data-count="full">…</text>
-        <text x="535" y="1194" class="pn" data-coverage="full">…</text>
-        <text x="535" y="1216" class="pn" data-daytona="full">…</text></g>
-    </svg>
-    </div>
-    <div class="flow-legend" aria-hidden="true">
-      <span><i class="edge-sample"></i>the candidate's required path</span>
-      <span><i class="edge-sample dashed"></i>exit into an outcome, or an alternate route such as the non-agentic bypass</span>
-    </div>
+  <section id="workflows" aria-labelledby="flow-title">
+    <h2 id="flow-title">Source workflows</h2>
+    <p>Choose the flow that matches the change. Source status is <a href="#term-status">Pending, Available, Excluded or Deprecated</a>; difficulty, Quality and publication have separate states. The letters a–j refer to the <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#ingestion-stage-map">ingestion stage map</a>. Follow solid arrows for the required path and dashed arrows for a conditional route; advance only when the applicable gate passes.</p>
+    <nav aria-label="Workflow contents"><p><a href="#ingestion">Ingestion</a> · <a href="#repair">Repair</a> · <a href="#replacement">Task replacement</a> · <a href="#drift">Drift analysis</a> · <a href="#deprecation">Deprecation</a> · <a href="#bans">Banning and unbanning</a> · <a href="#overlap">Overlap resolution</a> · <a href="#enrichment">Enrichment</a> · <a href="#quality-review">Quality review</a> · <a href="#publication">Publication</a> · <a href="#glossary">Glossary</a></p></nav>
+<article class="workflow" id="ingestion" aria-labelledby="ingestion-title"><h3 id="ingestion-title">1. Ingestion: a new source</h3>
+<p>Start from a pinned HF dataset row in the candidate intake list. This is the only flow that runs every stage from scratch and creates a new <a href="#term-source">source identity</a>; its <a href="#term-census">census</a> checks the <a href="#term-grading-boundary">grading boundary</a> on every task. Non-agentic tasks skip resource calibration, and answer-only graders skip NoP; sources without oracles use the recorded static-retention policy. The normal path includes SAMPLE QC, while existing QUICK admission exceptions remain explicit. The exit is Available or Excluded with evidence; unfinished work can remain Pending, and an intermediate private upload never proves admission. <code>private_always</code> content stays in its private store and cannot be uploaded to a release repository.</p>
+<figure aria-labelledby="ingestion-caption">
+<div class="flow-scroller" tabindex="0" aria-label="1. Ingestion: a new source; scroll horizontally on small screens">
+<svg class="flow" viewBox="0 0 1000 782" role="img" aria-labelledby="ingestion-svg-title ingestion-svg-desc">
+<title id="ingestion-svg-title">1. Ingestion: a new source</title>
+<desc id="ingestion-svg-desc">Follow the arrows and stage labels. Each box links to the procedure, code and glossary. 1. Ingestion: a new source is described in the text above.</desc>
+<defs><marker id="ingestion-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="arrowhead"/></marker></defs>
+<g class="edge"><path d="M322,73 H351" marker-end="url(#ingestion-arrow)"/></g>
+<g class="edge"><path d="M648,73 H677" marker-end="url(#ingestion-arrow)"/></g>
+<g class="edge"><path d="M828,126 V150 H176 V169" marker-end="url(#ingestion-arrow)"/></g>
+<g class="edge"><path d="M322,227 H351" marker-end="url(#ingestion-arrow)"/></g>
+<g class="edge"><path d="M648,227 H677" marker-end="url(#ingestion-arrow)"/></g>
+<g class="edge"><path d="M828,280 V304 H176 V323" marker-end="url(#ingestion-arrow)"/></g>
+<g class="edge"><path d="M322,381 H351" marker-end="url(#ingestion-arrow)"/></g>
+<g class="edge"><path d="M648,381 H677" marker-end="url(#ingestion-arrow)"/></g>
+<g class="edge"><path d="M828,434 V458 H176 V477" marker-end="url(#ingestion-arrow)"/></g>
+<g class="edge"><path d="M322,535 H351" marker-end="url(#ingestion-arrow)"/></g>
+<g class="edge"><path d="M648,535 H677" marker-end="url(#ingestion-arrow)"/></g>
+<g class="edge"><path d="M828,588 V612 H176 V631" marker-end="url(#ingestion-arrow)"/></g>
+<g class="edge exit"><path d="M502,588 V631" marker-end="url(#ingestion-arrow)"/></g>
+<text class="route-label" x="510" y="612">reason remains</text>
+<g class="node start"><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#pending-source-intake" aria-label="Start: pinned candidate: normative procedure"><rect x="30" y="20" width="292" height="106" rx="10"/><text x="44" y="47" class="nt">Start: pinned candidate</text><text x="44" y="71" class="ns">A new source in CANDIDATES</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/sources.py" aria-label="Start: pinned candidate: code and evidence checks"><text x="44" y="105" class="ns flow-link">Code ↗</text></a><a href="#term-source" aria-label="Glossary: source"><text x="152" y="105" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#atlas-stage-a" aria-label="a · Declare and license: normative procedure"><rect x="356" y="20" width="292" height="106" rx="10"/><text x="370" y="47" class="nt">a · Declare and license</text><text x="370" y="71" class="ns">Immutable pin and provenance</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/license_check.py" aria-label="a · Declare and license: code and evidence checks"><text x="370" y="105" class="ns flow-link">Code ↗</text></a><a href="#term-pin" aria-label="Glossary: pin"><text x="478" y="105" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#atlas-stage-b" aria-label="b · Convert the contract: normative procedure"><rect x="682" y="20" width="292" height="106" rx="10"/><text x="696" y="47" class="nt">b · Convert the contract</text><text x="696" y="71" class="ns">Faithful TaskSpec and format</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/pipeline.py" aria-label="b · Convert the contract: code and evidence checks"><text x="696" y="105" class="ns flow-link">Code ↗</text></a><a href="#term-task" aria-label="Glossary: task"><text x="804" y="105" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#atlas-stage-c" aria-label="c · Census and fidelity: normative procedure"><rect x="30" y="174" width="292" height="106" rx="10"/><text x="44" y="201" class="nt">c · Census and fidelity</text><text x="44" y="225" class="ns">Environment + grading boundary</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/grading_census.py" aria-label="c · Census and fidelity: code and evidence checks"><text x="44" y="259" class="ns flow-link">Code ↗</text></a><a href="#term-census" aria-label="Glossary: census"><text x="152" y="259" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#atlas-stage-d" aria-label="d · Exact deduplication: normative procedure"><rect x="356" y="174" width="292" height="106" rx="10"/><text x="370" y="201" class="nt">d · Exact deduplication</text><text x="370" y="225" class="ns">Within this source; keep manifest</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/within_source_census.py" aria-label="d · Exact deduplication: code and evidence checks"><text x="370" y="259" class="ns flow-link">Code ↗</text></a><a href="#term-receipt" aria-label="Glossary: receipt"><text x="478" y="259" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#atlas-stage-d2" aria-label="d2 · Cross-source check: normative procedure"><rect x="682" y="174" width="292" height="106" rx="10"/><text x="696" y="201" class="nt">d2 · Cross-source check</text><text x="696" y="225" class="ns">Compare admitted fingerprints</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/source_fingerprints.py" aria-label="d2 · Cross-source check: code and evidence checks"><text x="696" y="259" class="ns flow-link">Code ↗</text></a><a href="#term-fingerprint" aria-label="Glossary: fingerprint"><text x="804" y="259" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#atlas-stage-e" aria-label="e · Lexical decontamination: normative procedure"><rect x="30" y="328" width="292" height="106" rx="10"/><text x="44" y="355" class="nt">e · Lexical decontamination</text><text x="44" y="379" class="ns">Remove TRAIN; measure EVAL</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/lexical_binding.py" aria-label="e · Lexical decontamination: code and evidence checks"><text x="44" y="413" class="ns flow-link">Code ↗</text></a><a href="#term-lexical-decontamination" aria-label="Glossary: lexical decontamination"><text x="152" y="413" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#atlas-stage-f" aria-label="f · Resource calibration: normative procedure"><rect x="356" y="328" width="292" height="106" rx="10"/><text x="370" y="355" class="nt">f · Resource calibration</text><text x="370" y="379" class="ns">Agentic only; preserve limits</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/oracle_filter.py" aria-label="f · Resource calibration: code and evidence checks"><text x="370" y="413" class="ns flow-link">Code ↗</text></a><a href="#term-resource-calibration" aria-label="Glossary: resource calibration"><text x="478" y="413" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#atlas-stage-g" aria-label="g · Oracle + NoP controls: normative procedure"><rect x="682" y="328" width="292" height="106" rx="10"/><text x="696" y="355" class="nt">g · Oracle + NoP controls</text><text x="696" y="379" class="ns">All oracle-bearing tasks</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/oracle_filter.py" aria-label="g · Oracle + NoP controls: code and evidence checks"><text x="696" y="413" class="ns flow-link">Code ↗</text></a><a href="#term-nop-control" aria-label="Glossary: nop control"><text x="804" y="413" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#atlas-stage-h" aria-label="h · SAMPLE QC: normative procedure"><rect x="30" y="482" width="292" height="106" rx="10"/><text x="44" y="509" class="nt">h · SAMPLE QC</text><text x="44" y="533" class="ns">Fixed panel; record coverage</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/sample_qc_binding.py" aria-label="h · SAMPLE QC: code and evidence checks"><text x="44" y="567" class="ns flow-link">Code ↗</text></a><a href="#term-sample-full-qc" aria-label="Glossary: sample full qc"><text x="152" y="567" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#atlas-stage-i" aria-label="i · Admission: normative procedure"><rect x="356" y="482" width="292" height="106" rx="10"/><text x="370" y="509" class="nt">i · Admission</text><text x="370" y="533" class="ns">Bind final pin; clear all claims</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/source.py" aria-label="i · Admission: code and evidence checks"><text x="370" y="567" class="ns flow-link">Code ↗</text></a><a href="#term-gate" aria-label="Glossary: gate"><text x="478" y="567" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#atlas-stage-j" aria-label="j · Upload: normative procedure"><rect x="682" y="482" width="292" height="106" rx="10"/><text x="696" y="509" class="nt">j · Upload</text><text x="696" y="533" class="ns">All gates pass; private default</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/remediation_publish.py" aria-label="j · Upload: code and evidence checks"><text x="696" y="567" class="ns flow-link">Code ↗</text></a><a href="#term-upload" aria-label="Glossary: upload"><text x="804" y="567" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node start"><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#current-admission-policy" aria-label="Exit: Available: normative procedure"><rect x="30" y="636" width="292" height="106" rx="10"/><text x="44" y="663" class="nt">Exit: Available</text><text x="44" y="687" class="ns">Version qualified and recorded</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/source.py" aria-label="Exit: Available: code and evidence checks"><text x="44" y="721" class="ns flow-link">Code ↗</text></a><a href="#term-version" aria-label="Glossary: version"><text x="152" y="721" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#source-status-and-exclusion-taxonomy" aria-label="Exit: Excluded: normative procedure"><rect x="356" y="636" width="292" height="106" rx="10"/><text x="370" y="663" class="nt">Exit: Excluded</text><text x="370" y="687" class="ns">Typed reasons and evidence</text></a><a href="https://github.com/marin-community/marin/blob/main/lib/finestore/src/finestore/rl/status_taxonomy.py" aria-label="Exit: Excluded: code and evidence checks"><text x="370" y="721" class="ns flow-link">Code ↗</text></a><a href="#term-exclusion-reason" aria-label="Glossary: exclusion reason"><text x="478" y="721" class="ns flow-link">Glossary ↓</text></a></g>
+</svg>
+</div>
+<figcaption id="ingestion-caption">1. Ingestion: a new source. Select a box for its procedure; select Code for its checks.</figcaption>
+</figure>
+</article>
+<article class="workflow" id="repair" aria-labelledby="repair-title"><h3 id="repair-title">2. Repair: an Excluded item</h3>
+<p>Each <a href="#term-exclusion-reason">exclusion reason</a> has its own diagnosis, allowed fix and clearing gates in the <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#admission-procedure-for-excluded-sources">per-reason table</a>. Create a new pinned version, for example <code>@repaired-YYYYMMDD</code> or <code>@rhs</code>, then re-enter ingestion where the change first invalidates evidence. Environment or lock changes start at c, content or converter changes at b, grader changes at c plus g and h, and license changes at a. Run every later applicable stage; carry earlier receipts and SAMPLE reviews only under verified <a href="#term-equivalence">equivalence</a>. Upload defaults to private and occurs if and only if every reason and final admission gate clears; otherwise preserve the exclusion and provenance.</p>
+<figure aria-labelledby="repair-caption">
+<div class="flow-scroller" tabindex="0" aria-label="2. Repair: an Excluded item; scroll horizontally on small screens">
+<svg class="flow" viewBox="0 0 1000 474" role="img" aria-labelledby="repair-svg-title repair-svg-desc">
+<title id="repair-svg-title">2. Repair: an Excluded item</title>
+<desc id="repair-svg-desc">Follow the arrows and stage labels. Each box links to the procedure, code and glossary. 2. Repair: an Excluded item is described in the text above.</desc>
+<defs><marker id="repair-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="arrowhead"/></marker></defs>
+<g class="edge"><path d="M322,73 H351" marker-end="url(#repair-arrow)"/></g>
+<g class="edge"><path d="M648,73 H677" marker-end="url(#repair-arrow)"/></g>
+<g class="edge"><path d="M828,126 V150 H176 V169" marker-end="url(#repair-arrow)"/></g>
+<g class="edge"><path d="M322,227 H351" marker-end="url(#repair-arrow)"/></g>
+<g class="edge"><path d="M648,227 H677" marker-end="url(#repair-arrow)"/></g>
+<g class="edge"><path d="M828,280 V304 H176 V323" marker-end="url(#repair-arrow)"/></g>
+<g class="edge exit"><path d="M502,280 V323" marker-end="url(#repair-arrow)"/></g>
+<text class="route-label" x="510" y="304">gate fails</text>
+<g class="node start"><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#repair-of-an-excluded-source-or-task" aria-label="Start: Excluded: normative procedure"><rect x="30" y="20" width="292" height="106" rx="10"/><text x="44" y="47" class="nt">Start: Excluded</text><text x="44" y="71" class="ns">Source or task; typed reason</text></a><a href="https://github.com/marin-community/marin/blob/main/lib/finestore/src/finestore/rl/status_taxonomy.py" aria-label="Start: Excluded: code and evidence checks"><text x="44" y="105" class="ns flow-link">Code ↗</text></a><a href="#term-exclusion-reason" aria-label="Glossary: exclusion reason"><text x="152" y="105" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#admission-procedure-for-excluded-sources" aria-label="Diagnose each reason: normative procedure"><rect x="356" y="20" width="292" height="106" rx="10"/><text x="370" y="47" class="nt">Diagnose each reason</text><text x="370" y="71" class="ns">Use its own evidence and fix</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/source.py" aria-label="Diagnose each reason: code and evidence checks"><text x="370" y="105" class="ns flow-link">Code ↗</text></a><a href="#term-receipt" aria-label="Glossary: receipt"><text x="478" y="105" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#repair-of-an-excluded-source-or-task" aria-label="Create a pinned variant: normative procedure"><rect x="682" y="20" width="292" height="106" rx="10"/><text x="696" y="47" class="nt">Create a pinned variant</text><text x="696" y="71" class="ns">Parent + before/after hashes</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/remediation_publish.py" aria-label="Create a pinned variant: code and evidence checks"><text x="696" y="105" class="ns flow-link">Code ↗</text></a><a href="#term-variant-id" aria-label="Glossary: variant id"><text x="804" y="105" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#repair-of-an-excluded-source-or-task" aria-label="Re-enter ingestion: normative procedure"><rect x="30" y="174" width="292" height="106" rx="10"/><text x="44" y="201" class="nt">Re-enter ingestion</text><text x="44" y="225" class="ns">Earliest invalidated stage a–h</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/census_binding.py" aria-label="Re-enter ingestion: code and evidence checks"><text x="44" y="259" class="ns flow-link">Code ↗</text></a><a href="#term-carry-forward" aria-label="Glossary: carry forward"><text x="152" y="259" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#atlas-stage-i" aria-label="Clear all later gates: normative procedure"><rect x="356" y="174" width="292" height="106" rx="10"/><text x="370" y="201" class="nt">Clear all later gates</text><text x="370" y="225" class="ns">Final census + admission at i</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/source.py" aria-label="Clear all later gates: code and evidence checks"><text x="370" y="259" class="ns flow-link">Code ↗</text></a><a href="#term-gate" aria-label="Glossary: gate"><text x="478" y="259" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#atlas-stage-j" aria-label="j · Upload privately: normative procedure"><rect x="682" y="174" width="292" height="106" rx="10"/><text x="696" y="201" class="nt">j · Upload privately</text><text x="696" y="225" class="ns">If and only if every gate clears</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/remediation_publish.py" aria-label="j · Upload privately: code and evidence checks"><text x="696" y="259" class="ns flow-link">Code ↗</text></a><a href="#term-upload" aria-label="Glossary: upload"><text x="804" y="259" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node start"><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#current-admission-policy" aria-label="Exit: Available: normative procedure"><rect x="30" y="328" width="292" height="106" rx="10"/><text x="44" y="355" class="nt">Exit: Available</text><text x="44" y="379" class="ns">New version with provenance</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/source.py" aria-label="Exit: Available: code and evidence checks"><text x="44" y="413" class="ns flow-link">Code ↗</text></a><a href="#term-version" aria-label="Glossary: version"><text x="152" y="413" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#admission-procedure-for-excluded-sources" aria-label="Exit: still Excluded: normative procedure"><rect x="356" y="328" width="292" height="106" rx="10"/><text x="370" y="355" class="nt">Exit: still Excluded</text><text x="370" y="379" class="ns">Keep failed reason and evidence</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/source.py" aria-label="Exit: still Excluded: code and evidence checks"><text x="370" y="413" class="ns flow-link">Code ↗</text></a><a href="#term-status" aria-label="Glossary: status"><text x="478" y="413" class="ns flow-link">Glossary ↓</text></a></g>
+</svg>
+</div>
+<figcaption id="repair-caption">2. Repair: an Excluded item. Select a box for its procedure; select Code for its checks.</figcaption>
+</figure>
+</article>
+<article class="workflow" id="replacement" aria-labelledby="replacement-title"><h3 id="replacement-title">3. Task replacement: an Available source</h3>
+<p>The default path content-matches a candidate into identical, repaired, new or conflicting pairs, then compares repaired pairs and runs candidate oracle and applicable NoP controls. Replacement requires BETTER or TIE, no introduced defects, no BAD static quality finding and no reference conflict; otherwise the original stays. A deterministic repair instead applies a tested rule to a frozen task subset and clears its own defect and qualification gates. A repair union must prove disjoint task claims and satisfy every member’s gates together; it stops as <code>unsatisfiable</code> with conflicting members when that fails. The union validator is required work; the linked code currently supplies pair records and source-specific transforms. The exit is a new private version with per-task provenance; the source stays Available and a failed candidate leaves the original selected.</p>
+<figure aria-labelledby="replacement-caption">
+<div class="flow-scroller" tabindex="0" aria-label="3. Task replacement: an Available source; scroll horizontally on small screens">
+<svg class="flow" viewBox="0 0 1000 628" role="img" aria-labelledby="replacement-svg-title replacement-svg-desc">
+<title id="replacement-svg-title">3. Task replacement: an Available source</title>
+<desc id="replacement-svg-desc">Follow the arrows and stage labels. Each box links to the procedure, code and glossary. 3. Task replacement: an Available source is described in the text above.</desc>
+<defs><marker id="replacement-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="arrowhead"/></marker></defs>
+<g class="edge"><path d="M322,73 H351" marker-end="url(#replacement-arrow)"/></g>
+<g class="edge"><path d="M648,73 H677" marker-end="url(#replacement-arrow)"/></g>
+<g class="edge exit"><path d="M828,126 V150 H176 V169" marker-end="url(#replacement-arrow)"/></g>
+<text class="route-label" x="44" y="143">judged</text>
+<g class="edge"><path d="M322,227 H351" marker-end="url(#replacement-arrow)"/></g>
+<g class="edge exit"><path d="M828,126 V169" marker-end="url(#replacement-arrow)"/></g>
+<text class="route-label" x="836" y="150">rule-based</text>
+<g class="edge"><path d="M502,280 V304 H176 V323" marker-end="url(#replacement-arrow)"/></g>
+<text class="route-label" x="370" y="297">passes</text>
+<g class="edge"><path d="M828,280 V304 H176 V323" marker-end="url(#replacement-arrow)"/></g>
+<text class="route-label" x="696" y="297">passes</text>
+<g class="edge"><path d="M322,381 H351" marker-end="url(#replacement-arrow)"/></g>
+<g class="edge"><path d="M648,381 H677" marker-end="url(#replacement-arrow)"/></g>
+<g class="edge exit"><path d="M502,434 V458 H176 V477" marker-end="url(#replacement-arrow)"/></g>
+<text class="route-label" x="44" y="451">unsatisfiable</text>
+<g class="edge exit"><path d="M30,227 H12 V535 H25" marker-end="url(#replacement-arrow)"/></g>
+<text class="route-label" x="16" y="313">conflicting</text>
+<g class="node start"><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#task-replacement-and-repair-union" aria-label="Start: Available: normative procedure"><rect x="30" y="20" width="292" height="106" rx="10"/><text x="44" y="47" class="nt">Start: Available</text><text x="44" y="71" class="ns">Freeze tracked + candidate pins</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/repair_lane.py" aria-label="Start: Available: code and evidence checks"><text x="44" y="105" class="ns flow-link">Code ↗</text></a><a href="#term-pin" aria-label="Glossary: pin"><text x="152" y="105" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#stage-0-binding-license-gate" aria-label="License candidate at a: normative procedure"><rect x="356" y="20" width="292" height="106" rx="10"/><text x="370" y="47" class="nt">License candidate at a</text><text x="370" y="71" class="ns">Before matching or review spend</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/license_check.py" aria-label="License candidate at a: code and evidence checks"><text x="370" y="105" class="ns flow-link">Code ↗</text></a><a href="#term-gate" aria-label="Glossary: gate"><text x="478" y="105" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#task-replacement-and-repair-union" aria-label="Choose repair kind: normative procedure"><rect x="682" y="20" width="292" height="106" rx="10"/><text x="696" y="47" class="nt">Choose repair kind</text><text x="696" y="71" class="ns">Judged pair or deterministic rule</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/pdbthink_verifier_repair.py" aria-label="Choose repair kind: code and evidence checks"><text x="696" y="105" class="ns flow-link">Code ↗</text></a><a href="#term-version" aria-label="Glossary: version"><text x="804" y="105" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#repair-candidates" aria-label="Judged: content match: normative procedure"><rect x="30" y="174" width="292" height="106" rx="10"/><text x="44" y="201" class="nt">Judged: content match</text><text x="44" y="225" class="ns">identical / repaired / new / conflict</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/repair_match.py" aria-label="Judged: content match: code and evidence checks"><text x="44" y="259" class="ns flow-link">Code ↗</text></a><a href="#term-task" aria-label="Glossary: task"><text x="152" y="259" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#repair-candidates" aria-label="Compare repaired pairs: normative procedure"><rect x="356" y="174" width="292" height="106" rx="10"/><text x="370" y="201" class="nt">Compare repaired pairs</text><text x="370" y="225" class="ns">Then oracle + applicable NoP</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/repair_review.py" aria-label="Compare repaired pairs: code and evidence checks"><text x="370" y="259" class="ns flow-link">Code ↗</text></a><a href="#term-oracle" aria-label="Glossary: oracle"><text x="478" y="259" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#task-replacement-and-repair-union" aria-label="Rule: transform + tests: normative procedure"><rect x="682" y="174" width="292" height="106" rx="10"/><text x="696" y="201" class="nt">Rule: transform + tests</text><text x="696" y="225" class="ns">Frozen subset; own defect gates</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/pdbthink_verifier_repair.py" aria-label="Rule: transform + tests: code and evidence checks"><text x="696" y="259" class="ns flow-link">Code ↗</text></a><a href="#term-equivalence" aria-label="Glossary: equivalence"><text x="804" y="259" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#task-replacement-and-repair-union" aria-label="Requalify changed tasks: normative procedure"><rect x="30" y="328" width="292" height="106" rx="10"/><text x="44" y="355" class="nt">Requalify changed tasks</text><text x="44" y="379" class="ns">New tasks enter ingestion</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/oracle_filter.py" aria-label="Requalify changed tasks: code and evidence checks"><text x="44" y="413" class="ns flow-link">Code ↗</text></a><a href="#term-gate" aria-label="Glossary: gate"><text x="152" y="413" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#task-replacement-and-repair-union" aria-label="Optional repair union: normative procedure"><rect x="356" y="328" width="292" height="106" rx="10"/><text x="370" y="355" class="nt">Optional repair union</text><text x="370" y="379" class="ns">Disjoint claims; all member gates</text></a><a href="https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/pipeline/repair.py" aria-label="Optional repair union: code and evidence checks"><text x="370" y="413" class="ns flow-link">Code ↗</text></a><a href="#term-receipt" aria-label="Glossary: receipt"><text x="478" y="413" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#task-replacement-and-repair-union" aria-label="j · New private version: normative procedure"><rect x="682" y="328" width="292" height="106" rx="10"/><text x="696" y="355" class="nt">j · New private version</text><text x="696" y="379" class="ns">original / replaced / added</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/remediation_publish.py" aria-label="j · New private version: code and evidence checks"><text x="696" y="413" class="ns flow-link">Code ↗</text></a><a href="#term-upload" aria-label="Glossary: upload"><text x="804" y="413" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#task-replacement-and-repair-union" aria-label="Stop for a ruling: normative procedure"><rect x="30" y="482" width="292" height="106" rx="10"/><text x="44" y="509" class="nt">Stop for a ruling</text><text x="44" y="533" class="ns">Conflict or unsatisfiable union</text></a><a href="https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/pipeline/repair.py" aria-label="Stop for a ruling: code and evidence checks"><text x="44" y="567" class="ns flow-link">Code ↗</text></a><a href="#term-ruling" aria-label="Glossary: ruling"><text x="152" y="567" class="ns flow-link">Glossary ↓</text></a></g>
+</svg>
+</div>
+<figcaption id="replacement-caption">3. Task replacement: an Available source. Select a box for its procedure; select Code for its checks.</figcaption>
+</figure>
+</article>
+<article class="workflow" id="drift" aria-labelledby="drift-title"><h3 id="drift-title">4. Drift analysis</h3>
+<p>A source can change only through a recognized flow. A <a href="#term-drift">drift</a> check compares recorded and current <a href="#term-behavioral-identity">behavioral identities</a>, each hashed from dataset and converter inputs, grader code, locks, image digests, runtime/backend, judge/reviewer configuration and license/ruling records. The <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#drift-analysis">drift table</a> routes upstream, converter, verifyit, dependency, image, backend, reviewer and ruling changes; stale serving projections route to Publication. A checked change with no behavioral effect is recorded as a no-op, a passing behavior change re-enters ingestion, and a failing change enters Repair with a typed reason. A scheduled registry-wide identity check is required but is not yet implemented; current checks cover selected pins and receipts. Hashed installs and digest-pinned images prevent byte drift at those references, while floating inputs and external services remain exposed.</p>
+<figure aria-labelledby="drift-caption">
+<div class="flow-scroller" tabindex="0" aria-label="4. Drift analysis; scroll horizontally on small screens">
+<svg class="flow" viewBox="0 0 1000 474" role="img" aria-labelledby="drift-svg-title drift-svg-desc">
+<title id="drift-svg-title">4. Drift analysis</title>
+<desc id="drift-svg-desc">Follow the arrows and stage labels. Each box links to the procedure, code and glossary. 4. Drift analysis is described in the text above.</desc>
+<defs><marker id="drift-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="arrowhead"/></marker></defs>
+<g class="edge"><path d="M322,73 H351" marker-end="url(#drift-arrow)"/></g>
+<g class="edge"><path d="M648,73 H677" marker-end="url(#drift-arrow)"/></g>
+<g class="edge exit"><path d="M828,126 V150 H176 V169" marker-end="url(#drift-arrow)"/></g>
+<text class="route-label" x="44" y="143">no effect</text>
+<g class="edge exit"><path d="M828,126 V150 H502 V169" marker-end="url(#drift-arrow)"/></g>
+<text class="route-label" x="370" y="143">passes</text>
+<g class="edge exit"><path d="M828,126 V169" marker-end="url(#drift-arrow)"/></g>
+<text class="route-label" x="836" y="150">fails</text>
+<g class="edge"><path d="M502,280 V323" marker-end="url(#drift-arrow)"/></g>
+<text class="route-label" x="510" y="304">new evidence</text>
+<g class="edge"><path d="M828,280 V304 H502 V323" marker-end="url(#drift-arrow)"/></g>
+<text class="route-label" x="696" y="297">after Repair</text>
+<g class="node start"><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#drift-analysis" aria-label="Start: recorded version: normative procedure"><rect x="30" y="20" width="292" height="106" rx="10"/><text x="44" y="47" class="nt">Start: recorded version</text><text x="44" y="71" class="ns">Registry + pinned input identity</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/census_binding.py" aria-label="Start: recorded version: code and evidence checks"><text x="44" y="105" class="ns flow-link">Code ↗</text></a><a href="#term-behavioral-identity" aria-label="Glossary: behavioral identity"><text x="152" y="105" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#drift-analysis" aria-label="Compare identity inputs: normative procedure"><rect x="356" y="20" width="292" height="106" rx="10"/><text x="370" y="47" class="nt">Compare identity inputs</text><text x="370" y="71" class="ns">Dataset, code, locks and rulings</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/declaration_audit.py" aria-label="Compare identity inputs: code and evidence checks"><text x="370" y="105" class="ns flow-link">Code ↗</text></a><a href="#term-drift" aria-label="Glossary: drift"><text x="478" y="105" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#drift-analysis" aria-label="Route the change: normative procedure"><rect x="682" y="20" width="292" height="106" rx="10"/><text x="696" y="47" class="nt">Route the change</text><text x="696" y="71" class="ns">Record affected gates/attributes</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/source.py" aria-label="Route the change: code and evidence checks"><text x="696" y="105" class="ns flow-link">Code ↗</text></a><a href="#term-gate" aria-label="Glossary: gate"><text x="804" y="105" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#drift-analysis" aria-label="No behavioral effect: normative procedure"><rect x="30" y="174" width="292" height="106" rx="10"/><text x="44" y="201" class="nt">No behavioral effect</text><text x="44" y="225" class="ns">Record checked evidence; no-op</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/content_identity.py" aria-label="No behavioral effect: code and evidence checks"><text x="44" y="259" class="ns flow-link">Code ↗</text></a><a href="#term-equivalence" aria-label="Glossary: equivalence"><text x="152" y="259" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#repair-of-an-excluded-source-or-task" aria-label="Changed; still passes: normative procedure"><rect x="356" y="174" width="292" height="106" rx="10"/><text x="370" y="201" class="nt">Changed; still passes</text><text x="370" y="225" class="ns">Re-enter at invalidated stage</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/census_binding.py" aria-label="Changed; still passes: code and evidence checks"><text x="370" y="259" class="ns flow-link">Code ↗</text></a><a href="#term-carry-forward" aria-label="Glossary: carry forward"><text x="478" y="259" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#admission-procedure-for-excluded-sources" aria-label="Changed; now fails: normative procedure"><rect x="682" y="174" width="292" height="106" rx="10"/><text x="696" y="201" class="nt">Changed; now fails</text><text x="696" y="225" class="ns">Repair with a typed reason</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/source.py" aria-label="Changed; now fails: code and evidence checks"><text x="696" y="259" class="ns flow-link">Code ↗</text></a><a href="#term-exclusion-reason" aria-label="Glossary: exclusion reason"><text x="804" y="259" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#attribute-lifecycles" aria-label="New version or attributes: normative procedure"><rect x="356" y="328" width="292" height="106" rx="10"/><text x="370" y="355" class="nt">New version or attributes</text><text x="370" y="379" class="ns">Keep old evidence as history</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/review_carry_forward.py" aria-label="New version or attributes: code and evidence checks"><text x="370" y="413" class="ns flow-link">Code ↗</text></a><a href="#term-version" aria-label="Glossary: version"><text x="478" y="413" class="ns flow-link">Glossary ↓</text></a></g>
+</svg>
+</div>
+<figcaption id="drift-caption">4. Drift analysis. Select a box for its procedure; select Code for its checks.</figcaption>
+</figure>
+</article>
+<article class="workflow" id="deprecation" aria-labelledby="deprecation-title"><h3 id="deprecation-title">5. Deprecation</h3>
+<p>Start with an Available source and first admit its qualified replacement through ingestion or Repair. Record the replacement link and provenance, then mark the old source <a href="#term-status">Deprecated</a>. Deprecation runs no pipeline stages of its own, and the old version is selectable only when explicitly requested. A source with any exclusion claim is Excluded and cannot use Deprecated to bypass that claim.</p>
+<figure aria-labelledby="deprecation-caption">
+<div class="flow-scroller" tabindex="0" aria-label="5. Deprecation; scroll horizontally on small screens">
+<svg class="flow" viewBox="0 0 1000 320" role="img" aria-labelledby="deprecation-svg-title deprecation-svg-desc">
+<title id="deprecation-svg-title">5. Deprecation</title>
+<desc id="deprecation-svg-desc">Follow the arrows and stage labels. Each box links to the procedure, code and glossary. 5. Deprecation is described in the text above.</desc>
+<defs><marker id="deprecation-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="arrowhead"/></marker></defs>
+<g class="edge"><path d="M322,73 H351" marker-end="url(#deprecation-arrow)"/></g>
+<g class="edge"><path d="M648,73 H677" marker-end="url(#deprecation-arrow)"/></g>
+<g class="edge"><path d="M828,126 V150 H176 V169" marker-end="url(#deprecation-arrow)"/></g>
+<g class="node start"><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#deprecation" aria-label="Start: Available old source: normative procedure"><rect x="30" y="20" width="292" height="106" rx="10"/><text x="44" y="47" class="nt">Start: Available old source</text><text x="44" y="71" class="ns">Keep its version and receipts</text></a><a href="https://github.com/marin-community/marin/blob/main/lib/finestore/src/finestore/rl/status_taxonomy.py" aria-label="Start: Available old source: code and evidence checks"><text x="44" y="105" class="ns flow-link">Code ↗</text></a><a href="#term-source" aria-label="Glossary: source"><text x="152" y="105" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#atlas-stage-i" aria-label="Admit the replacement: normative procedure"><rect x="356" y="20" width="292" height="106" rx="10"/><text x="370" y="47" class="nt">Admit the replacement</text><text x="370" y="71" class="ns">Through ingestion or Repair</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/source.py" aria-label="Admit the replacement: code and evidence checks"><text x="370" y="105" class="ns flow-link">Code ↗</text></a><a href="#term-gate" aria-label="Glossary: gate"><text x="478" y="105" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#deprecation" aria-label="Mark old source Deprecated: normative procedure"><rect x="682" y="20" width="292" height="106" rx="10"/><text x="696" y="47" class="nt">Mark old source Deprecated</text><text x="696" y="71" class="ns">Replacement link + provenance</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/source.py" aria-label="Mark old source Deprecated: code and evidence checks"><text x="696" y="105" class="ns flow-link">Code ↗</text></a><a href="#term-status" aria-label="Glossary: status"><text x="804" y="105" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#deprecation" aria-label="Exit: explicit selection only: normative procedure"><rect x="30" y="174" width="292" height="106" rx="10"/><text x="44" y="201" class="nt">Exit: explicit selection only</text><text x="44" y="225" class="ns">No pipeline stages on old pin</text></a><a href="https://github.com/marin-community/marin/blob/main/lib/finestore/src/finestore/rl/status_taxonomy.py" aria-label="Exit: explicit selection only: code and evidence checks"><text x="44" y="259" class="ns flow-link">Code ↗</text></a><a href="#term-version" aria-label="Glossary: version"><text x="152" y="259" class="ns flow-link">Glossary ↓</text></a></g>
+</svg>
+</div>
+<figcaption id="deprecation-caption">5. Deprecation. Select a box for its procedure; select Code for its checks.</figcaption>
+</figure>
+</article>
+<article class="workflow" id="bans" aria-labelledby="bans-title"><h3 id="bans-title">6. Banning and unbanning</h3>
+<p>A license or policy ruling can start from any source status. Record its scope and evidence in <a href="https://github.com/marin-community/marin/issues/11497">#11497</a>, update the registry and attach a typed ban reason. Remove the source from mixes and curricula, and redact its content on public routes before publication; the preview builder must verify this required gate. Unbanning requires a reversing <a href="#term-ruling">ruling</a> and registry update, then re-entry at a when permission changed and completion of every unfinished gate from where the source left. A ban lift alone never restores Available status or authorizes upload.</p>
+<figure aria-labelledby="bans-caption">
+<div class="flow-scroller" tabindex="0" aria-label="6. Banning and unbanning; scroll horizontally on small screens">
+<svg class="flow" viewBox="0 0 1000 474" role="img" aria-labelledby="bans-svg-title bans-svg-desc">
+<title id="bans-svg-title">6. Banning and unbanning</title>
+<desc id="bans-svg-desc">Follow the arrows and stage labels. Each box links to the procedure, code and glossary. 6. Banning and unbanning is described in the text above.</desc>
+<defs><marker id="bans-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="arrowhead"/></marker></defs>
+<g class="edge"><path d="M322,73 H351" marker-end="url(#bans-arrow)"/></g>
+<g class="edge"><path d="M648,73 H677" marker-end="url(#bans-arrow)"/></g>
+<g class="edge"><path d="M828,126 V150 H176 V169" marker-end="url(#bans-arrow)"/></g>
+<g class="edge"><path d="M322,227 H351" marker-end="url(#bans-arrow)"/></g>
+<g class="edge exit"><path d="M648,227 H677" marker-end="url(#bans-arrow)"/></g>
+<g class="edge"><path d="M828,280 V304 H176 V323" marker-end="url(#bans-arrow)"/></g>
+<g class="edge"><path d="M322,381 H351" marker-end="url(#bans-arrow)"/></g>
+<g class="node start"><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#banning-and-unbanning" aria-label="Start: any status: normative procedure"><rect x="30" y="20" width="292" height="106" rx="10"/><text x="44" y="47" class="nt">Start: any status</text><text x="44" y="71" class="ns">License or policy decision</text></a><a href="https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/server/license_registry.py" aria-label="Start: any status: code and evidence checks"><text x="44" y="105" class="ns flow-link">Code ↗</text></a><a href="#term-ban" aria-label="Glossary: ban"><text x="152" y="105" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#banning-and-unbanning" aria-label="Record ruling + registry: normative procedure"><rect x="356" y="20" width="292" height="106" rx="10"/><text x="370" y="47" class="nt">Record ruling + registry</text><text x="370" y="71" class="ns">Scope, reason, evidence; #11497</text></a><a href="https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/server/license_registry.py" aria-label="Record ruling + registry: code and evidence checks"><text x="370" y="105" class="ns flow-link">Code ↗</text></a><a href="#term-ruling" aria-label="Glossary: ruling"><text x="478" y="105" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#banning-and-unbanning" aria-label="Exclude with ban claim: normative procedure"><rect x="682" y="20" width="292" height="106" rx="10"/><text x="696" y="47" class="nt">Exclude with ban claim</text><text x="696" y="71" class="ns">Remove from mixes/curricula</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/source.py" aria-label="Exclude with ban claim: code and evidence checks"><text x="696" y="105" class="ns flow-link">Code ↗</text></a><a href="#term-exclusion-reason" aria-label="Glossary: exclusion reason"><text x="804" y="105" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#banning-and-unbanning" aria-label="Redact public content: normative procedure"><rect x="30" y="174" width="292" height="106" rx="10"/><text x="44" y="201" class="nt">Redact public content</text><text x="44" y="225" class="ns">Required preview-builder gate</text></a><a href="https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/prepare_preview.py" aria-label="Redact public content: code and evidence checks"><text x="44" y="259" class="ns flow-link">Code ↗</text></a><a href="#term-preview" aria-label="Glossary: preview"><text x="152" y="259" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#source-status-and-exclusion-taxonomy" aria-label="Exit: Excluded: normative procedure"><rect x="356" y="174" width="292" height="106" rx="10"/><text x="370" y="201" class="nt">Exit: Excluded</text><text x="370" y="225" class="ns">Keep permitted decision evidence</text></a><a href="https://github.com/marin-community/marin/blob/main/lib/finestore/src/finestore/rl/status_taxonomy.py" aria-label="Exit: Excluded: code and evidence checks"><text x="370" y="259" class="ns flow-link">Code ↗</text></a><a href="#term-status" aria-label="Glossary: status"><text x="478" y="259" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#banning-and-unbanning" aria-label="Unban: reversing ruling: normative procedure"><rect x="682" y="174" width="292" height="106" rx="10"/><text x="696" y="201" class="nt">Unban: reversing ruling</text><text x="696" y="225" class="ns">Update registry; return to a</text></a><a href="https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/server/license_registry.py" aria-label="Unban: reversing ruling: code and evidence checks"><text x="696" y="259" class="ns flow-link">Code ↗</text></a><a href="#term-ruling" aria-label="Glossary: ruling"><text x="804" y="259" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#repair-of-an-excluded-source-or-task" aria-label="Resume ingestion gates: normative procedure"><rect x="30" y="328" width="292" height="106" rx="10"/><text x="44" y="355" class="nt">Resume ingestion gates</text><text x="44" y="379" class="ns">Recheck all unfinished stages</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/source.py" aria-label="Resume ingestion gates: code and evidence checks"><text x="44" y="413" class="ns flow-link">Code ↗</text></a><a href="#term-gate" aria-label="Glossary: gate"><text x="152" y="413" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#atlas-stage-j" aria-label="j · Upload privately: normative procedure"><rect x="356" y="328" width="292" height="106" rx="10"/><text x="370" y="355" class="nt">j · Upload privately</text><text x="370" y="379" class="ns">Only after every gate passes</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/remediation_publish.py" aria-label="j · Upload privately: code and evidence checks"><text x="370" y="413" class="ns flow-link">Code ↗</text></a><a href="#term-upload" aria-label="Glossary: upload"><text x="478" y="413" class="ns flow-link">Glossary ↓</text></a></g>
+</svg>
+</div>
+<figcaption id="bans-caption">6. Banning and unbanning. Select a box for its procedure; select Code for its checks.</figcaption>
+</figure>
+</article>
+<article class="workflow" id="overlap" aria-labelledby="overlap-title"><h3 id="overlap-title">7. Overlap resolution</h3>
+<p>Ingestion d2 detects cross-source duplicates using <a href="#term-fingerprint">fingerprints</a> and duplicate groups. Freeze the member versions, choose the canonical member, then fold or exclude other members with typed evidence, or acknowledge a known lineage by ruling, such as the calibforge pair. This flow spans several sources, so its decision belongs to the whole pinned group. Folding changes display and never deletes data or resolves admission by itself; record either a duplicate exclusion or a ruling that permits both populations, and use a distinct-population ruling to clear a duplicate exclusion. Resume ingestion after d2 and keep all later gates.</p>
+<figure aria-labelledby="overlap-caption">
+<div class="flow-scroller" tabindex="0" aria-label="7. Overlap resolution; scroll horizontally on small screens">
+<svg class="flow" viewBox="0 0 1000 474" role="img" aria-labelledby="overlap-svg-title overlap-svg-desc">
+<title id="overlap-svg-title">7. Overlap resolution</title>
+<desc id="overlap-svg-desc">Follow the arrows and stage labels. Each box links to the procedure, code and glossary. 7. Overlap resolution is described in the text above.</desc>
+<defs><marker id="overlap-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="arrowhead"/></marker></defs>
+<g class="edge"><path d="M322,73 H351" marker-end="url(#overlap-arrow)"/></g>
+<g class="edge"><path d="M648,73 H677" marker-end="url(#overlap-arrow)"/></g>
+<g class="edge exit"><path d="M828,126 V150 H176 V169" marker-end="url(#overlap-arrow)"/></g>
+<text class="route-label" x="44" y="143">duplicate</text>
+<g class="edge exit"><path d="M828,126 V169" marker-end="url(#overlap-arrow)"/></g>
+<text class="route-label" x="836" y="150">known lineage</text>
+<g class="edge"><path d="M176,280 V304 H502 V323" marker-end="url(#overlap-arrow)"/></g>
+<g class="edge"><path d="M828,280 V304 H502 V323" marker-end="url(#overlap-arrow)"/></g>
+<g class="node start"><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#atlas-stage-d2" aria-label="Start: ingestion d2: normative procedure"><rect x="30" y="20" width="292" height="106" rx="10"/><text x="44" y="47" class="nt">Start: ingestion d2</text><text x="44" y="71" class="ns">Compare with admitted sources</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/source_fingerprints.py" aria-label="Start: ingestion d2: code and evidence checks"><text x="44" y="105" class="ns flow-link">Code ↗</text></a><a href="#term-fingerprint" aria-label="Glossary: fingerprint"><text x="152" y="105" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#overlap-resolution" aria-label="Freeze duplicate group: normative procedure"><rect x="356" y="20" width="292" height="106" rx="10"/><text x="370" y="47" class="nt">Freeze duplicate group</text><text x="370" y="71" class="ns">Member pins + overlap evidence</text></a><a href="https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/source_fingerprints.py" aria-label="Freeze duplicate group: code and evidence checks"><text x="370" y="105" class="ns flow-link">Code ↗</text></a><a href="#term-duplicate-group" aria-label="Glossary: duplicate group"><text x="478" y="105" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#overlap-resolution" aria-label="Choose canonical member: normative procedure"><rect x="682" y="20" width="292" height="106" rx="10"/><text x="696" y="47" class="nt">Choose canonical member</text><text x="696" y="71" class="ns">Record content comparison/ruling</text></a><a href="https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/server/duplicate_folding.py" aria-label="Choose canonical member: code and evidence checks"><text x="696" y="105" class="ns flow-link">Code ↗</text></a><a href="#term-ruling" aria-label="Glossary: ruling"><text x="804" y="105" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#overlap-resolution" aria-label="Fold or exclude duplicate: normative procedure"><rect x="30" y="174" width="292" height="106" rx="10"/><text x="44" y="201" class="nt">Fold or exclude duplicate</text><text x="44" y="225" class="ns">Typed reason; preserve members</text></a><a href="https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/server/duplicate_folding.py" aria-label="Fold or exclude duplicate: code and evidence checks"><text x="44" y="259" class="ns flow-link">Code ↗</text></a><a href="#term-exclusion-reason" aria-label="Glossary: exclusion reason"><text x="152" y="259" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#overlap-resolution" aria-label="Or acknowledge lineage: normative procedure"><rect x="682" y="174" width="292" height="106" rx="10"/><text x="696" y="201" class="nt">Or acknowledge lineage</text><text x="696" y="225" class="ns">Recorded ruling, e.g. calibforge</text></a><a href="https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/source_fingerprints.py" aria-label="Or acknowledge lineage: code and evidence checks"><text x="696" y="259" class="ns flow-link">Code ↗</text></a><a href="#term-receipt" aria-label="Glossary: receipt"><text x="804" y="259" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#atlas-stage-e" aria-label="Resume ingestion after d2: normative procedure"><rect x="356" y="328" width="292" height="106" rx="10"/><text x="370" y="355" class="nt">Resume ingestion after d2</text><text x="370" y="379" class="ns">Resolution does not waive gates</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/source.py" aria-label="Resume ingestion after d2: code and evidence checks"><text x="370" y="413" class="ns flow-link">Code ↗</text></a><a href="#term-gate" aria-label="Glossary: gate"><text x="478" y="413" class="ns flow-link">Glossary ↓</text></a></g>
+</svg>
+</div>
+<figcaption id="overlap-caption">7. Overlap resolution. Select a box for its procedure; select Code for its checks.</figcaption>
+</figure>
+</article>
   </section>
-
+  <section id="attributes" aria-labelledby="attribute-title"><h2 id="attribute-title">Attribute side flows</h2>
+    <p>A new version from Ingestion, Repair or Drift analysis starts these side flows. Each consumes a <a href="#term-version">source version</a> and produces an attribute record with its input pins and provenance. Drift invalidates records whose inputs change; earlier records remain historical evidence. These flows do not change source status.</p>
+<article class="workflow" id="enrichment" aria-labelledby="enrichment-title"><h3 id="enrichment-title">8. Enrichment: difficulty and curriculum</h3>
+<p>Freeze the source pin, population and measurement configuration. Difficulty records use <code>measured</code>, <code>pending</code>, <code>blocked</code> and <code>not_measured</code>; the separate coverage classifier uses <code>measured</code>, <code>needs_measurement</code> and <code>blocked</code>. Curriculum produces immutable alignment and coverage releases after assignment, count reconciliation and privacy checks; it has no lifecycle-status enum. Both attach <a href="#term-receipt">receipts</a> to the specific source version, and changed inputs invalidate their currency. Difficulty evidence alone never excludes a source.</p>
+<figure aria-labelledby="enrichment-caption">
+<div class="flow-scroller" tabindex="0" aria-label="8. Enrichment: difficulty and curriculum; scroll horizontally on small screens">
+<svg class="flow" viewBox="0 0 1000 474" role="img" aria-labelledby="enrichment-svg-title enrichment-svg-desc">
+<title id="enrichment-svg-title">8. Enrichment: difficulty and curriculum</title>
+<desc id="enrichment-svg-desc">Follow the arrows and stage labels. Each box links to the procedure, code and glossary. 8. Enrichment: difficulty and curriculum is described in the text above.</desc>
+<defs><marker id="enrichment-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="arrowhead"/></marker></defs>
+<g class="edge exit"><path d="M502,126 V150 H176 V169" marker-end="url(#enrichment-arrow)"/></g>
+<text class="route-label" x="44" y="143">difficulty</text>
+<g class="edge exit"><path d="M502,126 V150 H828 V169" marker-end="url(#enrichment-arrow)"/></g>
+<text class="route-label" x="696" y="143">curriculum</text>
+<g class="edge"><path d="M176,280 V323" marker-end="url(#enrichment-arrow)"/></g>
+<g class="edge"><path d="M828,280 V323" marker-end="url(#enrichment-arrow)"/></g>
+<g class="node start"><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#attribute-lifecycles" aria-label="Start: new source version: normative procedure"><rect x="356" y="20" width="292" height="106" rx="10"/><text x="370" y="47" class="nt">Start: new source version</text><text x="370" y="71" class="ns">Pin population + configuration</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/source.py" aria-label="Start: new source version: code and evidence checks"><text x="370" y="105" class="ns flow-link">Code ↗</text></a><a href="#term-version" aria-label="Glossary: version"><text x="478" y="105" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#difficulty-measurement" aria-label="Difficulty: measure: normative procedure"><rect x="30" y="174" width="292" height="106" rx="10"/><text x="44" y="201" class="nt">Difficulty: measure</text><text x="44" y="225" class="ns">Solver protocol + typed gaps</text></a><a href="https://github.com/marin-community/marin/blob/main/lib/finestore/src/finestore/rl/difficulty.py" aria-label="Difficulty: measure: code and evidence checks"><text x="44" y="259" class="ns flow-link">Code ↗</text></a><a href="#term-resource-calibration" aria-label="Glossary: resource calibration"><text x="152" y="259" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#pipeline-overview" aria-label="Curriculum: assign: normative procedure"><rect x="682" y="174" width="292" height="106" rx="10"/><text x="696" y="201" class="nt">Curriculum: assign</text><text x="696" y="225" class="ns">Pinned taxonomy + embeddings</text></a><a href="https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/pipeline/curriculum/models.py" aria-label="Curriculum: assign: code and evidence checks"><text x="696" y="259" class="ns flow-link">Code ↗</text></a><a href="#term-projection" aria-label="Glossary: projection"><text x="804" y="259" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#difficulty-measurement" aria-label="Bind difficulty record: normative procedure"><rect x="30" y="328" width="292" height="106" rx="10"/><text x="44" y="355" class="nt">Bind difficulty record</text><text x="44" y="379" class="ns">Per-solver current-pin evidence</text></a><a href="https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/server/difficulty.py" aria-label="Bind difficulty record: code and evidence checks"><text x="44" y="413" class="ns flow-link">Code ↗</text></a><a href="#term-receipt" aria-label="Glossary: receipt"><text x="152" y="413" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#pipeline-overview" aria-label="Bind curriculum release: normative procedure"><rect x="682" y="328" width="292" height="106" rx="10"/><text x="696" y="355" class="nt">Bind curriculum release</text><text x="696" y="379" class="ns">Reconcile counts; privacy gate</text></a><a href="https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/load_curriculum.py" aria-label="Bind curriculum release: code and evidence checks"><text x="696" y="413" class="ns flow-link">Code ↗</text></a><a href="#term-catalog-load" aria-label="Glossary: catalog load"><text x="804" y="413" class="ns flow-link">Glossary ↓</text></a></g>
+</svg>
+</div>
+<figcaption id="enrichment-caption">8. Enrichment: difficulty and curriculum. Select a box for its procedure; select Code for its checks.</figcaption>
+</figure>
+</article>
+<article class="workflow" id="quality-review" aria-labelledby="quality-review-title"><h3 id="quality-review-title">9. Quality review</h3>
+<p>Freeze a <a href="#term-reviewer-profile">reviewer profile</a> and a fixed SAMPLE panel or the FULL population. Reuse conclusive reviews only under verified identity or equivalence, and retain their original reviewer identity. Atlas Quality is QUICK, SAMPLE or FULL; Result is GOOD, SOME_ISSUES, BAD or absent, with coverage and finality recorded separately. SAMPLE permits at most 5% missing observations, while a pinned FULL waiver permits at most 1%; QC findings alone never reject a source. A V3-to-V4 profile upgrade creates the required new review evidence and never relabels V3 receipts.</p>
+<figure aria-labelledby="quality-review-caption">
+<div class="flow-scroller" tabindex="0" aria-label="9. Quality review; scroll horizontally on small screens">
+<svg class="flow" viewBox="0 0 1000 320" role="img" aria-labelledby="quality-review-svg-title quality-review-svg-desc">
+<title id="quality-review-svg-title">9. Quality review</title>
+<desc id="quality-review-svg-desc">Follow the arrows and stage labels. Each box links to the procedure, code and glossary. 9. Quality review is described in the text above.</desc>
+<defs><marker id="quality-review-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="arrowhead"/></marker></defs>
+<g class="edge"><path d="M322,73 H351" marker-end="url(#quality-review-arrow)"/></g>
+<g class="edge"><path d="M648,73 H677" marker-end="url(#quality-review-arrow)"/></g>
+<g class="edge"><path d="M828,126 V150 H176 V169" marker-end="url(#quality-review-arrow)"/></g>
+<g class="edge"><path d="M322,227 H351" marker-end="url(#quality-review-arrow)"/></g>
+<g class="node start"><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#attribute-lifecycles" aria-label="Start: version + review need: normative procedure"><rect x="30" y="20" width="292" height="106" rx="10"/><text x="44" y="47" class="nt">Start: version + review need</text><text x="44" y="71" class="ns">New pin or reviewer upgrade</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/full_qc.py" aria-label="Start: version + review need: code and evidence checks"><text x="44" y="105" class="ns flow-link">Code ↗</text></a><a href="#term-reviewer-profile" aria-label="Glossary: reviewer profile"><text x="152" y="105" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#qa-reviewer" aria-label="Freeze profile and panel: normative procedure"><rect x="356" y="20" width="292" height="106" rx="10"/><text x="370" y="47" class="nt">Freeze profile and panel</text><text x="370" y="71" class="ns">SAMPLE or whole-population FULL</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/sample_qc.py" aria-label="Freeze profile and panel: code and evidence checks"><text x="370" y="105" class="ns flow-link">Code ↗</text></a><a href="#term-sample-full-qc" aria-label="Glossary: sample full qc"><text x="478" y="105" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#repair-of-an-excluded-source-or-task" aria-label="Carry or review tasks: normative procedure"><rect x="682" y="20" width="292" height="106" rx="10"/><text x="696" y="47" class="nt">Carry or review tasks</text><text x="696" y="71" class="ns">Only verified identity/equivalence</text></a><a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/review_carry_forward.py" aria-label="Carry or review tasks: code and evidence checks"><text x="696" y="105" class="ns flow-link">Code ↗</text></a><a href="#term-carry-forward" aria-label="Glossary: carry forward"><text x="804" y="105" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#sample-missing-review-tolerance" aria-label="Bind coverage and Result: normative procedure"><rect x="30" y="174" width="292" height="106" rx="10"/><text x="44" y="201" class="nt">Bind coverage and Result</text><text x="44" y="225" class="ns">Record missing/uncertain work</text></a><a href="https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/server/quality.py" aria-label="Bind coverage and Result: code and evidence checks"><text x="44" y="259" class="ns flow-link">Code ↗</text></a><a href="#term-receipt" aria-label="Glossary: receipt"><text x="152" y="259" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#attribute-lifecycles" aria-label="Exit: version-bound Quality: normative procedure"><rect x="356" y="174" width="292" height="106" rx="10"/><text x="370" y="201" class="nt">Exit: version-bound Quality</text><text x="370" y="225" class="ns">QUICK / SAMPLE / FULL</text></a><a href="https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/server/quality.py" aria-label="Exit: version-bound Quality: code and evidence checks"><text x="370" y="259" class="ns flow-link">Code ↗</text></a><a href="#term-version" aria-label="Glossary: version"><text x="478" y="259" class="ns flow-link">Glossary ↓</text></a></g>
+</svg>
+</div>
+<figcaption id="quality-review-caption">9. Quality review. Select a box for its procedure; select Code for its checks.</figcaption>
+</figure>
+</article>
+<article class="workflow" id="publication" aria-labelledby="publication-title"><h3 id="publication-title">10. Publication</h3>
+<p>Load the selected catalog, refresh its projections, pass the audit gate and verify a private preview before an authorized production release. This flow attaches a serving record to exact source and attribute pins; it does not change source status. The code has no publication-status enum: <code>ReleaseReceipt.phase</code> is <code>preflight</code>, <code>hosted</code> or <code>postpublish</code>, with <code>passed</code> and a failing gate. A <a href="#term-catalog-load">catalog load</a>, package hash and app <a href="#term-revision">revision</a> identify separate objects. A failed audit stops publication, and a stale projection returns here through drift analysis.</p>
+<figure aria-labelledby="publication-caption">
+<div class="flow-scroller" tabindex="0" aria-label="10. Publication; scroll horizontally on small screens">
+<svg class="flow" viewBox="0 0 1000 320" role="img" aria-labelledby="publication-svg-title publication-svg-desc">
+<title id="publication-svg-title">10. Publication</title>
+<desc id="publication-svg-desc">Follow the arrows and stage labels. Each box links to the procedure, code and glossary. 10. Publication is described in the text above.</desc>
+<defs><marker id="publication-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="arrowhead"/></marker></defs>
+<g class="edge"><path d="M322,73 H351" marker-end="url(#publication-arrow)"/></g>
+<g class="edge"><path d="M648,73 H677" marker-end="url(#publication-arrow)"/></g>
+<g class="edge"><path d="M828,126 V150 H176 V169" marker-end="url(#publication-arrow)"/></g>
+<g class="edge"><path d="M322,227 H351" marker-end="url(#publication-arrow)"/></g>
+<g class="edge"><path d="M648,227 H677" marker-end="url(#publication-arrow)"/></g>
+<g class="node start"><a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#attribute-lifecycles" aria-label="Start: version + attributes: normative procedure"><rect x="30" y="20" width="292" height="106" rx="10"/><text x="44" y="47" class="nt">Start: version + attributes</text><text x="44" y="71" class="ns">Exact pins selected for serving</text></a><a href="https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/load.py" aria-label="Start: version + attributes: code and evidence checks"><text x="44" y="105" class="ns flow-link">Code ↗</text></a><a href="#term-version" aria-label="Glossary: version"><text x="152" y="105" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/rl-data-atlas.md#publication-lifecycle" aria-label="Catalog load: normative procedure"><rect x="356" y="20" width="292" height="106" rx="10"/><text x="370" y="47" class="nt">Catalog load</text><text x="370" y="71" class="ns">Stage, verify, select load ID</text></a><a href="https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/load.py" aria-label="Catalog load: code and evidence checks"><text x="370" y="105" class="ns flow-link">Code ↗</text></a><a href="#term-catalog-load" aria-label="Glossary: catalog load"><text x="478" y="105" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/rl-data-atlas.md#publication-lifecycle" aria-label="Projection refresh: normative procedure"><rect x="682" y="20" width="292" height="106" rx="10"/><text x="696" y="47" class="nt">Projection refresh</text><text x="696" y="71" class="ns">Match selected evidence inputs</text></a><a href="https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/prepare_preview.py" aria-label="Projection refresh: code and evidence checks"><text x="696" y="105" class="ns flow-link">Code ↗</text></a><a href="#term-projection" aria-label="Glossary: projection"><text x="804" y="105" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/rl-data-atlas.md#publication-lifecycle" aria-label="Audit gate: normative procedure"><rect x="30" y="174" width="292" height="106" rx="10"/><text x="44" y="201" class="nt">Audit gate</text><text x="44" y="225" class="ns">Pins, counts, privacy, redaction</text></a><a href="https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/release_check.py" aria-label="Audit gate: code and evidence checks"><text x="44" y="259" class="ns flow-link">Code ↗</text></a><a href="#term-gate" aria-label="Glossary: gate"><text x="152" y="259" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/rl-data-atlas.md#publication-lifecycle" aria-label="Private preview: normative procedure"><rect x="356" y="174" width="292" height="106" rx="10"/><text x="370" y="201" class="nt">Private preview</text><text x="370" y="225" class="ns">Preflight + hosted verification</text></a><a href="https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/release_receipts.py" aria-label="Private preview: code and evidence checks"><text x="370" y="259" class="ns flow-link">Code ↗</text></a><a href="#term-preview" aria-label="Glossary: preview"><text x="478" y="259" class="ns flow-link">Glossary ↓</text></a></g>
+<g class="node "><a href="https://github.com/marin-community/marin/blob/main/docs/references/rl-data-atlas.md#publication-lifecycle" aria-label="Production: normative procedure"><rect x="682" y="174" width="292" height="106" rx="10"/><text x="696" y="201" class="nt">Production</text><text x="696" y="225" class="ns">Separate authorized app revision</text></a><a href="https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/RELEASE.md" aria-label="Production: code and evidence checks"><text x="696" y="259" class="ns flow-link">Code ↗</text></a><a href="#term-production" aria-label="Glossary: production"><text x="804" y="259" class="ns flow-link">Glossary ↓</text></a></g>
+</svg>
+</div>
+<figcaption id="publication-caption">10. Publication. Select a box for its procedure; select Code for its checks.</figcaption>
+</figure>
+</article>
+  </section>
   <section aria-labelledby="leaves-title">
     <h2 id="leaves-title">Read the evidence before selecting data</h2>
     <p>In the preview, sources awaiting an exact-input SAMPLE Result display QUICK. Their Quality tooltip and Evidence say “SAMPLE review in progress”; Result and issue rate stay unmeasured. The source declaration and execution evidence remain unchanged.</p>
@@ -246,39 +410,7 @@
     </section>
   </section>
 
-  <section aria-labelledby="steps-title" class="steps">
-    <h2 id="steps-title">The required ingest order</h2>
-    <article id="declare"><h3><span class="step-badge">1</span> Declare an immutable input</h3>
-      <p>Every source has a registered converter, a canonical ID, an immutable dataset pin and upstream provenance. Historical IDs resolve through the alias table. Register the source through <code>all_sources()</code>; inventory-only declarations are not current runnable sources. See <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#declarations">Declarations</a>.</p>
-    </article>
-    <article id="format"><h3><span class="step-badge">2</span> Preserve the task contract</h3>
-      <p>New agentic sources ingest TaskCompendium or Harbor task directories. Internal MarinSkyRL format is accepted only for the frozen grandfather list. Prompts, answer contracts, environments and graders belong to the task specification.</p>
-    </article>
-    <article id="environment"><h3><span class="step-badge">3</span> Assess environment fidelity and grading boundaries</h3>
-      <p>Tasks run in exactly their specified environment. A shared image cannot replace it. A repaired release completely describes its runtime behavior; ingestion-time transformations require SAMPLE or FULL QA and a new pinned version.</p>
-      <p>Every conversion assesses SHARED versus SEPARATE grading on every task. Workspace state and repository capabilities require SHARED execution; independent submitted-program or typed file-only contracts may use SEPARATE grading. A mismatched boundary is a mechanical rejection. Source-level declarations do not override task requirements. Inspect the per-source census and evidence. See <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#environments">Environments</a>.</p>
-    </article>
-    <article id="modes"><h3><span class="step-badge">4</span> Convert, deduplicate and decontaminate</h3>
-      <p>The mandatory order is conversion, exact within-source deduplication, lexical decontamination, resource calibration (agentic tasks only) and full-population oracle filtering, then SAMPLE/FULL QA. Raw, unique and dropped counts must reconcile, with a manifest explaining each exclusion.</p>
-      <p>Lexical measurements bind to the exact dataset revision. TRAIN remediation removes the union of duplicate and lexical exclusions; EVAL sources remove duplicates and retain lexical flags without lexical exclusions. Remediation produces a new private <code>open-athena</code> TaskCompendium release. QA and execution evidence bind to that retained population. Cross-source duplicate/subset display groups are distinct from within-source drops and do not authorize deleting data. They pair each task with its nearest neighbor in the other source, never by task ID; a model cannot downgrade a measured overlap.</p>
-      <p>QUICK converts without review. SAMPLE uses a bounded QA panel; FULL processes the complete population; complete content review requires its own coverage evidence. Processing mode, execution oversight, content Quality and Result are separate fields. See <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#mandatory-within-source-duplicate-removal">Within-source deduplication</a> and <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#lexical-decontamination-before-publication">Lexical decontamination</a>.</p>
-    </article>
-    <article id="qualify"><h3><span class="step-badge">5</span> Filter oracles and qualify execution</h3>
-      <p>Oracle filtering covers every oracle-bearing task in both SAMPLE and FULL. A sampled control pass rate never exempts unsampled oracle-bearing tasks. The retained cohort is the passing subset; infrastructure errors are re-driven and never count as oracle failures. Workspace-graded tasks also need a full-population <code>nop</code> negative control that does not pass. Content QC remains informational and never rejects tasks.</p>
-      <p>The Filtration column shows EXCLUDED and Examples 0 for a complete, current-pin private filtration output with no retained tasks. This is a mechanical exclusion, not an admission or execution claim. Oracle-bearing sources show Pending oracle filtration until final evidence is bound. No-oracle Examples equal the current retained count minus unique typed static blockers under the pinned policy ruling; EVAL tasks enter total Atlas admission as evaluation data and remain excluded from TRAIN selection. Actorless answer-only tasks are exempt from agentic-only environment, lock, tool, network and workspace checks under their pinned ruling. Grading, content QA, deduplication, lexical checks and original-oracle filtering still apply. Missing static measurements remain unmeasured. The ledger links canonical filter, private output and validation receipts with their SHA-256 hashes. Content QA and backend fit never supply an admitted count.</p>
-      <h4 id="no-oracle">Sources without oracle solutions</h4>
-      <p>No per-task execution proof is required for now; the requirement can be restored later. Examples counts the tasks retained after deduplication and lexical decontamination, minus tasks with typed static blockers such as <code>tool_provider_required</code> or <code>shared_executor_required</code>. Content QA, environment fidelity, deduplication and decontamination still apply. Payload preservation, setup execution and verifier liveness checks remain available as diagnostics; a rebuilt environment uses them to show its spec is faithful. See <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#sources-without-oracle-solutions">Sources without oracle solutions</a>.</p>
-      <h4 id="judged">LLM-judged sources</h4>
-      <p>The implemented <code>JUDGE_TIERS</code> table defines LIGHT, MEDIUM and HEAVY judge specifications. Choose a tier after reviewing ten frozen tasks by hand and record the rationale. Pin the model identity and available revision, rubric, inputs, context and completion budgets, reasoning, temperature (0.7), parsing and retry settings. Endpoint configuration stays separate from the task's judge contract.</p>
-      <p>A pinned preset establishes a contract; source qualification remains pending until end-to-end controls and review demonstrate its behavior through the production grader. Record unavailable immutable weight identities as limitations. The curation reviewer uses its own pinned <code>ReviewerSpec</code>, separate from the task's reward judge. See <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#llm-judged-sources">LLM-judged sources</a> and <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#full-population-oracle-filter">Oracle filtering</a>.</p>
-    </article>
-    <article id="daytona"><h3><span class="step-badge">6</span> Read actor capacity separately</h3>
-      <p>Daytona labels measure actor machines only. Grading runs according to each task's SHARED/SEPARATE contract and does not change the actor label. A static census does not prove live quota, image availability or successful execution. Per-source backend fit remains unassessed when no current complete task-spec census was loaded.</p>
-    </article>
-    <article id="publish"><h3><span class="step-badge">7</span> Publish evidence, then load the intended app</h3>
-      <p>Dataset publication, catalog publication, application code release and catalog loading are separate operations. Repaired and converted datasets are private <code>open-athena</code> TaskCompendium releases with immutable pins and provenance, one new version per source. Prepared task images use a new internal GHCR package per source. Inspect campaign outcomes before selecting a catalog snapshot. Loading a complete snapshot selects it atomically; failed staging preserves the serving selection.</p>
-      <p>This preview does not authorize production publication. Follow the <a href="https://github.com/marin-community/marin/blob/main/docs/references/rl-data-atlas.md#preview-packaging-before-the-shared-runtime-is-updated">Atlas preview procedure</a> with the explicit preview app ID. Production remains on hold.</p>
-    </article>
+  <section class="steps" aria-label="Training selection">
     <article id="selection"><h3>After admission: training selection</h3>
       <p>Only TRAIN sources with eligible FULL-mode artifacts may supply a training population. EVAL sources stay evaluation-only. A selection recipe names sources and quotas and pins the heldout set. Its exact heldout matching and cross-source deduplication supplement mandatory version-bound lexical decontamination; they do not replace it or establish semantic decontamination.</p>
       <h4 id="before-a-run">Before a training run</h4>
@@ -317,21 +449,39 @@
       <p>The status page lists every source — catalog rows, the pending intake queue and declaration-only metadata rows for known-but-rejected upstreams — with filters by status and reason, counts per status, and the list of sources whose exclusion still needs a ruling. Reason labels open their canonical one-line meaning and their clearing step; that explanation appears only when clicked, and the page itself shows data, never policy prose.</p>
     </article>
   </section>
-  <section id="repair" aria-labelledby="repair-title">
-    <h2 id="repair-title">Repair candidates</h2>
-    <article><h3>What a repair candidate is</h3>
-      <p>A repair candidate is a "cleaned subset" of a source the Atlas already tracks, offered by a third party (for example a validated-tasks folder against its TaskTrove counterpart). The repair lane never deprecates or excludes the tracked source and never admits the candidate as a parallel source: matched candidate tasks replace their tracked counterparts task by task, and only after passing every gate. Matching is content-only — task IDs are display labels, never matching keys.</p>
-    </article>
-    <article><h3>The match classes</h3>
-      <p>Every candidate is content-matched against the tracked population: <strong>identical</strong> (hash-proven same task, nothing to review), <strong>repaired</strong> (each side is the other's unique best neighbor at similarity ≥ 0.5 after the approved template stripping, and enters comparative review), <strong>new</strong> (no counterpart at or above 0.5, follows normal admission), or <strong>conflicting</strong> (a non-mutual nearest neighbor, or several candidates claiming one tracked task — a manual ruling is required and nothing is replaced by itself). Tracked tasks the candidate leaves out become advisory dropped-by-candidate flags on their QC evidence; the candidate's own filter is a signal, never an exclusion by itself. A candidate with zero overlap is a parallel derivation, not a cleaned subset — its advisories are suppressed and the folder is reported for a separate ruling.</p>
-    </article>
-    <article><h3>How replacement is decided</h3>
-      <p>Each repaired pair runs one comparative judge call (the pinned FULL-QC GLM-5.3 reviewer at temperature 0.7) under the atlas-repair-comparative rubric, returning better / tie / worse / incomparable plus exactly which defects the candidate fixes and which it introduces. A candidate replaces the original only when the comparison is not worse, it introduces no defects, and its own oracle and nop negative control pass. Every failed gate is recorded as typed evidence, and the original is kept otherwise.</p>
-    </article>
-    <article><h3>Reading the provenance</h3>
-      <p>The lane publishes a new private version of the tracked source with per-task provenance — original, replaced, or added — alongside the replaced task's hash and the advisory drop flags. The assessment page and each task's Evidence page carry those provenance fields and the comparative verdict receipts behind them. The source itself keeps its Available status and carries no exclusion reason; the candidate never appears as its own row.</p>
-    </article>
-  </section>
+  <section id="glossary" class="glossary" aria-labelledby="glossary-title"><h2 id="glossary-title">Glossary</h2><p>Use these terms with the <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#workflow-glossary">normative definitions</a> and <a href="#workflows">workflow diagrams</a>.</p><dl>
+    <div><dt id="term-source">Source <a href="#term-source" aria-label="Link to Source">#</a></dt><dd>One declared RL task population with a stable Atlas identity and pinned input.</dd></div>
+    <div><dt id="term-task">Task <a href="#term-task" aria-label="Link to Task">#</a></dt><dd>One RL problem encoded as a TaskSpec: context, completion contract, resources, environment and grader.</dd></div>
+    <div><dt id="term-variant-id">Variant ID <a href="#term-variant-id" aria-label="Link to Variant ID">#</a></dt><dd>A label for a derived source version, with parent provenance. The label is not an immutable revision.</dd></div>
+    <div><dt id="term-pin">Pin <a href="#term-pin" aria-label="Link to Pin">#</a></dt><dd>An immutable revision or verified content digest that identifies an input.</dd></div>
+    <div><dt id="term-version">Version <a href="#term-version" aria-label="Link to Version">#</a></dt><dd>A source release and its pinned conversion inputs. Changed behavior needs recorded new provenance.</dd></div>
+    <div><dt id="term-behavioral-identity">Behavioral identity <a href="#term-behavioral-identity" aria-label="Link to Behavioral identity">#</a></dt><dd>The combined hash of dataset, converter, grader, environment, runtime, judge/reviewer and license/ruling inputs.</dd></div>
+    <div><dt id="term-status">Status <a href="#term-status" aria-label="Link to Status">#</a></dt><dd>Pending: queued or qualifying under the intake rules. Available: admission checks pass. Excluded: a typed reason blocks selection. Deprecated: still trainable, but selectable only by explicit request.</dd></div>
+    <div><dt id="term-exclusion-reason">Exclusion reason <a href="#term-exclusion-reason" aria-label="Link to Exclusion reason">#</a></dt><dd>A typed source claim in ExclusionReason with evidence. Task filtration reasons have separate enums.</dd></div>
+    <div><dt id="term-gate">Gate <a href="#term-gate" aria-label="Link to Gate">#</a></dt><dd>A required check whose applicable evidence must pass before a flow advances.</dd></div>
+    <div><dt id="term-receipt">Receipt <a href="#term-receipt" aria-label="Link to Receipt">#</a></dt><dd>A version-bound record of input identity, check result and artifact references or hashes.</dd></div>
+    <div><dt id="term-census">Census <a href="#term-census" aria-label="Link to Census">#</a></dt><dd>Population measurement of task roles, environments, requirements and grading boundaries, with reconciled counts.</dd></div>
+    <div><dt id="term-grading-boundary">Grading boundary <a href="#term-grading-boundary" aria-label="Link to Grading boundary">#</a></dt><dd>SHARED grades against the actor workspace. SEPARATE uses an independent grading environment under the task contract.</dd></div>
+    <div><dt id="term-lexical-decontamination">Lexical decontamination <a href="#term-lexical-decontamination" aria-label="Link to Lexical decontamination">#</a></dt><dd>Measure evaluation-corpus lexical overlap and remove flagged TRAIN tasks. EVAL retains measured overlap. This makes no semantic-cleanliness claim.</dd></div>
+    <div><dt id="term-fingerprint">Fingerprint <a href="#term-fingerprint" aria-label="Link to Fingerprint">#</a></dt><dd>Deterministic content summaries used to find related or duplicate source populations.</dd></div>
+    <div><dt id="term-duplicate-group">Duplicate group <a href="#term-duplicate-group" aria-label="Link to Duplicate group">#</a></dt><dd>A recorded set of related source members with pinned overlap evidence and a canonical display choice.</dd></div>
+    <div><dt id="term-oracle">Oracle <a href="#term-oracle" aria-label="Link to Oracle">#</a></dt><dd>The source’s original solution, executed through the production grading path as a positive control.</dd></div>
+    <div><dt id="term-nop-control">NoP control <a href="#term-nop-control" aria-label="Link to NoP control">#</a></dt><dd>A do-nothing negative control for workspace grading. It must not pass; answer-only grading is exempt.</dd></div>
+    <div><dt id="term-resource-calibration">Resource calibration <a href="#term-resource-calibration" aria-label="Link to Resource calibration">#</a></dt><dd>Measure missing agentic limits while preserving declared limits and recording failures.</dd></div>
+    <div><dt id="term-sample-full-qc">SAMPLE / FULL QC <a href="#term-sample-full-qc" aria-label="Link to SAMPLE / FULL QC">#</a></dt><dd>Content review of a fixed selected panel / whole retained population with recorded coverage. QC findings alone never reject tasks.</dd></div>
+    <div><dt id="term-reviewer-profile">Reviewer profile <a href="#term-reviewer-profile" aria-label="Link to Reviewer profile">#</a></dt><dd>Pinned QC model, rubric, payload revision, budgets, temperature and retry configuration.</dd></div>
+    <div><dt id="term-equivalence">Equivalence <a href="#term-equivalence" aria-label="Link to Equivalence">#</a></dt><dd>A verified typed proof that specified input differences permit defined evidence reuse.</dd></div>
+    <div><dt id="term-carry-forward">Carry-forward <a href="#term-carry-forward" aria-label="Link to Carry-forward">#</a></dt><dd>Reuse conclusive reviews under exact task identity or accepted equivalence, keeping original reviewer provenance.</dd></div>
+    <div><dt id="term-ruling">Ruling <a href="#term-ruling" aria-label="Link to Ruling">#</a></dt><dd>A recorded authorized decision with scope, reason and evidence. A checker result alone is not a ruling.</dd></div>
+    <div><dt id="term-ban">Ban <a href="#term-ban" aria-label="Link to Ban">#</a></dt><dd>A binding negative license or policy ruling enforced through the registry and propagation gates.</dd></div>
+    <div><dt id="term-drift">Drift <a href="#term-drift" aria-label="Link to Drift">#</a></dt><dd>A detected change in behavioral or attribute inputs relative to the declared and recorded version.</dd></div>
+    <div><dt id="term-projection">Projection <a href="#term-projection" aria-label="Link to Projection">#</a></dt><dd>A derived serving view of catalog and evidence inputs. Its pins must stay current with the selected records.</dd></div>
+    <div><dt id="term-catalog-load">Catalog load <a href="#term-catalog-load" aria-label="Link to Catalog load">#</a></dt><dd>One staged and checked Postgres import with its own load ID. Selection of it is explicit.</dd></div>
+    <div><dt id="term-revision">Revision <a href="#term-revision" aria-label="Link to Revision">#</a></dt><dd>For a dataset, an immutable commit. For Atlas deployment, a numeric app release.</dd></div>
+    <div><dt id="term-preview">Preview <a href="#term-preview" aria-label="Link to Preview">#</a></dt><dd>A private Atlas app revision used to check a release before production.</dd></div>
+    <div><dt id="term-production">Production <a href="#term-production" aria-label="Link to Production">#</a></dt><dd>The separately selected Atlas app and revision used by its readers.</dd></div>
+    <div><dt id="term-upload">Upload / private release <a href="#term-upload" aria-label="Link to Upload / private release">#</a></dt><dd>Write a version to its permitted release store and record the immutable output. Private is the default; upload alone never admits a source.</dd></div>
+  </dl></section>
   <p id="snapshot-info" class="snapshot-info"></p>
   </div>
 <section><h2>Curriculum confidence and examples</h2><p>Confidence selects precomputed subject and capability similarity cutoffs. All (nearest) is the default. Counts and stored sample examples update together; examples show their Source without requiring a source selection. Complete per-source counts are available below the samples. Lists are samples, not a complete instance index.</p><h2>Grader profiles</h2><p>Grader is derived from measured task contracts. Mixed uses one chip with its breakdown and judge profile in Evidence. A changed or unmeasured input stays Pending.</p></section></main>

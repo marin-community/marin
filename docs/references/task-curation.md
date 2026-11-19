@@ -167,14 +167,6 @@ until its current-pin admission receipt exists.
   SAMPLE panel drawn on the current pin (`SamplePanelCurrency.CURRENT_PIN`)
   before its status is current; an archived-lineage panel cannot qualify a new
   admission (`require_sample_pin_currency`).
-  count matches: a new revision can change content. A census receipt that its own
-  evidence contradicts is refused at bind time
-  (`census_binding.check_receipt_evidence`), and
-  `census_binding --audit-receipt-evidence` audits every staged receipt. A
-  content-changed source needs fresh deduplication, lexical measurement and a
-  SAMPLE panel drawn on the current pin (`SamplePanelCurrency.CURRENT_PIN`)
-  before its status is current; an archived-lineage panel cannot qualify a new
-  admission (`require_sample_pin_currency`).
 - *Content identity.* Re-measuring a pin can re-serialize the same TaskSpec
   bytes into a different artifact layout, changing the artifact-level
   `task_specs_sha256` without changing any task. `content_identity.py` records
@@ -286,6 +278,19 @@ until its current-pin admission receipt exists.
   intake adoption is reported, not failed. The audit runs as an atlas-push gate
   for every task-curation landing and as `python -m
   experiments.post_training.task_curation.declaration_audit`.
+
+  The serving audit reads only the active `atlas_current.latest` load. Staged
+  and historical declarations cannot satisfy it. A derived-contract receipt
+  must match all six actor census input fields used by the serving projection;
+  evidence locations and carry-forward references do not change those inputs.
+  The contract archive is independent of catalog loads: every receipt for a
+  source remains a candidate. Receipts matching the same six input fields must
+  have identical summaries. Curriculum rows must match the dataset ID, revision,
+  and complete pipeline reference and carry a non-null alignment. Refresh stale
+  data through the `infra.marina.apps.rl_data_catalog.load`,
+  `infra.marina.apps.rl_data_catalog.load_derived_contract`, and
+  `infra.marina.apps.rl_data_catalog.load_curriculum` entry points. A registry
+  receipt alone cannot satisfy a served-data check.
 
 **Non-agentic tasks.** A TaskSpec with no actor role, agent harness or agent
 workspace is non-agentic: the model answers and the task's grader checks the
@@ -435,6 +440,293 @@ rebase conflicts and rerun. Advisory review remains required for non-trivial
 changes. Report the landed SHA to the coordinator. Never force-push or push to
 `main`. This rule ends when CI resumes.
 
+Ruling 60 (2026-11-19) temporarily permits named missing/stale serving-projection
+waivers while the preview load and coordinated refresh complete. Use the explicit
+waiver file for a landing:
+
+```bash
+atlas-push --waivers experiments/post_training/task_curation/declaration-projection-waivers.json \
+  --test "<affected test command>" --who "<session id>" --what "<change summary>"
+```
+
+Each entry names a source and projection and records
+`preview projection lag; declaration drift 0; ruling 2026-11-19`. The file binds
+these exceptions to the preview applet and the current/frozen catalog load IDs.
+Selecting the new refresh load automatically expires them; they cannot waive
+production checks. Declaration drift, query errors, conflicting contract summaries,
+and every other non-projection failure still block. The audit records each applied
+`source:projection` waiver. Without `--waivers`, the audit remains strict. After
+the refresh seals, run `python -m
+experiments.post_training.task_curation.declaration_audit` without that option.
+
+## Atlas workflows
+
+Use one of the flows below for every change to an Atlas source. Ingestion creates a
+source identity. Repair, task replacement and drift analysis create a new pinned
+version of an existing source. Deprecation, bans and overlap rulings change its
+recorded standing. Enrichment, quality review and publication attach records to
+one source version. The [Getting started guide](https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/dist/guide.html)
+shows one diagram for each flow and defines the [workflow terms](#workflow-glossary).
+Policy belongs in that guide and this reference. Tables, tooltips and Evidence
+cards show measured state, reasons and receipt links.
+
+### Ingestion stage map
+
+These letters identify re-entry points. They do not rename the driver's modes or
+its existing stage-0 license gate. A gate must bind to the exact source version
+and population it checks. Keep the receipt and the failed check when a gate fails.
+
+| Stage | Required action and evidence | Procedure and enforcing code |
+| --- | --- | --- |
+| <span id="atlas-stage-a">a</span> Declare | Register the candidate's immutable HF revision, stable source ID, converter identity, provenance, Use and restriction. Run the binding license gate before spend. | [Declarations](#declarations), [license gate](#stage-0-binding-license-gate); [sources.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/sources.py), [license_check.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/license_check.py) |
+| <span id="atlas-stage-b">b</span> Convert | Preserve prompts, references, grader and environment in TaskSpecs. Apply the accepted agentic format gate; answer-only tasks still need a complete task contract. | [Conversion](#conversion-modes); [pipeline.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/pipeline.py), [source.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/source.py) |
+| <span id="atlas-stage-c">c</span> Census | Check environment fidelity, actor and grader roles, SHARED/SEPARATE grading, locks, image identities and backend fit. Record population digests and complete grading counts. Reconcile the final retained population again at admission. | [Census](#actor-census-registration), [fidelity](#environment-fidelity-and-repair); [census_binding.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/census_binding.py), [grading_census.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/grading_census.py) |
+| <span id="atlas-stage-d">d</span> Exact deduplication | Drop exact within-source duplicate contracts. Preserve raw, unique and dropped counts and the drop manifest. | [Within-source deduplication](#mandatory-within-source-duplicate-removal); [within_source_census.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/within_source_census.py) |
+| <span id="atlas-stage-d2">d2</span> Cross-source check | Compare the candidate's source fingerprint against admitted sources. Resolve every duplicate group through the overlap flow before admission. | [Overlap resolution](#overlap-resolution); [source_fingerprints.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/source_fingerprints.py) |
+| <span id="atlas-stage-e">e</span> Lexical decontamination | Measure evaluation-corpus overlap at the pin. Remove TRAIN overlap; retain measured EVAL overlap. Bind the retained-release receipt and drop union. | [Lexical decontamination](#lexical-decontamination-before-publication); [lexical_binding.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/lexical_binding.py) |
+| <span id="atlas-stage-f">f</span> Resource calibration | For agentic tasks, preserve declared limits and calibrate missing ones. Record actor and verifier profiles and supported production execution. Non-agentic tasks skip this stage. | [Calibration prerequisites](#inventory-calibration-prerequisites); [oracle_filter.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/oracle_filter.py) |
+| <span id="atlas-stage-g">g</span> Oracle and NoP | Filter every oracle-bearing task through the production trial path. Workspace graders also require a non-passing NoP. No-oracle sources use static retention under the current ruling. Infrastructure failures remain pending and are re-driven. | [Oracle filtration](#full-population-oracle-filter), [NoP](#workspace-oracle-negative-controls); [oracle_filter.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/oracle_filter.py) |
+| <span id="atlas-stage-h">h</span> SAMPLE QC | Review the fixed retained-population panel with a pinned reviewer. Record coverage and Result. BAD content quality alone never rejects a source. Existing QUICK admission policy remains in force; a QUICK receipt does not claim SAMPLE review. | [SAMPLE coverage](#sample-missing-review-tolerance), [reviewer](#qa-reviewer); [sample_qc_binding.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/sample_qc_binding.py) |
+| <span id="atlas-stage-i">i</span> Admission | Reconcile final census, deduplication, lexical, grading, control and oversight evidence. Clear every source exclusion claim and bind the exact final pin in the declaration and registry together. | [Current admission policy](#current-admission-policy); [source.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/source.py), [declaration_audit.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/declaration_audit.py) |
+| <span id="atlas-stage-j">j</span> Upload | Upload the qualified version only when every applicable gate passes. Default to a private release, preserve its read-back receipt and provenance, and keep previous versions. | [Storage and publication](#storage-and-publication); [remediation_publish.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/remediation_publish.py) |
+
+Start ingestion from a pinned HF dataset row in the candidate intake list
+(`CANDIDATES`). Register it through the [pending source intake](#pending-source-intake)
+and [dataset declaration](#declarations) procedures.
+It is the only flow that starts every stage from scratch and creates a new source
+identity. Its exit is Available, or Excluded with typed reasons and evidence;
+incomplete work stays Pending where the status rules require it. Private
+qualification artifacts can exist before final admission; their upload never
+establishes availability. Stage j means the final qualified release. Sources with
+`private_always` restriction stay in their private store: publication helpers refuse
+their upload, even to a private release repository.
+
+### Repair of an Excluded source or task
+
+Start from the exact excluded pin and its typed claims. Diagnose each claim with
+its recorded evidence. Apply only the fix listed in the [per-reason table](#admission-procedure-for-excluded-sources).
+A repair records a new variant label, such as `@repaired-YYYYMMDD` or `@rhs`, and
+an immutable output revision. The label alone is not a pin. Keep the parent source
+identity, before/after task hashes, allowed change and ruling with the new version.
+
+Re-enter ingestion at the earliest stage invalidated by any change. Run that stage
+and every later applicable stage. Earlier receipts carry only when their exact
+inputs still match; a changed pin always requires a fresh actor census, even when
+the task count is unchanged. The final release needs its own admission bindings.
+
+| Change type | Earliest re-entry | Additional requirements |
+| --- | --- | --- |
+| License grant, ban lift or source-use ruling | a | Recheck the exact-pin license and registry scope; run later applicable gates. |
+| Converter code, prompt, reference, task content or population | b | Fresh census, deduplication, cross-source check, lexical measurement and changed-task QC. |
+| Environment, package lock, image or backend/runtime behavior | c | Recheck fidelity, grading boundary and backend fit; rerun calibration and controls. |
+| Grader code, verifyit module or grading protocol | c | Fresh grading census, g controls and h QC, even if task JSON is unchanged. |
+| Lexical corpus or contamination ruling | e | Rebuild retained population; bind its census, deduplication and review evidence at i. |
+| Resource limit change | f | Recalibrate, rerun controls and bind final census; declared limits need an approved deviation. |
+| Reviewer model, rubric, payload or profile | h | Follow quality review; do not relabel earlier reviews. No source version is needed if task behavior stays unchanged. |
+| Serving projection or loader only | Publication | Audit the projection against the same admitted version; source receipts stay unchanged. |
+
+SAMPLE review reuse requires `review_carry_forward.py` evidence. Exact task-contract
+identity permits conclusive reviews to carry with their original reviewer identity.
+Typed normalization receipts can prove absent-versus-null equivalence.
+Grading-environment equivalence permits only `grader.environment` changes and the
+explicit `calibration_completion`, `actor_setup_pinning` and `lock_resources`
+allowances after per-task verification. It does not permit arbitrary grader-code
+or content changes. Preserve fixed panel slots and draw only the required changed
+members under the existing rules. These are the implemented equivalence limits;
+no ruling label alone authorizes reuse.
+
+Upload at j if and only if all reasons' gates and the final admission gates clear.
+The output defaults to private. If a gate still fails, retain the Excluded version
+and its evidence; missing work remains pending under the status rules. Never clear
+a reason just because a patch was written or a candidate was uploaded.
+
+### Task replacement and repair union
+
+Start with an Available source and preserve its status while qualifying candidates.
+The default is [judged task replacement](#repair-candidates): classify content as
+`identical`, `repaired`, `new` or `conflicting`; compare repaired pairs; then require
+candidate oracle and applicable NoP controls. `new` tasks enter ingestion.
+`conflicting` matches stop for a ruling. A dry-run match report is not a release.
+
+A deterministic repair uses a versioned rule on an explicitly frozen task subset.
+Record the rule, input pin, selected task identities, allowed differing fields,
+before/after hashes and behavior tests for the defect. Prove unaffected tasks stay
+unchanged, then re-enter at the earliest invalidated stage and clear its remaining
+gates. For example, [pdbthink_verifier_repair.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/pdbthink_verifier_repair.py)
+checks the original native allocation and changes only the approved verifier
+allocation. A deterministic transform does not need a comparative preference
+judgment, but it needs its own defect check and qualification evidence.
+
+When several repairs accumulate, collect their receipts against the same base pin.
+Their claimed task sets must be disjoint, with no task claimed by two members.
+Apply the union to the base once, then check every member's allowed changes and
+gates together on the union. Rerun the affected stages and final census and
+admission on that combined output. If claims overlap or any member's gates cannot
+hold together, return `unsatisfiable`, name the conflicting members and gates,
+and stop for a ruling. Do not choose an order that silently overwrites a repair.
+
+The successful exit is one new private version with `original`, `replaced` or
+`added` provenance per task and links to the member receipts. The source stays
+Available; a failed candidate leaves the admitted version selected. The code has
+source-specific deterministic transforms and judged-pair records. A shared
+repair-union validator and typed `unsatisfiable` result are required additions;
+this procedure does not claim they already exist.
+
+### Drift analysis
+
+An Atlas source must change through a recognized flow. Its required behavioral
+identity is a canonical hash of these pinned inputs:
+
+- dataset repository and immutable revision;
+- converter version and converter code hash;
+- grader code hashes, including verifyit and TaskCompendium grading modules;
+- environment lock hashes and image digests;
+- backend implementation and runtime version;
+- task judge model and configuration, plus the QC reviewer profile;
+- the scoped license receipt and versioned ruling record.
+
+Keep the component hashes as evidence beside the combined hash. A dataset revision
+alone cannot identify behavior: a verifyit fix can change rewards without changing
+TaskSpec bytes. A QC reviewer change affects review evidence and can leave task
+execution unchanged. Projection identity also includes the selected catalog load
+and projection code; it is separate from source execution identity.
+
+The required scheduled check recomputes these components against each declaration
+and its registry receipts. It records old/new components, affected attributes,
+route and evidence. A change with no demonstrated behavioral effect gets a recorded
+no-op after its affected evidence is checked. A behavior change that still passes
+re-enters ingestion at the earliest invalidated stage. A failing behavior enters
+Repair with a typed reason. Never silently update the admitted pin or its receipts.
+
+| Observed change vector | Detection and route | Prevention and remaining exposure |
+| --- | --- | --- |
+| Upstream dataset revision | Compare declared and proposed revisions; a content change enters b, and a failing task enters Repair with its failure reason. | Immutable commits prevent the selected bytes from floating. New upstream commits can still appear. |
+| Converter edit | Compare version and code hash; enter b, or record a proven no-op. Failures use format, census or reference reasons. | A version string alone misses an unbumped code edit. |
+| Grader edit, including verifyit fixes | Hash grading modules; enter c grading census, g controls and h QC. Reward defects use `GRADER_DEFECT`. | A task hash alone misses library-code changes. |
+| Unpinned dependency drift | Compare resolved environment and lock evidence; enter c. Unresolved tasks carry `UNPINNED_ENVIRONMENT` at task level. | An installed hashed lock prevents package substitution only when every install uses it. Floating setup commands remain exposed. |
+| Mutable image tag | Resolve the tag and compare digest; enter c. Missing artifacts use `ENVIRONMENT_ARTIFACT_MISSING`. | An image consumed by verified digest cannot drift at that reference. Legacy tags can move. Deletion remains possible. |
+| Backend or runtime change | Compare implementation/runtime versions and capability evidence; enter c, f and g. A failed survey uses `NO_SUPPORTED_BACKEND`. | Digest pins do not freeze external backend services or their capability changes. |
+| Reviewer profile V3 to V4 | Compare reviewer specs, including token budgets; run quality review at h for required new observations. | `full_qc.py` selects V4 for new SAMPLE work. V3 receipts keep their recorded identity. |
+| License or ruling change | Compare scoped receipt and registry version; enter a or the ban/unban flow. | Registry scope and revision are inputs even when task bytes stay fixed. |
+| Serving-projection staleness | Compare declarations, receipts, selected load and projection inputs; enter Publication and block a stale preview. | A code release does not refresh the selected catalog by itself. |
+
+Hash-checked locks and digest-pinned images prevent their respective byte drift
+by construction when consumed as specified. They do not make every source immune
+to drift. Current code checks pins and selected receipt identities through
+`census_binding.py`, `declaration_audit.py`, `sample_qc_binding.py` and Atlas release
+checks. A scheduled registry-wide check with the complete behavioral identity above
+is not implemented in this cut. Until it exists, operators must compare these
+inputs before a version change or publication and retain that audit evidence.
+
+### Deprecation
+
+Start from Available. First admit the qualified replacement through ingestion or
+Repair. Then mark the old source Deprecated with its replacement link and
+provenance. Run no pipeline stages on the old version for this status change.
+It remains selectable only by explicit request and carries no exclusion claims.
+A population with a ban or any other exclusion reason is Excluded instead.
+`SourceStatus` and `source.py` enforce that distinction.
+
+### Banning and unbanning
+
+Start from any status. Record the license or policy decision, scope, reason and
+primary evidence in [#11497](https://github.com/marin-community/marin/issues/11497).
+Only an authorized user ruling can change the ban registry. Update the registry,
+record the typed ban claim and exclude the source from selection and admission.
+Remove it from mixes and curricula. Redact its content on public routes before
+publishing a preview or production revision; retain only permitted identity,
+counts and decision evidence. A registry change alone does not prove that all
+served copies have been redacted.
+
+`license_registry.py`, `license_binding.py` and selection enforce license bans.
+The public-route redaction check is a required preview-builder gate; it must prove
+that banned content is absent across task, review, curriculum and rollout routes.
+Do not treat the separate `private_always` guards as proof that ban propagation is
+complete. The preview-builder work supplies that gate; this documentation adds no
+redaction implementation.
+
+To unban, record the reversing ruling and update the registry. Re-enter ingestion
+at the earliest invalidated stage, starting with a when license permission
+changed and resuming all unfinished gates from where the source left. Clear every
+other reason, recheck propagation and upload privately only after all gates pass.
+A reversed ruling alone does not restore Available status.
+
+### Overlap resolution
+
+Ingestion d2 detects a candidate's overlap with admitted sources using source
+fingerprints and duplicate groups. This flow spans sources: freeze every group's
+member pins, inspect the task-content matches, and choose the canonical member.
+Fold display duplicates, exclude a duplicate with `DUPLICATE_OF_SOURCE` and
+ruling evidence, or acknowledge a known lineage through a recorded ruling.
+The calibforge pair is a recorded-lineage example. Folding is a display choice
+and does not resolve admission by itself. If the other member is an inadmissible
+duplicate, record its exclusion. If both populations are permitted, record the
+ruling that explains their lineage or distinct use. Either disposition can retain
+a display fold. Keep every member and its provenance; folding never deletes data
+or clears other admission gates.
+
+`source_fingerprints.py` produces measurements;
+[duplicate_folding.py](https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/server/duplicate_folding.py)
+projects groups for display. Matches use content, never task IDs, and a model may
+not downgrade measured overlap. A distinct-population ruling is required to clear
+a duplicate exclusion. Resume ingestion after d2 with the recorded resolution.
+
+### Attribute lifecycles
+
+Each attribute record consumes a specific source version and records its own
+input pins, producer, configuration, receipt and output hash. Ingestion, Repair
+or drift analysis can produce a new source version that starts these side flows.
+An attribute update alone does not change source status. Drift analysis invalidates
+only the records whose inputs changed; keep the old records as historical evidence.
+A discovered source defect follows Repair through a separate typed claim.
+
+| Attribute flow | Existing states in code | Gates and output |
+| --- | --- | --- |
+| Enrichment: difficulty | `MeasurementStatus`: `measured`, `pending`, `blocked`, `not_measured`. Coverage uses the distinct `CoverageStatus`: `measured`, `needs_measurement`, `blocked`. | Freeze release, converter, population and solver protocol. Measure, retain typed gaps and per-solver evidence, then bind current-pin observations. Difficulty never excludes by itself. See [Difficulty](#difficulty-measurement), [difficulty.py](https://github.com/marin-community/marin/blob/main/lib/finestore/src/finestore/rl/difficulty.py) and [coverage](https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/server/difficulty_coverage.py). |
+| Enrichment: curriculum | No curriculum lifecycle-status enum exists. `AlignmentRelease` and `CurriculumCoverage` are immutable records; `population` is `converted` or `admitted`, not a progress status. | Pin public semantic inputs, taxonomy and embedding specification; score assignments, reconcile coverage, apply privacy guards and load an explicit release. See [Pipeline overview](#pipeline-overview) and [curriculum models](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/pipeline/curriculum/models.py). |
+| Quality review | Atlas `Quality`: `QUICK`, `SAMPLE`, `FULL`. `JudgmentStatus`: `reviewed`, `unavailable`. `AssessmentStatus`: `complete`, `failed`, `skipped`. `QualityResultFinalization`: `complete`, `accepted_incomplete`. Result is `GOOD`, `SOME_ISSUES`, `BAD` or absent. | Freeze panel and reviewer profile; run SAMPLE or FULL and bind coverage and Result. SAMPLE permits at most 5% missing observations; FULL waiver permits at most 1%. A profile upgrade retains old identities and creates new evidence where required. See [Current admission policy](#current-admission-policy), [quality.py](https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/server/quality.py), [curation.py](https://github.com/marin-community/marin/blob/main/lib/finestore/src/finestore/rl/curation.py). |
+| Publication | No single publication-status enum exists. `ReleaseReceipt.phase` is the literal `preflight`, `hosted` or `postpublish`, with `passed` and the failing `gate`. A catalog load ID, selected pointer and numeric app revision are separate records. | Stage and verify catalog load; refresh serving projections; pass declaration, accounting, privacy/redaction and browser audits; publish and verify private preview; publish production only under its explicit release authority. See [Atlas publication](rl-data-atlas.md#publication-lifecycle) and [release_receipts.py](https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/release_receipts.py). |
+
+### Workflow glossary
+
+The [guide glossary](https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/dist/guide.html#glossary)
+uses these definitions. Names such as behavioral identity and repair union name
+required procedures above; they do not imply a new code enum or automatic service.
+
+| Term | Definition |
+| --- | --- |
+| Source | One declared RL task population with a stable Atlas identity and pinned input. |
+| Task | One RL problem encoded by a TaskSpec: context, completion contract, resources, environment and grader. |
+| Variant ID | A label for a derived version of a source, with parent provenance; it is not an immutable dataset revision. |
+| Pin | An immutable revision or verified content digest that identifies an input. |
+| Version | A source release and its pinned conversion inputs; changed behavior needs recorded new provenance. |
+| Behavioral identity | The combined hash of the dataset, converter, grader, environment, runtime, judge/reviewer and license/ruling inputs listed above. |
+| Status | The source's `Pending`, `Available`, `Excluded` or `Deprecated` standing, independent of attribute states. |
+| Exclusion reason | A typed source claim in `ExclusionReason` with evidence; task-level reasons have their own enums. |
+| Gate | A required check whose applicable evidence must pass before the flow can advance. |
+| Receipt | A version-bound evidence record with input identity, check result and artifact references or hashes. |
+| Census | A population measurement of task roles, environments, requirements and grading boundaries with reconciled counts. |
+| Grading boundary | `SHARED` grades against the actor workspace; `SEPARATE` uses an independent grading environment under the task contract. |
+| Lexical decontamination | Evaluation-corpus lexical overlap measurement and, for TRAIN, removal of flagged tasks; it makes no semantic-cleanliness claim. |
+| Fingerprint | Deterministic content summaries used to find related or duplicate source populations. |
+| Duplicate group | A recorded set of related source members with pinned overlap evidence and a canonical display choice. |
+| Oracle | The source's original solution, executed through the production grading path as a positive control. |
+| NoP control | A do-nothing negative control for workspace grading; it must not pass. Answer-only grading is exempt. |
+| Resource calibration | Measurement of missing agentic limits while preserving declared limits and recording failures. |
+| SAMPLE/FULL QC | Content review of a fixed selected panel / whole retained population, with recorded coverage. QC findings alone never reject tasks. |
+| Reviewer profile | The pinned QC model, rubric, payload revision, budgets, temperature and retry configuration. |
+| Equivalence | A verified typed proof that specified input differences permit defined evidence reuse. |
+| Carry-forward | Reuse of conclusive reviews under exact task identity or accepted equivalence, preserving reviewer provenance. |
+| Ruling | A recorded authorized decision with scope, reason and evidence; it is not an automatic checker result. |
+| Ban | A binding negative license or policy ruling enforced by the registry and required propagation gates. |
+| Drift | A detected change in behavioral or attribute inputs relative to the declared and recorded version. |
+| Projection | A derived serving view of catalog and evidence inputs, which must stay current with their selected pins. |
+| Catalog load | One staged and checked Postgres import, with its own load ID; selection of it is explicit. |
+| Revision | An immutable dataset commit when discussing a source; a numeric app release when discussing Atlas deployment. |
+| Preview | A private Atlas app revision used to check a release before production. |
+| Production | The separately selected Atlas app and revision used by its readers. |
+| Upload / private release | Writing a version to its permitted release store and recording its immutable output; private is the default and upload alone does not admit it. |
+
 ## Repair candidates
 
 A *repair candidate* is a "cleaned subset" of a source the Atlas already tracks, offered by a
@@ -475,10 +767,11 @@ original and the candidate side by side. Review and serving run on
 identity stays the same wherever the jobs place. The judge is the pinned FULL-QC reviewer (GLM-5.3,
 temperature 0.7, V3 budgets) under the `atlas-repair-comparative` rubric, returning a typed
 `ComparativeVerdict`: `BETTER`/`TIE`/`WORSE`/`INCOMPARABLE` plus the `Defect` members fixed
-and introduced. A candidate replaces its tracked counterpart only when the comparison is not
-worse, introduces no defects, and the candidate's own oracle and `nop` negative control pass;
-otherwise the original is kept and every failed gate is recorded as typed evidence on the
-pair's `ComparativeRepairReceipt`.
+and introduced. A candidate replaces its tracked counterpart only for `BETTER` or `TIE`, with no
+introduced defects, qualified oracle and applicable `nop` controls, no BAD static
+quality finding and no reference conflict. `INCOMPARABLE` keeps the original.
+These candidate-selection checks do not exclude the tracked source or task.
+Every failed gate is recorded on the pair's `ComparativeRepairReceipt`.
 
 **Dropped-by-candidate.** The candidate's own filter (for example pass@k) is a signal, not a
 mandate: each advisory flag feeds the tracked task's QC evidence and never excludes the task
@@ -582,32 +875,86 @@ page shows that list under "Sources whose exclusion needs a ruling".
 
 ### Admission procedure for Excluded sources
 
-A source becomes Available only when every reason is cleared by evidence, never
-by hand. Clearing a reason means producing the receipt the admission pipeline
-already defines, at the current pin:
+Diagnose each claim against its receipt before making a repair. The rows below
+are separate paths for all 27 members of `finestore.rl.status_taxonomy.ExclusionReason`.
+The first column uses enum member names; serialized values are the lower-case,
+hyphenated values in that module. No path clears other outstanding reasons.
 
-| Reason | Clearing step and receipt |
-|---|---|
-| `LICENSE_BAN` | Record a permissive grant or lift the ban in the license registry (user decision), then bind the accepted license receipt. |
-| `LICENSE_MISSING` | Establish and record a permissive grant or license receipt at the pin, then bind it. |
-| `NOT_RL_TASK_DATA` | Publish an upstream that contains usable RL task data and declare it. |
-| `ORACLE_FILTRATION_RETAINED_ZERO` | Republish the conversion so its full-population oracle filtration admits more than zero tasks; publish the new oracle release receipt and select it. |
-| `ACTOR_CENSUS_MISSING` | Run the source's licensed intake to a census receipt and bind it (`actor_census_receipts`). |
-| `ACTOR_CENSUS_STALE` | Re-measure the census at the current dataset pin and converter version; bind the new census receipt. |
-| `RETAINED_POPULATION_EMPTY` | Republish a nonempty retained population at the current pin. |
-| `GRADING_CENSUS_INCOMPLETE`, `GRADING_CENSUS_COUNTS_INCOMPLETE` | Complete the grading census over the retained population; bind the census receipt (`grading_census_receipts`). |
-| `GRADER_MISSING` | Declare runnable graders for the affected tasks and re-bind the grading census. |
-| `LEXICAL_RECEIPT_MISSING` | Measure the lexical receipt at the current pin for the declared use (`lexical_measurements`). |
-| `LEXICAL_REMEDIATION_REQUIRED` | A remediation agent publishes the remediated private release and binds its decontamination receipt at the current pin; the row queues as Pending with stage `Lexical remediation queued` until that receipt exists. |
-| `OVERSIGHT_MISSING` | Bind current-pin oversight evidence: the QUICK conversion receipt, or a SAMPLE or FULL review receipt with recorded verification. |
-| `AGENTIC_TASK_FORMAT_MISSING` | Declare the accepted TaskCompendium or Harbor task format, or record the grandfathered registration. |
-| `SNAPSHOT_IDENTITY_MISSING` | Produce the production snapshot identity measurement at the current pin. |
-| `EXECUTION_REQUIREMENT_MISSING` | Produce the execution-requirement measurement. |
-| `ENVIRONMENT_ARTIFACT_MISSING` | Rebuild the declared artifact in-region and bind its receipt; exclusion applies only when the ruling confirms it cannot be rebuilt. |
-| `NO_SUPPORTED_BACKEND` | Survey a backend that runs the population at the current pin, or rebuild the unsupported contracts and re-survey. |
-| `GRADER_JUDGE_UNAVAILABLE` | Re-pin the source's judge to a served `JUDGE_TIERS` tier through a private remediation version, with fresh SAMPLE and end-to-end judge validation. |
-| `INVALID_REFERENCE` | Publish a faithfully repaired private remediation version whose references resolve. |
-| `EVAL_ONLY_BENCHMARK`, `CONTAMINATION_RISK`, `SUPERSEDED_BY_REPLACEMENT`, `GRADER_DEFECT`, `DUPLICATE_OF_SOURCE`, `SNAPSHOT_BUDGET_EXCEEDED`, `UNSPECIFIED_LEGACY` | User rulings. Record the ruling as evidence, then update the source's claims (or its registry entry) accordingly. |
+Every row ends with the same sequence: create the new pinned variant, re-enter at
+the earliest changed stage, rerun all later applicable stages, bind the final
+version at i, then upload at j if and only if every gate passes. Carry earlier
+receipts only under the [repair reuse rules](#repair-of-an-excluded-source-or-task).
+The default output is private. Failed gates retain the exclusion and provenance.
+A lexical-remediation-only row queues as Pending under `Lexical remediation queued`.
+
+| Source reason | Diagnosis | Allowed fix | Re-entry and reason-clearing gates |
+| --- | --- | --- | --- |
+| `LICENSE_BAN` | License ban at the pinned scope. | Obtain a reversing user ruling on primary evidence; update the registry. | a: accepted license receipt and ban lift; propagation audit. |
+| `LICENSE_MISSING` | No license in pinned primary evidence. | Obtain a recorded permissive grant or a new licensed upstream pin. | a: checker-accepted exact-pin license receipt. |
+| `NOT_RL_TASK_DATA` | Harness or trajectories without RL tasks. | Use a republished upstream containing usable task data. | b: valid task contracts and nonempty retained population. |
+| `ORACLE_FILTRATION_RETAINED_ZERO` | No task survives complete filtration. | Diagnose source, converter, environment or grader defect; repair only the evidenced cause. | b for conversion, c for environment/grader; g must retain tasks; publication seal. |
+| `ACTOR_CENSUS_MISSING` | No actor census receipt. | Measure the licensed current version. | c: complete current-pin actor census. |
+| `ACTOR_CENSUS_STALE` | Dataset, converter or evidence identity differs. | Re-measure the declared version; do not copy the old counts. | c: exact dataset/converter/population binding. |
+| `RETAINED_POPULATION_EMPTY` | Current retained population is empty. | Repair an evidenced conversion or filtering defect, or select a nonempty upstream version. | b: nonempty retained population and reconciled drop counts. |
+| `GRADING_CENSUS_INCOMPLETE` | Grading census misses retained tasks. | Complete the task-level boundary survey. | c: every retained task covered. |
+| `GRADING_CENSUS_COUNTS_INCOMPLETE` | Typed grading counts do not reconcile. | Correct measurement or binding; preserve failing counts. | c: required, declared, status and reason counts sum to population. |
+| `GRADER_MISSING` | Tasks lack runnable graders. | Recover the original grader or make a separately approved grader repair. | c: zero missing graders; g controls and h QC. |
+| `LEXICAL_RECEIPT_MISSING` | EVAL has no current-pin lexical measurement. | Measure the frozen evaluation corpus; retain EVAL overlap. | e: measured receipt for the declared Use. |
+| `LEXICAL_REMEDIATION_REQUIRED` | TRAIN lacks a clean/remediated release receipt. | Remove the duplicate/lexical drop union and bind the private retained version. | e: clean or remediated exact-pin release; final-population bindings at i. |
+| `OVERSIGHT_MISSING` | No verified oversight evidence. | Produce a conversion receipt or run the required fixed-panel review. | h: SAMPLE/FULL receipt; current policy also accepts QUICK without claiming content review. |
+| `AGENTIC_TASK_FORMAT_MISSING` | Agentic source has no accepted format. | Declare the faithful TaskCompendium/Harbor conversion; use only an existing grandfathered registration. | b: accepted format; conversion and later qualification. |
+| `SNAPSHOT_IDENTITY_MISSING` | Production snapshot identities unmeasured. | Measure the task-declared profiles through the production naming path. | c: current-pin identity receipt; static identity is not a live quota test. |
+| `EXECUTION_REQUIREMENT_MISSING` | Execution requirements unmeasured. | Inventory declared limits; calibrate missing agentic limits. | c then f: bound requirement and calibration evidence. |
+| `EVAL_ONLY_BENCHMARK` | A ruling excludes training use. | Retain EVAL use unless a user ruling explicitly admits TRAIN. | a: scoped Use ruling and e evidence for that Use; EVAL admission alone does not clear TRAIN exclusion. |
+| `SUPERSEDED_BY_REPLACEMENT` | A replacement claim supersedes this population. | Obtain a ruling retiring the claim or restoring this pin. | a: current declaration and replacement provenance; keep any still-valid later receipts. |
+| `GRADER_DEFECT` | Grader/oracle defect changes reward trust. | Apply a versioned defect fix with a regression check; preserve the original protocol unless a ruling changes it. | c: grading census; g oracle/NoP; h QC and recorded defect check. |
+| `CONTAMINATION_RISK` | Recorded exposure or canary contamination. | Remove the recorded exposure under the ruling. | e: decontamination receipt proving removal; affected content reruns from b. |
+| `DUPLICATE_OF_SOURCE` | Population duplicates another admitted source. | Resolve the group; obtain a distinct-population ruling to clear this claim. | d2: pinned comparison and distinct-population ruling. |
+| `SNAPSHOT_BUDGET_EXCEEDED` | Provisioning exceeds its identity budget. | Repair the payload only with fidelity evidence, or use an approved supported provisioning route. | c: identity and snapshot-capacity receipts within the budget; f/g execution. |
+| `UNSPECIFIED_LEGACY` | The legacy exclusion has no typed cause. | Obtain a user ruling; replace this reason with the evidenced typed claim. | a: typed ruling; follow the resulting reason, never clear directly to Available. |
+| `ENVIRONMENT_ARTIFACT_MISSING` | Declared artifact exists in no region. | Rebuild faithfully in-region and bind its receipt; exclude only if unrebuildable. | c: artifact existence, fidelity and backend survey; f/g execution. |
+| `NO_SUPPORTED_BACKEND` | No surveyed production backend runs the contracts. | Qualify a supported backend or make a faithful, versioned contract repair. | c: runnable current-pin survey; f/g at the declared profile. |
+| `GRADER_JUDGE_UNAVAILABLE` | No qualified judge-model/API route. | Use a served JUDGE_TIERS tier in a new private remediation version. | c: grader census; g end-to-end judge controls; h fresh SAMPLE. |
+| `INVALID_REFERENCE` | Expected target absent from frozen task. | Restore a faithful reference in a versioned content repair. | b: resolvable targets; c grading census; g controls; h changed-task QC. |
+
+#### Task-level repair paths
+
+`OracleExclusionReason` in
+[TaskCompendium oracle_filter.py](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/pipeline/oracle_filter.py)
+is a separate task filtration enum. These 20 paths do not invent source reason
+labels. Bind the repaired task into a new population version; rerun the remaining
+stages and final admission before upload. A runtime failure is evidence about a
+task, not permission to weaken its grader or silently change its limits.
+
+| Task reason (enum member) | Diagnosis and allowed fix | Re-entry and clearing gates |
+| --- | --- | --- |
+| `NEGATIVE_CONTROL_PASSED` | NoP passes an unsolved workspace; diagnose reward leakage or grading defect. Repair only the demonstrated defect. | c grading census, g oracle passes and NoP does not pass, h QC. |
+| `NEGATIVE_CONTROL_PENDING` | Control not complete; finish the same pinned trial. | g complete negative-control receipt; no automatic task failure. |
+| `ORACLE_FAILED` | Original solution failed; diagnose conversion, reference, grader or environment. | b for content or c for runtime/grader, then g original-oracle pass and h QC. |
+| `OOM` | Measured memory failure; preserve declared limits, calibrate only missing limits. | f memory calibration and g controls; changed declared limits need a ruling and c. |
+| `DISK_FULL` | Measured disk failure; calibrate missing disk only. | f disk calibration and g controls; preserve declared limits. |
+| `AGENT_TIMEOUT` | Agent deadline exceeded; inspect the original workload. | f missing-limit calibration and g controls; declared deadline changes need a ruling. |
+| `VERIFIER_TIMEOUT` | Verifier deadline exceeded; inspect verifier work and profile. | f missing-limit calibration, g oracle/NoP; preserve source deadlines. |
+| `INFRASTRUCTURE` | Worker or producer failure; re-drive the same pinned work. | g successful retry; retain pending infrastructure evidence, never score it as task failure. |
+| `NO_ORACLE_LIVENESS` | No-oracle diagnostic liveness proof missing/failed. Repair an evidenced runtime defect if present. | c for a runtime change; apply current static-retention policy, which suspends per-task executability proof. |
+| `SOURCE_ENV_INCOMPATIBLE_WITH_GRADER` | Source environment cannot run its grader; restore a faithful supported grading setup. | c boundary/fidelity/backend evidence; f/g controls. |
+| `SOURCE_VERIFIER_ERROR` | Original verifier errors; diagnose a source defect separately from infrastructure. | c grader defect check, g controls, h QC; do not count an error as oracle success. |
+| `TOOL_PROVIDER_REQUIRED` | Task needs an unavailable external tool provider; qualify the actual provider contract. | c supported provider/backend, f/g controls. |
+| `SHARED_EXECUTOR_REQUIRED` | Grader needs the actor workspace; use a SHARED executor. | c SHARED boundary and backend evidence, f/g controls. |
+| `ENVIRONMENT_BUILD_FAILED` | Declared build failed; fix the evidenced build or provisioning fault faithfully. | c fidelity and artifact receipt, f/g controls. |
+| `EXECUTABILITY_PROOF_MISSING` | Historical no-oracle proof absent; diagnose under current policy. | Current static-retention ruling removes this proof requirement; other static blockers and gates still apply. |
+| `EXECUTABILITY_RUN_FAILED` | Historical no-oracle execution diagnostic failed; repair any evidenced static defect. | c if runtime changed; use static retention under the current no-oracle ruling, without a fabricated pass. |
+| `NETWORK_POLICY_UNSUPPORTED` | Backend cannot enforce the task policy; qualify a backend that can. | c policy survey and live enforcement where needed, f/g controls. |
+| `UNPINNED_ENVIRONMENT` | Floating dependencies or image; produce hashed locks and verified image digests. | c fidelity, pin and backend evidence, f/g; review carry-forward needs verified equivalence. |
+| `ENVIRONMENT_CONTRACT_UNRESOLVED` | Environment contract incomplete; recover exact original requirements. | c complete faithful contract, f/g controls; changed content starts at b. |
+| `BACKEND_CONTRACT_UNSUPPORTED` | Backend cannot satisfy the full contract; qualify a supported route. | c capability survey, f/g at the declared profile. |
+
+`NoOracleStaticBlocker` contains `TOOL_PROVIDER_REQUIRED`, `SHARED_EXECUTOR_REQUIRED`,
+`UNPINNED_ENVIRONMENT`, `ENVIRONMENT_CONTRACT_UNRESOLVED`,
+`BACKEND_CONTRACT_UNSUPPORTED` and `SOURCE_ENV_INCOMPATIBLE_WITH_GRADER`; use the
+same diagnosis and repair paths above, with static-retention evidence for tasks
+without oracles. `OraclePendingExclusionReason` contains only `INFRASTRUCTURE`;
+its retry path remains pending and does not count as an oracle failure.
 
 Declaration-only metadata rows for known-but-rejected upstreams live in
 `experiments/post_training/task_curation/metadata_exclusions.py`. They carry
@@ -626,7 +973,9 @@ either group back, and Show everything clears every filter.
 
 ## Pipeline overview
 
-The mandatory ingest order is license permission (stage 0) → conversion → exact within-source deduplication → lexical
+The [stage map](#ingestion-stage-map) fixes the workflow re-entry points. The mandatory
+ingest order is license permission (stage 0) → conversion and census → exact
+within-source deduplication → cross-source fingerprint check and overlap resolution → lexical
 decontamination → resource calibration (agentic tasks only) and full-population
 oracle filtering → SAMPLE/FULL QA → the late-stage derived contract census.
 QUICK also deduplicates its complete converted population.
@@ -643,9 +992,11 @@ populations remain distinct throughout the export.
 flowchart TD
     sources["Pinned dataset declarations"] --> license["Stage 0: binding license permission"]
     license --> conversion["Dataset-owned conversion graph"]
-    conversion --> dedup["Within-source exact deduplication"]
+    conversion --> census["Environment and grading census"]
+    census --> dedup["Within-source exact deduplication"]
     dedup --> quick["QUICK: unique converted TaskSpecs"]
-    dedup --> decon["Lexical decontamination or benchmark measurement"]
+    dedup --> cross["Cross-source fingerprint check and overlap resolution"]
+    cross --> decon["Lexical decontamination or benchmark measurement"]
     decon --> calibration["Resource calibration and full-population oracle filtering"]
     calibration --> reviewed["SAMPLE/FULL: review, verify, admit"]
     reviewed --> catalog["FineStore campaign catalog: results and evidence"]
