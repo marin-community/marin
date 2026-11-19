@@ -13,6 +13,7 @@ from sqlalchemy import create_engine, text
 
 from infra.marina.apps.rl_data_catalog.historical_assessments import retain_prior_assessments
 from infra.marina.apps.rl_data_catalog.load import TABLE_COLUMNS, insert_rows
+from infra.marina.apps.rl_data_catalog.load_counts import staged_row_count
 from infra.marina.apps.rl_data_catalog.parallel_history import CHECKPOINT_TABLE, retain_prior_assessments_parallel
 from infra.marina.apps.rl_data_catalog.server.cohort_summaries import materialize_cohort_summaries
 from infra.marina.apps.rl_data_catalog.server.schema import SCHEMA_SQL
@@ -428,3 +429,41 @@ def test_bounded_summary_matches_canonical_view_and_resumes(batch_database, coun
     assert materialize_cohort_summaries(query, load_id) == 0
     record_property("maximum_statement_seconds", max(row["seconds"] for row in statements))
     record_property("statement_count", len(statements))
+
+
+@pytest.mark.parametrize("count", [0, 5, 8193, 110600])
+def test_resume_count_windows_include_retained_pipelines(batch_database, count, record_property):
+    load = f"count-{count}"
+    with batch_database.begin() as connection:
+        connection.execute(
+            text(
+                """
+            INSERT INTO atlas_items (load_id,pipeline_key,task_id,cohort,status,verdict,
+                explanation,evidence_ids,packet_uri,has_task,omissions)
+            SELECT :load,'pipeline-'||mod(n,3),lpad(n::text,8,'0'),'admitted','reviewed','good',
+                repeat('Frozen explanation ',100),'[]'::jsonb,'s3://fixture',false,'[]'::jsonb
+            FROM generate_series(1,:count) n
+        """
+            ),
+            {"load": load, "count": count},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO atlas_packets SELECT load_id,pipeline_key,task_id,'{}' "
+                "FROM atlas_items WHERE load_id=:load AND mod(task_id::int,17)=0"
+            ),
+            {"load": load},
+        )
+    timings = []
+
+    def query(sql, parameters):
+        started = time.perf_counter()
+        result = execute_statement(batch_database, sql, parameters)
+        timings.append(time.perf_counter() - started)
+        if "batch" in parameters:
+            assert not result["rows"] or result["rows"][0]["n"] <= 4096
+        return result
+
+    assert staged_row_count(query, "atlas_items", load) == count
+    assert staged_row_count(query, "atlas_packets", load) == count // 17
+    record_property("count_max_statement_seconds", max(timings))

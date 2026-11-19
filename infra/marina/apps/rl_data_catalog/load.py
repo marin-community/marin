@@ -51,6 +51,7 @@ from experiments.post_training.task_curation.full_content_results import FullCon
 from experiments.post_training.task_curation.retirement import retired_admission_source_ids
 from experiments.post_training.task_curation.review_quality import quality_result as recompute_review_result
 from infra.marina.apps.rl_data_catalog.historical_assessments import retain_prior_assessments
+from infra.marina.apps.rl_data_catalog.load_counts import staged_row_count
 from infra.marina.apps.rl_data_catalog.prepare_preview import PREVIEW_APP_ID
 from infra.marina.apps.rl_data_catalog.server.admission import (
     backend_admission_review,
@@ -438,9 +439,7 @@ def load_catalog(
         # so the staged row count is exactly the committed prefix. ON CONFLICT DO NOTHING
         # absorbs any overlap at the batch boundary.
         if resume_load_id is not None:
-            skip = execute(f"SELECT COUNT(*) AS n FROM atlas_{table} WHERE load_id = :load_id", {"load_id": load_id})[
-                "rows"
-            ][0]["n"]
+            skip = staged_row_count(execute, f"atlas_{table}", load_id)
             if skip:
                 rows = list(rows)
                 rows = rows[skip:]
