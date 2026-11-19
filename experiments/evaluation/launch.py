@@ -382,8 +382,6 @@ def build_evaluation_batch(
     instances = model.serve.instances if spec.instances is None else spec.instances
     if instances < 1:
         raise ValueError("instances must be at least 1")
-    if instances > 1 and model.serve.pipeline_parallel_size > 1:
-        raise ValueError("pipeline parallelism requires one serving instance")
     requested_definitions = _evaluation_definitions(spec)
     has_curated_definitions = any(isinstance(definition, EvaluationSelection) for _, definition in requested_definitions)
     if spec.version in RUNTIME_COMMITS and has_curated_definitions:
@@ -394,8 +392,8 @@ def build_evaluation_batch(
         model = pinned_model(model)
     source_model_config = ModelConfigRef.model_validate(asdict(model))
     accelerator = MARIN_EVAL_HARDWARE.select(model, spec.platform, spec.accelerator)
-    if instances > 1 and accelerator.platform is Platform.TPU and accelerator.tasks_per_instance > 1:
-        raise ValueError("multi-host TPU serving requires one serving instance")
+    if instances > 1 and accelerator.tasks_per_instance > 1:
+        raise ValueError("a multi-task server requires one serving instance")
     if spec.federated_cluster is not None:
         if accelerator.platform is not Platform.GPU:
             raise ValueError("--federated_cluster requires a GPU accelerator")
