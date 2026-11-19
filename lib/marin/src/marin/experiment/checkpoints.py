@@ -27,7 +27,6 @@ from levanter.compat.hf_checkpoints import RepoRef
 from levanter.main.export_hf_to_lm import ImportHfConfig
 from levanter.main.export_hf_to_lm import main as import_hf_to_levanter
 from levanter.models.lm_model import LmConfig
-from levanter.models.snowball import SnowballConfig
 
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
@@ -144,8 +143,6 @@ def hf_to_levanter(
     tokenizer_revision = tokenizer_revision or hf_revision
     model_config = resolve_lm_config(model_type, hf_id, hf_revision)
     model_config_json = draccus.encode(model_config)
-    if isinstance(model_config, SnowballConfig) and not model_config.report_capacity_overflow:
-        model_config_json.pop("report_capacity_overflow", None)
     name = f"checkpoints/hf-to-levanter/{get_directory_friendly_name(hf_id)}-{model_type}"
 
     def build_config(ctx: StepContext) -> HfToLevanterConfig:

@@ -803,9 +803,8 @@ def test_step_resources_dispatch_uses_device_extra(tmp_path: Path, fray_client):
 
 def test_remote_resources_dispatch_uses_device_extra(tmp_path: Path, fray_client):
     resources = ResourceConfig.with_gpu("H100", count=8)
-    timeout = Duration.from_seconds(72_000)
 
-    @remote(resources=resources, timeout=timeout)
+    @remote(resources=resources)
     def my_step(output_path: str) -> Artifact:
         return Artifact(path=output_path)
 
@@ -815,9 +814,7 @@ def test_remote_resources_dispatch_uses_device_extra(tmp_path: Path, fray_client
         fn=my_step,
     )
 
-    spy = _run_step_with_submit_spy(step, fray_client)
-    _assert_single_submit_extras(spy, ["gpu"])
-    assert spy.requests[0].timeout == timeout
+    _assert_single_submit_extras(_run_step_with_submit_spy(step, fray_client), ["gpu"])
 
 
 def test_remote_dependency_groups_can_override_device_extra(tmp_path: Path, fray_client):

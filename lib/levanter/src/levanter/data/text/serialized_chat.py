@@ -39,6 +39,4 @@ def mask_serialized_chat(
     assistant = (latest_assistant >= latest_message) & (positions > latest_assistant) & (latest_assistant >= 0)
     # GrugLmExample weights index the prediction of the following token.
     weights = example.loss_weight * jnp.roll(assistant, -1, axis=-1)
-    if segments is not None:
-        weights *= segments == jnp.roll(segments, -1)
     return replace(example, loss_weight=weights.at[-1].set(0))

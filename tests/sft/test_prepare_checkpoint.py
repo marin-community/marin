@@ -112,6 +112,7 @@ def test_prepared_model_is_a_dependency_and_resolves_both_refs():
     step = sft_step(_spec(PreparedModel(prep)), ResourceConfig.with_cpu())
 
     assert prep in step.deps
+    assert step.fingerprint() == "64c5c245"
     prepared_path = prep.path(_PREFIX)
     train_config = materialized_config(step, _PREFIX).train_config
     assert train_config.initialize_from_hf == prepared_path

@@ -35,8 +35,7 @@ from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.field_dtype_overrides import hf_load_dtype
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
-from levanter.models.qwen import Qwen3Config
-from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
+from levanter.models.snowball import SnowballConfig
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.trainer_state import trainables_only
@@ -116,15 +115,6 @@ def _restore_lm_model_from_partial_checkpoint(
 
 def preserve_hf_runtime_settings(reloaded: LmConfig, requested: LmConfig) -> LmConfig:
     """Reapply supported runtime settings while loading the checkpoint's architecture."""
-    if isinstance(requested, Qwen3Config) and isinstance(reloaded, Qwen3Config):
-        return replace(
-            reloaded,
-            upcast_attn=requested.upcast_attn,
-            attn_backend=requested.attn_backend,
-            flash_attention_block_size=requested.flash_attention_block_size,
-            gradient_checkpointing=requested.gradient_checkpointing,
-            scan_layers=requested.scan_layers,
-        )
     if not isinstance(requested, SnowballConfig):
         return reloaded
     if not isinstance(reloaded, SnowballConfig):
@@ -135,7 +125,6 @@ def preserve_hf_runtime_settings(reloaded: LmConfig, requested: LmConfig) -> LmC
         moe_implementation=requested.moe_implementation,
         moe_capacity_factor=requested.moe_capacity_factor,
         fp32_activations=requested.fp32_activations,
-        report_capacity_overflow=requested.report_capacity_overflow,
         reference_checkpoint=requested.reference_checkpoint,
         tokenizer=requested.tokenizer,
     )
@@ -243,9 +232,7 @@ def main(config: TrainLmConfig):
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
     def loss_function(model: LmHeadModel, example: LmExample, *, key=None):
-        if isinstance(model, SnowballLMHeadModel) and model.config.report_capacity_overflow:
-            return model._loss_with_capacity_overflow(example, logsumexp_weight=config.z_loss_weight)
-        return model.compute_next_token_loss(example, key=key, logsumexp_weight=config.z_loss_weight)
+        return model.next_token_loss_and_metrics(example, key=key, logsumexp_weight=config.z_loss_weight)
 
     # Using the trainer as a context manager does 3 things:
     # 1. Sets the device mesh

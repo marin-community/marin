@@ -37,9 +37,8 @@ train state) supplies its own :class:`ModelSource` implementing the same protoco
 ``experiments/june_tpu_67b_a2b/moe/sft_launch.py``'s ``GrugModel``. The dependency runs vendored
 experiment -> this launcher, never the reverse, so this module stays model-family-agnostic.
 
-The accelerator is not part of the spec — it is chosen at launch time (see
-:func:`resources_from_accelerator` and :func:`run_sft_cli`) and threaded to the training job as a
-runtime arg, so the same recipe fingerprints identically whether it runs on TPU or GPU.
+The recipe or command line selects the resources for the training job. Resources are runtime
+arguments, so the same recipe fingerprints identically on compatible TPU and GPU allocations.
 
 Why a custom step rather than ``marin.experiment.train.train_lm``: that helper cannot emit a chat
 cache (``marin.experiment.data.tokenized`` has no template + completions-only masking) and only
@@ -58,13 +57,11 @@ Launch (a CPU coordinator job submits the training sub-job)::
       -e HF_TOKEN "$HF_TOKEN" -e WANDB_API_KEY "$WANDB_API_KEY" \\
       -- python -m experiments.sft.configs.delphi_1e22 --accelerator v4-64
 
-The CoreWeave H100 path only changes the launch flags: ``--accelerator 8xH100`` and an
-``s3://`` ``MARIN_PREFIX``; no target cluster is required (Iris places H100 work on any cluster
-that has them).
+CoreWeave H100 runs use an ``s3://`` ``MARIN_PREFIX``. Use the recipe's H100 resources or pass
+``--accelerator 8xH100`` for a recipe that takes its allocation from the command line.
 """
 from __future__ import annotations
 
-import dataclasses
 import hashlib
 import json
 import math
@@ -86,7 +83,6 @@ from levanter.data.text.formats import ChatLmDatasetFormat
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.lm_model import LmConfig
 from levanter.models.qwen import Qwen3Config
-from levanter.models.snowball import SnowballConfig
 from levanter.optim.config import OptimizerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import DEFAULT_JAX_CONFIG, TrainerConfig
@@ -99,8 +95,8 @@ from marin.experiment.checkpoints import HfToLevanterCheckpoint
 from marin.processing.tokenize.tokenize import TokenizeConfig, TokenizedCache
 from marin.processing.tokenize.tokenize import tokenize as run_tokenize
 from marin.rl.skyrl import ArtifactHfModel
-from marin.training.levanter import _add_gpu_collective_watchdog_env, run_levanter_train_lm
-from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig
+from marin.training.levanter import resolve_training_env, run_levanter_train_lm
+from marin.training.training import DEFAULT_HF_CHECKPOINTS_PATH, LevanterCheckpoint, TrainLmOnPodConfig
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.timing import Duration
 
@@ -261,6 +257,19 @@ def _levanter_pod_config(
     ``chat_tokenize`` dep) and disables on-the-fly building.
     """
     gpu_allocator = not ctx.is_fingerprint and isinstance(resources.device, GpuConfig)
+    if gpu_allocator:
+        mesh = spec.mesh or MeshConfig()
+        try:
+            ici, dcn = mesh.axis_shapes(resources.device.count * resources.replicas, resources.replicas)
+        except ValueError as error:
+            raise ValueError(f"mesh does not fit SFT resources: {error}") from error
+        batch_axes = mesh.resolved_compute_mapping["batch"]
+        batch_axes = (batch_axes,) if isinstance(batch_axes, str) else batch_axes
+        sizes = ici | dcn
+        batch_shards = math.prod(sizes.get(axis, 1) for axis in batch_axes)
+        microbatch = batch_shards * max(spec.per_device_parallelism, 1)
+        if spec.batch_size % microbatch:
+            raise ValueError(f"SFT batch_size={spec.batch_size} must be divisible by the mesh microbatch ({microbatch})")
     return TrainLmOnPodConfig(
         train_config=_levanter_train_config(
             spec,
@@ -282,9 +291,11 @@ def _levanter_pod_config(
 
 def _levanter_train_job(pod_config: TrainLmOnPodConfig, *, task_timeout_seconds: int | None = None) -> None:
     """Dispatch a Levanter ``train_lm`` config as its own Fray training job."""
-    env = dict(pod_config.env_vars or {})
-    if "XLA_FLAGS" in env and isinstance(pod_config.resources.device, GpuConfig):
-        _add_gpu_collective_watchdog_env(env)
+    env = (
+        resolve_training_env(pod_config.env_vars, pod_config.resources)
+        if isinstance(pod_config.resources.device, GpuConfig)
+        else {}
+    )
     remote(
         run_levanter_train_lm,
         resources=pod_config.resources,
@@ -315,7 +326,9 @@ class HFModel:
 
     @property
     def run(self) -> Callable[..., None]:
-        return _levanter_train_job
+        if self.task_timeout_seconds is None:
+            return _levanter_train_job
+        return partial(_levanter_train_job, task_timeout_seconds=self.task_timeout_seconds)
 
     def init_deps(self) -> tuple[ArtifactStep, ...]:
         return ()
@@ -353,7 +366,7 @@ class PreparedModel:
     """
 
     step: ArtifactStep[Artifact]
-    model_type: str = "qwen3"
+    model: LmConfig = field(default_factory=Qwen3Config)
     eos_token_ids: Sequence[int] = LLAMA3_CHAT_EOS_TOKEN_IDS
 
     def tokenizer_cache_key(self) -> str:
@@ -385,8 +398,7 @@ class PreparedModel:
             data_config,
             resources,
             num_train_steps,
-            # use_hf_model_config re-derives the arch from the prepared checkpoint, so only the class matters.
-            model_config=LmConfig.get_choice_class(self.model_type)(),
+            model_config=self.model,
             initialize_from_hf=prepared_path,
             initialize_model_from_checkpoint_path=None,
             use_hf_model_config=True,
@@ -583,6 +595,8 @@ class SFTSpec:
             raise ValueError("per_device_parallelism must be -1 or positive")
         if (self.num_train_steps is None) == (self.num_train_epochs is None):
             raise ValueError("Set exactly one of num_train_steps or num_train_epochs.")
+        if self.prepared_data is not None and self.num_train_epochs is not None:
+            raise ValueError("prepared_data requires num_train_steps")
         if self.num_train_epochs is not None and len(self.datasets) != 1:
             raise ValueError(
                 f"num_train_epochs is only defined for a single dataset (got {len(self.datasets)}); "
@@ -617,7 +631,7 @@ class LevanterSft:
         steps = self.spec.num_train_steps
         return ArtifactHfModel(
             step=sft_step(self.spec, resources),
-            relative_path=f"hf/step-{steps - 1}" if steps is not None else None,
+            relative_path=f"{DEFAULT_HF_CHECKPOINTS_PATH}/step-{steps - 1}" if steps is not None else None,
         )
 
 
@@ -839,53 +853,26 @@ def sft_step(spec: SFTSpec, resources: ResourceConfig) -> ArtifactStep[LevanterC
       the step count resolves from its token total, and training reads the pre-built cache.
     """
     model = spec.model
-    run = model.run
-    if isinstance(resources.device, GpuConfig) and run is _levanter_train_job:
-        mesh = spec.mesh or MeshConfig()
-        try:
-            ici, dcn = mesh.axis_shapes(resources.device.count * resources.replicas, resources.replicas)
-        except ValueError as error:
-            raise ValueError(f"mesh does not fit SFT resources: {error}") from error
-        batch_axes = mesh.resolved_compute_mapping.get("batch")
-        if batch_axes is None:
-            raise ValueError("SFT requires a compute mapping for the batch axis")
-        batch_axes = (batch_axes,) if isinstance(batch_axes, str) else batch_axes
-        sizes = ici | dcn
-        batch_shards = math.prod(sizes.get(axis, 1) for axis in batch_axes)
-        microbatch = batch_shards * max(spec.per_device_parallelism, 1)
-        if spec.batch_size % microbatch:
-            raise ValueError(f"SFT batch_size={spec.batch_size} must be divisible by the mesh microbatch ({microbatch})")
-    timeout = model.task_timeout_seconds if isinstance(model, HFModel) else None
-    if run is _levanter_train_job and timeout is not None:
-        run = partial(_levanter_train_job, task_timeout_seconds=timeout)
     transform_deps = _dataset_deps(spec)
 
     def train_config(ctx: StepContext, data: LmDataConfig, steps: int) -> object:
-        config = model.build_train_config(ctx, spec, data, ctx.runtime_arg(_TRAIN_RESOURCES), steps)
-        if ctx.is_fingerprint and isinstance(config, TrainLmOnPodConfig):
-            lm_config = config.train_config
-            if isinstance(lm_config, TrainLmConfig) and isinstance(lm_config.model, SnowballConfig):
-                if not lm_config.model.report_capacity_overflow:
-                    payload = dataclasses.asdict(config)
-                    del payload["train_config"]["model"]["report_capacity_overflow"]
-                    return payload
-        return config
+        return model.build_train_config(ctx, spec, data, ctx.runtime_arg(_TRAIN_RESOURCES), steps)
 
     if (prepared := spec.prepared_data) is not None:
         deps = (prepared.step, *model.init_deps())
 
         def build_config(ctx: StepContext) -> object:
             path = prefix_join(ctx.artifact_path(prepared.step), prepared.file)
-            if ctx.is_fingerprint:
-                data_config = LmDataConfig(tokenizer=prepared.tokenizer, cache_catalog=path, auto_build_caches=False)
-            else:
-                with StoragePath(path).open("r") as stream:
-                    data_config = draccus.decode(LmDataConfig, json.load(stream))
-                if data_config.tokenizer != prepared.tokenizer:
-                    raise ValueError("prepared_data file tokenizer does not match prepared_data.tokenizer")
-                if data_config.tokenizer != model.resolve_tokenizer(ctx):
-                    raise ValueError("prepared_data file tokenizer must match the resolved SFT model tokenizer")
             assert spec.num_train_steps is not None
+            if ctx.is_fingerprint:
+                data_config = LmDataConfig(tokenizer=prepared.tokenizer, auto_build_caches=False)
+                return {"prepared_data_manifest": path, "training": train_config(ctx, data_config, spec.num_train_steps)}
+            with StoragePath(path).open("r") as stream:
+                data_config = draccus.decode(LmDataConfig, json.load(stream))
+            if data_config.tokenizer != prepared.tokenizer:
+                raise ValueError("prepared_data file tokenizer does not match prepared_data.tokenizer")
+            if data_config.tokenizer != model.resolve_tokenizer(ctx):
+                raise ValueError("prepared_data file tokenizer must match the resolved SFT model tokenizer")
             return train_config(ctx, data_config, spec.num_train_steps)
 
     elif spec.num_train_epochs is not None:
@@ -913,7 +900,7 @@ def sft_step(spec: SFTSpec, resources: ResourceConfig) -> ArtifactStep[LevanterC
         name=spec.name,
         version=spec.version,
         artifact_type=LevanterCheckpoint,
-        run=run,
+        run=model.run,
         build_config=build_config,
         deps=deps,
         runtime_args={_TRAIN_RESOURCES: resources},

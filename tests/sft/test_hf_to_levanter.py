@@ -28,7 +28,7 @@ from marin.experiment.checkpoints import (
     HfToLevanterConfig,
 )
 from marin.processing.tokenize.tokenize import TokenizedCache
-from marin.training.training import LevanterCheckpoint
+from marin.training.training import DEFAULT_HF_CHECKPOINTS_PATH, LevanterCheckpoint
 
 from experiments.sft.launcher import (
     ConvertedCheckpointModel,
@@ -191,7 +191,7 @@ def test_sft_exports_once_at_the_final_update(tmp_path):
     resources = ResourceConfig.with_cpu()
     model = sft_model(LevanterSft(spec), resources)
     config = materialized_config(model.step, str(tmp_path)).train_config
-    export_path = Path(model.step.path(str(tmp_path))) / "hf"
+    export_path = Path(model.step.path(str(tmp_path))) / DEFAULT_HF_CHECKPOINTS_PATH
     export_path.mkdir(parents=True)
     trainer = _ExportTrainer()
     config.adapter.install_export_hooks(
@@ -211,7 +211,7 @@ def test_sft_exports_once_at_the_final_update(tmp_path):
     epoch_spec = dataclasses.replace(spec, version="2026.07.18-dev", num_train_steps=None, num_train_epochs=1)
     epoch_model = sft_model(LevanterSft(epoch_spec), resources)
     assert epoch_model.relative_path is None
-    epoch_export_path = Path(epoch_model.step.path(str(tmp_path))) / "hf"
+    epoch_export_path = Path(epoch_model.step.path(str(tmp_path))) / DEFAULT_HF_CHECKPOINTS_PATH
     shutil.copytree(export_path, epoch_export_path)
     for policy, expected in [(model, export_path), (epoch_model, epoch_export_path)]:
         context = StepContext.for_run(str(tmp_path / "rl"), str(tmp_path), deps=policy.deps())

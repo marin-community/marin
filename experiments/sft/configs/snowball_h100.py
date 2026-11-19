@@ -44,7 +44,7 @@ SPEC = SFTSpec(
     model=HFModel(
         model_ref=f"{HF_MODEL}@{HF_REVISION}",
         tokenizer_path=HF_MODEL,
-        model=SnowballConfig(report_capacity_overflow=True),
+        model=SnowballConfig(),
         eos_token_ids=(128001, 128009),
     ),
     chat_template=MARIN_CHAT_TEMPLATE,

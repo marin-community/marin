@@ -318,8 +318,6 @@ def sft_resources(dp_racks: int) -> ResourceConfig:
         ram=HERO_NODE_RAM,
         disk=HERO_NODE_DISK,
         replicas=HERO_EP_NODES * dp_racks,
-        regions=("US-EAST-08A",),
-        target_cluster="cw-us-east-08a",
     )
 
 
@@ -436,18 +434,16 @@ def build_sft_run(
     def build_config(ctx: StepContext) -> GrugRunConfig:
         # A placed run keeps its checkpoints under its placement's fingerprint, so a relaunch with another
         # placement, or none, starts again from the source checkpoint; the trainer would refuse to resume them.
-        output_path = ctx.output_path if expert_placement is None else _placement_path(ctx.output_path, expert_placement)
+        permanent_path = permanent_checkpoint_dir(ctx.output_path, checkpoint_root, expert_placement)
+        root = str(StoragePath(permanent_path).parent)
         if checkpoint_root is None:
-            permanent_path = prefix_join(output_path, "checkpoints")
             temporary_path = temporary_checkpoint_base_path(
-                output_path, ttl_days=RESUME_CHECKPOINT_TTL_DAYS, temp_prefix=HERO_RESUME_CHECKPOINT_PREFIX
+                root, ttl_days=RESUME_CHECKPOINT_TTL_DAYS, temp_prefix=HERO_RESUME_CHECKPOINT_PREFIX
             )
             resume_paths = checkpoint_resume_paths(
-                output_path, ttl_days=RESUME_CHECKPOINT_TTL_DAYS, temp_prefix=HERO_RESUME_CHECKPOINT_PREFIX
+                root, ttl_days=RESUME_CHECKPOINT_TTL_DAYS, temp_prefix=HERO_RESUME_CHECKPOINT_PREFIX
             )
         else:
-            root = checkpoint_root if expert_placement is None else _placement_path(checkpoint_root, expert_placement)
-            permanent_path = prefix_join(root, "checkpoints")
             temporary_path = prefix_join(root, "resume")
             resume_paths = [temporary_path, permanent_path]
         trainer = hero_trainer_config(
@@ -547,6 +543,14 @@ def _placement_label(placement: ExpertPlacement) -> str:
 
 def _placement_path(base: str, placement: ExpertPlacement) -> str:
     return prefix_join(base, _placement_label(placement))
+
+
+def permanent_checkpoint_dir(output: str, checkpoint_root: str | None, placement: ExpertPlacement | None) -> str:
+    """Return the directory shared by training and export for permanent checkpoints."""
+    root = output if checkpoint_root is None else checkpoint_root
+    if placement is not None:
+        root = _placement_path(root, placement)
+    return prefix_join(root, "checkpoints")
 
 
 def _grad_norm(value: str) -> float | None:

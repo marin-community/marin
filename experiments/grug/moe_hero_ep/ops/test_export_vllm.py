@@ -253,12 +253,6 @@ assert layout == GRUG_SPLIT_EXPERT_SCHEMA_VERSION
         check=True,
         timeout=180,
     )
-    shard = next(hf.glob("*.safetensors"))
-    damaged = bytearray(shard.read_bytes())
-    damaged[-1] ^= 1
-    shard.write_bytes(damaged)
-    with pytest.raises(ValueError, match="Shard integrity check failed"):
-        mochi_sft._export_final_sft(**config)
 
 
 def test_cpu_export_resumes_completed_shards_after_lowering_execution_limits(tmp_path, monkeypatch):

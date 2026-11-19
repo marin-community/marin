@@ -334,7 +334,7 @@ def test_snowball_moe_capacity_is_a_runtime_setting():
 
 
 def test_snowball_training_reports_capacity_drops():
-    cfg = _tiny_config(num_layers=2, num_experts_per_token=1, moe_implementation="ring", report_capacity_overflow=True)
+    cfg = _tiny_config(num_layers=2, num_experts_per_token=1, moe_implementation="ring")
     with use_test_devices(2) as devices:
         mesh = Mesh(
             np.asarray(devices).reshape(1, 1, 2, 1, 1),
@@ -350,11 +350,10 @@ def test_snowball_training_reports_capacity_drops():
             axes = (Axis("batch", 2), Axis("position", 8))
             tokens = hax.named(jnp.arange(16, dtype=jnp.int32).reshape(2, 8), axes)
             example = LmExample(tokens, hax.ones(axes))
-            loss, metrics = hax.named_jit(lambda m, e: m._loss_with_capacity_overflow(e, logsumexp_weight=0.0))(
-                model, example
-            )
-            plain = hax.named_jit(lambda m, e: m.compute_next_token_loss(e))(model, example)
-            np.testing.assert_allclose(loss.array, plain.array)
+            loss_kwargs = dict(reduction=None, logsumexp_weight=1e-4, logit_soft_cap=2.0)
+            loss, metrics = hax.named_jit(lambda m, e: m.next_token_loss_and_metrics(e, **loss_kwargs))(model, example)
+            plain = hax.named_jit(lambda m, e: m.compute_next_token_loss(e, **loss_kwargs))(model, example)
+            np.testing.assert_allclose(loss.array, plain.array, rtol=1e-6)
             # All assignments target the same shard. It has half of the configured capacity.
             assert float(metrics["moe/dropped_assignment_fraction"]) == 0.5
 
@@ -862,7 +861,6 @@ def test_hf_config_reload_keeps_fp32_router_settings(tmp_path):
             head_dim=8,
             max_seq_len=128,
             router_dot_fp32=True,
-            report_capacity_overflow=True,
             tokenizer=str(hf_path),
         )
         # HF metadata chooses the platform kernel; test reload separately from
