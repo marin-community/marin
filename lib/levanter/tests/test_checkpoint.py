@@ -1280,3 +1280,113 @@ def test_mpmd_checkpoint_uses_standard_format_across_destination_shardings(tmp_p
     assert loaded["weights"].sharding == source_sharding
     np.testing.assert_array_equal(loaded["progress"]["step"], 7)
     assert loaded["unused"] is None
+
+
+def test_prune_removes_metadata_before_payload_so_interrupted_delete_is_skipped(tmp_path, monkeypatch):
+    permanent_path = tmp_path / "checkpoints"
+    temporary_path = tmp_path / "temporary"
+    checkpointer = Checkpointer(
+        permanent_path,
+        None,
+        [],
+        temporary_base_path=temporary_path,
+        keep_last_temporary_checkpoints=1,
+    )
+
+    checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
+    _on_step(checkpointer, 1)
+    checkpointer.wait_until_finished()
+    step1_dir = temporary_path / "step-1"
+    assert (step1_dir / "metadata.json").is_file()
+
+    real_get_fs = checkpoint_module._get_fs_and_plain_path
+    observed_candidates_at_payload_rm: list[list[int]] = []
+
+    class InterruptedPayloadRmFs:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        def rm(self, path, recursive=False):
+            if recursive:
+                assert not (step1_dir / "metadata.json").exists()
+                observed_candidates_at_payload_rm.append(
+                    [c.step for c in discover_checkpoint_candidates(temporary_path)]
+                )
+                raise OSError("simulated mid-delete failure")
+            return self._inner.rm(path, recursive=False)
+
+    def wrapped_get_fs(path, fs=None):
+        inner, plain = real_get_fs(path, fs=fs)
+        if str(path) == str(step1_dir):
+            return InterruptedPayloadRmFs(inner), plain
+        return inner, plain
+
+    monkeypatch.setattr(checkpoint_module, "_get_fs_and_plain_path", wrapped_get_fs)
+
+    checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
+    _on_step(checkpointer, 2)
+    checkpointer.wait_until_finished()
+
+    assert observed_candidates_at_payload_rm == [[2]]
+    assert step1_dir.exists()
+    assert not (step1_dir / "metadata.json").exists()
+    assert [c.step for c in discover_checkpoint_candidates(temporary_path)] == [2]
+
+
+@pytest.mark.parametrize("failure_mode", ["raise", "silent_noop"])
+def test_prune_aborts_payload_removal_when_metadata_delete_fails(tmp_path, monkeypatch, failure_mode):
+    permanent_path = tmp_path / "checkpoints"
+    temporary_path = tmp_path / "temporary"
+    checkpointer = Checkpointer(
+        permanent_path,
+        None,
+        [],
+        temporary_base_path=temporary_path,
+        keep_last_temporary_checkpoints=1,
+    )
+
+    checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
+    _on_step(checkpointer, 1)
+    checkpointer.wait_until_finished()
+    step1_dir = temporary_path / "step-1"
+    before_files = sorted(str(p.relative_to(step1_dir)) for p in step1_dir.rglob("*") if p.is_file())
+    assert "metadata.json" in before_files
+
+    real_get_fs = checkpoint_module._get_fs_and_plain_path
+    recursive_rm_called = False
+
+    class FailingMetadataRmFs:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        def rm(self, path, recursive=False):
+            nonlocal recursive_rm_called
+            if recursive:
+                recursive_rm_called = True
+                return self._inner.rm(path, recursive=True)
+            if failure_mode == "raise":
+                raise PermissionError("metadata delete denied")
+            return None
+
+    def wrapped_get_fs(path, fs=None):
+        inner, plain = real_get_fs(path, fs=fs)
+        if str(path) == str(step1_dir):
+            return FailingMetadataRmFs(inner), plain
+        return inner, plain
+
+    monkeypatch.setattr(checkpoint_module, "_get_fs_and_plain_path", wrapped_get_fs)
+
+    checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
+    _on_step(checkpointer, 2)
+    checkpointer.wait_until_finished()
+
+    assert not recursive_rm_called
+    after_files = sorted(str(p.relative_to(step1_dir)) for p in step1_dir.rglob("*") if p.is_file())
+    assert after_files == before_files
+    assert _get_checkpoint_steps(temporary_path) == [1, 2]
