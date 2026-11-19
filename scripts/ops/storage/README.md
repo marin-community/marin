@@ -1,7 +1,7 @@
 # Marin storage tooling
 
-Storage reporting for the `marin-*` GCS buckets and telemetry for CoreWeave
-object storage.
+Storage reporting for the `marin-*` GCS buckets, telemetry for CoreWeave
+object storage, and bulk copies between CoreWeave prefixes.
 
 ## Storage report (on demand)
 
@@ -52,6 +52,31 @@ channel webhook resolved by `scripts/ops/discord.py` (no bot).
 
 **Prereqs:** `gh` (for `--gist`), `gcloud` + ADC (fetch `report.md`), a
 reachable `marin` controller, and the channel webhook for `--discord`.
+
+## Bulk copy between CoreWeave prefixes
+
+`copy_prefix.py` copies every object below one CoreWeave prefix to another. It
+runs as an Iris job on the CoreWeave cluster in the source's region
+(`--run-near destination` picks the destination's), and Zephyr workers stream
+the files:
+
+```bash
+export CW_KEY_ID=<key-id> CW_KEY_SECRET=<key-secret>
+uv run scripts/ops/storage/copy_prefix.py \
+  --from s3://marin-us-east-02a/marin/<prefix> \
+  --to s3://marin-us-east-08a/marin/<prefix> \
+  --dry-run                       # list both sides and report what would be copied
+```
+
+The job copies each source file whose destination copy is missing or has a
+different size, then lists the destination again and fails if any file is
+still missing or differs in size. Rerun the same command to resume an
+interrupted copy. `--max-workers` (default 100) bounds the Zephyr pool; each
+worker copies eight files at a time.
+
+CoreWeave rejects `CopyObject` between buckets in different regions
+(`InvalidRegion`), so every byte passes through a worker. Only CoreWeave
+prefixes are accepted; Hugging Face buckets and R2 are not supported yet.
 
 ## CoreWeave storage telemetry
 
