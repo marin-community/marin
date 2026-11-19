@@ -49,6 +49,8 @@ from marin.inference.config import (
     InferenceModelConfig,
     VllmCompilationCacheMode,
     VllmRouterConfig,
+    normalize_vllm_option,
+    vllm_option_flags,
 )
 from marin.inference.vllm_cache import VllmCompilationCache, VllmCompileIdentity
 from marin.inference.vllm_release import (
@@ -780,19 +782,20 @@ def _router_data_parallel_size(extra_cli_args: Sequence[str]) -> int:
     """Read the native ranks reachable behind vLLM's global internal DP frontend."""
     parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
     parser.add_argument(*VLLM_DATA_PARALLEL_SIZE_FLAGS, type=int, default=1)
-    parser.add_argument("--data-parallel-size-local", "-dpl", type=int)
-    parser.add_argument("--data-parallel-rank", "-dpn", type=int)
-    parser.add_argument("--data-parallel-start-rank", "-dpr", type=int)
-    parser.add_argument("--nnodes", "-n", type=int, default=1)
+    parser.add_argument(*vllm_option_flags("--data-parallel-size-local"), type=int)
+    parser.add_argument(*vllm_option_flags("--data-parallel-rank"), type=int)
+    parser.add_argument(*vllm_option_flags("--data-parallel-start-rank"), type=int)
+    parser.add_argument(*vllm_option_flags("--nnodes"), type=int, default=1)
     parser.add_argument("--headless", action="store_true")
-    parser.add_argument("--data-parallel-hybrid-lb", "-dph", action=argparse.BooleanOptionalAction)
-    parser.add_argument("--data-parallel-external-lb", "-dpe", action=argparse.BooleanOptionalAction)
-    parser.add_argument("--data-parallel-multi-port-external-lb", "-dpm", action=argparse.BooleanOptionalAction)
+    parser.add_argument(*vllm_option_flags("--data-parallel-hybrid-lb"), action=argparse.BooleanOptionalAction)
+    parser.add_argument(*vllm_option_flags("--data-parallel-external-lb"), action=argparse.BooleanOptionalAction)
+    parser.add_argument(
+        *vllm_option_flags("--data-parallel-multi-port-external-lb"), action=argparse.BooleanOptionalAction
+    )
     native_args = []
     for arg in extra_cli_args:
         option, equals, value = arg.partition("=")
-        # vLLM normalizes underscores in option names, leaving their values intact.
-        native_args.append(f"{option.replace('_', '-')}{equals}{value}" if arg.startswith("--") else arg)
+        native_args.append(f"{normalize_vllm_option(option)}{equals}{value}")
     topology, _ = parser.parse_known_args(native_args)
     local_dp = topology.data_parallel_size_local
     if local_dp is None and topology.nnodes > 1:

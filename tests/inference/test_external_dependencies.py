@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 from marin.external_dependencies import TPU_INFERENCE_FORK_REQUIREMENT, VLLM_FORK_REQUIREMENT, VLLM_GPU_RELEASE
+from marin.inference.vllm_release import load_vllm_gpu_release
 from rigging.config_discovery import find_project_root
 
 
@@ -79,7 +80,8 @@ def test_gpu_release_pin_matches_its_descriptor():
     assert generated == pinned
 
 
-def test_render_gpu_release_toml_reencodes_the_wheel_url_and_round_trips(tmp_path):
+@pytest.mark.parametrize("profile_format", ["toml", "json"])
+def test_render_gpu_release_toml_reencodes_the_wheel_url_and_round_trips(tmp_path, profile_format):
     update_external = _update_external()
     rendered = update_external.render_gpu_release_toml(_promoted_manifest())
 
@@ -88,14 +90,29 @@ def test_render_gpu_release_toml_reencodes_the_wheel_url_and_round_trips(tmp_pat
     assert "%2Bmarin.abcdef012345-" in rendered
     assert "+marin.abcdef012345-" not in rendered
 
-    path = tmp_path / "gpu.toml"
-    path.write_text(rendered)
-    release = update_external.load_vllm_gpu_release(path)
+    path = tmp_path / f"gpu.{profile_format}"
+    if profile_format == "toml":
+        path.write_text(rendered)
+        release = update_external.load_vllm_gpu_release(path)
+    else:
+        path.write_text(json.dumps(tomllib.loads(rendered)))
+        release = load_vllm_gpu_release(path)
+    assert release is not None
     assert release.release_tag == "marin-vllm-gpu-20260101-abcdef012345"
     assert release.source_commit == "a" * 40
     assert release.torch_backend == "cu130"
     assert release.torch_version == "2.11.0+cu130"
     assert [wheel.architecture for wheel in release.wheels] == ["x86_64"]
+
+
+def test_runtime_release_profile_rejects_mislabeled_wheels(tmp_path):
+    update_external = _update_external()
+    payload = tomllib.loads(update_external.render_gpu_release_toml(_promoted_manifest()))
+    payload["version"] = "0.0.0+wrong"
+    path = tmp_path / "gpu.json"
+    path.write_text(json.dumps(payload))
+    with pytest.raises(ValueError):
+        load_vllm_gpu_release(path)
 
 
 @pytest.mark.parametrize(

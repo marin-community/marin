@@ -22,6 +22,7 @@ from marin.inference import iris_vllm
 from marin.inference.config import (
     InferenceModelConfig,
     IrisConfig,
+    RemoteInferenceConfig,
     ServedModelConfig,
     ServingGeometry,
     VllmEngineConfig,
@@ -250,12 +251,26 @@ def test_environment_routes_all_native_ranks():
     "native_args",
     [
         ("-dpe",),
+        ("--data_parallel_external_lb",),
         ("--data-parallel-rank=0",),
         ("--data-parallel-size-local=2", "--data-parallel-start-rank=0"),
         ("-n", "2", "--data-parallel-start-rank=0"),
+        ("-n2", "--data-parallel-start-rank=0"),
     ],
 )
 def test_managed_router_rejects_native_load_balancers_that_cannot_dispatch_global_ranks(native_args):
+    with pytest.raises(ValueError):
+        RemoteInferenceConfig(
+            model=ServedModelConfig(weights="fake"),
+            engine=VllmEngineConfig(router=VllmRouterConfig(), extra_args=native_args),
+            iris=IrisConfig(
+                worker_resources=ResourceConfig.with_gpu("H100", count=4),
+                worker_environment=create_environment(docker_image="test"),
+                serving_geometry=ServingGeometry(
+                    tensor_parallel_size=1, data_parallel_size=4, pipeline_parallel_size=1, gpus_per_task=4
+                ),
+            ),
+        )
     with pytest.raises(ValueError):
         with VllmEnvironment(
             InferenceModelConfig("fake", None, {}),

@@ -12,6 +12,7 @@ import argparse
 import json
 import re
 import subprocess
+import sys
 import tempfile
 import tomllib
 from dataclasses import dataclass
@@ -20,16 +21,22 @@ from types import MappingProxyType
 from urllib.parse import parse_qs, quote, urlsplit, urlunsplit
 
 ROOT = Path(__file__).parents[1]
+# Keep this standalone script's shared validator free of workspace dependencies.
+sys.path.insert(0, str(ROOT / "lib" / "marin" / "src"))
+from marin.inference.vllm_release_schema import (  # noqa: E402
+    GPU_RELEASE_REPOSITORY,
+    gpu_release_url_prefix,
+    validate_vllm_gpu_release,
+)
+
 EXTERNAL_ROOT = Path(__file__).with_name("external")
 GENERATED_PINS = ROOT / "lib" / "marin" / "src" / "marin" / "external_dependencies.py"
 GIT_SUFFIX = ".git"
 GIT_COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}")
-SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 GENERATED_STRING_CHUNK_WIDTH = 88
 VLLM_CONFIG_NAME = "vllm"
 VLLM_GPU_RELEASE_CONFIG = EXTERNAL_ROOT / VLLM_CONFIG_NAME / "gpu.toml"
 TPU_FORKS_CONFIG = EXTERNAL_ROOT / VLLM_CONFIG_NAME / "tpu.toml"
-GPU_RELEASE_REPOSITORY = "marin-community/vllm"
 GPU_RELEASE_MANIFEST_NAME = "marin-vllm-gpu-manifest.json"
 CUDA_TOOLCHAIN_VERSION_BY_BACKEND = MappingProxyType(
     {
@@ -186,19 +193,11 @@ def locked_dependency(project: ExternalProject) -> LockedDependency:
     )
 
 
-def gpu_release_url_prefix(release_tag: str) -> str:
-    """Return the release-asset URL prefix a promoted GPU wheel is served under.
-
-    Shared by the writer and the validator so a rendered wheel URL and the URL the
-    loader accepts stay byte-identical.
-    """
-    return f"https://github.com/{GPU_RELEASE_REPOSITORY}/releases/download/{release_tag}/"
-
-
 def load_vllm_gpu_release(path: Path) -> VllmGpuRelease:
     """Load and validate the promoted vLLM GPU release."""
     config = tomllib.loads(path.read_text())
-    release = VllmGpuRelease(
+    validate_vllm_gpu_release(config, path)
+    return VllmGpuRelease(
         release_tag=config["release_tag"],
         source_commit=config["source_commit"],
         version=config["version"],
@@ -214,30 +213,6 @@ def load_vllm_gpu_release(path: Path) -> VllmGpuRelease:
             for wheel in config["wheels"]
         ),
     )
-    if GIT_COMMIT_PATTERN.fullmatch(release.source_commit) is None:
-        raise ValueError(f"{path}: expected a full vLLM source commit, found {release.source_commit!r}")
-    if not re.fullmatch(r"cu[0-9]+", release.torch_backend):
-        raise ValueError(f"{path}: expected a CUDA torch backend, found {release.torch_backend!r}")
-    if not release.torch_version.endswith(f"+{release.torch_backend}"):
-        raise ValueError(f"{path}: torch version {release.torch_version!r} does not match {release.torch_backend}")
-    architectures = tuple(wheel.architecture for wheel in release.wheels)
-    if not architectures or len(set(architectures)) != len(architectures):
-        raise ValueError(f"{path}: expected one or more unique wheel architectures, found {architectures!r}")
-    release_url_prefix = gpu_release_url_prefix(release.release_tag)
-    wheel_filename_prefix = f"vllm-{quote(release.version, safe='')}-"
-    wheel_urls = tuple(wheel.url for wheel in release.wheels)
-    if len(set(wheel_urls)) != len(wheel_urls):
-        raise ValueError(f"{path}: expected a unique asset URL for each wheel")
-    for wheel in release.wheels:
-        if not wheel.sm_targets:
-            raise ValueError(f"{path}: {wheel.architecture} must declare at least one SM target")
-        if not wheel.url.startswith(release_url_prefix) or "#" in wheel.url:
-            raise ValueError(f"{path}: {wheel.architecture} wheel URL is not an asset from {release.release_tag}")
-        if f"/{wheel_filename_prefix}" not in wheel.url or not wheel.url.endswith(f"_{wheel.architecture}.whl"):
-            raise ValueError(f"{path}: {wheel.architecture} wheel URL does not match vLLM version {release.version}")
-        if SHA256_PATTERN.fullmatch(wheel.sha256) is None:
-            raise ValueError(f"{path}: {wheel.architecture} wheel has invalid SHA-256 {wheel.sha256!r}")
-    return release
 
 
 def render_gpu_release_toml(manifest: dict) -> str:

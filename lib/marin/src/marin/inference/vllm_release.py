@@ -11,11 +11,17 @@ from pathlib import Path
 import draccus
 
 from marin.external_dependencies import VllmGpuRelease, VllmGpuWheel
+from marin.inference.vllm_release_schema import validate_vllm_gpu_release
 
 
 def load_vllm_gpu_release(path: Path | None) -> VllmGpuRelease | None:
     """Read a deployment's pinned vLLM GPU release."""
-    return draccus.decode(VllmGpuRelease, json.loads(path.read_text())) if path is not None else None
+    if path is None:
+        return None
+    payload = json.loads(path.read_text())
+    release = draccus.decode(VllmGpuRelease, payload)
+    validate_vllm_gpu_release(payload, path)
+    return release
 
 
 @dataclass(frozen=True)

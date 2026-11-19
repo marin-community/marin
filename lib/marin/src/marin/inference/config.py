@@ -27,18 +27,35 @@ WORKER_PYTHON_VERSION = "3.12"
 DEFAULT_CUDA_VLLM_VERSION = "0.25.1"
 VLLM_METRIC_PREFIX = "vllm:"
 VLLM_DATA_PARALLEL_SIZE_FLAGS = ("--data-parallel-size", "--data_parallel_size", "-dp")
+VLLM_TOPOLOGY_ALIASES = {
+    "-tp": "--tensor-parallel-size",
+    "-pp": "--pipeline-parallel-size",
+    "-dp": "--data-parallel-size",
+    "-dpl": "--data-parallel-size-local",
+    "-dpn": "--data-parallel-rank",
+    "-dpr": "--data-parallel-start-rank",
+    "-dpa": "--data-parallel-address",
+    "-dpp": "--data-parallel-rpc-port",
+    "-dpb": "--data-parallel-backend",
+    "-n": "--nnodes",
+    "-dph": "--data-parallel-hybrid-lb",
+    "-dpe": "--data-parallel-external-lb",
+    "-dpm": "--data-parallel-multi-port-external-lb",
+}
 VLLM_TOPOLOGY_OPTIONS = frozenset(
     {
         "--tensor-parallel-size",
         "--pipeline-parallel-size",
         *VLLM_DATA_PARALLEL_SIZE_FLAGS,
         "--data-parallel-size-local",
+        "--data-parallel-rank",
         "--data-parallel-start-rank",
         "--data-parallel-address",
         "--data-parallel-rpc-port",
         "--data-parallel-backend",
         "--data-parallel-hybrid-lb",
         "--data-parallel-external-lb",
+        "--data-parallel-multi-port-external-lb",
         "--nnodes",
         "--node-rank",
         "--master-addr",
@@ -62,10 +79,26 @@ def resolve_tokenizer_revision(
     return None
 
 
+def normalize_vllm_option(option: str) -> str:
+    """Normalize known topology aliases and long-option underscores."""
+    if option.startswith("--"):
+        option = option.replace("_", "-")
+    return VLLM_TOPOLOGY_ALIASES.get(option, option)
+
+
+def vllm_option_flags(option: str) -> tuple[str, ...]:
+    """Return a canonical option and its known short aliases."""
+    return (option, *(alias for alias, canonical in VLLM_TOPOLOGY_ALIASES.items() if canonical == option))
+
+
 def validate_serving_geometry_args(args: tuple[str, ...]) -> None:
     """Reject flags owned by Iris serving geometry."""
     for arg in args:
-        option = arg.partition("=")[0]
+        option = normalize_vllm_option(arg.partition("=")[0])
+        if option.startswith("-n") and option[2:].lstrip("-").isdigit():
+            option = "--nnodes"
+        if option.startswith("--no-"):
+            option = "--" + option.removeprefix("--no-")
         if option in VLLM_TOPOLOGY_OPTIONS:
             raise ValueError(f"serving geometry owns {option}; remove it from extra args")
 
