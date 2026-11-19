@@ -84,7 +84,7 @@ def use_bindings(declarations):
     ]
 
 
-def test_projection_inventory_resolves_archived_alias_and_names_missing_source():
+def test_projection_inventory_resolves_live_alias_and_names_missing_source():
     current = declaration("gpqa").model_copy(update={"origin": "GPQA", "id": "MarinSkyRL:gpqa"})
     selected = projection_inventory(["GPQA:gpqa"], [current])
     assert len(selected) == 1
