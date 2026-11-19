@@ -156,14 +156,14 @@ class PromptLoader:
         self._scan_start = 0
 
     def next_prompt(self, live: Collection[str]) -> dict | None:
-        """The next prompt whose uid is not in ``live``, or None when every uid is live.
+        """The next prompt whose uid is neither in ``live`` nor quarantined, or None when no such uid remains.
 
         Prompts awaiting regeneration come first, then up to two batches' worth of the prompt order's draws. If those
         draws find only live uids, a scan of the dataset from where the last scan stopped takes a free row, so an
         order that keeps drawing live rows cannot stall dispatch; the row may be one the order weights at zero.
         """
         for position, prompt in enumerate(self._retries):
-            if prompt["uid"] not in live and prompt["uid"] not in self._quarantined:
+            if self._available(prompt["uid"], live):
                 del self._retries[position]
                 return prompt
         # Every usable dataset uid is live, so drawing would only advance the order. A quarantined uid is never live.
