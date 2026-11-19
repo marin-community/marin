@@ -13,7 +13,7 @@ from itertools import pairwise
 
 from marina.client import AppletQuery
 
-from .historical_assessments import RETAIN_COPY_BATCH_ROWS
+from .historical_assessments import ASSESSMENT_TABLES, RETAIN_COPY_BATCH_ROWS, copy_statement
 
 CHECKPOINT_TABLE = "atlas_history_copy_segments"
 
@@ -33,22 +33,6 @@ class CopySegment:
 
 class ThreadClient(threading.local):
     query: AppletQuery | None = None
-
-
-def copy_statement(table: str, columns: str, task_count: int) -> str:
-    """Build the bounded copy statement used in the benchmark and the live load."""
-    names = [column.strip().split()[0] for column in columns.split(",")]
-    identifiers = ", ".join(f":task_id_{index}" for index in range(task_count))
-    return (
-        f"INSERT INTO atlas_{table} (load_id, {', '.join(names)}) "
-        f"SELECT :load_id, {', '.join('previous.' + name for name in names)} "
-        f"FROM atlas_{table} previous WHERE previous.load_id=:prior_load_id "
-        "AND previous.pipeline_key=:pipeline_key "
-        f"AND previous.task_id IN ({identifiers}) "
-        "AND NOT EXISTS (SELECT 1 FROM atlas_assessments current_assessment "
-        "WHERE current_assessment.load_id=:load_id "
-        "AND current_assessment.pipeline_key=previous.pipeline_key) ON CONFLICT DO NOTHING"
-    )
 
 
 def _copy_segment(
@@ -155,25 +139,18 @@ def retain_prior_assessments_parallel(
         "AND current_assessment.pipeline_key=candidates.pipeline_key) ORDER BY pipeline_key",
         parameters,
     )["rows"]
-    copied = dict.fromkeys(("populations", "items", "packets", "assessments"), 0)
+    copied = dict.fromkeys(ASSESSMENT_TABLES, 0)
 
-    def ordinary(table: str) -> int:
-        names = [column.strip().split()[0] for column in columns[table].split(",")]
+    def copy_metadata_table(table: str) -> int:
         total = 0
         for pipeline in pipelines:
             total += query(
-                f"INSERT INTO atlas_{table} (load_id, {', '.join(names)}) "
-                f"SELECT :load_id, {', '.join('previous.' + name for name in names)} "
-                f"FROM atlas_{table} previous WHERE previous.load_id=:prior_load_id "
-                "AND previous.pipeline_key=:pipeline_key AND NOT EXISTS "
-                "(SELECT 1 FROM atlas_assessments current_assessment "
-                "WHERE current_assessment.load_id=:load_id "
-                "AND current_assessment.pipeline_key=previous.pipeline_key) ON CONFLICT DO NOTHING",
+                copy_statement(table, columns[table]),
                 {**parameters, **pipeline},
             )["row_count"]
         return total
 
-    copied["populations"] = ordinary("populations")
+    copied["populations"] = copy_metadata_table("populations")
     clients = ThreadClient()
 
     def execute(segment: CopySegment, size: int) -> int:
@@ -231,5 +208,5 @@ def retain_prior_assessments_parallel(
                         failure = error
             if failure is not None:
                 raise failure
-    copied["assessments"] = ordinary("assessments")
+    copied["assessments"] = copy_metadata_table("assessments")
     return copied

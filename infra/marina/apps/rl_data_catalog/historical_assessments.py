@@ -15,6 +15,27 @@ ASSESSMENT_TABLES = ("populations", "items", "packets", "assessments")
 RETAIN_COPY_BATCH_ROWS = MappingProxyType({"items": 32, "packets": 8})
 
 
+def copy_statement(table: str, columns: str, task_count: int | None = None) -> str:
+    """Copy one pipeline, restricted to the supplied task IDs for per-task tables."""
+    if table in RETAIN_COPY_BATCH_ROWS and (task_count is None or task_count < 1):
+        raise ValueError("Per-task copies require a positive task ID bound")
+    names = [column.strip().split()[0] for column in columns.split(",")]
+    task_filter = ""
+    if task_count is not None:
+        placeholders = ", ".join(f":task_id_{index}" for index in range(task_count))
+        task_filter = f"AND previous.task_id IN ({placeholders}) "
+    return (
+        f"INSERT INTO atlas_{table} (load_id, {', '.join(names)}) "
+        f"SELECT :load_id, {', '.join('previous.' + name for name in names)} "
+        f"FROM atlas_{table} previous WHERE previous.load_id = :prior_load_id "
+        "AND previous.pipeline_key = :pipeline_key "
+        + task_filter
+        + "AND NOT EXISTS (SELECT 1 FROM atlas_assessments current_assessment "
+        "WHERE current_assessment.load_id = :load_id "
+        "AND current_assessment.pipeline_key = previous.pipeline_key) ON CONFLICT DO NOTHING"
+    )
+
+
 def retain_prior_assessments(
     query: AppletQuery, columns: Mapping[str, str], prior_load_id: str, load_id: str
 ) -> dict[str, int]:
@@ -28,7 +49,6 @@ def retain_prior_assessments(
     """
     copied = {}
     for table in ASSESSMENT_TABLES:
-        names = [column.strip().split()[0] for column in columns[table].split(",")]
         # The prior load's materialized cohort summaries carry its assessed pipeline
         # set in a small indexed table; probing the per-task tables directly scans
         # the whole retained item volume and exceeds the gateway statement timeout.
@@ -64,31 +84,15 @@ def retain_prior_assessments(
                     if not page:
                         break
                     identities = {f"task_id_{index}": item["task_id"] for index, item in enumerate(page)}
-                    placeholders = ", ".join(":" + name for name in identities)
                     result = query(
-                        f"INSERT INTO atlas_{table} (load_id, {', '.join(names)}) "
-                        f"SELECT :load_id, {', '.join('previous.' + name for name in names)} "
-                        f"FROM atlas_{table} previous WHERE previous.load_id = :prior_load_id "
-                        "AND previous.pipeline_key = :pipeline_key "
-                        f"AND previous.task_id IN ({placeholders}) "
-                        "AND NOT EXISTS (SELECT 1 FROM atlas_assessments current_assessment "
-                        "WHERE current_assessment.load_id = :load_id "
-                        "AND current_assessment.pipeline_key = previous.pipeline_key) "
-                        "ON CONFLICT DO NOTHING",
+                        copy_statement(table, columns[table], len(page)),
                         {**parameters, **identities},
                     )
                     total += result["row_count"]
                     after_task_id = page[-1]["task_id"]
             else:
                 result = query(
-                    f"INSERT INTO atlas_{table} (load_id, {', '.join(names)}) "
-                    f"SELECT :load_id, {', '.join('previous.' + name for name in names)} "
-                    f"FROM atlas_{table} previous WHERE previous.load_id = :prior_load_id "
-                    "AND previous.pipeline_key = :pipeline_key "
-                    "AND NOT EXISTS (SELECT 1 FROM atlas_assessments current_assessment "
-                    "WHERE current_assessment.load_id = :load_id "
-                    "AND current_assessment.pipeline_key = previous.pipeline_key) "
-                    "ON CONFLICT DO NOTHING",
+                    copy_statement(table, columns[table]),
                     parameters,
                 )
                 total += result["row_count"]

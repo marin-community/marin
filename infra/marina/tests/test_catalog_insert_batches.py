@@ -13,7 +13,7 @@ from sqlalchemy import create_engine, text
 
 from infra.marina.apps.rl_data_catalog.historical_assessments import retain_prior_assessments
 from infra.marina.apps.rl_data_catalog.load import TABLE_COLUMNS, insert_rows
-from infra.marina.apps.rl_data_catalog.parallel_history import retain_prior_assessments_parallel
+from infra.marina.apps.rl_data_catalog.parallel_history import CHECKPOINT_TABLE, retain_prior_assessments_parallel
 from infra.marina.apps.rl_data_catalog.server.schema import SCHEMA_SQL
 
 COMMITTED_PREFIX_ROWS = 13
@@ -225,6 +225,7 @@ def test_retained_history_copies_only_bounded_missing_rows(batch_database, recor
 
 def test_parallel_ranges_resume_after_copy_commits_before_checkpoint(batch_database, record_property):
     population = 12307
+    batch_rows = 1024
     with batch_database.begin() as c:
         c.execute(
             text(
@@ -281,7 +282,7 @@ def test_parallel_ranges_resume_after_copy_commits_before_checkpoint(batch_datab
         with lock:
             durations.append(time.monotonic() - start)
             if sql.startswith("INSERT INTO atlas_items"):
-                assert sum(key.startswith("task_id_") for key in parameters) <= 1024
+                assert sum(key.startswith("task_id_") for key in parameters) <= batch_rows
                 worker_threads.add(threading.get_ident())
                 if not interrupted:
                     interrupted = True
@@ -296,7 +297,7 @@ def test_parallel_ranges_resume_after_copy_commits_before_checkpoint(batch_datab
             "parallel-old",
             "parallel-new",
             workers=4,
-            item_batch_rows=1024,
+            item_batch_rows=batch_rows,
             stop=stopped,
         )
     with batch_database.connect() as c:
@@ -310,7 +311,7 @@ def test_parallel_ranges_resume_after_copy_commits_before_checkpoint(batch_datab
         "parallel-old",
         "parallel-new",
         workers=4,
-        item_batch_rows=1024,
+        item_batch_rows=batch_rows,
         stop=threading.Event(),
     )
     with batch_database.connect() as c:
@@ -320,7 +321,7 @@ def test_parallel_ranges_resume_after_copy_commits_before_checkpoint(batch_datab
         assert c.execute(text("SELECT count(*) FROM atlas_packets WHERE load_id='parallel-new'")).scalar_one() == 101
         assert c.execute(text("SELECT count(*) FROM atlas_assessments WHERE load_id='parallel-new'")).scalar_one() == 1
         segments = c.execute(
-            text("SELECT count(*) FROM atlas_history_copy_segments WHERE load_id='parallel-new' AND completed")
+            text(f"SELECT count(*) FROM {CHECKPOINT_TABLE} WHERE load_id='parallel-new' AND completed")
         ).scalar_one()
         assert segments >= 8
     assert result["items"] == population - committed
@@ -332,7 +333,7 @@ def test_parallel_ranges_resume_after_copy_commits_before_checkpoint(batch_datab
         "parallel-old",
         "parallel-new",
         workers=4,
-        item_batch_rows=1024,
+        item_batch_rows=batch_rows,
         stop=threading.Event(),
     ) == dict.fromkeys(result, 0)
     record_property("parallel_copy_threads", len(worker_threads))
