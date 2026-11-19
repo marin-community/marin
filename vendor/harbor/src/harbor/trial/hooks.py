@@ -13,6 +13,7 @@ class TrialEvent(Enum):
 
     START = "start"
     ENVIRONMENT_START = "environment_start"
+    ENVIRONMENT_READY = "environment_ready"
     AGENT_START = "agent_start"
     VERIFICATION_START = "verification_start"
     VERIFICATION_END = "verification_end"
