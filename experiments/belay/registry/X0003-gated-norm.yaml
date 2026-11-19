@@ -5,6 +5,7 @@ category: Normalization
 summary: Every RMSNorm is followed by x * sigmoid(W_up SiLU(W_down x)) with a rank-128 bottleneck.
 source: baseline
 status: adopted
+author: WhenWen
 first_batch: 0
 tags:
 - gatednorm

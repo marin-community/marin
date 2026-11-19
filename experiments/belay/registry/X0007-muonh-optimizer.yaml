@@ -5,6 +5,7 @@ category: Optimizers
 summary: Matrices use Muon steps projected back onto their init Frobenius sphere; lm_head uses AdamH; the rest use Adam.
 source: baseline
 status: adopted
+author: WhenWen
 first_batch: 0
 tags:
 - muon

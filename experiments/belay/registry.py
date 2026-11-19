@@ -148,6 +148,9 @@ class Experiment:
     details: tuple[str, ...] = ()
     knobs: tuple[str, ...] = ()
     intake: Intake | None = None
+    author: str | None = None
+    """The GitHub login credited for an idea that did not come through intake (a recipe feature someone designed, or
+    a proposal made for them); an intake idea is credited to its comment's author."""
     trials: tuple[Trial, ...] = ()
     events: tuple[Event, ...] = ()
     potential: dict[str, object] | None = None
@@ -323,8 +326,8 @@ def page_data(
 ) -> dict:
     """The Belay page's results JSON: its ``ideas`` keep the page's own field names, with ``xid`` added. The registry
     records Paloma macro loss; with ``placeholder_bpb_ratio`` the page shows it as placeholder BPB (loss times the
-    ratio) until trials record measured BPB. Each idea's ``author`` is its intake author, else ``default_author``
-    (the login credited for internal proposals)."""
+    ratio) until trials record measured BPB. Each idea's ``author`` is its recorded ``author``, else its intake
+    author, else ``default_author`` (the login credited for internal proposals)."""
     ideas = []
     for e in experiments:
         idea = _plain(e)
@@ -333,7 +336,7 @@ def page_data(
         idea.setdefault("trials", [])
         idea.setdefault("events", [])
         idea.setdefault("tags", [])
-        idea["author"] = (idea.get("intake") or {}).get("author") or default_author
+        idea["author"] = idea.get("author") or (idea.get("intake") or {}).get("author") or default_author
         if placeholder_bpb_ratio is not None:
             _placeholder_bpb(idea, placeholder_bpb_ratio)
         ideas.append(idea)
