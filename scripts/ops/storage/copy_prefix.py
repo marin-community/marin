@@ -95,10 +95,20 @@ def storage_prefix(url: str) -> str:
     spec = data_buckets().get(parsed.bucket)
     if spec is None or spec.store not in SUPPORTED_STORES:
         raise click.BadParameter(f"{url}: bucket {parsed.bucket} is not a declared CoreWeave bucket")
-    stripped = url.rstrip("/")
-    if stripped == f"s3://{parsed.bucket}":
+    if not parsed.key:
         raise click.BadParameter(f"{url}: copying a whole bucket is not supported; name a prefix")
-    return stripped
+    return f"s3://{parsed.bucket}/{parsed.key}"
+
+
+def prefixes_overlap(left: str, right: str) -> bool:
+    """Whether one storage prefix equals or contains the other."""
+    for inner, outer in ((left, right), (right, left)):
+        try:
+            StoragePath(inner).relative_to(StoragePath(outer))
+        except ValueError:
+            continue
+        return True
+    return False
 
 
 def cluster_for(url: str) -> str:
@@ -112,15 +122,14 @@ def cluster_for(url: str) -> str:
 
 def file_sizes(url: str) -> dict[str, int]:
     """Map each file below *url* to its size, keyed by path relative to *url*."""
-    _, root = filesystem_for(url)
-    root = root.rstrip("/") + "/"
+    root = StoragePath(url)
     sizes = {}
     for page in metadata_listing_pages(url):
         for entry in page.entries:
-            name = entry["name"]
-            if entry["type"] == DIRECTORY_TYPE or not name.startswith(root):
+            if entry["type"] == DIRECTORY_TYPE:
                 continue
-            sizes[name.removeprefix(root)] = entry["size"]
+            # S3 listings name objects as "<bucket>/<key>".
+            sizes[StoragePath(f"{root.scheme}://{entry['name']}").relative_to(root)] = entry["size"]
     return sizes
 
 
@@ -177,17 +186,22 @@ def _summary(label: str, files: Iterable[int]) -> str:
     return f"{label}: {len(sizes)} files, {_format_bytes(sum(sizes))}"
 
 
-def _copy_job(source_url: str, destination_url: str, max_workers: int, dry_run: bool) -> None:
-    """Iris-side entrypoint: plan, copy, and verify."""
+def _plan(source_url: str, destination_url: str) -> tuple[dict[str, int], dict[str, int]]:
+    """List both prefixes, report the plan, and return the source files and those still to copy."""
     source = file_sizes(source_url)
     if not source:
         raise ValueError(f"{source_url} holds no files")
-    destination = file_sizes(destination_url)
-    pending = pending_files(source, destination)
+    pending = pending_files(source, file_sizes(destination_url))
     _report(_summary("source", source.values()))
     _report(_summary("already at destination", (source[p] for p in source.keys() - pending.keys())))
     _report(_summary("to copy", pending.values()))
-    if dry_run or not pending:
+    return source, pending
+
+
+def _copy_job(source_url: str, destination_url: str, max_workers: int) -> None:
+    """Iris-side entrypoint: plan, copy, and verify."""
+    source, pending = _plan(source_url, destination_url)
+    if not pending:
         return
 
     shards = [CopyShard(source_url, destination_url, paths) for paths in pack_shards(pending, TARGET_SHARD_BYTES)]
@@ -219,20 +233,24 @@ def _copy_job(source_url: str, destination_url: str, max_workers: int, dry_run: 
     type=click.IntRange(min=1),
     help=f"Zephyr workers; each copies {COPY_THREADS_PER_WORKER} files at a time.",
 )
-@click.option("--dry-run", is_flag=True, help="List both prefixes and report what would be copied.")
+@click.option("--dry-run", is_flag=True, help="List both prefixes from this machine and report what would be copied.")
 def main(source_url: str, destination_url: str, run_near: str, max_workers: int, dry_run: bool) -> None:
     """Copy a CoreWeave prefix to another CoreWeave prefix on an Iris cluster."""
     # Iris reports submission progress and streams the job's log lines through logging.
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     source = storage_prefix(source_url)
     destination = storage_prefix(destination_url)
-    if source == destination or destination.startswith(source + "/") or source.startswith(destination + "/"):
+    if prefixes_overlap(source, destination):
         raise click.BadParameter("source and destination prefixes overlap")
+    if dry_run:
+        # Listing is metadata only, so it runs here and avoids Iris dropping a short job's final output.
+        _plan(source, destination)
+        return
     cluster = cluster_for(source if RunNear(run_near) == RunNear.SOURCE else destination)
 
     with open_iris_client(cluster_name=cluster, workspace=REPO_ROOT) as client:
         job = client.submit(
-            entrypoint=Entrypoint.from_callable(_copy_job, source, destination, max_workers, dry_run),
+            entrypoint=Entrypoint.from_callable(_copy_job, source, destination, max_workers),
             name=f"copy-prefix-{datetime.now(UTC):%Y%m%d-%H%M%S}",
             resources=COORDINATOR_RESOURCES,
             environment=EnvironmentSpec(env_vars={}),

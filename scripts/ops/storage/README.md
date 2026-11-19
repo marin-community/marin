@@ -65,7 +65,7 @@ export CW_KEY_ID=<key-id> CW_KEY_SECRET=<key-secret>
 uv run scripts/ops/storage/copy_prefix.py \
   --from s3://marin-us-east-02a/marin/<prefix> \
   --to s3://marin-us-east-08a/marin/<prefix> \
-  --dry-run                       # list both sides and report what would be copied
+  --dry-run                       # list both sides from this machine; submits no job
 ```
 
 The job copies each source file whose destination copy is missing or has a
