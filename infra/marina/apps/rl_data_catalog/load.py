@@ -174,17 +174,26 @@ def insert_rows(
     rows: Iterable[dict[str, Any]],
     *,
     conflict_nothing: bool = False,
+    conflict_updates: tuple[str, ...] = (),
 ) -> int:
     """Insert byte-bounded batches and return the stored row count.
 
     With ``conflict_nothing``, re-staged rows whose primary keys already exist are
     absorbed instead of raising — the resume path re-runs every insert and lets the
     primary keys deduplicate.
+    ``conflict_updates`` instead replaces only the named fields, allowing a
+    lossless transport migration within an existing unselected load.
     """
     names = ", ".join(column.strip().split()[0] for column in columns.split(","))
     budget = table_batch_bytes(table)
     max_rows = table_batch_rows(table)
+    if conflict_updates and (conflict_nothing or not set(conflict_updates) <= set(names.split(", "))):
+        raise ValueError("Conflict updates must name inserted columns and exclude conflict_nothing")
     conflict = "ON CONFLICT DO NOTHING" if conflict_nothing else ""
+    if conflict_updates:
+        conflict = f"ON CONFLICT ON CONSTRAINT {table}_pkey DO UPDATE SET " + ", ".join(
+            f"{name}=EXCLUDED.{name}" for name in conflict_updates
+        )
     count = 0
     for body in batches(rows, budget, max_rows):
         result = query(

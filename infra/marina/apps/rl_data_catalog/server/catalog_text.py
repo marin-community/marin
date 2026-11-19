@@ -14,12 +14,16 @@ CATALOG_TEXT_CODEC = "atlas-text-v1"
 PREFIX = "@" + CATALOG_TEXT_CODEC + ":"
 BINARY_TEXT_MARKER = "Binary content withheld from catalog text."
 NON_TEXT = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\ud800-\udfff]")
-HEADER = re.compile("^" + re.escape(PREFIX) + r"(utf8|bytes):([0-9a-f]{64}):")
 
 
 class CatalogTextKind(StrEnum):
     UTF8 = "utf8"
     BYTES = "bytes"
+
+
+HEADER = re.compile(
+    "^" + re.escape(PREFIX) + "(" + "|".join(kind.value for kind in CatalogTextKind) + r"):([0-9a-f]{64}):"
+)
 
 
 def needs_encoding(value: str | bytes) -> bool:
@@ -49,7 +53,7 @@ class EncodedCatalogText:
 
 
 def encode_catalog_value(value: Any) -> Any:
-    """Preserve JSON structure and string types while encoding unsupported text."""
+    """Encode unsupported text or bytes while preserving JSON container structure."""
     if isinstance(value, (str, bytes)):
         return EncodedCatalogText.encode(value).storage_text() if needs_encoding(value) else value
     if isinstance(value, dict):
@@ -72,7 +76,7 @@ def decode_catalog_value(value: Any) -> Any:
 
 
 def display_catalog_value(value: Any) -> Any:
-    """Show an explicit marker, including when SQL has truncated a preview."""
+    """Show a marker when the full header survives, even with a truncated payload."""
     if isinstance(value, str) and (match := HEADER.match(value)):
         return f"{BINARY_TEXT_MARKER} SHA-256: {match[2]}"
     if isinstance(value, dict):
