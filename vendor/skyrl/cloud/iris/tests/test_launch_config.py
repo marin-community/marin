@@ -489,6 +489,17 @@ def test_object_store_uris_in_skyrl_config_reach_the_task_unchanged(tmp_path: Pa
     assert config.skyrl.trainer.rollout_buffer.object_store_root == "s3://runs/smoke/rollouts"
 
 
+@pytest.mark.parametrize("model", ["", " policy "])
+def test_launch_rejects_a_noncanonical_model_label(tmp_path: Path, model: str) -> None:
+    raw = raw_launch_config()
+    raw["run"]["model"] = model
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw))
+
+    with pytest.raises(ValueError, match=r"run\.model must be a non-empty name"):
+        load_launch_config(path)
+
+
 def test_qwen_smoke_hugging_face_model_input_reaches_the_runner_without_a_model_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -215,9 +215,12 @@ def compose_launch_config(raw: Mapping[str, Any] | DictConfig) -> DictConfig:
     if not composed.inputs.evaluation_data:
         with open_dict(composed.inputs):
             del composed.inputs.evaluation_data
-    if composed.run.get("model") is None:
+    model = composed.run.get("model")
+    if model is None:
         with open_dict(composed.run):
             del composed.run.model
+    elif not model or model != model.strip():
+        raise ValueError("run.model must be a non-empty name without surrounding whitespace")
     return composed
 
 
