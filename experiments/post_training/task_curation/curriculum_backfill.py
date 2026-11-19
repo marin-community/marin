@@ -17,7 +17,7 @@ from uuid import uuid4
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from finestore.rl.curation import QualifiedSourceDeclaration, SourceDeclaration
+from finestore.rl.curation import QualifiedSourceDeclaration
 from finestore.schema import arrow_schema
 from fray.types import ResourceConfig
 from marin.execution.artifact import ArtifactRecord, result_type_name, write_record
@@ -56,7 +56,7 @@ STAGES = ("descriptions", "task_embeddings", "curriculum_embeddings", "coverage"
 class FrozenCoverageSource(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    declaration: Annotated[SourceDeclaration, AfterValidator(canonical_declaration)]
+    declaration: Annotated[QualifiedSourceDeclaration, AfterValidator(canonical_declaration)]
     specs_dir: str
     task_column: str
     raw_count: int
