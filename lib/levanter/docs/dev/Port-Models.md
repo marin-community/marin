@@ -105,17 +105,20 @@ ensure that `out_first=True` is set on Linear modules if they're going to be loa
 
 ### Hugging Face checkpoint converters
 
-Language models use `HfLmCheckpointConverter` from `levanter.compat.hf_checkpoints`.
-It owns tokenizer metadata, vocabulary resizing, and initialization through
-`Model.init(Vocab, config, key=key)`. Update imports of the former
-`HFCheckpointConverter` name; there is no compatibility alias.
+Use your model config's checkpoint converter to load weights from the Hugging Face Hub or a local directory. For example, to import and export a Llama checkpoint:
 
-Vision encoders use `HfVisionCheckpointConverter` and
-`VisionModelWithHfSerializationMixin`. Vision model classes initialize through
-`Model.init(config, key=key)`, and their config implements
-`to_hf_config(config_overrides=None)` and `from_hf_config(hf_config)`.
-Pass vision checkpoint references as `RepoRef(model_name_or_path, revision=None)`.
-Both converters share checkpoint I/O and shard export through `HfCheckpointIO`.
+```python
+from levanter.compat.hf_checkpoints import HfLmCheckpointConverter
+from levanter.models.llama import LlamaLMHeadModel
+
+converter = HfLmCheckpointConverter.from_hf("path/to/llama-checkpoint")
+model = converter.load_pretrained(LlamaLMHeadModel)
+converter.save_pretrained(model, "path/to/export")
+```
+
+If your code imports `HFCheckpointConverter`, rename the import to `HfLmCheckpointConverter`. The language converter reads the tokenizer from the source checkpoint and includes it in exports by default.
+
+Use `HfVisionCheckpointConverter` for a standalone vision encoder. Construct it with the encoder's Levanter config class and a source `RepoRef`, then pass the encoder class to `load_pretrained`. The exported directory contains the encoder weights and config. Save the matching Hugging Face processor alongside them if the consumer needs preprocessing metadata.
 
 ### Serialization to/from State Dicts
 

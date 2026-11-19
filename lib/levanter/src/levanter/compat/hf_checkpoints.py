@@ -544,10 +544,19 @@ class HfCheckpointIO(Generic[LevConfig]):
 
     LevConfigClass: Type[LevConfig]
     reference_checkpoint: Optional[RepoRef]
+    """Default checkpoint for weights and configuration, and source of bundled model code."""
+
     HfConfigClass: Type
+    """Hugging Face config class, inferred from the reference checkpoint when omitted."""
+
     config_overrides: Optional[dict] = None
+    """Values to override in the exported Hugging Face config, such as auto_map."""
+
     trust_remote_code: bool = False
+    """Whether to allow Hugging Face to execute custom code from the checkpoint repository."""
+
     ignore_prefix: Optional[str] = None
+    """Prefix to strip from checkpoint keys, such as transformer for GPT-2."""
 
     @staticmethod
     def _infer_config_class(hf_config_class, ref, trust_remote_code):
@@ -1040,7 +1049,10 @@ class HfLmCheckpointConverter(HfCheckpointIO[MConfig]):
     """Convert language-model checkpoints, including vocabulary and tokenizer metadata."""
 
     tokenizer: Any = None
+    """Tokenizer used to determine vocabulary size and exported with the model."""
+
     feature_extractor: Optional["FeatureExtractionMixin"] = None
+    """Audio feature extractor optionally saved with speech recognition checkpoints."""
 
     def __init__(
         self,
@@ -1420,7 +1432,7 @@ class HfLmCheckpointConverter(HfCheckpointIO[MConfig]):
 
 @dataclass_with_default_init(frozen=True)
 class HfVisionCheckpointConverter(HfCheckpointIO[VisionConfig]):
-    """Convert vision checkpoints without language-model vocabulary or tokenizer state."""
+    """Convert standalone vision encoder checkpoints."""
 
     def __init__(
         self,
