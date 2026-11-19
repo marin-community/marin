@@ -112,6 +112,11 @@ entry point. After the short run succeeds, use a fresh `RUN_VERSION` and
 The selected data stays cached; training does not curate or resample it.
 
 The launcher binds `train.parquet` and `validation.parquet` from that artifact.
+An update trains each task at most once, so `train.parquet` needs at least 128
+tasks; the launcher rejects a smaller selection before submission. With exactly
+128 tasks, every task must produce a gradable group in every update, and a task
+whose grader always fails stalls training. Select more tasks than one update
+uses when a grader may fail.
 Evaluation attempts the fixed panel before training and after the last update,
 and saves task-level verifier outcomes. Under the run artifact's `exports/`,
 `dumped_evals/global_step_0_evals/` holds the baseline and
