@@ -169,10 +169,11 @@ def test_judge_label_tables_reject_non_numbers():
         parse_spec('mode = "judge"\nlabel_metrics = { yes = 2 }\n')
 
 
-def test_judge_api_default_temperature_survives_serialization():
+@pytest.mark.parametrize("temperature", [None, 0.0, 0.7])
+def test_judge_temperature_control_survives_serialization(temperature):
     spec = JudgeSpec(
         references=("answer",),
-        temperature=None,
+        temperature=temperature,
         parse_attempts=3,
         context_char_limit=120000,
         chat_template_kwargs={"enable_thinking": "false"},

@@ -31,7 +31,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Any, TypeVar, cast
+from typing import Any, TypedDict, TypeVar, cast
 
 import openai
 from openai.types.chat import ChatCompletion, ChatCompletionMessageParam
@@ -64,6 +64,7 @@ from verifyit.spec import (
     JudgeCompletionPolicy,
     JudgeRuntimeSource,
     JudgeSpec,
+    JudgeTemperature,
     Spec,
 )
 
@@ -179,12 +180,16 @@ def _validate_spec(spec: JudgeSpec) -> _ValidatedJudgeSpec:
         raise InvalidTask("judge context character limit must be positive")
     if type(spec.max_turns) is not int or spec.max_turns != 1:
         raise InvalidTask("the judge harness supports exactly one conversation turn")
-    if type(spec.parse_attempts) is not int or spec.parse_attempts < 1:
+    if spec.parse_attempts is not None and (type(spec.parse_attempts) is not int or spec.parse_attempts < 1):
         raise InvalidTask("judge parse attempts must be positive")
-    if spec.temperature is not None and (
-        isinstance(spec.temperature, bool)
-        or not isinstance(spec.temperature, (int, float))
-        or not 0 <= spec.temperature <= 2
+    if (
+        spec.temperature is not None
+        and spec.temperature is not JudgeTemperature.RUNTIME_DEFAULT
+        and (
+            isinstance(spec.temperature, bool)
+            or not isinstance(spec.temperature, (int, float))
+            or not 0 <= spec.temperature <= 2
+        )
     ):
         raise InvalidTask("judge temperature must be finite and between zero and two")
     if spec.chat_template_kwargs and spec.api != "chat_completions":
@@ -440,7 +445,8 @@ def _judge_labels(spec: JudgeSpec, reference: str, candidate: str, client: opena
     label_metrics = {
         label.upper() if spec.label_case == "upper" else label: values for label, values in spec.label_metrics.items()
     }
-    for parse_attempt in range(spec.parse_attempts):
+    parse_attempts = 1 if spec.parse_attempts is None else spec.parse_attempts
+    for parse_attempt in range(parse_attempts):
         for index, budget in enumerate(budgets):
             completion = _label_completion(spec, client, model, messages, budget)
             detail: dict[str, Any] = {
@@ -475,7 +481,7 @@ def _judge_labels(spec: JudgeSpec, reference: str, candidate: str, client: opena
                     if (label in completed_lines if spec.label_scan == "lines" else label in answer)
                 }
             if final not in labels or observed != {final}:
-                if parse_attempt + 1 < spec.parse_attempts:
+                if parse_attempt + 1 < parse_attempts:
                     break
                 raise GradingInfraError("judge returned malformed or contradictory verdict labels", **detail)
             detail.update(verdict=final, reasoning=_reasoning(answer))
@@ -539,7 +545,7 @@ def _label_completion(
             request=request,
         )
     options: dict[str, Any] = {"reasoning": {"effort": spec.reasoning_effort}} if spec.reasoning_effort else {}
-    if spec.temperature is not None:
+    if isinstance(spec.temperature, (int, float)):
         options["temperature"] = spec.temperature
     request = {
         "model": model,
@@ -769,7 +775,8 @@ def _ask(
     """Parse a final SCORE, retrying truncated replies with the larger budget."""
     attempts: list[_CompletionAttempt] = []
     budgets = _completion_budgets(spec)
-    for attempt in range(1, spec.parse_attempts + 1):
+    parse_attempts = 2 if spec.parse_attempts is None else spec.parse_attempts
+    for attempt in range(1, parse_attempts + 1):
         for index, budget in enumerate(budgets):
             response = _complete(spec, client, model, prompt, budget)
             choice = _completion_choice(response)
@@ -793,7 +800,7 @@ def _ask(
             logger.warning("judge %s returned no SCORE line on attempt %d", model, attempt)
             break
     raise GradingInfraError(
-        f"judge {model!r} returned no valid SCORE after {spec.parse_attempts} attempts", **_attempt_detail(attempts)
+        f"judge {model!r} returned no valid SCORE after {parse_attempts} attempts", **_attempt_detail(attempts)
     )
 
 
@@ -818,11 +825,19 @@ def _complete(spec: JudgeSpec, client: openai.OpenAI, model: str, prompt: str, b
     )
 
 
-def _chat_options(spec: JudgeSpec) -> dict[str, Any]:
-    options: dict[str, Any] = {"reasoning_effort": spec.reasoning_effort} if spec.reasoning_effort else {}
+class JudgeChatOptions(TypedDict, total=False):
+    temperature: float
+    reasoning_effort: str
+    extra_body: dict[str, dict[str, str]]
+
+
+def _chat_options(spec: JudgeSpec) -> JudgeChatOptions:
+    options: JudgeChatOptions = {"reasoning_effort": spec.reasoning_effort} if spec.reasoning_effort else {}
     if spec.chat_template_kwargs:
         options["extra_body"] = {"chat_template_kwargs": spec.chat_template_kwargs}
-    if spec.temperature is not None:
+    if spec.temperature is JudgeTemperature.RUNTIME_DEFAULT:
+        options["temperature"] = 0.0
+    elif spec.temperature is not None:
         options["temperature"] = spec.temperature
     return options
 

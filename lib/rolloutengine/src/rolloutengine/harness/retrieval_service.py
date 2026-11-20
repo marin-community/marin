@@ -16,7 +16,7 @@ from pydantic import JsonValue
 from shellbox.http_service import HttpRequest, HttpResponse, serve_http
 from shellbox.machine import Command, Machine
 from taskcompendium.browsecomp import browsecomp_tools
-from taskcompendium.models import FunctionDefinition, ProviderRequirement
+from taskcompendium.models import FunctionDefinition, ProviderNetworkAccess, ProviderRequirement
 from taskcompendium.openresearcher import openresearcher_state
 
 from rolloutengine.harness.browsecomp import INVALID_ARGUMENTS, retrieval_output, valid_retrieval_call
@@ -113,7 +113,7 @@ class OpenResearcherServiceProvider:
 
     def tools(self, requirement: ProviderRequirement) -> tuple[FunctionDefinition, ...]:
         state = openresearcher_state(requirement)
-        if requirement.network_access != "service_only":
+        if requirement.network_access is not ProviderNetworkAccess.SERVICE_ONLY:
             raise ValueError("Retrieval service requires a service-only task network contract")
         return browsecomp_tools(state)
 

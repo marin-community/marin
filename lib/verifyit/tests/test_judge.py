@@ -526,6 +526,7 @@ def test_configured_judge_labels_on_real_http_boundary(tmp_path, fake_judge, rep
     result = run(spec_path, workspace)
     assert result.status is status
     assert result.reward == reward
+    assert len(fake_judge.requests) == 1
     if status is Status.SCORED:
         assert result.detail["completion"] == reply
     assert fake_judge.requests[0]["messages"] == [
@@ -924,8 +925,6 @@ def test_responses_whole_labels_preserve_source_request_and_reject_prose(tmp_pat
     }
     spec = _label_spec(
         api="responses",
-        temperature=None,
-        parse_attempts=1,
         label_scan="whole",
         label_case="upper",
         strip_reasoning_blocks=False,

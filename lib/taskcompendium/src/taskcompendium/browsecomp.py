@@ -38,9 +38,6 @@ class OfflineSearchSettings(Protocol):
     def top_k(self) -> int: ...
 
     @property
-    def snippet_max_tokens(self) -> int: ...
-
-    @property
     def include_get_document(self) -> bool: ...
 
 

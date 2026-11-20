@@ -457,7 +457,8 @@ The SkyRL default verifier floor is 1,800 seconds, defined by
 `environment.task_sessions.task_spec.minimum_verifier_timeout`. The common
 dataset loader applies the greater of that floor, the stored runtime limit and
 the task's declared verifier deadline. This covers fresh TaskSpecs and stored
-`task_rollout_spec` inputs. It extends a finite outer attempt budget to include
-the actor, verifier and cleanup phases. Original grader commands retain their
+`task_rollout_spec` inputs. When actor and verifier limits are finite, it
+extends a finite outer attempt budget to include both phases and cleanup.
+Without a separate actor limit, it preserves the existing attempt deadline. Original grader commands retain their
 own timeouts and verdict protocol; exceeding an infrastructure deadline remains
 an infrastructure timeout, never a successful grade.
