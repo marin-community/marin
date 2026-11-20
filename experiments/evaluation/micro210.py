@@ -36,16 +36,15 @@ from transformers import AutoTokenizer
 from experiments.evaluation.judge_config import JudgeConfig
 from experiments.evaluation.micro210_policy import (
     MODEL_IDENTITY_PREFIX,
+    POLICY_REVISION,
+    POLICY_ROOT,
     Micro210Evaluation,
     Micro210Model,
     micro210_evaluation,
 )
 from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 
-PREPARED_INPUTS = (
-    "s3://marin-us-east-08a/marin/users/benfeuer/evaluation-policies/micro210/2026.11.20-together/"
-    "ba099cbc869af0dd1c14f14586557e38a812d6b956442e8b1f406b36cc42c7a0"
-)
+PREPARED_INPUTS = str(POLICY_ROOT / POLICY_REVISION / "ba099cbc869af0dd1c14f14586557e38a812d6b956442e8b1f406b36cc42c7a0")
 
 # Relocation needs a new adoption identity even though the prepared bytes are unchanged.
 PREPARED_INPUTS_VERSION = "2026.11.20.1"
