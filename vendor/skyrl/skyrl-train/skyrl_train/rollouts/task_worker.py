@@ -15,6 +15,7 @@ from daytona import DaytonaError
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 from rigging.redaction import redact_string
+from shellbox.backends.daytona.machine import DaytonaSandboxCapacityError
 from shellbox.machine import Backend, Machine, MachineFactory
 from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import EnvironmentRequirements, NoGrader, ReasoningMarkupPolicy
@@ -237,6 +238,9 @@ def _failed_rollout(
     ):
         raise error
     exception_type = type(error).__name__
+    capacity_error = isinstance(error, DaytonaSandboxCapacityError) or (
+        isinstance(error, TaskMachineError) and isinstance(error.__cause__, DaytonaSandboxCapacityError)
+    )
     diagnostics = {"operation": interruption.operation.value, "timed_out": isinstance(error, TimeoutError)}
     if isinstance(error, TaskMachineError) and error.__cause__ is not None:
         diagnostics["cause_error_type"] = type(error.__cause__).__name__
@@ -282,12 +286,12 @@ def _failed_rollout(
         exception_type = "TemplateError"
         diagnostics["cause_error_type"] = type(error).__name__
     elif isinstance(error, TaskMachineError):
-        exception_type = "TaskMachineError"
+        exception_type = "DaytonaSandboxCapacityError" if capacity_error else "TaskMachineError"
     elif isinstance(error, ContextWindowExceeded):
         exception_type = "ContextLengthExceededError"
         diagnostics["error_category"] = "context_overflow"
     elif interruption.operation in {RolloutOperation.START, RolloutOperation.PREPARE}:
-        exception_type = VERIFIER_RUNTIME_ERROR
+        exception_type = "DaytonaSandboxCapacityError" if capacity_error else VERIFIER_RUNTIME_ERROR
         diagnostics.setdefault("cause_error_type", type(error).__name__)
     elif isinstance(error, ModelServerError):
         if error.category == "context_overflow":
@@ -320,6 +324,8 @@ def _failed_rollout(
         grade = fold_grades([step.transition.grade for step in rollout.steps if step.transition.grade is not None])
     if cleanup_errors := interruption.grade.diagnostics.get("cleanup_errors"):
         grade = replace(grade, diagnostics={**grade.diagnostics, "cleanup_errors": cleanup_errors})
+    if capacity_error and grade.status == Outcome.UNAVAILABLE:
+        grade = replace(grade, error="sandbox capacity")
     detail = exception_type
     if isinstance(error, TaskMachineError) and isinstance(error.__cause__, DaytonaError):
         # Diagnostics carry only allowlisted fields. Provider text can contain credentials, so log it redacted.

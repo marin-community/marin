@@ -51,6 +51,7 @@ _ERROR_CATEGORIES: Mapping[str, ErrorCategory] = MappingProxyType(
         "ArtifactWriteTimeoutError": ErrorCategory.INFRASTRUCTURE,
         "ContainerRegistryThrottledError": ErrorCategory.INFRASTRUCTURE,
         "DaytonaProcessError": ErrorCategory.INFRASTRUCTURE,
+        "DaytonaSandboxCapacityError": ErrorCategory.INFRASTRUCTURE,
         "PhaseCancellationError": ErrorCategory.INFRASTRUCTURE,
         "SandboxDiskFullError": ErrorCategory.INFRASTRUCTURE,
         "Tau3RuntimeInfrastructureError": ErrorCategory.INFRASTRUCTURE,

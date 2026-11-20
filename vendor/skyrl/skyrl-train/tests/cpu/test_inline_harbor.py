@@ -12,9 +12,12 @@ from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.result import AgentInfo, ExceptionInfo, TrialResult
 from harbor.models.verifier.result import VerifierResult
 from harbor.tasks.client import TaskClient
+from shellbox.backends.daytona.machine import DaytonaSandboxCapacityError
+from taskcompendium.grading_result import Outcome
 
 from skyrl_train.inline_harbor import HarborTaskCache, validation_metrics
 from skyrl_train.inline_harbor_client import HarborTrialClient
+from skyrl_train.rollouts.harbor_trial_session import HarborTrialHarness, trial_grade
 
 
 @pytest.mark.asyncio
@@ -134,7 +137,9 @@ async def test_worker_preserves_task_download_stderr(tmp_path):
 
 
 @pytest.mark.parametrize("agent_error", ["AgentTimeoutError", "TurnCapExhaustedError", "ModelInitiatedTmuxFailure"])
-@pytest.mark.parametrize("unscored_error", ["ConnectionError", "VerifierRuntimeError", "VerifierTimeoutError"])
+@pytest.mark.parametrize(
+    "unscored_error", ["ConnectionError", "VerifierRuntimeError", "VerifierTimeoutError", "DaytonaSandboxCapacityError"]
+)
 def test_validation_scores_preserve_infrastructure_missingness(agent_error, unscored_error):
     tasks = [
         TaskConfig(path=f"task-{index}", git_url="https://example.com/tasks", git_commit_id="a" * 40)
@@ -184,6 +189,36 @@ def test_validation_scores_preserve_infrastructure_missingness(agent_error, unsc
     result.trial_results = trials[:-1] + [trials[0]]
     with pytest.raises(ValueError, match="duplicate"):
         validation_metrics(result, config, "reward")
+
+
+def test_harbor_trial_grade_reports_sandbox_capacity():
+    task = TaskConfig(path="task", git_url="https://example.com/tasks", git_commit_id="a" * 40)
+    trial = TrialResult(
+        task_name="task",
+        trial_name="trial",
+        trial_uri="/tmp/trial",
+        task_id=task.get_task_id(),
+        task_checksum="checksum",
+        config=TrialConfig(task=task, agent=AgentConfig()),
+        agent_info=AgentInfo(name="terminus-2", version="test"),
+        exception_info=ExceptionInfo(
+            exception_type="DaytonaSandboxCapacityError",
+            exception_message="sandbox capacity",
+            exception_traceback="",
+            occurred_at=datetime.now(timezone.utc),
+        ),
+    )
+    grade = trial_grade(trial, "reward")
+    assert grade.status is Outcome.INFRA_ERROR
+    assert grade.error == "sandbox capacity"
+    assert grade.diagnostics["harbor_exception_type"] == "DaytonaSandboxCapacityError"
+
+    async def run_trial(_complete):
+        return trial
+
+    harness = HarborTrialHarness(run_trial, "reward")
+    with pytest.raises(DaytonaSandboxCapacityError, match="sandbox capacity"):
+        asyncio.run(harness.run(None, None))
 
 
 @pytest.mark.asyncio

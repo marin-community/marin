@@ -14,6 +14,7 @@ from harbor.environments.base import BaseEnvironment
 from harbor.models.trial.result import TrialResult
 from harbor.trial.hooks import TrialEvent, TrialHookEvent
 from harbor.trial.trial import Trial
+from shellbox.backends.daytona.machine import DaytonaSandboxCapacityError
 from rolloutengine.harness.core import HarnessContext, ModelSession
 from rolloutengine.harness.external import AgentCompletion
 from rolloutengine.models import ContextRecovery, LimitReached, ModelTurn, Prompt, RolloutEnded, RolloutLimits
@@ -33,10 +34,15 @@ def trial_grade(result: TrialResult, reward_key: str) -> GradeResult:
         diagnostics[HARBOR_EXCEPTION] = result.exception_info.exception_type
     verifier = result.verifier_result
     if verifier is None or verifier.rewards is None or reward_key not in verifier.rewards:
+        error = (
+            "sandbox capacity"
+            if result.exception_info is not None and result.exception_info.exception_type == "DaytonaSandboxCapacityError"
+            else "Harbor trial has no verifier score"
+        )
         return GradeResult(
             Outcome.INFRA_ERROR,
             None,
-            "Harbor trial has no verifier score",
+            error,
             diagnostics=diagnostics,
             failure=GradingFailure.MISSING_REWARD,
         )
@@ -166,6 +172,9 @@ class HarborTrialHarness:
                 return turn
 
         result = await self.run_trial(complete)
+        if last is None and result.exception_info is not None:
+            if result.exception_info.exception_type == "DaytonaSandboxCapacityError":
+                raise DaytonaSandboxCapacityError("sandbox capacity")
         if last is not None:
             session.record(data=StepReward(grade=trial_grade(result, self.reward_key)))
         if model_error is not None:
