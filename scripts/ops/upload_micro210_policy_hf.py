@@ -134,13 +134,13 @@ def read_and_verify(uri: str, digest: str, byte_size: int) -> bytes:
 def read_prepared_source() -> Path:
     """Fetch the prepared parquet from the regional copy and verify digest, size and rows."""
     directory = StoragePath(f"{S3_ROOT}/{PREPARED_REVISION}/{PREPARED_DIGEST}")
-    entries = [entry for entry in directory.ls() if str(entry.get("type", "file")) == "file"]
-    if len(entries) != 1:
-        raise ValueError(f"Expected exactly one file under {directory}, found {entries}")
-    name = str(entries[0]["name"]).rsplit("/", 1)[-1]
-    if name != PREPARED_FILENAME:
-        raise ValueError(f"Prepared parquet filename changed: {name}")
-    raw = read_and_verify(f"{directory}/{name}", PREPARED_DIGEST, PREPARED_BYTES)
+    try:
+        raw = read_and_verify(f"{directory}/{PREPARED_FILENAME}", PREPARED_DIGEST, PREPARED_BYTES)
+    except Exception as error:
+        raise ValueError(
+            f"Prepared parquet not verifiable at {directory}/{PREPARED_FILENAME}: "
+            f"directory holds {[str(entry) for entry in directory.ls()]}"
+        ) from error
     with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as handle:
         handle.write(raw)
         path = Path(handle.name)
