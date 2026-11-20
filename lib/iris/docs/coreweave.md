@@ -99,9 +99,10 @@ Capacity and task state come from Kubernetes nodes, Pods, and Kueue workloads.
 
 GPU Pods request `nvidia.com/gpu`. On clusters with `host_network: true`, they
 also request `rdma/ib` and use `ClusterFirstWithHostNet`. H100 nodes on
-`cw-us-east-02a` and `cw-rno2a` also carry a front-end Ethernet NIC whose RoCE
-functions (`mlx5_0`–`mlx5_8`) a pod sees beside the eight InfiniBand rails
-(`ibp0`–`ibp7`) when it runs under the privileged container profile. NCCL then
+`cw-us-east-02a` and `cw-rno2a` and GB200 nodes on `cw-us-east-08a` also carry a
+front-end Ethernet NIC whose RoCE functions (`mlx5_0`–`mlx5_8`) a pod sees beside
+the InfiniBand rails (`ibp0`–`ibp7` on H100, `ibp0`–`ibp3` on GB200) when it runs
+under the privileged container profile. NCCL then
 merges the RoCE functions into virtual NICs and routes channels over them, and
 those transfers fail with `IBV_WC_RETRY_EXC_ERR(12)`, so these clusters' `task_env`
 sets `NCCL_IB_HCA=ibp`. Check a new cluster's `NET/IB : Using` line under
