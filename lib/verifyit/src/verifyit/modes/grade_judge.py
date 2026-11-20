@@ -3,13 +3,15 @@
 
 """Mode judge: IFEval gate, exact gate, then an LLM judge.
 
-Three rubrics. ``reference`` ports the Nemotron open-QA harness: most correct responses match a
+Four rubrics. ``reference`` ports the Nemotron open-QA harness: most correct responses match a
 reference verbatim once normalized, so the exact gate answers them for free and only the survivors
 reach the model. ``checklist`` ports the rewardkit checklist graders: each criterion is a yes/no
 question put to the model on its own, and the reward is the fraction answered yes, as rewardkit's
 default mean aggregation scored them. ``labels`` maps a configured final verdict label to its
-explicit task score. All rubrics can sit behind ``constraints``, deterministic
-IFEval checks that must all pass first.
+explicit task score. ``answers`` follows Humanity's Last Exam's judge, extended to several results:
+one call returns a JSON verdict per reference, and the task scores 1 only when every one is correct.
+It samples with the judge's own defaults, as those harnesses do: reasoning judges loop under greedy decoding.
+All rubrics can sit behind ``constraints``, deterministic IFEval checks that must all pass first.
 
 The judge is any OpenAI-compatible chat endpoint, configured through ``VERIFYIT_JUDGE_BASE_URL``,
 ``VERIFYIT_JUDGE_API_KEY`` and ``VERIFYIT_JUDGE_MODEL`` (``spec.model`` wins when set). A runner
@@ -54,6 +56,7 @@ from verifyit.modes.grade_ifeval import resolve_checks
 from verifyit.modes.ifeval import Check
 from verifyit.reasoning_markup import REASONING_DELIMITERS
 from verifyit.spec import (
+    RUBRIC_ANSWERS,
     RUBRIC_CHECKLIST,
     RUBRIC_LABELS,
     RUBRIC_REFERENCE,
@@ -211,6 +214,8 @@ def _validate_spec(spec: JudgeSpec) -> _ValidatedJudgeSpec:
         raise InvalidTask("judge rubric 'checklist' needs non-empty criteria")
     if spec.rubric == RUBRIC_LABELS:
         _validate_label_spec(spec, references)
+    if spec.rubric == RUBRIC_ANSWERS:
+        _validate_answers_spec(spec, references)
     for budget in (spec.max_completion_tokens, spec.incomplete_retry_tokens):
         if type(budget) is not int or budget < 0:
             raise InvalidTask("judge token budgets must be nonnegative integers")
@@ -301,6 +306,8 @@ def grade_judge_candidate(
             return _judge_reference(spec, validated.references, candidate, client, model)
         if spec.rubric == RUBRIC_LABELS:
             return _judge_labels(spec, validated.references[0], candidate, client, model)
+        if spec.rubric == RUBRIC_ANSWERS:
+            return _judge_answers(spec, validated.references, candidate, client, model)
         return _judge_checklist(spec, validated.criteria, context, candidate, client, model)
 
 
@@ -351,6 +358,24 @@ def _validate_label_spec(spec: JudgeSpec, references: tuple[str, ...]) -> None:
             raise InvalidTask("malformed judge template") from error
     if not {"reference", "candidate"} <= used:
         raise InvalidTask("judge template must include reference and candidate")
+
+
+def _validate_answers_spec(spec: JudgeSpec, references: tuple[str, ...]) -> None:
+    if not references or len(references) != len(spec.references) or not spec.prompt_template.strip():
+        raise InvalidTask("answers rubric requires nonempty references and a prompt template")
+    used = set()
+    for template in (spec.system_prompt, spec.prompt_template):
+        try:
+            for _, name, format_spec, conversion in string.Formatter().parse(template):
+                if name is None:
+                    continue
+                if name not in {"question", "references", "candidate"} or format_spec or conversion:
+                    raise InvalidTask("judge template has an unsupported field")
+                used.add(name)
+        except ValueError as error:
+            raise InvalidTask("malformed judge template") from error
+    if not {"references", "candidate"} <= used:
+        raise InvalidTask("judge template must include references and candidate")
 
 
 def _answer_text(
@@ -426,12 +451,90 @@ def _judge_labels(spec: JudgeSpec, reference: str, candidate: str, client: opena
     raise RuntimeError("judge exhausted completion budgets")
 
 
+def _judge_answers(
+    spec: JudgeSpec, references: tuple[str, ...], candidate: str, client: openai.OpenAI, model: str
+) -> Reward:
+    listed = "\n".join(f"{index}. {reference}" for index, reference in enumerate(references))
+    fields = {"question": spec.question, "references": listed, "candidate": candidate}
+    messages: list[ChatCompletionMessageParam] = []
+    if spec.system_prompt:
+        messages.append({"role": "system", "content": spec.system_prompt.format(**fields)})
+    messages.append({"role": "user", "content": spec.prompt_template.format(**fields)})
+    budgets = _completion_budgets(spec)
+    for index, budget in enumerate(budgets):
+        completion = _label_completion(spec, client, model, messages, budget, greedy=False)
+        detail: dict[str, Any] = {
+            "model": model,
+            "response_model": completion.response_model,
+            "response_id": completion.response_id,
+            "finish_reason": completion.finish_reason,
+            "transport_attempts": completion.transport_attempts,
+            "completion": completion.text,
+            "judge_request": {"model": model, "messages": messages, "max_completion_tokens": budget},
+        }
+        if completion.incomplete:
+            if index + 1 < len(budgets):
+                continue
+            raise GradingInfraError("judge completion is incomplete", **detail)
+        reply = _answer_text(
+            completion.text, spec.strip_reasoning_blocks, unfinished_error="judge has unfinished reasoning"
+        )
+        verdicts = answer_verdicts(reply, len(references))
+        if verdicts is None:
+            raise GradingInfraError("judge returned malformed per-answer verdicts", **detail)
+        answers, confidence = verdicts
+        correct = [answer["correct"] for answer in answers]
+        strict = float(all(correct))
+        detail.update(
+            answers=answers,
+            confidence=confidence,
+            metrics={"accuracy": strict, "partial_credit": sum(correct) / len(correct)},
+        )
+        return scored(strict, **detail)
+    raise RuntimeError("judge exhausted completion budgets")
+
+
+def answer_verdicts(reply: str, count: int) -> tuple[list[dict[str, Any]], int | None] | None:
+    """Parse ``{"answers": [{"correct": "yes"|"no", ...}], "confidence": n}`` with one entry per reference."""
+    start, end = reply.find("{"), reply.rfind("}")
+    if start < 0 or end < start:
+        return None
+    try:
+        data = json.loads(reply[start : end + 1])
+    except ValueError:
+        return None
+    answers = data.get("answers") if isinstance(data, dict) else None
+    if not isinstance(answers, list) or len(answers) != count:
+        return None
+    verdicts = []
+    for index, answer in enumerate(answers):
+        verdict = str(answer.get("correct", "")).strip().lower() if isinstance(answer, dict) else ""
+        if verdict not in {"yes", "no"}:
+            return None
+        verdicts.append(
+            {
+                "index": index,
+                "label": answer.get("label"),
+                "extracted_final_answer": answer.get("extracted_final_answer"),
+                "reasoning": str(answer.get("reasoning", ""))[:REASONING_LIMIT],
+                "correct": verdict == "yes",
+            }
+        )
+    try:
+        confidence = max(0, min(100, round(float(str(data.get("confidence")).rstrip("%")))))
+    except ValueError:
+        confidence = None
+    return verdicts, confidence
+
+
 def _label_completion(
-    spec: JudgeSpec, client: openai.OpenAI, model: str, messages: list, budget: int
+    spec: JudgeSpec, client: openai.OpenAI, model: str, messages: list, budget: int, *, greedy: bool = True
 ) -> _LabelCompletion:
     if spec.api == "chat_completions":
         options: dict[str, Any] = {"reasoning_effort": spec.reasoning_effort} if spec.reasoning_effort else {}
-        request = {"model": model, "messages": messages, "temperature": 0.0, "max_completion_tokens": budget, **options}
+        if greedy:
+            options["temperature"] = 0.0
+        request = {"model": model, "messages": messages, "max_completion_tokens": budget, **options}
         response, attempts = _judge_transport(
             spec,
             lambda timeout: _chat_completion(client, timeout=timeout, **request),
@@ -627,7 +730,7 @@ def _client(spec: JudgeSpec, connection: JudgeConnection | None) -> tuple[openai
     if not model:
         raise InvalidTask(f"no judge model: set {MODEL_ENV} or the spec's model field")
     # Local OpenAI-compatible servers ignore the key, but the client insists on a non-empty one.
-    options: dict[str, Any] = {"max_retries": 0} if spec.rubric == RUBRIC_LABELS else {}
+    options: dict[str, Any] = {"max_retries": 0} if spec.rubric in {RUBRIC_LABELS, RUBRIC_ANSWERS} else {}
     return (
         openai.OpenAI(
             base_url=base_url,
