@@ -176,7 +176,7 @@ def max_concurrency(region: RegionCapacity, profile: SandboxProfile, *, headroom
     )
 
 
-async def _inventory_sandboxes(client: AsyncDaytona) -> list[AsyncSandbox]:
+async def inventory_sandboxes(client: AsyncDaytona) -> list[AsyncSandbox]:
     """Read every sandbox in the authenticated account across all pages."""
     return [sandbox async for sandbox in client.list(request_timeout=REQUEST_TIMEOUT_SECONDS)]
 
@@ -211,7 +211,7 @@ async def _organization_id(client: AsyncDaytona, sandboxes: list[AsyncSandbox]) 
 
 async def account_usage_from_client(client: AsyncDaytona) -> AccountUsage:
     """Read one account's quota, usage and sandbox inventory through an SDK client."""
-    sandboxes = await _inventory_sandboxes(client)
+    sandboxes = await inventory_sandboxes(client)
     organization_id = await _organization_id(client, sandboxes)
     overview = await _fetch_usage_overview(client, organization_id)
     state_counts: dict[str, int] = {}

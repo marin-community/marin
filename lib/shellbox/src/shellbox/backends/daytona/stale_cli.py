@@ -9,19 +9,28 @@ import json
 import math
 import os
 from collections import Counter
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TextIO
 
-from daytona import AsyncSandbox, DaytonaError
+from daytona import AsyncDaytona, AsyncSandbox, DaytonaError
 
 from shellbox.backends.daytona.connection import DEFAULT_DAYTONA_API_URL, DaytonaConnection
 from shellbox.backends.daytona.stale import SandboxActivity, SandboxDecision, select_idle_sandboxes
+from shellbox.backends.daytona.usage import inventory_sandboxes
 from shellbox.backends.daytona.usage_cli import ALL_ACCOUNTS
 
 REQUEST_TIMEOUT = 60
 DELETE_INTERVAL = 1.0
+DEFAULT_THRESHOLD_MINUTES = 60
+
+
+@dataclass(frozen=True)
+class PurgeCounts:
+    deleted: int
+    skipped: int
+    errors: int
 
 
 def _activity(sandbox: AsyncSandbox) -> SandboxActivity:
@@ -45,9 +54,50 @@ def _record(ledger: TextIO, account: str, decision: SandboxDecision, outcome: st
     os.fsync(ledger.fileno())
 
 
-async def _account(account: str, connection: DaytonaConnection, minimum_idle: timedelta, ledger: TextIO | None) -> int:
+async def _delete_candidates(
+    client: AsyncDaytona,
+    account: str,
+    candidates: tuple[SandboxDecision, ...],
+    minimum_idle: timedelta,
+    ledger: TextIO,
+) -> PurgeCounts:
+    """Recheck candidate IDs and return confirmed deletions, skips and errors."""
+    deleted = skipped = errors = 0
+    for decision in candidates:
+        # Throttle rechecks and deletions together; no bursts within an org.
+        await asyncio.sleep(DELETE_INTERVAL)
+        try:
+            sandbox = await client.get(decision.id, request_timeout=REQUEST_TIMEOUT)
+            if sandbox.id != decision.id:
+                raise RuntimeError("Daytona returned a different sandbox ID")
+            rechecked = select_idle_sandboxes([_activity(sandbox)], now=datetime.now(UTC), minimum_idle=minimum_idle)
+            if not rechecked.candidates:
+                skipped += 1
+                _record(ledger, account, rechecked.skipped[0], "skipped on recheck")
+                continue
+            decision = rechecked.candidates[0]
+            _record(ledger, account, decision, "delete requested")
+            await sandbox.delete(timeout=REQUEST_TIMEOUT, wait=True)
+        except DaytonaError as error:
+            errors += 1
+            # Provider exception messages can contain credential-bearing URLs.
+            outcome = f"error: {type(error).__name__}"
+            _record(ledger, account, decision, outcome)
+            print(f"  {decision.id}: {outcome}", flush=True)
+            continue
+        _record(ledger, account, decision, "deleted")
+        deleted += 1
+        if deleted % 50 == 0:
+            print(f"{account}: deleted={deleted} errors={errors}", flush=True)
+    return PurgeCounts(deleted, skipped, errors)
+
+
+async def _account_error_count(
+    account: str, connection: DaytonaConnection, minimum_idle: timedelta, ledger: TextIO | None
+) -> int:
+    """Report one account, optionally purge idle IDs, and return its error count."""
     async with connection.client_factory()() as client:
-        sandboxes = [sandbox async for sandbox in client.list(request_timeout=REQUEST_TIMEOUT)]
+        sandboxes = await inventory_sandboxes(client)
         selection = select_idle_sandboxes(map(_activity, sandboxes), now=datetime.now(UTC), minimum_idle=minimum_idle)
         print(
             f"{account}: total={len(sandboxes)} idle_candidates={len(selection.candidates)} "
@@ -60,38 +110,13 @@ async def _account(account: str, connection: DaytonaConnection, minimum_idle: ti
             for row in selection.candidates:
                 print(f"  candidate {row.id}: {row.reason}, last_used_at={row.last_used_at}", flush=True)
             return 0
-        deleted = skipped = errors = 0
-        for decision in selection.candidates:
-            # Throttle rechecks and deletions together; no bursts within an org.
-            await asyncio.sleep(DELETE_INTERVAL)
-            try:
-                sandbox = await client.get(decision.id, request_timeout=REQUEST_TIMEOUT)
-                if sandbox.id != decision.id:
-                    raise RuntimeError("Daytona returned a different sandbox ID")
-                rechecked = select_idle_sandboxes([_activity(sandbox)], now=datetime.now(UTC), minimum_idle=minimum_idle)
-                if not rechecked.candidates:
-                    skipped += 1
-                    _record(ledger, account, rechecked.skipped[0], "skipped on recheck")
-                    continue
-                decision = rechecked.candidates[0]
-                _record(ledger, account, decision, "delete requested")
-                await sandbox.delete(timeout=REQUEST_TIMEOUT, wait=True)
-            except DaytonaError as error:
-                errors += 1
-                # Provider exception messages can contain credential-bearing URLs.
-                outcome = f"error: {type(error).__name__}"
-                _record(ledger, account, decision, outcome)
-                print(f"  {decision.id}: {outcome}", flush=True)
-                continue
-            _record(ledger, account, decision, "deleted")
-            deleted += 1
-            if deleted % 50 == 0:
-                print(f"{account}: deleted={deleted} errors={errors}", flush=True)
+        counts = await _delete_candidates(client, account, selection.candidates, minimum_idle, ledger)
         print(
-            f"{account}: deleted={deleted} skipped={len(selection.skipped) + skipped} errors={errors}",
+            f"{account}: deleted={counts.deleted} skipped={len(selection.skipped) + counts.skipped} "
+            f"errors={counts.errors}",
             flush=True,
         )
-        return errors
+        return counts.errors
 
 
 async def _run(arguments: argparse.Namespace, ledger: TextIO | None) -> int:
@@ -105,7 +130,7 @@ async def _run(arguments: argparse.Namespace, ledger: TextIO | None) -> int:
             continue
         connection = DaytonaConnection(api_key=api_key, api_url=arguments.api_url, target=arguments.target)
         try:
-            errors += await _account(account, connection, timedelta(minutes=arguments.threshold), ledger)
+            errors += await _account_error_count(account, connection, timedelta(minutes=arguments.threshold), ledger)
         except DaytonaError as error:
             print(f"{account}: inventory error: {type(error).__name__}", flush=True)
             errors += 1
@@ -122,7 +147,12 @@ def main() -> None:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true", help="Report candidates without deletion (default).")
     mode.add_argument("--delete", action="store_true", help="Delete idle sandbox IDs after an activity recheck.")
-    parser.add_argument("--threshold", type=float, default=60, help="Minimum idle time in minutes (default: 60).")
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=DEFAULT_THRESHOLD_MINUTES,
+        help=f"Minimum idle time in minutes (default: {DEFAULT_THRESHOLD_MINUTES}).",
+    )
     parser.add_argument("--ledger", type=Path, help="Append-only JSONL ledger; required with --delete.")
     parser.add_argument("--target", default=os.environ.get("DAYTONA_TARGET"), help="Daytona target region.")
     parser.add_argument("--api-url", default=os.environ.get("DAYTONA_API_URL", DEFAULT_DAYTONA_API_URL))

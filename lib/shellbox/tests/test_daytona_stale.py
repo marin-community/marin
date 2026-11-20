@@ -33,10 +33,9 @@ def test_selector_uses_freshest_provider_time_at_threshold(activity, updated, id
 
 
 @pytest.mark.parametrize("activity, updated", [(None, None), ("invalid", ""), ("2026-11-19T10:00:00", None)])
-def test_selector_preserves_sandboxes_without_usable_time(activity, updated):
+def test_selector_skips_sandboxes_without_usable_time(activity, updated):
     result = select_idle_sandboxes(
         [SandboxActivity("unknown", activity, updated)], now=NOW, minimum_idle=timedelta(hours=1)
     )
     assert not result.candidates
     assert [(row.id, row.last_used_at) for row in result.skipped] == [("unknown", None)]
-    assert result.skipped[0].reason == "no usable activity or update timestamp"

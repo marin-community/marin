@@ -46,11 +46,11 @@ class FakeClient:
         return None
 
     def list(self, request_timeout):
-        async def pages():
+        async def iterate():
             for row in self.rows:
                 yield row
 
-        return pages()
+        return iterate()
 
     async def get(self, sandbox_id, request_timeout):
         row = next(row for row in self.rows if row.id == sandbox_id)
