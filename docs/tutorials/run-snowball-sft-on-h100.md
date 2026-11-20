@@ -38,6 +38,8 @@ The coordinator and workers need the same storage and Hugging Face credentials. 
 
 ## Choose an SFT preset
 
+Preset names use `<data>-<seq-len>-<nodes>`.
+
 ### Snowball
 
 | Preset | What it reproduces | Training layout | Measured run | Model returned |

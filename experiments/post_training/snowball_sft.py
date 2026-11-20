@@ -9,8 +9,8 @@ Experiment 2's stored sft.yaml at source 442bf9d878 pins 204 updates, 256 sequen
 262,144 tokens, CP32/EP8, chat packing at 256, per-device parallelism 1, the XLA
 autotuning setting, and a 72,000-second deadline on 32 eight-H100 workers.
 Its sft-data.yaml pins the mixture cache and tokenizer. The Snowball preset at that
-source pins the base weights and cosine Adam settings. The launch receipt in #11120
-comment 6863473319 confirms the batch geometry, and comment 6864384835 confirms
+source pins the base weights and cosine Adam settings. GitHub comment 6863473319 on
+#11120 confirms the batch geometry, and comment 6864384835 confirms
 FP32 parameters and assistant-only supervision.
 """
 
