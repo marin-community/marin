@@ -355,14 +355,14 @@ impl NamespaceProvider {
         let partition_candidates = self
             .partition_policy
             .and_then(|policy| policy.partitions_for_exact_values(&exact_values));
-        let int_matches = match self.int_bounds_predicate(state, filters)? {
+        let segment_int_matches = match self.int_bounds_predicate(state, filters)? {
             Some(predicate) => predicate.prune(&SegmentIntStatistics { provider: self })?,
             None => vec![true; self.segment_paths.len()],
         };
         let paths = self
             .segment_paths
             .iter()
-            .zip(int_matches)
+            .zip(segment_int_matches)
             .filter(|(path, int_matches)| {
                 let string_key_matches = string_key_range.is_none_or(|range| {
                     self.segment_key_bounds
@@ -1320,7 +1320,7 @@ mod tests {
                 .and(col("mem_bytes").lt_eq(lit(150_i64)))]),
             vec![0, 2, 3]
         );
-        // The float form `epoch_ms > extract(epoch from now()) * 1000 - …` folds to.
+        // The float comparison that `epoch_ms > extract(epoch from now()) * 1000 - …` folds to.
         let as_float = || datafusion::logical_expr::cast(col("mem_bytes"), DataType::Float64);
         assert_eq!(selected(&[as_float().gt(lit(299.5_f64))]), vec![2, 3]);
         assert_eq!(

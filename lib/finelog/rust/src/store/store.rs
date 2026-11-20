@@ -5351,6 +5351,11 @@ mod tests {
         ObjectSpec::new(1).schema(schema).validated()
     }
 
+    /// The unconverted time filter OPS.md allows: `extract(epoch ...) * 1000`
+    /// is a Float64, so the comparison casts `timestamp_ms` to a float.
+    const FLOAT_EPOCH_FILTER: &str =
+        "timestamp_ms > extract(epoch from TIMESTAMP '1970-01-01 00:00:02') * 1000 - 400";
+
     struct TimeBoundedTable {
         store: Store,
         data_dir: PathBuf,
@@ -5424,9 +5429,9 @@ mod tests {
                 .collect()
         }
 
-        fn provider(&self, pruning: bool) -> crate::query::provider::NamespaceProvider {
+        fn provider(&self, with_column_bounds: bool) -> crate::query::provider::NamespaceProvider {
             let mut snapshot = self.store.query_snapshot("iris.worker").unwrap();
-            if !pruning {
+            if !with_column_bounds {
                 snapshot.column_bounds.clear();
             }
             self.store
@@ -5434,10 +5439,10 @@ mod tests {
                 .unwrap()
         }
 
-        async fn rows(&self, sql: &str, pruning: bool) -> String {
+        async fn rows(&self, sql: &str, with_column_bounds: bool) -> String {
             let providers = vec![crate::query::RegisteredProvider {
                 name: "iris.worker".to_string(),
-                provider: self.provider(pruning),
+                provider: self.provider(with_column_bounds),
             }];
             let result = crate::query::run_query_over(&crate::query::make_ctx(), providers, sql)
                 .await
@@ -5448,11 +5453,11 @@ mod tests {
         }
 
         /// How many segment files the physical scan for `sql` opens.
-        async fn planned_segments(&self, sql: &str) -> usize {
+        async fn planned_segment_count(&self, sql: &str) -> usize {
             let ctx = crate::query::make_ctx();
             ctx.register_table(
                 datafusion::common::TableReference::bare("iris.worker"),
-                Arc::new(self.provider(true)),
+                Arc::new(self.provider(/* with_column_bounds */ true)),
             )
             .unwrap();
             let plan = ctx
@@ -5484,17 +5489,21 @@ mod tests {
         /// Assert each time filter returns the same rows with and without column
         /// bounds, and that its scan opens the paired number of segments.
         async fn assert_pruning_keeps_rows(&self, cases: &[(&str, usize)]) {
-            for &(filter, expected) in cases {
+            for &(filter, expected_segments) in cases {
                 let sql = format!(
                     "SELECT worker_id, mem_bytes, timestamp_ms FROM \"iris.worker\" \
                      WHERE {filter} ORDER BY timestamp_ms, mem_bytes"
                 );
                 assert_eq!(
-                    self.rows(&sql, true).await,
-                    self.rows(&sql, false).await,
+                    self.rows(&sql, /* with_column_bounds */ true).await,
+                    self.rows(&sql, /* with_column_bounds */ false).await,
                     "{filter}: rows differ with column bounds"
                 );
-                assert_eq!(self.planned_segments(&sql).await, expected, "{filter}");
+                assert_eq!(
+                    self.planned_segment_count(&sql).await,
+                    expected_segments,
+                    "{filter}"
+                );
             }
         }
 
@@ -5648,14 +5657,11 @@ mod tests {
         let table = TimeBoundedTable::new("column_bounds_pruned", false).await;
         table
             .assert_pruning_keeps_rows(&[
+                // (filter, segments its scan plans, of the table's three)
                 ("timestamp_ms >= 2000", 2),
                 ("timestamp_ms BETWEEN 1200 AND 2100", 2),
                 ("timestamp_ms > 2400.5", 2),
-                // The unconverted form OPS.md allows: `extract(epoch ...) * 1000` is a Float64.
-                (
-                    "timestamp_ms > extract(epoch from TIMESTAMP '1970-01-01 00:00:02') * 1000 - 400",
-                    2,
-                ),
+                (FLOAT_EPOCH_FILTER, 2),
                 ("timestamp_ms < 1000", 0),
             ])
             .await;
@@ -5674,10 +5680,7 @@ mod tests {
                 ("timestamp_ms >= 2000", 3),
                 ("timestamp_ms BETWEEN 1200 AND 2100", 3),
                 ("timestamp_ms > 2400.5", 3),
-                (
-                    "timestamp_ms > extract(epoch from TIMESTAMP '1970-01-01 00:00:02') * 1000 - 400",
-                    3,
-                ),
+                (FLOAT_EPOCH_FILTER, 3),
                 ("timestamp_ms < 1000", 3),
             ])
             .await;
@@ -5702,10 +5705,7 @@ mod tests {
                 ("timestamp_ms >= 2000", 2),
                 ("timestamp_ms BETWEEN 1200 AND 2100", 3),
                 ("timestamp_ms > 2400.5", 2),
-                (
-                    "timestamp_ms > extract(epoch from TIMESTAMP '1970-01-01 00:00:02') * 1000 - 400",
-                    2,
-                ),
+                (FLOAT_EPOCH_FILTER, 2),
                 ("timestamp_ms < 1000", 1),
             ])
             .await;
@@ -5771,10 +5771,7 @@ mod tests {
                 ("timestamp_ms >= 2000", 2),
                 ("timestamp_ms BETWEEN 1200 AND 2100", 2),
                 ("timestamp_ms > 2400.5", 2),
-                (
-                    "timestamp_ms > extract(epoch from TIMESTAMP '1970-01-01 00:00:02') * 1000 - 400",
-                    2,
-                ),
+                (FLOAT_EPOCH_FILTER, 2),
                 ("timestamp_ms < 1000", 0),
             ])
             .await;
