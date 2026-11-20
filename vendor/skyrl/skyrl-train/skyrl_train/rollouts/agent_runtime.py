@@ -163,7 +163,13 @@ class InstalledAgentRuntime:
             daytona=connection,
             protected_values=self.protected_values,
         )
-        environment = TrialEnvironmentConfig.model_validate({**settings.environment.model_dump(), "kwargs": kwargs})
+        environment_fields = settings.environment.model_dump(exclude={"eval_image_build", "eval_override_storage_mb"})
+        if phase == "eval":
+            if settings.environment.eval_image_build is not None:
+                kwargs["image_build"] = settings.environment.eval_image_build
+            if settings.environment.eval_override_storage_mb is not None:
+                environment_fields["override_storage_mb"] = settings.environment.eval_override_storage_mb
+        environment = TrialEnvironmentConfig.model_validate({**environment_fields, "kwargs": kwargs})
         agent = self.settings.agent.model_copy(
             update={
                 "override_timeout_sec": lowered.limits.total_turn_timeout or self.settings.run_timeout,

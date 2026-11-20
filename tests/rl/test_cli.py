@@ -15,6 +15,7 @@ from unittest.mock import MagicMock
 import click
 import pytest
 from click.testing import CliRunner
+from fray.types import GpuConfig
 from iris.client.client import IrisClient
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep
@@ -201,3 +202,27 @@ def test_cat_count_launcher_import_keeps_training_dependencies_unloaded() -> Non
         text=True,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_named_coordinator_repeated_submission_preserves_identity():
+    execution = dataclasses.replace(_execution(), coordinator_name="long-loop-plumbing-2026.11.08")
+    handles = [_step(execution)]
+    requests = [
+        _coordinator_request(handles, "experiments.test_rl", ("--run",), 1, Path("/workspace/marin"), {})[1]
+        for _ in range(2)
+    ]
+    assert requests[0].name == requests[1].name == "long-loop-plumbing-2026.11.08"
+
+
+def test_gpu_coordinator_preserves_route_and_priority():
+    execution = dataclasses.replace(_execution(), coordinator_gpu=GpuConfig(variant="H100", count=1))
+    cluster, request = _coordinator_request(
+        [_step(execution)], "experiments.test_rl", ("--run",), 1, Path("/workspace/marin"), {}
+    )
+    assert request.resources.device == execution.coordinator_gpu
+    cpu_cluster, cpu_request = _coordinator_request(
+        [_step(_execution())], "experiments.test_rl", ("--run",), 1, Path("/workspace/marin"), {}
+    )
+    assert cluster == cpu_cluster
+    assert request.resources.target_cluster == cpu_request.resources.target_cluster
+    assert request.priority == cpu_request.priority

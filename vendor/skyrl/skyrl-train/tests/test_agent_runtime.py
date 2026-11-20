@@ -31,6 +31,9 @@ from skyrl_train.rollouts.harbor_tasks import HarborTaskSettings
 from skyrl_train.rollouts.harbor_trial_session import run_harbor_trial
 from skyrl_train.rollouts.task_projections import WholeTaskProjection
 from skyrl_train.rollouts.task_worker import TaskRolloutWorker
+from skyrl_train.rollouts.task_worker import TaskRolloutWorkerSpec
+from skyrl_train.rollouts.workers import WorkerShard
+from skyrl_train.config.utils import get_default_config
 from tests.cpu.task_specs import lowered_task
 
 
@@ -45,6 +48,36 @@ async def unexpected_model_request(*args):
 class UnusedDecoder:
     def decode(self, token_ids):
         pytest.fail("Provider startup failure must precede token decoding")
+
+
+@pytest.mark.asyncio
+async def test_worker_spec_builds_installed_agent_with_separate_judge_and_phase_credentials(tmp_path, monkeypatch):
+    monkeypatch.setenv("TEST_JUDGE_KEY", "judge-key")
+    monkeypatch.setenv("TEST_RL_KEY", "training-key")
+    monkeypatch.setenv("TEST_EVAL_KEY", "evaluation-key")
+    config = OmegaConf.merge(get_default_config(), {
+        "trainer": {"policy": {"model": {"path": "fixture/model"}}},
+        "environment": {"task_sessions": {
+            "max_verifier_workers": 0,
+            "remote_judge": {"base_url": "https://judge.invalid", "api_key_env": "TEST_JUDGE_KEY"},
+        }},
+    })
+    harbor = OmegaConf.create({
+        "harbor": {"environment_type": "daytona", "daytona_api_key_env": "TEST_RL_KEY",
+                   "eval_daytona_api_key_env": "TEST_EVAL_KEY"},
+        "installed_agent": {
+            "agent": {"name": "pi"}, "output_path": str(tmp_path),
+            "setup_timeout": 5, "run_timeout": 5, "cleanup_timeout": 5,
+            "service_startup_timeout": 5, "service_shutdown_timeout": 5,
+        },
+    })
+    worker = TaskRolloutWorkerSpec.from_config(config, [], harbor_config=harbor).build(UnusedDecoder(), WorkerShard(0, 1))
+    try:
+        assert worker.judge_connection.base_url == "https://judge.invalid"
+        assert worker.installed_agents.daytona_connection.api_key == "training-key"
+        assert worker.installed_agents.eval_daytona_connection.api_key == "evaluation-key"
+    finally:
+        await worker.shutdown()
 
 
 class ProcessTransport:
@@ -114,7 +147,9 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
         daytona_connection=connections["train"],
         eval_daytona_connection=connections["eval"],
     )
-    harbor = HarborTaskSettings.from_config(OmegaConf.create({}))
+    harbor = HarborTaskSettings.from_config(OmegaConf.create({
+        "harbor": {"override_storage_mb": 8192, "eval_override_storage_mb": 16384},
+    }))
     worker = TaskRolloutWorker(
         OmegaConf.create({}),
         WholeTaskProjection(OmegaConf.create({}), UnusedDecoder()),
@@ -174,6 +209,8 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
     [result_path] = list((attempts[0] / "trials").glob("*/result.json"))
     result = TrialResult.model_validate_json(result_path.read_text())
     assert result.exception_info.exception_type == "ProviderUnavailable"
+    archived_config = TrialConfig.model_validate_json((result_path.parent / "config.json").read_text())
+    assert archived_config.environment.override_storage_mb == (16384 if phase == "eval" else 8192)
 
 
 @pytest.mark.asyncio

@@ -234,11 +234,15 @@ async def test_native_step_harness_keeps_length_stopped_rollout():
         ("context", None),
         ("first-request", None),
         ("context", "ContextLengthExceededError"),
+        ("context", "VerifierRuntimeError"),
         ("max_turns", None),
         ("budget_reached", None),
         ("model-failure", None),
     ],
-    ids=["sampled-turn", "first-request", "agent-error-policy", "turn-budget", "token-budget", "model-failure"],
+    ids=[
+        "sampled-turn", "first-request", "graded-model-limit", "masked-verifier-error",
+        "turn-budget", "token-budget", "model-failure",
+    ],
 )
 async def test_harbor_trial_preserves_work_and_error_policy_after_generation_stops(open_worker, stop, trial_error):
     """Terminal responses retain sampled turns; model failures still fail the rollout."""
@@ -292,16 +296,18 @@ async def test_harbor_trial_preserves_work_and_error_policy_after_generation_sto
     assert result.grade.status == Outcome.GRADED
     assert result.grade.reward == 0.75
     assert batch["response_ids"] == [[3]]
-    assert batch["loss_masks"] == [[1]]
     assert batch["rollout_logprobs"][0] == pytest.approx([-0.1])
     assert batch["verification_results"][0].status == VerificationStatus.VERIFIED
-    if trial_error is not None:
+    if trial_error == "VerifierRuntimeError":
         assert result.failure.exception_type == trial_error
+        assert batch["loss_masks"] == [[0]]
+        assert np.sum(batch["rewards"]) == 0.0
     else:
         assert result.failure is None
+        assert batch["loss_masks"] == [[1]]
+        assert np.sum(batch["rewards"]) == 0.75
     if stop in {"max_turns", "budget_reached"}:
         assert result.stop_reason == stop
-    assert np.sum(batch["rewards"]) == (0.75 if trial_error is None else 0.0)
 
 
 @pytest.mark.asyncio

@@ -50,6 +50,11 @@ class SubmissionMode(StrEnum):
     WAIT = "wait"
 
 
+class FinalizationMode(StrEnum):
+    SUCCESS = "success"
+    ANY_TERMINAL = "any_terminal"
+
+
 @dataclass
 class RunConfig:
     """Experiment identity and reproducibility inputs."""
@@ -60,6 +65,7 @@ class RunConfig:
     mode: str = RunMode.TRAIN.value
     submission: str = SubmissionMode.WAIT.value
     export_hf: bool = False
+    finalization: str = FinalizationMode.SUCCESS.value
 
 
 @dataclass
@@ -170,6 +176,7 @@ class InputsConfig:
     train_data: list[dict[str, Any]] = field(default_factory=list)
     validation_data: list[dict[str, Any]] = field(default_factory=list)
     starting_checkpoint: NativeCheckpointLocator | None = None
+    curriculum: dict[str, Any] | None = None
 
 
 @dataclass
@@ -353,6 +360,12 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
         raise ValueError(f"unsupported run.mode: {raw['run']['mode']!r}")
     if raw["run"]["submission"] not in set(SubmissionMode):
         raise ValueError(f"unsupported run.submission: {raw['run']['submission']!r}")
+    finalization = FinalizationMode(raw["run"]["finalization"])
+    if finalization == FinalizationMode.ANY_TERMINAL and (
+        raw["run"]["submission"] != SubmissionMode.WAIT or not raw["run"]["export_hf"]
+        or raw["skyrl"]["trainer"]["hf_export_checkpoint"] != "best"
+    ):
+        raise ValueError("Any-terminal finalization requires wait mode and export of the best checkpoint")
     if raw["inputs"]["data_kind"] not in {"tasks", "parquet"}:
         raise ValueError(f"unsupported inputs.data_kind: {raw['inputs']['data_kind']!r}")
     if raw["iris"]["timeout"] < 0:
@@ -390,7 +403,8 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
         if trainer["resume_path"] != checkpoint["uri"]:
             raise ValueError("trainer.resume_path must match inputs.starting_checkpoint.uri")
     if (
-        skyrl.get("generator", {}).get("weight_sync_transport") == WeightSyncTransport.EXPERT_BLOCK
+        run["mode"] == RunMode.TRAIN
+        and skyrl.get("generator", {}).get("weight_sync_transport") == WeightSyncTransport.EXPERT_BLOCK
         and skyrl.get("trainer", {}).get("placement", {}).get("colocate_all")
         and entrypoint != RL_ENTRYPOINTS[RLEntrypoint.STANDARD]
     ):

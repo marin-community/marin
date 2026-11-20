@@ -207,7 +207,9 @@ data parallelism.
 Identity-bearing inputs belong in `SkyRLSpec`: model and tokenizer,
 data artifacts, a starting native checkpoint, topology, seed, retention, and the rendered config. Cluster routing,
 host resources, priority, and retry policy belong in `IrisSkyRLExecution`; changing placement must
-not fork artifact identity.
+not fork artifact identity. A versioned task mix (`RlCurriculum`) also belongs in `SkyRLSpec`; it
+renders the trainer's sampling settings and is named in the run record. See
+[RL curricula](rl-curricula.md).
 
 `IrisSkyRLExecution.container_profile` accepts an `iris.rpc.job_pb2.ContainerProfile` enum for the
 coordinator and trainer jobs. Enum names are serialized at the launch boundary. It defaults to `None`,
@@ -259,21 +261,58 @@ vLLM applies these sampling values to requests that omit them. SkyRL rollouts
 send explicit sampling parameters, and behavior-logprob training sets
 `generation_config: vllm` so the checkpoint's defaults never reach rollouts.
 
+With `SkyRLSpec`, configuration rendering binds the `best_checkpoint` callback's
+`initial_model_uri` to the resolved model input before artifact fingerprinting.
+Standalone recipes must set this URI explicitly.
+
 The `best_checkpoint` callback accepts a `selection_metric` whose values must be
 finite normalized scores in [0, 1], with larger values preferred. Set
 `save_after_fraction` to delay trained-checkpoint selection until that fraction
-of the total steps has elapsed. Step-zero evaluation still records the initial
-model as a candidate without saving weights; if it remains best, load the
+of the total steps has elapsed. With the default one-observation window,
+step-zero evaluation records the initial model as a candidate without saving
+weights; if it remains best, load the
 `model_uri` recorded in `best_checkpoint.json`. Optional `preservation_max_drop`
 entries map metric names to allowed absolute drops from their step-zero values;
 all gates must pass before a candidate can replace the best checkpoint. The
-step-zero evaluation must meet the configured coverage and eligibility checks
-when preservation gates are set; otherwise the callback fails immediately. The
+candidate must attempt `expected_tasks`, score at least `minimum_scored_tasks`,
+and pass `eval/selection_eligible`. With preservation gates, an ineligible
+step-zero evaluation fails immediately. The
 baseline and selection policy are recorded in `best_checkpoint.json` and the
 baseline is restored on resume. Keep metric definitions and the selection policy
 unchanged on resume.
 
-The temporary checkpoint root is derived from the RL artifact name and version.
+For selection over several evaluations, set `ema_window` and
+`evaluation_interval` on `best_checkpoint`. A window of five with interval two
+combines `selection_metric` at the five scheduled optimizer steps ending at the
+current step. The newest observation has weight one; each older observation's
+weight is multiplied by `1 - 2 / (5 + 1)`. Divide the weighted sum by the sum of
+the weights. A missing observation leaves the window ineligible. Preservation
+gates still use the current evaluation. The callback records observation history
+and selection settings; changing the window or interval on resume fails.
+
+For asynchronous mixtures, `trainer.rollout_buffer.consumed_route_quotas` sets
+the number of prompt groups from each route in every consumed batch.
+`source_routes` maps each input's `data_source` to a route. Quotas require
+`batch_policy: full_batch` and must sum to the training batch size in prompt
+groups. Rejected groups are replaced within their route. Generation slots
+rotate between routes so one repeatedly failing route cannot occupy every slot.
+
+The `wall_time_budget` callback stops after a completed update when `seconds`
+have elapsed since this process's first optimizer completion. Startup is
+excluded; subsequent evaluation and checkpoint work counts toward the budget.
+Set `groups_per_step` to the prompt-group batch size. The callback writes
+`training-budget.json` under the export root. Its `drain_margin` records the
+planned allowance in seconds for finalization; it does not enforce a deadline.
+Normal trainer finalization drains work after the stop. A fresh
+process starts a fresh clock, including when it restores a checkpoint.
+
+Native checkpoints default to lifecycle-managed TTL storage derived from the RL artifact name and version.
+Set `SkyRLRetentionPolicy.native_checkpoint_storage` to
+`SkyRLCheckpointStorage.PERMANENT` to write native checkpoints under
+`<artifact_output>/checkpoints`, as the SFT checkpointer does. Attempts, traces and
+Ray logs keep their temporary storage lifetime. The launch document and terminal
+run record use the same checkpoint root, including for native recovery and draft
+checkpoints.
 After runtime changes, use a fresh RL artifact version. Reusing the old
 version with `resume_mode=latest` can load private Torch or distributed state serialized by the old
 runtime. Reuse a version across runtime changes only after establishing checkpoint compatibility or
@@ -310,6 +349,25 @@ Training limits use the absolute trainer step. To apply two more updates from
 A checkpoint already at or beyond the target completes without another update.
 Set `reset_global_step_on_resume=true` to count a new stage from zero instead;
 this leaves the restored optimizer and scheduler state intact.
+
+### Frozen Micro210 evaluation
+
+`python -m experiments.evaluation.micro210` builds the canonical Micro210
+evaluation graph. Supply `--model-uri`, the SHA256 of its
+`.marinskyrl-model-manifest.json` through `--model-manifest-sha256`, a tokenizer
+repository and full commit through `--tokenizer-uri` and `--tokenizer-revision`,
+and the run identity through `--name` and `--version`. The command prints the
+graph by default; `--run` submits it through Iris.
+
+The protocol lives in durable object storage. The code pins its URI, revision,
+SHA256 and byte size, and verifies those bytes before reading the policy.
+The model binding cannot set sampling, task subsets, sandbox resources, harness
+deadlines or the judge. The graph checks the prepared task bytes and model
+manifest before GPU allocation, then writes `canonical-evaluation.json` with the
+protocol hash beside the run outputs. Sandbox resources come from each task.
+The bound tokenizer must map the frozen stop IDs to `<|end_of_text|>` and
+`<|eot_id|>`; an incompatible tokenizer fails before allocation. Retained
+trajectories use the supplied run identity.
 
 ## Pre-launch review
 

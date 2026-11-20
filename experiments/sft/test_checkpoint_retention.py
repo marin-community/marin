@@ -4,20 +4,56 @@
 import datetime
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
+import draccus
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from fray.types import ResourceConfig
+from fray.types import CpuConfig, GpuConfig, ResourceConfig, TpuConfig
 from levanter.checkpoint import discover_latest_checkpoint, load_checkpoint_or_initialize
 from levanter.data.text.datasets import LmDataConfig
+from levanter.main.train_lm import TrainLmConfig
 from levanter.optim.config import AdamConfig
 from levanter.testing.helpers import use_test_mesh
+from levanter.trainer import TrainerConfig
 from marin.execution.lazy import StepContext
 from marin.training.levanter import apply_output_path
+from marin.training.training import TrainLmOnPodConfig
 from rigging.filesystem.storage_path import StoragePath
+from rigging.timing import Duration
 
+from experiments.sft import launcher
 from experiments.sft.launcher import HFModel, SFTSpec
+
+
+@pytest.mark.parametrize("override", [None, 345600])
+@pytest.mark.parametrize(
+    "device,platform", [(CpuConfig(), "cpu"), (GpuConfig("H100"), "cuda,cpu"), (TpuConfig("v4-8"), None)]
+)
+def test_native_sft_dispatch_preserves_accelerator_platform_and_timeout(monkeypatch, override, device, platform):
+    monkeypatch.setenv("MARIN_TEMP_PREFIX", "s3://marin-us-east-08a/tmp")
+    monkeypatch.setenv("JAX_PLATFORMS", "cpu")
+    submitted = []
+
+    def submit(request):
+        submitted.append(request)
+        return SimpleNamespace(wait=lambda *, raise_on_failure: None)
+
+    monkeypatch.setattr(launcher, "current_client", lambda: SimpleNamespace(submit=submit))
+    kwargs = {} if override is None else {"task_timeout_seconds": override}
+    model = HFModel("fixture/model@" + "a" * 40, **kwargs)
+    pod = TrainLmOnPodConfig(
+        train_config=TrainLmConfig(trainer=TrainerConfig(id="dispatch-test")),
+        resources=ResourceConfig(device=device),
+        env_vars={"XLA_FLAGS": "--xla_gpu_shard_autotuning=false"},
+    )
+    model.run(pod)
+    request = submitted[0]
+    assert request.timeout == Duration.from_seconds(259200 if override is None else override)
+    assert request.resources == pod.resources
+    assert request.environment.env_vars["MARIN_TEMP_PREFIX"] == "s3://marin-us-east-08a/tmp"
+    assert request.environment.env_vars.get("JAX_PLATFORMS") == platform
 
 
 @pytest.fixture
@@ -94,6 +130,8 @@ def test_sft_default_rolls_temporary_checkpoints_resumes_and_keeps_final(sft_tra
 
     # A fresh launch must restore the complete payload from scratch when no permanent save exists.
     restarted_trainer = sft_trainer()
+    # Production recipes cross a JSON boundary before the launcher resolves resume roots.
+    restarted_trainer = draccus.decode(TrainerConfig, json.loads(json.dumps(draccus.encode(restarted_trainer))))
     paths = restarted_trainer.checkpoint_search_paths("test-run")
     with use_test_mesh():
         restored = load_checkpoint_or_initialize(lambda: _state(0), paths)()

@@ -26,6 +26,7 @@ from megatron.bridge.utils.common_utils import extract_expert_number_from_param
 from megatron.core.pipeline_parallel.utils import is_pp_first_stage, is_pp_last_stage
 from megatron.core.utils import get_pg_rank
 
+from skyrl_train.models.grug_context_parallel import grug_cp_communication
 from skyrl_train.models.grug_megatron import GrugGPTModel, grug_block_spec
 from skyrl_train.models.grug_moe import (
     GRUG_DEFAULT_GLOBAL_EVERY,
@@ -226,10 +227,7 @@ class GrugMoeBridge(MegatronModelBridge):
         provider.grug_sconv_kernel = config.sconv_kernel
         provider.grug_hero = config.uses_hero_architecture
         provider.moe_latent_size = config.latent_dim
-        if provider.grug_hero:
-            # TE's ring CP cannot apply sliding windows. A2A preserves packed
-            # document boundaries; global layers can retain the ring implementation.
-            provider.cp_comm_type = ["p2p" if is_long else "a2a" for is_long in long_flags]
+        provider.cp_comm_type = grug_cp_communication(long_flags, hero=provider.grug_hero)
         provider.grug_qk_mult = config.qk_mult
         provider.grug_qk_mult_long_scale = config.qk_mult_long_scale
         provider.grug_log_scaling_n_floor = config.log_scaling_n_floor

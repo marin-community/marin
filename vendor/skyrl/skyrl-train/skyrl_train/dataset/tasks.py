@@ -218,10 +218,15 @@ def _canonical_task_prompt(row: dict, _index: int, *, environment_configs: Mappi
         and grader.environment is not None
         and not grades_with_judge(grader)
     ):
-        machine = config["image_verifier"] if grader.environment.docker_image is not None else config["package_verifier"]
+        machine = (
+            config["image_verifier"] if grader.environment.docker_image is not None else config["package_verifier"]
+        )
         verifier = MachineRuntimeSpec.model_validate(machine)
     lowered = rollout_spec(task, session, task_machine=task_machine, verifier_machine=verifier)
-    return _stored_prompt(lowered)
+    prepared = _stored_prompt(lowered)
+    if "teacher_route" in row:
+        prepared["teacher_route"] = row["teacher_route"]
+    return prepared
 
 
 def write_tasks(path: Path, records: Iterable[TaskRolloutSpec]) -> None:
@@ -266,7 +271,10 @@ class SourceTaskDataset(TaskDataset):
     ):
         self.environment_configs = environment_configs
         super().__init__(
-            list(datasets), tokenizer, max_prompt_length, num_workers=num_workers,
+            list(datasets),
+            tokenizer,
+            max_prompt_length,
+            num_workers=num_workers,
             chat_template_kwargs=chat_template_kwargs,
         )
 

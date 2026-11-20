@@ -1,0 +1,55 @@
+# Long-loop round 5 (Exp5). Exp4's configuration with exactly one recipe change
+# (special_token_lr_multiplier: 1.0) and the Exp5 identity fields.
+schema: 1
+name: long-loop-exp5/round5
+version: "2026.11.19.76"
+slug: mochi-exp5
+cluster: cw-rno2a
+storage:
+  output_prefix: s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp5
+  temporary_prefix: s3://marin-us-east-08a/tmp
+archive:
+  hf_upload_repo_prefix: open-athena/Snowball-LongLoop-Round5
+  evaldash_run_prefix: long-loop-round5
+data_release: v7-option-g
+pools: exp4-regional
+evaluation: frozen-micro210
+initializer: exp3-staged
+sft:
+  updates: 360
+  batch_size: 256
+  min_lr_ratio: 0.1
+  learning_rate: 5.0e-05
+  adam_learning_rate: 1.153846153846154e-05
+  # Special-token updates use the base learning rate; the runner
+  # records 1.0 in the resolved plan and applies it to the spec.
+  special_token_lr_multiplier: 1.0
+  mesh:
+    axes:
+      data: 1
+      expert: 8
+      model: 1
+      replica: 1
+    dcn_axes:
+      context: 32
+      replica_dcn: 1
+    batch_axis_name: batch
+    shared_mapping: {}
+    compute_mapping:
+      batch:
+        - replica_dcn
+        - data
+        - expert
+      position: context
+    param_mapping:
+      embed: data
+  resources:
+    cpu: 64
+    ram: 1500GB
+    disk: 512GB
+    device:
+      variant: H100
+      kind: gpu
+      count: 8
+    preemptible: false
+    replicas: 32

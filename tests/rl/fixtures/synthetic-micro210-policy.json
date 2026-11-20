@@ -4,26 +4,100 @@
     "seed": 20261030,
     "data_relative_path": "rollouts.parquet",
     "capability_origin": "https://iris.test",
-    "gpu_variant": "H100", "judge_gpu_count": 1,
-    "judge": {"name": "fixture-judge", "location": "test/judge", "resource_hint": {"cpu": 1, "memory": "1g", "disk": "1g"}},
-    "ray_timeouts": {"cluster_join_timeout": 60},
+    "gpu_variant": "H100",
+    "judge_gpu_count": 1,
+    "judge": {
+      "name": "fixture-judge",
+      "location": "test/judge",
+      "resource_hint": {
+        "cpu": 1,
+        "memory": "1g",
+        "disk": "1g"
+      }
+    },
+    "ray_timeouts": {
+      "cluster_join_timeout": 60
+    },
     "execution": {
-      "cluster": "test", "cluster_config": "test.yaml", "target_cluster": null,
-      "parent_cluster_config": null, "cpu": 1, "memory": "1GB", "disk": "1GB",
-      "priority": "batch", "max_retries": 0, "job_timeout_seconds": 3600, "required_env_vars": []
+      "cluster": "test",
+      "cluster_config": "test.yaml",
+      "target_cluster": null,
+      "parent_cluster_config": null,
+      "cpu": 1,
+      "memory": "1GB",
+      "disk": "1GB",
+      "priority": "batch",
+      "max_retries": 0,
+      "job_timeout_seconds": 3600,
+      "required_env_vars": []
     },
     "role_plan": {
-      "colocate_all": true, "policy_num_nodes": 1, "policy_num_gpus_per_node": 1,
-      "num_inference_engines": 1, "inference_engine_tensor_parallel_size": 1,
-      "inference_engine_pipeline_parallel_size": 1, "inference_engine_data_parallel_size": 1,
-      "inference_engine_expert_parallel_size": 1, "train_batch_size": 1,
-      "policy_mini_batch_size": 1, "micro_train_batch_size_per_gpu": 1, "n_samples_per_prompt": 1
+      "colocate_all": true,
+      "policy_num_nodes": 1,
+      "policy_num_gpus_per_node": 1,
+      "num_inference_engines": 1,
+      "inference_engine_tensor_parallel_size": 1,
+      "inference_engine_pipeline_parallel_size": 1,
+      "inference_engine_data_parallel_size": 1,
+      "inference_engine_expert_parallel_size": 1,
+      "train_batch_size": 1,
+      "policy_mini_batch_size": 1,
+      "micro_train_batch_size_per_gpu": 1,
+      "n_samples_per_prompt": 1
     },
     "config": {
-      "trainer": {"strategy": "megatron", "algorithm": {"use_kl_loss": false}},
-      "generator": {"backend": "vllm", "run_engines_locally": true, "trajectory_retention": {}, "sampling_params": {"stop_token_ids": [128001, 128009]}, "eval_sampling_params": {"stop_token_ids": [128001, 128009], "temperature": 0.7, "top_p": 0.95}},
-      "terminal_bench": {"harbor": {}}, "extra_env": {}, "context_budget": {"request_window_tokens": 1024, "max_new_tokens_per_turn": 128, "max_turns": 2},
-      "environment": {"task_sessions": {"remote_judge": {"base_url": "runtime://fixture-judge"}}}
+      "trainer": {
+        "strategy": "megatron",
+        "algorithm": {
+          "use_kl_loss": false
+        }
+      },
+      "generator": {
+        "backend": "vllm",
+        "run_engines_locally": true,
+        "trajectory_retention": {},
+        "sampling_params": {
+          "stop_token_ids": [
+            128001,
+            128009
+          ]
+        },
+        "eval_sampling_params": {
+          "stop_token_ids": [
+            128001,
+            128009
+          ],
+          "temperature": 0.7,
+          "top_p": 0.95
+        }
+      },
+      "terminal_bench": {
+        "harbor": {
+          "daytona_provisioning": "snapshot",
+          "eval_daytona_provisioning": "declarative"
+        },
+        "installed_agent": {
+          "agent": {
+            "name": "pi",
+            "kwargs": {
+              "version": "0.87.0"
+            }
+          }
+        }
+      },
+      "extra_env": {},
+      "context_budget": {
+        "request_window_tokens": 1024,
+        "max_new_tokens_per_turn": 128,
+        "max_turns": 2
+      },
+      "environment": {
+        "task_sessions": {
+          "remote_judge": {
+            "base_url": "runtime://fixture-judge"
+          }
+        }
+      }
     }
   }
 }

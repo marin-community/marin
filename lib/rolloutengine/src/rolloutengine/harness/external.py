@@ -4,6 +4,7 @@
 """Run an agent that owns its prompts and tool loop, and that sends each model request through the model session."""
 
 import asyncio
+import json
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -24,15 +25,44 @@ AgentRun = Callable[[HarnessContext, AgentCompletion], Coroutine[Any, Any, None]
 """An agent: it gets the attempt's context and a completion function, and sends one prompt at a time."""
 
 
+def messages_equal(left: tuple[dict[str, Any], ...], right: tuple[dict[str, Any], ...]) -> bool:
+    """Compare agent history while ignoring lossless chat/tool-JSON reserialization."""
+    return len(left) == len(right) and all(
+        _semantic_message(a) == _semantic_message(b) for a, b in zip(left, right, strict=True)
+    )
+
+
+def _semantic_message(message: dict[str, Any]) -> dict[str, Any]:
+    result = {
+        key: value
+        for key, value in message.items()
+        if value is not None and not (key in {"reasoning", "reasoning_content", "content"} and value == "")
+    }
+    if not result.get("tool_calls"):
+        return result
+    calls = []
+    for call in result["tool_calls"]:
+        function = dict(call["function"])
+        arguments = function["arguments"]
+        if isinstance(arguments, str):
+            try:
+                function["arguments"] = json.loads(arguments)
+            except json.JSONDecodeError:
+                # Invalid JSON is preserved literally; it is not a lossless reserialization.
+                pass
+        calls.append({**call, "function": function})
+    return {**result, "tool_calls": calls}
+
+
 @dataclass(frozen=True)
 class AgentHarness:
     """A harness for an agent that owns its prompts and tool loop.
 
     Each completion call sends one prompt and returns the exact ``ModelTurn``, also from tasks that the agent
-    does not await, such as HTTP handlers. A prompt that extends the last prompt with the model's message,
-    under the same options, is a reply; any other prompt starts a new conversation. The last prompt again gets
-    the same turn. One model request can be open at a time. When the attempt ends, calls wait until the
-    cleanup, after grading; the cleanup then cancels the agent. ``check`` rejects tools that the agent does
+    does not await, such as HTTP handlers. A prompt that semantically extends the last prompt with the model's
+    message is a reply with its current options; a history rewrite starts a new conversation. An identical
+    repeated prompt gets the same turn. One model request can be open at a time. When the attempt ends, calls
+    wait until cleanup, after grading; the cleanup then cancels the agent. ``check`` rejects tools that the agent does
     not get, such as an answer tool or a tool provider. The task rollout reference gives the rules for
     cancelled calls and for the shutdown of the agent.
     """
@@ -93,16 +123,19 @@ class _Completions:
         await asyncio.sleep(0)
         if not self.ended.done():
             last = self.last
-            if last is not None and prompt == last.prompt:
+            if (
+                last is not None
+                and prompt.options == last.prompt.options
+                and prompt.token_ids == last.prompt.token_ids
+                and messages_equal(prompt.messages, last.prompt.messages)
+            ):
                 return last.turn
             history = () if last is None else (*last.prompt.messages, last.turn.message)
             try:
-                if (
-                    last is not None
-                    and prompt.options == last.prompt.options
-                    and prompt.messages[: len(history)] == history
-                ):
-                    turn = await self.session.reply(prompt.messages[len(history) :], token_ids=prompt.token_ids)
+                if last is not None and messages_equal(prompt.messages[: len(history)], history):
+                    turn = await self.session.reply(
+                        prompt.messages[len(history) :], token_ids=prompt.token_ids, options=prompt.options
+                    )
                 else:
                     turn = await self.session.start(prompt)
             except RolloutEnded:

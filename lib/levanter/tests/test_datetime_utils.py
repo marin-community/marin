@@ -16,6 +16,7 @@ def test_encode_timedelta():
         assert td.total_seconds() == expected_seconds
         assert parse_timedelta(encode_timedelta(td)) == td, f"Failed to roundtrip {td_str}: {encode_timedelta(td)}"
 
+    ensure_roundtrip("0s", 0)
     ensure_roundtrip("1d", 86400)
     ensure_roundtrip("+32 m 1 s", 1921)
     ensure_roundtrip("+ 32 m 1 s", 1921)

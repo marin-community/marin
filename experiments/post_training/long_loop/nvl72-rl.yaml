@@ -1,0 +1,254 @@
+# Mochi optimizer and runtime settings with Ben's RL task workflow.
+# Role geometry, profile token limits and artifact paths are bound by nvl72.py.
+entrypoint: taskcompendium
+context_budget:
+  request_window_tokens: 65536
+  max_new_tokens_per_turn: 16384
+  max_turns: 128
+environment:
+  task_sessions:
+    local: {}
+    daytona:
+      api_key_env: DAYTONA_RL_API_KEY
+      ttl_minutes: 60
+      eval_api_key_env: DAYTONA_EVAL_API_KEY
+    task_spec:
+      harness_by_dataset:
+        long-loop-smartie-swesmith: harbor_trial
+      session:
+        max_turns: 128
+        attempt_timeout: 14400
+        total_turn_timeout: 10800
+        model_turn_timeout: 10800
+    remote_judge:
+      base_url: https://api.together.xyz/v1
+      api_key_env: TOGETHER_API_KEY
+trainer:
+  strategy: megatron
+  flash_attn: true
+  use_sample_packing: true
+  gradient_checkpointing: true
+  offload_optimizer_during_rollouts: false
+  update_epochs_per_batch: 1
+  eval_batch_size: 120
+  eval_interval: 2
+  resume_mode: latest
+  logger: wandb
+  project_name: mochi-rl
+  tracker_commit_each_step: true
+  training_metrics: true
+  rollout_spans: true
+  policy_train_spans: true
+  algorithm:
+    advantage_estimator: rloo_n
+    policy_loss_type: regular
+    loss_reduction: token_mean
+    use_kl_loss: false
+    use_kl_in_reward: false
+    kl_estimator_type: k3_unbiased_gradient
+    off_policy_correction: tis
+    eps_clip_low: 0.2
+    eps_clip_high: 0.2
+    group_advantage_min_size: 2
+    advantage_batch_normalize: false
+    rloo_n_filter_zero_reward_groups: true
+    use_entropy_loss: false
+    group_admission:
+      stall_timeout: 18000
+  policy:
+    optimizer_config:
+      optimizer: MuonH
+      lr: 1.0e-05
+      weight_decay: 0.0
+      max_grad_norm: 0.0
+      adam_betas:
+      - 0.9
+      - 0.95
+      optimizer_kwargs:
+        adam_lr: 2.307692307692308e-06
+        momentum: 0.95
+        nesterov: true
+        backend_steps: 5
+        epsilon: 1.0e-08
+        muon_epsilon: 1.0e-08
+        offload_momentum: true
+        expert_normalization: all_experts
+      scheduler: constant_with_warmup
+      num_warmup_steps: 0
+    megatron_config:
+      optimizer_config_kwargs: {}
+      optimizer_checkpoint_sharding_type: dp_reshardable
+      moe_router_replay: true
+  rollout_buffer:
+    max_staleness_steps: 3
+    batch_policy: full_batch
+    max_in_flight: 32
+    object_store_root: null
+    consumed_route_quotas:
+      agentic: 16
+      nonagentic: 16
+    source_routes:
+      long-loop-smartie-swesmith: agentic
+      PRIME-RL/Eurus-2-RL-Data: nonagentic
+      nvidia/Nemotron-RL-Ultra-Training-Blends: nonagentic
+      nvidia/OpenScience: nonagentic
+      ? https://files.pythonhosted.org/packages/42/21/bb9f6d2f76424f8b516fe83f8026e52e466b0202341bb4ee7a9861e06277/reasoning_gym-0.1.25-py3-none-any.whl
+      : nonagentic
+      open-athena/Snowball-Smartie-RL-2026.10.15.32-Data: nonagentic
+      open-thoughts/TaskTrove: nonagentic
+  eval_before_train: false
+  ckpt_interval: -1
+  eval_num_prompts: null
+  dump_eval_results: true
+  step_wise_training: false
+  dump_data_batch: true
+  callbacks:
+  - type: checkpoint
+    save_steps: -1
+    save_interval_seconds: 7200
+    save_on_train_end: true
+    save_after_fraction: 0.0
+  - type: evaluation
+    eval_steps: 2
+    eval_before_train: false
+    eval_on_train_end: true
+  - type: best_checkpoint
+    initial_model_uri: model-input
+    expected_tasks: 120
+    minimum_scored_tasks: 120
+    ema_window: 5
+    evaluation_interval: 2
+  - type: wall_time_budget
+    seconds: 36000
+    drain_margin: 1800
+    groups_per_step: 32
+  restore_dataloader_state: true
+  reset_global_step_on_resume: false
+generator:
+  backend: vllm
+  model_dtype: bfloat16
+  vllm_attention_backend: FLASH_ATTN
+  run_engines_locally: true
+  weight_sync_backend: nccl
+  weight_sync_pause:
+    mode: keep
+    clear_cache: true
+  weight_sync_transport: expert_block
+  expert_block_sync:
+    timeout_seconds: 600
+    verify: false
+  gpu_memory_utilization: 0.75
+  max_num_seqs: 16
+  max_num_batched_tokens: 8192
+  enable_prefix_caching: true
+  enable_chunked_prefill: true
+  enforce_eager: false
+  enable_http_endpoint: false
+  chat_template: null
+  engine_init_kwargs:
+    moe_backend: triton
+    enable_auto_tool_choice: true
+    tool_call_parser: hermes
+    model_loader_extra_config:
+      distributed: false
+      concurrency: 4
+      memory_limit: 8589934592
+    compilation_config:
+      mode: 3
+      cudagraph_mode: PIECEWISE
+      splitting_ops:
+      - vllm::unified_attention_with_output
+      - vllm::unified_kv_cache_update
+      - vllm::grug_moe_short_conv
+    enable_return_routed_experts: true
+  sampling_params:
+    temperature: 0.7
+    top_p: 1.0
+    logprobs: 0
+    stop_token_ids:
+    - 128001
+    - 128009
+    skip_special_tokens: false
+  trajectory_reward_shaping:
+    enabled: true
+    overlong:
+      penalty_scale: 0.0
+    reasoning_span:
+      penalty: 0.1
+      target: marker
+  chat_template_kwargs:
+    enable_thinking: true
+  eval_sampling_params:
+    stop_token_ids:
+    - 128001
+    - 128009
+    skip_special_tokens: false
+    temperature: 0.7
+    top_p: 1.0
+  trajectory_retention:
+    enabled: true
+    sample_fraction: 0.1
+    sample_count_per_step: 0
+    max_bytes_per_step: 67108864
+    max_bytes_per_run: 536870912
+    required: true
+    phases:
+    - train
+    - eval
+    always_retain_failures: false
+    always_retain_non_terminating: false
+    always_retain_loops: false
+  error_handling:
+    enable_error_classification: true
+    default_error_treatment: mask
+    preserve_logprobs_on_timeout: true
+data:
+  kind: parquet
+  shuffle: true
+trajectory_runner:
+  rollout_workers:
+    num_workers: 32
+    cpus_per_worker: 2
+    start_interval_seconds: 0
+extra_env:
+  DAYTONA_TARGET: us
+  OT_AGENT_RAY_OBJECT_STORE_CAP_GIB: '32'
+  PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+  VERIFYIT_JUDGE_MODEL: openai/gpt-oss-120b
+terminal_bench:
+  harbor:
+    environment_type: daytona
+    daytona_image_build: snapshot
+    eval_daytona_image_build: declarative
+    daytona_api_key_env: DAYTONA_RL_API_KEY
+    eval_daytona_api_key_env: DAYTONA_EVAL_API_KEY
+    override_timeout_sec: 10800
+    trial_attempt_timeout_sec: 14400
+    n_concurrent_trials: 256
+    max_retries: 1
+    enable_reward_shaping: false
+    eval_timeout_override_sec: 10800
+    verifier_override_timeout_sec: 900
+    override_memory_mb: 4096
+  installed_agent:
+    agent:
+      name: pi
+      override_setup_timeout_sec: 360
+      kwargs:
+        version: 0.87.0
+        max_turns: 128
+        temperature: 0.7
+        mcp_adapter_version: 7.0.0
+        thinking: high
+        thinking_format: chat-template
+        http_idle_timeout: 10800
+        model_info:
+          max_input_tokens: 65536
+          max_output_tokens: 16384
+        compaction_reserve_tokens: 16384
+    setup_timeout: 360
+    run_timeout: 10800
+    cleanup_timeout: 120
+    service_startup_timeout: 60
+    service_shutdown_timeout: 60
+    trial_reward_key: reward

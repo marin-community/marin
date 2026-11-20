@@ -333,6 +333,7 @@ def test_frozen_adaptor_export_hook_carries_field_dtype_overrides(tmp_path):
     hooks = []
     trainer = types.SimpleNamespace(
         run_id="run",
+        journal=None,
         config=types.SimpleNamespace(checkpointer=None, field_dtype_overrides={"router_bias": jnp.dtype("float32")}),
         add_hook=lambda hook, *, every: hooks.append((hook, every)),
     )

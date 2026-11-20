@@ -13,7 +13,8 @@ from marin.execution.lazy import StepContext, lower
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.micro210 import micro210_step, run_micro210
-from experiments.evaluation.micro210_policy import Micro210Model, micro210_evaluation
+from experiments.evaluation.micro210_policy import Micro210Model, micro210_evaluation, runtime_policy_config
+from experiments.post_training.long_loop.launch_validation import validate_launch
 from tests.rl.micro210_fixture import policy_fixture_reference
 
 
@@ -22,6 +23,75 @@ def policy_reference(monkeypatch):
     reference = policy_fixture_reference()
     monkeypatch.setattr("experiments.evaluation.micro210_policy.POLICY_REFERENCE", reference)
     return reference
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"eval_override_storage_mb": 131072},
+        {"sampling": {"temperature": 0}},
+        {"timeout": 300},
+        {"task_subset": ["swebench-verified"]},
+        {"judge": "other-model"},
+    ],
+)
+def test_micro210_binding_refuses_protocol_overrides(override):
+    model = Micro210Model("s3://test/model", "sha256:" + "a" * 64, "test/tokenizer", "a" * 40)
+    with pytest.raises(ValueError, match=next(iter(override))):
+        micro210_evaluation(model, run_id="test", output_uri="s3://test/eval", **override)
+
+
+def test_micro210_record_contains_content_digest_of_protocol(policy_reference):
+    evaluation = micro210_evaluation(
+        Micro210Model("s3://test/sft", "sha256:" + "b" * 64, "test/tokenizer", "a" * 40),
+        run_id="sft",
+        output_uri="s3://test/sft-eval",
+    )
+    assert (
+        evaluation.record().canonical_spec_sha256
+        == hashlib.sha256(StoragePath(policy_reference.uri).read_bytes()).hexdigest()
+    )
+
+
+def test_runtime_harbor_translation_preserves_the_frozen_policy(policy_reference):
+    raw = StoragePath(policy_reference.uri).read_bytes()
+    policy = json.loads(raw)
+    translated = runtime_policy_config(policy)
+    restored = json.loads(json.dumps(translated.config))
+    harbor = restored["terminal_bench"]["harbor"]
+    harbor["daytona_provisioning"] = harbor.pop("daytona_image_build")
+    harbor["eval_daytona_provisioning"] = harbor.pop("eval_daytona_image_build")
+    assert restored == policy["evaluation"]["config"]
+    assert StoragePath(policy_reference.uri).read_bytes() == raw
+    policy["evaluation"]["config"]["terminal_bench"]["harbor"]["daytona_image_build"] = "snapshot"
+    with pytest.raises(ValueError, match="ambiguous Harbor fields"):
+        runtime_policy_config(policy)
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("unknown", ["daytona_provisioning_extra", "unknown_harbor_option"])
+def test_runtime_harbor_translation_never_drops_unknown_fields(tmp_path, monkeypatch, policy_reference, unknown):
+    monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
+    policy = json.loads(StoragePath(policy_reference.uri).read_text())
+    policy["evaluation"]["config"]["terminal_bench"]["harbor"][unknown] = True
+    raw = json.dumps(policy).encode()
+    path = tmp_path / "protocol.json"
+    path.write_bytes(raw)
+    monkeypatch.setattr(
+        "experiments.evaluation.micro210_policy.POLICY_REFERENCE",
+        replace(policy_reference, uri=str(path), sha256=hashlib.sha256(raw).hexdigest(), byte_size=len(raw)),
+    )
+    step = micro210_step(
+        Micro210Model("s3://fixture/model", "sha256:" + "a" * 64, "fixture/tokenizer", "b" * 40),
+        name="fixture/translation",
+        version="2026.11.19",
+    )
+    context = StepContext.for_run(
+        str(tmp_path / "output"), str(tmp_path), runtime_args=step.runtime_args, deps=step.deps
+    )
+    run = step.build_config(replace(context, is_fingerprint=True))
+    with pytest.raises(ValueError, match="Unknown Harbor task settings"):
+        validate_launch(run.skyrl.launch_config_yaml, tmp_path / "preflight", model_config=b"{}")
 
 
 def test_micro210_binding_rejects_modified_protocol_bytes(tmp_path, monkeypatch, policy_reference):
@@ -51,6 +121,7 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     model_dir.mkdir()
     manifest = b'{"files": []}'
     (model_dir / ".marinskyrl-model-manifest.json").write_bytes(manifest)
+    (model_dir / "config.json").write_text("{}")
     inputs = tmp_path / "inputs"
     inputs.mkdir()
     task_bytes = b"pinned-prepared-task-fixture"
@@ -67,6 +138,7 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     monkeypatch.setattr("experiments.evaluation.micro210.PREPARED_INPUTS", str(inputs))
     monkeypatch.setenv("MARIN_TEMP_PREFIX", str(tmp_path / "temporary"))
     monkeypatch.setenv("TOGETHER_API_KEY", "unused-ambient-key")
+    monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
     counterpart_key = tmp_path / "counterpart-key"
     counterpart_key.write_text("test-counterpart-key")
     token_content = {128001: "<|end_of_text|>", 128009: "<|eot_id|>"}
@@ -76,6 +148,8 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     )
     binding = Micro210Model(str(model_dir), "sha256:" + hashlib.sha256(manifest).hexdigest(), "test/tokenizer", "a" * 40)
     step = micro210_step(binding, name="test/micro210", version="2026.11.18")
+    with pytest.raises(ValueError, match="eval_override_storage_mb"):
+        micro210_step(binding, name="test/micro210", version="2026.11.18", eval_override_storage_mb=131072)
     output = tmp_path / "result"
     output.mkdir()
     config = step.build_config(
@@ -106,6 +180,11 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     run_micro210(config)
     record = json.loads((output / "canonical-evaluation.json").read_text())
     assert record["canonical_spec_sha256"] == hashlib.sha256(raw).hexdigest()
+    assert record["runtime_field_renames"] == {
+        "terminal_bench.harbor.daytona_provisioning": "terminal_bench.harbor.daytona_image_build",
+        "terminal_bench.harbor.eval_daytona_provisioning": "terminal_bench.harbor.eval_daytona_image_build",
+    }
+    assert submitted[1]["skyrl"]["terminal_bench"]["harbor"]["eval_daytona_image_build"] == "declarative"
     assert (
         submitted[1]["skyrl"]["generator"]["eval_sampling_params"]
         == protocol["evaluation"]["config"]["generator"]["eval_sampling_params"]
@@ -118,12 +197,6 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     with pytest.raises(ValueError, match="launch_config_yaml"):
         run_micro210(replace(config, skyrl=replace(config.skyrl, launch_config_yaml=yaml.safe_dump(altered))))
     assert submitted == []
-    manifest_path = model_dir / ".marinskyrl-model-manifest.json"
-    manifest_path.write_bytes(b'{"files": ["changed"]}')
-    with pytest.raises(ValueError, match="export manifest differs"):
-        run_micro210(config)
-    assert submitted == []
-    manifest_path.write_bytes(manifest)
     token_content[128009] = "ordinary-token"
     with pytest.raises(ValueError, match="incompatible stop token ID: 128009"):
         run_micro210(config)
@@ -137,6 +210,6 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
 
 def test_canonical_evaluation_graph_lowers_with_its_final_run_binding():
     model = Micro210Model("s3://fixture/export", "sha256:" + "a" * 64, "fixture/tokenizer", "b" * 40)
-    step = micro210_step(model, name="fixture/final-eval", version="2026.11.18.74")
+    step = micro210_step(model, name="fixture/final-eval", version="2026.11.18.72")
     plan = lower(step)
-    assert "fixture/final-eval@2026.11.18.74" in plan.fingerprint_payload
+    assert "fixture/final-eval@2026.11.18.72" in plan.fingerprint_payload

@@ -1,0 +1,104 @@
+selected_micro_rows: 210
+policy_index_rows: 840
+legacy_rl_heldout_rows: 910
+covered_pinned_agentic_universes:
+  bixbench-pi: 205
+  ot-tblite-recovery: 100
+  ds-1000-local: 1000
+  bfclparity-pi: 123
+  tau3-pi: 375
+  swebench-verified: 500
+  terminal-bench-2: 89
+current_hf_universes:
+  cruxeval:
+    rows: 800
+    revision: b96af0450242eb4da433032b90998f25588a5d0f
+    historical_pin_verified: true
+  humanevalplus:
+    rows: 164
+    revision: d32357cf319e50e9c8d8dab5ea876c72b0fd321b
+    historical_pin_verified: true
+  gsm8k-0shot:
+    rows: 1319
+    revision: 740312add88f781978c0658806c59bc2815b9866
+    historical_pin_verified: false
+  ifbench:
+    rows: 300
+    revision: ed7c12452594b7028b15807b86d3938150b663ae
+    historical_pin_verified: false
+  truthfulqa:
+    rows: 817
+    revision: 741b8276f2d1982aa3d5b832d3ee81ed3b896490
+    historical_pin_verified: false
+  olympiadbench:
+    rows: 2126
+    revision: c24a1391397fcfe50afaea9210d2c29066494b69
+    historical_pin_verified: false
+  triviaqa:
+    rows: 29257
+    revision: 0f7faf33a3908546c6fd5b73a660e0f8ff173c2f
+    historical_pin_verified: false
+  gpqa-diamond:
+    rows: 198
+    revision: 83022cefff930aea54f654c0b282e74b9eeda5c6
+    historical_pin_verified: false
+  math500:
+    rows: 500
+    revision: 6e4ed1a2a79af7d8630a6b768ec859cb5af4d3be
+    historical_pin_verified: true
+  mmlu-pro:
+    rows: 12032
+    revision: b189ec765aa7ed75c8acfea42df31fdae71f97be
+    historical_pin_verified: false
+  mbppplus:
+    rows: 378
+    revision: b2d74c91837c3f2a20c1299ae98133cbe7cfa077
+    historical_pin_verified: true
+  mrcr:
+    rows: 2400
+    revision: f4c69fae7cf81f7ca26b9fee34b392a50f6b8a1d
+    historical_pin_verified: true
+  NUPA:
+    rows: 2387501
+    revision: 01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7
+    historical_pin_verified: true
+  aime24:
+    rows: 30
+    revision: d5d2f92ce4866c431063bd123ea31a3865530809
+    historical_pin_verified: true
+candidate_manifest:
+  path: /Users/benfeuer/Documents/experiments/active/long-loop-prototype/artifacts/run-spec-20261109/normalized-v4/manifest.json
+  sha256: f6ef37195dc2af85adfa7dbd4d715498b20ecb9759bb9a6a5a8aebd5c2af483f
+limitations:
+- Exact IDs, normalized full prompts/questions and conservative SWE repository matches
+  only; no semantic decontamination
+- NUPA full test split2387501 rows checked by complete-event/line equality; MRCR2400
+  nonce tokens checked exactly; AIME30 archived original questions checked as substrings
+- Question substring filter covers original strings with at least8 words and40 characters;
+  short questions remain covered only by task IDs or full prompt hashes
+- No semantic/paraphrase decontamination
+- Original unpinned HF revision is not reconstructed or fabricated
+- Ancient dataset scripts referenced external mutable files; historical external file
+  contents are not certified by repository history
+- Actual evaluation TaskSpecs and archived source docs are pinned independently of
+  those unknown revisions
+admission_pending: []
+special_universe_scan:
+  path: /Users/benfeuer/Documents/experiments/active/long-loop-prototype/artifacts/run-spec-20261109/special-universe-scan.json
+  sha256: 1874d059dc12fa07577788a83354dd72bf4b3b6d99cdd7861084857074f56646
+overlap_admission:
+  path: /Users/benfeuer/Documents/experiments/active/long-loop-prototype/artifacts/run-spec-20261109/overlap-admission-20261110.json
+  sha256: ac2e5c18c94222404cbc39b58077572e225efdaa125a11eb5a0375d152e83872
+  decision: admit exact-overlap checks using pinned actual evaluation tasks plus conservative
+    historical question union; original seven HF revisions remain unknown
+  rows_excluded: 0
+historical_question_union:
+  path: /Users/benfeuer/Documents/experiments/active/long-loop-prototype/artifacts/run-spec-20261109/inputs/historical-question-union.json
+  sha256: 32fe908b96f1bddc47ea8248024623f957eaa5aa6a41787e1ed9bddd4e629216
+  file_versions: 79
+  unique_questions: 28622
+  scan_path: /Users/benfeuer/Documents/experiments/active/long-loop-prototype/artifacts/run-spec-20261109/historical-union-scan.json
+  scan_sha256: e588fbf98bed7440cde2654daeb778b1cc370e7df2cb129b65de96e0e8a2eaa7
+triviaqa_config: rc.nocontext (vendored override; both no-context validation universes
+  excluded)
+selection_override: CalibForge entirely removed from train and validation

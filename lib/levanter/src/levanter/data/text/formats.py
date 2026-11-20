@@ -6,12 +6,18 @@ from dataclasses import dataclass
 from typing import Any, Literal, NotRequired, TypedDict
 
 import numpy as np
-from draccus import PluginRegistry
+from draccus import PluginRegistry, decode
 
 from levanter.data._preprocessor import BatchProcessor
 from levanter.tokenizers import MarinTokenizer, chat_template_has_generation_block
 
 from ._batch_tokenizer import BatchTokenizer
+
+
+@decode.register(Callable)
+def _decode_loss_weight_transform(_value) -> Callable[[np.ndarray], np.ndarray]:
+    # Draccus resolves the Callable decoder even when the optional field contains null.
+    raise ValueError("Loss-weight transforms must be supplied programmatically")
 
 
 class TokenSeqDict(TypedDict):
@@ -76,6 +82,26 @@ class ChatLmDatasetFormat(LmDatasetFormatBase):
         )
 
 
+@LmDatasetFormatBase.register_subclass("serialized_chat")
+@dataclass(frozen=True)
+class SerializedChatLmDatasetFormat(LmDatasetFormatBase):
+    """Assistant-only view of existing rendered-chat token caches.
+
+    The pinned tokenizer must encode the complete assistant header, including its
+    trailing delimiter, as ``assistant_prefix``. This view masks the headers and
+    all non-assistant messages without retokenizing or rewriting the cache.
+    """
+
+    message_start_id: int
+    assistant_prefix: tuple[int, ...]
+    text_key: str = "text"
+
+    def build_preprocessor(
+        self, tokenizer: MarinTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
+    ) -> BatchProcessor[dict, dict]:
+        return BatchTokenizer(tokenizer, enforce_bos=enforce_bos, enforce_eos=enforce_eos, text_field=self.text_key)
+
+
 @LmDatasetFormatBase.register_subclass("prebuilt")
 @dataclass(frozen=True)
 class PrebuiltLmDatasetFormat(LmDatasetFormatBase):
@@ -84,7 +110,6 @@ class PrebuiltLmDatasetFormat(LmDatasetFormatBase):
     Attributes:
         input_ids_key: Field name containing token ids.
         loss_weights_key: Optional field name containing loss weights.
-        loss_weight_transform: Optional callable to transform loss weights before training.
     """
 
     input_ids_key: str = "input_ids"

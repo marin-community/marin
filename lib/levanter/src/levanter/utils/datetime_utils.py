@@ -40,5 +40,8 @@ def encode_timedelta(td: timedelta) -> str:
     if seconds:
         out += f"{seconds}s"
 
+    if not out:
+        out = "0s"
+
     assert parse_timedelta(out) == td, f"Failed to encode {td} as {out}"
     return out

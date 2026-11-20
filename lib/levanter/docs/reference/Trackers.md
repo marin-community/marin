@@ -90,6 +90,10 @@ TODO: expand this section.
 
 ### Trackers
 
+When `TrainerConfig.native_telemetry_root` is set, the trainer records a local metric history and
+phase journal under its configured `log_dir`, then publishes immutable files and completion receipts
+to that storage root. This journal is independent of the selected tracker provider.
+
 ::: levanter.tracker.Tracker
 
 ::: levanter.tracker.tracker.CompositeTracker

@@ -35,11 +35,13 @@ from jax.experimental.array_serialization.serialization import GlobalAsyncCheckp
 from jaxtyping import PyTree
 
 from rigging import telemetry
+from rigging.training_journal import TrainingJournal, phase
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from levanter._debug_logging import flush_debug_output
 from levanter.tensorstore_serialization import (
+    LocalCommitStatus,
     TensorStoreReadConfig,
     TensorStoreWriteConfig,
     tree_deserialize_leaves_tensorstore,
@@ -48,6 +50,8 @@ from levanter.tensorstore_serialization import (
 from levanter.utils.types import FilterSpec
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_ASYNC_TIMEOUT_SECONDS = 30 * 60
 
 _CHECKPOINT_CURRENT = telemetry.snapshot_attributes("gauge", telemetry.CURRENT_SNAPSHOT)
 _CHECKPOINT_PHASE_DURATION_METRIC = "checkpoint_phase_duration_seconds"
@@ -490,6 +494,8 @@ class Checkpointer:
         debug: CheckpointDebugConfig | None = None,
         write_config: TensorStoreWriteConfig | None = None,
         metadata: Mapping[str, Any] | None = None,
+        async_timeout_seconds: int = DEFAULT_ASYNC_TIMEOUT_SECONDS,
+        training_journal: TrainingJournal | None = None,
     ):
         """
         Class for managing checkpoints. Saves checkpoints according to two policies: time and step.
@@ -515,6 +521,7 @@ class Checkpointer:
                 checkpoints still clean up temporary checkpoints because they supersede them for recovery.
             write_config: how a save divides work across the processes holding the state
             metadata: application metadata committed with every checkpoint this checkpointer saves
+            async_timeout_seconds: deadline for asynchronous checkpoint writes and coordination
         """
         _check_application_metadata(metadata)
         if keep_last_temporary_checkpoints < 0:
@@ -529,10 +536,12 @@ class Checkpointer:
         self._last_save_time = self._dt_now_injection()
         self._last_save_step = 0
         self._last_save_permanent = False
+        self._last_save_path: str | None = None
         self.keep_last_temporary_checkpoints = keep_last_temporary_checkpoints
         self.debug = debug or CheckpointDebugConfig()
         self.write_config = write_config or TensorStoreWriteConfig()
         self.metadata = metadata
+        self.training_journal = training_journal
         self._temporary_checkpoints = []
         self._checkpoint_request_lock = threading.Lock()
         self._requested_retention: CheckpointRetention | None = None
@@ -551,7 +560,7 @@ class Checkpointer:
                 raise ValueError("Step policies must be sorted by 'until' value")
 
         # The default of 5 minutes is too short even for modestly sized models for some reason
-        self._manager = GlobalAsyncCheckpointManager(timeout_secs=60 * 30)
+        self._manager = GlobalAsyncCheckpointManager(timeout_secs=async_timeout_seconds)
 
         if jax.process_index() == 0:
             self._async_checkpoint_remover_queue: queue.Queue[str] = queue.Queue(maxsize=-1)
@@ -748,6 +757,11 @@ class Checkpointer:
             return None
         return current_policy.every
 
+    @property
+    def last_saved_checkpoint_path(self) -> str | None:
+        """Path of the most recent checkpoint this checkpointer saved, under the root it was routed to."""
+        return self._last_save_path
+
     def wait_until_finished(self):
         self._manager.wait_until_finished()
         if jax.process_index() == 0:
@@ -803,9 +817,11 @@ class Checkpointer:
             debug=self.debug,
             write_config=self.write_config,
             metadata=self.metadata,
+            training_journal=self.training_journal,
         )
         self._last_save_step = step
         self._last_save_permanent = not is_temporary
+        self._last_save_path = path
         self._last_save_time = self._dt_now_injection()
 
     def _async_checkpoint_remover(self):
@@ -827,6 +843,7 @@ def save_checkpoint(
     debug: CheckpointDebugConfig | None = None,
     write_config: TensorStoreWriteConfig | None = None,
     metadata: Mapping[str, Any] | None = None,
+    training_journal: TrainingJournal | None = None,
 ):
     """
     Save a checkpoint to a given path using TensorStore with OCDBT.
@@ -872,6 +889,9 @@ def save_checkpoint(
     if progress_logger is not None:
         progress_logger.set_phase("filesystem_ready")
 
+    save_span = phase(training_journal, "checkpoint_save", step=step)
+    save_span.__enter__()
+
     def my_callback():
         if progress_logger is not None:
             progress_logger.set_phase("metadata_write")
@@ -882,9 +902,12 @@ def save_checkpoint(
 
             if commit_callback is not None:
                 commit_callback()
-        except Exception:
+        except BaseException as error:
             status = "failed"
+            save_span.__exit__(type(error), error, error.__traceback__)
             raise
+        else:
+            save_span.__exit__(None, None, None)
         finally:
             if progress_logger is not None:
                 progress_logger.finish(status)
@@ -896,9 +919,15 @@ def save_checkpoint(
             progress_logger.publish_staged_host_bytes(staged_host_bytes)
             progress_logger.set_phase("async_commit_in_flight")
 
-    def on_local_commit(status: str) -> None:
-        if progress_logger is not None and jax.process_index() != 0:
-            progress_logger.finish_local(status)
+    def on_local_commit(status: LocalCommitStatus) -> None:
+        if jax.process_index() != 0:
+            if status == LocalCommitStatus.COMPLETED:
+                save_span.__exit__(None, None, None)
+            else:
+                error = RuntimeError("Local checkpoint commit failed")
+                save_span.__exit__(type(error), error, None)
+            if progress_logger is not None:
+                progress_logger.finish_local(status)
 
     try:
         if progress_logger is not None:
@@ -917,7 +946,8 @@ def save_checkpoint(
             debug_log_flush=flush_debug_output if checkpoint_debug.flush_logs else None,
             write_config=write_config,
         )
-    except Exception:
+    except Exception as error:
+        save_span.__exit__(type(error), error, error.__traceback__)
         if progress_logger is not None:
             if jax.process_index() == 0:
                 progress_logger.finish("failed")
@@ -1276,6 +1306,7 @@ def _get_fs_and_plain_path(path, fs=None):
 @dataclass
 class CheckpointerConfig:
     base_path: str = "checkpoints/"
+    async_timeout_seconds: int = DEFAULT_ASYNC_TIMEOUT_SECONDS
     temporary_base_path: Optional[str] = None
     """Separate base path for temporary (time-policy) checkpoints. When set, temporary checkpoints
     are written here instead of base_path, allowing use of region-local storage with lifecycle TTL."""
@@ -1314,7 +1345,9 @@ class CheckpointerConfig:
             return os.path.expanduser(os.path.join(self.temporary_base_path, run_id))
         return os.path.expanduser(self.temporary_base_path)
 
-    def create(self, run_id, *, metadata: Mapping[str, Any] | None = None) -> Checkpointer:
+    def create(
+        self, run_id, *, metadata: Mapping[str, Any] | None = None, training_journal: TrainingJournal | None = None
+    ) -> Checkpointer:
         """Build the run's checkpointer; ``metadata`` is committed with every checkpoint it saves."""
         keeps = [CheckpointInterval(**k) for k in self.keep or []]
         return Checkpointer(
@@ -1327,6 +1360,8 @@ class CheckpointerConfig:
             debug=self.debug,
             write_config=self.write,
             metadata=metadata,
+            async_timeout_seconds=self.async_timeout_seconds,
+            training_journal=training_journal,
         )
 
     def __post_init__(self):

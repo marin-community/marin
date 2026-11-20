@@ -3,6 +3,7 @@
 import asyncio
 import math
 import os
+import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, nullcontext
@@ -62,6 +63,7 @@ from skyrl_train.rollouts.machines import OwnedMachineFactory, TaskMachineError
 from skyrl_train.rollouts.workers import WorkerShard, detached_config
 from skyrl_train.rollouts.finalization import finalize_trajectory_batch, propagate_data_sources
 from skyrl_train.rollout_observability import rollout_phase, rollout_wait
+from skyrl_train.telemetry import record_event
 from skyrl_train.trajectory_runners.trajectory_retention import RetentionSink
 from skyrl_train.trajectory_runners.model_clients import (
     ContextLengthExceededError,
@@ -292,7 +294,10 @@ def _failed_rollout(
     elif isinstance(error, ModelServerError):
         if error.category == "context_overflow":
             exception_type = "ContextLengthExceededError"
-        diagnostics.update(error_category=error.category, request_id=error.request_id, status_code=error.status_code)
+        diagnostics.update(
+            error_category=error.category, request_id=error.request_id, status_code=error.status_code,
+            message=error.message,
+        )
     if interruption.grade.failure == GradingFailure.TIMEOUT:
         # The engine may attempt verification after a model failure. The verifier
         # timeout determines whether pass-through can retain a scored rollout.
@@ -363,11 +368,13 @@ class TaskRolloutWorker:
         shutdown_timeout: float,
         installed_agents: InstalledAgentWorker | None = None,
         judge_connection: JudgeConnection | None = None,
+        eval_factories: Mapping[str, MachineFactory] | None = None,
     ):
         self.trajectory_runner_cfg = trajectory_runner_cfg
         self.model_client = model_client
         self.judge_connection = judge_connection
         self.factories = {name: OwnedMachineFactory(factory, name) for name, factory in factories.items()}
+        self.eval_factories = {name: OwnedMachineFactory(factory, name) for name, factory in (eval_factories or {}).items()}
         self.active_requests: set[asyncio.Task] = set()
         self.closing = False
         self.shutdown_timeout = shutdown_timeout
@@ -495,7 +502,8 @@ class TaskRolloutWorker:
             )
             lowered_tasks[index] = lowered.model_copy(update={"judge_connection": self.judge_connection})
             selected_harnesses.append(harnesses)
-        engines = [RolloutEngine(self.factories, harnesses) for harnesses in selected_harnesses]
+        factories = self.factories if phase == "train" else self.factories | self.eval_factories
+        engines = [RolloutEngine(factories, harnesses) for harnesses in selected_harnesses]
         for engine, lowered in zip(engines, lowered_tasks, strict=True):
             engine.check(lowered)
         tasks = [item.task for item in lowered_tasks]
@@ -612,7 +620,7 @@ class TaskRolloutWorker:
         """Cancel rollouts and release their machines before actor termination."""
         self.closing = True
         deadline = asyncio.get_running_loop().time() + self.shutdown_timeout
-        for factory in self.factories.values():
+        for factory in (*self.factories.values(), *self.eval_factories.values()):
             factory.stop_creating()
         pending = tuple(self.active_requests)
         for task in pending:
@@ -625,7 +633,7 @@ class TaskRolloutWorker:
                     logger.error("Task worker shutdown deadline expired with {} active rollouts", len(remaining))
                     failures.append(TimeoutError("Task rollouts did not stop before the shutdown deadline"))
             results = await asyncio.gather(
-                *(factory.close(deadline) for factory in self.factories.values()), return_exceptions=True
+                *(factory.close(deadline) for factory in (*self.factories.values(), *self.eval_factories.values())), return_exceptions=True
             )
             failures.extend(result for result in results if isinstance(result, Exception))
         finally:
@@ -644,8 +652,23 @@ class TaskRolloutWorker:
 
     async def run_task(self, task: RolloutTask, writer: RolloutWriter) -> int:
         with self._active_request():
+            started = time.perf_counter()
             rollouts = await self.generate(task.request)
             batch = await self.training_batch(task.request, rollouts)
+            record_event(
+                "task_group_completed",
+                {
+                    "uid": task.prompt["uid"],
+                    "duration_seconds": time.perf_counter() - started,
+                    "response_tokens": sum(len(tokens) for tokens in batch["response_ids"]),
+                    "loss_tokens": sum(sum(mask) for mask in batch["loss_masks"]),
+                    **(batch.get("rollout_metrics") or {}),
+                },
+                attributes={
+                    "source": task.request.metadata[0].data_source or "_unknown",
+                    "step": str(task.lease.policy_step),
+                },
+            )
             return await write_trajectory_batch(task, writer, batch)
 
 
@@ -710,6 +733,7 @@ class TaskRolloutWorkerSpec:
                 ),
             )
         factories = task_machine_factories(self.config.environment.task_sessions)
+        eval_factories = task_machine_factories(self.config.environment.task_sessions, phase="eval")
         if harbor is not None:
             if harbor.environment.type != EnvironmentType.DOCKER:
                 factories[HARBOR_MACHINE_BACKEND] = harbor.machine_factory()
@@ -734,4 +758,5 @@ class TaskRolloutWorkerSpec:
             shutdown_timeout=float(self.config.trajectory_runner.shutdown_timeout),
             installed_agents=installed_agents,
             judge_connection=judge,
+            eval_factories=eval_factories,
         )

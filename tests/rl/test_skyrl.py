@@ -12,7 +12,9 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 from typing import IO
 
 import pytest
@@ -45,6 +47,8 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem import cluster_config
 from rigging.filesystem.step_status import STATUS_SUCCESS
 from skyrlrecipe.locality import RoleTopologyMode
+
+from experiments.post_training.long_loop.eval_runtime.judge import run_with_existing_judge
 
 
 def _model_step() -> ArtifactStep[LevanterCheckpoint]:
@@ -635,6 +639,34 @@ def test_skyrl_step_declares_model_and_data_dependencies() -> None:
     ]
 
 
+def test_best_checkpoint_binds_model_before_artifact_fingerprinting() -> None:
+    spec = _spec()
+    recipe = yaml.safe_load(spec.config_yaml)
+    recipe["trainer"]["callbacks"] = [
+        {
+            "type": "best_checkpoint",
+            "initial_model_uri": "model-input",
+            "expected_tasks": 2,
+            "minimum_scored_tasks": 2,
+        }
+    ]
+    fingerprints = []
+    for version in ("2026.11.16.1", "2026.11.16.2"):
+        model = dataclasses.replace(
+            spec.model,
+            step=ArtifactStep.adopt("tests/model", version, f"s3://test/model/{version}", kind=LevanterCheckpoint),
+        )
+        step = skyrl_step(dataclasses.replace(spec, config_yaml=yaml.safe_dump(recipe), model=model), _execution())
+        # Lowering enforces the fingerprint pinned when the artifact was constructed.
+        step.lower()
+        config = materialized_config(step, prefix="s3://marin-us-east-08a")
+        launch = yaml.safe_load(config.launch_config_yaml)
+        callback = launch["skyrl"]["trainer"]["callbacks"][0]
+        assert callback["initial_model_uri"] == f"s3://test/model/{version}/hf/global_step-32"
+        fingerprints.append(step.fingerprint())
+    assert fingerprints[0] != fingerprints[1]
+
+
 def test_starting_checkpoint_binds_identity_and_rejects_cached_output_reuse(tmp_path: Path, monkeypatch) -> None:
     spec = _spec()
     checkpoints = [
@@ -790,6 +822,25 @@ def test_run_skyrl_returns_explicit_hf_export(monkeypatch: pytest.MonkeyPatch) -
     assert catalog_rows[0].status == "succeeded"
     assert catalog_rows[0].rollout_uri == f"{output.attempts_root}/trajectories"
     assert catalog_rows[0].job_id == "01KTEST"
+
+
+def test_lowered_skyrl_step_reaches_launcher_with_scoped_environment(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_TEMP_PREFIX", str(tmp_path / "temporary"))
+    step = skyrl_step(_spec(), _execution())
+
+    class LaunchBoundaryReached(Exception):
+        pass
+
+    def launcher(command, *, env_vars):
+        launch = yaml.safe_load(Path(command[-1]).read_text())
+        assert env_vars == {}
+        assert launch["inputs"]["model"]["uri"] == "s3://test/iceball-sft/hf/global_step-32"
+        assert launch["skyrl"]["trainer"]["max_steps"] == 8
+        raise LaunchBoundaryReached
+
+    monkeypatch.setattr("marin.rl.skyrl._run_launcher", launcher)
+    with pytest.raises(LaunchBoundaryReached):
+        step.lower().fn(str(tmp_path / "output"))
 
 
 def test_run_skyrl_succeeds_without_hf_export(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1026,3 +1077,36 @@ def test_reject_forced_socket_transport_allows_non_forcing_env() -> None:
     reject_forced_socket_transport({"NCCL_SOCKET_FAMILY": "AF_INET"}, num_nodes=32)
     reject_forced_socket_transport({"NCCL_NET": "Socket"}, num_nodes=1)
     reject_forced_socket_transport({}, num_nodes=32)
+
+
+def test_concurrent_judged_launches_keep_credentials_in_their_own_subprocesses(tmp_path, monkeypatch):
+    parent = {"OPENAI_API_KEY": "parent-provider", "JUDGE_API_KEY": "parent-judge"}
+    for name, value in parent.items():
+        monkeypatch.setenv(name, value)
+    step = skyrl_step(_spec(), _execution())
+    config = step.build_config(
+        StepContext.for_run(str(tmp_path), str(tmp_path), runtime_args=step.runtime_args, deps=step.deps)
+    )
+    barrier = Barrier(2)
+    script = (
+        "import json,os; print(json.dumps({'state':'succeeded','iris_job_id':"
+        "'/tests/'+os.environ['OPENAI_API_KEY']+'--'+os.environ['JUDGE_API_KEY']}))"
+    )
+
+    def launcher(command, *, env_vars):
+        barrier.wait(timeout=10)
+        assert {name: os.environ[name] for name in parent} == parent
+        return run_launcher_for_test(command, env_vars=env_vars)
+
+    monkeypatch.setattr("marin.rl.skyrl._launcher_command", lambda config: [sys.executable, "-c", script])
+    monkeypatch.setattr("marin.rl.skyrl._run_launcher", launcher)
+    monkeypatch.setattr("marin.rl.skyrl.record_rollout_run", lambda record: None)
+
+    def launch(label):
+        return run_with_existing_judge(
+            config, openai_api_key=f"provider-{label}", judge_api_key=f"judge-{label}"
+        ).iris_job_id
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        assert list(executor.map(launch, ("a", "b"))) == ["/tests/provider-a--judge-a", "/tests/provider-b--judge-b"]
+    assert {name: os.environ[name] for name in parent} == parent

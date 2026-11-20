@@ -4,6 +4,7 @@
 # NOTE: Do not explicitly import wandb/other trackers here, as this will cause the tests to trivially pass.
 import dataclasses
 import logging
+import json
 import re
 import subprocess
 import warnings
@@ -13,6 +14,7 @@ import draccus
 import pytest
 import yaml
 from rigging.provenance import LAUNCH_PROVENANCE_ENV, Provenance
+from rigging.training_journal import TrainingJournal, verify_training_journals
 
 import levanter.tracker
 import levanter.tracker.tracker_fns as tracker_fns
@@ -361,3 +363,20 @@ def test_truncate_wandb_run_name_logs_warning(caplog):
         truncate_wandb_run_name(name)
 
     assert any(record.levelno >= logging.WARNING for record in caplog.records)
+
+
+def test_producer_histories_remain_owned_by_their_trackers(tmp_path):
+    first = TrainingJournal(str(tmp_path / "first"), "first", "fixture", "rank-0")
+    second = TrainingJournal(str(tmp_path / "second"), "second", "fixture", "rank-0")
+    left = CompositeTracker([NoopTracker()], training_journal=first)
+    right = CompositeTracker([NoopTracker()], training_journal=second)
+    with first.events.span("work"), second.events.span("work"):
+        left.log({"loss": 1.0}, step=0)
+        right.log({"loss": 2.0}, step=0)
+        left.log({"loss": 0.5}, step=1)
+    left.finish()
+    right.finish()
+    for journal, values in ((first, [1.0, 0.5]), (second, [2.0])):
+        verify_training_journals(str(journal.destination.parent.parent), {"rank-0"}, {"work"})
+        rows = [json.loads(line) for line in (journal.destination / "history.jsonl").read_text().splitlines()]
+        assert [row["metrics"]["loss"] for row in rows] == values

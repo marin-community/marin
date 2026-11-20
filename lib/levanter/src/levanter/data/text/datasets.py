@@ -5,7 +5,7 @@ import abc
 import dataclasses
 import functools
 import logging
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from functools import cached_property
@@ -31,7 +31,7 @@ from levanter.data.mixture import (
     StopStrategy,
     rescale_mixture_schedule_for_batch_schedule,
 )
-from levanter.data.packing import GreedyPrepackedDataset
+from levanter.data.packing import GreedyPrepackedDataset, LookaheadPrepackedDataset
 from levanter.data.passthrough_tokenizer import PassthroughTokenizer
 from levanter.data.sharded_datasource import (
     ShardedDataSource,
@@ -52,9 +52,11 @@ from levanter.data.text.formats import (
     LmDatasetFormatBase,
     PrebuiltLmDatasetFormat,
     ProcessedChatDict,
+    SerializedChatLmDatasetFormat,
     TextLmDatasetFormat,
     TokenSeqDict,
 )
+from levanter.data.text.serialized_chat import mask_serialized_chat
 from levanter.data.text.length_bucket import (
     LengthBucket,
     LengthBucketIndex,
@@ -236,8 +238,7 @@ class PrebuiltLmDataset(MappedAsyncDataset[dict, GrugLmExample]):
                 return example
 
             def _map(example: dict) -> GrugLmExample:
-                loss_weight = example[loss_weights_key]
-                loss_weight = self.loss_weight_transform(loss_weight)
+                loss_weight = self.loss_weight_transform(example[loss_weights_key])
                 # pyrefly: ignore[bad-return, bad-argument-count]  # eqx.filter_jit wrapper hides the real signature
                 return _create_lm_example(example[input_ids_key], loss_weight)
 
@@ -338,6 +339,8 @@ class DatasetComponent(DatasetComponentBase):
     cache_dir: str | None = None
     format: LmDatasetFormatBase = field(default_factory=TextLmDatasetFormat)
     pack: bool | int | None = None
+    packing_lookahead: int | None = None
+    """Bounded document lookahead; when set, packing rejects oversized documents."""
     tags: list[str] | None = None
     split: str = "validation"
     flat_cache: bool = False
@@ -424,6 +427,23 @@ def _resolve_pack_config(
     return int(pack), packed_slice_strategy
 
 
+def _prepacked_cache(
+    cache: TreeCache[T],
+    max_length: int,
+    *,
+    max_segments: int,
+    slice_strategy: Literal["left", "right", "raise", "drop"],
+    lookahead: int | None,
+) -> GreedyPrepackedDataset[T] | LookaheadPrepackedDataset[T]:
+    if lookahead is not None:
+        return LookaheadPrepackedDataset(
+            cache.jagged_array_tree(), max_length, max_segments_per_example=max_segments, lookahead=lookahead
+        )
+    return GreedyPrepackedDataset(
+        cache.jagged_array_tree(), max_length, max_segments_per_example=max_segments, slice_strategy=slice_strategy
+    )
+
+
 class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
     """Packed version of token dataset using GreedyPrepackedDataset."""
 
@@ -435,16 +455,21 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
         slice_strategy: Literal["left", "right", "raise", "drop"] = "left",
         loss_weights_key: str | None = None,
         block_cross_document_attention: bool = True,
+        input_ids_key: str = "input_ids",
+        packing_lookahead: int | None = None,
+        loss_weight_transform: Callable[[np.ndarray], np.ndarray] | None = None,
     ):
-        self.packed: GreedyPrepackedDataset[dict] = GreedyPrepackedDataset(
-            cache.jagged_array_tree(),
+        self.packed = _prepacked_cache(
+            cache,
             Pos.size,
-            max_segments_per_example=max_segments_per_example,
+            max_segments=max_segments_per_example,
             slice_strategy=slice_strategy,
+            lookahead=packing_lookahead,
         )
         self.Pos = Pos
         self.block_cross_document_attention = block_cross_document_attention
         self.loss_weights_key = loss_weights_key
+        self.loss_weight_transform = loss_weight_transform or _identity_loss_weight
 
         sharding = _single_cpu_sharding()
 
@@ -453,9 +478,9 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
             @functools.partial(eqx.filter_jit)
             def _create_lm_example(e: tuple[dict, dict]) -> GrugLmExample:
                 example, seg_ids = e
-                tokens = example["input_ids"]
+                tokens = example[input_ids_key]
                 loss_weight = jnp.ones_like(tokens, dtype=jnp.float32)
-                seg_ids_raw = seg_ids["input_ids"]
+                seg_ids_raw = seg_ids[input_ids_key]
                 out = GrugLmExample.causal(
                     tokens=tokens,
                     loss_weight=loss_weight,
@@ -470,9 +495,9 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
             @functools.partial(eqx.filter_jit)
             def _create_lm_example(e: tuple[dict, dict]) -> GrugLmExample:
                 example, seg_ids = e
-                tokens = example["input_ids"]
-                loss_weight = example[loss_weights_key]
-                seg_ids_raw = seg_ids["input_ids"]
+                tokens = example[input_ids_key]
+                loss_weight = self.loss_weight_transform(example[loss_weights_key])
+                seg_ids_raw = seg_ids[input_ids_key]
                 out = GrugLmExample.causal(
                     tokens=tokens,
                     loss_weight=loss_weight,
@@ -498,12 +523,14 @@ class ChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, ProcessedChatDict]
         slice_strategy: Literal["left", "right", "raise", "drop"] = "left",
         mask_user_turns: bool = True,
         block_cross_document_attention: bool = True,
+        packing_lookahead: int | None = None,
     ):
-        self.packed: GreedyPrepackedDataset[ProcessedChatDict] = GreedyPrepackedDataset(
-            cache.jagged_array_tree(),
+        self.packed = _prepacked_cache(
+            cache,
             Pos.size,
-            max_segments_per_example=max_segments_per_example,
+            max_segments=max_segments_per_example,
             slice_strategy=slice_strategy,
+            lookahead=packing_lookahead,
         )
         self.Pos = Pos
         self.block_cross_document_attention = block_cross_document_attention
@@ -546,7 +573,24 @@ def dataset_for_component(
     block_cross_document_attention: bool,
 ) -> AsyncDataset[GrugLmExample]:
     pack = _effective_pack(component)
+    if component.packing_lookahead is not None and not pack:
+        raise ValueError("Document lookahead requires explicit packing")
     fmt = component.format
+    if isinstance(fmt, SerializedChatLmDatasetFormat):
+        max_segments, slice_strategy = _resolve_pack_config(pack) if pack else (1, "left")
+        dataset = PackedTokenDataset(
+            cache,
+            Pos,
+            max_segments_per_example=max_segments,
+            slice_strategy=slice_strategy,
+            block_cross_document_attention=block_cross_document_attention,
+            packing_lookahead=component.packing_lookahead,
+        )
+        return dataset.map(
+            functools.partial(
+                mask_serialized_chat, message_start_id=fmt.message_start_id, assistant_prefix=fmt.assistant_prefix
+            )
+        )
     if isinstance(fmt, TextLmDatasetFormat):
         if pack:
             max_segments, slice_strategy = _resolve_pack_config(pack)
@@ -556,6 +600,7 @@ def dataset_for_component(
                 max_segments_per_example=max_segments,
                 slice_strategy=slice_strategy,
                 block_cross_document_attention=block_cross_document_attention,
+                packing_lookahead=component.packing_lookahead,
             )
         return CausalLmDataset(
             TokenSeqDataset(cache, Pos.size),
@@ -573,8 +618,22 @@ def dataset_for_component(
             slice_strategy=slice_strategy,
             mask_user_turns=fmt.mask_user_turns,
             block_cross_document_attention=block_cross_document_attention,
+            packing_lookahead=component.packing_lookahead,
         )  # type: ignore
     elif isinstance(fmt, PrebuiltLmDatasetFormat):
+        if pack:
+            max_segments, slice_strategy = _resolve_pack_config(pack)
+            return PackedTokenDataset(
+                cache,
+                Pos,
+                max_segments_per_example=max_segments,
+                slice_strategy=slice_strategy,
+                input_ids_key=fmt.input_ids_key,
+                loss_weights_key=fmt.loss_weights_key,
+                loss_weight_transform=fmt.loss_weight_transform,
+                block_cross_document_attention=block_cross_document_attention,
+                packing_lookahead=component.packing_lookahead,
+            )
         return PrebuiltLmDataset(
             cache,
             Pos,
@@ -911,9 +970,21 @@ class LmDataConfig:
             return weights.get(name, 0) > 0
         return any(w.get(name, 0) > 0 for _, w in weights)
 
-    def build_token_datasets(self, caches: Mapping[str, TreeCache[dict]], Pos: Axis, *, split: str):
+    def build_token_datasets(
+        self,
+        caches: Mapping[str, TreeCache[dict]],
+        Pos: Axis,
+        *,
+        split: str,
+        requested_names: Collection[str] | None = None,
+    ):
+        """Construct packed sources required by the requested output dataset names."""
         datasets: dict[str, AsyncDataset[GrugLmExample]] = {}
         for name, component in self.components.items():
+            if requested_names is not None and not any(
+                requested == name or requested.startswith(f"{name}/") for requested in requested_names
+            ):
+                continue
             if split == "train" and not self._has_nonzero_weight(name):
                 continue
 
@@ -1224,7 +1295,9 @@ class LmDataConfig:
 
         if self.num_validation_sequences is not None:
             train_doc_caches = self.build_caches("train")
-            train_datasets = self.build_token_datasets(train_doc_caches, Pos, split="train")
+            train_datasets = self.build_token_datasets(
+                train_doc_caches, Pos, split="train", requested_names=self.num_validation_sequences
+            )
 
             for name, num_sequences in self.num_validation_sequences.items():
                 _, val_ds = _split_into_trainval_sets(

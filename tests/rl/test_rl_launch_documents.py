@@ -14,6 +14,7 @@ from tests.rl.launch_document_census import render_launch_census
 
 
 def _render_documents(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    monkeypatch.setenv("MARIN_PREFIX", "s3://test/launch-census")
     producers = set()
     validate = SkyRLSpec.__post_init__
 

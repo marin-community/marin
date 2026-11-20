@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Protocol, TypeVar
 
@@ -17,6 +18,7 @@ from transformers import PreTrainedTokenizerBase
 
 from skyrl_train.rollout_observability import RolloutTimings, current_rollout_observation, measure_rollout
 from skyrl_train.rollouts.buffer import RolloutTask, RolloutWriter
+from skyrl_train.telemetry import WORKER_ROLE, process_telemetry
 from skyrl_train.tokenizer import tokenizer_from_config
 from skyrl_train.trajectory_runners.base import TrajectoryRunner
 from skyrl_train.trajectory_runners.trajectory_retention import RetentionSink
@@ -82,6 +84,15 @@ class RolloutWorkerResources:
             start_interval_seconds=float(workers.start_interval_seconds),
         )
 
+    def validate_node_capacity(self, cpus: float) -> None:
+        """Reject a pool whose workers alone exceed their pinned node's CPU capacity."""
+        required = self.num_workers * self.cpus_per_worker
+        if required > cpus:
+            raise ValueError(
+                f"Rollout workers request {required} CPUs on the driver node; this node has {cpus:g}. "
+                "Reduce trajectory_runner.rollout_workers.num_workers or cpus_per_worker."
+            )
+
 
 class RolloutWorkerStalledError(TimeoutError):
     """A rollout worker completed no request before its progress deadline."""
@@ -95,6 +106,8 @@ class RolloutWorker:
         configure_worker_process()
         configure_ray_worker_logging()
         start_fd_monitor()
+        self._telemetry = ExitStack()
+        self._telemetry.enter_context(process_telemetry(WORKER_ROLE))
         self._executor_threads = executor_threads
         self._runner = spec.build(tokenizer_from_config(spec.config), shard)
         if sink is not None:
@@ -107,7 +120,8 @@ class RolloutWorker:
         await self._runner.startup()
 
     async def shutdown(self) -> None:
-        await self._runner.shutdown()
+        with self._telemetry:
+            await self._runner.shutdown()
 
     async def run(
         self, input_batch: TrajectoryRequestBatch, observe: bool

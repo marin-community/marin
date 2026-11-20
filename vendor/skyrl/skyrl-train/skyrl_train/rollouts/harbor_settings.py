@@ -5,8 +5,10 @@ from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
+from shellbox.backends.daytona.machine import DaytonaImageBuild
 
 HARBOR_EXCEPTION = "harbor_exception_type"
+HARBOR_MODEL_LIMIT = "harbor_model_limit"
 # Harbor trials one run executes at once when its config leaves n_concurrent_trials unset.
 DEFAULT_CONCURRENT_TRIALS = 16
 
@@ -24,9 +26,11 @@ class EnvironmentType(StrEnum):
 
 class EnvironmentConfig(BaseModel):
     type: EnvironmentType = EnvironmentType.DOCKER
+    eval_image_build: DaytonaImageBuild | None = None
     override_cpus: int | None = None
     override_memory_mb: int | None = None
     override_storage_mb: int | None = None
+    eval_override_storage_mb: int | None = None
     override_gpus: int | None = None
     kwargs: dict[str, Any] = Field(default_factory=dict)
 
@@ -41,6 +45,9 @@ DEFAULT_RETRY_EXCLUSIONS = frozenset(
     {
         "AgentTimeoutError",
         "VerifierTimeoutError",
+        "AddTestsDirError",
+        "DownloadVerifierDirError",
+        "VerifierRuntimeError",
         "RewardFileNotFoundError",
         "RewardFileEmptyError",
         "VerifierOutputParseError",

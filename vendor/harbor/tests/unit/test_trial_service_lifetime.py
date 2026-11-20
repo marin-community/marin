@@ -44,6 +44,19 @@ class PartialAnswerAgent(BaseAgent):
         await environment.exec("printf partial > answer; exec sleep 3600")
 
 
+class FixtureAgent(PartialAnswerAgent):
+    async def setup(self, environment) -> None:
+        result = await environment.exec('test "$(cat fixture)" = ready; printf started > agent-started')
+        if result.return_code:
+            raise RuntimeError(result.stderr)
+
+    async def run(self, instruction, environment, context) -> None:
+        with environment.scoped_exec_env(self.extra_env):
+            result = await environment.exec('test "$CONFIG_OVERRIDE" = launch; printf "$TASK_FIXTURE" > answer')
+        if result.return_code:
+            raise RuntimeError(result.stderr)
+
+
 class WaitingAgent(PartialAnswerAgent):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -109,6 +122,7 @@ def allow_trial_agents(monkeypatch):
         f"test-{agent.__name__}": agent
         for agent in (
             PartialAnswerAgent,
+            FixtureAgent,
             WaitingAgent,
             JudgeProbeAgent,
             BackgroundServerAgent,
@@ -384,3 +398,37 @@ async def test_runtime_failure_cannot_publish_a_success(tmp_path, monkeypatch, f
         assert result.completion is None
     else:
         assert result.completion is not None
+
+
+@pytest.mark.parametrize("setup_succeeds", [True, False])
+async def test_declared_fixture_setup_precedes_agent_access_and_preserves_infra_failure(
+    tmp_path, monkeypatch, setup_succeeds
+):
+    factory = ProcessTaskFactory(tmp_path / "guest")
+    monkeypatch.setattr(local, "LocalMachineFactory", lambda **kwargs: factory)
+    config = trial_config(tmp_path, "fixture", guest_root=tmp_path / "guest")
+    task_config = config.task.path / "task.toml"
+    command = "printf ready > fixture" if setup_succeeds else "echo bootstrap-failed >&2; exit 7"
+    task_config.write_text(
+        '[agent]\ntimeout_sec=5\n'
+        '[agent.env]\nTASK_FIXTURE="partial"\nCONFIG_OVERRIDE="task"\n'
+        '[environment]\nallow_internet=false\nworkdir="/workspace"\n'
+        f'[environment.setup]\ncommand="{command}"\ntimeout_sec=5\n'
+    )
+    verifier = config.task.path / "tests/test.sh"
+    verifier.write_text(verifier.read_text().replace('set -eu\n', 'set -eu\ntest -z "${TASK_FIXTURE:-}"\n'))
+    config.agent = AgentConfig(name="test-FixtureAgent", env={"CONFIG_OVERRIDE": "launch"})
+    trial = await Trial.create(config)
+    result = await trial.run()
+    if setup_succeeds:
+        assert result.exception_info is None
+        assert result.verifier_result.rewards == {"reward": 1.0}
+        assert factory.machine.path("/workspace/agent-started").read_text() == "started"
+        assert factory.machine.path("/workspace/answer").read_text() == "partial"
+    else:
+        assert result.exception_info.exception_type == "EnvironmentSetupError"
+        assert error_category(result.exception_info.exception_type) == ErrorCategory.INFRASTRUCTURE
+        assert "bootstrap-failed" in result.exception_info.exception_message
+        assert not factory.machine.path("/workspace/agent-started").exists()
+        assert result.verifier_result is None
+    assert factory.machine.closed

@@ -138,6 +138,8 @@ def test_url_reference_export_copies_code_and_preserves_trained_weights(
     (reference / "configuration_custom.py").write_bytes(b"CUSTOM_ARCHITECTURE = True\n")
     (reference / "nested/modeling_custom.py").write_bytes(b"CUSTOM_MODEL = True\n")
     (reference / ".git/config").write_bytes(b"git metadata")
+    (reference / ".verified-copy-manifest.json").write_bytes(b'{"files": ["initializer weights"]}')
+    (reference / ".cache_metadata.json").write_bytes(b'{"source_revision": "initializer"}')
     (reference / "reference-weights.safetensors").write_bytes(b"stale weights")
     (reference / "pytorch_model.bin").write_bytes(b"stale torch weights")
     (reference / "pytorch_model-00001-of-00002.bin").write_bytes(b"stale torch shard")
@@ -159,6 +161,8 @@ def test_url_reference_export_copies_code_and_preserves_trained_weights(
     assert (tmp_path / "configuration_custom.py").read_bytes() == b"CUSTOM_ARCHITECTURE = True\n"
     assert (tmp_path / "nested/modeling_custom.py").read_bytes() == b"CUSTOM_MODEL = True\n"
     assert not (tmp_path / ".git/config").exists()
+    assert not (tmp_path / ".verified-copy-manifest.json").exists()
+    assert not (tmp_path / ".cache_metadata.json").exists()
     assert not (tmp_path / "reference-weights.safetensors").exists()
     assert not (tmp_path / "pytorch_model.bin").exists()
     assert not (tmp_path / "pytorch_model-00001-of-00002.bin").exists()
@@ -362,7 +366,9 @@ def test_host_hf_export_matches_device_format_and_splits_experts(tmp_path):
     assert tensors["scalar"].shape == ()
 
 
-def test_host_hf_export_resumes_after_input_failure_and_rejects_corruption(tmp_path):
+def test_host_hf_export_resumes_after_input_failure_and_rejects_corruption(tmp_path, monkeypatch):
+    events = []
+    monkeypatch.setattr(hf_export.telemetry, "event", lambda name, body: events.append((name, body.fields)))
     source = tmp_path / "source"
     source.mkdir()
     values = np.arange(6, dtype=np.float32).reshape(2, 3)
@@ -398,6 +404,9 @@ def test_host_hf_export_resumes_after_input_failure_and_rejects_corruption(tmp_p
     with pytest.raises(ValueError, match="integrity"):
         hf_export.save_host_hf_shards(shards, load, str(destination), **options)
     assert first.read_bytes() == damaged
+    assert {body["phase"] for _, body in events} == {"serialization", "hash"}
+    assert all(name == "hf_export_phase" and body["succeeded"] for name, body in events)
+    assert all(body["started_unix_ms"] <= body["finished_unix_ms"] for _, body in events)
 
 
 def _export_on_cpu_rank(coordinator, destination, expected):
