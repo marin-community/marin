@@ -9,6 +9,7 @@ import pytest
 import yaml
 from marin.execution.build_context import BuildContext, VersionCodex, build_context
 
+from experiments.post_training.long_loop.launch_validation import validate_launch
 from experiments.post_training.long_loop.nvl72 import PROFILES, NVL72RunSpec, run_from_spec, validate_model_geometry
 
 
@@ -93,3 +94,14 @@ def test_snowball_geometry_rejects_mochi_profile_and_build_rejects_changed_data(
     with build_context(BuildContext(versions=VersionCodex(default="2026.11.17.3"))):
         with pytest.raises(ValueError, match="pinned SHA-256"):
             run_from_spec(run_spec, smoke=True, config_output=tmp_path / "launch.yaml")
+
+
+def test_snowball_smoke_satisfies_runtime_batch_geometry(run_spec, tmp_path, monkeypatch):
+    monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
+    output = tmp_path / "launch.yaml"
+    with build_context(BuildContext(versions=VersionCodex(default="2026.11.20.201"))):
+        run_from_spec(run_spec, smoke=True, config_output=output)
+    # The prior two-group default failed SkyRL validation for Snowball's policy DP4.
+    validate_launch(output.read_text(), tmp_path / "compiled", model_config=b"{}")
+    trainer = yaml.safe_load((tmp_path / "compiled/compiled.yaml").read_text())["skyrl"]["trainer"]
+    assert sum(trainer["rollout_buffer"]["consumed_route_quotas"].values()) == trainer["train_batch_size"]

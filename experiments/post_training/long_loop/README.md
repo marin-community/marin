@@ -668,8 +668,9 @@ NVL72 coordinators use `mochi-<profile>-<version>` for RL and
 user namespace, giving the cancellation prefix `/<owner>/mochi-`. Children stay
 beneath that coordinator's job ID. Record the exact submitted IDs before cancellation.
 
-Smoke mode uses two groups of eight samples, two rollout workers and a one-hour
-clock after the first optimizer update. It saves each update and at finalization;
+Smoke mode uses the smallest even number of groups that covers policy data
+parallelism: four for Snowball and two for Mochi, with eight samples per group.
+It uses two rollout workers and a one-hour clock after the first optimizer update. It saves each update and at finalization;
 it skips held-out evaluation and best selection. Normal runs save every two hours,
 at finalization and when best selection commits an improved checkpoint. They
 retain the 90%-of-expected coverage gate (108 of 120 for this shape) and the

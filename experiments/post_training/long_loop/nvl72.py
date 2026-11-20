@@ -4,6 +4,7 @@
 """NVL72 role profiles for the shared long-loop artifact graph."""
 
 import hashlib
+import math
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
@@ -252,9 +253,12 @@ def build_run(
         raise ValueError(f"{profile.output_name} requires data_sha256")
     if data_sha256 is not None and len(train_data) != 1:
         raise ValueError("data_sha256 requires exactly one training data source")
-    groups = (
-        batch_groups if batch_groups is not None else SMOKE_BATCH_GROUPS if smoke else profile.role_plan.train_batch_size
+    geometry = profile.megatron
+    policy_data_parallel_size = (profile.role_plan.policy_num_nodes * profile.role_plan.policy_num_gpus_per_node) // (
+        geometry.tensor_model_parallel_size * geometry.pipeline_model_parallel_size * geometry.context_parallel_size
     )
+    smoke_groups = math.lcm(SMOKE_BATCH_GROUPS, policy_data_parallel_size)
+    groups = batch_groups if batch_groups is not None else smoke_groups if smoke else profile.role_plan.train_batch_size
     if groups < 2 or groups % 2:
         raise ValueError("Batch groups must be positive and even for equal agentic and nonagentic quotas")
     profile = replace(
