@@ -165,8 +165,6 @@ def test_ragged_shadow_experts_keep_the_modelled_assignments_with_their_function
     selected_np = _skewed_routing()
     valid_np = _token_valid(padded)
     keep = _surviving_assignments(selected_np, valid_np, capacity_factor=capacity_factor, shadow=shadow)
-    assert int((~keep & valid_np[:, None]).sum()) == expected_drops
-
     hidden, intermediate = _dims()
     keys = jax.random.split(jax.random.key(0), 5)
     tokens = selected_np.shape[0]

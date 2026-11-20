@@ -923,7 +923,6 @@ def _shadow_experts_bwd(expert_mlp, residuals, out_cotangent):
         mlp_residuals, out_rows_cotangent
     )
     keep = (shadow.positions < rows).astype(jnp.float32)
-    # Each token sums the input cotangents of its shadow rows.
     x_cotangent = _shadow_combine(x_rows_cotangent, shadow.positions, keep)
     if expert_mlp.routing_weight_gradient == _RoutingWeightGradient.EXPERT_SIDE:
         # <dout, y> = <dy, y> / w, as in the transport path.
