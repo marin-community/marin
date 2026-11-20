@@ -8,11 +8,11 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
+import yaml
 from marin.rl.skyrl import SkyRLSpec, skyrl_cpu_command
 from marin.rl.skyrl import _run_launcher as run_launcher_for_test
 
-from tests.rl.launch_document_census import render_launch_census, runtime_launch
-from tests.rl.test_skyrl import generation_geometry_step
+from tests.rl.launch_document_census import generation_geometry_step, render_launch_census, runtime_launch
 
 
 def _render_documents(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
@@ -42,7 +42,10 @@ def _render_documents(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[s
 
 
 def test_rl_launch_documents_render_from_authored_specs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    assert _render_documents(tmp_path, monkeypatch)
+    generation = yaml.safe_load(_render_documents(tmp_path, monkeypatch)["native/generation"])
+    assert generation["iris"]["allocation"]["num_nodes"] == 1
+    assert generation["skyrl"]["generator"]["num_inference_engines"] == 4
+    assert generation["skyrl"]["entrypoint"] == "generate"
 
 
 # A cold SkyRL environment sync and the full batch of compositions share this deadline.

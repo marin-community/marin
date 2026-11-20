@@ -24,13 +24,17 @@ class ExportCheckpoint:
     initializer_uri: str | None = None
 
 
-def selected_export_checkpoint(checkpoint_root: str, selection: str, latest_step: int) -> ExportCheckpoint:
-    """Resolve the checkpoint selected for the terminal HF policy."""
+def selected_export_checkpoint(checkpoint_root: str, selection: str, latest_step: int) -> ExportCheckpoint | None:
+    """Resolve the checkpoint selected for HF export, if one is eligible."""
     if selection == "latest":
         return ExportCheckpoint(latest_step)
     if selection != "best":
         raise ValueError(f"Unknown HF checkpoint selection: {selection}")
-    best = json.loads(StoragePath(join_resource_path(checkpoint_root, BEST_CHECKPOINT_FILENAME)).read_text())
+    try:
+        evidence = (StoragePath(checkpoint_root) / BEST_CHECKPOINT_FILENAME).read_text()
+    except FileNotFoundError:
+        return None
+    best = json.loads(evidence)
     step = int(best["step"])
     if best["model_format"] == "native":
         return ExportCheckpoint(step)

@@ -341,6 +341,9 @@ class DatasetComponent(DatasetComponentBase):
     cache_dir: str | None = None
     format: LmDatasetFormatBase = field(default_factory=TextLmDatasetFormat)
     pack: bool | int | None = None
+    pack_lookahead_window: int | None = None
+    """Opt-in bounded first-fit lookahead for the packer, in documents. ``None`` (default)
+    keeps the sequential packer; see [pack_documents][levanter.data.packing.pack_documents]."""
     tags: list[str] | None = None
     split: str = "validation"
     flat_cache: bool = False
@@ -438,12 +441,14 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
         slice_strategy: Literal["left", "right", "raise", "drop"] = "left",
         loss_weights_key: str | None = None,
         block_cross_document_attention: bool = True,
+        lookahead_window: int | None = None,
     ):
         self.packed: GreedyPrepackedDataset[dict] = GreedyPrepackedDataset(
             cache.jagged_array_tree(),
             Pos.size,
             max_segments_per_example=max_segments_per_example,
             slice_strategy=slice_strategy,
+            lookahead_window=lookahead_window,
         )
         self.Pos = Pos
         self.block_cross_document_attention = block_cross_document_attention
@@ -501,12 +506,14 @@ class ChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, ProcessedChatDict]
         slice_strategy: Literal["left", "right", "raise", "drop"] = "left",
         mask_user_turns: bool = True,
         block_cross_document_attention: bool = True,
+        lookahead_window: int | None = None,
     ):
         self.packed: GreedyPrepackedDataset[ProcessedChatDict] = GreedyPrepackedDataset(
             cache.jagged_array_tree(),
             Pos.size,
             max_segments_per_example=max_segments_per_example,
             slice_strategy=slice_strategy,
+            lookahead_window=lookahead_window,
         )
         self.Pos = Pos
         self.block_cross_document_attention = block_cross_document_attention
@@ -549,6 +556,11 @@ def dataset_for_component(
     block_cross_document_attention: bool,
 ) -> AsyncDataset[GrugLmExample]:
     pack = _effective_pack(component)
+    if component.pack_lookahead_window is not None and not pack:
+        raise ValueError(
+            f"Component {component.cache_dir} sets pack_lookahead_window but pack={pack!r} disables packing; "
+            "the lookahead window only applies to packed datasets."
+        )
     fmt = component.format
     if isinstance(fmt, SerializedChatLmDatasetFormat):
         max_segments, slice_strategy = _resolve_pack_config(pack) if pack else (1, "left")
@@ -578,6 +590,7 @@ def dataset_for_component(
                 max_segments_per_example=max_segments,
                 slice_strategy=slice_strategy,
                 block_cross_document_attention=block_cross_document_attention,
+                lookahead_window=component.pack_lookahead_window,
             )
         return CausalLmDataset(
             TokenSeqDataset(cache, Pos.size),
@@ -595,8 +608,11 @@ def dataset_for_component(
             slice_strategy=slice_strategy,
             mask_user_turns=fmt.mask_user_turns,
             block_cross_document_attention=block_cross_document_attention,
+            lookahead_window=component.pack_lookahead_window,
         )  # type: ignore
     elif isinstance(fmt, PrebuiltLmDatasetFormat):
+        if component.pack_lookahead_window is not None:
+            raise ValueError("pack_lookahead_window is not supported for prebuilt datasets.")
         return PrebuiltLmDataset(
             cache,
             Pos,

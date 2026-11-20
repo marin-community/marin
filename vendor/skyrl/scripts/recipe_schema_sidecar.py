@@ -16,7 +16,7 @@ from skyrl_train.error_treatment import ErrorTreatment
 from skyrl_train.group_admission import GroupAdvantageKind
 from skyrl_train.hf_export_schema import HFUploadMode
 from skyrl_train.rollouts.buffer import BatchPolicy
-from skyrl_train.trajectory_selection import TrajectorySelectorKind
+from skyrl_train.config.trajectory_selection import TrajectorySelectorKind
 from skyrl_train.utils.advantage_estimators import AdvantageEstimatorRegistry
 from skyrl_train.utils.trainer_utils import ResumeMode
 

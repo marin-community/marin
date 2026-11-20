@@ -8,12 +8,7 @@ from statistics import fmean
 from omegaconf import DictConfig
 
 from skyrl_train.batch_sampling import filter_trajectory_batch
-from skyrl_train.config.trajectory_selection import (
-    BEST_OF_N_LEARNER_ROWS,
-    TrajectorySelectorKind as TrajectorySelectorKind,
-    best_of_n_sample_count,
-    require_best_of_n_samples,
-)
+from skyrl_train.config.trajectory_selection import BEST_OF_N_LEARNER_ROWS, best_of_n_sample_count, require_best_of_n_samples
 from skyrl_train.trajectory_runners.trajectory_reward_shaping import NormalizedReward
 from skyrl_train.trajectory_runners.types import TrajectoryBatch
 
