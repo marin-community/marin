@@ -10,6 +10,7 @@ from dataclasses import replace
 import pytest
 
 from experiments.post_training.task_curation import declaration_audit, ensure_current_projections
+from experiments.post_training.task_curation import sources as sources_module
 from experiments.post_training.task_curation.declaration_audit import (
     CanonicalLayer,
     DeclaredPin,
@@ -50,6 +51,26 @@ def test_a_receipt_at_the_declared_pin_binds():
     )
     assert findings == []
     assert notes == []
+
+
+def test_a_drifted_retained_binding_reports_a_gap_not_a_family_finding(monkeypatch):
+    """A retained release whose conversion pin drifts is a waivable gap, never a crash."""
+    monkeypatch.setattr(sources_module, "RETAINED_BINDING_DRIFTS", {"Test:drifted-source": "3" * 40})
+    # The control: an unrecorded unselected release still fails the family audit.
+    findings, _ = audit_families(
+        {},
+        layer=layer(selected={}),
+        releases={"Test:unrecorded-source": release()},
+    )
+    assert any("Test:unrecorded-source" in finding for finding in findings)
+    # The drift-recorded source produces no family finding: the audit reports it as a
+    # waivable served-catalog gap at the receipt's pinned revision instead.
+    findings, _ = audit_families(
+        {},
+        layer=layer(selected={}),
+        releases={"Test:drifted-source": release()},
+    )
+    assert findings == []
 
 
 def test_a_registry_only_receipt_fails():

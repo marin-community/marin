@@ -164,10 +164,7 @@ def parse_java_mvn(log: str) -> ParsedTestLog:
     running_re = re.compile(r"^(?:\[INFO\]\s+)?Running\s+([A-Za-z0-9_$.]+)$")
     gradle_class_re = re.compile(r"^([A-Za-z0-9_$.]+(?:Test|Tests|IT|ITCase))$")
     gradle_test_status_re = re.compile(r"^Test\s+(.+?)\s+(PASSED|FAILED)(?:\s+\(\d+(?:\.\d+)?\s*m?s\))?$")
-    summary_re = re.compile(
-        r"Tests run:\s*(\d+),\s*Failures:\s*(\d+),\s*Errors:\s*(\d+),"
-        r"\s*Skipped:\s*(\d+)"
-    )
+    summary_re = re.compile(r"Tests run:\s*(\d+),\s*Failures:\s*(\d+),\s*Errors:\s*(\d+)," r"\s*Skipped:\s*(\d+)")
 
     seen_running: set[str] = set()
     current_running: str | None = None
@@ -279,10 +276,7 @@ def parse_java_mvn_v2(log: str) -> ParsedTestLog:
     """Parse Maven Surefire / Failsafe style logs and extract module status."""
     results: ParsedTestLog = {}
     line_re = re.compile(r"^\[INFO\]\s+(?P<name>.+?)\s+\.\.+\s+(?P<status>SUCCESS|FAILURE|SKIPPED)(?:\s|\[|$)")
-    summary_re = re.compile(
-        r"Tests run:\s*(\d+),\s*Failures:\s*(\d+),\s*Errors:\s*(\d+),"
-        r"\s*Skipped:\s*(\d+)"
-    )
+    summary_re = re.compile(r"Tests run:\s*(\d+),\s*Failures:\s*(\d+),\s*Errors:\s*(\d+)," r"\s*Skipped:\s*(\d+)")
 
     for raw in log.splitlines():
         line = raw.strip()
@@ -469,17 +463,12 @@ def parse_log_csharp(log: str) -> ParsedTestLog:
     results: ParsedTestLog = {}
     result_re = re.compile(r"\b(Passed|Failed|Skipped)\s+(.+?)\s+\[[^\]]+?\]")
     loose_passed_re = re.compile(
-        r"(?=(?<![A-Za-z0-9_.])([A-Za-z_]\w*(?:\.[A-Za-z_]\w*){2,}[^\[\]\n]*?)"
-        r"\s+\[[^\]]+?\])"
+        r"(?=(?<![A-Za-z0-9_.])([A-Za-z_]\w*(?:\.[A-Za-z_]\w*){2,}[^\[\]\n]*?)" r"\s+\[[^\]]+?\])"
     )
-    joined_passed_re = re.compile(
-        r"(?<=[a-z])([A-Z][A-Za-z_]\w*(?:\.[A-Za-z_]\w*){2,}[^\[\]\n]*?)"
-        r"\s+\[[^\]]+?\]"
-    )
+    joined_passed_re = re.compile(r"(?<=[a-z])([A-Z][A-Za-z_]\w*(?:\.[A-Za-z_]\w*){2,}[^\[\]\n]*?)" r"\s+\[[^\]]+?\]")
     greedy_passed_re = re.compile(r"\bPassed\s+(.+)\s+\[[^\]]+?\]")
     embedded_joined_result_re = re.compile(
-        r"(?<=[a-z])[A-Z][A-Za-z_]\w*(?:\.[A-Za-z_]\w*){2,}[^\[\]\n]*?"
-        r"\s+\[[^\]]+?\]"
+        r"(?<=[a-z])[A-Z][A-Za-z_]\w*(?:\.[A-Za-z_]\w*){2,}[^\[\]\n]*?" r"\s+\[[^\]]+?\]"
     )
     skipped_re = re.compile(r"^\s+Skipped\s+(.+?)(?:\s+\[.+?\])?$")
     xunit_fail_re = re.compile(r"^\[xUnit\.net\s+[\d:\.]+\]\s+(.+?)\s+\[FAIL\]$")
@@ -1970,8 +1959,7 @@ PLACEHOLDER_TEST_NAMES = {"---NO TEST NAME FOUND YET---", "ok"}
 
 
 MAVEN_SELECTOR_PLACEHOLDER_RE = re.compile(
-    r'^"(?:[A-Za-z_$][\w$]*(?:Test)?(?:,[A-Za-z_$][\w$]*(?:Test)?){2,}'
-    r"|[\w.*$-]*\*Test)$"
+    r'^"(?:[A-Za-z_$][\w$]*(?:Test)?(?:,[A-Za-z_$][\w$]*(?:Test)?){2,}' r"|[\w.*$-]*\*Test)$"
 )
 
 
@@ -2010,10 +1998,7 @@ TEST_NAME_NORMALIZERS = (
     (re.compile(r"&\{\[[0-9_ ]{9,}\]\}"), "&{[<addr>]}"),
     (re.compile(r"\b(127\.0\.0\.1|localhost|0\.0\.0\.0):\d+\b"), r"\1:<port>"),
     (
-        re.compile(
-            r"\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?"
-            r"(?:Z(?:\[[^\]]+\])?|[+-]\d{2}:\d{2})?\b"
-        ),
+        re.compile(r"\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?" r"(?:Z(?:\[[^\]]+\])?|[+-]\d{2}:\d{2})?\b"),
         "<timestamp>",
     ),
     (

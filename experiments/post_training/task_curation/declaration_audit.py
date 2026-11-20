@@ -23,6 +23,7 @@ from pathlib import Path
 from experiments.post_training.task_curation.ensure_current_projections import (
     PROJECTION_WAIVER_CONFIG,
     DeclarationPin,
+    ProjectionGap,
     ProjectionWaivers,
     apply_projection_waivers,
     atlas_catalog_selection,
@@ -135,8 +136,14 @@ def audit_families(
                         f"{family}: {source_id} receipt pin {pin.dataset_id}@{pin.dataset_revision} "
                         f"({pin.converter_version}) matches no declared or selected pin"
                     )
+    from experiments.post_training.task_curation.sources import RETAINED_BINDING_DRIFTS  # noqa: PLC0415
+
     if releases is not None:
         for source_id, release in sorted(releases.items()):
+            if source_id in RETAINED_BINDING_DRIFTS:
+                # The population build kept the configured pin and recorded the drift;
+                # the audit reports it as a waivable served-catalog gap (ruling 2026-11-19).
+                continue
             if not layer.acknowledges(source_id):
                 findings.append(
                     f"retained release receipts: {source_id} names a source the declaration layer does not declare"
@@ -418,6 +425,20 @@ def main() -> None:
     )
     if atlas_catalog_selection() != selection:
         raise ValueError("Catalog selection changed during declaration audit; retry")
+    from experiments.post_training.task_curation.sources import RETAINED_BINDING_DRIFTS  # noqa: PLC0415
+
+    # A retained release whose conversion pin drifted from the configured declaration is
+    # a serving-projection gap at the receipt's pinned revision: reported, waivable under
+    # the ruling-60b rule, and never a crash (ruling 2026-11-19).
+    projection_findings.extend(
+        ProjectionGap(
+            source_id=source_id,
+            projection="served-catalog",
+            state="stale-pin",
+            last_computed_revision=pinned_revision,
+        )
+        for source_id, pinned_revision in sorted(RETAINED_BINDING_DRIFTS.items())
+    )
     waiver_result = apply_projection_waivers(
         projection_findings,
         waivers,

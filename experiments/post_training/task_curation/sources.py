@@ -4,6 +4,7 @@
 """The task catalog: training and evaluation dataset declarations, keyed by name."""
 
 
+from dataclasses import replace
 from pathlib import Path
 
 from finestore.rl.curation import OversightLevel
@@ -86,6 +87,7 @@ from experiments.post_training.task_curation.oracle_release import bind_oracle_f
 from experiments.post_training.task_curation.oversight_binding import bind_derived_oversight
 from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.remediation_binding import (
+    RetainedReleaseReceipt,
     bind_archived_retained_release,
     bind_retained_release,
     retained_lineage,
@@ -157,6 +159,29 @@ def configured_sources() -> list[RlDataSource]:
     ]
 
 
+def retained_binding(source: RlDataSource, receipt: RetainedReleaseReceipt) -> RlDataSource:
+    """Bind the retained release, or keep the configured pin and record the drift.
+
+    A receipt whose conversion pin no longer matches the configured declaration used to
+    crash the whole population build; the audit reports the drift as a typed
+    served-catalog gap instead (ruling 2026-11-19), so one drifted source cannot block
+    every lane's landing. The configured declaration stays current and carries the note.
+    """
+    try:
+        return bind_retained_release(source, receipt)
+    except ValueError as error:
+        RETAINED_BINDING_DRIFTS[source.info.id] = receipt.publication.plan.source_revision
+        note = f"Retained release drift: {error}."
+        return replace(source, info=replace(source.info, notes=f"{source.info.notes} {note}".strip()))
+
+
+RETAINED_BINDING_DRIFTS: dict[str, str] = {}
+"""The retained release receipts whose conversion pin no longer matches the configured
+declaration, recorded by the population build for the declaration audit (ruling
+2026-11-19): the audit routes each drifted source to a waivable served-catalog gap
+instead of failing the run."""
+
+
 def sources_before_oracle_filtration() -> dict[str, RlDataSource]:
     """Return configured populations before selecting oracle-filtered private pins."""
     actor_receipts = actor_census_receipts()
@@ -179,11 +204,7 @@ def sources_before_oracle_filtration() -> dict[str, RlDataSource]:
     ]
     sources = [bind_within_source_dedup(source, dedup_receipts[source.info.id]) for source in sources]
     sources = [
-        (
-            bind_retained_release(source, retained_receipts[source.info.id])
-            if source.info.id in retained_receipts
-            else source
-        )
+        retained_binding(source, retained_receipts[source.info.id]) if source.info.id in retained_receipts else source
         for source in sources
     ]
     # Retained selection changes the active pin and actor input for new measurements.
