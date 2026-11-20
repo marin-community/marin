@@ -318,6 +318,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             "2026.11.19.1": "371233d9",
             "2026.11.20.1": "8f532da2",
             "2026.11.20.3": "dc52613e",
+            "2026.11.20.4": "b63f9f76",
         },
         "data-short": {
             "2026.11.13.1": "7d9a590f",
@@ -325,6 +326,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             "2026.11.19.1": "cb07d91c",
             "2026.11.20.1": "a379319d",
             "2026.11.20.3": "d4749482",
+            "2026.11.20.4": "92dc9404",
         },
         "speed-medium": {
             "2026.11.12.1": "e75349ff",
@@ -332,6 +334,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             "2026.11.19.1": "f8281b9d",
             "2026.11.20.1": "8b7e47c8",
             "2026.11.20.3": "dbc38bdf",
+            "2026.11.20.4": "ed50475d",
         },
         "learning-medium": {
             "2026.11.12.1": "ba638a12",
@@ -340,6 +343,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             "2026.11.20.1": "67306e75",
             "2026.11.20.2": "b3044b9b",
             "2026.11.20.3": "4411fd8b",
+            "2026.11.20.4": "3e93b666",
         },
         "data-medium": {
             "2026.11.12.1": "ba638a12",
@@ -348,6 +352,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             "2026.11.20.1": "67306e75",
             "2026.11.20.2": "b3044b9b",
             "2026.11.20.3": "4411fd8b",
+            "2026.11.20.4": "3e93b666",
         },
         "speed-long": {
             "2026.11.11.1": "cd0a5f4e",
@@ -355,6 +360,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             "2026.11.19.1": "9edc7b70",
             "2026.11.20.1": "3d1fe22d",
             "2026.11.20.3": "87feb546",
+            "2026.11.20.4": "fafdb7f1",
         },
         "train-long": {
             "2026.11.11.1": "4945b701",
@@ -363,6 +369,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             "2026.11.20.1": "22473465",
             "2026.11.20.2": "412d0576",
             "2026.11.20.3": "e54674f6",
+            "2026.11.20.4": "aa9d679d",
         },
     }
     configs = assert_revisioned_native_configs(

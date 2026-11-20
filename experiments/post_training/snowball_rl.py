@@ -283,7 +283,7 @@ _SPEED_GUARDS = (
 
 _snowball = partial(
     Preset,
-    revision="2026.11.20.3",
+    revision="2026.11.20.4",
     tasks=_DEFAULT_TASKS,
     model=_DEFAULT_MODEL,
     seed=SEED,
