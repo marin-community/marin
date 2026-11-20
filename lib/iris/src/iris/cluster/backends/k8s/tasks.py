@@ -42,7 +42,7 @@ from iris.cluster.backends.k8s.output_contract import (
     OUTPUT_RELEASE_PATH,
     output_uploader_environment,
 )
-from iris.cluster.config import EgressAllowlistConfig, NodeHealthConfig, SandboxTolerationConfig, TaskOutputPolicy
+from iris.cluster.config import EgressAllowlistConfig, NodeHealthConfig, TaskOutputPolicy
 from iris.cluster.constraints import AttributeValue, Constraint, evaluate_constraint
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
@@ -178,13 +178,12 @@ def validate_coreweave_credentials(env: Mapping[str, str]) -> str | None:
 class PodManifestError(ValueError):
     """A RunTaskRequest cannot produce a valid Pod manifest.
 
-    Raised for validation failures in manifest construction: an unsupported
-    container profile, a coscheduling group_by with no topology mapping, an
-    NVLink-domain gang larger than a rack's schedulable slice, an unsupported
-    constraint op, or a sandbox placement that contradicts the task's selector.
-    These are permanent — the identical request fails the same way on every
-    retry — so ``sync`` fails the task terminally instead of treating it as a
-    retryable worker loss and re-applying it every tick.
+    Raised for request-level validation failures in manifest construction: an
+    unsupported container profile, a coscheduling group_by with no topology
+    mapping, an NVLink-domain gang larger than a rack's schedulable slice, or an unsupported
+    constraint op. These are permanent — the identical request fails the same
+    way on every retry — so ``sync`` fails the task terminally instead of
+    treating it as a retryable worker loss and re-applying it every tick.
     """
 
 
@@ -587,9 +586,6 @@ class PodConfig:
     cache_dir: str = DEFAULT_TASK_CACHE_DIR
     service_account: str = ""
     sandbox_runtime_class: str = DEFAULT_SANDBOX_RUNTIME_CLASS
-    # Extra scheduling for SANDBOX/legacy GVISOR pods (kubernetes_provider.sandbox_placement).
-    sandbox_node_selector: dict[str, str] = field(default_factory=dict)
-    sandbox_tolerations: tuple[SandboxTolerationConfig, ...] = ()
     host_network: bool = False
     controller_address: str | None = None
     managed_label: str = ""
@@ -1252,25 +1248,16 @@ def _build_pod_manifest(
         **({"securityContext": {"fsGroup": SECRET_GROUP}} if job_secrets else {}),
     }
 
-    if managed_label:
-        node_selector[managed_label] = "true"
-    # SANDBOX isolation comes from the RuntimeClass. Its placement comes from the
-    # class's own scheduling plus kubernetes_provider.sandbox_placement; the
-    # container securityContext stays at the DEFAULT posture (see _security_context).
+    # gVisor isolates the whole pod via a node RuntimeClass; the container
+    # securityContext stays at the DEFAULT posture (see _security_context).
     if run_req.container_profile in (job_pb2.CONTAINER_PROFILE_GVISOR, job_pb2.CONTAINER_PROFILE_SANDBOX):
         spec["runtimeClassName"] = config.sandbox_runtime_class
-        for key, value in config.sandbox_node_selector.items():
-            if node_selector.setdefault(key, value) != value:
-                raise PodManifestError(
-                    f"sandbox placement selects {key}={value!r} but the task already selects "
-                    f"{key}={node_selector[key]!r}"
-                )
-        if config.sandbox_tolerations:
-            spec.setdefault("tolerations", []).extend(t.model_dump() for t in config.sandbox_tolerations)
     if not isolation.include_service_account:
         spec["automountServiceAccountToken"] = False
         spec["enableServiceLinks"] = False
 
+    if managed_label:
+        node_selector[managed_label] = "true"
     if node_selector:
         spec["nodeSelector"] = node_selector
 

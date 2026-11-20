@@ -27,8 +27,6 @@ from iris.cluster.config import (
     LocalSliceConfig,
     ManualSliceConfig,
     PlatformConfig,
-    SandboxPlacementConfig,
-    SandboxTolerationConfig,
     ScaleGroupConfig,
     ScaleGroupResources,
     SliceConfig,
@@ -1989,64 +1987,6 @@ def test_k8s_sandbox_pod_uses_cluster_runtime_class(monkeypatch, configured_clas
         assert pod["spec"]["runtimeClassName"] == expected_class
     finally:
         backend.close()
-
-
-def test_k8s_sandbox_placement_reaches_pod(monkeypatch):
-    kubectl = InMemoryK8sService(namespace="iris")
-    monkeypatch.setattr("iris.cluster.composer.CloudK8sService", lambda **_: kubectl)
-    provider_config = KubernetesProviderConfig(
-        kueue=KueueConfig(cluster_queue="iris-cq"),
-        sandbox_placement=SandboxPlacementConfig(
-            node_selector={"iris.kueue": "sandbox"},
-            tolerations=[
-                SandboxTolerationConfig(key="iris.sandbox", operator="Equal", value="true", effect="NoSchedule")
-            ],
-        ),
-    )
-    backend = make_task_backend(
-        IrisClusterConfig(kubernetes_provider=provider_config), descriptor=k8s_backend_descriptor()
-    )
-
-    try:
-        request = make_run_req("/alice/sandbox/0")
-        request.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
-        request.egress_policy = job_pb2.EGRESS_POLICY_INTERNET
-        assert backend.sync(make_batch(tasks_to_run=[request])) == []
-        [pod] = kubectl.list_json(K8sResource.PODS)
-        assert pod["spec"]["nodeSelector"]["iris.kueue"] == "sandbox"
-        assert pod["spec"]["tolerations"] == [
-            {"key": "iris.sandbox", "operator": "Equal", "value": "true", "effect": "NoSchedule"}
-        ]
-    finally:
-        backend.close()
-
-
-@pytest.mark.parametrize(
-    "placement",
-    [
-        pytest.param({"node_selector": {"iris.kueue": "cpu sandbox"}}, id="selector-value"),
-        pytest.param({"node_selector": {"bad key": "sandbox"}}, id="selector-key"),
-        pytest.param({"node_selector": {"a..b/role": "sandbox"}}, id="empty-prefix-component"),
-        pytest.param({"node_selector": {"a-.b/role": "sandbox"}}, id="prefix-component-ends-in-hyphen"),
-        pytest.param({"node_selector": {"a.-b/role": "sandbox"}}, id="prefix-component-starts-with-hyphen"),
-        pytest.param({"node_selector": {"a/b/role": "sandbox"}}, id="two-slashes"),
-        pytest.param(
-            {"tolerations": [{"key": "bad key", "operator": "Exists", "effect": "NoSchedule"}]},
-            id="toleration-key",
-        ),
-    ],
-)
-def test_malformed_sandbox_placement_is_rejected_at_load(placement):
-    # Kubernetes would reject the pod at creation, and Iris retries that as a worker loss.
-    with pytest.raises(ValueError, match="not a valid Kubernetes label"):
-        KubernetesProviderConfig.model_validate({"kueue": {"cluster_queue": "iris-cq"}, "sandbox_placement": placement})
-
-
-def test_unset_sandbox_placement_is_absent_from_rendered_config():
-    # Controller images older than sandbox_placement parse the ConfigMap with
-    # extra="forbid", so an unset placement must not render the key.
-    config = IrisClusterConfig(kubernetes_provider=KubernetesProviderConfig(kueue=KueueConfig(cluster_queue="iris-cq")))
-    assert "sandbox_placement" not in config_to_dict(config)["kubernetes_provider"]
 
 
 @pytest.mark.parametrize("kubernetes", [False, True])

@@ -107,7 +107,6 @@ def make_task_backend(
         # The LocalQueue name is derived from label_prefix, not configured; Kueue is
         # mandatory (checked above), so it is always set.
         local_queue = local_queue_name(label_prefix)
-        placement = kp.sandbox_placement
         return K8sTaskProvider(
             descriptor=descriptor,
             kubectl=CloudK8sService(
@@ -121,8 +120,6 @@ def make_task_backend(
                 logship_image=config.controller.image,
                 service_account=kp.service_account or "",
                 sandbox_runtime_class=kp.sandbox_runtime_class,
-                sandbox_node_selector=dict(placement.node_selector) if placement is not None else {},
-                sandbox_tolerations=tuple(placement.tolerations) if placement is not None else (),
                 host_network=kp.host_network,
                 cache_dir=kp.cache_dir or DEFAULT_TASK_CACHE_DIR,
                 controller_address=kp.controller_address or None,

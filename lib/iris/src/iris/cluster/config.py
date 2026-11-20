@@ -22,7 +22,6 @@ import ipaddress
 import json
 import logging
 import os
-import re
 from collections.abc import Collection, Iterator, Mapping
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal
@@ -734,75 +733,12 @@ class CiliumConfig(_Config):
     egress_endpoints: list[EgressEndpointsConfig] = Field(default_factory=list)
 
 
-# Kubernetes label syntax. The API server rejects a pod whose nodeSelector or
-# tolerations break it, and Iris would retry that pod as a worker loss.
-_K8S_LABEL_NAME_RE = re.compile(r"[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?")
-_K8S_LABEL_VALUE_RE = re.compile(rf"({_K8S_LABEL_NAME_RE.pattern})?")
-# A label key prefix is a DNS subdomain: dot-separated DNS labels, 253 characters at most.
-_DNS_LABEL_RE = re.compile(r"[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?")
-_DNS_SUBDOMAIN_MAX_LENGTH = 253
-
-
-def _check_label_key(key: str) -> str:
-    prefix, slash, name = key.rpartition("/")
-    valid_prefix = not slash or (
-        len(prefix) <= _DNS_SUBDOMAIN_MAX_LENGTH and all(_DNS_LABEL_RE.fullmatch(part) for part in prefix.split("."))
-    )
-    if not (valid_prefix and _K8S_LABEL_NAME_RE.fullmatch(name)):
-        raise ValueError(f"{key!r} is not a valid Kubernetes label key")
-    return key
-
-
-def _check_label_value(value: str) -> str:
-    if not _K8S_LABEL_VALUE_RE.fullmatch(value):
-        raise ValueError(f"{value!r} is not a valid Kubernetes label value")
-    return value
-
-
-class SandboxTolerationConfig(_Config):
-    """A Kubernetes toleration added to SANDBOX pods."""
-
-    # Field names are the Kubernetes toleration field names: the pod manifest builder
-    # dumps this model into the pod spec.
-
-    key: str = Field(min_length=1)
-    operator: Literal["Equal", "Exists"]
-    value: str = ""
-    effect: Literal["NoSchedule", "PreferNoSchedule", "NoExecute"]
-
-    @model_validator(mode="after")
-    def _valid_toleration(self) -> SandboxTolerationConfig:
-        _check_label_key(self.key)
-        _check_label_value(self.value)
-        if self.operator == "Exists" and self.value:
-            raise ValueError("an Exists toleration must not set value")
-        return self
-
-
-class SandboxPlacementConfig(_Config):
-    """Scheduling for SANDBOX pods beyond their RuntimeClass: a dedicated node pool."""
-
-    node_selector: dict[str, str] = Field(default_factory=dict)
-    tolerations: list[SandboxTolerationConfig] = Field(default_factory=list)
-
-    @field_validator("node_selector")
-    @classmethod
-    def _valid_node_selector(cls, node_selector: dict[str, str]) -> dict[str, str]:
-        for key, value in node_selector.items():
-            _check_label_key(key)
-            _check_label_value(value)
-        return node_selector
-
-
 class KubernetesProviderConfig(_Config):
     namespace: str = ""  # default: "iris"
     kubeconfig: str = ""  # empty = in-cluster auth
     kube_context: str = ""  # kubeconfig context to bind to; empty = the file's current-context
     service_account: str = ""
     sandbox_runtime_class: str = Field(default=DEFAULT_SANDBOX_RUNTIME_CLASS, min_length=1)
-    # Defaults to None so that exclude_none keeps the key out of ConfigMaps that older
-    # controller images parse.
-    sandbox_placement: SandboxPlacementConfig | None = None
     host_network: bool = False
     cache_dir: str = ""  # hostPath base for cache mounts (default: "/cache")
     cache_max_age: DurationField | None = None  # enables cache reclamation
