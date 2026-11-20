@@ -8,8 +8,6 @@ from typing import Any, ClassVar, Literal
 from uuid import uuid4
 
 from rigging.redaction import redact_string
-from upath import UPath
-
 from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment, ExecResult
 from harbor.utils.artifact_writer import write_required
