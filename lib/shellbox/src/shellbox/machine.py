@@ -231,6 +231,14 @@ class MachineUnavailable(ConnectionError):
     """The machine's controller stayed unreachable through its bounded retry budget."""
 
 
+class CommandOutcomeUnknown(MachineUnavailable):
+    """The controller accepted the command, or may have, but its result was lost; rerunning it may repeat it."""
+
+
+class GuestPathError(OSError):
+    """The guest reported ``errno`` for the caller's path, never a failure on the host side of a transfer."""
+
+
 class MachineCancelled(RuntimeError):
     """The machine or the job that owns it was cancelled before the operation completed."""
 
