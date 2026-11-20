@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -72,6 +72,65 @@ def harbor_evaluation(path: Path) -> HarborEvaluationCallback:
         minimum_native_coverage=MINIMUM_TASK_COVERAGE,
         daytona_api_key_env=DAYTONA_EVAL_API_KEY_ENV,
     )
+
+
+HARBOR_EVALUATION = harbor_evaluation(Path(__file__).with_name("rl_harbor.yaml"))
+STOP_TOKEN_IDS = (128001, 128009)
+SAMPLED_TRAJECTORIES = sections.TrajectoryRetention(
+    phases=("train", "eval"),
+    sample_fraction=0.1,
+    sample_count_per_step=0,
+    required=True,
+    always_retain_failures=False,
+    always_retain_non_terminating=False,
+    always_retain_loops=False,
+)
+
+
+RL_TRAINING_BASE = RecipePatch(
+    environment=sections.Environment(task_sessions={"local": {}}),
+    data=sections.Data(kind="parquet", shuffle=True),
+    trainer=sections.Trainer(
+        strategy="megatron",
+        gradient_checkpointing=True,
+        offload_optimizer_during_rollouts=False,
+        update_epochs_per_batch=1,
+        logger=("console", "records", "wandb"),
+        tracker_commit_each_step=True,
+        training_metrics=True,
+        rollout_spans=True,
+        policy_train_spans=True,
+        algorithm=sections.Algorithm(
+            advantage_estimator="rloo_n",
+            policy_loss_type="regular",
+            loss_reduction="token_mean",
+            use_kl_loss=False,
+            group_advantage_min_size=2,
+            advantage_batch_normalize=False,
+            rloo_n_filter_zero_reward_groups=True,
+        ),
+        rollout_buffer=sections.RolloutBuffer(object_store_root=None),
+    ),
+    generator=sections.Generator(
+        backend="vllm",
+        vllm_attention_backend="FLASH_ATTN",
+        run_engines_locally=True,
+        weight_sync_backend="nccl",
+        weight_sync_transport="expert_block",
+        weight_sync_pause=sections.WeightSyncPause(mode="keep", clear_cache=True),
+        expert_block_sync=sections.ExpertBlockSync(timeout_seconds=600, verify=False),
+        gpu_memory_utilization=0.75,
+        max_num_batched_tokens=8192,
+        chat_template=None,
+        trajectory_reward_shaping=sections.TrajectoryRewardShaping(
+            enabled=True,
+            overlong=sections.Overlong(penalty_scale=0.0),
+            reasoning_span=sections.ReasoningSpan(penalty=0.1, target="marker"),
+        ),
+        engine_init_kwargs={"moe_backend": "triton", "enable_auto_tools": True, "tool_parser": "hermes"},
+    ),
+    extra_env={"NCCL_IB_HCA": "ibp", "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"},
+)
 
 
 class WindowStatistic(StrEnum):
@@ -379,11 +438,12 @@ class Preset:
     sample_namespace: str
     wandb_entity: str
     retention: SkyRLRetentionPolicy
-    output_ttl_days: int | None = None
+    temporary_output: bool = False
     export: CheckpointPolicy = "none"
     batch_mix: BatchMix | None = None
     held_out_tasks: str | None = None
     harbor: HarborEvaluationCallback | None = None
+    then: Callable[[ArtifactStep], ArtifactStep] | None = None
     guards: tuple[Metric, ...] = ()
     objectives: tuple[Metric, ...] = ()
     gaps: tuple[str, ...] = ()
@@ -431,6 +491,10 @@ class Preset:
     def gated(self) -> bool:
         return self.control_preset is not None
 
+    @property
+    def output_ttl_days(self) -> int | None:
+        return self.retention.temporary_storage_ttl_days if self.temporary_output else None
+
     def with_updates(self, updates: int) -> Preset:
         return replace(
             self,
@@ -461,6 +525,7 @@ class ModelPresets:
     presets: tuple[Preset, ...]
     namespace: str
     control_pins: Mapping[str, ControlPin]
+    needs_completed_default_export: bool = False
 
     @property
     def by_name(self) -> Mapping[str, Preset]:

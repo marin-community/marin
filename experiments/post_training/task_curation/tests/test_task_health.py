@@ -3,13 +3,14 @@
 
 import hashlib
 import json
+import sys
 from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from marin.execution.lazy import ArtifactStep, run
-from marin.rl.skyrl_records import RESOLVED_LAUNCH_FILENAME
+from marin.rl.skyrl_records import RESOLVED_LAUNCH_FILENAME, TERMINAL_RECEIPT_FILENAME
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.identity import canonical_sha256
@@ -31,9 +32,6 @@ from experiments.post_training.task_curation.selection import (
     SELECTION_PREFIX,
     TASK_SPEC_COLUMN,
     TRAIN_FILENAME,
-    HeldoutSource,
-    PanelFormat,
-    _panel_source_tasks,
 )
 from experiments.post_training.task_curation.task_health import (
     ATTEMPT_SCHEMA,
@@ -125,8 +123,8 @@ def test_extract_records_each_attempts_grade_phase_and_output_tails(tmp_path, mo
     task = harbor_task("swe:1")
     selection = write_tasks(tmp_path / "selection" / TRAIN_FILENAME, [task]).parent
     store = tmp_path / "attempts/trajectories/installed-agents"
-    run_output = tmp_path / "run"
-    run_output.mkdir()
+    run_output = tmp_path / "run-artifacts/fixture-run/2026.11.20.1"
+    run_output.mkdir(parents=True)
     source = {
         "uri": str(selection),
         "identity": f"{SELECTION_PREFIX}/fixture@2026.11.20.1:fingerprint",
@@ -134,10 +132,13 @@ def test_extract_records_each_attempts_grade_phase_and_output_tails(tmp_path, mo
         "relative_path": TRAIN_FILENAME,
     }
     launch = {
+        "run": {"id": "fixture-native-run", "attempt_id": "fixture-native-attempt"},
+        "artifacts": {"export_root": str(run_output / "exports")},
         "inputs": {"train_data": [source]},
         "skyrl": {"terminal_bench_config": {"installed_agent": {"output_path": str(store)}}},
     }
     (run_output / RESOLVED_LAUNCH_FILENAME).write_text(json.dumps({"config": launch}))
+    (run_output / TERMINAL_RECEIPT_FILENAME).write_text(json.dumps({"config": launch, "result": {"state": "succeeded"}}))
     write_attempt(store, "graded", task, trial_result(*ALL_PHASES, rewards={"reward": 0.0}), setup_receipt(True), {})
     test_output = "préparing tests\n" * 400 + MISSING_MODULE + "\n"
     write_attempt(
@@ -167,8 +168,9 @@ def test_extract_records_each_attempts_grade_phase_and_output_tails(tmp_path, mo
 
     artifact = ArtifactStep.adopt("fixture-run", "2026.11.20.1", str(run_output))
     run(task_health.task_health_step(artifact))
-    output = StoragePath(str(health_root / "attempts/fixture-run/2026.11.20.1"))
-    path = output / task_health.ATTEMPTS_FILENAME
+    version_root = health_root / "attempts/fixture-run/2026.11.20.1"
+    (path,) = map(StoragePath, map(str, version_root.glob(f"*/{task_health.ATTEMPTS_FILENAME}")))
+    output = path.parent
 
     rows = {row["attempt_id"]: row for row in pq.read_table(str(path)).to_pylist()}
     assert {attempt: (row["outcome"], row["grading_failure"], row["phase"]) for attempt, row in rows.items()} == {
@@ -190,14 +192,28 @@ def test_extract_records_each_attempts_grade_phase_and_output_tails(tmp_path, mo
     write_attempt(store, "later", task, trial_result(), setup_receipt(True), {})
     with pytest.raises(FileExistsError):
         extract_attempts(StoragePath(str(run_output)), "fixture-run@2026.11.20.1", output)
+    launch["run"]["attempt_id"] = "fixture-retry"
+    (run_output / RESOLVED_LAUNCH_FILENAME).write_text(json.dumps({"config": launch}))
+    (run_output / TERMINAL_RECEIPT_FILENAME).write_text(json.dumps({"config": launch, "result": {"state": "failed"}}))
+    monkeypatch.setattr(task_health, "configure_coreweave_s3", lambda: None)
+    monkeypatch.setattr(
+        sys, "argv", ["task_health", "extract", "--cluster", "fixture", "--run", "fixture-run@2026.11.20.1"]
+    )
+    task_health.main()
+    (retry_snapshot,) = set(version_root.glob(f"*/{task_health.ATTEMPTS_FILENAME}")) - {Path(str(path))}
+    assert set(pq.read_table(retry_snapshot)["attempt_id"].to_pylist()) == {*rows, "later"}
+    assert set(pq.read_table(str(path))["attempt_id"].to_pylist()) == rows.keys()
 
 
-def test_skip_lists_tasks_and_environments_that_fail_setup_or_verification(tmp_path):
+def test_skip_lists_tasks_and_environments_that_fail_setup_or_verification(tmp_path, monkeypatch, capsys):
     environments = {
         "repeated": ("swe/repeated", SETUP),
         "repeated-neighbor": ("swe/repeated", SETUP),
         "recovered": ("swe/recovered", SETUP),
         "infrastructure": ("swe/infrastructure", SETUP),
+        "infrastructure-neighbor": ("swe/infrastructure", SETUP),
+        "changed-task": ("swe/changed", SETUP),
+        "changed-neighbor": ("swe/changed", SETUP),
         "once": ("swe/once", SETUP),
         "incomplete": ("swe/incomplete", SETUP),
         "shared-1": (SHARED_IMAGE, SETUP),
@@ -206,7 +222,7 @@ def test_skip_lists_tasks_and_environments_that_fail_setup_or_verification(tmp_p
         "shared-other-setup": (SHARED_IMAGE, "make setup"),
     }
     tasks = {name: harbor_task(name, image, setup) for name, (image, setup) in environments.items()}
-    selection = write_tasks(tmp_path / "selection" / TRAIN_FILENAME, list(tasks.values())).parent
+    selection = write_tasks(tmp_path / "selections/fixture/2026.11.20.1" / TRAIN_FILENAME, list(tasks.values())).parent
 
     def attempt(name: str, phase: Phase, error: str | None, outcome: Outcome | None = Outcome.INFRA_ERROR) -> dict:
         image, setup = environments[name]
@@ -216,6 +232,8 @@ def test_skip_lists_tasks_and_environments_that_fail_setup_or_verification(tmp_p
             "outcome": outcome,
             "phase": phase,
             "error": error,
+            "setup_completed": False if phase == Phase.TASK_SETUP and error else None,
+            "verifier_stdout": error if phase == Phase.VERIFIER else None,
             "docker_image": image,
             "setup_sha256": hashlib.sha256(setup.encode()).hexdigest(),
             "address": f"s3://fixture/installed-agents/{name}-{phase}",
@@ -228,12 +246,21 @@ def test_skip_lists_tasks_and_environments_that_fail_setup_or_verification(tmp_p
         attempt("recovered", Phase.VERIFIER, MISSING_MODULE),
         attempt("infrastructure", Phase.ENVIRONMENT, "Sandbox creation failed"),
         attempt("infrastructure", Phase.AGENT, "Agent timed out"),
+        {**attempt("infrastructure", Phase.VERIFIER, "Service failed"), "exception_type": "AddTestsDirError"},
+        {**attempt("infrastructure", Phase.TASK_SETUP, "Service failed"), "exception_type": "RuntimeServiceError"},
+        {**attempt("infrastructure", Phase.TASK_SETUP, "Daytona output lost"), "exception_type": "DaytonaCommandError"},
+        attempt("infrastructure", Phase.TASK_SETUP, "Setup process failed to start"),
+        attempt("infrastructure", Phase.TASK_SETUP, "Setup process failed to start"),
+        {**attempt("infrastructure", Phase.VERIFIER, "Sandbox went away"), "verifier_stdout": None},
+        {**attempt("infrastructure", Phase.VERIFIER, "Sandbox went away"), "verifier_stdout": None},
         attempt("once", Phase.TASK_SETUP, SETUP_EXIT),
         attempt("incomplete", Phase.TASK_SETUP, None, None),
         attempt("incomplete", Phase.TASK_SETUP, None, None),
         attempt("shared-1", Phase.TASK_SETUP, SETUP_EXIT),
         attempt("shared-2", Phase.VERIFIER, MISSING_MODULE),
     ]
+    old_task_failure = {**attempt("changed-task", Phase.TASK_SETUP, SETUP_EXIT), "task_digest": "1" * 64}
+    first_run.extend([old_task_failure, attempt("changed-task", Phase.TASK_SETUP, SETUP_EXIT)])
     second_run = [
         attempt("repeated", Phase.VERIFIER, MISSING_MODULE),
         attempt("recovered", Phase.VERIFIER, None, Outcome.GRADED),
@@ -241,6 +268,8 @@ def test_skip_lists_tasks_and_environments_that_fail_setup_or_verification(tmp_p
         attempt("infrastructure", Phase.AGENT, "Agent timed out"),
         attempt("shared-1", Phase.TASK_SETUP, SETUP_EXIT),
         attempt("shared-2", Phase.VERIFIER, MISSING_MODULE),
+        old_task_failure,
+        attempt("changed-task", Phase.TASK_SETUP, SETUP_EXIT),
     ]
     inputs = []
     for index, rows in enumerate((first_run, second_run)):
@@ -251,7 +280,7 @@ def test_skip_lists_tasks_and_environments_that_fail_setup_or_verification(tmp_p
             for ordinal, row in enumerate(rows)
         ]
         pq.write_table(pa.Table.from_pylist(records, schema=ATTEMPT_SCHEMA), inputs[-1])
-    output = tmp_path / "skip"
+    output = tmp_path / "skip/fixture/2026.11.20.2"
 
     def publish(destination: Path, release: Path | None = None) -> dict:
         return publish_skip_list(
@@ -262,20 +291,43 @@ def test_skip_lists_tasks_and_environments_that_fail_setup_or_verification(tmp_p
             StoragePath(str(release)) if release else None,
         )
 
-    manifest = publish(output)
+    monkeypatch.setattr(task_health, "TASK_HEALTH_ROOT", str(tmp_path))
+    monkeypatch.setattr(task_health, "SELECTION_ROOT", str(tmp_path / "selections"))
+    monkeypatch.setattr(task_health, "configure_coreweave_s3", lambda: None)
+    monkeypatch.setattr(
+        task_health.Provenance,
+        "capture",
+        lambda: task_health.Provenance("test-tree", "test-commit", False, "test-branch", "test"),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "task_health",
+            "skip",
+            "--selection",
+            "fixture@2026.11.20.1",
+            "--attempts",
+            *map(str, inputs),
+            "--version",
+            "2026.11.20.2",
+        ],
+    )
+    task_health.main()
+    manifest = json.loads(capsys.readouterr().out)
 
     listed = {row["task_id"]: row for row in pq.read_table(output / SKIP_FILENAME).to_pylist()}
     assert {task_id: row["unit"] for task_id, row in listed.items()} == {
         "repeated": "task",
+        "changed-task": "task",
         "shared-1": "task",
         "shared-2": "task",
         "shared-untried": "environment",
     }
     assert (listed["repeated"]["failed_attempts"], listed["repeated"]["error"]) == (3, MISSING_MODULE)
-    exclusion = HeldoutSource(
-        uri=str(output / SKIP_FILENAME), version="2026.11.20.1", rows=len(listed), format=PanelFormat.TASK_SPEC
-    )
-    assert {task.id: task for task in _panel_source_tasks(exclusion, {})} == {name: tasks[name] for name in listed}
+    assert {name: TaskSpec.model_validate_json(row[TASK_SPEC_COLUMN]) for name, row in listed.items()} == {
+        name: tasks[name] for name in listed
+    }
     assert manifest["inputs"] == {
         str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in (selection / TRAIN_FILENAME, *inputs)
     }
@@ -285,7 +337,7 @@ def test_skip_lists_tasks_and_environments_that_fail_setup_or_verification(tmp_p
     release = write_tasks(tmp_path / "release.parquet", [fixed, untagged])
     publish(tmp_path / "skip-after-release", release)
     after_release = pq.read_table(tmp_path / "skip-after-release" / SKIP_FILENAME)
-    assert set(after_release["task_id"].to_pylist()) == {"repeated", "shared-2", "shared-untried"}
+    assert set(after_release["task_id"].to_pylist()) == {"repeated", "shared-2", "shared-untried", "changed-task"}
 
     empty = StoragePath(str(tmp_path / "empty-skip"))
     one_attempt = inputs[0].parent / "one-attempt.parquet"

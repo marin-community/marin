@@ -29,7 +29,6 @@ from skyrl_train.config.mismatch_probe import validate_mismatch_probe_config
 from skyrl_train.config.callbacks import validate_hf_export_config
 from skyrl_train.config.objective_spec import validate_objective
 from skyrl_train.config.rollout_validation import (
-    EntrypointOperation,
     FAMILY_COLUMN,
     GROUPS_PER_FAMILY_KEY,
     EntrypointOperation,
@@ -92,7 +91,6 @@ class RunConfig:
     submission: str = SubmissionMode.WAIT.value
     export_hf: bool = False
     model: str | None = None
-    sft_preset: str | None = None
 
 
 @dataclass
@@ -222,6 +220,10 @@ class SkyRLLaunchConfig:
 
 def compose_launch_config(raw: Mapping[str, Any] | DictConfig) -> DictConfig:
     """Compose a raw mapping into the strict structured launch schema."""
+    if "sft_preset" in raw.get("run", {}):
+        raw = OmegaConf.create(raw)
+        with open_dict(raw.run):
+            del raw.run.sft_preset
     composed = OmegaConf.merge(OmegaConf.structured(SkyRLLaunchConfig), raw)
     OmegaConf.to_container(composed, resolve=True, throw_on_missing=True)
     if not composed.inputs.evaluation_data:

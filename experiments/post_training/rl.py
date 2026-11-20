@@ -31,7 +31,7 @@ from marin.execution.artifact import is_mutable_version
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.lazy import run as build_artifacts
-from marin.execution.step_runner import check_cache, step_is_built
+from marin.execution.step_runner import check_cache
 from marin.execution.step_status import get_status_path
 from marin.experiment.cli import build_options_with_runner
 from marin.experiment.namespacing import user_owned_name
@@ -75,7 +75,6 @@ from experiments.post_training.rl_measurements import (
     run_inputs,
 )
 from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME
-from experiments.post_training.task_curation.task_health import task_health_step
 
 _WANDB_ENTITY_ENV = "WANDB_ENTITY"
 _FAILED_RUN_STATES = {JobState.FAILED, JobState.KILLED, JobState.WORKER_FAILED, JobState.UNSCHEDULABLE}
@@ -87,7 +86,9 @@ class SFTModelPreset(Protocol):
     @property
     def name(self) -> str: ...
 
-    def model(self, *, coordinator_cluster: str | None = None) -> ArtifactHfModel: ...
+    def model(
+        self, *, coordinator_cluster: str | None = None, coordinator_prefix: str | None = None
+    ) -> ArtifactHfModel: ...
 
 
 @dataclass(frozen=True)
@@ -144,8 +145,10 @@ def _run_name(
 
 
 def _check_resume(preset: presets.Preset, *, has_init: bool) -> None:
-    if has_init or preset.checkpoints == "none":
-        raise click.BadParameter("--resume requires checkpointing and cannot be combined with --init")
+    if has_init:
+        raise click.BadParameter("--resume cannot be combined with --init")
+    if preset.checkpoints == "none":
+        raise click.BadParameter("--resume requires checkpointing")
 
 
 def _with_run_options(
@@ -157,6 +160,8 @@ def _with_run_options(
     priority: str | None,
     needs_model: bool,
 ) -> presets.Preset:
+    if preset.gated and any(value is not None for value in (checkpoints, checkpoint_every, export)):
+        raise click.BadParameter("gated presets do not accept --checkpoints, --checkpoint-every, or --export")
     retention = checkpoints if checkpoints is not None else preset.checkpoints
     export_policy = export if export is not None else preset.export
     if needs_model and export is None and export_policy == "none":
@@ -206,8 +211,6 @@ def build_experiment(
         raise click.BadParameter("this preset does not accept --tasks")
     if not preset.accepts_init and init is not None:
         raise click.BadParameter("this preset does not accept --init")
-    if resume is not None:
-        _check_resume(preset, has_init=init is not None)
     if (not preset.gated and replicates != 1) or (control and preset.control_preset != preset.name):
         raise click.BadParameter(f"{preset.name} does not accept this replicate or control selection")
     if control and (settings or tasks is not None or init is not None or resume is not None):
@@ -232,17 +235,9 @@ def build_experiment(
         if not any(row["uri"] == expected and row["version"] == task_set.version for row in excluded):
             raise click.BadParameter("candidate tasks must record the full held-out selection in recipe.exclusions")
     initializer = recipe.stored_initializer(init, preset=preset) if init is not None else None
-    if init is not None and init.step.adopt_source is None:
-        prefix = recipe.run_prefix(preset)
-        if sft_preset is None and init.step.path() != init.step.path(prefix):
-            raise click.BadParameter("the initial model must build under the RL layout's storage prefix")
-        if preset.gated and not step_is_built(init.step.lower()):
-            raise click.BadParameter("gated presets require an initial model that is already built")
     spec = recipe.run_spec(
         preset, name="rl-config", tasks=tasks, init=init, resume=resume, settings=settings, model_name=table.model
     )
-    if sft_preset is not None:
-        spec = replace(spec, sft_preset=sft_preset)
     evaluation_inputs = [
         (evaluation.name, source.name, source.version)
         for evaluation in preset.evaluations
@@ -260,8 +255,7 @@ def build_experiment(
     if sft_preset is not None:
         changes["sft_preset"] = sft_preset
     options = RunOptions.from_preset(preset)
-    default_preset = table.by_name.get(preset.name)
-    if default_preset is not None and options != RunOptions.from_preset(default_preset):
+    if options != RunOptions.from_preset(table.by_name[preset.name]):
         changes["run_options"] = options.model_dump(mode="json")
     rl_gate.validate_requirements(preset, requirements, table=table, control=control)
     provenance = _provenance(control=control)
@@ -330,12 +324,29 @@ def _status(
     issue: int | None = None,
     publication_urls: dict[str, str] | None = None,
 ) -> dict:
+    prefix = recipe.run_prefix(preset)
+    ttl = preset.output_ttl_days
+    source = "cluster default"
+    if ttl is not None:
+        if os.environ.get("MARIN_PREFIX"):
+            source = "MARIN_PREFIX"
+        elif os.environ.get("MARIN_TEMP_PREFIX"):
+            source = "MARIN_TEMP_PREFIX"
+        else:
+            source = f"preset's {ttl}-day storage"
+    output = {"root": prefix, "source": source}
+    if (
+        ttl
+        and (source != "MARIN_PREFIX" or f"/tmp/ttl={ttl}d" in prefix)
+        and preset.recipe.layout.coordinator_timeout_hours > 24 * ttl
+    ):
+        output["warning"] = "The coordinator time limit exceeds storage lifetime. Set MARIN_PREFIX to a durable root."
     rows = []
     planned = []
     for step in run.runs:
         execution = skyrl_execution(step)
         assert execution is not None
-        path = step.path(recipe.run_prefix(preset))
+        path = step.path(prefix)
         config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
         planned.append(yaml.safe_load(config.launch_config_yaml))
         try:
@@ -423,6 +434,7 @@ def _status(
         inputs["starting_checkpoint"] = launch_inputs["starting_checkpoint"]["identity"]
     return {
         "preset": preset.name,
+        "output": output,
         "run_options": RunOptions.from_preset(preset).model_dump(mode="json"),
         "code": asdict(Provenance.capture(recipe.REPO_ROOT)),
         "inputs": inputs,
@@ -458,6 +470,7 @@ def _wait_for_run(
     *,
     table: presets.ModelPresets,
     service_url: str | None,
+    has_following: bool,
 ) -> None:
     with open_iris_client(config_file=Path(IRIS_HUB_CLUSTER_CONFIG), workspace=recipe.REPO_ROOT) as client:
         parent = client.job(job).wait(
@@ -493,7 +506,15 @@ def _wait_for_run(
     )
     if publication is not None:
         snapshot["publication"] = publication.to_dict()
-    if "verdict" not in snapshot and (coordinator_error is not None or run.gate is not None):
+    rows = snapshot.get("runs", ())
+    if (
+        has_following
+        and coordinator_error is not None
+        and rows
+        and all(row["state"] == JobState.SUCCEEDED for row in rows)
+    ):
+        snapshot["post_run_error"] = f"Coordinator {job} ended in state {parent.state}. RL has a committed result."
+    elif "verdict" not in snapshot and (coordinator_error is not None or run.gate is not None):
         snapshot["reason"] = coordinator_error or "required verdict unavailable"
     _print_status(snapshot)
     if _evaluation_failed(snapshot, preset):
@@ -558,7 +579,9 @@ def _run_command(
                 build_artifacts(*following, max_concurrent=max_concurrent)
             job = None
         if options["wait"] and job is not None:
-            _wait_for_run(job, rl_handles, preset, table=table, service_url=options["url"])
+            _wait_for_run(
+                job, rl_handles, preset, table=table, service_url=options["url"], has_following=len(handles) > count
+            )
 
     return click.command(
         cls=RLCommand, help=__doc__ + "\n\n" + "\n".join(f"{preset.name}: {preset.budget}" for preset in table.presets)
@@ -651,8 +674,8 @@ def command(
         "--resume",
         "resume_name",
         metavar="NAME@VERSION",
-        help="Continue from a finished run's native checkpoint within its retention period, "
-        "using that run's starting model.",
+        help="Continue from a stopped run's native checkpoint and its starting model. "
+        "A running source may prune the checkpoint before the coordinator starts it.",
     )
     @click.option(
         "--control",
@@ -711,7 +734,10 @@ def command(
                     f"unknown SFT preset {sft_name!r}. Choose from {', '.join(by_name)}.", param_hint="--sft"
                 )
             try:
-                initializer = by_name[sft_name].model(coordinator_cluster=preset.recipe.layout.cluster)
+                initializer = by_name[sft_name].model(
+                    coordinator_cluster=preset.recipe.layout.cluster,
+                    coordinator_prefix=recipe.run_prefix(preset) if preset.temporary_output else None,
+                )
             except ValueError as error:
                 raise click.BadParameter(str(error), param_hint="--sft") from error
         if resume_name is not None:
@@ -746,11 +772,11 @@ def command(
             click.get_current_context().meta["rl_training_type"] = validated["runtime"]["training_type"]
         model = preset.model
         if (
-            run.inputs.init is None
+            table.needs_completed_default_export
+            and run.inputs.init is None
             and (run.inputs.resume is None or run.inputs.resume.model is None)
             and isinstance(model, ArtifactHfModel)
             and model.step.adopt_source is not None
-            and model.tokenizer_uri is None
             and not check_cache(model.step.path())
         ):
             sft_hint = "Build it with --sft PRESET or use" if sft_presets is not None else "Use"
@@ -765,8 +791,8 @@ def command(
         if not do_run and "verdict" in snapshot:
             raise click.exceptions.Exit(EXIT_CODES[snapshot["verdict"]])
         following = then(SkyRLPolicyModel(run.runs[0])) if then is not None else ()
-        if preset.batch_mix is not None:
-            following = (*following, *(task_health_step(step) for step in run.runs))
+        if after_run := preset.then:
+            following = (*following, *(after_run(step) for step in run.runs))
         rl_handles = (*run.runs, *((run.gate,) if run.gate else ()))
         click.get_current_context().meta["rl_handle_count"] = len(rl_handles)
         return (*rl_handles, *following)

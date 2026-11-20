@@ -14,8 +14,11 @@ from skyrlrecipe.locality import RoleTopologyMode
 from skyrlrecipe.sampling import EvalSamplingParams
 
 from experiments.post_training import rl
-from experiments.post_training.rl_agentic_recipe import SAMPLED_TRAJECTORIES, STOP_TOKEN_IDS, agentic, agentic_limits
+from experiments.post_training.rl_agentic_recipe import agentic_limits, agentic_preset
 from experiments.post_training.rl_presets import (
+    RL_TRAINING_BASE,
+    SAMPLED_TRAJECTORIES,
+    STOP_TOKEN_IDS,
     Evaluation,
     Layout,
     ModelPresets,
@@ -79,101 +82,65 @@ THREE_RACK = replace(
 )
 
 _SPLITTING_OPS = ("vllm::unified_attention_with_output", "vllm::unified_kv_cache_update", "vllm::grug_moe_short_conv")
-_ONE_TURN = RecipePatch(
-    context_budget=ContextBudget(request_window_tokens=65_536, max_new_tokens_per_turn=16_384, max_turns=1),
-    environment=sections.Environment(task_sessions={"local": {}}),
-    data=sections.Data(kind="parquet", shuffle=True),
-    trainer=sections.Trainer(
-        strategy="megatron",
-        flash_attn=True,
-        use_sample_packing=True,
-        gradient_checkpointing=True,
-        offload_optimizer_during_rollouts=False,
-        epochs=10_000,
-        update_epochs_per_batch=1,
-        eval_batch_size=120,
-        logger=("console", "records", "wandb"),
-        project_name="marin-mochi-rl",
-        tracker_commit_each_step=True,
-        training_metrics=True,
-        rollout_spans=True,
-        policy_train_spans=True,
-        algorithm=sections.Algorithm(
-            advantage_estimator="rloo_n",
-            policy_loss_type="regular",
-            loss_reduction="token_mean",
-            use_kl_loss=False,
-            off_policy_correction="tis",
-            group_advantage_min_size=2,
-            advantage_batch_normalize=False,
-            rloo_n_filter_zero_reward_groups=True,
-        ),
-        policy=sections.Policy(
-            optimizer_config=sections.PolicyOptimizerConfig(
-                optimizer="MuonH",
-                lr=1e-5,
-                weight_decay=0.0,
-                max_grad_norm=0.0,
-                adam_betas=(0.9, 0.95),
-                optimizer_kwargs={
-                    "adam_lr": 2.307692307692308e-6,
-                    "momentum": 0.95,
-                    "nesterov": True,
-                    "backend_steps": 5,
-                    "epsilon": 1e-8,
-                    "muon_epsilon": 1e-8,
-                    "offload_momentum": True,
-                    "expert_normalization": "all_experts",
-                },
+_ONE_TURN = RL_TRAINING_BASE.merge(
+    RecipePatch(
+        context_budget=ContextBudget(request_window_tokens=65_536, max_new_tokens_per_turn=16_384, max_turns=1),
+        trainer=sections.Trainer(
+            flash_attn=True,
+            use_sample_packing=True,
+            epochs=10_000,
+            eval_batch_size=120,
+            project_name="marin-mochi-rl",
+            algorithm=sections.Algorithm(
+                off_policy_correction="tis",
             ),
-            megatron_config=sections.PolicyMegatronConfig(
-                optimizer_checkpoint_sharding_type="dp_reshardable", moe_router_replay=True
+            policy=sections.Policy(
+                optimizer_config=sections.PolicyOptimizerConfig(
+                    optimizer="MuonH",
+                    lr=1e-5,
+                    weight_decay=0.0,
+                    max_grad_norm=0.0,
+                    adam_betas=(0.9, 0.95),
+                    optimizer_kwargs={
+                        "adam_lr": 2.307692307692308e-6,
+                        "momentum": 0.95,
+                        "nesterov": True,
+                        "backend_steps": 5,
+                        "epsilon": 1e-8,
+                        "muon_epsilon": 1e-8,
+                        "offload_momentum": True,
+                        "expert_normalization": "all_experts",
+                    },
+                ),
+                megatron_config=sections.PolicyMegatronConfig(
+                    optimizer_checkpoint_sharding_type="dp_reshardable", moe_router_replay=True
+                ),
+            ),
+            rollout_buffer=sections.RolloutBuffer(max_staleness_steps=3, batch_policy="full_batch"),
+        ),
+        generator=sections.Generator(
+            model_dtype="bfloat16",
+            max_num_seqs=16,
+            chat_template_kwargs={"enable_thinking": True},
+            sampling_params=sections.SamplingParams(
+                temperature=0.7, top_p=1.0, logprobs=0, stop_token_ids=STOP_TOKEN_IDS, skip_special_tokens=False
+            ),
+            engine_init_kwargs={
+                "model_loader_extra_config": {"distributed": False, "concurrency": 4, "memory_limit": 8 * 1024**3},
+                "compilation_config": {"mode": 3, "cudagraph_mode": "PIECEWISE", "splitting_ops": _SPLITTING_OPS},
+            },
+            trajectory_retention=SAMPLED_TRAJECTORIES.replace(
+                max_bytes_per_step=64 * 1024**2,
+                max_bytes_per_run=512 * 1024**2,
             ),
         ),
-        rollout_buffer=sections.RolloutBuffer(max_staleness_steps=3, batch_policy="full_batch", object_store_root=None),
-    ),
-    generator=sections.Generator(
-        backend="vllm",
-        model_dtype="bfloat16",
-        vllm_attention_backend="FLASH_ATTN",
-        run_engines_locally=True,
-        weight_sync_backend="nccl",
-        weight_sync_transport="expert_block",
-        weight_sync_pause=sections.WeightSyncPause(mode="keep", clear_cache=True),
-        expert_block_sync=sections.ExpertBlockSync(timeout_seconds=600, verify=False),
-        gpu_memory_utilization=0.75,
-        max_num_seqs=16,
-        max_num_batched_tokens=8192,
-        chat_template=None,
-        chat_template_kwargs={"enable_thinking": True},
-        sampling_params=sections.SamplingParams(
-            temperature=0.7, top_p=1.0, logprobs=0, stop_token_ids=STOP_TOKEN_IDS, skip_special_tokens=False
+        trajectory_runner=sections.TrajectoryRunner(
+            rollout_workers=sections.RolloutWorkers(num_workers=32, cpus_per_worker=2, start_interval_seconds=0)
         ),
-        trajectory_reward_shaping=sections.TrajectoryRewardShaping(
-            enabled=True,
-            overlong=sections.Overlong(penalty_scale=0.0),
-            reasoning_span=sections.ReasoningSpan(penalty=0.1, target="marker"),
-        ),
-        engine_init_kwargs={
-            "moe_backend": "triton",
-            "enable_auto_tools": True,
-            "tool_parser": "hermes",
-            "model_loader_extra_config": {"distributed": False, "concurrency": 4, "memory_limit": 8 * 1024**3},
-            "compilation_config": {"mode": 3, "cudagraph_mode": "PIECEWISE", "splitting_ops": _SPLITTING_OPS},
+        extra_env={
+            "OT_AGENT_RAY_OBJECT_STORE_CAP_GIB": "32",
         },
-        trajectory_retention=SAMPLED_TRAJECTORIES.replace(
-            max_bytes_per_step=64 * 1024**2,
-            max_bytes_per_run=512 * 1024**2,
-        ),
-    ),
-    trajectory_runner=sections.TrajectoryRunner(
-        rollout_workers=sections.RolloutWorkers(num_workers=32, cpus_per_worker=2, start_interval_seconds=0)
-    ),
-    extra_env={
-        "NCCL_IB_HCA": "ibp",
-        "OT_AGENT_RAY_OBJECT_STORE_CAP_GIB": "32",
-        "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
-    },
+    )
 )
 
 _TRANSFORMER_KWARGS = {"bias_activation_fusion": True, "grug_checkpoint_cpu_offload": True}
@@ -222,7 +189,7 @@ _EVALUATION = Evaluation(
 # Four hours covers the trial; eight hours covers the trial and one retry.
 _AGENTIC_LIMITS = agentic_limits(
     trial_timeout=14_400,
-    model_turn_timeout=10_800,
+    agent_timeout=10_800,
     stall_timeout=28_800,
 ).merge(RecipePatch(terminal_bench={"harbor": {"override_memory_mb": 4096}}))
 
@@ -249,7 +216,7 @@ _TRAIN_LONG = Preset(
     sample_namespace="datasets/mochi-rl",
     wandb_entity="marin-community",
     retention=SkyRLRetentionPolicy(resume_checkpoint_count=2, temporary_storage_ttl_days=3),
-    output_ttl_days=3,
+    temporary_output=True,
     export="none",
 )
 _TRAIN_LONG_3RACK = replace(
@@ -263,7 +230,7 @@ _TRAIN_MEDIUM = replace(
     evaluations=(),
 )
 _TRAIN_LONG_AGENTIC = replace(
-    agentic(_TRAIN_LONG, name="train-long-agentic", limits=_AGENTIC_LIMITS), revision="2026.11.20.6"
+    agentic_preset(_TRAIN_LONG, name="train-long-agentic", limits=_AGENTIC_LIMITS), revision="2026.11.20.6"
 )
 
 MOCHI = ModelPresets(
@@ -272,15 +239,16 @@ MOCHI = ModelPresets(
         _TRAIN_MEDIUM,
         _TRAIN_LONG,
         _TRAIN_LONG_3RACK,
-        agentic(_TRAIN_MEDIUM, name="train-medium-agentic", limits=_AGENTIC_LIMITS),
+        agentic_preset(_TRAIN_MEDIUM, name="train-medium-agentic", limits=_AGENTIC_LIMITS),
         _TRAIN_LONG_AGENTIC,
         replace(
-            agentic(_TRAIN_LONG_3RACK, name="train-long-agentic-3rack", limits=_AGENTIC_LIMITS),
+            agentic_preset(_TRAIN_LONG_3RACK, name="train-long-agentic-3rack", limits=_AGENTIC_LIMITS),
             revision=_TRAIN_LONG_AGENTIC.revision,
         ),
     ),
     namespace="mochi-rl",
     control_pins={},
+    needs_completed_default_export=True,
 )
 
 

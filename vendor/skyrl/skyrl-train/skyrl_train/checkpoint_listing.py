@@ -14,22 +14,23 @@ ROLLOUT_STATE_FILENAME = "data.pt"
 
 def extract_step_from_path(path: str) -> int:
     basename = os.path.basename(path)
-    if basename.startswith(GLOBAL_STEP_PREFIX):
-        return int(basename.split(GLOBAL_STEP_PREFIX)[1])
+    if basename.startswith(GLOBAL_STEP_PREFIX) and (suffix := basename.removeprefix(GLOBAL_STEP_PREFIX)).isdecimal():
+        return int(suffix)
     return -1
 
 
-def list_checkpoint_dirs(checkpoint_base_path: str) -> list[str]:
+def list_checkpoint_dirs(checkpoint_base_path: str, *, strict: bool = False) -> list[str]:
     """
     List all checkpoint directories in the base path.
 
     Args:
         checkpoint_base_path: Base path where checkpoints are stored
+        strict: Propagate storage failures for retention decisions on a committed run
 
     Returns:
         list[str]: List of checkpoint directory names
     """
-    if not io.exists(checkpoint_base_path):
+    if not strict and not io.exists(checkpoint_base_path):
         return []
 
     try:
@@ -45,6 +46,8 @@ def list_checkpoint_dirs(checkpoint_base_path: str) -> list[str]:
 
         return sorted(checkpoint_dirs)
     except Exception as e:
+        if strict:
+            raise
         logger.warning(f"Failed to list checkpoint directories from {checkpoint_base_path}: {e}")
         return []
 
@@ -57,15 +60,22 @@ def best_checkpoint_step(checkpoint_root: str) -> int | None:
     return None
 
 
-def periodic_checkpoint_steps(checkpoint_root: str, keep_every: int | None, latest_step: int) -> set[int]:
+def periodic_checkpoint_steps(
+    checkpoint_root: str, keep_every: int | None, latest_step: int, *, strict: bool = False
+) -> set[int]:
     if keep_every is None:
         return set()
+    return committed_checkpoint_steps(checkpoint_root, latest_step, every=keep_every, strict=strict)
+
+
+def committed_checkpoint_steps(
+    checkpoint_root: str, latest_step: int, *, every: int = 1, strict: bool = False
+) -> set[int]:
     return {
         step
-        for directory in list_checkpoint_dirs(checkpoint_root)
-        if directory.removeprefix(GLOBAL_STEP_PREFIX).isdecimal()
-        and 0 < (step := extract_step_from_path(directory)) <= latest_step
-        and step % keep_every == 0
+        for directory in list_checkpoint_dirs(checkpoint_root, strict=strict)
+        if 0 < (step := extract_step_from_path(directory)) <= latest_step
+        and step % every == 0
         and io.exists(os.path.join(checkpoint_root, directory, TRAINER_STATE_FILENAME))
         and io.exists(os.path.join(checkpoint_root, directory, ROLLOUT_STATE_FILENAME))
     }
@@ -90,28 +100,21 @@ def cleanup_old_checkpoints(
     if len(checkpoint_dirs) <= max_checkpoints:
         return
 
-    # Sort by step number (extract number from global_step_N)
-    def extract_step(dirname):
-        try:
-            return int(dirname.split("global_step_")[1])
-        except (IndexError, ValueError):
-            return 0
-
-    checkpoint_dirs.sort(key=extract_step)
+    checkpoint_dirs.sort(key=extract_step_from_path)
 
     protected_steps = protected_steps or set()
     recent = set(checkpoint_dirs[-max_checkpoints:]) if max_checkpoints > 0 else set()
     dirs_to_remove = [
         directory
         for directory in checkpoint_dirs
-        if directory not in recent and extract_step(directory) not in protected_steps
+        if directory not in recent and extract_step_from_path(directory) not in protected_steps
     ]
 
     for dir_name in dirs_to_remove:
         full_path = os.path.join(checkpoint_base_path, dir_name)
         try:
             io.remove(full_path)
-            step_num = extract_step(dir_name)
+            step_num = extract_step_from_path(dir_name)
             logger.info(f"Cleaned up old checkpoint: global_step_{step_num} at {full_path}")
         except Exception as e:
             logger.warning(f"Failed to remove old checkpoint {full_path}: {e}")

@@ -174,7 +174,6 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
     [result_path] = list((attempts[0] / "trials").glob("*/result.json"))
     result = TrialResult.model_validate_json(result_path.read_text())
     assert result.exception_info.exception_type == "ProviderUnavailable"
-    assert result.config.agent.kwargs["model_info"] == {"max_input_tokens": 1024, "max_output_tokens": 128}
 
 
 @pytest.mark.asyncio

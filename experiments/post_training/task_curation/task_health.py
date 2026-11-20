@@ -6,7 +6,7 @@
 ``extract`` writes one row per attempt in the run's installed-agent attempt store. ``skip`` lists a
 selection's training rows whose tasks repeatedly fail declared setup or verification without ever
 grading, and every row of an environment where enough tasks do. A skip file is a selection recipe's
-``exclusions`` input in ``task_spec`` format.
+``exclusions`` input in ``task_digest`` format.
 """
 
 import argparse
@@ -15,6 +15,7 @@ import io
 import json
 import math
 import os
+import re
 import tomllib
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -22,10 +23,11 @@ from enum import StrEnum
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from finestore.rl.run_records import LaunchState
 from marin.execution.artifact import validate_path_segment
 from marin.execution.lazy import ArtifactStep, apply
+from marin.rl.skyrl import read_skyrl_attempt
 from marin.rl.skyrl_records import read_skyrl_launch_config
-from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
@@ -35,7 +37,7 @@ from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.rl_compose import SELECTION_ROOT, artifact_prefix
-from experiments.post_training.task_curation import CANONICAL_ARTIFACT_ROOT
+from experiments.post_training.task_curation import CANONICAL_ARTIFACT_ROOT, publish_once
 from experiments.post_training.task_curation.selection import (
     SELECTION_PREFIX,
     TASK_SPEC_COLUMN,
@@ -66,7 +68,10 @@ class Phase(StrEnum):
     VERIFIER = "verifier"
 
 
-FAILING_PHASES = frozenset((Phase.TASK_SETUP, Phase.VERIFIER))
+SERVICE_FAILURES = frozenset(
+    {"AddTestsDirError", "DaytonaCommandError", "DownloadVerifierDirError", "ProviderUnavailable", "RuntimeServiceError"}
+)
+SETUP_COMMAND_FAILURE = re.compile(r"^Declared task setup command \d+ exited -?[1-9]\d*\b")
 # Only ungraded attempts carry the output tails and the attempt's address.
 ATTEMPT_COLUMNS = (
     "run selection attempt_id task_id task_digest outcome grading_failure exception_type error phase "
@@ -195,22 +200,12 @@ def _parquet(table: pa.Table) -> bytes:
     return buffer.getvalue()
 
 
-def _publish_once(output: StoragePath, files: dict[str, bytes]) -> None:
-    """Write each file once; publishing again succeeds only with identical bytes."""
-    output.mkdirs()
-    for name, contents in files.items():
-        target = conditional_object(str(output / name))
-        try:
-            target.write(contents, expected_version=None)
-        except ConditionalWriteError as error:
-            existing = target.read()
-            if existing is None or existing.data != contents:
-                raise FileExistsError(f"A different {name} is already published: {target.path}") from error
-
-
 def extract_attempts(run_output: StoragePath, run: str, output: StoragePath) -> StoragePath:
     """Publish one row per attempt in the run's installed-agent attempt store, graded or not."""
-    config = read_skyrl_launch_config(str(run_output))
+    return _extract_attempts(read_skyrl_launch_config(str(run_output)), run, output)
+
+
+def _extract_attempts(config: dict, run: str, output: StoragePath) -> StoragePath:
     agent = config["skyrl"]["terminal_bench_config"]["installed_agent"]
     (source,) = config["inputs"]["train_data"]
     selection = source["identity"].rpartition(":")[0].removeprefix(f"{SELECTION_PREFIX}/")
@@ -228,7 +223,7 @@ def extract_attempts(run_output: StoragePath, run: str, output: StoragePath) -> 
         ],
         schema=ATTEMPT_SCHEMA,
     )
-    _publish_once(output, {ATTEMPTS_FILENAME: _parquet(table)})
+    publish_once(output, {ATTEMPTS_FILENAME: _parquet(table)})
     return output / ATTEMPTS_FILENAME
 
 
@@ -257,10 +252,23 @@ def publish_skip_list(
     attempted = Counter(row["task_digest"] for row in rows)
     failures: defaultdict[str, list[dict]] = defaultdict(list)
     for row in rows:
-        if row["outcome"] == Outcome.INFRA_ERROR and row["phase"] in FAILING_PHASES and row["task_digest"] not in graded:
+        if (
+            row["outcome"] != Outcome.INFRA_ERROR
+            or row["task_digest"] in graded
+            or row["exception_type"] in SERVICE_FAILURES
+        ):
+            continue
+        failed_setup = (
+            row["phase"] == Phase.TASK_SETUP
+            and row["setup_completed"] is False
+            and SETUP_COMMAND_FAILURE.match(row["error"] or "") is not None
+        )
+        failed_verifier = row["phase"] == Phase.VERIFIER and (row["verifier_stdout"] or row["verifier_stderr"])
+        if failed_setup or failed_verifier:
             failures[row["task_digest"]].append(row)
     broken = {digest: failed[0] for digest, failed in failures.items() if len(failed) >= MIN_FAILED_ATTEMPTS}
-    environments = Counter((row["docker_image"], row["setup_sha256"]) for row in broken.values())
+    distinct_tasks = {(row["docker_image"], row["setup_sha256"], row["task_id"]) for row in broken.values()}
+    environments = Counter((image, setup) for image, setup, _ in distinct_tasks)
     broken_environments = {
         environment
         for environment, count in environments.items()
@@ -300,7 +308,7 @@ def publish_skip_list(
         "code_commit": code_commit,
         "rows": len(listed),
     }
-    _publish_once(
+    publish_once(
         output,
         {
             SKIP_FILENAME: _parquet(pa.Table.from_pylist(listed, schema=SKIP_SCHEMA)),
@@ -317,13 +325,19 @@ def _name_version(value: str) -> tuple[str, str]:
     return name, version
 
 
-def _attempt_output(run: str) -> StoragePath:
+def _extract_stopped_run(run_output: str, run: str) -> StoragePath:
+    """Snapshot all trial records at this run output after its current native attempt stops."""
+    attempt = read_skyrl_attempt(run_output)
+    if attempt is None or attempt.native.result.state not in {LaunchState.SUCCEEDED, LaunchState.FAILED}:
+        raise ValueError(f"Task health extraction requires a stopped run: {run}")
     name, version = _name_version(run)
-    return StoragePath(TASK_HEALTH_ROOT) / "attempts" / name / version
+    location = canonical_sha256({"run_output": run_output, "attempt": attempt.attempt_id})[:16]
+    output = StoragePath(TASK_HEALTH_ROOT) / "attempts" / name / version / location
+    return _extract_attempts(attempt.native.config, run, output)
 
 
 def _record_attempts(run_output: str, run: str) -> None:
-    extract_attempts(StoragePath(run_output), run, _attempt_output(run))
+    _extract_stopped_run(run_output, run)
 
 
 def task_health_step(run: ArtifactStep) -> ArtifactStep:
@@ -355,7 +369,7 @@ def main() -> None:
         name, version = _name_version(args.run)
         prefix = os.environ.get("MARIN_PREFIX") or artifact_prefix(args.cluster)
         run_output = StoragePath(prefix) / name / version
-        print(extract_attempts(run_output, args.run, _attempt_output(args.run)))
+        print(_extract_stopped_run(str(run_output), args.run))
         return
     provenance = Provenance.capture()
     if provenance.dirty or not provenance.base_commit:

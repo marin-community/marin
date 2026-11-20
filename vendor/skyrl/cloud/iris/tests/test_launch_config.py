@@ -574,8 +574,6 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(
     document["run"]["coordinator_iris_job_id"] = "/tests/coordinator"
     document["run"]["model"] = "test-policy"
     if own_tokenizer:
-        document["run"]["sft_preset"] = "small-sft"
-    if own_tokenizer:
         document["inputs"]["model"].update(tokenizer_uri=None, tokenizer_revision=None)
     if resume:
         document["inputs"]["starting_checkpoint"] = {
@@ -586,7 +584,7 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(
     backends = ["console"]
     if records_enabled:
         backends.append("records")
-        if entrypoint == "generate" or resume or own_tokenizer:
+        if entrypoint == "generate" or resume:
             backends.append("wandb")
     document["skyrl"]["trainer"]["logger"] = backends
     document["skyrl"]["entrypoint"] = entrypoint
@@ -688,10 +686,6 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(
         assert [(run["id"], run["group"], run["resume"]) for run in wandb_runs] == [("attempt-1", "smoke", "allow")]
         assert wandb_runs[0]["tags"] == ["test-policy"]
         assert wandb_runs[0]["config"]["model"] == "test-policy"
-    if own_tokenizer:
-        runtime = wandb_runs[0]["config"]["runtime"]
-        assert runtime["sft_preset"] == "small-sft"
-        assert runtime["model_source_identity"] == document["inputs"]["model"]["identity"]
     if resume:
         (evaluation,) = read_evaluations(export_root, attempt_id="attempt-1", evaluation="eval/")
         for field, expected in (

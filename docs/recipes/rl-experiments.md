@@ -12,65 +12,56 @@ Preset names use `<question>-<length>`. The two loops serve different purposes.
 
 The short loop, also called the quick loop, uses gated presets to compare one change against control runs.
 
-| Preset | What it measures | Default work and estimated cost | Evaluation and gate | When to use it |
-|---|---|---|---|---|
-| `speed-short` | Generation throughput per GPU | 8 H100s, 512 prompts × four answers, 14–17 min and about 2 H100-hours | Separate pass on the EvalLite pool. Gated on throughput and EvalLite pool family mean. | Screen a vLLM wheel, kernel or engine option before testing the full training loop with `speed-medium`. |
-| `data-short` | Fraction of prompts with both passing and failing answers | 8 H100s, 256 candidate training prompts × four answers, 10–15 min and about 2 H100-hours | Scores the sampled candidate tasks. Gated on mixed-answer fraction. | Screen a new `--tasks` selection before training on it with `data-medium`. |
-| `eval-short` | Published model scores | 8 H100s. The recorded run used 1.1 H100-hours. | Scores the full EvalLite pool without a control comparison. | Evaluate a published checkpoint in a generation-only job. |
-| `speed-medium` | Update time and policy agreement | 40 H100s, 10 updates. Wall time and cost are unmeasured. | Training metrics on updates 2–10. Gated on speed and mismatch. | Check startup, trainer kernels, parallelism, weight synchronization or numerics. Use `learning-medium` to measure quality after a precision change. |
-| `learning-medium` | EvalLite pool family mean and score gain per GPU-hour | 40 H100s, 25 updates. Wall time and cost are unmeasured. | EvalLite pool at steps 0 and 25. Gated on EvalLite pool family mean. | Compare objectives, optimizers, sampling, batch shape or initial weights. |
-| `data-medium` | Learning on a candidate training selection | 40 H100s, 25 updates. Wall time and cost are unmeasured. | EvalLite pool at steps 0 and 25. Shares the `learning-medium` gate and controls. | Train on a `--tasks` selection after it passes the short screen. |
-| `speed-long` | Sustained asynchronous update time and policy agreement | 40 H100s, 20 updates, 45–75 min and 30–50 H100-hours | Training metrics on updates 3–20. Gated on speed and mismatch. | Measure grading, admission or throughput changes over a longer window. |
+| Preset | What it measures | Default work and estimated cost | Evaluation and gate | When to use it | Ran on GPU |
+|---|---|---|---|---| --- |
+| `speed-short` | Generation throughput per GPU | 8 H100s, 512 prompts × four answers, 14–17 min and about 2 H100-hours | Separate pass on the EvalLite pool. Gated on throughput and EvalLite pool family mean. | Screen a vLLM wheel, kernel or engine option before testing the full training loop with `speed-medium`. | CPU plan only |
+| `data-short` | Fraction of prompts with both passing and failing answers | 8 H100s, 256 candidate training prompts × four answers, 10–15 min and about 2 H100-hours | Scores the sampled candidate tasks. Gated on mixed-answer fraction. | Screen a new `--tasks` selection before training on it with `data-medium`. | CPU plan only |
+| `eval-short` | Published model scores | 8 H100s. | Scores the full EvalLite pool without a control comparison. | Evaluate a published checkpoint in a generation-only job. | Ran as written |
+| `speed-medium` | Update time and policy agreement | 40 H100s, 10 updates. Wall time and cost are unmeasured. | Training metrics on updates 2–10. Gated on speed and mismatch. | Check startup, trainer kernels, parallelism, weight synchronization or numerics. Use `learning-medium` to measure quality after a precision change. | CPU plan only |
+| `learning-medium` | EvalLite pool family mean and score gain per GPU-hour | 40 H100s, 25 updates. Wall time and cost are unmeasured. | EvalLite pool at steps 0 and 25. Gated on EvalLite pool family mean. | Compare objectives, optimizers, sampling, batch shape or initial weights. | CPU plan only |
+| `data-medium` | Learning on a candidate training selection | 40 H100s, 25 updates. Wall time and cost are unmeasured. | EvalLite pool at steps 0 and 25. Shares the `learning-medium` gate and controls. | Train on a `--tasks` selection after it passes the short screen. | CPU plan only |
+| `speed-long` | Sustained asynchronous update time and policy agreement | 40 H100s, 20 updates, 45–75 min and 30–50 H100-hours | Training metrics on updates 3–20. Gated on speed and mismatch. | Measure grading, admission or throughput changes over a longer window. | CPU plan only |
 
 ### Long loop
 
 The long loop trains a model and evaluates it on held-out tasks.
 Use `train-long` for EvalLite or `train-long-harbor` to add the Harbor cohorts.
 
-| Preset | What it measures | Default work and estimated cost | Evaluation and gate | When to use it |
-|---|---|---|---|---|
-| Snowball `train-long` | Full training and checkpoint quality | 40 H100s, 100 updates by default, hours to days. Check the plan and use the reported GPU-hours for cost. | EvalLite active set of 100 tasks at step 0 and every 10 updates. Evaluation coverage invariants, without a calibrated control comparison. | Train a release candidate with checkpoint recovery and durable HF export. |
-| Snowball `train-long-harbor` | Full training with agentic checkpoint evaluation | 40 H100s, 100 updates by default, hours to days plus Harbor sandbox costs. | EvalLite plus 90 Harbor trials at each checkpoint evaluation. Coverage invariants without a calibrated control comparison. | Qualify current training weights on BFCL, SWE-bench Verified and OpenThoughts-TBLite. Requires the [Daytona evaluation account and sandbox capacity](#harbor-evaluation). |
+| Preset | What it measures | Default work and estimated cost | Evaluation and gate | When to use it | Ran on GPU |
+|---|---|---|---|---| --- |
+| Snowball `train-long` | Full training and checkpoint quality | 40 H100s, 100 updates by default, hours to days. Check the plan and use the reported GPU-hours for cost. | EvalLite active set of 100 tasks at step 0 and every 10 updates. Evaluation coverage invariants, without a calibrated control comparison. | Train a release candidate with checkpoint recovery and durable HF export. | Ran with a five-step SFT initializer and two RL updates |
+| Snowball `train-long-harbor` | Full training with agentic checkpoint evaluation | 40 H100s, 100 updates by default, hours to days plus Harbor sandbox costs. | EvalLite plus 90 Harbor trials at each checkpoint evaluation. Coverage invariants without a calibrated control comparison. | Qualify current training weights on BFCL, SWE-bench Verified and OpenThoughts-TBLite. Requires the [Daytona evaluation account and sandbox capacity](#harbor-evaluation). | CPU plan only |
 
 Mochi RL starts from the completed production SFT export, which supplies the weights and tokenizer.
 Use `--sft PRESET` to build a starting model or `--init NAME@VERSION` to use a published model.
 Mochi’s medium presets run two updates and its long presets run up to 10,000 updates.
 A preset ending in `-agentic` trains on agent tasks. A preset ending in `-harbor` evaluates with Harbor cohorts.
 
-| Mochi preset | When to use it | Layout |
-| --- | --- | --- |
-| `train-medium` | Short one-turn training check. | 15 nodes × 4 GB200s, one rack |
-| `train-medium-agentic` | Short mixed run with tool-using and one-turn tasks. | 15 nodes × 4 GB200s, one rack |
-| `train-long` | One-turn training with held-out evaluation. | 15 nodes × 4 GB200s, one rack |
-| `train-long-3rack` | One-turn training with dedicated racks for training and inference. | 48 nodes × 4 GB200s, three racks |
-| `train-long-agentic` | Mixed training and held-out evaluation with a single-rack allocation. | 15 nodes × 4 GB200s, one rack |
-| `train-long-agentic-3rack` | Mixed training and held-out evaluation across three racks. | 48 nodes × 4 GB200s, three racks |
+| Mochi preset | When to use it | Layout | Ran on GPU |
+| --- | --- | --- | --- |
+| `train-medium` | Short one-turn training check. | 15 nodes × 4 GB200s, one rack | Ran with an explicit initializer and checkpointing enabled |
+| `train-medium-agentic` | Short mixed run with tool-using and one-turn tasks. | 15 nodes × 4 GB200s, one rack | Ran with the v3 task selection, reduced batches and checkpointing enabled |
+| `train-long` | One-turn training with held-out evaluation. | 15 nodes × 4 GB200s, one rack | CPU plan only |
+| `train-long-3rack` | One-turn training with dedicated racks for training and inference. | 48 nodes × 4 GB200s, three racks | CPU plan only |
+| `train-long-agentic` | Mixed training and held-out evaluation with a single-rack allocation. | 15 nodes × 4 GB200s, one rack | CPU plan only |
+| `train-long-agentic-3rack` | Mixed training and held-out evaluation across three racks. | 48 nodes × 4 GB200s, three racks | CPU plan only |
 
 Mochi saves no checkpoint or HF export by default. Scheduled evaluation scores the live policy.
 Enable checkpointing if you need to resume. The default Mochi run path is under the cluster's
-`tmp/ttl=3d/` prefix. Set `MARIN_PREFIX` to store your checkpoints and exports durably.
-
-- A reduced one-turn run used about 83.4 GB200-hours for two updates. [One-turn run](https://iris.oa.dev/#/job/%2Fatqamar%2Fusers-ahmad-checkpoints-mochi-rl-train-medium-ccd0098764-in-f77b2799-2026.11.19.1-coordinator-5caf5432)
-- A three-update mixed run used 95.5 GB200-hours. [Mixed run](https://iris.oa.dev/#/job/%2Fatqamar%2Fusers-ahmad-checkpoints-mochi-rl-train-medium-agentic-42fe33329d-in-03b184b7-2026.11.19.1-coordinator-c7f0249f)
-- A one-update resume used 69.0 GB200-hours. [Resume run](https://iris.oa.dev/#/job/%2Fatqamar%2Fusers-ahmad-checkpoints-mochi-rl-train-medium-agentic-f546f24c97-in-f59a7432-resume-step-3-2026.11.19.1-coordinator-698346c2)
+`tmp/ttl=3d/` prefix. Set `MARIN_PREFIX` to a durable root for runs that may use the full 96-hour time limit.
 
 Both Mochi layouts restrict NCCL to the `ibp` InfiniBand rails. The long presets evaluate the
-100-task active set as `eval_lite_100`. The three-rack layout has CPU composition coverage.
-The mixed measurements use the v3 selection. A native Mochi checkpoint
-occupied 4.3 TB, and saves took 16 to 26 minutes on the single-rack layout. [Short mixed save](https://iris.oa.dev/#/job/%2Fatqamar%2Fusers-ahmad-checkpoints-mochi-rl-train-medium-agentic-42fe33329d-in-9adaf2cd-2026.11.19.1-coordinator-2c4b43b1) · [Resume save](https://iris.oa.dev/#/job/%2Fatqamar%2Fusers-ahmad-checkpoints-mochi-rl-train-medium-agentic-f546f24c97-in-f59a7432-resume-step-3-2026.11.19.1-coordinator-698346c2)
+100-task active set as `eval_lite_100`.
 
-| Snowball preset | When to use it | Layout | Checkpoints and export |
-| --- | --- | --- | --- |
-| `train-medium-agentic` | Ten updates with held-out evaluation on one inference engine. | `h100x88`, 11 nodes × 8 H100s | Best eligible policy. |
-| `train-long-agentic` | Up to 10,000 updates with held-out evaluation on 22 inference engines. | `h100x256`, 32 nodes × 8 H100s | Best eligible policy. |
+| Snowball preset | When to use it | Layout | Checkpoints and export | Ran on GPU |
+| --- | --- | --- | --- | --- |
+| `train-medium-agentic` | Ten updates with held-out evaluation on one inference engine. | `h100x88`, 11 nodes × 8 H100s | Best eligible policy. | Ran with the v4 task selection, reduced batches and a bounded attempt |
+| `train-long-agentic` | Up to 10,000 updates with held-out evaluation on 22 inference engines. | `h100x256`, 32 nodes × 8 H100s | Best eligible policy. | CPU plan only |
 
 When a trained step has the best eligible score, a successful waiting run keeps that native
 checkpoint and returns its HF export. When step zero wins, the result points to the starting HF
 model and trained checkpoints stay only if `keep_every` or an outstanding export protects them.
 Detached launches use the trainer’s rolling checkpoint window.
-
-A five-node smoke used 12.7 H100-hours for one update with the v3 selection and a custom layout.
-[Snowball smoke](https://iris.oa.dev/#/job/%2Fatqamar%2Fusers-ahmad-checkpoints-snowball-rl-train-medium-agentic-0b68f259dc-in-3f9941b9-2026.11.19.1-coordinator-7982cea2)
 
 The smaller Snowball layouts pack one trajectory per replica with context parallelism of one and
 no separate packing token budget, and the campaign layout splits a 102,400-token request into
@@ -83,10 +74,10 @@ selection contains the admitted SWE v4 agent tasks and the one-turn training row
 families must be present, and training rows must be disjoint from the held-out evaluation.
 
 Use `--resume NAME@VERSION` with checkpointing enabled to restore the newest retained recovery
-checkpoint and its original model identity from a finished run. The source needs an immutable
-version and a retained native checkpoint. `--init` starts from published
-model weights and is mutually exclusive with `--resume`. Set `SOURCE_RUN` to a finished Mochi
-run’s artifact name and version, as printed in its plan under `runs` as `name` and `version`.
+checkpoint and its original model identity from a run that has stopped. A running source's
+rolling cleanup can remove the checkpoint after you pin it. The source needs an immutable
+version and a retained native checkpoint. `--init` starts from published weights and is mutually
+exclusive with `--resume`. Set `SOURCE_RUN` to the source run's artifact name and version from its plan.
 
 ```bash
 uv run python -m experiments.post_training.mochi_rl \
@@ -117,21 +108,23 @@ output, commit, and per-row digests. Pin the derived file and its digest in the 
 
 ### Task health records
 
-Mixed presets record their single-step installed-agent attempts after RL succeeds. To extract
-from a stored run, including a failed run, use
+Mixed presets record their installed-agent attempts after RL commits its result. The runner
+reports a failure of this step separately from the RL result. To extract from a stopped run,
+including a failed run, use
 `uv run python -m experiments.post_training.task_curation.task_health extract --cluster CLUSTER --run NAME@VERSION`.
 Use `MARIN_PREFIX` if the run used an explicit or temporary storage prefix. The extractor writes
 grades, phases, image and setup digests, and output tails for ungraded attempts to
-`s3://marin-us-east-02a/marin/rl-data/task-health/attempts/<run>/<version>/attempts.parquet`.
-One Mochi run recorded 142 attempts, with 90 graded, 50 verifier failures and two environment
-failures. The verifier tails showed 20 Python import errors and 30 other test outputs.
+`s3://marin-us-east-02a/marin/rl-data/task-health/attempts/<run>/<version>/<attempt-key>/attempts.parquet`.
+The extractor snapshots the run's full attempt store, including trial records from earlier retries
+at that location. The key identifies the run location and the stopped native attempt.
 
 From a clean commit, run `skip --selection NAME@VERSION --attempts ADDRESS... --version YYYY.MM.DD.N`
-to publish a skip list. A task qualifies after two attempts recorded as setup or verifier failures with no
-graded attempt. When two qualifying tasks share an image and setup, the list includes the other
-tasks in that environment. `--release FILE` clears entries for tasks whose content has changed.
-Pin the resulting `skip.parquet` under the selection recipe's `exclusions` with format `task_spec`.
-The selection summary counts recipe exclusions separately from held-out overlap.
+to publish a skip list. A task qualifies after two attempts with a failed setup command or verifier
+output and no graded attempt. Known service failures do not count. When two distinct qualifying tasks
+share an image and setup, the list includes the other tasks in that environment.
+`--release FILE` clears entries for tasks whose content has changed.
+Pin the resulting `skip.parquet` under the selection recipe's `exclusions` with format `task_digest`.
+Selection matches the exact task revision and counts these exclusions separately from held-out overlap.
 Released inputs also pin an attempts record. The probe selection must use the same input digest,
 and at least 90% of 50 or more distinct probed tasks must have a graded attempt.
 
@@ -265,7 +258,8 @@ Use `--checkpoints latest --checkpoint-every 0 --export latest` to save and expo
 weights. Set a positive cadence to also save periodic checkpoints.
 `--checkpoints best` requires a checkpoint cadence and evaluation. Pass `--priority production`
 to request Iris's production band. The plan prints the effective checkpoint and export settings
-and the requested priority.
+and the requested priority, plus the output root and where it came from. Checkpoint and export
+options are fixed for gated presets. Candidates can set `--priority`.
 
 `--replicates N` makes 1–5 copies of a gated preset with one seed. `--control --replicates N`
 collects the preset's defaults from a clean checkout. Controls have their collection commit

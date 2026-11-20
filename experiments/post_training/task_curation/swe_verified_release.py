@@ -11,14 +11,13 @@ import tomllib
 import click
 import pyarrow as pa
 import pyarrow.parquet as pq
-from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
 from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.resources import resource_bytes
 
-from experiments.post_training.task_curation import CANONICAL_ARTIFACT_ROOT
+from experiments.post_training.task_curation import CANONICAL_ARTIFACT_ROOT, publish_once
 
 _SOURCE_SHA256 = "453552f9d4e1fa27710f9434a303f7ab5ff390c22deb54572f9be885a2a80f5d"
 _SOURCE_ROWS = 5608
@@ -80,18 +79,9 @@ def convert_release(source: StoragePath, sha256: str, rows: int, output: Storage
         "rows": rows,
         "tasks": identities,
     }
-    output.mkdirs()
-    for name, contents in (
-        ("agentic-train.parquet", parquet),
-        ("manifest.json", (json.dumps(manifest, indent=2) + "\n").encode()),
-    ):
-        target = conditional_object(str(output / name))
-        try:
-            target.write(contents, expected_version=None)
-        except ConditionalWriteError as error:
-            existing = target.read()
-            if existing is None or existing.data != contents:
-                raise FileExistsError(f"Published conversion differs from {target.path}") from error
+    publish_once(
+        output, {"agentic-train.parquet": parquet, "manifest.json": (json.dumps(manifest, indent=2) + "\n").encode()}
+    )
     return manifest
 
 

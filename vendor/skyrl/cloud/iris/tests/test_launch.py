@@ -264,6 +264,7 @@ class RetentionCase:
     marker: str | None = "3"
     expected_marker: str | None = "3"
     pending_exports: tuple[int, ...] = ()
+    inventory_error: bool = False
 
 
 @pytest.mark.parametrize("case", [
@@ -278,8 +279,12 @@ class RetentionCase:
     pytest.param(RetentionCase((1, 2, 3, 4), best_format=None, marker=None, expected_marker=None), id="no-marker"),
     pytest.param(RetentionCase((1, 2, 3, 4), best_format=None, marker="invalid", expected_marker="invalid"), id="unreadable-marker"),
     pytest.param(RetentionCase((1, 2, 4), pending_exports=(2, 4), expected_marker="2"), id="pending-exports"),
+    pytest.param(
+        RetentionCase((1, 2, 3, 4), keep_every=2, best_format="hf", inventory_error=True),
+        id="checkpoint-storage-error",
+    ),
 ])
-def test_launch_retains_checkpoints_only_after_success(completed_run_checkpoints, case):
+def test_launch_prunes_checkpoints_after_the_terminal_receipt(completed_run_checkpoints, case, monkeypatch):
     path, root = completed_run_checkpoints
     config = yaml.safe_load(path.read_text())
     config["run"]["export_hf"] = case.export_hf
@@ -304,6 +309,16 @@ def test_launch_retains_checkpoints_only_after_success(completed_run_checkpoints
             write_hf_export_request(HFExportRequest.from_trainer(
                 training.skyrl.trainer, step=step, checkpoint_root=str(root), export_root=training.artifacts.export_root
             ))
+    if case.inventory_error:
+        listing = launch.checkpoint_io.list_dir
+
+        def fail_first_listing(checkpoint_path):
+            if checkpoint_path == str(root):
+                monkeypatch.setattr(launch.checkpoint_io, "list_dir", listing)
+                raise OSError("checkpoint storage unavailable")
+            return listing(checkpoint_path)
+
+        monkeypatch.setattr(launch.checkpoint_io, "list_dir", fail_first_listing)
 
     backend = LocalLaunchBackend(
         outcome=LaunchOutcome("/user/training", case.job_state, int(case.job_state == "failed")),

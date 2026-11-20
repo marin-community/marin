@@ -38,7 +38,12 @@ from marinskyrl.speculative_decoding import SpeculatorModelConfig, SpeculatorMod
 from marinskyrl.task_sources import TaskTroveParquetSource, TaskTroveSelectionSnapshot, data_source, data_source_dict
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import launch_provenance
-from skyrl_train.checkpoint_listing import best_checkpoint_step, cleanup_old_checkpoints, periodic_checkpoint_steps
+from skyrl_train.checkpoint_listing import (
+    best_checkpoint_step,
+    cleanup_old_checkpoints,
+    committed_checkpoint_steps,
+    periodic_checkpoint_steps,
+)
 from skyrl_train.hf_export import protected_hf_export_steps
 from skyrl_train.io import io as checkpoint_io
 
@@ -200,12 +205,12 @@ def _retain_terminal_checkpoints(config: DictConfig) -> None:
     latest = terminal_checkpoint_step(root)
     best = best_checkpoint_step(root) if selection == "best" else None
     selected = latest if best is None else best
-    kept = periodic_checkpoint_steps(root, trainer.get("checkpoint_keep_every"), latest)
+    kept = periodic_checkpoint_steps(root, trainer.get("checkpoint_keep_every"), latest, strict=True)
     if selected > 0:
         kept.add(selected)
-    protected = protected_hf_export_steps(root)
+    protected = protected_hf_export_steps(root, strict=True)
     if protected:
-        kept.update(periodic_checkpoint_steps(root, 1, latest) & protected)
+        kept.update(committed_checkpoint_steps(root, latest, strict=True) & protected)
     if not kept:
         checkpoint_io.remove(str(marker))
     elif (newest := max(kept)) != latest:
@@ -344,8 +349,8 @@ def execute_launch(
     if config.run.mode == RunMode.TRAIN:
         try:
             _retain_terminal_checkpoints(config)
-        except Exception as error:
-            logger.warning(f"Failed to prune checkpoints for {config.run.id}: {error}")
+        except Exception:
+            logger.exception(f"Failed to prune checkpoints for {config.run.id}")
     return result
 
 

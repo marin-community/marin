@@ -119,6 +119,7 @@ LOCAL_GRADERS = frozenset((GraderKind.IN_PROCESS, GraderKind.PACKAGE))
 class PanelFormat(StrEnum):
     HISTORICAL = "historical"
     TASK_SPEC = "task_spec"
+    TASK_DIGEST = "task_digest"
     NORMALIZED = "normalized"
     EVALUATION = "evaluation"
 
@@ -566,7 +567,12 @@ def _grader_counts(path: Path) -> dict[str, int]:
 
 
 def write_training(
-    config: SelectionConfig, heldout: tuple[TaskSpec, ...], exclusions: tuple[TaskSpec, ...], destination: Path
+    config: SelectionConfig,
+    heldout: tuple[TaskSpec, ...],
+    exclusions: tuple[TaskSpec, ...],
+    destination: Path,
+    *,
+    excluded_digests: frozenset[str] = frozenset(),
 ) -> dict[str, SourceCounts]:
     """Sample admitted training tasks after excluding panel overlaps and duplicates."""
     heldout_keys = {key for task in heldout for key in _panel_keys(task).exclusion}
@@ -601,7 +607,9 @@ def write_training(
                 if not heldout_keys.isdisjoint(exclusion):
                     source_counts.heldout_overlap += 1
                     continue
-                if not excluded_keys.isdisjoint(exclusion):
+                if not excluded_keys.isdisjoint(exclusion) or (
+                    excluded_digests and canonical_sha256(json.loads(task_json)) in excluded_digests
+                ):
                     source_counts.excluded += 1
                     continue
                 contract = deduplication_key(task)
@@ -663,8 +671,17 @@ def prepare(config: SelectionConfig) -> None:
     selection = select_heldout(heldout, config.recipe)
     with TemporaryDirectory(prefix="task-selection-") as temporary:
         directory = Path(temporary)
-        excluded = tuple(task for source in config.exclusions for task in _panel_source_tasks(source, environments))
-        counts = write_training(config, selection.full, excluded, directory / TRAIN_FILENAME)
+        excluded = []
+        digests = set()
+        for source in config.exclusions:
+            tasks = _panel_source_tasks(source, environments)
+            if source.format == PanelFormat.TASK_DIGEST:
+                digests.update(canonical_sha256(task.model_dump(mode="json")) for task in tasks)
+            else:
+                excluded.extend(tasks)
+        counts = write_training(
+            config, selection.full, tuple(excluded), directory / TRAIN_FILENAME, excluded_digests=frozenset(digests)
+        )
         annotations = tuple(_manifest_records(selection.full, {task.id for task in selection.sample}))
         strata = {
             row["task_id"]: TaskStrata.model_validate({key: row[key] for key in TaskStrata.model_fields})

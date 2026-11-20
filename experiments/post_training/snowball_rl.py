@@ -24,15 +24,13 @@ from skyrlrecipe.declared import EvaluationProfile
 from skyrlrecipe.sampling import EvalSamplingParams
 
 from experiments.post_training import rl
-from experiments.post_training.rl_agentic_recipe import (
-    HARBOR_EVALUATION,
-    SAMPLED_TRAJECTORIES,
-    STOP_TOKEN_IDS,
-    agentic,
-    agentic_limits,
-)
+from experiments.post_training.rl_agentic_recipe import agentic_limits, agentic_preset
 from experiments.post_training.rl_compose import BATCH_SETTINGS
 from experiments.post_training.rl_presets import (
+    HARBOR_EVALUATION,
+    RL_TRAINING_BASE,
+    SAMPLED_TRAJECTORIES,
+    STOP_TOKEN_IDS,
     UPDATE_SECONDS_METRIC,
     ControlPin,
     Evaluation,
@@ -71,86 +69,47 @@ _DEFAULT_MODEL = ArtifactHfModel(
     relative_path="",
 )
 
-_DEFAULT_PATCH = RecipePatch(
-    context_budget=ContextBudget(request_window_tokens=24576, max_new_tokens_per_turn=8192, max_turns=1),
-    environment=sections.Environment(task_sessions={"local": {}}),
-    data=sections.Data(kind="parquet", shuffle=True),
-    trainer=sections.Trainer(
-        strategy="megatron",
-        flash_attn=False,
-        use_sample_packing=False,
-        gradient_checkpointing=True,
-        offload_optimizer_during_rollouts=False,
-        epochs=50,
-        update_epochs_per_batch=1,
-        eval_batch_size=256,
-        eval_before_train=False,
-        logger=("console", "records", "wandb"),
-        project_name="marin-snowball-rl",
-        tracker_commit_each_step=True,
-        training_metrics=True,
-        rollout_spans=True,
-        policy_train_spans=True,
-        algorithm=sections.Algorithm(
-            advantage_estimator="rloo_n",
-            off_policy_correction="none",
-            policy_loss_type="regular",
-            loss_reduction="token_mean",
-            use_kl_loss=False,
-            kl_estimator_type="k3_unbiased_gradient",
-            eps_clip_low=0.2,
-            eps_clip_high=0.2,
-            group_advantage_min_size=2,
-            advantage_batch_normalize=False,
-            rloo_n_filter_zero_reward_groups=True,
-            use_entropy_loss=False,
-        ),
-        policy=sections.Policy(
-            optimizer_config=sections.PolicyOptimizerConfig(
-                optimizer="AdamW",
-                lr=1e-6,
-                adam_betas=(0.9, 0.999),
-                weight_decay=0.0,
-                max_grad_norm=0.5,
-                scheduler="constant_with_warmup",
-                num_warmup_steps=0,
+_DEFAULT_PATCH = RL_TRAINING_BASE.merge(
+    RecipePatch(
+        context_budget=ContextBudget(request_window_tokens=24576, max_new_tokens_per_turn=8192, max_turns=1),
+        trainer=sections.Trainer(
+            flash_attn=False,
+            use_sample_packing=False,
+            epochs=50,
+            eval_batch_size=256,
+            eval_before_train=False,
+            project_name="marin-snowball-rl",
+            algorithm=sections.Algorithm(
+                off_policy_correction="none",
+                kl_estimator_type="k3_unbiased_gradient",
+                eps_clip_low=0.2,
+                eps_clip_high=0.2,
+                use_entropy_loss=False,
+            ),
+            policy=sections.Policy(
+                optimizer_config=sections.PolicyOptimizerConfig(
+                    optimizer="AdamW",
+                    lr=1e-6,
+                    adam_betas=(0.9, 0.999),
+                    weight_decay=0.0,
+                    max_grad_norm=0.5,
+                    scheduler="constant_with_warmup",
+                    num_warmup_steps=0,
+                ),
             ),
         ),
-        rollout_buffer=sections.RolloutBuffer(object_store_root=None),
-    ),
-    generator=sections.Generator(
-        backend="vllm",
-        vllm_attention_backend="FLASH_ATTN",
-        run_engines_locally=True,
-        weight_sync_backend="nccl",
-        weight_sync_pause=sections.WeightSyncPause(mode="keep", clear_cache=True),
-        weight_sync_transport="expert_block",
-        expert_block_sync=sections.ExpertBlockSync(timeout_seconds=600, verify=False),
-        gpu_memory_utilization=0.75,
-        max_num_seqs=1024,
-        max_num_batched_tokens=8192,
-        enable_prefix_caching=True,
-        trajectory_reward_shaping=sections.TrajectoryRewardShaping(
-            enabled=True,
-            overlong=sections.Overlong(penalty_scale=0.0),
-            reasoning_span=sections.ReasoningSpan(penalty=0.1, target="marker"),
+        generator=sections.Generator(
+            max_num_seqs=1024,
+            enable_prefix_caching=True,
+            enable_chunked_prefill=True,
+            enforce_eager=False,
+            apply_overlong_filtering=False,
+            sampling_params=sections.SamplingParams(temperature=1.0, top_p=1.0, logprobs=0),
         ),
-        enable_chunked_prefill=True,
-        enforce_eager=False,
-        chat_template=None,
-        apply_overlong_filtering=False,
-        engine_init_kwargs={"moe_backend": "triton", "enable_auto_tools": True, "tool_parser": "hermes"},
-        sampling_params=sections.SamplingParams(temperature=1.0, top_p=1.0, logprobs=0),
-    ),
-    trajectory_runner=sections.TrajectoryRunner(max_concurrent_tasks=1024),
-    extra_env={
-        "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
-        # The privileged profile below exposes the front-end Ethernet NIC's RoCE functions
-        # (mlx5_*) beside the InfiniBand rails. NCCL routes some channels over them, which fails
-        # with IBV_WC_RETRY_EXC_ERR(12). Pin NCCL to the rails (ibp0-ibp7).
-        "NCCL_IB_HCA": "ibp",
-    },
+        trajectory_runner=sections.TrajectoryRunner(max_concurrent_tasks=1024),
+    )
 )
+
 
 _MODE_KEYS = (
     "trainer.rollout_buffer.max_staleness_steps",
@@ -367,12 +326,11 @@ _AGENTIC_PATCH = RecipePatch(
         sampling_params=sections.SamplingParams(
             temperature=0.7, stop_token_ids=STOP_TOKEN_IDS, skip_special_tokens=False
         ),
-        engine_init_kwargs={"enable_auto_tools": True, "tool_parser": "hermes"},
         trajectory_retention=SAMPLED_TRAJECTORIES,
     ),
 )
 
-_TRAIN_LONG_AGENTIC = agentic(
+_TRAIN_LONG_AGENTIC = agentic_preset(
     replace(
         _TRAIN_LONG.with_updates(10_000),
         revision="2026.11.20.4",
@@ -386,7 +344,7 @@ _TRAIN_LONG_AGENTIC = agentic(
     # The sandbox covers one 90-minute trial; admission covers the trial and one retry.
     limits=agentic_limits(
         trial_timeout=5400,
-        model_turn_timeout=1800,
+        agent_timeout=1800,
         stall_timeout=10_800,
     ).merge(_AGENTIC_PATCH),
 )

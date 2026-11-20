@@ -86,7 +86,7 @@ def assert_revisioned_native_configs(
             preset,
             name="fixture-default-" + name,
             model_name=table.model,
-            tasks=mixed_tasks if preset.tasks_input == "required" else None,
+            tasks=mixed_tasks if preset.batch_mix is not None else None,
         )
         step = recipe.run_step(preset, spec)
         path = tmp_path / f"{name}.yaml"

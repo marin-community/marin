@@ -651,7 +651,6 @@ class SkyRLSpec:
     evaluation_data: tuple[tuple[str, tuple[SkyRLDataSource, ...]], ...] = ()
     starting_checkpoint: ArtifactStep[Artifact] | None = None
     model_name: str | None = None
-    sft_preset: str | None = None
 
     def __post_init__(self) -> None:
         _validate_skyrl_recipe(self.config_yaml, self.topology)
@@ -1070,7 +1069,6 @@ def _launch_config_yaml(
             "submission": "wait",
             "export_hf": export_hf,
             **({"model": spec.model_name} if spec.model_name is not None else {}),
-            **({"sft_preset": spec.sft_preset} if spec.sft_preset is not None else {}),
             **({"coordinator_iris_job_id": coordinator_iris_job_id} if coordinator_iris_job_id is not None else {}),
         },
         "runtime": {

@@ -174,7 +174,7 @@ class PromptLoader:
         self._scan_start = 0
 
     def next_prompt(self, live: Collection[str], family: str | None = None) -> dict | None:
-        """Return an available prompt outside ``live`` in the requested family.
+        """Offer a prompt in the requested family whose uid is neither live nor quarantined.
 
         Prompts awaiting regeneration come first, then up to two batches' worth of the prompt order's draws. If those
         draws find no eligible uid, a scan starting after the previous match can pick a row the order weights at zero.
@@ -187,6 +187,7 @@ class PromptLoader:
             if eligible(prompt["uid"]):
                 del self._retries[position]
                 return self._label_family(prompt)
+        # Every usable dataset uid is live, so drawing would only advance the order. A quarantined uid is never live.
         if len(live) + len(self._quarantined) >= self._uid_count:
             return None
         for _ in range(self._draw_limit):

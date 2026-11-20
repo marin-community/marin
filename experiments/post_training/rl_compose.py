@@ -20,7 +20,14 @@ from finestore.rl.strata import MembershipState, SelectionTaskRow, read_selectio
 from finestore.schema import arrow_schema
 from iris.rpc import job_pb2
 from marin.evaluation.eval_env import DAYTONA_TARGET_ENV
-from marin.execution.artifact import Artifact, is_mutable_version, read_record, result_type_name, validate_path_segment
+from marin.execution.artifact import (
+    RECORD_FILENAME,
+    Artifact,
+    is_mutable_version,
+    read_record,
+    result_type_name,
+    validate_path_segment,
+)
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.rl.skyrl import (
@@ -262,7 +269,7 @@ def published_model(value: str, *, preset: Preset) -> SkyRLModelSource:
     name, separator, version = value.rpartition("@")
     if not separator or is_mutable_version(version):
         raise click.BadParameter("use NAME@VERSION with an immutable model version")
-    root = run_path(preset, name, version)
+    root = _source_run_path(preset, name, version, RESOLVED_LAUNCH_FILENAME, RECORD_FILENAME)
     record = read_record(root)
     if (StoragePath(root) / RESOLVED_LAUNCH_FILENAME).exists() or (
         record is not None and record.result_type == result_type_name(SkyRLRun)
@@ -281,7 +288,7 @@ def published_model(value: str, *, preset: Preset) -> SkyRLModelSource:
 
 
 def recovery_checkpoint(value: str, *, preset: Preset) -> presets.StoredResume:
-    """Pin the newest retained recovery checkpoint and starting model from a finished run."""
+    """Pin the newest retained recovery checkpoint and starting model from a stopped run."""
     name, separator, version = value.rpartition("@")
     if not name or not separator or is_mutable_version(version):
         raise click.BadParameter("use NAME@VERSION with an immutable run version")
@@ -290,7 +297,7 @@ def recovery_checkpoint(value: str, *, preset: Preset) -> presets.StoredResume:
         validate_path_segment("version", version)
     except ValueError as error:
         raise click.BadParameter(str(error)) from error
-    output = run_path(preset, name, version)
+    output = _source_run_path(preset, name, version, RESOLVED_LAUNCH_FILENAME)
     try:
         config = read_skyrl_launch_config(output)
         root = StoragePath(config["artifacts"]["checkpoint_root"])
@@ -367,6 +374,15 @@ def model_from_reference(source: StoredInitializer, *, resolved: ResolvedModelLo
 
 def run_path(preset: Preset, name: str, version: str) -> str:
     return str(StoragePath(run_prefix(preset)) / name / version)
+
+
+def _source_run_path(preset: Preset, name: str, version: str, *record_names: str) -> str:
+    output = StoragePath(run_path(preset, name, version))
+    if preset.temporary_output and not any((output / record).exists() for record in record_names):
+        durable = StoragePath(artifact_prefix(preset.recipe.layout.cluster)) / name / version
+        if any((durable / record).exists() for record in record_names):
+            return str(durable)
+    return str(output)
 
 
 def utc_millis(value: str) -> int:

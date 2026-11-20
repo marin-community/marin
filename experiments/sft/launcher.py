@@ -630,15 +630,20 @@ class SFTSpec:
             if self.prepared_data.tokenizer != self.model.tokenizer_cache_key():
                 raise ValueError("prepared_data.tokenizer must match the SFT model's tokenizer")
 
-    def trained(self, resources: ResourceConfig, *, coordinator_cluster: str | None = None) -> ArtifactHfModel:
+    def trained(
+        self, resources: ResourceConfig, *, coordinator_cluster: str | None = None, coordinator_prefix: str | None = None
+    ) -> ArtifactHfModel:
         """Build the Levanter training step and resolve its final Hugging Face export."""
         if not isinstance(self.model, (HFModel, PreparedModel, ConvertedCheckpointModel, LevanterCheckpointModel)):
             raise ValueError(f"Build a Hugging Face export for the {type(self.model).__name__} trainer")
         resources = sft_child_resources(resources, coordinator_cluster)
         _validate_gpu_mesh(self, resources)
         steps = self.num_train_steps
+        training = sft_step(self, resources)
+        if coordinator_prefix is not None:
+            training = replace(training, output_path_prefix=coordinator_prefix)
         return ArtifactHfModel(
-            step=sft_step(self, resources),
+            step=training,
             relative_path=f"{DEFAULT_HF_CHECKPOINTS_PATH}/step-{steps - 1}" if steps is not None else None,
         )
 
@@ -646,7 +651,9 @@ class SFTSpec:
 class SFTRecipe(Protocol):
     """Produce a Hugging Face export with tokenizer files for RL and serving."""
 
-    def trained(self, resources: ResourceConfig, *, coordinator_cluster: str | None = None) -> ArtifactHfModel: ...
+    def trained(
+        self, resources: ResourceConfig, *, coordinator_cluster: str | None = None, coordinator_prefix: str | None = None
+    ) -> ArtifactHfModel: ...
 
 
 @dataclass(frozen=True)
@@ -657,9 +664,11 @@ class SFTPreset[RecipeT: SFTRecipe]:
     recipe: RecipeT
     resources: ResourceConfig
 
-    def model(self, *, coordinator_cluster: str | None = None) -> ArtifactHfModel:
+    def model(self, *, coordinator_cluster: str | None = None, coordinator_prefix: str | None = None) -> ArtifactHfModel:
         """Build the model export using the preset's fixed allocation."""
-        return self.recipe.trained(self.resources, coordinator_cluster=coordinator_cluster)
+        return self.recipe.trained(
+            self.resources, coordinator_cluster=coordinator_cluster, coordinator_prefix=coordinator_prefix
+        )
 
 
 def sft_child_resources(resources: ResourceConfig, coordinator_cluster: str | None) -> ResourceConfig:

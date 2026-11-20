@@ -531,8 +531,7 @@ def _comparison_document(launch: dict, recorded: RecordedLaunch | None = None) -
         "<run-identity>",
     )
     runtime = config["skyrl"].get("runtime", {})
-    if config["run"].get("sft_preset") is None:
-        config["run"].pop("sft_preset", None)
+    config["run"].pop("sft_preset", None)
     for field in ("run_id", "model", "attempt_id", "coordinator_iris_job_id", "iris_job_id"):
         runtime.pop(field, None)
     if not runtime:
@@ -553,22 +552,6 @@ def comparison_config(launch: dict, recorded: RecordedLaunch | None = None) -> d
 def _gate_config(launch: dict, recorded: RecordedLaunch | None = None) -> dict[str, object]:
     config = _comparison_document(launch, recorded)
     config["iris"].pop("priority", None)
-    config["run"].pop("export_hf", None)
-    trainer = config["skyrl"]["trainer"]
-    for field in (
-        "checkpoint_retention",
-        "checkpoint_keep_every",
-        "resume_mode",
-        "hf_export_checkpoint",
-        "export_hf_artifact",
-    ):
-        trainer.pop(field, None)
-    if "callbacks" in trainer:
-        trainer["callbacks"] = [
-            callback
-            for callback in trainer["callbacks"]
-            if callback["type"] not in {"checkpoint", "best_checkpoint", "hf_model_save"}
-        ]
     return _config_values(config)
 
 
@@ -588,8 +571,6 @@ def _compose_plans(
                     resume=candidate.resume,
                     settings=candidate.settings,
                 )
-                if candidate.sft_preset is not None:
-                    spec = replace(spec, sft_preset=candidate.sft_preset)
                 if isinstance(spec.model, ArtifactHfModel) and spec.model.relative_path is None:
                     spec = replace(spec, model=replace(spec.model, relative_path="<terminal-hf-export>"))
                 step = recipe.run_step(preset, spec)

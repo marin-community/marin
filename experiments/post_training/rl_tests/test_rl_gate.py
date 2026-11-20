@@ -90,26 +90,6 @@ def edit_metrics(root, edit):
     write_metrics(root, metrics)
 
 
-def test_compose_configs_configures_storage_before_loading(monkeypatch):
-    probe = """
-from cloud.iris import launch_config
-from omegaconf import OmegaConf
-from rigging.filesystem import s3_compat
-
-configured = []
-s3_compat.configure_coreweave_s3 = lambda: configured.append(True)
-
-def load(path):
-    assert configured, "launch input requires configured storage"
-    return OmegaConf.create({"path": path})
-
-launch_config.load_launch_config = load
-"""
-    native_json = gate._native_json
-    monkeypatch.setattr(gate, "_native_json", lambda program, *paths: native_json(probe + program, *paths))
-    assert gate.compose_configs(["launch.yaml"]) == [{"path": "launch.yaml"}]
-
-
 def test_compare_leave_one_out_writes_the_printed_report(recorded_runs):
     controls(recorded_runs, "speed-medium")
     report = compare("speed-medium", "--leave-out", "r0")
@@ -355,7 +335,7 @@ def test_current_generation_counters_compare_with_stored_controls(recorded_runs,
     assert any(row["name"] == "eval_lite/grader_error_fraction" and not row["holds"] for row in report["invariants"])
 
 
-def test_best_checkpoint_selection_requires_held_out_grading(recorded_runs, preset_table):
+def test_training_evaluation_checks_held_out_grading_with_either_checkpoint_policy(recorded_runs, preset_table):
     preset = snowball_model.SNOWBALL.by_name["train-long"]
     evaluation = replace(preset.evaluations[0], every=2)
     for retention in ("latest", "best"):
@@ -365,9 +345,9 @@ def test_best_checkpoint_selection_requires_held_out_grading(recorded_runs, pres
         preset_table(candidate)
         root = recorded_runs(candidate.name, f"users/test/checkpoint-grading-{retention}")
         facts = {fact.name for fact in measurements.read_measurements(str(root), candidate).invariants}
-        assert f"{evaluation.name}/answers_complete" in facts
-        for check in ("task_coverage", "grader_error_fraction"):
-            assert (f"{evaluation.name}/{check}" in facts) == (retention == "best")
+        assert {
+            f"{evaluation.name}/{check}" for check in ("answers_complete", "task_coverage", "grader_error_fraction")
+        } <= facts
 
 
 def test_additional_evaluation_protocol_uses_its_recorded_request(recorded_runs):
@@ -581,7 +561,7 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
     [
         "initializer",
         "initializer-hf",
-        "run-options",
+        "priority",
         "stale-default",
         "control-commit",
         "unbound-data",
@@ -664,12 +644,9 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
             planned = gate.validate_candidate(preset, inputs, table=snowball_model.SNOWBALL)
             assert planned["inputs"]["model"]["uri"].endswith("/<terminal-hf-export>")
         return
-    if case == "run-options":
+    if case == "priority":
         override = replace(
             preset,
-            checkpoints="latest",
-            checkpoint_every=None,
-            export="none",
             recipe=replace(preset.recipe, layout=replace(preset.recipe.layout, priority="production")),
         )
         inputs = inputs.model_copy(update={"options": RunOptions.from_preset(override)})

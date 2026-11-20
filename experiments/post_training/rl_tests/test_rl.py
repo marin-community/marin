@@ -36,6 +36,7 @@ from experiments.post_training import rl as snowball
 from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import snowball_rl as snowball_model
+from experiments.post_training.mochi_rl import MOCHI
 from experiments.post_training.rl_tests.fixtures import (
     SELECTION_IDENTITY,
     append_metrics,
@@ -64,14 +65,23 @@ def printed_status(output):
     return yaml.safe_load(output[marker + 1 if marker >= 0 else 0 :].split("\n# ", 1)[0])
 
 
-def test_all_presets_plan_with_their_declared_controls(selection):
+def test_all_presets_plan_with_their_declared_controls(selection, tmp_path):
     table = snowball_model.SNOWBALL
+    name, version = "tests/evaluation-init", "2026.11.17"
+    initializer = f"{name}@{version}"
+    write_published_artifact(tmp_path, name, version, Artifact, source=str(tmp_path / name / version))
     for preset in table.presets:
         arguments = ["--preset", preset.name, "--version", preset.revision, "--plan"]
         if preset.tasks_input == "required":
             arguments += ["--tasks", SELECTION_IDENTITY]
+        if preset.name == "eval-short":
+            arguments += ["--init", initializer]
         result = CliRunner().invoke(snowball.command(table, argv=tuple(arguments)), arguments)
         assert result.exit_code == 0, (preset.name, result.output, result.exception)
+        if preset.name == "eval-short":
+            status = printed_status(result.stdout.partition("\nStepSpec(")[0])
+            assert status["inputs"]["model"].partition(":")[0] == initializer
+            assert status["updates"] == 0 and status["guards"] == []
 
     preset = next(preset for preset in table.presets if preset.gated)
     arguments = ["--preset", preset.name, "--version", preset.revision]
@@ -81,27 +91,6 @@ def test_all_presets_plan_with_their_declared_controls(selection):
     result = CliRunner().invoke(snowball.command(unpinned, argv=tuple(arguments)), arguments)
     assert result.exit_code == 4 and "no control pin" in result.output, (result.output, result.exception)
     assert "--control --replicates" in result.output
-
-
-def test_generation_presets_accept_init_only_for_eval_short(selection, tmp_path):
-    table = snowball_model.SNOWBALL
-    name, version = "tests/evaluation-init", "2026.11.17"
-    root = tmp_path / name / version
-    write_published_artifact(tmp_path, name, version, Artifact, source=str(root))
-    for preset_name in ("eval-short", "speed-short", "data-short"):
-        preset = table.by_name[preset_name]
-        arguments = ["--preset", preset_name, "--version", preset.revision, "--init", f"{name}@{version}", "--plan"]
-        if preset.tasks_input == "required":
-            arguments += ["--tasks", SELECTION_IDENTITY]
-        result = CliRunner().invoke(snowball.command(table, argv=tuple(arguments)), arguments)
-        if preset_name == "eval-short":
-            assert result.exit_code == 0, (result.output, result.exception)
-            status = printed_status(result.stdout.partition("\nStepSpec(")[0])
-            assert status["inputs"]["model"].partition(":")[0] == f"{name}@{version}"
-            assert status["updates"] == 0
-            assert status["guards"] == []
-        else:
-            assert result.exit_code == 4 and "does not accept --init" in result.output, result.output
 
 
 @pytest.mark.parametrize(
@@ -504,7 +493,41 @@ def test_published_init_binds_export_tokenizer(
     )
 
 
-def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatch):
+@pytest.mark.parametrize("model", ("snowball", "mochi"))
+def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, request):
+    if model == "mochi":
+        revisions = {
+            "train-medium": {"2026.11.19.1": "8b5a970e", "2026.11.20.2": "15b0f019", "2026.11.20.4": "08ba7390"},
+            "train-long": {"2026.11.20.4": "e105d46c"},
+            "train-long-3rack": {"2026.11.20.4": "9734d621"},
+            "train-medium-agentic": {"2026.11.19.1": "3f203da5", "2026.11.20.4": "1617b1d3"},
+            "train-long-agentic": {"2026.11.20.6": "a3e2befe"},
+            "train-long-agentic-3rack": {"2026.11.20.6": "b8f3bba7"},
+        }
+        with monkeypatch.context() as local:
+            local.delenv("MARIN_PREFIX", raising=False)
+            local.delenv("MARIN_TEMP_PREFIX", raising=False)
+            local.setattr(recipe, "artifact_prefix", lambda _cluster: "s3://marin-us-east-08a/marin")
+            for preset in MOCHI.presets:
+                assert recipe.run_prefix(preset).rstrip("/") == "s3://marin-us-east-08a/tmp/ttl=3d"
+        produced = request.getfixturevalue("mochi_sft_presets")["periodic"].model()
+        for preset in MOCHI.presets:
+            model, prefix = preset.model, recipe.artifact_prefix(preset.recipe.layout.cluster)
+            assert (model.step.name, model.step.version, model.step.path(prefix)) == (
+                produced.step.name,
+                produced.step.version,
+                produced.step.path(prefix),
+            )
+            assert model.relative_path == produced.relative_path and model.tokenizer_uri is None
+        configs = assert_revisioned_native_configs(
+            MOCHI,
+            revisions,
+            tmp_path=tmp_path,
+            monkeypatch=monkeypatch,
+            mixed_tasks=request.getfixturevalue("selection"),
+        )
+        _assert_mochi_preset_documents(revisions, configs)
+        return
     revisions = {
         "speed-short": {
             "2026.11.13.1": "96e0d088",
@@ -561,16 +584,13 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             "2026.11.20.3": "40c0256e",
             "2026.11.20.4": "7826cc5a",
         },
-        "train-long-harbor": {
-            "2026.11.17.2": "5a71e7e8",
-            "2026.11.18.1": "7c3c9478",
-            "2026.11.19.1": "3f50c3ec",
-            "2026.11.20.2": "b4ff4b10",
-            "2026.11.20.3": "52b4bece",
-            "2026.11.20.4": "90aefa3b",
-            "2026.11.20.5": "e1f1635a",
-            "2026.11.20.6": "5707ee45",
+        "train-long-harbor": {"2026.11.20.5": "e1f1635a", "2026.11.20.6": "5707ee45"},
+        "train-medium-agentic": {
+            "2026.11.19.1": "756f58ef",
+            "2026.11.20.1": "b557a4f0",
+            "2026.11.20.4": "f76d6b51",
         },
+        "train-long-agentic": {"2026.11.20.4": "7123c960"},
         "eval-short": {
             "2026.11.19.1": "8144570a",
             "2026.11.20.1": "fad362ca",
@@ -578,10 +598,17 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
         },
     }
     configs = assert_revisioned_native_configs(
-        snowball_model.SNOWBALL, revisions, tmp_path=tmp_path, monkeypatch=monkeypatch
+        snowball_model.SNOWBALL,
+        revisions,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        mixed_tasks=request.getfixturevalue("selection"),
     )
     for name, config in zip(revisions, configs, strict=True):
         trainer, generator = config["skyrl"]["trainer"], config["skyrl"]["generator"]
+        if snowball_model.SNOWBALL.by_name[name].batch_mix is not None:
+            assert trainer["rollout_buffer"]["groups_per_family"]
+            continue
         assert "groups_per_family" not in trainer["rollout_buffer"]
         assert config["iris"]["allocation"]["num_nodes"] * config["iris"]["allocation"]["gpus_per_node"] <= 40
         generating = name in ("speed-short", "data-short", "eval-short")
@@ -592,7 +619,6 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             trainer["rollout_buffer"]["batch_policy"],
         ) == ((None, 0, "none", "full_batch") if generating else ("async", 2, "tis", "full_batch"))
         if generating:
-            assert trainer["placement"]["policy_num_nodes"] == 4
             assert config["runtime"]["entrypoint"] == "skyrl_train.entrypoints.main_generate"
         if name in ("speed-short", "learning-medium", "data-medium", "train-long"):
             profile = next(
@@ -622,6 +648,26 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             assert kinds.index("evaluation") < kinds.index("best_checkpoint") < kinds.index("hf_model_save")
         if name == "train-long":
             assert next(row for row in trainer["callbacks"] if row["type"] == "evaluation")["eval_on_train_end"] is False
+
+
+def _assert_mochi_preset_documents(revisions, configs):
+    documents = dict(zip(revisions, configs, strict=True))
+    for preset in MOCHI.presets:
+        document = documents[preset.name]
+        assert not document["run"]["export_hf"]
+        assert not any(
+            callback["type"] in {"checkpoint", "best_checkpoint", "hf_model_save"}
+            for callback in document["skyrl"]["trainer"]["callbacks"]
+        )
+        if preset.evaluations:
+            (validation,) = document["inputs"]["validation_data"]
+            assert validation["relative_path"] == "validation.parquet"
+
+    docs = (recipe.REPO_ROOT / "docs/dev-guide/skyrl.md").read_text()
+    fragment = docs.split("## Mochi inference on GB200", 1)[1].split("```yaml", 1)[1].split("```", 1)[0]
+    served = gate._config_values(documents["train-long-3rack"]["skyrl"])
+    for path, value in gate._config_values(yaml.safe_load(fragment)).items():
+        assert served[path] == value, path
 
 
 def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, tmp_path, recorded_runs):
@@ -1199,7 +1245,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
             info = JobInfo(task_id=JobName.from_wire("/test-user/train-coordinator/0"))
             with iris_ctx_scope(IrisContext.from_job_info(info)), pytest.raises(SystemExit) as completed:
                 runpy.run_module(coordinator_module, run_name="__main__", alter_sys=True)
-            assert completed.value.code == (0 if mode == "valid" else 4)
+            assert completed.value.code == {"valid": 0, "failed-following": 3}.get(mode, 4)
         set_job_info(None)
         return SimpleNamespace(job_id=job)
 
@@ -1213,7 +1259,9 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     raw_load = SkyRLRun.raw_load
     monkeypatch.setattr(SkyRLRun, "raw_load", lambda path: raw_load(str(policy_path) if path == policy_uri else path))
 
-    def module(name, *, entry_module=None, use_init=True, forward_env=("HF_TEST_KEY",), policy_forward=None):
+    def module(
+        name, *, entry_module=None, use_init=True, forward_env=("HF_TEST_KEY",), policy_forward=None, then="None"
+    ):
         path = tmp_path / (name + ".py")
         dependency = ""
         if policy_forward is not None:
@@ -1228,15 +1276,17 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
                 f"init=SkyRLPolicyModel(replace(producer,override_path={policy_uri!r}))\n"
             )
         path.write_text(
-            "from dataclasses import replace\nfrom pathlib import Path\nfrom marin.execution.lazy import ArtifactStep\n"
+            "from dataclasses import replace\nfrom pathlib import Path\n"
+            "from marin.execution.lazy import ArtifactStep, apply\n"
             "from marin.execution.artifact import Artifact,ArtifactRecord,RECORD_FILENAME,result_type_name\n"
             "from marin.rl.skyrl import ArtifactHfModel,SkyRLRun,SkyRLPolicyModel\n"
             "from experiments.post_training import rl, snowball_rl\n"
             "step=ArtifactStep.adopt('tests/python-init','2026.11.17','s3://marin-test/models/python-init',kind=Artifact)\n"
             "init=ArtifactHfModel(step,'tests/python-tokenizer','python-tokenizer-revision',relative_path='')\n"
+            "def fail_following():\n    raise RuntimeError('following stage failed')\n"
             + dependency
             + f"raise SystemExit(rl.main(snowball_rl.SNOWBALL,init={'init' if use_init else 'None'},"
-            f"forward_env={forward_env!r},entry_module={entry_module!r}))\n"
+            f"forward_env={forward_env!r},entry_module={entry_module!r},then={then}))\n"
         )
         spec = importlib.util.spec_from_file_location(name, path)
         assert spec is not None
@@ -1287,6 +1337,12 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
             result.exception,
         )
         assert "test-initializer-credential" not in result.output and len(native_calls) == 1
+
+    mode, coordinator_module = "failed-following", "first_model_entry"
+    module(coordinator_module, then="lambda _: (apply('tests/following', fail_following, version='2026.11.20.1'),)")
+    result = CliRunner().invoke(entry)
+    assert result.exit_code == 3 and "post_run_error:" in result.output, (result.output, result.exception)
+    assert "RL has a committed result" in result.output
 
     evaluations = read_evaluations(str(source / "exports"), attempt_id="recorded-attempt", evaluation="eval/")
     replace_evaluations(

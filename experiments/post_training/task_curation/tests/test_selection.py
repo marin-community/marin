@@ -481,9 +481,17 @@ def test_selection_mixes_released_and_curated_tasks(tmp_path, monkeypatch):
     repeated = source_task("evaluation-overlap")
     one_turn_task = source_task("one-turn")
     alias = one_turn_task.model_copy(update={"id": "cross-source-alias"})
-    tasks = (harness_task(), repeated, alias)
+    repaired = harness_task()
+    old_task = repaired.model_copy(
+        update={"environment_requirements": EnvironmentRequirements(setup_commands=("false",))}
+    )
+    skipped = source_task("skip-exact-task")
+    tasks = (repaired, repeated, alias, skipped)
     release = released_training(tmp_path / "release.parquet", *tasks)
-    release = release.model_copy(update={"admission": released_probe(tmp_path, release, tasks, graded=3)})
+    release = release.model_copy(update={"admission": released_probe(tmp_path, release, tasks, graded=len(tasks))})
+    skip_list = task_file(
+        tmp_path / "skip.parquet", [selection_module.with_agentic_tag(task) for task in (old_task, skipped)]
+    )
     heldout = source_task("validation", dataset="structure-closure")
     one_turn = "fixture:first"
     settings = released_recipe(
@@ -492,7 +500,10 @@ def test_selection_mixes_released_and_curated_tasks(tmp_path, monkeypatch):
         family_limits={"nonagentic": 1, "agentic": 1},
         source_limits={one_turn: 1, release.uri: 1},
         heldout=(task_file(tmp_path / "heldout.parquet", [heldout]),),
-        exclusions=(task_file(tmp_path / "evallite.parquet", [repeated]),),
+        exclusions=(
+            task_file(tmp_path / "evallite.parquet", [repeated]),
+            skip_list.model_copy(update={"format": PanelFormat.TASK_DIGEST}),
+        ),
         admitted_graders=LOCAL_GRADERS | {GraderKind.HARNESS},
     )
     curated = {one_turn: admitted_source(tmp_path / "curated", [one_turn_task])}
@@ -504,11 +515,11 @@ def test_selection_mixes_released_and_curated_tasks(tmp_path, monkeypatch):
     assert summary["harness_graded_datasets"] == ["long-loop-smartie-swesmith"]
     assert summary["grader_kind_counts"]["train"]["harness"] == 1
     assert summary["source_counts"][release.uri] == {
-        "input": 3,
+        "input": 4,
         "selected": 1,
         "eligible": 1,
         "heldout_overlap": 0,
-        "excluded": 1,
+        "excluded": 2,
         "duplicate": 1,
     }
     rows = pq.read_table(root / TRAIN_FILENAME).to_pylist()
