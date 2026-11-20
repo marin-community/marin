@@ -7,8 +7,8 @@ import pytest
 from marin.execution.lazy import ArtifactStep, artifact_identity
 from marin.rl.curriculum import CurriculumStage
 
-from experiments.post_training.task_curation.curriculum import ordered_curriculum, weighted_curriculum
 from experiments.post_training.task_curation.campaign import CampaignArtifact
+from experiments.post_training.task_curation.curriculum import ordered_curriculum, weighted_curriculum
 
 
 def _pool(name: str) -> ArtifactStep[CampaignArtifact]:
