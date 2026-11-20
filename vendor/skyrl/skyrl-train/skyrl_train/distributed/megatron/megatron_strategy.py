@@ -1,8 +1,6 @@
 import os
 import math
 import random
-import tempfile
-from contextlib import nullcontext
 from datetime import timedelta
 from typing import List, Union, Optional
 from loguru import logger
@@ -533,21 +531,17 @@ class MegatronStrategy(DistributedStrategy):
             io.makedirs(output_dir, exist_ok=True)
         dist.barrier()
 
-        # Every rank exhausts Bridge's collective conversion. Rank zero owns artifact finalization and cloud
-        # publication; local nonzero ranks write directly to the shared directory without publishing a manifest.
-        if rank_zero:
-            model_dir = hf_model_io.local_hf_model_dir(output_dir)
-        elif io.is_cloud_path(output_dir):
-            model_dir = tempfile.TemporaryDirectory()
-        else:
-            model_dir = nullcontext(output_dir)
-        with model_dir as work_dir:
-            bridge.save_hf_weights(model.actor_module, work_dir)
-            self.log(f"Successfully saved HF safetensors model to {output_dir}")
+        weights = bridge.export_hf_weights(model.actor_module, cpu=True)
+        # Every rank exhausts Bridge's collective conversion. Rank zero writes the export.
+        if not rank_zero:
+            for _ in weights:
+                pass
+            return
 
-            # Only rank 0 saves the Huggingface config and tokenizer.
-            if rank_zero:
-                self.save_hf_configs(self.hf_config, work_dir, tokenizer)
-                self.log(f"Successfully saved HF config and tokenizer to {output_dir}")
+        with hf_model_io.local_hf_model_dir(output_dir) as work_dir:
+            hf_model_io.write_hf_weight_shards(weights, work_dir)
+            self.log(f"Successfully saved HF safetensors model to {output_dir}")
+            self.save_hf_configs(self.hf_config, work_dir, tokenizer)
+            self.log(f"Successfully saved HF config and tokenizer to {output_dir}")
 
         # The Ray caller waits for every rank result; no collective needs to span artifact publication.

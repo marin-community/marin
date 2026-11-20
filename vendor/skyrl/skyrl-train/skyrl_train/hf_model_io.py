@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Iterable
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -24,11 +25,39 @@ from marinskyrl.model_manifest import (
     write_local_model_manifest,
 )
 from marinskyrl.resource_locator import join_resource_path
+from safetensors.torch import save_file
+from torch import Tensor, contiguous_format
 from transformers.utils import cached_file
 
 from skyrl_train.io import io
 
 HF_WEIGHT_FILENAME = "model.safetensors"
+
+
+def write_hf_weight_shards(
+    weights: Iterable[tuple[str, Tensor]], output_dir: str, *, shard_size_bytes: int = 5_000_000_000
+) -> None:
+    """Write a stream of CPU weights as Safetensors shards for the export finalizer."""
+    directory = Path(output_dir)
+    shard = {}
+    size = 0
+    shard_number = 1
+
+    def flush():
+        nonlocal size, shard_number
+        save_file(shard, directory / f"model-{shard_number:05d}.safetensors", metadata={"format": "pt"})
+        shard.clear()
+        size = 0
+        shard_number += 1
+
+    for name, tensor in weights:
+        tensor_bytes = tensor.numel() * tensor.element_size()
+        if shard and size + tensor_bytes > shard_size_bytes:
+            flush()
+        shard[name] = tensor.clone(memory_format=contiguous_format)
+        size += tensor_bytes
+    if shard:
+        flush()
 
 
 def write_export_generation_config(
