@@ -1,0 +1,215 @@
+# Copyright The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
+import dataclasses
+
+import equinox as eqx
+import haliax as hax
+import jax
+import jax.numpy as jnp
+import numpy as np
+import pytest
+
+from levanter.grug.sharding import compact_grug_mesh
+from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
+from levanter.inference.jit_scheduler import FinishReason, SeqDecodingParams
+from levanter.inference.page_table import PageBatchInfo, PageTableSpec
+from levanter.inference.snowball_engine_replay import (
+    generate_snowball_replay,
+    replay_snowball_logits,
+    replay_snowball_loss,
+)
+from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
+
+
+@pytest.fixture
+def serving_model():
+    config = SnowballConfig(
+        vocab_size=23,
+        hidden_dim=16,
+        intermediate_dim=16,
+        shared_expert_intermediate_dim=16,
+        num_layers=2,
+        num_experts=4,
+        num_experts_per_token=2,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        max_seq_len=8,
+        sliding_window=4,
+        attention_implementation="reference",
+        inference_attention_implementation="reference",
+        moe_implementation="ring",
+    )
+    with (
+        jax.set_mesh(compact_grug_mesh(expert_axis_size=1)),
+        jax.default_matmul_precision("highest"),
+    ):
+        yield SnowballLMHeadModel.init(hax.Axis("vocab", 23), config, key=jax.random.key(41))
+
+
+def _engine(model, max_rounds):
+    return InferenceEngine.from_model_with_config(
+        model,
+        None,
+        InferenceEngineConfig(
+            max_seq_len=8,
+            max_pages=4,
+            max_seqs=2,
+            page_size=4,
+            max_queued_tokens=2,
+            max_seqs_in_prefill=2,
+            max_prefill_size=8,
+            max_rounds=max_rounds,
+            compute_dtype=jnp.float32,
+        ),
+    )
+
+
+def _requests():
+    return [
+        Request(
+            prompt,
+            rid,
+            dataclasses.replace(
+                SeqDecodingParams.default(),
+                max_num_tokens=jnp.asarray(length),
+                temperature=jnp.asarray(1.0),
+                key=jax.random.PRNGKey(rid),
+            ),
+            1,
+        )
+        for prompt, rid, length in [([1, 2], 101, 6), ([3, 4, 5], 202, 7), ([6], 303, 5), ([8, 9], 404, 8)]
+    ]
+
+
+@eqx.filter_jit
+def _decode(model, cache, tokens, info, positions):
+    return model.decode(tokens, cache, info, positions)
+
+
+@eqx.filter_jit
+def _capture(model, cache, tokens, info, positions):
+    return model.decode_with_route_captures(tokens, cache, info, positions)
+
+
+def _public_serving_oracle(model, payload):
+    """Teacher-force each actual input through independent public cached decode."""
+    cache = model.initial_cache(PageTableSpec(2, 4, 1), dtype=jnp.float32)
+    outputs = []
+    routes = []
+    for position, token in enumerate(payload.tokens):
+        info = PageBatchInfo(
+            slot_ids=hax.named(jnp.asarray([0], jnp.int32), "seq"),
+            page_indices=hax.named(jnp.asarray([[0, 1]], jnp.int32), ("seq", "page")),
+            seq_lens=hax.named(jnp.asarray([position + 1], jnp.int32), "seq"),
+            cu_q_lens=hax.named(jnp.asarray([0, 1], jnp.int32), "seq"),
+            num_seqs=jnp.asarray(1, jnp.int32),
+            new_token_dests=hax.named(jnp.asarray([position], jnp.int32), "position"),
+            page_size=4,
+        )
+        tokens = hax.named(jnp.asarray([token], jnp.int32), "position")
+        positions = hax.named(jnp.asarray([position], jnp.int32), "position")
+        # Capture and noncapture use the same pre-call cache for independent
+        # logit comparison before advancing the noncapturing state.
+        logits, next_cache = _decode(model, cache, tokens, info, positions)
+        captured_logits, _, captured = _capture(model, cache, tokens, info, positions)
+        np.testing.assert_array_equal(np.asarray(logits.array), np.asarray(captured_logits.array))
+        assert np.asarray(captured.token_ids).tolist() == [token]
+        assert np.asarray(captured.position_ids).tolist() == [position]
+        outputs.append(np.asarray(logits.array)[0])
+        routes.append(jax.device_get(captured.route_captures))
+        cache = next_cache
+    return np.stack(outputs), routes
+
+
+@pytest.mark.timeout(300)
+def test_engine_replay_matches_real_scheduling_and_preserves_every_target(serving_model):
+    requests = _requests()
+    results = []
+    for max_rounds in (1, 3):
+        engine = _engine(serving_model, max_rounds)
+        ordinary = engine.generate(requests)
+        replay = generate_snowball_replay(engine, requests, policy_id="tiny-41")
+        assert replay.generation == ordinary
+        assert replay.generation.finish_reasons == [FinishReason.LENGTH] * 4
+        assert [p.request_id for p in replay.payloads] == [r.request_id for r in requests]
+        # More requests than slots, followed by a second call, must preserve
+        # request identity even when physical pages and slot IDs are reused.
+        second = generate_snowball_replay(engine, requests[-1:], policy_id="tiny-41")
+        assert second.generation.tokens == ordinary.tokens[-1:]
+        results.append(replay)
+    assert results[0].generation == results[1].generation
+    for payload, other in zip(results[0].payloads, results[1].payloads, strict=True):
+        np.testing.assert_array_equal(payload.tokens, other.tokens)
+        example, _ = payload.training_inputs(serving_model, policy_id="tiny-41")
+        predictor_rows = np.flatnonzero(np.asarray(example.loss_weight.array))
+        np.testing.assert_array_equal(predictor_rows, np.arange(payload.prompt_length - 1, len(payload.tokens) - 1))
+        assert len(predictor_rows) == len(payload.sampled_logprobs)
+        assert payload.positions[-1] == len(payload.tokens) - 1
+        oracle, serving_routes = _public_serving_oracle(serving_model, payload)
+        learner = np.asarray(replay_snowball_logits(serving_model, payload, policy_id="tiny-41").array)
+        np.testing.assert_allclose(learner, oracle, rtol=1e-4, atol=1e-4)
+        for position, layers in enumerate(serving_routes):
+            for index, route in enumerate(layers):
+                for field in ("selected_experts", "token_valid", "qb_alpha"):
+                    np.testing.assert_array_equal(
+                        getattr(payload.layers[index], field)[position], np.asarray(getattr(route, field))[0]
+                    )
+        next_logprobs = np.asarray(jax.nn.log_softmax(jnp.asarray(oracle[predictor_rows]), axis=-1))
+        scored = next_logprobs[np.arange(len(predictor_rows)), payload.tokens[payload.prompt_length :]]
+        np.testing.assert_allclose(payload.raw_policy_logprobs, scored, rtol=1e-4, atol=1e-4)
+        # Distinct first/last weights detect either omitted endpoint or a
+        # shifted causal mask without copying the learner loss implementation.
+        weights = np.arange(1, len(scored) + 1, dtype=np.float32)
+        with hax.axis_mapping({"batch": ("replica_dcn", "data", "expert"), "position": None, "vocab": "model"}):
+            weighted = replay_snowball_loss(
+                serving_model, payload, policy_id="tiny-41", target_weights=hax.named(jnp.asarray(weights), "target")
+            )
+        np.testing.assert_allclose(float(weighted), -np.sum(scored * weights) / weights.sum(), rtol=1e-4, atol=1e-4)
+
+
+@pytest.mark.timeout(300)
+def test_engine_replay_stop_sequences_first_token_and_slot_reuse(serving_model):
+    engine = _engine(serving_model, 3)
+    requests = _requests()
+    ordinary = engine.generate(requests)
+    stop_requests = []
+    for index, request in enumerate(requests):
+        stop_length = (1, 2, 3, 1)[index]
+        stop = ordinary.tokens[index][:stop_length]
+        params = dataclasses.replace(
+            request.decode_params, stop_tokens=hax.named(jnp.asarray([stop]), ("stop_seq", "position"))
+        )
+        stop_requests.append(dataclasses.replace(request, decode_params=params))
+    baseline = engine.generate(stop_requests)
+    replay = generate_snowball_replay(engine, stop_requests, policy_id="tiny-41")
+    assert replay.generation == baseline
+    assert replay.generation.finish_reasons == [FinishReason.STOP] * 4
+    assert [len(tokens) for tokens in replay.generation.tokens] == [1, 2, 3, 1]
+    for payload, request, generated in zip(replay.payloads, requests, baseline.tokens, strict=True):
+        np.testing.assert_array_equal(payload.tokens, [*request.prompt_tokens, *generated])
+        np.testing.assert_array_equal(payload.positions, np.arange(len(payload.tokens)))
+        example, _ = payload.training_inputs(serving_model, policy_id="tiny-41")
+        assert np.asarray(example.loss_weight.array).sum() == len(generated)
+        assert all(layer.token_valid[-1] for layer in payload.layers)
+
+
+@pytest.mark.timeout(180)
+def test_engine_replay_rejects_unsupported_batch_before_mutation_and_handles_empty(serving_model):
+    engine = _engine(serving_model, 3)
+    requests = _requests()[:1]
+    expected = engine.generate(requests)
+    empty = generate_snowball_replay(engine, [], policy_id="tiny-41")
+    assert empty.payloads == () and empty.generation.tokens == []
+    for invalid in [
+        dataclasses.replace(requests[0], n_generations=2),
+        dataclasses.replace(requests[0], prompt_tokens=[]),
+    ]:
+        with pytest.raises(ValueError):
+            generate_snowball_replay(engine, [invalid], policy_id="tiny-41")
+        assert engine.generate(requests) == expected
+    # Aborting/callbacks have no capture API: reject before entering generation.
+    with pytest.raises(TypeError):
+        generate_snowball_replay(engine, requests, policy_id="tiny-41", should_abort=lambda: True)
+    assert engine.generate(requests) == expected

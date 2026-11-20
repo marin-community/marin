@@ -33,11 +33,17 @@ from levanter.inference.jit_scheduler import (
     _DecodeOutputs,
 )
 from levanter.inference.page_table import PageTable
+from levanter.inference.snowball_replay_payload import (
+    _SnowballDecodeOutputs,
+    _SnowballReplayCollector,
+    _SnowballRouteBuffer,
+)
 from levanter.inference.utils import INVALID, is_valid
 from levanter.layers.attention import AttentionMask
 from levanter.layers.kv_cache import PageCache
 from levanter.layers.sampler import Sampler
 from levanter.models.lm_model import LmHeadModel
+from levanter.models.snowball import SnowballLMHeadModel
 from levanter.utils.jax_utils import estimated_free_device_memory, sharded_tree_size
 
 logger = logging.getLogger(__name__)
@@ -408,13 +414,39 @@ def _gather_logits(logits: NamedArray, indices: NamedArray) -> NamedArray:
     return hax.named(values, (*indices.axes, *logits.axes[1:]))
 
 
+def _capture_terminal_inputs(
+    gen_state: GenState, model: SnowballLMHeadModel, routes: _SnowballRouteBuffer
+) -> tuple[GenState, _SnowballRouteBuffer]:
+    """Decode finished inputs once, without sampling, while their pages still exist."""
+
+    def capture(state):
+        gen_state, routes = state
+        ds = gen_state.decode_state
+        finished = ds.finished.array & ds.sequences.used_mask.array
+        slots = jnp.nonzero(finished, size=ds.max_seqs, fill_value=INVALID)[0].astype(jnp.int32)
+        safe_slots = jnp.maximum(slots, 0)
+        positions = jnp.where(slots >= 0, ds.seq_lens.array[safe_slots] - 1, INVALID)
+        tokens = jnp.where(slots >= 0, ds.tokens.array[safe_slots, jnp.maximum(positions, 0)], INVALID)
+        slot_ids = hax.named(slots, "position")
+        pos_ids = hax.named(positions, "position")
+        ds, info = ds.allocate_for_seq(slot_ids, pos_ids)
+        _, cache, captured = model.decode_with_route_captures(
+            hax.named(tokens, "position"), gen_state.cache, info, pos_ids
+        )
+        return dataclasses.replace(gen_state, decode_state=ds, cache=cache), routes.append(captured, slot_ids)
+
+    finished = gen_state.decode_state.finished & gen_state.decode_state.sequences.used_mask
+    return jax.lax.cond(hax.any(finished).scalar(), capture, lambda state: state, (gen_state, routes))
+
+
 def _prefill_kernel(
     gen_state: GenState,
     model: LmHeadModel,
     sampler: Sampler,
     queue: TokenQueue,
     max_seqs_in_prefill: int,  # static
-) -> tuple[GenState, _DecodeOutputs]:
+    capture_routes: bool = False,
+) -> tuple[GenState, _DecodeOutputs | _SnowballDecodeOutputs]:
     """Run prefill using a fresh, local token queue. Newly sampled tokens are enqueued to the main decode queue via update_tokens."""
 
     tokens = queue.queued_tokens
@@ -434,7 +466,14 @@ def _prefill_kernel(
     #     pos=pos_ids.array,
     #     lens=decode_state.seq_lens.array,
     # )
-    logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
+    routes = None
+    if capture_routes:
+        assert isinstance(model, SnowballLMHeadModel)
+        routes = _SnowballRouteBuffer.init(model, tokens.axis_size("position") + decode_state.max_seqs)
+        logits, cache, captured = model.decode_with_route_captures(tokens, gen_state.cache, binfo, pos_ids)
+        routes = routes.append(captured, slot_ids)
+    else:
+        logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
     logits_at_samples = _gather_logits(logits, sample_indices)
 
     num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
@@ -490,6 +529,10 @@ def _prefill_kernel(
     #     size=outputs.num_tokens,
     #     queued=gen_state.decode_state.num_queued_tokens,
     # )
+    if routes is not None:
+        assert isinstance(model, SnowballLMHeadModel)
+        gen_state, routes = _capture_terminal_inputs(gen_state, model, routes)
+        return gen_state, _SnowballDecodeOutputs(outputs, routes)
     return gen_state, outputs
 
 
@@ -547,16 +590,17 @@ def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> GenState:
     return jax.lax.fori_loop(0, max_slots, clone, gen_state)
 
 
-@functools.partial(jax.jit, donate_argnums=0, static_argnames=("max_seqs_in_prefill",))
+@functools.partial(jax.jit, donate_argnums=0, static_argnames=("max_seqs_in_prefill", "capture_routes"))
 def _run_prefill(
     gen_state: GenState,
     model: LmHeadModel,
     sampler: Sampler,
     work: PrefillWork,
     max_seqs_in_prefill: int,
-) -> tuple[GenState, _DecodeOutputs]:
+    capture_routes: bool = False,
+) -> tuple[GenState, _DecodeOutputs | _SnowballDecodeOutputs]:
     gen_state = _apply_prefill_work(gen_state, work)
-    return _prefill_kernel(gen_state, model, sampler, work.queue, max_seqs_in_prefill)
+    return _prefill_kernel(gen_state, model, sampler, work.queue, max_seqs_in_prefill, capture_routes)
 
 
 def _handle_clones(
@@ -671,26 +715,29 @@ def _handle_clones(
     return gen_state, outputs
 
 
-@functools.partial(jax.jit, static_argnums=(3, 4), donate_argnames=("gen_state",))
+@functools.partial(
+    jax.jit, static_argnames=("max_tokens_per_round", "max_rounds", "capture_routes"), donate_argnames=("gen_state",)
+)
 def _run_generation_loop(
     gen_state: GenState,
     model: LmHeadModel,
     sampler: Sampler,
     max_tokens_per_round: int,
     max_rounds: int,
-) -> tuple[GenState, _DecodeOutputs]:
+    capture_routes: bool = False,
+) -> tuple[GenState, _DecodeOutputs | _SnowballDecodeOutputs]:
     """Run autoregressive generation until all sequences finish or `max_rounds` reached."""
 
-    def cond(state: tuple[GenState, _DecodeOutputs, jax.Array]):
-        _gen_state, _outputs, step = state
+    def cond(state):
+        _gen_state, _outputs, _routes, step = state
         return (
             (step < max_rounds)
             & (_gen_state.decode_state.num_queued_tokens > 0)
             & (~hax.all(_gen_state.decode_state.finished)).scalar()
         )
 
-    def body(state: tuple[GenState, _DecodeOutputs, jax.Array]) -> tuple[GenState, _DecodeOutputs, jax.Array]:
-        gen_state, outputs, step = state
+    def body(state):
+        gen_state, outputs, routes, step = state
 
         # Pack the next chunk from the queue via DecodeState
         decode_state, packed_seq = gen_state.decode_state.pack_next_sequence(max_tokens_per_round)
@@ -715,7 +762,12 @@ def _run_generation_loop(
         sample_indices = _compute_sample_indices(pos_ids, slot_ids, seq_lens, max_sample_indices)
 
         # Decode logits and sample new tokens
-        logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
+        if routes is not None:
+            assert isinstance(model, SnowballLMHeadModel)
+            logits, cache, captured = model.decode_with_route_captures(tokens, gen_state.cache, binfo, pos_ids)
+            routes = routes.append(captured, slot_ids)
+        else:
+            logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
         logits_at_samples = _gather_logits(logits, sample_indices)
 
         num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
@@ -742,7 +794,7 @@ def _run_generation_loop(
         #     size=outputs.num_tokens,
         #     queued=new_gen_state.decode_state.num_queued_tokens,
         # )
-        return new_gen_state, outputs, step + 1
+        return new_gen_state, outputs, routes, step + 1
 
     # Allocate an outputs buffer sized for this run
     outputs_buf = _DecodeOutputs.init(
@@ -750,9 +802,16 @@ def _run_generation_loop(
         max_seqs=gen_state.decode_state.max_seqs,
         with_logprobs=True,
     )
-    init_state = (gen_state, outputs_buf, jnp.array(0, dtype=jnp.int32))
-    final_gen_state, final_outputs, _ = jax.lax.while_loop(cond, body, init_state)
-    # jax.debug.print("[gen] final outputs_size={size}", size=final_outputs.num_tokens)
+    routes = None
+    if capture_routes:
+        assert isinstance(model, SnowballLMHeadModel)
+        routes = _SnowballRouteBuffer.init(model, max_tokens_per_round * max_rounds + gen_state.decode_state.max_seqs)
+    init_state = (gen_state, outputs_buf, routes, jnp.array(0, dtype=jnp.int32))
+    final_gen_state, final_outputs, routes, _ = jax.lax.while_loop(cond, body, init_state)
+    if routes is not None:
+        assert isinstance(model, SnowballLMHeadModel)
+        final_gen_state, routes = _capture_terminal_inputs(final_gen_state, model, routes)
+        return final_gen_state, _SnowballDecodeOutputs(final_outputs, routes)
     return final_gen_state, final_outputs
 
 
@@ -925,7 +984,9 @@ class InferenceEngine:
         """Score a token sequence under this engine's model."""
         return score_token_sequence_logprobs(self.model, token_ids, top_k)
 
-    def _prefill_batch(self, batch: Sequence[Request]) -> _DecodeOutputs | None:
+    def _prefill_batch(
+        self, batch: Sequence[Request], replay: _SnowballReplayCollector | None = None
+    ) -> _DecodeOutputs | _SnowballDecodeOutputs | None:
         """Admit a batch from the head of the queue that fits in free slots/pages.
 
         Returns the decode outputs for the admitted prefill batch, or None if no work was admitted.
@@ -935,7 +996,12 @@ class InferenceEngine:
         if prefill_work is None:
             return None
         new_state = _run_prefill(
-            self.gen_state, self.model, self.sampler, prefill_work, self.config.max_seqs_in_prefill
+            self.gen_state,
+            self.model,
+            self.sampler,
+            prefill_work,
+            self.config.max_seqs_in_prefill,
+            capture_routes=replay is not None,
         )
 
         # _run_prefill returns (GenState, _DecodeOutputs)
@@ -1108,6 +1174,16 @@ class InferenceEngine:
             should_abort: Host predicate checked before prefill and between decode rounds.
                 Unfinished choices return their exact partial output with an ABORT reason.
         """
+        return self._generate(requests, step_callback, should_abort=should_abort)
+
+    def _generate(
+        self,
+        requests: Sequence[Request],
+        step_callback=None,
+        *,
+        should_abort: Callable[[], bool] | None = None,
+        replay: _SnowballReplayCollector | None = None,
+    ) -> GenerationResult:
         if not requests:
             return GenerationResult(tokens=[], logprobs=[], total_generated=0, finish_reasons=[])
         if len({r.request_id for r in requests}) != len(requests):
@@ -1181,8 +1257,8 @@ class InferenceEngine:
         # Initial admission from queue and extract prompt tokens
         aborted = should_abort is not None and should_abort()
         if not aborted:
-            decode_outputs = self._prefill_batch(requests)
-            self._extract_outputs(decode_outputs)
+            decode_outputs = self._prefill_batch(requests, replay)
+            self._extract_outputs(decode_outputs, replay)
         initial_prefill_out = time.time()
         logger.info(f"Initial prefill and extraction took {initial_prefill_out - time_in:.3f}s")
 
@@ -1202,8 +1278,8 @@ class InferenceEngine:
                 aborted = True
                 break
             if pending and self.free_slots:
-                prefill_outputs = self._prefill_batch(pending)
-                self._extract_outputs(prefill_outputs)
+                prefill_outputs = self._prefill_batch(pending, replay)
+                self._extract_outputs(prefill_outputs, replay)
                 pending = [request for request in pending if request.request_id not in self.sequences]
                 if prefill_outputs is not None:
                     continue
@@ -1223,12 +1299,13 @@ class InferenceEngine:
                 # TODO: tune max_tokens_per_round
                 self.config.imputed_max_tokens_per_round,
                 self.config.max_rounds,
+                capture_routes=replay is not None,
             )
             submit_done = time.time()
             self.gen_state = future_state
 
             extract_start = time.time()
-            new_tokens = self._extract_outputs(decode_outputs)
+            new_tokens = self._extract_outputs(decode_outputs, replay)
             extract_time = time.time() - extract_start
 
             iter_end = time.time()
@@ -1338,7 +1415,11 @@ class InferenceEngine:
         else:
             logger.info(f"Written trace info to {path}")
 
-    def _extract_outputs(self, pending_outputs: _DecodeOutputs | None) -> int:
+    def _extract_outputs(
+        self,
+        pending_outputs: _DecodeOutputs | _SnowballDecodeOutputs | None,
+        replay: _SnowballReplayCollector | None = None,
+    ) -> int:
         """Append newly available tokens into outputs per (request_id, child_id).
 
         Returns number of new tokens appended.
@@ -1348,6 +1429,10 @@ class InferenceEngine:
 
         # Pull the entire buffer in one host op
         pending_outputs = jax.device_get(pending_outputs)
+        if isinstance(pending_outputs, _SnowballDecodeOutputs):
+            assert replay is not None
+            replay.append(pending_outputs.routes, self.local_map)
+            pending_outputs = pending_outputs.outputs
         n = int(pending_outputs.num_tokens)
         fins = pending_outputs.finished.array
         toks_arr = pending_outputs.tokens.array

@@ -62,6 +62,87 @@ FP64 arithmetic, and related precision-oracle helpers are removed. Callers
 should use the reference path for CPU validation and the standard TPU path for
 accelerator validation; no compatibility aliases remain.
 
+### Production Snowball engine route replay
+
+`levanter.inference.snowball_engine_replay.generate_snowball_replay` opts an
+existing `InferenceEngine` into serving route capture. It runs the same prompt
+admission, prefill, sampling and device `while_loop` used by `engine.generate`.
+Its `generation` field retains the ordinary generated tokens, sampled
+logprobs and finish reasons. `payloads` contains one host
+`SnowballReplayPayload` per request in request order.
+
+```python
+import haliax as hax
+from levanter.inference.snowball_engine_replay import (
+    generate_snowball_replay, replay_snowball_logits, replay_snowball_loss,
+)
+from levanter.inference.snowball_replay_payload import SnowballReplayPayload
+
+# The caller owns the serving mesh/precision context and an immutable identity
+# for these exact policy weights. The learner verifies that same identity.
+result = generate_snowball_replay(engine, requests, policy_id="checkpoint-sha256:...")
+wire_bytes = result.payloads[0].to_bytes()
+payload = SnowballReplayPayload.from_bytes(wire_bytes)
+logits = replay_snowball_logits(model, payload, policy_id="checkpoint-sha256:...")
+with hax.axis_mapping({"batch": ("replica_dcn", "data", "expert"),
+                       "position": None, "vocab": "model"}):
+    loss = replay_snowball_loss(model, payload, policy_id="checkpoint-sha256:...")
+```
+
+The supported scope is one choice per request (`n_generations=1`), nonempty
+heterogeneous prompts with contiguous absolute positions, a causal mask,
+STOP/EOS stop-token sequences and LENGTH completion. Pending requests may
+outnumber slots; ownership is resolved to request ID and choice before host
+extraction releases or reuses a slot. Clones and packed document segments are
+unsupported. The capture API has no callbacks or abort parameter. It validates
+its supported model, sampler and request scope before resetting the engine.
+The page budget must cover the largest concurrently admitted requests through
+their terminal input, including a terminal token on a new page.
+
+Capture uses `SnowballLMHeadModel.decode_with_route_captures` for the actual
+prefill and decode inputs. Since the scheduler purges a sampled terminal token
+from the normal decode queue, capture performs one additional bounded serving
+decode of finished sequences before their pages are released. That call samples
+no output. Every input row, including the last sampled token, therefore has its
+actual serving routes. Capture buffers are bounded by prefill capacity or
+`max_rounds * max_tokens_per_round`, plus one terminal row per slot. They remain
+on device until the existing host extraction boundary. Ordinary generation
+allocates no route buffers and performs no terminal capture decode.
+
+Each payload contains int32 tokens and absolute positions, the prompt boundary,
+request ID/choice, effective sampling parameters and key, sampled float32
+logprobs, finish reason, and per-layer `selected_experts`, `token_valid` and
+`qb_alpha`. It transports no KV pages, weights or vocabulary logits. Versioned
+JSON metadata plus safetensors arrays provides a bytes format without pickle.
+A SHA256 binding covers exact tokens, row order, prompt, routes, metadata,
+model configuration/vocabulary and the caller's policy ID. This detects altered
+or truncated evidence; it does not authenticate an untrusted sender or hash the
+model weights. The caller must assign and verify the immutable source-policy identity.
+Learner parameters may change under replay; numerical equality comparisons
+additionally require unchanged weights and matching arithmetic contexts.
+The mask contract is contiguous causal attention, with Snowball's configured
+layer/window schedule; arbitrary masks and packed segments cannot be supplied.
+
+Learner `training_inputs` reconstructs `LmExample` and
+`SnowballRouteCaptureBatch` directly from those transported arrays. Row `p`
+predicts token `p+1`; the generated targets use predictor rows
+`prompt_length-1` through `len(tokens)-2`, including the first and terminal
+target. The final input row predicts no sampled token. `replay_snowball_loss`
+accepts optional per-generated-target weights on the `target` axis. It calls
+the public next-token loss, preserving current-parameter combine weights,
+weighted reduction and gradients. It creates no teacher route capture or
+optimizer state. Replayed experts and `qb_alpha` do not include training
+capacity/drop state or router auxiliary losses.
+
+Engine sampled logprobs describe its temperature/top-p sampling logits;
+temperature zero selects greedily using unscaled logits. Raw-policy comparison
+is initially supported only at temperature one and top-p one.
+`payload.raw_policy_logprobs` rejects other settings. Learner logits are untransformed logits with the retained routing policy. CPU reference tests exercise scheduling,
+transport and numerical replay at the existing tolerances. They do not
+establish TPU bitwise equality, throughput or full production qualification.
+External vLLM/SkyRL rollout transport and learner integration remain outside
+this API.
+
 ### Opt-in fixed-schedule projections
 
 Snowball’s `projection_implementation="fixed_schedule"` selects the fixed
