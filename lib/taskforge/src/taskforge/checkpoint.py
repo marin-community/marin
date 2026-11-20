@@ -10,12 +10,13 @@ one proceeds, and a writer that lost the head extends nothing.
 """
 
 import asyncio
+import errno
 import hashlib
 import json
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator, Coroutine, Sequence
+from collections.abc import AsyncIterator, Callable, Coroutine, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from functools import partial
@@ -25,7 +26,7 @@ from typing import override
 from pydantic import TypeAdapter
 from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
 from rigging.filesystem.factory import open_url, url_to_fs
-from rigging.filesystem.s3_errors import OBJECT_STORE_ERRORS, is_transient_s3_error
+from rigging.filesystem.s3_errors import OBJECT_STORE_ERRORS, is_transient_s3_error, storage_error_status
 from rigging.filesystem.storage_path import prefix_join
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
@@ -41,7 +42,52 @@ CHECKPOINT_EVENTS = 25
 CHECKPOINT_SECONDS = 60
 FINAL_ATTEMPTS = 6
 FINAL_BACKOFF = ExponentialBackoff(initial=5.0, maximum=120.0, factor=2.0, jitter=0.25)
-"""The final publication outlasts a storage outage of several minutes beyond the adapters' own retries."""
+"""The final publication and every history read outlast a storage outage of several minutes beyond the adapters' own
+retries."""
+RETRIED_REFUSALS = frozenset({408, 429})
+"""Request timeout and too many requests: 4xx answers that ask the client to try again."""
+REFUSED_ERRNOS = frozenset(
+    {
+        errno.EACCES,
+        errno.EPERM,
+        errno.ENOENT,
+        errno.ENOTDIR,
+        errno.EISDIR,
+        errno.EEXIST,
+        errno.ENOSPC,
+        errno.EDQUOT,
+        errno.EROFS,
+        errno.ENAMETOOLONG,
+    }
+)
+REFUSED_PATHS = (PermissionError, FileNotFoundError, FileExistsError, IsADirectoryError, NotADirectoryError)
+
+
+def is_transient_storage_error(error: BaseException) -> bool:
+    """Whether a journal storage call that raised ``error`` may be retried.
+
+    A storage hiccup must never cost paid model work; only an explicit refusal stops the writer. A refusal is an HTTP
+    4xx answer other than 408 and 429 (denied access, a bad key or signature, a missing bucket), found on the error or
+    on the SDK error it translates, or a local filesystem error naming one (permission, a missing path, no space, a
+    read-only filesystem). Every other storage error is transient: resets, short reads, timeouts, throttling, any 5xx,
+    SDK transport errors this rule has never seen, and whatever rigging's S3 classifier retries. An error outside the
+    storage families is no storage error.
+    """
+    if not isinstance(error, OBJECT_STORE_ERRORS):
+        return False
+    if is_transient_s3_error(error):
+        return True
+    if (status := storage_error_status(error)) is not None:
+        return status in RETRIED_REFUSALS or not 400 <= status < 500
+    if isinstance(error, OSError):
+        return not isinstance(error, REFUSED_PATHS) and error.errno not in REFUSED_ERRNOS
+    return True
+
+
+def _retried[T](call: Callable[[], T], operation: str, attempts: int) -> T:
+    return retry_with_backoff(
+        call, retryable=is_transient_storage_error, max_attempts=attempts, backoff=FINAL_BACKOFF, operation=operation
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,9 +127,13 @@ class Journal:
     def _fetch(self, directory: str, name: str) -> bytes:
         """Fetch an object the head names; a missing or altered one is corruption, other I/O errors propagate."""
         path = prefix_join(self.destination, f"{directory}/{name}")
-        try:
+
+        def fetch() -> bytes:
             with open_url(path, "rb") as source:
-                data = source.read()
+                return source.read()
+
+        try:
+            data = _retried(fetch, f"read of {path}", FINAL_ATTEMPTS)
         except FileNotFoundError as error:
             raise CorruptJournal(f"{path} is missing; the head names it") from error
         if hashlib.sha256(data).hexdigest() != name.split(".")[0]:
@@ -109,7 +159,8 @@ class Journal:
 
 def read_journal(destination: str) -> Journal | None:
     """Read the head alone; fail closed on a root in any other journal format."""
-    current = conditional_object(prefix_join(destination, HEAD)).read()
+    head_object = conditional_object(prefix_join(destination, HEAD))
+    current = _retried(head_object.read, f"read of {head_object.path}", FINAL_ATTEMPTS)
     if current is None:
         fs, root = url_to_fs(destination)
         if found := sorted(FORMAT_1 & {PurePosixPath(path).name for path in fs.glob(prefix_join(root, "*"))}):
@@ -219,12 +270,10 @@ class CheckpointSink(Sink):
         if self.stopped is not None:
             raise self.stopped
         publish = asyncio.to_thread(
-            retry_with_backoff,
+            _retried,
             partial(self._publish, status, workpiece),
-            retryable=is_transient_s3_error,
-            max_attempts=1 if workpiece is None else FINAL_ATTEMPTS,
-            backoff=FINAL_BACKOFF,
-            operation=f"final publication of {self.destination}",
+            f"publication of {self.destination}",
+            1 if workpiece is None else FINAL_ATTEMPTS,
         )
         try:
             await _drained(publish)
@@ -232,7 +281,7 @@ class CheckpointSink(Sink):
             self._stop(error)
             raise
         except OBJECT_STORE_ERRORS as error:
-            if workpiece is None and is_transient_s3_error(error):
+            if workpiece is None and is_transient_storage_error(error):
                 logging.warning("Checkpoint upload to %s failed; the timer retries: %r", self.destination, error)
                 self.deferred = True
                 return

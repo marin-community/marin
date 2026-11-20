@@ -17,10 +17,11 @@ from types import SimpleNamespace
 from typing import Any, cast, override
 
 import pytest
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, IncompleteReadError
 from lib.taskforge.tests.effect_fakes import local_records
 from lib.taskforge.tests.resource_doubles import FakeCommand, FakeEnv, FakeInference, FakeWeb
 from lib.taskforge.tests.stage_fakes import CandidateEngine, SolverEngine, solver_model
+from rigging.filesystem.conditional_object import LocalConditionalObject, VersionedBytes
 from rigging.timing import ExponentialBackoff
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.models import GradedRollout, Model, Rollout, TaskRolloutSpec
@@ -761,10 +762,78 @@ async def test_a_recoverable_error_on_a_count_triggered_chunk_loses_no_paid_work
     assert executions(first) == (len(script()), 2) and executions(relaunch) == (0, 0)
 
 
-async def test_a_storage_refusal_on_a_count_triggered_chunk_stops_publication_without_a_bug_hold(
+def short_body() -> IncompleteReadError:
+    """What botocore's ``StreamingBody`` raises when the response ends before its declared length."""
+    return IncompleteReadError(actual_bytes=17, expected_bytes=412)
+
+
+async def test_a_short_head_read_at_a_count_triggered_checkpoint_loses_no_paid_work(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    calls = fail_put_once(monkeypatch, s3_error("AccessDenied", 403))
+    """The first checkpoint's head read ends short; its lines stay pending and the final publication carries them."""
+    monkeypatch.setattr(checkpoint, "CHECKPOINT_EVENTS", 1)
+    read, reads = LocalConditionalObject.read, []
+
+    def short_second_read(target: LocalConditionalObject) -> VersionedBytes | None:
+        reads.append(target.path)
+        if len(reads) == 2:  # After the launch's own read of the head, the first checkpoint's.
+            raise short_body()
+        return read(target)
+
+    monkeypatch.setattr(LocalConditionalObject, "read", short_second_read)
+    first, relaunch = resources(Envs(), script()), resources(Envs(), script())
+    serve(monkeypatch, first, relaunch)
+    await driver.one(driver_args)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    assert published_workpiece(destination).terminal is Terminal.ACCEPTED
+    assert [record.sequence for record in history(destination)] == list(range(1, len(history(destination)) + 1))
+    driver_args.work_dir = str(Path(driver_args.work_dir).parent / "relaunch")
+    await driver.one(driver_args)
+    assert executions(first) == (len(script()), 2) and executions(relaunch) == (0, 0)
+
+
+async def test_a_short_chunk_read_on_resume_is_retried_and_repeats_no_paid_work(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A preempted launch checkpointed every event but never published its end; the relaunch's first chunk read ends
+    short, is read again, and the relaunch replays everything."""
+    monkeypatch.setattr(checkpoint, "CHECKPOINT_EVENTS", 1)
+    instant_final_retries(monkeypatch)
+    first, relaunch = resources(Envs(), script()), resources(Envs(), script())
+    serve(monkeypatch, first, relaunch)
+    final_publish = CheckpointSink.finish
+
+    async def preempted(*_args: object) -> None:
+        """Only checkpoints reach storage, not the final publication."""
+
+    monkeypatch.setattr(CheckpointSink, "finish", preempted)
+    await driver.one(driver_args)
+    monkeypatch.setattr(CheckpointSink, "finish", final_publish)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    assert published(destination).head.status.terminal is None and published(destination).head.chunks
+    open_url, opened = checkpoint.open_url, []
+
+    def short_first_chunk(url: str, mode: str = "rb") -> object:
+        opened.append(url)
+        if len(opened) == 1:
+            raise short_body()
+        return open_url(url, mode)
+
+    monkeypatch.setattr(checkpoint, "open_url", short_first_chunk)
+    driver_args.work_dir = str(Path(driver_args.work_dir).parent / "relaunch")
+    await driver.one(driver_args)
+    assert opened[0] == opened[1]
+    assert published_workpiece(destination).terminal is Terminal.ACCEPTED
+    assert executions(first) == (len(script()), 2) and executions(relaunch) == (0, 0)
+
+
+@pytest.mark.parametrize(
+    "refusal", [s3_error("AccessDenied", 403), PermissionError(errno.EACCES, "Permission denied")], ids=["s3", "local"]
+)
+async def test_a_storage_refusal_on_a_count_triggered_chunk_stops_publication_without_a_bug_hold(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, refusal: Exception
+) -> None:
+    calls = fail_put_once(monkeypatch, refusal)
     serve(monkeypatch, resources(Envs(), script()))
     with pytest.raises(Exception) as raised:
         await driver.one(driver_args)

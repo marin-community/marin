@@ -2,20 +2,29 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import errno
 import json
 import re
 import subprocess
 import sys
 import threading
 from pathlib import Path
+from typing import Any
 
 import pytest
-from botocore.exceptions import ClientError, ConnectionClosedError, EndpointConnectionError
+from botocore.exceptions import (
+    ClientError,
+    ConnectionClosedError,
+    EndpointConnectionError,
+    IncompleteReadError,
+)
 from lib.taskforge.tests.effect_fakes import local_records
 from rigging.filesystem.conditional_object import ConditionalObject, VersionedBytes
+from rigging.timing import ExponentialBackoff
+from s3fs.errors import translate_boto_error
 
 from taskforge import checkpoint
-from taskforge.checkpoint import HEAD, CheckpointSink, Journal, read_journal
+from taskforge.checkpoint import HEAD, CheckpointSink, Journal, is_transient_storage_error, read_journal
 from taskforge.effects.events import Note, StageCompleted
 from taskforge.effects.issues import CorruptJournal, PublicationFailed, Superseded
 from taskforge.effects.log import EventLog, Status, decode
@@ -28,6 +37,11 @@ def journal(destination: Path) -> Journal:
     published = read_journal(str(destination))
     assert published is not None
     return published
+
+
+def s3_error(code: str, status: int) -> ClientError:
+    response: Any = {"Error": {"Code": code}, "ResponseMetadata": {"HTTPStatusCode": status}}
+    return ClientError(response, "PutObject")
 
 
 def claimed(tmp_path: Path) -> CheckpointSink:
@@ -135,8 +149,11 @@ async def test_transient_timer_upload_failure_keeps_the_timer_and_republishes_fr
 
 
 @pytest.mark.parametrize("by_count", [True, False])
+@pytest.mark.parametrize(
+    "refusal", [s3_error("AccessDenied", 403), PermissionError(errno.EACCES, "Permission denied")], ids=["s3", "local"]
+)
 async def test_a_storage_refusal_stops_publication_on_either_trigger(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, by_count: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, by_count: bool, refusal: Exception
 ) -> None:
     monkeypatch.setattr(checkpoint, "CHECKPOINT_EVENTS", 1 if by_count else 100)
     monkeypatch.setattr(checkpoint, "CHECKPOINT_SECONDS", 60 if by_count else 0.01)
@@ -145,11 +162,11 @@ async def test_a_storage_refusal_stops_publication_on_either_trigger(
 
     def refused(status: Status, workpiece: Workpiece | None) -> None:
         calls.append(status)
-        raise ClientError({"Error": {"Code": "AccessDenied", "Message": "Access Denied"}}, "PutObject")
+        raise refusal
 
     monkeypatch.setattr(sink, "_publish", refused)
     log = EventLog(sink=sink)
-    with pytest.raises(PublicationFailed, match="AccessDenied"):
+    with pytest.raises(PublicationFailed, match=type(refusal).__name__):
         async with sink.running():
             await log.record(Note("first"))
             await asyncio.sleep(5)
@@ -170,7 +187,7 @@ async def test_a_tick_queued_behind_a_refused_checkpoint_publishes_nothing(
         calls.append(status)
         if len(calls) == 1:
             gate.wait(5)
-            raise ClientError({"Error": {"Code": "AccessDenied", "Message": "Access Denied"}}, "PutObject")
+            raise s3_error("AccessDenied", 403)
         publish(status, workpiece)
 
     async def tick() -> None:
@@ -404,14 +421,57 @@ async def test_damaged_committed_objects_read_as_corrupt_naming_the_path(
     assert {path: path.read_bytes() for path in destination.rglob("*") if path.is_file()} == before
 
 
-async def test_transient_read_errors_stay_retryable(
-    tmp_path: Path, proposal: TaskProposal, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("error", "attempts"),
+    [
+        (ConnectionResetError(errno.ECONNRESET, "Connection reset by peer"), 2),
+        (IncompleteReadError(actual_bytes=3, expected_bytes=9), 2),
+        (PermissionError(errno.EACCES, "Permission denied"), 1),
+    ],
+    ids=["reset", "short-body", "refused"],
+)
+async def test_a_history_read_retries_a_storage_hiccup_and_not_a_refusal(
+    tmp_path: Path, proposal: TaskProposal, monkeypatch: pytest.MonkeyPatch, error: Exception, attempts: int
 ) -> None:
     destination = await finished(tmp_path, proposal)
+    expected = journal(destination).events()
+    monkeypatch.setattr(checkpoint, "FINAL_BACKOFF", ExponentialBackoff(initial=0.001, maximum=0.001, jitter=0.0))
+    opened, open_url = [], checkpoint.open_url
 
-    def reset(url: str, mode: str = "rb") -> object:
-        raise ConnectionResetError("connection reset by peer")
+    def fail_once(url: str, mode: str = "rb") -> object:
+        opened.append(url)
+        if len(opened) == 1:
+            raise error
+        return open_url(url, mode)
 
-    monkeypatch.setattr(checkpoint, "open_url", reset)
-    with pytest.raises(ConnectionResetError):
-        journal(destination).events()
+    monkeypatch.setattr(checkpoint, "open_url", fail_once)
+    if attempts == 1:
+        with pytest.raises(PermissionError):
+            journal(destination).events()
+    else:
+        assert journal(destination).events() == expected
+    assert opened.count(opened[0]) == attempts
+
+
+@pytest.mark.parametrize(
+    ("error", "transient"),
+    [
+        (ConnectionResetError(errno.ECONNRESET, "Connection reset by peer"), True),
+        (IncompleteReadError(actual_bytes=3, expected_bytes=9), True),
+        (s3_error("SlowDown", 503), True),
+        (s3_error("BadGateway", 502), True),
+        (s3_error("NotImplemented", 501), True),
+        (s3_error("RequestTimeout", 408), True),
+        (s3_error("TooManyRequests", 429), True),
+        (translate_boto_error(s3_error("BadGateway", 502)), True),
+        (OSError(errno.EIO, "Input/output error"), True),
+        (s3_error("AccessDenied", 403), False),
+        (s3_error("NoSuchBucket", 404), False),
+        (translate_boto_error(s3_error("AccessDenied", 403)), False),
+        (PermissionError(errno.EACCES, "Permission denied"), False),
+        (OSError(errno.ENOSPC, "No space left on device"), False),
+        (ValueError("not a storage error"), False),
+    ],
+)
+def test_only_an_explicit_refusal_is_a_permanent_storage_error(error: Exception, transient: bool) -> None:
+    assert is_transient_storage_error(error) is transient
