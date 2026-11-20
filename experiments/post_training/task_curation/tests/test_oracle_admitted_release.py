@@ -264,6 +264,8 @@ def test_answer_graded_release_does_not_claim_workspace_controls(admitted_releas
 
 def test_current_content_attaches_after_the_filtered_pin_is_selected(admitted_release):
     source, receipt = admitted_release
+    original_actor = actor_census_input(source.dataset.name, source.dataset.revision, source.version, 2)
+    source = replace(source, info=replace(source.info, actor_census_input=original_actor))
     selected = bind_oracle_admitted_release(source, receipt)
     bound = bind_selected_source_content(source, selected, receipt.sample, None)
 
