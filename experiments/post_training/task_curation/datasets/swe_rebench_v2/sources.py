@@ -66,7 +66,7 @@ def _declare() -> RlDataSource[CurationRecipe]:
                 family="swe-repo",
                 tags=(
                     "agentic",
-                    "multi-turn",
+                    "single-turn",
                     "license:cc-by-4.0",
                     "language:python",
                     "language:go",

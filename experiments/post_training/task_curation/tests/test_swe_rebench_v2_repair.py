@@ -6,6 +6,7 @@
 import json
 import re
 import types
+from dataclasses import replace
 
 import pytest
 import tomlkit
@@ -22,11 +23,14 @@ from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert imp
     task_toml,
     to_workspace,
 )
+from experiments.post_training.task_curation.datasets.swe_rebench_v2.sources import _declare
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.upstream import task_files
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.upstream.task_files import (
     grader_source,
     solve_sh,
 )
+from experiments.post_training.task_curation.derived_contract_census import DerivedContractReceipt
+from experiments.post_training.task_curation.derived_contract_tags import bind_derived_contract_tags
 from experiments.post_training.task_curation.swe_rebench_fidelity_driver import (
     CHURN_THRESHOLD,
     CHURN_WINDOW,
@@ -436,3 +440,50 @@ def test_the_condensed_solve_script_moves_to_the_uniform_workspace():
     assert "/spectree" not in rewritten.replace("/x/spectree", "")
     # the upstream variant's own script is not rewritten
     assert "WORKDIR=/spectree" in solve_sh(row)
+
+
+def test_declared_shape_tag_matches_the_measured_derived_contract():
+    """The source shape must accept the measured contract; the old tag must fail."""
+    source = next(s for s in _declare() if s.info.id == "SWE-rebench:ibragim-bad/SWE-rebench-V2.1@repaired-20261119")
+    assert "single-turn" in source.info.tags and "multi-turn" not in source.info.tags
+    receipt = DerivedContractReceipt.model_validate(
+        {
+            "source_id": source.info.id,
+            "input": {
+                "dataset_id": source.dataset.name,
+                "dataset_revision": source.dataset.revision,
+                "converter_version": source.version,
+                "converter_revision": "0" * 40,
+                "measured_tasks": 21272,
+                "task_specs_sha256": "0" * 64,
+                "evidence_url": "s3://proof/derived-contract",
+            },
+            "population_path": "s3://proof/population",
+            "scanned_task_specs_sha256": "0" * 64,
+            "evidence_url": "s3://proof/derived-contract",
+            "summary": {
+                "task_count": 21272,
+                "grader_type_counts": {"none": 21272},
+                "agentic_count": 21272,
+                "single_turn_count": 21272,
+                "reply_only_count": 0,
+                "workspace_graded_count": 0,
+                "judge_rubric_counts": {},
+                "judge_reference_count": 0,
+                "judge_no_reference_count": 0,
+            },
+        }
+    )
+    bound = bind_derived_contract_tags(source, receipt)
+    assert bound.info.derived_contract is not None
+    stale = replace(
+        source,
+        info=replace(
+            source.info,
+            tags=frozenset(
+                {"agentic", "multi-turn", *(t for t in source.info.tags if t not in {"agentic", "single-turn"})}
+            ),
+        ),
+    )
+    with pytest.raises(ValueError, match="multi-turn"):
+        bind_derived_contract_tags(stale, receipt)
