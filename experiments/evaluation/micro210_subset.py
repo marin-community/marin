@@ -19,6 +19,12 @@ class Micro210Subset:
 
 
 @dataclass(frozen=True)
+class Micro210Selection:
+    subset: Micro210Subset
+    inputs: str
+
+
+@dataclass(frozen=True)
 class PreparedMicro210Subset:
     parquet: bytes
     record: dict

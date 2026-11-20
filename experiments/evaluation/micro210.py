@@ -45,7 +45,7 @@ from experiments.evaluation.micro210_policy import (
     micro210_evaluation,
     runtime_policy_config,
 )
-from experiments.evaluation.micro210_subset import Micro210Subset, prepare_subset, validate_subset
+from experiments.evaluation.micro210_subset import Micro210Selection, Micro210Subset, prepare_subset, validate_subset
 from experiments.post_training.long_loop.launch_validation import validate_before_allocation
 from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 
@@ -123,8 +123,7 @@ class Micro210Run:
     canonical_launch_sha256: str
     serving_profile: Micro210ServingProfile | None = None
     model_manifest_filename: str = MODEL_MANIFEST_FILENAME
-    subset: Micro210Subset | None = None
-    selected_inputs: str | None = None
+    selection: Micro210Selection | None = None
 
 
 def judge_runtime_config(config: dict, judge: JudgeConfig) -> dict:
@@ -176,23 +175,22 @@ def run_micro210(config: Micro210Run) -> SkyRLRun:
     if hashlib.sha256(config.skyrl.launch_config_yaml.encode()).hexdigest() != config.canonical_launch_sha256:
         raise ValueError("Canonical Micro210 refuses modified field: launch_config_yaml")
     validate_inputs(config.evaluation, PREPARED_INPUTS, model_manifest_filename=config.model_manifest_filename)
-    selection = None
-    if config.subset is not None:
-        assert config.selected_inputs is not None
+    selection_record = None
+    if config.selection is not None:
         policy = config.evaluation.policy()
-        selection = validate_subset(
+        selection_record = validate_subset(
             prepared_inputs=PREPARED_INPUTS,
-            selected_inputs=config.selected_inputs,
+            selected_inputs=config.selection.inputs,
             source_sha256=policy["prepared_rollouts_sha256"],
             data_relative_path=policy["evaluation"]["data_relative_path"],
-            subset=config.subset,
+            subset=config.selection.subset,
         )
     validate_before_allocation(config.skyrl.launch_config_yaml)
     (StoragePath(config.evaluation.output_uri) / "canonical-evaluation.json").write_text(
         json.dumps(
             {
                 **asdict(config.evaluation.record()),
-                **({"selection": selection} if selection is not None else {}),
+                **({"selection": selection_record} if selection_record is not None else {}),
                 "runtime_field_renames": runtime_policy_config(config.evaluation.policy()).field_renames,
                 **(
                     {
@@ -259,7 +257,7 @@ def micro210_artifact_step(
     )
     if subset is not None:
         inputs = apply(
-            "evaluation/micro210/subset",
+            f"{name}/inputs",
             prepare_subset,
             version=version,
             prepared_inputs=inputs,
@@ -326,8 +324,7 @@ def micro210_artifact_step(
             hashlib.sha256(rendered.encode()).hexdigest(),
             serving_profile,
             model_manifest_filename,
-            subset,
-            context.artifact_path(inputs) if subset is not None else None,
+            Micro210Selection(subset, context.artifact_path(inputs)) if subset is not None else None,
         )
 
     configured = replace(step, run=run_micro210, build_config=build, expected_fingerprint=None)
