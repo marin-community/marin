@@ -45,7 +45,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             return False
         return source.info.id in receipts
 
-    declared = [_declare()]
+    declared = _declare()
     return [source for source in declared if _receipt_present(source)]
 
 
