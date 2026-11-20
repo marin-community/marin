@@ -169,18 +169,20 @@ async def test_assistant_prefix_worker_preserves_continuation_and_rejects_parsed
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "stop_token,stop_reason,skip_special_tokens",
+    "stop_token,stop_reason,content,reward,skip_special_tokens",
     [
-        (98, "stop", None),
-        (97, "stop", None),
-        (99, "stop", None),
-        (98, "length", None),
-        (98, "stop", False),
+        (98, "stop", ",2]\n```", 1.0, None),
+        (97, "stop", ",2]\n```", 1.0, None),
+        (99, "stop", ",2]\n```", 1.0, None),
+        (98, "stop", ",2]\n```", 1.0, False),
+        # A length stop never earns reward, even when its last budgeted token is a turn terminator.
+        (98, "length", ",2]\n```<|eot_id|>", 0.0, None),
+        (98, "length", ",2]\n```<|eot_id|>", 0.0, False),
     ],
-    ids=["llama-turn-end", "qwen-turn-end", "eos", "length-stop", "retain-special-tokens"],
+    ids=["llama-turn-end", "qwen-turn-end", "eos", "retain-special-tokens", "length-stop", "length-stop-retained"],
 )
-async def test_assistant_prefix_worker_grades_the_closure_without_the_turn_terminator(
-    task_inputs, stop_token, stop_reason, skip_special_tokens
+async def test_assistant_prefix_worker_grades_only_an_ended_turn_without_its_terminator(
+    task_inputs, stop_token, stop_reason, content, reward, skip_special_tokens
 ):
     config, request = task_inputs
     if skip_special_tokens is not None:
@@ -222,8 +224,8 @@ async def test_assistant_prefix_worker_grades_the_closure_without_the_turn_termi
         (result,) = await worker.generate(request)
     finally:
         await worker.shutdown()
-    assert result.grade.reward == 1.0
-    assert result.messages[-1]["content"] == ",2]\n```"
+    assert result.grade.reward == reward
+    assert result.messages[-1]["content"] == content
     assert result.response_token_ids == (7, stop_token)
 
 
@@ -363,14 +365,7 @@ async def test_assistant_prefix_transport_renders_serving_tokens_and_retains_raw
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("interrupted", [False, True])
-<<<<<<< HEAD
 async def test_assistant_prefix_real_client_preserves_prompt_and_raw_completion_across_retry(interrupted):
-=======
-@pytest.mark.parametrize("skip_special_tokens", [False, True])
-async def test_assistant_prefix_real_client_preserves_prompt_and_completion_across_retry(
-    interrupted, skip_special_tokens
-):
->>>>>>> c95d05af14 (Deslop 8b78427157ddbec8b8da323aac4ae6d778113b77 tests)
     backend = Tokenizer(
         models.WordLevel({"[UNK]": 0, "assistant": 1, "prefix": 2, "</think>": 3, "tail": 4}, unk_token="[UNK]")
     )
@@ -413,14 +408,10 @@ async def test_assistant_prefix_real_client_preserves_prompt_and_completion_acro
             "sampling_params": {"max_generate_length": 10, "logprobs": 1},
             "max_context_length": 5,
             "max_prompt_length": 2,
-<<<<<<< HEAD
         }
     )
     assert [row["prompt_token_ids"] for row in submitted] == (
         [[[1, 2]], [[1, 2, 3]]] if interrupted else [[[1, 2]]]
-=======
-        },
->>>>>>> c95d05af14 (Deslop 8b78427157ddbec8b8da323aac4ae6d778113b77 tests)
     )
     assert [row["sampling_params"]["max_tokens"] for row in submitted] == ([3, 2] if interrupted else [3])
     assert all(row["sampling_params"]["skip_special_tokens"] is False for row in submitted)
@@ -431,14 +422,8 @@ async def test_assistant_prefix_real_client_preserves_prompt_and_completion_acro
     assert output["student_topk_indices"] == [[[3], [4]]]
     assert output["behavior_topk_logprobs"] == [[[-0.3], [-0.4]]]
     assert output["response_policy_steps"] == [[7, 7]]
-<<<<<<< HEAD
     assert output["responses"] == ["</think> tail"]
     assert output["assistant_messages"] == [{"role": "assistant", "content": "</think> tail"}]
-=======
-    expected = "tail" if skip_special_tokens else "</think> tail"
-    assert output["responses"] == [expected]
-    assert output["assistant_messages"] == [{"role": "assistant", "content": expected}]
->>>>>>> c95d05af14 (Deslop 8b78427157ddbec8b8da323aac4ae6d778113b77 tests)
     assert output["stop_reasons"] == ["stop"]
     assert output["token_provenance"] == TokenProvenance.ENGINE
 

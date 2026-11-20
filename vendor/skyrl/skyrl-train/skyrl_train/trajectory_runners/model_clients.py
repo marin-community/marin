@@ -146,21 +146,24 @@ class _ChatResult:
 TURN_END_MARKERS = frozenset({"<|eot_id|>", "<|im_end|>"})
 
 
-def _ends_turn(tokenizer: PreTrainedTokenizerBase, response_ids: list[int]) -> bool:
-    """Whether the response ends with the EOS or a chat template's turn terminator.
+def _ends_turn(tokenizer: PreTrainedTokenizerBase, response_ids: list[int], stop_reason: str) -> bool:
+    """Whether the response ended its turn with the EOS or a chat template's turn terminator.
 
-    The stop reason does not matter: a terminator sampled as the last budgeted token still ends the turn.
+    A length stop never ended its turn, even when its last sampled token is a terminator.
     """
-    return bool(response_ids) and response_ids[-1] in _turn_end_tokens(tokenizer)
+    if not response_ids or stop_reason == "length":
+        return False
+    return response_ids[-1] in _turn_end_tokens(tokenizer)
 
 
-def _visible_text(tokenizer: PreTrainedTokenizerBase, response_ids: list[int], text: str) -> str:
-    """Reply text without the trailing turn terminator.
+def _visible_text(tokenizer: PreTrainedTokenizerBase, response_ids: list[int], stop_reason: str, text: str) -> str:
+    """Reply text without the terminator of a turn that ended.
 
     Graders, environment steps, and conversation history read this text, and the chat template adds its own
-    terminator after each historical turn. The response token IDs keep the terminator for training.
+    terminator after each historical turn. A length stop keeps all of its sampled text. The response token IDs
+    keep the terminator for training.
     """
-    if not _ends_turn(tokenizer, response_ids):
+    if not _ends_turn(tokenizer, response_ids, stop_reason):
         return text
     return text.removesuffix(tokenizer.decode(response_ids[-1:], skip_special_tokens=False))
 
@@ -322,8 +325,10 @@ class DirectModelClient:
             return await self._generate_chat(request)
         output = await self._client.generate(request)
         responses = [
-            _visible_text(self._client.tokenizer, response_ids, text)
-            for response_ids, text in zip(output["response_ids"], output["responses"], strict=True)
+            _visible_text(self._client.tokenizer, response_ids, stop_reason, text)
+            for response_ids, stop_reason, text in zip(
+                output["response_ids"], output["stop_reasons"], output["responses"], strict=True
+            )
         ]
         return ModelClientOutput(**{**output, "responses": responses}, token_provenance=TokenProvenance.ENGINE)
 
@@ -349,7 +354,7 @@ class DirectModelClient:
         if output.get("prompt_ids") != [prompt_ids]:
             raise RolloutContractError("Assistant prefix inference did not report the rendered prompt token IDs")
         response_ids = output["response_ids"][0]
-        text = _visible_text(self._client.tokenizer, response_ids, output["responses"][0])
+        text = _visible_text(self._client.tokenizer, response_ids, output["stop_reasons"][0], output["responses"][0])
         message = {**(output.get("assistant_messages") or [{"role": "assistant"}])[0], "content": text}
         return _ChatResult(
             prompt_ids,
@@ -451,17 +456,24 @@ class DirectModelClient:
             if not isinstance(response_ids, list) or not all(isinstance(token, int) for token in response_ids):
                 raise RuntimeError("vLLM chat completion did not return exact token IDs")
             tokenizer = self._client.tokenizer
+            stop_reason = choice["finish_reason"]
             message = _replace_lone_surrogates(choice["message"])
-            text = _visible_text(tokenizer, response_ids, message.get("content") or "")
+            text = _visible_text(tokenizer, response_ids, stop_reason, message.get("content") or "")
             if message.get("content") is not None:
                 message = {**message, "content": text}
             # Some serving configurations omit reasoning parsers and remove
             # special delimiters from content. Exact tokens retain the boundary.
-            stop_reason = choice["finish_reason"]
-            semantic_ids = response_ids[:-1] if _ends_turn(tokenizer, response_ids) else response_ids
+            semantic_ids = response_ids[:-1] if _ends_turn(tokenizer, response_ids, stop_reason) else response_ids
             decoded = tokenizer.decode(semantic_ids, skip_special_tokens=False)
             if any(marker in decoded for pair in REASONING_DELIMITERS for marker in pair):
-                text = final_answer_text(decoded)
+                answer = final_answer_text(decoded)
+                # The answer extractor drops a final `<|eot_id|>`; a length stop keeps the terminator its text kept.
+                unended = len(semantic_ids) == len(response_ids)
+                if unended and response_ids and response_ids[-1] in _turn_end_tokens(tokenizer):
+                    terminator = tokenizer.decode(response_ids[-1:], skip_special_tokens=False)
+                    if text.endswith(terminator):
+                        answer = answer.removesuffix(terminator) + terminator
+                text = answer
                 if not message.get("tool_calls"):
                     message = {**message, "content": text}
             logprob_items = (choice.get("logprobs") or {}).get("content")
