@@ -353,6 +353,7 @@ their Kubernetes service account inside the cluster.
 | `kubernetes_provider.kueue.cluster_queue` | Pulumi-owned ClusterQueue to which Iris binds its LocalQueue. This is required. |
 | `kubernetes_provider.kueue.topologies` | Optional `group_by` to CoreWeave node-label mappings. |
 | `kubernetes_provider.sandbox_runtime_class` | RuntimeClass for SANDBOX pods; defaults to `gvisor`. See [Sandbox runtime](#sandbox-runtime). |
+| `kubernetes_provider.sandbox_placement` | Optional node selector and tolerations for SANDBOX pods. See [Sandbox runtime](#sandbox-runtime). |
 
 An empty `kubernetes_provider.kubeconfig` means in-cluster authentication. That
 is the normal CoreWeave controller configuration.
@@ -621,6 +622,22 @@ CoreWeave's deprecated `gvisor` class. Sandbox starts are known to fail on
 cw-us-east-02a ([#10090](https://github.com/marin-community/marin/issues/10090),
 [#11343](https://github.com/marin-community/marin/issues/11343)) and are not verified
 on the other clusters.
+
+`kubernetes_provider.sandbox_placement` routes sandboxes to a dedicated node pool. Its
+`node_selector` entries are added to the pod's nodeSelector, and its `tolerations`
+(`key`, `operator` `Equal` or `Exists`, `value`, `effect`) are added to the pod's
+tolerations. It applies only to SANDBOX and legacy GVISOR pods. A `node_selector` key
+that contradicts the task's constraint-derived or managed selector fails the task with a
+manifest error; Iris never overwrites the existing value. When it is unset, sandbox pods
+get no extra selector or tolerations. Kueue assigns a Workload to a ResourceFlavor
+only when every `nodeLabels` key the flavor declares and the pod also selects has the
+same value, and the pod tolerates the flavor's `NoSchedule` and `NoExecute`
+`nodeTaints`. A placement selecting `iris.kueue: sandbox` conflicts with both existing
+flavors, which declare `iris.kueue: "true"`, so it needs its own flavor and nodes with
+capacity; without them, sandbox Workloads are never admitted. No checked-in cluster
+sets this yet. Controller images older than this
+option reject a ConfigMap that sets it; see
+[First deploy after a config-schema change](../OPS.md#first-deploy-after-a-config-schema-change).
 
 ## Source map
 

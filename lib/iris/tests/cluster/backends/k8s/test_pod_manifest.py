@@ -14,7 +14,7 @@ from iris.cluster.backends.k8s.tasks import (
     K8sTaskProvider,
     PodConfig,
 )
-from iris.cluster.config import EgressAllowlistConfig, TaskOutputPolicy
+from iris.cluster.config import EgressAllowlistConfig, SandboxTolerationConfig, TaskOutputPolicy
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.egress import parse_egress_rules
@@ -1178,6 +1178,66 @@ def test_sandbox_pod_carries_nothing_from_the_cluster(egress, label):
     assert [c["name"] for c in spec["containers"]] == ["task"]
     assert spec["initContainers"] == []
     assert manifest["metadata"]["labels"][EGRESS_LABEL] == label
+
+
+_SANDBOX_TOLERATION = SandboxTolerationConfig(key="iris.sandbox", operator="Equal", value="true", effect="NoSchedule")
+
+
+@pytest.mark.parametrize(
+    "profile",
+    [job_pb2.CONTAINER_PROFILE_SANDBOX, job_pb2.CONTAINER_PROFILE_GVISOR],
+    ids=["sandbox", "legacy-gvisor"],
+)
+def test_sandbox_placement_applies_only_to_sandbox_pods(profile):
+    # The placement restates the managed label; an agreeing key is accepted.
+    config = pod_config(
+        managed_label="iris-x-managed",
+        sandbox_node_selector={"iris-x-managed": "true", "iris-x-scale-group": "cpu-sandbox", "iris.kueue": "sandbox"},
+        sandbox_tolerations=(_SANDBOX_TOLERATION,),
+    )
+    sandbox_req = make_run_req("/my-job/task-0")
+    sandbox_req.container_profile = profile
+    sandbox_spec = _build_pod_manifest(sandbox_req, config)["spec"]
+    default_spec = _build_pod_manifest(make_run_req("/my-job/task-0"), config)["spec"]
+
+    assert sandbox_spec["nodeSelector"] == {
+        "iris-x-managed": "true",
+        "iris-x-scale-group": "cpu-sandbox",
+        "iris.kueue": "sandbox",
+    }
+    assert sandbox_spec["tolerations"] == [
+        {"key": "iris.sandbox", "operator": "Equal", "value": "true", "effect": "NoSchedule"}
+    ]
+    assert default_spec["nodeSelector"] == {"iris-x-managed": "true"}
+    assert "tolerations" not in default_spec
+
+
+@pytest.mark.parametrize(
+    ("placement", "constraint", "conflicting_key"),
+    [
+        pytest.param({"iris-x-managed": "false"}, None, "iris-x-managed", id="managed-label"),
+        pytest.param({"iris.pool": "a"}, ("pool", "b"), "iris.pool", id="constraint"),
+    ],
+)
+def test_sandbox_placement_rejects_contradicting_selector(placement, constraint, conflicting_key):
+    req = make_run_req("/my-job/task-0")
+    req.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    if constraint is not None:
+        add_eq_constraint(req, *constraint)
+    config = pod_config(managed_label="iris-x-managed", sandbox_node_selector=placement)
+
+    update = _rejected_dispatch(req, config)
+
+    assert conflicting_key in update.error
+
+
+def test_sandbox_pod_without_placement_has_only_the_managed_selector():
+    req = make_run_req("/my-job/task-0")
+    req.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    spec = _build_pod_manifest(req, pod_config(managed_label="iris-x-managed"))["spec"]
+
+    assert "tolerations" not in spec
+    assert spec["nodeSelector"] == {"iris-x-managed": "true"}
 
 
 def _allowlist_request(
