@@ -1,0 +1,368 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""The Exp3 SFT training mix — data release V5 — as a Marin artifact graph.
+
+Exp3's production SFT stage (job ``/benfeuer/long-loop-exp3-2026.11.16.51``, coordinator
+sign-off ``450bc8a4b24613c6b6f00e07da9b3953``) trained on data release V5
+(``release-complete-v5.json``, SHA-256 ``3e21619…``) under source revision
+``0f5721bbb4953e98898c847896110dee32a5b293``. This module expresses that exact mix as
+versioned handles so any run's mix is recoverable from its records:
+
+- **Release seal.** The release document and its cache catalog are adopted at their exact
+  URIs, with the pinned SHA-256 digests recorded in the handles' configs.
+- **One sealed-cache handle per source.** Each of the 434 mixture sources is a
+  ``TokenizedCache`` step whose fingerprinted config pins the digest of the source's
+  cache-catalog entry — the ledger that carries the source's exact content-addressed
+  shard caches — plus its row and token counts, shard count, and loss mode. The step's
+  record is the deliverable; no data is read or recomputed.
+- **The mixture.** :func:`exp3_v5_data_config` assembles the ``LmDataConfig`` through
+  :func:`marin.experiment.data.mixture`: the 434 sources at their natural weights, the
+  three-phase weight schedule (boundaries 0/250/500), the full-permutation feistel shuffle,
+  the release's cache catalog, and the per-source IID validation reservation.
+
+The training run's consumed data config is recorded in ``fixtures/exp3_v5_data.json``
+(byte-exact to the release member the run consumed, plus the hook-required trailing
+newline the loader strips and re-verifies); the per-source seal manifest in
+``fixtures/exp3_v5_source_seals.json`` pins each source's ledger digest, row and token
+counts, and loss mode. Both fixtures carry the SHA-256 digests they were verified against,
+checked at import. The exact content-addressed shard paths live in the SHA-pinned cache
+catalog, not in the repository; :func:`exp3_v5_seal_check` verifies every one of them at
+run time.
+
+The Exp3 runtime packed documents with bounded lookahead (cap 256, lookahead 128); every
+seal record pins that geometry so the run's packing stays recoverable. A consumer packs
+with its own policy; the mix definition does not set it.
+"""
+
+import hashlib
+import json
+from dataclasses import replace
+from functools import cache
+from pathlib import Path
+
+import click
+from levanter.data.text.datasets import LmDataConfig
+from levanter.store.cache import CacheOptions
+from marin.execution.artifact import Artifact
+from marin.execution.lazy import ArtifactStep, StepContext, lower, run
+from marin.experiment.data import mixture
+from marin.processing.tokenize.tokenize import TokenizedCache
+from rigging.filesystem.storage_path import StoragePath, prefix_join
+
+EXP3_V5_VERSION = "2026.11.16"
+"""The release's creation date; the identity version of every handle in this mix."""
+
+_FIXTURES = Path(__file__).parent / "fixtures"
+
+_RELEASE_URI = (
+    "s3://marin-us-east-08a/marin/users/benfeuer/exp3-data-mix/2026.11.15-candidate-v1"
+    "/release-v5/release-complete-v5.json"
+)
+_RELEASE_SHA256 = "3e2161945e1adc60c9edcdb6b0d7395946966dc4e0d16b88660fbc38989603f5"
+"""The release document the coordinator signed off and the launcher verified."""
+
+
+def _load_fixture(filename: str, sha256: str) -> dict:
+    raw = (_FIXTURES / filename).read_bytes()
+    if hashlib.sha256(raw).hexdigest() != sha256:
+        raise ValueError(f"{filename}: SHA-256 does not match the pinned digest {sha256}")
+    return json.loads(raw)
+
+
+def _load_release_data() -> dict:
+    """The release's ``data.json``, byte-exact after the fixture's trailing newline.
+
+    The newline hook requires a terminated last line, so the fixture stores the release
+    member plus one newline byte; the digest check covers the member's exact bytes.
+    """
+    raw = (_FIXTURES / "exp3_v5_data.json").read_bytes()
+    content = raw[:-1] if raw.endswith(b"\n") else raw
+    expected = _RELEASE["artifacts"]["data.json"]["sha256"]
+    if hashlib.sha256(content).hexdigest() != expected:
+        raise ValueError(f"exp3_v5_data.json: content does not match the release member digest {expected}")
+    return json.loads(content)
+
+
+_RELEASE = _load_fixture("exp3_v5_release.json", _RELEASE_SHA256)
+"""The byte-identical release document. Its ``artifacts`` pins every member's digest."""
+
+_DATA = _load_release_data()
+"""The release's ``data.json`` — the ``LmDataConfig`` the Exp3 SFT run consumed."""
+
+_MANIFEST = _load_fixture(
+    "exp3_v5_source_seals.json",
+    "782a6b8b25b758a4a32f10e9f419841ae5e975890f6f63e21043c9f18e1d3782",
+)
+"""Per-source seal manifest derived from the release's cache catalog.
+
+Each source pins its catalog-entry digest (the canonical entry JSON, sorted keys), row
+and token counts, shard count, and loss mode. The manifest is a pure function of the two
+SHA-pinned release members named in its ``derived_from`` block, so regenerating it from
+an unchanged release is byte-stable."""
+
+_SEALS = _MANIFEST["sources"]
+
+_CACHE_ROOT = _DATA["components"][next(iter(_DATA["components"]))]["cache_dir"]
+_CATALOG_URI = _DATA["cache_catalog"]
+_CATALOG_SHA256 = _RELEASE["artifacts"]["cache_catalog.json"]["sha256"]
+_TOKENIZER = _DATA["tokenizer"]
+_SCHEDULE = [[phase, dict(weights)] for phase, weights in _DATA["train_weights"]]
+_NUM_VALIDATION_SEQUENCES = dict(_DATA["num_validation_sequences"])
+_MIXTURE_BLOCK_SIZE = _DATA["mixture_block_size"]
+_ENFORCE_EOS = _DATA["enforce_eos"]
+_AUTO_BUILD_CACHES = _DATA["auto_build_caches"]
+_CACHE_BATCH_SIZE = 128
+"""Cache-read batch size the Exp3 launcher set. Not a release field: recorded from the run's
+consumed config (``production51-sft-consumed-config.json``), which matches the release data
+config on every field the release carries."""
+_STOP_STRATEGY = _DATA["stop_strategy"]
+
+# The 434 components share one packing/format shape; extract it once and hold the mix to it.
+_SHAPE_KEYS = ("format", "pack", "split", "flat_cache")
+_SHAPES = {
+    json.dumps({key: component[key] for key in _SHAPE_KEYS}, sort_keys=True)
+    for component in _DATA["components"].values()
+}
+if len(_SHAPES) != 1:
+    raise ValueError(f"release components do not share one shape: {_SHAPES}")
+_SHAPE = json.loads(next(iter(_SHAPES)))
+_PACK = _SHAPE["pack"]
+_FLAT_CACHE = _SHAPE["flat_cache"]
+_SPLIT = _SHAPE["split"]
+_FORMAT = dict(_SHAPE["format"], type="prebuilt")
+_PACKING_LOOKAHEAD = next(iter(_DATA["components"].values()))["packing_lookahead"]
+assert _PACKING_LOOKAHEAD == 128  # the Exp3 runtime's bounded-lookahead packing, recorded as provenance
+assert _MANIFEST["geometry"]["cache_dir"] == _CACHE_ROOT
+assert _MANIFEST["geometry"]["pack"] == _PACK and _MANIFEST["geometry"]["packing_lookahead"] == _PACKING_LOOKAHEAD
+
+_SOURCE_NAMES = tuple(sorted(_DATA["components"]))
+if set(_SOURCE_NAMES) != set(_SEALS) or set(_SOURCE_NAMES) != set(_SCHEDULE[0][1]):
+    raise ValueError("release components, seal manifest, and weight schedule name different source sets")
+
+
+exp3_v5_release = ArtifactStep.adopt(
+    "sft-mixes/exp3-v5/release",
+    EXP3_V5_VERSION,
+    _RELEASE_URI,
+    config={"sha256": _RELEASE_SHA256, "members": dict(_RELEASE["artifacts"])},
+)
+"""The adopted release document: its exact URI, with every member digest recorded."""
+
+exp3_v5_cache_catalog = ArtifactStep.adopt(
+    "sft-mixes/exp3-v5/cache-catalog",
+    EXP3_V5_VERSION,
+    _CATALOG_URI,
+    config={"sha256": _CATALOG_SHA256},
+)
+"""The adopted cache catalog: the authoritative per-source ledgers behind ``cache_catalog``."""
+
+
+def _seal_config(name: str) -> dict:
+    """The fingerprinted seal record for one source: its exact sealed cache, as literals.
+
+    The entry digest pins the source's catalog entry — the ledger that carries the
+    content-addressed shard paths, per-shard row counts, and loss metadata.
+    """
+    seal = _SEALS[name]
+    return {
+        "source_name": name,
+        "tokenizer": _TOKENIZER,
+        "format": dict(_FORMAT),
+        "pack": _PACK,
+        "packing_lookahead": _PACKING_LOOKAHEAD,
+        "split": _SPLIT,
+        "flat_cache": _FLAT_CACHE,
+        "tags": None,
+        "cache_dir": _CACHE_ROOT,
+        "rows": seal["rows"],
+        "input_ids_tokens": seal["input_ids_tokens"],
+        "loss_weights_tokens": seal["loss_weights_tokens"],
+        "loss_mode": seal["loss_mode"],
+        "shards": seal["shards"],
+        "entry_sha256": seal["entry_sha256"],
+        "release": {"uri": _RELEASE_URI, "sha256": _RELEASE_SHA256},
+        "cache_catalog": {"uri": _CATALOG_URI, "sha256": _CATALOG_SHA256},
+    }
+
+
+def _entry_digest(entry: dict) -> str:
+    """The canonical digest of a cache-catalog entry (sorted-key JSON)."""
+    return hashlib.sha256(json.dumps(entry, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _register_seal(_config: dict) -> None:
+    """Register the sealed cache. The step's record is the deliverable; the data is
+    neither read nor moved. ``exp3_v5_seal_check`` verifies the sealed content."""
+
+
+def _verify_shard_paths(cache_dir: str, shards: list[str]) -> None:
+    """Fail unless every content-addressed shard cache exists under ``cache_dir``."""
+    missing = []
+    for shard in shards:
+        if not StoragePath(prefix_join(cache_dir, shard)).exists():
+            missing.append(shard)
+        if len(missing) >= 5:
+            break
+    if missing:
+        raise FileNotFoundError(
+            f"{len(missing)} or more sealed shard caches are missing under {cache_dir} (first: {missing[0]})"
+        )
+
+
+@cache
+def _exp3_v5_sources() -> dict[str, ArtifactStep[TokenizedCache]]:
+    """One sealed-cache handle per release source, keyed by the mixture's component name.
+
+    Private on purpose: each seal record pins the shared release cache root, so the
+    per-source cache addresses only resolve through the catalog that
+    :func:`exp3_v5_data_config` attaches as ``cache_catalog``. Mixing these handles
+    directly (without that catalog) would point every component at the root.
+
+    Each handle is a ``TokenizedCache`` step that writes a seal record; its config is
+    pure literals (the entry digest, counts, and loss mode), so the fingerprint pins the
+    exact sealed content. The data is never copied or recomputed; the record is what
+    makes the source's cache addressable, and ``mixture`` reads it at run time.
+    """
+    return {
+        name: ArtifactStep(
+            name=name,
+            version=EXP3_V5_VERSION,
+            artifact_type=TokenizedCache,
+            run=_register_seal,
+            build_config=lambda _ctx, _name=name: _seal_config(_name),
+            deps=(exp3_v5_cache_catalog,),
+        )
+        for name in _SOURCE_NAMES
+    }
+
+
+def exp3_v5_seal_check() -> ArtifactStep[Artifact]:
+    """Verify the sealed release against the pinned digests and the seal manifest.
+
+    Reads the cache catalog once, checks its SHA-256 and every source's entry digest, and
+    cross-checks row counts, shard counts, and loss modes against the manifest and the
+    release totals; then verifies that every content-addressed shard cache exists. Declare
+    this handle among a consumer's dependencies so the seal is verified before the mix is
+    used.
+    """
+    expected = {
+        name: {
+            "rows": s["rows"],
+            "shards": s["shards"],
+            "loss_mode": s["loss_mode"],
+            "entry_sha256": s["entry_sha256"],
+        }
+        for name, s in _SEALS.items()
+    }
+    totals = {
+        "sources": len(_SEALS),
+        "rows": sum(s["rows"] for s in _SEALS.values()),
+        "input_ids_tokens": sum(s["input_ids_tokens"] for s in _SEALS.values()),
+        "loss_weights_tokens": sum(s["loss_weights_tokens"] for s in _SEALS.values()),
+        "shards": sum(s["shards"] for s in _SEALS.values()),
+    }
+
+    def build_config(_ctx: StepContext) -> dict:
+        return {
+            "cache_catalog": {"uri": _CATALOG_URI, "sha256": _CATALOG_SHA256},
+            "release": {"uri": _RELEASE_URI, "sha256": _RELEASE_SHA256},
+            "cache_dir": _CACHE_ROOT,
+            "expected_sources": expected,
+            "expected_totals": totals,
+        }
+
+    def check(config: dict) -> None:
+        raw = StoragePath(config["cache_catalog"]["uri"]).read_bytes()
+        if hashlib.sha256(raw).hexdigest() != config["cache_catalog"]["sha256"]:
+            raise ValueError(f"cache catalog digest differs from the release pin {config['cache_catalog']['sha256']}")
+        catalog = json.loads(raw)["splits"]["train"]
+        if set(catalog) != set(config["expected_sources"]):
+            raise ValueError("cache catalog sources differ from the seal manifest")
+        shards: list[str] = []
+        for name, entry in catalog.items():
+            ledger = entry["ledger"]
+            want = config["expected_sources"][name]
+            if not ledger.get("is_finished"):
+                raise ValueError(f"{name}: cache ledger is not finished")
+            if ledger["total_num_rows"] != want["rows"]:
+                raise ValueError(f"{name}: {ledger['total_num_rows']} rows, manifest pins {want['rows']}")
+            if len(ledger["finished_shards"]) != want["shards"]:
+                raise ValueError(f"{name}: {len(ledger['finished_shards'])} shards, manifest pins {want['shards']}")
+            if _entry_digest(entry) != want["entry_sha256"]:
+                raise ValueError(f"{name}: catalog entry digest differs from the manifest pin")
+            loss_mode = ledger.get("metadata", {}).get("preprocessor_metadata", {}).get("loss_mode")
+            if loss_mode != want["loss_mode"]:
+                raise ValueError(f"{name}: loss mode {loss_mode!r}, manifest pins {want['loss_mode']!r}")
+            shards.extend(ledger["finished_shards"])
+        observed = {
+            "sources": len(catalog),
+            "rows": sum(entry["ledger"]["total_num_rows"] for entry in catalog.values()),
+            "shards": len(shards),
+        }
+        for key, value in observed.items():
+            if value != config["expected_totals"][key]:
+                raise ValueError(f"{key}: {value}, manifest pins {config['expected_totals'][key]}")
+        _verify_shard_paths(config["cache_dir"], shards)
+
+    return ArtifactStep(
+        name="sft-mixes/exp3-v5/seal-check",
+        version=EXP3_V5_VERSION,
+        artifact_type=Artifact,
+        run=check,
+        build_config=build_config,
+        deps=(exp3_v5_release, exp3_v5_cache_catalog),
+    )
+
+
+def exp3_v5_mix_deps() -> tuple[ArtifactStep, ...]:
+    """The dependencies a consumer of :func:`exp3_v5_data_config` must declare."""
+    return (exp3_v5_release, exp3_v5_cache_catalog, exp3_v5_seal_check(), *_exp3_v5_sources().values())
+
+
+def exp3_v5_data_config(ctx: StepContext) -> LmDataConfig:
+    """The ``LmDataConfig`` the Exp3 SFT run consumed, assembled through ``mixture``.
+
+    Call this inside a consumer's ``build_config`` whose ``deps`` include
+    :func:`exp3_v5_mix_deps`. ``mixture`` reads each source's seal record at run time for
+    its format and packing. The release catalog supplies the per-source cache addresses;
+    the schedule, shuffle, and validation reservations come from the release document.
+    """
+    phase_weights = _SCHEDULE[0][1]
+    train = {handle: phase_weights[handle.name] for handle in _exp3_v5_sources().values()}
+    cfg = mixture(ctx, train, shuffle=_DATA["shuffle"])
+    return replace(
+        cfg,
+        train_weights=[(phase, weights) for phase, weights in _SCHEDULE],
+        cache_catalog=ctx.artifact_path(exp3_v5_cache_catalog),
+        num_validation_sequences=dict(_NUM_VALIDATION_SEQUENCES),
+        mixture_block_size=_MIXTURE_BLOCK_SIZE,
+        enforce_eos=_ENFORCE_EOS,
+        auto_build_caches=_AUTO_BUILD_CACHES,
+        cache_options=CacheOptions(batch_size=_CACHE_BATCH_SIZE),
+        stop_strategy=_STOP_STRATEGY,
+    )
+
+
+@click.command()
+@click.option("--run", "build", is_flag=True, help="Build the handles (default: only print the plan).")
+@click.option("--only", help="Comma-separated subset of source names to select (default: all).")
+@click.option("--max-concurrent", type=int, default=8, help="Max handles built concurrently.")
+def cli(build: bool, only: str | None, max_concurrent: int) -> None:
+    selected = _exp3_v5_sources()
+    if only is not None:
+        keys = only.split(",")
+        unknown = [key for key in keys if key not in selected]
+        if unknown:
+            raise click.BadParameter(f"unknown sources {unknown}; available: {sorted(selected)}", param_hint="--only")
+        selected = {key: selected[key] for key in keys}
+    handles = [*selected.values(), exp3_v5_seal_check()]
+    if not build:
+        for handle in handles:
+            click.echo(lower(handle))
+        return
+    run(*handles, max_concurrent=max_concurrent)
+
+
+if __name__ == "__main__":
+    cli()

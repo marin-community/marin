@@ -1,0 +1,204 @@
+{
+  "artifacts": {
+    "cache_catalog.json": {
+      "sha256": "338e92252879c54e6aa7fa874556cd3b8200cfb82299da183607eda17873d73e",
+      "uri": "s3://marin-us-east-08a/marin/users/benfeuer/exp3-data-mix/2026.11.15-candidate-v1/release-v5/cache_catalog.json"
+    },
+    "data.json": {
+      "sha256": "12046a74b9fc95ec84268e5738dc53d489f959c9a8f3c8584da29080d4c23f19",
+      "uri": "s3://marin-us-east-08a/marin/users/benfeuer/exp3-data-mix/2026.11.15-candidate-v1/release-v5/data.json"
+    },
+    "mixture-rationale.json": {
+      "sha256": "ec94ee03642acc1056e14a289f8df3e7d30a717b7a444eef61a4abbbb8e840b0",
+      "uri": "s3://marin-us-east-08a/marin/users/benfeuer/exp3-data-mix/2026.11.15-candidate-v1/release-v5/mixture-rationale.json"
+    },
+    "retention-by-source.csv": {
+      "sha256": "bb32f86776b55ce0761cd7609a89dd3ce23ce4c41722a1f9712ca14d47047ad5",
+      "uri": "s3://marin-us-east-08a/marin/users/benfeuer/exp3-data-mix/2026.11.15-candidate-v1/release-v5/retention-by-source.csv"
+    },
+    "retention-by-transform.csv": {
+      "sha256": "ffe489147102f4b1d4650296cb16c41a996eecfe587fabb54fdd6c07d0e7eae4",
+      "uri": "s3://marin-us-east-08a/marin/users/benfeuer/exp3-data-mix/2026.11.15-candidate-v1/release-v5/retention-by-transform.csv"
+    },
+    "source_loss.json": {
+      "sha256": "7fe4e0c7a187da4c55feb3097ef8851cf232d44c1e7c6f44092fa64d0a448939",
+      "uri": "s3://marin-us-east-08a/marin/users/benfeuer/exp3-data-mix/2026.11.15-candidate-v1/release-v5/source_loss.json"
+    },
+    "train_weights.json": {
+      "sha256": "e365fa1d5a12b774c1e41b104b76d37c8da982a5b765d5c753408f12caa22223",
+      "uri": "s3://marin-us-east-08a/marin/users/benfeuer/exp3-data-mix/2026.11.15-candidate-v1/release-v5/train_weights.json"
+    }
+  },
+  "atlas_bloom_pin": {
+    "sha256": "ef6e6c7663f7171ccdd4b17d3aab9882abb7ecec9e0242661e63773b501cf42e",
+    "uri": "s3://marin-us-east-08a/marin/users/benfeuer/exp3-data-mix/2026.11.15-candidate-v1/atlas-full-candidate-v5/bloom-pin.json"
+  },
+  "atlas_population_pins": {
+    "sha256": "d96642680477c27e90a879199648017ba0690a0f98a32ef61636ccf697c43915",
+    "uri": "s3://marin-us-east-08a/marin/users/benfeuer/exp3-data-mix/2026.11.15-candidate-v1/atlas-full-candidate-v5/population-pins.json"
+  },
+  "atlas_report": {
+    "sha256": "431894182b2ef0269c84b6528137ef00f9beb8b1ef7a2b4f5fb02e31ba4430a2",
+    "uri": "s3://marin-us-east-08a/marin/users/benfeuer/exp3-data-mix/2026.11.15-candidate-v1/atlas-full-candidate-v5/report.json"
+  },
+  "code_revisions": {
+    "atlas": "5ff2a777238f1427264c643b6451efc9ea4d0604",
+    "consumer": "6db3ce9022a414804142d02f6edd2fe47befc632",
+    "data": "a4f509e17608de3ca73a17cae094c76155cd847a",
+    "raw_question_repair": "fada02f02b0ed4c12da050da751b4723bbcb2153"
+  },
+  "consumer_limitation": "Measures packing/exposure, not per-sampled-document assistant-loss position counts",
+  "created": "2026-11-16T12:17:57.098061+00:00",
+  "exposure_views": {
+    "360": {
+      "padding_fraction": 0.0398921724408865,
+      "totals": {
+        "context_positions": 24159191040,
+        "document_references": 4781806,
+        "dropped_tokens": 0,
+        "padding_tokens": 963762615,
+        "real_tokens": 23195428425,
+        "sequences": 92160
+      }
+    },
+    "377": {
+      "padding_fraction": 0.039952298492904686,
+      "totals": {
+        "context_positions": 25300041728,
+        "document_references": 5000845,
+        "dropped_tokens": 0,
+        "padding_tokens": 1010794819,
+        "real_tokens": 24289246909,
+        "sequences": 96512
+      }
+    },
+    "746": {
+      "padding_fraction": 0.04039197546946779,
+      "totals": {
+        "context_positions": 50063212544,
+        "document_references": 9928671,
+        "dropped_tokens": 0,
+        "padding_tokens": 2022152053,
+        "real_tokens": 48041060491,
+        "sequences": 190976
+      }
+    }
+  },
+  "geometry": {
+    "global_batch": 256,
+    "lookahead": 128,
+    "packing_cap": 256,
+    "seed": 0,
+    "sequence_length": 262144,
+    "updates": 746
+  },
+  "gpu_training_approved": false,
+  "inventory": {
+    "sha256": "b2c5c0cc021fd658feec8accbbde0db3340a609afbe1c85b22aa48a7655a57d3",
+    "uri": "s3://marin-us-east-08a/marin/users/benfeuer/exp3-data-mix/2026.11.15-candidate-v1/final-data-v5/inventory.json"
+  },
+  "native_consumer_receipt": {
+    "sha256": "6bba910963d2c95d67779b51024a8c09ebad551a7f5ac9e77057ce75a57a6739",
+    "uri": "s3://marin-us-east-08a/marin/users/benfeuer/exp3-data-mix/2026.11.15-candidate-v1/release-v5/native-consumer-receipt.json"
+  },
+  "native_measurement_job": {
+    "sha256": "c6753194242e40ebaca08b386321b1feefcecdce2c6fbe1ceea87d82be47ae29",
+    "uri": "s3://marin-us-east-08a/marin/users/benfeuer/exp3-data-mix/2026.11.15-candidate-v1/release-v5/native-measurement-job.json"
+  },
+  "natural_population": {
+    "chat_assistant_only": {
+      "output_documents": 12541984,
+      "output_tokens": 108856031240,
+      "supervised_prediction_positions": 86421054812
+    },
+    "full_token": {
+      "output_documents": 32504629,
+      "output_tokens": 34015266826,
+      "supervised_prediction_positions": 33982762197
+    }
+  },
+  "num_validation_sequences": {
+    "sft/source/agenttrove": 8,
+    "sft/source/identity-data": 8,
+    "sft/source/nemotron_sft_v3/competitive_programming_v2/competitive_coding_python": 8,
+    "sft/source/nemotron_sft_v3/finance_v1/train": 8,
+    "sft/source/nemotron_sft_v3/math_proofs_v1/lean": 8,
+    "sft/source/nemotron_sft_v3/math_v3/train": 8,
+    "sft/source/nemotron_sft_v3/science_v2/vendor": 8
+  },
+  "opencode_raw_question_repair": {
+    "bridge": {
+      "sha256": "529450205d669e4cf06867e3424c1c06c93b87c39d80a0ce6e01c7eb3a5f6af4",
+      "uri": "s3://marin-us-east-08a/marin/users/benfeuer/exp3-data-mix/2026.11.15-candidate-v1/opencode-question-bridge-v1/inventory.json"
+    },
+    "counts": {
+      "changed": 409621,
+      "changed_user_messages": 409621,
+      "unchanged": 0,
+      "unjoined": 17
+    },
+    "index": {
+      "sha256": "7c6842b90f86271c664ac3f6766e08da0e78b1b486ed4b8d3a33c6a2f958dd46",
+      "uri": "s3://marin-us-east-08a/marin/users/benfeuer/exp3-data-mix/2026.11.15-candidate-v1/opencode-question-index-v1/inventory.json"
+    },
+    "inventory": {
+      "sha256": "4b22e8c77bad1da9ac4bd09ede18dc7a584539f853072aac13232fc6eb36638c",
+      "uri": "s3://marin-us-east-08a/marin/users/benfeuer/exp3-data-mix/2026.11.15-candidate-v1/opencode-raw-question-repaired-v1/inventory.json"
+    },
+    "original_cache_rows": 409950,
+    "original_join_counts": {
+      "joined": 409933,
+      "reason/joined": 409933,
+      "reason/missing_raw_question": 16,
+      "reason/native_fingerprint_not_found": 1,
+      "unjoined": 17
+    },
+    "post_atlas_counts": {
+      "atlas_dropped": {
+        "changed": 617
+      },
+      "input": {
+        "changed": 409621,
+        "unjoined": 17
+      },
+      "retained": {
+        "changed": 409004,
+        "unjoined": 17
+      }
+    },
+    "previous_raw_question_deferral": "Superseded by this completed user-directed v5 repair; other Tier C deferrals unchanged.",
+    "raw_manifest": {
+      "sha256": "ececfff82d1923f26aadfaf5d7549e728966176c8090f87cb6b08f04bfb4de65",
+      "uri": "s3://marin-us-east-08a/marin/users/benfeuer/exp3-data-mix/2026.11.15-candidate-v1/opencode-raw-question-v1/manifest.json"
+    },
+    "raw_revision": "556d5237acff203f3e1a0be49428634c3606cda2",
+    "recipe": {
+      "sha256": "4ee5a8941d87b588e2723f1e2b4650c8728e6da4292d9464b6e64e7599c5dc69",
+      "uri": "s3://marin-us-east-08a/marin/users/benfeuer/exp3-data-mix/2026.11.15-candidate-v1/inputs/opencode-question-repair-recipe-v1.json"
+    },
+    "repair_enabled": true,
+    "retained_rows_before_atlas": 409638,
+    "rule": "Exact PR11193 question-prefix wrapper removal, restricted to 0\u20133 trailing note blocks. Notes and all non-user text are byte-preserved; changed assistant target-token arrays must match exactly.",
+    "stable_identity": "Partition-scoped complete-native-content SHA bridge to raw UUID; identical raw payloads with an identical question retain the full equivalent UUID set; missing or ambiguous questions and unmatched fingerprints are never guessed.",
+    "unjoined_policy": "Original token and mask arrays retained unchanged, explicitly counted."
+  },
+  "publisher_manifest": {
+    "sha256": "c4c2035e177dff1090b4510f1aa228a676eb753951a10581c7ba4bd853b63b1f",
+    "uri": "s3://marin-us-east-08a/marin/users/benfeuer/exp3-data-mix/2026.11.15-candidate-v1/release-v5/manifest.json"
+  },
+  "readiness_scope": "Data qualification only; production launch requires user approval and the runtime graph resolve.",
+  "schema_version": 1,
+  "seal_implementation": {
+    "sha256": "ce23e3ee4cbb587ecda1a4bc8fb2e5032b1a6a5a062637de2cc1f1775cd81d55",
+    "uri": "s3://marin-us-east-08a/marin/users/benfeuer/exp3-data-mix/2026.11.15-candidate-v1/inputs/prepare-release-seal-v7.py"
+  },
+  "static_evidence": {
+    "sha256": "b384c60aa7f5efbb33aedeffc0ab7e9d62ae5ca98243de08af1dbe42aa302c41",
+    "uri": "s3://marin-us-east-08a/marin/users/benfeuer/exp3-data-mix/2026.11.15-candidate-v1/inputs/release-static-pins-v6.json"
+  },
+  "supersedes": {
+    "sha256": "37c726c08d03a4b8b287f7e65957148e826a494845361b3e5adc0bffaa798dc0",
+    "uri": "s3://marin-us-east-08a/marin/users/benfeuer/exp3-data-mix/2026.11.15-candidate-v1/release-v4/release-complete-v4.json"
+  },
+  "training_ready": true
+}
