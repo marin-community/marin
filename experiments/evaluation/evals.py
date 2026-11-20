@@ -158,6 +158,7 @@ EVALS.update(
         "swebench-lite": harbor_definition("swebench-lite", 2),
         "swebench-full": harbor_definition("swebench-full"),
         "swebench-pro": harbor_definition("swebench-pro"),
+        "swebench-pro-200": harbor_definition("swebench-pro-200"),
         "swebench-pro-lite": harbor_definition("swebench-pro-lite", 2),
         "swebench-pro-smoke": harbor_definition("swebench-pro-smoke"),
         "gaia": harbor_definition("gaia"),
