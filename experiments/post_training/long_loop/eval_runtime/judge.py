@@ -38,23 +38,12 @@ class JudgedEvaluation:
     judge_target_cluster: str | None = None
 
 
-def run_with_existing_judge(config: SkyRLRunConfig) -> SkyRLRun:
-    """Bind the original Tau3 counterpart credential before submitting its task."""
-    previous = os.environ.get("OPENAI_API_KEY")
-    os.environ["OPENAI_API_KEY"] = os.environ["TOGETHER_API_KEY"]
-    try:
-        return run_skyrl(
-            config,
-            env_vars={
-                "OPENAI_API_KEY": os.environ["TOGETHER_API_KEY"],
-                "JUDGE_API_KEY": os.environ.get("JUDGE_API_KEY", "EMPTY"),
-            },
-        )
-    finally:
-        if previous is None:
-            del os.environ["OPENAI_API_KEY"]
-        else:
-            os.environ["OPENAI_API_KEY"] = previous
+def run_with_existing_judge(config: SkyRLRunConfig, *, openai_api_key: str, judge_api_key: str) -> SkyRLRun:
+    """Bind the counterpart and verifier credentials to this launch only."""
+    return run_skyrl(
+        config,
+        env_vars={"OPENAI_API_KEY": openai_api_key, "JUDGE_API_KEY": judge_api_key},
+    )
 
 
 def run_judged(config: JudgedEvaluation) -> SkyRLRun:
@@ -110,16 +99,12 @@ def run_judged(config: JudgedEvaluation) -> SkyRLRun:
             launch["skyrl"]["environment"]["task_sessions"]["remote_judge"]["base_url"] = base_url
             launch["skyrl"]["extra_env"]["JUDGE_BASE_URL"] = base_url
             launch["runtime"]["task_env"]["JUDGE_BASE_URL"] = base_url
-            # Resolve credentials only in the submitting process; never serialize a key into YAML.
-            previous = os.environ.get("JUDGE_API_KEY")
-            os.environ["JUDGE_API_KEY"] = judge.model.endpoint.api_key or "EMPTY"
-            try:
-                with log.span("eval_execution_including_queue"):
-                    return run_with_existing_judge(replace(config.skyrl, launch_config_yaml=yaml.safe_dump(launch)))
-            finally:
-                if previous is None:
-                    del os.environ["JUDGE_API_KEY"]
-                else:
-                    os.environ["JUDGE_API_KEY"] = previous
+            # Pass credentials only to this subprocess; never serialize them into YAML.
+            with log.span("eval_execution_including_queue"):
+                return run_with_existing_judge(
+                    replace(config.skyrl, launch_config_yaml=yaml.safe_dump(launch)),
+                    openai_api_key=os.environ["TOGETHER_API_KEY"],
+                    judge_api_key=judge.model.endpoint.api_key or "EMPTY",
+                )
         finally:
             fs.pipe_file(key, log.path.read_bytes())

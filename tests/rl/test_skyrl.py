@@ -12,7 +12,9 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 from typing import IO
 
 import pytest
@@ -45,6 +47,8 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem import cluster_config
 from rigging.filesystem.step_status import STATUS_SUCCESS
 from skyrlrecipe.locality import RoleTopologyMode
+
+from experiments.post_training.long_loop.eval_runtime.judge import run_with_existing_judge
 
 
 def _model_step() -> ArtifactStep[LevanterCheckpoint]:
@@ -1073,3 +1077,36 @@ def test_reject_forced_socket_transport_allows_non_forcing_env() -> None:
     reject_forced_socket_transport({"NCCL_SOCKET_FAMILY": "AF_INET"}, num_nodes=32)
     reject_forced_socket_transport({"NCCL_NET": "Socket"}, num_nodes=1)
     reject_forced_socket_transport({}, num_nodes=32)
+
+
+def test_concurrent_judged_launches_keep_credentials_in_their_own_subprocesses(tmp_path, monkeypatch):
+    parent = {"OPENAI_API_KEY": "parent-provider", "JUDGE_API_KEY": "parent-judge"}
+    for name, value in parent.items():
+        monkeypatch.setenv(name, value)
+    step = skyrl_step(_spec(), _execution())
+    config = step.build_config(
+        StepContext.for_run(str(tmp_path), str(tmp_path), runtime_args=step.runtime_args, deps=step.deps)
+    )
+    barrier = Barrier(2)
+    script = (
+        "import json,os; print(json.dumps({'state':'succeeded','iris_job_id':"
+        "'/tests/'+os.environ['OPENAI_API_KEY']+'--'+os.environ['JUDGE_API_KEY']}))"
+    )
+
+    def launcher(command, *, env_vars):
+        barrier.wait(timeout=10)
+        assert {name: os.environ[name] for name in parent} == parent
+        return run_launcher_for_test(command, env_vars=env_vars)
+
+    monkeypatch.setattr("marin.rl.skyrl._launcher_command", lambda config: [sys.executable, "-c", script])
+    monkeypatch.setattr("marin.rl.skyrl._run_launcher", launcher)
+    monkeypatch.setattr("marin.rl.skyrl.record_rollout_run", lambda record: None)
+
+    def launch(label):
+        return run_with_existing_judge(
+            config, openai_api_key=f"provider-{label}", judge_api_key=f"judge-{label}"
+        ).iris_job_id
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        assert list(executor.map(launch, ("a", "b"))) == ["/tests/provider-a--judge-a", "/tests/provider-b--judge-b"]
+    assert {name: os.environ[name] for name in parent} == parent
