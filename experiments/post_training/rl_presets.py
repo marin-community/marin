@@ -15,6 +15,7 @@ from typing import Annotated, ClassVar, Literal
 
 import yaml
 from finestore.rl.rl_progress import Invariant
+from marin.evaluation.eval_env import DAYTONA_EVAL_API_KEY_ENV
 from marin.execution.lazy import ArtifactStep
 from marin.rl.skyrl import (
     ArtifactDataSource,
@@ -66,7 +67,7 @@ def harbor_evaluation(path: Path) -> HarborEvaluationCallback:
         timeout=config["timeout"],
         minimum_coverage=config["minimum_coverage"],
         minimum_native_coverage=MINIMUM_TASK_COVERAGE,
-        daytona_api_key_env="DAYTONA_EVAL_API_KEY",
+        daytona_api_key_env=DAYTONA_EVAL_API_KEY_ENV,
     )
 
 
