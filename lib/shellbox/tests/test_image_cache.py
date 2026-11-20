@@ -106,7 +106,7 @@ def test_local_image_unpack_failure_reports_the_host_diagnostic(tmp_path, layere
 
 
 def test_local_unpack_accepts_a_digest_pinned_docker_manifest(tmp_path, layered_oci_image):
-    if shutil.which("skopeo") is None or shutil.which("umoci") is None:
+    if shutil.which("umoci") is None:
         pytest.skip("Docker-to-OCI unpack requires the image tools installed by Shellbox CI")
     layout = layered_oci_image.layout
     blobs = layout / "blobs/sha256"

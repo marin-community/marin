@@ -20,6 +20,13 @@ OCI_TAG = "image"
 OCI_MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json"
 DOCKER_MANIFEST_MEDIA_TYPE = "application/vnd.docker.distribution.manifest.v2+json"
 
+DOCKER_LAYER_MEDIA_TYPES = {
+    "application/vnd.docker.image.rootfs.diff.tar.gzip": "application/vnd.oci.image.layer.v1.tar+gzip",
+    "application/vnd.docker.image.rootfs.foreign.diff.tar.gzip": (
+        "application/vnd.oci.image.layer.nondistributable.v1.tar+gzip"
+    ),
+}
+
 
 @dataclass(frozen=True)
 class RegistryImage:
@@ -100,23 +107,32 @@ def oci_image(image: PreparedImage, directory: Path) -> PreparedImage:
         return image
     if media_type != DOCKER_MANIFEST_MEDIA_TYPE:
         raise ValueError(f"Unsupported unpack manifest: {media_type}")
-    _run(
-        "skopeo",
-        "--insecure-policy",
-        "copy",
-        "--format",
-        "oci",
-        f"oci:{image.layout}:{OCI_TAG}",
-        f"oci:{directory}:{OCI_TAG}",
-    )
+    original["mediaType"] = OCI_MANIFEST_MEDIA_TYPE
+    original["config"]["mediaType"] = "application/vnd.oci.image.config.v1+json"
+    for layer in original["layers"]:
+        layer["mediaType"] = DOCKER_LAYER_MEDIA_TYPES[layer["mediaType"]]
+    blobs = directory / "blobs" / "sha256"
+    blobs.mkdir(parents=True)
+    # Translate descriptors only: reserializing Docker config would change image identity.
+    for descriptor in [original["config"], *original["layers"]]:
+        blob = _oci_blob(image.layout, descriptor["digest"])
+        if blob.stat().st_size != descriptor["size"]:
+            raise ValueError("Prepared image blob size mismatch")
+        destination = blobs / descriptor["digest"].removeprefix("sha256:")
+        if not destination.exists():
+            destination.symlink_to(blob.resolve())
+    manifest = json.dumps(original).encode()
+    manifest_hash = hashlib.sha256(manifest).hexdigest()
+    (blobs / manifest_hash).write_bytes(manifest)
+    descriptor = {
+        "mediaType": OCI_MANIFEST_MEDIA_TYPE,
+        "digest": f"sha256:{manifest_hash}",
+        "size": len(manifest),
+        "annotations": {"org.opencontainers.image.ref.name": OCI_TAG},
+    }
+    (directory / "index.json").write_text(json.dumps({"schemaVersion": 2, "manifests": [descriptor]}))
+    (directory / "oci-layout").write_text(json.dumps({"imageLayoutVersion": "1.0.0"}))
     digest = _manifest_digest(directory)
-    converted = _oci_json_blob(directory, digest)
-    if converted["mediaType"] != OCI_MANIFEST_MEDIA_TYPE:
-        raise ValueError("Image conversion did not produce an OCI manifest")
-    before = [original["config"], *original["layers"]]
-    after = [converted["config"], *converted["layers"]]
-    if [(item["digest"], item["size"]) for item in before] != [(item["digest"], item["size"]) for item in after]:
-        raise ValueError("OCI conversion changed image config or layer content")
     return PreparedImage(directory, digest, image.source)
 
 
