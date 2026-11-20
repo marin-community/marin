@@ -162,6 +162,7 @@ class _LabelCompletion:
     finish_reason: str | None
     transport_attempts: tuple[dict[str, Any], ...] = ()
     usage: dict[str, Any] | None = None
+    # Preserve the SDK's heterogeneous JSON request payload verbatim for diagnostics.
     request: dict[str, Any] = field(default_factory=dict)
 
 

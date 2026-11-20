@@ -993,10 +993,5 @@ class TaskSpec(BaseModel):
 
 
 def declared_verifier_timeout(task: TaskSpec) -> float | None:
-    """Return the longest verifier budget in the task's declared execution requirements."""
-    deadlines = [
-        requirement.verifier_timeout_sec
-        for requirement in (task.execution_requirements, task.verifier_execution_requirements)
-        if requirement is not None
-    ]
-    return max(deadlines, default=None)
+    """Return the verifier budget shared by the task's declared allocations."""
+    return task.execution_requirements.verifier_timeout_sec if task.execution_requirements is not None else None
