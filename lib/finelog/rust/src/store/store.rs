@@ -5678,6 +5678,8 @@ mod tests {
                 ("worker_id LIKE 'w-%'", 3),
                 ("worker_id LIKE 'w-2'", 1),
                 ("worker_id LIKE 'w-%' AND timestamp_ms >= 2000", 2),
+                // The optimizer turns `starts_with` into a prefix `LIKE`.
+                ("starts_with(worker_id, 'w-') AND timestamp_ms >= 2000", 2),
                 (
                     "(worker_id LIKE 'w-1%' OR worker_id LIKE 'w-3%') AND timestamp_ms >= 2000",
                     2,
