@@ -8,8 +8,6 @@ import types
 
 import pytest
 import tomlkit
-
-from experiments.post_training.task_curation.datasets.swe_rebench_v2.upstream import task_files
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.datasets.swe_rebench_v2 import groups
@@ -22,6 +20,7 @@ from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert imp
     setup_command,
     task_toml,
 )
+from experiments.post_training.task_curation.datasets.swe_rebench_v2.upstream import task_files
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.upstream.task_files import grader_source
 
 PYTHON_ROW = {
