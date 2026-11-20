@@ -318,8 +318,7 @@ def _failed_rollout(
     grade = rollout.grade
     if grade.status == Outcome.UNAVAILABLE and interruption.operation != RolloutOperation.GRADE and rollout.steps:
         grade = fold_grades([step.transition.grade for step in rollout.steps if step.transition.grade is not None])
-    if cleanup_errors := interruption.grade.diagnostics.get("cleanup_errors"):
-        grade = replace(grade, diagnostics={**grade.diagnostics, "cleanup_errors": cleanup_errors})
+    grade = replace(grade, diagnostics={**interruption.grade.diagnostics, **grade.diagnostics})
     detail = exception_type
     if isinstance(error, TaskMachineError) and isinstance(error.__cause__, DaytonaError):
         # Diagnostics carry only allowlisted fields. Provider text can contain credentials, so log it redacted.

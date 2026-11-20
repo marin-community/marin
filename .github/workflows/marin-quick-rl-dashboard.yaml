@@ -1,0 +1,50 @@
+name: Marin - Refresh Quick RL dashboard
+
+on:
+  schedule:
+    - cron: "3,13,23,33,43,53 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: quick-rl-dashboard
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'marin-community/marin' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install Marina client
+        run: uv sync --locked --package marin-marina --no-default-groups
+      - name: Authenticate to Marina
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: hai-gcp-models
+          workload_identity_provider: projects/748532799086/locations/global/workloadIdentityPools/github-pool/providers/github-oidc
+          service_account: marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
+      - name: Import terminal attempts
+        run: |
+          uv run --no-sync python - <<'PY'
+          from urllib.parse import urlsplit
+
+          from marina.client import DEFAULT_MARINA_URL, marina_request
+
+          app_id = "6c971887-1e22-45b1-9dcb-dd775829df57"
+          details = marina_request(DEFAULT_MARINA_URL, "GET", f"/api/marina/applets/{app_id}")
+          url = urlsplit(details["authenticated_url"])
+          origin = f"{url.scheme}://{url.netloc}"
+          version = details["current_version"]
+          print(marina_request(origin, "POST", f"/a/{app_id}/v/{version}/api/sync"))
+          PY

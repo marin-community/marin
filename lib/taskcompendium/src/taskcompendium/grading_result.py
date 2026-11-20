@@ -7,6 +7,9 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+GRADING_DURATION_SECONDS = "grading_duration_seconds"
+GRADING_FAILURE = "grading_failure"
+
 
 class Outcome(StrEnum):
     GRADED = "graded"

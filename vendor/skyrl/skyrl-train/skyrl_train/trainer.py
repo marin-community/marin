@@ -122,7 +122,7 @@ from skyrl_train.utils.utils import (
 
 from skyrl_train.config.objective_spec import rollout_logprobs_required
 from skyrl_train.utils.algorithm_registry import PolicyLossRegistry
-from skyrl_train.evaluate import evaluate, evaluate_step_wise, evaluation_session
+from skyrl_train.evaluate import evaluation_dump_dir, evaluate, evaluate_step_wise, evaluation_session
 from skyrl_train.evaluation_pool import EvaluationPool
 from skyrl_train.callbacks.base import TrainerCallback, TrainerState, TrainerControl, CallbackHandler
 from skyrl_train.callbacks.builtin import DefaultCallbackHandler, RefModelUpdateCallback
@@ -1631,6 +1631,7 @@ class RayPPOTrainer:
             self.context.resume()
 
     async def _evaluate_and_log(self, state: TrainerState, *, commit: bool) -> None:
+        started = time.perf_counter()
         async with self._evaluation_session() as pool:
             async with asyncio.TaskGroup() as tasks:
                 native = tasks.create_task(self.eval(evaluation_pool=pool))
@@ -1649,6 +1650,12 @@ class RayPPOTrainer:
         self._log_metrics_stdout(eval_metrics, step=self.global_step, kind="eval")
         self.tracker.log(eval_metrics, step=self.global_step, commit=commit)
         self._last_evaluated_step = self.global_step
+        if self.cfg.trainer.get("dump_grader_report", False):
+            data_save_dir = evaluation_dump_dir(str(self.cfg.trainer.export_path), self.global_step)
+            payload = {"duration_seconds": time.perf_counter() - started}
+            io.write_bytes_atomic(
+                join_resource_path(data_save_dir, "dashboard_duration.json"), json.dumps(payload).encode()
+            )
 
     async def _run_pretraining_evaluation(self, state: TrainerState) -> None:
         # Pre-step evaluation must not be mixed into the first optimizer step's inclusive timers.

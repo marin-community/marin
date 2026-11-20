@@ -14,7 +14,7 @@ import collections
 import time
 import uuid
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Protocol
 
@@ -25,6 +25,7 @@ from skyrl_train.group_admission import (
     GroupAdmissionStalledError,
     TrainingGroupInvariantError,
 )
+from skyrl_train.grader_reporting import GraderStats
 from skyrl_train.rollout_observability import rollout_wait
 from skyrl_train.rollouts.loader import JudgedGroup
 from skyrl_train.telemetry import GeneratedWork
@@ -266,6 +267,7 @@ class RolloutVerdict:
     rewards: GroupRewards | None
     work: GeneratedWork
     row_facts: RowFacts | None = None
+    grader_stats: GraderStats | None = None
 
     @property
     def trainable(self) -> bool:
@@ -278,6 +280,7 @@ class RolloutContentPolicy:
 
     admission: GroupAdmissionPolicy
     selection: GroupSelectionPolicy
+    report_graders: bool = False
 
     def verdict(self, group: RolloutGroup) -> RolloutVerdict:
         """Judge one group, raising when it violates the run's structural contract."""
@@ -288,10 +291,16 @@ class RolloutContentPolicy:
             )
         batch = group.trajectory_batch
         work = GeneratedWork.from_batch(batch["response_ids"], batch.get("is_last_step"))
+        grader_stats = None
+        if self.report_graders:
+            metadata = group.prompt["input"].metadata
+            grader_stats = GraderStats()
+            key = (metadata.metric_class, metadata.data_source)
+            grader_stats.add(batch, [key] * len(batch["rewards"]))
         if not decision.accepted:
-            return RolloutVerdict(group.uid, decision.rejections, None, None, work)
+            return RolloutVerdict(group.uid, decision.rejections, None, None, work, grader_stats=grader_stats)
         facts = RowFacts.from_batch(batch)
-        return RolloutVerdict(group.uid, (), self.selection.evaluate(group), facts.rewards, work, facts)
+        return RolloutVerdict(group.uid, (), self.selection.evaluate(group), facts.rewards, work, facts, grader_stats)
 
 
 class RolloutWriter(Protocol):
@@ -560,6 +569,7 @@ class RolloutBuffer:
         self._batch_taken = False
         self._retries: list[dict] = []
         self._generated: list[tuple[int, GeneratedWork]] = []
+        self._grader_stats = GraderStats()
         self._dispositions: list[GroupDisposition] = []
         self._stats: collections.defaultdict[int, _SelectionStats] = collections.defaultdict(_SelectionStats)
         self._changed = asyncio.Condition()
@@ -587,6 +597,9 @@ class RolloutBuffer:
         async with self._changed:
             lease = self._leases.pop(lease_id)
             self._generated.append((lease.policy_step, verdict.work))
+            if verdict.grader_stats is not None:
+                self._grader_stats.merge(verdict.grader_stats)
+                verdict = replace(verdict, grader_stats=None)
             self._ready.append(
                 ReadyRollout(
                     lease_id, lease.policy_step, lease.batch_id, prompt, verdict, payload.value, time.monotonic()
@@ -695,6 +708,10 @@ class RolloutBuffer:
             self._unreported, self._retries, self._generated, self._dispositions = [], [], [], []
             self._changed.notify_all()
             return admission
+
+    def grader_summary(self) -> list[dict]:
+        """Report all completed groups, including groups rejected for training."""
+        return self._grader_stats.summary()
 
     def snapshot(self) -> BufferSnapshot:
         """Copy committed groups not yet in a taken batch, and prompts awaiting regeneration."""

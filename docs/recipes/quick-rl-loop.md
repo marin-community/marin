@@ -121,6 +121,29 @@ per-dataset JSONL responses and `aggregated_results.jsonl`; compare its
 HF export is opt-in with `--export-hf` and adds a separate export job after training.
 Local graders require the privileged container profile; image graders and host judges use their configured backends.
 
+### Grader report
+
+`exports/grader_report.json` groups rollouts by environment class and task source.
+The evaluation section includes step 0 and the final evaluation step.
+The training section holds a cumulative snapshot for each trainer attempt and
+includes completed groups the optimizer discards. Training snapshots update
+when a rollout batch fills and during trainer shutdown.
+
+Each row includes attempts, verifier coverage, and success rate among verified
+responses. Verification failures have their own counts by reason, including
+timeouts, execution errors, and missing or invalid rewards. Rollout failures
+outside grading are counted by execution stage. Grading latency includes output
+capture and grader setup and execution. The count, mean, p95, and max use only
+rollouts that entered this phase. For an individual eval response, check
+`verification.diagnostics` in the per-dataset JSONL.
+
+
+The [RL iteration progress dashboard](https://applets.marina.oa.dev/a/6c971887-1e22-45b1-9dcb-dd775829df57/)
+imports terminal attempts automatically. Select a run or chart point to open
+its grader stats. The dashboard subtracts both evaluation durations from the
+Iris coordinator's wall time and compares runs within the same timing and
+evaluation group. Imports run every ten minutes.
+
 ## Compare the iteration
 
 Require `SUCCESS` from the Iris coordinator submitted by `--run` and its training

@@ -32,6 +32,7 @@ from skyrlrecipe import RecipePatch, RLEntrypoint, SkyRLRecipe, sections
 from skyrlrecipe.sampling import EvalSamplingParams
 
 from experiments.post_training.async_rl import DEFAULT, SNOWBALL_RECIPE, training_config
+from experiments.post_training.inventory.dashboard import run_dashboard_attempt
 from experiments.post_training.task_curation.inventory import TRAIN_FILENAME, VALIDATION_FILENAME
 
 MODEL_ID = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
@@ -103,6 +104,7 @@ def training_recipe(steps: int, *, reproducible_serving: bool = False) -> SkyRLR
                 project_name="marin-snowball-curriculum",
                 eval_num_prompts=None,
                 dump_eval_results=True,
+                dump_grader_report=True,
                 algorithm=sections.Algorithm(
                     advantage_estimator="rloo_n",
                     group_advantage_min_size=2,
@@ -173,7 +175,7 @@ def build_run(
         kind=LevanterCheckpoint,
     )
     plan = SNOWBALL_RECIPE.role_plan
-    return skyrl_step(
+    training = skyrl_step(
         SkyRLSpec(
             name=user_owned_name(ARTIFACT_NAME),
             version=version,
@@ -216,6 +218,7 @@ def build_run(
         ),
         export_hf=export_hf,
     )
+    return replace(training, run=run_dashboard_attempt)
 
 
 @click.command(help=__doc__)

@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import json
 from contextlib import asynccontextmanager, nullcontext
 import torch
 from skyrl_train.utils.progress import tqdm
@@ -9,6 +11,7 @@ from dataclasses import dataclass, replace
 
 from skyrl_train.utils import Timer
 from skyrl_train.evaluation_pool import EvaluationPool
+from skyrl_train.grader_reporting import GraderStats, write_grader_report
 from skyrl_train.io import io
 from marinskyrl.resource_locator import join_resource_path
 
@@ -38,7 +41,7 @@ from skyrl_train.trajectory_runners.trajectory_retention import (
     make_trajectory_sink,
 )
 
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import AutoTokenizer
 
@@ -224,6 +227,23 @@ def _dump_eval_results(
     data_sources: List[str | None],
     metrics: Dict[str, float],
 ) -> None:
+    if cfg.trainer.get("dump_grader_report", False):
+        stats = GraderStats()
+        stats.add(rollouts.batch, zip(rollouts.env_classes, data_sources, strict=True))
+        key = "eval_only" if global_step is None else str(global_step)
+        export_path = str(cfg.trainer.export_path)
+        write_grader_report(export_path, "evaluation", key, stats.summary())
+        identity = {
+            "membership_sha256": hashlib.sha256(json.dumps(sorted(rollouts.uids)).encode()).hexdigest(),
+            "sampling": OmegaConf.to_container(cfg.generator.eval_sampling_params, resolve=True),
+            "samples_per_prompt": int(cfg.generator.eval_n_samples_per_prompt),
+            "backend": str(cfg.generator.backend),
+            "step_wise": bool(cfg.trainer.step_wise_training),
+        }
+        data_save_dir = evaluation_dump_dir(export_path, global_step)
+        io.write_bytes_atomic(
+            join_resource_path(data_save_dir, "dashboard_identity.json"), json.dumps(identity).encode()
+        )
     if not cfg.trainer.dump_eval_results:
         return
     with Timer("dump_eval_results"):
