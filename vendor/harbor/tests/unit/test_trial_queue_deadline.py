@@ -29,6 +29,7 @@ from harbor.utils.artifact_writer import (
 )
 from harbor_config import ErrorCategory, error_category
 from harbor_config.errors import is_resume_retryable
+from shellbox.backends.daytona.machine import DaytonaCommandError
 
 from tests.unit.agents.terminus_2.bare_agent import make_bare_terminus2
 
@@ -676,6 +677,44 @@ async def test_attempt_failure_returns_terminal_result_and_does_not_cancel_batch
     assert completed_result.exception_info is None
     persisted = TrialPaths(failed.trials_dir / failed.trial_name).result_path
     assert persisted.exists()
+
+
+@pytest.mark.unit
+async def test_daytona_command_error_is_persisted_and_retried(
+    tmp_path: Path, monkeypatch
+) -> None:
+    async def fail_command(trial: FakeTrial) -> None:
+        raise DaytonaCommandError("Cannot collect Daytona command output")
+
+    async def finish(trial: FakeTrial) -> None:
+        trial.result.verifier_result = VerifierResult(rewards={"reward": 1.0})
+
+    config = _config(tmp_path, "daytona-command", attempt_timeout=None)
+    _install_factory(
+        monkeypatch,
+        {
+            (config.trial_name, 0): FakeTrial(config, 0, fail_command),
+            (config.trial_name, 1): FakeTrial(config, 1, finish),
+        },
+    )
+    queue = TrialQueue(
+        n_concurrent=1,
+        retry_config=RetryConfig(
+            max_retries=1,
+            include_exceptions={"DaytonaCommandError"},
+            min_wait_sec=0,
+            max_wait_sec=0,
+        ),
+    )
+
+    result = await queue.submit(config)
+    first_path = config.trials_dir / config.trial_name / "attempts" / "000" / "result.json"
+    first = TrialResult.model_validate_json(first_path.read_text())
+    assert first.exception_info is not None
+    assert first.exception_info.exception_type == "DaytonaCommandError"
+    assert error_category(first.exception_info.exception_type) is ErrorCategory.INFRASTRUCTURE
+    assert result.trial_relpath == "daytona-command/attempts/001"
+    assert result.verifier_result.rewards == {"reward": 1.0}
 
 
 @pytest.mark.unit

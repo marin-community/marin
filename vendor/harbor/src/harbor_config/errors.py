@@ -73,6 +73,7 @@ _ERROR_CATEGORIES: dict[str, ErrorCategory] = {
     "SnapshotQuotaExceeded": ErrorCategory.INFRASTRUCTURE,
     "HealthcheckError": ErrorCategory.INFRASTRUCTURE,
     "DaytonaError": ErrorCategory.INFRASTRUCTURE,
+    "DaytonaCommandError": ErrorCategory.INFRASTRUCTURE,
     "DaytonaProcessError": ErrorCategory.INFRASTRUCTURE,
     "DaytonaDockerSetupError": ErrorCategory.INFRASTRUCTURE,
     "DaytonaSandboxStopError": ErrorCategory.INFRASTRUCTURE,

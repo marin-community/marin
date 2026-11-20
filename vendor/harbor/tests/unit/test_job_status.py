@@ -186,7 +186,7 @@ async def _flush_job_snapshots(job: Job) -> None:
         (None, 1.0, "cancel_drain"),
     ],
 )
-async def test_explicit_task_source_preserves_completed_metrics(
+async def test_job_preserves_metrics_and_telemetry_across_teardown(
     tmp_path: Path,
     metric_type: MetricType | None,
     expected: float,
