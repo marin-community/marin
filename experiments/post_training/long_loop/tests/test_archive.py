@@ -163,7 +163,7 @@ def test_cleanup_is_verified_scoped_and_preserves_selected(tmp_path, hub):
 @pytest.mark.parametrize("unscored", [False, True])
 @pytest.mark.parametrize("max_checkpoints", [3, -1])
 def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(
-    tmp_path, monkeypatch, hub, incomplete, unscored, max_checkpoints
+    tmp_path, monkeypatch, hub, permanent_storage_root, incomplete, unscored, max_checkpoints
 ):
 
     report = tmp_path / "report"
@@ -182,7 +182,7 @@ def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(
             }
         )
     )
-    selected = tmp_path / "checkpoints" / "global_step_5"
+    selected = permanent_storage_root / "checkpoints" / "global_step_5"
     selected.mkdir(parents=True)
     weight = selected / "weight"
     weight.write_bytes(b"selected-native-weights")
@@ -215,7 +215,7 @@ def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(
             },
         },
     }
-    exported = tmp_path / "exports" / "global_step_5" / "policy"
+    exported = permanent_storage_root / "exports" / "global_step_5" / "policy"
     exported.parent.mkdir(parents=True)
     Path(plan["hf_upload"]["source"]).rename(exported)
     plan["hf_upload"]["source"] = str(exported)
