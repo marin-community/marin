@@ -261,33 +261,42 @@ class DaytonaMachine:
         finally:
             self._acquisitions.discard(acquisition)
 
-    async def _read_output(self, path: str, limit: int) -> tuple[bytes, bool]:
+    async def _read_outputs(
+        self, stdout_path: str, stderr_path: str, limit: int
+    ) -> tuple[tuple[bytes, bool], tuple[bytes, bool]]:
+        # Measure and cap both streams in a single provider round trip. The files
+        # stay under the command directory until its normal cleanup.
         count = await self.sandbox.process.exec(
-            _control_command(f"size=$(wc -c < {shlex.quote(path)}) || exit; printf '{COUNT_PREFIX}%s\\n' \"$size\""),
+            _control_command(
+                "measure() { "
+                'size=$(wc -c < "$1") || return; '
+                'if [ "$size" -gt "$2" ] && [ "$2" -gt 0 ]; then '
+                'head -c "$2" "$1" > "$1.limited" || return; '
+                'fi; printf "%d" "$size"; }; '
+                f"out=$(measure {shlex.quote(stdout_path)} {limit}) && "
+                f"err=$(measure {shlex.quote(stderr_path)} {limit}) && "
+                f'printf \'{COUNT_PREFIX}%s %s\\n\' "$out" "$err"'
+            ),
             cwd=CONTROL_CWD,
         )
         if count.exit_code:
             raise RuntimeError(f"Failed to measure command output: {count.result}")
-        match = re.search(rf"(?m)^{COUNT_PREFIX}([0-9]+)$", count.result)
+        match = re.search(rf"(?m)^{COUNT_PREFIX}([0-9]+) ([0-9]+)$", count.result)
         if match is None:
-            raise RuntimeError(f"Invalid command output size: {count.result!r}")
-        size = int(match.group(1))
-        if size <= limit:
-            data = await self.sandbox.fs.download_file(path)
-            assert isinstance(data, bytes)
-            return data, False
-        clipped = f"{path}.limited"
-        result = await self.sandbox.process.exec(
-            _control_command(f"head -c {limit} {shlex.quote(path)} > {shlex.quote(clipped)}"), cwd=CONTROL_CWD
-        )
-        if result.exit_code:
-            raise RuntimeError(f"Failed to limit command output: {result.result}")
-        try:
-            data = await self.sandbox.fs.download_file(clipped)
-            assert isinstance(data, bytes)
-            return data, True
-        finally:
-            await self.sandbox.process.exec(_control_command(f"rm -f {shlex.quote(clipped)}"), cwd=CONTROL_CWD)
+            raise RuntimeError(f"Invalid command output sizes: {count.result!r}")
+
+        stdout_size, stderr_size = map(int, match.groups())
+        stdout = await self._download_output(stdout_path, stdout_size, limit)
+        stderr = await self._download_output(stderr_path, stderr_size, limit)
+        return stdout, stderr
+
+    async def _download_output(self, path: str, size: int, limit: int) -> tuple[bytes, bool]:
+        truncated = size > limit
+        if not size or not limit:
+            return b"", truncated
+        data = await self.sandbox.fs.download_file(f"{path}.limited" if truncated else path)
+        assert isinstance(data, bytes)
+        return data, truncated
 
     async def _stop_command(self, pidfile: str, completed_path: str) -> None:
         async with asyncio.timeout(INTERRUPT_TIMEOUT):
@@ -391,8 +400,9 @@ class DaytonaMachine:
             async with asyncio.timeout(self.output_collection_timeout):
                 limit = command.output_limit_bytes
                 try:
-                    stdout, stdout_truncated = await self._read_output(stdout_path, limit)
-                    stderr, stderr_truncated = await self._read_output(stderr_path, limit)
+                    (stdout, stdout_truncated), (stderr, stderr_truncated) = await self._read_outputs(
+                        stdout_path, stderr_path, limit
+                    )
                 except Exception as error:
                     diagnostic = response.result or ""
                     error.add_note(
@@ -650,12 +660,16 @@ class DaytonaMachineFactory:
                 if default_cwd.exit_code or not PurePosixPath(image_workdir).is_absolute():
                     raise RuntimeError(f"Cannot resolve Daytona image workdir: {default_cwd.result!r}")
                 effective_spec = replace(spec, workdir=image_workdir)
+            else:
+                workdir = await sandbox.process.exec(
+                    _control_command(shlex.join(("mkdir", "-p", "--", spec.workdir))),
+                    cwd=CONTROL_CWD,
+                    timeout=INTERRUPT_TIMEOUT,
+                )
+                if workdir.exit_code:
+                    raise RuntimeError(f"Failed to create workdir {spec.workdir}: {workdir.result!r}")
             machine = DaytonaMachine(
                 sandbox, effective_spec, lifetime, output_collection_timeout=self.output_collection_timeout
             )
-            if spec.workdir:
-                result = await machine.run(Command(("mkdir", "-p", spec.workdir), cwd="/", env={"PATH": CONTROL_PATH}))
-                if result.exit_code:
-                    raise RuntimeError(f"Failed to create workdir {spec.workdir}: {result.stderr!r}")
             machine.resources = lifetime.pop_all()
             return machine

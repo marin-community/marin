@@ -132,12 +132,22 @@ optimizer-update counts, finite metrics, initial/final attempted and scored
 counts and native checkpoint metadata; check the completed HF export only when requested.
 A missing verifier result is an evaluation error, not a wrong answer; report coverage with scores.
 
-Record the source revision, selection identity, initializer, run version and
-elapsed submission-to-completion time with each comparison. Hold the validation
-panel fixed and change one recipe choice at a time. Reuse the published data for
-training-only changes; produce a new selection version when changing tasks or
-sampling. Update this page and the checked-in recipe when adopting a better
-configuration, and keep trial results in the experiment issue or report.
+Record the source revision, selection identity, initializer, and run version.
+Report the quick-loop total as Iris coordinator submission-to-completion time
+minus baseline validation (`startup/eval_before_train` at step 0) and final
+validation (`timing/eval` at the last step). This total includes queueing,
+startup, training, and checkpointing. Record the raw Iris wall time and both
+validation durations alongside the total so the calculation can be checked.
+
+For image-backed tasks, use the selection's task and grader requirements to
+identify where Daytona runs. The quick loop can use the Daytona eval account
+for training rollouts as well as validation.
+
+Hold the validation panel fixed and change one recipe choice at a time.
+Reuse the published data for training-only changes. Produce a new selection
+version when changing tasks or sampling. Update this page and the checked-in
+recipe when adopting a better configuration. Keep trial results in the
+experiment issue or report.
 
 Default-profile runs whose recorded configuration has evaluation temperature
 0.0 evaluated greedily without a seed. Do not compare their evaluation scores
