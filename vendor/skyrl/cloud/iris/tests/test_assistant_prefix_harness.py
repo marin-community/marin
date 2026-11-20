@@ -363,7 +363,14 @@ async def test_assistant_prefix_transport_renders_serving_tokens_and_retains_raw
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("interrupted", [False, True])
+<<<<<<< HEAD
 async def test_assistant_prefix_real_client_preserves_prompt_and_raw_completion_across_retry(interrupted):
+=======
+@pytest.mark.parametrize("skip_special_tokens", [False, True])
+async def test_assistant_prefix_real_client_preserves_prompt_and_completion_across_retry(
+    interrupted, skip_special_tokens
+):
+>>>>>>> c95d05af14 (Deslop 8b78427157ddbec8b8da323aac4ae6d778113b77 tests)
     backend = Tokenizer(
         models.WordLevel({"[UNK]": 0, "assistant": 1, "prefix": 2, "</think>": 3, "tail": 4}, unk_token="[UNK]")
     )
@@ -406,10 +413,14 @@ async def test_assistant_prefix_real_client_preserves_prompt_and_raw_completion_
             "sampling_params": {"max_generate_length": 10, "logprobs": 1},
             "max_context_length": 5,
             "max_prompt_length": 2,
+<<<<<<< HEAD
         }
     )
     assert [row["prompt_token_ids"] for row in submitted] == (
         [[[1, 2]], [[1, 2, 3]]] if interrupted else [[[1, 2]]]
+=======
+        },
+>>>>>>> c95d05af14 (Deslop 8b78427157ddbec8b8da323aac4ae6d778113b77 tests)
     )
     assert [row["sampling_params"]["max_tokens"] for row in submitted] == ([3, 2] if interrupted else [3])
     assert all(row["sampling_params"]["skip_special_tokens"] is False for row in submitted)
@@ -420,8 +431,14 @@ async def test_assistant_prefix_real_client_preserves_prompt_and_raw_completion_
     assert output["student_topk_indices"] == [[[3], [4]]]
     assert output["behavior_topk_logprobs"] == [[[-0.3], [-0.4]]]
     assert output["response_policy_steps"] == [[7, 7]]
+<<<<<<< HEAD
     assert output["responses"] == ["</think> tail"]
     assert output["assistant_messages"] == [{"role": "assistant", "content": "</think> tail"}]
+=======
+    expected = "tail" if skip_special_tokens else "</think> tail"
+    assert output["responses"] == [expected]
+    assert output["assistant_messages"] == [{"role": "assistant", "content": expected}]
+>>>>>>> c95d05af14 (Deslop 8b78427157ddbec8b8da323aac4ae6d778113b77 tests)
     assert output["stop_reasons"] == ["stop"]
     assert output["token_provenance"] == TokenProvenance.ENGINE
 
