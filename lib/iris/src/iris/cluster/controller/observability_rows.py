@@ -210,9 +210,12 @@ def _write(tables: ObservabilityRowTables, marked: _Marked, lock_cost: CostWindo
         snapshot_seconds=marked.snapshot_seconds,
         enqueue_seconds=time.monotonic() - started,
     )
+    rows = cost.job_rows + cost.job_config_rows + cost.task_rows + cost.attempt_rows
+    if rows == 0:
+        # Marked ids that turned out to need no row (e.g. a job outside this cluster).
+        return
     lock_cost.add_row_transaction(cost)
     seconds = cost.snapshot_seconds + cost.enqueue_seconds
-    rows = cost.job_rows + cost.job_config_rows + cost.task_rows + cost.attempt_rows
     if seconds >= SLOW_ROWS_SECONDS and _slow_rows_log.should_run():
         logger.warning(
             "observability rows: %d rows took %.0f ms under the write lock "

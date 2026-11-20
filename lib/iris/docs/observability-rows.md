@@ -89,7 +89,10 @@ worker, error or exit code changes. A change to any other column alone
 (`status_message`, `container_id`, `backend_id`)
 writes no row, because Kubernetes rewrites the pending reason on every
 reconcile. So those columns hold their value as of the row's change, and
-pending-reason history is kept only at those trigger points.
+pending-reason history is kept only at those trigger points. Likewise, a worker
+observation writes an `iris.controller_db__task_attempts` row only when it
+changes the attempt row; repeating the attempt's state, as a status-message
+refresh does, writes none.
 
 Keys: a job is `(cluster, root_job_id, root_submitted_at_ms, job_id,
 submitted_at_ms)`, because job ids are reused after a job ends, and a live
@@ -199,8 +202,7 @@ per transaction pairs each burst's row count with its time, so the per-row cost
 and the fixed cost per transaction can be read off, and so can how close a table
 gets to the Finelog client's 10,000-row buffer. Expect at most one event per
 reconcile tick that changes rows, plus one per submit: on the order of 10,000 a
-day on `marin`, and up to one per second while an unchanged attempt observation
-still writes an attempt row. The controller's RPC telemetry in
+day on `marin`. The controller's RPC telemetry in
 `telemetry_v1.iris.rpc` writes about 9 million rows a day.
 
 The lock counters are summed in a window that closes with the first write

@@ -270,7 +270,7 @@ def commit_effects(
     _flush_attempts(cur, list(effects.attempts.values()))
     _flush_jobs(cur, list(effects.jobs.values()))
     observability_rows.record_task_changes(cur, effects.changed_tasks)
-    observability_rows.record_attempt_changes(cur, [(d.task_id, d.attempt_id) for d in effects.attempts.values()])
+    observability_rows.record_attempt_changes(cur, effects.changed_attempts)
     observability_rows.record_job_changes(cur, [d.job_id for d in effects.jobs.values()])
 
     task_events = tuple(effects.task_events)

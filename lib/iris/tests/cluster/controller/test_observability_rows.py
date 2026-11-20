@@ -765,3 +765,40 @@ def test_a_rolled_back_transaction_emits_no_row_record(state, monkeypatch):
 
     assert [r for pending in emitted for r in pending.row_transactions] == []
     assert emitted, "the rolled-back transaction still reports its lock time"
+
+
+def test_a_status_message_refresh_writes_no_attempt_row_and_no_row_event(state, monkeypatch):
+    # A same-state observation with a new status message builds an attempt delta that
+    # changes nothing on the attempt row, so it must not copy one.
+    worker = register_worker(state, "w1", "host1:8080", make_worker_metadata())
+    (task,) = submit_job(state, "train", make_job_request("train"))
+    _run_on_node(state, task, worker, "gpu-node-7")
+    rows = _attach(state, "marin")
+    emitted = _emitted(monkeypatch, state)
+
+    with state._db.transaction() as cur:
+        apply_task_observations(
+            cur,
+            [
+                WorkerTaskUpdates(
+                    worker_id=worker,
+                    updates=[
+                        TaskUpdate(
+                            task_id=task.task_id,
+                            attempt_id=query_task(state, task.task_id).current_attempt_id,
+                            new_state=job_pb2.TASK_STATE_RUNNING,
+                            pod_name="pod-a",
+                            node_name="gpu-node-7",
+                            topology={"rack": "rack-3"},
+                            status_message="made-up pending reason",
+                        )
+                    ],
+                )
+            ],
+            health=state._health,
+            now=Timestamp.now(),
+        )
+
+    assert rows.attempts == []
+    assert rows.tasks == []
+    assert [r for pending in emitted for r in pending.row_transactions] == []
