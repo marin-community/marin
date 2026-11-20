@@ -334,11 +334,6 @@ custom_roles:
   permissions:
   - iam.roles.get
   - iam.roles.update
-- role_id: marinIrisHubMetadataWriter
-  title: Marin Iris hub metadata writer
-  description: Update the Iris hub controller VM startup metadata.
-  permissions:
-  - compute.instances.setMetadata
 - role_id: marinServiceAccountIamManager
   title: Marin service account IAM manager
   description: Manage IAM and metadata on an explicitly scoped Marin workflow service account.
@@ -919,12 +914,6 @@ project_grants:
 - role: projects/hai-gcp-models/roles/marinIapIamManager
   members:
   - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
-- role: projects/hai-gcp-models/roles/marinIrisHubMetadataWriter
-  members:
-  - principal: human-075
-  condition:
-    title: marin-iris-hub-controller-vm-only
-    expression: resource.type == "compute.googleapis.com/Instance" && resource.name == "projects/hai-gcp-models/zones/us-central1-a/instances/iris-controller-marin"
 - role: projects/hai-gcp-models/roles/marinPulumiAdmin
   members:
   - principal: human-076
@@ -1121,6 +1110,7 @@ project_grants:
   - principal: human-026
   - principal: human-078
   - principal: human-082
+  - principal: human-075
 - role: roles/compute.networkViewer
   members:
   - serviceAccount:loom-dev@hai-gcp-models.iam.gserviceaccount.com
@@ -1134,6 +1124,7 @@ project_grants:
   - principal: human-012
   - principal: human-006
   - principal: human-082
+  - principal: human-075
 - role: roles/compute.osLogin
   members:
   - serviceAccount:claude-tunix-agent@hai-gcp-models.iam.gserviceaccount.com
@@ -1254,6 +1245,7 @@ project_grants:
   - principal: human-032
   - principal: human-064
   - principal: human-082
+  - principal: human-075
 - role: roles/logging.admin
   members:
   - serviceAccount:github-actions-logging@hai-gcp-models.iam.gserviceaccount.com
@@ -1651,6 +1643,7 @@ service_accounts:
   - role: roles/iam.serviceAccountUser
     members:
     - serviceAccount:iris-controller@hai-gcp-models.iam.gserviceaccount.com
+    - principal: human-075
 - email: checkpoint-download@hai-gcp-models.iam.gserviceaccount.com
   grants:
   - role: roles/iam.serviceAccountUser
