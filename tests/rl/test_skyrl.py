@@ -1028,7 +1028,7 @@ def test_reject_forced_socket_transport_allows_non_forcing_env() -> None:
     reject_forced_socket_transport({}, num_nodes=32)
 
 
-def test_ttl_run_path_preserves_an_existing_temporary_root(monkeypatch):
+def test_ttl_run_path_preserves_a_run_already_under_the_temporary_root(monkeypatch):
     monkeypatch.setattr("marin.rl.skyrl.marin_temp_bucket", lambda **kwargs: "s3://regional/tmp/ttl=14d")
     temporary = skyrl_temporary_run_path("s3://regional/marin/run", ttl_days=14)
     assert skyrl_temporary_run_path(temporary, ttl_days=14) == temporary
