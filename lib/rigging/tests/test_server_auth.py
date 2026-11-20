@@ -136,7 +136,6 @@ def test_policy_interceptor_cleans_up_context_on_handler_error(interceptor):
     with pytest.raises(RuntimeError, match="handler failed"):
         interceptor.intercept_unary_sync(failing_handler, "request", ctx)
 
-    # Verified user should be cleaned up after handler exits
     assert get_verified_identity() is None
 
 
