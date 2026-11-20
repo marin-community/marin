@@ -15,7 +15,7 @@ import tempfile
 import uuid
 from asyncio import sleep
 from collections.abc import Callable, Mapping
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, suppress
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -58,6 +58,7 @@ from shellbox.machine import (
 from shellbox.process_session import finish_owned, own_cleanup
 
 DEFAULT_SANDBOX_TTL_MINUTES = 360
+DEFAULT_AUTO_STOP_MINUTES = 30
 DEFAULT_OUTPUT_COLLECTION_TIMEOUT = 60
 logger = logging.getLogger(__name__)
 CONTROL_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
@@ -114,6 +115,22 @@ async def _create_sandbox(
             delay = max(retry_after, backoff.next_interval())
             logger.warning("Retrying throttled Daytona creation: delay=%.3f", delay)
             await sleep(delay)
+
+
+async def _keep_active(sandbox: AsyncSandbox, interval: float) -> None:
+    """Renew activity while the machine is open; running guest processes do not renew it."""
+    while True:
+        await sleep(interval)
+        try:
+            await sandbox.refresh_activity(request_timeout=INTERRUPT_TIMEOUT)
+        except DaytonaError as error:
+            logger.warning("Cannot renew Daytona sandbox activity: %s", error)
+
+
+async def _stop_keepalive(task: asyncio.Task[None]) -> None:
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
 
 
 async def _delete_named_sandbox(client: AsyncDaytona, name: str) -> None:
@@ -560,13 +577,19 @@ class DaytonaMachineFactory:
         client_factory: Callable[[], AsyncDaytona] | None = AsyncDaytona,
         *,
         ttl_minutes: int = DEFAULT_SANDBOX_TTL_MINUTES,
+        auto_stop_interval: int = DEFAULT_AUTO_STOP_MINUTES,
+        labels: Mapping[str, str] | None = None,
         create_timeout: float = 600,
         output_collection_timeout: float = DEFAULT_OUTPUT_COLLECTION_TIMEOUT,
         network_policy: DaytonaNetworkPolicy | None = None,
         image_build: DaytonaImageBuild = DaytonaImageBuild.SNAPSHOT,
     ):
+        if auto_stop_interval < 0:
+            raise ValueError("Daytona auto-stop interval must be nonnegative")
         self.client_factory = client_factory
         self.ttl_minutes = ttl_minutes
+        self.auto_stop_interval = auto_stop_interval
+        self.labels = {"owner": "shellbox", **(labels or {})}
         self.create_timeout = create_timeout
         self.output_collection_timeout = output_collection_timeout
         self.network_policy = network_policy
@@ -634,7 +657,14 @@ class DaytonaMachineFactory:
                 request = snapshot_request_for_spec(spec)
                 name = f"shellbox-{uuid.uuid4().hex}"
                 sandbox_fields = dict(
-                    name=name, os_user="root", env_vars=spec.env, **network, ttl_minutes=self.ttl_minutes
+                    name=name,
+                    os_user="root",
+                    env_vars=spec.env,
+                    **network,
+                    ttl_minutes=self.ttl_minutes,
+                    auto_stop_interval=self.auto_stop_interval,
+                    auto_delete_interval=0,
+                    labels=dict(self.labels),
                 )
                 if self.image_build == DaytonaImageBuild.SNAPSHOT:
                     params = CreateSandboxFromSnapshotParams(
@@ -646,6 +676,9 @@ class DaytonaMachineFactory:
                     )
                 lifetime.push_async_callback(_delete_named_sandbox, client, name)
                 sandbox = await _create_sandbox(client, params, timeout=timeout)
+            if self.auto_stop_interval:
+                keepalive = asyncio.create_task(_keep_active(sandbox, self.auto_stop_interval * 60 / 3))
+                lifetime.push_async_callback(_stop_keepalive, keepalive)
             prepared = await sandbox.process.exec(
                 _control_command("command -v setsid"), cwd=CONTROL_CWD, timeout=INTERRUPT_TIMEOUT
             )
