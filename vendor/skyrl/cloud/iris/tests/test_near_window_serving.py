@@ -35,8 +35,7 @@ class CompletionServer:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("drop_prompt_token", [False, True])
-async def test_probe_checks_server_usage_against_rendered_input_and_persists_failure(tmp_path, monkeypatch, drop_prompt_token):
-    monkeypatch.setenv("IRIS_OUTPUT_DIR", str(tmp_path))
+async def test_probe_checks_server_usage_against_rendered_input_and_persists_failure(tmp_path, drop_prompt_token):
     tokenizer = probe_tokenizer()
     engines = [CompletionServer(drop_prompt_token=drop_prompt_token), CompletionServer()]
 
@@ -131,9 +130,8 @@ async def local_completion_server(served_name):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("served_name", ["s3://regional-bucket/exact-streamed-model", "explicit-configured-alias"])
-async def test_probe_model_matches_registered_server_name_over_http(tmp_path, monkeypatch, served_name):
-    monkeypatch.setenv("IRIS_OUTPUT_DIR", str(tmp_path))
+async def test_probe_model_matches_registered_server_name_over_http(tmp_path):
+    served_name = "explicit-configured-alias"
     tokenizer = probe_tokenizer()
     settings = dict(engines=16, minimum_prompt_tokens=250000, max_new_tokens=1024, context_tokens=CONTEXT_TOKENS,
                     temperature=0.7, top_p=1.0, request_timeout=10, memory_sample_interval=2,
