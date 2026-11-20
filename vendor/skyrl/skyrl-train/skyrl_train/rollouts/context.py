@@ -248,11 +248,11 @@ class TrainingContext:
         if self._grader_report_path is None:
             return
         summary = await self._buffer.grader_summary.remote()
-        if summary["benchmarks"]:
+        if summary["subsets"]:
             write_grader_report(
                 self._grader_report_path,
                 self._grader_report_attempt,
-                {"training": summary["benchmarks"], "training_tasks": summary["tasks"]},
+                {"training": summary["subsets"], "training_tasks": summary["tasks"]},
             )
 
     async def pause_and_drain(self) -> None:

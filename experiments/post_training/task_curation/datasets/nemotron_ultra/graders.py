@@ -805,7 +805,7 @@ def _agent_task(
         answer_format=FinalAction() if action else PlainText(),
         grader=package.grader,
         resources=ResourceGroups(verifier=package.resources),
-        labels={"benchmark_id": blend_component(request.contract)},
+        labels={"subset_id": blend_component(request.contract)},
     )
     return NormalizedTask(task, (*changes, *request.changes))
 

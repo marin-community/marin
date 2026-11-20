@@ -40,7 +40,7 @@ def source_task(
 ) -> TaskSpec:
     """Preserve source semantics without selecting a session or machine backend."""
     parameters = SessionParameters(extras=extras, config=config)
-    benchmark_id = extras.get("benchmark_id")
+    subset_id = extras.get("subset_id")
     return TaskSpec(
         id=f"{source.dataset}:{source.row}",
         context=chat_input(prompt),
@@ -50,5 +50,5 @@ def source_task(
         grader=NoGrader(reason="SkyRL grades each task turn", contract=parameters.model_dump()),
         resources=ResourceGroups(verifier=(inline_resource("config.json", parameters.model_dump_json().encode()),)),
         source=source,
-        labels={"benchmark_id": benchmark_id} if isinstance(benchmark_id, str) and benchmark_id else {},
+        labels={"subset_id": subset_id} if isinstance(subset_id, str) and subset_id else {},
     )

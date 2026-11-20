@@ -84,6 +84,6 @@ retain their original timing and evaluation groups.
 
 Run names and chart points open a separate grader page for the selected native
 attempt. The page shows success rates and verifier coverage by task and
-benchmark, with failure counts and latency by benchmark for training and
+subset, with failure counts and latency by subset for training and
 evaluation. Failed attempts show any report they collected before termination.
 Historical attempts without a report show an empty state.

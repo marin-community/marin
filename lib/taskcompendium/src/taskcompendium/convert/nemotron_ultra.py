@@ -230,7 +230,7 @@ def blend_task(
             grader=package.grader,
             reasoning_markup=reasoning_markup,
             resources=ResourceGroups(verifier=package.resources),
-            labels={"benchmark_id": blend_component(request.contract)},
+            labels={"subset_id": blend_component(request.contract)},
         ),
         (*changes, *request.changes),
     )

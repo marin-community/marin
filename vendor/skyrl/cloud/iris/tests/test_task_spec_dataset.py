@@ -100,7 +100,7 @@ def test_dataset_harness_binding_keeps_harbor_and_assistant_prefix_execution(tmp
 def test_canonical_rows_lower_at_load_and_admit_image_and_package_graders(tmp_path: Path):
     image = text_task("image-task", source="nvidia/Nemotron-RL-Ultra-Training-Blends").model_copy(
         update={
-            "labels": {"benchmark_id": "competitive-coding"},
+            "labels": {"subset_id": "competitive-coding"},
             "grader": ScriptGrader(
                 argv=("sh", "/tests/grade.sh"),
                 environment=EnvironmentRequirements(
@@ -125,7 +125,7 @@ def test_canonical_rows_lower_at_load_and_admit_image_and_package_graders(tmp_pa
         }
     )
     inputs = _load(tmp_path, (image, prefix))
-    assert [(item.metadata.task_id, item.metadata.benchmark_id) for item in inputs] == [
+    assert [(item.metadata.task_id, item.metadata.subset_id) for item in inputs] == [
         ("image-task", "competitive-coding"),
         ("prefix-task", "structure-closure"),
     ]

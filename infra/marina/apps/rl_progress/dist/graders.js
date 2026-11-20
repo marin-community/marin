@@ -19,8 +19,8 @@ const successColumns = [
   ['Success rate', (row) => row.success_rate == null ? null : percent.format(row.success_rate)],
 ];
 
-const benchmarkColumns = [
-  ['Benchmark', (row) => row.benchmark_id ?? row.data_source ?? row.environment],
+const subsetColumns = [
+  ['Subset', (row) => row.subset_id ?? row.data_source ?? row.environment],
   ['Task source', (row) => row.data_sources?.join(', ') || row.data_source],
   ...successColumns,
   ['Grader failures', (row) => counts(row.grading_failures)],
@@ -32,7 +32,7 @@ const benchmarkColumns = [
 
 const taskColumns = [
   ['Task ID', (row) => row.task_id],
-  ['Benchmark', (row) => row.benchmark_ids.join(', ')],
+  ['Subset', (row) => row.subset_ids.join(', ')],
   ...successColumns,
 ];
 
@@ -77,7 +77,7 @@ function section(title, rows, tasks) {
   }
   const sorted = [...rows].sort((a, b) => failureCount(b) - failureCount(a)
     || (b.grading_latency_seconds?.p95 ?? 0) - (a.grading_latency_seconds?.p95 ?? 0));
-  panel.append(resultsTable(sorted, benchmarkColumns));
+  panel.append(resultsTable(sorted, subsetColumns));
   if (tasks?.length) {
     const details = element('details');
     details.append(element('summary', `Individual tasks (${tasks.length})`));

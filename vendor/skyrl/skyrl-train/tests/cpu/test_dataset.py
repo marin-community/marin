@@ -24,7 +24,7 @@ def test_task_preprocessing_preserves_filtered_rows_and_forks_only_large_inputs(
             "env_class": "gsm8k",
             "reward_spec": {"ground_truth": str(i)},
             "data_source": "fixture",
-            "benchmark_id": "grade-school-math",
+            "subset_id": "grade-school-math",
             "teacher_route": "math",
         }
         for i in range(row_count)
@@ -45,7 +45,7 @@ def test_task_preprocessing_preserves_filtered_rows_and_forks_only_large_inputs(
     assert [task_messages(row["input"].spec) for row in prepared] == [rows[i]["prompt"] for i in indices]
     assert [row["input"].spec.task.source.row for row in prepared] == [str(i) for i in indices]
     assert [row["input"].metadata.data_source for row in prepared] == ["fixture"] * len(indices)
-    assert [row["input"].metadata.benchmark_id for row in prepared] == ["grade-school-math"] * len(indices)
+    assert [row["input"].metadata.subset_id for row in prepared] == ["grade-school-math"] * len(indices)
     assert all(row["input"].metadata.teacher_route == "math" for row in prepared)
     assert bool(tuple(fork_records.iterdir())) == (row_count == 8)
 

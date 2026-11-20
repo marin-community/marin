@@ -241,7 +241,7 @@ def _dump_eval_results(
             report_dir,
             key,
             {
-                "evaluation": summary["benchmarks"],
+                "evaluation": summary["subsets"],
                 "evaluation_tasks": summary["tasks"],
                 "evaluation_metadata": metadata,
             },

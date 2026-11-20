@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Per-benchmark grader health and task success for a SkyRL run."""
+"""Per-subset grader health and task success for a SkyRL run."""
 
 import json
 from collections import Counter
@@ -49,7 +49,7 @@ class _SuccessCounts:
 
 
 @dataclass
-class _BenchmarkStats:
+class _SubsetStats:
     counts: _SuccessCounts = field(default_factory=_SuccessCounts)
     data_sources: set[str] = field(default_factory=set)
     statuses: Counter[str] = field(default_factory=Counter)
@@ -61,7 +61,7 @@ class _BenchmarkStats:
 @dataclass
 class _TaskStats:
     counts: _SuccessCounts = field(default_factory=_SuccessCounts)
-    benchmark_ids: set[str] = field(default_factory=set)
+    subset_ids: set[str] = field(default_factory=set)
 
 
 class GradingLatency(TypedDict):
@@ -79,8 +79,8 @@ class SuccessSummary(TypedDict):
     success_rate: float | None
 
 
-class BenchmarkSummary(SuccessSummary):
-    benchmark_id: str
+class SubsetSummary(SuccessSummary):
+    subset_id: str
     data_sources: list[str]
     verification_statuses: dict[str, int]
     grading_failures: dict[str, int]
@@ -90,19 +90,19 @@ class BenchmarkSummary(SuccessSummary):
 
 class TaskSummary(SuccessSummary):
     task_id: str
-    benchmark_ids: list[str]
+    subset_ids: list[str]
 
 
 class GraderSummary(TypedDict):
-    benchmarks: list[BenchmarkSummary]
+    subsets: list[SubsetSummary]
     tasks: list[TaskSummary]
 
 
 class GraderStats:
-    """Collect final verdicts by task and benchmark."""
+    """Collect final verdicts by task and subset."""
 
     def __init__(self) -> None:
-        self._benchmarks: dict[str, _BenchmarkStats] = {}
+        self._subsets: dict[str, _SubsetStats] = {}
         self._tasks: dict[str, _TaskStats] = {}
 
     def add(self, batch: TrajectoryBatch, metadata: Iterable[TrajectoryMetadata]) -> None:
@@ -113,17 +113,17 @@ class GraderStats:
         for row, result, passed, final in zip(metadata, results, successes, final_rows, strict=True):
             if not final:
                 continue
-            benchmark_id = row.benchmark_id or row.data_source or row.metric_class
+            subset_id = row.subset_id or row.data_source or row.metric_class
             verified = result is not None and result.status is VerificationStatus.VERIFIED
             passed = passed and verified
-            stats = self._benchmarks.setdefault(benchmark_id, _BenchmarkStats())
+            stats = self._subsets.setdefault(subset_id, _SubsetStats())
             stats.counts.record(verified, passed)
             if row.data_source is not None:
                 stats.data_sources.add(row.data_source)
             if row.task_id is not None:
                 task = self._tasks.setdefault(row.task_id, _TaskStats())
                 task.counts.record(verified, passed)
-                task.benchmark_ids.add(benchmark_id)
+                task.subset_ids.add(subset_id)
             if result is None:
                 stats.statuses["missing"] += 1
                 continue
@@ -139,8 +139,8 @@ class GraderStats:
 
     def merge(self, other: "GraderStats") -> None:
         """Accumulate observations from a completed group."""
-        for key, other_stats in other._benchmarks.items():
-            stats = self._benchmarks.setdefault(key, _BenchmarkStats())
+        for key, other_stats in other._subsets.items():
+            stats = self._subsets.setdefault(key, _SubsetStats())
             stats.counts.merge(other_stats.counts)
             stats.data_sources.update(other_stats.data_sources)
             stats.statuses.update(other_stats.statuses)
@@ -150,17 +150,17 @@ class GraderStats:
         for task_id, other_stats in other._tasks.items():
             stats = self._tasks.setdefault(task_id, _TaskStats())
             stats.counts.merge(other_stats.counts)
-            stats.benchmark_ids.update(other_stats.benchmark_ids)
+            stats.subset_ids.update(other_stats.subset_ids)
 
     def summary(self) -> GraderSummary:
         """Return JSON-ready counts, rates, and latency statistics."""
-        benchmarks: list[BenchmarkSummary] = []
-        for benchmark_id, stats in sorted(self._benchmarks.items()):
+        subsets: list[SubsetSummary] = []
+        for subset_id, stats in sorted(self._subsets.items()):
             grading_count = len(stats.durations)
-            benchmarks.append(
+            subsets.append(
                 {
                     **stats.counts.summary(),
-                    "benchmark_id": benchmark_id,
+                    "subset_id": subset_id,
                     "data_sources": sorted(stats.data_sources),
                     "verification_statuses": dict(sorted(stats.statuses.items())),
                     "grading_failures": dict(sorted(stats.grading_failures.items())),
@@ -174,9 +174,9 @@ class GraderStats:
                 }
             )
         return {
-            "benchmarks": benchmarks,
+            "subsets": subsets,
             "tasks": [
-                {**stats.counts.summary(), "task_id": task_id, "benchmark_ids": sorted(stats.benchmark_ids)}
+                {**stats.counts.summary(), "task_id": task_id, "subset_ids": sorted(stats.subset_ids)}
                 for task_id, stats in sorted(self._tasks.items())
             ],
         }

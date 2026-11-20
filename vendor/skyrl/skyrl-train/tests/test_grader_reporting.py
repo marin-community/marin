@@ -23,11 +23,11 @@ from skyrl_train.task_inputs import TrajectoryMetadata
 from skyrl_train.trajectory_runners.types import TrajectoryBatch
 
 
-def test_grader_report_keeps_baseline_and_final_success_by_task_and_benchmark(tmp_path):
+def test_grader_report_keeps_baseline_and_final_success_by_task_and_subset(tmp_path):
     export_path = str(tmp_path)
-    math_a = TrajectoryMetadata("row-0", "taskcompendium", "blend", task_id="math-a", benchmark_id="math")
-    math_b = TrajectoryMetadata("row-1", "taskcompendium", "other", task_id="math-b", benchmark_id="math")
-    code = TrajectoryMetadata("row-2", "taskcompendium", "blend", task_id="code-a", benchmark_id="code")
+    math_a = TrajectoryMetadata("row-0", "taskcompendium", "blend", task_id="math-a", subset_id="math")
+    math_b = TrajectoryMetadata("row-1", "taskcompendium", "other", task_id="math-b", subset_id="math")
+    code = TrajectoryMetadata("row-2", "taskcompendium", "blend", task_id="code-a", subset_id="code")
     baseline = GraderStats()
     batch = TrajectoryBatch(
         rewards=[1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
@@ -48,7 +48,7 @@ def test_grader_report_keeps_baseline_and_final_success_by_task_and_benchmark(tm
     )
     baseline.add(batch, [math_b, math_a, math_b, math_a, math_b, code, code])
     summary = baseline.summary()
-    write_grader_report(export_path, "0", {"evaluation": summary["benchmarks"], "evaluation_tasks": summary["tasks"]})
+    write_grader_report(export_path, "0", {"evaluation": summary["subsets"], "evaluation_tasks": summary["tasks"]})
 
     final = GraderStats()
     final.add(
@@ -56,18 +56,18 @@ def test_grader_report_keeps_baseline_and_final_success_by_task_and_benchmark(tm
         [math_b],
     )
     summary = final.summary()
-    write_grader_report(export_path, "25", {"evaluation": summary["benchmarks"], "evaluation_tasks": summary["tasks"]})
+    write_grader_report(export_path, "25", {"evaluation": summary["subsets"], "evaluation_tasks": summary["tasks"]})
     write_grader_report(export_path, "25", {"evaluation_duration_seconds": 3.5})
 
     report = json.loads((tmp_path / "grader_report.json").read_text())
     evaluations = report["evaluation"]
     assert report["evaluation_duration_seconds"] == {"25": 3.5}
     code, math = evaluations["0"]
-    assert code["benchmark_id"] == "code"
+    assert code["subset_id"] == "code"
     assert code["success_rate"] is None
     assert code["grading_failures"] == {"execution": 1}
     assert code["verification_statuses"] == {"error": 1, "unavailable": 1}
-    assert math["benchmark_id"] == "math"
+    assert math["subset_id"] == "math"
     assert math["data_sources"] == ["blend", "other"]
     assert math["attempted"] == 4
     assert math["verified"] == 2
@@ -79,7 +79,7 @@ def test_grader_report_keeps_baseline_and_final_success_by_task_and_benchmark(tm
     assert evaluations["25"][0]["success_rate"] == 1.0
     tasks = {row["task_id"]: row for row in report["evaluation_tasks"]["0"]}
     assert tasks["code-a"]["success_rate"] is None
-    assert tasks["math-a"]["benchmark_ids"] == ["math"]
+    assert tasks["math-a"]["subset_ids"] == ["math"]
     assert tasks["math-a"]["success_rate"] == 1.0
     assert tasks["math-a"]["verification_coverage"] == 0.5
     assert tasks["math-b"]["success_rate"] == 0.0
@@ -108,7 +108,7 @@ async def test_training_report_counts_a_crashed_grader_in_a_rejected_group(tmp_p
     )
     await buffer.publish(1)
 
-    metadata = TrajectoryMetadata("row-0", "taskcompendium", "blend", task_id="task-1", benchmark_id="code")
+    metadata = TrajectoryMetadata("row-0", "taskcompendium", "blend", task_id="task-1", subset_id="code")
     prompt = {"input": SimpleNamespace(metadata=metadata)}
     for result, loss_mask in (
         (VerificationResult.error("crash", diagnostics={GRADING_FAILURE: "execution"}), [0]),
@@ -128,7 +128,7 @@ async def test_training_report_counts_a_crashed_grader_in_a_rejected_group(tmp_p
     admission = await buffer.admit(timeout=1)
     assert len(admission.admitted) == 1
     summary = buffer.grader_summary()
-    write_grader_report(str(tmp_path), "attempt", {"training": summary["benchmarks"], "training_tasks": summary["tasks"]})
+    write_grader_report(str(tmp_path), "attempt", {"training": summary["subsets"], "training_tasks": summary["tasks"]})
     report = json.loads((tmp_path / "grader_report.json").read_text())
     (row,) = report["training"]["attempt"]
     assert row["attempted"] == 2

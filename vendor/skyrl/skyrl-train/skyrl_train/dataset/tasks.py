@@ -102,7 +102,7 @@ class TaskDataset(PromptDataset):
                             teacher_route=extras.get("teacher_route"),
                             metric_tags=metric_tags,
                             task_id=lowered.task.id,
-                            benchmark_id=lowered.task.labels.get("benchmark_id") or lowered.task.source.dataset,
+                            subset_id=lowered.task.labels.get("subset_id") or lowered.task.source.dataset,
                         ),
                         group_grader=task_group_grader(lowered),
                     ),
