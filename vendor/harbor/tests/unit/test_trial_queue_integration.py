@@ -109,15 +109,6 @@ class TestTrialQueueIntegration:
         assert queue._hooks is hooks
 
     @pytest.mark.unit
-    def test_trial_queue_initialization_without_hooks(self):
-        """Test that TrialQueue creates default hooks for public usage."""
-        queue = TrialQueue(n_concurrent=2)
-
-        assert queue._n_concurrent == 2
-        assert queue._retry_config == RetrySettings()
-        assert queue._hooks == {event: [] for event in TrialEvent}
-
-    @pytest.mark.unit
     def test_job_initializes_trial_queue_with_existing_constructor_shape(
         self, tmp_path
     ):

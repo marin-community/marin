@@ -1,15 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared task failure identities, treatment categories, and retry decisions.
+"""Shared task failure categories and retry settings.
 
 Categories describe the source of a failure. Consumers choose training treatment
 separately from retry settings. Persisted exception names are stable identifiers.
 """
 
-from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -140,9 +138,7 @@ def errors_by_category(category: ErrorCategory) -> frozenset[str]:
     Consumers derive their default ``mask`` / ``zero`` / ``passthrough`` sets
     from this rather than duplicating Harbor exception names.
     """
-    return frozenset(
-        name for name, value in _ERROR_CATEGORIES.items() if value == category
-    )
+    return frozenset(name for name, value in _ERROR_CATEGORIES.items() if value == category)
 
 
 def is_resume_retryable(exception_type: str) -> bool:
@@ -165,29 +161,8 @@ def known_error_types() -> frozenset[str]:
     return frozenset(_ERROR_CATEGORIES)
 
 
-class RetryDisposition(StrEnum):
-    TRANSIENT = "transient"
-    PERMANENT = "permanent"
-    UNKNOWN = "unknown"
-
-
-@dataclass(frozen=True)
-class ErrorIdentity:
-    """Safe, serializable identity of a task failure and its provider cause."""
-
-    exception_type: str
-    diagnostics: dict[str, Any] = field(default_factory=dict)
-    cause_type: str | None = None
-    operation: str | None = None
-    retry_disposition: RetryDisposition = RetryDisposition.UNKNOWN
-
-    @property
-    def category(self) -> ErrorCategory:
-        return error_category(self.exception_type)
-
-
 class RetrySettings(BaseModel):
-    """Retry budget and filters shared by every task execution path."""
+    """Retry budget and name filters shared by task execution paths."""
 
     max_retries: int = Field(default=0, ge=0)
     include_exceptions: set[str] | None = None
@@ -200,62 +175,6 @@ class RetrySettings(BaseModel):
             "VerifierOutputParseError",
         }
     )
-    include_categories: set[ErrorCategory] | None = None
-    exclude_categories: set[ErrorCategory] = Field(default_factory=set)
-    wait_multiplier: float = Field(default=1.0, ge=1)
-    min_wait_sec: float = Field(default=1.0, ge=0)
-    max_wait_sec: float = Field(default=60.0, ge=0)
-
-
-_PERMANENT_ERROR_TYPES = {
-    "AgentTimeoutError",
-    "AgentDiskFullError",
-    "ContextLengthExceededError",
-    "NonZeroAgentExitCodeError",
-    "ModelInitiatedTmuxFailure",
-    "OutputLengthExceededError",
-    "TurnCapExhaustedError",
-    "MalformedModelResponseError",
-    "ModelAuthenticationError",
-    "MissingExtraError",
-    "SandboxDiskFullError",
-    "SnapshotQuotaExceeded",
-}
-
-
-def retry_disposition(failure: ErrorIdentity) -> RetryDisposition:
-    """Resolve retryability without inferring it from training treatment."""
-    if failure.retry_disposition is not RetryDisposition.UNKNOWN:
-        return failure.retry_disposition
-    if failure.exception_type in _RESUME_RETRYABLE_ERROR_TYPES:
-        return RetryDisposition.TRANSIENT
-    if failure.exception_type in _PERMANENT_ERROR_TYPES:
-        return RetryDisposition.PERMANENT
-    return RetryDisposition.UNKNOWN
-
-
-def retry_delay(failure: ErrorIdentity | None, settings: RetrySettings, retries: int) -> float | None:
-    """Return a bounded backoff, or None when the result must remain terminal.
-
-    Names can match the task error or its provider cause. Exclusions take
-    precedence over inclusions. Unknown failures require an explicit inclusion;
-    permanent failures cannot be retried.
-    """
-    if failure is None or retries >= settings.max_retries:
-        return None
-    names = {failure.exception_type, failure.cause_type} - {None}
-    if names.intersection(settings.exclude_exceptions or ()) or failure.category in settings.exclude_categories:
-        return None
-    disposition = retry_disposition(failure)
-    if disposition is RetryDisposition.PERMANENT:
-        return None
-    selected = bool(
-        names.intersection(settings.include_exceptions or ())
-        or failure.category in (settings.include_categories or ())
-    )
-    if settings.include_exceptions or settings.include_categories:
-        if not selected:
-            return None
-    if disposition is RetryDisposition.UNKNOWN and not selected:
-        return None
-    return min(settings.min_wait_sec * settings.wait_multiplier**retries, settings.max_wait_sec)
+    wait_multiplier: float = 1.0
+    min_wait_sec: float = 1.0
+    max_wait_sec: float = 60.0
