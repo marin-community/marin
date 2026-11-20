@@ -153,7 +153,18 @@ class _ScoreResult:
 
 
 @dataclass(frozen=True)
-class _LabelCompletion:
+class _AnswerVerdict:
+    """The judge's verdict on one reference answer under the ``answers`` rubric."""
+
+    index: int
+    label: Any
+    extracted_final_answer: Any
+    reasoning: str
+    correct: bool
+
+
+@dataclass(frozen=True)
+class _JudgeCompletion:
     text: str
     incomplete: bool
     response_model: str | None
@@ -397,15 +408,45 @@ def _judge_labels(spec: JudgeSpec, reference: str, candidate: str, client: opena
     if spec.system_prompt:
         messages.append({"role": "system", "content": spec.system_prompt.format(**fields)})
     messages.append({"role": "user", "content": spec.prompt_template.format(**fields)})
-    budgets = _completion_budgets(spec)
     labels = {
         label.upper() if spec.label_case == "upper" else label: score for label, score in spec.label_scores.items()
     }
     label_metrics = {
         label.upper() if spec.label_case == "upper" else label: values for label, values in spec.label_metrics.items()
     }
+    completion, detail = _final_completion(spec, client, model, messages, temperature=0.0)
+    answer = _answer_text(
+        completion.text, spec.strip_reasoning_blocks, unfinished_error="judge has unfinished reasoning"
+    )
+    if spec.label_case == "upper":
+        answer = answer.upper()
+    if spec.label_scan == "whole":
+        final = answer
+        observed = {answer}
+    else:
+        final = answer.rsplit("\n", 1)[-1].strip()
+        completed_lines = {line.strip() for line in answer.splitlines()}
+        observed = {
+            label for label in labels if (label in completed_lines if spec.label_scan == "lines" else label in answer)
+        }
+    if final not in labels or observed != {final}:
+        raise GradingInfraError("judge returned malformed or contradictory verdict labels", **detail)
+    detail.update(verdict=final, reasoning=_reasoning(answer))
+    if label_metrics:
+        detail["metrics"] = label_metrics[final]
+    return scored(float(labels[final]), **detail)
+
+
+def _final_completion(
+    spec: JudgeSpec, client: openai.OpenAI, model: str, messages: list, *, temperature: float | None
+) -> tuple[_JudgeCompletion, dict[str, Any]]:
+    """Return the first completion that fits a token budget, with its evidence; raise when every budget runs out."""
+    budgets = _completion_budgets(spec)
     for index, budget in enumerate(budgets):
-        completion = _label_completion(spec, client, model, messages, budget)
+        completion = _judge_completion(spec, client, model, messages, budget, temperature)
+        request: dict[str, Any] = {"model": model, "messages": messages, "max_completion_tokens": budget}
+        if temperature is not None:
+            request["temperature"] = temperature
         detail: dict[str, Any] = {
             "model": model,
             "requested_model": model,
@@ -414,33 +455,13 @@ def _judge_labels(spec: JudgeSpec, reference: str, candidate: str, client: opena
             "finish_reason": completion.finish_reason,
             "transport_attempts": completion.transport_attempts,
             "completion": completion.text,
-            "judge_request": {"model": model, "messages": messages, "max_completion_tokens": budget, "temperature": 0.0},
+            "judge_request": request,
         }
         if completion.incomplete:
             if index + 1 < len(budgets):
                 continue
             raise GradingInfraError("judge completion is incomplete", **detail)
-        content = completion.text
-        answer = _answer_text(content, spec.strip_reasoning_blocks, unfinished_error="judge has unfinished reasoning")
-        if spec.label_case == "upper":
-            answer = answer.upper()
-        if spec.label_scan == "whole":
-            final = answer
-            observed = {answer}
-        else:
-            final = answer.rsplit("\n", 1)[-1].strip()
-            completed_lines = {line.strip() for line in answer.splitlines()}
-            observed = {
-                label
-                for label in labels
-                if (label in completed_lines if spec.label_scan == "lines" else label in answer)
-            }
-        if final not in labels or observed != {final}:
-            raise GradingInfraError("judge returned malformed or contradictory verdict labels", **detail)
-        detail.update(verdict=final, reasoning=_reasoning(answer))
-        if label_metrics:
-            detail["metrics"] = label_metrics[final]
-        return scored(float(labels[final]), **detail)
+        return completion, detail
     raise RuntimeError("judge exhausted completion budgets")
 
 
@@ -453,41 +474,23 @@ def _judge_answers(
     if spec.system_prompt:
         messages.append({"role": "system", "content": spec.system_prompt.format(**fields)})
     messages.append({"role": "user", "content": spec.prompt_template.format(**fields)})
-    budgets = _completion_budgets(spec)
-    for index, budget in enumerate(budgets):
-        completion = _label_completion(spec, client, model, messages, budget, greedy=False)
-        detail: dict[str, Any] = {
-            "model": model,
-            "response_model": completion.response_model,
-            "response_id": completion.response_id,
-            "finish_reason": completion.finish_reason,
-            "transport_attempts": completion.transport_attempts,
-            "completion": completion.text,
-            "judge_request": {"model": model, "messages": messages, "max_completion_tokens": budget},
-        }
-        if completion.incomplete:
-            if index + 1 < len(budgets):
-                continue
-            raise GradingInfraError("judge completion is incomplete", **detail)
-        reply = _answer_text(
-            completion.text, spec.strip_reasoning_blocks, unfinished_error="judge has unfinished reasoning"
-        )
-        verdicts = _answer_verdicts(reply, len(references))
-        if verdicts is None:
-            raise GradingInfraError("judge returned malformed per-answer verdicts", **detail)
-        answers, confidence = verdicts
-        correct = [answer["correct"] for answer in answers]
-        strict = float(all(correct))
-        detail.update(
-            answers=answers,
-            confidence=confidence,
-            metrics={"accuracy": strict, "partial_credit": sum(correct) / len(correct)},
-        )
-        return scored(strict, **detail)
-    raise RuntimeError("judge exhausted completion budgets")
+    completion, detail = _final_completion(spec, client, model, messages, temperature=None)
+    reply = _answer_text(completion.text, spec.strip_reasoning_blocks, unfinished_error="judge has unfinished reasoning")
+    verdicts = _answer_verdicts(reply, len(references))
+    if verdicts is None:
+        raise GradingInfraError("judge returned malformed per-answer verdicts", **detail)
+    answers, confidence = verdicts
+    correct = [answer.correct for answer in answers]
+    strict = float(all(correct))
+    detail.update(
+        answers=[asdict(answer) for answer in answers],
+        confidence=confidence,
+        metrics={"accuracy": strict, "partial_credit": sum(correct) / len(correct)},
+    )
+    return scored(strict, **detail)
 
 
-def _answer_verdicts(reply: str, count: int) -> tuple[list[dict[str, Any]], int | None] | None:
+def _answer_verdicts(reply: str, count: int) -> tuple[list[_AnswerVerdict], int | None] | None:
     """Parse ``{"answers": [{"correct": "yes"|"no", ...}], "confidence": n}`` with one entry per reference."""
     start, end = reply.find("{"), reply.rfind("}")
     if start < 0 or end < start:
@@ -505,13 +508,13 @@ def _answer_verdicts(reply: str, count: int) -> tuple[list[dict[str, Any]], int 
         if verdict not in {"yes", "no"}:
             return None
         verdicts.append(
-            {
-                "index": index,
-                "label": answer.get("label"),
-                "extracted_final_answer": answer.get("extracted_final_answer"),
-                "reasoning": str(answer.get("reasoning", ""))[:REASONING_LIMIT],
-                "correct": verdict == "yes",
-            }
+            _AnswerVerdict(
+                index=index,
+                label=answer.get("label"),
+                extracted_final_answer=answer.get("extracted_final_answer"),
+                reasoning=str(answer.get("reasoning", ""))[:REASONING_LIMIT],
+                correct=verdict == "yes",
+            )
         )
     try:
         confidence = max(0, min(100, round(float(str(data.get("confidence")).rstrip("%")))))
@@ -520,13 +523,13 @@ def _answer_verdicts(reply: str, count: int) -> tuple[list[dict[str, Any]], int 
     return verdicts, confidence
 
 
-def _label_completion(
-    spec: JudgeSpec, client: openai.OpenAI, model: str, messages: list, budget: int, *, greedy: bool = True
-) -> _LabelCompletion:
+def _judge_completion(
+    spec: JudgeSpec, client: openai.OpenAI, model: str, messages: list, budget: int, temperature: float | None
+) -> _JudgeCompletion:
     if spec.api == "chat_completions":
         options: dict[str, Any] = {"reasoning_effort": spec.reasoning_effort} if spec.reasoning_effort else {}
-        if greedy:
-            options["temperature"] = 0.0
+        if temperature is not None:
+            options["temperature"] = temperature
         request = {"model": model, "messages": messages, "max_completion_tokens": budget, **options}
         response, attempts = _judge_transport(
             spec,
@@ -543,7 +546,7 @@ def _label_completion(
                     transport_attempts=attempts,
                 )
             choice = response.choices[0]
-            return _LabelCompletion(
+            return _JudgeCompletion(
                 choice.message.content or "",
                 False,
                 response.model,
@@ -553,10 +556,10 @@ def _label_completion(
             )
         choice = _completion_choice(response)
         if choice.finish_reason == "length":
-            return _LabelCompletion(
+            return _JudgeCompletion(
                 choice.message.content or "", True, response.model, response.id, choice.finish_reason, attempts
             )
-        return _LabelCompletion(
+        return _JudgeCompletion(
             _completed_text(choice), False, response.model, response.id, choice.finish_reason, attempts
         )
     options = {"reasoning": {"effort": spec.reasoning_effort}} if spec.reasoning_effort else {}
@@ -576,7 +579,7 @@ def _label_completion(
     if not isinstance(payload, dict) or payload.get("error") is not None:
         raise RuntimeError("judge transport returned an error")
     if payload.get("status") == "incomplete" and payload.get("incomplete_details") == {"reason": "max_output_tokens"}:
-        return _LabelCompletion("", True, payload.get("model"), payload.get("id"), payload.get("status"), attempts)
+        return _JudgeCompletion("", True, payload.get("model"), payload.get("id"), payload.get("status"), attempts)
     if payload.get("status") != "completed" or payload.get("incomplete_details") is not None:
         raise RuntimeError("judge response is incomplete")
     output = payload.get("output")
@@ -597,7 +600,7 @@ def _label_completion(
     text = block.get("text")
     if block.get("type") != "output_text" or not isinstance(text, str) or not text.strip():
         raise RuntimeError("judge output is empty or contains a refusal")
-    return _LabelCompletion(text, False, payload.get("model"), payload.get("id"), payload.get("status"), attempts)
+    return _JudgeCompletion(text, False, payload.get("model"), payload.get("id"), payload.get("status"), attempts)
 
 
 def _retry_after(error: openai.APIStatusError) -> float:
