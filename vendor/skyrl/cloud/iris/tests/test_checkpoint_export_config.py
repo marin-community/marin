@@ -13,7 +13,8 @@ from cloud.iris.export_hf_checkpoint import (
     _run_export,
     checkpoint_export_launch_config,
 )
-from cloud.iris.launch_config import derive_launch_topology
+from cloud.iris.launch_config import derive_launch_topology, load_launch_config, validate_launch_config
+from cloud.iris.tests.launch_config_fixtures import raw_launch_config
 from cloud.iris.role_plan import derive_num_nodes, derive_policy_export_role_plan, derive_role_plan
 from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT, RuntimeProfile
 from skyrl_train.callbacks.base import CallbackHandler, TrainerControl, TrainerState
@@ -77,6 +78,46 @@ def _spec(request: HFExportRequest) -> ExportJobSpec:
         no_wait=False,
         launch_config_path="/tmp/export.yaml",
     )
+
+
+@pytest.mark.parametrize("transport", ["broadcast", "expert_block"])
+def test_checkpoint_export_config_carries_request_fields_as_data(tmp_path: Path, transport: str) -> None:
+    raw = raw_launch_config()
+    raw["iris"]["allocation"]["gpus_per_node"] = 4
+    raw["skyrl"]["trainer"]["placement"]["policy_num_gpus_per_node"] = 4
+    raw["skyrl"]["trainer"]["policy"] = {
+        "megatron_config": {
+            "tensor_model_parallel_size": 1,
+            "pipeline_model_parallel_size": 1,
+            "expert_tensor_parallel_size": 1,
+            "expert_model_parallel_size": 4,
+        }
+    }
+    raw["skyrl"]["generator"].update(
+        weight_sync_transport=transport,
+        expert_block_sync={"verify": True},
+        num_inference_engines=1,
+        inference_engine_data_parallel_size=4,
+        inference_engine_expert_parallel_size=4,
+        engine_init_kwargs={"kernel_config": {"moe_backend": "triton"}},
+    )
+    path = tmp_path / "training.yaml"
+    OmegaConf.save(OmegaConf.create(raw), path)
+    training = load_launch_config(path)
+    request = _request()
+    config = checkpoint_export_launch_config(training, request, _spec(request))
+    topology = validate_launch_config(config)
+    assert (topology.num_nodes, topology.gpus_per_node) == (request.num_nodes, request.gpus_per_node)
+
+    assert config.run.mode == "checkpoint_export"
+    assert config.runtime.entrypoint == "skyrl_train.entrypoints.checkpoint_export"
+    assert config.runtime.profile == "megatron-export"
+    assert config.iris.timeout == 7200
+    assert config.iris.allocation.gpu_variant == "H100"
+    assert config.skyrl.trainer.placement.policy_num_nodes == 1
+    assert config.skyrl.trainer.placement.policy_num_gpus_per_node == 4
+    assert config.skyrl.checkpoint_export.checkpoint_path == request.checkpoint_path
+    assert config.skyrl.checkpoint_export.export_root == request.export_path
 
 
 def test_checkpoint_export_config_preserves_saved_policy_geometry_on_whole_nodes() -> None:

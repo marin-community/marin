@@ -5,10 +5,12 @@ import json
 import subprocess
 
 import pytest
-from marin.execution.lazy import StepContext
-from marin.rl.skyrl import _launcher_command as launcher_command_for_test
+from marin.rl.skyrl import skyrl_cpu_command
 
 from experiments.post_training.curriculum_rl import launch
+from tests.rl.launch_document_census import runtime_launch as _runtime_launch
+
+runtime_launch = pytest.fixture(_runtime_launch)
 
 COMPOSE_LAUNCHES = """
 import json
@@ -31,21 +33,19 @@ print(json.dumps([
     + [(launch.SNOWBALL_POLICY, preset) for preset in launch.SCALES.values() if preset.label.startswith("snowball-")],
     ids=lambda value: value.label,
 )
-def test_curriculum_arms_compose_in_nested_runtime(policy, preset, tmp_path) -> None:
+def test_curriculum_arms_compose_in_nested_runtime(policy, preset, tmp_path, runtime_launch) -> None:
     # Validate every sampler arm at the executable boundary without allocating GPUs.
     arms = launch.build_arms(
         specs=tuple(launch.ARMS.values()), scale=preset.label, policy=policy, version="2026.10.19.1"
     )
     paths = []
     for name, arm in arms.items():
-        config = arm.rl.build_config(StepContext.for_fingerprint(arm.rl.runtime_args, arm.rl.deps))
+        config = runtime_launch(arm.rl)
         path = tmp_path / f"{name}.yaml"
         path.write_text(config.launch_config_yaml)
         paths.append(str(path))
-    command = launcher_command_for_test(paths[0])
-    bootstrap = command[: command.index("marinskyrl")]
     result = subprocess.run(
-        [*bootstrap, "python", "-c", COMPOSE_LAUNCHES, *paths], capture_output=True, text=True, check=False
+        skyrl_cpu_command("python", "-c", COMPOSE_LAUNCHES, *paths), capture_output=True, text=True, check=False
     )
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == [{"profile": "megatron", "strategy": "megatron"}] * len(arms)

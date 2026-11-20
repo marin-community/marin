@@ -8,11 +8,11 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from marin.execution.lazy import StepContext
-from marin.rl.skyrl import _launcher_command as launcher_command_for_test
+from marin.rl.skyrl import skyrl_cpu_command
 
 from experiments.post_training import async_rl
 from experiments.post_training.curriculum_rl.launch import ARMS, SNOWBALL_POLICY, build_arms
+from tests.rl.launch_document_census import runtime_launch as _runtime_launch
 
 COMPOSE_LAUNCH = """
 import json
@@ -29,12 +29,12 @@ print(json.dumps({
 """
 
 
+runtime_launch = pytest.fixture(_runtime_launch)
+
+
 def _compose_launch(path: Path, script: str, *, timeout: int = 180) -> subprocess.CompletedProcess[str]:
-    command = launcher_command_for_test(str(path))
-    # Exercise the production bootstrap without invoking the job-submission CLI.
-    bootstrap = command[: command.index("marinskyrl")]
     return subprocess.run(
-        [*bootstrap, "python", "-c", script, str(path)],
+        skyrl_cpu_command("python", "-c", script, str(path)),
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -81,11 +81,13 @@ def test_rollout_overrides_change_the_run_identity(monkeypatch) -> None:
     ],
     ids=["default", "smoke", "on-policy", "off-boundary-terminal"],
 )
-def test_launcher_composes_pinned_rollout_buffer_config(preset, training_type, settings, tmp_path, monkeypatch) -> None:
+def test_launcher_composes_pinned_rollout_buffer_config(
+    preset, training_type, settings, tmp_path, monkeypatch, runtime_launch
+) -> None:
     monkeypatch.setattr("marin.experiment.namespacing.username_segment", lambda: "alice")
     monkeypatch.setattr(async_rl, "username_segment", lambda: "alice")
     run = async_rl.build_run(SNOWBALL_POLICY, preset, version="2026.09.18", settings=settings, seed=23)
-    launch = run.rl.build_config(StepContext.for_fingerprint(run.rl.runtime_args, run.rl.deps))
+    launch = runtime_launch(run.rl)
     path = tmp_path / "launch.yaml"
     path.write_text(launch.launch_config_yaml)
     result = _compose_launch(path, COMPOSE_LAUNCH)
@@ -99,12 +101,12 @@ def test_launcher_composes_pinned_rollout_buffer_config(preset, training_type, s
 
 
 @pytest.mark.timeout(180)
-def test_snowball_curriculum_smoke_composes_separate_reference_allocation(tmp_path, monkeypatch) -> None:
+def test_snowball_curriculum_smoke_composes_separate_reference_allocation(tmp_path, monkeypatch, runtime_launch) -> None:
     monkeypatch.setattr("marin.experiment.namespacing.username_segment", lambda: "alice")
     step = build_arms(specs=(ARMS["naive"],), scale="snowball-smoke", policy=SNOWBALL_POLICY, version="2026.10.15")[
         "naive"
     ].rl
-    launch = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+    launch = runtime_launch(step)
     path = tmp_path / "curriculum.yaml"
     path.write_text(launch.launch_config_yaml)
     result = _compose_launch(

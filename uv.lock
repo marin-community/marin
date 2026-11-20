@@ -5992,6 +5992,7 @@ dependencies = [
 [package.dev-dependencies]
 test = [
     { name = "marin-shellbox", extra = ["daytona", "shellsim"] },
+    { name = "marin-taskcompendium", extra = ["pipeline"] },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
@@ -6008,6 +6009,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 test = [
     { name = "marin-shellbox", extras = ["daytona", "shellsim"], editable = "lib/shellbox" },
+    { name = "marin-taskcompendium", extras = ["pipeline"], editable = "lib/taskcompendium" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },

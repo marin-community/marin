@@ -207,6 +207,8 @@ def supervise_iris_job(job: Job) -> LaunchOutcome:
         job_id=job_id,
         job_state=status.state.value,
         exit_code=0 if status.state is JobState.SUCCEEDED else 1,
+        started_at=status.started_at.as_formatted_date() if status.started_at else None,
+        finished_at=status.finished_at.as_formatted_date() if status.finished_at else None,
     )
 
 
@@ -744,9 +746,11 @@ def _build_task_shell(
         args.rendezvous_dir, args.ray_spill_backend, args.ray_spill_dir
     ).shell_preflight()
     gate_report_prefix = f"{args.rendezvous_dir.rstrip('/')}/interconnect-gate"
+    # The frozen export runtime uses PyTorch NCCL and has no vLLM.
+    pynccl_check = "" if _is_checkpoint_export(args) else " --pynccl-init"
     transport_gate = (
         f"{RL_PYTHON} {APP_DIR}/experiments/post_training/nccl_transport_probe.py"
-        " --mode gate --gate-coverage all-gpus --pynccl-init"
+        f" --mode gate --gate-coverage all-gpus{pynccl_check}"
         f" --gate-report-prefix {shlex.quote(gate_report_prefix)}; "
     )
     bash = (
@@ -1058,6 +1062,11 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
             ports=[port.value for port in RayPort],
             max_retries_failure=args.max_retries,
             max_task_failures=args.max_retries,
+            **(
+                {"max_retries_preemption": 0}
+                if "records" in args.config.skyrl.trainer.get("logger", ()) and not _is_checkpoint_export(args)
+                else {}
+            ),
             priority_band=priority_band,
             timeout=None if args.timeout == 0 else _seconds_to_duration(args.timeout),
         )
