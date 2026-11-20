@@ -13,10 +13,12 @@ import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
+from errno import EACCES, EISDIR, ENOENT, ENOTDIR
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import httpx
 import pytest
 
 pytest.importorskip("iris")
@@ -33,7 +35,9 @@ from shellbox.backends.iris.machine import IrisMachine, IrisMachineFactory
 from shellbox.image import RegistryImage
 from shellbox.machine import (
     Command,
+    CommandOutcomeUnknown,
     ExecSetupFailed,
+    GuestPathError,
     MachineCancelled,
     MachineSpec,
     MachineTerminated,
@@ -64,15 +68,16 @@ class FailingRpc:
 class RefusingRpc(LocalRpc):
     """Fails the first ``refusals`` execs with ``code`` before running anything, then runs them locally."""
 
-    def __init__(self, code: Code, refusals: int):
+    def __init__(self, code: Code, refusals: int, cause: Exception | None = None):
         self.code = code
         self.refusals = refusals
+        self.cause = cause
         self.scripts: list[str] = []
 
     def exec_in_container(self, request, timeout_ms):
         self.scripts.append(request.command[-1])
         if len(self.scripts) <= self.refusals:
-            raise ConnectError(self.code, "refused")
+            raise ConnectError(self.code, "refused") from self.cause
         return super().exec_in_container(request, timeout_ms)
 
     def sent(self, marker: str) -> int:
@@ -199,22 +204,35 @@ def test_paths_the_caller_chose_fail_as_os_errors_and_transport_failures_do_not(
         locked = tmp_path / "locked"
         locked.mkdir()
         (locked / "secret.txt").write_text("hidden")
-        for path in (locked / "secret.txt", locked):
-            path.chmod(0o500 if path == locked else 0)
+        unsearchable = tmp_path / "unsearchable"
+        unsearchable.mkdir()
+        (unsearchable / "file.txt").write_text("hidden")
+        for path, mode in ((locked / "secret.txt", 0), (locked, 0o500), (unsearchable, 0o600)):
+            path.chmod(mode)
+
+        async def guest_errno(operation) -> int | None:
+            with pytest.raises(GuestPathError) as raised:
+                await operation
+            return raised.value.errno
+
         try:
-            with pytest.raises(FileNotFoundError):
-                await machine.download(str(tmp_path / "missing.txt"), tmp_path / "out.txt")
-            with pytest.raises(IsADirectoryError):
-                await machine.upload(source, str(tmp_path / "directory"))
-            with pytest.raises(NotADirectoryError):
-                await machine.upload(source, str(tmp_path / "input.txt" / "child"))
+            assert await guest_errno(machine.download(str(tmp_path / "missing.txt"), tmp_path / "out.txt")) == ENOENT
+            assert await guest_errno(machine.upload(source, str(tmp_path / "directory"))) == EISDIR
+            assert await guest_errno(machine.upload(source, str(tmp_path / "input.txt" / "child"))) == ENOTDIR
+            assert (
+                await guest_errno(machine.download(str(tmp_path / "input.txt" / "child"), tmp_path / "out")) == ENOTDIR
+            )
             if os.geteuid() != 0:
-                with pytest.raises(PermissionError):
-                    await machine.upload(source, str(locked / "new" / "file.txt"))
-                with pytest.raises(PermissionError):
-                    await machine.download(str(locked / "secret.txt"), tmp_path / "out.txt")
+                assert await guest_errno(machine.upload(source, str(locked / "new" / "file.txt"))) == EACCES
+                assert await guest_errno(machine.download(str(locked / "secret.txt"), tmp_path / "out.txt")) == EACCES
+                for operation in (
+                    machine.download(str(unsearchable / "file.txt"), tmp_path / "out.txt"),
+                    machine.upload(source, str(unsearchable / "file.txt")),
+                ):
+                    assert await guest_errno(operation) == EACCES
         finally:
-            locked.chmod(0o700)
+            for path in (locked, unsearchable):
+                path.chmod(0o700)
             (locked / "secret.txt").chmod(0o600)
             await machine.close()
         unreachable, _ = local_machine(tmp_path, FailingRpc())
@@ -327,13 +345,15 @@ def test_exec_refused_by_a_full_controller_pool_is_retried(tmp_path: Path, monke
     assert rpc.sent("echo ran") == 3
 
 
-def test_exec_failing_after_the_controller_accepted_it_is_not_repeated(tmp_path: Path) -> None:
-    rpc = RefusingRpc(Code.UNAVAILABLE, refusals=1)
+@pytest.mark.parametrize("connected", [True, False])
+def test_exec_failing_after_the_controller_accepted_it_is_not_repeated(tmp_path: Path, connected: bool) -> None:
+    rpc = RefusingRpc(Code.UNAVAILABLE, refusals=1, cause=None if connected else httpx.ConnectError("refused"))
     machine, _ = local_machine(tmp_path, rpc)
 
     with pytest.raises(MachineUnavailable) as raised:
         asyncio.run(machine.run(Command(("echo", "once"))))
-    assert isinstance(raised.value.__cause__, ConnectError)
+    # Only a request that never opened a connection is known not to have run.
+    assert isinstance(raised.value, CommandOutcomeUnknown) is connected
     assert rpc.sent("echo once") == 1
 
 
@@ -704,3 +724,36 @@ def test_sandbox_collision_retry_mints_a_fresh_id(monkeypatch):
         with pytest.raises(MachineUnavailable, match="fresh sandbox id"):
             asyncio.run(factory.create(MachineSpec(source=RegistryImage("ubuntu:24.04"))))
     assert len(set(names)) == 2
+
+
+class VanishingRpc(LocalRpc):
+    """Removes ``path`` just before the first chunk read of it, after its size was measured."""
+
+    def __init__(self, path: Path):
+        self.path = path
+
+    def exec_in_container(self, request, timeout_ms):
+        if request.command[-1].startswith("tail -c +1 ") and str(self.path) in request.command[-1]:
+            self.path.unlink(missing_ok=True)
+        return super().exec_in_container(request, timeout_ms)
+
+
+# Review 2026-11-20: a file removed between its size probe and its first chunk downloaded as zero bytes.
+def test_download_of_a_file_that_vanishes_mid_read_fails_while_an_empty_file_succeeds(tmp_path: Path) -> None:
+    vanishing, empty = tmp_path / "vanishing.txt", tmp_path / "empty.txt"
+    vanishing.write_bytes(b"sixbyt")
+    empty.write_bytes(b"")
+    machine, _ = local_machine(tmp_path, VanishingRpc(vanishing))
+
+    async def scenario() -> None:
+        try:
+            with pytest.raises(GuestPathError) as raised:
+                await machine.download(str(vanishing), tmp_path / "vanishing.out")
+            assert raised.value.errno == ENOENT
+            await machine.download(str(empty), tmp_path / "empty.out")
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+    assert not (tmp_path / "vanishing.out").exists()
+    assert (tmp_path / "empty.out").read_bytes() == b""
