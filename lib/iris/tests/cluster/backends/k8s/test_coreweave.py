@@ -71,6 +71,7 @@ from iris.cluster.platforms.k8s.types import (
     K8sResource,
     iris_priority_class_manifest,
 )
+from iris.cluster.platforms.protocols import ControllerRestartNotStarted
 from iris.cluster.platforms.types import (
     InfraError,
     Labels,
@@ -753,6 +754,29 @@ def test_stop_all_dry_run():
 # ============================================================================
 # Tests: verify_prerequisites
 # ============================================================================
+
+
+def test_restart_controller_missing_prerequisites_does_not_change_deployment():
+    provider, k8s = _make_provider()
+
+    with pytest.raises(ControllerRestartNotStarted):
+        provider.restart_controller(_make_cluster_config())
+
+    assert k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller") is None
+    provider.shutdown()
+
+
+def test_restart_controller_apply_failure_is_not_prebootstrap():
+    provider, k8s = _make_provider()
+    config = _make_cluster_config()
+    _seed_prerequisites(k8s, config)
+    k8s.inject_failure("apply_json", InfraError("apply failed"))
+
+    with pytest.raises(InfraError) as error:
+        provider.restart_controller(config)
+
+    assert not isinstance(error.value, ControllerRestartNotStarted)
+    provider.shutdown()
 
 
 def test_verify_prerequisites_raises_when_nothing_provisioned():

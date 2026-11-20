@@ -71,6 +71,7 @@ from iris.cluster.platforms.k8s.types import (
     build_priority_class_manifest,
     parse_k8s_timestamp,
 )
+from iris.cluster.platforms.protocols import ControllerRestartNotStarted
 from iris.cluster.platforms.types import InfraError, Labels, local_queue_name
 from iris.cluster.runtime.env import IRIS_NAMESPACE_ENV, IRIS_NODE_NAME_ENV
 from iris.cluster.runtime.sandbox import EGRESS_BLOCKED_CIDRS, TaskNetwork
@@ -821,6 +822,19 @@ class K8sControllerProvider:
         self._kubectl.rollout_status(K8sResource.DEPLOYMENTS, "iris-controller")
 
     def restart_controller(self, config: IrisClusterConfig) -> str:
+        # Verify read-only prerequisites before start_controller applies any
+        # resource, so an authorization failure cannot arm a stale restore.
+        try:
+            cw = config.controller.coreweave
+            if not cw.scale_group or cw.scale_group not in config.scale_groups:
+                raise InfraError(f"Controller scale_group {cw.scale_group!r} is not configured")
+            self.preflight_controller(config)
+            self.verify_prerequisites(config)
+            assert_no_inlined_secrets(config)
+            if self.uses_s3_storage(config):
+                _resolve_s3_credentials()
+        except Exception as e:
+            raise ControllerRestartNotStarted(f"Controller restart failed before Kubernetes changes: {e}") from e
         return self.start_controller(config)
 
     def _delete_controller_deployment_and_wait(self) -> None:

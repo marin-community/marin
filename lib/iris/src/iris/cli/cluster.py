@@ -67,8 +67,8 @@ from iris.cluster.platforms.factory import ProviderBundle
 from iris.cluster.platforms.gcp.worker_bootstrap import build_worker_bootstrap_script
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
 from iris.cluster.platforms.k8s.controller import PRINCIPAL_DIRECTORY_ENV_VAR, resolve_controller_secrets
+from iris.cluster.platforms.protocols import ControllerRestartNotStarted
 from iris.cluster.platforms.types import Labels
-from iris.cluster.platforms.vm_lifecycle import ControllerRestartNotStarted
 from iris.cluster.provenance import is_same_image_provenance, provenance_from_proto
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2
 from iris.rpc.proto_display import format_accelerator_display, vm_state_name
@@ -1372,7 +1372,7 @@ def controller_restart(
     else:
         pre_deploy_checkpoint = _take_pre_deploy_checkpoint(ctx, controller_url, checkpoint_timeout)
 
-    active_image = prior_record.image if prior_record else config.controller.image
+    active_image = config.controller.image
     new_image = _build_forward_image(
         ctx,
         config,
@@ -1384,34 +1384,29 @@ def controller_restart(
 
     # Record the in-flight deploy before restarting: a crash mid-restart leaves a
     # rollback pointer, and a later --rollback reads back these coordinates.
-    _record_rollout(
-        remote_state_dir,
-        RolloutRecord(
-            phase=RolloutPhase.PENDING,
-            image=new_image,
-            previous_image=previous_image,
-            rollback_checkpoint=pre_deploy_checkpoint,
-            updated_at_ms=int(time.time() * 1000),
-        ),
+    pending_record = RolloutRecord(
+        phase=RolloutPhase.PENDING,
+        image=new_image,
+        previous_image=previous_image,
+        rollback_checkpoint=pre_deploy_checkpoint,
+        updated_at_ms=int(time.time() * 1000),
     )
+    _record_rollout(remote_state_dir, pending_record)
 
     try:
         address = bundle.controller.restart_controller(config)
     except ControllerRestartNotStarted as e:
-        click.echo(f"Controller restart did not reach the VM: {e}", err=True)
-        if prior_record and prior_record.phase in (RolloutPhase.COMMITTED, RolloutPhase.ROLLED_BACK):
-            safe_record = prior_record
-        else:
-            safe_record = RolloutRecord(
-                phase=RolloutPhase.COMMITTED,
-                image=active_image,
-                updated_at_ms=int(time.time() * 1000),
-            )
+        click.echo(f"Controller restart did not begin: {e}", err=True)
+        safe_record = prior_record or RolloutRecord(
+            phase=RolloutPhase.COMMITTED,
+            image=active_image,
+            updated_at_ms=int(time.time() * 1000),
+        )
         _record_rollout(remote_state_dir, safe_record)
         raise SystemExit(1) from e
     except Exception as e:
         click.echo(f"Deploy failed its post-restart health check: {e}", err=True)
-        _auto_rollback(bundle, config, remote_state_dir, previous_image, pre_deploy_checkpoint)
+        _auto_rollback(bundle, config, remote_state_dir, previous_image, pre_deploy_checkpoint, pending_record)
         raise SystemExit(1) from e
 
     click.echo(f"Controller restarted at {address}")
@@ -1443,7 +1438,12 @@ def _rollback_last_deploy(ctx, bundle, config, remote_state_dir: str | None, pri
         require_controller_url(ctx)
     except (RuntimeError, click.ClickException):
         raise click.ClickException("Rollback needs a running controller to restart in place; none was found.") from None
-    _rollback_controller(bundle, config, remote_state_dir, prior_record.previous_image, prior_record.rollback_checkpoint)
+    try:
+        _rollback_controller(
+            bundle, config, remote_state_dir, prior_record.previous_image, prior_record.rollback_checkpoint, prior_record
+        )
+    except ControllerRestartNotStarted as e:
+        raise SystemExit(1) from e
 
 
 def _build_forward_image(
@@ -1492,6 +1492,7 @@ def _rollback_controller(
     remote_state_dir: str | None,
     rollback_image: str,
     rollback_checkpoint: str | None,
+    prior_record: RolloutRecord,
 ) -> None:
     """Restart the controller on ``rollback_image``, restoring ``rollback_checkpoint``.
 
@@ -1504,6 +1505,17 @@ def _rollback_controller(
     _request_rollback(remote_state_dir, rollback_image, rollback_checkpoint)
     try:
         address = bundle.controller.restart_controller(config)
+    except ControllerRestartNotStarted as e:
+        click.echo(f"Rollback restart did not begin: {e}", err=True)
+        if remote_state_dir:
+            try:
+                write_rollout_record(remote_state_dir, prior_record)
+            except OSError as write_error:
+                raise click.ClickException(
+                    f"Could not restore the previous rollout record after a prebootstrap failure ({write_error}); "
+                    "the new rollback request remains armed."
+                ) from write_error
+        raise
     except Exception as e:
         click.echo(f"Rollback restart failed: {e}", err=True)
         raise SystemExit(1) from e
@@ -1516,6 +1528,7 @@ def _auto_rollback(
     remote_state_dir: str | None,
     previous_image: str | None,
     pre_deploy_checkpoint: str | None,
+    pending_record: RolloutRecord,
 ) -> None:
     """Revert a failed forward deploy to the previous image and its pre-deploy checkpoint."""
     if not previous_image:
@@ -1525,7 +1538,7 @@ def _auto_rollback(
         )
         return
     click.echo(f"Auto-rolling back to previous image {previous_image}...")
-    _rollback_controller(bundle, config, remote_state_dir, previous_image, pre_deploy_checkpoint)
+    _rollback_controller(bundle, config, remote_state_dir, previous_image, pre_deploy_checkpoint, pending_record)
 
 
 def _request_rollback(remote_state_dir: str | None, rollback_image: str, rollback_checkpoint: str | None) -> None:

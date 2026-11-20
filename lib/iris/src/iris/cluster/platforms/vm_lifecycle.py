@@ -34,7 +34,7 @@ from iris.cluster.platforms.gcp.controller_bootstrap import (
     build_controller_bootstrap_script_from_config,
 )
 from iris.cluster.platforms.gcp.ssh import OS_LOGIN_METADATA
-from iris.cluster.platforms.protocols import WorkerInfraProvider
+from iris.cluster.platforms.protocols import ControllerRestartNotStarted, WorkerInfraProvider
 from iris.cluster.platforms.types import (
     Labels,
     RemoteWorkerHandle,
