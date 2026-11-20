@@ -1509,6 +1509,8 @@ def test_ttl_run_path_preserves_a_run_already_under_the_temporary_root(monkeypat
     assert skyrl_temporary_run_path(temporary, ttl_days=14) == temporary
     sibling = skyrl_temporary_run_path("s3://regional/tmp/ttl=14d-other/run", ttl_days=14)
     assert sibling == "s3://regional/tmp/ttl=14d/skyrl/tmp/ttl=14d-other/run"
+
+
 def _pool(name: str) -> ArtifactStep[Artifact]:
     return ArtifactStep.adopt(name, "2026.08.01", f"s3://test/{name}")
 
