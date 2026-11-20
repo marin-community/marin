@@ -8,9 +8,12 @@ model (``experiments/june_tpu_67b_a2b/moe/model.py``) and training loop, on the 
 kernels (reference or ``xla_flash`` attention, XLA ``ragged_dot``), so the two code paths can be compared on
 hardware that has no CUDA or TPU kernels. Every step sees fresh uniform-random tokens with no repeats, so the
 loss cannot fall below ln(vocab_size) and a lower value means something leaks the targets (``--repeat-batches``
-cycles through a small pool of batches instead, so the loss can fall, for convergence checks). No checkpoint is
-written. Like the Snowball harness, it logs the model FLOPs per example up front and ends with the median step
-time from step 2 on, tokens/s, model TFLOP/s and MFU, then each device's peak memory.
+cycles through a small pool of batches instead, so the loss can fall, for convergence checks). ``--tokens-file``
+replaces the random tokens with a flat array of real token ids, cut into consecutive ``seq_len`` windows with documents
+separated by ``--eos-id`` as in production packing, so runs at different sequence lengths and equal tokens per step see
+the same token stream (a loss check across context lengths). No checkpoint is written. Like the Snowball harness, it
+logs the model FLOPs per example up front and ends with the median step time from step 2 on, tokens/s, model TFLOP/s
+and MFU, then each device's peak memory.
 
 Example, 8 GPUs, full 67B shape, expert parallelism over all 8, profile of steps 10-12::
 
@@ -25,6 +28,7 @@ parameters over a cross-node ``data`` axis (FSDP), and ``--expert-axis 16`` spre
 
 import argparse
 import dataclasses
+import functools
 import json
 import logging
 import time
@@ -123,6 +127,16 @@ def parse_args() -> argparse.Namespace:
         "fall (a convergence check); 0 = fresh tokens every step. Either way the run draws from at most 65535 "
         "distinct sequences.",
     )
+    parser.add_argument(
+        "--tokens-file",
+        type=Path,
+        help="A .npy array of token ids to train on in order, instead of random tokens; requires --eos-id.",
+    )
+    parser.add_argument(
+        "--eos-id",
+        type=int,
+        help="End-of-document token in --tokens-file; attention does not cross it, as in production packing.",
+    )
     parser.add_argument("--mp", help="jmp policy override, e.g. 'p=f32,c=float16' (default: preset).")
     parser.add_argument("--expert-axis", type=int, default=1, help="Expert-parallel mesh axis size (1 = FSDP only).")
     parser.add_argument(
@@ -195,6 +209,19 @@ def synthetic_examples(count: int, seq_len: int, vocab_size: int, seed: int = 0)
     ]
 
 
+def token_file_examples(tokens: np.ndarray, count: int, seq_len: int, eos_id: int) -> list[GrugLmExample]:
+    """The first ``count`` consecutive ``seq_len`` windows of ``tokens``, built as the production loader builds them:
+    causal loss weights and one attention segment per EOS-terminated document."""
+    if count * seq_len > tokens.shape[0]:
+        raise ValueError(
+            f"{count} sequences of {seq_len} tokens need {count * seq_len} tokens, file has {tokens.shape[0]}"
+        )
+    build = jax.jit(functools.partial(GrugLmExample.causal, eos_id=eos_id))
+    windows = np.asarray(tokens[: count * seq_len], dtype=np.int32).reshape(count, seq_len)
+    with jax.default_device(jax.devices("cpu")[0]):
+        return [jax.tree.map(np.asarray, build(window)) for window in windows]
+
+
 def report_memory() -> None:
     for device in jax.local_devices():
         stats = device.memory_stats()
@@ -264,6 +291,10 @@ def main() -> None:
                 f"--num-expert-waves {args.num_expert_waves} must divide the {local_experts} local experts "
                 f"({model.num_experts} experts over --expert-axis {args.expert_axis})"
             )
+    if (args.tokens_file is None) != (args.eos_id is None):
+        raise ValueError("--tokens-file and --eos-id go together")
+    if args.tokens_file is not None and args.repeat_batches:
+        raise ValueError("--tokens-file reads every batch once; it does not combine with --repeat-batches")
     batch_size = jax.device_count() if args.batch_size is None else args.batch_size
     if batch_size == 1:
         # jnp.roll in the next-token loss slices the (1, seq_len) token grid to (1, 1), and under an explicit mesh JAX
@@ -308,7 +339,11 @@ def main() -> None:
             f"{distinct} batches of {batch_size} sequences exceed the mixture block limit of 65535 sequences; lower "
             "--steps or --repeat-batches"
         )
-    examples = synthetic_examples(distinct * batch_size, model.max_seq_len, model.vocab_size)
+    if args.tokens_file is None:
+        examples = synthetic_examples(distinct * batch_size, model.max_seq_len, model.vocab_size)
+    else:
+        tokens = np.load(args.tokens_file, mmap_mode="r")
+        examples = token_file_examples(tokens, distinct * batch_size, model.max_seq_len, args.eos_id)
     data = LmDataConfig(
         components={"synthetic": DirectDatasetComponent(datasets={"train": ListAsyncDataset(examples)})},
         tokenizer="passthrough",
