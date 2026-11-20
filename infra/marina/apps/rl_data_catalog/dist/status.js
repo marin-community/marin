@@ -71,6 +71,11 @@ function row(item) {
   tr.append(source);
   const status = node('td');
   status.append(node('span', item.status, 'chip'));
+  if (item.consumer_findings?.length) {
+    const flag = node('span', 'Consumer advisory', 'chip');
+    flag.title = item.consumer_findings.join(', ');
+    status.append(flag);
+  }
   if (item.stage) status.append(node('div', item.stage, 'status-stage'));
   tr.append(status);
   const claims = item.reasons || [];
@@ -149,6 +154,7 @@ async function load() {
     stage: stages[declaration.id] || declaration.stage || null,
     reasons: declaration.exclusion_claims || [],
     notes: declaration.notes,
+    consumer_findings: declaration.consumer_findings,
     receipt: catalog.snapshot_id ? `catalog snapshot ${catalog.snapshot_id}` : null,
     generated_at: declaration.updated_at,
   }));

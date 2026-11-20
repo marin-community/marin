@@ -106,7 +106,8 @@ TABLE_SOURCE_FIELDS = frozenset(
         "actor_census_input",
         "consumer_requirements",
         "consumer_receipt",
-        "consumer_blockers",
+        "consumer_decision",
+        "consumer_findings",
         "daytona",
         "curation",
         "task_count",
@@ -467,6 +468,8 @@ def create_api(services: AppletServices) -> FastAPI:
                         'within_source_dedup',declaration->'within_source_dedup',
                         'actor_census_input',declaration->'actor_census_input',
                         'consumer_receipt',declaration->'consumer_receipt',
+                        'consumer_decision',declaration->'consumer_decision',
+                        'consumer_findings',declaration->'consumer_findings',
                         'consumer_requirements',declaration->'consumer_requirements'
                     ) || CASE WHEN declaration ? 'data_restriction'
                         THEN jsonb_build_object('data_restriction',declaration->'data_restriction')
@@ -495,7 +498,7 @@ def create_api(services: AppletServices) -> FastAPI:
                             "stage",
                             "exclusion_claims",
                             "notes",
-                            "consumer_blockers",
+                            "consumer_findings",
                         )
                     }
                     | {"data_restriction": declaration.get("data_restriction"), "updated_at": metadata["loaded_at"]}

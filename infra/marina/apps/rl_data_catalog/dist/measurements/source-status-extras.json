@@ -11,15 +11,14 @@
         "task_specs_sha256": "672b8d112a4e7ff39622b9366a851927caf4c97efbeee12b8f390c82fa00af15",
         "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
         "checked_tasks": 4326,
-        "failed_tasks": 4326,
-        "failures": {
-          "CONSUMER_JUDGE_UNREGISTERED": 4326
-        },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "custom_judge": 4326
         }
-      }
+      },
+      "consumer_decision": null
     },
     "Evalchemy:simpleqa-mini": {
       "consumer_requirements": [
@@ -32,15 +31,14 @@
         "task_specs_sha256": "2354b94ffabf2e3ad92beef208ad31d40d941d567416e7596c7f4f4f7265c4e3",
         "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
         "checked_tasks": 500,
-        "failed_tasks": 500,
-        "failures": {
-          "CONSUMER_JUDGE_UNREGISTERED": 500
-        },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "custom_judge": 500
         }
-      }
+      },
+      "consumer_decision": null
     },
     "TaskTrove:laion__exp_rpt_taco-v2": {
       "consumer_requirements": [
@@ -57,11 +55,12 @@
         "failures": {
           "CONSUMER_EXECUTION_UNSUPPORTED": 5063
         },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "execution": 5063
         }
-      }
+      },
+      "consumer_decision": null
     },
     "TaskTrove:DCAgent__exp_rpt_pymethods2test-v3": {
       "consumer_requirements": [
@@ -78,11 +77,12 @@
         "failures": {
           "CONSUMER_EXECUTION_UNSUPPORTED": 496
         },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "execution": 496
         }
-      }
+      },
+      "consumer_decision": null
     },
     "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2": {
       "consumer_requirements": [
@@ -99,11 +99,12 @@
         "failures": {
           "CONSUMER_EXECUTION_UNSUPPORTED": 4951
         },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "execution": 4951
         }
-      }
+      },
+      "consumer_decision": null
     },
     "TaskTrove:DCAgent__exp_rpt_unitsyn-python-v4": {
       "consumer_requirements": [
@@ -120,11 +121,12 @@
         "failures": {
           "CONSUMER_EXECUTION_UNSUPPORTED": 487
         },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "execution": 487
         }
-      }
+      },
+      "consumer_decision": null
     },
     "TaskTrove:DCAgent__exp_rpt_unitsyn-python-large-v2": {
       "consumer_requirements": [
@@ -141,11 +143,12 @@
         "failures": {
           "CONSUMER_EXECUTION_UNSUPPORTED": 4949
         },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "execution": 4949
         }
-      }
+      },
+      "consumer_decision": null
     },
     "TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2": {
       "consumer_requirements": [
@@ -162,11 +165,12 @@
         "failures": {
           "CONSUMER_EXECUTION_UNSUPPORTED": 1422
         },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "execution": 1422
         }
-      }
+      },
+      "consumer_decision": null
     },
     "TaskTrove:laion__nemotron-gym-safety-v3": {
       "consumer_requirements": [
@@ -179,15 +183,14 @@
         "task_specs_sha256": "251b54d039268a2a85cca287fba652d7e317480123938cdbedb1d5ec40bb6a38",
         "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
         "checked_tasks": 89066,
-        "failed_tasks": 89066,
-        "failures": {
-          "CONSUMER_JUDGE_UNREGISTERED": 89066
-        },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "custom_judge": 89066
         }
-      }
+      },
+      "consumer_decision": null
     },
     "TaskTrove:laion__nemotron-gym-knowledge-openqa-v4": {
       "consumer_requirements": [
@@ -200,15 +203,14 @@
         "task_specs_sha256": "ad0bd75c109eaacabbb3dfa282d4302af7d5a8d781c41902e95e5ae2aac07e38",
         "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
         "checked_tasks": 122357,
-        "failed_tasks": 122357,
-        "failures": {
-          "CONSUMER_JUDGE_UNREGISTERED": 122357
-        },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "custom_judge": 122357
         }
-      }
+      },
+      "consumer_decision": null
     },
     "TaskTrove:laion__nemotron-gym-science-so-openq-v3": {
       "consumer_requirements": [
@@ -221,15 +223,14 @@
         "task_specs_sha256": "21e85b137de8bfc74c793e37631f96c88c88493df5b7370433cdf6db771a0eec",
         "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
         "checked_tasks": 150644,
-        "failed_tasks": 150644,
-        "failures": {
-          "CONSUMER_JUDGE_UNREGISTERED": 150644
-        },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "custom_judge": 150644
         }
-      }
+      },
+      "consumer_decision": null
     },
     "TaskTrove:laion__nemotron-gym-agent-calendar-v2": {
       "consumer_requirements": [
@@ -246,11 +247,12 @@
         "failures": {
           "CONSUMER_EXECUTION_UNSUPPORTED": 58
         },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "execution": 58
         }
-      }
+      },
+      "consumer_decision": null
     },
     "TaskTrove:laion__nemotron-gym-multichallenge-advanced-v4": {
       "consumer_requirements": [
@@ -265,11 +267,12 @@
         "checked_tasks": 1068,
         "failed_tasks": 0,
         "failures": {},
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "custom_judge": 1068
         }
-      }
+      },
+      "consumer_decision": null
     },
     "Nemotron:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/SWE-Gym/SWE-Gym": {
       "consumer_requirements": [
@@ -282,15 +285,14 @@
         "task_specs_sha256": "f16545b03bb754c995d8f9247e57d60cf830f3cb4d00ca1a2b14fa05e8039a75",
         "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
         "checked_tasks": 496,
-        "failed_tasks": 496,
-        "failures": {
-          "CONSUMER_JUDGE_UNREGISTERED": 496
-        },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "custom_judge": 496
         }
-      }
+      },
+      "consumer_decision": null
     },
     "Nemotron:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/nebius/SWE-rebench-V2": {
       "consumer_requirements": [
@@ -303,15 +305,14 @@
         "task_specs_sha256": "e5cc79fff0c9322c0fd5a3b635d4136f3c10e42cbd7ca54bd89a6020bfe531be",
         "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
         "checked_tasks": 1840,
-        "failed_tasks": 1840,
-        "failures": {
-          "CONSUMER_JUDGE_UNREGISTERED": 1840
-        },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "custom_judge": 1840
         }
-      }
+      },
+      "consumer_decision": null
     },
     "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_abstention": {
       "consumer_requirements": [
@@ -324,15 +325,14 @@
         "task_specs_sha256": "e7f960164f13a2eaade15fdb15b0b4303a5b5e88b71674a70e2a4f72ff23e68c",
         "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
         "checked_tasks": 2299,
-        "failed_tasks": 2299,
-        "failures": {
-          "CONSUMER_JUDGE_UNREGISTERED": 2299
-        },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "custom_judge": 2299
         }
-      }
+      },
+      "consumer_decision": null
     },
     "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_instruction_following": {
       "consumer_requirements": [
@@ -345,15 +345,14 @@
         "task_specs_sha256": "4ade3bf7c51756999795a9743547749eff7921d4e22ce169a14e690634dc11f9",
         "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
         "checked_tasks": 10409,
-        "failed_tasks": 10409,
-        "failures": {
-          "CONSUMER_JUDGE_UNREGISTERED": 10409
-        },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "custom_judge": 10409
         }
-      }
+      },
+      "consumer_decision": null
     },
     "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_jailbreak": {
       "consumer_requirements": [
@@ -366,15 +365,14 @@
         "task_specs_sha256": "2306b6d97ce7af909801604491bb1a3094bc1fc2cca38937b8542be1f62164cc",
         "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
         "checked_tasks": 1121,
-        "failed_tasks": 1121,
-        "failures": {
-          "CONSUMER_JUDGE_UNREGISTERED": 1121
-        },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "custom_judge": 1121
         }
-      }
+      },
+      "consumer_decision": null
     },
     "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_math_tir": {
       "consumer_requirements": [
@@ -391,11 +389,12 @@
         "failures": {
           "CONSUMER_TOOL_UNREGISTERED": 5790
         },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "tool_provider": 5790
         }
-      }
+      },
+      "consumer_decision": null
     },
     "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_multichallenge_len40k": {
       "consumer_requirements": [
@@ -408,15 +407,14 @@
         "task_specs_sha256": "1a332c92725f2af2bd62d4bb94f277e840aa6a8585250c6b90273fc542a5e5e0",
         "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
         "checked_tasks": 1184,
-        "failed_tasks": 1184,
-        "failures": {
-          "CONSUMER_JUDGE_UNREGISTERED": 1184
-        },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "custom_judge": 1184
         }
-      }
+      },
+      "consumer_decision": null
     },
     "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_toolcall_schema": {
       "consumer_requirements": [
@@ -429,15 +427,14 @@
         "task_specs_sha256": "08a05362f7578f492c6c36cb43f87b708ee29bdaf504c0083ef0e3681cb98f74",
         "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
         "checked_tasks": 2264,
-        "failed_tasks": 2264,
-        "failures": {
-          "CONSUMER_JUDGE_UNREGISTERED": 2264
-        },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "custom_judge": 2264
         }
-      }
+      },
+      "consumer_decision": null
     },
     "Nemotron:nemotron_ultra_rlvr1/language_mixing_hs3_ultra_genrm_fmt": {
       "consumer_requirements": [
@@ -450,15 +447,14 @@
         "task_specs_sha256": "d078e162505a25b1d0c6a1d4b966deca4dc440efb2f03968ddb0e17d9a6e3982",
         "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
         "checked_tasks": 4599,
-        "failed_tasks": 4599,
-        "failures": {
-          "CONSUMER_JUDGE_UNREGISTERED": 4599
-        },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "custom_judge": 4599
         }
-      }
+      },
+      "consumer_decision": null
     },
     "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_abstention": {
       "consumer_requirements": [
@@ -471,15 +467,14 @@
         "task_specs_sha256": "8616bc2c46852a484cdeb2311f8c6978ef132f9dddb14f577c4c098ac03c8a6f",
         "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
         "checked_tasks": 2299,
-        "failed_tasks": 2299,
-        "failures": {
-          "CONSUMER_JUDGE_UNREGISTERED": 2299
-        },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "custom_judge": 2299
         }
-      }
+      },
+      "consumer_decision": null
     },
     "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_instruction_following": {
       "consumer_requirements": [
@@ -492,15 +487,14 @@
         "task_specs_sha256": "c7689115850760f3adfb8989d8ee13aaf367634658cae509687291c197cf60b2",
         "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
         "checked_tasks": 11828,
-        "failed_tasks": 11828,
-        "failures": {
-          "CONSUMER_JUDGE_UNREGISTERED": 11828
-        },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "custom_judge": 11828
         }
-      }
+      },
+      "consumer_decision": null
     },
     "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_jailbreak": {
       "consumer_requirements": [
@@ -513,15 +507,14 @@
         "task_specs_sha256": "dd32cfdee627542d5e1c41e76606abc051649e90025b7e2f27a7907e4020bbc3",
         "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
         "checked_tasks": 1121,
-        "failed_tasks": 1121,
-        "failures": {
-          "CONSUMER_JUDGE_UNREGISTERED": 1121
-        },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "custom_judge": 1121
         }
-      }
+      },
+      "consumer_decision": null
     },
     "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_math_tir": {
       "consumer_requirements": [
@@ -538,11 +531,12 @@
         "failures": {
           "CONSUMER_TOOL_UNREGISTERED": 5790
         },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "tool_provider": 5790
         }
-      }
+      },
+      "consumer_decision": null
     },
     "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_multichallenge_len40k": {
       "consumer_requirements": [
@@ -555,15 +549,14 @@
         "task_specs_sha256": "b351741e37f53ba37d7350ca67f670ffd4737a129729ef488b8ed8892d75384d",
         "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
         "checked_tasks": 1184,
-        "failed_tasks": 1184,
-        "failures": {
-          "CONSUMER_JUDGE_UNREGISTERED": 1184
-        },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "custom_judge": 1184
         }
-      }
+      },
+      "consumer_decision": null
     },
     "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym": {
       "consumer_requirements": [
@@ -576,15 +569,14 @@
         "task_specs_sha256": "7bbfd2fa33630d449fb8b927df7f884adf545c22f72b962682128ce4792ffb05",
         "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
         "checked_tasks": 502,
-        "failed_tasks": 502,
-        "failures": {
-          "CONSUMER_JUDGE_UNREGISTERED": 502
-        },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "custom_judge": 502
         }
-      }
+      },
+      "consumer_decision": null
     },
     "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": {
       "consumer_requirements": [
@@ -597,15 +589,14 @@
         "task_specs_sha256": "d6776dab0ee7f2a5c23b20f5112d48147249ec6b9092fc8c5b5da184397f00cb",
         "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
         "checked_tasks": 2016,
-        "failed_tasks": 2016,
-        "failures": {
-          "CONSUMER_JUDGE_UNREGISTERED": 2016
-        },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "custom_judge": 2016
         }
-      }
+      },
+      "consumer_decision": null
     },
     "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_tau_pivot": {
       "consumer_requirements": [
@@ -618,15 +609,14 @@
         "task_specs_sha256": "f77bd92bba70123ac72f2ba814e688e37178591865c116aabc9d76bea0714065",
         "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
         "checked_tasks": 20035,
-        "failed_tasks": 20035,
-        "failures": {
-          "CONSUMER_JUDGE_UNREGISTERED": 20035
-        },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "custom_judge": 20035
         }
-      }
+      },
+      "consumer_decision": null
     },
     "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_toolcall_schema": {
       "consumer_requirements": [
@@ -639,15 +629,14 @@
         "task_specs_sha256": "b65f2dc20f346d0a5fb0597303216e460e16bc91b3177e0a235940a90441fb60",
         "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
         "checked_tasks": 2879,
-        "failed_tasks": 2879,
-        "failures": {
-          "CONSUMER_JUDGE_UNREGISTERED": 2879
-        },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "custom_judge": 2879
         }
-      }
+      },
+      "consumer_decision": null
     },
     "Nemotron:nemotron_ultra_rlvr2/language_mixing_hs3_ultra_genrm_fmt": {
       "consumer_requirements": [
@@ -660,15 +649,14 @@
         "task_specs_sha256": "03b6d903e5be9a1b03742d446b99e0787253bd84904b89cae62829e438ece656",
         "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
         "checked_tasks": 4566,
-        "failed_tasks": 4566,
-        "failures": {
-          "CONSUMER_JUDGE_UNREGISTERED": 4566
-        },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "custom_judge": 4566
         }
-      }
+      },
+      "consumer_decision": null
     },
     "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_abstention": {
       "consumer_requirements": [
@@ -681,15 +669,14 @@
         "task_specs_sha256": "5e8db4e82491e871a37b8091075acc73ea261f3ba7201be714570374d4b9d578",
         "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
         "checked_tasks": 2299,
-        "failed_tasks": 2299,
-        "failures": {
-          "CONSUMER_JUDGE_UNREGISTERED": 2299
-        },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "custom_judge": 2299
         }
-      }
+      },
+      "consumer_decision": null
     },
     "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_instruction_following": {
       "consumer_requirements": [
@@ -702,15 +689,14 @@
         "task_specs_sha256": "28e1b9df7323667584c75940589145cc22280122e4d59c29be7311da0f8709c0",
         "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
         "checked_tasks": 10409,
-        "failed_tasks": 10409,
-        "failures": {
-          "CONSUMER_JUDGE_UNREGISTERED": 10409
-        },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "custom_judge": 10409
         }
-      }
+      },
+      "consumer_decision": null
     },
     "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_jailbreak": {
       "consumer_requirements": [
@@ -723,15 +709,14 @@
         "task_specs_sha256": "26d335c2da2a7de20c7f946f72c73e06dda9f82c3dcaa90152ceeea90aeed5d2",
         "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
         "checked_tasks": 1121,
-        "failed_tasks": 1121,
-        "failures": {
-          "CONSUMER_JUDGE_UNREGISTERED": 1121
-        },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "custom_judge": 1121
         }
-      }
+      },
+      "consumer_decision": null
     },
     "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_math_tir": {
       "consumer_requirements": [
@@ -748,11 +733,12 @@
         "failures": {
           "CONSUMER_TOOL_UNREGISTERED": 5790
         },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "tool_provider": 5790
         }
-      }
+      },
+      "consumer_decision": null
     },
     "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_multichallenge_len40k": {
       "consumer_requirements": [
@@ -765,15 +751,14 @@
         "task_specs_sha256": "82b573bbd82710bfad75a452e50fe82cfb83f4b9176ac575ff3feaa34e44465a",
         "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
         "checked_tasks": 1184,
-        "failed_tasks": 1184,
-        "failures": {
-          "CONSUMER_JUDGE_UNREGISTERED": 1184
-        },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "custom_judge": 1184
         }
-      }
+      },
+      "consumer_decision": null
     },
     "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym": {
       "consumer_requirements": [
@@ -786,15 +771,14 @@
         "task_specs_sha256": "edc575891af13a0cb13e8a32bb09cfdde73d81324295a4db1cd82dbede674777",
         "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
         "checked_tasks": 502,
-        "failed_tasks": 502,
-        "failures": {
-          "CONSUMER_JUDGE_UNREGISTERED": 502
-        },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "custom_judge": 502
         }
-      }
+      },
+      "consumer_decision": null
     },
     "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": {
       "consumer_requirements": [
@@ -807,15 +791,14 @@
         "task_specs_sha256": "b50d3b7b305dd0414dd690e31e4edc5bdbe0fecb81fd3eeba764d2c27e7c0ced",
         "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
         "checked_tasks": 2016,
-        "failed_tasks": 2016,
-        "failures": {
-          "CONSUMER_JUDGE_UNREGISTERED": 2016
-        },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "custom_judge": 2016
         }
-      }
+      },
+      "consumer_decision": null
     },
     "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_tau_pivot": {
       "consumer_requirements": [
@@ -828,15 +811,14 @@
         "task_specs_sha256": "118beb3f9d51c863b2ee7f166aceef8666077b5d49b9d3394323fb89a994b679",
         "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
         "checked_tasks": 20035,
-        "failed_tasks": 20035,
-        "failures": {
-          "CONSUMER_JUDGE_UNREGISTERED": 20035
-        },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "custom_judge": 20035
         }
-      }
+      },
+      "consumer_decision": null
     },
     "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_toolcall_schema": {
       "consumer_requirements": [
@@ -849,15 +831,14 @@
         "task_specs_sha256": "73c5f994398062ac8651e20abd6c83fff732704089a934414aed7371b26a0ae1",
         "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
         "checked_tasks": 2264,
-        "failed_tasks": 2264,
-        "failures": {
-          "CONSUMER_JUDGE_UNREGISTERED": 2264
-        },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "custom_judge": 2264
         }
-      }
+      },
+      "consumer_decision": null
     },
     "OpenResearcher:OpenResearcher-Dataset": {
       "consumer_requirements": [
@@ -875,12 +856,13 @@
         "failures": {
           "CONSUMER_TOOL_UNREGISTERED": 283
         },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "custom_judge": 283,
           "tool_provider": 283
         }
-      }
+      },
+      "consumer_decision": null
     },
     "TaskTrove:tasktrove-taco-built-image": {
       "consumer_requirements": [
@@ -897,11 +879,12 @@
         "failures": {
           "CONSUMER_EXECUTION_UNSUPPORTED": 5065
         },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "execution": 5065
         }
-      }
+      },
+      "consumer_decision": null
     },
     "TaskTrove:tasktrove-pymethods2test-rebuilt-v1": {
       "consumer_requirements": [
@@ -918,11 +901,12 @@
         "failures": {
           "CONSUMER_EXECUTION_UNSUPPORTED": 496
         },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "execution": 496
         }
-      }
+      },
+      "consumer_decision": null
     },
     "TaskTrove:tasktrove-pymethods2test-large-rebuilt-v1": {
       "consumer_requirements": [
@@ -939,11 +923,12 @@
         "failures": {
           "CONSUMER_EXECUTION_UNSUPPORTED": 4951
         },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "execution": 4951
         }
-      }
+      },
+      "consumer_decision": null
     },
     "TaskTrove:tasktrove-unitsyn-python-rebuilt-v1": {
       "consumer_requirements": [
@@ -960,11 +945,12 @@
         "failures": {
           "CONSUMER_EXECUTION_UNSUPPORTED": 4950
         },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "execution": 4950
         }
-      }
+      },
+      "consumer_decision": null
     },
     "TaskTrove:tasktrove-unitsyn-python-large-rebuilt-v1": {
       "consumer_requirements": [
@@ -981,11 +967,12 @@
         "failures": {
           "CONSUMER_EXECUTION_UNSUPPORTED": 4951
         },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "execution": 4951
         }
-      }
+      },
+      "consumer_decision": null
     },
     "TaskTrove:tasktrove-safety-qa": {
       "consumer_requirements": [
@@ -998,15 +985,14 @@
         "task_specs_sha256": "0132dd1aa78aa2f1007f1a9fb165b87d1eb2a08622d1cd2fcb249312136e641b",
         "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
         "checked_tasks": 44939,
-        "failed_tasks": 44939,
-        "failures": {
-          "CONSUMER_JUDGE_UNREGISTERED": 44939
-        },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "custom_judge": 44939
         }
-      }
+      },
+      "consumer_decision": null
     },
     "TaskTrove:tasktrove-knowledge-openqa-qa": {
       "consumer_requirements": [
@@ -1019,15 +1005,14 @@
         "task_specs_sha256": "93377fa2a6d3c4cd8503302aa9bfe1a282ba19530982083ee356ffe831b12308",
         "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
         "checked_tasks": 122314,
-        "failed_tasks": 122314,
-        "failures": {
-          "CONSUMER_JUDGE_UNREGISTERED": 122314
-        },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "custom_judge": 122314
         }
-      }
+      },
+      "consumer_decision": null
     },
     "TaskTrove:tasktrove-science-openqa-qa": {
       "consumer_requirements": [
@@ -1040,15 +1025,14 @@
         "task_specs_sha256": "f145a9d35365dd22787116f8d97c51ea5aa81c6f62d71677ebce1cb4747ae064",
         "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
         "checked_tasks": 150644,
-        "failed_tasks": 150644,
-        "failures": {
-          "CONSUMER_JUDGE_UNREGISTERED": 150644
-        },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "custom_judge": 150644
         }
-      }
+      },
+      "consumer_decision": null
     },
     "TaskTrove:laion__exp_rpt_crosscodeeval-python-v2": {
       "consumer_requirements": [
@@ -1065,11 +1049,12 @@
         "failures": {
           "CONSUMER_EXECUTION_UNSUPPORTED": 500
         },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "execution": 500
         }
-      }
+      },
+      "consumer_decision": null
     },
     "TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2@repaired-20261118": {
       "consumer_requirements": [
@@ -1086,11 +1071,12 @@
         "failures": {
           "CONSUMER_EXECUTION_UNSUPPORTED": 372
         },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "execution": 372
         }
-      }
+      },
+      "consumer_decision": null
     },
     "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2@repaired-20261118": {
       "consumer_requirements": [
@@ -1107,11 +1093,12 @@
         "failures": {
           "CONSUMER_EXECUTION_UNSUPPORTED": 3754
         },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "execution": 3754
         }
-      }
+      },
+      "consumer_decision": null
     },
     "PrimeIntellect:PrimeIntellect/Multi-SWE-RL-Verified": {
       "consumer_requirements": [
@@ -1129,12 +1116,13 @@
         "failures": {
           "CONSUMER_EXECUTION_UNSUPPORTED": 12
         },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "execution": 12,
           "verifier_allocation": 1130
         }
-      }
+      },
+      "consumer_decision": null
     },
     "PrimeIntellect:PrimeIntellect/SWE-Lego-Real-Data-Verified": {
       "consumer_requirements": [
@@ -1151,11 +1139,12 @@
         "failures": {
           "CONSUMER_EXECUTION_UNSUPPORTED": 11
         },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "execution": 11
         }
-      }
+      },
+      "consumer_decision": null
     },
     "RST:laion/rts-1k-rootless-apptainer": {
       "consumer_requirements": [
@@ -1173,12 +1162,13 @@
         "failures": {
           "CONSUMER_EXECUTION_UNSUPPORTED": 616
         },
-        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-verified/audit.json",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/scoped-v2-launch-binding/audit.json",
         "requirements": {
           "execution": 616,
           "verifier_allocation": 623
         }
-      }
+      },
+      "consumer_decision": null
     }
   },
   "pending": [
@@ -1268,62 +1258,7 @@
     }
   ],
   "stages": {
-    "di-zhang-fdu:aime_1983_2024": "Lexical remediation queued",
-    "Evalchemy:simpleqa": "Consumer check pending",
-    "Evalchemy:simpleqa-mini": "Consumer check pending",
-    "TaskTrove:laion__exp_rpt_taco-v2": "Consumer check pending",
-    "TaskTrove:DCAgent__exp_rpt_pymethods2test-v3": "Consumer check pending",
-    "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2": "Consumer check pending",
-    "TaskTrove:DCAgent__exp_rpt_unitsyn-python-v4": "Consumer check pending",
-    "TaskTrove:DCAgent__exp_rpt_unitsyn-python-large-v2": "Consumer check pending",
-    "TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2": "Consumer check pending",
-    "TaskTrove:laion__nemotron-gym-safety-v3": "Consumer check pending",
-    "TaskTrove:laion__nemotron-gym-knowledge-openqa-v4": "Consumer check pending",
-    "TaskTrove:laion__nemotron-gym-science-so-openq-v3": "Consumer check pending",
-    "TaskTrove:laion__nemotron-gym-agent-calendar-v2": "Consumer check pending",
-    "Nemotron:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/SWE-Gym/SWE-Gym": "Consumer check pending",
-    "Nemotron:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/nebius/SWE-rebench-V2": "Consumer check pending",
-    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_abstention": "Consumer check pending",
-    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_instruction_following": "Consumer check pending",
-    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_jailbreak": "Consumer check pending",
-    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_math_tir": "Consumer check pending",
-    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_multichallenge_len40k": "Consumer check pending",
-    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_toolcall_schema": "Consumer check pending",
-    "Nemotron:nemotron_ultra_rlvr1/language_mixing_hs3_ultra_genrm_fmt": "Consumer check pending",
-    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_abstention": "Consumer check pending",
-    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_instruction_following": "Consumer check pending",
-    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_jailbreak": "Consumer check pending",
-    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_math_tir": "Consumer check pending",
-    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_multichallenge_len40k": "Consumer check pending",
-    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym": "Consumer check pending",
-    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": "Consumer check pending",
-    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_tau_pivot": "Consumer check pending",
-    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_toolcall_schema": "Consumer check pending",
-    "Nemotron:nemotron_ultra_rlvr2/language_mixing_hs3_ultra_genrm_fmt": "Consumer check pending",
-    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_abstention": "Consumer check pending",
-    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_instruction_following": "Consumer check pending",
-    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_jailbreak": "Consumer check pending",
-    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_math_tir": "Consumer check pending",
-    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_multichallenge_len40k": "Consumer check pending",
-    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym": "Consumer check pending",
-    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": "Consumer check pending",
-    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_tau_pivot": "Consumer check pending",
-    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_toolcall_schema": "Consumer check pending",
-    "OpenResearcher:OpenResearcher-Dataset": "Consumer check pending",
-    "TaskTrove:tasktrove-taco-built-image": "Consumer check pending",
-    "TaskTrove:tasktrove-pymethods2test-rebuilt-v1": "Consumer check pending",
-    "TaskTrove:tasktrove-pymethods2test-large-rebuilt-v1": "Consumer check pending",
-    "TaskTrove:tasktrove-unitsyn-python-rebuilt-v1": "Consumer check pending",
-    "TaskTrove:tasktrove-unitsyn-python-large-rebuilt-v1": "Consumer check pending",
-    "TaskTrove:tasktrove-safety-qa": "Consumer check pending",
-    "TaskTrove:tasktrove-knowledge-openqa-qa": "Consumer check pending",
-    "TaskTrove:tasktrove-science-openqa-qa": "Consumer check pending",
-    "TaskTrove:laion__exp_rpt_crosscodeeval-python-v2": "Consumer check pending",
-    "TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2@repaired-20261118": "Consumer check pending",
-    "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2@repaired-20261118": "Consumer check pending",
-    "PrimeIntellect:PrimeIntellect/Multi-SWE-RL-Verified": "Consumer check pending",
-    "PrimeIntellect:PrimeIntellect/SWE-Lego-Real-Data-Verified": "Consumer check pending",
-    "RST:laion/rts-1k-rootless-apptainer": "Consumer check pending"
+    "di-zhang-fdu:aime_1983_2024": "Lexical remediation queued"
   },
   "remediation_queue": [
     {

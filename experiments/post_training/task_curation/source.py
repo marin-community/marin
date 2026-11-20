@@ -10,7 +10,9 @@ from typing import Annotated, Protocol
 from finestore.rl.curation import (
     DAYTONA_SAFE_SNAPSHOT_LIMIT,
     ActorCensusInput,
+    ConsumerDecision,
     ConsumerNeed,
+    ConsumerReason,
     ConsumerReceipt,
     ContentEvidenceReference,
     ConvertedExamples,
@@ -36,6 +38,7 @@ from finestore.rl.curation import (
     SourceUse,
     WithinSourceDedupEvidence,
     consumer_blockers,
+    consumer_decision_status,
     source_identifier,
     source_title,
 )
@@ -276,6 +279,7 @@ class SourceInfo:
     actor_census_input: ActorCensusInput | None = None
     consumer_receipt: ConsumerReceipt | None = None
     consumer_requirements: tuple[ConsumerNeed, ...] = ()
+    consumer_decision: ConsumerDecision | None = None
     converted_examples: ConvertedExamples | None = None
     oracle_filtration: Annotated[OracleFiltrationEvidence | None, Field(exclude_if=lambda value: value is None)] = None
     no_oracle_executability_policy: Annotated[
@@ -406,17 +410,9 @@ class RlDataSource[ConfigT: CatalogConfig]:
         info = self.info
         inherited_legacy_admission = info.id in GRANDFATHERED_MARINSKYRL_SOURCES and info.inherited_admission is not None
         blockers = []
-        blockers.extend(
-            reason.value
-            for reason in consumer_blockers(
-                info.consumer_receipt,
-                info.id,
-                info.actor_census_input,
-                info.within_source_dedup.unique_count if info.within_source_dedup else 0,
-                info.consumer_requirements,
-                runtime_commit=CONSUMER_RUNTIME_COMMIT,
-            )
-        )
+        if self.approved_consumer_status is not None:
+            assert info.consumer_decision is not None
+            blockers.append(info.consumer_decision.reason.value)
         dataset = self.dataset
         if ban := source_license_ban(info.id, dataset.name if dataset else None, info.license_receipt):
             blockers.append(f"license ban: {ban.reason} ({ban.issue_url})")
@@ -679,16 +675,31 @@ class RlDataSource[ConfigT: CatalogConfig]:
             return SourceStatus.EXCLUDED
         if "deprecated" in self.info.tags:
             return SourceStatus.DEPRECATED
-        if consumer_blockers(
+        if approved := self.approved_consumer_status:
+            return approved
+        return SourceStatus.AVAILABLE
+
+    @property
+    def consumer_findings(self) -> tuple[ConsumerReason, ...]:
+        return consumer_blockers(
             self.info.consumer_receipt,
             self.info.id,
             self.info.actor_census_input,
             self.info.within_source_dedup.unique_count if self.info.within_source_dedup else 0,
             self.info.consumer_requirements,
             runtime_commit=CONSUMER_RUNTIME_COMMIT,
-        ):
-            return SourceStatus.PENDING
-        return SourceStatus.AVAILABLE
+        )
+
+    @property
+    def approved_consumer_status(self) -> SourceStatus | None:
+        status = consumer_decision_status(
+            self.info.consumer_decision,
+            self.info.id,
+            self.info.actor_census_input,
+            self.consumer_findings,
+            runtime_commit=CONSUMER_RUNTIME_COMMIT,
+        )
+        return SourceStatus(status) if status is not None else None
 
     @property
     def derived_turns(self) -> str:
@@ -821,6 +832,8 @@ class RlDataSource[ConfigT: CatalogConfig]:
             actor_census_input=info.actor_census_input,
             consumer_receipt=info.consumer_receipt,
             consumer_requirements=info.consumer_requirements,
+            consumer_findings=self.consumer_findings,
+            consumer_decision=info.consumer_decision,
             converted_examples=info.converted_examples,
             oracle_filtration=info.oracle_filtration,
             no_oracle_executability_policy=info.no_oracle_executability_policy,

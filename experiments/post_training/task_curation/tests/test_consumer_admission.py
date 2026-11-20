@@ -1,12 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Consumer failures hold a source pending without discarding its population."""
+"""Consumer findings are advisory until a source-specific user decision applies."""
 
 from dataclasses import replace
 
 import pytest
-from finestore.rl.curation import ConsumerNeed, ConsumerReason, OversightEvidence, OversightLevel
+from finestore.rl.curation import ConsumerDecision, ConsumerNeed, ConsumerReason, OversightEvidence, OversightLevel
 from finestore.rl.status_taxonomy import SourceStatus
 
 from experiments.post_training.task_curation.tests.admission_fixtures import with_admission_census
@@ -36,23 +36,23 @@ def qualified_source(tmp_path):
     "failure",
     [None, ConsumerReason.JUDGE_UNREGISTERED, ConsumerReason.TOOL_UNREGISTERED, ConsumerReason.SERVICE_UNREGISTERED],
 )
-def test_consumer_failure_blocks_new_and_retained_admission(qualified_source, failure):
+def test_consumer_failure_cannot_change_admission_or_status_without_user_decision(qualified_source, failure):
     source = qualified_source
     receipt = source.info.consumer_receipt
     assert receipt is not None
     receipt = None if failure is None else receipt.model_copy(update={"failed_tasks": 1, "failures": {failure: 1}})
     held = replace(source, info=replace(source.info, consumer_receipt=receipt))
     reason = failure or ConsumerReason.RECEIPT_MISSING
-    assert held.status is SourceStatus.PENDING
+    assert held.status is SourceStatus.AVAILABLE
     assert not held.exclusion_claims
-    with pytest.raises(ValueError, match=reason.value):
-        require_population_admission(held.declaration)
+    require_population_admission(held.declaration)
     historical = {**held.declaration.model_dump(mode="json"), "status": "Available"}
     projected = consumer_projection(historical)
-    assert projected["status"] == "Pending"
-    assert projected["consumer_blockers"] == [reason.value]
+    assert projected["status"] == "Available"
+    assert projected["consumer_findings"] == [reason.value]
     assert projected["task_count"] == source.declaration.task_count
-    assert filtration(historical)["admitted_count"] is None
+    baseline = {**historical, "consumer_requirements": [], "consumer_findings": []}
+    assert filtration(historical) == filtration(baseline)
 
 
 @pytest.mark.parametrize(
@@ -68,9 +68,9 @@ def test_consumer_receipt_must_match_current_runtime_and_full_population(qualifi
     source = qualified_source
     receipt = source.info.consumer_receipt.model_copy(update=update)
     held = replace(source, info=replace(source.info, consumer_receipt=receipt))
-    assert held.status is SourceStatus.PENDING
-    with pytest.raises(ValueError, match=reason.value):
-        require_population_admission(held.declaration)
+    assert held.status is SourceStatus.AVAILABLE
+    assert held.consumer_findings == (reason,)
+    require_population_admission(held.declaration)
 
 
 def test_passing_consumer_receipt_permits_qualified_population(qualified_source):
@@ -79,7 +79,7 @@ def test_passing_consumer_receipt_permits_qualified_population(qualified_source)
     require_population_admission(source.declaration)
     projected = consumer_projection(source.declaration.model_dump(mode="json"))
     assert projected["status"] == "Available"
-    assert projected.get("consumer_blockers", []) == []
+    assert projected.get("consumer_findings", []) == []
 
 
 @pytest.mark.parametrize("status", ["Available", "Excluded"])
@@ -104,3 +104,54 @@ def test_global_schema_drift_does_not_block_bespoke_admission(qualified_source):
     source = replace(source, info=replace(source.info, consumer_receipt=receipt))
     assert source.status is SourceStatus.AVAILABLE
     require_population_admission(source.declaration)
+
+
+@pytest.mark.parametrize("status", ["Pending", "Excluded"])
+def test_only_matching_source_specific_user_decision_can_apply_consumer_status(qualified_source, status):
+    source = qualified_source
+    receipt = source.info.consumer_receipt.model_copy(
+        update={"failed_tasks": 1, "failures": {ConsumerReason.TOOL_UNREGISTERED: 1}}
+    )
+    decision = ConsumerDecision(
+        source_id=source.info.id,
+        runtime_commit=receipt.runtime_commit,
+        task_specs_sha256=receipt.task_specs_sha256,
+        reason=ConsumerReason.TOOL_UNREGISTERED,
+        status=status,
+        user_ruling="fixture user ruling: hold only this exact source population",
+    )
+    source = replace(source, info=replace(source.info, consumer_receipt=receipt, consumer_decision=decision))
+    assert source.status.value == status
+    with pytest.raises(ValueError, match="User-approved consumer decision"):
+        require_population_admission(source.declaration)
+    historical = {**source.declaration.model_dump(mode="json"), "status": "Available"}
+    projected = consumer_projection(historical)
+    assert projected["status"] == status
+    assert projected["consumer_decision"]["user_ruling"] == decision.user_ruling
+    for update in (
+        {"source_id": "fixture:another-source"},
+        {"runtime_commit": "c" * 40},
+        {"task_specs_sha256": "c" * 64},
+        {"reason": ConsumerReason.SERVICE_UNREGISTERED},
+    ):
+        stale = replace(source, info=replace(source.info, consumer_decision=decision.model_copy(update=update)))
+        assert stale.status is SourceStatus.AVAILABLE
+        require_population_admission(stale.declaration)
+        assert (
+            consumer_projection({**stale.declaration.model_dump(mode="json"), "status": "Available"})["status"]
+            == "Available"
+        )
+
+
+def test_user_decision_requires_a_ruling_citation(qualified_source):
+    receipt = qualified_source.info.consumer_receipt
+    with pytest.raises(ValueError, match="user_ruling"):
+        ConsumerDecision.model_validate(
+            {
+                "source_id": qualified_source.info.id,
+                "runtime_commit": receipt.runtime_commit,
+                "task_specs_sha256": receipt.task_specs_sha256,
+                "reason": ConsumerReason.TOOL_UNREGISTERED,
+                "status": "Pending",
+            }
+        )

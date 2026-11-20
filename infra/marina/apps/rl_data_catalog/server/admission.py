@@ -21,6 +21,7 @@ from finestore.rl.curation import (
     SamplePanelCurrency,
     SourceUse,
     consumer_blockers,
+    consumer_decision_status,
     require_decontamination,
 )
 from finestore.rl.curation import (
@@ -165,15 +166,29 @@ def require_population_admission(declaration: SourceDeclaration) -> None:
         != (declaration.dataset_id, declaration.dataset_revision, pipeline.version)
     ):
         raise ValueError(f"Admission census belongs to another current population: {declaration.id}")
-    if reasons := consumer_blockers(
+    reasons = consumer_blockers(
         declaration.consumer_receipt,
         declaration.id,
         binding,
         declaration.within_source_dedup.unique_count,
         declaration.consumer_requirements,
         runtime_commit=CONSUMER_RUNTIME_COMMIT,
+    )
+    if (
+        consumer_decision_status(
+            declaration.consumer_decision,
+            declaration.id,
+            binding,
+            reasons,
+            runtime_commit=CONSUMER_RUNTIME_COMMIT,
+        )
+        is not None
     ):
-        raise ValueError(f"Consumer admission blocked: {declaration.id}: {', '.join(reasons)}")
+        assert declaration.consumer_decision is not None
+        raise ValueError(
+            f"User-approved consumer decision: {declaration.id}: {declaration.consumer_decision.reason}: "
+            f"{declaration.consumer_decision.user_ruling}"
+        )
     if blocker := population_admission_blocker(
         binding, declaration.within_source_dedup.unique_count, declaration.grading_environment
     ):

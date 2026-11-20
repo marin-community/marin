@@ -177,6 +177,15 @@ function render(data, sourceId, auxiliary) {
     ]));
   }
   sections.push(card('Grading environment', [['Required boundary', gradingChips(d)], ['Census', d.grading_environment]], 'SHARED grades in the task environment; SEPARATE uses an independent grading environment. Mismatches remain explicit.'));
+  if (d.consumer_requirements?.length) {
+    sections.push(card('Consumer check', [
+      ['Result', d.consumer_findings?.length ? d.consumer_findings.join(', ') : 'Pass'],
+      ['Required capabilities', d.consumer_requirements.join(', ')],
+      ['Runtime', d.consumer_receipt?.runtime_commit],
+      ['Evidence', d.consumer_receipt?.evidence_url && pointer(d.consumer_receipt.evidence_url)],
+      ['User ruling', d.consumer_decision?.user_ruling],
+    ], 'Consumer findings are advisory. A status change requires a separate user ruling for this source.'));
+  }
   // Catalogs frozen before the derived-oversight fields keep the historical prose in
   // oversight_evidence and their receipt pointers at the FULL binding or QC evidence paths.
   const derivedReceipt = d.oversight_evidence?.receipt_uri;

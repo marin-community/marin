@@ -844,6 +844,37 @@ class ConsumerReceipt(CatalogRecord):
         return self
 
 
+class ConsumerDecision(CatalogRecord):
+    """A source-specific user ruling authorizing a consumer status action."""
+
+    source_id: str
+    runtime_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
+    task_specs_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reason: ConsumerReason
+    status: Literal["Pending", "Excluded"]
+    user_ruling: str = Field(min_length=1)
+
+
+def consumer_decision_status(
+    decision: ConsumerDecision | None,
+    source_id: str,
+    binding: ActorCensusInput | None,
+    findings: Sequence[ConsumerReason],
+    *,
+    runtime_commit: str,
+) -> Literal["Pending", "Excluded"] | None:
+    """Apply a user decision only to its source, runtime, population and current finding."""
+    if decision is None or binding is None:
+        return None
+    if (decision.source_id, decision.runtime_commit, decision.task_specs_sha256) != (
+        source_id,
+        runtime_commit,
+        binding.task_specs_sha256,
+    ) or decision.reason not in findings:
+        return None
+    return decision.status
+
+
 def consumer_blockers(
     receipt: ConsumerReceipt | None,
     source_id: str,
@@ -853,7 +884,7 @@ def consumer_blockers(
     *,
     runtime_commit: str,
 ) -> tuple[ConsumerReason, ...]:
-    """Check bespoke consumer needs; standard populations keep their existing admission."""
+    """Report advisory bespoke findings; a finding alone never authorizes a status action."""
     if not requirements:
         return ()
     if receipt is None:
@@ -1067,6 +1098,8 @@ class QualifiedSourceDeclaration(SourceDeclaration):
     actor_census_input: ActorCensusInput | None = None
     consumer_receipt: ConsumerReceipt | None = None
     consumer_requirements: list[ConsumerNeed] = Field(default_factory=list)
+    consumer_findings: list[ConsumerReason] = Field(default_factory=list)
+    consumer_decision: ConsumerDecision | None = None
     converted_examples: ConvertedExamples | None = None
     oracle_filtration: OracleFiltrationEvidence | None = Field(default=None, exclude_if=lambda value: value is None)
     no_oracle_executability_policy: NoOracleExecutabilityPolicy | None = Field(

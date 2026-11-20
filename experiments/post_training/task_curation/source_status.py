@@ -176,6 +176,9 @@ def status_extras() -> dict[str, Any]:
                 "consumer_receipt": (
                     source.info.consumer_receipt.model_dump(mode="json") if source.info.consumer_receipt else None
                 ),
+                "consumer_decision": (
+                    source.info.consumer_decision.model_dump(mode="json") if source.info.consumer_decision else None
+                ),
             }
             for source in all_sources().values()
             if source.info.consumer_requirements
@@ -186,7 +189,7 @@ def status_extras() -> dict[str, Any]:
             **{
                 source.info.id: PendingStage.CONSUMER_CHECK_PENDING.value
                 for source in all_sources().values()
-                if source.status is SourceStatus.PENDING and not source.exclusion_claims
+                if source.approved_consumer_status is SourceStatus.PENDING and not source.exclusion_claims
             },
         },
         "remediation_queue": remediation,

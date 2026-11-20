@@ -5,6 +5,9 @@
 
 import hashlib
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pyarrow as pa
@@ -26,7 +29,7 @@ from taskcompendium.models import (
 )
 from verifyit.spec import JudgeSpec
 
-from experiments.post_training.task_curation.consumer_audit import audit_source
+from experiments.post_training.task_curation.consumer_audit import RUNTIME_PATHS, audit_source
 from experiments.post_training.task_curation.consumer_scope import ConsumerCapacity, consumer_needs
 
 CAPACITY = ConsumerCapacity(cpus=4, memory_mb=8192, storage_mb=10240, agent_timeout=2400, verifier_timeout=300)
@@ -169,3 +172,43 @@ def test_frozen_fingerprint_survives_storage_sort_but_rejects_changed_content(tm
     assert result["task_specs_sha256"] == result["source_order_task_specs_sha256"] == expected
     assert result["scanned_task_specs_sha256"] != expected
     assert result["checked_tasks"] == 2 and result["failed_tasks"] == 0
+
+
+@pytest.mark.parametrize("bound", [True, False])
+def test_source_judge_uses_launch_binding_without_a_static_model_roster(standard_task, bound):
+    task = standard_task.model_copy(
+        update={
+            "grader": standard_task.grader.model_copy(
+                update={"judge": JudgeSpec(model="source-declared-model", references=("answer",), question="Question")}
+            )
+        }
+    )
+    config = {
+        "session": {
+            "task_session": "shellbox",
+            "max_turns": None,
+            "max_total_tokens": None,
+            "model_turn_timeout": None,
+            "tool_turn_timeout": None,
+            "total_turn_timeout": None,
+            "attempt_timeout": None,
+            "verifier_timeout": None,
+            "cleanup_timeout": 60,
+        },
+        "default_judge": "different-default-model",
+        "judge_binding": {"base_url": "https://judge.invalid/v1", "api_key_env": "JUDGE_API_KEY"} if bound else None,
+    }
+    record = {"task": task.model_dump_json(), "needs": ["custom_judge"], "judge_model": "source-declared-model"}
+    root = Path(__file__).resolve().parents[4]
+    result = subprocess.run(
+        [sys.executable, str(root / "experiments/post_training/task_curation/consumer_probe.py")],
+        input="\n".join(json.dumps(value) for value in (config, record)) + "\n",
+        text=True,
+        capture_output=True,
+        check=True,
+        env={**os.environ, "PYTHONPATH": os.pathsep.join(str(root / path) for path in RUNTIME_PATHS)},
+    )
+    receipt = json.loads(result.stdout)
+    assert receipt["failed_tasks"] == (0 if bound else 1)
+    assert receipt["failures"] == ({} if bound else {"CONSUMER_JUDGE_UNREGISTERED": 1})
+    assert receipt["global_schema_rejected_tasks"] == 0

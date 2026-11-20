@@ -7,7 +7,14 @@ import json
 from functools import cache
 from typing import Any
 
-from finestore.rl.curation import ActorCensusInput, ConsumerNeed, ConsumerReceipt, consumer_blockers
+from finestore.rl.curation import (
+    ActorCensusInput,
+    ConsumerDecision,
+    ConsumerNeed,
+    ConsumerReceipt,
+    consumer_blockers,
+    consumer_decision_status,
+)
 
 from .consumer_evidence import CONSUMER_INPUTS, CONSUMER_RUNTIME_COMMIT
 
@@ -19,9 +26,7 @@ def packaged_consumer_inputs() -> dict[str, dict[str, Any]]:
 
 
 def consumer_projection(declaration: dict[str, Any]) -> dict[str, Any]:
-    """Gate only bespoke needs; standard source declarations pass through unchanged."""
-    if declaration["status"] not in {"Available", "Pending"}:
-        return declaration
+    """Show bespoke findings; only a current per-source user decision changes status."""
     current = packaged_consumer_inputs().get(declaration["id"], declaration)
     requirements = tuple(ConsumerNeed(need) for need in current.get("consumer_requirements") or ())
     if not requirements:
@@ -36,10 +41,21 @@ def consumer_projection(declaration: dict[str, Any]) -> dict[str, Any]:
         requirements,
         runtime_commit=CONSUMER_RUNTIME_COMMIT,
     )
+    raw_decision = current.get("consumer_decision")
+    decision = ConsumerDecision.model_validate(raw_decision) if raw_decision is not None else None
+    approved = consumer_decision_status(
+        decision,
+        declaration["id"],
+        ActorCensusInput.model_validate(binding) if binding is not None else None,
+        reasons,
+        runtime_commit=CONSUMER_RUNTIME_COMMIT,
+    )
     effective = {
         **declaration,
         "consumer_requirements": [need.value for need in requirements],
         "consumer_receipt": raw,
+        "consumer_findings": [reason.value for reason in reasons],
+        "consumer_decision": raw_decision if approved is not None else None,
     }
     if not reasons:
         return effective
@@ -47,14 +63,17 @@ def consumer_projection(declaration: dict[str, Any]) -> dict[str, Any]:
     missing_reasons = [reason.value for reason in reasons if reason.value not in notes]
     return {
         **effective,
-        "status": "Pending" if reasons and declaration["status"] == "Available" else declaration["status"],
-        "consumer_blockers": [reason.value for reason in reasons],
+        "status": (
+            approved
+            if approved is not None and declaration["status"] in {"Available", "Pending"}
+            else declaration["status"]
+        ),
         "notes": " ".join(
             filter(
                 None,
                 (
                     declaration.get("notes", ""),
-                    ", ".join(missing_reasons),
+                    "Consumer advisory: " + ", ".join(missing_reasons) if missing_reasons else "",
                 ),
             )
         ),

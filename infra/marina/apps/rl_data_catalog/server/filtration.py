@@ -41,12 +41,23 @@ def filtration(declaration: dict[str, Any], counts: SourceCountEvidence | None =
         "reason": "Filtration in progress: no complete current-pin admission receipt is recorded.",
     }
     projected = consumer_projection(declaration)
-    if projected.get("consumer_blockers") and declaration["status"] in {"Available", "Pending"}:
+    if projected.get("consumer_findings") and projected.get("consumer_decision"):
+        status = projected["status"]
+        if status == "Excluded":
+            return {
+                "example_count": 0,
+                "state": "excluded",
+                "admitted_count": 0,
+                "population_count": pending["population_count"],
+                "excluded_count": pending["population_count"],
+                "source_status": status,
+                "reason": projected["consumer_decision"]["user_ruling"],
+            }
         return {
             **pending,
             "admitted_count": None,
-            "source_status": "Pending",
-            "reason": ", ".join(projected["consumer_blockers"]),
+            "source_status": status,
+            "reason": projected["consumer_decision"]["user_ruling"],
         }
     raw = declaration.get("oracle_filtration")
     if raw is None:

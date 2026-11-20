@@ -22,6 +22,7 @@ from experiments.post_training.task_curation.datasets import (
 )
 from experiments.post_training.task_curation.datasets.arc import arc
 from experiments.post_training.task_curation.datasets.cascade import tasks as cascade
+from experiments.post_training.task_curation.datasets.consumer_decisions import consumer_decisions
 from experiments.post_training.task_curation.datasets.consumer_receipts import consumer_receipts
 from experiments.post_training.task_curation.datasets.daytona_measurements import actor_census_receipts
 from experiments.post_training.task_curation.datasets.derived_contract_measurements import derived_contract_receipts
@@ -280,6 +281,7 @@ def all_sources() -> dict[str, RlDataSource]:
         for source_id, source in selected.items()
     }
     consumers = consumer_receipts()
+    decisions = consumer_decisions()
     return {
         source_id: replace(
             source,
@@ -287,6 +289,7 @@ def all_sources() -> dict[str, RlDataSource]:
                 source.info,
                 consumer_receipt=consumers.get(source_id),
                 consumer_requirements=tuple(sorted(consumers[source_id].requirements)) if source_id in consumers else (),
+                consumer_decision=decisions.get(source_id),
             ),
         )
         for source_id, source in selected.items()

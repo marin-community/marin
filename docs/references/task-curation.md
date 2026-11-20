@@ -119,10 +119,10 @@ remain intact.
 
 ## Current admission policy
 
-Ruling 72 (2026-11-20, clarified the same day): a source with bespoke consumer
-requirements needs a passing `CONSUMER` receipt before Atlas marks it Available
-or counts it as Admitted. Standard sources retain their existing status.
-Consumer failures hold a bespoke source Pending without excluding its tasks.
+Ruling 72 (2026-11-20, clarified the same day): `CONSUMER` checks are advisory.
+They record typed findings for bespoke requirements and show a per-source flag.
+They never change Available, Pending or Excluded status, or admission counts,
+without an explicit user decision for that source. Standard sources remain exempt.
 
 `consumer_scope.consumer_needs` classifies each frozen TaskSpec. A required tool
 or provider, custom judge, service binding or distinct verifier allocation selects
@@ -143,19 +143,30 @@ a task can pass its bespoke check while the global runtime alignment is pending.
 Bespoke failures use `CONSUMER_TOOL_UNREGISTERED`,
 `CONSUMER_JUDGE_UNREGISTERED`, `CONSUMER_SERVICE_UNREGISTERED` or
 `CONSUMER_EXECUTION_UNSUPPORTED`. Provider requirements use the tool code; over-capacity allocations and deadlines
-use the execution code. Missing receipts and changed runtime or
-population pins invalidate bespoke admission. Only the canonical runtime pin
-qualifies admission; audits of other pins remain historical evidence. Standard
+use the execution code. Missing receipts and changed runtime or population pins
+produce advisory findings. Only the canonical runtime pin qualifies a current
+consumer result; audits of other pins remain historical evidence. Standard
 sources need no receipt.
+
+`datasets/consumer_decisions.json` records user-approved status actions, one entry
+per source. It starts empty. Each entry cites the user ruling and binds the source
+ID, runtime commit, population fingerprint, typed finding and approved Pending or
+Excluded status. A decision applies only while all of these match. Audit and
+receipt-publication commands never write decisions. A finding without such a
+decision leaves the source's status and filtration counts unchanged.
 
 Run `experiments.post_training.task_curation.consumer_audit` in the population's
 storage region. Supply a frozen input inventory, runtime git archive and JSON
 configuration with `runtime_commit`, `runtime_archive_sha256`, `regional_bucket`,
-`session`, `capacity`, `default_judge` and `judges`. `capacity` contains `cpus`,
+`session`, `capacity`, `default_judge` and `judge_binding`. `capacity` contains `cpus`,
 `memory_mb`, `storage_mb`, `agent_timeout` and `verifier_timeout`. A null deadline
-means the consumer has no cap for that phase. Derive the judge roster and default
-from the actual `MICRO210_JUDGE` object in the consumer runtime's
-`experiments/evaluation/judge_config.py`; preserve each task's JudgeSpec.
+means the consumer has no cap for that phase. `judge_binding` records the launcher's
+actual `remote_judge` endpoint and credential environment name, with no credential
+value. Derive the default from the actual `MICRO210_JUDGE` object in the consumer
+runtime's `experiments/evaluation/judge_config.py`. The task's explicit model wins.
+Judges bind at launch through `JudgeConnection`; they need no static model-name
+roster. Preserve the task's JudgeSpec and record a pass with launch binding when
+that path can supply it. This check proves binding, not a live API response.
 The archive SHA is checked before extraction. Results contain counts, hashes and
 schema paths without task content. Frozen-stream digest differences are recorded
 separately for provenance investigation. The receipt binds the census population
@@ -166,7 +177,7 @@ private `open-athena/marin-rl-data-atlas-registry` through the serialized regist
 publisher with SHA readback, and commit references under
 `datasets/consumer_receipt_refs/`. The committed reference fixes the registry
 revision and document hash; a mismatch is an error. The source declarations, admission writer and
-served Atlas projection apply the same scope and receipt rule. The app package
+served Atlas projection apply the same advisory and user-decision rule. The app package
 includes immutable scope and receipt metadata for retained declarations; standard
 rows pass through unchanged. This static check does not prove machine startup or
 original grader execution. Backend and original-oracle qualification remain

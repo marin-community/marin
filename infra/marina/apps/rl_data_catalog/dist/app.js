@@ -161,6 +161,11 @@ function sourceRow(row, others, canonical) {
     const name = node('td'), open = node('button', row.display_name, 'source-name');
     open.title = row.display_name; open.addEventListener('click', () => details(row));
     name.append(open);
+    if (row.consumer_findings?.length) {
+      const flag = node('span', 'Consumer advisory', 'chip');
+      flag.title = row.consumer_findings.join(', ');
+      name.append(flag);
+    }
     if (others.length) {
       const groupId = row.duplicate_group.group_id, expanded = expandedGroups.has(groupId);
       const toggle = node('button', expanded ? '▾' : '▸', 'text-button duplicate-toggle');
@@ -214,6 +219,8 @@ function details(row) {
   const fields = [
     ['Origin', originOf(row)], ['Build path', row.build_path], ['Status', row.status], ['Quality', row.quality], ['Result', resultLabels[resultKey(row)] + (row.result && row.result_provisional ? ' · provisional' : '')],
     ['Content review', row.quality_review_status],
+    ['Consumer advisory', row.consumer_findings?.join(', ')],
+    ['Consumer user ruling', row.consumer_decision?.user_ruling],
     ...filtrationRows(row), ['Use', useLabels[value(row, 'use')]], ['Method', value(row, 'method')],
     ['Coverage basis', row.coverage?.basis], ['Coverage gap', row.coverage?.unavailable_reason],
     ['Sampled grader qualification', row.oracle_validation && (oracleValidationLabels[row.oracle_validation] ?? row.oracle_validation)],

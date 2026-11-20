@@ -8,14 +8,17 @@ import sys
 from collections import Counter
 
 from pydantic import ValidationError
+from rolloutengine.grading import judge_connection
 from skyrl_gym.rollout_specs import TOOL_PROVIDERS, rollout_spec, shell_harness
 from taskcompendium.models import TaskSpec
+from verifyit.modes.grade_judge import JudgeConnection
 
 
 def check_task(record: dict, config: dict) -> tuple[set[str], list[str]]:
     document = json.loads(record["task"])
     failures: set[str] = set()
     fields: list[str] = []
+    judge_binding = config.get("judge_binding")
     try:
         task = TaskSpec.model_validate_json(record["task"])
     except ValidationError as error:
@@ -24,18 +27,35 @@ def check_task(record: dict, config: dict) -> tuple[set[str], list[str]]:
     for requirement in document["environment_requirements"].get("tool_providers", {}).values():
         if requirement["action_interface"] not in TOOL_PROVIDERS:
             failures.add("CONSUMER_TOOL_UNREGISTERED")
+    lowered = None
     if task is not None and record["needs"]:
         try:
             lowered = rollout_spec(task, config["session"])
-            if config["session"]["task_session"] == "shellbox":
+            if config["session"]["task_session"] == "shellbox" and "tool_provider" in record["needs"]:
                 shell_harness(lowered.harness).check(task, lowered.limits)
         except (ValueError, NotImplementedError, KeyError):
-            if "tool_provider" in record["needs"]:
-                failures.add("CONSUMER_TOOL_UNREGISTERED")
+            failures.add(
+                "CONSUMER_TOOL_UNREGISTERED" if "tool_provider" in record["needs"] else "CONSUMER_EXECUTION_UNSUPPORTED"
+            )
     if "custom_judge" in record["needs"]:
         model = record["judge_model"] or config["default_judge"]
-        if not model or model not in config["judges"]:
+        if not (model and judge_binding and judge_binding.get("base_url") and judge_binding.get("api_key_env")):
             failures.add("CONSUMER_JUDGE_UNREGISTERED")
+        elif lowered is not None:
+            try:
+                judge_connection(
+                    lowered.model_copy(
+                        update={
+                            "judge_connection": JudgeConnection(
+                                judge_binding["base_url"],
+                                "consumer-binding-probe",
+                                default_model=config["default_judge"],
+                            )
+                        }
+                    )
+                )
+            except ValueError:
+                failures.add("CONSUMER_JUDGE_UNREGISTERED")
     if "execution" in record["needs"]:
         failures.add("CONSUMER_EXECUTION_UNSUPPORTED")
     if "service" in record["needs"] and not config["session"].get("retrieval_service"):

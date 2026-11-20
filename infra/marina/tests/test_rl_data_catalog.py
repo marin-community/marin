@@ -35,6 +35,7 @@ from finestore.rl.curation import (
     AssessmentPopulation,
     CatalogSnapshot,
     Confidence,
+    ConsumerDecision,
     ConsumerNeed,
     ConsumerReason,
     ContentEvidenceReference,
@@ -321,8 +322,9 @@ def catalog_identity_map(catalog: CurationCatalog) -> SourceIdentitySurvey:
     )
 
 
-def test_retained_rows_gate_bespoke_requirements_from_current_package(
-    catalog_database, catalog_query, tmp_path, monkeypatch
+@pytest.mark.parametrize("decision_status", [None, "Pending", "Excluded"])
+def test_retained_rows_require_a_user_decision_before_consumer_status_changes(
+    catalog_database, catalog_query, tmp_path, monkeypatch, decision_status
 ):
     root = str(tmp_path / "consumer-refresh")
     publish_sample(root, "standard", source_id="Marin:standard")
@@ -364,6 +366,18 @@ def test_retained_rows_gate_bespoke_requirements_from_current_package(
             "requirements": {ConsumerNeed.TOOL_PROVIDER: 3},
         }
     )
+    decision = (
+        ConsumerDecision(
+            source_id="Marin:bespoke",
+            runtime_commit=receipt.runtime_commit,
+            task_specs_sha256=receipt.task_specs_sha256,
+            reason=ConsumerReason.TOOL_UNREGISTERED,
+            status=decision_status,
+            user_ruling="fixture user ruling for this source",
+        ).model_dump(mode="json")
+        if decision_status is not None
+        else None
+    )
     monkeypatch.setattr(
         consumer_policy,
         "packaged_consumer_inputs",
@@ -371,19 +385,23 @@ def test_retained_rows_gate_bespoke_requirements_from_current_package(
             "Marin:bespoke": {
                 "consumer_requirements": [ConsumerNeed.TOOL_PROVIDER.value],
                 "consumer_receipt": failed.model_dump(mode="json"),
+                "consumer_decision": decision,
             }
         },
     )
     with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
         table = {row["id"]: row for row in client.get("/sources", params={"projection": "table"}).json()["sources"]}
         compact = {row["id"]: row for row in client.get("/source-statuses").json()["sources"]}
-    assert table["Marin:bespoke"]["status"] == compact["Marin:bespoke"]["status"] == "Pending"
+    assert table["Marin:bespoke"]["status"] == compact["Marin:bespoke"]["status"] == (decision_status or "Available")
     assert (
-        table["Marin:bespoke"]["consumer_blockers"]
-        == compact["Marin:bespoke"]["consumer_blockers"]
+        table["Marin:bespoke"]["consumer_findings"]
+        == compact["Marin:bespoke"]["consumer_findings"]
         == [ConsumerReason.TOOL_UNREGISTERED.value]
     )
-    assert table["Marin:bespoke"]["filtration"]["admitted_count"] is None
+    if decision_status is None:
+        assert table["Marin:bespoke"]["filtration"] == before["Marin:bespoke"]["filtration"]
+    else:
+        assert table["Marin:bespoke"]["filtration"]["admitted_count"] == (0 if decision_status == "Excluded" else None)
     assert table["Marin:bespoke"]["filtration"]["population_count"] == 3
     assert table["Marin:standard"]["status"] == compact["Marin:standard"]["status"] == "Available"
     assert table["Marin:standard"]["filtration"] == before["Marin:standard"]["filtration"]
@@ -406,7 +424,7 @@ def test_status_inventory_matches_source_statuses_without_loading_task_evidence(
         "stage",
         "exclusion_claims",
         "notes",
-        "consumer_blockers",
+        "consumer_findings",
         "data_restriction",
         "updated_at",
     )
