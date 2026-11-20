@@ -57,13 +57,20 @@ def test_check_wandb_history(monkeypatch, state, last_step, ok):
     assert (error is None) == ok
 
 
-def test_main_fails_when_wandb_history_is_missing(monkeypatch):
+def test_main_warns_when_wandb_history_is_missing(monkeypatch, tmp_path, capsys):
+    (tmp_path / "out").mkdir()
+    (tmp_path / "out" / "tracker_metrics.jsonl").write_text('{"summary": {}}\n')
+    github_output = tmp_path / "github_output"
     monkeypatch.setenv("RUN_ID", "canary-gpu-1-1")
     monkeypatch.setenv("WANDB_API_KEY", "fake")
+    monkeypatch.setenv("CANARY_METRICS_COPY_DIR", str(tmp_path / "diag"))
+    monkeypatch.setenv("GITHUB_OUTPUT", str(github_output))
     with (
-        patch("scripts.ci.validate_canary_metrics.resolve_canary_output_path", return_value="gs://fake"),
+        patch("scripts.ci.validate_canary_metrics.resolve_canary_output_path", return_value=str(tmp_path / "out")),
         patch("scripts.ci.validate_canary_metrics.read_summary", return_value=HEALTHY_SUMMARY),
         patch("scripts.ci.validate_canary_metrics.check_wandb_history", return_value="no history"),
-        pytest.raises(SystemExit, match="1"),
     ):
         main()
+    assert "::warning title=Canary W&B history lost::no history" in capsys.readouterr().out
+    assert (tmp_path / "diag" / "tracker_metrics.jsonl").read_text() == '{"summary": {}}\n'
+    assert github_output.read_text() == "wandb_history_lost=true\n"

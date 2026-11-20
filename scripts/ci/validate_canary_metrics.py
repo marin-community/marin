@@ -56,10 +56,17 @@ def resolve_canary_output_path() -> str:
     return str(StoragePath(scheme="mirror", segments=output_path.segments, rooted=False))
 
 
+METRICS_FILENAME = "tracker_metrics.jsonl"
+
+
+def read_metrics_text(output_path: str) -> str:
+    """Read the raw contents of tracker_metrics.jsonl."""
+    return (StoragePath(output_path) / METRICS_FILENAME).read_text()
+
+
 def read_summary(output_path: str) -> dict:
     """Read the summary dict from tracker_metrics.jsonl."""
-    metrics_file = f"{output_path}/tracker_metrics.jsonl"
-    record = json.loads(StoragePath(metrics_file).read_text().strip())
+    record = json.loads(read_metrics_text(output_path).strip())
     return record["summary"]
 
 
@@ -105,18 +112,18 @@ WANDB_POLL_SECONDS = 15
 
 
 def check_wandb_history(path: str, min_steps: float) -> str | None:
-    """Return an error unless the W&B run at ``path`` logged history through ``min_steps``.
+    """Return a problem description unless the W&B run at ``path`` logged history through ``min_steps``.
 
     ``tracker_metrics.jsonl`` is written by the trainer, so it can pass while W&B holds
     no history. Polls for up to ``WANDB_HISTORY_WAIT_SECONDS`` for ingestion to catch up.
-    A crashed or failed run is an error even with enough history.
+    A crashed or failed run is a problem even with enough history.
     """
     api = wandb.Api(timeout=60)
     deadline = time.monotonic() + WANDB_HISTORY_WAIT_SECONDS
     while True:
         try:
             run = api.run(path)
-        except Exception as e:  # wandb raises CommError or ValueError for a missing run
+        except (wandb.errors.CommError, ValueError) as e:  # what wandb raises for a missing run
             return f"Could not read W&B run {path}: {e}"
         last_step = run.lastHistoryStep
         if last_step >= min_steps and run.state not in ("crashed", "failed"):
@@ -129,6 +136,27 @@ def check_wandb_history(path: str, min_steps: float) -> str | None:
             )
         time.sleep(WANDB_POLL_SECONDS)
         api.flush()
+
+
+def report_lost_wandb_history(message: str, output_path: str) -> None:
+    """Warn that the canary's W&B history was lost, without failing the canary.
+
+    The loss is a W&B upload problem, not a training regression, so it raises a GitHub
+    warning annotation instead of an alert. It saves ``tracker_metrics.jsonl`` to
+    ``CANARY_METRICS_COPY_DIR``, because the canary output directory expires after a day,
+    and sets the step output ``wandb_history_lost=true`` so the workflow collects the
+    job's diagnostics.
+    """
+    print(f"::warning title=Canary W&B history lost::{message}")
+    copy_dir = os.environ.get("CANARY_METRICS_COPY_DIR")
+    if copy_dir:
+        os.makedirs(copy_dir, exist_ok=True)
+        with open(os.path.join(copy_dir, METRICS_FILENAME), "w") as f:
+            f.write(read_metrics_text(output_path))
+    github_output = os.environ.get("GITHUB_OUTPUT")
+    if github_output:
+        with open(github_output, "a") as f:
+            f.write("wandb_history_lost=true\n")
 
 
 def _wandb_run_path() -> str | None:
@@ -163,8 +191,7 @@ def main():
     if wandb_path is None:
         print("Skipping the W&B history check: RUN_ID is not set.")
     elif (wandb_error := check_wandb_history(wandb_path, _min_steps())) is not None:
-        print(f"FAILED: {wandb_error}")
-        sys.exit(1)
+        report_lost_wandb_history(wandb_error, output_path)
     print("PASSED: All metrics within thresholds.")
 
 
