@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from contextlib import AsyncExitStack
 from functools import partial
 from pathlib import Path, PurePosixPath
 from tarfile import AbsoluteLinkError, TarInfo
@@ -11,6 +12,7 @@ import httpx
 import pytest
 from rolloutengine.models import GradedRollout, Model, TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task, rollout_limits
+from shellbox.backends.iris.machine import ExecOutput, IrisMachine
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
@@ -49,6 +51,7 @@ from taskforge.resources.env import (
     FakeEnv,
     ReadFile,
     RunCommand,
+    ShellboxEnv,
     WriteFile,
     read_file,
     run_command,
@@ -442,6 +445,29 @@ async def test_malformed_grader_checks_return_feedback_and_corrected_checks_are_
     await ctx.drain()
     assert isinstance(corrected, ToolResult)
     assert json.loads(corrected.content)["grader_checks"] == [{"name": "A", "passed": False, "weight": 1}]
+
+
+class MissingPathIrisMachine(IrisMachine):
+    """An Iris sandbox whose every exec fails as Debian's dash does when a redirect source is missing."""
+
+    def __init__(self) -> None:
+        pass
+
+    @override
+    async def _script(self, script: str, timeout: float | None = None) -> ExecOutput:
+        return ExecOutput(exit_code=2, stdout="", stderr="sh: 1: cannot open /tests/grade.py: No such file\n")
+
+
+async def test_reading_a_missing_path_on_iris_is_tool_feedback(tmp_path: Path) -> None:
+    # Stack pilot: reading a missing /tests/grade.py raised the shell's RuntimeError and ended the workpiece.
+    ctx = Context(log=EventLog())
+    env = ShellboxEnv(MissingPathIrisMachine(), "image", ctx.emit, AsyncExitStack(), str(tmp_path))
+    ctx.resource(env, env.fingerprint)
+    ctx.handle(ReadFile, partial(read_file, notify=ctx.emit), uses=(env,))
+    result = await ReadFileTool()(ctx, {"path": "grade.py"})
+    await ctx.drain()
+    assert isinstance(result, ToolResult) and result.content.startswith("File operation failed:")
+    assert "grade.py" in result.content
 
 
 async def test_read_file_ranges_are_bytes_before_text_or_base64_decoding() -> None:
