@@ -5,6 +5,7 @@ import json
 import sys
 from dataclasses import replace
 from types import SimpleNamespace
+from typing import cast
 
 import draccus
 import numpy as np
@@ -15,7 +16,7 @@ from levanter.data.text.datasets import LmDataConfig, dataset_for_component
 from levanter.store.cache import SerialCacheWriter
 from levanter.utils.thread_utils import blocking_wait
 from marin.execution.artifact import Artifact
-from marin.execution.lazy import ArtifactStep, materialized_config
+from marin.execution.lazy import ArtifactStep, StepContext, materialized_config
 from marin.execution.step_status import StatusFile
 from marin.training.training import DEFAULT_HF_CHECKPOINTS_PATH
 from rigging.filesystem.step_status import STATUS_SUCCESS
@@ -50,6 +51,7 @@ def invoke_sft(monkeypatch, presets, *args):
         (None, "Build a Hugging Face export for the GrugModel trainer"),
         ({"xla_flags": ("--flag",)}, "xla_flags"),
         ({"per_device_parallelism": 1}, "per_device_parallelism"),
+        ({"timeout": Duration.from_minutes(12)}, "timeout"),
     ],
 )
 def test_sft_refuses_incompatible_grug_settings(overrides, error):
@@ -62,6 +64,44 @@ def test_sft_refuses_incompatible_grug_settings(overrides, error):
             replace(OPENTHOUGHTS_32K_4NODE, recipe=spec).model()
         else:
             launcher.sft_step(spec, OPENTHOUGHTS_32K_4NODE.resources).fingerprint()
+
+
+def test_sft_resolves_an_export_from_a_structural_model_source(tmp_path):
+    base = OPENTHOUGHTS_SPEC.model
+    model = cast(
+        launcher.ModelSource,
+        SimpleNamespace(
+            tokenizer_cache_key=base.tokenizer_cache_key,
+            resolve_tokenizer=base.resolve_tokenizer,
+            run=base.run,
+            init_deps=base.init_deps,
+            build_train_config=base.build_train_config,
+            hf_export_path=lambda _: "published/final",
+        ),
+    )
+    resources = OPENTHOUGHTS_32K_4NODE.resources
+    exported = replace(OPENTHOUGHTS_SPEC, model=model).trained(resources)
+    prefix = str(tmp_path)
+    ctx = StepContext.for_run(str(tmp_path / "eval"), prefix, deps=exported.deps())
+    assert exported.resolve(ctx).uri == f"{exported.step.path(prefix)}/published/final"
+
+
+def test_prepared_sft_submits_the_recipe_timeout(tmp_path):
+    weights = ArtifactStep.adopt("tests/weights", "2026.11.20", str(tmp_path / "weights"), kind=Artifact)
+    timeout = Duration.from_minutes(12)
+    spec = replace(OPENTHOUGHTS_SPEC, model=PreparedModel(weights), timeout=timeout)
+    step = spec.trained(OPENTHOUGHTS_32K_4NODE.resources).step
+    requests = []
+
+    def submit(request):
+        requests.append(request)
+        return SimpleNamespace(wait=lambda **_kwargs: None)
+
+    with set_current_client(SimpleNamespace(submit=submit)):
+        step.run(materialized_config(step, str(tmp_path)))
+
+    [request] = requests
+    assert request.timeout == timeout
 
 
 def test_openthoughts_keeps_one_conversation_per_context_window(tmp_path):

@@ -563,12 +563,13 @@ def dataset_for_component(
         )
     fmt = component.format
     if isinstance(fmt, SerializedChatLmDatasetFormat):
-        max_segments, slice_strategy = _resolve_pack_config(pack) if pack else (1, "left")
+        max_segments, slice_strategy = _resolve_pack_config(pack)
         dataset = PackedTokenDataset(
             cache,
             Pos,
             max_segments_per_example=max_segments,
             slice_strategy=slice_strategy,
+            lookahead_window=component.pack_lookahead_window,
         )
 
         def apply_chat_mask(example: GrugLmExample) -> GrugLmExample:
