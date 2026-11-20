@@ -370,7 +370,7 @@ def browser_checks(
                             return
                     except Exception as error:
                         # Playwright reconstructs callback errors; custom constructors can mask the cause.
-                        raise RuntimeError(f"Release API {path}: {error}") from error
+                        raise RuntimeError(f"Release API {route.request.url}: {error}") from error
                     if local and path == "api/source":
                         row = next(item for item in expected["sources"] if item["id"] == data["declaration"]["id"])
                         data = {

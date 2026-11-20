@@ -1170,6 +1170,17 @@ def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
             )
         local_remainder = client.get("/curriculum/tasks", params=area_params).json()["tasks"]
         assert [(row["task_id"], row["outcome"]) for row in local_remainder] == [("two", "subject_only")]
+        assigned_params = {"subject_id": "D01", "node_id": "subject:D01", "outcome": "assigned", "limit": 2}
+        assigned = client.get("/curriculum/tasks", params=assigned_params).json()
+        assigned_next = client.get(
+            "/curriculum/tasks", params={**assigned_params, "cursor": assigned["next_cursor"]}
+        ).json()
+        assert [(row["source_id"], row["task_id"]) for row in assigned["tasks"] + assigned_next["tasks"]] == [
+            ("Marin:a", "one"),
+            ("Marin:b", "one"),
+            ("Marin:a", "two"),
+        ]
+        assert not assigned_next["next_cursor"]
         manifest = json.loads(path.read_text())
         coverage = json.loads(coverage_path.read_text())
         path.write_text(json.dumps({**manifest, "release_id": "bad", "task_count": 401}))
