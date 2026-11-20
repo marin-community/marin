@@ -19,7 +19,7 @@ from haliax.jax_utils import named_call
 from jax import random
 from jax.sharding import reshard
 from jaxtyping import Array, Float, Int, PRNGKeyArray
-from levanter.compat.hf_checkpoints import HFCheckpointConverter
+from levanter.compat.hf_checkpoints import HfLmCheckpointConverter
 from levanter.grug.attention import (
     AttentionMask,
     GrugAttentionImplementation,
@@ -145,8 +145,8 @@ class GrugModelConfig:
     def hf_checkpoint_converter(
         self,
         ref_checkpoint: str | None = None,
-    ) -> HFCheckpointConverter["GrugModelConfig"]:  # type: ignore[type-var]
-        return HFCheckpointConverter(
+    ) -> HfLmCheckpointConverter["GrugModelConfig"]:  # type: ignore[type-var]
+        return HfLmCheckpointConverter(
             self.__class__,
             reference_checkpoint=ref_checkpoint,
             HfConfigClass=GrugMoeHfConfig,
