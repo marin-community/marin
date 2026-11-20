@@ -95,8 +95,9 @@ A Playground Reports tab lists the reports described below.
 Playground reports are the model-feedback reports that the marin-serve dashboard's Report issue
 button saves, one immutable JSON object per report under `{prefix}/{YYYY-MM-DD}/{id}.json` in
 `gs://marin-eval-metadata/model-feedback` and `s3://marin-us-east-02a/marin/model-feedback`. The
-format and prefixes live in `evalrecords.model_feedback`, shared with the serve dashboard. Each
-ingest pass copies objects it has not seen into the `playground_reports` table and never rereads
+writer is `marin.inference.model_feedback`; EvalDash cannot import marin at runtime, so it keeps its
+own copy of the format, and a test ingests a report saved by that writer. Each ingest pass, before
+the record pass, copies objects it has not seen into the `playground_reports` table and never rereads
 one it has. An object that fails validation is skipped with a warning on every pass; a listing or
 read failure is logged and reported as a failed prefix, and the other reports are still copied.
 The list shows the newest 1,000 reports and says when older ones were left out. The local store has

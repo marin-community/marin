@@ -4,17 +4,18 @@
 """Playground reports: model-feedback reports saved by the marin-serve dashboard.
 
 The serve dashboard's Report issue button writes one immutable JSON object per report under
-``{prefix}/{YYYY-MM-DD}/{id}.json`` (format in ``evalrecords.model_feedback``). The scheduled ingest job
+``{prefix}/{YYYY-MM-DD}/{id}.json`` (see ``marin.inference.model_feedback``). The scheduled ingest job
 copies objects it has not seen into ``playground_reports``.
 """
 
 from __future__ import annotations
 
 import logging
+from datetime import datetime
+from typing import Literal
 
 import sqlalchemy
-from evalrecords.model_feedback import FeedbackRecord
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 from rigging.filesystem.factory import open_url, url_to_fs
 from sqlalchemy import Boolean, Column, DateTime, Index, Table, Text
 from sqlalchemy.engine import Engine
@@ -23,6 +24,13 @@ from .results_db import _dialect_insert, _utc, json_type, metadata
 
 logger = logging.getLogger(__name__)
 
+# Where marin.inference.model_feedback writes reports. EvalDash cannot import marin at runtime, so it
+# keeps its own copy of the prefixes and record format; a test saves a report through the serve
+# dashboard's writer and ingests it here, so the two cannot drift unnoticed.
+DEFAULT_REPORT_PREFIXES = (
+    "gs://marin-eval-metadata/model-feedback",
+    "s3://marin-us-east-02a/marin/model-feedback",
+)
 MAX_REPORT_SUMMARIES = 1000
 
 
@@ -39,6 +47,27 @@ reports = Table(
     Column("record", json_type, nullable=False),
     Index("playground_reports_created_at", "created_at"),
 )
+
+
+class FeedbackReport(BaseModel):
+    """What the reporter entered, plus the conversation when they included it."""
+
+    model_config = ConfigDict(extra="allow")
+    description: str
+    reporter: str = ""
+    model: str
+    conversation: dict[str, object] | None
+
+
+class FeedbackRecord(BaseModel):
+    """Version 1 of the object the serve dashboard writes for each report."""
+
+    model_config = ConfigDict(extra="allow")
+    version: Literal[1]
+    id: str
+    created_at: datetime
+    serving: dict[str, object]
+    report: FeedbackReport
 
 
 def list_report_paths(prefix: str) -> list[str]:

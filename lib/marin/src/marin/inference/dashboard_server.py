@@ -41,8 +41,6 @@ from dataclasses import dataclass, field
 import httpx
 import shellsim
 import uvicorn
-from evalrecords.model_feedback import FeedbackReport
-from pydantic import ValidationError
 from rigging.timing import Duration, ExponentialBackoff
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -140,14 +138,10 @@ class _FeedbackStore:
     async def create_response(self, request: Request) -> Response:
         if self.saved >= self.max_reports:
             return JSONResponse({"error": "this server has reached its feedback report limit"}, status_code=429)
-        body = await _json_object_body(request, self.max_bytes, "feedback report")
-        if isinstance(body, Response):
-            return body
-        try:
-            report = FeedbackReport.model_validate(body)
-        except ValidationError as error:
-            return JSONResponse({"error": f"invalid feedback report: {error}"}, status_code=400)
-        if not report.description.strip():
+        report = await _json_object_body(request, self.max_bytes, "feedback report")
+        if isinstance(report, Response):
+            return report
+        if not str(report.get("description", "")).strip():
             return JSONResponse({"error": "feedback report needs a description"}, status_code=400)
         # Count before the write so concurrent requests cannot pass the limit together.
         self.saved += 1

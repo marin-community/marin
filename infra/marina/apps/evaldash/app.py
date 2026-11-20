@@ -49,7 +49,6 @@ from evalrecords.eval_stats import (
     SelectionRequest,
     declared_protocols,
 )
-from evalrecords.model_feedback import FEEDBACK_PREFIXES
 from evalrecords.records import (
     DEFAULT_SCAN_PREFIXES,
     EvalRunRecord,
@@ -300,7 +299,7 @@ class EvaldashConfig:
     def from_env(cls, environ: Mapping[str, str]) -> EvaldashConfig:
         """Resolve the configuration, failing on an unknown store rather than guessing one."""
         raw_prefixes = environ.get(PREFIXES_ENV) or ",".join(DEFAULT_SCAN_PREFIXES)
-        raw_report_prefixes = environ.get(REPORT_PREFIXES_ENV, ",".join(FEEDBACK_PREFIXES))
+        raw_report_prefixes = environ.get(REPORT_PREFIXES_ENV, ",".join(playground_reports.DEFAULT_REPORT_PREFIXES))
         store = environ.get(STORE_ENV, StoreMode.POSTGRES).strip().lower()
         if store not in tuple(StoreMode):
             raise ValueError(f"unknown {STORE_ENV}={store!r}; expected one of {[mode.value for mode in StoreMode]}")

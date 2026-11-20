@@ -10,7 +10,8 @@ import sqlalchemy
 from evaldash import app as evaldash_app
 from evaldash import results_db
 from evaldash.db_migrations import apply_migrations
-from evaldash.playground_reports import fetch_report_summaries, ingest_reports
+from evaldash.playground_reports import DEFAULT_REPORT_PREFIXES, fetch_report_summaries, ingest_reports
+from marin.inference.model_feedback import COREWEAVE_FEEDBACK_PREFIX, GCS_FEEDBACK_PREFIX, save_feedback_report
 from sqlalchemy.pool import StaticPool
 from starlette.testclient import TestClient
 
@@ -122,3 +123,25 @@ def test_summaries_say_when_older_reports_were_left_out(tmp_path):
     capped = fetch_report_summaries(engine, limit=2)
     assert capped["truncated"] is True
     assert [row["report_id"] for row in capped["reports"]] == ["2026-11-18-090200-aaaa", "2026-11-18-090100-aaaa"]
+
+
+def test_reports_saved_by_the_serve_dashboard_appear_in_evaldash(tmp_path):
+    """EvalDash keeps its own copy of the record format; this fails if the writer's format drifts."""
+    assert set(DEFAULT_REPORT_PREFIXES) == {GCS_FEEDBACK_PREFIX, COREWEAVE_FEEDBACK_PREFIX}
+    engine = _engine()
+    prefix = tmp_path / "model-feedback"
+    conversation = {"title": "Capital", "messages": [{"role": "user", "content": "Capital of Australia?"}]}
+    report = {"description": "Said Sydney.", "reporter": "Ada", "model": "marin/demo", "conversation": conversation}
+    serving = {"model": "marin/demo", "backend": "vllm", "tensor_parallel_size": 4}
+    location = save_feedback_report(str(prefix), report, serving)
+
+    assert ingest_reports(engine, (str(prefix),)) == ()
+
+    with _client(engine, prefix) as client:
+        [summary] = client.get("/playground-reports").json()["reports"]
+        detail = client.get(f"/playground-reports/{summary['report_id']}").json()
+    assert (summary["model"], summary["reporter"], summary["description"]) == ("marin/demo", "Ada", "Said Sydney.")
+    assert summary["has_conversation"] is True
+    assert detail["source_url"].endswith(Path(location).name)
+    assert detail["report"]["conversation"] == conversation
+    assert detail["serving"] == serving

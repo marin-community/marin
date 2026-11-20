@@ -15,7 +15,7 @@ from .results_db import verify_schema
 
 
 def main() -> int:
-    """Reconcile every record prefix, then copy new playground reports, into EvalDash's PostgreSQL schema once."""
+    """Copy new playground reports, then reconcile every record prefix, into EvalDash's PostgreSQL schema once."""
     config = EvaldashConfig.from_env(os.environ)
     if config.store is not StoreMode.POSTGRES:
         raise RuntimeError("the scheduled EvalDash ingest requires the postgres store")
@@ -23,9 +23,10 @@ def main() -> int:
     engine = job_engine()
     try:
         verify_schema(engine)
+        # Reports first: copying them is quick, and a slow or failing record pass must not delay them.
+        failures = ingest_reports(engine, config.report_prefixes)
         ingestor = PostgresIngestor(engine, config.prefixes, config.ingest_interval, config.revalidate_after)
-        failures = asyncio.run(ingestor.run_once())
-        failures += ingest_reports(engine, config.report_prefixes)
+        failures += asyncio.run(ingestor.run_once())
         if failures:
             raise RuntimeError(f"EvalDash ingest failed for prefixes: {', '.join(failures)}")
         return 0
