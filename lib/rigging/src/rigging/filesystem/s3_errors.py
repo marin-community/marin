@@ -5,18 +5,31 @@
 
 import aiohttp
 import botocore.exceptions
+import google.api_core.exceptions
+
+OBJECT_STORE_ERRORS = (
+    OSError,
+    aiohttp.ClientError,
+    botocore.exceptions.BotoCoreError,
+    botocore.exceptions.ClientError,
+    google.api_core.exceptions.GoogleAPIError,
+)
+"""Exception families the local, S3 and GCS filesystem adapters raise when a storage operation fails."""
 
 _TRANSIENT_S3_TRANSPORT_ERRORS = (
     aiohttp.ClientConnectionError,
     aiohttp.ClientPayloadError,
-    botocore.exceptions.ConnectionClosedError,
+    # Every failure to send or read a request: closed connections, read timeouts and broken response streams.
+    botocore.exceptions.HTTPClientError,
     botocore.exceptions.ConnectTimeoutError,
     botocore.exceptions.EndpointConnectionError,
     botocore.exceptions.ProxyConnectionError,
-    botocore.exceptions.ReadTimeoutError,
-    botocore.exceptions.ResponseStreamingError,
+    ConnectionResetError,
     TimeoutError,
 )
+
+# Server-side and gateway failures; a refusal (403/404) or failed precondition (412) carries a 4xx status.
+_TRANSIENT_HTTP_STATUSES = frozenset({500, 502, 503, 504})
 
 _TRANSIENT_S3_ERROR_CODES = frozenset(
     {
@@ -47,7 +60,9 @@ def is_transient_s3_error(error: BaseException) -> bool:
     response = getattr(error, "response", None)
     if isinstance(response, dict):
         code = response.get("Error", {}).get("Code")
-        if code in _TRANSIENT_S3_ERROR_CODES:
+        if code in _TRANSIENT_S3_ERROR_CODES or response.get("ResponseMetadata", {}).get("HTTPStatusCode") in (
+            _TRANSIENT_HTTP_STATUSES
+        ):
             return True
     message = str(error)
     return any(fragment in message for fragment in _TRANSIENT_S3_MESSAGE_FRAGMENTS)
