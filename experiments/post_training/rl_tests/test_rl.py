@@ -585,6 +585,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
     )
     for name, config in zip(revisions, configs, strict=True):
         trainer, generator = config["skyrl"]["trainer"], config["skyrl"]["generator"]
+        assert "groups_per_family" not in trainer["rollout_buffer"]
         assert config["iris"]["allocation"]["num_nodes"] * config["iris"]["allocation"]["gpus_per_node"] <= 40
         generating = name in ("speed-short", "data-short", "eval-short")
         assert (
