@@ -1,7 +1,7 @@
 """Assign each model to an Iris group confined to one NVLink domain."""
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any
 import xml.etree.ElementTree as ET
 
@@ -104,6 +104,17 @@ def node_physical_labels(*, rank: int, gpus_per_node: int, host: str, fabric_xml
     }
 
 
+@dataclass(frozen=True)
+class PhysicalRoleNode:
+    node_id: str
+    rank: int
+    host: str
+    locality_group: int
+    roles: list[str]
+    fabric: str
+    gpu_uuids: list[str]
+
+
 def validate_role_nodes(
     nodes: Sequence[Mapping[str, Any]],
     *,
@@ -135,26 +146,18 @@ def validate_role_nodes(
             raise ValueError("Ray GPU capacity disagrees with the physical node width")
         fabrics[group].add(fabric)
         rows.append(
-            {
-                "node_id": node["NodeID"],
-                "rank": rank,
-                "host": host,
-                "locality_group": group,
-                "roles": [
-                    role
-                    for role, role_group in zip(topology.roles, topology.locality.role_groups, strict=True)
-                    if role_group == group
-                ],
-                "fabric": fabric,
-                "gpu_uuids": uuids,
-            }
+            PhysicalRoleNode(
+                node_id=node["NodeID"], rank=rank, host=host, locality_group=group,
+                roles=[role for role, role_group in zip(topology.roles, topology.locality.role_groups, strict=True) if role_group == group],
+                fabric=fabric, gpu_uuids=uuids,
+            )
         )
-    if {row["rank"] for row in rows} != set(range(topology.num_nodes)) or len(
-        {row["host"] for row in rows}
+    if {row.rank for row in rows} != set(range(topology.num_nodes)) or len(
+        {row.host for row in rows}
     ) != topology.num_nodes:
         raise ValueError("Ray nodes must cover distinct Iris ranks and physical hosts")
-    if len({gpu for row in rows for gpu in row["gpu_uuids"]}) != topology.num_nodes * gpus_per_node:
+    if len({gpu for row in rows for gpu in row.gpu_uuids}) != topology.num_nodes * gpus_per_node:
         raise ValueError("Ray nodes report duplicate physical GPUs")
     if any(len(value) != 1 for value in fabrics.values()) or len(set.union(*fabrics.values())) != len(fabrics):
         raise ValueError("Each locality group must occupy one distinct physical NVLink domain")
-    return sorted(rows, key=lambda row: row["rank"])
+    return [asdict(row) for row in sorted(rows, key=lambda row: row.rank)]

@@ -1313,8 +1313,9 @@ def wait_for_nodes(
     *,
     role_topology: RoleTopology | None = None,
     gpus_per_node: int = 0,
+    report_directory: Path | None = None,
 ) -> None:
-    """Block until the Ray cluster reports ``expected_nodes`` alive nodes.
+    """Wait for alive nodes; with role topology, validate and publish physical placement.
 
     ``rewrite_cb`` (head only) re-publishes the rendezvous at most once per ``RENDEZVOUS_REWRITE_INTERVAL`` seconds
     so ``written_at`` stays fresh. A worker pod on a cold node can start >RENDEZVOUS_FRESHNESS_SLACK (60s) after the
@@ -1345,9 +1346,11 @@ def wait_for_nodes(
                 last_count = count
             if count >= expected_nodes:
                 if role_topology is not None:
+                    if report_directory is None:
+                        raise ValueError("Physical role validation requires a report directory")
                     rows = validate_role_nodes(alive, topology=role_topology, gpus_per_node=gpus_per_node)
                     report = json.dumps({"role_topology": "nvlink.domain", "nodes": rows}, sort_keys=True)
-                    (Path(os.environ.get("IRIS_OUTPUT_DIR", "/tmp")) / "role-topology.json").write_text(report + "\n")
+                    (report_directory / "role-topology.json").write_text(report + "\n")
                     _log(f"Verified physical role placement before model actors: {report}")
                 _log(f"All {expected_nodes} Ray node(s) joined. Resources: {ray.cluster_resources()}")
                 return
@@ -2012,6 +2015,7 @@ def run_head(
             rewrite_cb=lambda: write_rendezvous(args.rendezvous_dir, head_ip, ray_port, gang_epoch),
             role_topology=args.role_topology,
             gpus_per_node=args.gpus_per_node,
+            report_directory=Path(os.environ["IRIS_OUTPUT_DIR"]) if args.role_topology is not None else None,
         )
     else:
         _log("Single-node slice: skipping rendezvous and multi-node wait.")
