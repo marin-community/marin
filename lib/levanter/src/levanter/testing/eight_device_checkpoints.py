@@ -15,7 +15,6 @@ import os
 import pathlib
 import socket
 import threading
-import time
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from tempfile import TemporaryDirectory
@@ -52,8 +51,10 @@ _PROXY_ENV_VARS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")
 _PINNED_HOST_MEMORY_KIND = "pinned_host"
 _SHARED_ARRAY_NAMES = ("a", "b", "c")
 _MANIFEST_LOCK = f"manifest.ocdbt{tensorstore_serialization._LOCK_FILE_SUFFIX}"
-# Long enough that a commit ignoring the lock lands well before the lock is released.
+# Long enough that a save ignoring the lock commits well before the lock is released.
 _HELD_LOCK_SECONDS = 2.0
+# A save that never reaches the lock sweep or never commits fails instead of hanging.
+_SAVE_DEADLINE_SECONDS = 60.0
 # Small enough that every array is worth splitting, so these exercise the split path.
 SPLIT_CONFIG = TensorStoreWriteConfig(min_replica_slice_bytes=1, max_chunk_bytes=4096)
 
@@ -200,47 +201,48 @@ def resave_after_interrupted_save_across_processes() -> list[np.ndarray]:
         return _run_on_distributed_processes(_resave_after_interrupted_save, f"{tmpdir}/step-10")
 
 
-def _commit_waits_for_held_lock(process_id: int, coordinator: str, checkpoint_path: str) -> bool | None:
+def _save_waits_for_held_lock(process_id: int, coordinator: str, checkpoint_path: str) -> bool | None:
     with _distributed_process(process_id, coordinator):
-        config = TensorStoreWriteConfig()
-        # The context a multi-process save to this path commits under. Every process builds it,
-        # since asking for the process count brings up the backend, which waits for all of them.
-        context = tensorstore_serialization._tensorstore_write_context(
-            config, tensorstore_serialization._file_io_locking(config, checkpoint_path)
-        )
-        if process_id != 0:
-            return None
-        spec = {
-            "driver": "zarr3",
-            "kvstore": {"driver": "ocdbt", "base": f"file://{checkpoint_path}"},
-            "metadata": {"shape": [1], "data_type": "float32"},
-            "create": True,
-        }
-        store = ts.open(spec, context=context).result()
-        store.write(np.zeros(1, np.float32)).result()
-
-        # Another node's commit holds the manifest lock, which this node cannot see as an OS lock.
+        mesh = Mesh(np.array(jax.devices()), ("replica",))
+        split = NamedSharding(mesh, P("replica"))
+        values = np.arange(DISTRIBUTED_ARRAY_SIZE, dtype=np.float32)
         lock = pathlib.Path(checkpoint_path, _MANIFEST_LOCK)
-        lock.touch()
-        released = threading.Event()
+        lock_held = threading.Event()
+        sweep = tensorstore_serialization._remove_abandoned_lock_files
 
-        def release():
-            time.sleep(_HELD_LOCK_SECONDS)
-            released.set()
+        def sweep_then_hold_lock(checkpoint_dir: str) -> None:
+            # Another node's commit takes the manifest lock once the save has cleared abandoned
+            # locks, which this node cannot see as an OS lock.
+            sweep(checkpoint_dir)
+            lock.touch()
+            lock_held.set()
+
+        with (
+            jax.set_mesh(mesh),
+            mock.patch.object(tensorstore_serialization, "_remove_abandoned_lock_files", sweep_then_hold_lock),
+        ):
+            if process_id != 0:
+                _save_halves(checkpoint_path, split, values)
+                return None
+            saved = threading.Event()
+
+            def save() -> None:
+                _save_halves(checkpoint_path, split, values)
+                saved.set()
+
+            # A daemon, so a save that hangs fails the deadline below instead of the interpreter's exit.
+            saver = threading.Thread(target=save, daemon=True)
+            saver.start()
+            assert lock_held.wait(timeout=_SAVE_DEADLINE_SECONDS), "the save never swept for abandoned locks"
+            blocked = not saved.wait(timeout=_HELD_LOCK_SECONDS)
             lock.unlink()
-
-        releaser = threading.Thread(target=release)
-        releaser.start()
-        store.write(np.ones(1, np.float32)).result()
-        committed_after_release = released.is_set()
-        releaser.join()
-        return committed_after_release
+            return blocked and saved.wait(timeout=_SAVE_DEADLINE_SECONDS)
 
 
-def commit_waits_for_held_lock_across_processes() -> bool:
-    """Whether a multi-process save's commit to a local path waits for another writer's lock file."""
+def save_waits_for_held_lock_across_processes() -> bool:
+    """Whether a two-process save to a local path waits for another writer's lock file, then commits."""
     with TemporaryDirectory() as tmpdir:
-        results = _run_on_distributed_processes(_commit_waits_for_held_lock, tmpdir)
+        results = _run_on_distributed_processes(_save_waits_for_held_lock, f"{tmpdir}/step-10")
     return results[0]
 
 

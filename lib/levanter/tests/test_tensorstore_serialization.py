@@ -565,9 +565,9 @@ def test_replica_aware_restore_broadcasts_across_processes():
     eight_device_checkpoints.replica_aware_restore_across_processes()
 
 
-def test_processes_sharing_a_local_checkpoint_lock_with_lock_files():
+def test_a_multi_process_save_waits_for_another_writers_lock_file():
     """Advisory OS locks do not exclude writers on different NFS clients; lock files do."""
-    assert eight_device_checkpoints.commit_waits_for_held_lock_across_processes()
+    assert eight_device_checkpoints.save_waits_for_held_lock_across_processes()
 
 
 def test_a_save_after_an_interrupted_save_to_the_same_directory_commits():
