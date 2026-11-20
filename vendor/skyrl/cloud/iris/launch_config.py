@@ -91,6 +91,7 @@ class RunConfig:
     submission: str = SubmissionMode.WAIT.value
     export_hf: bool = False
     model: str | None = None
+    sft_preset: str | None = None
 
 
 @dataclass

@@ -27,6 +27,7 @@ from experiments.grug.moe_hero_ep.ops.export_cpu import CpuExportConfig, export
 from experiments.grug.moe_hero_ep.ops.upload_hf import write_tokenizer_metadata
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
 from experiments.grug.moe_hero_ep.train import RouterBiasMode
+from experiments.sft.launcher import sft_child_resources
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -49,7 +50,7 @@ class GrugHeroSFT:
     eval_every: int = 0
     expert_placement: ExpertPlacement | None = None
 
-    def trained(self, resources: ResourceConfig) -> ArtifactHfModel:
+    def trained(self, resources: ResourceConfig, *, coordinator_cluster: str | None = None) -> ArtifactHfModel:
         allocation = sft_resources(self.dp_racks)
         if resources != replace(allocation, regions=resources.regions, target_cluster=resources.target_cluster):
             raise ValueError("Mochi SFT resources must match the GB200 allocation derived from dp_racks")
@@ -68,13 +69,17 @@ class GrugHeroSFT:
             eval_every=self.eval_every,
             expert_placement=self.expert_placement,
             version=self.version,
-            resources=resources,
+            resources=sft_child_resources(resources, coordinator_cluster),
         )
         training = step.build_config(StepContext.for_fingerprint(step.runtime_args.keys(), step.deps))
         relative_path = "hf"
         export_step = apply(
             f"{step.name}-hf",
-            remote(_export_final_sft, resources=self.export_resources, env_vars={"TMPDIR": "/cache"}),
+            remote(
+                _export_final_sft,
+                resources=sft_child_resources(self.export_resources, coordinator_cluster),
+                env_vars={"TMPDIR": "/cache"},
+            ),
             version=step.version,
             output=OUT,
             trained=step,

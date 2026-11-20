@@ -229,7 +229,7 @@ _AGENTIC_LIMITS = agentic_limits(
 
 _TRAIN_LONG = Preset(
     name="train-long",
-    revision="2026.11.20.3",
+    revision="2026.11.20.4",
     recipe=Recipe(layout=ONE_RACK, fixed_reply_tokens=None, config=_ONE_TURN),
     updates=10_000,
     measured=range(1, 10_001),
@@ -238,8 +238,7 @@ _TRAIN_LONG = Preset(
     accepts_init=True,
     publishes=False,
     control_preset=None,
-    checkpoint_every=2,
-    checkpoints="best",
+    checkpoints="none",
     owned_keys=frozenset({"generator.run_engines_locally"}),
     data_settings=frozenset({"shuffle"}),
     tasks="snowball-100k@2026.11.19.1",
@@ -250,7 +249,8 @@ _TRAIN_LONG = Preset(
     sample_namespace="datasets/mochi-rl",
     wandb_entity="marin-community",
     retention=SkyRLRetentionPolicy(resume_checkpoint_count=2, temporary_storage_ttl_days=3),
-    export="best",
+    output_ttl_days=3,
+    export="none",
 )
 _TRAIN_LONG_3RACK = replace(
     _TRAIN_LONG,
@@ -261,11 +261,9 @@ _TRAIN_MEDIUM = replace(
     _TRAIN_LONG.with_updates(2),
     name="train-medium",
     evaluations=(),
-    checkpoints="latest",
-    export="none",
 )
 _TRAIN_LONG_AGENTIC = replace(
-    agentic(_TRAIN_LONG, name="train-long-agentic", limits=_AGENTIC_LIMITS), revision="2026.11.20.5"
+    agentic(_TRAIN_LONG, name="train-long-agentic", limits=_AGENTIC_LIMITS), revision="2026.11.20.6"
 )
 
 MOCHI = ModelPresets(
@@ -287,4 +285,11 @@ MOCHI = ModelPresets(
 
 
 if __name__ == "__main__":
-    raise SystemExit(rl.main(MOCHI))
+
+    def sft_presets():
+        # Load the SFT training dependencies only for --sft.
+        from experiments.post_training.mochi_sft import MOCHI_SFT  # noqa: PLC0415
+
+        return MOCHI_SFT
+
+    raise SystemExit(rl.main(MOCHI, sft_presets=sft_presets))

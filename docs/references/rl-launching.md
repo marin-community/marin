@@ -50,27 +50,27 @@ Iris forwards available HF/W&B/CoreWeave credentials and the current application
 bundle as read-only files; ordinary child jobs inherit that bundle by default.
 See [secret delivery](https://github.com/marin-community/marin/blob/main/lib/iris/docs/secrets.md).
 
-The Snowball SFT-to-RL module composes the supervised mixture and an RL preset
-that accepts initial weights. Use the RL layout's storage prefix for both stages.
+Use `--sft PRESET` on the RL command to train a starting model and use its export for RL.
+Both stages use the RL layout's storage prefix.
 
 ```bash
-MARIN_PREFIX=s3://marin-us-east-02a/marin uv run python -m experiments.post_training.snowball_sft_then_rl \
-  --preset train-long --version 2026.11.19.1
+MARIN_PREFIX=s3://marin-us-east-02a/marin uv run python -m experiments.post_training.snowball_rl \
+  --preset train-long --sft mixture-262k-32node --version 2026.11.19.1 --plan
 ```
 
 The Mochi RL presets default to the completed production Mochi SFT export. The export
-supplies its own tokenizer. Native resume also uses this export. Use
-`--init NAME@VERSION` to start a new run from another published model.
-Use the Mochi SFT-to-RL module to build the production export and pass its model into
-RL. The command below prints that plan.
+supplies its own tokenizer. Use `--init NAME@VERSION` to start from another published model,
+or select an SFT preset with `--sft`. Mochi writes artifacts under the cluster's
+`tmp/ttl=3d/` prefix. Set `MARIN_PREFIX` to use a durable prefix.
 
 ```bash
-MARIN_PREFIX=s3://marin-us-east-02a/marin uv run python -m experiments.post_training.mochi_sft_then_rl \
-  --preset train-medium --version 2026.11.19.1 --plan
+uv run python -m experiments.post_training.mochi_rl \
+  --preset train-medium --sft mixture-262k-176node --version 2026.11.19.1 --plan
 ```
 
-Use Mochi's `train-medium-agentic` for two updates on a task mix with native
-checkpointing. Pass a versioned selection containing both task families with `--tasks NAME@VERSION`.
+Use Mochi's `train-medium-agentic` for two updates on a task mix. Pass a versioned selection
+containing both task families with `--tasks NAME@VERSION`. Enable recovery with
+`--checkpoints latest`. Add `--export latest` to export the final policy.
 
 The Snowball and Mochi preset commands use `--resume NAME@VERSION` to start from
 the newest retained recovery checkpoint of a finished run. Use a checkpointing

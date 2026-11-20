@@ -189,7 +189,7 @@ def test_rl_entrypoint_can_spawn_workers(tmp_path: Path) -> None:
         from experiments.post_training import rl
 
         assert "experiments.post_training.snowball_rl" not in sys.modules
-        from experiments.post_training import mochi_rl, mochi_sft_then_rl, snowball_rl, snowball_sft_then_rl
+        from experiments.post_training import mochi_rl, snowball_rl
 
         assert "marin.processing.embeddings.harrier" not in sys.modules
         assert {"levanter", "transformers", "torch", "wandb"}.isdisjoint(sys.modules)
@@ -235,7 +235,8 @@ def test_rl_entrypoint_can_spawn_workers(tmp_path: Path) -> None:
     (
         ("experiments.post_training.cat_count_canary.launcher", ()),
         ("experiments.post_training.mochi_rl", ("--help",)),
-        ("experiments.post_training.mochi_sft_then_rl", ()),
+        ("experiments.post_training.snowball_rl", ("--help",)),
+        ("experiments.post_training.rl", ()),
     ),
 )
 def test_launcher_startup_keeps_training_dependencies_unloaded(module: str, args: tuple[str, ...]) -> None:
@@ -255,6 +256,11 @@ def test_launcher_startup_keeps_training_dependencies_unloaded(module: str, args
         heavy = {"levanter", "transformers", "torch", "wandb"}
         loaded = heavy.intersection(name.split(".")[0] for name in sys.modules)
         assert not loaded, sorted(loaded)
+        assert not any(
+            name.startswith(("experiments.sft.", "experiments.post_training.mochi_sft",
+                             "experiments.post_training.snowball_sft"))
+            for name in sys.modules
+        )
         """
     )
     result = subprocess.run(

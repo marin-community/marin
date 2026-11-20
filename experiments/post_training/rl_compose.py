@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Iterator, Mapping
 from dataclasses import asdict, fields, replace
 from datetime import datetime
@@ -37,6 +38,7 @@ from marin.rl.skyrl import (
 from marin.rl.skyrl_records import RESOLVED_LAUNCH_FILENAME, read_skyrl_launch_config
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from skyrlrecipe import RecipePatch, SkyRLRecipe, sections
 from skyrlrecipe.declared import EvaluationProfile
@@ -235,6 +237,13 @@ def artifact_prefix(cluster: str) -> str:
     return config["defaults"]["task_env"]["MARIN_PREFIX"]
 
 
+def run_prefix(preset: Preset) -> str:
+    prefix = artifact_prefix(preset.recipe.layout.cluster)
+    if preset.output_ttl_days is None:
+        return prefix
+    return os.environ.get("MARIN_PREFIX") or marin_temp_bucket(preset.output_ttl_days, source_prefix=prefix)
+
+
 def selection_artifact(value: str) -> ArtifactStep:
     name, separator, version = value.rpartition("@")
     if not separator or is_mutable_version(version):
@@ -247,7 +256,7 @@ def published_model(value: str, *, preset: Preset) -> SkyRLModelSource:
     name, separator, version = value.rpartition("@")
     if not separator or is_mutable_version(version):
         raise click.BadParameter("use NAME@VERSION with an immutable model version")
-    root = run_path(preset.recipe.layout.cluster, name, version)
+    root = run_path(preset, name, version)
     record = read_record(root)
     if (StoragePath(root) / RESOLVED_LAUNCH_FILENAME).exists() or (
         record is not None and record.result_type == result_type_name(SkyRLRun)
@@ -275,7 +284,7 @@ def recovery_checkpoint(value: str, *, preset: Preset) -> presets.StoredResume:
         validate_path_segment("version", version)
     except ValueError as error:
         raise click.BadParameter(str(error)) from error
-    output = run_path(preset.recipe.layout.cluster, name, version)
+    output = run_path(preset, name, version)
     try:
         config = read_skyrl_launch_config(output)
         root = StoragePath(config["artifacts"]["checkpoint_root"])
@@ -308,7 +317,7 @@ def stored_initializer(source: SkyRLModelSource, *, preset: Preset) -> StoredIni
     values = dict(
         artifact_name=step.name,
         artifact_version=step.version,
-        artifact_root=step.path(artifact_prefix(preset.recipe.layout.cluster)),
+        artifact_root=step.path(run_prefix(preset)),
         fingerprint_payload=step.fingerprint_payload(),
     )
     if isinstance(source, SkyRLPolicyModel):
@@ -350,8 +359,8 @@ def model_from_reference(source: StoredInitializer, *, resolved: ResolvedModelLo
     )
 
 
-def run_path(cluster: str, name: str, version: str) -> str:
-    return str(StoragePath(artifact_prefix(cluster)) / name / version)
+def run_path(preset: Preset, name: str, version: str) -> str:
+    return str(StoragePath(run_prefix(preset)) / name / version)
 
 
 def utc_millis(value: str) -> int:
@@ -377,7 +386,7 @@ def _training_config(
         max_steps=preset.updates or 1,
         micro_forward_batch_size_per_gpu=micro_batch,
         eval_interval=max(1, preset.updates) if preset.evaluations else -1,
-        resume_mode="latest" if preset.checkpoint_every else "none",
+        resume_mode="latest" if preset.checkpoints != "none" else "none",
         ckpt_interval=0,
         hf_save_interval=-1,
         policy=sections.Policy(megatron_config=sections.PolicyMegatronConfig(**geometry)),
@@ -478,7 +487,7 @@ def run_spec(
     model = (resume.model if resume is not None else None) or init or preset.model
     initial_model_uri = None
     if preset.checkpoints == "best":
-        prefix = artifact_prefix(preset.recipe.layout.cluster)
+        prefix = run_prefix(preset)
         initial_model_uri = model.uri if isinstance(model, ResolvedModelLocator) else model.step.path(prefix)
     validation_data = ()
     evaluation_data = []
@@ -547,7 +556,11 @@ def run_spec(
             gpu_variant=preset.recipe.layout.gpu_variant,
             role_plan=plan,
         ),
-        retention=preset.retention,
+        retention=(
+            replace(preset.retention, checkpoints_in_run_output=True)
+            if preset.output_ttl_days is not None
+            else preset.retention
+        ),
         seed=preset.seed,
         starting_checkpoint=(
             ArtifactStep.adopt(
@@ -578,6 +591,8 @@ def run_step(
     layout = preset.recipe.layout
     config = yaml.safe_load(spec.config_yaml)
     required_env = ("WANDB_API_KEY", "WANDB_ENTITY") if wandb_entity else ("WANDB_API_KEY",)
+    if preset.output_ttl_days is not None:
+        required_env += ("MARIN_PREFIX",)
     if preset.harbor is not None or get_path(config, "terminal_bench.installed_agent") is not MISSING:
         # The submitter selects the Daytona target for the run.
         required_env += ("DAYTONA_TARGET",)

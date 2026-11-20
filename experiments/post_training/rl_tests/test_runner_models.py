@@ -35,13 +35,13 @@ def table(request):
     return {"snowball": SNOWBALL, "mochi": MOCHI}[request.param]
 
 
-def plan(table, name, *options, version=None, then=None):
+def plan(table, name, *options, version=None, then=None, sft_presets=None):
     preset = table.by_name[name]
     args = ("--preset", name, "--version", version or preset.revision, "--plan")
     if preset.tasks_input == "required":
         args += ("--tasks", SELECTION_IDENTITY)
     args += options
-    return CliRunner().invoke(rl.command(table, argv=args, then=then), args)
+    return CliRunner().invoke(rl.command(table, argv=args, then=then, sft_presets=sft_presets), args)
 
 
 @pytest.fixture
@@ -54,7 +54,7 @@ def mochi_sft_preset(monkeypatch):
     return MIXTURE_262K_176NODE
 
 
-@pytest.mark.parametrize("mode, cadence, period", [("none", None, None), ("latest", 2, 4)])
+@pytest.mark.parametrize("mode, cadence, period", [("none", None, None), ("latest", None, None), ("latest", 2, 4)])
 def test_retention_composes_periodic_saves_and_evaluation(selection, tmp_path, mode, cadence, period):
     preset = replace(
         MOCHI.by_name["train-long"], checkpoints=mode, checkpoint_every=cadence, keep_every=period, export="none"
@@ -66,10 +66,10 @@ def test_retention_composes_periodic_saves_and_evaluation(selection, tmp_path, m
     trainer = config["skyrl"]["trainer"]
     assert (trainer.get("checkpoint_retention", "none"), trainer.get("checkpoint_keep_every")) == (mode, period)
     assert (trainer["ckpt_interval"], trainer["max_ckpts_to_keep"], trainer["hf_export_checkpoint"]) == (0, 2, "latest")
-    callbacks = ["checkpoint", "evaluation"] if cadence else ["evaluation"]
+    callbacks = ["checkpoint", "evaluation"] if mode == "latest" else ["evaluation"]
     assert [callback["type"] for callback in trainer["callbacks"]] == callbacks
-    if cadence:
-        assert trainer["callbacks"][0]["save_steps"] == cadence
+    if mode == "latest":
+        assert trainer["callbacks"][0]["save_steps"] == (cadence or preset.updates + 1)
     assert not config["run"]["export_hf"]
 
 
@@ -78,7 +78,6 @@ def test_retention_composes_periodic_saves_and_evaluation(selection, tmp_path, m
     [
         ({"checkpoints": "latest"}, "export must be none or match checkpoints"),
         ({"export": "none", "evaluations": ()}, "requires an evaluation"),
-        ({"checkpoints": "latest", "export": "none", "checkpoint_every": None}, 'checkpoints="latest" requires'),
         ({"checkpoint_every": None}, 'checkpoints="best" requires checkpoint_every'),
         ({"checkpoints": "none", "export": "none"}, 'checkpoints="none" requires'),
         ({"keep_every": 0}, "keep_every must be positive"),
@@ -87,7 +86,6 @@ def test_retention_composes_periodic_saves_and_evaluation(selection, tmp_path, m
     ids=[
         "export-mismatch",
         "best-without-evaluation",
-        "latest-without-cadence",
         "best-without-cadence",
         "none-with-cadence",
         "zero-keep-every",
@@ -95,8 +93,22 @@ def test_retention_composes_periodic_saves_and_evaluation(selection, tmp_path, m
     ],
 )
 def test_checkpoint_retention_refuses_incompatible_presets(changes, error):
+    base = replace(MOCHI.by_name["train-long"], checkpoints="best", checkpoint_every=2, export="best")
     with pytest.raises(ValueError, match=error):
-        replace(MOCHI.by_name["train-long"], **changes)
+        replace(base, **changes)
+
+
+@pytest.mark.parametrize(
+    ("name", "options", "reason"),
+    [
+        ("train-medium", ("--export", "latest"), "export must be none or match checkpoints"),
+        ("train-medium", ("--checkpoint-every", "2"), 'checkpoints="none" requires'),
+        ("train-long", ("--checkpoints", "best"), 'checkpoints="best" requires checkpoint_every'),
+    ],
+)
+def test_run_options_use_preset_checkpoint_validation(name, options, reason):
+    result = plan(MOCHI, name, *options)
+    assert result.exit_code == 4 and reason in result.output, (result.output, result.exception)
 
 
 @pytest.mark.parametrize(
@@ -110,24 +122,28 @@ def test_checkpoint_retention_refuses_incompatible_presets(changes, error):
                     "2026.11.20.1": "674dadce",
                     "2026.11.20.2": "15b0f019",
                     "2026.11.20.3": "83cf1ff6",
+                    "2026.11.20.4": "08ba7390",
                 },
                 "train-long": {
                     "2026.11.19.1": "db854d78",
                     "2026.11.20.1": "b6144722",
                     "2026.11.20.2": "d1f75f26",
                     "2026.11.20.3": "491fdfff",
+                    "2026.11.20.4": "e105d46c",
                 },
                 "train-long-3rack": {
                     "2026.11.19.1": "a0e17c94",
                     "2026.11.20.1": "bc381480",
                     "2026.11.20.2": "bc381480",
                     "2026.11.20.3": "4c67c254",
+                    "2026.11.20.4": "9734d621",
                 },
                 "train-medium-agentic": {
                     "2026.11.19.1": "3f203da5",
                     "2026.11.20.1": "5f0a0fa1",
                     "2026.11.20.2": "d25249f4",
                     "2026.11.20.3": "56f7ec8d",
+                    "2026.11.20.4": "1617b1d3",
                 },
                 "train-long-agentic": {
                     "2026.11.19.1": "bef4849f",
@@ -136,6 +152,7 @@ def test_checkpoint_retention_refuses_incompatible_presets(changes, error):
                     "2026.11.20.3": "9f1754cd",
                     "2026.11.20.4": "f29b9e5f",
                     "2026.11.20.5": "86d2efb3",
+                    "2026.11.20.6": "a3e2befe",
                 },
                 "train-long-agentic-3rack": {
                     "2026.11.19.1": "87a6ba8f",
@@ -144,6 +161,7 @@ def test_checkpoint_retention_refuses_incompatible_presets(changes, error):
                     "2026.11.20.3": "fbfd8b6a",
                     "2026.11.20.4": "e1eba83b",
                     "2026.11.20.5": "13b9c0ac",
+                    "2026.11.20.6": "b8f3bba7",
                 },
             },
         ),
@@ -170,8 +188,11 @@ def test_checkpoint_retention_refuses_incompatible_presets(changes, error):
 )
 def test_new_presets_match_revisioned_native_configs(table, revisions, tmp_path, monkeypatch, request):
     if table.model == "mochi":
+        monkeypatch.delenv("MARIN_PREFIX", raising=False)
+        monkeypatch.delenv("MARIN_TEMP_PREFIX", raising=False)
         produced = request.getfixturevalue("mochi_sft_preset").model()
         for preset in table.presets:
+            assert rl_compose.run_prefix(preset) == "s3://marin-us-east-08a/tmp/ttl=3d"
             model, prefix = preset.model, rl_compose.artifact_prefix(preset.recipe.layout.cluster)
             assert isinstance(model, ArtifactHfModel)
             assert (model.step.name, model.step.version, model.step.path(prefix)) == (
@@ -188,6 +209,12 @@ def test_new_presets_match_revisioned_native_configs(table, revisions, tmp_path,
     if table.model == "mochi":
         documents = dict(zip(revisions, configs, strict=True))
         for preset in table.presets:
+            document = documents[preset.name]
+            assert not document["run"]["export_hf"]
+            assert not any(
+                callback["type"] in {"checkpoint", "best_checkpoint", "hf_model_save"}
+                for callback in document["skyrl"]["trainer"]["callbacks"]
+            )
             if preset.evaluations:
                 (evaluation,) = preset.evaluations
                 (validation,) = documents[preset.name]["inputs"]["validation_data"]
@@ -393,7 +420,9 @@ def test_resume_inherits_the_source_runs_initializer(
     selection, table, explicit_init, tmp_path, monkeypatch, mochi_with_incomplete_default
 ):
     if table is MOCHI:
-        table = mochi_with_incomplete_default
+        monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+        preset = replace(mochi_with_incomplete_default.by_name["train-long"], checkpoints="latest")
+        table = replace(mochi_with_incomplete_default, presets=(preset,))
     preset = table.by_name["train-long"]
     model_name = "models/alternative"
     model_uri = "gs://fixture-models/alternative"
@@ -453,6 +482,10 @@ def test_resume_inherits_the_source_runs_initializer(
     monkeypatch.setattr(rl, "run_skyrl", lambda _config, **_kwargs: None)
     resumed.run(resumed_config)
     inputs = read_run_inputs(str(Path(resumed_config.output.resolved_config_uri).parent))
+    assert inputs.options is not None
+    assert (inputs.options.checkpoints, inputs.options.checkpoint_every, inputs.options.export) == (
+        ("latest", None, "latest") if table.model == "mochi" else ("best", 10, "best")
+    )
     assert {key: getattr(inputs.resume.model, key) for key in tokenizer} == tokenizer
     assert (inputs.resume.artifact_name, inputs.resume.artifact_version, inputs.resume.step) == (
         source.name,
@@ -463,44 +496,90 @@ def test_resume_inherits_the_source_runs_initializer(
 
 @pytest.mark.parametrize("resume", (False, True), ids=("fresh", "resume"))
 def test_mochi_plan_refuses_an_incomplete_default_export(
-    selection, stored_checkpoint, resume, mochi_with_incomplete_default
+    selection, stored_checkpoint, resume, mochi_with_incomplete_default, tmp_path, monkeypatch
 ):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     table = mochi_with_incomplete_default
     preset = table.by_name["train-long"]
     model = preset.model
-    table = replace(table, presets=(replace(preset, export="none"),))
     args = ()
     if resume:
         (stored_checkpoint / "trainer_state.pt").write_bytes(b"trainer checkpoint")
-        args += ("--resume", "checkpoints/previous@2026.11.19.1")
-    result = plan(table, preset.name, *args)
+        args += ("--resume", "checkpoints/previous@2026.11.19.1", "--checkpoints", "latest")
+    result = plan(table, preset.name, *args, sft_presets=lambda: pytest.fail("loaded unused SFT presets"))
     assert result.exit_code == 4, (result.output, result.exception)
     assert f"{model.step.name}@{model.step.version}" in result.output
-    assert "mochi_sft_then_rl.py" in result.output and "--init NAME@VERSION" in result.output
+    assert "--sft PRESET" in result.output and "--init NAME@VERSION" in result.output
 
 
 @pytest.mark.usefixtures("source_provenance")
-@pytest.mark.parametrize("model", ("snowball", "mochi"))
-def test_sft_composition_reenters_its_own_module(selection, monkeypatch, model, request):
-    module = f"experiments.post_training.{model}_sft_then_rl"
+@pytest.mark.parametrize(
+    ("model", "override"),
+    [("snowball", True), ("mochi", False), ("mochi", True)],
+    ids=("snowball", "mochi-ttl", "mochi-durable"),
+)
+def test_sft_composition_reenters_its_own_module(selection, monkeypatch, model, override, request):
+    module = f"experiments.post_training.{model}_rl"
     sft = MIXTURE_262K_32NODE if model == "snowball" else request.getfixturevalue("mochi_sft_preset")
-    argv = ("--preset", "train-long", "--version", "2026.11.19.1", "--run")
-    prefix = "s3://fixture-models/shared"
-    monkeypatch.setenv("MARIN_PREFIX", prefix)
-    monkeypatch.setattr(rl_compose, "artifact_prefix", lambda _cluster: prefix)
+    argv = (
+        "--preset",
+        "train-long",
+        "--sft",
+        sft.name,
+        "--version",
+        "2026.11.19.1",
+        "--run",
+        "--checkpoints",
+        "latest",
+        "--checkpoint-every",
+        "5",
+        "--export",
+        "latest",
+        "--priority",
+        "production",
+    )
+    durable = "s3://marin-us-east-08a/marin"
+    temporary = "s3://marin-us-east-08a/tmp/ttl=3d"
+    prefix = durable if override else temporary
+    monkeypatch.delenv("MARIN_TEMP_PREFIX", raising=False)
+    if override:
+        monkeypatch.setenv("MARIN_PREFIX", durable)
+    else:
+        monkeypatch.delenv("MARIN_PREFIX", raising=False)
+    monkeypatch.setattr(rl_compose, "artifact_prefix", lambda _cluster: durable)
     monkeypatch.setattr(rl, "_status", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(sys, "argv", [module, *argv])
+    monkeypatch.delitem(sys.modules, module)
     submitted = []
 
-    def submit(entry_module, handles, _max_concurrent, _env, *, argv):
+    def submit(entry_module, handles, _max_concurrent, env, *, argv):
         assert entry_module == module
+        assert env["MARIN_PREFIX"] == prefix
         (run,) = handles
         initializer = sft.model()
         producer = next(step for step in run.deps if step.name == initializer.step.name)
         assert producer.fingerprint() == initializer.step.fingerprint()
-        document = yaml.safe_load(materialized_config(run, prefix).launch_config_yaml)
+        training = (
+            producer
+            if model == "snowball"
+            else next(dependency for dependency in producer.deps if "train_resources" in dependency.runtime_args)
+        )
+        assert training.runtime_args["train_resources"].target_cluster is None
+        config = materialized_config(run, env["MARIN_PREFIX"])
+        document = yaml.safe_load(config.launch_config_yaml)
+        assert document["run"]["sft_preset"] == sft.name
+        assert document["inputs"]["model"]["identity"] == artifact_identity(initializer.step)
         assert document["inputs"]["model"]["uri"] == f"{producer.path(prefix)}/{initializer.relative_path}"
         assert document["inputs"]["model"]["tokenizer_uri"] is None
+        assert document["iris"]["priority"] == "production"
+        assert document["run"]["export_hf"]
+        trainer = document["skyrl"]["trainer"]
+        assert trainer["checkpoint_retention"] == "latest"
+        assert trainer["callbacks"][0] == {"type": "checkpoint", "save_steps": 5}
+        assert "best_checkpoint" not in [callback["type"] for callback in trainer["callbacks"]]
+        if model == "mochi":
+            assert document["artifacts"]["checkpoint_root"] == f"{run.path(prefix)}/checkpoints"
+            assert document["artifacts"]["export_root"] == f"{run.path(prefix)}/exports"
         submitted.append((run.name, argv))
         return JobName.from_wire("/fixture/sft-then-rl")
 
@@ -513,16 +592,43 @@ def test_sft_composition_reenters_its_own_module(selection, monkeypatch, model, 
 
 
 @pytest.mark.parametrize(
-    ("table", "name", "allowed"),
-    [("snowball", "train-long", True), ("snowball", "learning-medium", False), ("mochi", "train-medium", False)],
-    indirect=["table"],
-    ids=("exporting", "gated", "no-export"),
+    ("name", "extra", "error"),
+    [
+        ("train-long", ("--init", "model@1"), "--sft requires a fresh candidate"),
+        ("train-long", ("--resume", "run@1"), "--sft requires a fresh candidate"),
+        ("learning-medium", (), "uses default-model controls"),
+        ("speed-short", (), "does not accept --sft"),
+    ],
 )
-def test_runner_composes_after_an_export(selection, table, name, allowed):
+def test_training_graph_rejects_incompatible_sft_options(name, extra, error):
+    result = plan(
+        SNOWBALL, name, "--sft", "unknown", *extra, sft_presets=lambda: pytest.fail("loaded refused SFT presets")
+    )
+    assert result.exit_code == 4 and error in result.output, (result.output, result.exception)
+
+
+@pytest.mark.parametrize(
+    ("table", "name", "allowed"),
+    [("snowball", "train-long", True), ("snowball", "learning-medium", False), ("mochi", "train-medium", True)],
+    indirect=["table"],
+    ids=("exporting", "gated", "implicit-terminal-export"),
+)
+def test_runner_composes_after_an_export(selection, tmp_path, table, name, allowed, monkeypatch):
+    if table is MOCHI:
+        monkeypatch.setattr(rl, "check_cache", lambda _path: True)
+
     def read_policy(policy_output):
         return Artifact(path=policy_output)
 
     def evaluate(model):
+        if table is MOCHI:
+            document = yaml.safe_load(materialized_config(model.step, str(tmp_path)).launch_config_yaml)
+            assert document["run"]["export_hf"]
+            trainer = document["skyrl"]["trainer"]
+            assert trainer["checkpoint_retention"] == "latest"
+            checkpoint, export = trainer["callbacks"]
+            assert (checkpoint["type"], checkpoint["save_steps"]) == ("checkpoint", 3)
+            assert export["type"] == "hf_model_save" and export["save_on_train_end"]
         return (apply("runs/post-rl-evaluation", read_policy, version="2026.11.19", policy_output=model.step),)
 
     result = CliRunner().invoke(

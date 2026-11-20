@@ -523,4 +523,11 @@ SNOWBALL = ModelPresets(
 )
 
 if __name__ == "__main__":
-    raise SystemExit(rl.main(SNOWBALL))
+
+    def sft_presets():
+        # Load the SFT training dependencies only for --sft.
+        from experiments.post_training.snowball_sft import SNOWBALL_SFT  # noqa: PLC0415
+
+        return SNOWBALL_SFT
+
+    raise SystemExit(rl.main(SNOWBALL, sft_presets=sft_presets))

@@ -177,8 +177,10 @@ class Training:
         initial_model_uri: str | None,
     ) -> tuple[Callback, ...]:
         callbacks: list[Callback] = []
-        if preset.checkpoint_every:
-            callbacks.append(CheckpointCallback(type="checkpoint", save_steps=preset.checkpoint_every))
+        if preset.checkpoints != "none":
+            callbacks.append(
+                CheckpointCallback(type="checkpoint", save_steps=preset.checkpoint_every or preset.updates + 1)
+            )
         if evaluation is not None:
             callbacks.append(
                 EvaluationCallback(
@@ -343,6 +345,9 @@ def validate_agentic_recipe(config: RecipePatch) -> None:
         raise ValueError("group_admission.stall_timeout must cover the Harbor attempt and configured retries")
 
 
+CheckpointPolicy = Literal["none", "latest", "best"]
+
+
 @dataclass(frozen=True, kw_only=True)
 class Preset:
     """Describe an RL preset with an export policy of ``none``, ``latest``, or ``best``.
@@ -361,7 +366,7 @@ class Preset:
     publishes: bool = False
     control_preset: str | None = None
     checkpoint_every: int | None = None
-    checkpoints: Literal["none", "latest", "best"] = "best"
+    checkpoints: CheckpointPolicy = "best"
     keep_every: int | None = None
     owned_keys: frozenset[str] = frozenset()
     data_settings: frozenset[str] = frozenset()
@@ -372,7 +377,8 @@ class Preset:
     sample_namespace: str
     wandb_entity: str
     retention: SkyRLRetentionPolicy
-    export: Literal["none", "latest", "best"] = "none"
+    output_ttl_days: int | None = None
+    export: CheckpointPolicy = "none"
     batch_mix: BatchMix | None = None
     held_out_tasks: str | None = None
     harbor: HarborEvaluationCallback | None = None
@@ -395,12 +401,14 @@ class Preset:
             raise ValueError("keep_every must be positive")
         if self.export not in ("none", self.checkpoints):
             raise ValueError("export must be none or match checkpoints")
+        if isinstance(self.recipe.layout.workload, Generation) and self.checkpoints != "none":
+            raise ValueError("generation presets do not save checkpoints")
         if self.checkpoints == "none":
             if cadence is not None or self.keep_every is not None:
                 raise ValueError('checkpoints="none" requires checkpoint_every and keep_every to be unset')
-        elif cadence is None:
-            raise ValueError(f'checkpoints="{self.checkpoints}" requires checkpoint_every')
         elif self.checkpoints == "best":
+            if cadence is None:
+                raise ValueError('checkpoints="best" requires checkpoint_every')
             if not self.evaluations:
                 raise ValueError('checkpoints="best" requires an evaluation')
             every = self.evaluations[0].every

@@ -69,7 +69,7 @@ import json
 import math
 import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from functools import partial
 from typing import Protocol, runtime_checkable
@@ -632,9 +632,10 @@ class SFTSpec:
             ):
                 raise ValueError("prepared_data.tokenizer must match the SFT model's tokenizer")
 
-    def trained(self, resources: ResourceConfig) -> ArtifactHfModel:
+    def trained(self, resources: ResourceConfig, *, coordinator_cluster: str | None = None) -> ArtifactHfModel:
         if not isinstance(self.model, (HFModel, PreparedModel, ConvertedCheckpointModel, LevanterCheckpointModel)):
             raise ValueError(f"Build a Hugging Face export for the {type(self.model).__name__} trainer")
+        resources = sft_child_resources(resources, coordinator_cluster)
         _validate_gpu_mesh(self, resources)
         steps = self.num_train_steps
         return ArtifactHfModel(
@@ -644,7 +645,7 @@ class SFTSpec:
 
 
 class SFTRecipe(Protocol):
-    def trained(self, resources: ResourceConfig) -> ArtifactHfModel: ...
+    def trained(self, resources: ResourceConfig, *, coordinator_cluster: str | None = None) -> ArtifactHfModel: ...
 
 
 @dataclass(frozen=True)
@@ -653,9 +654,18 @@ class SFTPreset:
     recipe: SFTRecipe
     resources: ResourceConfig
 
-    def model(self) -> ArtifactHfModel:
+    def model(self, *, coordinator_cluster: str | None = None) -> ArtifactHfModel:
         """Build the model export using the preset's fixed allocation."""
-        return self.recipe.trained(self.resources)
+        return self.recipe.trained(self.resources, coordinator_cluster=coordinator_cluster)
+
+
+def sft_child_resources(resources: ResourceConfig, coordinator_cluster: str | None) -> ResourceConfig:
+    """Route same-cluster SFT jobs through the coordinator's local Iris controller."""
+    if coordinator_cluster is None or resources.target_cluster is None:
+        return resources
+    if resources.target_cluster != coordinator_cluster:
+        raise ValueError(f"SFT targets {resources.target_cluster}, but the RL coordinator targets {coordinator_cluster}")
+    return replace(resources, target_cluster=None)
 
 
 # Accelerator strings: "<count>x<gpu>" (e.g. "8xH100") for GPU, else a TPU slice variant ("v4-64").

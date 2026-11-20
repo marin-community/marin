@@ -25,28 +25,30 @@ The short loop, also called the quick loop, compares one change against control 
 
 ### Long loop
 
-The long loop trains a model and keeps its best checkpoint with `train-long` or `train-long-harbor` where available.
+The long loop trains a model and evaluates it on held-out tasks.
 
 | Preset | What it measures | Default work and estimated cost | Evaluation and gate | When to use it |
 |---|---|---|---|---|
-| `train-long` | Full training and checkpoint quality | 40 H100s, 100 updates by default, hours to days. Check the plan and use the reported GPU-hours for cost. | EvalLite active set of 100 tasks at step 0 and every 10 updates. Evaluation coverage invariants, without a calibrated control comparison. | Train a release candidate with checkpoint recovery and durable HF export. |
-| `train-long-harbor` | Full training with agentic checkpoint evaluation | 40 H100s, 100 updates by default, hours to days plus Harbor sandbox costs. | EvalLite plus 90 Harbor trials at each checkpoint evaluation. Coverage invariants without a calibrated control comparison. | Qualify current training weights on BFCL, SWE-bench Verified and OpenThoughts-TBLite. Requires the [Daytona evaluation account and sandbox capacity](#harbor-evaluation). |
-
-## Mochi presets and Snowball task mixes
+| Snowball `train-long` | Full training and checkpoint quality | 40 H100s, 100 updates by default, hours to days. Check the plan and use the reported GPU-hours for cost. | EvalLite active set of 100 tasks at step 0 and every 10 updates. Evaluation coverage invariants, without a calibrated control comparison. | Train a release candidate with checkpoint recovery and durable HF export. |
+| Snowball `train-long-harbor` | Full training with agentic checkpoint evaluation | 40 H100s, 100 updates by default, hours to days plus Harbor sandbox costs. | EvalLite plus 90 Harbor trials at each checkpoint evaluation. Coverage invariants without a calibrated control comparison. | Qualify current training weights on BFCL, SWE-bench Verified and OpenThoughts-TBLite. Requires the [Daytona evaluation account and sandbox capacity](#harbor-evaluation). |
 
 Mochi RL starts from the completed production SFT export, which supplies the weights and tokenizer.
-Build that export first if it is absent, or use `--init NAME@VERSION` with another published model.
+Use `--sft PRESET` to build a starting model or `--init NAME@VERSION` to use a published model.
 Mochi’s medium presets run two updates and its long presets run up to 10,000 updates.
 A preset ending in `-agentic` trains on agent tasks. A preset ending in `-harbor` evaluates with Harbor cohorts.
 
-| Mochi preset | When to use it | Layout | Checkpoints and export |
-| --- | --- | --- | --- |
-| `train-medium` | Short one-turn training check. | 15 nodes × 4 GB200s, one rack | Newest recovery checkpoint, HF export disabled. |
-| `train-medium-agentic` | Short mixed run with tool-using and one-turn tasks. | 15 nodes × 4 GB200s, one rack | Newest recovery checkpoint, HF export disabled. |
-| `train-long` | One-turn training with held-out evaluation. | 15 nodes × 4 GB200s, one rack | Best eligible policy. |
-| `train-long-3rack` | One-turn training with dedicated racks for training and inference. | 48 nodes × 4 GB200s, three racks | Best eligible policy. |
-| `train-long-agentic` | Mixed training and held-out evaluation with a single-rack allocation. | 15 nodes × 4 GB200s, one rack | Best eligible policy. |
-| `train-long-agentic-3rack` | Mixed training and held-out evaluation across three racks. | 48 nodes × 4 GB200s, three racks | Best eligible policy. |
+| Mochi preset | When to use it | Layout |
+| --- | --- | --- |
+| `train-medium` | Short one-turn training check. | 15 nodes × 4 GB200s, one rack |
+| `train-medium-agentic` | Short mixed run with tool-using and one-turn tasks. | 15 nodes × 4 GB200s, one rack |
+| `train-long` | One-turn training with held-out evaluation. | 15 nodes × 4 GB200s, one rack |
+| `train-long-3rack` | One-turn training with dedicated racks for training and inference. | 48 nodes × 4 GB200s, three racks |
+| `train-long-agentic` | Mixed training and held-out evaluation with a single-rack allocation. | 15 nodes × 4 GB200s, one rack |
+| `train-long-agentic-3rack` | Mixed training and held-out evaluation across three racks. | 48 nodes × 4 GB200s, three racks |
+
+Mochi saves no checkpoint or HF export by default. Scheduled evaluation scores the live policy.
+Enable checkpointing if you need to resume. The default Mochi run path is under the cluster's
+`tmp/ttl=3d/` prefix. Set `MARIN_PREFIX` to store your checkpoints and exports durably.
 
 - A reduced one-turn run used about 83.4 GB200-hours for two updates. [One-turn run](https://iris.oa.dev/#/job/%2Fatqamar%2Fusers-ahmad-checkpoints-mochi-rl-train-medium-ccd0098764-in-f77b2799-2026.11.19.1-coordinator-5caf5432)
 - A three-update mixed run used 95.5 GB200-hours. [Mixed run](https://iris.oa.dev/#/job/%2Fatqamar%2Fusers-ahmad-checkpoints-mochi-rl-train-medium-agentic-42fe33329d-in-03b184b7-2026.11.19.1-coordinator-c7f0249f)
@@ -80,7 +82,7 @@ Pass `--tasks users/ahmad/snowball-100k-agentic@2026.11.19.2` for a mixed preset
 selection contains the admitted SWE v4 agent tasks and the one-turn training rows. Both task
 families must be present, and training rows must be disjoint from the held-out evaluation.
 
-Use `--resume NAME@VERSION` on a checkpointing preset to restore the newest retained recovery
+Use `--resume NAME@VERSION` with checkpointing enabled to restore the newest retained recovery
 checkpoint and its original model identity from a finished run. The source needs an immutable
 version and a retained native checkpoint. `--init` starts from published
 model weights and is mutually exclusive with `--resume`. Set `SOURCE_RUN` to a finished Mochi
@@ -88,24 +90,22 @@ run’s artifact name and version, as printed in its plan under `runs` as `name`
 
 ```bash
 uv run python -m experiments.post_training.mochi_rl \
-  --preset train-medium-agentic --version 2026.11.19.1 \
+  --preset train-medium-agentic --version 2026.11.19.1 --checkpoints latest \
   --tasks users/ahmad/snowball-100k-agentic@2026.11.19.2 --resume "$SOURCE_RUN" --plan
 ```
 
 ### Compose SFT and RL
 
-Set `MARIN_PREFIX` to the RL layout’s storage prefix, which both stages use. The examples print
-the plans. Replace `--plan` with `--run` to build the SFT export and pass it as the RL initializer.
-The launcher requires `--version`, and the chosen preset supplies its artifact revision.
+Use `--sft PRESET` on the RL command to build the SFT export and initialize RL from its weights
+and tokenizer. Replace `--plan` with `--run` to launch both stages. Use one of `--sft`, `--init`,
+or `--resume` to select the initial weights. Gated presets use pinned controls and refuse `--sft`.
 
 ```bash
-MARIN_PREFIX=s3://marin-us-east-08a/marin \
-  uv run python -m experiments.post_training.snowball_sft_then_rl \
-  --preset train-medium-agentic --version 2026.11.19.1 \
-  --tasks users/ahmad/snowball-100k-agentic@2026.11.19.2 --plan
 MARIN_PREFIX=s3://marin-us-east-02a/marin \
-  uv run python -m experiments.post_training.mochi_sft_then_rl \
-  --preset train-medium --version 2026.11.19.1 --plan
+  uv run python -m experiments.post_training.snowball_rl \
+  --preset train-long --sft openthoughts-32k-4node --version 2026.11.19.1 --plan
+uv run python -m experiments.post_training.mochi_rl \
+  --preset train-medium --sft mixture-262k-176node --version 2026.11.19.1 --plan
 ```
 
 ### Convert released agent tasks
@@ -233,11 +233,17 @@ Selections with AI-judged tasks are refused before submission.
 
 `--init NAME@VERSION` on `learning-medium` or either train-long preset starts from a published initializer
 or a retained RL HF export. The selected initializer supplies both weights and its tokenizer.
-Training recovery uses the run's native checkpoint lineage. Learning-medium, data-medium and
-both train-long presets export the checkpoint with the best eligible evaluation score. If step zero wins,
+Training recovery uses the run's native checkpoint lineage. By default, Snowball's `learning-medium`,
+`data-medium`, and `train-long` export the checkpoint with the best eligible evaluation score. If step zero wins,
 the terminal receipt points to the initializer's HF checkpoint. A trained winner is converted to
 HF under `exports/global_step_<N>/policy`. See
 [native checkpoint and attempt handling](../references/rl-launching.md) for retention and retries.
+
+Use `--checkpoints latest --checkpoint-every 0 --export latest` to save and export the final
+weights. Set a positive cadence to also save periodic checkpoints.
+`--checkpoints best` requires a checkpoint cadence and evaluation. Pass `--priority production`
+to request Iris's production band. The plan prints the effective checkpoint and export settings
+and the requested priority.
 
 `--replicates N` makes 1–5 copies of a gated preset with one seed. `--control --replicates N`
 collects the preset's defaults from a clean checkout. Controls have their collection commit
@@ -409,7 +415,7 @@ best checkpoint step, or `none eligible`.
 | `exports/run-records/` | FineStore attempt records, numeric metrics and per-task evaluations. `read_skyrl_metrics(output, attempt_id=...)` reads a selected attempt. |
 | FineStore `evaluations` table | One task per attempt, evaluation and step, with task content digest, ordered answers, native rewards, verifier bounds, normalized verifier scores, outcomes and canonical strata. `finestore.rl.run_records.read_evaluations` reads it. |
 | `exports/dumped_evals/<attempt_id>/...` | JSONL answers carrying attempt, step and final-turn identity; additional evaluations also have their own export subtree. |
-| Native checkpoint root | Recovery checkpoints in the 14-day TTL bucket. The receipt records their location and lineage; they are separate from durable exports. |
+| Native checkpoint root | The receipt records recovery checkpoint locations and lineage. Snowball uses 14-day scratch storage. When enabled, Mochi writes checkpoints under its run path. |
 | `exports/best_checkpoint.json` | The selected step and its evaluation evidence, written when a checkpoint is eligible. |
 | HF policy | The completed receipt identifies the HF model for `--init`, either the initializer or a converted checkpoint under `exports/`. |
 | Gate artifact `gate_report.json`, `gate_report.md` | Calibrated comparison, invariants and breakdowns for a gated preset. Train-long has evaluation invariants without a calibrated verdict. |

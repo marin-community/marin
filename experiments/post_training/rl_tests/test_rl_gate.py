@@ -45,7 +45,7 @@ from experiments.post_training import rl_measurements as measurements
 from experiments.post_training import rl_scoring as scoring
 from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.rl_command import EXIT_CODES
-from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs, read_run_inputs
+from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs, RunOptions, read_run_inputs
 from experiments.post_training.rl_tests.fixtures import (
     SELECTION_IDENTITY,
     controls,
@@ -556,6 +556,7 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
     [
         "initializer",
         "initializer-hf",
+        "run-options",
         "stale-default",
         "control-commit",
         "unbound-data",
@@ -637,7 +638,25 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
             planned = gate.validate_candidate(preset, inputs, table=snowball_model.SNOWBALL)
             assert planned["inputs"]["model"]["uri"].endswith("/<terminal-hf-export>")
         return
-    candidate = recorded_runs(preset.name, name, inputs=inputs)
+    if case == "run-options":
+        override = replace(
+            preset,
+            checkpoints="latest",
+            checkpoint_every=None,
+            export="none",
+            recipe=replace(preset.recipe, layout=replace(preset.recipe.layout, priority="production")),
+        )
+        inputs = inputs.model_copy(update={"options": RunOptions.from_preset(override)})
+        planned = gate.validate_candidate(override, inputs, table=snowball_model.SNOWBALL)
+        assert planned["iris"]["priority"] == "production"
+        assert planned["skyrl"]["trainer"]["checkpoint_retention"] == "latest"
+        assert not planned["run"]["export_hf"]
+        table = snowball_model.SNOWBALL
+        with monkeypatch.context() as altered:
+            altered.setattr(snowball_model, "SNOWBALL", replace(table, presets=(override,)))
+            candidate = recorded_runs(preset.name, name, inputs=inputs)
+    else:
+        candidate = recorded_runs(preset.name, name, inputs=inputs)
     omissions = {
         "omitted-default": {
             "config.skyrl.generator.chat_template_kwargs": {},

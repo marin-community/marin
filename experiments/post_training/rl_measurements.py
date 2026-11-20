@@ -157,6 +157,22 @@ RUN_INPUTS_FILENAME = "run_inputs.json"
 GRADER_ERROR_LIMIT = 0.01
 
 
+class RunOptions(BaseModel, frozen=True):
+    checkpoints: presets.CheckpointPolicy
+    checkpoint_every: int | None
+    export: presets.CheckpointPolicy
+    priority: str
+
+    @classmethod
+    def from_preset(cls, preset: presets.Preset) -> RunOptions:
+        return cls(
+            checkpoints=preset.checkpoints,
+            checkpoint_every=preset.checkpoint_every,
+            export=preset.export,
+            priority=preset.recipe.layout.priority,
+        )
+
+
 class RunInputs(BaseModel, frozen=True):
     preset_name: str
     settings: tuple[str, ...] = ()
@@ -164,6 +180,8 @@ class RunInputs(BaseModel, frozen=True):
     init: presets.StoredInitializer | None = None
     resume: presets.StoredResume | None = None
     requirements: tuple[str, ...] = ()
+    options: RunOptions | None = None
+    sft_preset: str | None = None
 
 
 def run_inputs(
@@ -174,6 +192,8 @@ def run_inputs(
     requirements: Sequence[str] = (),
     *,
     resume: presets.StoredResume | None = None,
+    options: RunOptions | None = None,
+    sft_preset: str | None = None,
 ) -> RunInputs:
     values = recipe.override_document(tuple(settings))
     return RunInputs(
@@ -183,6 +203,8 @@ def run_inputs(
         init=init,
         resume=resume,
         requirements=tuple(dict.fromkeys(requirements)),
+        options=options,
+        sft_preset=sft_preset,
     )
 
 
@@ -414,7 +436,7 @@ def read_measurements(
             if initial.num_rows and frozenset(initial["task_id"].to_pylist()) != ids:
                 raise InvalidComparison(f"initial and final evaluation task IDs differ: {path}")
             sessions.append((evaluation.name + "/initial", initial, 0))
-        if preset.checkpoint_every:
+        if preset.checkpoint_every or evaluation.every:
             scheduled = set(range(evaluation.every, preset.updates, evaluation.every)) if evaluation.every else set()
             sessions.extend(
                 (f"{evaluation.name}/step-{step}", all_scores.filter(pc.equal(all_scores["step"], step)), step)

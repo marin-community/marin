@@ -402,8 +402,7 @@ def _config_values(value, prefix: str = "") -> dict[str, object]:
     return {prefix: value}
 
 
-def comparison_config(launch: dict, recorded: RecordedLaunch | None = None) -> dict[str, object]:
-    """Compare complete native configuration with declared runtime aliases resolved."""
+def _comparison_document(launch: dict, recorded: RecordedLaunch | None = None) -> dict:
     recorded = recorded or RecordedLaunch.from_document(launch, attempt=launch["run"]["attempt_id"])
     config = deepcopy(launch)
     if get_path(config, "skyrl.trainer.rollout_buffer.groups_per_family") == {}:
@@ -511,6 +510,8 @@ def comparison_config(launch: dict, recorded: RecordedLaunch | None = None) -> d
         "<run-identity>",
     )
     runtime = config["skyrl"].get("runtime", {})
+    if config["run"].get("sft_preset") is None:
+        config["run"].pop("sft_preset", None)
     for field in ("run_id", "model", "attempt_id", "coordinator_iris_job_id", "iris_job_id"):
         runtime.pop(field, None)
     if not runtime:
@@ -520,6 +521,34 @@ def comparison_config(launch: dict, recorded: RecordedLaunch | None = None) -> d
         if "hf_hub_private" in export and not export.get("hf_hub_repo_id"):
             # Without an upload destination, compare visibility using the stored controls' False default.
             export["hf_hub_private"] = False
+    return config
+
+
+def comparison_config(launch: dict, recorded: RecordedLaunch | None = None) -> dict[str, object]:
+    """Compare complete native configuration with declared runtime aliases resolved."""
+    return _config_values(_comparison_document(launch, recorded))
+
+
+def _gate_config(launch: dict, recorded: RecordedLaunch | None = None) -> dict[str, object]:
+    config = _comparison_document(launch, recorded)
+    config["iris"].pop("priority", None)
+    config["run"].pop("export_hf", None)
+    config["skyrl"].pop("checkpoint_export", None)
+    trainer = config["skyrl"]["trainer"]
+    for field in (
+        "checkpoint_retention",
+        "checkpoint_keep_every",
+        "resume_mode",
+        "hf_export_checkpoint",
+        "export_hf_artifact",
+    ):
+        trainer.pop(field, None)
+    if "callbacks" in trainer:
+        trainer["callbacks"] = [
+            callback
+            for callback in trainer["callbacks"]
+            if callback["type"] not in {"checkpoint", "best_checkpoint", "hf_model_save"}
+        ]
     return _config_values(config)
 
 
@@ -539,13 +568,13 @@ def _compose_plans(
                     resume=candidate.resume,
                     settings=candidate.settings,
                 )
+                if candidate.sft_preset is not None:
+                    spec = replace(spec, sft_preset=candidate.sft_preset)
                 if isinstance(spec.model, ArtifactHfModel) and spec.model.relative_path is None:
                     spec = replace(spec, model=replace(spec.model, relative_path="<terminal-hf-export>"))
                 step = recipe.run_step(preset, spec)
                 path = root / f"config-{index}.yaml"
-                path.write_text(
-                    materialized_config(step, recipe.artifact_prefix(preset.recipe.layout.cluster)).launch_config_yaml
-                )
+                path.write_text(materialized_config(step, recipe.run_prefix(preset)).launch_config_yaml)
                 paths.append(str(path))
             except (ValueError, click.BadParameter) as error:
                 raise InvalidComparison(f"recorded inputs cannot build the current preset: {error}") from error
@@ -609,7 +638,7 @@ def validate_plan(preset: presets.Preset, spec: SkyRLSpec, step: ArtifactStep[Sk
         execution = skyrl_execution(step)
         assert execution is not None
         step = skyrl_step(replace(spec, model=model), execution, export_hf=preset.export != "none")
-    config = materialized_config(step, recipe.artifact_prefix(preset.recipe.layout.cluster))
+    config = materialized_config(step, recipe.run_prefix(preset))
     with tempfile.TemporaryDirectory(prefix="rl-plan-") as directory:
         path = Path(directory) / "launch.yaml"
         path.write_text(config.launch_config_yaml)
@@ -662,7 +691,7 @@ def _schema_defaults(native_project: str, source_identity: str | None, groups: t
 def _check_control_config(
     config: dict, current_config: dict, recorded: RecordedLaunch | None = None, *, preset: presets.Preset
 ) -> None:
-    observed, current = comparison_config(config, recorded), comparison_config(current_config)
+    observed, current = _gate_config(config, recorded), _gate_config(current_config)
     differences = _changed_config_keys(observed, current)
     missing = {key for key in differences if key not in observed}
     if missing:
@@ -677,7 +706,7 @@ def _check_control_config(
             projected = deepcopy(current_config)
             set_path(projected, key, value)
             try:
-                default_value = comparison_config(projected).get(key, MISSING)
+                default_value = _gate_config(projected).get(key, MISSING)
             except InvalidComparison:
                 continue
             if default_value == current[key]:
@@ -742,12 +771,12 @@ def _write_gate(
         current_config, expected_config = _compose_plans(
             preset, (RunInputs(preset_name=preset.name), inputs), model=resolved_model
         )
-        current, expected = comparison_config(current_config), comparison_config(expected_config)
+        current, expected = _gate_config(current_config), _gate_config(expected_config)
         changed = _changed_config_keys(current, expected)
         explicit = _setting_keys(inputs, set(current) | set(expected))
         metadata = metadata.model_copy(update={"config_changes": tuple(sorted(changed | explicit))})
         for candidate in runs:
-            differences = _changed_config_keys(comparison_config(candidate.config, candidate.recorded), expected)
+            differences = _changed_config_keys(_gate_config(candidate.config, candidate.recorded), expected)
             if differences:
                 raise InvalidComparison(
                     f"candidate config differs from recorded inputs: {', '.join(sorted(differences))}"
@@ -804,9 +833,7 @@ def control_pin(preset: presets.Preset, *, table: ModelPresets, check_revision: 
 
 
 def control_path(preset: presets.Preset, pin: ControlPin, index: int, *, table: ModelPresets) -> str:
-    return recipe.run_path(
-        preset.recipe.layout.cluster, control_name(pin.preset, pin.commit, index, table=table), pin.revision
-    )
+    return recipe.run_path(preset, control_name(pin.preset, pin.commit, index, table=table), pin.revision)
 
 
 def _gate_artifact(
@@ -889,7 +916,7 @@ def gate_step(
 ) -> ArtifactStep[GateReport]:
     pin = control_pin(preset, table=table, check_revision=False)
     name = runs[0].name.rsplit("-r", 1)[0] + f"/gate-n{len(runs)}-{pin.commit}"
-    paths = tuple(candidate.path(recipe.artifact_prefix(preset.recipe.layout.cluster)) for candidate in runs)
+    paths = tuple(candidate.path(recipe.run_prefix(preset)) for candidate in runs)
     identities = tuple(f"{candidate.name}@{candidate.version}" for candidate in runs)
     return replace(_gate_artifact(name, preset, identities, inputs, run_paths=paths, table=table, pin=pin), deps=runs)
 
@@ -941,7 +968,7 @@ def command(table: ModelPresets) -> click.Command:
             index = int(leave_out[1:])
             candidate_name = control_name(pin.preset, pin.commit, index, table=table)
         name, separator, version = candidate_name.partition("@")
-        source = recipe.run_path(preset.recipe.layout.cluster, name, version if separator else preset.revision)
+        source = recipe.run_path(preset, name, version if separator else preset.revision)
         namespace = user_owned_name(
             f"checkpoints/{table.namespace}/compare/"
             f"{preset_name}-{fingerprint_hash(canonical_json((source, pin, index)))}"

@@ -58,6 +58,9 @@ def run_config(config_path: Path) -> None:
             "coordinator_iris_job_id": config.run.coordinator_iris_job_id,
             "iris_job_id": str(job_info.job_id) if job_info is not None else None,
         }
+        if (sft_preset := config.run.get("sft_preset")) is not None:
+            config.skyrl.runtime.sft_preset = sft_preset
+            config.skyrl.runtime.model_source_identity = str(config.inputs.model.identity)
         if (checkpoint := config.inputs.starting_checkpoint) is not None:
             config.skyrl.runtime.model_source_identity = str(config.inputs.model.identity)
             config.skyrl.runtime.starting_checkpoint_identity = str(checkpoint.identity)
