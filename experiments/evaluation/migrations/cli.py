@@ -21,15 +21,12 @@ from dataclasses import asdict, dataclass
 from enum import StrEnum
 
 import click
-from finestore.eval import ARCHIVE_SAMPLES_TABLE, SCHEMA_VERSION
-from finestore.migrations import migrate
-from finestore.reader import ReadView
-from marin.evaluation.lm_eval_samples import (
+from evalrecords.lm_eval_samples import (
     export_lm_eval_samples,
     preserved_sample_sources,
     rebuild_lm_eval_samples,
 )
-from marin.evaluation.records import (
+from evalrecords.records import (
     CW_RECORDS_PREFIX,
     DEFAULT_SCAN_PREFIXES,
     LEGACY_CW_RECORDS_PREFIX,
@@ -37,6 +34,9 @@ from marin.evaluation.records import (
     EvalTaskRef,
     list_records,
 )
+from finestore.eval import ARCHIVE_SAMPLES_TABLE, SCHEMA_VERSION
+from finestore.migrations import migrate
+from finestore.reader import ReadView
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 from experiments.evaluation.migrations.format_smoke import (

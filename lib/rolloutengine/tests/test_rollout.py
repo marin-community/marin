@@ -76,6 +76,8 @@ from rolloutengine.models import (
     LENGTH_STOP_REASON,
     AttemptEnded,
     AttemptStarted,
+    ContextRecovery,
+    ContextRejected,
     ContextWindowExceeded,
     ConversationStarted,
     GenerationLimitReached,
@@ -336,8 +338,17 @@ async def test_agent_harness_uses_isolated_task_grading_and_engine_cleanup(answe
             await machine.run(Command(("true",)))
 
 
-@pytest.mark.parametrize("arguments", ['["invalid"]', '"invalid"', "null", "42"])
-async def test_shell_rejects_nonobject_arguments_and_grades_repaired_file(arguments):
+@pytest.mark.parametrize(
+    ("arguments", "error"),
+    [
+        *(
+            (arguments, "Tool arguments must be a JSON object")
+            for arguments in ('["invalid"]', '"invalid"', "null", "42")
+        ),
+        ('{"command": "echo \\ud83d > /workspace/answer"}', "shell command must be valid Unicode text"),
+    ],
+)
+async def test_shell_rejects_invalid_arguments_and_grades_repaired_file(arguments, error):
     rejected = shell_call("unused", call_id="rejected")
     rejected["tool_calls"][0]["function"]["arguments"] = arguments
     model = ReplayModel([rejected, shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done"}])
@@ -346,9 +357,7 @@ async def test_shell_rejects_nonobject_arguments_and_grades_repaired_file(argume
     )
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
     assert record.rollout.conversations[-1].messages[1] == rejected
-    assert json.loads(record.rollout.conversations[-1].messages[2]["content"]) == {
-        "error": "Tool arguments must be a JSON object"
-    }
+    assert json.loads(record.rollout.conversations[-1].messages[2]["content"]) == {"error": error}
 
 
 async def test_shell_harness_cuts_each_command_output_at_its_limit():
@@ -722,6 +731,8 @@ async def test_a_new_conversation_replaces_the_model_options(next_options):
     revised_messages = ({"role": "user", "content": "Return 12 without tools."},)
 
     class Restarting:
+        context_recovery = ContextRecovery.NEVER
+
         def check(self, task, limits):
             pass
 
@@ -1619,6 +1630,8 @@ async def test_token_budget_stops_model_requests_and_grades_the_last_response(us
 
 async def test_token_budget_skips_a_new_conversation_and_grades_the_last_response():
     class Restarting:
+        context_recovery = ContextRecovery.NEVER
+
         def check(self, task, limits):
             pass
 
@@ -2824,6 +2837,8 @@ async def test_a_harness_runs_alone_on_a_local_machine():
 
 async def test_a_harness_that_ignores_a_limit_runs_until_the_turn_deadline():
     class Stubborn:
+        context_recovery = ContextRecovery.NEVER
+
         def check(self, task, limits):
             pass
 
@@ -2904,6 +2919,8 @@ async def test_an_agent_that_does_not_stop_is_a_cleanup_error_and_is_kept_until_
 
 async def test_recorded_step_data_keeps_the_tool_deadline():
     class SlowTool:
+        context_recovery = ContextRecovery.NEVER
+
         def check(self, task, limits):
             pass
 
@@ -2922,6 +2939,8 @@ async def test_recorded_step_data_keeps_the_tool_deadline():
 @pytest.mark.parametrize("error", [RuntimeError, TimeoutError])
 async def test_a_harness_failure_after_the_turn_deadline_is_not_a_normal_stop(error):
     class FailingOnCancel:
+        context_recovery = ContextRecovery.NEVER
+
         def check(self, task, limits):
             pass
 
@@ -2944,6 +2963,8 @@ async def test_observations_recorded_before_a_new_conversation_stay_in_the_earli
     note = {"role": "user", "content": "Noted."}
 
     class Restarting:
+        context_recovery = ContextRecovery.NEVER
+
         def check(self, task, limits):
             pass
 
@@ -3064,6 +3085,8 @@ def test_a_judge_connection_never_reaches_the_serialized_spec():
 
 async def test_a_harness_that_catches_its_tool_deadline_cannot_block_the_event_loop():
     class SwallowsDeadline:
+        context_recovery = ContextRecovery.NEVER
+
         def check(self, task, limits):
             pass
 
@@ -3089,6 +3112,8 @@ async def test_a_harness_that_catches_its_tool_deadline_cannot_block_the_event_l
 @pytest.mark.parametrize("asks_again", [False, True])
 async def test_a_harness_that_catches_its_attempt_deadline_gets_no_more_turns(asks_again):
     class SwallowsDeadline:
+        context_recovery = ContextRecovery.NEVER
+
         def check(self, task, limits):
             pass
 
@@ -3116,6 +3141,8 @@ async def test_a_harness_that_catches_its_attempt_deadline_gets_no_more_turns(as
 
 async def test_a_turn_with_recorded_observations_takes_no_reply():
     class RecordsThenReplies:
+        context_recovery = ContextRecovery.NEVER
+
         def check(self, task, limits):
             pass
 
@@ -3163,6 +3190,8 @@ async def test_an_agent_waits_while_the_engine_grades():
 
 async def test_a_harness_that_fails_after_a_model_failure_is_a_harness_failure():
     class GivesUp:
+        context_recovery = ContextRecovery.NEVER
+
         def check(self, task, limits):
             pass
 
@@ -3297,6 +3326,8 @@ async def test_final_observations_replace_a_cancelled_reply():
     final = {"role": "user", "content": "Final result."}
 
     class CancelsItsReply:
+        context_recovery = ContextRecovery.NEVER
+
         def check(self, task, limits):
             pass
 
@@ -3317,6 +3348,8 @@ async def test_final_observations_replace_a_cancelled_reply():
 
 async def test_a_harness_cannot_change_the_record_after_its_turn_deadline():
     class RecordsLate:
+        context_recovery = ContextRecovery.NEVER
+
         def check(self, task, limits):
             pass
 
@@ -3397,6 +3430,8 @@ async def test_a_cancelled_reply_starts_a_new_tool_deadline():
 
 async def test_a_harness_records_step_data_only_between_model_requests():
     class RecordsDuringARequest:
+        context_recovery = ContextRecovery.NEVER
+
         def check(self, task, limits):
             pass
 
@@ -3469,6 +3504,8 @@ async def test_a_turn_after_the_model_turn_deadline_is_a_model_failure(answers):
 
 async def test_a_new_conversation_cut_off_by_the_end_of_the_harness_is_recorded_once():
     class StartsAgainInTheBackground:
+        context_recovery = ContextRecovery.NEVER
+
         def check(self, task, limits):
             pass
 
@@ -3586,6 +3623,8 @@ async def test_a_length_cut_tool_call_is_graded_without_execution():
 
 
 class StartsTwice:
+    context_recovery = ContextRecovery.NEVER
+
     def check(self, task, limits):
         pass
 
@@ -3615,6 +3654,8 @@ async def test_a_model_failure_in_a_new_conversation_grades_the_earlier_one():
 
 class RecordsAfterARefusal:
     """Records a final reward after the session refuses the second request."""
+
+    context_recovery = ContextRecovery.NEVER
 
     def __init__(self, second: str):
         self.second = second
@@ -3665,6 +3706,8 @@ async def test_a_harness_records_a_final_reward_after_the_session_refuses_a_requ
 
 async def test_recording_after_a_failed_first_request_raises_the_refusal_again():
     class RecordsAfterAFailedFirstRequest:
+        context_recovery = ContextRecovery.NEVER
+
         def check(self, task, limits):
             pass
 
@@ -3693,6 +3736,8 @@ async def test_a_pinned_prompt_that_does_not_start_with_the_served_tokens_is_not
     recorded = []
 
     class PinsOtherTokens:
+        context_recovery = ContextRecovery.NEVER
+
         def check(self, task, limits):
             pass
 
@@ -3750,11 +3795,15 @@ async def test_a_grading_failure_after_a_model_failure_keeps_the_model_failure()
     )
 
 
-async def test_a_generation_limit_in_a_new_conversation_grades_the_earlier_one():
+@pytest.mark.parametrize("wrapped", [False, True], ids=["generation-limit", "transport-rejection"])
+async def test_a_generation_limit_in_a_new_conversation_grades_the_earlier_one(wrapped):
     class LimitedModel(ReplayModel):
         async def complete(self, request):
             if self.requests:
-                raise GenerationLimitReached((70, 71))
+                error = GenerationLimitReached((70, 71))
+                if wrapped:
+                    raise ContextRejected(error, "Maximum context length exceeded") from error
+                raise error
             return await super().complete(request)
 
     record = await engine(
@@ -3790,7 +3839,8 @@ async def test_context_rejection_allows_a_shorter_request_without_ending_the_att
     async def model(request):
         if request.messages[-1].get("content") == "Oversized tool output":
             rejected.append(request)
-            raise ContextWindowExceeded("Maximum context length exceeded")
+            error = GenerationLimitReached((70, 71))
+            raise ContextRejected(error, "Maximum context length exceeded") from error
         return await replay.complete(request)
 
     async def agent(_context, complete):

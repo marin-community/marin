@@ -5,15 +5,15 @@ import dataclasses
 import functools
 import logging
 import os
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass, field, replace
+from typing import Any, Optional
 
 import equinox as eqx
 import haliax as hax
 import jax.numpy as jnp
 import jax.random as jrandom
 from haliax import Axis
-from haliax.partitioning import named_jit, round_axis_for_partitioning
+from haliax.partitioning import named_jit
 from rigging.filesystem.storage_path import StoragePath
 
 import levanter
@@ -29,17 +29,16 @@ from levanter.callbacks.labeled_eval import LabeledLmEvalConfig, add_labeled_lm_
 from levanter.adaptor import AdaptorConfig, AdaptorExportConfig, NoAdaptorConfig
 from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics_hook_if_enabled
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint, resolve_checkpoint
-from levanter.compat.hf_checkpoints import HFCompatConfig, build_generation_config
+from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig, build_generation_config
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text.datasets import LmDataConfig
 from levanter.eval_harness import LmEvalHarnessConfig
+from levanter.field_dtype_overrides import hf_load_dtype
 from levanter.models.llama import LlamaConfig
-from levanter.models.llama_native_lm import NativeLlamaLmConfig, native_llama_sharding
-from levanter.main.model_init import ModelInitContext, build_model, prepare_model_init_context, load_model_from_source
-from levanter.model_loading import native_evaluation_axis_mapping
-from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
+from levanter.main.model_init import ModelInitContext, prepare_model_init_context, load_model_from_source
 from jax.sharding import PartitionSpec as P
-from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
+from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, ModelPlacement, split_activations
+from levanter.models.snowball import SnowballConfig
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.trainer import ExplicitTrainingLayout, Trainer, TrainerConfig
 from levanter.trainer_state import trainables_only
@@ -78,6 +77,7 @@ class TrainLmConfig:
     hf_save_chat_template: Optional[str] = None
     """Chat template embedded in the HF export's tokenizer instead of the tokenizer's own."""
     hf_generation_eos_token_ids: Optional[list[int]] = None
+    hf_generation_config_defaults: dict[str, Any] | None = None
 
     adapter: AdaptorConfig = field(default_factory=NoAdaptorConfig)
     peft_save_path: Optional[str] = None
@@ -116,6 +116,27 @@ def _restore_lm_model_from_partial_checkpoint(
     return eqx.combine(checkpointed_trainables, source_model)
 
 
+def preserve_hf_runtime_settings(reloaded: LmConfig, requested: LmConfig) -> LmConfig:
+    """Reapply the requested Snowball runtime settings after an HF config reload.
+
+    HF metadata supplies architecture fields. Keep the requested runtime settings,
+    reference checkpoint, and tokenizer.
+    """
+    if not isinstance(requested, SnowballConfig):
+        return reloaded
+    if not isinstance(reloaded, SnowballConfig):
+        raise ValueError("HF reload changed the Snowball model type")
+    return replace(
+        reloaded,
+        router_dot_fp32=requested.router_dot_fp32,
+        moe_implementation=requested.moe_implementation,
+        moe_capacity_factor=requested.moe_capacity_factor,
+        fp32_activations=requested.fp32_activations,
+        reference_checkpoint=requested.reference_checkpoint,
+        tokenizer=requested.tokenizer,
+    )
+
+
 def _load_lm_model_from_configured_source(
     *,
     config: TrainLmConfig,
@@ -125,8 +146,10 @@ def _load_lm_model_from_configured_source(
     adapter_key,
     parameter_axis_mapping,
     trainer: Trainer,
+    placement: ModelPlacement | None = None,
 ) -> LmHeadModel:
-    if isinstance(config.model, NativeLlamaLmConfig):
+    if config.model.owns_parameter_placement:
+        assert placement is not None
         source = config.initialize_from_checkpoint_path or config.initialize_model_from_checkpoint_path
         if config.initialize_from_hf or source is not None:
             return load_model_from_source(
@@ -134,28 +157,21 @@ def _load_lm_model_from_configured_source(
                 Vocab=Vocab,
                 model_key=model_key,
                 parameter_axis_mapping=parameter_axis_mapping,
-                compute_axis_mapping=trainer.compute_axis_mapping,
-                batch_axis_name=config.trainer.batch_axis_name,
-                compute_dtype=trainer.mp.compute_dtype,
-                cast_to_param=trainer.mp.cast_to_param,
+                placement=placement,
+                mp=trainer.mp,
                 hf_ref=config.initialize_from_hf,
                 checkpoint_path=source,
             )
-        return build_model(
-            config.model,
-            Vocab,
-            key=model_key,
-            parameter_axis_mapping=parameter_axis_mapping,
-            compute_axis_mapping=trainer.compute_axis_mapping,
-            batch_axis_name=config.trainer.batch_axis_name,
-        )
+        return config.model.build_for_mesh(Vocab, key=model_key, placement=placement)
     if config.initialize_from_hf:
         assert converter is not None
         model = converter.load_pretrained(
             config.model.model_type,
-            config=config.model if not config.use_hf_model_config else None,
+            # main already resolved HF architecture and reapplied runtime-only settings.
+            # Passing None here would reload a second time and discard those settings.
+            config=config.model,
             axis_mapping=parameter_axis_mapping,
-            dtype=trainer.mp.compute_dtype,
+            dtype=hf_load_dtype(trainer.mp),
         )
         model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(model)
     elif (
@@ -178,10 +194,23 @@ def _load_lm_model_from_configured_source(
     return model
 
 
+def _native_local_export_converter(
+    model: HFCompatConfig,
+    converter: HFCheckpointConverter,
+    path: str,
+    initialize_from_hf: bool | str,
+) -> HFCheckpointConverter:
+    if StoragePath(path).is_remote:
+        raise ValueError("llama_native HF export requires a local save path")
+    # Validate the resolved architecture before training starts.
+    model.to_hf_config(converter.Vocab.size)
+    return converter if initialize_from_hf else converter.without_reference_checkpoint()
+
+
 def main(config: TrainLmConfig):
-    native = isinstance(config.model, NativeLlamaLmConfig)
+    explicit = config.model.owns_parameter_placement
     explicit_layout = None
-    if native:
+    if explicit:
         if config.trainer.quantization is not None or not isinstance(config.adapter, NoAdaptorConfig):
             raise ValueError("llama_native currently supports unquantized models without adapters")
         if config.pad_tokenizer_to_match_model:
@@ -196,13 +225,17 @@ def main(config: TrainLmConfig):
             )
         ):
             raise ValueError("llama_native supports local full-model HF export without uploads or adapters")
-        if config.hf_save_path is not None:
-            if StoragePath(config.hf_save_path).is_remote:
-                raise ValueError("llama_native HF export requires a local save path")
-            config.model.validate_hf_export()
         if config.log_entropy or config.eval_harness is not None:
             raise ValueError("llama_native optional entropy/harness callbacks are not yet supported")
-        config = dataclasses.replace(config, trainer=dataclasses.replace(config.trainer, use_explicit_mesh_axes=True))
+        config = dataclasses.replace(
+            config,
+            trainer=dataclasses.replace(
+                config.trainer, use_explicit_mesh_axes=config.model.requires_explicit_mesh_axes
+            ),
+        )
+    if isinstance(config.model, SnowballConfig) and config.model.router_dot_fp32:
+        if config.trainer.field_dtype_overrides.get("router_bias") != jnp.dtype("float32"):
+            raise ValueError("FP32 router dot requires trainer.field_dtype_overrides to map router_bias to float32")
     tokenizer = config.data.the_tokenizer
 
     # The three weight-init sources are mutually exclusive: HF conversion, native full-state restore, and
@@ -228,7 +261,7 @@ def main(config: TrainLmConfig):
 
     # this is some unpleasant code to allow us to initialize from a hf checkpoint. If this is your first read through,
     # I recommend skipping it for now
-    if native:
+    if explicit:
         context = prepare_model_init_context(
             config.model,
             tokenizer=tokenizer,
@@ -237,6 +270,11 @@ def main(config: TrainLmConfig):
         )
         config = dataclasses.replace(config, model=context.model)
         converter = context.converter
+        if config.hf_save_path is not None:
+            assert isinstance(config.model, HFCompatConfig) and converter is not None
+            converter = _native_local_export_converter(
+                config.model, converter, config.hf_save_path, config.initialize_from_hf
+            )
     elif config.initialize_from_hf:
         assert isinstance(config.model, HFCompatConfig)
         converter = config.model.hf_checkpoint_converter()
@@ -253,7 +291,10 @@ def main(config: TrainLmConfig):
         if config.use_hf_model_config:
             # TODO: log diff of old and new config
             # NB: gross mutability
-            config.model = converter.config_from_hf_config(converter.default_hf_config)
+            config.model = preserve_hf_runtime_settings(
+                converter.config_from_hf_config(converter.default_hf_config),
+                config.model,
+            )
     elif isinstance(config.model, HFCompatConfig):
         converter = config.model.hf_checkpoint_converter()
         converter = converter.replaced(tokenizer=tokenizer)
@@ -263,21 +304,14 @@ def main(config: TrainLmConfig):
         converter = None
 
     levanter.trainer.initialize(config)
-    if native:
-        sharding = native_llama_sharding(
-            config.trainer.parameter_axis_mapping,
-            config.trainer.compute_axis_mapping,
-            config.trainer.batch_axis_name,
-        )
-        config.model.validate_sharding(sharding, config.trainer.device_mesh)
-        explicit_layout = ExplicitTrainingLayout(config.trainer.device_mesh, P(sharding.batch, None))
+    placement = ModelPlacement(
+        config.trainer.parameter_axis_mapping, config.trainer.compute_axis_mapping, config.trainer.batch_axis_name
+    )
+    if explicit:
+        explicit_layout = ExplicitTrainingLayout(config.trainer.device_mesh, P(placement.batch_axes, None))
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
-    def loss_function(model: LmHeadModel, example: LmExample | GrugLmExample, *, key=None):
-        if native and isinstance(example, GrugLmExample):
-            example = named_lm_example_from_grug(
-                example, model.Pos.resize(example.tokens.shape[-1]), batch_axis=config.trainer.batch_axis_name
-            )
+    def loss_function(model: LmHeadModel, example: LmExample, *, key=None):
         return model.compute_next_token_loss(example, key=key, logsumexp_weight=config.z_loss_weight)
 
     # Using the trainer as a context manager does 3 things:
@@ -289,8 +323,7 @@ def main(config: TrainLmConfig):
             config.trainer,
             optimizer,
             loss_function,
-            explicit_layout=explicit_layout,
-            checkpoint_metadata=(lambda model: model.checkpoint_metadata()) if native else None,
+            layout=explicit_layout,
         ) as trainer,
         TrainingDashboard(config, trainer.request_checkpoint, config.trainer.id or "unknown"),
     ):
@@ -307,14 +340,8 @@ def main(config: TrainLmConfig):
         # This allows Zero-3-style parameter sharding, where we shard the parameters and optimizer state across the mesh
         compute_axis_mapping = trainer.compute_axis_mapping
         parameter_axis_mapping = trainer.parameter_axis_mapping
-        if native:
-            compute_axis_mapping = native_evaluation_axis_mapping(
-                config.model,
-                parameter_axis_mapping,
-                compute_axis_mapping,
-                trainer.device_mesh,
-                config.trainer.batch_axis_name,
-            )
+        if explicit:
+            compute_axis_mapping = placement.evaluation_mapping(trainer.device_mesh)
 
         # some axes we need
         EvalBatch = config.trainer.EvalBatch
@@ -338,11 +365,11 @@ def main(config: TrainLmConfig):
         # For most things, we just insist you specify the config right, but tokenizers often have strange numbers of
         # tokens: gpt-2 has 50257, for example. So we round up.
         vocab_size = len(tokenizer)
-        Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), parameter_axis_mapping)
+        Vocab = config.model.vocab_axis_for_mesh(Axis("vocab", vocab_size), placement)
         if vocab_size != Vocab.size:
             logger.info(f"Rounding vocab size from {vocab_size} to {Vocab.size} for partitioning")
 
-        if native:
+        if explicit:
             checkpoint = trainer.explicit_checkpoint_to_load
             initialization_source = (
                 config.initialize_from_checkpoint_path or config.initialize_model_from_checkpoint_path
@@ -358,7 +385,6 @@ def main(config: TrainLmConfig):
                     if vocab_size > source_vocab:
                         raise ValueError("Tokenizer vocabulary exceeds native checkpoint vocabulary")
                     Vocab = Vocab.resize(source_vocab)
-            config.model.validate_sharding(sharding, trainer.device_mesh, Vocab.size)
 
         # Get the training dataset
         train_dataset = config.data.train_set(
@@ -381,8 +407,9 @@ def main(config: TrainLmConfig):
             adapter_key=adapter_key,
             parameter_axis_mapping=parameter_axis_mapping,
             trainer=trainer,
+            placement=placement,
         )
-        resuming = trainer.explicit_checkpoint_to_load is not None if native else trainer.checkpoint_load_plan()[1]
+        resuming = trainer.explicit_checkpoint_to_load is not None if explicit else trainer.checkpoint_load_plan()[1]
         weight_source = config.initialize_from_hf or config.initialize_model_from_checkpoint_path is not None
         if weight_source and not resuming:
             logger.info("Initializing trainer state directly from pretrained weights")
@@ -395,18 +422,7 @@ def main(config: TrainLmConfig):
         elif isinstance(config.adapter, NoAdaptorConfig):
             state = trainer.initial_state(
                 training_key,
-                model_init=lambda: (
-                    build_model(
-                        config.model,
-                        Vocab,
-                        key=model_key,
-                        parameter_axis_mapping=parameter_axis_mapping,
-                        compute_axis_mapping=trainer.compute_axis_mapping,
-                        batch_axis_name=config.trainer.batch_axis_name,
-                    )
-                    if native
-                    else config.model.build(Vocab, key=model_key)
-                ),
+                model_init=lambda: config.model.build_for_mesh(Vocab, key=model_key, placement=placement),
             )
         else:
             initial_model = config.adapter.apply(
@@ -422,7 +438,7 @@ def main(config: TrainLmConfig):
 
         if not resuming and config.initialize_from_checkpoint_path is not None:
             checkpoint_path = latest_checkpoint_path(config.initialize_from_checkpoint_path)
-            state = load_checkpoint(state, checkpoint_path, **({"mesh": trainer.device_mesh} if native else {}))
+            state = load_checkpoint(state, checkpoint_path, **({"mesh": trainer.device_mesh} if explicit else {}))
             # reset to step 0, we're just initializing weights here
             state = dataclasses.replace(state, step=jnp.array(0))
 
@@ -462,7 +478,7 @@ def main(config: TrainLmConfig):
                 trainer.device_mesh,
                 compute_axis_mapping,
                 max_eval_examples_per_ds,
-                mp=config.trainer.mp,
+                mp=trainer.mp,
                 checkpoint_path=checkpoint_path,
             )
             trainer.add_hook(cb, every=config.trainer.steps_per_eval)
@@ -508,6 +524,7 @@ def main(config: TrainLmConfig):
                 hf_save_steps=config.hf_save_steps,
                 hf_save_dtype=config.hf_save_dtype,
                 generation_config=build_generation_config(tokenizer, config.hf_generation_eos_token_ids),
+                generation_config_defaults=config.hf_generation_config_defaults,
                 chat_template=config.hf_save_chat_template,
                 peft_save_path=config.peft_save_path,
                 peft_hf_upload=config.peft_hf_upload,

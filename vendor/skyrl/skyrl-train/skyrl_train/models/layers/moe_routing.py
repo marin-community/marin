@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import NamedTuple, Protocol
 
 import torch
-import torch.nn.functional as F
 from torch import nn
 
 
@@ -52,29 +51,6 @@ class TokenReorderer(nn.Module):
         sorted_scores = top_scores.reshape(-1)[sorted_route_indices]
         sorted_token_indices = sorted_route_indices // self.top_k
         return GroupedRouting(sorted_scores, sorted_token_indices, num_tokens_per_expert)
-
-
-def run_experts_for_loop(
-    gate_weights: torch.Tensor,
-    down_weights: torch.Tensor,
-    up_weights: torch.Tensor,
-    routed_input: torch.Tensor,
-    num_tokens_per_expert: torch.Tensor,
-) -> torch.Tensor:
-    """Match eager gated-MLP numerics and zero any padded routed rows."""
-
-    counts = num_tokens_per_expert.to(torch.int64).tolist()
-    routed_rows = sum(counts)
-    num_padding = routed_input.shape[0] - routed_rows
-    input_splits = torch.split(routed_input[:routed_rows], split_size_or_sections=counts, dim=0)
-    output_splits = []
-    for expert_idx, expert_input in enumerate(input_splits):
-        gate = F.silu(torch.matmul(expert_input, gate_weights[expert_idx].transpose(-2, -1)))
-        up = torch.matmul(expert_input, up_weights[expert_idx].transpose(-2, -1))
-        hidden = gate * up
-        output_splits.append(torch.matmul(hidden, down_weights[expert_idx].transpose(-2, -1)))
-    output = torch.cat(output_splits, dim=0)
-    return torch.vstack((output, output.new_zeros((num_padding, output.shape[-1]))))
 
 
 def grouped_expert_contributions(

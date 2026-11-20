@@ -25,7 +25,18 @@ from iris.cluster.types import JobName
 from iris.managed_thread import thread_container_scope
 from iris.test_util import SentinelFile
 from iris.testing.config import make_controller_only_config
+from rigging.pytest_config import hermetic_cluster_config as hermetic_cluster_config
 from rigging.timing import Duration, ExponentialBackoff
+
+HOST_REQUIREMENTS = {
+    "requires_linux_procfs": "CPU sampling exercises the Linux /proc implementation",
+    "requires_linux_loopback": "DNS filters bind arbitrary addresses in the Linux 127.0.0.0/8 loopback range",
+}
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    for marker, reason in HOST_REQUIREMENTS.items():
+        config.addinivalue_line("markers", f"{marker}: {reason} (skipped on macOS)")
 
 
 @pytest.fixture
@@ -130,7 +141,13 @@ _task_image_available: bool | None = None
 
 
 def pytest_collection_modifyitems(config, items):
-    """Skip docker-marked tests if the task image isn't available."""
+    """Skip tests whose host requirements or Docker task image are unavailable."""
+    if sys.platform == "darwin":
+        for item in items:
+            for marker, reason in HOST_REQUIREMENTS.items():
+                if item.get_closest_marker(marker) is not None:
+                    item.add_marker(pytest.mark.skip(reason=reason))
+
     global _task_image_available
     if _task_image_available is None:
         _task_image_available = _docker_image_exists("iris-task:latest")

@@ -14,6 +14,21 @@ The selection defines the 100k training allocation. The launcher defaults to
 128 prompt groups per update, four samples per group, a 24,576-token context
 and an 8,192-token response limit.
 
+## Serving profile
+
+Evaluation samples at temperature 0.6 and top-p 0.95 with seed 20261020.
+Training rollouts sample at temperature 1.0 and top-p 1.0. The seed alone does
+not make batched serving repeat exactly.
+
+Add `--reproducible-serving` to use batch-invariant arithmetic, TRITON_ATTN,
+prefix caching and greedy evaluation. This profile limits each serving
+rank to one sequence and admits eight concurrent tasks in training and
+evaluation. Exact evaluation repeats are qualified only for this profile.
+Training throughput for this profile is unmeasured. Use a fresh
+run version when switching profiles, and do not compare evaluation scores
+across profiles. See the
+[serving reproducibility record](https://github.com/marin-community/marin/issues/11007).
+
 ## Make or update tasks
 
 Declare new tasks through the
@@ -104,7 +119,10 @@ and saves task-level verifier outcomes. Under the run artifact's `exports/`,
 per-dataset JSONL responses and `aggregated_results.jsonl`; compare its
 `avg_score` and `pass_at_1` metrics alongside verifier coverage. The final update saves a checkpoint;
 HF export is opt-in with `--export-hf` and adds a separate export job after training.
-Local graders require the privileged container profile; image graders and host judges use their configured backends.
+Local graders require the privileged container profile. Image graders and host
+judges use their configured backends. The selection's task and grader
+requirements determine which phases use Daytona. Quick-loop training and
+validation can both use the Daytona eval account.
 
 ## Compare the iteration
 
@@ -123,3 +141,7 @@ panel fixed and change one recipe choice at a time. Reuse the published data for
 training-only changes; produce a new selection version when changing tasks or
 sampling. Update this page and the checked-in recipe when adopting a better
 configuration, and keep trial results in the experiment issue or report.
+
+Default-profile runs whose recorded configuration has evaluation temperature
+0.0 evaluated greedily without a seed. Do not compare their evaluation scores
+with runs that sampled at 0.6.

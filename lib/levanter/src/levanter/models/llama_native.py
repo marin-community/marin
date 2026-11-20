@@ -11,7 +11,7 @@ The state-dict boundary uses canonical output-first Hugging Face parameter shape
 import dataclasses
 import math
 from dataclasses import dataclass
-from typing import Literal, Mapping
+from typing import Literal, Mapping, TypeVar
 
 import equinox as eqx
 import jax
@@ -24,7 +24,13 @@ from levanter.grug.attention import AttentionMask, GrugAttentionImplementation, 
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.layers.linear import INITIALIZER_TRUNCATION_BOUND, Linear
 from levanter.layers.rms_norm import RmsNorm
-from levanter.layers.rotary_native import NativeRotaryConfig, RotaryConfig, apply_rotary
+from levanter.layers.rotary import (
+    DefaultRotaryEmbeddingsConfig,
+    Llama3RotaryEmbeddingsConfig,
+    RotaryEmbeddingsConfig,
+    YarnRotaryEmbeddingsConfig,
+)
+from levanter.layers.rotary_native import apply_rotary
 from levanter.layers.scan_checkpoint import ScanCheckpointSpec
 from levanter.layers.stacked import ArrayStacked
 from levanter.utils.activation import ActivationFunctionEnum, JaxActivationFunction
@@ -122,7 +128,7 @@ class NativeLlamaConfig:
     hybrid_norm: bool = False
     use_qk_norm: bool = False
     upcast_attn: bool = False
-    rope: NativeRotaryConfig = RotaryConfig()
+    rope: RotaryEmbeddingsConfig = DefaultRotaryEmbeddingsConfig()
     attention_implementation: GrugAttentionImplementation = "reference"
     gradient_checkpointing: ScanCheckpointSpec = True
 
@@ -136,6 +142,10 @@ class NativeLlamaConfig:
             raise ValueError("hidden_dim must be divisible by num_heads when head_dim is not set")
         if self.actual_head_dim % 2:
             raise ValueError("RoPE requires an even head dimension")
+        if not isinstance(
+            self.rope, (DefaultRotaryEmbeddingsConfig, Llama3RotaryEmbeddingsConfig, YarnRotaryEmbeddingsConfig)
+        ):
+            raise ValueError(f"Unsupported llama_native RoPE configuration: {type(self.rope).__name__}")
 
     @property
     def actual_head_dim(self) -> int:
@@ -144,16 +154,16 @@ class NativeLlamaConfig:
     def build(self, *, key: PRNGKeyArray, sharding: NativeLlamaSharding = NativeLlamaSharding()) -> "NativeLlamaModel":
         return NativeLlamaModel.init(self, key=key, sharding=sharding)
 
-
-def _norm(config: NativeLlamaConfig, dim: int, storage_spec: P) -> RmsNorm:
-    return RmsNorm.init(
-        dim,
-        eps=config.layer_norm_epsilon,
-        use_weight=config.use_layer_norm_weight,
-        use_bias=config.use_bias,
-        storage_spec=storage_spec,
-        compute_spec=P(None),
-    )
+    def init_norm(self, dim: int, storage_spec: P) -> RmsNorm:
+        """Build a replicated compute norm with the model's affine settings."""
+        return RmsNorm.init(
+            dim,
+            eps=self.layer_norm_epsilon,
+            use_weight=self.use_layer_norm_weight,
+            use_bias=self.use_bias,
+            storage_spec=storage_spec,
+            compute_spec=P(None),
+        )
 
 
 class NativeLlamaAttention(eqx.Module):
@@ -197,8 +207,8 @@ class NativeLlamaAttention(eqx.Module):
                 storage_spec=sharding.row_storage,
                 compute_spec=sharding.row_compute,
             ),
-            _norm(config, head_dim, P(None)) if config.use_qk_norm else None,
-            _norm(config, head_dim, P(None)) if config.use_qk_norm else None,
+            config.init_norm(head_dim, P(None)) if config.use_qk_norm else None,
+            config.init_norm(head_dim, P(None)) if config.use_qk_norm else None,
             config,
             sharding,
         )
@@ -212,7 +222,7 @@ class NativeLlamaAttention(eqx.Module):
     ) -> Float[Array, "B S D"]:
         q, k, v = self.project_qkv(x, pos_ids, sharding=self.sharding)
         if self.config.attention_implementation == "reference":
-            output = reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
+            output = reference_attention(q, k, v, mask, logits_dtype=None)
         else:
             output = attention(q, k, v, mask, implementation=self.config.attention_implementation)
         return self.project_output(output, dtype=x.dtype, sharding=self.sharding)
@@ -326,10 +336,10 @@ class NativeLlamaBlock(eqx.Module):
         return NativeLlamaBlock(
             NativeLlamaAttention.init(config, sharding, key=attn_key),
             NativeLlamaMlp.init(config, sharding, key=mlp_key),
-            _norm(config, config.hidden_dim, sharding.norm_storage),
-            _norm(config, config.hidden_dim, sharding.norm_storage),
-            _norm(config, config.hidden_dim, sharding.norm_storage) if config.hybrid_norm else None,
-            _norm(config, config.hidden_dim, sharding.norm_storage) if config.hybrid_norm else None,
+            config.init_norm(config.hidden_dim, sharding.norm_storage),
+            config.init_norm(config.hidden_dim, sharding.norm_storage),
+            config.init_norm(config.hidden_dim, sharding.norm_storage) if config.hybrid_norm else None,
+            config.init_norm(config.hidden_dim, sharding.norm_storage) if config.hybrid_norm else None,
         )
 
     @jax.named_call
@@ -408,9 +418,9 @@ class NativeLlamaModel(eqx.Module):
         return NativeLlamaModel(
             embeddings,
             layers,
-            _norm(config, config.hidden_dim, sharding.norm_storage),
+            config.init_norm(config.hidden_dim, sharding.norm_storage),
             head,
-            _norm(config, config.hidden_dim, sharding.norm_storage) if config.input_embedding_norm else None,
+            config.init_norm(config.hidden_dim, sharding.norm_storage) if config.input_embedding_norm else None,
             config,
             sharding,
         )
@@ -439,8 +449,9 @@ class NativeLlamaModel(eqx.Module):
         return self.norm(hidden)
 
     def embed_tokens(self, tokens: Int[Array, "B S"], *, sharding: NativeLlamaSharding) -> Float[Array, "B S D"]:
-        weight = reshard(self.token_embeddings, sharding.column_compute)
-        hidden = weight.at[tokens].get(out_sharding=sharding.residual)
+        # Gather from the stored shards so the pullback can accumulate repeated token IDs
+        # without first replicating the weight over FSDP.
+        hidden = self.token_embeddings.at[tokens].get(out_sharding=sharding.residual)
         return self.embedding_norm(hidden) if self.embedding_norm is not None else hidden
 
     def get_lm_head(self) -> Float[Array, "V D"]:
@@ -505,20 +516,16 @@ class NativeLlamaModel(eqx.Module):
         state: dict[str, jax.Array] = {}
         _put(state, _HF_TOKEN_EMBEDDING_WEIGHT_KEY, self.token_embeddings)
         _put_module(state, _HF_FINAL_NORM_PREFIX, self.norm)
-        if self.embedding_norm is not None:
-            _put_module(state, "norm", self.embedding_norm)
-        if self.lm_head is not None:
-            _put_module(state, "lm_head", self.lm_head)
+        _put_module(state, "norm", self.embedding_norm)
+        _put_module(state, "lm_head", self.lm_head)
         for index, layer in enumerate(self.layers.unstacked()):
             path = f"{_HF_LAYER_PREFIX}{index}"
             for name in _LAYER_NORM_FIELDS:
                 module = getattr(layer, name)
-                if module is not None:
-                    _put_module(state, f"{path}.{name}", module)
+                _put_module(state, f"{path}.{name}", module)
             for name in _ATTENTION_FIELDS:
                 module = getattr(layer.self_attn, name)
-                if module is not None:
-                    _put_module(state, f"{path}.self_attn.{name}", module)
+                _put_module(state, f"{path}.self_attn.{name}", module)
             for name in _MLP_FIELDS:
                 _put_module(state, f"{path}.mlp.{name}", getattr(layer.mlp, name))
         return {f"{prefix}.{name}" if prefix else name: value for name, value in state.items()}
@@ -536,18 +543,11 @@ class NativeLlamaModel(eqx.Module):
             model,
             _load_module(model.norm, source, _HF_FINAL_NORM_PREFIX, self.sharding.norm_storage),
         )
-        if model.embedding_norm is not None:
-            model = eqx.tree_at(
-                lambda m: m.embedding_norm,
-                model,
-                _load_module(model.embedding_norm, source, "norm", self.sharding.norm_storage),
-            )
-        if model.lm_head is not None:
-            model = eqx.tree_at(
-                lambda m: m.lm_head,
-                model,
-                _load_module(model.lm_head, source, "lm_head", self.sharding.column_storage),
-            )
+        model = dataclasses.replace(
+            model,
+            embedding_norm=_load_module(model.embedding_norm, source, "norm", self.sharding.norm_storage),
+            lm_head=_load_module(model.lm_head, source, "lm_head", self.sharding.column_storage),
+        )
         layers = []
         for index, layer in enumerate(model.layers.unstacked()):
             path = f"{_HF_LAYER_PREFIX}{index}"
@@ -584,7 +584,9 @@ def _put(state: dict[str, jax.Array], key: str, value: jax.Array | None) -> None
         state[key] = value
 
 
-def _put_module(state: dict[str, jax.Array], prefix: str, module: Linear | RmsNorm) -> None:
+def _put_module(state: dict[str, jax.Array], prefix: str, module: Linear | RmsNorm | None) -> None:
+    if module is None:
+        return
     assert isinstance(module, (Linear, RmsNorm))
     _put(state, f"{prefix}.weight", module.weight)
     _put(state, f"{prefix}.bias", module.bias)
@@ -594,7 +596,12 @@ def _load(value: jax.Array, template: jax.Array, spec: P) -> jax.Array:
     return reshard(jnp.asarray(value, dtype=template.dtype).reshape(template.shape), spec)
 
 
-def _load_module(module: Linear | RmsNorm, state: Mapping[str, jax.Array], prefix: str, spec: P):
+_ParameterModule = TypeVar("_ParameterModule", Linear, RmsNorm, Linear | None, RmsNorm | None)
+
+
+def _load_module(module: _ParameterModule, state: Mapping[str, jax.Array], prefix: str, spec: P) -> _ParameterModule:
+    if module is None:
+        return module
     if not isinstance(module, (Linear, RmsNorm)):
         raise ValueError("Load native base weights before applying adapters")
     weight = None if module.weight is None else _load(state[f"{prefix}.weight"], module.weight, spec)

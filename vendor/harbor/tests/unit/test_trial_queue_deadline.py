@@ -11,7 +11,7 @@ import pytest
 from harbor.agents.base import TurnCapExhaustedError
 from harbor.environments.base import SandboxDiskFullError
 from harbor.models.job.config import RetryConfig
-from harbor.models.trial.config import TaskConfig, TrialConfig
+from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.paths import TrialPaths
 from harbor.models.trial.result import AgentInfo, ExceptionInfo, TrialResult
 from harbor.models.verifier.result import VerifierResult
@@ -90,6 +90,7 @@ def _config(
     cleanup_grace: float = 0.01,
 ) -> TrialConfig:
     return TrialConfig(
+        agent=AgentConfig(name="pi"),
         task=TaskConfig(path=tmp_path / "task"),
         trial_name=name,
         trials_dir=tmp_path / "trials",
@@ -205,7 +206,6 @@ async def test_agent_disk_exhaustion_is_a_model_failure(tmp_path: Path) -> None:
     trial._hooks = {event: [] for event in TrialEvent}
     trial.task = SimpleNamespace(name="disk-full")
     trial.agent = SimpleNamespace(run=run_agent, cleanup=cleanup)
-    trial.user_agent = None
     trial.agent_environment = SimpleNamespace(
         with_default_user=lambda user: contextlib.nullcontext(),
         with_agent_timeout=lambda timeout: contextlib.nullcontext(),
@@ -464,7 +464,6 @@ def _trial_with_agent_phase(
     trial._is_agent_environment_stopped = False
     trial._first_phase_timeout = None
     trial._log_handler = None
-    trial.user_agent = None
 
     async def no_op(*args, **kwargs) -> None:
         return None
@@ -591,79 +590,6 @@ async def test_slow_cancelled_producer_cannot_publish_over_confirmed_completion(
     )
     assert after_upload.completion is None
     assert after_upload.verifier_result is None
-
-
-@pytest.mark.unit
-@pytest.mark.parametrize(
-    "prior_error, scored",
-    [
-        pytest.param(None, True, id="scored"),
-        pytest.param(None, False, id="never-scored"),
-        pytest.param(AgentTimeoutError("agent deadline"), True, id="agent-timeout"),
-        pytest.param(TurnCapExhaustedError("turn cap"), True, id="passthrough"),
-    ],
-)
-async def test_abandoned_bridge_export_has_retryable_failure_at_finalization(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    prior_error: Exception | None,
-    scored: bool,
-) -> None:
-    monkeypatch.setattr(artifact_writer, "_WRITER", ArtifactWriter(num_workers=1))
-    config = _config(
-        tmp_path, "bridge-export", attempt_timeout=None, cleanup_grace=0.01
-    )
-    trial = _trial_ready_to_finalize(config)
-    trial._first_phase_timeout = None
-    trial._reached_verifier = True
-    trial.user_agent = None
-    if prior_error is not None:
-        trial.result.exception_info = ExceptionInfo.from_exception(prior_error)
-    if not scored:
-        trial.result.verifier_result = None
-    release = asyncio.Event()
-    export_cancelled = asyncio.Event()
-
-    async def export(environment, path):
-        try:
-            await asyncio.Future()
-        except asyncio.CancelledError:
-            export_cancelled.set()
-            await release.wait()
-
-    async def no_op(*args):
-        return None
-
-    trial.bridge = SimpleNamespace(
-        export_trajectory=export,
-        teardown=no_op,
-        trajectory_filename="bridge-trajectory.json",
-    )
-    trial._bridge_ready = True
-    trial.agent_environment = SimpleNamespace(
-        with_default_user=lambda _: contextlib.nullcontext(),
-        scoped_exec_env=lambda _: contextlib.nullcontext(),
-    )
-    try:
-        # Bridge cleanup deliberately swallows the abandoned export's error.
-        await trial._cleanup_bridge(user=None)
-        assert export_cancelled.is_set()
-        await trial._finalize()
-
-        native = TrialResult.model_validate_json(
-            trial.paths.lifecycle_result_path.read_text()
-        )
-        assert native.completion is None
-        assert native.verifier_result is None
-        assert native.exception_info.exception_type == "PhaseCancellationError"
-        assert (
-            error_category(native.exception_info.exception_type)
-            is ErrorCategory.INFRASTRUCTURE
-        )
-        assert is_resume_retryable(native.exception_info.exception_type)
-    finally:
-        release.set()
-        await asyncio.gather(*trial.pending_cleanup_tasks(), return_exceptions=True)
 
 
 def _install_factory(monkeypatch, behaviors: dict[tuple[str, int], FakeTrial]) -> None:

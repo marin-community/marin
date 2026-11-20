@@ -77,6 +77,7 @@ from levanter.checkpoint import (
     load_checkpoint_or_initialize,
 )
 from levanter.config import JsonAtom
+from levanter.field_dtype_overrides import check_field_dtype_overrides, with_field_dtype_overrides
 from levanter.cutlass_kernel_cache import cutlass_kernel_cache
 from levanter.cutlass_kernel_cache import install as install_cutlass_kernel_cache
 from levanter.data.dataset import AsyncDataset
@@ -111,6 +112,52 @@ DEFAULT_JAX_CONFIG: Dict[str, JsonAtom] = {
 
 
 @dataclass(frozen=True)
+class NamedTrainingLayout:
+    """Haliax parameter and computation mappings on a training mesh."""
+
+    mesh: Mesh
+    parameter_mapping: ResourceMapping
+    compute_mapping: ResourceMapping
+
+    def mesh_context(self):
+        return haliax.partitioning.set_mesh(self.mesh)
+
+    def parameter_context(self):
+        return hax.axis_mapping(self.parameter_mapping)
+
+    def compute_context(self):
+        return hax.axis_mapping(self.compute_mapping)
+
+    def jit_step(self, step):
+        return named_jit(
+            step,
+            axis_resources=self.parameter_mapping,
+            out_axis_resources=self.parameter_mapping,
+            donate_args=(True,),
+        )
+
+    def place_step_result(self, result):
+        return hax.shard_with_axis_mapping(result, self.parameter_mapping)
+
+    def place_state(self, state):
+        return hax.shard(state, self.parameter_mapping)
+
+    def loader_mapping(self, batch_name: str) -> ResourceMapping:
+        return self.compute_mapping
+
+    def batch_size(self, config: "TrainerConfig") -> int | None:
+        return config.microbatch_size
+
+    def accumulate(self, grad_fn, size, batch_name, batch, batch_kwargs):
+        axis = _resolve_axis_in_tree((batch, batch_kwargs), batch_name)
+        return (
+            grad_fn
+            if size is None
+            else microbatched(grad_fn, axis, size, self.parameter_mapping, self.compute_mapping)
+        )
+
+
+@dataclass(frozen=True)
 class ExplicitTrainingLayout:
     """Placement for raw-array training; models own parameter and computation layouts.
 
@@ -128,6 +175,55 @@ class ExplicitTrainingLayout:
     def __post_init__(self):
         if any(axis_type is not AxisType.Explicit for axis_type in self.mesh.axis_types):
             raise ValueError("Raw-array training requires explicit mesh axes")
+
+    @property
+    def batch_axes(self):
+        return self.batch_spec[0] if self.batch_spec else None
+
+    def mesh_context(self):
+        return jax.set_mesh(self.mesh)
+
+    def parameter_context(self):
+        return nullcontext()
+
+    def compute_context(self):
+        return nullcontext()
+
+    @property
+    def compute_mapping(self) -> None:
+        return None
+
+    def jit_step(self, step):
+        return jax.jit(step, donate_argnums=(0,))
+
+    def place_step_result(self, result):
+        return result
+
+    def place_state(self, state):
+        return state
+
+    def loader_mapping(self, batch_name: str) -> ResourceMapping:
+        if any(axis is not None for axis in self.batch_spec[1:]):
+            raise ValueError(
+                "Explicit data loaders only shard the leading example dimension; "
+                "provide feature-sharded batches directly to train_step"
+            )
+        return {batch_name: self.batch_axes or ()}
+
+    def batch_size(self, config: "TrainerConfig") -> int | None:
+        if config.per_device_parallelism < 0:
+            return None
+        entry = self.batch_axes
+        axes = () if entry is None else (entry,) if isinstance(entry, str) else entry
+        return config.per_device_parallelism * math.prod(self.mesh.shape[axis] for axis in axes)
+
+    def accumulate(self, grad_fn, size, batch_name, batch, batch_kwargs):
+        if len(batch) != 1:
+            raise ValueError("Explicit training accepts one positional batch pytree")
+        return grad_fn if size is None else microbatched_arrays(grad_fn, size)
+
+
+TrainingLayout = NamedTrainingLayout | ExplicitTrainingLayout
 
 
 # A note on the semantics of "step" vs "next_step":
@@ -312,8 +408,7 @@ class Trainer:
         loss_fn: ComputeLossFunction,
         *,
         add_default_hooks: bool = True,
-        explicit_layout: ExplicitTrainingLayout | None = None,
-        checkpoint_metadata: Callable[[Any], Mapping[str, Any]] | None = None,
+        layout: TrainingLayout | None = None,
     ):
         """
         Args:
@@ -323,15 +418,13 @@ class Trainer:
                 either a scalar loss, or a tuple of (scalar loss, metrics_dict). The metrics dict will be automatically
                 logged to the tracker with appropriate prefixes (e.g., "train/accuracy", "eval/perplexity").
                 The function should be jit-able and should not have any side effects.
-            explicit_layout: Raw-array mesh and batch placement; models own storage and computation shardings.
-            checkpoint_metadata: Application metadata derived from the model being saved.
+            layout: Placement for model state and batches. Defaults to the configured Haliax mappings.
         """
         self.hooks = TrainerHooks()
         self.config = config
         self.optimizer = optimizer
-        self.explicit_layout = explicit_layout
-        self._checkpoint_metadata = checkpoint_metadata
-        if explicit_layout is not None and config.quantization is not None:
+        self._layout = layout
+        if isinstance(layout, ExplicitTrainingLayout) and config.quantization is not None:
             raise ValueError("Explicit raw-array training does not yet support quantization")
         self._raw_loss_function = loss_fn
         self._checkpointer: Optional[Checkpointer] = None
@@ -354,6 +447,14 @@ class Trainer:
         self._logged_jaxprs: set[str] = set()
 
     @cached_property
+    def layout(self) -> TrainingLayout:
+        if self._layout is not None:
+            return self._layout
+        return NamedTrainingLayout(
+            self.config.device_mesh, self.config.parameter_axis_mapping, self.config.compute_axis_mapping
+        )
+
+    @cached_property
     def loss_fn(self) -> WrappedLossFunction:
         """Wrap the loss to return (loss, metrics_dict), casting the model to compute precision.
 
@@ -363,7 +464,7 @@ class Trainer:
         return WrappedLossFunction(
             self._raw_loss_function,
             self.mp,
-            self.compute_axis_mapping if self.explicit_layout is None else None,
+            self.layout.compute_mapping,
         )
 
     @property
@@ -374,8 +475,8 @@ class Trainer:
 
     @property
     def mp(self) -> jmp.Policy:
-        """Returns the mixed precision policy"""
-        return self.config.mp
+        """Returns the mixed precision policy, with ``field_dtype_overrides`` applied"""
+        return self.config.precision_policy
 
     @property
     def num_train_steps(self) -> int:
@@ -414,33 +515,28 @@ class Trainer:
 
     @property
     def parameter_axis_mapping(self) -> ResourceMapping:
+        if isinstance(self.layout, NamedTrainingLayout):
+            return self.layout.parameter_mapping
         return self.config.parameter_axis_mapping
 
     @property
     def compute_axis_mapping(self) -> ResourceMapping:
-        return self.config.compute_axis_mapping
+        mapping = self.layout.compute_mapping
+        return self.config.compute_axis_mapping if mapping is None else mapping
 
     @property
     def device_mesh(self) -> Mesh:
-        if self.explicit_layout is not None:
-            return self.explicit_layout.mesh
-        return self.config.device_mesh
+        return self.layout.mesh
 
     def _parameter_context(self):
-        return nullcontext() if self.explicit_layout is not None else hax.axis_mapping(self.parameter_axis_mapping)
+        return self.layout.parameter_context()
 
     def _compute_context(self):
-        return nullcontext() if self.explicit_layout is not None else hax.axis_mapping(self.compute_axis_mapping)
+        return self.layout.compute_context()
 
     @property
     def microbatch_size(self) -> int | None:
-        if self.explicit_layout is None:
-            return self.config.microbatch_size
-        if self.config.per_device_parallelism < 0:
-            return None
-        entry = self.explicit_layout.batch_spec[0] if self.explicit_layout.batch_spec else None
-        axes = () if entry is None else (entry,) if isinstance(entry, str) else entry
-        return self.config.per_device_parallelism * math.prod(self.device_mesh.shape[axis] for axis in axes)
+        return self.layout.batch_size(self.config)
 
     @property
     def TrainBatch(self):
@@ -456,11 +552,7 @@ class Trainer:
 
         self._cmanagers = [
             levanter.tracker.current_tracker(self.tracker),
-            (
-                jax.set_mesh(self.device_mesh)
-                if self.explicit_layout is not None
-                else haliax.partitioning.set_mesh(self.device_mesh)
-            ),
+            self.layout.mesh_context(),
             self._parameter_context(),
         ]
 
@@ -527,7 +619,8 @@ class Trainer:
 
         # first try to load a full trainer state checkpoint
         checkpoint_search_paths, load_checkpoint = self.checkpoint_load_plan()
-        if self.explicit_layout is not None:
+        explicit = isinstance(self.layout, ExplicitTrainingLayout)
+        if explicit:
             checkpoint = self.explicit_checkpoint_to_load
             load_checkpoint = checkpoint is not None
             if checkpoint is not None:
@@ -535,6 +628,7 @@ class Trainer:
 
         def init_state_and_model(model_init, training_key):
             model = model_init()
+            check_field_dtype_overrides(model, self.config.field_dtype_overrides)
             # only force trainable params to param precision. Other params are cast to compute precision
             state = TrainerState.init(
                 self.optimizer,
@@ -547,7 +641,7 @@ class Trainer:
             )
             return state
 
-        if (model is not None or self.explicit_layout is not None) and not load_checkpoint:
+        if (model is not None or explicit) and not load_checkpoint:
             # Explicit model initialization already owns its placement. Avoid a second
             # compiled initialization/merge that would donate its buffers.
             return init_state_and_model(model_init, training_key)
@@ -558,10 +652,10 @@ class Trainer:
         state = load_checkpoint_or_initialize(
             init_state_and_model,
             checkpoint_search_paths,
-            discover_latest=self.explicit_layout is None,
-            axis_mapping=self.parameter_axis_mapping if self.explicit_layout is None else None,
+            discover_latest=not explicit,
+            axis_mapping=self.parameter_axis_mapping if not explicit else None,
             mesh=self.device_mesh,
-            donate_args=self.explicit_layout is None,
+            donate_args=not explicit,
             is_checkpointed=saveable_train_state,
             do_load=load_checkpoint,
             allow_partial=self.config.allow_partial_checkpoint,
@@ -732,15 +826,9 @@ class Trainer:
                 ProgressEvent.CHECKPOINT_STARTED,
                 ProgressEvent.CHECKPOINT_FINISHED,
             ):
-                if self._checkpoint_metadata is None:
-                    checkpointer.on_step(tree=info.state.saveable_state, step=info.step, force=force)
-                else:
-                    checkpointer.on_step(
-                        tree=info.state.saveable_state,
-                        step=info.step,
-                        force=force,
-                        metadata=self._checkpoint_metadata(info.state.model),
-                    )
+                checkpointer.on_step(
+                    tree=info.state.saveable_state, step=info.step, force=force, model=info.state.model
+                )
 
         self.add_hook(checkpoint_hook, every=1)  # checkpointer manages its own frequency
 
@@ -769,7 +857,6 @@ class Trainer:
 
             @eqx.filter_jit
             def eval_loss(model, *batch, **batch_kwargs):
-                model = self.mp.cast_to_compute(model)
                 return self.loss_fn(model, *batch, **batch_kwargs, key=None)
 
             self.add_hook(
@@ -796,11 +883,6 @@ class Trainer:
         Returns:
             DataLoader: the data loader
         """
-        if self.explicit_layout is not None and any(axis is not None for axis in self.explicit_layout.batch_spec[1:]):
-            raise ValueError(
-                "Explicit data loaders only shard the leading example dimension; "
-                "provide feature-sharded batches directly to train_step"
-            )
         if isinstance(batch, int):
             batch_name = self.config.batch_axis_name
             batch_size = batch
@@ -816,11 +898,7 @@ class Trainer:
             batch_size=batch_size,
             max_buffered_batches=128,
             mesh=self.device_mesh,
-            axis_resources=(
-                self.compute_axis_mapping
-                if self.explicit_layout is None
-                else {batch_name: self.explicit_layout.batch_spec[0] if self.explicit_layout.batch_spec else None}
-            ),
+            axis_resources=self.layout.loader_mapping(batch_name),
             fetch_batch_size=32,
             batch_axis_name=batch_name,
             allow_nondivisible_batch_size=self.config.allow_nondivisible_batch_size,
@@ -828,25 +906,11 @@ class Trainer:
 
     @cached_property
     def _jit_train_step_fn(self):
-        if self.explicit_layout is not None:
-            return jax.jit(self._train_step, donate_argnums=(0,))
-        return named_jit(
-            self._train_step,
-            axis_resources=self.parameter_axis_mapping,
-            out_axis_resources=self.parameter_axis_mapping,
-            donate_args=(True,),
-        )
+        return self.layout.jit_step(self._train_step)
 
     @cached_property
     def _jit_train_step_fn_no_hook(self):
-        if self.explicit_layout is not None:
-            return jax.jit(functools.partial(self._train_step, _no_hooks=True), donate_argnums=(0,))
-        return named_jit(
-            functools.partial(self._train_step, _no_hooks=True),
-            axis_resources=self.parameter_axis_mapping,
-            out_axis_resources=self.parameter_axis_mapping,
-            donate_args=(True,),
-        )
+        return self.layout.jit_step(functools.partial(self._train_step, _no_hooks=True))
 
     def _train_step(self, state: S, batch, batch_kwargs, _no_hooks=False) -> TrainStepResult[S]:
         key, new_key = jax.random.split(state.training_key)
@@ -865,11 +929,10 @@ class Trainer:
                 result = self._raw_loss_function(model, *batch, **batch_kwargs, key=key)
                 # result is (loss, metrics) tuple
                 loss_for_opt, _metrics = result
-                return _ensure_scalar(loss_for_opt) if self.explicit_layout is not None else loss_for_opt.scalar()
+                return _ensure_scalar(loss_for_opt)
 
         new_state, updates = state.take_step(grads, obj_fun=obj_fun, loss=loss, key=new_key)
-        if self.explicit_layout is None:
-            new_state = hax.shard(new_state, self.parameter_axis_mapping)
+        new_state = self.layout.place_state(new_state)
 
         hook_infos = None
         if not _no_hooks:
@@ -887,9 +950,7 @@ class Trainer:
             loss_metrics=train_metrics,
             hook_infos=hook_infos,
         )
-        if self.explicit_layout is not None:
-            return result
-        return hax.shard_with_axis_mapping(result, self.parameter_axis_mapping)
+        return self.layout.place_step_result(result)
 
     def _compute_gradients_microbatched(
         self, loss_fn: WrappedLossFunction, model: M, *batch, **batch_kwargs
@@ -898,27 +959,11 @@ class Trainer:
         Compute gradients, optionally with microbatching.
         Returns (loss, grads, dict[str, Metric]).
         """
-        if self.explicit_layout is not None and len(batch) != 1:
-            raise ValueError("Explicit training accepts one positional batch pytree")
-        if self.explicit_layout is None:
-            Batch = _resolve_axis_in_tree((batch, batch_kwargs), self.config.batch_axis_name)
-
-        # loss_fn always returns (loss, metrics), so has_aux=True
-        # Only batch inputs should be split; raw model dimensions can match the batch size.
+        # Only batch inputs should be split; model dimensions can match the batch size.
         grad_fn = partial(eqx.filter_value_and_grad(loss_fn, has_aux=True), model)
-
-        mbs = self.microbatch_size
-        if mbs is not None:
-            if self.explicit_layout is not None:
-                grad_fn = microbatched_arrays(grad_fn, mbs)
-            else:
-                grad_fn = microbatched(
-                    grad_fn,
-                    Batch,
-                    mbs,
-                    self.parameter_axis_mapping,
-                    self.compute_axis_mapping,
-                )
+        grad_fn = self.layout.accumulate(
+            grad_fn, self.microbatch_size, self.config.batch_axis_name, batch, batch_kwargs
+        )
 
         with self._compute_context():
             (loss, metrics), grads = grad_fn(*batch, **batch_kwargs)
@@ -981,6 +1026,13 @@ def _initialize_global_tracker(config, run_id):
 class TrainerConfig:
     seed: int = 0  # random seed
     mp: jmp.Policy = jmp.get_policy("f32")  # mixed precision policy
+    field_dtype_overrides: dict[str, jnp.dtype] = field(default_factory=dict)
+    """Model attribute name, matched at any depth (e.g. ``router_bias``), to the floating dtype it keeps.
+
+    ``mp`` casts an overridden field only to its own dtype: in the trainer state and the compute view, on HF load in
+    train_lm, train_dpo and lora_lm, and in HF exports. The eval and sampling entry points still load HF checkpoints in
+    the compute dtype. In YAML: ``field_dtype_overrides: {router_bias: float32}``.
+    """
     quantization: Optional[QuantizationConfig] = None
     model_averaging: ModelAveragingConfig | None = None
 
@@ -1012,6 +1064,11 @@ class TrainerConfig:
     This is required for code paths that call `jax.sharding.reshard(..., PartitionSpec(...))`,
     because JAX disallows using named `PartitionSpec`s under `AxisType.Auto`/`AxisType.Manual` meshes.
     """
+
+    @property
+    def precision_policy(self) -> jmp.Policy:
+        """``mp`` with ``field_dtype_overrides`` applied."""
+        return with_field_dtype_overrides(self.mp, self.field_dtype_overrides)
 
     @property
     def batch_axis_name(self) -> str | None:

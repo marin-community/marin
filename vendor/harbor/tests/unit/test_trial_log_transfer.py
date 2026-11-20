@@ -3,7 +3,11 @@ import logging
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
+import pytest
+
 import harbor.environments.factory as environment_factory
+from harbor.agents.factory import AgentFactory
+from harbor.models.agent.name import AgentName
 from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment, ExecResult
 from harbor.environments.capabilities import EnvironmentCapabilities
@@ -135,7 +139,7 @@ def _scored_trial_config(tmp_path: Path) -> TrialConfig:
     return TrialConfig(
         task=TaskConfig(path=task_dir),
         trials_dir=trials_dir,
-        agent=AgentConfig(import_path="tests.unit.test_trial_log_transfer:_QuickAgent"),
+        agent=AgentConfig(name=AgentName.PI),
         environment=EnvironmentConfig(
             type=EnvironmentType.LOCAL,
             delete=True,
@@ -201,3 +205,8 @@ async def test_failed_log_upload_keeps_exception_context(
     )
     assert failure.exc_info is not None
     assert isinstance(failure.exc_info[1], RuntimeError)
+
+
+@pytest.fixture(autouse=True)
+def register_test_agents(monkeypatch):
+    monkeypatch.setitem(AgentFactory._AGENT_MAP, AgentName.PI, _QuickAgent)

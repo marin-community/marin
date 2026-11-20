@@ -13,7 +13,7 @@ from haliax.partitioning import _get_mesh
 from jax import numpy as jnp
 from jax import shard_map
 from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel
-from jax.sharding import NamedSharding, auto_axes
+from jax.sharding import NamedSharding, PartitionSpec, auto_axes, reshard
 from jaxtyping import Array, Bool, Float, Int
 
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
@@ -65,7 +65,8 @@ class AttentionMask(eqx.Module):
     sliding_window: int | None = eqx.field(default=None, static=True)
     # Optional precomputed FA4/CuTe per-token metadata (lower_bounds, valid), both [B, S] int32/bool.
     # When set, ``gpu_fa4_cute_attention`` and the AMD Triton flash kernels use these directly instead of
-    # rebuilding from ``segment_ids``/``sliding_window``. This lets a caller compute the metadata once outside a
+    # rebuilding from ``segment_ids``/``sliding_window``, and ``materialize_mask`` (reference attention) also keeps
+    # only keys at or after each query's lower bound. This lets a caller compute the metadata once outside a
     # ``lax.scan`` and select a per-layer sliding window (a static field the scan body cannot vary).
     # Build them with ``fa4_cute_segment_bounds`` from segment IDs that each form one contiguous run: the AMD
     # kernels need nondecreasing bounds at most each token's position (invalid tokens counting as their own
@@ -116,7 +117,7 @@ class AttentionMask(eqx.Module):
 
         Shapes:
           - If `segment_ids` is unset, returns `(q_len, k_len)` (broadcastable across batch).
-          - If `segment_ids` is set with per-batch IDs, returns `(batch, q_len, k_len)`.
+          - If `segment_ids` is set with per-batch IDs, or `fa4_bounds` is set, returns `(batch, q_len, k_len)`.
         """
         mask = None
 
@@ -149,6 +150,15 @@ class AttentionMask(eqx.Module):
                 allowed = q_seg[:, :, None] == k_seg[:, None, :]
             else:
                 raise ValueError(f"segment_ids must be 1D or 2D, got ndim={q_seg.ndim}")
+            mask = allowed if mask is None else jnp.logical_and(mask, allowed)
+
+        if self.fa4_bounds is not None:
+            # Inclusive per-query key lower bounds; they carry a per-layer window and document starts.
+            # Padding queries hold a kernel tile-skip hint (up to a ``seq_len`` sentinel) rather than a
+            # bound, which would mask the whole row, so they keep only the other mask terms.
+            lower_bounds, valid = self.fa4_bounds
+            lower_bounds = jnp.where(valid, lower_bounds, 0)
+            allowed = jnp.arange(k_len)[None, None, :] >= lower_bounds[:, :, None]
             mask = allowed if mask is None else jnp.logical_and(mask, allowed)
 
         return mask
@@ -245,11 +255,14 @@ def _reference_attention_math(
 ) -> Float[Array, "B Q Hq D"]:
     head_dim = q.shape[-1]
     num_q_heads = q.shape[2]
-    k = align_kv_heads(k, num_q_heads=num_q_heads)
-    v = align_kv_heads(v, num_q_heads=num_q_heads)
-
-    scale = 1.0 / math.sqrt(head_dim)
-    scores = jnp.einsum("bqhd,bkhd->bhqk", q * scale, k)
+    num_kv_heads = k.shape[2]
+    if num_q_heads % num_kv_heads != 0 or v.shape[2] != num_kv_heads:
+        raise ValueError("Query heads must form complete groups over matching key/value heads")
+    groups = num_q_heads // num_kv_heads
+    # Keep query groups in the contraction so KV gradients sum before BF16 rounding.
+    q = q.reshape(*q.shape[:2], num_kv_heads, groups, head_dim)
+    scaled_q = q * (1.0 / math.sqrt(head_dim))
+    scores = jnp.einsum("bqhgd,bkhd->bhgqk", scaled_q, k)
 
     explicit = None
     if mask is None:
@@ -273,7 +286,7 @@ def _reference_attention_math(
                 f"got mask={explicit.shape}, expected [batch,{scores.shape[-2]},{scores.shape[-1]}]"
             )
 
-        explicit = explicit[:, None, :, :]  # -> [B, 1, Q, K], broadcast across heads.
+        explicit = explicit[:, None, None, :, :]  # Broadcast across KV heads and query groups.
         if explicit.dtype == jnp.bool_:
             scores = jnp.where(explicit, scores, jnp.array(-1e9, dtype=scores.dtype))
         else:
@@ -281,8 +294,8 @@ def _reference_attention_math(
     if logits_dtype is not None:
         scores = scores.astype(logits_dtype)
     weights = jax.nn.softmax(scores, axis=-1).astype(v.dtype)
-    ctx = jnp.einsum("bhqk,bkhd->bqhd", weights, v)
-    return ctx.astype(v.dtype)
+    ctx = jnp.einsum("bhgqk,bkhd->bqhgd", weights, v)
+    return ctx.reshape(*q.shape[:2], num_q_heads, v.shape[-1]).astype(v.dtype)
 
 
 def reference_attention(
@@ -293,14 +306,12 @@ def reference_attention(
     *,
     logits_dtype: jnp.dtype | None,
 ) -> Float[Array, "B Q Hq D"]:
-    """Reference attention whose output sharding follows ``q``."""
+    """Scale Q in its dtype, optionally cast scores before softmax, and preserve Q sharding."""
     out_sharding = named_sharding_of(q)
     if out_sharding is None:
         return _reference_attention_math(q, k, v, mask, logits_dtype=logits_dtype)
-    # jax 0.11.1 explicit-sharding mode cannot infer layouts for the two contractions
-    # (align_kv_heads drops the head-axis sharding, and a sharded head_dim makes the
-    # score contraction ambiguous), so run the math under Auto axes and pin only the
-    # output to q's sharding.
+    # Explicit axes cannot infer every score contraction layout when heads or
+    # head dimensions are sharded. Run under Auto axes and pin the output layout.
     # pyrefly: ignore[bad-assignment]  # auto_axes's decorator overload erases the wrapped signature
     wrapped: Callable[..., Float[Array, "B Q Hq D"]] = auto_axes(_reference_attention_math, out_sharding=out_sharding)
     return wrapped(q, k, v, mask, logits_dtype=logits_dtype)
@@ -312,6 +323,15 @@ def _tpu_splash_attention(
     v: Float[Array, "B K Hkv D"],
     mask: AttentionMask | jax.Array | None,
 ) -> Float[Array, "B Q Hq D"]:
+    if isinstance(mask, AttentionMask) and mask.fa4_bounds is not None:
+        raise NotImplementedError(
+            "TPU Splash attention does not support fa4_bounds; select a static sliding_window mask."
+        )
+
+    # On TPU, keep Splash's backward query scale from folding into the BF16 RoPE multiply.
+    # Changing the rounding order gave ~0.34% relative L2 query gradient error on v4-16.
+    # See https://github.com/dlwh/marin/pull/67 for the paired comparison.
+    q = jax.lax.optimization_barrier(q)
     # Splash attention expects BHSD.
     q_ = jnp.transpose(q, (0, 2, 1, 3))
     k_ = jnp.transpose(k, (0, 2, 1, 3))
@@ -391,6 +411,15 @@ def _tpu_splash_attention(
 
         if mask.segment_ids is not None:
             q_segment_ids, kv_segment_ids = mask.segment_ids
+            # Each query shard needs its local document IDs; KV stays gathered with K/V.
+            q_seg_axes = (
+                PartitionSpec(q_pspec[0], q_pspec[2]) if q_segment_ids.ndim == 2 else PartitionSpec(q_pspec[2])
+            )
+            kv_seg_axes = (
+                PartitionSpec(k_pspec[0], k_pspec[2]) if kv_segment_ids.ndim == 2 else PartitionSpec(k_pspec[2])
+            )
+            q_segment_ids = reshard(q_segment_ids, NamedSharding(mesh, q_seg_axes))
+            kv_segment_ids = reshard(kv_segment_ids, NamedSharding(mesh, kv_seg_axes))
             q_seg_sharding = _named_sharding_of(q_segment_ids, label="segment_ids.q")
             kv_seg_sharding = _named_sharding_of(kv_segment_ids, label="segment_ids.kv")
             segment_id_lowering = lower_splash_segment_ids(
@@ -420,11 +449,15 @@ def _tpu_splash_attention(
         head_shards=head_shards,
         q_seq_shards=q_seq_shards,
     )
+    # The kernel carries global mask metadata, including query positions; slice it with Q.
+    kernel_sharding = NamedSharding(mesh, PartitionSpec(q_pspec[1], q_pspec[2]))
+    kernel_specs = splash_kernel.manual_sharding_spec(kernel_sharding)
+    splash_kernel = reshard(splash_kernel, kernel_specs)
 
     @functools.partial(
         shard_map,
         mesh=mesh,
-        in_specs=(q_pspec, k_pspec, v_pspec, segment_id_lowering.segment_ids_axes, None),
+        in_specs=(q_pspec, k_pspec, v_pspec, segment_id_lowering.segment_ids_axes, kernel_specs),
         out_specs=q_pspec,
         check_vma=False,
     )

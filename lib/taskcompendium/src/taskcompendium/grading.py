@@ -15,12 +15,14 @@ from openai import APIError
 from verifyit.candidate import Candidate, grade_candidate, grade_ejection_candidate
 from verifyit.grade import GradingInfraError, InvalidTask, Reward, Status, empty_output_policy
 from verifyit.modes.grade_judge import JudgeConnection, grade_judge_candidate
+from verifyit.reasoning_markup import COMPLETED_STOP_REASON, ReasoningReply
 from verifyit.spec import (
     EmptyOutputPolicy,
     ExactSpec,
     JudgeSpec,
     NumericSpec,
     PredictedActionSpec,
+    ReasoningMarkupSpec,
     Spec,
     StructuredExactSpec,
     UnsolvableSpec,
@@ -124,6 +126,8 @@ def _candidate(verifier: Spec, submission: Submission) -> Candidate:
             if not isinstance(final, AssistantToolCalls):
                 return ()
             return tuple(CandidateCall(call.name, call.object_arguments()) for call in final.calls)
+        case ReasoningMarkupSpec(), ActionSubmission(message=final):
+            return final.content if isinstance(final, TextMessage) else final.content or ""
         case ExactSpec(), JsonSubmission(value=value) | StateSubmission(value=value):
             if not isinstance(value, str):
                 raise SubmissionFailure("Text verifier requires a string JSON value")
@@ -170,6 +174,10 @@ def grade_answer(task: TaskSpec, attempt: GradingAttempt) -> GradeResult:
         if not gradeable_empty_text(task, attempt, verifier):
             return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
         candidate = ""
+    if isinstance(verifier, ReasoningMarkupSpec):
+        assert isinstance(candidate, str)
+        # An attempt without a stop reason is a complete reply, such as a golden or control reply.
+        candidate = ReasoningReply(candidate, attempt.stop_reason or COMPLETED_STOP_REASON)
     resources = {resource.path: resource_bytes(resource) for resource in task.resources.verifier}
     return grade_result(verifier, grade_candidate(verifier, candidate, resources))
 

@@ -67,9 +67,10 @@ from levanter.grug.sharding import (
     _drop_absent_mesh_axes,
     _mesh_axis_size,
     _mesh_has_axis,
-    _reshard_for_init,
     _reshard_for_shard_map,
     _value_spec_or_default,
+    keep_reduced,
+    replicate_keeping_reduced,
 )
 from levanter.utils.activation import ActivationFunctionEnum
 
@@ -78,6 +79,15 @@ MOE_SENDER_DROPPED_ASSIGNMENTS_METRIC = "moe/sender_dropped_assignments"
 MOE_RECEIVER_DROPPED_ASSIGNMENTS_METRIC = "moe/receiver_dropped_assignments"
 MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC = "moe/skipped_padding_assignments"
 MOE_VALID_ASSIGNMENTS_METRIC = "moe/valid_assignments"
+
+
+def _expert_assignment_counts(
+    selected_experts: Int[Array, "T K"], token_valid: Bool[Array, "T"], num_experts: int
+) -> Int[Array, "E"]:
+    # float32 holds integers exactly only up to 2**24. With unbalanced routing at large batch, one expert's
+    # global count passes that, and rounded counts break the valid-plus-skipped accounting of drop metrics.
+    one_hot = jax.nn.one_hot(selected_experts, num_experts, dtype=jnp.int32)
+    return jnp.sum(one_hot * token_valid.astype(jnp.int32)[:, None, None], axis=(0, 1))
 
 
 def moe_routing_stats(
@@ -93,10 +103,7 @@ def moe_routing_stats(
     router_probs_f = router_probs.astype(jnp.float32)
     router_logits_f = router_logits.astype(jnp.float32)
     valid_f = token_valid.astype(jnp.float32)
-    expert_counts = jnp.sum(
-        jax.nn.one_hot(selected_experts, num_experts, dtype=jnp.float32) * valid_f[:, None, None],
-        axis=(0, 1),
-    )
+    expert_counts = _expert_assignment_counts(selected_experts, token_valid, num_experts)
     total_assignments = jnp.maximum(jnp.sum(expert_counts), 1.0)
     assignment_fraction = expert_counts / total_assignments
     routing_entropy = -jnp.sum(assignment_fraction * jnp.log(assignment_fraction + 1e-6))
@@ -132,7 +139,7 @@ def moe_routing_stats_local(
 
     def _local(sel: jax.Array, probs: jax.Array, logits: jax.Array, valid: jax.Array) -> dict[str, jax.Array]:
         valid_f = valid.astype(jnp.float32)
-        counts = jnp.sum(jax.nn.one_hot(sel, num_experts, dtype=jnp.float32) * valid_f[:, None, None], axis=(0, 1))
+        counts = _expert_assignment_counts(sel, valid, num_experts)
         log_partition = jsp.special.logsumexp(logits.astype(jnp.float32), axis=-1)
         return {
             "routing_counts_local": counts[None, :],
@@ -292,7 +299,7 @@ class QBRoutedMoE(eqx.Module):
             raise ValueError(f"token_valid must have shape [{x.shape[0]}], got shape={token_valid.shape}")
 
         with jax.named_scope("moe_route"):
-            router_logits = jnp.einsum("td,de->te", x, reshard(router, P(None, None))).astype(jnp.float32)
+            router_logits = jnp.einsum("td,de->te", x, replicate_keeping_reduced(router)).astype(jnp.float32)
             biased_logits = router_logits + jax.lax.stop_gradient(router_bias)
             router_probs = jax.nn.softmax(router_logits, axis=-1)
             topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.num_experts_per_token + 1)
@@ -386,16 +393,10 @@ class MoEExpertMlp(eqx.Module):
         # `w_gate`/`w_up` contract over `hidden_dim`, so their fan-in moves when the experts run
         # in a latent space; `w_down` contracts over `intermediate_dim` and is unaffected.
         gate_up_std = initializer_std if gate_up_initializer_std is None else gate_up_initializer_std
-        w_gate = _init_weight(k_gate, (num_experts, hidden_dim, intermediate_dim), gate_up_std)
-        w_up = _init_weight(k_up, (num_experts, hidden_dim, intermediate_dim), gate_up_std)
-        w_down = _reshard_for_init(
-            _init_weight(k_down, (num_experts, intermediate_dim, hidden_dim), initializer_std),
-            pspecs.w_down,
-        )
         return MoEExpertMlp(
-            w_gate=_reshard_for_init(w_gate, pspecs.w_gate_up),
-            w_up=_reshard_for_init(w_up, pspecs.w_gate_up),
-            w_down=w_down,
+            w_gate=_init_weight(k_gate, (num_experts, hidden_dim, intermediate_dim), gate_up_std, pspecs.w_gate_up),
+            w_up=_init_weight(k_up, (num_experts, hidden_dim, intermediate_dim), gate_up_std, pspecs.w_gate_up),
+            w_down=_init_weight(k_down, (num_experts, intermediate_dim, hidden_dim), initializer_std, pspecs.w_down),
             implementation=resolved_implementation,
             activation=activation,
             capacity_factor=capacity_factor,
@@ -607,8 +608,8 @@ def moe_mlp(
         else:
             raise AssertionError(f"Unhandled MoE implementation {resolved_implementation!r}")
 
-        w_up_gate_spec = P("expert", None, None)
-        w_down_spec = P("expert", None, None)
+        w_up_gate_spec = keep_reduced(P("expert", None, None), w_up_gate)
+        w_down_spec = keep_reduced(P("expert", None, None), w_down)
 
         x = _reshard_for_shard_map(x, mesh, token_spec)
         selected_experts = _reshard_for_shard_map(selected_experts, mesh, token_spec)
@@ -667,6 +668,8 @@ def moe_mlp(
         # The local kernel contracts full hidden dimensions against the complete expert bank.
         w_up_gate_spec = P(*(None for _ in range(w_up_gate.ndim)))
         w_down_spec = P(*(None for _ in range(w_down.ndim)))
+    w_up_gate_spec = keep_reduced(w_up_gate_spec, w_up_gate)
+    w_down_spec = keep_reduced(w_down_spec, w_down)
 
     x = _reshard_for_shard_map(x, mesh, x_spec)
     selected_experts = _reshard_for_shard_map(selected_experts, mesh, selected_experts_spec)

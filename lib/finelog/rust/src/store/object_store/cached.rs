@@ -164,6 +164,11 @@ pub struct CachedObjectStore {
     /// Bounds concurrent cache-miss downloads.
     fetches: Arc<Semaphore>,
     read_workers: Arc<ReadWorkers>,
+    /// The limiter a [`ObjectStore::maintenance_reads`] view reads through. It
+    /// has the same size as `read_workers` but its own queue: a merge reads one
+    /// input at a time, and behind a queue of query reads each read waits a
+    /// full turn.
+    maintenance_read_workers: Arc<ReadWorkers>,
     fill_workers: Arc<ReadWorkers>,
     /// Bounds write-through uploads independently of reads and flush encoding.
     uploads: Arc<Semaphore>,
@@ -189,6 +194,7 @@ impl CachedObjectStore {
             cache: FileCache::new(root)?,
             fetches: Arc::new(Semaphore::new(MAX_PARALLEL_FETCHES)),
             read_workers: Arc::new(ReadWorkers::new(MAX_PARALLEL_CACHE_READS)),
+            maintenance_read_workers: Arc::new(ReadWorkers::new(MAX_PARALLEL_CACHE_READS)),
             fill_workers: Arc::new(ReadWorkers::new(MAX_PARALLEL_FETCHES)),
             uploads: Arc::new(Semaphore::new(MAX_PARALLEL_UPLOADS)),
             capacity_bytes,
@@ -553,6 +559,13 @@ impl ObjectStore for CachedObjectStore {
         reference: &ObjectReference,
     ) -> Result<Option<PathBuf>, StatsError> {
         self.lookup(reference).await
+    }
+
+    fn maintenance_reads(&self) -> Option<Arc<dyn ObjectStore>> {
+        Some(Arc::new(Self {
+            read_workers: Arc::clone(&self.maintenance_read_workers),
+            ..self.clone()
+        }))
     }
 
     async fn pin_cached_path(

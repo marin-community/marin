@@ -1,4 +1,4 @@
-import type { ImportedGitCommit, ServingInfo } from './types'
+import type { Conversation, ImportedGitCommit, ServingInfo } from './types'
 import type { ToolDefinition } from './python_tools'
 import type { SharedChatSnapshot } from './shared_chat'
 
@@ -62,6 +62,14 @@ export async function invokeShell(
   return postJsonResult('shell', { files, commits, history, command }, signal, 'shell command', baseUrl)
 }
 
+export async function invokeWebSearch(
+  arguments_: Record<string, unknown>,
+  signal: AbortSignal,
+  baseUrl?: string,
+): Promise<unknown> {
+  return postJsonResult('web-search', arguments_, signal, 'web search', baseUrl)
+}
+
 export interface RepositorySnapshot {
   files: Record<string, string>
   commits: ImportedGitCommit[]
@@ -77,6 +85,29 @@ export async function createChatShare(snapshot: SharedChatSnapshot): Promise<str
   const result = await postJsonResult<{ id: string }>('chat-shares', snapshot, undefined, 'chat share')
   if (typeof result.id !== 'string') throw new Error('chat share returned an invalid ID')
   return result.id
+}
+
+export interface FeedbackReport {
+  description: string
+  /** Self-reported and unverified; empty when the reporter left it blank. */
+  reporter: string
+  model: string
+  /** The saved conversation, or null when the reporter left it out. */
+  conversation: Conversation | null
+}
+
+/** What the reporter enters in the Report issue dialog. */
+export interface ReportInput {
+  description: string
+  reporter: string
+  includeConversation: boolean
+}
+
+/** Save a model-feedback report and return its storage URL. */
+export async function submitFeedback(report: FeedbackReport): Promise<string> {
+  const result = await postJsonResult<{ location: string }>('feedback', report, undefined, 'feedback report')
+  if (typeof result.location !== 'string') throw new Error('feedback report returned an invalid location')
+  return result.location
 }
 
 export async function fetchChatShare(shareId: string): Promise<unknown> {

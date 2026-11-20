@@ -39,6 +39,9 @@ pub struct RemoteObjectStore {
 /// Build the remote store from `remote_log_dir`, or `None` when sync is
 /// disabled (empty string).
 ///
+/// Open cloud providers within the Tokio runtime that will own their HTTP I/O.
+/// It stays there even when operations are polled on another runtime.
+///
 /// `gs://bucket/sub/dir` -> a GCS store on `bucket` with prefix `sub/dir`.
 /// `s3://bucket/sub/dir` -> an S3-compatible store on `bucket` with prefix
 /// `sub/dir`. Everything else about the connection comes from the standard
@@ -322,8 +325,8 @@ mod tests {
         assert!(build_remote_object_store("").unwrap().is_none());
     }
 
-    #[test]
-    fn gs_url_parses_bucket_and_prefix() {
+    #[tokio::test]
+    async fn gs_url_parses_bucket_and_prefix() {
         // from_env() builds without credentials; the parse + prefix split is the
         // logic under test (no network — we never call put/list here).
         let store = build_remote_object_store("gs://my-bucket/logs/sub")
@@ -336,8 +339,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn s3_url_parses_bucket_and_prefix() {
+    #[tokio::test]
+    async fn s3_url_parses_bucket_and_prefix() {
         // from_env() builds without credentials; the parse + prefix split is the
         // logic under test (no network — we never call put/list here). No
         // AWS_ENDPOINT_URL is set, so the builder keeps its default endpoint.

@@ -23,6 +23,7 @@ import numpy as np
 import pytest
 import safetensors
 import transformers
+from huggingface_hub.utils import LocalEntryNotFoundError
 from chex import assert_trees_all_close, assert_trees_all_equal
 from haliax import Axis
 from haliax.state_dict import ModuleWithStateDictSerialization, to_torch_compatible_state_dict, with_prefix
@@ -50,7 +51,10 @@ from levanter.compat.hf_checkpoints import (
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.testing.helpers import use_test_mesh
+from levanter.testing.tokenizer import llama3_style_chat_tokenizer
 from levanter.utils.byte_budget import HostByteBudget
+
+SAMPLING_DEFAULTS = {"do_sample": True, "temperature": 0.6, "top_p": 0.95}
 
 
 @skip_if_no_torch
@@ -87,7 +91,7 @@ def test_save_sharded_checkpoints(local_gpt2_tokenizer_path, monkeypatch):
         use_flash_attention=False,
         tokenizer=local_gpt2_tokenizer_path,
     )
-    converter = nano_config.hf_checkpoint_converter()
+    converter = replace(nano_config.hf_checkpoint_converter(), reference_checkpoint=None)
 
     mp = jmp.get_policy("f32")
 
@@ -164,12 +168,80 @@ def test_url_reference_export_copies_code_and_preserves_trained_weights(
         assert not (tmp_path / "weights.blob").exists()
 
 
+@pytest.mark.parametrize("save_tokenizer", [True, False])
+@pytest.mark.parametrize("reference_kind", ["local", "memory", "hub", "missing"])
+@pytest.mark.parametrize("override", [None, {"eos_token_id": [3, 5]}])
+def test_export_preserves_reference_generation_config(
+    tmp_path, local_gpt2_tokenizer_path, monkeypatch, reference_kind, override, save_tokenizer
+):
+    config = Gpt2Config(
+        hidden_dim=16, num_heads=2, num_layers=1, use_flash_attention=False, tokenizer=local_gpt2_tokenizer_path
+    )
+    original = {"eos_token_id": [1, 2], "temperature": 0.7, "do_sample": True}
+    reference = StoragePath(str(tmp_path / "reference"))
+    if reference_kind == "memory":
+        reference = StoragePath("memory://generation-reference") / uuid.uuid4().hex
+    if reference_kind != "missing":
+        (reference / "generation_config.json").write_bytes(json.dumps(original).encode())
+    else:
+        Path(str(reference)).mkdir()
+    converter = replace(config.hf_checkpoint_converter(), reference_checkpoint=RepoRef(str(reference)))
+    if reference_kind == "hub":
+
+        def download(*, repo_id, filename, revision):
+            assert (repo_id, filename, revision) == ("test/reference", "generation_config.json", "pinned-revision")
+            return str(reference / filename)
+
+        monkeypatch.setattr(hf_checkpoints, "hf_hub_download", download)
+        converter = replace(converter, reference_checkpoint=RepoRef("test/reference", "pinned-revision"))
+    output = tmp_path / "output"
+    with use_test_mesh():
+        model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(23))
+        converter.save_pretrained(
+            model,
+            str(output),
+            save_reference_code=False,
+            generation_config=override,
+            generation_config_defaults=SAMPLING_DEFAULTS,
+            save_tokenizer=save_tokenizer,
+        )
+    saved = json.loads((output / "generation_config.json").read_text())
+    preserved = override if override is not None else (None if reference_kind == "missing" else original)
+    if preserved is not None:
+        for key, value in preserved.items():
+            if key == "eos_token_id":
+                expected_ids = {value} if isinstance(value, int) else set(value)
+                assert set(saved[key]).issuperset(expected_ids)
+            else:
+                assert saved[key] == value
+    assert saved["do_sample"] is True
+
+
+def test_export_propagates_unavailable_hub_generation_config(tmp_path, local_gpt2_tokenizer_path, monkeypatch):
+    config = Gpt2Config(
+        hidden_dim=16, num_heads=2, num_layers=1, use_flash_attention=False, tokenizer=local_gpt2_tokenizer_path
+    )
+    converter = replace(
+        config.hf_checkpoint_converter(), reference_checkpoint=RepoRef("test/reference", "pinned-revision")
+    )
+
+    def unavailable_download(*, repo_id, filename, revision):
+        assert (repo_id, filename, revision) == ("test/reference", "generation_config.json", "pinned-revision")
+        raise LocalEntryNotFoundError("Hub unavailable and generation config is not cached")
+
+    monkeypatch.setattr(hf_checkpoints, "hf_hub_download", unavailable_download)
+    with use_test_mesh():
+        model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(23))
+        with pytest.raises(LocalEntryNotFoundError):
+            converter.save_pretrained(model, str(tmp_path / "output"), save_reference_code=False)
+
+
 def test_parallel_export_matches_serial_bytes_and_host_budget(local_gpt2_tokenizer_path, monkeypatch, tmp_path):
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     config = Gpt2Config(
         hidden_dim=32, num_heads=2, num_layers=1, use_flash_attention=False, tokenizer=local_gpt2_tokenizer_path
     )
-    converter = config.hf_checkpoint_converter()
+    converter = replace(config.hf_checkpoint_converter(), reference_checkpoint=None)
     fs = fsspec.filesystem("memory")
     serial_path = f"memory://levanter/export-serial/{uuid.uuid4().hex}"
     parallel_path = f"memory://levanter/export-parallel/{uuid.uuid4().hex}"
@@ -530,7 +602,7 @@ def test_save_pretrained_to_memory_fs(local_gpt2_tokenizer_path):
     gpt2_config = Gpt2Config(
         num_layers=4, num_heads=1, hidden_dim=32, use_flash_attention=False, tokenizer=local_gpt2_tokenizer_path
     )
-    converter = gpt2_config.hf_checkpoint_converter()
+    converter = replace(gpt2_config.hf_checkpoint_converter(), reference_checkpoint=None)
 
     try:
         fs.rm(path, recursive=True)
@@ -576,6 +648,39 @@ def test_save_pretrained_to_memory_fs(local_gpt2_tokenizer_path):
             assert_trees_all_close(original_value, reloaded_value)
 
     fs.rm(base_path, recursive=True)
+
+
+@pytest.mark.parametrize(
+    ("explicit", "expected"),
+    [
+        (None, {"bos_token_id": 1, "eos_token_id": [2, 3], "do_sample": True, "temperature": 0.6, "top_p": 0.95}),
+        (
+            {"eos_token_id": [2], "temperature": 0.3},
+            {"bos_token_id": 1, "eos_token_id": [2, 3], "do_sample": True, "temperature": 0.3, "top_p": 0.95},
+        ),
+    ],
+)
+def test_save_pretrained_writes_complete_generation_config(local_gpt2_tokenizer_path, tmp_path, explicit, expected):
+    gpt2_config = Gpt2Config(
+        num_layers=1, num_heads=1, hidden_dim=8, use_flash_attention=False, tokenizer=local_gpt2_tokenizer_path
+    )
+    converter = replace(
+        gpt2_config.hf_checkpoint_converter(),
+        tokenizer=llama3_style_chat_tokenizer(),
+        reference_checkpoint=None,
+    )
+
+    with use_test_mesh():
+        model = Gpt2LMHeadModel.init(converter.Vocab, gpt2_config, key=PRNGKey(0))
+        converter.save_pretrained(
+            model,
+            str(tmp_path),
+            save_reference_code=False,
+            generation_config=explicit,
+            generation_config_defaults=SAMPLING_DEFAULTS,
+        )
+
+    assert json.loads((tmp_path / "generation_config.json").read_text()) == expected
 
 
 def test_causal_lm_architecture_name_is_torch_free():
@@ -655,6 +760,11 @@ def test_save_pretrained_writes_transformers4_and_5_rope_keys(tmp_path):
 
 
 class NonpersistentBufferWrapper(BasicModelWrapper):
+    @classmethod
+    def init(cls, Vocab: Axis, config: Gpt2Config, *, key: PRNGKey) -> "NonpersistentBufferWrapper":
+        base = BasicModelWrapper.init(Vocab, config, key=key)
+        return cls(base.model, base.an_int_param, base.a_bool_buffer, base.a_float_param)
+
     def to_state_dict(self, prefix=None):
         state = super().to_state_dict(prefix)
         state.pop(with_prefix(prefix, "a_bool_buffer"))
@@ -668,7 +778,7 @@ class NonpersistentBufferWrapper(BasicModelWrapper):
 
 
 @pytest.mark.parametrize("explicit", [False, True])
-def test_local_hf_loading_reconstructs_missing_buffers_with_placed_constructor(
+def test_local_hf_loading_reconstructs_missing_buffers_with_placed_template(
     tmp_path, local_gpt2_tokenizer_path, explicit
 ):
     config = Gpt2Config(num_layers=1, num_heads=1, hidden_dim=16, max_seq_len=8, use_flash_attention=False)
@@ -680,8 +790,7 @@ def test_local_hf_loading_reconstructs_missing_buffers_with_placed_constructor(
     )
 
     def constructor(vocab):
-        base = BasicModelWrapper.init(vocab, config, key=PRNGKey(0))
-        model = NonpersistentBufferWrapper(base.model, base.an_int_param, base.a_bool_buffer, base.a_float_param)
+        model = NonpersistentBufferWrapper.init(vocab, config, key=PRNGKey(0))
         if explicit:
             model = replace(model, a_bool_buffer=jax.sharding.reshard(model.a_bool_buffer, P()))
         return model
@@ -694,7 +803,7 @@ def test_local_hf_loading_reconstructs_missing_buffers_with_placed_constructor(
             ref=RepoRef(str(tmp_path)),
             config=config,
             axis_mapping={},
-            model_init=constructor,
+            model_template=eqx.filter_eval_shape(constructor, Axis("vocab", 32)),
         )
         assert_trees_all_equal(restored, original)
         assert restored.a_bool_buffer.sharding.is_equivalent_to(original.a_bool_buffer.sharding, 1)

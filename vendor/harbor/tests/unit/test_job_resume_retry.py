@@ -21,13 +21,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
-
 from harbor.job import Job
 from harbor.llms.base import ContextManagementInfrastructureError
 from harbor.metrics.mean import Mean
 from harbor.models.job.config import JobConfig
 from harbor.models.job.result import JobResult, JobStats
-from harbor.models.trial.config import TaskConfig, TrialConfig
+from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.result import (
     AgentInfo,
     ExceptionInfo,
@@ -44,7 +43,11 @@ _MAX_TOKENS_ZERO_MSG = (
 
 
 def _make_job(tmp_path: Path, task_configs: list[TaskConfig]) -> Job:
-    config = JobConfig(job_name="job-resume-retry-test", jobs_dir=tmp_path)
+    config = JobConfig(
+        agents=[AgentConfig(name="pi")],
+        job_name="job-resume-retry-test",
+        jobs_dir=tmp_path,
+    )
     metrics = defaultdict(lambda: [Mean()])
     return Job(config, _task_configs=task_configs, _metrics=metrics)
 

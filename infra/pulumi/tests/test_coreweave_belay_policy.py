@@ -107,3 +107,16 @@ def test_belay_organization_policy_denies_account_and_policy_management() -> Non
         assert action in deny.actions
     granted = {a for s in statements if s.effect == "Allow" for a in s.actions}
     assert not granted & set(deny.actions)
+
+
+def test_belay_runs_can_read_the_tokenizer_and_caches_but_not_write_the_caches() -> None:
+    temp_bucket = coreweave_temp_bucket(load_cluster_config("coreweave"))
+    reads = [
+        f"{BELAY_BUCKET}/marin/tokenizers/hero-bpe-v16384/hf-hub-1.21.0/tokenizer.json",
+        f"{BELAY_BUCKET}/marin/compilation-cache/jit_add-abc",
+        f"{temp_bucket}/tmp/ttl=30d/xla-per-fusion-autotune/tree/entry",
+    ]
+    for path in reads:
+        policy = coreweave_bucket_policy(path.split("/", 1)[0], temp_bucket)
+        assert not denied(policy, "s3:GetObject", f"arn:aws:s3:::{path}")
+        assert denied(policy, "s3:PutObject", f"arn:aws:s3:::{path}")

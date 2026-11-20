@@ -2,28 +2,24 @@ import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 
-import pytest
-
 import harbor.models.job.lock as lock_models
+import pytest
 from harbor.models.job.config import DatasetConfig, JobConfig
-from harbor.models.bridge import BridgeConfig, BridgeKind
 from harbor.models.job.lock import (
     JobLock,
     build_job_lock,
     sanitize_cli_invocation,
 )
-from harbor.skills import compute_skill_digest
 from harbor.models.trial.config import (
     AgentConfig,
     EnvironmentConfig,
     TaskConfig,
     TrialConfig,
-    UserAgentConfig,
     VerifierConfig,
 )
-from harbor.tasks.packager import Packager
+from harbor.skills import compute_skill_digest
 from harbor.tasks.client import TaskDownloadResult
-
+from harbor.tasks.packager import Packager
 
 TASK_TOML = """\
 [task]
@@ -61,7 +57,9 @@ def _sha(char: str) -> str:
 
 
 def _trial(task: TaskConfig, trial_name: str = "trial-1", **kwargs) -> TrialConfig:
-    return TrialConfig(task=task, trial_name=trial_name, **kwargs)
+    return TrialConfig(
+        task=task, trial_name=trial_name, **{"agent": AgentConfig(name="pi"), **kwargs}
+    )
 
 
 def test_local_task_uses_packager_content_hash(tmp_path: Path) -> None:
@@ -70,7 +68,7 @@ def test_local_task_uses_packager_content_hash(tmp_path: Path) -> None:
     expected_hash, _ = Packager.compute_content_hash(task_dir)
 
     lock = build_job_lock(
-        config=JobConfig(job_name="job", tasks=[task]),
+        config=JobConfig(agents=[AgentConfig(name="pi")], job_name="job", tasks=[task]),
         trial_configs=[_trial(task)],
         invocation=["harbor", "run"],
     )
@@ -84,122 +82,6 @@ def test_local_task_uses_packager_content_hash(tmp_path: Path) -> None:
     assert "local_path" not in trial_task_data
     assert "config" not in trial_task_data
     assert "tasks" not in lock.model_dump(mode="json")
-
-
-def test_bridge_input_files_are_hashed(tmp_path: Path) -> None:
-    task_dir = _make_task_dir(tmp_path)
-    task = TaskConfig(path=task_dir)
-    user_persona = tmp_path / "persona.md"
-    user_prompt = tmp_path / "user.j2"
-    bridge_prompt = tmp_path / "bridge.md"
-    acpx_config = tmp_path / "acpx.json"
-    user_persona.write_text("Grumpy")
-    user_prompt.write_text("{{ persona }} {{ bridge_instructions }} {{ instruction }}")
-    bridge_prompt.write_text("Use ACPX")
-    acpx_config.write_text('{"timeout": 1800}')
-    user_agent = UserAgentConfig(
-        name="claude-code",
-        user_persona_path=user_persona,
-        user_prompt_template_path=user_prompt,
-        bridge=BridgeConfig(
-            kind=BridgeKind.ACP,
-            prompt_path=bridge_prompt,
-            kwargs={"acpx_config_path": str(acpx_config)},
-        ),
-    )
-
-    lock = build_job_lock(
-        config=JobConfig(job_name="job", tasks=[task], user_agent=user_agent),
-        trial_configs=[_trial(task, user_agent=user_agent)],
-    ).trials[0]
-
-    assert lock.user_persona is not None
-    assert lock.user_prompt_template is not None
-    assert lock.bridge_prompt is not None
-    assert set(lock.bridge_inputs) == {"acpx_config_path"}
-    assert lock.user_persona.digest == lock_models._file_sha256_digest(user_persona)
-    assert lock.user_prompt_template.digest == lock_models._file_sha256_digest(
-        user_prompt
-    )
-    assert lock.bridge_prompt.digest == lock_models._file_sha256_digest(bridge_prompt)
-    assert lock.bridge_inputs["acpx_config_path"].digest == (
-        lock_models._file_sha256_digest(acpx_config)
-    )
-
-
-def test_bridge_lock_equality_uses_file_contents_not_host_paths(
-    tmp_path: Path,
-) -> None:
-    task_dir = _make_task_dir(tmp_path)
-    task = TaskConfig(path=task_dir)
-
-    def user_agent(parent: Path, content: str) -> UserAgentConfig:
-        parent.mkdir()
-        user_prompt = parent / "user.j2"
-        bridge_prompt = parent / "bridge.md"
-        acpx_config = parent / "acpx.json"
-        user_prompt.write_text("{{ bridge_instructions }} {{ instruction }}")
-        bridge_prompt.write_text("Use ACPX")
-        acpx_config.write_text(content)
-        return UserAgentConfig(
-            name="claude-code",
-            user_prompt_template_path=user_prompt,
-            bridge=BridgeConfig(
-                kind=BridgeKind.ACP,
-                prompt_path=bridge_prompt,
-                kwargs={"acpx_config_path": str(acpx_config)},
-            ),
-        )
-
-    first_user = user_agent(tmp_path / "first", '{"timeout": 1800}')
-    moved_user = user_agent(tmp_path / "moved", '{"timeout": 1800}')
-    changed_user = user_agent(tmp_path / "changed", '{"timeout": 900}')
-
-    first = build_job_lock(
-        config=JobConfig(job_name="job", tasks=[task], user_agent=first_user),
-        trial_configs=[_trial(task, user_agent=first_user)],
-    ).trials[0]
-    moved = build_job_lock(
-        config=JobConfig(job_name="job", tasks=[task], user_agent=moved_user),
-        trial_configs=[_trial(task, user_agent=moved_user)],
-    ).trials[0]
-    changed = build_job_lock(
-        config=JobConfig(job_name="job", tasks=[task], user_agent=changed_user),
-        trial_configs=[_trial(task, user_agent=changed_user)],
-    ).trials[0]
-
-    assert first == moved
-    assert first != changed
-
-
-def test_user_persona_lock_equality_uses_file_contents_not_host_paths(
-    tmp_path: Path,
-) -> None:
-    task_dir = _make_task_dir(tmp_path)
-    task = TaskConfig(path=task_dir)
-
-    def user_agent(parent: Path, persona: str) -> UserAgentConfig:
-        parent.mkdir()
-        persona_path = parent / "persona.md"
-        persona_path.write_text(persona)
-        return UserAgentConfig(
-            name="claude-code",
-            user_persona_path=persona_path,
-            bridge=BridgeConfig(kind=BridgeKind.ACP),
-        )
-
-    def lock_for(agent: UserAgentConfig) -> lock_models.TrialLock:
-        return build_job_lock(
-            config=JobConfig(job_name="job", tasks=[task], user_agent=agent),
-            trial_configs=[_trial(task, user_agent=agent)],
-        ).trials[0]
-
-    first = lock_for(user_agent(tmp_path / "first", "Grumpy"))
-    moved = lock_for(user_agent(tmp_path / "moved", "Grumpy"))
-    changed = lock_for(user_agent(tmp_path / "changed", "Cheerful"))
-
-    assert first == moved
-    assert first != changed
 
 
 def test_task_lock_equality_uses_digest_only() -> None:
@@ -222,7 +104,7 @@ def test_package_task_uses_resolved_ref_digest() -> None:
     task = TaskConfig(name="test-org/test-task", ref=task_digest, source="test-org/ds")
 
     lock = build_job_lock(
-        config=JobConfig(job_name="job", tasks=[task]),
+        config=JobConfig(agents=[AgentConfig(name="pi")], job_name="job", tasks=[task]),
         trial_configs=[_trial(task)],
         invocation=["harbor", "run"],
     )
@@ -234,7 +116,9 @@ def test_package_task_uses_resolved_ref_digest() -> None:
 def test_job_lock_equality_ignores_trial_order() -> None:
     first_task = TaskConfig(name="test-org/first", ref=_sha("1"))
     second_task = TaskConfig(name="test-org/second", ref=_sha("2"))
-    config = JobConfig(job_name="job", tasks=[first_task, second_task])
+    config = JobConfig(
+        agents=[AgentConfig(name="pi")], job_name="job", tasks=[first_task, second_task]
+    )
 
     first_lock = build_job_lock(
         config=config,
@@ -279,7 +163,9 @@ def test_job_lock_ignores_model_alias_but_keeps_model_name_in_identity() -> None
 def test_job_lock_equality_ignores_non_replay_identity_fields() -> None:
     task = TaskConfig(name="test-org/test-task", ref=_sha("1"))
     lock = build_job_lock(
-        config=JobConfig(job_name="original-job", tasks=[task]),
+        config=JobConfig(
+            agents=[AgentConfig(name="pi")], job_name="original-job", tasks=[task]
+        ),
         trial_configs=[_trial(task, trial_name="original-trial")],
         invocation=["harbor", "run"],
     )
@@ -358,7 +244,7 @@ def test_package_task_uses_download_result_content_hash() -> None:
     task = TaskConfig(name="test-org/test-task", ref="latest", source="test-org/ds")
 
     lock = build_job_lock(
-        config=JobConfig(job_name="job", tasks=[task]),
+        config=JobConfig(agents=[AgentConfig(name="pi")], job_name="job", tasks=[task]),
         trial_configs=[_trial(task)],
         invocation=["harbor", "run"],
         task_download_results={
@@ -392,7 +278,7 @@ def test_git_task_uses_download_result_resolved_commit(monkeypatch) -> None:
     )
 
     lock = build_job_lock(
-        config=JobConfig(job_name="job", tasks=[task]),
+        config=JobConfig(agents=[AgentConfig(name="pi")], job_name="job", tasks=[task]),
         trial_configs=[_trial(task)],
         invocation=["harbor", "run"],
         task_download_results={
@@ -419,7 +305,11 @@ def test_dataset_config_is_not_written_but_trial_task_source_remains(
     task = TaskConfig(name="test-org/test-task", ref=_sha("c"), source=dataset_dir.name)
 
     lock = build_job_lock(
-        config=JobConfig(job_name="job", datasets=[DatasetConfig(path=dataset_dir)]),
+        config=JobConfig(
+            agents=[AgentConfig(name="pi")],
+            job_name="job",
+            datasets=[DatasetConfig(path=dataset_dir)],
+        ),
         trial_configs=[_trial(task)],
         invocation=["harbor", "run"],
     )
@@ -465,6 +355,7 @@ def test_lock_records_extra_instruction_digests(tmp_path: Path, monkeypatch) -> 
 
     lock = build_job_lock(
         config=JobConfig(
+            agents=[AgentConfig(name="pi")],
             job_name="job",
             tasks=[task],
             extra_instruction_paths=extra_instruction_paths,
@@ -502,7 +393,7 @@ def test_job_lock_equality_ignores_extra_instruction_path(
         extra_instruction_paths=[Path("extra-no-multimodal-hint.md")],
     )
     lock = build_job_lock(
-        config=JobConfig(job_name="job", tasks=[task]),
+        config=JobConfig(agents=[AgentConfig(name="pi")], job_name="job", tasks=[task]),
         trial_configs=[trial],
         invocation=["harbor", "run"],
     )
@@ -533,6 +424,7 @@ def test_lock_errors_on_missing_extra_instruction_path(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError, match="Extra instruction file not found"):
         build_job_lock(
             config=JobConfig(
+                agents=[AgentConfig(name="pi")],
                 job_name="job",
                 tasks=[task],
                 extra_instruction_paths=extra_instruction_paths,
@@ -705,7 +597,7 @@ def test_harbor_metadata_uses_git_commit_hash_and_editable_install(
     task = TaskConfig(name="test-org/test-task", ref=_sha("f"))
 
     lock = build_job_lock(
-        config=JobConfig(job_name="job", tasks=[task]),
+        config=JobConfig(agents=[AgentConfig(name="pi")], job_name="job", tasks=[task]),
         trial_configs=[_trial(task)],
         invocation=["harbor", "run"],
     )
@@ -891,7 +783,9 @@ def test_job_lock_equality_still_catches_agent_semantic_env_drift() -> None:
     [
         (
             {
-                "OPENAI_BASE_URL": "https://iris.example:8443/proxy/t/new-token/serve.new/v1?token=new#api"
+                "OPENAI_BASE_URL": (
+                    "https://iris.example:8443/proxy/t/new-token/serve.new/v1?token=new#api"
+                )
             },
             True,
         ),
@@ -913,7 +807,7 @@ def test_judge_endpoint_rotation_preserves_resume_identity(overrides, matches) -
     new_trial = _trial(task, verifier=VerifierConfig(env=old_env | overrides))
 
     assert saved_trial.matches_identity(new_trial) is matches
-    config = JobConfig(job_name="job", tasks=[task])
+    config = JobConfig(agents=[AgentConfig(name="pi")], job_name="job", tasks=[task])
     saved_lock = JobLock.model_validate_json(
         build_job_lock(config=config, trial_configs=[old_trial]).model_dump_json()
     )
@@ -930,7 +824,7 @@ def test_judge_endpoint_rotation_without_model_identity_is_rejected() -> None:
         for url in ("https://iris.example/old/v1", "https://iris.example/new/v1")
     ]
     assert not trials[0].matches_identity(trials[1])
-    config = JobConfig(job_name="job", tasks=[task])
+    config = JobConfig(agents=[AgentConfig(name="pi")], job_name="job", tasks=[task])
     locks = [build_job_lock(config=config, trial_configs=[trial]) for trial in trials]
     assert locks[0] != locks[1]
 
@@ -969,7 +863,7 @@ def test_recorded_judge_identity_survives_host_and_serving_alias_replacement(
     ]
     saved = TrialConfig.model_validate_json(trials[0].model_dump_json())
     assert saved.matches_identity(trials[1]) is matches
-    config = JobConfig(job_name="job", tasks=[task])
+    config = JobConfig(agents=[AgentConfig(name="pi")], job_name="job", tasks=[task])
     saved_lock = JobLock.model_validate_json(
         build_job_lock(config=config, trial_configs=[trials[0]]).model_dump_json()
     )
@@ -983,9 +877,13 @@ def test_recorded_judge_identity_survives_host_and_serving_alias_replacement(
     [
         (
             {
-                "candidate_model_endpoint": "https://iris.example:8443/proxy/t/new-capability/serve.new/v1",
+                "candidate_model_endpoint": (
+                    "https://iris.example:8443/proxy/t/new-capability/serve.new/v1"
+                ),
                 "candidate_model_name": "new-serving-alias",
-                "model_endpoint": "https://judge.example/proxy/t/new-capability/serve.new/v1",
+                "model_endpoint": (
+                    "https://judge.example/proxy/t/new-capability/serve.new/v1"
+                ),
                 "auto_snapshot": True,
             },
             "org/candidate",
@@ -1006,7 +904,9 @@ def test_persisted_relay_capabilities_rotate_without_changing_resume_identity(
 ):
     task = TaskConfig(name="test-org/test-task", ref=_sha("a"))
     old_kwargs = {
-        "candidate_model_endpoint": "https://iris.example/proxy/t/old-capability/serve.old/v1",
+        "candidate_model_endpoint": (
+            "https://iris.example/proxy/t/old-capability/serve.old/v1"
+        ),
         "candidate_model_name": "old-serving-alias",
         "model_endpoint": "https://judge.example/proxy/t/old-capability/serve.old/v1",
         "model_name": "judge-model",
@@ -1034,7 +934,7 @@ def test_persisted_relay_capabilities_rotate_without_changing_resume_identity(
     )
     assert saved_trial.matches_identity(new_trial) is matches
 
-    config = JobConfig(job_name="job", tasks=[task])
+    config = JobConfig(agents=[AgentConfig(name="pi")], job_name="job", tasks=[task])
     persisted_lock = build_job_lock(
         config=config, trial_configs=[old_trial]
     ).model_dump_json()
@@ -1054,7 +954,7 @@ def test_environment_relay_rotation_without_model_identity_is_rejected(endpoint)
         for url in ("https://iris.example/old/v1", "https://iris.example/new/v1")
     ]
     assert not trials[0].matches_identity(trials[1])
-    config = JobConfig(job_name="job", tasks=[task])
+    config = JobConfig(agents=[AgentConfig(name="pi")], job_name="job", tasks=[task])
     locks = [build_job_lock(config=config, trial_configs=[trial]) for trial in trials]
     assert locks[0] != locks[1]
 
@@ -1076,40 +976,7 @@ def test_candidate_model_change_without_immutable_agent_identity_rejects_saved_r
     ]
     saved_trial = TrialConfig.model_validate_json(trials[0].model_dump_json())
     assert not saved_trial.matches_identity(trials[1])
-    config = JobConfig(job_name="job", tasks=[task])
-    saved_lock = JobLock.model_validate_json(
-        build_job_lock(config=config, trial_configs=[trials[0]]).model_dump_json()
-    )
-    assert saved_lock != build_job_lock(config=config, trial_configs=[trials[1]])
-
-
-@pytest.mark.parametrize(
-    "overrides",
-    [
-        {"temperature": 0.8},
-        {"max_tokens": 8192},
-        {"tool_url": "https://different-tool.example"},
-    ],
-)
-def test_candidate_generation_or_tool_changes_reject_saved_results(overrides):
-    task = TaskConfig(name="test-org/test-task", ref=_sha("a"))
-    kwargs = {
-        "temperature": 0.0,
-        "max_tokens": 4096,
-        "tool_url": "https://tool.example",
-    }
-    trials = [
-        _trial(
-            task,
-            agent=AgentConfig(
-                name="pi", model_name="org/candidate@revision", kwargs=settings
-            ),
-        )
-        for settings in (kwargs, kwargs | overrides)
-    ]
-    saved = TrialConfig.model_validate_json(trials[0].model_dump_json())
-    assert not saved.matches_identity(trials[1])
-    config = JobConfig(job_name="job", tasks=[task])
+    config = JobConfig(agents=[AgentConfig(name="pi")], job_name="job", tasks=[task])
     saved_lock = JobLock.model_validate_json(
         build_job_lock(config=config, trial_configs=[trials[0]]).model_dump_json()
     )
@@ -1136,12 +1003,22 @@ def test_job_lock_equality_ignores_environment_cache_acquisition_kwargs(
     with_flag = EnvironmentConfig(kwargs=provisioning_kwarg)
 
     without_lock = build_job_lock(
-        config=JobConfig(job_name="job", tasks=[task], environment=without),
+        config=JobConfig(
+            agents=[AgentConfig(name="pi")],
+            job_name="job",
+            tasks=[task],
+            environment=without,
+        ),
         trial_configs=[_trial(task, environment=without)],
         invocation=["harbor", "run"],
     )
     with_flag_lock = build_job_lock(
-        config=JobConfig(job_name="job", tasks=[task], environment=with_flag),
+        config=JobConfig(
+            agents=[AgentConfig(name="pi")],
+            job_name="job",
+            tasks=[task],
+            environment=with_flag,
+        ),
         trial_configs=[_trial(task, environment=with_flag)],
         invocation=["harbor", "run"],
     )
@@ -1157,12 +1034,22 @@ def test_job_lock_equality_still_catches_environment_semantic_kwarg_drift() -> N
     on = EnvironmentConfig(kwargs={"network_block_all": True})
 
     off_lock = build_job_lock(
-        config=JobConfig(job_name="job", tasks=[task], environment=off),
+        config=JobConfig(
+            agents=[AgentConfig(name="pi")],
+            job_name="job",
+            tasks=[task],
+            environment=off,
+        ),
         trial_configs=[_trial(task, environment=off)],
         invocation=["harbor", "run"],
     )
     on_lock = build_job_lock(
-        config=JobConfig(job_name="job", tasks=[task], environment=on),
+        config=JobConfig(
+            agents=[AgentConfig(name="pi")],
+            job_name="job",
+            tasks=[task],
+            environment=on,
+        ),
         trial_configs=[_trial(task, environment=on)],
         invocation=["harbor", "run"],
     )

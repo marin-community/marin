@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bounded GB200 diagnostics for the production EP64 MoE hero recipe."""
+"""Bounded GB200 diagnostics for the production MoE hero recipe."""
 
 import dataclasses
 import os
@@ -44,6 +44,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_NODE_RAM,
     HERO_PROCESSES_PER_TASK,
     HERO_RACK_GPUS,
+    HERO_SCHEDULE_EXTENSION,
     HERO_TENSORSTORE_CACHE_BYTES,
     HERO_WATCH_INTERVAL,
     HeroThroughputResult,
@@ -92,6 +93,9 @@ def build_diagnostic_run(
     qk_mult: float | None = None,
     qk_mult_long_scale: float | None = None,
     log_scaling_n_floor: int | None = None,
+    log_scaling_alpha: float | None = None,
+    log_scaling_power: float | None = None,
+    disable_log_scaling: bool = False,
     restore_from: str | None = None,
     long_context_start_step: int | None = None,
     moe_implementation: str | None = None,
@@ -111,7 +115,7 @@ def build_diagnostic_run(
     training_data_mode: TrainingDataMode = TrainingDataMode.MIXTURE,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
-    """Build a bounded diagnostic run for the production EP64 hero recipe.
+    """Build a bounded diagnostic run for the production hero recipe.
 
     The overrides sweep expert count, expert width, routed top-k, and routing capacity from the
     hero spec. They keep the hidden dimension, so the compute-scaled optimizer values stay
@@ -123,6 +127,9 @@ def build_diagnostic_run(
     ``batch_size`` is the global batch across all data-parallel racks. It does not scale with
     ``dp_racks``. ``None`` selects the hero's tokens per rack at the model's context length.
     ``batch_size``, ``max_seq_len``, and ``schedule_steps`` determine the heuristic token budget.
+
+    ``HERO_SCHEDULE_EXTENSION`` sets the learning rate past ``schedule_steps``, and ``num_steps`` can reach its
+    last step.
     """
     if expert_axis_size is None:
         expert_axis_size = hero_expert_axis_size(context_axis_size)
@@ -141,7 +148,8 @@ def build_diagnostic_run(
     if profile_steps > 0 and profile_start_step >= num_steps:
         raise ValueError(f"profile_start_step must be less than num_steps={num_steps}, got {profile_start_step}")
     # `schedule_steps` sets the whole learning-rate schedule; `num_steps` is the absolute step the
-    # run stops at (a restore resumes mid-schedule, so it must lie past the restored step).
+    # run stops at (a restore resumes mid-schedule, so a stop at the restored step trains nothing and one
+    # before it fails).
     # Both matter, and they enter in different places. The optimizer heuristic scales learning rate,
     # adam_lr, and epsilon from a token budget (`num_train_steps * batch * seq`), which fixes the
     # peak. Warmup and decay are *fractions* of `TrainerConfig.num_train_steps`, so that field has to
@@ -150,8 +158,12 @@ def build_diagnostic_run(
     # rather than the head of a long one. Default keeps the two equal, which is the previous behavior.
     if schedule_steps is not None and schedule_steps <= 0:
         raise ValueError(f"schedule_steps must be positive, got {schedule_steps}")
-    if schedule_steps is not None and schedule_steps < num_steps:
-        raise ValueError(f"schedule_steps={schedule_steps} must be at least num_steps={num_steps}")
+    extension_steps = HERO_SCHEDULE_EXTENSION.steps if HERO_SCHEDULE_EXTENSION is not None else 0
+    if schedule_steps is not None and schedule_steps + extension_steps < num_steps:
+        raise ValueError(
+            f"num_steps={num_steps} must not pass schedule_steps={schedule_steps} "
+            f"plus the {extension_steps}-step schedule extension"
+        )
     total_schedule_steps = schedule_steps if schedule_steps is not None else num_steps
     model = HERO_MODEL_CONFIG
     overrides = {
@@ -166,16 +178,24 @@ def build_diagnostic_run(
             ("qk_mult", qk_mult),
             ("qk_mult_long_scale", qk_mult_long_scale),
             ("log_scaling_n_floor", log_scaling_n_floor),
+            ("log_scaling_alpha", log_scaling_alpha),
+            ("log_scaling_power", log_scaling_power),
             ("moe_implementation", moe_implementation),
             ("ce_grad_in_forward_token_block_size", ce_grad_in_forward_token_block_size),
         )
         if value is not None
     }
+    log_scaling_set = any(value is not None for value in (log_scaling_n_floor, log_scaling_alpha, log_scaling_power))
+    if disable_log_scaling:
+        if log_scaling_set:
+            raise ValueError("disable_log_scaling excludes the other log scaling options")
+        overrides.update(log_scaling_n_floor=None, log_scaling_alpha=None, log_scaling_power=None)
     if overrides:
         model = dataclasses.replace(model, **overrides)
-    if log_scaling_n_floor is not None and log_scaling_n_floor >= model.max_seq_len:
+    floor = model.log_scaling_n_floor
+    if log_scaling_set and floor is not None and floor >= model.max_seq_len:
         raise ValueError(
-            f"log_scaling_n_floor={log_scaling_n_floor} scales no query at max_seq_len={model.max_seq_len}; "
+            f"log_scaling_n_floor={floor} scales no query at max_seq_len={model.max_seq_len}; "
             "this arm would be a control"
         )
     model = with_transport_remat_mode(model)
@@ -187,6 +207,7 @@ def build_diagnostic_run(
         hidden_dim=model.hidden_dim,
         seq_len=model.max_seq_len,
     )
+    optimizer = dataclasses.replace(optimizer, schedule_extension=HERO_SCHEDULE_EXTENSION)
     batch_axes = validated_batch_axis_size(
         device_count=HERO_RACK_GPUS * dp_racks,
         dp_racks=dp_racks,
@@ -575,16 +596,35 @@ def build_diagnostic_run(
     "--qk-mult-long-scale",
     type=click.FloatRange(min=0, min_open=True),
     default=None,
-    help="Extra multiplier on --qk-mult for the global (full-causal) layers only. Defaults to 1.0.",
+    help="Extra multiplier on --qk-mult for the global (full-causal) layers only. Defaults to the hero configuration.",
 )
 @click.option(
     "--log-scaling-n-floor",
     type=click.IntRange(min=1),
     default=None,
     help=(
-        "Scale each global-layer query seeing n keys in its document by 1 + 0.1 * ln(max(n / this value, 1)), "
-        "on top of --qk-mult and --qk-mult-long-scale. Defaults to off."
+        "Scale each global-layer query seeing n keys in its document by "
+        "(1 + --log-scaling-alpha * ln(max(n / this value, 1))) ** --log-scaling-power, on top of --qk-mult and "
+        "--qk-mult-long-scale. Unset keeps the hero's value."
     ),
+)
+@click.option(
+    "--log-scaling-alpha",
+    type=click.FloatRange(min=0, min_open=True),
+    default=None,
+    help="Slope of the log scaling. Unset keeps the hero's value.",
+)
+@click.option(
+    "--log-scaling-power",
+    type=click.FloatRange(min=0, min_open=True),
+    default=None,
+    help="Exponent on the log scaling factor. Unset keeps the hero's value.",
+)
+@click.option(
+    "--no-log-scaling",
+    "disable_log_scaling",
+    is_flag=True,
+    help="Turn off the hero's log scaling, for a control arm. Excludes the other --log-scaling-* options.",
 )
 @click.option("--restore-from", default=None, help="Checkpoint to restore; outputs use this run's own path.")
 @click.option(
@@ -631,6 +671,9 @@ def main(
     qk_mult: float | None,
     qk_mult_long_scale: float | None,
     log_scaling_n_floor: int | None,
+    log_scaling_alpha: float | None,
+    log_scaling_power: float | None,
+    disable_log_scaling: bool,
     restore_from: str | None,
     long_context_start_step: int | None,
 ) -> ArtifactStep[HeroThroughputResult]:
@@ -653,6 +696,9 @@ def main(
         qk_mult=qk_mult,
         qk_mult_long_scale=qk_mult_long_scale,
         log_scaling_n_floor=log_scaling_n_floor,
+        log_scaling_alpha=log_scaling_alpha,
+        log_scaling_power=log_scaling_power,
+        disable_log_scaling=disable_log_scaling,
         restore_from=restore_from,
         long_context_start_step=long_context_start_step,
         moe_implementation=moe_implementation,

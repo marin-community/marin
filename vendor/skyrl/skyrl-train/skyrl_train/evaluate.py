@@ -164,10 +164,7 @@ async def _collect_evaluation_rollouts(
     if len(trajectory_batches) != len(rows) * cfg.generator.eval_n_samples_per_prompt:
         raise RuntimeError("evaluation did not return every selected row and repetition")
     return _EvaluationRollouts(
-        batch=concatenate_trajectory_batches(
-            trajectory_batches,
-            tis_lcs_alert_threshold=float(cfg.trainer.algorithm.tis_lcs_alert_threshold),
-        ),
+        batch=concatenate_trajectory_batches(trajectory_batches),
         env_classes=accumulator.env_classes,
         data_sources=accumulator.data_sources,
         uids=accumulator.uids,

@@ -21,9 +21,15 @@ const GIB: i64 = 1024 * MIB;
 pub struct CompactionConfig {
     /// L0->L1 at 64 MiB, L1->L2 at 256 MiB, L2->L3 (terminal) at 256 MiB.
     pub level_targets: Vec<i64>,
-    /// Per-level fanout cap. Promotes a non-terminal level once its contiguous
-    /// run reaches this many segments, even if the byte target isn't met.
+    /// Per-level fanout trigger. Promotes a non-terminal level once its
+    /// contiguous run reaches this many segments, even if the byte target isn't
+    /// met, and caps the inputs of an L1-or-higher job. L0 jobs are capped by
+    /// `max_l0_inputs`.
     pub max_segments_per_level: usize,
+    /// Most L0 inputs one job takes once `max_segments_per_level` triggers it.
+    /// L0s are one flush each, often a few hundred KB, so a backlog drains in
+    /// far fewer jobs when one job takes more than the trigger count.
+    pub max_l0_inputs: usize,
     /// Ceiling on the summed ARROW-MATERIALIZED size of a merge job's inputs.
     ///
     /// `level_targets` bound a job's COMPRESSED input size, but the merge decodes
@@ -68,6 +74,7 @@ impl Default for CompactionConfig {
         CompactionConfig {
             level_targets: vec![64 * MIB, 256 * MIB, 256 * MIB],
             max_segments_per_level: 32,
+            max_l0_inputs: 32,
             // ~2x this in peak merge RSS. Sized for the 32 GiB hub box, whose
             // query pool may hold 21 GiB concurrently.
             max_merge_arrow_bytes: 4 * GIB,

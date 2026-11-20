@@ -18,6 +18,18 @@ from verifyit.spec import Constraint, JudgeSpec, parse_spec
 
 def score(scorer: str, config: dict[str, Any], response: str) -> Reward:
     # Scorers load only the dependencies of the selected dataset's environment.
+    if scorer == "gsm8k_cot":
+        from .math import grade_gsm8k_cot
+
+        return grade_gsm8k_cot(config["document"], response)
+    if scorer == "minerva_math":
+        from .math import grade_minerva_completion
+
+        return grade_minerva_completion(config["document"], response)
+    if scorer == "bbh_cot":
+        from .choices import grade_bbh_cot
+
+        return grade_bbh_cot(config["document"], response)
     if scorer == "boxed_math":
         from .math import grade_boxed_math
 
@@ -41,17 +53,39 @@ def score(scorer: str, config: dict[str, Any], response: str) -> Reward:
         assert isinstance(judge, JudgeSpec)
         verdict = grade_judge_candidate(judge, answer)
         return Reward(verdict.reward, verdict.status, {**verdict.detail, "extracted": answer, "method": "llm_judge"})
+    if scorer == "facts_grounding":
+        from verifyit.modes.grade_judge import judge_reply
+
+        from .facts_grounding import grade_facts_grounding
+
+        judge = parse_spec(Path("/tests/judge.toml").read_text())
+        assert isinstance(judge, JudgeSpec)
+        return grade_facts_grounding(
+            config["full_prompt"],
+            judge.question,
+            judge.references[0],
+            response,
+            lambda messages: judge_reply(judge, messages),
+        )
     if scorer in {"gpqa", "mmlu_pro"}:
         from .choices import grade_gpqa_answer, grade_mmlu_answer
 
         grade = grade_gpqa_answer if scorer == "gpqa" else grade_mmlu_answer
         return grade(config["expected"], response)
+    if scorer == "zeroeval_mcqa":
+        from .zeroeval import grade_zeroeval_mcqa
+
+        return grade_zeroeval_mcqa(config["expected"], response)
     if scorer in {"mrcr", "graphwalks"}:
         from .long_context import grade_graphwalks, grade_nonce_similarity
 
         if scorer == "mrcr":
             return grade_nonce_similarity(config["expected"], config["nonce"], response)
         return grade_graphwalks(tuple(config["expected"]), response)
+    if scorer == "longbench_v2":
+        from .longbench_v2 import grade_longbench_v2
+
+        return grade_longbench_v2(config["expected"], response)
     if scorer == "nupa":
         from .nupa import grade_nupa_candidate
 

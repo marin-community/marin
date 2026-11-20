@@ -30,6 +30,7 @@ class Linear(eqx.Module):
         storage_spec: PartitionSpec,
         compute_spec: PartitionSpec,
     ) -> "Linear":
+        """Build output-first weights with storage and compute specs over ``[out, in]``."""
         weight = initializer_std * jax.random.truncated_normal(
             key,
             -INITIALIZER_TRUNCATION_BOUND,

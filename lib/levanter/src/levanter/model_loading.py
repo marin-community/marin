@@ -17,7 +17,6 @@ device mesh. There are two cases, one per loader:
 
 from __future__ import annotations
 
-from functools import partial
 from typing import cast
 
 import equinox as eqx
@@ -26,36 +25,17 @@ import jax
 import jax.numpy as jnp
 from haliax import Axis
 from haliax.partitioning import ResourceMapping
-from jax.sharding import Mesh
 
 from levanter.checkpoint import discover_latest_checkpoint, load_checkpoint, resolve_checkpoint
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
+from levanter.compat.hf_checkpoints import HFCompatConfig, RepoRef
 from levanter.model_cache import resolve_cached_model_path
-from levanter.models.lm_model import LmConfig, LmHeadModel
-from levanter.models.llama_native_lm import NativeLlamaLmConfig, native_llama_sharding
+from levanter.models.lm_model import LmConfig, LmHeadModel, ModelPlacement
 from levanter.utils.jax_utils import use_cpu_device
 
 # Sub-path under the region-local TTL bucket mirrored HuggingFace snapshots are written to.
 _HF_CACHE_PREFIX = "hf-models"
 # Days a mirrored HuggingFace snapshot is kept before the bucket lifecycle deletes it.
 _DEFAULT_HF_CACHE_TTL_DAYS = 30
-
-
-def native_evaluation_axis_mapping(
-    model_config: NativeLlamaLmConfig,
-    parameter_axis_mapping: ResourceMapping,
-    compute_axis_mapping: ResourceMapping,
-    mesh: Mesh,
-    batch_axis_name: str,
-) -> ResourceMapping:
-    """Validate native placement and normalize batch axes for named evaluation."""
-    sharding = native_llama_sharding(parameter_axis_mapping, compute_axis_mapping, batch_axis_name)
-    model_config.validate_sharding(sharding, mesh)
-    # Named loss slices and rolls need canonical replicated placement on unit axes.
-    return {
-        **compute_axis_mapping,
-        batch_axis_name: tuple(axis for axis in sharding.batch_axes if mesh.shape[axis] > 1),
-    }
 
 
 def load_levanter_checkpoint(
@@ -65,8 +45,7 @@ def load_levanter_checkpoint(
     Vocab: Axis,
     axis_mapping: ResourceMapping,
     key: jax.Array,
-    compute_axis_mapping: ResourceMapping | None = None,
-    batch_axis_name: str = "batch",
+    placement: ModelPlacement | None = None,
 ) -> LmHeadModel:
     """Load and shard an ``LmHeadModel`` from a local Levanter checkpoint.
 
@@ -87,21 +66,19 @@ def load_levanter_checkpoint(
         Vocab: Vocabulary axis used to build the model template.
         axis_mapping: Resource mapping the model is sharded with.
         key: PRNG key for building the model template.
-        compute_axis_mapping: Native computation roles, distinct from parameter storage.
-        batch_axis_name: Named batch axis in the computation mapping.
+        placement: Framework mappings for a config with explicit parameter placement.
     """
-    if isinstance(model_config, NativeLlamaLmConfig):
-        if compute_axis_mapping is None:
-            raise ValueError("Loading llama_native requires compute_axis_mapping")
-        sharding = native_llama_sharding(axis_mapping, compute_axis_mapping, batch_axis_name)
+    if model_config.owns_parameter_placement:
+        if placement is None:
+            raise ValueError("An explicitly placed checkpoint requires model placement")
         resolved = resolve_checkpoint(checkpoint)
         source_vocab = model_config.checkpoint_vocab_size(resolved.metadata)
-        if source_vocab is not None and Vocab.size > source_vocab:
-            raise ValueError("Tokenizer vocabulary exceeds the native checkpoint vocabulary")
-        Vocab = Vocab.resize(source_vocab) if source_vocab is not None else Vocab
+        if source_vocab is not None:
+            if Vocab.size > source_vocab:
+                raise ValueError("Tokenizer vocabulary exceeds the checkpoint vocabulary")
+            Vocab = Vocab.resize(source_vocab)
         mesh = jax.sharding.get_mesh()
-        model_config.validate_sharding(sharding, mesh, Vocab.size)
-        model = eqx.filter_eval_shape(model_config.build, Vocab, key=key, sharding=sharding)
+        model = eqx.filter_eval_shape(model_config.build_for_mesh, Vocab, key=key, placement=placement)
         return load_checkpoint(model, resolved.path, subpath="model", mesh=mesh)
 
     resolved = discover_latest_checkpoint(checkpoint) or checkpoint
@@ -117,9 +94,8 @@ def load_hf_checkpoint(
     *,
     axis_mapping: ResourceMapping,
     tokenizer,
-    compute_dtype: jnp.dtype,
-    compute_axis_mapping: ResourceMapping | None = None,
-    batch_axis_name: str = "batch",
+    compute_dtype: jnp.dtype | None,
+    placement: ModelPlacement | None = None,
     cache_ttl_days: int = _DEFAULT_HF_CACHE_TTL_DAYS,
 ) -> LmHeadModel:
     """Load and shard an ``LmHeadModel`` from a HuggingFace checkpoint.
@@ -136,41 +112,37 @@ def load_hf_checkpoint(
         tokenizer: Tokenizer the HuggingFace converter is bound to.
         compute_dtype: Named-model load dtype. Native masters are loaded in FP32 and cast
             to computation precision by the evaluation caller.
-        compute_axis_mapping: Native computation roles, distinct from parameter storage.
-        batch_axis_name: Named batch axis in the computation mapping.
+        placement: Framework mappings for a config with explicit parameter placement.
         cache_ttl_days: TTL for the region-local mirror of a HuggingFace repo id. ``<= 0``
             disables mirroring (the repo loads directly from HuggingFace). Ignored for
             ``hf://`` and object-store paths.
     """
-    if not hasattr(model_config, "hf_checkpoint_converter"):
+    if not isinstance(model_config, HFCompatConfig):
         raise ValueError("Model config does not have an HF checkpoint converter. Can't load HF checkpoint.")
 
     resolved = resolve_cached_model_path(checkpoint, cache_ttl_days=cache_ttl_days, cache_prefix=_HF_CACHE_PREFIX)
     ref = RepoRef.from_string(resolved)
-    if isinstance(model_config, NativeLlamaLmConfig):
-        if compute_axis_mapping is None:
-            raise ValueError("Loading llama_native requires compute_axis_mapping")
-        sharding = native_llama_sharding(axis_mapping, compute_axis_mapping, batch_axis_name)
-        converter = model_config.hf_checkpoint_converter(str(ref), tokenizer=tokenizer)
+    converter = model_config.hf_checkpoint_converter_for_source(ref, tokenizer)
+    if model_config.owns_parameter_placement:
+        if placement is None:
+            raise ValueError("An explicitly placed HF checkpoint requires model placement")
         hf_config = converter.default_hf_config
-        model_config.validate_hf_config(hf_config)
-        if len(tokenizer) > hf_config.vocab_size:
-            raise ValueError("Tokenizer vocabulary exceeds the native HF checkpoint vocabulary")
-        model_config.validate_sharding(sharding, jax.sharding.get_mesh(), hf_config.vocab_size)
+        Vocab = model_config.hf_checkpoint_vocab(hf_config, converter.Vocab)
+        template = eqx.filter_eval_shape(
+            model_config.build_for_mesh, Vocab, key=jax.random.PRNGKey(0), placement=placement
+        )
         model = converter.load_pretrained(
             model_config.model_type,
             ref=ref,
             config=model_config,
             axis_mapping=axis_mapping,
             dtype=jnp.float32,
-            model_init=partial(model_config.build, key=jax.random.PRNGKey(0), sharding=sharding),
+            model_template=template,
         )
-        return cast(LmHeadModel, model)
-
-    converter: HFCheckpointConverter = model_config.hf_checkpoint_converter().replaced(
-        reference_checkpoint=ref, tokenizer=tokenizer
-    )
-    model = converter.load_pretrained(model_config.model_type, ref=ref, axis_mapping=axis_mapping, dtype=compute_dtype)
+    else:
+        model = converter.load_pretrained(
+            model_config.model_type, ref=ref, axis_mapping=axis_mapping, dtype=compute_dtype
+        )
     # `load_pretrained` is typed as the broad `ModelWithHfSerializationMixin`, but loading a
     # config's `model_type` always yields an `LmHeadModel` at runtime.
     return cast(LmHeadModel, model)

@@ -5,7 +5,6 @@
 
 import dataclasses
 import math
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional, cast
 
@@ -16,21 +15,19 @@ import jax.numpy as jnp
 from haliax import Axis, NamedArray
 from haliax.jax_utils import maybe_rng_split
 from haliax.nn.scan import ScanCheckpointPolicy as NamedScanCheckpointPolicy
-from haliax.partitioning import ResourceMapping
+from haliax.partitioning import round_axis_for_partitioning
 from haliax.state_dict import ModuleWithStateDictSerialization
-from jax.sharding import AxisType, Mesh, PartitionSpec as P, auto_axes, get_abstract_mesh, reshard
+from jax.sharding import AbstractMesh, AxisType, Mesh, PartitionSpec as P, get_abstract_mesh, reshard
 from jaxtyping import PRNGKeyArray
+from transformers import PreTrainedTokenizerBase
 from transformers import PretrainedConfig as HfConfig
 from transformers import LlamaConfig as HfLlamaConfig
 
-from levanter.compat.hf_checkpoints import HFCheckpointConverter
+from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.compat.hf_config import hf_rope_config
 from levanter.data.text.examples import grug_attention_mask_from_named
 from levanter.grug.attention import AttentionMask as RawAttentionMask
-from levanter.inference.page_table import PageBatchInfo, PageTableSpec
-from levanter.kernels.pallas.autotune_utils import named_sharding_of
-from levanter.layers.attention import AttentionBackend, AttentionMask, ragged_paged_attention
-from levanter.layers.kv_cache import KvPageCache, ListCache
+from levanter.layers.attention import AttentionBackend, AttentionMask
 from levanter.layers.scan_checkpoint import ScanCheckpointPolicy
 from levanter.layers.rotary import (
     DefaultRotaryEmbeddingsConfig,
@@ -38,16 +35,9 @@ from levanter.layers.rotary import (
     RotaryEmbeddingsConfig,
     YarnRotaryEmbeddingsConfig,
 )
-from levanter.layers.rotary_native import (
-    Llama3RotaryConfig,
-    NativeRotaryConfig,
-    RotaryConfig,
-    YarnRotaryConfig,
-    yarn_attention_factor,
-)
 from levanter.models.llama import LlamaConfig
 from levanter.models.llama_native import NativeLlamaConfig, NativeLlamaModel, NativeLlamaSharding
-from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
+from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, ModelPlacement
 from levanter.tokenizers import MarinTokenizer
 from levanter.utils.activation import ActivationFunctionEnum
 
@@ -57,67 +47,22 @@ _NATIVE_CHECKPOINT_VERSION = 1
 _NATIVE_MODEL_TYPE = "llama_native"
 
 
-def _paged_attention(
-    q: jax.Array,
-    k: jax.Array,
-    v: jax.Array,
-    cache: KvPageCache,
-    batch_info: PageBatchInfo,
-    *,
-    model_axis: str | None,
-    sm_scale: float,
-) -> tuple[jax.Array, KvPageCache]:
-    # Named cache/reference math uses Auto axes; return to the native explicit
-    # layout at this shared infrastructure boundary, including donated pages.
-    def attend(query, keys, values, pages, info):
-        query = hax.named(query, ("position", "kv_head", "q_heads_per_group", "head_size"))
-        cache = KvPageCache(hax.named(pages, ("page", "slot", "kv_head", "head_size")))
-        with hax.axis_mapping({} if model_axis is None else {"kv_head": model_axis}, merge=False):
-            cache = cache.update(
-                info,
-                hax.named(keys, ("position", "kv_head", "head_size")),
-                hax.named(values, ("position", "kv_head", "head_size")),
-            )
-            output = ragged_paged_attention(
-                query,
-                cache.kv_pages,
-                info.seq_lens,
-                info.page_indices,
-                info.cu_q_lens,
-                info.num_seqs,
-                sm_scale=sm_scale,
-            )
-        return output.array, cache.kv_pages.array
-
-    # pyrefly: ignore[bad-assignment]  # auto_axes decorator overload erases the callable signature.
-    wrapped: Callable[..., tuple[jax.Array, jax.Array]] = auto_axes(
-        attend, out_sharding=(named_sharding_of(q), named_sharding_of(cache.kv_pages.array))
-    )
-    output, pages = wrapped(q, k, v, cache.kv_pages.array, batch_info)
-    return output, dataclasses.replace(cache, kv_pages=hax.named(pages, cache.kv_pages.axes))
-
-
-def native_llama_sharding(
-    parameter_axis_mapping: ResourceMapping,
-    compute_axis_mapping: ResourceMapping,
-    batch_axis_name: str = "batch",
-) -> NativeLlamaSharding:
-    """Resolve native storage and computation roles from Levanter's named mappings."""
-    batch = compute_axis_mapping.get(batch_axis_name, compute_axis_mapping.get("batch"))
+def _native_llama_sharding(placement: ModelPlacement) -> NativeLlamaSharding:
+    batch = placement.batch_axes
     batch_axes = () if batch is None else (batch,) if isinstance(batch, str) else tuple(batch)
-    fsdp_axis = parameter_axis_mapping.get("embed")
-    model_axis = compute_axis_mapping.get("mlp")
+    fsdp_axis = placement.parameter_mapping.get("embed")
+    model_axis = placement.compute_mapping.get("mlp")
     if fsdp_axis is not None and not isinstance(fsdp_axis, str):
         raise ValueError("llama_native requires one FSDP axis in mesh.param_mapping.embed")
     if model_axis is not None and not isinstance(model_axis, str):
         raise ValueError("llama_native requires one tensor-parallel axis in mesh.compute_mapping.mlp")
     if model_axis is not None and (model_axis in batch_axes or model_axis == fsdp_axis):
         raise ValueError("llama_native tensor-parallel placement must be distinct from batch/FSDP axes")
-    if compute_axis_mapping.get("position") is not None:
+    if placement.compute_mapping.get("position") is not None:
         raise ValueError("llama_native does not support sequence parallelism")
-    if compute_axis_mapping.get("embed") is not None:
+    if placement.compute_mapping.get("embed") is not None:
         raise ValueError("llama_native gathers the FSDP embed dimension for computation")
-    for mapping in (compute_axis_mapping, parameter_axis_mapping):
+    for mapping in (placement.compute_mapping, placement.parameter_mapping):
         for dimension in ("mlp", "heads", "kv_head", "vocab"):
             if dimension in mapping and mapping[dimension] != model_axis:
                 raise ValueError(f"llama_native requires {dimension} to use the tensor-parallel axis {model_axis}")
@@ -125,6 +70,7 @@ def native_llama_sharding(
 
 
 def _checkpoint_architecture(config: NativeLlamaConfig) -> dict[str, Any]:
+    _, rope_scaling = config.rope.to_hf_config()
     architecture: dict[str, Any] = {
         "hidden_dim": config.hidden_dim,
         "intermediate_dim": config.intermediate_dim,
@@ -141,29 +87,19 @@ def _checkpoint_architecture(config: NativeLlamaConfig) -> dict[str, Any]:
         "use_qk_norm": config.use_qk_norm,
         "upcast_attn": config.upcast_attn,
         "rope_theta": float(config.rope.theta),
-        "rope_factor": float(config.rope.factor),
+        "rope_factor": float((rope_scaling or {}).get("factor", 1.0)),
     }
     # SiLU/default-linear metadata is already a checkpoint wire contract.
     # Other activations and scaled RoPE add their semantic fields without
     # changing that existing shape.
     if config.activation_function is not ActivationFunctionEnum.silu:
         architecture["activation_function"] = config.activation_function.value
-    if not isinstance(config.rope, RotaryConfig):
-        architecture["rope_type"] = "llama3" if isinstance(config.rope, Llama3RotaryConfig) else "yarn"
+    if not isinstance(config.rope, DefaultRotaryEmbeddingsConfig):
+        architecture["rope_type"] = "llama3" if isinstance(config.rope, Llama3RotaryEmbeddingsConfig) else "yarn"
         architecture.update(
             {name: value for name, value in dataclasses.asdict(config.rope).items() if name not in {"theta", "factor"}}
         )
     return architecture
-
-
-def _native_rotary_config(config: RotaryEmbeddingsConfig) -> NativeRotaryConfig:
-    if isinstance(config, DefaultRotaryEmbeddingsConfig):
-        return RotaryConfig(theta=config.theta, factor=config.factor)
-    if isinstance(config, Llama3RotaryEmbeddingsConfig):
-        return Llama3RotaryConfig(**dataclasses.asdict(config))
-    if isinstance(config, YarnRotaryEmbeddingsConfig):
-        return YarnRotaryConfig(**dataclasses.asdict(config))
-    raise ValueError(f"Unsupported native Llama RoPE configuration: {type(config).__name__}")
 
 
 @LmConfig.register_subclass(_NATIVE_MODEL_TYPE)
@@ -193,6 +129,19 @@ class NativeLlamaLmConfig(LlamaConfig):
     @property
     def requires_explicit_mesh_axes(self) -> bool:
         return True
+
+    @property
+    def owns_parameter_placement(self) -> bool:
+        return True
+
+    def build_for_mesh(  # pyrefly: ignore[bad-override]  # This config selects a different LmHeadModel.
+        self, Vocab: Axis, *, key: PRNGKeyArray, placement: ModelPlacement
+    ) -> "NativeLlamaLmHeadModel":
+        return NativeLlamaLmHeadModel.init(Vocab, self, key=key, placement=placement)
+
+    def vocab_axis_for_mesh(self, Vocab: Axis, placement: ModelPlacement) -> Axis:
+        sharding = _native_llama_sharding(placement)
+        return round_axis_for_partitioning(Vocab, {Vocab.name: sharding.model_axis})
 
     @property
     def model_type(self) -> type["NativeLlamaLmHeadModel"]:  # pyrefly: ignore[bad-override]
@@ -229,7 +178,7 @@ class NativeLlamaLmConfig(LlamaConfig):
             scaling = None if self.rope.factor == 1 else {"rope_type": "linear", "factor": self.rope.factor}
         elif isinstance(self.rope, YarnRotaryEmbeddingsConfig):
             assert scaling is not None
-            scaling["attention_factor"] = yarn_attention_factor(self.rope.factor, self.rope.mscale)
+            scaling["attention_factor"] = self.rope.attention_factor
         fields.update(
             architectures=["LlamaForCausalLM"],
             head_dim=self.actual_head_size,
@@ -240,12 +189,11 @@ class NativeLlamaLmConfig(LlamaConfig):
         fields.update(config_overrides or {})
         return HfLlamaConfig.from_dict(fields)
 
-    def hf_export_converter(self, tokenizer: MarinTokenizer | None) -> HFCheckpointConverter:
-        """Build a local-export converter without resolving reference weights or metadata."""
-        return HFCheckpointConverter(type(self), HfConfigClass=HfLlamaConfig, tokenizer=tokenizer)
-
     def hf_checkpoint_converter(
-        self, ref_checkpoint: str | None = None, *, tokenizer: MarinTokenizer | None = None
+        self,
+        ref_checkpoint: RepoRef | str | None = None,
+        *,
+        tokenizer: MarinTokenizer | PreTrainedTokenizerBase | None = None,
     ) -> HFCheckpointConverter:
         return HFCheckpointConverter(
             type(self),
@@ -253,6 +201,39 @@ class NativeLlamaLmConfig(LlamaConfig):
             HfConfigClass=HfLlamaConfig,
             tokenizer=tokenizer if tokenizer is not None else self.tokenizer,
         )
+
+    def hf_checkpoint_converter_for_source(
+        self,
+        ref: RepoRef | str | None,
+        tokenizer: MarinTokenizer | PreTrainedTokenizerBase,
+        *,
+        check_tokenizer: bool = False,
+    ) -> HFCheckpointConverter:
+        # The data tokenizer is authoritative for native initialization. Only
+        # compare against a tokenizer explicitly configured on the model.
+        if check_tokenizer and self.tokenizer is not None:
+            self.hf_checkpoint_converter().warn_if_tokenizer_mismatch(tokenizer)
+        return self.hf_checkpoint_converter(ref, tokenizer=tokenizer)
+
+    def with_hf_architecture(self, converter: HFCheckpointConverter) -> "NativeLlamaLmConfig":
+        # Replace the architecture while preserving the caller's runtime and source settings.
+        loaded = type(self).from_hf_config(converter.default_hf_config)
+        return dataclasses.replace(
+            loaded,
+            attn_backend=self.attn_backend,
+            gradient_checkpointing=self.gradient_checkpointing,
+            scan_layers=self.scan_layers,
+            flash_attention_block_size=self.flash_attention_block_size,
+            upcast_attn=self.upcast_attn,
+            reference_checkpoint=str(converter.reference_checkpoint),
+            tokenizer=self.tokenizer,  # The converter is bound to the data tokenizer separately.
+        )
+
+    def hf_checkpoint_vocab(self, hf_config: HfConfig, tokenizer_vocab: Axis) -> Axis:
+        self.validate_hf_config(hf_config)
+        if tokenizer_vocab.size > hf_config.vocab_size:
+            raise ValueError("Tokenizer vocabulary exceeds the native HF checkpoint vocabulary")
+        return tokenizer_vocab.resize(hf_config.vocab_size)
 
     def validate_hf_config(self, hf_config: HfConfig) -> None:
         """Reject HF architectures whose weights would change meaning under this configuration."""
@@ -302,20 +283,23 @@ class NativeLlamaLmConfig(LlamaConfig):
         if isinstance(rope, YarnRotaryEmbeddingsConfig) and scaling is not None:
             if not scaling.get("truncate", True):
                 raise ValueError("llama_native HF YaRN requires the integer correction ramp")
-            expected_factor = yarn_attention_factor(rope.factor, rope.mscale)
+            expected_factor = rope.attention_factor
             attention_factor = scaling.get("attention_factor")
             if attention_factor is None:
                 mscale, mscale_all_dim = scaling.get("mscale"), scaling.get("mscale_all_dim")
                 attention_factor = (
-                    yarn_attention_factor(rope.factor, mscale) / yarn_attention_factor(rope.factor, mscale_all_dim)
+                    dataclasses.replace(rope, mscale=mscale).attention_factor
+                    / dataclasses.replace(rope, mscale=mscale_all_dim).attention_factor
                     if mscale and mscale_all_dim
-                    else yarn_attention_factor(rope.factor, 1.0)
+                    else dataclasses.replace(rope, mscale=1.0).attention_factor
                 )
             if attention_factor != expected_factor:
                 raise ValueError("llama_native HF YaRN attention factor does not match the configured RoPE")
 
-    def validate_sharding(self, sharding: NativeLlamaSharding, mesh: Mesh, vocab_size: int | None = None) -> None:
-        """Validate a native model's dimensions against its concrete explicit mesh."""
+    def validate_sharding(
+        self, sharding: NativeLlamaSharding, mesh: Mesh | AbstractMesh, vocab_size: int | None = None
+    ) -> None:
+        """Validate a native model's dimensions against the explicit mesh shape."""
         if mesh.empty or any(axis_type != AxisType.Explicit for axis_type in mesh.axis_types):
             raise ValueError("llama_native requires an active mesh with explicit axis types")
         for axis in (*sharding.batch_axes, sharding.fsdp_axis, sharding.model_axis):
@@ -382,19 +366,15 @@ class NativeLlamaLmConfig(LlamaConfig):
             fields["gradient_checkpointing"] = ScanCheckpointPolicy(**dataclasses.asdict(self.gradient_checkpointing))
         return NativeLlamaConfig(
             vocab_size=vocab_size,
-            rope=_native_rotary_config(self.rope),
+            rope=self.rope,
             attention_implementation="tpu_splash" if self.attn_backend == AttentionBackend.SPLASH else "reference",
             **fields,
         )
 
     def build(  # pyrefly: ignore[bad-override]  # This config selects a different LmHeadModel implementation.
-        self,
-        Vocab: Axis,
-        *,
-        key: PRNGKeyArray,
-        sharding: NativeLlamaSharding = NativeLlamaSharding(),
+        self, Vocab: Axis, *, key: PRNGKeyArray
     ) -> "NativeLlamaLmHeadModel":
-        return NativeLlamaLmHeadModel.init(Vocab, self, key=key, sharding=sharding)
+        return NativeLlamaLmHeadModel.init(Vocab, self, key=key)
 
 
 class NativeLlamaLmHeadModel(ModuleWithStateDictSerialization, LmHeadModel[NativeLlamaLmConfig]):
@@ -434,8 +414,11 @@ class NativeLlamaLmHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Nativ
         config: NativeLlamaLmConfig,
         *,
         key: PRNGKeyArray,
-        sharding: NativeLlamaSharding = NativeLlamaSharding(),
+        placement: ModelPlacement | None = None,
     ) -> "NativeLlamaLmHeadModel":
+        sharding = NativeLlamaSharding() if placement is None else _native_llama_sharding(placement)
+        if placement is not None:
+            config.validate_sharding(sharding, get_abstract_mesh(), Vocab.size)
         return cls(config.native_config(Vocab.size).build(key=key, sharding=sharding), config)
 
     def _attention_mask(
@@ -516,77 +499,6 @@ class NativeLlamaLmHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Nativ
         # The shared CE kernel partitions examples and requires a complete head
         # on each participant. Storage remains FSDP/tensor-parallel.
         return hax.named(reshard(self.native.get_lm_head(), P(None, None)), (self.Vocab, self.Embed))
-
-    def initial_cache(self, spec: PageTableSpec, *, dtype) -> ListCache[KvPageCache]:
-        """Allocate per-layer paged KV storage, replicated except for TP heads."""
-        model_axis = self.native.sharding.model_axis
-        model_size = 1 if model_axis is None else get_abstract_mesh().shape[model_axis]
-        if self.native.config.num_kv_heads % model_size:
-            raise ValueError("Paged native Llama requires KV heads divisible by tensor parallel size")
-        caches = []
-        with hax.axis_mapping({} if model_axis is None else {"kv_head": model_axis}, merge=False):
-            for _ in range(self.native.config.num_layers):
-                cache = KvPageCache.init(
-                    spec,
-                    Axis("kv_head", self.native.config.num_kv_heads),
-                    Axis("head_size", self.native.config.actual_head_dim),
-                    dtype=dtype,
-                )
-                pages = reshard(cache.kv_pages.array, P(None, None, model_axis, None))
-                caches.append(dataclasses.replace(cache, kv_pages=hax.named(pages, cache.kv_pages.axes)))
-        return ListCache(caches)
-
-    def decode(
-        self,
-        input_ids: NamedArray,
-        kv_cache: ListCache[KvPageCache],
-        batch_info: PageBatchInfo,
-        pos_ids: NamedArray,
-        *,
-        key=None,
-    ) -> tuple[NamedArray, ListCache[KvPageCache]]:
-        """Run packed causal prefill or decode using the existing paged engine.
-
-        The packed stream and page table are replicated over data axes; weights
-        retain FSDP storage and attention/cache heads retain tensor parallelism.
-        Positions are absolute within each sequence. Only the valid prefix in
-        ``batch_info`` updates cache; trailing padded logits are not sampled.
-        """
-        # Paged decode shares the public key callback, but this route has no stochastic operation.
-        del key
-        if input_ids.ndim != 1 or input_ids.axes[0].name != self.Pos.name or pos_ids.axes != input_ids.axes:
-            raise ValueError("Paged native Llama expects matching flat position token/position arrays")
-        if len(kv_cache) != self.native.config.num_layers:
-            raise ValueError("Paged native Llama requires one cache per decoder layer")
-        layout = dataclasses.replace(self.native.sharding, batch_axes=())
-        tokens = reshard(input_ids.array[None], layout.tokens)
-        positions = reshard(pos_ids.array[None], layout.tokens)
-        hidden = self.native.embed_tokens(tokens, sharding=layout)
-        config = self.native.config
-        count = input_ids.axes[0].size
-        caches = []
-        for index in range(config.num_layers):
-            layer = self.native.layers.get_layer(index)
-            q, k, v = layer.self_attn.project_qkv(layer.input_layernorm(hidden), positions, sharding=layout)
-            q = q.reshape(count, config.num_kv_heads, config.num_heads // config.num_kv_heads, config.actual_head_dim)
-            k = k.reshape(count, config.num_kv_heads, config.actual_head_dim)
-            v = v.reshape(count, config.num_kv_heads, config.actual_head_dim)
-            output, cache = _paged_attention(
-                q,
-                k,
-                v,
-                kv_cache[index],
-                batch_info,
-                model_axis=layout.model_axis,
-                sm_scale=1 / math.sqrt(config.actual_head_dim),
-            )
-            output = output.reshape(1, count, config.num_heads, config.actual_head_dim)
-            attn = layer.self_attn.project_output(output, dtype=hidden.dtype, sharding=layout)
-            hidden = layer.finish_attention(hidden, attn, sharding=layout)
-            caches.append(cache)
-        logits = self.native.unembed(self.native.norm(hidden), sharding=layout)
-        logits = logits.reshape(count, self.Vocab.size)
-        return hax.named(logits, (input_ids.axes[0], self.Vocab)), ListCache(caches)
 
     def compute_next_token_loss(
         self,

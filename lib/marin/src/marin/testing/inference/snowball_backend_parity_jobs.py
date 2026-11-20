@@ -27,10 +27,11 @@ import requests
 from haliax import Axis
 from jax.sharding import PartitionSpec as P
 from levanter.models.snowball import SnowballLMHeadModel
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.timing import Duration, ExponentialBackoff
 
 from marin.inference.backend import ModelSpec
-from marin.inference.config import LevanterEngineConfig, VllmEngineConfig, VllmLauncherType, VllmSource
+from marin.inference.config import LevanterEngineConfig, ServingGeometry, VllmEngineConfig, VllmLauncherType, VllmSource
 from marin.inference.iris_tpu_vllm import tpu_ray_gang
 from marin.inference.iris_vllm import (
     iris_vllm_followers,
@@ -53,11 +54,14 @@ from marin.testing.inference.snowball import (
     BATCH_SIZE,
     MAX_PROBABILITY_ERROR,
     SNOWBALL,
+    TPU_CHIPS_PER_HOST,
+    TPU_TENSOR_PARALLEL_SIZE,
     RepresentativeCase,
     RepresentativeGolden,
     RepresentativePromptFixture,
     pad_prompt_batch,
     read_prompt_fixture,
+    read_tpu_export_manifest,
 )
 
 logger = logging.getLogger(__name__)
@@ -310,6 +314,7 @@ def score_vllm_against_goldens(
     pipeline_parallel_size: int,
 ) -> list[NextTokenParity] | None:
     """Run one task in the vLLM gang; the leader scores rank-pinned prompts."""
+    configure_coreweave_s3()
     prompt_fixture = read_prompt_fixture(goldens)
 
     spec = ModelSpec(
@@ -344,9 +349,12 @@ def score_vllm_against_goldens(
     )
     parities: list[NextTokenParity] = []
     with iris_vllm_launch(
-        pipeline_parallel_size=pipeline_parallel_size,
-        tensor_parallel_size=1,
-        data_parallel_size=GPU_COUNT,
+        ServingGeometry(
+            tensor_parallel_size=1,
+            data_parallel_size=GPU_COUNT,
+            pipeline_parallel_size=pipeline_parallel_size,
+            gpus_per_task=GPU_COUNT,
+        )
     ) as launch:
         logger.info(
             "vLLM requested topology: tasks=%d GPUs/task=%d DP=%d EP=%d PP=%d TP=%d task=%d",
@@ -460,6 +468,8 @@ def score_tpu_vllm_against_goldens(
     cpus_per_host: float,
 ) -> list[NextTokenParity] | None:
     """Run the same vLLM contract on one four-host v4 slice at TP16."""
+    assert weights == SNOWBALL.tpu_export_uri
+    read_tpu_export_manifest()
     fixture = read_prompt_fixture(goldens)
     engine = tpu_vllm_engine_config()
     launcher = vllm_launcher(engine)
@@ -467,8 +477,8 @@ def score_tpu_vllm_against_goldens(
     spec = ModelSpec(
         weights=weights,
         api_model=SNOWBALL.model_name,
-        num_chips=16,
-        tensor_parallel_size=16,
+        num_chips=TPU_TENSOR_PARALLEL_SIZE,
+        tensor_parallel_size=TPU_TENSOR_PARALLEL_SIZE,
         dtype="bfloat16",
         max_model_len=MAX_MODEL_LEN,
         chat_template_content=None,
@@ -478,7 +488,7 @@ def score_tpu_vllm_against_goldens(
     with tpu_ray_gang(
         VllmLauncherWithEnvironment(launcher, {"JAX_PLATFORMS": "tpu,cpu"}),
         cpus_per_host=max(1, math.floor(cpus_per_host)),
-        chips_per_host=4,
+        chips_per_host=TPU_CHIPS_PER_HOST,
         timeout_seconds=RUNTIME_TIMEOUT,
     ) as gang:
         if gang.leader:
