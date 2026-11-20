@@ -7,7 +7,7 @@ from filelock import FileLock
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from rigging.filesystem.cluster_config import StoreType, data_buckets
 from rigging.filesystem.storage_path import StoragePath
-from rigging.fsutil.verified_copy import verified_copy_prefix
+from rigging.filesystem.transfer import copy
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.image import ImageCache, PreparedImage, RegistryImage, image_cache_path
 
@@ -68,7 +68,7 @@ def cached_mirror_image(cache: ImageCache, mirror: LocalImageMirror, *, region: 
         with TemporaryDirectory(prefix=".mirror-", dir=cache.directory) as temporary:
             staged_cache = Path(temporary)
             staged = image_cache_path(staged_cache, digest)
-            verified_copy_prefix(str(source), str(staged))
+            copy(str(source), str(staged), recursive=True)
             prepared = ImageCache(staged_cache).prepare(image)
             try:
                 prepared.layout.rename(destination)
