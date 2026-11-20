@@ -11,9 +11,9 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { apiGet, useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
-import { formatCoverage, formatDelta, formatInterval, formatScore } from '@/utils/formatting'
+import { formatDelta, formatInterval, formatScore } from '@/utils/formatting'
 import { scoreTint } from '@/utils/score'
-import { UNVERSIONED_COHORT, cohortWarning, isPartialCoverage } from '@/utils/panel'
+import { UNVERSIONED_COHORT, cellCoverageLabel, cohortWarning, isPartialCoverage, scoredItemsLabel } from '@/utils/panel'
 import { FACETS, MAX_COMPARE } from '@/constants'
 import type { Comparison, ComparisonRow, Meta, Panel, PanelCell } from '@/types/api'
 import EmptyState from '@/components/shared/EmptyState.vue'
@@ -313,7 +313,7 @@ const chartSeries = computed(() =>
                       backgroundColor: scoreTint(cell(row, m)!.value),
                       ...(row.leader === m ? { '--tw-ring-color': 'var(--c-best)' } : {}),
                     }"
-                    :title="`${cell(row, m)!.metric} · ${cell(row, m)!.n_scored} items graded · cohort ${cell(row, m)!.version ?? UNVERSIONED_COHORT}`"
+                    :title="`${cell(row, m)!.metric} · ${scoredItemsLabel(cell(row, m)!)} graded · cohort ${cell(row, m)!.version ?? UNVERSIONED_COHORT}`"
                   >
                     <span class="font-mono font-medium tabular-nums">{{ formatScore(cell(row, m)!.value) }}</span>
                     <span class="block font-mono text-[10px] text-text-muted tabular-nums leading-none">
@@ -322,7 +322,7 @@ const chartSeries = computed(() =>
                     <span
                       v-if="isPartialCoverage(cell(row, m)!)"
                       class="block font-mono text-[9px] leading-none text-status-warning"
-                      >{{ formatCoverage(cell(row, m)!.coverage) }}</span
+                      >{{ cellCoverageLabel(cell(row, m)!) }}</span
                     >
                     <span
                       v-else-if="row.differences[m]"

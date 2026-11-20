@@ -44,7 +44,7 @@ export const INTERVAL_KIND = {
 
 export type IntervalKind = (typeof INTERVAL_KIND)[keyof typeof INTERVAL_KIND]
 
-// Properties of a measurement worth showing beside it. `marin.evaluation.eval_stats.ResultFlag` is
+// Properties of a measurement worth showing beside it. `evalrecords.eval_stats.ResultFlag` is
 // the full set; these are the ones the panel annotates a cell with.
 export const RESULT_FLAG = {
   NO_ANSWERS: 'no_answers',
@@ -61,6 +61,17 @@ export const FLAG_NOTES: Record<string, string> = {
   degenerate_stderr: 'the harness recorded a standard error of exactly zero, which no real sample supports',
 }
 
+export interface RepeatAggregate {
+  n_items: number
+  n_repeats: number
+  n_trials: number
+  n_scored_trials: number | null
+  coverage_basis: 'items' | 'item_lower_bound' | 'source'
+  stderr: number
+  stderr_basis: string
+  source_coverage: unknown
+}
+
 // One benchmark result: the rate over graded items, the interval around it, how much of the
 // attempted item set was graded, and the run it came from. `low` is the ranking key -- `value` is a
 // complete-case rate and is biased upward when a run lost items.
@@ -71,6 +82,7 @@ export interface PanelCell {
   interval_kind: IntervalKind
   metric: string
   metric_kind: string
+  repeat_aggregation: RepeatAggregate | null
   declared: boolean
   n_scored: number
   n_benchmark: number | null

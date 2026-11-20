@@ -9,6 +9,7 @@ from marin.evaluation.model_config import ModelConfig
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.rl.skyrl import SkyRLRun
 
+from experiments.evaluation.evals import EvaluationDefinition
 from experiments.evaluation.pipeline import EvaluationResult, eval_step
 
 SKYRL_POLICY_LOCATION = "<skyrl-policy>"
@@ -38,7 +39,7 @@ def resolve_skyrl_model(ctx: StepContext, source: ArtifactStep[SkyRLRun], model:
 def skyrl_eval_step(
     source: ArtifactStep[SkyRLRun],
     model: ModelConfig,
-    evals: str,
+    evals: tuple[EvaluationDefinition, ...],
     *,
     version: str,
     accelerator: str | None,

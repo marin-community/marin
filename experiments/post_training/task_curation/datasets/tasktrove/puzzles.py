@@ -24,7 +24,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.archives import 
 )
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import archive_file
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 
 PUZZLES_CONFIG = "laion__all-puzzles-v2"
 
@@ -89,12 +89,13 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "Numeric compare on real puzzles. Gold lives in /tests, which the harness must hide; "
                     "fine under the new grader."
                 ),
+                task_format=TaskFormat.TASKCOMPENDIUM,
             ),
             config=CurationRecipe(
                 name="tasktrove-puzzles",
                 source=tasktrove_source(PUZZLES_CONFIG),
                 convert=TaskTroveConverter(PUZZLES_CONFIG, convert_puzzle),
-                version="1",
+                version="2",
                 intended_use=IntendedUse.TRAIN,
                 rubric=RUBRIC,
                 controls=Controls(golden=reference_reply),

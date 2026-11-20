@@ -264,4 +264,4 @@ class HarborTaskDataset(TaskDataset):
         super().__init__([str(self.task_path)], tokenizer, max_prompt_length, num_workers=num_workers)
 
     def uid(self, index: int) -> str:
-        return TaskRolloutSpec.model_validate_json(self.dataframe[index][TASK_ROLLOUT_COLUMN]).task.id
+        return self.label(index)

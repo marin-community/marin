@@ -143,10 +143,11 @@ function grantOf(nodes, hours, priority) {
 }
 
 function renderPending() {
-  // Pending ideas wait for a decision; approval happens only here.
-  // An escalated idea waits for a maintainer: approved, or planned when a session stopped before launching.
+  // Pending ideas wait for a decision; approval happens only here. An escalated approved idea waits for a
+  // maintainer, and a planned idea can be re-queued or declined (check its runs first).
   const escalated = (i) => ['approved', 'planned'].includes(i.state) && (i.note ?? '').startsWith('Escalated:')
-  const pending = state.ideas.filter((i) => i.state === 'pending' || escalated(i))
+  const requeueable = (i) => escalated(i) || i.state === 'planned'
+  const pending = state.ideas.filter((i) => i.state === 'pending' || requeueable(i))
   document.getElementById('pending-n').textContent = String(pending.filter((i) => i.state === 'pending').length)
   if (!pending.length) {
     setChildren('pending', el('div', { class: 'none' }, 'Nothing to review'), alreadyRun())
@@ -180,20 +181,20 @@ function renderPending() {
               {},
               escalated(idea)
                 ? `needs maintainer: ${idea.note.replace('Escalated: ', '')} · `
-                : 'not approved · ',
+                : idea.state === 'planned' ? 'planned · ' : 'not approved · ',
               `${idea.origin === 'intake' ? '#9514' : 'proposal'} · ${idea.author} · `,
               when(idea.posted_at),
             ),
           ),
           idea.url ? link(idea.url, '↗') : el('span'),
-          escalated(idea)
+          requeueable(idea)
             ? requeueWithGrant(idea, '', `idea${idea.id}`)
             : approveWithGrant(`idea${idea.id}`, 'Approve', (body) =>
                 act(`ideas/${idea.id}/approve`, body, 'Approved and queued'),
               ),
           idea.state === 'pending'
             ? el('button', { type: 'button', class: 'btn', onclick: () => act(`ideas/${idea.id}/dismiss`, {}, 'Dismissed') }, 'Dismiss')
-            : escalated(idea)
+            : requeueable(idea)
               ? el('button', { type: 'button', class: 'btn', onclick: () => {
                   const note = window.prompt('Why decline?', '')
                   if (note !== null) act(`ideas/${idea.id}/decline`, { note }, 'Declined')

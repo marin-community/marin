@@ -354,6 +354,7 @@ user_budgets:
       - morrisy
     budget_limit: 75000
     max_band: PRIORITY_BAND_INTERACTIVE
-  - user_ids: [principal:human-080]
+  # Capped at PRIORITY_BAND_BATCH; higher-band submissions are rejected.
+  - user_ids: [principal:human-080, wg0420]
     budget_limit: 0
     max_band: PRIORITY_BAND_BATCH

@@ -1,15 +1,14 @@
-import importlib
 import ipaddress
 import os
 import time
 import sys
 import logging
 import math
-import socket
 
 import ray
 import torch
 from loguru import logger
+from transformers import AutoConfig
 from rigging.secrets import SECRETS_DIR_ENV, require_secret
 from omegaconf import DictConfig, OmegaConf
 from ray.util.placement_group import (
@@ -21,7 +20,7 @@ from ray.util.placement_group import (
 
 from skyrl_train.batch_invariant import BATCH_INVARIANT_NCCL_ENV
 from skyrl_train.config.callbacks import validate_hf_export_config
-from skyrl_train.config.utils import generation_context_limit
+from skyrl_train.config.utils import generation_context_limit, model_expert_count
 from skyrl_train.config.query_bias import resolve_grug_query_bias_update
 from skyrl_train.config.weight_sync_pause import resolve_weight_sync_pause_policy
 from skyrl_train.config.behavior_logprobs import configure_behavior_logprob_sampling
@@ -41,7 +40,7 @@ from skyrl_train.env_vars import (
 from skyrl_train.group_admission import resolve_group_advantage_invariant
 from skyrl_train.trajectory_selection import optimization_samples_per_prompt, trajectory_selector_from_config
 from skyrl_train.dynamic_sampling import resolve_dynamic_sampling_criteria
-from marinskyrl.runtime_options import reference_model_required
+from marinskyrl.runtime_options import reference_model_required, AdvantageEstimator, PolicyLossType
 from marinskyrl.rollout_grading import validate_nemotron_ultra_grading
 from marinskyrl.process_diagnostics import initialize_process_diagnostics
 from marinskyrl.distillation import (
@@ -50,7 +49,7 @@ from marinskyrl.distillation import (
     validate_generation_logprobs,
 )
 from marinskyrl.inference_placement import validate_expert_block_transport
-from marinskyrl.runtime_options import GDNBackend, R3Transport
+from marinskyrl.runtime_options import R3Transport, BatchBuilder, OUTCOME_ADVANTAGE_ESTIMATORS
 
 from .constants import DEFAULT_RAY_PLACEMENT_GROUP_TIMEOUT_SECONDS
 from .algorithm_registry import (
@@ -361,6 +360,11 @@ def validate_batch_sizes(cfg: DictConfig):
         f"train_batch_size {cfg.trainer.train_batch_size} should be divisible by policy_mini_batch_size {cfg.trainer.policy_mini_batch_size}"
     )
     optimization_group_size = optimization_samples_per_prompt(cfg)
+    if (
+        cfg.trainer.batch_builder == BatchBuilder.WORKER
+        and cfg.trainer.train_batch_size * optimization_group_size % policy_dp_size
+    ):
+        raise ValueError("trainer.batch_builder=worker does not support rows requiring DP padding")
     policy_mini_batch_size_per_gpu = cfg.trainer.policy_mini_batch_size * optimization_group_size // policy_dp_size
     assert policy_mini_batch_size_per_gpu > 0, (
         f"Invalid policy_mini_batch_size_per_gpu: {policy_mini_batch_size_per_gpu}. "
@@ -408,11 +412,6 @@ def validate_batch_sizes(cfg: DictConfig):
 def validate_megatron_cfg(cfg: DictConfig):
     # not yet supported + tested features
     assert cfg.generator.weight_sync_backend == "nccl", "only nccl is supported for megatron weight sync"
-    assert cfg.generator.backend == "vllm", "only vllm is supported for with megatron"
-    assert cfg.trainer.critic.model.path is None, "only GRPO training is currently supported for megatron"
-
-    if cfg.trainer.flash_attn:
-        importlib.import_module("flash_attn")
 
     worker_configs = [(cfg.trainer.policy, "policy"), (cfg.trainer.ref, "ref")]
     for config, worker_type in worker_configs:
@@ -447,12 +446,63 @@ def _iter_config_kwargs(node):
             yield (key,), value
 
 
+_OUTCOME_LOSSES = frozenset(
+    {
+        PolicyLossType.REGULAR,
+        PolicyLossType.DUAL_CLIP,
+        PolicyLossType.GSPO,
+        PolicyLossType.CISPO,
+        PolicyLossType.SAPO,
+        PolicyLossType.IMPORTANCE_SAMPLING,
+        PolicyLossType.BEHAVIOR_CLIP,
+    }
+)
+
+
+def require_worker_batch_config(cfg: DictConfig) -> None:
+    """Reject configuration settings unsupported by policy-worker assembly."""
+    algorithm = cfg.trainer.algorithm
+    shaping = parse_trajectory_reward_shaping_config(cfg.generator.get("trajectory_reward_shaping"))
+    megatron = cfg.trainer.policy.megatron_config
+    expert_tensor_parallel = megatron.get("expert_tensor_parallel_size") or megatron.tensor_model_parallel_size
+    moe_etp = False
+    if expert_tensor_parallel > 1:
+        # Model registration imports utils while initializing the model package.
+        from skyrl_train.models import register_local_models
+
+        register_local_models()
+        model = cfg.trainer.policy.model
+        metadata = AutoConfig.from_pretrained(model.path, trust_remote_code=True, revision=model.get("revision"))
+        moe_etp = model_expert_count(metadata) is not None
+    supported_loss = (
+        algorithm.policy_loss_type in _OUTCOME_LOSSES and algorithm.advantage_estimator in OUTCOME_ADVANTAGE_ESTIMATORS
+    ) or (
+        algorithm.policy_loss_type == PolicyLossType.SFT and algorithm.advantage_estimator == AdvantageEstimator.UNIFORM
+    )
+    restrictions = [
+        ("DPO and reference-model objectives", reference_model_required(algorithm)),
+        ("the configured loss and estimator", not supported_loss),
+        ("colocated placement", cfg.trainer.placement.colocate_all),
+        ("distillation", algorithm.get("distillation") is not None),
+        ("trajectory selection", cfg.trainer.trajectory_selector.type is not None),
+        ("step-wise training", cfg.trainer.step_wise_training),
+        ("advantage batch normalization", algorithm.advantage_batch_normalize),
+        ("loop advantage credit", shaping.enabled and shaping.loop.advantage_penalty_per_token > 0),
+        ("marker-target reasoning penalties", shaping.enabled and shaping.reasoning_span.charges_tokens),
+        ("ETP greater than one", moe_etp),
+        ("dense batch dumping", cfg.trainer.dump_data_batch),
+    ]
+    for reason, unsupported in restrictions:
+        if unsupported:
+            raise ValueError(f"trainer.batch_builder=worker does not support {reason}")
+
+
 def validate_cfg(cfg: DictConfig):
+    if BatchBuilder(cfg.trainer.batch_builder) is BatchBuilder.WORKER:
+        require_worker_batch_config(cfg)
     validate_mismatch_probe_config(cfg)
     if cfg.trainer.strategy != "megatron":
         raise ValueError(f"Unsupported training strategy: {cfg.trainer.strategy}")
-    if cfg.trainer.critic.model.path:
-        raise ValueError("Megatron does not support a critic worker")
     distillation_plan = compile_distillation_plan_from_config(cfg)
     validate_distillation_runtime_support(distillation_plan)
     validate_nemotron_ultra_grading(cfg, distillation_plan)
@@ -501,19 +551,12 @@ def validate_cfg(cfg: DictConfig):
             "trainer.algorithm.group_admission.stall_timeout must be positive when set; got "
             f"{group_admission_stall_timeout}"
         )
-    if cfg.trainer.algorithm.tis_lcs_alert_threshold < 0:
-        raise ValueError(
-            "trainer.algorithm.tis_lcs_alert_threshold must be non-negative; "
-            f"got {cfg.trainer.algorithm.tis_lcs_alert_threshold}"
-        )
     if cfg.trainer.progress.mode not in {"auto", "tqdm", "logging"}:
         raise ValueError(f"trainer.progress.mode must be one of auto, tqdm, logging; got {cfg.trainer.progress.mode!r}")
     if cfg.generator.r3_transport not in set(R3Transport):
         raise ValueError(
             f"generator.r3_transport must be one of by_value, resident, decentral; got {cfg.generator.r3_transport!r}"
         )
-    if cfg.generator.gdn_backend not in set(GDNBackend):
-        raise ValueError(f"generator.gdn_backend must be one of torch, flashqla; got {cfg.generator.gdn_backend!r}")
     available_policy_losses = PolicyLossRegistry.list_available()
     assert available_policy_losses != [], "Policy loss registry is not populated."
     assert cfg.trainer.algorithm.policy_loss_type in available_policy_losses, (
@@ -529,12 +572,6 @@ def validate_cfg(cfg: DictConfig):
         resolve_grug_query_bias_update(cfg.trainer.policy)
     except ValueError as error:
         raise AssertionError(str(error)) from error
-
-    # if advantage estimator is GAE, then critic path should be provided
-    if cfg.trainer.algorithm.advantage_estimator == "gae":
-        assert cfg.trainer.critic.model.path, (
-            "`trainer.critic.model.path` should be provided for PPO training, got `None`"
-        )
 
     assert not (cfg.trainer.algorithm.use_kl_in_reward and cfg.trainer.algorithm.use_kl_loss), (
         "use_kl_in_reward and use_kl_loss should be mutually exclusive"
@@ -582,8 +619,6 @@ def validate_cfg(cfg: DictConfig):
                 "The selected objective requires rollout logprobs; setting generator.sampling_params.logprobs=0."
             )
             cfg.generator.sampling_params.logprobs = 0
-        if cfg.generator.backend == "sglang":
-            raise NotImplementedError("Behavior-logprob objectives require the vLLM generator backend")
         configure_behavior_logprob_sampling(cfg.generator)
 
     if cfg.trainer.policy.model.lora.rank > 0:
@@ -653,15 +688,10 @@ def validate_batch_invariant_config(cfg: DictConfig) -> None:
 
 
 def validate_generator_cfg(cfg: DictConfig):
-    """Validates the correctness of generator-related config.
+    """Validate generation settings before engine startup."""
 
-    Args:
-        cfg (DictConfig): config to validate
-
-    Raises:
-        NotImplementedError: if feature is not supported, such as sglang for multiturn generation
-        ValueError: when cfg.generator.sampling_params.logprobs > 0
-    """
+    if cfg.generator.backend != "vllm":
+        raise ValueError(f"generator.backend must be 'vllm', got {cfg.generator.backend!r}")
 
     parse_trajectory_reward_shaping_config(cfg.generator.get("trajectory_reward_shaping"))
     parse_trajectory_retention_config(cfg.generator.get("trajectory_retention"))
@@ -689,52 +719,17 @@ def validate_generator_cfg(cfg: DictConfig):
             # remote engines can be launched separately so we `enable` by default
             cfg.generator.override_existing_update_group = "enable"
         else:
-            # for local engines or sglang, we disable
+            # Local engines manage their update group lifecycle.
             cfg.generator.override_existing_update_group = "disable"
-
-    # TODO: fix once we support these features with SGLang
-    if cfg.generator.backend == "sglang" and cfg.generator.run_engines_locally:
-        assert cfg.generator.inference_engine_tensor_parallel_size == 1, (
-            "As of now, We do not support tensor parallel inference engine with SGLang when running engines locally. "
-            "Please set `inference_engine_tensor_parallel_size` to 1."
-        )
 
     validate_generation_logprobs(cfg)
 
     validate_megatron_cfg(cfg)
-    if cfg.generator.backend == "sglang":
-        # Some sampling parameters are not supported in SGLang when `skip_tokenizer_init` is True.
-        if cfg.generator.sampling_params.stop is not None or cfg.generator.eval_sampling_params.stop is not None:
-            raise ValueError(
-                "`sampling_params.stop` and `eval_sampling_params.stop` are not supported for SGLang backend "
-                "since we always set `skip_tokenizer_init` to True. If you have to use these parameters, you can switch to vLLM. "
-                "See this issue for more: https://github.com/sgl-project/sglang/issues/9039#issuecomment-3218331087"
-            )
-        if "min_new_tokens" in cfg.generator.sampling_params or "min_new_tokens" in cfg.generator.eval_sampling_params:
-            raise ValueError(
-                "`sampling_params.min_new_tokens` and `eval_sampling_params.min_new_tokens` are not "
-                "supported for SGLang backend since we always set `skip_tokenizer_init` to True. "
-                "If you have to use these parameters, you can switch to vLLM. "
-                "See this issue for more: https://github.com/sgl-project/sglang/issues/9039#issuecomment-3218331087"
-            )
-
-    if cfg.generator.enable_http_endpoint:
-        if cfg.generator.backend == "sglang":
-            # TODO(Charlie): sglang_server.py not supported for /chat/completion yet because we have
-            # skip_tokenizer_init=True in engine creation. Fix by getting tokens via return logprobs
-            # instead. sglang_engine.py not supported yet because we still need to figure out how
-            # to make SGLang Python engine take OAI request.
-            raise ValueError(
-                'generator.enable_http_endpoint is not supported for SGLang backend yet. Please set generator.backend="vllm".'
-            )
 
     # Validate inference engine parallelism.
     ep_size = cfg.generator.inference_engine_expert_parallel_size
     dp_size = cfg.generator.inference_engine_data_parallel_size
     tp_size = cfg.generator.inference_engine_tensor_parallel_size
-    if cfg.generator.backend == "sglang":
-        assert dp_size == 1, "Inference data parallelism is not yet supported for SGLang backend."
-        assert ep_size == 1, "Inference expert parallelism is not yet supported for SGLang backend."
     if ep_size > 1:
         assert dp_size * tp_size == ep_size, (
             f"If inference expert parallel is enabled, data parallel size * tensor parallel size must equal expert parallel size. "
@@ -847,7 +842,7 @@ def _validate_dcp_cfg(cfg: DictConfig):
           merely duplicated and there is no non-attention work to shard (doc :27,29).
           Resolved model-aware from the HF config; degrades to the cheap dcp<=tp bound +
           a warning when the config is not offline-resolvable.
-      (c) backend == "vllm" (SGLang has no DCP knob),
+      (c) backend == "vllm",
       (e) NOT R3 router capture (vLLM rejects DCP + enable_return_routed_experts;
           vllm/config/vllm.py:1939-1944),
       (f) the arch is DCP-capable (GQA via FlashAttention, or MLA via FlashMLA).
@@ -880,7 +875,6 @@ def _validate_dcp_cfg(cfg: DictConfig):
         f"inference_engine_decode_context_parallel_size must satisfy 1 <= dcp <= "
         f"inference_engine_tensor_parallel_size; got dcp={dcp}, tp={tp}"
     )
-    # (c) SGLang has no DCP knob.
     assert gen.backend == "vllm", (
         f"decode context parallel (inference_engine_decode_context_parallel_size={dcp}) "
         f"is only supported with generator.backend='vllm', got '{gen.backend}'"
@@ -1079,7 +1073,6 @@ def prepare_runtime_environment(cfg: DictConfig) -> dict[str, str]:
 
     # NOTE (charlie): See https://github.com/vllm-project/vllm/blob/c6b0a7d3ba03ca414be1174e9bd86a97191b7090/vllm/worker/worker_base.py#L445
     # and https://docs.vllm.ai/en/v0.9.2/usage/troubleshooting.html?h=nccl_cumem_enable#known-issues
-    # Same for SGLang as we set `NCCL_CUMEM_ENABLE` to 0 in `sglang_engine.py`'s _patched_set_envs_and_config
     if cfg.generator.weight_sync_backend == "nccl":
         env_vars["NCCL_CUMEM_ENABLE"] = "0"
 
@@ -1087,7 +1080,6 @@ def prepare_runtime_environment(cfg: DictConfig) -> dict[str, str]:
     # See https://github.com/NVIDIA/Megatron-LM/issues/533#issuecomment-1760193239
     env_vars["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
     if cfg.trainer.flash_attn:
-        # TransformerEngine otherwise overrides the FlashAttention choice on Hopper+.
         env_vars["NVTE_FUSED_ATTN"] = "0"
 
     if cfg.generator.backend == "vllm":
@@ -1131,7 +1123,6 @@ def prepare_runtime_environment(cfg: DictConfig) -> dict[str, str]:
         gpu_counts.extend(
             [
                 placement.policy_num_gpus_per_node,
-                placement.critic_num_gpus_per_node,
                 placement.ref_num_gpus_per_node,
             ]
         )
@@ -1240,7 +1231,7 @@ def configure_ray_worker_logging() -> None:
             except ValueError:
                 level = record.levelno
             message = record.getMessage()
-            if record.exc_info is not None and record.exc_info[1] is not None:
+            if record.exc_info and record.exc_info[1] is not None:
                 message = f"{message}\n{format_exception_text(record.exc_info[1])}"
             logger.opt(depth=6).log(level, message)
 
@@ -1337,9 +1328,7 @@ def get_reordered_bundle_indices(pg: PlacementGroup):
     return pg_reordered_bundle_indices
 
 
-# NOTE (sumanthrh): For SGLang, the string representations here should also match those used by (and supported by) SGLang.
-# This is because we do not control the update weight implementation with SGLang backend.
-# With VLLM, we use a custom Worker extension to have a custom update weight implementation.
+# Weight updates use the dtype names accepted by the vLLM worker extension.
 def torch_dtype_to_str(dtype: torch.dtype) -> str:
     if dtype == torch.bfloat16:
         return "bfloat16"
@@ -1444,11 +1433,3 @@ def get_tcp_url(host: str, port: int) -> str:
         # not a literal IP, probably a hostname
         pass
     return f"tcp://{host}:{port}"
-
-
-def get_free_port():
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(("", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port

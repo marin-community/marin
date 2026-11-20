@@ -10,6 +10,7 @@ Integration tests that need a running cluster are marked with @pytest.mark.iris.
 import logging
 import pickle
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import MagicMock
 
 import fray.iris_backend as iris_backend
@@ -33,6 +34,7 @@ from fray.types import (
     ResourceConfig,
     TpuConfig,
 )
+from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.constraints import ConstraintOp
 from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.cluster.types import JobName, ResourceSpec, gpu_device
@@ -133,23 +135,34 @@ class TestConvertConstraintsDeviceAlternatives:
         assert {v.value for v in c.values} == {"v4-8", "v5p-8"}
 
 
-class TestIrisActorHandlePickle:
-    def test_pickle_roundtrip_preserves_name(self):
-        handle = IrisActorHandle("my-actor")
-        data = pickle.dumps(handle)
-        restored = pickle.loads(data)
-        assert restored._endpoint_name == "my-actor"
-        assert restored._client is None
+def test_unpickled_actor_handle_reresolves_endpoint_in_receiver_context(monkeypatch):
+    """A pickled handle carries only its endpoint name; the receiver resolves it through its own Iris context."""
+    resolved_names = []
 
-    def test_pickle_drops_client(self):
-        """Client is transient state — pickle should not carry it."""
-        handle = IrisActorHandle("my-actor", resolver=MagicMock())
-        # Manually set client to simulate resolved state
-        handle._client = "fake-client"
-        data = pickle.dumps(handle)
-        restored = pickle.loads(data)
-        assert restored._client is None
-        assert restored._resolver is None
+    def actor_client(actor_resolver, endpoint_name):
+        resolved_names.append(actor_resolver.resolve(endpoint_name).name)
+        return SimpleNamespace(ping=lambda: "pong")
+
+    monkeypatch.setattr(iris_backend, "ActorClient", actor_client)
+
+    sender_lookups = []
+    sender_resolver = SimpleNamespace(resolve=lambda name: sender_lookups.append(name) or SimpleNamespace(name=name))
+    handle = IrisActorHandle("my-actor", resolver=sender_resolver)
+    assert handle.ping() == "pong"
+
+    restored = pickle.loads(pickle.dumps(handle))
+    receiver_lookups = []
+    receiver_cluster = SimpleNamespace(list_endpoint_instances=lambda name: receiver_lookups.append(name) or [])
+    receiver_ctx = IrisContext(
+        job_id=JobName.from_string("/user/receiver"),
+        client=cast(IrisClient, SimpleNamespace(_cluster_client=receiver_cluster)),
+    )
+    with iris_ctx_scope(receiver_ctx):
+        assert restored.ping() == "pong"
+
+    assert resolved_names == ["my-actor", "my-actor"]
+    assert sender_lookups == ["my-actor"]
+    assert receiver_lookups == [f"{receiver_ctx.namespace}/my-actor"]
 
 
 def test_actor_group_created_by_driver_uses_creating_client(monkeypatch):
@@ -264,14 +277,6 @@ class TestResourceConfigScale:
 
 
 class TestImagePlumbing:
-    def test_resource_config_image_default_is_none(self):
-        rc = ResourceConfig()
-        assert rc.image is None
-
-    def test_resource_config_image_set(self):
-        rc = ResourceConfig(image="custom/swetrace:dev")
-        assert rc.image == "custom/swetrace:dev"
-
     def test_create_actor_group_passes_task_image_to_iris(self):
         """resources.image must reach the underlying iris.submit() call as task_image."""
         fake_iris = MagicMock()

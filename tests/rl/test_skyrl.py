@@ -17,8 +17,10 @@ from typing import IO
 
 import pytest
 import yaml
-from marin.execution.artifact import Artifact
-from marin.execution.lazy import ArtifactStep, StepContext
+from marin.execution.artifact import Artifact, ArtifactRecord, FingerprintMismatchError, write_record
+from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity, materialized_config
+from marin.execution.step_runner import StepRunner
+from marin.execution.step_status import StatusFile
 from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
@@ -31,6 +33,7 @@ from marin.rl.skyrl import (
     TaskTroveDataSource,
     TaskTroveSelection,
     TaskTroveTagMatch,
+    reject_forced_socket_transport,
     run_skyrl,
     skyrl_cpu_command,
     skyrl_step,
@@ -40,6 +43,8 @@ from marin.rl.skyrl import (
 from marin.rl.skyrl import _run_launcher as run_launcher_for_test
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem import cluster_config
+from rigging.filesystem.step_status import STATUS_SUCCESS
+from skyrlrecipe.locality import RoleTopologyMode
 
 
 def _model_step() -> ArtifactStep[LevanterCheckpoint]:
@@ -49,6 +54,18 @@ def _model_step() -> ArtifactStep[LevanterCheckpoint]:
         "s3://test/iceball-sft",
         kind=LevanterCheckpoint,
     )
+
+
+def test_launcher_credentials_are_scoped_to_its_subprocess(monkeypatch):
+    key = "MICRO210_TEST_JUDGE_KEY"
+    monkeypatch.setenv(key, "parent")
+    completed = run_launcher_for_test(
+        [sys.executable, "-c", "import os,sys; print(os.environ[sys.argv[1]])", key],
+        env_vars={key: "per-evaluation"},
+    )
+    assert completed.returncode == 0
+    assert completed.stdout.strip() == "per-evaluation"
+    assert os.environ[key] == "parent"
 
 
 @pytest.mark.parametrize("relative_path", [".", "hf/.", "hf/../policy"])
@@ -319,6 +336,125 @@ def test_skyrl_launch_reserves_capacity_for_config_derived_draft_trainer() -> No
     assert launch_config.draft_checkpoint_root == "<temporary_output_path>/checkpoints/drafts"
 
 
+@pytest.mark.parametrize(
+    ("trainer_gpus", "rollout_gpus", "expected_nodes"),
+    [
+        (32, 16, 12),
+        (32, 32, 16),
+        (32, 64, 24),
+        (48, 16, 16),
+        (48, 32, 20),
+        (48, 64, 28),
+        (64, 16, 20),
+        (64, 32, 24),
+        (64, 64, 32),
+        (48, 12, 15),
+        (72, 16, 22),
+    ],
+)
+def test_cross_host_ep_launch_reserves_policy_and_rollout_nodes(trainer_gpus, rollout_gpus, expected_nodes):
+    plan = dataclasses.replace(
+        _role_plan(),
+        colocate_all=False,
+        policy_num_nodes=trainer_gpus // 4,
+        num_inference_engines=1,
+        inference_engine_data_parallel_size=rollout_gpus,
+        inference_engine_expert_parallel_size=rollout_gpus,
+    )
+    recipe = yaml.safe_load(_config_yaml())
+    recipe["trainer"]["policy"] = {
+        "megatron_config": {
+            "tensor_model_parallel_size": 1,
+            "pipeline_model_parallel_size": 2,
+            "context_parallel_size": 4,
+            "expert_model_parallel_size": 4,
+            "expert_tensor_parallel_size": 1,
+        }
+    }
+    spec = dataclasses.replace(
+        _spec(),
+        config_yaml=yaml.safe_dump(recipe),
+        topology=SkyRLTopology(num_nodes=plan.num_nodes, gpus_per_node=4, gpu_variant="GB200", role_plan=plan),
+    )
+    step = skyrl_step(spec, _execution())
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+    allocation = yaml.safe_load(config.launch_config_yaml)["iris"]["allocation"]
+
+    assert allocation["num_nodes"] == expected_nodes
+    assert allocation["num_nodes"] * allocation["gpus_per_node"] == trainer_gpus + rollout_gpus
+
+
+def test_nvlink_launch_requests_extra_hosts_when_each_group_rounds_up():
+    plan = dataclasses.replace(
+        _role_plan(),
+        colocate_all=False,
+        num_inference_engines=7,
+        inference_engine_data_parallel_size=18,
+        inference_engine_expert_parallel_size=18,
+    )
+    spec = dataclasses.replace(
+        _spec(),
+        topology=SkyRLTopology(num_nodes=plan.num_nodes, gpus_per_node=4, gpu_variant="GB200", role_plan=plan),
+    )
+    execution = dataclasses.replace(_execution(), role_topology=RoleTopologyMode.NVLINK_DOMAIN)
+    step = skyrl_step(spec, execution)
+    config = step.build_config(
+        StepContext.for_run(
+            output_path="s3://test/run", prefix="s3://test", runtime_args=step.runtime_args, deps=step.deps
+        )
+    )
+    allocation = yaml.safe_load(config.launch_config_yaml)["iris"]["allocation"]
+    assert allocation["num_nodes"] == 34
+
+
+def test_nvlink_launch_rejects_tensor_parallel_inference_before_submission():
+    plan = dataclasses.replace(
+        _role_plan(), colocate_all=False, num_inference_engines=1, inference_engine_tensor_parallel_size=2
+    )
+    spec = dataclasses.replace(
+        _spec(),
+        topology=SkyRLTopology(num_nodes=plan.num_nodes, gpus_per_node=4, gpu_variant="GB200", role_plan=plan),
+    )
+    step = skyrl_step(spec, dataclasses.replace(_execution(), role_topology=RoleTopologyMode.NVLINK_DOMAIN))
+    with pytest.raises(ValueError, match="requires vLLM TP1/PP1 EP=DP"):
+        step.build_config(
+            StepContext.for_run(
+                output_path="s3://test/run", prefix="s3://test", runtime_args=step.runtime_args, deps=step.deps
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ("gpus_per_node", "engines", "dp", "rollout_nodes"),
+    [(4, 4, 3, 4), (8, 5, 3, 3), (4, 3, 10, 8), (8, 2, 12, 3)],
+)
+def test_rollout_pool_respects_host_local_engines_and_cross_host_workers(gpus_per_node, engines, dp, rollout_nodes):
+    plan = dataclasses.replace(
+        _role_plan(),
+        colocate_all=False,
+        policy_num_gpus_per_node=gpus_per_node,
+        num_inference_engines=engines,
+        inference_engine_data_parallel_size=dp,
+        inference_engine_expert_parallel_size=dp,
+    )
+    assert plan.num_nodes == 1 + rollout_nodes
+
+
+@pytest.mark.parametrize(("tp", "pp", "dp", "ep"), [(2, 1, 4, 4), (1, 2, 4, 4), (1, 1, 8, 4)])
+def test_unsupported_cross_host_layouts_still_require_one_node(tp, pp, dp, ep):
+    plan = dataclasses.replace(
+        _role_plan(),
+        colocate_all=False,
+        num_inference_engines=1,
+        inference_engine_tensor_parallel_size=tp,
+        inference_engine_pipeline_parallel_size=pp,
+        inference_engine_data_parallel_size=dp,
+        inference_engine_expert_parallel_size=ep,
+    )
+    with pytest.raises(ValueError, match="each SkyRL inference engine must fit on one node"):
+        SkyRLTopology(num_nodes=3, gpus_per_node=4, gpu_variant="GB200", role_plan=plan)
+
+
 def test_skyrl_topology_rejects_a_colocated_slice_that_does_not_tile_the_node() -> None:
     plan = dataclasses.replace(
         _role_plan(),
@@ -419,13 +555,52 @@ def test_skyrl_separate_reference_reserves_capacity_and_renders_distinct_roles()
     }
 
 
-@pytest.mark.parametrize("entrypoint", ["generate", "taskcompendium"])
+def _colocated_expert_block_spec(entrypoint: str | None = None) -> SkyRLSpec:
+    plan = dataclasses.replace(
+        _role_plan(),
+        num_inference_engines=1,
+        inference_engine_data_parallel_size=4,
+        inference_engine_expert_parallel_size=4,
+    )
+    recipe = yaml.safe_load(_config_yaml())
+    recipe["trainer"]["policy"] = {
+        "megatron_config": {
+            "tensor_model_parallel_size": 1,
+            "pipeline_model_parallel_size": 1,
+            "expert_tensor_parallel_size": 1,
+            "expert_model_parallel_size": 4,
+        }
+    }
+    recipe["generator"].update(
+        weight_sync_transport="expert_block",
+        weight_sync_backend="nccl",
+        expert_block_sync={"verify": True},
+        engine_init_kwargs={"kernel_config": {"moe_backend": "triton"}},
+    )
+    if entrypoint is not None:
+        recipe["entrypoint"] = entrypoint
+
+    return dataclasses.replace(
+        _spec(),
+        topology=dataclasses.replace(_spec().topology, role_plan=plan),
+        config_yaml=yaml.safe_dump(recipe),
+    )
+
+
+@pytest.mark.parametrize("entrypoint", ["generate", "taskcompendium", "terminal_bench_generate"])
 def test_expert_block_colocation_fails_before_job_submission(entrypoint: str) -> None:
-    # Evaluation previously passed preflight, then failed in the GPU engine factory.
-    spec = _spec()
-    recipe = f"entrypoint: {entrypoint}\n{_config_yaml(strategy='megatron')}  weight_sync_transport: expert_block\n"
-    with pytest.raises(ValueError, match="expert_block requires non-colocated"):
-        dataclasses.replace(spec, config_yaml=recipe)
+    with pytest.raises(ValueError, match="colocated expert_block requires entrypoint=standard"):
+        _colocated_expert_block_spec(entrypoint)
+
+
+def test_expert_block_colocated_four_gpu_recipe_passes_preflight() -> None:
+    spec = _colocated_expert_block_spec()
+    step = skyrl_step(spec, _execution())
+    launch = yaml.safe_load(
+        step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps)).launch_config_yaml
+    )
+    assert launch["iris"]["allocation"]["num_nodes"] == 1
+    assert launch["skyrl"]["generator"]["inference_engine_data_parallel_size"] == 4
 
 
 def test_skyrl_step_fingerprint_includes_roles_and_excludes_placement() -> None:
@@ -458,6 +633,34 @@ def test_skyrl_step_declares_model_and_data_dependencies() -> None:
         ("tests/iceball-sft", "2026.08.01"),
         ("tests/iceball-gsm8k", "2026.08.01"),
     ]
+
+
+def test_starting_checkpoint_binds_identity_and_rejects_cached_output_reuse(tmp_path: Path, monkeypatch) -> None:
+    spec = _spec()
+    checkpoints = [
+        ArtifactStep.adopt("tests/native", f"2026.11.13.{step}", f"s3://checkpoints/global_step_{step}")
+        for step in (2, 5)
+    ]
+    runs = [
+        skyrl_step(dataclasses.replace(spec, starting_checkpoint=checkpoint), _execution()) for checkpoint in checkpoints
+    ]
+    for run, checkpoint in zip(runs, checkpoints, strict=True):
+        config = materialized_config(run, prefix="s3://marin-us-east-08a")
+        launch = yaml.safe_load(config.launch_config_yaml)
+        assert checkpoint in run.deps
+        assert launch["inputs"]["starting_checkpoint"] == {
+            "uri": checkpoint.adopt_source,
+            "identity": artifact_identity(checkpoint),
+        }
+        assert not checkpoint.adopt_source.startswith(config.output.checkpoint_root)
+    assert runs[0].fingerprint() != runs[1].fingerprint()
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    output = runs[0].path(str(tmp_path))
+    write_record(ArtifactRecord(output_path=output, fingerprint=runs[0].fingerprint()))
+    StatusFile(output, worker_id="test").write_status(STATUS_SUCCESS)
+    StepRunner().run([runs[0].lower()])
+    with pytest.raises(FingerprintMismatchError):
+        StepRunner().run([runs[1].lower()])
 
 
 def test_skyrl_step_routes_disposable_state_to_ttl_storage(
@@ -551,7 +754,7 @@ def test_run_skyrl_returns_explicit_hf_export(monkeypatch: pytest.MonkeyPatch) -
     catalog_rows = []
     monkeypatch.setattr("marin.rl.skyrl.record_rollout_run", catalog_rows.append)
 
-    model = run_skyrl(config)
+    model = run_skyrl(config, env_vars={})
 
     assert model.hf_model_uri is not None and model.hf_model_uri.endswith("global_step_8/policy")
     assert model.global_step == 8
@@ -620,7 +823,7 @@ def test_run_skyrl_succeeds_without_hf_export(monkeypatch: pytest.MonkeyPatch) -
     )
     monkeypatch.setattr("marin.rl.skyrl.record_rollout_run", lambda _record: None)
 
-    run = run_skyrl(config)
+    run = run_skyrl(config, env_vars={})
 
     assert run.hf_model_uri is None
     assert run.global_step is None
@@ -694,7 +897,7 @@ def test_launcher_failure_reports_the_launcher_stderr(monkeypatch: pytest.Monkey
     )
 
     with pytest.raises(RuntimeError, match="entrypoint must be a registered name"):
-        run_skyrl(config)
+        run_skyrl(config, env_vars={})
 
     assert len(catalog_rows) == 1
     assert catalog_rows[0].status == "failed"
@@ -804,3 +1007,22 @@ def test_skyrl_spec_rejects_unsupported_training_strategy() -> None:
     # Unsupported curriculum strategies must fail before the launcher allocates workers.
     with pytest.raises(ValueError, match=r"trainer\.strategy=megatron"):
         dataclasses.replace(_spec(), config_yaml=_config_yaml(strategy="fsdp2"))
+
+
+def test_reject_forced_socket_transport_blocks_multi_node_overrides() -> None:
+    # Multi-node jobs must keep NCCL on InfiniBand; the audit in #11619 measured
+    # 12-24x lower socket bandwidth and bootstrap hangs for partial overrides.
+    with pytest.raises(ValueError, match=r"NCCL_NET=Socket"):
+        reject_forced_socket_transport({"NCCL_NET": "Socket"}, num_nodes=32)
+    with pytest.raises(ValueError, match=r"NCCL_IB_DISABLE=1"):
+        reject_forced_socket_transport({"NCCL_IB_DISABLE": "1"}, num_nodes=5)
+    with pytest.raises(ValueError, match=r"NCCL_NET=Socket, NCCL_IB_DISABLE=1"):
+        reject_forced_socket_transport({"NCCL_NET": "Socket", "NCCL_IB_DISABLE": "1"}, num_nodes=2)
+
+
+def test_reject_forced_socket_transport_allows_non_forcing_env() -> None:
+    # AF_INET alone does not force sockets, single-node jobs have no
+    # cross-node transport to protect, and an empty env passes.
+    reject_forced_socket_transport({"NCCL_SOCKET_FAMILY": "AF_INET"}, num_nodes=32)
+    reject_forced_socket_transport({"NCCL_NET": "Socket"}, num_nodes=1)
+    reject_forced_socket_transport({}, num_nodes=32)

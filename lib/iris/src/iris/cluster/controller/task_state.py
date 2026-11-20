@@ -172,6 +172,7 @@ class AttemptDetailRow:
     node_name: str | None
     terminal_reason: str | None
     output_archive_json: str | None
+    topology_json: dict[str, str]
 
     @classmethod
     def from_row(cls, row: Row) -> "AttemptDetailRow":
@@ -190,6 +191,7 @@ class AttemptDetailRow:
             node_name=row.node_name,
             terminal_reason=row.terminal_reason,
             output_archive_json=row.output_archive_json,
+            topology_json=row.topology_json,
         )
 
 

@@ -14,14 +14,16 @@ from jinja2 import TemplateError
 from daytona import DaytonaError
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
+from rigging.redaction import redact_string
 from shellbox.machine import Backend, Machine, MachineFactory
 from taskcompendium.grading_result import GradingFailure, Outcome
-from taskcompendium.models import NoGrader, ReasoningMarkupPolicy
+from taskcompendium.models import EnvironmentRequirements, NoGrader, ReasoningMarkupPolicy
 from verifyit.modes.grade_judge import JudgeConnection
 from rolloutengine.harness.core import Harness
 from rolloutengine.harness.external import AgentHarness
 from rolloutengine.models import (
     GenerationLimitReached,
+    ContextRejected,
     ContextWindowExceeded,
     GradedRollout,
     GradedRolloutInterrupted,
@@ -318,7 +320,11 @@ def _failed_rollout(
         grade = fold_grades([step.transition.grade for step in rollout.steps if step.transition.grade is not None])
     if cleanup_errors := interruption.grade.diagnostics.get("cleanup_errors"):
         grade = replace(grade, diagnostics={**grade.diagnostics, "cleanup_errors": cleanup_errors})
-    logger.warning("Task {} interrupted during {}: {}", task.id, interruption.operation, exception_type)
+    detail = exception_type
+    if isinstance(error, TaskMachineError) and isinstance(error.__cause__, DaytonaError):
+        # Diagnostics carry only allowlisted fields. Provider text can contain credentials, so log it redacted.
+        detail = f"{exception_type} ({type(error.__cause__).__name__}: {redact_string(str(error.__cause__))})"
+    logger.warning("Task {} interrupted during {}: {}", task.id, interruption.operation, detail)
     return replace(
         rollout,
         grade=grade,
@@ -423,18 +429,32 @@ class TaskRolloutWorker:
         if lowered.harness == HARBOR_TRIAL_SESSION:
             if harbor is None or self.installed_agents is None:
                 raise ValueError("Full Harbor trials require Harbor and installed-agent settings")
+            engine_requirements = lowered.task.environment_requirements.model_copy(
+                update={"setup_commands": (), "working_directory": None}
+            )
+            if engine_requirements != EnvironmentRequirements():
+                raise ValueError(
+                    "Declare environment requirements in the Harbor package; "
+                    "TaskSpec overrides support only setup_commands and their working_directory"
+                )
             harnesses[HARBOR_TRIAL_SESSION] = self.installed_agents.original_harness(lowered, session_id, harbor, phase)
+            # The bound Harbor trial retains and executes the original setup.
+            # The recording engine must not provision a second task machine for it.
+            engine_task = lowered.task.model_copy(
+                update={"environment_requirements": engine_requirements}
+            )
             # Harbor owns the phase deadlines and must still run its verifier
             # after an agent timeout. The outer attempt deadline covers the full trial.
             lowered = lowered.model_copy(
                 update={
+                    "task": engine_task,
                     "limits": lowered.limits.model_copy(
                         update={
                             "model_turn_timeout": None,
                             "tool_turn_timeout": None,
                             "total_turn_timeout": None,
                         }
-                    )
+                    ),
                 }
             )
         elif harbor is not None and self.installed_agents is not None:
@@ -504,11 +524,10 @@ class TaskRolloutWorker:
                         session_id=session_id,
                     )
                 except (GenerationLimitReached, ContextLengthExceededError) as error:
-                    if lowered.harness != SKYRL_AGENT_HARNESS:
-                        raise
-                    raise ContextWindowExceeded(
+                    raise ContextRejected(
+                        error,
                         f"This request exceeds the maximum context length of {max_context_length} tokens. "
-                        "Compact the conversation and retry."
+                        "Compact the conversation and retry.",
                     ) from error
 
             engine = engines[index]
@@ -664,7 +683,7 @@ class TaskRolloutWorkerSpec:
         installed_agents = None
         if self.harbor_config is not None and self.harbor_config.get("installed_agent") is not None:
             # Full Harbor is an optional dependency for installed-agent runs.
-            from harbor.host_capabilities import DAYTONA_API_URL, DaytonaConnection
+            from shellbox.backends.daytona.connection import DEFAULT_DAYTONA_API_URL, DaytonaConnection
             from skyrl_train.rollouts.agent_runtime import InstalledAgentRuntime, InstalledAgentSettings
             from skyrl_train.rollouts.agent_backend import AgentInferenceBackend
 
@@ -675,7 +694,7 @@ class TaskRolloutWorkerSpec:
             daytona_options = harbor.environment.kwargs
             daytona_connection = DaytonaConnection(
                 api_key=os.environ.get(daytona_options.get("api_key_env") or "DAYTONA_API_KEY"),
-                api_url=os.environ.get("DAYTONA_API_URL", DAYTONA_API_URL),
+                api_url=os.environ.get("DAYTONA_API_URL", DEFAULT_DAYTONA_API_URL),
                 target=os.environ.get("DAYTONA_TARGET"),
             )
             installed_agents = InstalledAgentRuntime(
