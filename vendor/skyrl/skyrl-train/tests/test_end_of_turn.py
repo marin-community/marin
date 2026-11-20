@@ -2,9 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+from pathlib import Path
+
+from tokenizers import Tokenizer, models
+from transformers import PreTrainedTokenizerFast
 
 import pytest
 
+from rolloutengine.models import ModelRequest
+from skyrl_train.rollouts.agent_backend import AgentInferenceBackend, TRIAL_HEADER
+from skyrl_train.rollouts.task_worker import _model_turn
 from skyrl_train.inference_engines.base import InferenceEngineInput
 from skyrl_train.trajectory_runners.model_clients import DirectModelClient
 
@@ -74,23 +81,24 @@ def test_the_special_token_a_turn_stopped_at_is_removed_from_the_reply(terminato
 @pytest.mark.parametrize(
     "response_ids,finish_reason,expected",
     [
-        ([PLAN, END_OF_TURN], "stop", "plan<|eot_id|>"),
-        ([THINK_START, PLAN, THINK_END, CALL, END_OF_TURN], "stop", "call<|eot_id|>"),
-        ([THINK_START, PLAN, THINK_END, CALL, END_OF_TURN], "length", "call<|eot_id|>"),
+        ([PLAN, END_OF_TURN], "stop", "plan"),
+        ([THINK_START, PLAN, THINK_END, CALL, END_OF_TURN], "stop", "call"),
+        ([THINK_START, PLAN, THINK_END, CALL, END_OF_TURN], "length", "call"),
     ],
     ids=["plain", "reasoning", "reasoning-length-stop"],
 )
-def test_explicit_special_token_retention_keeps_the_turn_terminator(response_ids, finish_reason, expected):
+def test_explicit_special_token_retention_excludes_the_turn_terminator(response_ids, finish_reason, expected):
     output = _generate(response_ids, finish_reason, sampling_params={"skip_special_tokens": False})
 
     assert output["responses"] == [expected]
     assert output["assistant_messages"][0]["content"] == expected
 
 
-def test_a_length_stop_keeps_its_last_token():
+def test_a_length_stop_keeps_its_last_training_token_without_replaying_the_terminator():
     output = _generate([PLAN, END_OF_TURN], "length", sampling_params={"skip_special_tokens": False})
 
-    assert output["assistant_messages"][0]["content"] == "plan<|eot_id|>"
+    assert output["assistant_messages"][0]["content"] == "plan"
+    assert output["response_ids"] == [[PLAN, END_OF_TURN]]
 
 
 def test_a_tool_call_that_ended_its_turn_at_the_budget_is_not_a_length_stop():
@@ -128,3 +136,112 @@ def test_agent_output_cap_reaches_the_chat_server(options, effective_cap):
     assert request["max_completion_tokens"] == effective_cap
     assert "max_tokens" not in request
     assert output["generation_token_budgets"] == [effective_cap]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("installed_agent", [False, True], ids=["skyrl", "harbor-pi"])
+async def test_tool_call_history_renders_without_reply_terminators(installed_agent):
+    # Frozen template from the audited Exp4 tokenizer, unchanged since before #11232.
+    template = (Path(__file__).parent / "fixtures/marin-chat-template.jinja").read_text()
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=Tokenizer(models.WordLevel({"[UNK]": 0}, unk_token="[UNK]")),
+        chat_template=template,
+        bos_token="<|begin_of_text|>",
+    )
+    rendered = []
+
+    class ToolClient(_InferenceClient):
+        async def tokenize(self, request):
+            rendered.append(
+                tokenizer.apply_chat_template(request["json"]["messages"], tokenize=False, add_generation_prompt=True)
+            )
+            return {"tokens": [PLAN]}
+
+        async def chat_completion(self, request):
+            response = await super().chat_completion(request)
+            response["choices"][0]["message"].update(
+                content="plan<|eot_id|>",
+                tool_calls=[
+                    {"id": "lookup", "type": "function", "function": {"name": "lookup", "arguments": '{"key": "a"}'}}
+                ],
+            )
+            return response
+
+    engine = ToolClient([PLAN, CALL, END_OF_TURN], "tool_calls")
+    client = DirectModelClient(engine)
+    backend = AgentInferenceBackend("policy", 1024, engine.tokenize, engine.tokenizer)
+
+    async def complete(prompt):
+        return await _model_turn(
+            client,
+            ModelRequest(prompt.messages, prompt.options),
+            sampling_params={"skip_special_tokens": False},
+            max_context_length=1024,
+            max_prompt_length=1024,
+            chat_template_kwargs={},
+            session_id="pi",
+        )
+
+    messages = [{"role": "user", "content": "go"}]
+    for _ in range(3):
+        if installed_agent:
+            with backend.session("pi", complete):
+                response = await backend.chat_completion(
+                    {
+                        "headers": {TRIAL_HEADER: "pi"},
+                        "json": {"messages": list(messages)},
+                    }
+                )
+            assert response["choices"][0]["token_ids"] == [PLAN, CALL, END_OF_TURN]
+            message = response["choices"][0]["message"]
+        else:
+            output = await client.generate(
+                InferenceEngineInput(
+                    prompts=[list(messages)],
+                    chat_completion_params=[{}],
+                    sampling_params={"skip_special_tokens": False},
+                )
+            )
+            assert output["responses"] == ["plan"]
+            assert output["response_ids"] == [[PLAN, CALL, END_OF_TURN]]
+            message = output["assistant_messages"][0]
+        messages.extend([message, {"role": "tool", "tool_call_id": "lookup", "content": "12"}])
+
+    initial = "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\ngo<|eot_id|>\n"
+    historical_turn = (
+        "<|start_header_id|>assistant<|end_header_id|>\nplan<tool_call>\n"
+        '{"name": "lookup", "arguments": {"key": "a"}}\n</tool_call><|eot_id|>'
+        '<|start_header_id|>tool<|end_header_id|>\n<tool_response name="lookup">12</tool_response><|eot_id|>\n'
+    )
+    generation = "<|start_header_id|>assistant<|end_header_id|>\n"
+    assert [text.encode() for text in rendered] == [
+        (initial + historical_turn * turns + generation).encode() for turns in range(3)
+    ]
+
+
+@pytest.mark.parametrize("chat", [True, False], ids=["chat", "completion"])
+@pytest.mark.parametrize("raw", [True, False], ids=["raw-opt-in", "visible-only"])
+def test_raw_text_is_opt_in_and_keeps_exact_completion_delimiters(chat, raw):
+    class Client(_InferenceClient):
+        async def generate(self, request):
+            assert "return_raw_text" not in request
+            return {
+                "responses": ["<think>plan</think>call<|eot_id|>"],
+                "response_ids": [self.response_ids],
+                "stop_reasons": [self.finish_reason],
+            }
+
+    client = DirectModelClient(Client([THINK_START, PLAN, THINK_END, CALL, END_OF_TURN], "stop"))
+    request = InferenceEngineInput(sampling_params={"skip_special_tokens": False}, return_raw_text=raw)
+    if chat:
+        request.update(prompts=[[{"role": "user", "content": "go"}]], chat_completion_params=[{}])
+    else:
+        request["prompt_token_ids"] = [[PLAN]]
+    output = asyncio.run(client.generate(request))
+
+    assert output["responses"] == ["call" if chat else "<think>plan</think>call"]
+    assert output["response_ids"] == [[THINK_START, PLAN, THINK_END, CALL, END_OF_TURN]]
+    if raw:
+        assert output["raw_responses"] == ["<think>plan</think>call<|eot_id|>"]
+    else:
+        assert "raw_responses" not in output

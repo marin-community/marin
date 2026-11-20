@@ -46,7 +46,6 @@ from skyrl_train.trajectory_runners.types import TokenProvenance
 from skyrl_train.trajectory_runners.routed_experts import normalize_routed_experts
 from skyrl_train.rollout_observability import rollout_phase
 
-
 # The per-turn output limit, as the trainer config (`max_generate_length`) and vLLM (`max_tokens`) spell it. Chat
 # requests carry it only as `max_completion_tokens`, which vLLM prefers over `max_tokens`.
 _SAMPLING_OUTPUT_LIMIT_KEYS = ("max_generate_length", "max_tokens")
@@ -68,6 +67,7 @@ class ModelClientOutput(InferenceEngineOutput):
     """Normalized model output with explicit token provenance."""
 
     token_provenance: TokenProvenance
+    raw_responses: NotRequired[list[str]]
     generation_token_budgets: NotRequired[list[int | None]]
     reasoning_violations: NotRequired[list[ReasoningViolation | None]]
     reasoning_violation_tokens: NotRequired[list[int | None]]
@@ -306,10 +306,30 @@ class DirectModelClient:
         self._client = inference_engine_client
 
     async def generate(self, request: InferenceEngineInput) -> ModelClientOutput:
+        request = request.copy()
+        return_raw_text = request.pop("return_raw_text", False)
         if request.get("chat_completion_params") is not None:
-            return await self._generate_chat(request)
-        output = await self._client.generate(request)
-        return ModelClientOutput(**output, token_provenance=TokenProvenance.ENGINE)
+            output = await self._generate_chat(request)
+        else:
+            generated = await self._client.generate(request)
+            output = ModelClientOutput(**generated, token_provenance=TokenProvenance.ENGINE)
+        tokenizer = self._client.tokenizer
+        turn_end_tokens = _turn_end_tokens(tokenizer)
+        # Normalize where replies become visible text and replayable messages.
+        # The exact training tokens and opt-in raw text keep the terminator.
+        for index, response_ids in enumerate(output["response_ids"]):
+            if not response_ids or response_ids[-1] not in turn_end_tokens:
+                continue
+            terminator = tokenizer.decode(response_ids[-1:], skip_special_tokens=False)
+            output["responses"][index] = output["responses"][index].removesuffix(terminator)
+            messages = output.get("assistant_messages")
+            if messages is not None and isinstance(messages[index].get("content"), str):
+                messages[index] = {**messages[index], "content": messages[index]["content"].removesuffix(terminator)}
+        if return_raw_text:
+            output["raw_responses"] = [
+                tokenizer.decode(token_ids, skip_special_tokens=False) for token_ids in output["response_ids"]
+            ]
+        return output
 
     async def _generate_assistant_prefix(
         self, request: InferenceEngineInput, messages: list[dict[str, Any]], options: dict[str, Any], session_id: str
@@ -321,8 +341,8 @@ class DirectModelClient:
         if token_budget is not None:
             sampling["max_tokens"] = token_budget
         sampling.pop("max_generate_length", None)
-        sampling.update(skip_special_tokens=False, include_stop_str_in_output=True)
-        # Raw completions retain delimiters and bypass chat tool/reasoning parsers.
+        sampling.update(skip_special_tokens=skip_special_tokens, include_stop_str_in_output=True)
+        # Completion inference bypasses chat tool/reasoning parsers.
         output = await self._client.generate(
             {
                 "prompts": None,
@@ -333,11 +353,8 @@ class DirectModelClient:
         )
         if output.get("prompt_ids") != [prompt_ids]:
             raise RolloutContractError("Assistant prefix inference did not report the rendered prompt token IDs")
-        # Training keeps the stop token; default grader text omits it so a closing fence stays closed.
         text = output["responses"][0]
         response_ids = output["response_ids"][0]
-        if skip_special_tokens and _ends_turn(self._client.tokenizer, response_ids, output["stop_reasons"][0]):
-            text = text.removesuffix(self._client.tokenizer.decode(response_ids[-1:], skip_special_tokens=False))
         message = {**(output.get("assistant_messages") or [{"role": "assistant"}])[0], "content": text}
         return _ChatResult(
             prompt_ids,
@@ -445,25 +462,11 @@ class DirectModelClient:
             tokenizer = self._client.tokenizer
             stop_reason = choice["finish_reason"]
             semantic_ids = response_ids[:-1] if _ends_turn(tokenizer, response_ids, stop_reason) else response_ids
-            terminator_text = (
-                tokenizer.decode(response_ids[-1:], skip_special_tokens=False)
-                if response_ids and response_ids[-1] in _turn_end_tokens(tokenizer)
-                else ""
-            )
-            if len(semantic_ids) != len(response_ids):
-                text = text.removesuffix(terminator_text)
-                if message.get("content") is not None:
-                    message = {**message, "content": text}
             decoded = tokenizer.decode(semantic_ids, skip_special_tokens=False)
             if any(marker in decoded for pair in REASONING_DELIMITERS for marker in pair):
                 text = final_answer_text(decoded)
                 if not message.get("tool_calls"):
                     message = {**message, "content": text}
-            # Extract the answer before restoring a requested turn terminator.
-            if terminator_text and not body.get("skip_special_tokens", True):
-                text = text.removesuffix(terminator_text) + terminator_text
-                if message.get("content") is not None:
-                    message = {**message, "content": message["content"].removesuffix(terminator_text) + terminator_text}
             logprob_items = (choice.get("logprobs") or {}).get("content")
             response_logprobs = (
                 [float(item["logprob"]) for item in logprob_items] if logprob_items is not None else None
