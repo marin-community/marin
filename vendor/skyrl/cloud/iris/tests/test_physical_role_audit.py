@@ -68,19 +68,13 @@ def test_healthy_multi_node_groups_may_share_a_fabric(audit):
     assert {row["fabric"] for row in report["nodes"]} == {"cluster:1"}
 
 
-def test_a_group_split_across_fabrics_is_rejected(audit, tmp_path):
+@pytest.mark.parametrize(
+    "label,value", [(FABRIC_LABEL, "cluster:2"), (HOST_LABEL, "host-0")], ids=["split-group", "duplicate-host"]
+)
+def test_invalid_physical_placement_is_rejected(audit, tmp_path, label, value):
     topology = RoleTopology(("policy",), LocalityPlan((2,), (0,)))
     nodes = role_nodes(topology)
-    nodes[1]["Labels"][FABRIC_LABEL] = "cluster:2"
-    with pytest.raises(ValueError):
-        audit(topology, nodes)
-    assert not (tmp_path / "role-topology.json").exists()
-
-
-def test_duplicate_hosts_are_rejected(audit, tmp_path):
-    topology = RoleTopology(("policy",), LocalityPlan((2,), (0,)))
-    nodes = role_nodes(topology)
-    nodes[1]["Labels"][HOST_LABEL] = "host-0"
+    nodes[1]["Labels"][label] = value
     with pytest.raises(ValueError):
         audit(topology, nodes)
     assert not (tmp_path / "role-topology.json").exists()

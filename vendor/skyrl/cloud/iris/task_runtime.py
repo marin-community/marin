@@ -47,9 +47,11 @@ from typing import Any, Protocol
 
 import huggingface_hub.constants
 from filelock import FileLock
+from iris.cluster.runtime.env import IRIS_NODE_NAME_ENV, IRIS_OUTPUT_DIR_ENV
 from omegaconf import DictConfig, OmegaConf
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
 from rigging.timing import RateLimiter
+from skyrlrecipe.locality import RoleTopologyMode
 
 from cloud.iris.artifacts import (
     ArtifactSource,
@@ -1357,7 +1359,7 @@ def verify_role_placement(ray_address: str, topology: RoleTopology, report_direc
     try:
         nodes = ray.nodes()
         rows = validate_role_nodes(nodes, topology=topology)
-        report = json.dumps({"role_topology": "nvlink.domain", "nodes": rows}, sort_keys=True)
+        report = json.dumps({"role_topology": RoleTopologyMode.NVLINK_DOMAIN, "nodes": rows}, sort_keys=True)
         (report_directory / "role-topology.json").write_text(report + "\n")
         _log(f"Verified physical role placement before model actors: {report}")
     finally:
@@ -2022,7 +2024,7 @@ def run_head(
         _log("Single-node slice: skipping rendezvous and multi-node wait.")
 
     if args.role_topology is not None:
-        verify_role_placement(ray_address, args.role_topology, Path(os.environ["IRIS_OUTPUT_DIR"]))
+        verify_role_placement(ray_address, args.role_topology, Path(os.environ[IRIS_OUTPUT_DIR_ENV]))
 
     with ray_metrics_telemetry(head_ip, allocated_ray_port(RayPort.METRICS), CONTROLLER_ROLE):
         env = training_driver_env(derived_gloo_ifname)
@@ -2333,14 +2335,16 @@ def main() -> None:
     args = _runtime_namespace(launch_config)
     os.environ.update(args.task_env)
     if args.role_topology is not None:
-        fabric = subprocess.run(["nvidia-smi", "-q", "-x"], check=True, capture_output=True, text=True, timeout=30)
+        fabric_xml = subprocess.run(
+            ["nvidia-smi", "-q", "-x"], check=True, capture_output=True, text=True, timeout=30
+        ).stdout
         args.ray_labels = {
             **args.role_topology.node_labels(_rank()),
             **node_physical_labels(
                 rank=_rank(),
                 gpus_per_node=int(launch_config.iris.allocation.gpus_per_node),
-                host=os.environ["IRIS_NODE_NAME"],
-                fabric_xml=fabric.stdout,
+                host=os.environ[IRIS_NODE_NAME_ENV],
+                fabric_xml=fabric_xml,
             ),
         }
     _print_env_snapshot()
