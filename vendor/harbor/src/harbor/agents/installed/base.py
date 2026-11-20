@@ -5,7 +5,7 @@ from uuid import uuid4
 from rigging.redaction import redact_string
 import shlex
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Literal
 
@@ -20,6 +20,17 @@ from harbor.utils.templating import render_prompt_template
 REQUIRED_MODEL_PRICE_FIELDS = frozenset(
     {"input_cost_per_token", "output_cost_per_token"}
 )
+
+COMMAND_ERROR_TAIL = 2000
+
+
+@dataclass(frozen=True)
+class CommandFailureEvidence:
+    return_code: int
+    command: str
+    stdout: str
+    stderr: str
+
 
 SERVER_TIMEOUT_GRACE = 15.0
 SERVER_TIMEOUT_KILL_DELAY = 5.0
@@ -393,28 +404,36 @@ class BaseInstalledAgent(BaseAgent, ABC):
             timeout_sec=timeout_sec,
         )
         if result.return_code != 0:
-            diagnostics = {
-                key: self._redact_output(value)
-                for key, value in {"command": command, "stdout": result.stdout, "stderr": result.stderr}.items()
-            }
+            diagnostics = CommandFailureEvidence(
+                return_code=result.return_code,
+                command=self._redact_output(command),
+                stdout=self._redact_output(result.stdout),
+                stderr=self._redact_output(result.stderr),
+            )
             failure_dir = self.logs_dir / "command-failures"
-            failure_dir.mkdir(parents=True, exist_ok=True)
             failure_path = failure_dir / f"{uuid4().hex}.json"
-            failure_path.write_text(json.dumps({"return_code": result.return_code, **diagnostics}))
+            evidence_error = None
+            try:
+                failure_dir.mkdir(parents=True, exist_ok=True)
+                failure_path.write_text(json.dumps(asdict(diagnostics)))
+            except OSError as error:
+                evidence_error = error
             self.logger.debug(
                 "Command failed",
                 extra={
                     "return_code": result.return_code,
-                    "stdout": self._truncate_output(self._redact_output(result.stdout)),
-                    "stderr": self._truncate_output(self._redact_output(result.stderr)),
+                    "stdout": self._truncate_output(diagnostics.stdout),
+                    "stderr": self._truncate_output(diagnostics.stderr),
                 },
             )
             message = (
-                f"Command failed (exit {result.return_code}): {diagnostics['command']}\n"
-                f"stdout tail: {diagnostics['stdout'][-2000:]}\n"
-                f"stderr tail: {diagnostics['stderr'][-2000:]}\n"
+                f"Command failed (exit {result.return_code}): {diagnostics.command}\n"
+                f"stdout tail: {diagnostics.stdout[-COMMAND_ERROR_TAIL:]}\n"
+                f"stderr tail: {diagnostics.stderr[-COMMAND_ERROR_TAIL:]}\n"
                 f"Full redacted output: {failure_path}"
             )
+            if evidence_error is not None:
+                message += f"\nEvidence publication failed: {self._redact_output(str(evidence_error))}"
             # A return code of 128 + N (N in 1..64) is the shell's convention for
             # "terminated by signal N" — distinct from an ordinary non-zero exit.
             # Classify it so a signal kill (e.g. the agent's own kill -HUP hitting
@@ -425,8 +444,8 @@ class BaseInstalledAgent(BaseAgent, ABC):
                     message,
                     signal_number=result.return_code - 128,
                     result=result,
-                )
-            raise NonZeroAgentExitCodeError(message, result=result)
+                ) from evidence_error
+            raise NonZeroAgentExitCodeError(message, result=result) from evidence_error
 
         self.logger.debug(
             "Command outputs captured",
