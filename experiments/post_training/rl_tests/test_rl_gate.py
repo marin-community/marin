@@ -341,7 +341,7 @@ def test_best_checkpoint_selection_requires_held_out_grading(recorded_runs, pres
         root = recorded_runs(candidate.name, f"users/test/checkpoint-grading-{retention}")
         facts = {fact.name for fact in measurements.read_measurements(str(root), candidate).invariants}
         assert f"{evaluation.name}/answers_complete" in facts
-        for check in ("scored_fraction", "grader_error_fraction"):
+        for check in ("task_coverage", "grader_error_fraction"):
             assert (f"{evaluation.name}/{check}" in facts) == (retention == "best")
 
 

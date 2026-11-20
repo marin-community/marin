@@ -29,7 +29,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from evalrecords.records import read_record, record_path
+from evalrecords.records import RLAttemptRef, read_record, record_path
 from iris.client.client import iris_ctx
 from iris.rpc import job_pb2
 from marin.evaluation.hardware import default_platform
@@ -52,6 +52,7 @@ _ACCELERATOR_RUNTIME_ARG = "accelerator"
 _SUBMISSION_CLUSTER_RUNTIME_ARG = "submission_cluster"
 _FEDERATED_CLUSTER_RUNTIME_ARG = "federated_cluster"
 _INSTANCES_RUNTIME_ARG = "instances"
+_JOB_TIMEOUT_RUNTIME_ARG = "job_timeout_seconds"
 
 
 @dataclass(frozen=True)
@@ -68,6 +69,8 @@ class EvalStepConfig:
     federated_cluster: str | None
     version: str
     instances: int = 1
+    rl_attempt: RLAttemptRef | None = None
+    job_timeout_seconds: int | None = None
 
 
 @dataclass(frozen=True)
@@ -104,9 +107,12 @@ def run_eval_pipeline_step(config: EvalStepConfig) -> EvaluationResult:
         federated_cluster=config.federated_cluster,
         priority_band=job_pb2.PRIORITY_BAND_INHERIT,
         version=config.version,
+        rl_attempt=config.rl_attempt,
         cache_key=None if is_mutable_version(config.version) else config.artifact_path,
     )
-    submitted = launch_group(prepare_evaluation_batch(spec), iris_ctx().client)
+    submitted = launch_group(
+        prepare_evaluation_batch(spec), iris_ctx().client, job_timeout_seconds=config.job_timeout_seconds
+    )
     submitted.job.wait(timeout=float("inf"))
     run_ids = tuple(evaluation.run_id for evaluation in submitted.evaluations)
     return EvaluationResult(
@@ -127,12 +133,14 @@ def eval_step(
     version: str,
     deps: tuple[ArtifactStep, ...] = (),
     resolve_model: Callable[[StepContext], ModelConfig] | None = None,
+    resolve_rl_attempt: Callable[[StepContext], RLAttemptRef | None] | None = None,
     limit: int | None = None,
     max_concurrent: int = DEFAULT_EVAL_CONCURRENCY,
     instances: int = 1,
     accelerator: str | None = None,
     submission_cluster: str = EVALUATION_CONTROLLER_CLUSTER,
     federated_cluster: str | None = None,
+    job_timeout_seconds: int | None = None,
 ) -> ArtifactStep[EvaluationResult]:
     """Evaluate a model with curated TaskSpec corpora and Harbor.
 
@@ -141,6 +149,8 @@ def eval_step(
     ``max_concurrent`` caps concurrent evaluators sharing inference.
     ``instances`` starts candidate serving workers behind one broker when greater than one.
     """
+    if job_timeout_seconds is not None and job_timeout_seconds <= 0:
+        raise ValueError("job_timeout_seconds must be positive")
 
     def build_config(ctx: StepContext) -> EvalStepConfig | EvalStepFingerprint:
         resolved_model = resolve_model(ctx) if resolve_model is not None else model
@@ -163,6 +173,8 @@ def eval_step(
             submission_cluster=ctx.runtime_arg(_SUBMISSION_CLUSTER_RUNTIME_ARG),
             federated_cluster=ctx.runtime_arg(_FEDERATED_CLUSTER_RUNTIME_ARG),
             version=version,
+            rl_attempt=resolve_rl_attempt(ctx) if resolve_rl_attempt is not None else None,
+            job_timeout_seconds=ctx.runtime_arg(_JOB_TIMEOUT_RUNTIME_ARG),
         )
 
     return ArtifactStep(
@@ -177,6 +189,7 @@ def eval_step(
             _SUBMISSION_CLUSTER_RUNTIME_ARG: submission_cluster,
             _FEDERATED_CLUSTER_RUNTIME_ARG: federated_cluster,
             _INSTANCES_RUNTIME_ARG: instances,
+            _JOB_TIMEOUT_RUNTIME_ARG: job_timeout_seconds,
         },
     )
 

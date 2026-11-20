@@ -846,7 +846,7 @@ def test_speculative_pipeline_launch_selects_gpu(tmp_path, monkeypatch):
 
     submitted_batches: list[EvaluationBatch] = []
 
-    def launch(batch: EvaluationBatch, _client: object):
+    def launch(batch: EvaluationBatch, _client: object, *, job_timeout_seconds: int | None = None):
         submitted_batches.append(batch)
         return SimpleNamespace(
             group_id=batch.group_id,
@@ -891,7 +891,7 @@ def test_pipeline_retry_preserves_completed_evaluations(tmp_path, monkeypatch, v
             raise EvaluationError("interrupted evaluation", status=RunStatus.INFRA_FAILED)
         return _successful_evaluation(session, output_dir, env_vars, backend_state=backend_state, judge=judge)
 
-    def launch(batch, _client):
+    def launch(batch, _client, *, job_timeout_seconds: int | None = None):
         executions = (successful, interrupted)
         evaluations = tuple(
             replace(evaluation, executor=executor)

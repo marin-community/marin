@@ -38,7 +38,7 @@ checkpoint_export:
   checkpoint_path: null
   export_root: null
   hf_hub_repo_id: null
-  hf_hub_private: false
+  hf_hub_private: true
   hf_hub_revision: main
   hf_upload_mode: latest
 

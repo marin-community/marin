@@ -29,6 +29,7 @@ from evalrecords.records import (
     ModelConfigRef,
     ModelRef,
     PromptFormat,
+    RLAttemptRef,
     RunStatus,
     list_records,
     scoring_settings,
@@ -77,6 +78,7 @@ from rigging.config_discovery import resolve_cluster_config
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.secrets import SecretSpec, resolve_secret_spec
+from rigging.timing import Duration
 from zephyr.context import ZephyrContext
 
 from experiments.evaluation.curated import (
@@ -174,6 +176,7 @@ class LaunchSpec:
     """Reuse evaluation records for this key and the same resolved configuration."""
     run_id: str | None = None
     policy_finalization: PolicyFinalization | None = None
+    rl_attempt: RLAttemptRef | None = None
 
 
 # EvalDash scans these record roots (`DEFAULT_SCAN_PREFIXES` adds read-only legacy roots).
@@ -536,6 +539,7 @@ def build_evaluation_batch(
         user=user,
         version=spec.version,
         description=spec.description,
+        rl_attempt=spec.rl_attempt,
         records_prefix=records_prefix,
         model=model,
         accelerator=accelerator,
@@ -688,7 +692,9 @@ def run_evaluation_group(batch: EvaluationBatch) -> None:
         StepRunner().run((step,), max_concurrent=1)
 
 
-def launch_group(batch: EvaluationBatch, client: IrisClient) -> SubmittedEvaluationBatch:
+def launch_group(
+    batch: EvaluationBatch, client: IrisClient, *, job_timeout_seconds: int | None = None
+) -> SubmittedEvaluationBatch:
     """Bind final evaluation steps and submit one CPU orchestrator."""
     constraints = None
     if batch.accelerator.target_cluster and batch.accelerator.target_cluster != batch.submission_cluster:
@@ -718,6 +724,7 @@ def launch_group(batch: EvaluationBatch, client: IrisClient) -> SubmittedEvaluat
         ),
         constraints=constraints,
         egress_allow=batch.egress_allow,
+        timeout=Duration.from_seconds(job_timeout_seconds) if job_timeout_seconds is not None else None,
         max_retries_failure=0,
         priority_band=batch.priority_band,
     )

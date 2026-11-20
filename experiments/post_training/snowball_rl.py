@@ -495,7 +495,20 @@ _PRESETS = (
 
 SNOWBALL = ModelPresets(
     model="snowball",
-    presets=_PRESETS,
+    presets=(
+        *_PRESETS,
+        replace(
+            next(preset for preset in _PRESETS if preset.name == "speed-short"),
+            name="eval-short",
+            recipe=_GENERATING,
+            accepts_init=True,
+            control_preset=None,
+            evaluations=(EVALUATIONS["eval_lite"],),
+            guards=(),
+            objectives=(),
+            budget="1.1 H100-hours in the recorded EvalLite run",
+        ),
+    ),
     namespace="snowball-rl",
     control_pins={
         name: ControlPin(name, "648b5687f0", "2026.11.06.1", count)

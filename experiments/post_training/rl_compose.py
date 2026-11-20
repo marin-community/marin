@@ -103,6 +103,7 @@ RUNNER_KEYS = _DERIVED_RECIPE_KEYS | {"generator.trajectory_retention", "generat
 _GATED_KEYS = frozenset(
     {
         "trainer.max_steps",
+        "trainer.hf_hub_repo_id",
         "trainer.logger",
         "trainer.project_name",
         "context_budget",
