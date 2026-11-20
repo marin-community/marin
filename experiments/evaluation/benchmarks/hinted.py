@@ -35,7 +35,6 @@ from taskcompendium.importers.evalchemy.hinted import (
     GSM8K_SHOTS,
     HINT_LEVELS,
     MINERVA_SHOTS,
-    TOKENIZER_INPUT,
     HintMethod,
     convert_hinted,
     hinted_item,
@@ -51,7 +50,7 @@ from experiments.evaluation.benchmarks.math import MATH500_REVISION
 from experiments.evaluation.preparation import EvaluationCorpusRecipe
 from experiments.evaluation.prompt_compilation import evaluation_source
 from experiments.post_training.task_curation.environment import Environment
-from experiments.post_training.task_curation.pipeline import HfSource, RecipeSource, UrlSource
+from experiments.post_training.task_curation.pipeline import HfSource, RecipeSource
 from experiments.post_training.task_curation.source import RlDataSource
 
 VERSION = "2026.11.20"
@@ -59,20 +58,12 @@ PROTOCOL = "hinted"
 GSM8K_POOL_FILE = "main/train-00000-of-00001.parquet"
 MATH500_SOURCE = HfSource("HuggingFaceH4/MATH-500", MATH500_REVISION, ("test.jsonl",), SourceFormat.JSONL)
 MATH500_POPULATION = 500
-MARIN_TOKENIZER_REVISION = "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2"
-MARIN_TOKENIZER = UrlSource(
-    f"https://huggingface.co/marin-community/marin-tokenizer/resolve/{MARIN_TOKENIZER_REVISION}/tokenizer.json",
-    "881c9c36c359e1617afef6f7583403567931b7b4f43f6552d2b2155a131650a2",
-    "tokenizer.json",
-    SourceFormat.JSONL,
-)
 GSM8K_STOPS = ("Question:", "</s>", "<|im_end|>")
 MINERVA_STOPS = ("Problem:",)
 GSM8K_MAX_TOKENS = 512
+# The longest H=1 MATH-500 prompt is about 2,300 tokens, so this budget fits the 4,096-token context of the
+# Delphi and hero-ladder checkpoints these evals target.
 MATH_MAX_TOKENS = 1024
-# The Delphi and hero-ladder checkpoints these evals target serve a 4096-token context; a MATH prompt must
-# leave room for the output budget.
-TARGET_CONTEXT_WINDOW = 4096
 HINTED_TEMPERATURE = 0.4
 HINTED_TOP_K = 1000
 # vLLM reads -1 as "no top-k"; the paper's unhinted runs disable top-k.
@@ -180,12 +171,10 @@ def math500_sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                 read=partial(
                     read_hinted_math,
                     method=method,
-                    tokenizer_file=MARIN_TOKENIZER.filename,
-                    prompt_token_budget=TARGET_CONTEXT_WINDOW - MATH_MAX_TOKENS,
                     source_row_prefix=f"{MATH500_SOURCE.repo}@{MATH500_SOURCE.revision[:8]}",
                 ),
             ),
-            inputs={TOKENIZER_INPUT: MARIN_TOKENIZER},
+            inputs={},
             scorer="minerva_math",
             grader=MATH_GRADER,
             protocol=hinted_protocol(

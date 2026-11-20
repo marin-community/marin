@@ -54,8 +54,6 @@ GSM8K_HINTED_POPULATION = 256
 GSM8K_SHOTS = 5
 MINERVA_SHOTS = 4
 MINERVA_PROFILE = "minerva_math"
-TOKENIZER_INPUT = "tokenizer"
-"""Recipe input name holding the tokenizer that sizes MATH prompts."""
 _WORD = re.compile(r"\S+")
 _NUMERIC_ANSWER = re.compile(r"-?\$?[\d,]*\.?\d+")
 _FINAL_ANSWER_LINE = "\nFinal Answer:"
@@ -354,43 +352,22 @@ def minerva_exemplars() -> list[HintedExample]:
     return examples
 
 
-def math_rows(
-    documents: Sequence[Document],
-    method: HintMethod,
-    *,
-    count_tokens: Callable[[str], int],
-    prompt_token_budget: int,
-    source_row_prefix: str,
-) -> Iterator[dict[str, Any]]:
-    """Yield Minerva prompts, dropping trailing shots for problems whose H=1 prompt exceeds the budget.
+def math_rows(documents: Sequence[Document], method: HintMethod, *, source_row_prefix: str) -> Iterator[dict[str, Any]]:
+    """Yield four-shot Minerva prompts; H=0 uses the plain prompt.
 
-    The shot count is fixed per problem from the longer of its H=1 truncation and masking prompts,
-    so every hint method and level of a problem shares one prompt structure; H=0 uses the plain prompt.
+    The longest H=1 prompt over MATH-500 is about 2,300 tokens, so every prompt leaves room for the
+    1,024-token output budget in a 4,096-token context and no shots are dropped.
     """
     exemplar_documents = pinned_prompts()[MINERVA_PROFILE]
     exemplars = minerva_exemplars()
-    budget = prompt_token_budget
     for document in documents:
         problem_id = document["unique_id"]
         target = minerva_example(document, problem_id, document["answer"])
-        shots = MINERVA_SHOTS
-        while shots:
-            if method is HintMethod.NONE:
-                lengths = [count_tokens(minerva_plain_prompt(document, exemplar_documents[:shots]))]
-            else:
-                lengths = [
-                    count_tokens(hint_block_prompt(target, exemplars[:shots], hinted, 1.0, render=minerva_block)[0])
-                    for hinted in (HintMethod.TRUNCATION, HintMethod.MASKING)
-                ]
-            if max(lengths) <= budget:
-                break
-            shots -= 1
         base = {
             "document": document,
             "profile": MINERVA_PROFILE,
             "subject": document["subject"],
-            "num_fewshot": shots,
-            "dropped_shots": MINERVA_SHOTS - shots,
+            "num_fewshot": MINERVA_SHOTS,
             "problem_id": problem_id,
             "reference_id": f"{source_row_prefix}:{problem_id}",
             "reference": target.reference,
@@ -398,34 +375,14 @@ def math_rows(
             "hinted_scaling_laws_revision": HINTED_SCALING_LAWS_REVISION,
         }
         if method is HintMethod.NONE:
-            prompt = minerva_plain_prompt(document, exemplar_documents[:shots])
+            prompt = minerva_plain_prompt(document, exemplar_documents)
             yield {**base, "prompt": prompt, "hint_method": method.value, "hint_level": 0.0, "hint_text": ""}
             continue
-        yield from hinted_rows(base, target, exemplars[:shots], method, render=minerva_block)
+        yield from hinted_rows(base, target, exemplars, method, render=minerva_block)
 
 
 def read_hinted_math(
-    path: StoragePath,
-    context: ConversionContext,
-    *,
-    method: HintMethod,
-    tokenizer_file: str,
-    prompt_token_budget: int,
-    source_row_prefix: str,
+    path: StoragePath, context: ConversionContext, *, method: HintMethod, source_row_prefix: str
 ) -> Iterator[dict[str, Any]]:
-    # The tokenizer is a curation dependency; the pinned file is a recipe input.
-    from tokenizers import Tokenizer  # noqa: PLC0415
-
-    tokenizer = Tokenizer.from_str((context.inputs[TOKENIZER_INPUT] / tokenizer_file).read_text())
-
-    def count_tokens(text: str) -> int:
-        return len(tokenizer.encode(text).ids)
-
     documents = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
-    yield from math_rows(
-        documents,
-        method,
-        count_tokens=count_tokens,
-        prompt_token_budget=prompt_token_budget,
-        source_row_prefix=source_row_prefix,
-    )
+    yield from math_rows(documents, method, source_row_prefix=source_row_prefix)

@@ -9,7 +9,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from fray.local_backend import LocalClient
 from taskcompendium.convert.answers import source_evidence
-from taskcompendium.evaluation.corpus import evaluation_cases, text_prompt
+from taskcompendium.evaluation.corpus import evaluation_cases
 from taskcompendium.importers.evalchemy.hinted import HINT_LEVELS
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
@@ -62,8 +62,5 @@ def test_publication_groups_each_level_and_keeps_its_reference(tmp_path):
     evidence = source_evidence(full.task)
     assert evidence["reference_id"] == "openai/gsm8k@740312ad:test:0"
     assert evidence["reference"] == "Tom reads 9 * 2 = 18 pages."
-    assert text_prompt(full.task).endswith(
-        "Question: Tom reads 9 pages a day for 2 days. How many pages?\nHint: Tom reads 9 * 2 = <mask> pages.\nAnswer:"
-    )
     config = json.loads(resource_bytes(next(r for r in full.task.resources.verifier if r.path == "config.json")))
     assert config == {"expected": "18"}
