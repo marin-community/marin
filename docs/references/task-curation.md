@@ -2602,6 +2602,10 @@ Planning rechecks missing-artifact URIs. Sources whose Python
 `requirements.lock` files have been restored can re-enter measurement.
 
 A local `reconcile` starts one interactive Iris CPU controller in `cw-rno2a`.
+The controller uses `CONTAINER_PROFILE_PRIVILEGED`, matching its attempt and
+repair children. Iris task tokens can delegate this profile only when their
+parent already holds it; a default-profile parent fails child submission with
+`set_container_profile not allowed for role task`.
 All attempt and repair jobs are its children. Send the returned controller ID
 to the fleet-watchdog coordinator for one registry entry using a `log_regex`
 probe. The registry schema is documented in

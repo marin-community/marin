@@ -11,6 +11,7 @@ import time
 
 from finestore.rl.difficulty import Solver
 from iris.client.client import iris_ctx
+from iris.rpc import job_pb2
 from rigging.auth import MARIN_DESKTOP_OAUTH_CLIENT, IapRefreshTokenProvider
 from rigging.credential_store import load_credentials
 from rigging.secrets import require_secret
@@ -73,6 +74,8 @@ def launch_controller(
         raise ValueError("Controller needs a refreshable Marina login; run iris login")
     environment = {**os.environ, REFRESH_TOKEN_ENV: record.edge_refresh_token}
     command = cpu_job_command(CONTROLLER_JOB_PREFIX + generation[:16])
+    # Task tokens can delegate an elevated child profile only when the parent holds it.
+    command.extend(["--container-profile", job_pb2.ContainerProfile.Name(job_pb2.CONTAINER_PROFILE_PRIVILEGED)])
     command.extend(["--secret", "MARINA_IAP_REFRESH_TOKEN", "env:" + REFRESH_TOKEN_ENV])
     for name in ("CW_KEY_ID", "CW_KEY_SECRET", "HF_TOKEN", "GLM_BULK_TOKEN", "TOGETHER_API_KEY"):
         command.extend(["--secret", name, "env:" + name])
