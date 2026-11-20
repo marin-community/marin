@@ -65,6 +65,14 @@ workspace. The child discards the parent's Python environment selection. SkyRL
 installs Marin libraries and Harbor from editable paths in the checkout.
 Marin calls SkyRL through the executable.
 
+SkyRL workers do not install the `marin` package. The optional native-runtime
+diagnostic control prepares compiler caches in a separate, frozen Marin CPU
+environment. Its SkyRL-side module delegates to that environment before worker
+startup; it does not add Marin or change Python resolution in inference actors.
+Run the cache module's subprocess regression before qualifying such a control
+on GPUs. An actor-start deadline can otherwise hide an import crash before any
+EngineCore starts.
+
 Iris submits the Marin repository through its standard workspace bundle.
 Workers run SkyRL from `/app/vendor/skyrl` and install the project in editable
 mode with the frozen Megatron/vLLM profile. Marin artifacts and SkyRL run
