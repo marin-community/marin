@@ -23,7 +23,7 @@ from skyrl_gym.answer_tasks import grade_gsm8k
 from skyrl_gym.task_sessions import AnswerTaskSession
 
 from cloud.iris.tests.launch_config_fixtures import raw_launch_config
-from finestore.rl.run_records import read_attempt, read_attempt_metrics
+from finestore.rl.run_records import read_attempt, read_attempt_metrics, read_evaluations
 from cloud.iris import launch, skyrl_entrypoint, task_runtime, training_driver
 from cloud.iris.launch_config import LaunchTopology, load_launch_config, validate_launch_config
 from cloud.iris.role_plan import derive_num_nodes, derive_role_plan
@@ -38,6 +38,9 @@ from skyrl_train.callbacks.base import TrainerControl, TrainerState
 from skyrl_train.callbacks.builtin import HFModelSaveCallback, create_default_callbacks
 from skyrl_train.distributed.step_policy import NonfiniteStepPolicy, nonfinite_step_policy
 from skyrl_train.dataset.tasks import source_row_task
+from skyrl_train.evaluate import _EvaluationRollouts, _persist_evaluation
+from skyrl_train.task_inputs import TrajectoryMetadata
+from taskcompendium.grading_result import Outcome
 from marinskyrl.runtime_options import reference_model_required
 from marinskyrl.inference_placement import validate_expert_block_transport
 from skyrl_train.config.utils import get_default_config
@@ -319,6 +322,7 @@ def test_launch_preserves_harbor_dataset_relative_paths(tmp_path):
             "cohorts": [{"name": "bfcl_parity", "reward_key": "reward", "job": {"tasks": [task]}}],
             "timeout": 600,
             "minimum_coverage": 0.9,
+            "minimum_native_coverage": 0.99,
         }
     ]
     path = tmp_path / "launch.yaml"
@@ -553,11 +557,17 @@ def test_qwen_smoke_hugging_face_model_input_reaches_the_runner_without_a_model_
 
 
 @pytest.mark.parametrize(
-    ("entrypoint", "own_tokenizer", "records_enabled"),
-    [("standard", False, True), ("generate", False, True), ("standard", True, True), ("generate", False, False)],
+    ("entrypoint", "own_tokenizer", "records_enabled", "resume"),
+    [
+        ("standard", False, True, False),
+        ("generate", False, True, False),
+        ("standard", True, True, False),
+        ("generate", False, False, False),
+        ("standard", False, True, True),
+    ],
 )
 def test_forwarded_launch_metadata_reaches_attempt_startup_record(
-    tmp_path: Path, monkeypatch, entrypoint, own_tokenizer, records_enabled
+    tmp_path: Path, monkeypatch, entrypoint, own_tokenizer, records_enabled, resume
 ) -> None:
     destination = tmp_path / "launch.yaml"
     document = raw_launch_config()
@@ -565,11 +575,16 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(
     document["run"]["model"] = "test-policy"
     if own_tokenizer:
         document["inputs"]["model"].update(tokenizer_uri=None, tokenizer_revision=None)
+    if resume:
+        document["inputs"]["starting_checkpoint"] = {
+            "uri": "s3://seed/checkpoints/global_step_2",
+            "identity": "checkpoints/seed/resume/step-2@2026.11.13:abc",
+        }
     document["iris"]["max_retries"] = 0
     backends = ["console"]
     if records_enabled:
         backends.append("records")
-        if entrypoint == "generate":
+        if entrypoint == "generate" or resume:
             backends.append("wandb")
     document["skyrl"]["trainer"]["logger"] = backends
     document["skyrl"]["entrypoint"] = entrypoint
@@ -613,6 +628,12 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(
                     with pytest.raises(ValueError, match="active execution|reserved for metric provenance"):
                         tracker.log(invalid, step=9)
             tracker.log({"startup/ready": 1}, step=0)
+            if resume:
+                batch = {"task_ids": ["task"], "response_ids": [[1]], "rewards": [1.0], "task_outcomes": [Outcome.GRADED]}
+                rollouts = _EvaluationRollouts(
+                    batch, ["answer"], [TrajectoryMetadata("task", "fixture")], [0], [], batch
+                )
+                _persist_evaluation(config, 3, None, rollouts, export_root)
 
     monkeypatch.setattr(skyrl_entrypoint, "get_job_info", lambda: SimpleNamespace(job_id="/tests/bootstrap-trainer"))
 
@@ -665,6 +686,14 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(
         assert [(run["id"], run["group"], run["resume"]) for run in wandb_runs] == [("attempt-1", "smoke", "allow")]
         assert wandb_runs[0]["tags"] == ["test-policy"]
         assert wandb_runs[0]["config"]["model"] == "test-policy"
+    if resume:
+        (evaluation,) = read_evaluations(export_root, attempt_id="attempt-1", evaluation="eval/")
+        for field, expected in (
+            ("model_source_identity", document["inputs"]["model"]["identity"]),
+            ("starting_checkpoint_identity", document["inputs"]["starting_checkpoint"]["identity"]),
+        ):
+            assert getattr(evaluation, field) == expected
+            assert wandb_runs[0]["config"]["runtime"][field] == expected
 
 
 def test_evaluation_metric_names_survive_iris_path_resolution(tmp_path: Path) -> None:
@@ -975,12 +1004,22 @@ def test_composed_launch_rejects_tis_selectors(tmp_path: Path, key: str, value) 
         ),
         ({"algorithm.dynamic_sampling.max_mean_reward": 0.9}, "requires dynamic_sampling.type=filter"),
         ({"algorithm.dynamic_sampling.max_mean_reward": 0.9, "algorithm.dynamic_sampling.type": "filter"}, None),
+        (
+            {"rollout_buffer.groups_per_family": {"math": 8}, "rollout_buffer.batch_policy": "rolling"},
+            "requires batch_policy=full_batch",
+        ),
+        ({"rollout_buffer.groups_per_family": {"math": 7}}, "sums to 7, expected train_batch_size=8"),
+        (
+            {"rollout_buffer.groups_per_family": {"math": 8}, "data.sampling.kind": "domain-weighted"},
+            r"requires data\.sampling\.kind to be null",
+        ),
     ],
 )
 def test_launch_validates_correction_and_selection_contract(tmp_path: Path, overrides: dict, error: str | None):
     raw = OmegaConf.create(raw_launch_config())
     for key, value in overrides.items():
-        OmegaConf.update(raw.skyrl.trainer, key, value, force_add=True)
+        path = key if key.startswith("data.") else f"trainer.{key}"
+        OmegaConf.update(raw.skyrl, path, value, force_add=True)
     if overrides.get("placement.colocate_all") is False:
         raw.iris.allocation.num_nodes = 2
     if overrides.get("algorithm.batch_invariant"):
@@ -1007,6 +1046,48 @@ def test_source_launch_preserves_nested_open_mappings(tmp_path):
     }
 
 
+@pytest.mark.parametrize(
+    ("remaining_families", "error"),
+    [
+        (["code"] * 7, "requires 8 rows for family 'code', found 7"),
+        (["code"] * 8 + ["other"], r"names .* but training rows have families .*'other'"),
+        (["code"] * 8, None),
+    ],
+    ids=["insufficient", "unlisted-family", "valid-pool"],
+)
+def test_launch_preflights_groups_per_family(tmp_path, remaining_families, error):
+    data_path = tmp_path / "tasks.parquet"
+    pq.write_table(pa.table({"family": ["math"] * 8 + remaining_families}), data_path)
+    raw = raw_launch_config()
+    raw["inputs"]["data_kind"] = "parquet"
+    raw["inputs"]["train_data"] = [
+        {"kind": "directory", "uri": str(tmp_path), "identity": "fixture", "local_path": str(tmp_path),
+         "relative_path": "tasks.parquet"}
+    ]
+    raw["skyrl"]["data"] = {"kind": "parquet"}
+    trainer = raw["skyrl"]["trainer"]
+    trainer["rollout_buffer"] = {
+        "groups_per_family": {"math": 4, "code": 4},
+        "max_staleness_steps": 1,
+    }
+    trainer["placement"]["colocate_all"] = False
+    trainer["algorithm"]["off_policy_correction"] = "none"
+    raw["iris"]["allocation"]["num_nodes"] = 2
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw))
+
+    if error:
+        with pytest.raises(ValueError, match=rf"trainer\.rollout_buffer\.groups_per_family {error}"):
+            load_launch_config(path)
+        return
+
+    resolved = load_launch_config(path)
+    assert resolved.skyrl.trainer.rollout_buffer.groups_per_family == {"math": 4, "code": 4}
+    OmegaConf.save(resolved, path)
+    data_path.unlink()
+    assert load_launch_config(path) == resolved
+
+
 def test_first_train_submission_validates_recipe_and_resolved_reload(tmp_path):
     raw = raw_launch_config()
     raw["runtime"]["entrypoint"] = ""
@@ -1018,9 +1099,36 @@ def test_first_train_submission_validates_recipe_and_resolved_reload(tmp_path):
     assert OmegaConf.to_container(load_launch_config(resolved), resolve=True) == OmegaConf.to_container(
         loaded, resolve=True
     )
+    rollout_buffer = raw["skyrl"]["trainer"].setdefault("rollout_buffer", {})
+    rollout_buffer["groups_per_family"] = {}
+    path.write_text(yaml.safe_dump(raw))
+    with pytest.raises(ValueError, match="groups_per_family"):
+        load_launch_config(path)
+    del rollout_buffer["groups_per_family"]
+
     del raw["skyrl"]["context_budget"]
     path.write_text(yaml.safe_dump(raw))
     with pytest.raises(ValueError, match="context_budget"):
+        load_launch_config(path)
+
+
+@pytest.mark.parametrize(
+    ("geometry", "weight_decay", "error"),
+    [
+        ({"tensor_model_parallel_size": 2}, 0.0, "require tensor parallel size 1"),
+        ({"expert_tensor_parallel_size": 2}, 0.0, "require expert tensor parallel size 1"),
+        ({}, 0.1, "requires weight_decay=0"),
+    ],
+)
+def test_launch_rejects_invalid_muonh_geometry_or_weight_decay(tmp_path, geometry, weight_decay, error):
+    document = raw_launch_config()
+    document["skyrl"]["trainer"]["policy"] = {
+        "optimizer_config": {"optimizer": "MuonH", "weight_decay": weight_decay},
+        "megatron_config": geometry,
+    }
+    path = tmp_path / "muonh.yaml"
+    path.write_text(yaml.safe_dump(document))
+    with pytest.raises(ValueError, match=error):
         load_launch_config(path)
 
 
