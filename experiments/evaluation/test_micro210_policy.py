@@ -14,7 +14,7 @@ from marin.execution.lazy import ArtifactStep, StepContext, lower, run
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.judge_config import MICRO210_JUDGE
-from experiments.evaluation.micro210 import PREPARED_INPUTS_VERSION, micro210_step, run_micro210
+from experiments.evaluation.micro210 import PREPARED_INPUTS, PREPARED_INPUTS_VERSION, micro210_step, run_micro210
 from experiments.evaluation.micro210_policy import (
     LEGACY_POLICY_REFERENCE,
     POLICY_REFERENCE,
@@ -195,3 +195,17 @@ def test_new_prepared_inputs_do_not_reuse_old_policy_provenance(
     assert old_record.config == {"sha256": previous_digest}
     assert new_record.source == str(new_inputs)
     assert new_record.config == {"sha256": "fixture-tasks"}
+
+
+def test_prepared_inputs_adopt_the_pinned_hugging_face_source(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    step = micro210_step(
+        Micro210Model("s3://fixture/model", "sha256:" + "a" * 64, "fixture/tokenizer", "b" * 40),
+        name="fixture/prepared-source",
+        version="2026.11.20",
+    )
+    prepared = next(dep for dep in step.deps if dep.name == "evaluation/micro210/prepared")
+    run(prepared)
+    record = read_record(str(tmp_path / "evaluation/micro210/prepared" / PREPARED_INPUTS_VERSION))
+    assert record.source == PREPARED_INPUTS
+    assert record.source.startswith("hf://datasets/open-athena/micro210-prepared-tasks@")
