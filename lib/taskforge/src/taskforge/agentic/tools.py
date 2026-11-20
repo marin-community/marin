@@ -1049,7 +1049,7 @@ def _transcript(rollout: Rollout, grade: GradeResult | None) -> str:
     header = {
         "run_id": rollout.run_id,
         "stop_reason": rollout.stop_reason,
-        "failure": asdict(rollout.failure) if rollout.failure is not None else None,
+        "failure": rollout.failure.model_dump(mode="json") if rollout.failure is not None else None,
         "grade": {"status": grade.status, "reward": grade.reward, "error": grade.error} if grade is not None else None,
     }
     lines = [json.dumps(header, default=str)]

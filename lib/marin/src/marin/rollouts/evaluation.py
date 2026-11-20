@@ -34,7 +34,7 @@ from finestore.reader import ReadView
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
 from openai import APIError, APIStatusError
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.exact_chat import EXACT_CHAT_HARNESS, ExactChatHarness
 from rolloutengine.likelihood import InvalidLikelihoodRequest, LikelihoodScorer, LikelihoodTransportError
@@ -79,6 +79,7 @@ from verifyit.modes.grade_judge import JudgeConnection
 
 # Bump when execution semantics change so resume cannot mix terminal grades from different implementations.
 EVALUATION_EXECUTION_REVISION = "2026.11.05.1"
+GRADE_RECORD = TypeAdapter(GradeResult)
 
 
 class EvaluationInfrastructureError(RuntimeError):
@@ -197,7 +198,7 @@ def _sample(
             metric=protocol.primary_metric,
             score=grade.reward,
             passed=grade.passed,
-            detail=json.dumps(dataclasses.asdict(grade), allow_nan=False),
+            detail=json.dumps(GRADE_RECORD.dump_python(grade, mode="json"), allow_nan=False),
         ),
         metrics=metrics,
         correct=(
@@ -482,10 +483,10 @@ async def _score_generation(
     raw = {
         **saved_task_fields(task, config.task_evidence),
         "item": case.item.model_dump(mode="json"),
-        "grade": dataclasses.asdict(grade),
+        "grade": GRADE_RECORD.dump_python(grade, mode="json"),
         "conversations": [dataclasses.asdict(conversation) for conversation in rollout.conversations],
         "stop_reason": rollout.stop_reason,
-        "failure": dataclasses.asdict(rollout.failure) if rollout.failure else None,
+        "failure": rollout.failure.model_dump(mode="json") if rollout.failure else None,
         "failure_evidence": failure_evidence,
         "options": options,
         "reused_response_from_retry": attempt.retry - 1 if retry_turn is not None else None,
