@@ -76,6 +76,21 @@ class _DestinationFile:
 
 
 @dataclass(frozen=True)
+class VerifiedObject:
+    """A copied object that passed verification.
+
+    Attributes:
+        sha256: SHA-256 of the bytes read from the source.
+        destination_identity: ``etag=...`` when the destination reports an ETag, otherwise another
+            provider checksum or version ID as ``<field>=...``, otherwise ``sha256=...`` of the
+            copied bytes.
+    """
+
+    sha256: str
+    destination_identity: str
+
+
+@dataclass(frozen=True)
 class _CopiedFile:
     sha256: str
     size: int
@@ -269,7 +284,7 @@ def _source_files(filesystem: AbstractFileSystem, root: str) -> list[_SourceFile
     files = []
     for path, info in _find_files(filesystem, root).items():
         relative = _relative_path(path, root)
-        files.append(_SourceFile(relative, path, int(info.get("size") or 0), _source_identity(info)))
+        files.append(_SourceFile(relative, path, int(info.get("size") or 0), source_identity(info)))
     files.sort(key=lambda file: file.path)
     return files
 
@@ -329,27 +344,15 @@ def _copy_or_resume(
             ):
                 return _CopyOutcome(expected, _CopyDisposition.RESUMED)
 
-    copied = _copy_with_hash(source_fs, source.source_path, destination_fs, staging_path)
-    if copied.size != source.size:
-        destination_fs.rm(staging_path)
-        raise VerifiedCopyError(f"source size changed while copying {source.path}")
-    current_info = source_fs.info(source.source_path)
-    current_size = int(current_info.get("size") or 0)
-    current_identity = _source_identity(current_info, matching=source.identity)
-    if current_size != source.size or current_identity != source.identity:
-        destination_fs.rm(staging_path)
-        raise VerifiedCopyError(f"source identity changed while copying {source.path}")
-    try:
-        staging_identity = _verify_destination(
-            destination_fs,
-            staging_path,
-            expected_size=source.size,
-            expected_sha256=copied.sha256,
-            expected_etag=copied.expected_etag,
-        )
-    except VerifiedCopyError:
-        destination_fs.rm(staging_path)
-        raise
+    copied = copy_verified_object(
+        source_fs,
+        source.source_path,
+        destination_fs,
+        staging_path,
+        expected_size=source.size,
+        expected_identity=source.identity,
+    )
+    staging_identity = copied.destination_identity
     verified = VerifiedFile(source.path, source.size, copied.sha256, source.identity)
     _write_json_atomic(
         status_fs,
@@ -425,6 +428,53 @@ def _promote(
     filesystem.rm(staging_path)
 
 
+def copy_verified_object(
+    source_fs: AbstractFileSystem,
+    source_path: str,
+    destination_fs: AbstractFileSystem,
+    destination_path: str,
+    *,
+    expected_size: int,
+    expected_identity: str | None,
+) -> VerifiedObject:
+    """Stream one object, check that the source did not change, and verify the destination.
+
+    S3 destinations publish only after the whole upload succeeds. A destination filesystem built
+    with ``S3UploadPolicy.FIXED_PARTS`` is checked by its multipart ETag; any other destination
+    object, and any object smaller than one part, is read back and hashed. A destination that
+    fails a check is removed.
+
+    Args:
+        expected_size: Source size recorded before the copy.
+        expected_identity: Source identity from :func:`source_identity`, recorded before the copy.
+
+    Raises:
+        VerifiedCopyError: If the source changed during the copy or the destination does not match.
+    """
+    copied = _copy_with_hash(source_fs, source_path, destination_fs, destination_path)
+    if copied.size != expected_size:
+        destination_fs.rm(destination_path)
+        raise VerifiedCopyError(f"source size changed while copying {source_path}")
+    source_fs.invalidate_cache(source_path)
+    current_info = source_fs.info(source_path)
+    current_identity = source_identity(current_info, matching=expected_identity)
+    if int(current_info.get("size") or 0) != expected_size or current_identity != expected_identity:
+        destination_fs.rm(destination_path)
+        raise VerifiedCopyError(f"source identity changed while copying {source_path}")
+    try:
+        identity = _verify_destination(
+            destination_fs,
+            destination_path,
+            expected_size=expected_size,
+            expected_sha256=copied.sha256,
+            expected_etag=copied.expected_etag,
+        )
+    except VerifiedCopyError:
+        destination_fs.rm(destination_path)
+        raise
+    return VerifiedObject(copied.sha256, identity)
+
+
 def _copy_with_hash(
     source_fs: AbstractFileSystem,
     source_path: str,
@@ -489,7 +539,7 @@ def _verify_destination(
             raise VerifiedCopyError(f"destination hash mismatch for {path}")
         return _destination_identity(info) or f"{SHA256_IDENTITY_PREFIX}{expected_sha256}"
 
-    actual_etag = _etag(info)
+    actual_etag = object_etag(info)
     if actual_etag != expected_etag:
         raise VerifiedCopyError(f"destination ETag mismatch for {path}")
     return f"{ETAG_IDENTITY_PREFIX}{actual_etag}"
@@ -637,7 +687,11 @@ def _validate_completed_source(
             raise VerifiedCopyError(f"source content changed after destination completion: {source.path}")
 
 
-def _source_identity(info: dict[str, Any], *, matching: str | None = None) -> str | None:
+def source_identity(info: dict[str, Any], *, matching: str | None = None) -> str | None:
+    """A ``key=value`` string naming this version of an object, from the first metadata key it has.
+
+    With *matching*, read only the key that *matching* names, so a later read compares like with like.
+    """
     keys: tuple[str, ...] = (
         "generation",
         "version_id",
@@ -664,7 +718,7 @@ def _source_identity(info: dict[str, Any], *, matching: str | None = None) -> st
 
 
 def _destination_identity(info: dict[str, Any]) -> str | None:
-    etag = _etag(info)
+    etag = object_etag(info)
     if etag is not None:
         return f"{ETAG_IDENTITY_PREFIX}{etag}"
     for key in ("ChecksumSHA256", "checksum", "md5Hash", "crc32c", "version_id", "VersionId"):
@@ -674,7 +728,8 @@ def _destination_identity(info: dict[str, Any]) -> str | None:
     return None
 
 
-def _etag(info: dict[str, Any]) -> str | None:
+def object_etag(info: dict[str, Any]) -> str | None:
+    """The object's ETag from listing or ``info`` metadata, without quotes."""
     value = info.get("etag") or info.get("ETag")
     if value is None:
         return None

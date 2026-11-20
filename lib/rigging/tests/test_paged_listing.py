@@ -31,7 +31,7 @@ def test_s3_level_pages_yield_one_page_per_continuation_token(monkeypatch):
     responses = {
         None: {
             "CommonPrefixes": [{"Prefix": "iris/"}],
-            "Contents": [{"Key": "a.bin", "Size": 10, "LastModified": MODIFIED}],
+            "Contents": [{"Key": "a.bin", "Size": 10, "LastModified": MODIFIED, "ETag": '"a-etag"'}],
             "NextContinuationToken": "page-2",
         },
         "page-2": {
@@ -45,7 +45,7 @@ def test_s3_level_pages_yield_one_page_per_continuation_token(monkeypatch):
     assert len(pages) == 2
     first_files, first_subdirs = pages[0]
     assert first_subdirs == ["bucket/iris/"]
-    assert [(f["name"], f["size"]) for f in first_files] == [("bucket/a.bin", 10)]
+    assert [(f["name"], f["size"], f["ETag"]) for f in first_files] == [("bucket/a.bin", 10, '"a-etag"')]
     second_files, second_subdirs = pages[1]
     assert second_subdirs == []
     assert [f["name"] for f in second_files] == ["bucket/b.bin"]

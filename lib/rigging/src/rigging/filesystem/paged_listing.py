@@ -78,6 +78,7 @@ def s3_listing_page(
             "size": int(item.get("Size") or 0),
             "type": "file",
             "LastModified": item.get("LastModified"),
+            "ETag": item.get("ETag"),
         }
         for item in response.get("Contents", [])
     )

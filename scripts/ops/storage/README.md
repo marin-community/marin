@@ -1,7 +1,7 @@
 # Marin storage tooling
 
-Storage reporting for the `marin-*` GCS buckets and telemetry for CoreWeave
-object storage.
+Storage reporting for the `marin-*` GCS buckets, telemetry for CoreWeave
+object storage, and bulk copies between CoreWeave prefixes.
 
 ## Storage report (on demand)
 
@@ -52,6 +52,44 @@ channel webhook resolved by `scripts/ops/discord.py` (no bot).
 
 **Prereqs:** `gh` (for `--gist`), `gcloud` + ADC (fetch `report.md`), a
 reachable `marin` controller, and the channel webhook for `--discord`.
+
+## Bulk copy between CoreWeave prefixes
+
+`copy_prefix.py` copies every object below one CoreWeave prefix to another. It
+submits an Iris job through the `marin` hub, which hands it off to the
+CoreWeave cluster in the source's region (`--run-near destination` picks the
+destination's). Zephyr workers stream the files:
+
+```bash
+export CW_KEY_ID=<key-id> CW_KEY_SECRET=<key-secret>
+uv run scripts/ops/storage/copy_prefix.py \
+  --from s3://marin-us-east-02a/marin/<prefix> \
+  --to s3://marin-us-east-08a/marin/<prefix> \
+  --dry-run                       # list the source and shard records from this machine; submits no job
+```
+
+The job packs source files, in key order, into 32 GiB shards and splits any
+shard with more than 2,000 files. Each Zephyr
+worker copies one shard eight files at a time with the per-object checks of
+`fsutil verified-copy`. Uploads use fixed 50 MiB parts and publish only when
+complete. Each upload's ETag is checked against the bytes read, and objects
+smaller than one part are read back and hashed. After every file in a shard
+passes, the worker writes the shard's record under
+`<destination>.copy-status/shards/`. When all shards are done, the job checks
+every destination object's size and ETag against the records and writes
+`<destination>.copy-status/complete.json` last.
+
+Rerunning the same command resumes the copy one whole shard at a time. A shard
+is skipped when its record exists and every destination object still matches
+it; every other shard is copied again in full. A
+shard's ID covers its files' keys, sizes, and source ETags, so a changed source
+file is copied again. Destination files outside the source are left untouched
+and unchecked. `--max-workers` (default 50, at 2 CPUs and 8 GB each) bounds the
+Zephyr pool so the copy fits in the CPU node pool.
+
+CoreWeave rejects `CopyObject` between buckets in different regions
+(`InvalidRegion`), so every byte passes through a worker. Only CoreWeave
+prefixes are accepted; Hugging Face buckets and R2 are not supported yet.
 
 ## CoreWeave storage telemetry
 
