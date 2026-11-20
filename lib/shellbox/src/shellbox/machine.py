@@ -239,6 +239,10 @@ class ExecSetupFailed(RuntimeError):
     """The command transport failed before the command was sent, so a retry cannot run it twice."""
 
 
+class CommandOutputLost(RuntimeError):
+    """A process inside the machine removed a command's captured output before it was read."""
+
+
 class Machine(Protocol):
     """One writable task environment. Files persist until close."""
 

@@ -58,11 +58,64 @@ from levanter.grug.grug_moe import (
     _expert_granular_a2a_params,
     moe_mlp,
 )
+from levanter.testing.devices import use_cpu_devices, use_test_devices
 from levanter.utils.activation import ActivationFunctionEnum
 
 
 _BF16_MOE_RELATIVE_TOLERANCE = 0.02
 _FP32_MOE_RELATIVE_TOLERANCE = 1e-4
+
+
+@pytest.mark.multidevice
+def test_stacked_expert_initialization_preserves_weights_with_sharded_temporaries():
+    with use_cpu_devices(8), jax_config.threefry_partitionable(True):
+        mesh = Mesh(
+            np.asarray(jax.devices()).reshape(2, 2, 2, 1),
+            ("data", "context", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 4,
+        )
+        pspecs = MoEExpertMlpPspecs(expert=("expert", "context"))
+
+        def initialize(key):
+            return jax.vmap(
+                lambda layer_key: MoEExpertMlp.init(
+                    num_experts=16,
+                    hidden_dim=128,
+                    intermediate_dim=128,
+                    initializer_std=0.02,
+                    key=layer_key,
+                    implementation="ring",
+                    pspecs=pspecs,
+                )
+            )(jax.random.split(key, 4))
+
+        def replicated_reference(key):
+            def layer_weights(layer_key):
+                gate_key, up_key, down_key = jax.random.split(layer_key, 3)
+                return tuple(
+                    jax.sharding.reshard(0.02 * jax.random.truncated_normal(k, -3, 3, (16, 128, 128)), spec)
+                    for k, spec in (
+                        (gate_key, pspecs.w_gate_up),
+                        (up_key, pspecs.w_gate_up),
+                        (down_key, pspecs.w_down),
+                    )
+                )
+
+            return jax.vmap(layer_weights)(jax.random.split(key, 4))
+
+        with jax.set_mesh(mesh):
+            key = jax.random.key(7)
+            initialized = jax.jit(initialize).lower(key).compile()
+            reference = jax.jit(replicated_reference).lower(key).compile()
+            actual = initialized(key)
+            expected = reference(key)
+            for weight, previous_weight in zip((actual.w_gate, actual.w_up, actual.w_down), expected, strict=True):
+                np.testing.assert_array_equal(weight, previous_weight)
+            # The regression replicated all layers' RNG buffers on every chip even though
+            # the returned parameters were partitioned. Compare compiler allocation sizes.
+            assert (
+                initialized.memory_analysis().temp_size_in_bytes < reference.memory_analysis().temp_size_in_bytes / 4
+            )
 
 
 def _make_dense_mesh() -> Mesh:
@@ -2463,3 +2516,91 @@ def test_routing_counts_stay_exact_past_the_float32_integer_range():
         counts = reduced_counts(selected_experts, router_scores, token_valid)
 
     assert int(np.asarray(counts)[0, 0]) == num_tokens
+
+
+@pytest.mark.multidevice
+def test_combine_in_fp32_matches_an_fp32_combine_reference_on_eight_devices():
+    with use_test_devices(8) as devices:
+        mesh = Mesh(
+            np.asarray(devices).reshape(2, 4, 1),
+            axis_names=("data", "expert", "model"),
+            axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+        )
+        tokens, hidden, inter, experts, topk = 64, 8, 4, 8, 4
+        rng = np.random.default_rng(0)
+        # Entries in {-1, 0, 1} and a linear activation keep every expert output row an integer of magnitude at
+        # most 128, exact in bfloat16, so the combine is the only place the paths can round.
+        x = rng.integers(-1, 2, (tokens, hidden)).astype(np.float32)
+        w_up_gate = rng.integers(-1, 2, (experts, hidden, 2 * inter)).astype(np.float32)
+        w_down = rng.integers(-1, 2, (experts, inter, hidden)).astype(np.float32)
+        selected = np.stack([rng.permutation(experts)[:topk] for _ in range(tokens)]).astype(np.int32)
+        # Snowball-like sigmoid weights renormed to sum to 2.5; not representable in bfloat16.
+        weights = 1 / (1 + np.exp(-rng.normal(size=(tokens, topk))))
+        weights = (weights * (2.5 / weights.sum(-1, keepdims=True))).astype(np.float32)
+
+        def linear(a):
+            return a
+
+        hidden_rows = np.einsum("th,tkhi->tki", x, w_up_gate[selected])
+        rows = np.einsum("tki,tkih->tkh", hidden_rows[..., :inter] * hidden_rows[..., inter:], w_down[selected])
+        reference = np.einsum("tkh,tk->th", rows.astype(np.float64), weights.astype(np.float64))
+
+        batch = NamedSharding(mesh, P(("data", "expert"), None))
+        expert = NamedSharding(mesh, P("expert", None, None))
+        args = {
+            "x": jax.device_put(jnp.asarray(x, jnp.bfloat16), batch),
+            "selected": jax.device_put(jnp.asarray(selected), batch),
+            "weights": jax.device_put(jnp.asarray(weights), batch),
+            "w_up_gate": jax.device_put(jnp.asarray(w_up_gate, jnp.bfloat16), expert),
+            "w_down": jax.device_put(jnp.asarray(w_down, jnp.bfloat16), expert),
+        }
+
+        def run(implementation, mesh, **options):
+            def forward(x, selected, weights, w_up_gate, w_down):
+                return grug_moe.moe_mlp(
+                    x,
+                    selected,
+                    weights,
+                    w_up_gate,
+                    w_down,
+                    activation=linear,
+                    implementation=implementation,
+                    mesh=mesh,
+                    capacity_factor=4.0,
+                    **options,
+                )
+
+            if mesh is None:
+                local = {name: jnp.asarray(jax.device_get(value)) for name, value in args.items()}
+                return jax.jit(forward)(**local)
+            with jax.set_mesh(mesh):
+                return jax.jit(forward)(**args)
+
+        reference_bf16 = np.asarray(jnp.asarray(reference.astype(np.float32), jnp.bfloat16), np.float64)
+        for implementation, run_mesh in (("ring", mesh), ("ring_gather_combine", mesh), ("scatter", None)):
+            on = run(implementation, run_mesh, combine_in_fp32=True)
+            off = run(implementation, run_mesh)
+            assert on.dtype == off.dtype == jnp.bfloat16, (implementation, on.dtype, off.dtype)
+            on = np.asarray(on, np.float64)
+            off = np.asarray(off, np.float64)
+            # One float32 sum rounded once to bfloat16: within half a bfloat16 ulp of the exact combine, plus
+            # float32 slack; rounding ties aside it is the rounded reference itself.
+            half_ulp = np.exp2(np.floor(np.log2(np.maximum(np.abs(reference), 1e-30))) - 8)
+            assert np.all(np.abs(on - reference) <= half_ulp * (1 + 1e-4)), implementation
+            assert np.mean(on == reference_bf16) > 0.99, (implementation, np.mean(on == reference_bf16))
+            off_error = np.abs(off - reference).mean()
+            on_error = np.abs(on - reference).mean()
+            assert off_error > 1.5 * on_error, (implementation, off_error, on_error)
+
+        with jax.set_mesh(mesh), pytest.raises(ValueError, match="combine_in_fp32"):
+            grug_moe.moe_mlp(
+                args["x"],
+                args["selected"],
+                args["weights"],
+                args["w_up_gate"],
+                args["w_down"],
+                activation=linear,
+                implementation="ragged_all_to_all",
+                mesh=mesh,
+                combine_in_fp32=True,
+            )

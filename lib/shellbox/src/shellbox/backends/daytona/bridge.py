@@ -16,6 +16,7 @@ from shellbox.process_framing import (
     CHUNK_BYTES,
     EXIT,
     FRAME_BYTES,
+    PAD,
     STDERR,
     STDIN,
     STDOUT,
@@ -23,6 +24,12 @@ from shellbox.process_framing import (
     decode_frame,
     encode_frame,
 )
+
+# Daytona corrupts a command's log stream when stdout and stderr interleave, and
+# its SDK withholds a websocket message shorter than three bytes until more
+# output arrives. Every frame goes to stdout followed by padding, so the stream
+# never interleaves and only padding can be withheld.
+TRAILER = encode_frame(PAD, b"")
 
 
 def main() -> None:
@@ -55,14 +62,20 @@ def main() -> None:
             with contextlib.suppress(BrokenPipeError):
                 child.stdin.close()
 
-    def output_stream(source, target, prefix: bytes) -> None:
+    output_lock = threading.Lock()
+
+    def write_frame(kind: bytes, data: bytes) -> None:
+        with output_lock:
+            sys.stdout.buffer.write(encode_frame(kind, data) + TRAILER)
+            sys.stdout.buffer.flush()
+
+    def output_stream(source, kind: bytes) -> None:
         while data := os.read(source.fileno(), CHUNK_BYTES):
-            target.write(encode_frame(prefix, data))
-            target.flush()
+            write_frame(kind, data)
 
     threading.Thread(target=input_stream, daemon=True).start()
-    stdout = threading.Thread(target=output_stream, args=(child.stdout, sys.stdout.buffer, STDOUT))
-    stderr = threading.Thread(target=output_stream, args=(child.stderr, sys.stderr.buffer, STDERR))
+    stdout = threading.Thread(target=output_stream, args=(child.stdout, STDOUT))
+    stderr = threading.Thread(target=output_stream, args=(child.stderr, STDERR))
     stdout.start()
     stderr.start()
     # Keep the leader unreaped until its descendants are stopped, preventing
@@ -72,8 +85,7 @@ def main() -> None:
     code = child.wait()
     stdout.join()
     stderr.join()
-    sys.stdout.buffer.write(encode_frame(EXIT, str(code).encode()))
-    sys.stdout.buffer.flush()
+    write_frame(EXIT, str(code).encode())
 
 
 if __name__ == "__main__":

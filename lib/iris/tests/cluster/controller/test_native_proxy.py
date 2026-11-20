@@ -110,6 +110,7 @@ def _start_upstream(threads: ThreadContainer, iap_keys: dict[str, str] | None = 
                 "verified_identity": request.headers.get(VERIFIED_IDENTITY_HEADER),
                 "decision_secret": request.headers.get("x-iris-decision-secret"),
                 "iap_assertion": request.headers.get("x-goog-iap-jwt-assertion"),
+                "session_id": request.headers.get("x-session-id"),
             },
             headers={"x-native-upstream": "reached"},
         )
@@ -173,6 +174,7 @@ def test_native_listener_preserves_public_routes_and_streams_to_endpoint(
                 headers={
                     "authorization": "Bearer browser-secret",
                     "cookie": "session=browser-secret",
+                    "x-session-id": "conversation-123",
                 },
             )
             controller_rpc = client.post("/iris.cluster.ControllerService/ListJobs", json={})
@@ -190,6 +192,7 @@ def test_native_listener_preserves_public_routes_and_streams_to_endpoint(
             "verified_identity": None,
             "decision_secret": None,
             "iap_assertion": None,
+            "session_id": "conversation-123",
         }
         assert received_bodies == [payload]
     finally:

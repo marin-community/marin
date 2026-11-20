@@ -37,3 +37,4 @@ class GradeResult:
     failure: GradingFailure | None = None
     score_min: float = 0.0
     score_max: float = 1.0
+    verifier_setup_seconds: float = 0.0
