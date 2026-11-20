@@ -171,7 +171,8 @@
     "Ray one-GPU visibility and external DP/store ownership are preserved.",
     "Native13 managed cache is restored regionally once per host to its exact cache key/path.",
     "Iris/Ray control-plane identities and secret/opaque values are preserved; only declared nonsecret inference-runtime settings are copied.",
-    "114 preserves SkyRL Python/HF resolution; only declared GPU/runtime/library/cache settings are transplanted. Unset values are removed before worker exec, never represented as empty strings."
+    "114 preserves SkyRL Python/HF resolution; only declared GPU/runtime/library/cache settings are transplanted. Unset values are removed before worker exec, never represented as empty strings.",
+    "116 runs cache preparation in an isolated frozen Marin CPU interpreter; SkyRL actor Python resolution is unchanged."
   ],
   "versions": {
     "vllm": "0.0.0.dev20261113+marin.0ac9dcb157ee.cu132",
@@ -195,6 +196,6 @@
     "concurrency": 16,
     "max_new_tokens": 256,
     "request_timeout": 600,
-    "receipt_uri": "s3://marin-us-east-08a/marin/users/benfeuer/mochi-bringup/engine-serving-probe/20261119-17-runtime-version/serving-receipt.json"
+    "receipt_uri": "s3://marin-us-east-08a/marin/users/benfeuer/mochi-bringup/engine-serving-probe/20261119-18-cache-runtime/serving-receipt.json"
   }
 }

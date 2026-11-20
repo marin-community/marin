@@ -1,42 +1,33 @@
-"""Restore native13's regional cache once per Ray host, outside actor imports."""
+"""Delegate native cache preparation to an isolated, frozen Marin CPU runtime."""
 
 import json
 import os
-import shutil
-import tempfile
+import subprocess
 from pathlib import Path
 
-from marin.inference.vllm_cache import VllmCompilationCache, VllmCompileIdentity
-from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.config_discovery import find_project_root
 
 from marinskyrl.native_environment_control import CONTROL_KEY
 
 
 def main() -> None:
-    configure_coreweave_s3()
+    workspace = find_project_root(Path(__file__))
+    if workspace is None:
+        raise RuntimeError("Native cache preparation requires the shipped Marin workspace")
     profile = json.loads(os.environ[CONTROL_KEY])
-    argv = profile["native_cli"]
-    cache = VllmCompilationCache.prepare(
-        launcher_identity=profile["cache_launcher_identity"],
-        compile_identity=VllmCompileIdentity.from_vllm_args(
-            model_name_or_path=argv[1], extra_cli_args=tuple(argv[2:])
-        ),
-        environment=dict(os.environ),
-    )
-    with tempfile.TemporaryDirectory(prefix="mochi-native-cache-") as temporary:
-        source = Path(cache.environment()["VLLM_CACHE_ROOT"]).parent
-        expected = Path(profile["values"]["VLLM_CACHE_ROOT"]).parent
-        if source != expected:
-            raise RuntimeError(f"Native cache identity mismatch: {source} != {expected}")
-        staged = Path(temporary) / "cache"
-        try:
-            shutil.copytree(source, staged)
-        finally:
-            cache.close()
-        shutil.copytree(staged, expected)
-        files = [path for path in expected.rglob("*") if path.is_file()]
-        print(json.dumps({"native_cache_restored": str(expected), "files": len(files),
-                          "bytes": sum(path.stat().st_size for path in files)}), flush=True)
+    environment = dict(os.environ)
+    for name in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", CONTROL_KEY):
+        environment.pop(name, None)
+    environment["UV_PROJECT_ENVIRONMENT"] = str(Path(profile["venv_alias"]).parent / "marin-cache-runtime")
+    uv_version = (workspace / "vendor/skyrl/.uv-version").read_text().strip()
+    command = [
+        "uv", "tool", "run", "--from", f"uv=={uv_version}",
+        "--python", "==3.12.*", "--no-python-downloads", "uv", "run",
+        "--project", str(workspace), "--frozen", "--package", "marin-core",
+        "--extra", "cpu", "--no-default-groups", "--python", "==3.12.*", "--no-python-downloads",
+        "python", "-m", "experiments.post_training.long_loop.native_environment_cache",
+    ]
+    subprocess.run(command, input=json.dumps(profile), text=True, env=environment, cwd=workspace, check=True)
 
 
 if __name__ == "__main__":
