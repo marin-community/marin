@@ -369,8 +369,8 @@ The bound tokenizer must map the frozen stop IDs to `<|end_of_text|>` and
 `<|eot_id|>`; an incompatible tokenizer fails before allocation. Retained
 trajectories use the supplied run identity.
 
-Mochi exports use the adopted round in
-`experiments/post_training/long_loop/rounds/mochi-sft-eval.yaml` through
+Mochi exports use the adopted rounds in
+`experiments/post_training/long_loop/rounds/mochi-{base,sft}-eval.yaml` through
 `experiments.post_training.long_loop.round_runner`. Its serving section declares
 InfiniBand transport, `NCCL_IB_HCA=ibp`, and a 4-MiB NCCL buffer. The historical
 256-KiB qualification predates the NVLSTree corruption finding in #11649.

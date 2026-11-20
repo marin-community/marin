@@ -713,7 +713,7 @@ checkpoint or synthetic training-completion marker.
 
 ### Mochi Micro210 evaluation admission
 
-The adopted Mochi evaluation declares its three IB transport variables and
+Both adopted Mochi evaluation rounds declare their three IB transport variables and
 4-MiB NCCL buffer explicitly. The historical 256-KiB serving qualification
 predates the NVLSTree corruption finding in #11649. Compilation and PIECEWISE
 CUDA graphs remain enabled. Exact CPU preflight checks each local model role's
