@@ -20,7 +20,6 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("proposals", "output", "policy", "job-prefix"):
         parser.add_argument(f"--{name}", required=True)
-    parser.add_argument("--arm", choices=("S", "T"), required=True)
     for name in ("drivers", "concurrency", "cpu"):
         parser.add_argument(f"--{name}", type=int, required=True)
     parser.add_argument("--driver-range", type=lambda value: tuple(map(int, value.split(":"))))
@@ -49,7 +48,7 @@ def main() -> None:
         "max-retries": "3",
         "sync-package": "marin-taskforge",
     }
-    driver = {name: str(getattr(args, name)) for name in ("proposals", "output", "policy", "arm", "concurrency")}
+    driver = {name: str(getattr(args, name)) for name in ("proposals", "output", "policy", "concurrency")}
     driver["buckets"] = "4096"
     if args.ranks:
         driver["ranks"] = args.ranks

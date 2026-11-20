@@ -77,7 +77,7 @@ def test_launcher_passes_secrets_by_reference_only(monkeypatch: pytest.MonkeyPat
     monkeypatch.delenv("GLM_BASE_URL", raising=False)
     commands: list[list[str]] = []
     monkeypatch.setattr(run_taskforge.subprocess, "run", lambda command, **_: commands.append(command))
-    argv = ["launcher", "--arm", "S", "--drivers", "2", "--concurrency", "4", "--cpu", "8"]
+    argv = ["launcher", "--drivers", "2", "--concurrency", "4", "--cpu", "8"]
     argv += [item for name in ("proposals", "output", "policy", "job-prefix") for item in (f"--{name}", "test")]
     monkeypatch.setattr(sys, "argv", argv)
     run_taskforge.main()
@@ -96,7 +96,7 @@ def test_launcher_bucket_coverage(monkeypatch: pytest.MonkeyPatch, drivers: int,
     monkeypatch.delenv("GLM_RELAY_JOB", raising=False)
     commands: list[list[str]] = []
     monkeypatch.setattr(run_taskforge.subprocess, "run", lambda command, **_: commands.append(command))
-    argv = ["launcher", "--arm", "S", "--drivers", str(drivers), "--concurrency", "4", "--cpu", "8"]
+    argv = ["launcher", "--drivers", str(drivers), "--concurrency", "4", "--cpu", "8"]
     argv += [item for name in ("proposals", "output", "policy", "job-prefix") for item in (f"--{name}", "test")]
     monkeypatch.setattr(sys, "argv", argv + (["--driver-range", span] if span else []))
     run_taskforge.main()
@@ -125,7 +125,7 @@ async def test_iris_runtime_on_linux_never_constructs_local_backend_or_probes_ho
     monkeypatch.setattr(httpx.AsyncClient, "send", unexpected)
     policy = load_policy(Path(__file__).parents[1] / "src/taskforge/policy/defaults")
     source = wiring.endpoint_source("http://fake/v1", None, "fake", "glm-5.3", policy.setting("provider.pool", str))
-    async with wiring.runtime(policy, "S", source, "fake") as (_, resources):
+    async with wiring.runtime(policy, source, "fake") as (_, resources):
         assert set(resources.factories) == {"gvisor", "shellsim"}
         factory = resources.factories["gvisor"]
         assert isinstance(factory, IrisMachineFactory)

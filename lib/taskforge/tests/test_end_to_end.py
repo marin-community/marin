@@ -23,7 +23,7 @@ from taskcompendium.models import EnvironmentRequirements
 
 from taskforge import checkpoint, driver
 from taskforge.config import TaskforgeConfig
-from taskforge.coordinator import run_workpiece
+from taskforge.coordinator import advance, run_workpiece
 from taskforge.effects.events import StageCompleted
 from taskforge.effects.issues import Restart, Transient
 from taskforge.effects.log import EventLog, JsonlSink, fold
@@ -89,13 +89,11 @@ def call(name: str, arguments: Mapping[str, object], identity: str) -> Completio
     return Completion("", (ToolCall(identity, name, json.dumps(arguments)),), FinishReason.TOOL_CALLS)
 
 
-def script(arm: str) -> tuple[Completion, ...]:
-    validate = (call("validate", {}, "validate"),) if arm == "T" else ()
+def script() -> tuple[Completion, ...]:
     return (
         call("shell", {"command": "inspect", "timeout": 5}, "inspect"),
         call("shell", {"command": "write-draft", "timeout": 5}, "write"),
         call("grade", {"reply": "12", "files": []}, "grade"),
-        *validate,
         call(
             "submit",
             {"notes": "done"},
@@ -116,34 +114,31 @@ def resources(envs: Envs, responses: Sequence[Completion]) -> Resources:
     )
 
 
-def config(arm: str) -> TaskforgeConfig:
+def config() -> TaskforgeConfig:
     root = Path(__file__).parents[1] / "src/taskforge/policy/defaults"
     policy = load_policy(root).overlaid({"solver.k": 2, "adversary.roster": [], "budget.max_modify_rounds": 1})
-    return build_config(policy, arm, {})
+    return build_config(policy, {})
 
 
-@pytest.mark.parametrize("arm", ("S", "T"))
-async def test_both_arms_accept_and_record_stage_sequence(proposal: TaskProposal, arm: str) -> None:
+async def test_workflow_accepts_and_records_stage_sequence(proposal: TaskProposal) -> None:
     log = EventLog()
-    wp = await run_workpiece(proposal, config(arm), resources(Envs(), script(arm)), log, install=install)
+    wp = await run_workpiece(proposal, config(), resources(Envs(), script()), log, install=install)
     assert wp.terminal == Terminal.ACCEPTED
     stages = [record.event.stage for record in log.records if isinstance(record.event, StageCompleted)]
-    assert stages == (
-        ["author", "validate", "review"] if arm == "S" else ["author", "validate", "author", "validate", "review"]
-    )
+    assert stages == ["author", "validate", "review"]
     assert fold(tuple(record.event for record in log.records)).terminal == "accepted"
 
 
 async def test_crash_resume_replays_commands_without_repeating_inference(proposal: TaskProposal, tmp_path: Path) -> None:
     sink = JsonlSink(str(tmp_path / "events.jsonl"))
     first = EventLog(sink=sink)
-    broken = resources(Envs(fail=True), script("S"))
-    assert (await run_workpiece(proposal, config("S"), broken, first, install=install)).terminal == Terminal.HELD
+    broken = resources(Envs(fail=True), script())
+    assert (await run_workpiece(proposal, config(), broken, first, install=install)).terminal == Terminal.HELD
     assert isinstance(broken.inference, FakeInference)
     assert len(broken.inference.requests) == 2
-    resumed = resources(Envs(), script("S")[2:])
+    resumed = resources(Envs(), script()[2:])
     log = EventLog(replay_from=await sink.read(), sink=sink)
-    wp = await run_workpiece(proposal, config("S"), resumed, log, install=install)
+    wp = await run_workpiece(proposal, config(), resumed, log, install=install)
     assert wp.terminal == Terminal.ACCEPTED
     assert isinstance(resumed.inference, FakeInference)
     assert isinstance(resumed.envs, Envs)
@@ -168,11 +163,11 @@ async def test_modify_budget_ends_abandoned(proposal: TaskProposal) -> None:
             await super().close()
 
     pool = RoundPool()
-    settings = replace(config("S"), review=needs_revision)
+    settings = replace(config(), review=needs_revision)
     wp = await run_workpiece(
         proposal,
         settings,
-        replace(resources(Envs(), (*script("S"), *script("S"))), verifiers=pool),
+        replace(resources(Envs(), (*script(), *script())), verifiers=pool),
         EventLog(),
         install=install,
     )
@@ -189,7 +184,7 @@ async def test_modify_budget_ends_abandoned(proposal: TaskProposal) -> None:
 
 
 async def test_validation_retry_budget_holds_without_restarting_author(proposal: TaskProposal) -> None:
-    settings = config("S")
+    settings = config()
 
     class UngradedEngine(Engine):
         @override
@@ -197,7 +192,7 @@ async def test_validation_retry_budget_holds_without_restarting_author(proposal:
             assert run_id is not None
             return GradedRollout(Rollout(run_id, (), "stop"), GradeResult(Outcome.UNAVAILABLE, None))
 
-    bundle = resources(Envs(), script("S"))
+    bundle = resources(Envs(), script())
     bundle = replace(bundle, rollouts=replace(bundle.rollouts, engine=UngradedEngine()))
     log = EventLog()
     wp = await run_workpiece(proposal, settings, bundle, log, install=install)
@@ -219,9 +214,9 @@ async def test_unavailable_control_grade_is_regraded_on_validation_retry(proposa
                 return GradedRollout(Rollout(run_id or "grade", (), "stop"), GradeResult(Outcome.UNAVAILABLE, None))
             return await CandidateEngine().run_task(spec, model, run_id=run_id)
 
-    without_grade_tool = tuple(c for c in script("S") if c.tool_calls[0].name != "grade")
+    without_grade_tool = tuple(c for c in script() if c.tool_calls[0].name != "grade")
     bundle = replace(resources(Envs(), without_grade_tool), grading=GradingResource(OnceUnavailable(), "grader"))
-    wp = await run_workpiece(proposal, config("S"), bundle, EventLog(replayable=replayable_grade), install=install)
+    wp = await run_workpiece(proposal, config(), bundle, EventLog(replayable=replayable_grade), install=install)
     assert [type(decision) for decision in wp.decisions] == [Retry, Accept]
     assert wp.terminal == Terminal.ACCEPTED
 
@@ -237,7 +232,6 @@ def driver_args(proposal: TaskProposal, tmp_path: Path, monkeypatch: pytest.Monk
     return Namespace(
         proposals=str(source),
         policy=str(overlay),
-        arm="S",
         output=str(tmp_path / "out"),
         work_dir=str(tmp_path / "work"),
         resume_held=False,
@@ -280,9 +274,9 @@ async def test_driver_persists_programming_failure_then_reraises(
 ) -> None:
     @asynccontextmanager
     async def broken_runtime(
-        policy: Policy, arm: str, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
-        yield build_config(policy, arm, {}), resources(Envs(), ())
+        yield build_config(policy, {}), resources(Envs(), ())
 
     monkeypatch.setattr(driver, "runtime", broken_runtime)
     args = driver_args
@@ -314,15 +308,15 @@ async def test_driver_resumes_published_partial_log_without_repeated_inference(
                 raise asyncio.CancelledError()
             return await super().complete(request)
 
-    first = replace(resources(Envs(), ()), inference=InterruptedInference(script("S")))
-    second = resources(Envs(), script("S")[2:])
+    first = replace(resources(Envs(), ()), inference=InterruptedInference(script()))
+    second = resources(Envs(), script()[2:])
     attempts = iter((first, second))
 
     @asynccontextmanager
     async def fake_runtime(
-        policy: Policy, arm: str, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
-        yield config(arm), next(attempts)
+        yield config(), next(attempts)
 
     monkeypatch.setattr(driver, "runtime", fake_runtime)
     args = driver_args
@@ -340,7 +334,7 @@ async def test_driver_resumes_published_partial_log_without_repeated_inference(
     await driver.one(args)
     assert WORKPIECE.validate_json((destination / "workpiece.json").read_bytes()).terminal == Terminal.ACCEPTED
     assert isinstance(first.inference, FakeInference) and len(first.inference.requests) == 2
-    assert isinstance(second.inference, FakeInference) and len(second.inference.requests) == len(script("S")) - 2
+    assert isinstance(second.inference, FakeInference) and len(second.inference.requests) == len(script()) - 2
     published = (destination / "events.jsonl").read_bytes()
     # Even with no resources left to construct, another fresh attempt exits successfully.
     args.work_dir = str(tmp_path / "third")
@@ -350,13 +344,11 @@ async def test_driver_resumes_published_partial_log_without_repeated_inference(
 
 @pytest.mark.parametrize("reason", tuple(StopReason))
 def test_author_abandonment_publishes_stop_cause(proposal: TaskProposal, reason: StopReason) -> None:
-    settings = config("S")
-    edge = settings.transitions[(Stage.AUTHOR, Stopped)]
-    assert edge[0] is None
     previous = Modify(("prior review",))
     wp = Workpiece(proposal.header.id, proposal).with_(decisions=(previous,))
     session = Conversation((), ())
-    stopped = edge[1](wp, Stopped(reason, session))
+    stopped, following = advance(wp, Stopped(reason, session), config())
+    assert following is None
     published = WORKPIECE.validate_json(WORKPIECE.dump_json(stopped))
     assert published.terminal == Terminal.ABANDONED
     assert published.session == session
@@ -372,21 +364,21 @@ async def test_stage_restart_replays_on_fresh_machine_without_repeating_inferenc
             return env
 
     envs = Recovers(fail=True)
-    resource = resources(envs, script("S"))
-    result = await run_workpiece(proposal, config("S"), resource, EventLog(), install=install)
+    resource = resources(envs, script())
+    result = await run_workpiece(proposal, config(), resource, EventLog(), install=install)
     assert result.terminal == Terminal.ACCEPTED
     assert len(envs.created) == 2
     assert [env.executed for env in envs.created] == [["inspect", "write-draft"], ["inspect", "write-draft"]]
     assert isinstance(resource.inference, FakeInference)
-    assert len(resource.inference.requests) == len(script("S"))
+    assert len(resource.inference.requests) == len(script())
 
 
 async def test_stage_restart_stops_after_three_attempts_with_cause(
     proposal: TaskProposal, caplog: pytest.LogCaptureFixture
 ) -> None:
     envs = Envs(fail=True)
-    resource = resources(envs, script("S"))
-    result = await run_workpiece(proposal, config("S"), resource, EventLog(), install=install)
+    resource = resources(envs, script())
+    result = await run_workpiece(proposal, config(), resource, EventLog(), install=install)
     assert result.terminal == Terminal.HELD
     assert len(envs.created) == 3
     assert "fake machine died" in str(result.decisions[-1])
@@ -430,16 +422,16 @@ async def test_driver_only_resumes_held_on_request_and_reexecutes_ungraded_trial
         async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
             return GradedRollout(Rollout(run_id or "trial", (), "stop"), GradeResult(Outcome.UNAVAILABLE, None))
 
-    first = resources(Envs(), script("S"))
+    first = resources(Envs(), script())
     first = replace(first, rollouts=replace(first.rollouts, engine=Unavailable(2)))
     second = resources(Envs(), ())
     attempts = iter((first, second))
 
     @asynccontextmanager
     async def fake_runtime(
-        policy: Policy, arm: str, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
-        yield config(arm), next(attempts)
+        yield config(), next(attempts)
 
     monkeypatch.setattr(driver, "runtime", fake_runtime)
     await driver.one(driver_args)
@@ -474,9 +466,9 @@ async def test_environment_startup_transient_replays_stage_or_holds_without_bug(
 
     @asynccontextmanager
     async def fake_runtime(
-        policy: Policy, arm: str, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
-        yield config(arm), resources(envs, script("S"))
+        yield config(), resources(envs, script())
 
     monkeypatch.setattr(driver, "runtime", fake_runtime)
     await driver.one(driver_args)

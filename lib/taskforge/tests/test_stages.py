@@ -19,8 +19,8 @@ from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import EnvironmentRequirements, TaskResource, TaskSpec
 from taskcompendium.runtime.resources import inline_resource
 
-from taskforge.arms import decided, validated
 from taskforge.config import TaskforgeConfig, WorkspaceHydration
+from taskforge.coordinator import decide
 from taskforge.effects.context import Context
 from taskforge.effects.events import Note, Resolved
 from taskforge.effects.issues import ContextExceeded, Hold, OutputBudgetExhausted, Restart
@@ -30,7 +30,7 @@ from taskforge.harness.protocol import Returned, Stopped, StopReason, Submitted
 from taskforge.harness.tools.adversary import AdversaryClaim, AdversaryReport
 from taskforge.lowering import lowering_settings, machine_backend, requirements
 from taskforge.model.controls import CONTROL, CONTROLS, Candidate, Control, ControlKind, RewardBand
-from taskforge.model.llm import Completion, Message, Role, ToolCall, Usage
+from taskforge.model.llm import Completion, Message, Role, Usage
 from taskforge.model.proposal import ResearchNeed, TaskProposal, render
 from taskforge.model.review import (
     VALIDATION_RESULT,
@@ -57,7 +57,6 @@ from taskforge.resources.grading import GradeCandidate, GradingResource, grade
 from taskforge.resources.rollouts import SolverRollout
 from taskforge.stages.author import author
 from taskforge.stages.classify import grade_cause, replayable_grade
-from taskforge.stages.exits import Decided, Validated
 from taskforge.stages.review import review
 from taskforge.stages.rules import default_review
 from taskforge.stages.validate import adversary_result, claim_result, control_result, solver_result, validate
@@ -80,7 +79,7 @@ def workpiece(proposal: TaskProposal) -> Workpiece:
 
 def config(harness: RecordingHarness | None = None) -> TaskforgeConfig:
     return replace(
-        build_config(load_policy(DEFAULTS_DIR), "S", {}),
+        build_config(load_policy(DEFAULTS_DIR), {}),
         author=harness or RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ()))),
     )
 
@@ -359,7 +358,7 @@ async def test_adversary_prompt_uses_manifest_for_large_resources(workpiece: Wor
     assert TaskSpec.model_validate_json(bundle.envs.created[0].files[PurePosixPath("/workspace/task.json")]) == task
 
 
-async def test_validate_summary_hydrates_full_evidence_before_author_resumes(workpiece: Workpiece) -> None:
+async def test_author_hydrates_full_validation_evidence(workpiece: Workpiece) -> None:
     assert workpiece.submission is not None
     grade = GradeResult(Outcome.GRADED, 1, diagnostics={"stdout": "first line\n" + "x" * 100000})
     finding = AdversaryFinding(
@@ -375,15 +374,7 @@ async def test_validate_summary_hydrates_full_evidence_before_author_resumes(wor
         (ControlResult(0, grade, True),),
         (AdversaryResult("finder", AdversaryStatus.REPORTED, (finding,)),),
     )
-    session = Conversation((Message(Role.ASSISTANT, "", (ToolCall("v1", "validate", "{}"),)),), ())
-    resumed = validated(
-        workpiece.with_(session=session), Validated(evidence), tool=True, workdir="/workspace", output_chars=3000
-    )
-    assert resumed.session is not None
-    message = resumed.session.messages[-1]
-    assert message.tool_call_id == "v1" and len(message.content) <= 3000
-    assert "first line" in message.content and "answer.bin" in message.content
-    assert "content_base64" not in message.content and "/workspace/.validation/0.json" in message.content
+    resumed = workpiece.with_(evidence=(evidence,))
     harness = RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ())))
     ctx = Context(log=EventLog())
     bundle = resources(ctx)
@@ -511,10 +502,10 @@ def evidence(solved: int = 1, *, controls_met: bool = True) -> ValidationResult:
     )
 
 
-def decide(wp: Workpiece) -> Workpiece:
+def reviewed(wp: Workpiece) -> Workpiece:
     wp = wp.with_(session=wp.session or Conversation((Message(Role.SYSTEM, "author"),), ()))
-    setup = build_config(load_policy(DEFAULTS_DIR), "S", {})
-    return decided(wp, Decided(default_review(wp, setup.band, setup.budget)), budget=setup.budget, policy=setup.policy)
+    setup = build_config(load_policy(DEFAULTS_DIR), {})
+    return decide(wp, default_review(wp, setup.band, setup.budget), setup.budget, setup.policy.prompt("author.revision"))
 
 
 # One hardening attempt uses the shared modification budget, including a prior unrelated repair.
@@ -526,7 +517,7 @@ def test_hardening_accepts_or_restores_baseline(
 ) -> None:
     original = workpiece.submission
     assert original is not None
-    pending = decide(workpiece.with_(round=1, decisions=(Modify(("repair",)),), evidence=(evidence(3),)))
+    pending = reviewed(workpiece.with_(round=1, decisions=(Modify(("repair",)),), evidence=(evidence(3),)))
     assert pending.round == 2 and pending.too_easy_baseline == original and pending.terminal is None
     first = pending.decisions[-1]
     assert (
@@ -537,7 +528,7 @@ def test_hardening_accepts_or_restores_baseline(
     updated = replace(original, task=original.task.model_copy(update={"labels": {"revision": "harder"}}))
     final = WORKPIECE.validate_json(
         WORKPIECE.dump_json(
-            decide(pending.with_(submission=updated, evidence=(evidence(solved, controls_met=controls_met),)))
+            reviewed(pending.with_(submission=updated, evidence=(evidence(solved, controls_met=controls_met),)))
         )
     )
     assert final.terminal is Terminal.ACCEPTED and final.round == 2
@@ -554,7 +545,7 @@ def test_review_budget_precedence(workpiece: Workpiece, exhausted: bool) -> None
         current = current.with_(
             evidence=(replace(evidence(3, controls_met=False), solver=(TrialResult(0, None, Cause.AGENT_TIMEOUT),)),)
         )
-    final = decide(current)
+    final = reviewed(current)
     if exhausted:
         assert final.terminal is Terminal.ACCEPTED and final.round == 2 and final.submission == workpiece.submission
         assert final.too_easy_baseline is None and final.accepted_with is BandOutcome.TOO_EASY
@@ -601,7 +592,7 @@ def test_grader_failure_classification_and_repair(workpiece: Workpiece, failure:
         False,
         cause,
     )
-    final = decide(
+    final = reviewed(
         workpiece.with_(
             evidence=(
                 replace(evidence(), adversary=(AdversaryResult("adversary", AdversaryStatus.REPORTED, (finding,)),)),
@@ -619,7 +610,7 @@ def test_grader_failure_classification_and_repair(workpiece: Workpiece, failure:
 @pytest.mark.parametrize("grade", [None, GradeResult(Outcome.GRADED, 1)])
 def test_generation_limit_is_failed_solver_evidence(workpiece: Workpiece, grade: GradeResult | None) -> None:
     result = replace(evidence(), solver=(TrialResult(0, grade, Cause.GENERATION_LIMIT), evidence().solver[0]))
-    setup = build_config(load_policy(DEFAULTS_DIR), "S", {})
+    setup = build_config(load_policy(DEFAULTS_DIR), {})
     band = BandRules(0.5, 0.5, frozenset({BandOutcome.IN_BAND}))
     assert isinstance(default_review(workpiece.with_(evidence=(result,)), band, setup.budget), Accept)
     assert result.solver[0].cause is Cause.GENERATION_LIMIT and result.solver[0].grade is grade
@@ -691,7 +682,7 @@ async def test_adversary_window_exhaustion_passes_and_notes_only_an_accept(
     decision = (await review(ctx, wp, setup, bundle)).decision
     assert isinstance(decision, verdict)
     author = Conversation((Message(Role.SYSTEM, "author"),), ())
-    after = decided(wp.with_(session=author), Decided(decision), budget=setup.budget, policy=setup.policy)
+    after = decide(wp.with_(session=author), decision, setup.budget, setup.policy.prompt("author.revision"))
     if isinstance(decision, Accept):
         assert f"finder: {note}" in decision.reasons and after.terminal is Terminal.ACCEPTED
     if isinstance(decision, Modify):

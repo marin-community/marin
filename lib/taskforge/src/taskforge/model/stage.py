@@ -15,4 +15,4 @@ class Stage(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class Exit:
-    """Transition tables dispatch on concrete subclasses."""
+    """What a stage returns; the coordinator matches on the concrete subclass."""
