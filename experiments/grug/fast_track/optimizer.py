@@ -671,6 +671,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     ``scale_by_adamc`` at ``lr_h = lr_max s(t)^2`` with decay mult ``muonc_anneal_adamc``, so its decay is
     ``(lr_h^2 / lr_max) lambda_h`` with ``lambda_h = muonc_anneal_adamc * lr_max``. The MoE router weights and
     ``token_embed`` move to the ``adamc_adam`` group, as with ``adamc_head_router_embed``. 0: off."""
+    muonc_anneal_decay_lr_steps: float = 0.0
+    """With ``muonc_anneal_decay``: the reference total ``lr_max N`` at which ``muonc_anneal_decay`` applies. The
+    matrix ``lambda`` becomes ``muonc_anneal_decay * muonc_anneal_decay_lr_steps / (lr_max N)``, so the total matrix
+    decay ``lambda lr_max N`` is the same at every rung. 0: off."""
     muonh_law_cap_ball: bool = False
     """Law-cap ball (``scale_with_grug_muon_law_cap``) in place of the MuonH sphere for the ``muonh`` and ``kda_beta``
     groups, ``s(t) = lr_t / lr_max`` of the MuonH schedule: a plain Muon step at the matrix LR ``lr_m = lr_t`` until
@@ -881,7 +885,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     beta_matrix_lr, beta_lr, None, NONSI_RADIUS_B1, NONSI_RADIUS_B2
                 )
             if self.muonc_anneal_decay:
-                decay = self.muonc_anneal_decay * matrix_lr / self.learning_rate
+                matrix_decay = self.muonc_anneal_decay
+                if self.muonc_anneal_decay_lr_steps:
+                    matrix_decay *= self.muonc_anneal_decay_lr_steps / (self.learning_rate * num_train_steps)
+                decay = matrix_decay * matrix_lr / self.learning_rate
                 transforms["muonh"] = muonc_annealed_at(matrix_lr, decay)
                 transforms["kda_beta"] = muonc_annealed_at(matrix_lr * KDA_BETA_LR_MULT, decay)
                 transforms["adamh"] = optax.chain(
@@ -959,6 +966,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             self.muonc_anneal_adamc and (not self.muonc_anneal_decay or self.router_lr_mult != 1.0)
         ):
             raise ValueError("muonc_anneal_adamc must be non-negative and needs muonc_anneal_decay and router_lr_mult 1")
+        if self.muonc_anneal_decay_lr_steps < 0 or (self.muonc_anneal_decay_lr_steps and not self.muonc_anneal_decay):
+            raise ValueError("muonc_anneal_decay_lr_steps must be non-negative and needs muonc_anneal_decay")
         if self.muonh_law_cap_ball and (
             self.muonh_radial_softcap or self.muonc_decay_mult or self.muonh_nonsi_anneal or self.muonc_anneal_decay
         ):
