@@ -16,6 +16,7 @@ from marin.evaluation.hardware import Platform
 from marin.evaluation.model_config import load_model_config
 from marin.evaluation.task_worker import JUDGE_API_KEY
 from rigging.secrets import require_secret
+from taskcompendium.importers.evalchemy.frontierscience import JUDGE_MODEL
 
 from experiments.evaluation.launch import LaunchSpec, prepare_evaluation_batch, run_evaluation_group
 
@@ -53,10 +54,9 @@ def main() -> None:
     if remaining <= 0:
         raise TimeoutError("FrontierScience pilot deadline has passed")
     signal.alarm(remaining)
-    judge_model = "openai/gpt-oss-120b"
     run = EvaluationOverrides(
         judge=JudgeIdentity(
-            deployment="together", models={judge_model: f"provider-managed:{judge_model}"}, default_model=judge_model
+            deployment="together", models={JUDGE_MODEL: f"provider-managed:{JUDGE_MODEL}"}, default_model=JUDGE_MODEL
         ),
         judge_endpoint="https://api.together.xyz/v1",
         judge_api_key=("env:TOGETHER_API_KEY",),

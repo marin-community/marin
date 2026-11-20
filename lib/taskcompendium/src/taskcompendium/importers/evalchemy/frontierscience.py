@@ -30,6 +30,7 @@ def _prompt(filename: str) -> str:
     )
 
 
+JUDGE_MODEL = "openai/gpt-oss-120b"
 _OLYMPIAD_PROMPT = _prompt("frontierscience_olympiad_judge.txt")
 _RESEARCH_PROMPT = _prompt("frontierscience_research_judge.txt")
 
@@ -41,7 +42,7 @@ def convert_olympiad(row: RawRow, _context: ConversionContext) -> TaskSpec:
         rubric="labels",
         question=problem,
         references=(row.data["answer"],),
-        model="openai/gpt-oss-120b",
+        model=JUDGE_MODEL,
         reasoning_effort="high",
         prompt_template=_OLYMPIAD_PROMPT,
         exact_gate=False,
@@ -59,7 +60,7 @@ def convert_research(row: RawRow, _context: ConversionContext) -> TaskSpec:
         rubric=RUBRIC_FRONTIERSCIENCE,
         question=problem,
         references=(row.data["answer"],),
-        model="openai/gpt-oss-120b",
+        model=JUDGE_MODEL,
         reasoning_effort="high",
         prompt_template=_RESEARCH_PROMPT,
         max_completion_tokens=32768,
