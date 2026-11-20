@@ -140,10 +140,6 @@ validation time. The timer starts after Iris queueing and provisioning.
 For phase breakdowns, use `startup/eval_before_train` at step 0 and
 `timing/eval` at the last step.
 
-For image-backed tasks, use the selection's task and grader requirements to
-identify where Daytona runs. The quick loop can use the Daytona eval account
-for training rollouts as well as validation.
-
 Hold the validation panel fixed and change one recipe choice at a time.
 Reuse the published data for training-only changes. Produce a new selection
 version when changing tasks or sampling. Update this page and the checked-in
