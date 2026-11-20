@@ -193,30 +193,3 @@ async def test_tool_call_history_renders_without_reply_terminators(agent_transpo
     assert [text.encode() for text in rendered] == [
         (initial + historical_turn * turns + generation).encode() for turns in range(3)
     ]
-
-
-@pytest.mark.parametrize("chat", [True, False], ids=["chat", "completion"])
-@pytest.mark.parametrize("raw", [True, False], ids=["raw-opt-in", "visible-only"])
-def test_raw_text_is_opt_in_and_keeps_exact_completion_delimiters(chat, raw):
-    class Client(_InferenceClient):
-        async def generate(self, request):
-            return {
-                "responses": ["<think>plan</think>call<|eot_id|>"],
-                "response_ids": [self.response_ids],
-                "stop_reasons": [self.finish_reason],
-            }
-
-    client = DirectModelClient(Client([THINK_START, PLAN, THINK_END, CALL, END_OF_TURN], "stop"))
-    request = InferenceEngineInput(sampling_params={"skip_special_tokens": False})
-    if chat:
-        request.update(prompts=[[{"role": "user", "content": "go"}]], chat_completion_params=[{}])
-    else:
-        request["prompt_token_ids"] = [[PLAN]]
-    output = asyncio.run(client.generate(request, return_raw_text=raw))
-
-    assert output["responses"] == ["call" if chat else "<think>plan</think>call"]
-    assert output["response_ids"] == [[THINK_START, PLAN, THINK_END, CALL, END_OF_TURN]]
-    if raw:
-        assert output["raw_responses"] == ["<think>plan</think>call<|eot_id|>"]
-    else:
-        assert "raw_responses" not in output

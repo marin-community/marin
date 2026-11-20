@@ -364,7 +364,7 @@ async def test_assistant_prefix_transport_renders_serving_tokens_and_retains_raw
 @pytest.mark.asyncio
 @pytest.mark.parametrize("interrupted", [False, True])
 @pytest.mark.parametrize("skip_special_tokens", [False, True])
-async def test_assistant_prefix_real_client_preserves_prompt_and_raw_completion_across_retry(
+async def test_assistant_prefix_real_client_preserves_prompt_and_completion_across_retry(
     interrupted, skip_special_tokens
 ):
     backend = Tokenizer(
@@ -412,7 +412,6 @@ async def test_assistant_prefix_real_client_preserves_prompt_and_raw_completion_
             "max_context_length": 5,
             "max_prompt_length": 2,
         },
-        return_raw_text=True,
     )
     assert [row["prompt_token_ids"] for row in submitted] == ([[[1, 2]], [[1, 2, 3]]] if interrupted else [[[1, 2]]])
     assert [row["sampling_params"]["max_tokens"] for row in submitted] == ([3, 2] if interrupted else [3])
@@ -425,7 +424,6 @@ async def test_assistant_prefix_real_client_preserves_prompt_and_raw_completion_
     assert output["response_policy_steps"] == [[7, 7]]
     expected = "tail" if skip_special_tokens else "</think> tail"
     assert output["responses"] == [expected]
-    assert output["raw_responses"] == ["</think> tail"]
     assert output["assistant_messages"] == [{"role": "assistant", "content": expected}]
     assert output["stop_reasons"] == ["stop"]
     assert output["token_provenance"] == TokenProvenance.ENGINE
