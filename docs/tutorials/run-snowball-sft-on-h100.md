@@ -69,7 +69,8 @@ The short Mochi presets train without checkpoints or exports by default. A retry
 checkpoint. `--steps` sets the number of updates from that point. `--export` saves the final native
 checkpoint and runs a CPU export that writes the weights, pinned tokenizer, and generation config at
 `<export-output>/hf`. Short runs use the cluster's `tmp/ttl=3d/` prefix. Set `--prefix` to choose another
-storage root.
+storage root. Set `GIT_COMMIT` to the source commit when exporting from an Iris bundle without Git
+metadata.
 
 The 176-node preset uses the original production training artifact and checkpoint schedule. Pass
 `--export` to request its associated export. Use `--steps` to run a bounded variant in scratch storage.

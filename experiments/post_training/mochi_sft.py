@@ -13,13 +13,13 @@ from dataclasses import replace
 from pathlib import Path
 
 import click
-from fray.types import ResourceConfig
+from fray.types import ANY_REGION, ResourceConfig
 from marin.execution.lazy import ArtifactStep, lower
 from marin.execution.step_runner import StepRunner
-from marin.rl.skyrl import ArtifactHfModel
 
 from experiments.grug.moe_hero_ep import launch_hero_sft
 from experiments.grug.moe_hero_ep.expert_placement import ExpertPlacement
+from experiments.grug.moe_hero_ep.hero_recipe import HeroThroughputResult
 from experiments.grug.moe_hero_ep.sft_recipe import MochiSFT
 from experiments.grug.moe_hero_ep.train import RouterBiasMode
 from experiments.sft.launcher import SFTPreset
@@ -43,7 +43,7 @@ MOCHI_SPEC = MochiSFT(
     ),
     version="2026.11.10",
     source_revision="406dff47f217637ceca499b266989588cb0df5ab",
-    export_resources=ResourceConfig.with_cpu(cpu=64, ram="256g", disk="512g", regions=("US-EAST-08A",)),
+    export_resources=ResourceConfig.with_cpu(cpu=64, ram="256g", disk="512g", regions=(ANY_REGION,)),
     # The pinned Hub tokenizer, config, and chat template match the training copy at S3 version 2026.09.18 by SHA-256.
     tokenizer_uri="marin-community/marin-tokenizer-tools",
     tokenizer_revision="3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09",
@@ -52,10 +52,11 @@ MOCHI_SPEC = MochiSFT(
 
 def _preset(recipe: MochiSFT) -> SFTPreset[MochiSFT]:
     resources = launch_hero_sft.sft_resources(recipe.dp_racks)
+    # The coordinator selects the peer. Its children use that peer's workers directly.
     return SFTPreset(
         f"mixture-262k-{resources.replicas}node",
         recipe,
-        replace(resources, regions=("US-EAST-08A",)),
+        replace(resources, regions=(ANY_REGION,)),
     )
 
 
@@ -72,11 +73,11 @@ MOCHI_SFT = (MIXTURE_262K_176NODE, MIXTURE_262K_16NODE, MIXTURE_262K_48NODE)
 _BY_NAME = {preset.name: preset for preset in MOCHI_SFT}
 
 
-def build_run(
+def build_training(
     preset: SFTPreset[MochiSFT], *, steps: int | None, export: bool, prefix: str | None
-) -> ArtifactStep | ArtifactHfModel:
+) -> ArtifactStep[HeroThroughputResult]:
     recipe = preset.recipe
-    if recipe.checkpoints != "periodic" or steps is not None or prefix is not None:
+    if steps is not None or recipe.stop_after_steps is not None:
         recipe = replace(
             recipe,
             stop_after_steps=recipe.stop_after_steps if steps is None else steps,
@@ -84,22 +85,23 @@ def build_run(
         )
         if prefix is None:
             prefix = recipe.scratch_prefix()
-    training = recipe.training_step(preset.resources, prefix=prefix)
-    return recipe.export_model(training) if export else training
+    return recipe.training_step(preset.resources, prefix=prefix)
 
 
 @click.command()
 @click.option("--preset", type=click.Choice(tuple(_BY_NAME)), required=True)
 @click.option("--steps", type=click.IntRange(min=1), help="Stop after this many SFT updates.")
 @click.option("--export", is_flag=True, help="Save the final native checkpoint and export it to Hugging Face format.")
-@click.option("--prefix", help="Output storage URI or absolute directory. Defaults to the cluster's three-day storage.")
+@click.option("--prefix", help="Output storage URI or absolute directory. Bounded runs default to three-day storage.")
 @click.option("--run", is_flag=True, help="Launch the selected workflow.")
 def main(preset: str, steps: int | None, export: bool, prefix: str | None, run: bool) -> None:
+    chosen = _BY_NAME[preset]
     try:
-        result = build_run(_BY_NAME[preset], steps=steps, export=export, prefix=prefix)
+        training = build_training(chosen, steps=steps, export=export, prefix=prefix)
+        terminal = chosen.recipe.export_model(training).step if export else training
     except ValueError as error:
         raise click.UsageError(str(error)) from error
-    StepRunner().run([lower(result.step if isinstance(result, ArtifactHfModel) else result)], dry_run=not run)
+    StepRunner().run([lower(terminal)], dry_run=not run)
 
 
 if __name__ == "__main__":

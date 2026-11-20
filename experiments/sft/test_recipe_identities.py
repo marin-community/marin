@@ -6,12 +6,12 @@ from types import SimpleNamespace
 
 from levanter.models.snowball import SnowballConfig
 from levanter.utils.mesh import MeshConfig
-from marin.rl.skyrl import ArtifactHfModel
+from marin.execution.lazy import StepContext
 
 from experiments.grug.moe_hero_ep import launch_hero_sft
 from experiments.post_training.curriculum_sft import math_trial, trial
 from experiments.post_training.iceball_micro import build_workflow
-from experiments.post_training.mochi_sft import MIXTURE_262K_176NODE, build_run
+from experiments.post_training.mochi_sft import MIXTURE_262K_176NODE, build_training
 from experiments.post_training.snowball_sft import MIXTURE_262K_32NODE, OPENTHOUGHTS_32K_4NODE, OPENTHOUGHTS_SPEC
 from experiments.sft.configs import delphi_1e22
 from experiments.sft.launcher import resources_from_accelerator, sft_step
@@ -35,9 +35,14 @@ def test_sft_recipe_identities(monkeypatch):
     }
     tokenizer = SimpleNamespace(encode=lambda text, *, add_special_tokens: anchors[text])
     monkeypatch.setattr(launch_hero_sft, "load_tokenizer", lambda _: tokenizer)
-    mochi_model = build_run(MIXTURE_262K_176NODE, steps=None, export=True, prefix=None)
-    assert isinstance(mochi_model, ArtifactHfModel)
-    mochi_export = mochi_model.step
+    production = MIXTURE_262K_176NODE
+    training = build_training(production, steps=None, export=True, prefix=None)
+    mochi_export = production.recipe.export_model(training).step
+    relocated = build_training(production, steps=None, export=False, prefix="/tmp/mochi-production")
+    config = relocated.build_config(StepContext.for_fingerprint(relocated.runtime_args.keys(), relocated.deps))
+    assert config.stop_step == 400407
+    assert config.trainer.save_checkpoints
+    assert config.trainer.trainer.checkpointer.keep == [{"every": 500}]
 
     old_mesh = MeshConfig(
         axes={"data": 1, "replica": 1, "model": 1, "context": 4, "expert": -1},

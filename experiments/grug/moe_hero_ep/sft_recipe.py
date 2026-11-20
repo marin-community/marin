@@ -3,18 +3,20 @@
 
 """Build Mochi SFT training and export its final checkpoint for policy initialization."""
 
+import os
 from dataclasses import dataclass, replace
 from pathlib import Path
+from subprocess import CalledProcessError
 from tempfile import TemporaryDirectory
 from typing import Literal
 
 from fray.types import ResourceConfig
 from levanter.checkpoint import discover_checkpoint_candidates
+from levanter.infra.cli_helpers import get_git_commit
 from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply
 from marin.execution.remote import remote
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.skyrl import ArtifactHfModel
-from marin.training.run_environment import add_run_env_variables
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -103,7 +105,10 @@ class MochiSFT:
         relative_path = "hf"
         source_revision = self.source_revision
         if step.output_path_prefix is not None:
-            source_revision = add_run_env_variables({}).get("GIT_COMMIT", source_revision)
+            try:
+                source_revision = os.environ.get("GIT_COMMIT") or get_git_commit()
+            except (CalledProcessError, OSError) as error:
+                raise ValueError("Set GIT_COMMIT to the source revision when exporting a new Mochi SFT run") from error
         export_step = apply(
             f"{step.name}-hf",
             remote(_export_final_sft, resources=self.export_resources, env_vars={"TMPDIR": "/cache"}),

@@ -17,13 +17,15 @@ import levanter.compat.hf_export as hf_export
 import numpy as np
 import pytest
 from fray.current_client import set_current_client
+from fray.iris_backend import convert_constraints
+from iris.cluster.constraints import is_any_region_marker
 from jax.sharding import PartitionSpec as P
 from levanter.checkpoint import save_checkpoint
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.testing.tokenizer import llama3_style_chat_tokenizer
 from marin.execution.artifact import read_record
-from marin.execution.lazy import ArtifactStep, StepContext, materialized_config
-from marin.rl.skyrl import ArtifactHfModel, skyrl_cpu_command
+from marin.execution.lazy import StepContext, materialized_config
+from marin.rl.skyrl import skyrl_cpu_command
 from rigging.filesystem.storage_path import StoragePath
 from safetensors.numpy import load_file
 
@@ -35,7 +37,7 @@ from experiments.grug.moe_hero_ep.model import GRUG_MOE_ARTIFACT_SCHEMA_VERSION_
 from experiments.grug.moe_hero_ep.ops import upload_hf
 from experiments.grug.moe_hero_ep.ops.export_vllm import ExportConfig, export
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
-from experiments.post_training.mochi_sft import MIXTURE_262K_16NODE, MIXTURE_262K_48NODE, MOCHI_SPEC, build_run
+from experiments.post_training.mochi_sft import MIXTURE_262K_16NODE, MIXTURE_262K_48NODE, MOCHI_SPEC, build_training
 
 
 @pytest.mark.parametrize(
@@ -196,8 +198,7 @@ def test_mochi_sft_three_rack_run_uses_scratch_without_checkpoints(monkeypatch):
     monkeypatch.setattr(sft_recipe, "checkpoint_step", lambda _: 393491)
     monkeypatch.setattr(launch_hero_sft, "special_token_init", lambda _: None)
 
-    step = build_run(MIXTURE_262K_48NODE, steps=None, export=False, prefix=None)
-    assert isinstance(step, ArtifactStep)
+    step = build_training(MIXTURE_262K_48NODE, steps=None, export=False, prefix=None)
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args.keys(), step.deps))
     allocation = step.runtime_args["train_resources"]
     assert step.path().startswith("s3://marin-us-east-08a/tmp/ttl=3d/users/")
@@ -238,9 +239,8 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
         preset.model()
     initializer_metadata.write_text(json.dumps(initial))
     prefix = tmp_path / "selected-prefix"
-    model = build_run(preset, steps=1, export=True, prefix=str(prefix))
-    assert isinstance(model, ArtifactHfModel)
-    [trained] = model.step.deps
+    trained = build_training(preset, steps=1, export=True, prefix=str(prefix))
+    model = recipe.export_model(trained)
     training = materialized_config(trained, str(tmp_path))
     assert training.resources.replicas == 16
     assert training.resources.device.count == 4
@@ -248,8 +248,8 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
     assert training.trainer.save_checkpoints
     assert training.trainer.trainer.checkpointer.save_interval is None
     assert training.trainer.trainer.checkpointer.keep is None
-    assert training.resources.regions == ("US-EAST-08A",)
-    assert training.resources.target_cluster is None
+    [constraint] = convert_constraints(training.resources)
+    assert is_any_region_marker(constraint)
     assert Path(trained.path()).is_relative_to(prefix)
     checkpoints = Path(trained.path()) / f"expert-placement-{placement.fingerprint}" / "checkpoints"
     native, _ = native_fixture(str(checkpoints / "step-17"), master=True)
@@ -284,8 +284,8 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
     with set_current_client(SimpleNamespace(submit=submit)):
         lowered.fn(str(output))
     [request] = requests
-    assert request.resources.regions == ("US-EAST-08A",)
-    assert request.resources.target_cluster is None
+    [constraint] = convert_constraints(request.resources)
+    assert is_any_region_marker(constraint)
 
     record = read_record(str(output))
     assert record is not None and record.config is not None
