@@ -438,25 +438,21 @@ class RayWrappedInferenceEngine(InferenceEngineInterface):
         return await self.inference_engine_actor.get_stats.remote(read_mode=read_mode)
 
 
-def populate_engine_max_model_lens(
+def populate_engine_serving_metadata(
     engines: List["RayWrappedInferenceEngine"], *, timeout_seconds: float, kill_on_failure: bool = True
 ) -> None:
-    """Record each serving actor's resolved context limit on its local wrapper."""
+    """Record each serving actor's resolved context limit and registered model name."""
     actor_handles = [engine.inference_engine_actor for engine in engines]
     limit_refs = [actor.get_model_max_len.remote() for actor in actor_handles]
+    name_refs = [actor.get_served_model_name.remote() for actor in actor_handles]
     wait_for_inference_engine_startup(
-        limit_refs,
+        [*limit_refs, *name_refs],
         actor_handles,
         timeout_seconds=timeout_seconds,
         kill_on_failure=kill_on_failure,
     )
-    for engine, max_model_len in zip(engines, ray.get(limit_refs), strict=True):
+    for engine, max_model_len, model_name in zip(engines, ray.get(limit_refs), ray.get(name_refs), strict=True):
         engine.max_model_len = max_model_len
-    name_refs = [actor.get_served_model_name.remote() for actor in actor_handles]
-    wait_for_inference_engine_startup(
-        name_refs, actor_handles, timeout_seconds=timeout_seconds, kill_on_failure=kill_on_failure
-    )
-    for engine, model_name in zip(engines, ray.get(name_refs), strict=True):
         engine.model_name = model_name
 
 
@@ -1032,7 +1028,7 @@ def create_ray_wrapped_inference_engines(
                 kill_on_failure=False,
             )
 
-        populate_engine_max_model_lens(
+        populate_engine_serving_metadata(
             engines,
             timeout_seconds=engine_init_timeout_seconds,
             kill_on_failure=False,

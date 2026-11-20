@@ -98,7 +98,7 @@ async def test_chat_completion_retry_keeps_exact_ids_and_optional_routes(capture
 
 @pytest.mark.parametrize("registered_name", ["configured-alias", "/regional/streamed-model-cache"])
 @pytest.mark.asyncio
-async def test_completion_routes_through_the_registered_engine_name(registered_name):
+async def test_client_exposes_the_registered_name_for_model_requests(registered_name):
     class Engine:
         model_name = registered_name
 
