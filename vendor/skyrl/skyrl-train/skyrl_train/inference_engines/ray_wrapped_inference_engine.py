@@ -15,6 +15,7 @@ from rigging.timing import ExponentialBackoff, retry_with_backoff
 from transformers import AutoConfig, PretrainedConfig
 
 from marinskyrl.inference_placement import COLOCATED_EXPERT_BLOCK_GPU_COUNT, InferenceReplicaPlacement
+from marinskyrl.inference_startup_diagnostics import capture_startup_timeout
 from skyrl_train.inference_engines.base import (
     InferenceEngineInterface,
     InferenceEngineInput,
@@ -1075,6 +1076,7 @@ def wait_for_inference_engine_startup(
                 )
                 if remaining > 0:
                     continue
+                capture_startup_timeout()
                 raise TimeoutError(
                     f"inference engine startup timed out after {timeout_seconds:g} seconds; "
                     f"pending engine actors: {pending_indices}"

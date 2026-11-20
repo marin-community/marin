@@ -306,6 +306,7 @@ class RayPPOTrainer:
         self._checkpoint_save_failures = 0.0
         self._ftpo_stopped = False
         self._shutdown_complete = False
+        self._exit_watchdog: threading.Timer | None = None
         self._restored_rollout_state: TrainingContextState | None = None
         self.global_step = 0
         self.loaded_checkpoint_path: str | None = None
@@ -528,7 +529,8 @@ class RayPPOTrainer:
         """
         # Teacher cleanup can block or resist cancellation. Arm the process guard
         # before any teardown awaits, including executor shutdown after asyncio.run.
-        self._start_exit_watchdog()
+        if self._exit_watchdog is None:
+            self._exit_watchdog = self._start_exit_watchdog()
         if self._expert_block_sync is not None:
             await self._guarded_async(
                 self._expert_block_sync.close(),
@@ -580,8 +582,14 @@ class RayPPOTrainer:
             await self._teardown()
             self._shutdown_complete = True
 
+    def finish_shutdown(self) -> None:
+        """Disarm the process guard after the caller joins the event-loop executor."""
+        if self._exit_watchdog is not None:
+            self._exit_watchdog.cancel()
+            self._exit_watchdog = None
+
     @staticmethod
-    def _start_exit_watchdog(timeout: int = 120) -> None:
+    def _start_exit_watchdog(timeout: int = 300) -> threading.Timer:
         """Start a daemon thread that force-exits the process after *timeout* seconds."""
 
         def _force_exit():
@@ -593,6 +601,7 @@ class RayPPOTrainer:
         t = threading.Timer(timeout, _force_exit)
         t.daemon = True
         t.start()
+        return t
 
     async def train(self):
         """Run the rollout-buffer training loop, then release every resource it started."""

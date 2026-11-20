@@ -73,6 +73,7 @@ def shutdown_case(monkeypatch):
             releases.append("sink")
 
     trainer = RayPPOTrainer.__new__(RayPPOTrainer)
+    trainer._exit_watchdog = None
     trainer.context = SimpleNamespace(close=context_close)
     # Each service finishes within its own deadline; their sum exceeds the old watchdog.
     short_cleanup = 20
