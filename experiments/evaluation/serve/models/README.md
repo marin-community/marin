@@ -191,6 +191,14 @@ slices (`v6e`, `v5litepod`) and `DP=1` work. `LMCache` is unsupported on TPU bec
 only accepts `TPUConnector`, `TPUConnectorHMA`, `TPUOffloadConnector`, and `RaidenOffloadConnector`;
 use `TPUOffloadConnector` for TPU-native host-RAM prefix caching.
 
+For large checkpoints with multi-process TPU DP (such as Snowball 67B on `v5p-8`), raise `--memory`
+(for example `--memory 400g`, as the `64g` default can OOM when multiple DP ranks stream weights
+concurrently) and `--wait-timeout` (for example `--wait-timeout 3600`, since it also bounds in-job
+startup during multi-rank XLA compilation). Minted capability URLs
+(`https://iris.oa.dev/proxy/t/<token>/serve.<name>/...`) forward `X-Session-ID` from off-cluster
+clients including CoreWeave pods; on allowlist-enforced CoreWeave clusters, pass
+`--egress-allow iris.oa.dev:443`.
+
 `--vllm-release` reads `marin-vllm-gpu-manifest.json` from a [published release](https://github.com/marin-community/vllm/releases).
 Omitting it uses the normal runtime.
 The isolated `vllm-router==0.1.16` process uses vLLM's global internal DP frontend;
