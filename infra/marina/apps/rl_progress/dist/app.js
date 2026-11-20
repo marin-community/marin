@@ -2,6 +2,7 @@ const $ = (id) => document.getElementById(id);
 const ns = 'http://www.w3.org/2000/svg';
 const colors = ['#286451', '#526bb2', '#a06534', '#9a5079', '#16768c'];
 let runs = [];
+let controlRewards = [];
 let hardwareColors = new Map();
 
 function element(tag, text, attrs = {}) {
@@ -45,16 +46,14 @@ function fillHardware() {
   select.disabled = labels.length === 0;
   hardwareColors = new Map(labels.filter((label) => label !== 'Not recorded').map((label, index) => [label, colors[index % colors.length]]));
 }
-function fillPresets(catalog) {
+function fillPresets(catalog, defaultPreset) {
   const select = $('preset');
   const current = select.value;
   const counts = new Map();
   for (const run of runs) counts.set(run.preset, (counts.get(run.preset) ?? 0) + 1);
   const presets = [...new Set([...catalog, ...counts.keys()])];
   select.replaceChildren(...presets.map((preset) => new Option(`${presetLabel(preset)} · ${counts.get(preset) ?? 0}`, preset)));
-  select.value = presets.includes(current)
-    ? current
-    : (presets.find((preset) => counts.has(preset)) ?? presets[0]);
+  select.value = presets.includes(current) ? current : defaultPreset;
   fillHardware();
 }
 function route(run) { return '#run=' + encodeURIComponent(identity(run)); }
@@ -115,6 +114,61 @@ function chart(id, rows, xValue, yValue, xLabel, yLabel, { dateAxis = false, lab
 function addField(list, title, value) {
   list.append(element('dt', title), element('dd', value ?? 'Not recorded'));
 }
+
+function renderControlRewards(hardware) {
+  const host = $('control-rewards');
+  host.replaceChildren();
+  const groups = controlRewards.filter((group) => (
+    group.preset === $('preset').value && (!hardware || hardwareLabel(group) === hardware)
+  ));
+  if (!groups.length) {
+    host.append(element('p', 'No comparable control runs recorded for this view.', { class: 'note' }));
+    return;
+  }
+
+  const width = Math.max(240, host.clientWidth);
+  const inset = 26;
+  const axis = 59;
+  const tickCount = width < 420 ? 3 : 5;
+  for (const group of groups) {
+    const { points, mean, sample_sd: sd } = group;
+    const summary = sd === null
+      ? '1 control run · sample SD needs at least 2 comparable runs'
+      : `${points.length} control runs · mean ${formatNumber(mean)} · sample SD ${formatNumber(sd)}`;
+    const configuration = group.hardware ? hardwareLabel(group) : 'Hardware not recorded';
+    host.append(element('p', `${group.eval_set} · ${configuration}`, { class: 'note' }));
+    host.append(element('p', summary, { class: 'control-summary' }));
+    const low = Math.min(mean - (sd ?? 0), ...points.map((point) => point.reward));
+    const high = Math.max(mean + (sd ?? 0), ...points.map((point) => point.reward));
+    const padding = (high - low || 0.01) * 0.14;
+    const min = low - padding;
+    const max = high + padding;
+    const x = (reward) => inset + (reward - min) / (max - min) * (width - 2 * inset);
+    const plot = svg('svg', {
+      viewBox: `0 0 ${width} 104`, class: 'control-plot', role: 'group',
+      'aria-label': `Final control rewards. ${summary}.`,
+    });
+    if (sd !== null) {
+      plot.append(svg('rect', { x: x(mean - sd), y: 10, width: x(mean + sd) - x(mean - sd), height: axis - 10, class: 'control-band' }));
+      plot.append(svg('line', { x1: x(mean), x2: x(mean), y1: 10, y2: axis, class: 'control-mean' }));
+    }
+    plot.append(svg('line', { x1: inset, x2: width - inset, y1: axis, y2: axis, class: 'axis' }));
+    for (let index = 0; index < tickCount; index++) {
+      const value = min + (max - min) * index / (tickCount - 1);
+      plot.append(svg('text', { x: x(value), y: axis + 17, 'text-anchor': 'middle', class: 'tick' }, formatNumber(value, 3)));
+    }
+    plot.append(svg('text', { x: width / 2, y: 98, 'text-anchor': 'middle', class: 'axis-label' }, 'Final reward'));
+    for (const [index, point] of points.entries()) {
+      const replicate = point.run_id.match(/-r(\d+)-/)?.[1];
+      const label = `${replicate === undefined ? point.label : `Control r${replicate}`} · ${formatNumber(point.reward)}`;
+      const link = svg('a', { href: graderPage(point), class: 'dot', 'aria-label': label });
+      link.append(svg('title', {}, label), svg('circle', { cx: x(point.reward), cy: 26 + 12 * (index % 3), r: 5, class: 'control-point' }));
+      plot.append(link);
+    }
+    host.append(plot);
+    if (sd !== null) host.append(element('p', 'Shading shows ±1 sample SD. Dots show individual control runs.', { class: 'note' }));
+  }
+}
 function showDetails(run) {
   $('detail-title').textContent = run.label;
   const body = $('detail-body'); body.replaceChildren();
@@ -166,6 +220,7 @@ function render() {
     return;
   }
   $('count').textContent = `${selected.length} attempts · ${selected.filter((run) => run.pareto_eligible).length} eligible for frontier ranking`;
+  renderControlRewards(hardware);
   chart('pareto', selected, hours, (run) => run.final?.reward, 'Elapsed hours', 'Final reward', { labelDots: true });
   chart('reward', selected, (run) => Date.parse(run.run_date ?? run.started_at), (run) => run.final?.reward, 'Run date (Los Angeles)', 'Reward', { dateAxis: true, baseline: true });
   chart('duration', selected, (run) => Date.parse(run.run_date ?? run.started_at), hours, 'Run date (Los Angeles)', 'Elapsed hours', { dateAxis: true });
@@ -188,8 +243,8 @@ async function refresh() {
   try {
     const response = await fetch('./api/runs');
     if (!response.ok) throw new Error(`Could not load runs (${response.status}).`);
-    const data = await response.json(); runs = data.runs;
-    fillPresets(data.presets);
+    const data = await response.json(); runs = data.runs; controlRewards = data.control_rewards;
+    fillPresets(data.presets, data.default_preset);
     render(); followHash();
   } catch (error) { $('error').textContent = error.message; $('error').hidden = false; }
   finally { $('refresh').disabled = false; }

@@ -5,10 +5,16 @@
 
 import hashlib
 import json
+import math
 
 import pytest
 
-from infra.marina.apps.rl_progress.server.app import SNOWBALL_INITIALIZER_ALIASES, comparison_fields, run_metadata
+from infra.marina.apps.rl_progress.server.app import (
+    SNOWBALL_INITIALIZER_ALIASES,
+    comparison_fields,
+    control_reward_summaries,
+    run_metadata,
+)
 
 
 def test_partial_baseline_is_not_a_trusted_gain_and_names_do_not_change_cohort():
@@ -53,3 +59,34 @@ def test_changed_membership_cannot_become_rankable_under_an_old_digest():
     run = {"evaluation": {"task_ids": ["first", "replacement"], "membership_sha256": digest}}
     with pytest.raises(ValueError, match="membership"):
         comparison_fields(run)
+
+
+def test_control_sd_excludes_candidates_and_counts_a_retried_control_once():
+    def result(run_id, attempt_id, reward, *, finished="2026-11-19T08:00:00Z", source="rev"):
+        return {
+            "run_id": run_id,
+            "attempt_id": attempt_id,
+            "label": "learning-medium",
+            "preset": "learning-medium",
+            "eval_set_label": "Snowball held-out test",
+            "pareto_eligible": True,
+            "completed_at": finished,
+            "comparison_key": "same-evaluation-and-timing",
+            "source_revision": source,
+            "final": {"reward": reward},
+        }
+
+    root = "checkpoints/snowball-rl/control/learning-medium"
+    shared, other = control_reward_summaries(
+        [
+            result(root + "-r0", "b", 0.61, finished="2026-11-19T09:00:00Z"),
+            result(root + "-r0", "a", 0.50),
+            result(root + "-r1", "c", 0.63),
+            result("candidate", "d", 0.90),
+            result(root + "-other", "e", 0.90, source="other"),
+        ]
+    )
+    assert [point["attempt_id"] for point in shared["points"]] == ["b", "c"]
+    assert shared["mean"] == pytest.approx(0.62)
+    assert shared["sample_sd"] == pytest.approx(math.sqrt(0.0002))
+    assert other["sample_sd"] is None

@@ -5,8 +5,12 @@
 
 import hashlib
 import json
+import math
+from collections import defaultdict
 from dataclasses import asdict
 from datetime import datetime
+from statistics import mean, stdev
+from typing import TypedDict
 
 from fastapi import FastAPI, HTTPException
 from rigging.telemetry.serialization import json_bytes
@@ -37,6 +41,24 @@ PRESETS = (
     "data-long",
     "train-long",
 )
+DEFAULT_PRESET = "learning-medium"
+SNOWBALL_CONTROL_PREFIX = "checkpoints/snowball-rl/control/"
+
+
+class ControlRewardPoint(TypedDict):
+    run_id: str
+    attempt_id: str
+    label: str
+    reward: float
+
+
+class ControlRewardSummary(TypedDict):
+    preset: str
+    hardware: dict | None
+    eval_set: str
+    points: list[ControlRewardPoint]
+    mean: float
+    sample_sd: float | None
 
 
 def run_metadata(run: dict) -> dict[str, str]:
@@ -125,6 +147,54 @@ def comparison_fields(run: dict) -> dict:
     }
 
 
+def control_reward_summaries(records: list[dict]) -> list[ControlRewardSummary]:
+    """Summarize independently named control repeats with matching run identities."""
+    groups: dict[tuple, dict[str, dict]] = defaultdict(dict)
+    for run in sorted(
+        records,
+        key=lambda run: datetime.fromisoformat(run["completed_at"]).timestamp() if run.get("completed_at") else 0,
+    ):
+        is_control = run.get("is_control", run["run_id"].startswith(SNOWBALL_CONTROL_PREFIX))
+        if not is_control or not run["pareto_eligible"]:
+            continue
+        reward = run["final"]["reward"]
+        if not math.isfinite(reward):
+            continue
+        key = (
+            run["preset"],
+            run["comparison_key"],
+            run.get("initializer_identity"),
+            run.get("data_identity"),
+            run.get("source_revision"),
+            run.get("optimizer_steps"),
+            json_bytes(run.get("engine")),
+        )
+        groups[key][run["run_id"]] = run
+
+    summaries: list[ControlRewardSummary] = []
+    for group in groups.values():
+        members = list(group.values())
+        sample = [
+            ControlRewardPoint(
+                run_id=run["run_id"], attempt_id=run["attempt_id"], label=run["label"], reward=run["final"]["reward"]
+            )
+            for run in members
+        ]
+        metadata = members[0]
+        rewards = [point["reward"] for point in sample]
+        summaries.append(
+            ControlRewardSummary(
+                preset=metadata["preset"],
+                hardware=metadata.get("hardware"),
+                eval_set=metadata["eval_set_label"],
+                points=sample,
+                mean=mean(rewards),
+                sample_sd=stdev(rewards) if len(rewards) > 1 else None,
+            )
+        )
+    return summaries
+
+
 def create_api(services):
     api = FastAPI()
     engine = services.engine()
@@ -147,7 +217,13 @@ def create_api(services):
                 records.append(run | comparison_fields(run) | run_metadata(run))
                 imported_at = row["imported_at"]
                 updated_at = imported_at if updated_at is None else max(updated_at, imported_at)
-        return {"runs": records, "presets": PRESETS, "updated_at": updated_at}
+        return {
+            "runs": records,
+            "presets": PRESETS,
+            "default_preset": DEFAULT_PRESET,
+            "control_rewards": control_reward_summaries(records),
+            "updated_at": updated_at,
+        }
 
     @api.post("/sync")
     def sync():

@@ -19,6 +19,7 @@
     <p id="no-runs" class="note" hidden>No runs recorded for this preset.</p>
     <div id="preset-runs">
     <section class="panel lead" aria-labelledby="pareto-title"><div class="panel-heading"><div><span class="eyebrow">PARETO</span><h2 id="pareto-title">Reward / time frontier</h2></div><span>↖ Higher reward, shorter loop</span></div><p class="note">Click a dot or run name to open its grader stats.</p><div id="pareto" class="chart"></div><p id="frontier-note" class="note"></p><div id="legend" class="legend"></div></section>
+    <section class="panel" aria-labelledby="control-title"><h2 id="control-title">Control reward variability</h2><div id="control-rewards"></div></section>
     <section class="panel"><div class="panel-heading"><h2>Recorded attempts</h2><span class="note">Run dates use America/Los_Angeles</span></div><div class="table-scroll"><table><thead><tr><th>Run</th><th>Base model</th><th>Eval set</th><th>Hardware</th><th>Baseline → final</th><th>Elapsed</th><th>Updates</th><th>Coverage</th><th>Evidence</th></tr></thead><tbody id="attempts"></tbody></table></div></section>
     <div class="chart-grid">
       <section class="panel"><h2>Reward over time</h2><p class="note">Hollow: baseline · Filled: final</p><div id="reward" class="chart"></div></section>

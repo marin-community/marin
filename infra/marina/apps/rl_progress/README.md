@@ -38,6 +38,11 @@ The picker also shows the historical Snowball presets. Historical rows with
 a recognized series use it as their preset. GPU type and count narrow the
 view and distinguish frontiers within it.
 
+The overview opens on `learning-medium`. The control chart plots one completed,
+fully scored attempt per control run, grouped by matching evaluation, training,
+and runtime evidence. Its shaded band spans one sample standard deviation on
+either side of the mean when the group has two or more repeats.
+
 ## Validate and release
 
 From the repository root:

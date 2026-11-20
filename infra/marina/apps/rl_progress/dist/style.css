@@ -8,3 +8,8 @@
 .toolbar label{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;min-width:0;max-width:100%;color:var(--muted)}
 .toolbar select{margin-left:0;min-width:0;max-width:100%;color:var(--ink)}
 .toolbar #count{color:var(--muted);font-size:13px}
+.control-plot{display:block;width:100%;height:auto}
+.control-summary{font-weight:600;font-variant-numeric:tabular-nums}
+.control-band{fill:var(--mark);fill-opacity:.10}
+.control-mean{stroke:var(--mark);stroke-dasharray:3 3}
+.control-point{fill:var(--mark);stroke:var(--panel);stroke-width:1.5}
