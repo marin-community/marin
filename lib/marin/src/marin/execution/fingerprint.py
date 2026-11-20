@@ -150,8 +150,8 @@ def _dataclass_fields(o: Any) -> dict[str, object]:
 def _tensorstore_write_config_fingerprint(config: TensorStoreWriteConfig) -> dict[str, object]:
     """Leave an unset ``file_io_locking`` out of a training step's identity.
 
-    Unset means the save picks its own locking mode, which is how every checkpoint recorded
-    without the field was written, so those steps keep their fingerprints.
+    Unset lets the save choose its locking mode from the checkpoint path and process count,
+    which does not change what the step produces. An explicit mode is part of the identity.
     """
     fields = _dataclass_fields(config)
     if config.file_io_locking is None:
@@ -159,6 +159,7 @@ def _tensorstore_write_config_fingerprint(config: TensorStoreWriteConfig) -> dic
     return fields
 
 
+# Registered here so the form applies to every fingerprint, whichever modules a launcher imports.
 register_fingerprint(TensorStoreWriteConfig, _tensorstore_write_config_fingerprint)
 
 
