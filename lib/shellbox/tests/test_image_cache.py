@@ -3,6 +3,7 @@
 
 """Image build reuse across temporary task directories."""
 
+import gzip
 import hashlib
 import io
 import json
@@ -15,7 +16,14 @@ from pathlib import Path
 import pytest
 from shellbox.backends.local.images import prepare_local_image
 from shellbox.backends.qemu.image import QemuAssets, stage_qemu_image
-from shellbox.image import DockerfileSource, ImageCache, PreparedImage, RegistryImage, prepared_image_workdir
+from shellbox.image import (
+    DOCKER_MANIFEST_MEDIA_TYPE,
+    DockerfileSource,
+    ImageCache,
+    PreparedImage,
+    RegistryImage,
+    prepared_image_workdir,
+)
 
 
 @pytest.mark.parametrize("working_directory,expected", [("/task workspace", "/task workspace"), ("", "/")])
@@ -95,6 +103,38 @@ def test_local_image_unpack_failure_reports_the_host_diagnostic(tmp_path, layere
     with pytest.raises(RuntimeError, match="umoci exited 7: unpack: setxattr: operation not permitted") as error:
         prepare_local_image(layered_oci_image, tmp_path / "bundle", umoci=umoci)
     assert isinstance(error.value.__cause__, subprocess.CalledProcessError)
+
+
+def test_local_unpack_accepts_a_digest_pinned_docker_manifest(tmp_path, layered_oci_image):
+    if shutil.which("skopeo") is None or shutil.which("umoci") is None:
+        pytest.skip("Docker-to-OCI unpack requires the image tools installed by Shellbox CI")
+    layout = layered_oci_image.layout
+    blobs = layout / "blobs/sha256"
+    manifest = json.loads((blobs / layered_oci_image.manifest_digest.removeprefix("sha256:")).read_bytes())
+    manifest["mediaType"] = DOCKER_MANIFEST_MEDIA_TYPE
+    manifest["config"]["mediaType"] = "application/vnd.docker.container.image.v1+json"
+    for layer in manifest["layers"]:
+        payload = gzip.compress((blobs / layer["digest"].removeprefix("sha256:")).read_bytes())
+        digest = hashlib.sha256(payload).hexdigest()
+        (blobs / digest).write_bytes(payload)
+        layer.update(
+            digest=f"sha256:{digest}", size=len(payload), mediaType="application/vnd.docker.image.rootfs.diff.tar.gzip"
+        )
+    payload = json.dumps(manifest).encode()
+    digest = hashlib.sha256(payload).hexdigest()
+    (blobs / digest).write_bytes(payload)
+    index = json.loads((layout / "index.json").read_text())
+    index["manifests"][0].update(digest=f"sha256:{digest}", size=len(payload), mediaType=DOCKER_MANIFEST_MEDIA_TYPE)
+    pinned_index = json.dumps(index)
+    (layout / "index.json").write_text(pinned_index)
+    source = RegistryImage(f"registry.invalid/image@sha256:{digest}")
+    image = PreparedImage(layout, f"sha256:{digest}", source)
+    unpacked = prepare_local_image(image, tmp_path / "bundle", umoci=Path("umoci"))
+    assert (unpacked.root / "data/payload").read_bytes() == b"original"
+    assert not (unpacked.root / "data/deleted").exists()
+    assert (layout / "index.json").read_text() == pinned_index
+    assert (blobs / digest).read_bytes() == payload
+    assert image.source == source
 
 
 @pytest.mark.parametrize("tampering", ["config", "tag", "manifest-path"])

@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Any
 
 OCI_TAG = "image"
+OCI_MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json"
+DOCKER_MANIFEST_MEDIA_TYPE = "application/vnd.docker.distribution.manifest.v2+json"
 
 
 @dataclass(frozen=True)
@@ -82,6 +84,40 @@ def prepared_image_workdir(image: PreparedImage) -> str:
     """Read the selected image's initial working directory from its verified OCI config."""
     config = prepared_image_config(image)
     return config.get("config", {}).get("WorkingDir") or "/"
+
+
+def oci_image(image: PreparedImage, directory: Path) -> PreparedImage:
+    """Convert a Docker manifest to OCI for unpacking, preserving config and layer bytes.
+
+    The caller owns the conversion directory. The source layout and its pinned
+    manifest remain unchanged; only the temporary manifest representation changes.
+    """
+    if _tagged_manifest_digest(image.layout) != image.manifest_digest:
+        raise ValueError("Prepared image tag no longer selects its pinned manifest")
+    original = _oci_json_blob(image.layout, image.manifest_digest)
+    media_type = original.get("mediaType", OCI_MANIFEST_MEDIA_TYPE)
+    if media_type == OCI_MANIFEST_MEDIA_TYPE:
+        return image
+    if media_type != DOCKER_MANIFEST_MEDIA_TYPE:
+        raise ValueError(f"Unsupported unpack manifest: {media_type}")
+    _run(
+        "skopeo",
+        "--insecure-policy",
+        "copy",
+        "--format",
+        "oci",
+        f"oci:{image.layout}:{OCI_TAG}",
+        f"oci:{directory}:{OCI_TAG}",
+    )
+    digest = _manifest_digest(directory)
+    converted = _oci_json_blob(directory, digest)
+    if converted["mediaType"] != OCI_MANIFEST_MEDIA_TYPE:
+        raise ValueError("Image conversion did not produce an OCI manifest")
+    before = [original["config"], *original["layers"]]
+    after = [converted["config"], *converted["layers"]]
+    if [(item["digest"], item["size"]) for item in before] != [(item["digest"], item["size"]) for item in after]:
+        raise ValueError("OCI conversion changed image config or layer content")
+    return PreparedImage(directory, digest, image.source)
 
 
 def image_source_key(source: RegistryImage | DockerfileSource) -> str:
