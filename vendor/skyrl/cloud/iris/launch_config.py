@@ -312,9 +312,9 @@ def load_launch_config(path: Path) -> DictConfig:
     validate_launch_config(config)
     if is_source_recipe:
         buffer = config.skyrl.trainer.rollout_buffer
-        if buffer.groups_per_family:
+        if groups_per_family := buffer.get("groups_per_family"):
             inputs = OmegaConf.to_container(config.inputs, resolve=True)
-            _validate_launch_family_pools(inputs, dict(buffer.groups_per_family), buffer.max_staleness_steps)
+            _validate_launch_family_pools(inputs, dict(groups_per_family), buffer.max_staleness_steps)
     profiles = resolve_evaluation_profiles(config.skyrl)
     record_evaluation_profiles(config.skyrl, profiles)
     if config.run.mode == RunMode.TRAIN:

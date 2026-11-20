@@ -1053,6 +1053,7 @@ def test_launch_preflights_groups_per_family(tmp_path, remaining_families, error
         return
 
     resolved = load_launch_config(path)
+    assert resolved.skyrl.trainer.rollout_buffer.groups_per_family == {"math": 4, "code": 4}
     OmegaConf.save(resolved, path)
     data_path.unlink()
     assert load_launch_config(path) == resolved
@@ -1069,6 +1070,10 @@ def test_first_train_submission_validates_recipe_and_resolved_reload(tmp_path):
     assert OmegaConf.to_container(load_launch_config(resolved), resolve=True) == OmegaConf.to_container(
         loaded, resolve=True
     )
+    raw["skyrl"]["trainer"].setdefault("rollout_buffer", {})["groups_per_family"] = {}
+    path.write_text(yaml.safe_dump(raw))
+    assert load_launch_config(path) == loaded
+
     del raw["skyrl"]["context_budget"]
     path.write_text(yaml.safe_dump(raw))
     with pytest.raises(ValueError, match="context_budget"):

@@ -5,7 +5,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from omegaconf import OmegaConf
-from skyrl_train.config.rollout_validation import FAMILY_COLUMN
+from skyrl_train.config.rollout_validation import FAMILY_COLUMN, GROUPS_PER_FAMILY_KEY
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.dataset.tasks import TASK_SPEC_COLUMN, SourceTaskDataset, TaskDataset, source_row_task, write_tasks
 from skyrl_train.rollouts.context import TrainingContext
@@ -68,7 +68,7 @@ def test_training_context_checks_family_pools_on_prepared_rows(tmp_path, monkeyp
     config.trainer.train_batch_size = 2
     config.trainer.rollout_buffer.batch_policy = "full_batch"
     config.trainer.rollout_buffer.max_staleness_steps = 1
-    config.trainer.rollout_buffer.groups_per_family = {"math": 1, "agentic": 1}
+    OmegaConf.update(config, GROUPS_PER_FAMILY_KEY, {"math": 1, "agentic": 1}, force_add=True)
     config.data.sampling.kind = None
     configs = OmegaConf.to_container(config.environment.task_sessions, resolve=True)
     tasks = [
