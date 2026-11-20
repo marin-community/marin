@@ -18,8 +18,7 @@ from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
 from rolloutengine.validation import task_machine_reason
 from skyrl_gym.rollout_specs import is_shell_harness, rollout_spec, shell_harness
 from skyrl_gym.source_task import session_parameters, source_task
-from taskcompendium.convert.nemotron_ultra import blend_component
-from taskcompendium.grader import grader_config
+from taskcompendium.benchmark_environment import benchmark_env_id
 from taskcompendium.models import (
     EnvironmentRequirements,
     NoGrader,
@@ -40,7 +39,6 @@ from skyrl_train.rollouts.group_grader import task_group_grader
 from skyrl_train.task_inputs import TaskInput, TrajectoryMetadata, task_messages
 
 TASKCOMPENDIUM_ENVIRONMENT = "taskcompendium"
-NEMOTRON_ULTRA_DATASET = "nvidia/Nemotron-RL-Ultra-Training-Blends"
 TASK_ROLLOUT_COLUMN = "task_rollout_spec"
 TASK_SPEC_COLUMN = "task_spec"
 TASK_SCHEMA = pa.schema([pa.field(TASK_ROLLOUT_COLUMN, pa.string(), nullable=False)])
@@ -56,20 +54,6 @@ def task_prompt(lowered: TaskRolloutSpec) -> dict:
         "env_class": TASKCOMPENDIUM_ENVIRONMENT if is_shell_harness(lowered.harness) else lowered.harness,
         "data_source": task.source.dataset,
     }
-
-
-def _benchmark_env_id(task: TaskSpec, extras: dict) -> str:
-    explicit_id = task.labels.get("env_id") or extras.get("env_id") or extras.get("env_name")
-    if isinstance(explicit_id, str) and explicit_id:
-        return explicit_id
-    # The blend shares one source dataset across several grading environments.
-    if task.source.dataset == NEMOTRON_ULTRA_DATASET and any(
-        resource.path == "config.json" for resource in task.resources.verifier
-    ):
-        contract = grader_config(task).get("contract")
-        if isinstance(contract, dict) and (contract.get("dataset") or "agent_ref" in contract):
-            return blend_component(contract)
-    return task.source.dataset
 
 
 class TaskDataset(PromptDataset):
@@ -102,6 +86,7 @@ class TaskDataset(PromptDataset):
                 extras = {**session_parameters(lowered.task).extras, **extras}
             extra_info = extras.get("extra_info") or {}
             ultra = extra_info.get("nemotron_ultra")
+            source_env_id = extras.get("env_id") or extras.get("env_name")
             metric_tags = (
                 (f"nemotron_ultra/coverage/{ultra['blend']}/{ultra['agent']}",)
                 if ultra is not None and "blend" in ultra and "agent" in ultra
@@ -119,7 +104,10 @@ class TaskDataset(PromptDataset):
                             teacher_route=extras.get("teacher_route"),
                             metric_tags=metric_tags,
                             task_id=lowered.task.id,
-                            env_id=_benchmark_env_id(lowered.task, extras),
+                            env_id=benchmark_env_id(
+                                lowered.task,
+                                source_env_id=source_env_id if isinstance(source_env_id, str) else None,
+                            ),
                         ),
                         group_grader=task_group_grader(lowered),
                     ),
