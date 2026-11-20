@@ -15,7 +15,8 @@ import torch.nn.functional as F
 from verifyit.tool_call_markup import THINK_CLOSE, TOOL_OPEN, ToolCallStatus, tool_call_regions
 
 from skyrl_train.config.ftpo import FTPOBoundary, FTPOConfig
-from skyrl_train.trajectory_runners.trajectory_reward_shaping import LoopCreditConfig, tail_loop
+from skyrl_train.config.reward_shaping import LoopCreditConfig
+from skyrl_train.trajectory_runners.trajectory_reward_shaping import tail_loop
 
 ROLE_HEADER_START = "<|start_header_id|>"
 ASSISTANT_HEADER = "<|start_header_id|>assistant<|end_header_id|>"

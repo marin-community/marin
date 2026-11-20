@@ -8,12 +8,15 @@ from experiments.post_training.task_curation.environment import Archive, Environ
 
 BASIC_GRADER = Environment(requirements=("tomli-w==1.2.0",))
 PYTHON_GRADER = Environment(requirements=("numpy==2.3.5",))
+# The vendored LiveCodeBench scorer preloads NumPy and pandas for every submission.
+LIVECODEBENCH_GRADER = Environment(requirements=(*PYTHON_GRADER.requirements, "pandas==2.2.2"))
 # Harness Unicode normalization uses NumPy's fixed-width string operations.
 ALIAS_GRADER = Environment(requirements=(*BASIC_GRADER.requirements, "numpy==2.3.5"))
 MATH_GRADER = Environment(
     requirements=("tomli-w==1.2.0", "math-verify==0.9.0", "sympy==1.13.3", "antlr4-python3-runtime==4.11.0")
 )
 MATH_JUDGE_GRADER = Environment(requirements=(*MATH_GRADER.requirements, "openai==2.24.0"))
+JUDGE_GRADER = Environment(requirements=(*BASIC_GRADER.requirements, "openai==2.24.0"))
 
 NLTK_DATA_REVISION = "550b6625bcef1f2abff2ff770a5a0d272c9c6b2a"
 NLTK_DATA_ROOT = "/srv/nltk_data"

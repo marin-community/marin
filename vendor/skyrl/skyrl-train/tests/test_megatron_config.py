@@ -3,7 +3,7 @@
 import sys
 
 from skyrl_train.config.utils import get_default_config
-from skyrl_train.utils.utils import validate_megatron_cfg
+from skyrl_train.config.driver_validation import validate_cfg
 
 
 def test_flash_attention_config_validates_without_fa2(monkeypatch):
@@ -15,4 +15,4 @@ def test_flash_attention_config_validates_without_fa2(monkeypatch):
     monkeypatch.setitem(sys.modules, "flash_attn", None)
 
     # A valid FA3 configuration must not require FA2's separate Python module.
-    assert validate_megatron_cfg(config) is None
+    assert validate_cfg(config) is None
