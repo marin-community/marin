@@ -11,7 +11,9 @@ This achieves about a 90% "real token" rate, compared to like 10% without packin
 """
 import asyncio
 import time
+from collections import deque
 from dataclasses import dataclass
+from itertools import islice
 from typing import Iterable, Literal, Sequence, TypeVar
 
 import haliax as hax
@@ -374,54 +376,45 @@ def _pack_documents_lookahead(
     lens = [[int(v) for v in leaf] for leaf in lengths_leaves]
     allowed = [int(v) for v in max_length_leaves]
 
-    # doubly linked list over remaining (non-dropped) documents; drop_mask is False for dropped docs
-    next_remaining = list(range(1, n_docs + 1))
-    prev_remaining = list(range(-1, n_docs - 1))
-    head = 0
+    remaining = iter(range(n_docs)) if drop_mask is None else (doc for doc in range(n_docs) if drop_mask[doc])
+    pending = deque(islice(remaining, lookahead_window))
 
-    def unlink(doc: int) -> None:
-        nonlocal head
-        prev, next_ = prev_remaining[doc], next_remaining[doc]
-        if prev >= 0:
-            next_remaining[prev] = next_
+    def take(index: int) -> int:
+        if index == 0:
+            doc = pending.popleft()
         else:
-            head = next_
-        if next_ < n_docs:
-            prev_remaining[next_] = prev
-
-    if drop_mask is not None:
-        for doc in range(n_docs):
-            if not drop_mask[doc]:
-                unlink(doc)
+            doc = pending[index]
+            del pending[index]
+        # Refill after every removal so the buffer holds the first window of remaining documents.
+        next_doc = next(remaining, None)
+        if next_doc is not None:
+            pending.append(next_doc)
+        return doc
 
     packs: list[list[int]] = []
-    while head < n_docs:
+    while pending:
+        head = take(0)
         members = [head]
         used = [lens[l][head] for l in range(n_leaves)]
         over_long = any(lens[l][head] > allowed[l] for l in range(n_leaves))
-        unlink(head)
         if not over_long:
             while max_segments_per_example is None or len(members) < max_segments_per_example:
                 # take the first fitting document among up to lookahead_window documents
                 # starting at the frontier
                 taken = -1
-                doc = head
-                for _ in range(lookahead_window):
-                    if doc >= n_docs:
-                        break
-                    fits = all(used[l] + lens[l][doc] <= allowed[l] for l in range(n_leaves)) and not any(
-                        lens[l][doc] > allowed[l] for l in range(n_leaves)
+                for index, doc in enumerate(pending):
+                    fits = all(
+                        used[l] + lens[l][doc] <= allowed[l] and lens[l][doc] <= allowed[l] for l in range(n_leaves)
                     )
                     if fits:
-                        taken = doc
+                        taken = index
                         break
-                    doc = next_remaining[doc]
                 if taken < 0:
                     break
+                doc = take(taken)
                 for l in range(n_leaves):
-                    used[l] += lens[l][taken]
-                members.append(taken)
-                unlink(taken)
+                    used[l] += lens[l][doc]
+                members.append(doc)
         packs.append(members)
     return packs
 

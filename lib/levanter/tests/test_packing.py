@@ -742,6 +742,13 @@ def test_pack_documents_lookahead_basic():
     assert len(lookahead) < len(sequential)
 
 
+def test_pack_documents_lookahead_refills_after_each_take():
+    lengths = np.array([6, 9, 3, 1, 8, 2])
+    # Doc 3 starts beyond the window, but enters it when doc 2 joins the first pack.
+    packs = pack_documents(lengths, 10, lookahead_window=2)
+    assert packs == [[0, 2, 3], [1], [4, 5]]
+
+
 def test_pack_documents_lookahead_default_is_sequential():
     # Without a lookahead the results are contiguous ranges, identical to the packer's
     # historical behavior.
