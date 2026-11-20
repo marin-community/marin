@@ -867,7 +867,7 @@ def test_daytona_provider_timeout_remains_an_infrastructure_error(tmp_path, comm
 @pytest.mark.parametrize("deletion_failure", [False, True])
 def test_daytona_cancellation_during_failed_command_cleanup_remains_cancellation(deletion_failure):
     entered = asyncio.Event()
-    deletion_error = DaytonaConflictError("Sandbox state change in progress", status_code=409)
+    deletion_error = DaytonaError("Failed to remove sandbox", status_code=500)
 
     class BlockedCleanup(LocalProcess):
         async def exec(self, command, **kwargs):
@@ -1016,7 +1016,7 @@ def test_daytona_file_cleanup_failure_closes_machine_and_preserves_primary_error
     primary_failure, cleanup_failure, deletion_failure
 ):
     provider_error = OSError("Provider command failed")
-    deletion_error = DaytonaConflictError("Sandbox state change in progress", status_code=409)
+    deletion_error = DaytonaError("Failed to remove sandbox", status_code=500)
 
     class FailedCleanup(LocalProcess):
         async def exec(self, command, **kwargs):
@@ -1636,19 +1636,26 @@ def test_snapshot_request_interchange_rejects_a_mismatched_name(tmp_path) -> Non
     assert SnapshotRequest.from_dict(spec) == request
 
 
-def test_sandbox_deletion_retries_a_gateway_error(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    "transient",
+    [
+        DaytonaError("Failed to get sandbox: 502 Bad Gateway", status_code=502),
+        DaytonaConflictError("Failed to remove sandbox: Sandbox state change in progress", status_code=409),
+    ],
+)
+def test_sandbox_deletion_retries_a_transient_error(monkeypatch, transient) -> None:
     class FlakyGateway:
         def __init__(self):
-            self.gets = 0
+            self.attempts = 0
             self.deleted = []
 
         async def get(self, name):
-            self.gets += 1
-            if self.gets == 1:
-                raise DaytonaError("Failed to get sandbox: 502 Bad Gateway", status_code=502)
             return SimpleNamespace(name=name)
 
         async def delete(self, sandbox):
+            self.attempts += 1
+            if self.attempts == 1:
+                raise transient
             self.deleted.append(sandbox.name)
 
     async def no_wait(delay):
@@ -1660,3 +1667,25 @@ def test_sandbox_deletion_retries_a_gateway_error(monkeypatch) -> None:
     asyncio.run(_delete_named_sandbox(client, "fixture"))
 
     assert client.deleted == ["fixture"]
+
+
+def test_sandbox_deletion_reports_a_conflict_that_outlasts_the_deadline(monkeypatch) -> None:
+    conflict = DaytonaConflictError("Failed to remove sandbox: Sandbox state change in progress", status_code=409)
+
+    class StuckSandbox:
+        async def get(self, name):
+            return SimpleNamespace(name=name)
+
+        async def delete(self, sandbox):
+            raise conflict
+
+    async def short_wait(delay):
+        await asyncio.sleep(0.01)
+
+    monkeypatch.setattr("shellbox.backends.daytona.machine.INTERRUPT_TIMEOUT", 0.1)
+    monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", short_wait)
+
+    with pytest.raises(DaytonaConflictError) as caught:
+        asyncio.run(_delete_named_sandbox(StuckSandbox(), "fixture"))
+
+    assert caught.value is conflict
