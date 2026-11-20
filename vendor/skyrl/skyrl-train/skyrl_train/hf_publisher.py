@@ -3,18 +3,40 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from glob import escape
 from pathlib import Path, PurePosixPath
 
 from huggingface_hub import HfApi, RepoFile
+from loguru import logger
 
+from marinskyrl.checkpoint_paths import policy_export_path
 from marinskyrl.hf_model import hugging_face_hub_online
 from marinskyrl.hugging_face_retry import call_with_hugging_face_retry
 from marinskyrl.model_manifest import MODEL_MANIFEST_FILENAME, ModelManifest, ModelManifestFile, sha256_file
 from marinskyrl.resource_locator import join_resource_path
-from skyrl_train.hf_export_schema import DEFAULT_HF_HUB_REVISION, DEFAULT_HF_UPLOAD_MODE, HFUploadMode
+from skyrl_train.hf_export_schema import DEFAULT_HF_HUB_REVISION, DEFAULT_HF_UPLOAD_MODE, HFExportRequest, HFUploadMode
+from skyrl_train.hf_model_io import verify_completed_hf_model_export
 from skyrl_train.io import io
+
+
+def publish_verified_hf_export(request: HFExportRequest, staging_dir: str) -> None:
+    """Upload an object-store export from a CPU job without loading model tensors."""
+    if request.hf_hub_repo_id is None:
+        raise ValueError("Hub publication requires hf_hub_repo_id")
+    export_path = policy_export_path(request.export_path, request.step)
+    verify_completed_hf_model_export(export_path)
+    started = time.monotonic()
+    logger.info("Starting Hub publication of {} to {}", export_path, request.hf_hub_repo_id)
+    HuggingFacePublisher(
+        repo_id=request.hf_hub_repo_id,
+        private=request.hf_hub_private,
+        revision=request.hf_hub_revision,
+        upload_mode=request.hf_upload_mode,
+        staging_dir=staging_dir,
+    ).publish(export_path, request.step)
+    logger.info("Hub publication completed in {:.3f} seconds", time.monotonic() - started)
 
 
 @dataclass(frozen=True)
@@ -25,6 +47,7 @@ class HuggingFacePublisher:
     private: bool
     revision: str = DEFAULT_HF_HUB_REVISION
     upload_mode: HFUploadMode = DEFAULT_HF_UPLOAD_MODE
+    staging_dir: str | None = None
 
     def publish(self, export_path: str, step: int) -> None:
         if not io.exists(export_path):
@@ -50,7 +73,10 @@ class HuggingFacePublisher:
                 raise ValueError(
                     f"Hugging Face repository {self.repo_id} visibility differs from hf_hub_private={self.private}"
                 )
-            with io.local_read_dir(export_path) as local_dir:
+            staging_started = time.monotonic()
+            with io.local_read_dir(export_path, staging_dir=self.staging_dir) as local_dir:
+                upload_started = time.monotonic()
+                logger.info("Hub publication staging completed in {:.3f} seconds", upload_started - staging_started)
                 root = Path(local_dir)
                 marker = root / MODEL_MANIFEST_FILENAME
                 manifest = ModelManifest.from_mapping(json.loads(marker.read_bytes()), str(marker))
@@ -63,6 +89,7 @@ class HuggingFacePublisher:
                     self._upload(
                         api, root, files, f"checkpoints/step_{step}", f"Archive checkpoint at step {step}"
                     )
+                logger.info("Hub upload completed in {:.3f} seconds", time.monotonic() - upload_started)
 
     def _upload(
         self,

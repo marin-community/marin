@@ -6,12 +6,12 @@ from types import SimpleNamespace
 import pytest
 import torch
 from huggingface_hub import RepoFile
-from omegaconf import OmegaConf
 from safetensors.torch import save_file
 
 from marinskyrl.model_manifest import MODEL_MANIFEST_FILENAME, write_local_model_manifest
-from skyrl_train.checkpoint_exporter import CheckpointExportPlan, CheckpointExporter, RayPolicyExportWorkers, hub_publisher
-from skyrl_train.hf_export_schema import HFUploadMode
+from skyrl_train.checkpoint_exporter import CheckpointExportPlan, CheckpointExporter, RayPolicyExportWorkers
+from skyrl_train.hf_export_schema import HFExportRequest, HFUploadMode
+from skyrl_train.hf_publisher import publish_verified_hf_export
 from skyrl_train.hf_model_io import verify_hf_model_export
 
 
@@ -117,14 +117,6 @@ class FakeHubApi:
         return str(target)
 
 
-class FakePublisher:
-    def __init__(self):
-        self.calls = []
-
-    def publish(self, export_path: str, step: int) -> None:
-        self.calls.append((export_path, step))
-
-
 def _plan(tmp_path: Path, step: int = 12) -> CheckpointExportPlan:
     checkpoint_path = tmp_path / "checkpoints" / f"global_step_{step}"
     checkpoint_path.mkdir(parents=True)
@@ -138,14 +130,12 @@ def _plan(tmp_path: Path, step: int = 12) -> CheckpointExportPlan:
     )
 
 
-def test_checkpoint_exporter_converts_only_the_policy_model(tmp_path, monkeypatch):
+def test_checkpoint_exporter_converts_only_the_policy_model(tmp_path):
     plan = _plan(tmp_path)
     workers = FakePolicyExportWorkers()
     tokenizer = object()
 
-    monkeypatch.setattr("skyrl_train.hf_publisher.HfApi", lambda: pytest.fail("publication requires a repository ID"))
-    publisher = hub_publisher(OmegaConf.create({"checkpoint_export": {}}))
-    result = CheckpointExporter(plan, workers, tokenizer, publisher=publisher).run()
+    result = CheckpointExporter(plan, workers, tokenizer).run()
 
     assert result.step == 12
     assert result.export_path == str(tmp_path / "exports" / "global_step_12" / "policy")
@@ -176,13 +166,10 @@ def test_checkpoint_exporter_rejects_a_mismatched_checkpoint_marker(tmp_path):
 )
 def test_checkpoint_exporter_rejects_incomplete_conversion_result(tmp_path, worker_type, error):
     workers = worker_type()
-    publisher = FakePublisher()
-
     with pytest.raises(RuntimeError, match=error):
-        CheckpointExporter(_plan(tmp_path), workers, object(), publisher).run()
+        CheckpointExporter(_plan(tmp_path), workers, object()).run()
 
     assert workers.closed
-    assert publisher.calls == []
 
 
 def test_unsharded_cloud_export_verification_does_not_head_optional_index(monkeypatch):
@@ -250,7 +237,7 @@ def test_ray_policy_export_workers_loads_model_state_without_training_state():
             False, "differs from the model manifest",
         ),
         pytest.param(
-            None, None, HFUploadMode.LATEST, None, True, "publication requires a model manifest", id="missing-manifest"
+            None, None, HFUploadMode.LATEST, None, True, "HF export lacks completion markers", id="missing-manifest"
         ),
     ],
 )
@@ -269,22 +256,31 @@ def test_hf_publisher_checks_visibility_and_uploaded_files(
     api = FakeHubApi(tmp_path / "downloads", visibility, corrupt)
     monkeypatch.setattr("skyrl_train.hf_publisher.HfApi", lambda: api)
     monkeypatch.setenv("HF_HUB_OFFLINE", "1")
-    settings = {"hf_hub_repo_id": "org/model", "hf_upload_mode": upload_mode.value}
-    if requested is not None:
-        settings["hf_hub_private"] = requested
-    publisher = hub_publisher(OmegaConf.create({"checkpoint_export": settings}))
-    assert publisher is not None
-
+    visibility_request = {} if requested is None else {"hf_hub_private": requested}
+    request = HFExportRequest(
+        step=12,
+        checkpoint_base_path=str(tmp_path / "checkpoints"),
+        checkpoint_path=str(tmp_path / "checkpoints" / "global_step_12"),
+        export_path=str(tmp_path / "exports"),
+        model_path="org/model",
+        num_nodes=1,
+        gpus_per_node=1,
+        hf_hub_repo_id="org/model",
+        hf_upload_mode=upload_mode,
+        **visibility_request,
+    )
+    staging_dir = str(tmp_path / "staging")
     if error:
-        with pytest.raises(ValueError, match=error):
-            publisher.publish(str(export_path), step=12)
+        error_type = RuntimeError if missing_manifest else ValueError
+        with pytest.raises(error_type, match=error):
+            publish_verified_hf_export(request, staging_dir)
         if corrupt is None:
             assert not api.commits
         if missing_manifest:
             assert api.private is None
         return
 
-    publisher.publish(str(export_path), step=12)
+    publish_verified_hf_export(request, staging_dir)
 
     assert api.private is (requested is True)
     paths = [file.path for file in manifest.files] + [MODEL_MANIFEST_FILENAME]
