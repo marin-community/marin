@@ -91,6 +91,8 @@ class InstalledAgentRuntime:
         eval_daytona_connection: DaytonaConnection,
         judge: JudgeConnection | None,
     ):
+        if settings.judge_model is not None and judge is None:
+            raise ValueError("Installed-agent judge_model requires a remote_judge connection")
         self.settings = settings
         self.judge = judge
         self.backend = backend
@@ -150,17 +152,10 @@ class InstalledAgentRuntime:
         finally:
             await publish_attempt(trial_dir, destination)
 
-    def original_harness(
-        self, lowered: TaskRolloutSpec, session_id: str, settings: HarborTaskSettings, phase: str
-    ) -> HarborTrialHarness:
-        """Bind a full Harbor trial to the phase's deadlines and environment settings."""
-        if lowered.limits.attempt_timeout is None:
-            raise ValueError("Full Harbor trials require a finite attempt timeout for the inference capability")
-        if settings.environment.type is not EnvironmentType.DAYTONA:
-            raise ValueError(
-                "Original Harbor trials require Shellbox Daytona; engine-owned Docker "
-                "machines use the borrowed-machine harness"
-            )
+    def original_trial_environment(
+        self, lowered: TaskRolloutSpec, settings: HarborTaskSettings, phase: str
+    ) -> tuple[TrialEnvironmentConfig, HostCapabilities]:
+        """Resolve phase-specific provisioning and the original task's model relay."""
         kwargs = dict(settings.environment.kwargs)
         kwargs.pop("api_key_env", None)
         kwargs.pop("eval_api_key_env", None)
@@ -192,6 +187,20 @@ class InstalledAgentRuntime:
             protected_values=protected,
         )
         environment = TrialEnvironmentConfig.model_validate({**settings.environment.model_dump(), "kwargs": kwargs})
+        return environment, host_capabilities
+
+    def original_harness(
+        self, lowered: TaskRolloutSpec, session_id: str, settings: HarborTaskSettings, phase: str
+    ) -> HarborTrialHarness:
+        """Bind a full Harbor trial to the phase's deadlines and environment settings."""
+        if lowered.limits.attempt_timeout is None:
+            raise ValueError("Full Harbor trials require a finite attempt timeout for the inference capability")
+        if settings.environment.type is not EnvironmentType.DAYTONA:
+            raise ValueError(
+                "Original Harbor trials require Shellbox Daytona; engine-owned Docker "
+                "machines use the borrowed-machine harness"
+            )
+        environment, host_capabilities = self.original_trial_environment(lowered, settings, phase)
         agent = self.settings.agent.model_copy(
             update={
                 "override_timeout_sec": lowered.limits.total_turn_timeout or self.settings.run_timeout,

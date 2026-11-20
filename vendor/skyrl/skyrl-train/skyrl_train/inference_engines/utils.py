@@ -14,7 +14,6 @@ from typing import Tuple
 import ray
 from ray.actor import ActorHandle
 from ray.util.placement_group import PlacementGroupSchedulingStrategy
-from iris.cluster.worker.port_allocator import DEFAULT_TASK_PORT_RANGE
 
 VLLM_DATA_PARALLEL_MASTER_PORT_COUNT = 5
 
@@ -199,6 +198,7 @@ def aggregate_completion_usage_info(
 _RENDEZVOUS_PORT_START = 10_002  # Iris controller and worker RPC use 10000/10001.
 _TCP_PORT_STOP = 65_536
 _EPHEMERAL_PORT_RANGE_PATH = Path("/proc/sys/net/ipv4/ip_local_port_range")
+_RESERVED_PORTS_PATH = Path("/proc/sys/net/ipv4/ip_local_reserved_ports")
 
 
 def get_pg_bundle_node_ips(placement_group, pg_indices: Collection[int]) -> List[str]:
@@ -222,21 +222,20 @@ def get_pg_bundle_node_ips(placement_group, pg_indices: Collection[int]) -> List
 
 
 def _reserve_available_rendezvous_ports(port_count: int, excluded_ports: Collection[int] = ()) -> list[socket.socket]:
-    """Hold listeners outside the node's ephemeral and Iris named-port ranges.
-
-    The kernel must not assign an outgoing connection one of these ports during
-    the handoff to vLLM. Iris can widen its ephemeral range below Linux's default
-    floor, so a fixed 20000–29999 pool is unsafe. Bind each candidate once and
-    keep that same socket; other inference gangs cannot reserve it concurrently.
-    """
+    """Return bound sockets outside kernel ephemeral, reserved, and excluded ports."""
     ephemeral_start, ephemeral_end = map(int, _EPHEMERAL_PORT_RANGE_PATH.read_text().split())
-    task_start, task_stop = DEFAULT_TASK_PORT_RANGE
     excluded = set(excluded_ports)
+    for span in _RESERVED_PORTS_PATH.read_text().strip().split(","):
+        if not span:
+            continue
+        start, separator, end = span.partition("-")
+        excluded.update(range(int(start), int(end if separator else start) + 1))
+    # Outbound sockets must not take these ports during the vLLM handoff.
+    # Read the actual node range: Iris can lower Linux's default ephemeral floor.
     candidates = [
         port
         for port in range(_RENDEZVOUS_PORT_START, _TCP_PORT_STOP)
         if not ephemeral_start <= port <= ephemeral_end
-        and not task_start <= port < task_stop
         and port not in excluded
     ]
     random.shuffle(candidates)
@@ -256,7 +255,7 @@ def _reserve_available_rendezvous_ports(port_count: int, excluded_ports: Collect
                 return sockets
         raise RuntimeError(
             f"Cannot reserve {port_count} rendezvous ports outside ephemeral range "
-            f"{ephemeral_start}–{ephemeral_end} and Iris named-port range {task_start}–{task_stop - 1}"
+            f"{ephemeral_start}–{ephemeral_end}, kernel reserved ports, and caller exclusions"
         )
     except Exception:
         for reserved in sockets:
@@ -266,7 +265,7 @@ def _reserve_available_rendezvous_ports(port_count: int, excluded_ports: Collect
 
 @ray.remote(num_cpus=0, num_gpus=0)
 class RendezvousPortReservation:
-    """Hold node-local listener ports until the vLLM coordinator starts."""
+    """Hold node-local bound sockets until the vLLM coordinator starts."""
 
     def __init__(self, port_count: int, excluded_ports: Collection[int]):
         self._sockets = _reserve_available_rendezvous_ports(port_count, excluded_ports)
