@@ -17,6 +17,77 @@ window. Start with a plan to confirm the inputs, allocation and output path.
 | `train-long` | Full training and checkpoint quality | 40 H100s, 100 updates by default, hours to days. Check the plan and use the reported GPU-hours for cost. | EvalLite's 100 active tasks at step 0 and every 10 updates. Evaluation coverage invariants, without a calibrated control comparison. | Train a release candidate with checkpoint recovery and durable HF export. |
 | `train-long-harbor` | Full training with agentic checkpoint evaluation | 40 H100s, 100 updates by default, hours to days plus Harbor sandbox costs. | EvalLite plus 90 Harbor trials at each checkpoint evaluation. Coverage invariants without a calibrated control comparison. | Qualify current training weights on BFCL, SWE-bench Verified and OpenThoughts-TBLite. Requires the [Daytona evaluation account and sandbox capacity](#harbor-evaluation). |
 
+## Mochi and mixed-workload Snowball presets
+
+Mochi RL starts from the completed production SFT export, which supplies the weights and tokenizer.
+Build that export first if it is absent, or use `--init NAME@VERSION` with another published model.
+Mochi’s medium presets run two updates and its long presets run up to 10,000 updates.
+
+| Mochi preset | When to use it | Layout | Checkpoints and export |
+| --- | --- | --- | --- |
+| `train-medium` | Short one-turn training check. | 15 nodes × 4 GB200s, one rack | Native checkpoint, HF export disabled. |
+| `train-medium-agentic` | Short mixed run with tool-using and one-turn tasks. | 15 nodes × 4 GB200s, one rack | Native checkpoint, HF export disabled. |
+| `train-long` | One-turn training with held-out evaluation. | 15 nodes × 4 GB200s, one rack | Rolling native recovery and an HF export of the best eligible checkpoint. |
+| `train-long-3rack` | One-turn training with dedicated racks for training and inference. | 48 nodes × 4 GB200s, three racks | Rolling native recovery and an HF export of the best eligible checkpoint. |
+| `train-long-agentic` | Mixed training and held-out evaluation with a single-rack allocation. | 15 nodes × 4 GB200s, one rack | Rolling native recovery and an HF export of the best eligible checkpoint. |
+| `train-long-agentic-3rack` | Mixed training and held-out evaluation across three racks. | 48 nodes × 4 GB200s, three racks | Rolling native recovery and an HF export of the best eligible checkpoint. |
+
+- A reduced one-turn run used about 83.4 GB200-hours for two updates. [One-turn run](https://iris.oa.dev/#/job/%2Fatqamar%2Fusers-ahmad-checkpoints-mochi-rl-train-medium-ccd0098764-in-f77b2799-2026.11.19.1-coordinator-5caf5432)
+- A three-update mixed run used 95.5 GB200-hours. [Mixed run](https://iris.oa.dev/#/job/%2Fatqamar%2Fusers-ahmad-checkpoints-mochi-rl-train-medium-agentic-42fe33329d-in-03b184b7-2026.11.19.1-coordinator-c7f0249f)
+- A one-update resume used 69.0 GB200-hours. [Resume run](https://iris.oa.dev/#/job/%2Fatqamar%2Fusers-ahmad-checkpoints-mochi-rl-train-medium-agentic-f546f24c97-in-f59a7432-resume-step-3-2026.11.19.1-coordinator-698346c2)
+
+The mixed measurements use the v3 selection. A native Mochi checkpoint occupied 4.3 TB, and saves
+took 16 to 26 minutes on the single-rack layout. [Short mixed save](https://iris.oa.dev/#/job/%2Fatqamar%2Fusers-ahmad-checkpoints-mochi-rl-train-medium-agentic-42fe33329d-in-9adaf2cd-2026.11.19.1-coordinator-2c4b43b1) · [Resume save](https://iris.oa.dev/#/job/%2Fatqamar%2Fusers-ahmad-checkpoints-mochi-rl-train-medium-agentic-f546f24c97-in-f59a7432-resume-step-3-2026.11.19.1-coordinator-698346c2)
+
+| Snowball preset | When to use it | Layout | Checkpoints and export |
+| --- | --- | --- | --- |
+| `train-medium-agentic` | Ten updates with held-out evaluation on one inference engine. | 11 nodes × 8 H100s | Rolling native recovery and an HF export of the best eligible checkpoint. |
+| `train-long-agentic` | Up to 10,000 updates with held-out evaluation on 22 inference engines. | 32 nodes × 8 H100s | Rolling native recovery and an HF export of the best eligible checkpoint. |
+
+A five-node smoke used 12.7 H100-hours for one update with the v3 selection and a custom layout.
+[Snowball smoke](https://iris.oa.dev/#/job/%2Fatqamar%2Fusers-ahmad-checkpoints-snowball-rl-train-medium-agentic-0b68f259dc-in-3f9941b9-2026.11.19.1-coordinator-7982cea2)
+
+### Task selection and native resume
+
+Pass `--tasks users/ahmad/snowball-100k-agentic@2026.11.19.2` for a mixed preset. The versioned
+selection contains the admitted SWE v4 agent tasks and the one-turn training rows. Both task
+families must be present, and training rows must be disjoint from the held-out evaluation.
+
+Use `--resume NAME@VERSION` on a checkpointing preset to restore the latest committed native
+checkpoint and its original model identity from a finished run. The source needs an immutable
+version and a checkpoint still present in storage. `--init` starts from published
+model weights and is mutually exclusive with `--resume`. Set `SOURCE_RUN` to a finished Mochi
+run’s artifact name and version, as printed in its plan under `runs` as `name` and `version`.
+
+```bash
+uv run python -m experiments.post_training.mochi_rl \
+  --preset train-medium-agentic --version 2026.11.19.1 \
+  --tasks users/ahmad/snowball-100k-agentic@2026.11.19.2 --resume "$SOURCE_RUN" --plan
+```
+
+### Compose SFT and RL
+
+Set `MARIN_PREFIX` to the RL layout’s storage prefix, which both stages use. The examples print
+the plans. Replace `--plan` with `--run` to build the SFT export and pass it as the RL initializer.
+The launcher requires `--version`, and the chosen preset supplies its artifact revision.
+
+```bash
+MARIN_PREFIX=s3://marin-us-east-08a/marin \
+  uv run python -m experiments.post_training.snowball_sft_then_rl \
+  --preset train-medium-agentic --version 2026.11.19.1 \
+  --tasks users/ahmad/snowball-100k-agentic@2026.11.19.2 --plan
+MARIN_PREFIX=s3://marin-us-east-02a/marin \
+  uv run python -m experiments.post_training.mochi_sft_then_rl \
+  --preset train-medium --version 2026.11.19.1 --plan
+```
+
+### Convert released agent tasks
+
+Run `uv run python -m experiments.post_training.task_curation.swe_verified_release` from a clean
+commit to materialize the declared Harbor bootstrap in each released TaskSpec's `setup_commands`.
+The converter checks the pinned input and writes versioned Parquet plus a manifest of source,
+output, commit, and per-row digests. Pin the derived file and its digest in the mixed selection recipe.
+
 ## The loop
 
 1. [Curate tasks](../references/task-curation.md#run-a-campaign) into an admitted corpus.
@@ -60,10 +131,10 @@ coordinator or unavailable required verdict, and 4 for refusal before execution.
 Set `WANDB_API_KEY` before submission. `WANDB_ENTITY` selects the team and defaults to
 `marin-community`. Snowball logs to the `marin-snowball-rl` project.
 
-Short presets use eight H100s; training presets use 40.
-East is `cw-us-east-02a`. The 40-H100 layout has 32 policy GPUs and eight engine GPUs,
+For the Snowball presets in the first table, short presets use eight H100s and training
+presets use 40. East is `cw-us-east-02a`. The 40-H100 layout has 32 policy GPUs and eight engine GPUs,
 128 prompts × four answers and a 24,576-token window. Natural replies allow 8,192 tokens.
-All training presets use staleness 2 and TIS. Speed-long has no evaluation,
+These training presets use staleness 2 and TIS. Speed-long has no evaluation,
 checkpoints or export; learner and engine token rates are descriptive telemetry.
 
 ## Dashboard publication
