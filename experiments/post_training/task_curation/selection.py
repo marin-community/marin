@@ -4,6 +4,7 @@
 """Select training and evaluation task sets from curated and released task files."""
 
 import hashlib
+import io
 import json
 from collections import Counter
 from collections.abc import Iterator, Mapping
@@ -28,7 +29,7 @@ from finestore.rl.strata import (
     read_selection_manifest,
 )
 from finestore.schema import arrow_schema
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import Artifact, is_mutable_version, validate_path_segment, validate_version
 from marin.execution.fingerprint import register_fingerprint
 from marin.execution.lazy import ArtifactStep, StepContext
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt
@@ -38,6 +39,7 @@ from taskcompendium.convert.structure_closure import structure_closure_task
 from taskcompendium.evaluation.corpus import EvaluationCase, evaluation_cases
 from taskcompendium.evaluation.spec import ChatGeneration, TextGeneration
 from taskcompendium.grader import grader_config
+from taskcompendium.grading_result import Outcome
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.importers.evalchemy.assets.code_protocol import mbpp_example
 from taskcompendium.models import (
@@ -59,6 +61,7 @@ from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
 from verifyit.json_objects import unique_object
 from zephyr.writers import write_parquet_file
 
+from experiments.post_training.task_curation import CANONICAL_ARTIFACT_ROOT
 from experiments.post_training.task_curation.curation_catalog import MANIFEST_FILENAME
 
 SELECTION_PREFIX = "rl-data/task-selection"
@@ -68,6 +71,8 @@ STRUCTURAL_FAMILY = "structural"
 PARQUET_BATCH_ROWS = 256
 # Answers per task in the initializer run that measures panel pass rates.
 PASS_RATE_ATTEMPTS = 8
+MIN_PROBED_TASKS = 50
+MIN_GRADED_SHARE = 0.9
 TRAIN_FILENAME = "train.parquet"
 VALIDATION_FILENAME = "validation.parquet"
 SUMMARY_FILENAME = "summary.json"
@@ -127,12 +132,20 @@ class HeldoutSource(BaseModel):
     format: PanelFormat
 
 
+class ReleaseAdmission(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    uri: str
+    sha256: str
+
+
 class ReleasedSource(HeldoutSource):
     format: Literal[PanelFormat.TASK_SPEC]
     family: str
     sha256: str
     agentic: bool
     license: str
+    admission: ReleaseAdmission | None = Field(default=None, exclude_if=lambda admission: admission is None)
 
 
 class SelectionRecipe(BaseModel):
@@ -429,10 +442,51 @@ def _admitted_records(source: SelectionInput) -> Iterator[tuple[TaskSpec, str]]:
             yield TaskSpec.model_validate_json(task_json), task_json
 
 
+def _check_release_admission(source: ReleasedSource, released: set[tuple[str, str]]) -> None:
+    admission = source.admission
+    if admission is None:
+        raise ValueError(f"Released source requires admission evidence: {source.uri}")
+    contents = StoragePath(admission.uri).read_bytes()
+    if hashlib.sha256(contents).hexdigest() != admission.sha256:
+        raise ValueError(f"Admission record SHA-256 mismatch: {admission.uri}")
+    attempts = pq.read_table(
+        io.BytesIO(contents), columns=["selection", "task_id", "task_digest", "outcome"]
+    ).to_pylist()
+    selections = {attempt["selection"] for attempt in attempts}
+    if len(selections) != 1 or None in selections:
+        raise ValueError("Admission attempts must name one versioned selection")
+    (identity,) = selections
+    name, _, version = identity.rpartition("@")
+    validate_path_segment("selection name", name)
+    validate_version(version)
+    if is_mutable_version(version):
+        raise ValueError("Admission requires an immutable probe selection")
+    summary = StoragePath(CANONICAL_ARTIFACT_ROOT) / SELECTION_PREFIX / name / version / SUMMARY_FILENAME
+    recipe = json.loads(summary.read_text())["recipe"]
+    # The digest identifies the released Parquet independently of where it is stored.
+    if not any(pin.get("sha256") == source.sha256 for pin in recipe.get("released", ())):
+        raise ValueError(f"Probe selection {identity} does not pin released source {source.uri}")
+    observed = set()
+    graded = set()
+    for attempt in attempts:
+        key = (attempt["task_id"], attempt["task_digest"])
+        if key not in released:
+            continue
+        observed.add(key)
+        if attempt["outcome"] == Outcome.GRADED:
+            graded.add(key)
+    if len(observed) < MIN_PROBED_TASKS or len(graded) < MIN_GRADED_SHARE * len(observed):
+        raise ValueError(
+            f"Released source requires at least {MIN_PROBED_TASKS} probed tasks with "
+            f"{MIN_GRADED_SHARE:.0%} graded. Found {len(graded)} of {len(observed)} graded: {source.uri}"
+        )
+
+
 def _released_records(source: ReleasedSource) -> Iterator[tuple[TaskSpec, str]]:
     with StoragePath(source.uri).open("rb") as stream:
         if hashlib.file_digest(stream, "sha256").hexdigest() != source.sha256:
             raise ValueError(f"Released source SHA-256 mismatch: {source.uri}")
+    released = set()
     for task in _panel_source_tasks(source, {}):
         tagged = "agentic" in task.tags
         if tagged and not source.agentic:
@@ -440,7 +494,9 @@ def _released_records(source: ReleasedSource) -> Iterator[tuple[TaskSpec, str]]:
         published = task
         if source.agentic and not tagged:
             published = task.model_copy(update={"tags": (*task.tags, "agentic")})
+        released.add((published.id, canonical_sha256(published.model_dump(mode="json"))))
         yield task, published.model_dump_json()
+    _check_release_admission(source, released)
 
 
 def _grader_environments(sources: tuple[SelectionInput, ...]) -> dict[str, EnvironmentRequirements]:

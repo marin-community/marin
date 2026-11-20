@@ -533,7 +533,6 @@ def _gate_config(launch: dict, recorded: RecordedLaunch | None = None) -> dict[s
     config = _comparison_document(launch, recorded)
     config["iris"].pop("priority", None)
     config["run"].pop("export_hf", None)
-    config["skyrl"].pop("checkpoint_export", None)
     trainer = config["skyrl"]["trainer"]
     for field in (
         "checkpoint_retention",

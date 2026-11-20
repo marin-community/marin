@@ -75,6 +75,7 @@ from experiments.post_training.rl_measurements import (
     run_inputs,
 )
 from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME
+from experiments.post_training.task_curation.task_health import task_health_step
 
 _WANDB_ENTITY_ENV = "WANDB_ENTITY"
 _FAILED_RUN_STATES = {JobState.FAILED, JobState.KILLED, JobState.WORKER_FAILED, JobState.UNSCHEDULABLE}
@@ -502,7 +503,6 @@ def _run_command(
     table: presets.ModelPresets,
     argv: tuple[str, ...],
     entry_module: str | None,
-    then: Callable[[SkyRLPolicyModel], tuple[ArtifactStep, ...]] | None,
     function: Callable,
 ) -> click.Command:
     @wraps(function)
@@ -515,7 +515,8 @@ def _run_command(
         context = click.get_current_context()
         options = context.params
         preset = context.meta["rl_preset"]
-        rl_handles = handles[:1] if then is not None else handles
+        count = context.meta["rl_handle_count"]
+        rl_handles = handles[:count]
         if get_job_info() is None:
             module = entry_module
             if module is None:
@@ -548,8 +549,8 @@ def _run_command(
         else:
             validate_coordinator_graph(handles)
             _run_graph(rl_handles, max_concurrent)
-            if then is not None and handles[1:]:
-                build_artifacts(*handles[1:], max_concurrent=max_concurrent)
+            if following := handles[count:]:
+                build_artifacts(*following, max_concurrent=max_concurrent)
             job = None
         if options["wait"] and job is not None:
             _wait_for_run(job, rl_handles, preset, table=table, service_url=options["url"])
@@ -569,7 +570,7 @@ def command(
     entry_module: str | None = None,
     forward_env: tuple[str, ...] = (),
 ) -> click.Command:
-    @partial(_run_command, table, argv, entry_module, then)
+    @partial(_run_command, table, argv, entry_module)
     @click.option("--issue", type=click.IntRange(min=1), help="GitHub experiment issue for this launch.")
     @click.option("--plan", is_flag=True, help="Print the plan without submission (the default).")
     @click.option(
@@ -758,7 +759,11 @@ def command(
         if not do_run and "verdict" in snapshot:
             raise click.exceptions.Exit(EXIT_CODES[snapshot["verdict"]])
         following = then(SkyRLPolicyModel(run.runs[0])) if then is not None else ()
-        return (*run.runs, *((run.gate,) if run.gate else ()), *following)
+        if preset.batch_mix is not None:
+            following = (*following, *(task_health_step(step) for step in run.runs))
+        rl_handles = (*run.runs, *((run.gate,) if run.gate else ()))
+        click.get_current_context().meta["rl_handle_count"] = len(rl_handles)
+        return (*rl_handles, *following)
 
     if sft_presets is not None:
         run_command.params.append(

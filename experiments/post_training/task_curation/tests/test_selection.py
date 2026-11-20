@@ -20,6 +20,7 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.answers import source_evidence
 from taskcompendium.evaluation.corpus import evaluation_cases
 from taskcompendium.grader import verifyit_package
+from taskcompendium.grading_result import Outcome
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import (
     AnswerType,
@@ -47,6 +48,7 @@ from experiments.evaluation.benchmarks.reasoning import sources as reasoning_sou
 from experiments.post_training.rl_compose import sampled_tasks_step
 from experiments.post_training.rl_scoring import EvalLiteVersionScore, score_eval_lite_version
 from experiments.post_training.rl_tests.fixtures import answer, evaluation_task_rows
+from experiments.post_training.task_curation import selection as selection_module
 from experiments.post_training.task_curation.campaign import error_chain
 from experiments.post_training.task_curation.datasets.nemo_tool_calls import sources as tool_call_sources
 from experiments.post_training.task_curation.datasets.nemotron_ultra.components import BLENDS
@@ -68,6 +70,7 @@ from experiments.post_training.task_curation.selection import (
     GraderKind,
     HeldoutSource,
     PanelFormat,
+    ReleaseAdmission,
     ReleasedSource,
     SelectionRecipe,
     eval_lite_step,
@@ -364,6 +367,30 @@ def released_training(path: Path, *tasks: TaskSpec) -> ReleasedSource:
     )
 
 
+def released_probe(root, release, tasks, *, graded, pin=True):
+    name, version = "probe", "2026.11.18.1"
+    selection = root / selection_module.SELECTION_PREFIX / name / version
+    selection.mkdir(parents=True)
+    (selection / "summary.json").write_text(
+        json.dumps({"recipe": {"released": [{"sha256": release.sha256}] if pin else []}})
+    )
+    rows = []
+    for index, task in enumerate(tasks):
+        tags = task.tags if "agentic" in task.tags else (*task.tags, "agentic")
+        task = task.model_copy(update={"tags": tags})
+        rows.append(
+            {
+                "selection": f"{name}@{version}",
+                "task_id": task.id,
+                "task_digest": canonical_sha256(task.model_dump(mode="json")),
+                "outcome": Outcome.GRADED if index < graded else Outcome.INFRA_ERROR,
+            }
+        )
+    attempts = root / "attempts.parquet"
+    pq.write_table(pa.Table.from_pylist(rows), attempts)
+    return ReleaseAdmission(uri=str(attempts), sha256=hashlib.sha256(attempts.read_bytes()).hexdigest())
+
+
 def harness_task(tags=("harbor",)) -> TaskSpec:
     return source_task("agent-task", dataset="long-loop-smartie-swesmith").model_copy(
         update={"grader": NoGrader(reason="The harness grades the completed trial"), "tags": tags}
@@ -446,11 +473,15 @@ def test_sealed_swe_conversion_preserves_rows_and_records_hashes(tmp_path, setup
     assert convert() == manifest
 
 
-def test_selection_mixes_released_and_curated_tasks(tmp_path):
+def test_selection_mixes_released_and_curated_tasks(tmp_path, monkeypatch):
+    monkeypatch.setattr(selection_module, "CANONICAL_ARTIFACT_ROOT", str(tmp_path))
+    monkeypatch.setattr(selection_module, "MIN_PROBED_TASKS", 3)
     repeated = source_task("evaluation-overlap")
     one_turn_task = source_task("one-turn")
     alias = one_turn_task.model_copy(update={"id": "cross-source-alias"})
-    release = released_training(tmp_path / "release.parquet", harness_task(), repeated, alias)
+    tasks = (harness_task(), repeated, alias)
+    release = released_training(tmp_path / "release.parquet", *tasks)
+    release = release.model_copy(update={"admission": released_probe(tmp_path, release, tasks, graded=3)})
     heldout = source_task("validation", dataset="structure-closure")
     one_turn = "fixture:first"
     settings = released_recipe(
@@ -518,6 +549,34 @@ def test_selection_refuses_invalid_released_tasks(tmp_path, fault, message):
     with pytest.raises(RuntimeError) as error:
         run(step)
     assert message in error_chain(error.value)
+    assert not (Path(step.path()) / TRAIN_FILENAME).exists()
+
+
+@pytest.mark.parametrize(
+    ("fault", "error"),
+    [
+        ("missing", "requires admission evidence"),
+        ("hash", "Admission record SHA-256 mismatch"),
+        ("pin", "does not pin released source"),
+        ("size", "Found 49 of 49 graded"),
+        ("coverage", "Found 44 of 50 graded"),
+    ],
+)
+def test_selection_requires_matching_released_task_admission(tmp_path, monkeypatch, fault, error):
+    monkeypatch.setattr(selection_module, "CANONICAL_ARTIFACT_ROOT", str(tmp_path))
+    tasks = tuple(source_task(f"probed-{index}") for index in range(50))
+    release = released_training(tmp_path / "release.parquet", *tasks)
+    if fault != "missing":
+        admitted = tasks[:49] if fault == "size" else tasks
+        graded = 44 if fault == "coverage" else len(admitted)
+        probe = released_probe(tmp_path, release, admitted, graded=graded, pin=fault != "pin")
+        if fault == "hash":
+            probe = probe.model_copy(update={"sha256": "0" * 64})
+        release = release.model_copy(update={"admission": probe})
+    step = task_selection_step({}, released_recipe(release))
+    with pytest.raises(RuntimeError) as raised:
+        run(step)
+    assert error in error_chain(raised.value)
     assert not (Path(step.path()) / TRAIN_FILENAME).exists()
 
 

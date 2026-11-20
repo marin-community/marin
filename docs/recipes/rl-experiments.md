@@ -115,6 +115,22 @@ from a clean commit to copy the declared Harbor bootstrap into each released Tas
 The converter checks the pinned input and writes versioned Parquet plus a manifest of source,
 output, commit, and per-row digests. Pin the derived file and its digest in the mixed selection recipe.
 
+### Task health records
+
+Mixed presets record their single-step installed-agent attempts after RL. For a stored run, run
+`uv run python -m experiments.post_training.task_curation.task_health extract --cluster CLUSTER --run NAME@VERSION`.
+Use `MARIN_PREFIX` if the run used an explicit or temporary storage prefix. The extractor writes
+grades, phases, image and setup digests, and output tails for ungraded attempts to
+`s3://marin-us-east-02a/marin/rl-data/task-health/attempts/<run>/<version>/attempts.parquet`.
+
+From a clean commit, run `skip --selection NAME@VERSION --attempts ADDRESS... --version YYYY.MM.DD.N`
+to publish a skip list. A task qualifies after two distinct setup or verifier failures with no
+graded attempt. When two qualifying tasks share an image and setup, the list includes the other
+tasks in that environment. `--release FILE` clears entries for tasks whose content has changed.
+Pin the resulting `skip.parquet` under the selection recipe's `exclusions` with format `task_spec`.
+Released inputs also pin an attempts record. The probe selection must use the same input digest,
+and at least 90% of 50 or more distinct probed tasks must have a graded attempt.
+
 ## The loop
 
 1. [Curate tasks](../references/task-curation.md#run-a-campaign) into an admitted corpus.

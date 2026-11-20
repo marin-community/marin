@@ -637,3 +637,11 @@ def test_runner_composes_after_an_export(selection, tmp_path, table, name, allow
     assert result.exit_code == (0 if allowed else 4), (result.output, result.exception)
     expected = "runs/post-rl-evaluation" if allowed else "requires one ungated run with a model export"
     assert expected in result.output
+
+
+def test_mochi_agentic_plan_collects_attempts_with_exports_disabled(selection, monkeypatch):
+    monkeypatch.setattr(rl, "check_cache", lambda _path: True)
+    result = plan(MOCHI, "train-medium-agentic")
+    assert result.exit_code == 0, (result.output, result.exception)
+    assert "rl-data/task-health/attempts/" in result.output
+    assert "  checkpoints: none\n" in result.output and "  export: none\n" in result.output
