@@ -26,6 +26,7 @@ _ERROR_CATEGORIES: Mapping[str, ErrorCategory] = MappingProxyType(
         "EnvironmentStartTimeoutError": ErrorCategory.INFRASTRUCTURE,
         "TrialTimeoutError": ErrorCategory.INFRASTRUCTURE,
         "SandboxBuildFailedError": ErrorCategory.INFRASTRUCTURE,
+        "SandboxCapacityError": ErrorCategory.INFRASTRUCTURE,
         "SnapshotQuotaExceeded": ErrorCategory.INFRASTRUCTURE,
         "HealthcheckError": ErrorCategory.INFRASTRUCTURE,
         "DaytonaSandboxStopError": ErrorCategory.INFRASTRUCTURE,
