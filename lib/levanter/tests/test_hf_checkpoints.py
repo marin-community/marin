@@ -200,17 +200,11 @@ def test_export_preserves_reference_generation_config(
     if reference_kind == "hub":
 
         def download(*, repo_id, filename, revision):
-            assert (repo_id, filename, revision) == ("test/reference", "generation_config.json", "pinned-revision")
+            assert (repo_id, revision) == ("test/reference", "pinned-revision")
+            assert filename in ("generation_config.json", "tokenizer.json")
             return str(reference / filename)
 
-        load_local_tokenizer = hf_checkpoints.load_marin_tokenizer
-
-        def load_hub_tokenizer(name_or_path):
-            assert name_or_path == "test/reference@pinned-revision"
-            return load_local_tokenizer(str(reference))
-
         monkeypatch.setattr(hf_checkpoints, "hf_hub_download", download)
-        monkeypatch.setattr(hf_checkpoints, "load_marin_tokenizer", load_hub_tokenizer)
         converter = replace(converter, reference_checkpoint=RepoRef("test/reference", "pinned-revision"))
     output = tmp_path / "output"
     with use_test_mesh():

@@ -41,6 +41,7 @@ from haliax.partitioning import ResourceMapping
 from haliax.state_dict import StateDict, from_torch_compatible_state_dict
 from huggingface_hub import HfApi, ModelInfo, hf_hub_download, repo_exists, snapshot_download
 from huggingface_hub.errors import HfHubHTTPError, RemoteEntryNotFoundError
+from tokenizers import Tokenizer as HfBaseTokenizer
 from huggingface_hub.file_download import repo_folder_name
 from huggingface_hub.utils import EntryNotFoundError, GatedRepoError, HFValidationError
 from jax import ShapeDtypeStruct
@@ -66,7 +67,6 @@ from levanter.compat.hf_generation_config import (
 from levanter.field_dtype_overrides import FieldDtypes, cast_with_field_dtypes, sorted_field_dtypes
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.tokenizers import MarinTokenizer
-from levanter.tokenizers import load_tokenizer as load_marin_tokenizer
 from levanter.utils.cloud_utils import temp_dir_before_upload
 from levanter.utils.byte_budget import HostByteBudget
 from levanter.utils.hf_utils import HfTokenizer
@@ -1298,43 +1298,48 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
         logger.info(f"Finished saving HF-compatible checkpoint to {path}")
 
+    def _read_reference_file(self, filename: str) -> bytes | None:
+        """Return ``filename`` from the pinned reference checkpoint, or ``None`` when the checkpoint lacks it."""
+        repo, revision = self._get_ref(self.reference_checkpoint)
+        if _is_url_like(repo) or os.path.isdir(repo):
+            try:
+                return (StoragePath(repo) / filename).read_bytes()
+            except FileNotFoundError:
+                return None
+        try:
+            source_path = hf_hub_download(repo_id=repo, filename=filename, revision=revision)
+        except RemoteEntryNotFoundError:
+            return None
+        with open(source_path, "rb") as source_file:
+            return source_file.read()
+
     def _load_reference_generation_config(self) -> GenerationConfigDict | None:
         """Return the reference checkpoint's generation config, if it has one that applies to the exported tokenizer.
 
         The config's token ids index the reference checkpoint's tokenizer, so with an exported tokenizer it is kept
-        only when that tokenizer gives every reference token the same id: the reference tokenizer itself, or one padded
-        or extended from it. A Qwen3 model trained with the Llama 3 tokenizer, or a reference that ships no
-        ``tokenizer.json``, gets ``None``, and the export derives its settings from the exported tokenizer.
+        only when that tokenizer gives every token in the reference's ``tokenizer.json`` the same id: the reference
+        tokenizer itself, or one padded or extended from it. A Qwen3 model trained with the Llama 3 tokenizer, or a
+        reference without ``tokenizer.json``, gets ``None``, and the export derives its settings from the exported
+        tokenizer.
         """
         if self.reference_checkpoint is None:
             return None
-        repo, revision = self._get_ref(self.reference_checkpoint)
-        if _is_url_like(repo) or os.path.isdir(repo):
-            source = StoragePath(repo) / "generation_config.json"
-            try:
-                contents = source.read_bytes()
-            except FileNotFoundError:
-                return None
-        else:
-            try:
-                source_path = hf_hub_download(repo_id=repo, filename="generation_config.json", revision=revision)
-            except RemoteEntryNotFoundError:
-                return None
-            with open(source_path, "rb") as source_file:
-                contents = source_file.read()
+        contents = self._read_reference_file(GENERATION_CONFIG_FILENAME)
+        if contents is None:
+            return None
         config = json.loads(contents)
         if not isinstance(config, dict):
             raise ValueError(f"Reference generation config must be a JSON object: {self.reference_checkpoint}")
         if self.tokenizer is None:
             return config
-        try:
-            reference_tokenizer = load_marin_tokenizer(repo if revision is None else f"{repo}@{revision}")
-        except FileNotFoundError:
+        reference_tokenizer = self._read_reference_file("tokenizer.json")
+        if reference_tokenizer is None:
             logger.info(
                 "Not preserving the generation config of %s: it has no tokenizer.json", self.reference_checkpoint
             )
             return None
-        if reference_tokenizer.get_vocab().items() <= self.tokenizer.get_vocab().items():
+        reference_vocab = HfBaseTokenizer.from_buffer(reference_tokenizer).get_vocab()
+        if reference_vocab.items() <= self.tokenizer.get_vocab().items():
             return config
         logger.info(
             "Not preserving the generation config of %s: the exported tokenizer gives its tokens other ids",
