@@ -294,6 +294,41 @@ uv run fsutil ls s3://marin-us-east-02a/marin/datakit/
 | `scripts/` | Manual source triggering and synchronization, tier-2 dataset reproduction, and tier-1 output validation |
 | `testbed/` | Sampled-corpus testbed used by the smoke and decon experiments |
 
+## SFT registration receipt
+
+Chat sources use the existing [chat registration workflow](../../docs/tutorials/add-chat-dataset.md)
+and `marin.datakit.sft_sources.all_sft_sources`. After full preparation,
+`register_sft.py` adds a terminal check to that source's normalization graph:
+
+```bash
+uv run python -m experiments.datakit.register_sft --plan registration-plan.json
+uv run python -m experiments.datakit.register_sft --plan registration-plan.json --run
+```
+
+`SftRegistrationPlan` pins the input and training file manifests, completed stage
+records, eval manifests, tokenizer files and chat template. Each file manifest
+contains `files` (URI/SHA-256 references) and the complete `rows` count. The
+filtering artifact records the variant `input`, `input_rows`, `filtered_rows`
+and the `output_manifest` reference. The prepared training Parquet retains
+canonical `messages`, `chat_template_kwargs`, `id`, `normalized_id`, `input_ids`
+and `assistant_masks`. `normalized_id` joins the conversation to its measured
+Datakit text and decontamination rows.
+
+The terminal check reads every selected training row. It checks original chat
+identity, applied decontamination, exact token-sequence duplicates, and tokens
+and assistant masks from the pinned tokenizer/template. All required stages
+must have successful StepRunner status and belong to the preparation's lineage.
+Every removed normalized conversation must be eval-contaminated or have the
+same token sequence and mask as a retained conversation.
+The eval policy uses the required AA, lm-eval, Uncheatable and Atlas-reference
+manifests; the SFT Bloom and marks must use the same five-word policy.
+Success writes `receipt.json` as `finestore.sft.SftPreparationReceipt`; a failed
+check writes no receipt. Run the check in the data's region.
+
+Prepare an RL-to-SFT conversion as a separate workflow that emits a new dataset
+variant and its lineage receipt. Registration consumes that variant; it does
+not generate teacher responses or change the parent dataset.
+
 ## Running
 
 Submission commands (full and sample mode) live in the `reference_pipeline.py`
