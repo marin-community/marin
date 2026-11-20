@@ -246,7 +246,9 @@ def test_shadow_routing_takes_the_tail_of_each_shadowed_group_and_inverts_it():
     for shard, shard_sizes in enumerate(all_group_sizes):
         selected = rng.permutation(np.repeat(np.arange(num_experts), shard_sizes)).astype(np.int32)
         sorted_indices = np.argsort(selected, kind="stable").astype(np.int32)
-        shadow, shadow_all = routing(jnp.asarray(all_group_sizes), jnp.asarray(sorted_indices), jnp.int32(shard))
+        shadow, shadowed_by_expert = routing(
+            jnp.asarray(all_group_sizes), jnp.asarray(sorted_indices), jnp.int32(shard)
+        )
         np.testing.assert_array_equal(shadow.experts, [5, 0, 3])
 
         expected = []
@@ -255,7 +257,7 @@ def test_shadow_routing_takes_the_tail_of_each_shadowed_group_and_inverts_it():
             group = sorted_indices[selected[sorted_indices] == e]
             taken = min(len(group), left)
             left -= taken
-            assert np.asarray(shadow_all)[shard, e] == taken
+            assert np.asarray(shadowed_by_expert)[shard, e] == taken
             expected.extend(group[len(group) - taken :])
         active = len(expected)
         # Inactive slots hold distinct out-of-range assignments.

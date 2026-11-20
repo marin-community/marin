@@ -795,11 +795,11 @@ def _shadow_routing(
     # Most loaded first: when a shard's shadowed rows exceed its buffer, the lightest shadowed experts
     # spill back to the transport rather than the most-loaded ones.
     _, experts = jax.lax.top_k(jnp.sum(all_group_sizes, axis=0), count)  # [R]
-    shadowed_all = _prefix_cap_counts(all_group_sizes[:, experts], capacity=rows)  # [S, R]
-    shadow_all = jnp.zeros((num_shards, num_experts), jnp.int32).at[:, experts].set(shadowed_all)  # [S, E]
+    shadowed_by_rank = _prefix_cap_counts(all_group_sizes[:, experts], capacity=rows)  # [S, R]
+    shadowed_by_expert = jnp.zeros((num_shards, num_experts), jnp.int32).at[:, experts].set(shadowed_by_rank)  # [S, E]
 
     group_sizes = all_group_sizes[shard_id]  # [E]
-    shadowed = shadowed_all[shard_id]  # [R]
+    shadowed = shadowed_by_rank[shard_id]  # [R]
     group_ends = jnp.cumsum(group_sizes)[experts]  # [R]
     buffer_ends = jnp.cumsum(shadowed)  # [R]
     slot = jnp.arange(rows, dtype=jnp.int32)  # [B]
@@ -818,7 +818,7 @@ def _shadow_routing(
         assignments=assignments,
         positions=positions.reshape(-1, topk),
     )
-    return routing, shadow_all
+    return routing, shadowed_by_expert
 
 
 @jax.custom_vjp
@@ -1006,7 +1006,7 @@ def _moe_mlp_ep_ragged_a2a_local(
         if shadow_experts is not None:
             # A token picks an expert at most once, so more than `min(count, K)` rows per token never fill.
             rows_per_token = min(shadow_experts.rows_per_token, min(shadow_experts.count, topk))
-            shadow, shadow_all = _shadow_routing(
+            shadow, shadowed_by_expert = _shadow_routing(
                 all_group_sizes,
                 sorted_indices,
                 shard_id,
@@ -1014,7 +1014,7 @@ def _moe_mlp_ep_ragged_a2a_local(
                 rows=math.ceil(rows_per_token * tokens_per_shard),
                 topk=topk,
             )
-            transport_group_sizes = all_group_sizes - shadow_all
+            transport_group_sizes = all_group_sizes - shadowed_by_expert
         chunk_of_expert = (jnp.arange(num_experts, dtype=jnp.int32) % local_experts) // chunk_experts  # [E]
         chunk_clipped_group_sizes = tuple(  # [S, E] each
             _clip_receiver_group_sizes(
