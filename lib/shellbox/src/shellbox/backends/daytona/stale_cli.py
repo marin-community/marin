@@ -17,7 +17,7 @@ from typing import TextIO
 from daytona import AsyncDaytona, AsyncSandbox, DaytonaError
 
 from shellbox.backends.daytona.connection import DEFAULT_DAYTONA_API_URL, DaytonaConnection
-from shellbox.backends.daytona.stale import SandboxActivity, SandboxDecision, select_idle_sandboxes
+from shellbox.backends.daytona.stale import DeletionState, SandboxActivity, SandboxDecision, select_idle_sandboxes
 from shellbox.backends.daytona.usage import inventory_sandboxes
 from shellbox.backends.daytona.usage_cli import ALL_ACCOUNTS
 
@@ -34,7 +34,11 @@ class PurgeCounts:
 
 
 def _activity(sandbox: AsyncSandbox) -> SandboxActivity:
-    return SandboxActivity(sandbox.id, sandbox.last_activity_at, sandbox.updated_at)
+    state = sandbox.state.value if sandbox.state else ""
+    deletion_state = DeletionState.NOT_DELETING
+    if state in (DeletionState.DESTROYING, DeletionState.DESTROYED):
+        deletion_state = DeletionState(state)
+    return SandboxActivity(sandbox.id, sandbox.last_activity_at, sandbox.updated_at, deletion_state)
 
 
 def _record(ledger: TextIO, account: str, decision: SandboxDecision, outcome: str) -> None:
@@ -138,7 +142,9 @@ async def _run(arguments: argparse.Namespace, ledger: TextIO | None) -> int:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Purge idle Daytona sandboxes; dry-run by default.")
+    parser = argparse.ArgumentParser(
+        description="Purge idle sandboxes account-wide, including those created outside Shellbox; dry-run by default."
+    )
     account = parser.add_mutually_exclusive_group(required=True)
     account.add_argument(
         "--all", action="store_true", help="Select eval, rl and data via their dedicated API key variables."
@@ -163,6 +169,8 @@ def main() -> None:
         parser.error("--threshold must be finite and positive")
     if arguments.delete and arguments.ledger is None:
         parser.error("--delete requires --ledger")
+    if arguments.ledger is not None and not arguments.delete:
+        parser.error("--ledger requires --delete")
     if arguments.delete:
         with arguments.ledger.open("a", encoding="utf-8") as ledger:
             errors = asyncio.run(_run(arguments, ledger))

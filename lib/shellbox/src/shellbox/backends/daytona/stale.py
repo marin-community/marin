@@ -6,6 +6,13 @@
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
+
+
+class DeletionState(StrEnum):
+    NOT_DELETING = "not_deleting"
+    DESTROYING = "destroying"
+    DESTROYED = "destroyed"
 
 
 @dataclass(frozen=True)
@@ -13,6 +20,7 @@ class SandboxActivity:
     id: str
     last_activity_at: str | None
     updated_at: str | None
+    deletion_state: DeletionState
 
 
 @dataclass(frozen=True)
@@ -34,7 +42,8 @@ def select_idle_sandboxes(
     """Select sandboxes idle for at least the threshold; skip unusable timestamps.
 
     Use the freshest timezone-aware activity or update timestamp. Creation time
-    and sandbox state do not establish inactivity.
+    does not establish inactivity. Sandboxes already being deleted or destroyed
+    are skipped regardless of their timestamps.
     """
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("now must include a timezone")
@@ -43,6 +52,9 @@ def select_idle_sandboxes(
     candidates = []
     skipped = []
     for sandbox in sandboxes:
+        if sandbox.deletion_state != DeletionState.NOT_DELETING:
+            skipped.append(SandboxDecision(sandbox.id, f"already {sandbox.deletion_state.value}", None))
+            continue
         timestamps = []
         for value in (sandbox.last_activity_at, sandbox.updated_at):
             if not value:

@@ -75,8 +75,10 @@ requirement. See the source Jupiter runbook below for that workflow.
 
 `shellbox-daytona-stale` lists every sandbox page in the selected accounts.
 It uses the freshest valid activity or update timestamp. Sandboxes without a
-timezone-aware timestamp are skipped. All states use the same idle threshold,
-which defaults to 60 minutes. The command does not change snapshots.
+timezone-aware timestamp are skipped. Sandboxes in `destroying` or `destroyed`
+are also skipped. Other states use the same idle threshold, which defaults to
+60 minutes. Cleanup is account-wide and includes sandboxes created outside
+Shellbox. The command does not change snapshots.
 
 Load the dedicated account keys and select the configured target:
 
