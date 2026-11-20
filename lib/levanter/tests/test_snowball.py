@@ -56,6 +56,7 @@ from levanter.models.snowball import (
     GatedNorm,
     GrugMoeHfConfig,
     SnowballConfig,
+    SnowballAttention,
     SnowballLMHeadModel,
     SnowballMoEMLP,
     _activation_spec,
@@ -918,6 +919,76 @@ def test_snowball_packed_conversations_are_isolated(separate_key_axis):
         np.testing.assert_array_equal(observe(model, changed), after)
     assert not np.allclose(before[:, :4], after[:, :4])
     np.testing.assert_allclose(before[:, 4:], after[:, 4:], atol=1e-5, rtol=1e-5)
+
+
+def test_snowball_explicit_positions_match_masked_gaps():
+    """Token positions survive compacting gaps; ignoring pos_ids changes short-layer attention."""
+    cfg = _tiny_config(num_layers=2, sliding_window=16, moe_capacity_factor=8)
+    compact = _device_batched_ids(cfg.vocab_size, 4)
+    Batch = compact.axes[0]
+    ExpandedPos = Axis("position", 8)
+    positions = hax.named(jnp.broadcast_to(jnp.arange(0, 8, 2), compact.array.shape), compact.axes)
+    expanded = hax.named(
+        jnp.zeros((Batch.size, 8), dtype=jnp.int32).at[:, ::2].set(compact.array), (Batch, ExpandedPos)
+    )
+    segments = hax.named(jnp.broadcast_to(jnp.arange(8) % 2, expanded.array.shape), expanded.axes)
+    mask = AttentionMask.causal().with_segment_ids(segments)
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(15))
+        forward = eqx.filter_jit(lambda m, ids, attn, pos: m.activations(ids, attn, pos_ids=pos).array)
+        expected = np.asarray(forward(model, expanded, mask, None))[:, ::2]
+        actual = np.asarray(forward(model, compact, None, positions))
+        ignored = np.asarray(forward(model, compact, None, None))
+    np.testing.assert_allclose(actual, expected, atol=1e-5, rtol=1e-5)
+    assert np.max(np.abs(actual - ignored)) > 1e-5
+
+
+def test_snowball_fp32_attention_projection_and_gate_match_reference():
+    """Match selective FP32 XSA and gate, leaving projection GEMMs in BF16."""
+    cfg = _tiny_config(hidden_dim=8, num_heads=1, num_kv_heads=1, head_dim=8, head_gate_fp32=True, xsa_fp32=True)
+    batch_size = jax.device_count()
+    values = jnp.broadcast_to(
+        jnp.array(
+            [
+                [
+                    [0.25, -0.5, 1.25, -1.5, 0.75, 0.125, -0.875, 1.75],
+                    [1.5, 0.375, -0.25, 0.75, -1.125, 2.25, 0.5, -0.625],
+                ]
+            ],
+            dtype=jnp.bfloat16,
+        ),
+        (batch_size, 2, 8),
+    )
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        attention = SnowballAttention.init(cfg, key=jax.random.key(3))
+        attention = eqx.tree_at(
+            lambda m: (m.w_q, m.w_k, m.w_v, m.w_o, m.attn_gate),
+            attention,
+            (
+                jnp.zeros((8, 8), dtype=jnp.bfloat16),
+                jnp.zeros((8, 8), dtype=jnp.bfloat16),
+                jnp.eye(8, dtype=jnp.bfloat16),
+                jnp.eye(8, dtype=jnp.bfloat16),
+                jnp.arange(8, dtype=jnp.bfloat16)[:, None] / 13,
+            ),
+        )
+        actual = np.asarray(
+            eqx.filter_jit(lambda m, x: m(x, GrugAttentionMask.causal(), disable_rope=True))(attention, values),
+            dtype=np.float32,
+        )
+    raw = np.asarray(values, dtype=np.float32)
+    # Zero Q/K make the causal softmax exactly 1 and 1/2; the oracle needs no
+    # shared attention, normalization, position or softmax implementation.
+    context = np.stack([raw[:, 0], (raw[:, 0] + raw[:, 1]) / 2], axis=1)
+    dot = (context * raw).sum(axis=-1, keepdims=True)
+    denominator = (raw * raw).sum(axis=-1, keepdims=True) + 1e-6
+    projected = np.asarray(jnp.asarray(context - dot / denominator * raw, dtype=jnp.bfloat16), dtype=np.float32)
+    logits = np.asarray(
+        jnp.asarray(raw @ np.asarray(attention.attn_gate, dtype=np.float32), dtype=jnp.bfloat16), dtype=np.float32
+    )
+    gate = np.asarray(jnp.asarray(2 / (1 + np.exp(-logits)), dtype=jnp.bfloat16), dtype=np.float32)
+    expected = np.asarray(jnp.asarray(projected * gate, dtype=jnp.bfloat16), dtype=np.float32)
+    np.testing.assert_allclose(actual, expected, atol=1e-4, rtol=1e-4)
 
 
 @pytest.mark.timeout(180)

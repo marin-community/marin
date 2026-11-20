@@ -6,7 +6,7 @@ from collections.abc import Callable
 from functools import partial
 from itertools import product
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from unittest.mock import patch
 
 from marin.execution.artifact import write_artifact
@@ -61,9 +61,11 @@ def _probe_step(artifact_root: Path, **settings: Any) -> ArtifactStep[SkyRLRun]:
     )
 
 
-def _inventory_step(artifact_root: Path) -> ArtifactStep[SkyRLRun]:
+def _inventory_step(
+    artifact_root: Path, learner: Literal["megatron", "levanter"] = "megatron"
+) -> ArtifactStep[SkyRLRun]:
     selection = ArtifactStep.adopt("rl-data/task-selection/census", VERSION, str(artifact_root / "selection"))
-    return inventory.build_run(VERSION, selection=selection)
+    return inventory.build_run(VERSION, selection=selection, learner=learner)
 
 
 def _port_smoke_step(stage: str) -> ArtifactStep[SkyRLRun]:
@@ -114,6 +116,7 @@ def launch_builders(
     )
     builders["canary/seed-identity"] = partial(canary.build_run, preset="dry", version=VERSION, seed=18)
     builders["inventory/train"] = partial(_inventory_step, artifact_root)
+    builders["inventory/levanter"] = partial(_inventory_step, artifact_root, "levanter")
     for stage in ("train", "resume"):
         builders[f"port-smoke/{stage}"] = partial(_port_smoke_step, stage)
     builders["iceball/workflow"] = _iceball_step

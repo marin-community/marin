@@ -14,7 +14,7 @@ profile="$4"
 install_mode="$5"
 
 case "$profile" in
-  megatron|megatron-export) ;;
+  megatron|megatron-export|levanter) ;;
   *)
     echo "unsupported runtime profile: $profile" >&2
     exit 2
@@ -30,7 +30,10 @@ case "$install_mode" in
     ;;
 esac
 
-if [[ "$profile" == *-export ]]; then
+if [[ "$profile" == levanter ]]; then
+  # Keep rollout engines and the model-free publisher on the existing Torch lock.
+  runtime_extras=(--extra megatron --extra vllm --extra telemetry)
+elif [[ "$profile" == *-export ]]; then
   strategy="${profile%-export}"
   runtime_extras=(--extra "$strategy")
 else
@@ -66,6 +69,22 @@ python="$environment/bin/python"
 # Native JITs invoke tools such as ninja by name after bootstrap completes.
 printf 'export PATH=%q${PATH:+:$PATH}\n' "$environment/bin" >> "$runtime_file"
 source "$runtime_file"
+if [[ "$profile" == levanter ]]; then
+  root_project="$(cd "$project_root/../.." && pwd)"
+  levanter_environment="$root_project/.levanter-policy-env"
+  # Only the stdlib IPC client is imported by Torch; model code stays in JAX.
+  export PYTHONPATH="$root_project/lib/marin/src${PYTHONPATH:+:$PYTHONPATH}"
+  printf 'export PYTHONPATH=%q${PYTHONPATH:+:$PYTHONPATH}\n' "$root_project/lib/marin/src" >> "$runtime_file"
+  UV_PROJECT_ENVIRONMENT="$levanter_environment" uv tool run --from "uv==$uv_version" \
+    --python "$system_python" --no-python-downloads uv sync --quiet \
+    --project "$root_project" \
+    --python "$system_python" \
+    --no-python-downloads \
+    --frozen \
+    --link-mode symlink \
+    --no-default-groups \
+    --extra pipeline
+fi
 # FlashInfer's CUDA 13 JIT still links through CUDA_HOME/lib64, while the
 # NVIDIA wheel installs its libraries in CUDA_HOME/lib.
 if [[ ! -e "$CUDA_HOME/lib64" ]]; then
@@ -104,6 +123,14 @@ if [[ "$profile" == *-export ]]; then
 else
   run_check agents "$python" -c "import memray; from shellbox.backends.daytona.machine import DaytonaMachineFactory; from shellbox.backends.shellsim.machine import ShellSimMachineFactory; from rolloutengine.engine import RolloutEngine"
   run_check vllm "$python" -c "import quack.activation, torch, vllm; import vllm._C_stable_libtorch, vllm.cumem_allocator; from skyrl_train.models.grug_moe import GRUG_MOE_ARCHITECTURE; from vllm.model_executor.models import ModelRegistry; assert GRUG_MOE_ARCHITECTURE in ModelRegistry.get_supported_archs(); print('[rl-iris] frozen runtime ready:', torch.__version__, vllm.__version__)"
+fi
+if [[ "$profile" == levanter ]]; then
+  run_check levanter-parent "$python" -c \
+    "import sys; from skyrl_train.workers.levanter.levanter_worker import LevanterRayActorGroup; assert 'jax' not in sys.modules"
+  run_check levanter env -u CUDA_HOME -u NVRTC_HOME -u LIBRARY_PATH -u LD_LIBRARY_PATH \
+    -u LD_PRELOAD -u VIRTUAL_ENV -u PYTHONPATH -u PYTHONHOME \
+    "$levanter_environment/bin/python" -c \
+    "import jax; from marin.rl.levanter_worker_runtime import main; from levanter.policy_learner import SpmdPolicyLearner"
 fi
 
 check_status=0

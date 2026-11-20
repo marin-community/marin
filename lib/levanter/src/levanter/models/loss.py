@@ -197,6 +197,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     logsumexp_weight: float | None = 0.0,
     block_size: int | None = None,
     dtype: Optional[jnp.dtype] = jnp.float32,
+    logits_dtype: Optional[jnp.dtype] = None,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
     implementation: Implementation | None = None,
@@ -218,6 +219,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     logsumexp_weight: float | None = 0.0,
     block_size: int | None = None,
     dtype: Optional[jnp.dtype] = jnp.float32,
+    logits_dtype: Optional[jnp.dtype] = None,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
     implementation: Implementation | None = None,
@@ -238,6 +240,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     logsumexp_weight: float | None = 0.0,
     block_size: int | None = None,
     dtype: Optional[jnp.dtype] = jnp.float32,
+    logits_dtype: Optional[jnp.dtype] = None,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
     implementation: Implementation | None = None,
@@ -258,6 +261,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
         logsumexp_weight (float): Weight for logsumexp penalty.
         block_size (int | None): Optional vocabulary block size for processing.
         dtype (Optional[jnp.dtype]): Data type for the loss.
+        logits_dtype (Optional[jnp.dtype]): Projection output rounding before softmax (XLA/reference only).
         precision (Optional[jax.lax.PrecisionLike]): Optional matmul precision override for the fused kernel.
         implementation (Implementation | None): Backend selector ("xla", "pallas_tpu", etc.).
         return_argmax (bool): Whether to return per-position argmax token ids as well.
@@ -291,6 +295,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
             logsumexp_weight=logsumexp_weight,
             block_size=block_size,
             dtype=dtype,
+            logits_dtype=logits_dtype,
             logit_soft_cap=logit_soft_cap,
             precision=precision,
             implementation=implementation,

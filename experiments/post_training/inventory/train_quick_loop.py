@@ -4,6 +4,7 @@
 """Train Datakit SFT on the Snowball 100k selection and evaluate before and after RL."""
 
 from dataclasses import replace
+from typing import Literal
 
 import click
 import pyarrow.parquet as pq
@@ -53,7 +54,13 @@ EVALUATION_API_KEY_ENV = "DAYTONA_EVAL_API_KEY"
 JUDGE_API_KEY_ENV = "TOGETHER_API_KEY"
 
 
-def training_recipe(steps: int, *, reproducible_serving: bool = False) -> SkyRLRecipe:
+def training_recipe(
+    steps: int,
+    *,
+    reproducible_serving: bool = False,
+    learner: Literal["megatron", "levanter"] = "megatron",
+    verify_publication: bool = False,
+) -> SkyRLRecipe:
     """Use the maintained Snowball geometry with synchronous RLOO-N updates."""
     preset = replace(
         DEFAULT,
@@ -124,6 +131,49 @@ def training_recipe(steps: int, *, reproducible_serving: bool = False) -> SkyRLR
         )
     )
 
+    if verify_publication or learner == "levanter":
+        config = config.merge(
+            RecipePatch(generator=sections.Generator(expert_block_sync=sections.ExpertBlockSync(verify=True)))
+        )
+    if learner == "levanter":
+        plan = SNOWBALL_RECIPE.role_plan
+        experts = SNOWBALL_RECIPE.megatron.expert_model_parallel_size
+        config = config.merge(
+            RecipePatch(
+                trainer=sections.Trainer(
+                    strategy="levanter",
+                    batch_builder="driver",
+                    offload_optimizer_during_rollouts=False,
+                    policy=sections.Policy(
+                        levanter_config=sections.PolicyLevanterConfig(
+                            python_executable="/app/.levanter-policy-env/bin/python",
+                            coordinator_port=38679,
+                            command_timeout_seconds=1800,
+                            initialization_timeout_seconds=1800,
+                            mesh_axes=sections.LevanterMeshAxes(
+                                replica_dcn=1,
+                                replica=1,
+                                data=plan.policy_num_nodes * plan.policy_num_gpus_per_node // experts,
+                                expert=experts,
+                                model=1,
+                                context=1,
+                            ),
+                            projection_block_size=1024,
+                            projection_logits_dtype="bfloat16",
+                            attention_implementation="gpu_fa4_cute",
+                            moe_implementation="ring_gather_combine",
+                            router_dot_fp32=True,
+                            moe_capacity_factor=experts,
+                            fp32_activations=False,
+                            head_gate_fp32=True,
+                            xsa_fp32=True,
+                            device_memory_fraction=0.90,
+                        )
+                    ),
+                )
+            )
+        )
+
     if not reproducible_serving:
         return config
 
@@ -164,6 +214,8 @@ def build_run(
     steps: int = DEFAULT_STEPS,
     export_hf: bool = False,
     reproducible_serving: bool = False,
+    learner: Literal["megatron", "levanter"] = "megatron",
+    verify_publication: bool = False,
 ) -> ArtifactStep[SkyRLRun]:
     """Bind selected canonical tasks, pinned SFT weights and terminal outputs."""
     model = ArtifactStep.adopt(
@@ -178,7 +230,12 @@ def build_run(
             name=user_owned_name(ARTIFACT_NAME),
             version=version,
             config_yaml=yaml.safe_dump(
-                training_recipe(steps, reproducible_serving=reproducible_serving).to_skyrl(),
+                training_recipe(
+                    steps,
+                    reproducible_serving=reproducible_serving,
+                    learner=learner,
+                    verify_publication=verify_publication,
+                ).to_skyrl(),
                 sort_keys=False,
             ),
             model=ArtifactHfModel(
@@ -224,13 +281,24 @@ def build_run(
 )
 @click.option("--steps", type=click.IntRange(min=1), default=DEFAULT_STEPS, show_default=True)
 @click.option("--export-hf", is_flag=True, help="Export the final Hugging Face model after training.")
+@click.option("--learner", type=click.Choice(["megatron", "levanter"]), default="megatron", show_default=True)
+@click.option("--verify-publication", is_flag=True, help="Replay received weight bytes after every publication.")
 @click.option(
     "--reproducible-serving",
     is_flag=True,
     help="Use batch-invariant serving with one sequence per rank and greedy evaluation.",
 )
 @rl_build_options
-def main(selection_uri: str, steps: int, export_hf: bool, reproducible_serving: bool) -> ArtifactStep[SkyRLRun]:
+def main(
+    selection_uri: str,
+    steps: int,
+    export_hf: bool,
+    reproducible_serving: bool,
+    learner: Literal["megatron", "levanter"],
+    verify_publication: bool,
+) -> ArtifactStep[SkyRLRun]:
+    if learner == "levanter" and export_hf:
+        raise click.BadParameter("Levanter supports native checkpoints; terminal HF export is not implemented")
     name = user_owned_name(ARTIFACT_NAME)
     selection_uri = selection_uri.rstrip("/")
     _, marker, identity = selection_uri.rpartition(f"/{SELECTION_PREFIX}/")
@@ -258,6 +326,8 @@ def main(selection_uri: str, steps: int, export_hf: bool, reproducible_serving: 
         steps=steps,
         export_hf=export_hf,
         reproducible_serving=reproducible_serving,
+        learner=learner,
+        verify_publication=verify_publication,
     )
 
 

@@ -129,6 +129,8 @@ def preserve_hf_runtime_settings(reloaded: LmConfig, requested: LmConfig) -> LmC
         moe_implementation=requested.moe_implementation,
         moe_capacity_factor=requested.moe_capacity_factor,
         fp32_activations=requested.fp32_activations,
+        head_gate_fp32=requested.head_gate_fp32,
+        xsa_fp32=requested.xsa_fp32,
         reference_checkpoint=requested.reference_checkpoint,
         tokenizer=requested.tokenizer,
     )

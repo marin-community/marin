@@ -40,6 +40,81 @@ def _make_toy_inputs():
     return x, w, y
 
 
+@pytest.mark.parametrize("operand_dtype", [jnp.float32, jnp.bfloat16])
+@pytest.mark.parametrize("implementation", ["reference", "xla", "xla_fast_bwd"])
+@pytest.mark.parametrize("soft_cap", [None, 1.3])
+def test_projection_rounding_matches_dense_fp32_softmax_values_and_gradients(operand_dtype, implementation, soft_cap):
+    keys = jax.random.split(jax.random.PRNGKey(837), 5)
+    x = (jax.random.normal(keys[0], (7, 8)) * 0.2).astype(operand_dtype)
+    w = (jax.random.normal(keys[1], (8, 19)) * 0.3).astype(operand_dtype)
+    labels = jax.random.randint(keys[2], (7,), 0, 19)
+    weights = jax.random.normal(keys[3], (7,))
+    lse_weight = 0.03
+
+    def actual(x, w):
+        return fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+            x,
+            labels,
+            w,
+            block_sizes=BlockSizes(b_block_size=4, h_block_size=8, v_block_size=8),
+            reduction="sum",
+            weight=weights,
+            logsumexp_weight=lse_weight,
+            dtype=jnp.float32,
+            logits_dtype=jnp.bfloat16,
+            logit_soft_cap=soft_cap,
+            implementation=implementation,
+        )
+
+    def reference(x, w):
+        # Match a BF16 linear output followed by an FP32 CE, including the cast's
+        # BF16 cotangent in autodiff. This dense oracle uses no production CE code.
+        logits = jnp.matmul(x, w, preferred_element_type=jnp.float32).astype(jnp.bfloat16).astype(jnp.float32)
+        if soft_cap is not None:
+            logits = jnp.tanh(logits / soft_cap) * soft_cap
+        accuracy = jax.lax.AccuracyMode.HIGHEST if jax.default_backend() == "tpu" else None
+        maximum = jax.lax.stop_gradient(jnp.max(logits, axis=-1))
+        total = jnp.sum(jax.lax.exp(logits - maximum[:, None], accuracy=accuracy), axis=-1)
+        lse = maximum + jax.lax.log(total, accuracy=accuracy)
+        ce = lse - logits[jnp.arange(7), labels]
+        return jnp.sum((ce + lse_weight * lse**2) * weights)
+
+    actual_value, actual_gradient = jax.jit(jax.value_and_grad(actual, argnums=(0, 1)))(x, w)
+    expected_value, expected_gradient = jax.jit(jax.value_and_grad(reference, argnums=(0, 1)))(x, w)
+    np.testing.assert_allclose(actual_value, expected_value, atol=1e-5, rtol=1e-5)
+    for observed, expected in zip(actual_gradient, expected_gradient, strict=True):
+        np.testing.assert_allclose(observed.astype(jnp.float32), expected.astype(jnp.float32), atol=1e-5, rtol=1e-5)
+
+
+def test_projection_rounding_rejects_an_unsupported_optimized_backend():
+    x, w, labels = _make_toy_inputs()
+    with pytest.raises(ValueError, match="XLA and reference"):
+        fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+            x.reshape(6, 4), labels.reshape(6), w, logits_dtype=jnp.bfloat16, implementation="batched_xla"
+        )
+
+
+@pytest.mark.parametrize("implementation", [None, "reference", "xla"])
+def test_projection_rounding_argmax_ties_and_fp32_softmax(implementation):
+    x = jnp.ones((1, 1), dtype=jnp.float32)
+    w = jnp.array([[1.001, 1.002, 0.0]], dtype=jnp.float32)
+    loss, token = fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+        x,
+        jnp.array([1], dtype=jnp.int32),
+        w,
+        reduction=None,
+        block_sizes=BlockSizes(b_block_size=1, v_block_size=1),
+        dtype=jnp.float32,
+        logits_dtype=jnp.bfloat16,
+        implementation=implementation,
+        return_argmax=True,
+    )
+    expected = -jax.nn.log_softmax(jnp.array([[1.0, 1.0, 0.0]], dtype=jnp.float32))[0, 1]
+    np.testing.assert_allclose(loss, expected[None], atol=1e-5, rtol=1e-5)
+    np.testing.assert_array_equal(token, jnp.array([0]))
+    assert loss.dtype == jnp.float32
+
+
 def test_fused_cross_entropy_xla_matches_reference():
     x, w, y = _make_toy_inputs()
 
@@ -263,6 +338,7 @@ def test_xla_streaming_custom_vjp_grad_matches_streaming_autodiff():
             block_size,
             6,
             jnp.float32,
+            None,
             logit_soft_cap,
             None,
             False,
@@ -388,6 +464,7 @@ def test_xla_streaming_custom_vjp_grad_matches_streaming_autodiff_with_batch_blo
             block_size,
             64,
             jnp.float32,
+            None,
             logit_soft_cap,
             None,
             False,
@@ -429,6 +506,7 @@ def test_fused_cross_entropy_xla_uses_explicit_batch_block_size(monkeypatch: pyt
         block_size,
         batch_block_size,
         dtype,
+        logits_dtype,
         logit_soft_cap,
         precision,
         fast_backward,
@@ -438,7 +516,7 @@ def test_fused_cross_entropy_xla_uses_explicit_batch_block_size(monkeypatch: pyt
         labels_arg,
         w_arg,
     ):
-        del dtype, logit_soft_cap, precision, fast_backward, bwd_batch_block_size, bwd_v_block_size
+        del dtype, logits_dtype, logit_soft_cap, precision, fast_backward, bwd_batch_block_size, bwd_v_block_size
         del x_arg, labels_arg, w_arg
         captured["block_size"] = block_size
         captured["batch_block_size"] = batch_block_size
@@ -471,6 +549,7 @@ def test_fused_cross_entropy_xla_caps_requested_batch_block_size_to_legal_diviso
         block_size,
         batch_block_size,
         dtype,
+        logits_dtype,
         logit_soft_cap,
         precision,
         fast_backward,
@@ -480,7 +559,7 @@ def test_fused_cross_entropy_xla_caps_requested_batch_block_size_to_legal_diviso
         labels_arg,
         w_arg,
     ):
-        del dtype, logit_soft_cap, precision, fast_backward, bwd_batch_block_size, bwd_v_block_size
+        del dtype, logits_dtype, logit_soft_cap, precision, fast_backward, bwd_batch_block_size, bwd_v_block_size
         del x_arg, labels_arg, w_arg
         captured["block_size"] = block_size
         captured["batch_block_size"] = batch_block_size
@@ -519,6 +598,7 @@ def test_fused_cross_entropy_xla_infer_uses_tuned_batch_block_size_when_availabl
         block_size,
         batch_block_size,
         dtype,
+        logits_dtype,
         logit_soft_cap,
         precision,
         fast_backward,
@@ -528,7 +608,7 @@ def test_fused_cross_entropy_xla_infer_uses_tuned_batch_block_size_when_availabl
         labels_arg,
         w_arg,
     ):
-        del dtype, logit_soft_cap, precision, fast_backward, bwd_batch_block_size, bwd_v_block_size
+        del dtype, logits_dtype, logit_soft_cap, precision, fast_backward, bwd_batch_block_size, bwd_v_block_size
         del x_arg, labels_arg, w_arg
         captured["block_size"] = block_size
         captured["batch_block_size"] = batch_block_size

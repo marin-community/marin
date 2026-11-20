@@ -12,6 +12,7 @@ from jaxtyping import Array, Float, Int
 from .config import BlockSizes
 from .reference import (
     _cross_entropy_exp,
+    _project_logits,
     linear_softmax_cross_entropy_loss_reference,
     linear_softmax_cross_entropy_loss_streaming,
 )
@@ -150,6 +151,7 @@ def _linear_softmax_cross_entropy_loss_streaming_fwd(
     *,
     block_size: int,
     dtype: Optional[jnp.dtype],
+    logits_dtype: Optional[jnp.dtype] = None,
     batch_block_size: int,
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
@@ -172,6 +174,7 @@ def _linear_softmax_cross_entropy_loss_streaming_fwd(
                 w,
                 block_size=block_size,
                 dtype=dtype,
+                logits_dtype=logits_dtype,
                 logit_soft_cap=logit_soft_cap,
                 precision=precision,
                 return_argmax=False,
@@ -197,6 +200,7 @@ def _linear_softmax_cross_entropy_loss_streaming_fwd(
                 w,
                 block_size=block_size,
                 dtype=dtype,
+                logits_dtype=logits_dtype,
                 logit_soft_cap=logit_soft_cap,
                 precision=precision,
                 return_argmax=False,
@@ -216,6 +220,7 @@ def _linear_softmax_cross_entropy_loss_streaming_fwd_with_argmax(
     *,
     block_size: int,
     dtype: Optional[jnp.dtype],
+    logits_dtype: Optional[jnp.dtype] = None,
     batch_block_size: int,
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
@@ -238,6 +243,7 @@ def _linear_softmax_cross_entropy_loss_streaming_fwd_with_argmax(
                 w,
                 block_size=block_size,
                 dtype=dtype,
+                logits_dtype=logits_dtype,
                 logit_soft_cap=logit_soft_cap,
                 precision=precision,
                 return_argmax=True,
@@ -264,6 +270,7 @@ def _linear_softmax_cross_entropy_loss_streaming_fwd_with_argmax(
                 w,
                 block_size=block_size,
                 dtype=dtype,
+                logits_dtype=logits_dtype,
                 logit_soft_cap=logit_soft_cap,
                 precision=precision,
                 return_argmax=True,
@@ -287,6 +294,7 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd(
     *,
     block_size: int,
     dtype: Optional[jnp.dtype],
+    logits_dtype: Optional[jnp.dtype] = None,
     batch_block_size: int,
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
@@ -316,8 +324,11 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd(
     lse_dtype = lse.dtype
     dout_loss = dout_loss.astype(lse_dtype)
     dout_lse = dout_lse.astype(lse_dtype)
-    gx_init = jnp.zeros_like(x)
-    gw_init = jnp.zeros((h_dim, v_padded), dtype=w.dtype)
+    # Explicit projection rounding follows the dense autodiff contract: round
+    # dlogits at that output boundary, then sum GEMM contributions in FP32 before
+    # converting to the operand dtype once. The legacy accumulation is unchanged.
+    gx_init = jnp.zeros_like(x, dtype=x.dtype if logits_dtype is None else jnp.float32)
+    gw_init = jnp.zeros((h_dim, v_padded), dtype=w.dtype if logits_dtype is None else jnp.float32)
     num_b_blocks = b_dim // batch_block_size
 
     def body(block_idx, state):
@@ -336,15 +347,13 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd(
             dout_loss_block = jax.lax.dynamic_slice(dout_loss, (batch_start,), (batch_block_size,))
             dout_lse_block = jax.lax.dynamic_slice(dout_lse, (batch_start,), (batch_block_size,))
 
-            logits = jax.lax.dot_general(
+            logits = _project_logits(
                 x_block,
                 w_block,
-                (((1,), (0,)), ((), ())),
+                dtype=dtype,
+                logits_dtype=logits_dtype,
                 precision=precision,
-                preferred_element_type=jnp.float32,
             )
-            if dtype is not None:
-                logits = logits.astype(dtype)
 
             cap_deriv = jnp.asarray(1.0, dtype=logits.dtype)
             if logit_soft_cap is not None:
@@ -366,6 +375,8 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd(
                 jnp.where(in_block, -dout_loss_block.astype(logits.dtype), 0.0)
             )
             delta = (delta * cap_deriv).astype(logits.dtype)
+            if logits_dtype is not None:
+                delta = delta.astype(logits_dtype)
 
             gx_block = jax.lax.dot_general(
                 delta,
@@ -392,7 +403,7 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd(
         return gx, gw
 
     gx, gw = jax.lax.fori_loop(0, num_blocks, body, (gx_init, gw_init))
-    return gx, gw[:, :v_dim]
+    return gx.astype(x.dtype), gw[:, :v_dim].astype(w.dtype)
 
 
 def _linear_softmax_cross_entropy_loss_streaming_bwd_scan(
@@ -405,6 +416,7 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd_scan(
     *,
     block_size: int,
     dtype: Optional[jnp.dtype],
+    logits_dtype: Optional[jnp.dtype] = None,
     batch_block_size: int,
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
@@ -457,7 +469,7 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd_scan(
 
     # Operand dtype for the two backward GEMMs. Keeping this equal to the primal
     # dtypes is what keeps them on tensor cores.
-    gemm_dtype = jnp.result_type(x.dtype, w.dtype)
+    gemm_dtype = jnp.result_type(x.dtype, w.dtype) if logits_dtype is None else jnp.dtype(logits_dtype)
 
     labels_i32 = labels.astype(jnp.int32)
     lse_f32 = lse.astype(jnp.float32)
@@ -474,15 +486,13 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd_scan(
         w_block: jax.Array,
         v_start: jax.Array,
     ) -> jax.Array:
-        logits = jax.lax.dot_general(
+        logits = _project_logits(
             x_blk,
             w_block,
-            (((1,), (0,)), ((), ())),
+            dtype=dtype,
+            logits_dtype=logits_dtype,
             precision=precision,
-            preferred_element_type=jnp.float32,
         )
-        if dtype is not None:
-            logits = logits.astype(dtype)
         logits = logits.astype(jnp.float32)
 
         cap_deriv = None
@@ -568,11 +578,12 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd_scan(
     return grad_x[:original_rows].astype(x.dtype), grad_w[:, :v_dim]
 
 
-@partial(jax.custom_vjp, nondiff_argnums=(0, 1, 2, 3, 4, 5, 6, 7))
+@partial(jax.custom_vjp, nondiff_argnums=(0, 1, 2, 3, 4, 5, 6, 7, 8))
 def _linear_softmax_cross_entropy_loss_streaming_custom_vjp(
     block_size: int,
     batch_block_size: int,
     dtype: Optional[jnp.dtype],
+    logits_dtype: Optional[jnp.dtype],
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
     fast_backward: bool,
@@ -589,6 +600,7 @@ def _linear_softmax_cross_entropy_loss_streaming_custom_vjp(
         w,
         block_size=block_size,
         dtype=dtype,
+        logits_dtype=logits_dtype,
         batch_block_size=batch_block_size,
         logit_soft_cap=logit_soft_cap,
         precision=precision,
@@ -600,6 +612,7 @@ def _linear_softmax_cross_entropy_loss_streaming_custom_vjp_fwd(
     block_size: int,
     batch_block_size: int,
     dtype: Optional[jnp.dtype],
+    logits_dtype: Optional[jnp.dtype],
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
     fast_backward: bool,
@@ -616,6 +629,7 @@ def _linear_softmax_cross_entropy_loss_streaming_custom_vjp_fwd(
         w,
         block_size=block_size,
         dtype=dtype,
+        logits_dtype=logits_dtype,
         batch_block_size=batch_block_size,
         logit_soft_cap=logit_soft_cap,
         precision=precision,
@@ -627,6 +641,7 @@ def _linear_softmax_cross_entropy_loss_streaming_custom_vjp_bwd(
     block_size: int,
     batch_block_size: int,
     dtype: Optional[jnp.dtype],
+    logits_dtype: Optional[jnp.dtype],
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
     fast_backward: bool,
@@ -651,6 +666,7 @@ def _linear_softmax_cross_entropy_loss_streaming_custom_vjp_bwd(
             dout_lse_arr,
             block_size=(bwd_v_block_size if bwd_v_block_size is not None else block_size),
             dtype=dtype,
+            logits_dtype=logits_dtype,
             batch_block_size=(bwd_batch_block_size if bwd_batch_block_size is not None else x.shape[0]),
             logit_soft_cap=logit_soft_cap,
             precision=precision,
@@ -665,6 +681,7 @@ def _linear_softmax_cross_entropy_loss_streaming_custom_vjp_bwd(
         dout_lse_arr,
         block_size=block_size,
         dtype=dtype,
+        logits_dtype=logits_dtype,
         batch_block_size=batch_block_size,
         logit_soft_cap=logit_soft_cap,
         precision=precision,
@@ -685,6 +702,7 @@ def linear_softmax_cross_entropy_loss_xla(
     *,
     block_sizes: BlockSizes | None = None,
     dtype: Optional[jnp.dtype] = jnp.float32,
+    logits_dtype: Optional[jnp.dtype] = None,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
     return_argmax: bool = False,
@@ -698,6 +716,9 @@ def linear_softmax_cross_entropy_loss_xla(
     contain only the original rows.
 
     Args:
+        logits_dtype: Optional projection output rounding before softmax's
+            ``dtype`` conversion. ``None`` retains the existing FP32-accumulated
+            projection and gradient behavior.
         fast_backward: Use the scan/one-hot/tensor-core backward. ``None`` means
             "no call-site preference" and falls back to the library default (off).
             The ``LEVANTER_CE_XLA_FAST_BWD`` env var overrides this in either
@@ -736,6 +757,7 @@ def linear_softmax_cross_entropy_loss_xla(
             labels,
             w,
             dtype=dtype,
+            logits_dtype=logits_dtype,
             logit_soft_cap=logit_soft_cap,
             precision=precision,
             return_argmax=return_argmax,
@@ -758,6 +780,7 @@ def linear_softmax_cross_entropy_loss_xla(
             w,
             block_size=v_block_size,
             dtype=dtype,
+            logits_dtype=logits_dtype,
             batch_block_size=b_block_size,
             logit_soft_cap=logit_soft_cap,
             precision=precision,
@@ -769,6 +792,7 @@ def linear_softmax_cross_entropy_loss_xla(
         v_block_size,
         b_block_size,
         dtype,
+        logits_dtype,
         logit_soft_cap,
         precision,
         bool(fast_backward),

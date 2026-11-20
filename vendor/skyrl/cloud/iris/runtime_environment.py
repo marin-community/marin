@@ -22,6 +22,7 @@ class RuntimeProfile(StrEnum):
 
     MEGATRON = "megatron"
     MEGATRON_EXPORT = "megatron-export"
+    LEVANTER = "levanter"
 
 
 class RuntimeMode(StrEnum):
@@ -36,6 +37,10 @@ def runtime_profile_for_strategy(
 ) -> RuntimeProfile:
     """Return the locked dependency profile for a trainer strategy."""
     checkpoint_export = mode is RuntimeMode.CHECKPOINT_EXPORT
+    if strategy == "levanter":
+        if checkpoint_export:
+            raise ValueError("Levanter supports native checkpoints; terminal HF export is not implemented")
+        return RuntimeProfile.LEVANTER
     if strategy == "megatron":
         return RuntimeProfile.MEGATRON_EXPORT if checkpoint_export else RuntimeProfile.MEGATRON
     if strategy is None:

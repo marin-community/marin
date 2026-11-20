@@ -18,8 +18,8 @@ COLOCATED_EXPERT_BLOCK_GPU_COUNT = 4
 def validate_expert_block_transport(config: Mapping[str, Any]) -> None:
     """Reject ``expert_block`` unless the config meets its requirements.
 
-    It needs the megatron strategy at TP=1 and ETP=1, local TP=1 vLLM engines with EP=DP>=1, and
-    the NCCL weight-sync backend.
+    Policy senders must expose complete expert matrices and dense slices. Engines
+    use local TP=1 vLLM with EP=DP and the NCCL weight-sync backend.
     """
     generator = config["generator"]
     transport = generator["weight_sync_transport"]
@@ -31,9 +31,14 @@ def validate_expert_block_transport(config: Mapping[str, Any]) -> None:
     trainer = config["trainer"]
     megatron = trainer["policy"]["megatron_config"] if trainer["strategy"] == "megatron" else None
     problems = []
-    if trainer["strategy"] != "megatron":
-        problems.append("the policy must train with the megatron strategy")
-    else:
+    if trainer["strategy"] == "levanter":
+        if trainer["placement"]["colocate_all"]:
+            problems.append("Levanter requires disaggregated learner hosts")
+        if trainer["policy"]["levanter_config"]["mesh_axes"]["model"] != 1:
+            problems.append("Levanter publication requires model=1")
+        if not generator["expert_block_sync"]["verify"]:
+            problems.append("Levanter publication requires expert_block_sync.verify=true")
+    elif trainer["strategy"] == "megatron":
         assert megatron is not None
         if megatron["tensor_model_parallel_size"] != 1:
             problems.append("the policy must use tensor_model_parallel_size 1")
@@ -46,6 +51,8 @@ def validate_expert_block_transport(config: Mapping[str, Any]) -> None:
         # checked when the ranks report.
         if megatron["expert_model_parallel_size"] < 1 or generator["inference_engine_expert_parallel_size"] < 1:
             problems.append("expert-parallel sizes must be positive")
+    else:
+        problems.append("the policy must train with the megatron or levanter strategy")
     if generator["weight_sync_backend"] != "nccl":
         problems.append("generator.weight_sync_backend must be nccl")
     if generator["backend"] != "vllm" or not generator["run_engines_locally"]:

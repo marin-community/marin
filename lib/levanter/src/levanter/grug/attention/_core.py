@@ -218,10 +218,17 @@ def apply_rotary_embedding(
     seq_len: int,
     head_dim: int,
     rope: RotaryConfig,
+    position_ids: Int[Array, "B S"] | None = None,
 ) -> tuple[Float[Array, "B S H D"], Float[Array, "B S H D"]]:
-    cos, sin = _rotary_cache(seq_len, head_dim, rope)
-    cos = cos[None, :, None, :]
-    sin = sin[None, :, None, :]
+    if position_ids is None:
+        cos, sin = _rotary_cache(seq_len, head_dim, rope)
+        cos = cos[None, :, None, :]
+        sin = sin[None, :, None, :]
+    else:
+        half_dim = head_dim // 2
+        inv_freq = 1.0 / (rope.theta ** (jnp.arange(0, half_dim, dtype=jnp.float32) / half_dim))
+        angles = position_ids.astype(jnp.float32)[..., None] * inv_freq
+        cos, sin = jnp.cos(angles)[:, :, None, :], jnp.sin(angles)[:, :, None, :]
 
     def _apply(x: Float[Array, "B S H D"]) -> Float[Array, "B S H D"]:
         dtype = x.dtype

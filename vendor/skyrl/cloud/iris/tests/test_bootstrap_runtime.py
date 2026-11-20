@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 import shutil
 import subprocess
@@ -94,6 +95,11 @@ def _fake_frozen_runtime(
     _write_module(site_packages, "shellbox/backends/daytona/machine.py", "class DaytonaMachineFactory: pass\n")
     _write_module(site_packages, "shellbox/backends/shellsim/machine.py", "class ShellSimMachineFactory: pass\n")
     _write_module(site_packages, "rolloutengine/engine.py", "class RolloutEngine: pass\n")
+    _write_module(
+        site_packages,
+        "skyrl_train/workers/levanter/levanter_worker.py",
+        "class LevanterRayActorGroup: pass\n",
+    )
 
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -127,13 +133,17 @@ def _fake_frozen_runtime(
 
 
 def _run_bootstrap(
-    environment: Path, process_environment: dict[str, str], profile: str
+    environment: Path,
+    process_environment: dict[str, str],
+    profile: str,
+    *,
+    project_root: Path = REPOSITORY_ROOT,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
             "bash",
             str(BOOTSTRAP_SCRIPT),
-            str(REPOSITORY_ROOT),
+            str(project_root),
             str(environment),
             str(environment / "runtime.sh"),
             profile,
@@ -146,6 +156,49 @@ def _run_bootstrap(
         check=False,
         timeout=30,
     )
+
+
+def test_levanter_bootstrap_keeps_torch_and_jax_environments_separate(tmp_path: Path) -> None:
+    environment, process_environment = _fake_frozen_runtime(tmp_path)
+    workspace = tmp_path / "workspace"
+    project = workspace / "vendor" / "skyrl"
+    (project / "marinskyrl").mkdir(parents=True)
+    shutil.copy2(REPOSITORY_ROOT / ".uv-version", project / ".uv-version")
+    shutil.copy2(
+        REPOSITORY_ROOT / "marinskyrl/environment_contract.py", project / "marinskyrl/environment_contract.py"
+    )
+    child = workspace / ".levanter-policy-env"
+    subprocess.run([sys.executable, "-m", "venv", "--without-pip", child], check=True)
+    site_packages = next((child / "lib").glob("python*/site-packages"))
+    receipt = tmp_path / "jax-runtime.json"
+    # The bootstrap imports each runtime in its actual venv. The child checks
+    # toolchain isolation while the parent still needs its frozen CUDA paths.
+    _write_module(
+        site_packages,
+        "jax.py",
+        "import json, os, sys\nfrom pathlib import Path\n"
+        f"Path({str(receipt)!r}).write_text(json.dumps({{'prefix': sys.prefix, "
+        "'inherited_cuda_paths': [name for name in ('CUDA_HOME', 'NVRTC_HOME', 'LIBRARY_PATH', "
+        "'LD_LIBRARY_PATH') if name in os.environ]}))\n",
+    )
+    _write_module(site_packages, "marin/__init__.py")
+    _write_module(site_packages, "marin/rl/__init__.py")
+    _write_module(site_packages, "marin/rl/levanter_worker_runtime.py", "def main(): pass\n")
+    _write_module(site_packages, "levanter/__init__.py")
+    _write_module(site_packages, "levanter/policy_learner.py", "class SpmdPolicyLearner: pass\n")
+
+    result = _run_bootstrap(environment, process_environment, "levanter", project_root=project)
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(receipt.read_text()) == {"prefix": str(child), "inherited_cuda_paths": []}
+    activation = subprocess.run(
+        ["bash", "-c", 'source "$1"; "$2" -c "import os; assert os.path.isdir(os.environ[\'CUDA_HOME\'])"',
+         "bash", environment / "runtime.sh", environment / "bin" / "python"],
+        env=process_environment,
+        capture_output=True,
+        text=True,
+    )
+    assert activation.returncode == 0, activation.stderr
 
 
 @pytest.mark.parametrize(

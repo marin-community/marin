@@ -63,12 +63,29 @@ def _apply_logit_soft_cap(logits: Float[Array, "B V"], logit_soft_cap: Optional[
     return jnp.tanh(logits / logit_soft_cap) * logit_soft_cap
 
 
+def _project_logits(x, w, *, dtype, logits_dtype, precision):
+    """Keep projection output rounding separate from softmax arithmetic."""
+    logits = jax.lax.dot_general(
+        x,
+        w,
+        (((1,), (0,)), ((), ())),
+        precision=precision,
+        preferred_element_type=jnp.float32,
+    )
+    if logits_dtype is not None:
+        logits = logits.astype(logits_dtype)
+    if dtype is not None:
+        logits = logits.astype(dtype)
+    return logits
+
+
 def linear_softmax_cross_entropy_loss_reference(
     x: Float[Array, "B H"],
     labels: Int[Array, "B"],
     w: Float[Array, "H V"],
     *,
     dtype: Optional[jnp.dtype] = jnp.float32,
+    logits_dtype: Optional[jnp.dtype] = None,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
     block_sizes: Optional[object] = None,
@@ -80,7 +97,8 @@ def linear_softmax_cross_entropy_loss_reference(
         x: [B, H] input activations.
         labels: [B] integer labels.
         w: [H, V] projection weights.
-        dtype: Optional dtype for logits/softmax.
+        dtype: Optional dtype for softmax arithmetic.
+        logits_dtype: Optional projection output dtype, rounded before converting to dtype.
         logit_soft_cap: Optional tanh soft cap for logits.
         precision: Optional matmul precision override.
         block_sizes: Ignored (for API compatibility).
@@ -90,15 +108,7 @@ def linear_softmax_cross_entropy_loss_reference(
         lse: [B] logsumexp of logits.
     """
     del block_sizes  # unused in reference implementation
-    logits = jax.lax.dot_general(
-        x,
-        w,
-        (((1,), (0,)), ((), ())),
-        precision=precision,
-        preferred_element_type=jnp.float32,
-    )
-    if dtype is not None:
-        logits = logits.astype(dtype)
+    logits = _project_logits(x, w, dtype=dtype, logits_dtype=logits_dtype, precision=precision)
 
     logits = _apply_logit_soft_cap(logits, logit_soft_cap)
     lse = _cross_entropy_logsumexp(logits)
@@ -117,6 +127,7 @@ def linear_softmax_cross_entropy_loss_streaming(
     *,
     block_size: int,
     dtype: Optional[jnp.dtype] = jnp.float32,
+    logits_dtype: Optional[jnp.dtype] = None,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
     return_argmax: bool = False,
@@ -149,15 +160,7 @@ def linear_softmax_cross_entropy_loss_streaming(
         start = block_idx * block_size
 
         w_block = jax.lax.dynamic_slice(w, (0, start), (w.shape[0], block_size))
-        logits = jax.lax.dot_general(
-            x,
-            w_block,
-            (((1,), (0,)), ((), ())),
-            precision=precision,
-            preferred_element_type=jnp.float32,
-        )
-        if dtype is not None:
-            logits = logits.astype(dtype)
+        logits = _project_logits(x, w_block, dtype=dtype, logits_dtype=logits_dtype, precision=precision)
         logits = _apply_logit_soft_cap(logits, logit_soft_cap)
 
         valid = (start + jnp.arange(block_size)) < v_dim

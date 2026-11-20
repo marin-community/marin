@@ -728,6 +728,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     block_size: Optional[int] = None,
     block_sizes: Optional[BlockSizes] = None,
     dtype: Optional[jnp.dtype] = jnp.float32,
+    logits_dtype: Optional[jnp.dtype] = None,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
     implementation: Implementation | Sequence[Implementation | ArrayImpl] | None = None,
@@ -747,6 +748,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     block_size: Optional[int] = None,
     block_sizes: Optional[BlockSizes] = None,
     dtype: Optional[jnp.dtype] = jnp.float32,
+    logits_dtype: Optional[jnp.dtype] = None,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
     implementation: Implementation | Sequence[Implementation | ArrayImpl] | None = None,
@@ -765,6 +767,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     block_size: Optional[int] = None,
     block_sizes: Optional[BlockSizes] = None,
     dtype: Optional[jnp.dtype] = jnp.float32,
+    logits_dtype: Optional[jnp.dtype] = None,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
     implementation: Implementation | Sequence[Implementation | ArrayImpl] | None = None,
@@ -781,7 +784,9 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
         logsumexp_weight: Weight for the logsumexp (z-loss) penalty.
         block_size: Optional convenience for setting block_sizes.v_block_size.
         block_sizes: Block size configuration for the kernel.
-        dtype: Optional dtype for logits/softmax computations.
+        dtype: Optional dtype for softmax computations.
+        logits_dtype: Optional projection output rounding before the dtype conversion.
+            Supported by XLA/reference only; an omitted implementation selects XLA.
         logit_soft_cap: Optional tanh soft cap for logits.
         precision: Optional matmul precision override for XLA/reference paths.
         implementation: Backend selector or override implementation list.
@@ -792,6 +797,14 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
         If return_argmax=True: tuple of (loss, argmax_ids[B]).
     """
     _validate_inputs(x, labels, w)
+    if logits_dtype is not None:
+        if implementation is None:
+            implementation = "xla"
+        selected = (implementation,) if isinstance(implementation, str) else implementation
+        if not isinstance(selected, Sequence) or any(
+            not isinstance(impl, str) or impl not in ("xla", "xla_fast_bwd", "reference") for impl in selected
+        ):
+            raise ValueError("Projection logits_dtype is supported only by the XLA and reference implementations")
     explicit_block_sizes = block_size is not None or block_sizes is not None
     resolved_block_sizes = (
         _resolve_block_sizes(block_size, block_sizes, x=x, w=w, dtype=dtype) if explicit_block_sizes else None
@@ -837,6 +850,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
             "autotune_enabled": _autotune_enabled() if needs_inferred_block_sizes else None,
             "shape": (x.shape, labels.shape, w.shape),
             "dtypes": (str(x.dtype), str(labels.dtype), str(w.dtype), str(dtype)),
+            "logits_dtype": str(logits_dtype),
             "backend": jax.default_backend(),
             "logit_soft_cap": logit_soft_cap,
             "precision": str(precision),
@@ -893,6 +907,8 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
                     logit_soft_cap=logit_soft_cap,
                     precision=precision,
                 )
+                if logits_dtype is not None:
+                    kwargs["logits_dtype"] = logits_dtype
                 if return_argmax:
                     kwargs["return_argmax"] = True
                 result = impl_for_call(x, labels, w, **kwargs)
@@ -919,6 +935,8 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
                     logit_soft_cap=logit_soft_cap,
                     precision=precision,
                 )
+                if logits_dtype is not None:
+                    kwargs["logits_dtype"] = logits_dtype
                 if return_argmax:
                     kwargs["return_argmax"] = True
                 result = fn(x, labels, w, **kwargs)

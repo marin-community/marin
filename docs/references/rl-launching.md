@@ -67,7 +67,10 @@ Marin calls SkyRL through the executable.
 
 Iris submits the Marin repository through its standard workspace bundle.
 Workers run SkyRL from `/app/vendor/skyrl` and install the project in editable
-mode with the frozen Megatron/vLLM profile. Marin artifacts and SkyRL run
+mode with the frozen Megatron/vLLM profile. The experimental Levanter strategy
+keeps that rollout environment and installs a separate JAX learner environment
+at `/app/.levanter-policy-env`; see [policy learning](policy-learning.md#skyrl-quick-loop)
+for its supported recipe and acceptance boundaries. Marin artifacts and SkyRL run
 records use `rigging.provenance` for checkout and launch context alongside
 the resolved configuration.
 Outside a Marin checkout, the launcher raises `RuntimeError` before submission.
@@ -195,12 +198,16 @@ allocation then disagrees with the derived role plan and is rejected before subm
 The preflight requires positive role dimensions, checks batch divisibility, and requires an explicit
 forward microbatch size to equal the training microbatch size. It checks local engine placement,
 rejects unsupported transport settings and requires an explicit KL-loss
-setting. For every launcher, preflight checks policy and reference Megatron parallelism against
+setting. For Megatron launchers, preflight checks policy and reference parallelism against
 the GPUs assigned to each role. Megatron builds separate dense and expert grids. The role GPU count
 must be divisible by both `TP * PP * CP` and `ETP * EP * PP`, where ETP is expert tensor
 parallelism. An omitted or null ETP inherits the role's TP before these checks.
 Context-parallel ranks participate in the expert grid, so EP need not divide dense
 data parallelism.
+
+Levanter preflight checks the explicit native mesh against the reserved learner
+GPUs and verifies optimizer-batch divisibility by its data/expert microbatch.
+Unused Megatron dimensions do not determine the native learner's mesh.
 
 ## Artifact and runtime boundaries
 

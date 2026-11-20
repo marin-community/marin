@@ -236,6 +236,11 @@ class SnowballConfig(HFCompatConfig):
     head gate, the shared MLP and the routed experts. Off, they run in the compute dtype. A runtime knob like
     ``router_dot_fp32``: not exported in HF metadata."""
 
+    head_gate_fp32: bool = False
+    """Compute the attention gate in FP32, then round it once to the activation dtype."""
+    xsa_fp32: bool = False
+    """Compute the exclusive-self-attention projection in FP32, then round back to the activation dtype."""
+
     reference_checkpoint: Optional[str] = None
     tokenizer: Optional[str] = None
 
@@ -474,6 +479,7 @@ class SnowballAttention(eqx.Module):
         x: Float[Array, "B S D"],
         mask: AttentionMask,
         disable_rope: bool = False,
+        position_ids: Int[Array, "B S"] | None = None,
     ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
@@ -488,7 +494,12 @@ class SnowballAttention(eqx.Module):
         if not disable_rope:
             half = head_dim // 2
             q_rot, k_rot = apply_rotary_embedding(
-                q[..., :half], k[..., :half], seq_len=seq_len, head_dim=half, rope=self.cfg.rope
+                q[..., :half],
+                k[..., :half],
+                seq_len=seq_len,
+                head_dim=half,
+                rope=self.cfg.rope,
+                position_ids=position_ids,
             )
             q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
             k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
@@ -508,12 +519,19 @@ class SnowballAttention(eqx.Module):
         aligned_v = align_kv_heads(local_v, num_q_heads=attn_out.shape[2])
         aligned_v = _partition_match(aligned_v, attn_out)
         # Exclusive Self-Attention: subtract the component of y parallel to v, per head.
+        attention_dtype = attn_out.dtype
+        if self.cfg.xsa_fp32:
+            attn_out, aligned_v = attn_out.astype(jnp.float32), aligned_v.astype(jnp.float32)
         dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
         v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
-        attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
+        attn_out = (attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v).astype(attention_dtype)
         # Headwise gating: 2 * sigmoid(x @ attn_gate), one scalar per head.
-        sigmoid = sigmoid_fp32 if self.cfg.fp32_activations else jax.nn.sigmoid
-        gate = 2 * sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
+        gate_logits = jnp.einsum("bsd,dn->bsn", x, self.attn_gate)
+        if self.cfg.head_gate_fp32:
+            gate = (2 * jax.nn.sigmoid(gate_logits.astype(jnp.float32))).astype(attention_dtype)[..., None]
+        else:
+            sigmoid = sigmoid_fp32 if self.cfg.fp32_activations else jax.nn.sigmoid
+            gate = 2 * sigmoid(gate_logits)[..., None]
         attn_out = gate * attn_out
         attn_out = jnp.reshape(
             attn_out,
@@ -738,8 +756,9 @@ class SnowballBlock(eqx.Module):
         short_mask: AttentionMask,
         long_mask: AttentionMask,
         use_long: Bool[Array, ""],
+        position_ids: Int[Array, "B S"] | None = None,
     ) -> Float[Array, "B S D"]:
-        return self.forward(x, short_mask, long_mask, use_long, return_routes=False)[0]
+        return self.forward(x, short_mask, long_mask, use_long, return_routes=False, position_ids=position_ids)[0]
 
     def forward(
         self,
@@ -748,9 +767,10 @@ class SnowballBlock(eqx.Module):
         long_mask: AttentionMask,
         use_long: Bool[Array, ""],
         return_routes: bool,
+        position_ids: Int[Array, "B S"] | None = None,
     ) -> tuple[Float[Array, "B S D"], Array | None]:
         """The block output and, with ``return_routes``, the MoE's selected expert ids [B, S, K] (an observer)."""
-        result = self._forward(x, short_mask, long_mask, use_long, return_routes)
+        result = self._forward(x, short_mask, long_mask, use_long, return_routes, position_ids=position_ids)
         return result.output, result.routes
 
     def _forward(
@@ -761,6 +781,7 @@ class SnowballBlock(eqx.Module):
         use_long: Bool[Array, ""],
         return_routes: bool,
         token_valid: Array | None = None,
+        position_ids: Int[Array, "B S"] | None = None,
     ) -> MoeForwardOutput:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         # ``lax.cond`` keeps a uniform per-layer body so the transformer can scan the layers:
@@ -768,8 +789,8 @@ class SnowballBlock(eqx.Module):
         # sliding-window mask and keep RoPE. Both branches are the same shape.
         attn_out = jax.lax.cond(
             jnp.asarray(use_long, dtype=jnp.bool_),
-            lambda _: self.attn(attn_in, long_mask, disable_rope=True),
-            lambda _: self.attn(attn_in, short_mask, disable_rope=False),
+            lambda _: self.attn(attn_in, long_mask, disable_rope=True, position_ids=position_ids),
+            lambda _: self.attn(attn_in, short_mask, disable_rope=False, position_ids=position_ids),
             operand=None,
         )
         x = x + attn_out
@@ -829,23 +850,38 @@ class SnowballTransformer(eqx.Module):
         )
 
     @named_call
-    def __call__(self, token_ids: Int[Array, "B S"], mask: Optional[AttentionMask] = None) -> Float[Array, "B S D"]:
-        return self._forward(token_ids, mask, return_routes=False).output
+    def __call__(
+        self,
+        token_ids: Int[Array, "B S"],
+        mask: Optional[AttentionMask] = None,
+        *,
+        position_ids: Int[Array, "B S"] | None = None,
+    ) -> Float[Array, "B S D"]:
+        return self._forward(token_ids, mask, return_routes=False, position_ids=position_ids).output
 
     def with_routes(
-        self, token_ids: Int[Array, "B S"], mask: Optional[AttentionMask] = None
+        self,
+        token_ids: Int[Array, "B S"],
+        mask: Optional[AttentionMask] = None,
+        *,
+        position_ids: Int[Array, "B S"] | None = None,
     ) -> tuple[Float[Array, "B S D"], Int[Array, "L B S K"]]:
         """The final hidden state [B, S, D] and every layer's selected expert ids [L, B, S, K], collected from the
         forward as run (an observer: routing is not recomputed or changed)."""
-        result = self._forward(token_ids, mask, return_routes=True)
+        result = self._forward(token_ids, mask, return_routes=True, position_ids=position_ids)
         assert result.routes is not None
         return result.output, result.routes
 
     def with_stats(
-        self, token_ids: Array, token_valid: Array, mask: AttentionMask | None = None
+        self,
+        token_ids: Array,
+        token_valid: Array,
+        mask: AttentionMask | None = None,
+        *,
+        position_ids: Int[Array, "B S"] | None = None,
     ) -> tuple[Array, MoeForwardStats]:
         """Run causal attention with document segments, dispatch validity and counts."""
-        result = self._forward(token_ids, mask, True, token_valid)
+        result = self._forward(token_ids, mask, True, token_valid, position_ids=position_ids)
         assert result.routes is not None and result.counts is not None
         stats = MoeForwardStats(result.routes, result.counts.sender_dropped, result.counts.receiver_dropped)
         return result.output, stats
@@ -856,6 +892,7 @@ class SnowballTransformer(eqx.Module):
         mask: Optional[AttentionMask],
         return_routes: bool,
         token_valid: Array | None = None,
+        position_ids: Int[Array, "B S"] | None = None,
     ) -> MoeForwardOutput:
         cfg = self.config
         if mask is None:
@@ -865,6 +902,8 @@ class SnowballTransformer(eqx.Module):
         long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
 
         token_ids = reshard(token_ids, P(_BATCH_AXES, _context_axis()))
+        if position_ids is not None:
+            position_ids = reshard(position_ids, P(_BATCH_AXES, _context_axis()))
         if token_valid is not None:
             token_valid = reshard(token_valid, P(_BATCH_AXES, _context_axis()))
         hidden = self.token_embed.at[token_ids].get(out_sharding=_activation_spec())
@@ -881,12 +920,16 @@ class SnowballTransformer(eqx.Module):
         def _scan_layer(carry: Float[Array, "B S D"], layer_and_flag):
             layer, use_long = layer_and_flag
             if token_valid is not None:
-                result = layer._forward(carry, short_mask, long_mask, use_long, return_routes, token_valid)
+                result = layer._forward(
+                    carry, short_mask, long_mask, use_long, return_routes, token_valid, position_ids=position_ids
+                )
                 return result.output, (result.routes, result.counts)
             if return_routes:
-                hidden, routes = layer.forward(carry, short_mask, long_mask, use_long, return_routes=True)
+                hidden, routes = layer.forward(
+                    carry, short_mask, long_mask, use_long, return_routes=True, position_ids=position_ids
+                )
                 return hidden, (routes, None)
-            return layer(carry, short_mask, long_mask, use_long), (None, None)
+            return layer(carry, short_mask, long_mask, use_long, position_ids=position_ids), (None, None)
 
         # Bound routed-expert activation memory during the backward pass as well as forward.
         hidden, (routes, counts) = jax.lax.scan(jax.checkpoint(_scan_layer), hidden, (stacked, long_schedule))
@@ -927,7 +970,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         key=None,
         pos_ids: NamedArray | None = None,
     ) -> NamedArray:
-        return self._activations(input_ids, return_routes=False, attn_mask=attn_mask)[0]
+        return self._activations(input_ids, return_routes=False, attn_mask=attn_mask, pos_ids=pos_ids)[0]
 
     def activations_with_routes(
         self, input_ids: NamedArray, attn_mask: LmHeadAttentionMask | NamedArray | None = None
@@ -995,6 +1038,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         input_ids: NamedArray,
         return_routes: bool,
         attn_mask: LmHeadAttentionMask | NamedArray | None,
+        pos_ids: NamedArray | None = None,
     ) -> tuple[NamedArray, Array | None]:
         Pos = input_ids.resolve_axis(self.Pos.name)
         raw = input_ids.array
@@ -1005,7 +1049,14 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         # [B, S, D], and [L, B, S, K] with return_routes
         mask = self._attention_mask(input_ids, attn_mask)
         hidden, routes = (
-            self.transformer.with_routes(tokens, mask) if return_routes else (self.transformer(tokens, mask), None)
+            self.transformer.with_routes(
+                tokens, mask, position_ids=None if pos_ids is None else pos_ids.array.reshape(b, s)
+            )
+            if return_routes
+            else (
+                self.transformer(tokens, mask, position_ids=None if pos_ids is None else pos_ids.array.reshape(b, s)),
+                None,
+            )
         )
         hidden = hidden.reshape(*lead, s, self.Embed.size) if lead else hidden.reshape(s, self.Embed.size)
         out_axes = (*input_ids.axes, self.Embed) if lead else (Pos, self.Embed)
