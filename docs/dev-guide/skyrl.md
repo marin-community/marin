@@ -55,17 +55,26 @@ remain older after a dependency override. In the frozen CUDA runtime, run:
 ```bash
 python - <<'PYTHON'
 import ctypes
+from pathlib import Path
 import torch
 
+paths = {
+    line.split()[-1]
+    for line in Path("/proc/self/maps").read_text().splitlines()
+    if "libnccl.so" in line and line.split()[-1].startswith("/")
+}
+assert len(paths) == 1, paths
+library = ctypes.CDLL(paths.pop())
 version = ctypes.c_int()
-status = ctypes.CDLL("libnccl.so.2").ncclGetVersion(ctypes.byref(version))
+status = library.ncclGetVersion(ctypes.byref(version))
 assert status == 0, status
 print("Loaded NCCL:", version.value, "Torch build NCCL:", torch.cuda.nccl.version())
 PYTHON
 ```
 
 NCCL 2.32.6 reports `23206`. Set `NCCL_DEBUG=VERSION` before a collective test
-to retain the library's version banner with the numerical results.
+and capture its stdout and stderr to save the version banner with the numerical
+results.
 
 The launcher lock targets Linux x86_64, Linux aarch64, and macOS ARM64.
 The pinned Ray release has no Intel macOS wheel.
