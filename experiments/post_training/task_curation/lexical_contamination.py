@@ -44,6 +44,7 @@ from experiments.post_training.task_curation.pipeline import (
 )
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort
 from experiments.post_training.task_curation.retained_release import RetainedCohort
+from experiments.post_training.task_curation.source import RlDataSource
 from experiments.post_training.task_curation.sources import all_sources
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, original_source_id
 
@@ -75,8 +76,9 @@ class TextPopulationFiles(NamedTuple):
     drop_manifest_uri: str
 
 
-def source_documents(config: SourceTextConfig, rejected: Counter, admission: Counter) -> Iterable[tuple[dict, dict]]:
-    source = all_sources()[canonical_source_id(config.source_id)]
+def source_documents(
+    source: RlDataSource, config: SourceTextConfig, rejected: Counter, admission: Counter
+) -> Iterable[tuple[dict, dict]]:
     definition = source.config
     if isinstance(definition, PrebuiltCohort | RetainedCohort):
         with (StoragePath(config.source_input) / definition.files[0]).open("rb") as stream:
@@ -185,9 +187,15 @@ def write_text_population(documents: Iterable[tuple[dict, dict]], output_path: s
 
 
 def normalize_source(config: SourceTextConfig) -> SourceTextPopulation:
-    source = all_sources()[canonical_source_id(config.source_id)]
+    return normalize_source_population(all_sources()[canonical_source_id(config.source_id)], config)
+
+
+def normalize_source_population(source: RlDataSource, config: SourceTextConfig) -> SourceTextPopulation:
+    """Normalize an explicit configured source before qualification receipts exist."""
+    if source.info.id != canonical_source_id(config.source_id):
+        raise ValueError("Normalization configuration belongs to another source")
     rejected, admission = Counter(), Counter()
-    files = write_text_population(source_documents(config, rejected, admission), config.output_path)
+    files = write_text_population(source_documents(source, config, rejected, admission), config.output_path)
     if files.task_count == 0:
         raise ValueError(f"Registered converter emitted no TaskSpecs: {source.info.id}; {dict(rejected)}")
     dataset = source.dataset
