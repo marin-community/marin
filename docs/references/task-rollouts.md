@@ -125,6 +125,21 @@ For these trials, the Harbor task package defines the image, environment variabl
 and agent user. TaskSpec may add `setup_commands` and their setup-only
 `working_directory`; other TaskSpec machine-environment overrides are rejected.
 
+## SkyRL reply text
+
+The SkyRL model client returns visible text in `responses` and assistant message
+`content`. These fields exclude the trailing EOS or chat turn terminator, even
+with `skip_special_tokens=False`. Graders, task steps, and conversation history
+use this text. The chat template supplies the history terminator after tool calls.
+`skip_special_tokens` controls special tokens within the reply.
+
+Sampled `response_ids` keep all tokens for training. To inspect the complete
+decoded generation, set `return_raw_text=True` on the model-client request. The
+client then adds `raw_responses`, decoded from those IDs with special tokens,
+including any sampled reasoning and the final terminator. The field is absent by
+default. The client consumes this option; it does not forward it to the inference
+engine.
+
 ## Harnesses
 
 A harness is the agent loop of a task: what the model sees, which tools run, and when the attempt ends.
