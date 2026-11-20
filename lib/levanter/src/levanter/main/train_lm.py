@@ -14,6 +14,7 @@ import jax.numpy as jnp
 import jax.random as jrandom
 from haliax import Axis
 from haliax.partitioning import named_jit
+from rigging.filesystem.storage_path import StoragePath
 
 import levanter
 import levanter.analysis
@@ -262,7 +263,7 @@ def main(config: TrainLmConfig):
             assert isinstance(config.model, HFCompatConfig) and converter is not None
             config.model.validate_hf_export()
             if not config.initialize_from_hf:
-                converter = dataclasses.replace(converter, reference_checkpoint=None)
+                converter = converter.without_reference_checkpoint()
     elif config.initialize_from_hf:
         assert isinstance(config.model, HFCompatConfig)
         converter = config.model.hf_checkpoint_converter()

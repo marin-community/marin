@@ -16,7 +16,9 @@ Native Llama supports unquantized training, HF weight initialization, full-state
 Levanter checkpoints, and tagged held-out evaluation. Set `hf_save_path` to a
 local directory and `hf_save_steps` to export full-model HF snapshots. Export
 requires standard weighted RMSNorm and bias-free projections. Training from
-scratch exports using the data tokenizer and the model configuration.
+scratch exports using the data tokenizer and the model configuration. The
+training entry point rejects quantization, adapters, Hub uploads, and optional
+entropy and harness callbacks.
 
 Native checkpoints include model architecture and
 vocabulary metadata; restore validates those fields before constructing the

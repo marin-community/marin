@@ -273,7 +273,7 @@ def test_native_local_hf_shards_roundtrip_preserves_gqa_rope_weights_and_loss(tm
         )
         loss = eqx.filter_jit(lambda m: m.compute_next_token_loss(example).scalar())
         expected_loss = loss(model)
-        converter = dataclasses.replace(context.converter, reference_checkpoint=None)
+        converter = context.converter.without_reference_checkpoint()
         converter.save_pretrained(model, str(tmp_path), max_shard_size=65536)
         loaded = load_hf_checkpoint(
             config,
