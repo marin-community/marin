@@ -244,7 +244,11 @@ def gsm8k_block(question: str, hint: str, solution: str | None) -> str:
 
 
 def gsm8k_rows(
-    documents: Sequence[Document], pool: Sequence[Document], method: HintMethod, *, source_row_prefix: str
+    documents: Sequence[dict[str, Any]],
+    pool: Sequence[dict[str, Any]],
+    method: HintMethod,
+    *,
+    source_row_prefix: str,
 ) -> Iterator[dict[str, Any]]:
     """Yield the plain prompt (``HintMethod.NONE``) or ten hinted prompts per problem."""
     template = HarnessTemplate(name="gsm8k", num_fewshot=GSM8K_SHOTS)
