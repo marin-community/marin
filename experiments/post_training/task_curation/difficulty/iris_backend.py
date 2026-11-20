@@ -23,6 +23,7 @@ from experiments.post_training.task_curation.difficulty.planner import (
     Action,
     AttemptBatch,
     QualifyJudgeRoute,
+    RecheckExecutabilityAdmission,
     action_from_payload,
     action_id,
 )
@@ -31,6 +32,7 @@ from experiments.post_training.task_curation.difficulty_protocol import PINS
 JOB_COMPONENT = "difficulty-reconcile-"
 MAX_JUDGE_GPUS = 8
 JOB_NAMESPACE = "atlas-difficulty"
+ADMISSION_RECHECK_TIMEOUT = 3600
 
 
 @dataclass(frozen=True)
@@ -78,6 +80,8 @@ class IrisBackend:
             timeout = int(action.max_gpu_hours * 3600 / gpu_count)
         elif isinstance(action, QualifyJudgeRoute):
             timeout = int(MAX_GPU_HOURS_PER_JOB * 3600 / MAX_JUDGE_GPUS)
+        elif isinstance(action, RecheckExecutabilityAdmission):
+            timeout = ADMISSION_RECHECK_TIMEOUT
         command = [
             "python",
             "-m",

@@ -2530,6 +2530,16 @@ routes. The gate in `difficulty_preparation.py` accepts the GLM route and every
 `JUDGE_TIERS` model (`SERVED_JUDGE_MODELS`); a validated endpoint is confirmed
 at serving time by the judge probe and identity receipt.
 
+The reconciler schedules `RecheckExecutabilityAdmission` for legacy static
+admission and filtration gaps before escalation. One bounded CPU job per frozen
+source population rechecks every selected contract across affected solvers.
+The existing preparation gate verifies the original task hashes and repeats its
+executability checks. A cleared gate returns missing tasks to attempt planning.
+If a provider, shared executor or another preflight prerequisite is still
+unsupported, the result records each blocked task ID, hash and typed reason
+before escalation. It does not drop tasks or change source status. A different
+admitted population still requires a qualified release and a new frozen panel.
+
 ### How SOURCE gaps are escalated
 
 `DIFFICULTY_GAPS`

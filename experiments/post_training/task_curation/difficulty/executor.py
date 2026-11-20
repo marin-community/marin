@@ -34,6 +34,7 @@ from experiments.post_training.task_curation.difficulty.planner import (
     Escalate,
     QualifyJudgeRoute,
     RebuildEnvironmentArtifact,
+    RecheckExecutabilityAdmission,
     RetryAfter,
     action_cells,
     action_from_payload,
@@ -331,4 +332,6 @@ def repaired_gap(action: Action) -> Gap:
         return Gap(GapReason.DAYTONA_SNAPSHOT_PREFLIGHT_PENDING)
     if isinstance(action, BuildTaskSpecFactory):
         return Gap(GapReason.TASK_SPEC_FACTORY_PENDING)
+    if isinstance(action, RecheckExecutabilityAdmission):
+        return Gap(GapReason.EXECUTABILITY_ADMISSION_PENDING)
     raise ValueError(f"Action cannot publish repair evidence: {type(action).__name__}")

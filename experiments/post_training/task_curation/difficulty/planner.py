@@ -12,10 +12,18 @@ from finestore.rl.difficulty import Solver
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.difficulty.ledger import digest
-from experiments.post_training.task_curation.difficulty.state import CellState, CellStatus, Gap, GapReason, LedgerRow
+from experiments.post_training.task_curation.difficulty.state import (
+    CatalogSource,
+    CellState,
+    CellStatus,
+    Gap,
+    GapReason,
+    LedgerRow,
+)
 
 MAX_TASKS_PER_JOB = 20
 MAX_GPU_HOURS_PER_JOB = 40.0
+ADMISSION_CAPABILITY_PREFIXES = ("executability_admission_pending:", "filtration_findings_admission_pending:")
 
 
 @dataclass(frozen=True)
@@ -56,6 +64,12 @@ class BuildTaskSpecFactory:
 
 
 @dataclass(frozen=True)
+class RecheckExecutabilityAdmission:
+    source: SourceAttempts
+    cells: tuple[tuple[str, Solver], ...]
+
+
+@dataclass(frozen=True)
 class QualifyJudgeRoute:
     model: str
     cells: tuple[tuple[str, Solver], ...]
@@ -84,6 +98,7 @@ Action = (
     | RebuildEnvironmentArtifact
     | BuildSnapshot
     | BuildTaskSpecFactory
+    | RecheckExecutabilityAdmission
     | QualifyJudgeRoute
     | RetryAfter
     | Escalate
@@ -216,6 +231,38 @@ class TaskSpecRemediation:
 
 
 @dataclass(frozen=True)
+class AdmissionRemediation:
+    def plan(self, cells: Sequence[CellState]) -> list[Action]:
+        grouped: dict[CatalogSource, list[CellState]] = {}
+        actions: list[Action] = []
+        for cell in cells:
+            capabilities = [
+                gap.capability for gap in cell.gaps if gap.reason == GapReason.EXECUTABILITY_ADMISSION_PENDING
+            ]
+            if not all(
+                capability and capability.startswith(ADMISSION_CAPABILITY_PREFIXES) for capability in capabilities
+            ):
+                actions.extend(EscalationRemediation(GapReason.EXECUTABILITY_ADMISSION_PENDING).plan([cell]))
+                continue
+            grouped.setdefault(cell.source, []).append(cell)
+        for source, group in grouped.items():
+            actions.append(
+                RecheckExecutabilityAdmission(
+                    SourceAttempts(
+                        source.source_id,
+                        source.registry_revision,
+                        tuple((task, sha, 1) for task, sha in source.tasks),
+                        source.queue_uri,
+                        source.queue_sha256,
+                        tuple(sorted({evidence for cell in group for evidence in cell.evidence_ids})),
+                    ),
+                    tuple(sorted({(cell.source.source_id, cell.solver) for cell in group})),
+                )
+            )
+        return actions
+
+
+@dataclass(frozen=True)
 class JudgeRemediation:
     def plan(self, cells: Sequence[CellState]) -> list[Action]:
         grouped: dict[tuple[str, float | None], list[CellState]] = {}
@@ -276,7 +323,7 @@ REMEDIATIONS: dict[GapReason, Remediation] = {
     GapReason.PROTOCOL_INPUT_BUDGET_EXCEEDED: EscalationRemediation(GapReason.PROTOCOL_INPUT_BUDGET_EXCEEDED),
     GapReason.NETWORK_POLICY_VIOLATION: EscalationRemediation(GapReason.NETWORK_POLICY_VIOLATION),
     GapReason.UNSUPPORTED_COMPOSE_DOCUMENT: EscalationRemediation(GapReason.UNSUPPORTED_COMPOSE_DOCUMENT),
-    GapReason.EXECUTABILITY_ADMISSION_PENDING: EscalationRemediation(GapReason.EXECUTABILITY_ADMISSION_PENDING),
+    GapReason.EXECUTABILITY_ADMISSION_PENDING: AdmissionRemediation(),
 }
 
 
@@ -366,6 +413,11 @@ def action_from_payload(payload: dict) -> Action:
         return BuildSnapshot(source_attempts_from_payload(payload["source"]), Solver(payload["solver"]))
     if kind == "BuildTaskSpecFactory":
         return BuildTaskSpecFactory(source_attempts_from_payload(payload["source"]), Solver(payload["solver"]))
+    if kind == "RecheckExecutabilityAdmission":
+        return RecheckExecutabilityAdmission(
+            source_attempts_from_payload(payload["source"]),
+            tuple((source, Solver(solver)) for source, solver in payload["cells"]),
+        )
     if kind == "RetryAfter":
         return RetryAfter(
             payload["provider"], source_attempts_from_payload(payload["source"]), Solver(payload["solver"])
