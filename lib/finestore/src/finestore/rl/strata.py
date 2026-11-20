@@ -115,7 +115,7 @@ class SelectionDefinition(BaseModel):
 
 
 @dataclass(frozen=True)
-class SelectionStrata:
+class SelectionManifest:
     definition: SelectionDefinition
     tasks: dict[str, SelectionTaskRow]
 
@@ -148,7 +148,7 @@ def _task_file_digests(path: str, _content_key: str) -> dict[str, str]:
     return result
 
 
-def read_selection_strata(root: str) -> SelectionStrata | None:
+def read_selection_manifest(root: str) -> SelectionManifest | None:
     """Read and validate a versioned selection's membership, content and strata."""
     directory = StoragePath(root)
     summary_path = directory / "summary.json"
@@ -196,4 +196,4 @@ def read_selection_strata(root: str) -> SelectionStrata | None:
             counts[family] = counts.get(family, 0) + 1
         if counts != definition.family_quotas:
             raise ValueError(f"selection family counts differ from quotas: {counts}")
-    return SelectionStrata(definition, tasks)
+    return SelectionManifest(definition, tasks)

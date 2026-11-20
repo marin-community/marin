@@ -38,7 +38,7 @@ from skyrl_train.evaluation_profiles import (
     EvaluationProfile,
     evaluation_profile_due,
     resolve_evaluation_profiles,
-    named_evaluation_metrics,
+    additional_evaluation_metrics,
 )
 from skyrl_train.config.callbacks import has_explicit_callbacks, hf_export_destination_configured
 from skyrl_train.distillation import DISTILLATION_SCORED_TOKENS_METRIC
@@ -417,7 +417,7 @@ class EvaluationCallback(TrainerCallback):
                 profile=parameters,
                 evaluation_pool=pool,
             )
-            metrics.update(named_evaluation_metrics(additional, name))
+            metrics.update(additional_evaluation_metrics(additional, name))
 
         async with asyncio.TaskGroup() as tasks:
             for name, parameters in self.additional_evaluations.items():

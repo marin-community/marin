@@ -38,7 +38,7 @@ from tests.cpu.tiny_training.tiny_model import build_tiny_policy
 
 
 @pytest.mark.parametrize("experiment_type", [BasePPOExp, TerminalBenchExp])
-def test_final_profiles_build_primary_and_named_datasets_without_periodic_evaluation(tmp_path, experiment_type):
+def test_final_profiles_build_primary_and_additional_datasets_without_periodic_evaluation(tmp_path, experiment_type):
     config = get_default_config()
     primary, named = tmp_path / "primary" / "tasks.parquet", tmp_path / "named" / "tasks.parquet"
     for path in (primary, named):
@@ -89,17 +89,17 @@ def test_final_profiles_build_primary_and_named_datasets_without_periodic_evalua
     experiment.tokenizer = AutoTokenizer.from_pretrained(build_tiny_policy(tmp_path / "model"))
 
     primary_dataset = experiment.get_eval_dataset()
-    named_datasets = experiment.get_named_eval_datasets()
+    additional_datasets = experiment.get_additional_eval_datasets()
 
     assert primary_dataset is not None
     assert [row["input"].spec.task.id for row in primary_dataset.collate_fn(list(primary_dataset))] == ["shared"]
-    named_dataset = named_datasets["named_final"]
-    assert [row["input"].spec.task.id for row in named_dataset.collate_fn(list(named_dataset))] == ["shared"]
+    additional_dataset = additional_datasets["named_final"]
+    assert [row["input"].spec.task.id for row in additional_dataset.collate_fn(list(additional_dataset))] == ["shared"]
     if experiment_type is TerminalBenchExp:
-        assert (primary_dataset.uid(0), named_dataset.uid(0)) == ("shared", "shared")
+        assert (primary_dataset.uid(0), additional_dataset.uid(0)) == ("shared", "shared")
 
     identities = [
-        dataset.collate_fn(list(dataset))[0]["input"].metadata for dataset in (primary_dataset, named_dataset)
+        dataset.collate_fn(list(dataset))[0]["input"].metadata for dataset in (primary_dataset, additional_dataset)
     ]
     assert [
         (

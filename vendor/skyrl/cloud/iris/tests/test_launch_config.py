@@ -728,7 +728,7 @@ def test_callback_setup_rejects_final_metrics_during_periodic_evaluation(tmp_pat
         ("mixed-field-keys", {1: 0, "typo": 0}, "mapping keys must be strings"),
     ],
 )
-def test_named_evaluation_data_is_staged_and_bound_in_training_driver(
+def test_additional_evaluation_data_is_staged_and_bound_in_training_driver(
     tmp_path: Path, monkeypatch, case, patch, error
 ) -> None:
     path = tmp_path / "evaluation.yaml"

@@ -427,8 +427,8 @@ class BasePPOExp:
         data_files = self.cfg.data.val_data if data_files is None else data_files
         probe = self.cfg.trainer.mismatch_probe
         needs_probe_prompts = probe.enabled and probe.reuse_probe is None
-        needs_named_evaluation = bool(self.evaluation_profiles)
-        if (self.cfg.trainer.eval_interval > 0 or needs_probe_prompts or needs_named_evaluation) and data_files:
+        needs_additional_evaluation = bool(self.evaluation_profiles)
+        if (self.cfg.trainer.eval_interval > 0 or needs_probe_prompts or needs_additional_evaluation) and data_files:
             return self._build_eval_dataset(data_files)
         return None
 
@@ -437,8 +437,8 @@ class BasePPOExp:
             return self.harbor_task_dataset(data_files)
         return self.task_dataset(data_files)
 
-    def get_named_eval_datasets(self):
-        """Build the datasets selected by named evaluation profiles."""
+    def get_additional_eval_datasets(self):
+        """Build the datasets selected by additional evaluation profiles."""
         datasets = {}
         for name, profile in self.evaluation_profiles.items():
             if profile.data_files is not None:
@@ -600,7 +600,7 @@ class BasePPOExp:
             tokenizer=tokenizer,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            named_eval_datasets=self.get_named_eval_datasets(),
+            additional_eval_datasets=self.get_additional_eval_datasets(),
             callbacks=create_default_callbacks(cfg, evaluation_profiles=self.evaluation_profiles),
             inference_engine_client=inference_engine_client,
             trajectory_runner=trajectory_runner,

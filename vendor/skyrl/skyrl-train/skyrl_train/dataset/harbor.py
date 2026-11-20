@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pyarrow.parquet as pq
-from finestore.rl.strata import TaskEvaluationIdentity, read_selection_strata
+from finestore.rl.strata import TaskEvaluationIdentity, read_selection_manifest
 from loguru import logger
 from transformers import PreTrainedTokenizerBase
 from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
@@ -178,12 +178,12 @@ def _parquet_evaluation_identities(
     for source in data_files:
         if not isinstance(source, str) or not source.endswith(".parquet"):
             continue
-        panel = read_selection_strata(str(Path(source).parent))
+        selection = read_selection_manifest(str(Path(source).parent))
         with pq.ParquetFile(source) as parquet:
             for batch in parquet.iter_batches(columns=[TASK_ROLLOUT_COLUMN], batch_size=MATERIALIZATION_BATCH_SIZE):
                 for raw in batch.column(0).to_pylist():
                     task_id = json.loads(raw)["task"]["id"]
-                    identity = panel.identity(task_id) if panel is not None else None
+                    identity = selection.identity(task_id) if selection is not None else None
                     if task_id in identities and identities[task_id] != identity:
                         raise ValueError(f"task has conflicting selection identities in one input set: {task_id}")
                     identities[task_id] = identity
