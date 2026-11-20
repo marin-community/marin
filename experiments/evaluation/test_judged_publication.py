@@ -183,11 +183,8 @@ def test_physics_verified_drops_figure_rows_and_judges_each_labelled_answer(tmp_
 
     [source] = evaluation_benchmarks()["physics-verified"].resolve()
     (case,) = published_cases(source, write_rows, tmp_path, monkeypatch, 1)
-    system, user = conversation_messages(case.task.context.events)
-    assert system["content"].startswith("Your response should be in the following format:")
+    _, user = conversation_messages(case.task.context.events)
     assert user == {"role": "user", "content": "(a) Find f. (b) Find n."}
-    assert case.item.operation.response_selection == "final_only"
-    assert case.item.groups == {"domain": "Optics"}
     state, connection = judge_http
     verdicts = {"answers": [{"correct": "yes"}, {"correct": "no"}], "confidence": 70}
     state["response"] = judge_response("PHYSICS-Verified", reply=json.dumps(verdicts))

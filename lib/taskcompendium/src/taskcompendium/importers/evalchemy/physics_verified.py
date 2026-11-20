@@ -36,7 +36,6 @@ def is_text_only(row: dict[str, Any], _context: ConversionContext) -> bool:
 
 
 def physics_verified_judge(row: dict[str, Any]) -> JudgeSpec:
-    """One verdict per labelled reference, rendered as the harness lists them."""
     return JudgeSpec(
         rubric="answers",
         question=row["questions"],

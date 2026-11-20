@@ -10,7 +10,6 @@ question put to the model on its own, and the reward is the fraction answered ye
 default mean aggregation scored them. ``labels`` maps a configured final verdict label to its
 explicit task score. ``answers`` follows Humanity's Last Exam's judge, extended to several results:
 one call returns a JSON verdict per reference, and the task scores 1 only when every one is correct.
-It samples with the judge's own defaults, as those harnesses do: reasoning judges loop under greedy decoding.
 All rubrics can sit behind ``constraints``, deterministic IFEval checks that must all pass first.
 
 The judge is any OpenAI-compatible chat endpoint, configured through ``VERIFYIT_JUDGE_BASE_URL``,
@@ -154,8 +153,6 @@ class _ScoreResult:
 
 @dataclass(frozen=True)
 class _AnswerVerdict:
-    """The judge's verdict on one reference answer under the ``answers`` rubric."""
-
     index: int
     label: Any
     extracted_final_answer: Any
@@ -533,7 +530,6 @@ def _judge_answers(
 
 
 def _answer_verdicts(reply: str, count: int) -> tuple[list[_AnswerVerdict], int | None] | None:
-    """Parse ``{"answers": [{"correct": "yes"|"no", ...}], "confidence": n}`` with one entry per reference."""
     start, end = reply.find("{"), reply.rfind("}")
     if start < 0 or end < start:
         return None
