@@ -3,18 +3,14 @@
 
 """SWE-rebench V2.1 repair conversion: declared bases, task-start setup, family config."""
 
-import base64
-import io
 import json
 import re
-import tarfile
 import types
 
 import pytest
 import tomlkit
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.task_curation.datasets.native_harbor import unpack_native
 from experiments.post_training.task_curation.datasets.swe_rebench_v2 import groups
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert import (
     _flatten,
