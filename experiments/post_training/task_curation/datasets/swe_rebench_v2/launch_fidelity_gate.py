@@ -18,7 +18,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-OUTPUT_ROOT = "s3://marin-us-east-02a/marin/rl-data/atlas/swe-repair/2026.11.20.1/wave-v10"
+OUTPUT_ROOT = "s3://marin-us-east-02a/marin/rl-data/atlas/swe-repair/2026.11.20.1/wave-v11"
 SAMPLE_URI = f"{OUTPUT_ROOT}/fidelity-sample-manifest.json"
 BINDINGS_URI = f"{OUTPUT_ROOT}/base-image-bindings.json"
 DATASET_URI = "s3://marin-us-east-02a/marin/rl-data/inputs/swe-rebench-v2/v2-1-data"
@@ -28,7 +28,7 @@ DRIVER_URI = (
     "s3://marin-us-east-02a/marin/rl-data/inputs/swe-rebench-v2/gate/2026.11.20.2/swe_rebench_fidelity_driver.py"
 )
 DRIVER_SHA256 = "d963497dd3878f32710a981bae357a50b6d4d5cfb4885c40dbb66649be6def3f"
-JOB_NAME = "swe-repair-swe-rebench-wave-v10"
+JOB_NAME = "swe-repair-swe-rebench-wave-v11"
 
 
 def parse_args() -> dict:
