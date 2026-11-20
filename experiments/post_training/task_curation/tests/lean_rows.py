@@ -1,9 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""ProofNet-Verified and NuminaMath-LEAN fixture rows, and the frozen contracts converted from them."""
+"""Fixture rows for the Lean training sources and eval benchmarks, and the frozen contracts converted from them."""
 
+import csv
 import gzip
+import io
 import json
 from collections.abc import Iterable
 from pathlib import Path
@@ -95,3 +97,92 @@ def with_passing_proof(monkeypatch: Any, row: dict[str, Any]) -> dict[str, Any]:
     """``row``, with its human proof counted as passing for this test only."""
     monkeypatch.setattr(numina, "PASSING_PROOFS", numina.PASSING_PROOFS | {numina.proof_key(row)})
     return row
+
+
+MINIF2F_TEST_LEAN = """import MiniF2F.ProblemImports
+
+open BigOperators Real Nat Topology
+
+/-- What is the remainder when $194$ is divided by $11$? Show that it is 7. -/
+theorem mathd_numbertheory_66 : 194 % 11 = 7 :=
+  rfl
+
+theorem amc12a_2002_p6 (n : Nat) (h0 : 0 < n) : ∃ m, m > n ∧ ∃ p, m * p ≤ m + p := by
+  sorry
+"""
+"""A ``Test.lean`` shaped like miniF2F's: its import, an ``open``, one theorem with its shipped proof and one without."""
+
+
+PUTNAMBENCH_FIXTURE = Path(__file__).parent / "fixtures/lean/putnambench_files.json"
+"""PutnamBench files copied from the pinned archive: answers of several shapes (a long set, a typed function, a set
+written right after ``--``, a real number) and the six statements that ``PORTS`` restates."""
+
+
+class StagedFile:
+    """The one method the eval row readers use of a staged source file."""
+
+    def __init__(self, data: bytes):
+        self.data = data
+
+    def open(self, _mode: str = "rb") -> io.BytesIO:
+        return io.BytesIO(self.data)
+
+
+def putnambench_files() -> dict[str, str]:
+    return json.loads(PUTNAMBENCH_FIXTURE.read_text())["files"]
+
+
+IMO_BENCH_FIXTURE = Path(__file__).parent / "fixtures/lean/imo_bench_rows.json"
+"""The IMO-LeanProofBench rows whose statements use ``List.Chain'``, copied from the pinned v2 file without their
+written solutions."""
+
+
+def imo_bench_fixture_rows() -> dict[str, dict[str, str]]:
+    return {row["Problem ID"]: row for row in json.loads(IMO_BENCH_FIXTURE.read_text())["rows"]}
+
+
+def putnam_file(name: str, answer: str | None = None, answer_type: str = "Nat") -> str:
+    """A PutnamBench file for ``name``; with ``answer``, it also holds a definition left as ``sorry`` and the answer in a
+    comment below it."""
+    slot = f"abbrev {name}_solution : {answer_type} := sorry\n-- {answer}\n\n" if answer is not None else ""
+    goal = f"{name}_solution = 2 + 2" if answer is not None else "(2 : Nat) + 2 = 4"
+    return f"import Mathlib\n\n{slot}/--\nWhat is two plus two?\n-/\ntheorem {name} : {goal} := by\n  sorry\n"
+
+
+IMO_BENCH_COLUMNS = (
+    "Problem ID",
+    "Problem",
+    "Solution",
+    "Grading guidelines",
+    "Category",
+    "Level",
+    "Short Answer",
+    "Source",
+    "Lean Statement",
+)
+
+
+def imo_bench_row(problem_id: str = "PB-Basic-999", name: str = "PBBasic999", **fields: str) -> dict[str, str]:
+    """An IMO-LeanProofBench row shaped like the pinned v2 file, with ``fields`` replacing its values."""
+    row = {
+        "Problem ID": problem_id,
+        "Problem": "Show that two plus two is four.",
+        "Solution": "SENTINEL-WRITTEN-SOLUTION: count on your fingers.",
+        "Grading guidelines": "SENTINEL-GRADING-GUIDELINES: full marks for counting.",
+        "Category": "Algebra",
+        "Level": "pre-IMO",
+        "Short Answer": "4",
+        "Source": "(Modified) Fixture",
+        "Lean Statement": (
+            f"import Mathlib\n\n/-\nShow that two plus two is four.\n-/\ntheorem {name} : (2 : Nat) + 2 = 4 := by sorry"
+        ),
+    }
+    return {**row, **fields}
+
+
+def imo_bench_csv(rows: list[dict[str, str]]) -> bytes:
+    stream = io.StringIO()
+    writer = csv.DictWriter(stream, fieldnames=IMO_BENCH_COLUMNS)
+    writer.writeheader()
+    writer.writerows(rows)
+    return stream.getvalue().encode()
