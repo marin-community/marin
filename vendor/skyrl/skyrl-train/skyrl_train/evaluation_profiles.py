@@ -49,7 +49,7 @@ def validate_evaluation_data(config: DictConfig, *, source_recipe: bool) -> None
 def resolve_evaluation_profiles(
     config: DictConfig, *, evaluation_data: tuple[tuple[str, tuple[str, ...]], ...] = ()
 ) -> dict[str, EvaluationProfile]:
-    """Resolve named requests without modifying the native SkyRL configuration."""
+    """Resolve additional evaluation profiles without modifying the native SkyRL configuration."""
     staged = dict(evaluation_data)
     resolved = {}
     for name, declaration in _declared_profiles(config).items():
@@ -81,7 +81,7 @@ def resolve_evaluation_profiles(
 
 
 def record_evaluation_profiles(config: DictConfig, profiles: Mapping[str, EvaluationProfile]) -> None:
-    """Record complete named requests in a composed or staged launch configuration."""
+    """Record complete additional evaluation profiles in a composed or staged launch configuration."""
     for callback in config.get("trainer", {}).get("callbacks") or []:
         if callback.get("type") == "evaluation":
             for name in callback.get("additional_evaluations") or {}:
@@ -89,7 +89,7 @@ def record_evaluation_profiles(config: DictConfig, profiles: Mapping[str, Evalua
 
 
 def evaluation_profile_due(profile: EvaluationProfile, *, step: int, last_step: bool) -> bool:
-    """Whether a named request runs at this evaluation event."""
+    """Whether an additional evaluation runs at this evaluation event."""
     return profile.schedule == "every_evaluation" or last_step and step > 0
 
 

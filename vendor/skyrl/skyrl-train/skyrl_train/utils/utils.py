@@ -17,13 +17,6 @@ from ray.util.placement_group import (
 )
 
 from skyrl_train.batch_invariant import BATCH_INVARIANT_NCCL_ENV
-from skyrl_train.config.driver_validation import (
-    moe_router_replay_requested as moe_router_replay_requested,
-    require_worker_batch_config as require_worker_batch_config,
-    validate_batch_sizes as validate_batch_sizes,
-    validate_cfg as validate_cfg,
-    validate_generator_cfg as validate_generator_cfg,
-)
 from skyrl_train.config.worker_environment import configured_ray_worker_environment
 from skyrl_train.debug_mode import apply_debug_mode
 from skyrl_train.numa_policy import NUMA_AFFINITY_ENV

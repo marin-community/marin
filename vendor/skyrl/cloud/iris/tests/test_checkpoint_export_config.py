@@ -304,7 +304,7 @@ def test_trainer_records_export_request_for_selected_checkpoint(tmp_path: Path, 
 @pytest.mark.parametrize(
     ("best_metadata", "expected_error"),
     [
-        (None, FileNotFoundError),
+        (None, None),
         ({"step": 0, "model_format": "hf"}, ValueError),
         ({"step": 15, "model_format": "native"}, None),
     ],
@@ -344,6 +344,9 @@ async def test_best_export_waits_until_train_end(tmp_path: Path, best_metadata, 
         return
 
     await trainer._finalize_training(completed_step=20, epoch=0)
+    if best_metadata is None:
+        assert not list(tmp_path.glob("global_step_*/hf_export_request.json"))
+        return
     request = read_hf_export_request(str(tmp_path / "global_step_15"))
     assert request is not None
     assert request.step == 15

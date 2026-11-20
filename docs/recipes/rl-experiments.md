@@ -6,12 +6,11 @@ window. Start with a plan to confirm the inputs, allocation and output path.
 
 ## Which experiment to run
 
-Each preset name is `<question>-<length>`, with short presets making no training updates,
-medium presets making 10–25, and long presets making 20 or more.
+Preset names use `<question>-<length>`. The two loops serve different purposes.
 
 ### Short loop
 
-The short loop, also called the quick loop, compares one change against control runs.
+The short loop, also called the quick loop, uses gated presets to compare one change against control runs.
 
 | Preset | What it measures | Default work and estimated cost | Evaluation and gate | When to use it |
 |---|---|---|---|---|
@@ -25,7 +24,7 @@ The short loop, also called the quick loop, compares one change against control 
 
 ### Long loop
 
-The long loop trains a model and keeps its best checkpoint with `train-long` or `train-long-harbor` where available.
+The long loop uses ungated training to build a model and retain its best eligible checkpoint.
 
 | Preset | What it measures | Default work and estimated cost | Evaluation and gate | When to use it |
 |---|---|---|---|---|
@@ -47,6 +46,7 @@ The long loop trains a model and keeps its best checkpoint with `train-long` or 
 uv run python -m experiments.post_training.snowball_rl --preset speed-short --version dev --plan
 ```
 
+Plans and host-side submissions run the native driver checks on CPU before Iris submission.
 A plan without `--require` uses the declared control pin. With `--require`, planning also validates the pin
 and checks that control r0 recorded the requested metric. Gated execution and comparison require the pin's revision to match
 the preset; a mismatch returns exit 4 before submission or INVALID during gate execution. Controls are collected
@@ -119,7 +119,7 @@ uv run python -m experiments.post_training.snowball_rl publish --preset learning
 
 The pins in `snowball_rl.SNOWBALL.control_pins` must match the preset's current revision; unavailable pins
 produce a usage error. Speed presets and data-short publish nothing. See the
-[dashboard and record contract](https://github.com/marin-community/marin/blob/2a13c0c0627c2a6b2dd6b44d898edd530b4e1b6d/infra/marina/apps/rl_progress/README.md) for native identity,
+[dashboard and record contract](https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_progress/README.md) for native identity,
 recorded measurements and stored gate facts.
 
 ## Change one input
@@ -141,9 +141,8 @@ Placement, data bindings, retention, evaluation and measurement settings belong 
 Learning and train-long can change task sampling, optimizer, schedule and batch shape.
 Data presets require `--tasks` and refuse `--set`.
 
-Set `TASK_SELECTION` to a published `NAME@VERSION`. Custom selections must use the default held-out
-development input and record the complete
-frozen EvalLite in their recipe's `exclusions`. The builder checks those recorded inputs.
+Set `TASK_SELECTION` to a published `NAME@VERSION`. Custom selections must use the default development panel (`recipe.heldout`)
+and record the complete frozen EvalLite in their recipe's `exclusions`. The builder checks those recorded inputs.
 Create an immutable candidate through [task curation](../references/task-curation.md#final-task-selection).
 Selections with AI-judged tasks are refused before submission.
 
@@ -152,7 +151,9 @@ or a retained RL HF export. The selected initializer supplies both weights and i
 Training recovery uses the run's native checkpoint lineage. Learning-medium, data-medium and
 train-long publish the checkpoint with the best eligible evaluation score. If step zero wins,
 the terminal receipt points to the initializer's HF checkpoint. A trained winner is converted to
-HF under `exports/global_step_<N>/policy`. See
+HF under `exports/global_step_<N>/policy`. If no evaluation is eligible, the native attempt completes
+with its recovery checkpoint and no HF export. The status shows `none eligible` and the evaluation
+invariants. See
 [native checkpoint and attempt handling](../references/rl-launching.md) for retention and retries.
 
 `--replicates N` makes 1–5 copies of a gated preset with one seed. `--control --replicates N`
@@ -215,7 +216,7 @@ Reports use the caller's namespace under `MARIN_PREFIX`; controls are read-only.
    That CI workflow is planned separately; control collection is not a merge gate.
    The manual `--control` command remains available for an explicitly authorized calibration.
    Source, revision and replicate count live in `snowball_rl.SNOWBALL.control_pins`.
-5. Validate a newly collected control replicates with `snowball_rl compare --leave-out rN` for every replicate.
+5. Validate newly collected control replicates with `snowball_rl compare --leave-out rN` for every replicate.
    Every leave-one-out verdict must PASS.
 
 ## Tasks and evaluation
@@ -343,10 +344,9 @@ its own model, tasks, layout and recipe. A preset with held-out evaluations decl
 `held_out_tasks` and the evaluation profiles. A `mochi_rl.py` entry fits the same interface with the
 model label `mochi`, its own namespace, and Mochi's initializer, resources and evaluation choices.
 The preset table's namespace owns run and control paths.
-The native launch-document census counts `rl_compose.py`, where `SkyRLSpec` is
-constructed; add the new table's builders to `tests/rl/launch_document_census.py` the same way
-as Snowball. Use `assert_revisioned_native_configs` in `skyrl_test_support.py` with the table's
-pinned revisions and native hashes.
+The model entry's preset golden test owns the launch documents composed through `rl_compose.py`.
+Use `assert_revisioned_native_configs` in `skyrl_test_support.py` with the table's pinned revisions
+and native hashes. The launch-document census covers the other authored builders.
 
 Python callers can pass `init: SkyRLModelSource` to `rl.main(table, argv=..., init=...)` or
 `build_experiment(preset, table=..., init=...)`. An `ArtifactHfModel` accepts any `ArtifactStep`;
@@ -358,7 +358,7 @@ without reading its export. Stored inputs preserve its identity and export selec
 comparison uses the concrete export URI recorded by the candidate. At RL startup, after the
 model is built, the checkpoint and loaded tokenizer vocabularies must match before engines load.
 
-The coordinator re-enters the calling module with the exact arguments. Run model entrys with
+The coordinator re-enters the calling module with the exact arguments. Run model entries with
 `python -m PACKAGE.MODULE`; callers without module metadata can set `entry_module` on `rl.main`.
 Its `forward_env=("NAME", ...)` argument requires and forwards extra environment variables to
 the coordinator and native jobs, including terminal export. Configuration and logs contain

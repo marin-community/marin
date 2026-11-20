@@ -111,7 +111,8 @@ as the numerical reference.
 
 ## Batch assembly
 
-The driver builds batches by default; use `--set trainer.batch_builder=worker` with `experiments.post_training.async_rl` for policy-worker slices. Keep `driver` for these configurations:
+The driver builds batches by default. Recipes that support policy-worker slicing can set
+`trainer.batch_builder=worker`. Keep `driver` for these configurations:
 
 | Worker startup refusal | Configurations |
 | --- | --- |

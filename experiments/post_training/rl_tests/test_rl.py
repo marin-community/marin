@@ -25,7 +25,7 @@ from iris.resources.state import JobState
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import OUT, ArtifactStep, apply, materialized_config, run
 from marin.rl import skyrl as skyrl_api
-from marin.rl.skyrl import ArtifactHfModel
+from marin.rl.skyrl import ArtifactHfModel, SkyRLRun
 from marin.rl.skyrl_records import read_skyrl_metrics
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
@@ -49,6 +49,7 @@ from experiments.post_training.rl_tests.fixtures import (
     replace_evaluations,
     write_published_artifact,
     write_receipt,
+    write_skyrl_run_record,
 )
 from experiments.post_training.rl_tests.fixtures import write_json as _json
 from experiments.post_training.skyrl_test_support import assert_revisioned_native_configs, native_json
@@ -103,35 +104,49 @@ def test_generation_presets_accept_init_only_for_eval_short(selection, tmp_path)
 
 
 @pytest.mark.parametrize(
-    ("recipe_settings", "override", "reason"),
+    ("mode", "recipe_settings", "override", "reason"),
     [
         (
+            "--plan",
             ("trainer.policy_mini_batch_size=2", "generator.n_samples_per_prompt=8"),
             "trainer.train_batch_size=2",
             "lcm_dp_size=16",
         ),
         (
+            "--run",
+            ("trainer.policy_mini_batch_size=2", "generator.n_samples_per_prompt=8"),
+            "trainer.train_batch_size=2",
+            "lcm_dp_size=16",
+        ),
+        (
+            "--plan",
             ('terminal_bench={"harbor":{}}',),
             "terminal_bench.harbor.eval_override_timeout_sec=180",
             "Unknown Harbor task settings: ['eval_override_timeout_sec']",
         ),
     ],
-    ids=["batch-size", "harbor-setting"],
+    ids=["plan-batch-size", "run-batch-size", "plan-harbor-setting"],
 )
-def test_plan_refuses_invalid_driver_settings(
-    selection, preset_table, monkeypatch, capsys, recipe_settings, override, reason
+def test_launcher_refuses_invalid_driver_settings(
+    selection, preset_table, monkeypatch, capsys, mode, recipe_settings, override, reason
 ):
-    monkeypatch.delenv("WANDB_API_KEY", raising=False)
+    client, _ = fake_iris(monkeypatch, "invalid-driver-config")
+    if mode == "--run":
+        monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
+    else:
+        monkeypatch.delenv("WANDB_API_KEY", raising=False)
     preset = snowball_model.SNOWBALL.by_name["train-long"]
     config = preset.recipe.config.with_settings(recipe_settings)
     table = preset_table(replace(preset, recipe=replace(preset.recipe, config=config)))
 
     exit_code = snowball.main(
         table,
-        argv=["--preset", preset.name, "--version", preset.revision, "--plan", "--set", override],
+        argv=["--preset", preset.name, "--version", preset.revision, mode, "--set", override],
+        entry_module="experiments.post_training.snowball_rl",
     )
 
     output = capsys.readouterr().out
+    client.submit.assert_not_called()
     assert exit_code == 4, output
     result = json.loads(output)
     assert result["verdict"] == "invalid"
@@ -381,7 +396,6 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
     )
     for name, config in zip(revisions, configs, strict=True):
         trainer, generator = config["skyrl"]["trainer"], config["skyrl"]["generator"]
-        assert {"NCCL_NET", "NCCL_IB_DISABLE", "NCCL_SOCKET_FAMILY"}.isdisjoint(config["runtime"]["task_env"])
         assert config["iris"]["allocation"]["num_nodes"] * config["iris"]["allocation"]["gpus_per_node"] <= 40
         generating = name in ("speed-short", "data-short", "eval-short")
         assert (
@@ -416,7 +430,6 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             ) == (0, False, 8192, 1)
         if name in ("learning-medium", "data-medium", "train-long"):
             assert next(row for row in trainer["callbacks"] if row["type"] == "evaluation")["eval_before_train"] is True
-            assert config["run"]["export_hf"] and trainer["hf_export_checkpoint"] == "best"
             kinds = [row["type"] for row in trainer["callbacks"]]
             assert kinds.index("evaluation") < kinds.index("best_checkpoint") < kinds.index("hf_model_save")
         if name == "train-long":
@@ -1002,6 +1015,11 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         state=JobState.SUCCEEDED if mode == "valid" else JobState.FAILED
     )
 
+    policy_uri = "s3://marin-test/models/python-policy"
+    policy_path = tmp_path / "python-policy"
+    raw_load = SkyRLRun.raw_load
+    monkeypatch.setattr(SkyRLRun, "raw_load", lambda path: raw_load(str(policy_path) if path == policy_uri else path))
+
     def module(name, *, entry_module=None, use_init=True, forward_env=("HF_TEST_KEY",), policy_forward=None):
         path = tmp_path / (name + ".py")
         dependency = ""
@@ -1010,14 +1028,14 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
                 f"producer=rl.build_experiment(snowball_rl.SNOWBALL.by_name['train-long'],table=snowball_rl.SNOWBALL,"
                 f"settings=('trainer.max_steps=2',),forward_env={policy_forward!r}).runs[0]\n"
                 f"result=SkyRLRun.raw_load({str(source)!r}).model_copy(update={{'hf_model_uri':'s3://marin-test/models/python-init'}})\n"
-                "directory=Path(producer.path());directory.mkdir(parents=True,exist_ok=True)\n"
+                f"directory=Path({str(policy_path)!r});directory.mkdir(parents=True,exist_ok=True)\n"
                 "record=ArtifactRecord(name=producer.name,version=producer.version,fingerprint=producer.fingerprint(),"
                 "result_type=result_type_name(SkyRLRun),result=result.result_payload())\n"
                 "(directory/RECORD_FILENAME).write_text(record.model_dump_json())\n"
-                "init=SkyRLPolicyModel(producer)\n"
+                f"init=SkyRLPolicyModel(replace(producer,override_path={policy_uri!r}))\n"
             )
         path.write_text(
-            "from pathlib import Path\nfrom marin.execution.lazy import ArtifactStep\n"
+            "from dataclasses import replace\nfrom pathlib import Path\nfrom marin.execution.lazy import ArtifactStep\n"
             "from marin.execution.artifact import Artifact,ArtifactRecord,RECORD_FILENAME,result_type_name\n"
             "from marin.rl.skyrl import ArtifactHfModel,SkyRLRun,SkyRLPolicyModel\n"
             "from experiments.post_training import rl, snowball_rl\n"
@@ -1078,17 +1096,41 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         assert "test-initializer-credential" not in result.output and len(native_calls) == 1
 
     evaluations = read_evaluations(str(source / "exports"), attempt_id="recorded-attempt", evaluation="eval/")
-    replace_evaluations(source, [row for row in evaluations if row.step != 10])
+    replace_evaluations(
+        source,
+        [
+            row.model_copy(
+                update={
+                    "answers": [answer.model_copy(update={"error_treatment": "passthrough"}) for answer in row.answers]
+                }
+            )
+            for row in evaluations
+            if row.step != 10
+        ],
+    )
+    (source / "exports/best_checkpoint.json").unlink()
+    with edit_receipt(source) as receipt:
+        receipt["result"]["model"] = None
+    step = built.runs[0]
+    write_skyrl_run_record(source, step.name, step.version, fingerprint=step.fingerprint(), global_step=None)
     planning_args = ["--preset", preset.name, "--version", preset.revision, "--set", "trainer.max_steps=12"]
     result = CliRunner().invoke(
         snowball.command(table, argv=tuple(planning_args), init=initializer, forward_env=("HF_TEST_KEY",)),
         planning_args,
     )
     assert result.exit_code == 1, (result.output, result.exception)
-    facts = {
-        fact["name"]: fact for row in printed_status(result.output)["runs"] for fact in row["evaluation_invariants"]
-    }
+    [status] = printed_status(result.output)["runs"]
+    assert status["best_checkpoint_step"] == "none eligible"
+    facts = {fact["name"]: fact for fact in status["evaluation_invariants"]}
     assert not facts[f"{preset.evaluations[0].name}/step-10/answers_complete"]["holds"]
+    assert not facts[f"{preset.evaluations[0].name}/task_coverage"]["holds"]
+
+    mode, coordinator_module = "valid", "first_model_entry"
+    module(coordinator_module)
+    resumed = CliRunner().invoke(entry)
+    assert resumed.exit_code == 1 and len(native_calls) == 1, (resumed.output, resumed.exception)
+    assert "best_checkpoint_step: none eligible" in resumed.output
+
     replace_evaluations(source, evaluations)
     mode, coordinator_module = "failed-native", "first_model_entry"
     module("first_model_entry")

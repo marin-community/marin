@@ -411,18 +411,18 @@ class EvaluationCallback(TrainerCallback):
     async def collect_evaluation(self, state, *, trainer, pool):
         metrics = {}
 
-        async def collect(name, parameters):
+        async def collect(name, profile):
             additional = await trainer.eval(
                 val_set_name=name,
-                profile=parameters,
+                profile=profile,
                 evaluation_pool=pool,
             )
             metrics.update(additional_evaluation_metrics(additional, name))
 
         async with asyncio.TaskGroup() as tasks:
-            for name, parameters in self.additional_evaluations.items():
-                if evaluation_profile_due(parameters, step=state.global_step, last_step=state.is_last_step):
-                    tasks.create_task(collect(name, parameters))
+            for name, profile in self.additional_evaluations.items():
+                if evaluation_profile_due(profile, step=state.global_step, last_step=state.is_last_step):
+                    tasks.create_task(collect(name, profile))
         return metrics
 
     async def on_evaluate_async(

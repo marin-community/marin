@@ -144,7 +144,9 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
         )
     )[0]
     assert report.verdict == "fail" and report.effect == "regression"
-    assert next(row for row in report.comparisons if row.metric == "speed/update_seconds").passes is False
+    speed_guard = next(row for row in report.comparisons if row.metric == "speed/update_seconds")
+    assert speed_guard.passes is False
+    assert speed_guard.tolerance == pytest.approx(t.ppf(1 - 0.025 / 2, 3) * math.sqrt(5 / 3) * math.sqrt(0.75))
     requirement = report.rows(ComparisonRole.REQUIREMENT)
     assert len(requirement) == 1 and requirement[0].passes
     assert requirement[0].tolerance == pytest.approx(t.ppf(0.975, 3) * math.sqrt(5 / 3) * math.sqrt(0.5 + 0.25))
@@ -299,6 +301,29 @@ def test_current_generation_counters_compare_with_stored_controls(recorded_runs,
     step = snowball_model.SNOWBALL.by_name[preset].updates
     report = compare(preset, "--candidate", "users/test/current-generation")
     assert (report["verdict"], report["effect"]) == ("pass", "no change"), report
+    if preset == "learning-medium":
+        unscored = recorded_runs(preset, "users/test/no-eligible-evaluation", speed=101)
+        export = str(unscored / "exports")
+        assert not (Path(export) / "best_checkpoint.json").exists()
+        with edit_receipt(unscored) as attempt:
+            attempt["result"]["model"] = None
+        evaluations = read_evaluations(export, attempt_id="recorded-attempt", evaluation="eval/")
+        write_evaluations(
+            export,
+            [
+                task.model_copy(
+                    update={
+                        "answers": [
+                            answer.model_copy(update={"error_treatment": "passthrough"}) for answer in task.answers
+                        ]
+                    }
+                )
+                for task in evaluations
+            ],
+        )
+        report = compare(preset, "--candidate", "users/test/no-eligible-evaluation")
+        assert report["verdict"] == "fail", report
+        assert any(row["name"] == "eval_lite/task_coverage" and not row["holds"] for row in report["invariants"])
     prefix = "eval/all/outcome/" if preset == "learning-medium" else "eval/eval_lite/all/outcome/"
     metrics[step][prefix + "graded"] = 19
     metrics[step][prefix + "unavailable"] = 1
@@ -766,13 +791,12 @@ def test_task_set_content_hash_is_order_independent_and_checked(recorded_runs):
     assert report["verdict"] == "invalid" and "TaskSpec content differs" in report["reason"], report
 
 
-@pytest.mark.parametrize(("preset_name", "gpu"), [("learning-medium", "gb200"), ("data-medium", "h100")])
+@pytest.mark.parametrize("preset_name", ["learning-medium", "data-medium"])
 def test_python_run_saves_typed_inputs_for_comparison(
-    preset_table, recorded_runs, selection, tmp_path, monkeypatch, preset_name, gpu
+    preset_table, recorded_runs, selection, tmp_path, monkeypatch, preset_name
 ):
     preset = snowball_model.SNOWBALL.by_name[preset_name]
-    gain_key = f"eval_lite/family_mean/gain_per_{gpu}_hour"
-    preset = replace(preset, objectives=(preset.objectives[0], replace(preset.objectives[1], key=gain_key)))
+    gain_key = "eval_lite/family_mean/gain_per_gpu_hour"
     model = tmp_path / "model"
     model.mkdir()
     model_uri = f"s3://marin-test/models/{tmp_path.name}"
@@ -886,6 +910,9 @@ def test_python_run_saves_typed_inputs_for_comparison(
     assert report["run"]["tasks"] == recorded.tasks
     assert report["run"]["attempt_ids"] == ["recorded-attempt"]
     assert comparisons(report)[gain_key]["run"] == pytest.approx(0.005)
+    _json(source / "exports/best_checkpoint.json", {"step": preset.updates})
+    [status] = snowball._status(built, preset, stored_only=True)["runs"]
+    assert status["best_checkpoint_step"] == preset.updates
     if tasks is None:
         assert {
             "inputs.model.uri",

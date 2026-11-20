@@ -447,7 +447,7 @@ def export_terminal_policy(training_config_path: Path, *, forward_env: tuple[str
         str(training_config.skyrl.trainer.hf_export_checkpoint),
         terminal_checkpoint_step(checkpoint_root),
     )
-    if selected.initializer_uri is not None:
+    if selected is None or selected.initializer_uri is not None:
         return
     checkpoint_path = join_resource_path(checkpoint_root, f"{GLOBAL_STEP_PREFIX}{selected.step}")
     request = _read_hf_export_request(checkpoint_path)

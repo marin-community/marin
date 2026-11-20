@@ -6,17 +6,7 @@ from typing import Any
 import numpy as np
 
 from skyrl_train.config.reasoning_span_penalty import ReasoningSpanPenaltyConfig, ReasoningSpanPenaltyTarget
-from skyrl_train.config.reward_shaping import (
-    DEFAULT_ACCEPTED_STOP_REASONS as DEFAULT_ACCEPTED_STOP_REASONS,
-    SHAPING_SCHEMA_VERSION as SHAPING_SCHEMA_VERSION,
-    LoopCreditConfig as LoopCreditConfig,
-    NonTerminationPenaltyConfig as NonTerminationPenaltyConfig,
-    OverlongPenaltyConfig as OverlongPenaltyConfig,
-    PassthroughPenaltyConfig as PassthroughPenaltyConfig,
-    SuccessfulLengthPenaltyConfig as SuccessfulLengthPenaltyConfig,
-    TrajectoryRewardShapingConfig as TrajectoryRewardShapingConfig,
-    parse_trajectory_reward_shaping_config as parse_trajectory_reward_shaping_config,
-)
+from skyrl_train.config.reward_shaping import LoopCreditConfig, OverlongPenaltyConfig, parse_trajectory_reward_shaping_config
 from skyrl_train.error_treatment import ErrorTreatment
 from skyrl_train.trajectory_runners.types import (
     REWARD_SHAPING_COMPONENT_NAMES,
