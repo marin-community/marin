@@ -79,7 +79,9 @@ def regional_preflight(document: str, readable_uris: tuple[str, ...]) -> None:
         validate_launch(document, Path(directory), build_worker=True)
 
 
-def validate_before_allocation(document: str, *, readable_uris: tuple[str, ...] = ()) -> dict:
+def validate_before_allocation(
+    document: str, *, readable_uris: tuple[str, ...] = (), secrets: dict[str, str] | None = None
+) -> dict:
     """Gate every long-loop evaluation on regional CPU admission before GPU allocation."""
     with tempfile.TemporaryDirectory(prefix="long-loop-validation-") as directory:
         validation = validate_launch(document, Path(directory))
@@ -92,7 +94,7 @@ def validate_before_allocation(document: str, *, readable_uris: tuple[str, ...] 
         launch["skyrl"]["terminal_bench"].get("harbor", {}),
     ):
         names.update(value for key, value in settings.items() if key.endswith("api_key_env") and value is not None)
-    secrets = {name: value for name in names if (value := get_secret(name)) is not None}
+    secrets = {**{name: value for name in names if (value := get_secret(name)) is not None}, **(secrets or {})}
     iris = launch["iris"]
     nested = get_job_info() is not None
     request = JobRequest(
