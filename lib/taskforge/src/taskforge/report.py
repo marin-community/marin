@@ -8,22 +8,15 @@ import time
 from collections import Counter, defaultdict
 from dataclasses import asdict
 
-from pydantic import TypeAdapter
-from rigging.filesystem.factory import open_url, url_to_fs
+from rigging.filesystem.factory import url_to_fs
 
+from taskforge.checkpoint import HEAD, read_published
 from taskforge.effects.events import Resolved, ScopeEntered, ScopeExited, StageCompleted
-from taskforge.effects.log import JsonlSink, Status
+from taskforge.effects.log import decode
 from taskforge.model.stage import Stage
-from taskforge.model.workpiece import WORKPIECE, Terminal, Workpiece
+from taskforge.model.workpiece import Terminal
 from taskforge.resources.inference import InferenceRequest
 from taskforge.resources.rollouts import SolverRollout
-
-
-def artifacts(path: str) -> tuple[Status, Workpiece]:
-    with open_url(path + "/status.json", "rb") as source:
-        status = TypeAdapter(Status).validate_json(source.read())
-    with open_url(path + "/workpiece.json", "rb") as source:
-        return status, WORKPIECE.validate_json(source.read())
 
 
 def reason_class(reason: str) -> str:
@@ -41,9 +34,9 @@ async def report(root: str, since_hours: float | None = None) -> tuple[str, ...]
     now = time.time()
     cutoff = now - since_hours * 3600 if since_hours is not None else -math.inf
     fs, prefix = url_to_fs(root.rstrip("/"))
-    paths = await asyncio.to_thread(fs.glob, prefix + "/**/status.json")
+    paths = await asyncio.to_thread(fs.glob, f"{prefix}/**/{HEAD}")
     if not paths:
-        raise ValueError(f"No workpiece status files at {root}")
+        raise ValueError(f"No workpiece journals at {root}")
     counts, reasons = Counter[str](), Counter[tuple[str, str]]()
     tokens: dict[str, Counter[str]] = defaultdict(Counter)
     durations: dict[str, list[float]] = defaultdict(list)
@@ -52,16 +45,17 @@ async def report(root: str, since_hours: float | None = None) -> tuple[str, ...]
 
     async def collect(path: str) -> None:
         async with gate:
-            directory = fs.unstrip_protocol(path).removesuffix("/status.json")
-            (status, workpiece), records = await asyncio.gather(
-                asyncio.to_thread(artifacts, directory), JsonlSink(directory + "/events.jsonl").read()
-            )
+            published = await asyncio.to_thread(read_published, fs.unstrip_protocol(path).removesuffix(f"/{HEAD}"))
+            if published is None:
+                return
+            status, workpiece = published.head.status, published.head.workpiece
+            records = await asyncio.to_thread(decode, published.events)
             if not records or records[-1].wall_time < cutoff:
                 return
             terminal = str(status.terminal or "running")
             counts[terminal] += 1
             if status.terminal in (Terminal.HELD, Terminal.ABANDONED):
-                last = workpiece.decisions[-1] if workpiece.decisions else None
+                last = workpiece.decisions[-1] if workpiece is not None and workpiece.decisions else None
                 for reason in {reason_class(value) for value in getattr(last, "reasons", ())} or {"unknown"}:
                     reasons[terminal, reason] += 1
             decision_time = None

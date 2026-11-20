@@ -22,6 +22,7 @@ from taskforge.resources.execution import Notify, has_cause, retry_effect
 
 @dataclass(frozen=True, slots=True)
 class SolverRollout(Event[GradedRollout]):
+    kind = "rollouts.solver_rollout"
     spec: TaskRolloutSpec
     trial: int
     attempt: int

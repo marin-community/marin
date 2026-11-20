@@ -18,11 +18,13 @@ class Answer:
 
 @dataclass(frozen=True, slots=True)
 class Query(Event[Answer]):
+    kind = "test.query"
     arguments: Mapping[str, str]
 
 
 @dataclass(frozen=True, slots=True)
 class Number(Event[int]):
+    kind = "test.number"
     value: int
 
 
@@ -41,11 +43,13 @@ class FlakySink(Sink):
 
 @dataclass(frozen=True, slots=True)
 class Timed(Event[float]):
+    kind = "test.timed"
     timeout: float
 
 
 @dataclass(frozen=True, slots=True)
 class Choices(Event[frozenset[str]]):
+    kind = "test.choices"
     options: frozenset[str]
 
 

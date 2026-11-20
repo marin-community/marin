@@ -8,6 +8,7 @@ from taskforge.effects.events import Event
 
 @dataclass(frozen=True, slots=True)
 class ToolInvoked(Event[None]):
+    kind = "tool.invoked"
     call_id: str
     name: str
     arguments: str
@@ -15,6 +16,7 @@ class ToolInvoked(Event[None]):
 
 @dataclass(frozen=True, slots=True)
 class ToolReturned(Event[None]):
+    kind = "tool.returned"
     call_id: str
     name: str
     content: str

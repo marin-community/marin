@@ -10,11 +10,8 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, Protocol, cast, override
-from urllib.parse import unquote, urlsplit
 
 from pydantic import TypeAdapter
-from rigging.filesystem.atomic import atomic_rename
-from rigging.filesystem.factory import open_url, url_to_fs
 
 from taskforge.effects.events import (
     BYTES_TAG,
@@ -67,7 +64,7 @@ def _encode(event: Event[object], sequence: int = 0, known: dict[str, int] | Non
         for item in fields(event)
         if item.metadata.get("serialize", True)
     }
-    return {"type": f"{type(event).__module__}.{type(event).__qualname__}", "payload": payload}
+    return {"type": event.kind, "payload": payload}
 
 
 def _restore(value: Any, known: dict[str, Event[object]]) -> Any:
@@ -87,7 +84,9 @@ def _restore(value: Any, known: dict[str, Event[object]]) -> Any:
 def _decode(data: Mapping[str, Any], known: dict[str, Event[object]]) -> Event[object]:
     if "ref" in data:
         return known[data["ref"]]
-    cls = EVENT_TYPES[data["type"]]
+    cls = EVENT_TYPES.get(data["type"])
+    if cls is None:
+        raise LogFailure(f"Unknown event kind {data['type']!r}")
     restored = _restore(data["payload"], known)
     if cls is Resolved:
         request = restored["request"]
@@ -102,9 +101,28 @@ def _decode(data: Mapping[str, Any], known: dict[str, Event[object]]) -> Event[o
     return event
 
 
+def decode(data: bytes, first_seen: dict[str, int] | None = None) -> tuple[Record, ...]:
+    """Decode a complete event stream; ``first_seen`` collects each event digest's first sequence."""
+    try:
+        known: dict[str, Event[object]] = {}
+        decoded = []
+        for line in data.splitlines():
+            row = json.loads(line)
+            previous = set(known)
+            event = _decode(row["event"], known)
+            if first_seen is not None:
+                first_seen.update({key: row["sequence"] for key in known.keys() - previous})
+            decoded.append(Record(row["sequence"], row["wall_time"], event))
+    except (TypeError, ValueError, KeyError) as error:
+        raise LogFailure("Cannot decode the event stream") from error
+    if any(record.sequence != index for index, record in enumerate(decoded, 1)):
+        raise LogFailure("Log sequence is incomplete or out of order")
+    return tuple(decoded)
+
+
 @dataclass(frozen=True, slots=True)
 class JsonlSink(Sink):
-    """Single-writer log: local append or immutable object-store batches."""
+    """The local single-writer stream: fsynced appends that tolerate a torn tail and retried batches."""
 
     path: str
     _known: dict[str, int] = field(default_factory=dict, init=False, repr=False, compare=False)
@@ -131,102 +149,47 @@ class JsonlSink(Sink):
         ).encode()
 
     def _write(self, records: Sequence[Record]) -> None:
-        url = urlsplit(self.path)
-        if url.scheme in ("", "file"):
-            path = Path(unquote(url.path))
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with path.open("a+b") as output:
-                end = output.seek(0, os.SEEK_END)
-                tail = b""
-                position = end
-                while position and tail.count(b"\n") < 2:
-                    chunk = min(position, 8192)
-                    position -= chunk
-                    output.seek(position)
-                    tail = output.read(chunk) + tail
-                complete = tail.rfind(b"\n")
-                output.truncate(position + complete + 1)
-                last = json.loads(tail[:complete].split(b"\n")[-1])["sequence"] if complete >= 0 else 0
-                if records and records[-1].sequence < last:
-                    raise LogFailure("Append batch predates the stream tail")
-                for record in records:
-                    if record.sequence == last and json.loads(self._line(record)) != json.loads(
-                        tail[:complete].split(b"\n")[-1]
-                    ):
-                        raise LogFailure("Append batch conflicts with the stream tail")
-                    if record.sequence <= last:
-                        continue
-                    if record.sequence != last + 1:
-                        raise LogFailure("Cannot append a gap in the event stream")
-                    output.write(self._line(record))
-                    last = record.sequence
-                output.flush()
-                os.fsync(output.fileno())
-            return
-        if records:
-            self.append_bytes(b"".join(self._line(record) for record in records))
-
-    def append_bytes(self, data: bytes) -> None:
-        """Publish an immutable batch; retrying its last sequence replaces the same key."""
-        last = json.loads(data.splitlines()[-1])["sequence"]
-        path = f"{self.path}.parts/{last:012d}.jsonl"
-        with atomic_rename(path) as temporary:
-            with open_url(temporary, "wb") as output:
-                output.write(data)
+        path = Path(self.path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a+b") as output:
+            end = output.seek(0, os.SEEK_END)
+            tail = b""
+            position = end
+            while position and tail.count(b"\n") < 2:
+                chunk = min(position, 8192)
+                position -= chunk
+                output.seek(position)
+                tail = output.read(chunk) + tail
+            complete = tail.rfind(b"\n")
+            output.truncate(position + complete + 1)
+            last = json.loads(tail[:complete].split(b"\n")[-1])["sequence"] if complete >= 0 else 0
+            if records and records[-1].sequence < last:
+                raise LogFailure("Append batch predates the stream tail")
+            for record in records:
+                if record.sequence == last and json.loads(self._line(record)) != json.loads(
+                    tail[:complete].split(b"\n")[-1]
+                ):
+                    raise LogFailure("Append batch conflicts with the stream tail")
+                if record.sequence <= last:
+                    continue
+                if record.sequence != last + 1:
+                    raise LogFailure("Cannot append a gap in the event stream")
+                output.write(self._line(record))
+                last = record.sequence
+            output.flush()
+            os.fsync(output.fileno())
 
     def read_bytes(self) -> bytes:
-        """Read the snapshot at ``path``, if any, and the batches appended after it."""
-        try:
-            with open_url(self.path, "rb") as source:
-                content = source.read()
-            if urlsplit(self.path).scheme in ("", "file"):
-                content = content[: content.rfind(b"\n") + 1]
-        except FileNotFoundError:
-            content = b""
-        lines = content.splitlines(keepends=True)
-        last = json.loads(lines[-1])["sequence"] if lines else 0
-        fs, prefix = url_to_fs(f"{self.path}.parts")
-        for path in sorted(fs.glob(f"{prefix}/*.jsonl")):
-            if int(Path(path).stem) <= last:
-                continue
-            with fs.open(path, "rb") as source:
-                for line in source:
-                    sequence = json.loads(line)["sequence"]
-                    if sequence <= last:
-                        # A batch overlapping the stream must repeat it byte for byte; a second writer that
-                        # started numbering from 1 beside this stream shows up here, not as a decode error.
-                        if sequence <= len(lines) and lines[sequence - 1].rstrip(b"\n") != line.rstrip(b"\n"):
-                            raise LogFailure(
-                                f"Event stream has diverged: {Path(path).name} disagrees at sequence {sequence}"
-                            )
-                        continue
-                    if sequence != last + 1:
-                        raise LogFailure("Log sequence is incomplete or out of order")
-                    lines.append(line)
-                    last = sequence
-        if not lines:
-            raise FileNotFoundError(self.path)
-        return b"".join(lines)
+        """The complete lines of the stream; a torn last line is not part of it."""
+        content = Path(self.path).read_bytes()
+        return content[: content.rfind(b"\n") + 1]
 
     async def read(self) -> tuple[Record, ...]:
         try:
-            return await asyncio.to_thread(self._read)
-        except (OSError, TypeError, ValueError, KeyError) as error:
-            raise LogFailure("Cannot decode the event stream") from error
-
-    def _read(self) -> tuple[Record, ...]:
-        known: dict[str, Event[object]] = {}
-        decoded = []
-        for line in self.read_bytes().splitlines():
-            row = json.loads(line)
-            previous = set(known)
-            event = _decode(row["event"], known)
-            self._known.update({key: row["sequence"] for key in known.keys() - previous})
-            decoded.append(Record(row["sequence"], row["wall_time"], event))
-        records = tuple(decoded)
-        if any(record.sequence != index for index, record in enumerate(records, 1)):
-            raise LogFailure("Log sequence is incomplete or out of order")
-        return records
+            data = await asyncio.to_thread(self.read_bytes)
+        except OSError as error:
+            raise LogFailure("Cannot read the event stream") from error
+        return decode(data, self._known)
 
 
 class EventLog:

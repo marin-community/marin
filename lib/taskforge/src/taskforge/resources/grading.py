@@ -21,6 +21,7 @@ from taskforge.resources.rollouts import Engine, interruption
 
 @dataclass(frozen=True, slots=True)
 class GradeCandidate(Event[GradeResult]):
+    kind = "grading.grade_candidate"
     spec: TaskRolloutSpec
     candidate: Candidate
     fresh_verifier: bool = False

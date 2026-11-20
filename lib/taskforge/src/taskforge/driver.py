@@ -12,7 +12,7 @@ import os
 import subprocess
 import sys
 import traceback
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
@@ -23,14 +23,14 @@ from rigging.filesystem.storage_path import prefix_join
 from rigging.log_setup import configure_logging
 from rigging.secrets import get_secret, list_secret_names, require_secret
 
-from taskforge.checkpoint import CheckpointSink
+from taskforge.checkpoint import CheckpointSink, read_published
 from taskforge.coordinator import reasons, run_workpiece
 from taskforge.effects.events import StageCompleted
-from taskforge.effects.issues import Hold, LogFailure, Restart, Transient
-from taskforge.effects.log import EventLog, JsonlSink, Status, fold
+from taskforge.effects.issues import Hold, LogFailure, Restart, Superseded, Transient
+from taskforge.effects.log import EventLog, JsonlSink, fold
 from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal
 from taskforge.model.review import Incomplete
-from taskforge.model.workpiece import WORKPIECE, Terminal, Workpiece
+from taskforge.model.workpiece import Terminal, Workpiece
 from taskforge.policy import Policy, load_policy, parse_overlay
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.report import report
@@ -77,40 +77,6 @@ def inputs(source: str, ranks: tuple[int, ...] = ()) -> tuple[str, ...]:
     return paths
 
 
-SNAPSHOT_FILES = ("events.jsonl", "workpiece.json", "status.json")
-"""Published in this order, so an interrupted publish leaves the stream without its status."""
-
-
-def publish(workdir: Path, destination: str, names: tuple[str, ...] = SNAPSHOT_FILES) -> None:
-    for name in names:
-        with (workdir / name).open("rb") as source, open_url(prefix_join(destination, name), "wb") as target:
-            target.write(source.read())
-
-
-async def recover(workdir: Path, destination: str) -> Status | None:
-    """Restore the published snapshot; the event stream, not status.json, decides whether work exists.
-
-    Starting fresh whenever the status is missing would append a second stream numbered from 1 beside
-    the published one, and the next read would splice the two.
-    """
-    sink = JsonlSink(prefix_join(destination, "events.jsonl"))
-    try:
-        snapshot = {"events.jsonl": await asyncio.to_thread(sink.read_bytes)}
-    except FileNotFoundError:
-        return None
-    for name in SNAPSHOT_FILES[1:]:
-        try:
-            with open_url(prefix_join(destination, name), "rb") as source:
-                snapshot[name] = source.read()
-        except FileNotFoundError:
-            logging.warning("Published %s lacks %s; resuming from its event stream", destination, name)
-    for name, data in snapshot.items():
-        (workdir / name).write_bytes(data)
-    if "status.json" in snapshot:
-        return TypeAdapter(Status).validate_json(snapshot["status.json"])
-    return fold(tuple(record.event for record in await sink.read()))
-
-
 def run_policy(path: str) -> tuple[Policy, Policy]:
     declared = load_policy(DEFAULTS_DIR)
     with open_url(path, "rt") as source:
@@ -140,18 +106,20 @@ async def one(args: argparse.Namespace) -> None:
     workdir.mkdir(parents=True, exist_ok=True)
     destination = prefix_join(args.output, str(identity))
     sink = JsonlSink(str(workdir / "events.jsonl"))
-    wp = Workpiece(proposal.header.id, proposal)
-    log: EventLog | None = None
-    skipped = False
-    try:
-        restored = await recover(workdir, destination)
-        if restored is not None and (restored.finished or (restored.terminal is Terminal.HELD and not args.resume_held)):
-            logging.info("SKIP %s: published terminal=%s", identity, restored.terminal)
-            skipped = True
+    # An unreadable or older journal raises here, before anything is claimed or published.
+    published = await asyncio.to_thread(read_published, destination)
+    if published is not None:
+        terminal = published.head.status.terminal
+        if published.head.status.finished or (terminal is Terminal.HELD and not args.resume_held):
+            logging.info("SKIP %s: published terminal=%s", identity, terminal)
             return
-        previous = await sink.read() if Path(sink.path).exists() else ()
-        checkpoints = CheckpointSink(sink, destination, WORKPIECE.dump_json(wp))
-        log = EventLog(sink=checkpoints, replay_from=previous, replayable=replayable_grade)
+        (workdir / "events.jsonl").write_bytes(published.events)
+    checkpoints = CheckpointSink(sink, destination)
+    await checkpoints.claim(published)
+    previous = await sink.read() if Path(sink.path).exists() else ()
+    log = EventLog(sink=checkpoints, replay_from=previous, replayable=replayable_grade)
+    wp = Workpiece(proposal.header.id, proposal)
+    try:
         async with checkpoints.running():
             source = endpoint_source(
                 os.environ.get("GLM_BASE_URL"),
@@ -162,29 +130,23 @@ async def one(args: argparse.Namespace) -> None:
             )
             async with runtime(policy, source, get_secret("PARALLEL_API_KEY") or "") as (config, resources):
                 wp = await run_workpiece(proposal, config, resources, log, install=install)
+    except* Superseded:
+        raise
     except* (Hold, Restart, Transient, LogFailure) as error:
         wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete(reasons(error))))
-        if log is not None:
-            await log.record(StageCompleted(None, "", "Held", wp.round, Terminal.HELD))
+        await log.record(StageCompleted(None, "", "Held", wp.round, Terminal.HELD))
         logging.warning("Taskforge workpiece %s held: %s", proposal.header.id, reasons(error))
     except* Exception as error:
         detail = traceback.format_exc()
         wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete((f"bug: {detail}",))))
-        if log is not None:
-            await log.record(StageCompleted(None, "", "bug", wp.round, Terminal.HELD))
+        await log.record(StageCompleted(None, "", "bug", wp.round, Terminal.HELD))
         logging.exception("Taskforge workpiece %s failed", proposal.header.id)
         if len(error.exceptions) == 1:
             raise error.exceptions[0] from None
         raise
     finally:
-        if not skipped:
-            (workdir / "workpiece.json").write_bytes(WORKPIECE.dump_json(wp))
-            # A stream that could not be read is left as published, so its parts stay repairable.
-            status = (
-                fold(tuple(record.event for record in log.records)) if log is not None else Status(terminal=wp.terminal)
-            )
-            (workdir / "status.json").write_text(json.dumps(asdict(status)))
-            publish(workdir, destination, SNAPSHOT_FILES if log is not None else SNAPSHOT_FILES[1:])
+        if checkpoints.superseded is None:
+            await checkpoints.finish(fold(tuple(record.event for record in log.records)), wp)
 
 
 async def run(args: argparse.Namespace) -> None:

@@ -120,11 +120,19 @@ Each workpiece publishes to `<output>/<capability>/<slot>/`:
 
 | file | contents |
 |---|---|
-| `events.jsonl` | the full effect log: every request, result, tool call, retry, scope; uploaded after 25 events or 60 s, whichever comes first |
-| `workpiece.json` | the frozen workpiece: proposal, submission, evidence per round, decisions, terminal |
-| `status.json` | `terminal` (`accepted`, `abandoned`, `held`, or `null` while running) and when the upload started |
+| `journal.json` | the head: journal format (2), the owning writer, the chunks that make up the event stream and the bytes they cover, `status` (`terminal` is `accepted`, `abandoned`, `held`, or `null` while running), `published_at`, and once the workpiece ends the frozen `workpiece` (proposal, submission, evidence per round, decisions, terminal) |
+| `chunks/<writer>-<offset>.jsonl` | immutable slices of the effect log: every request, result, tool call, retry, scope; published after 25 events or 60 s, whichever comes first |
 
-A driver restarted against the same output resumes each workpiece from these files and prints
+Events are recorded by stable kinds (`inference.request`, `env.run_command`, ...; the table is in
+`effects/events.py`), never by Python module path. Each driver claims `journal.json` by
+compare-and-swap when it starts and advances it the same way after each chunk. A second driver on
+the same workpiece (a relaunch racing a live driver, a preempted worker's replacement) takes the
+head; the first then fails with `Superseded` at its next checkpoint and publishes nothing more.
+Readers follow only the chunks the head names. A root in any other journal format, including the
+format-1 layout (`events.jsonl`, `events.jsonl.parts/`, `status.json`), fails with an error naming
+the format found and is left untouched; such roots are converted once by a separate migration.
+
+A driver restarted against the same output resumes each workpiece from its journal and prints
 `SKIP <id>: published terminal=<state>` for every published terminal, `held` included. Held
 workpieces are resumed only when the launch passes `--resume-held`; use it under a new job prefix
 after an infrastructure outage (sandbox admission, a provider gap longer than
@@ -133,14 +141,14 @@ re-executed on fresh machines, so a resumed author session takes minutes before 
 Replay reuses recorded model results only while the re-executed commands return the output that
 was recorded; after the first difference, the remaining model calls run again.
 Cancelling a driver sends SIGTERM to each workpiece process, which exits without a final snapshot:
-its `status.json` keeps `terminal: null`, and the next launch resumes it without `--resume-held`.
+its head keeps `terminal: null`, and the next launch resumes it without `--resume-held`.
 
-While a driver is working on a workpiece, its `status.json` reads `terminal: null` with
-`upload_started_at`; the hub's `job describe` for a finished federated driver can keep saying
+While a driver is working on a workpiece, its head reads `terminal: null` with
+`published_at`; the hub's `job describe` for a finished federated driver can keep saying
 `running` indefinitely, so judge progress by these files and by the driver's pods, not by job state.
 
 Run `uv run --frozen python -m taskforge.driver report <output-root> [--since-hours N]`
-with the storage credentials above. It reads published snapshots and event parts concurrently,
+with the storage credentials above. It reads each journal head and its chunks concurrently,
 then prints terminal/reason counts, accepted/hour over 1/6/24 hours, tokens by role,
 stage durations, and consecutive-event latency proxies. Replayed results do not add token
 spend or latency samples. Solver usage comes from recorded rollout steps; other roles follow
@@ -155,7 +163,8 @@ fail instead of silently producing an incomplete tally.
 The keys in `defaults/policy.json`, by group. Override any of them in the overlay.
 
 - **Models**: `author.model` (DeepSeek V4.1 Flash), `solver.model` and `adversary.model` (GLM-5.3),
-  each with `<role>.context_tokens`. There is no output cap; the prompt limit is the model's window.
+  with `author.context_tokens` and `adversary.context_tokens` as their prompt limits. There is no output cap;
+  the prompt limit is the model's window.
 - **Review band**: `band.low`/`band.high` on the solver pass rate; `solver.k` trials. A task
   that is *too easy* gets one hardening round and is then accepted with `accepted_with: too_easy`,
   reverting to the earlier submission if the hardening broke something.
@@ -207,5 +216,5 @@ backend failed three times.
   resumes them from their last checkpoint (see Outputs).
 - S3 output roots (`marin/forge/...`), Iris job prefixes (`forge-pilot-*`), sandbox paths
   (`.forge-candidates/`, `/tmp/forge-hydration-*`) and the event-log encoding markers
-  (`__forge_*__`) keep the `forge` name of the pilot runs. Event logs name events by module
-  path, so logs written by the `forge` pilots do not replay under `taskforge`.
+  (`__forge_*__`) keep the `forge` name of the pilot runs. Roots written by the `forge` pilots
+  use journal format 1 and need the one-time migration before `taskforge` reads them.

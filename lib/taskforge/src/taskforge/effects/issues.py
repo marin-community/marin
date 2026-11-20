@@ -36,6 +36,14 @@ class LogFailure(EffectIssue):
     """Event log encoding, decoding, or persistence failed."""
 
 
+class Superseded(LogFailure):
+    """Another writer took the published journal; stop and publish nothing.
+
+    A relaunch, a racing driver or a preempted worker's replacement owns the workpiece now. Holding would
+    publish a terminal status over the owner's journal, so the process exits with an error instead.
+    """
+
+
 class ContextExceeded(Exception):
     """The provider rejected the conversation because its context window is full.
 

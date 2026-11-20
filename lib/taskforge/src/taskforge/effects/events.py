@@ -1,6 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""Recorded effect requests and the stable kinds that name them in a journal.
+
+Every concrete ``Event`` declares ``kind = "<area>.<name>"``: ``<area>`` is the resource whose executor resolves
+the request (``env``, ``inference``, ``grading``, ``rollouts``, ``ids``, ``web``) or, for diagnostics, the
+mechanism that emits it (``effect``, ``scope``, ``stage``, ``tool``); ``<name>`` is the snake-case request or
+occurrence. The kind, never the Python module or class name, is the recorded ``type`` and the first element of
+the replay digest, so classes may move or be renamed freely. Changing a kind breaks every journal that recorded it.
+"""
+
 from dataclasses import dataclass, field, fields
 from enum import StrEnum
 from types import get_original_bases
@@ -46,6 +55,7 @@ class Event(Generic[T_co]):
     phantom result parameter requires an explicit TypeVar to preserve this.
     """
 
+    kind: ClassVar[str]
     result_type: ClassVar[object] = type(None)
     _digest: str | None = field(default=None, init=False, repr=False, compare=False, metadata={"serialize": False})
 
@@ -61,7 +71,14 @@ class Event(Generic[T_co]):
             if get_origin(base) is Event:
                 cls.result_type = get_args(base)[0]
                 break
-        EVENT_TYPES[f"{cls.__module__}.{cls.__qualname__}"] = cls
+        kind = cls.__dict__.get("kind")
+        if not isinstance(kind, str) or not kind:
+            raise TypeError(f"{cls.__qualname__} must declare a recorded kind")
+        existing = EVENT_TYPES.get(kind)
+        # dataclass(slots=True) re-creates the class, registering its replacement under the same name and kind.
+        if existing is not None and (existing.__module__, existing.__name__) != (cls.__module__, cls.__name__):
+            raise TypeError(f"Event kind {kind!r} is declared by both {existing.__qualname__} and {cls.__qualname__}")
+        EVENT_TYPES[kind] = cls
 
 
 # Event registration is the sole module-state exception; logs never import classes.
@@ -70,15 +87,14 @@ EVENT_TYPES: dict[str, type[Event[object]]] = {}
 
 def event_digest(event: Event[object]) -> str:
     if event._digest is None:
-        object.__setattr__(
-            event, "_digest", digest((f"{type(event).__module__}.{type(event).__qualname__}", event.identity()))
-        )
+        object.__setattr__(event, "_digest", digest((event.kind, event.identity())))
     assert event._digest is not None
     return event._digest
 
 
 @dataclass(frozen=True, slots=True)
 class Resolved[T](Event[None]):
+    kind = "effect.resolved"
     request: Event[T]
     fingerprints: tuple[Fingerprint, ...]
     value: T
@@ -87,11 +103,13 @@ class Resolved[T](Event[None]):
 
 @dataclass(frozen=True, slots=True)
 class Note(Event[None]):
+    kind = "effect.note"
     msg: str
 
 
 @dataclass(frozen=True, slots=True)
 class Retrying(Event[None]):
+    kind = "effect.retrying"
     request: Event[object]
     attempt: int
     cause: str
@@ -99,17 +117,20 @@ class Retrying(Event[None]):
 
 @dataclass(frozen=True, slots=True)
 class ScopeEntered(Event[None]):
+    kind = "scope.entered"
     name: str
 
 
 @dataclass(frozen=True, slots=True)
 class ScopeExited(Event[None]):
+    kind = "scope.exited"
     name: str
     failed: bool
 
 
 @dataclass(frozen=True, slots=True)
 class StageCompleted(Event[None]):
+    kind = "stage.completed"
     stage: Stage | None
     config_digest: str
     exit: str

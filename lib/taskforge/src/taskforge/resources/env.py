@@ -49,23 +49,27 @@ class CommandResult:
 
 @dataclass(frozen=True, slots=True)
 class RunCommand(Event[CommandResult]):
+    kind = "env.run_command"
     cmd: str
     timeout: float
 
 
 @dataclass(frozen=True, slots=True)
 class WriteFile(Event[None]):
+    kind = "env.write_file"
     path: PurePosixPath
     data: bytes
 
 
 @dataclass(frozen=True, slots=True)
 class WriteFiles(Event[None]):
+    kind = "env.write_files"
     files: tuple[tuple[PurePosixPath, bytes], ...]
 
 
 @dataclass(frozen=True, slots=True)
 class ReadFile(Event[bytes]):
+    kind = "env.read_file"
     path: PurePosixPath
     offset: int = 0
     limit: int | None = None

@@ -131,14 +131,12 @@ async def test_log_retries_only_unwritten_records_and_retains_failed_batch() -> 
     assert tuple(record.event for record in sink.records) == (Note("retained"), Note("next"), Note("last"))
 
 
-async def test_object_store_sink_appends_batches_and_retries_idempotently() -> None:
-    sink = JsonlSink("memory://forge-test/append.jsonl")
-    first = Record(1, 1.0, Note("first"))
-    second = Record(2, 2.0, Note("second"))
-    await sink.write((first,))
-    await sink.write((second,))
-    await sink.write((second,))
-    assert await sink.read() == (first, second)
+async def test_unknown_recorded_kind_fails_closed_naming_it(tmp_path: Path) -> None:
+    path = tmp_path / "events.jsonl"
+    await JsonlSink(str(path)).write((Record(1, 1.0, Note("known")),))
+    path.write_text(path.read_text().replace('"effect.note"', '"taskforge.effects.events.Note"'))
+    with pytest.raises(LogFailure, match=r"Unknown event kind 'taskforge\.effects\.events\.Note'"):
+        await JsonlSink(str(path)).read()
 
 
 async def test_records_queued_during_upload_coalesce_into_one_incremental_batch() -> None:
@@ -160,6 +158,8 @@ async def test_records_queued_during_upload_coalesce_into_one_incremental_batch(
 async def test_unencodable_event_does_not_poison_later_persistence(tmp_path: Path) -> None:
     @dataclass(frozen=True, slots=True)
     class Invalid(Event[None]):
+        kind = "test.invalid"
+
         opaque: object
 
     sink = JsonlSink(str(tmp_path / "valid.jsonl"))
@@ -206,25 +206,3 @@ async def test_nonfinite_event_values_roundtrip_and_replay(tmp_path: Path, numbe
     before = Path(sink.path).read_bytes()
     await sink.write(loaded[-1:])
     assert Path(sink.path).read_bytes() == before
-
-
-@pytest.mark.parametrize("agrees", [True, False])
-async def test_parts_overlapping_the_snapshot_must_repeat_it(tmp_path: Path, agrees: bool) -> None:
-    """A second writer numbered from 1 beside a published stream is reported as divergence, not spliced in."""
-    destination = tmp_path / "published"
-    (destination / "events.jsonl.parts").mkdir(parents=True)
-    first = JsonlSink(str(tmp_path / "first.jsonl"))
-    await EventLog(sink=first).record(StageCompleted(Stage.AUTHOR, "", "Held", 0, Terminal.HELD))
-    (destination / "events.jsonl").write_bytes(Path(first.path).read_bytes())
-    writer = first if agrees else JsonlSink(str(tmp_path / "second.jsonl"))
-    log = EventLog(sink=writer, replay_from=await first.read() if agrees else ())
-    if not agrees:
-        await log.record(Note("fresh start"))
-    await log.record(StageCompleted(Stage.AUTHOR, "", "draft"))
-    (destination / "events.jsonl.parts" / "000000000002.jsonl").write_bytes(Path(writer.path).read_bytes())
-    published = JsonlSink(str(destination / "events.jsonl"))
-    if agrees:
-        assert [record.sequence for record in await published.read()] == [1, 2]
-    else:
-        with pytest.raises(LogFailure, match=r"diverged: 000000000002\.jsonl disagrees at sequence 1"):
-            published.read_bytes()

@@ -23,11 +23,12 @@ from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import EnvironmentRequirements
 
 from taskforge import checkpoint, driver
+from taskforge.checkpoint import HEAD, CheckpointSink, Published, read_published
 from taskforge.config import TaskforgeConfig
 from taskforge.coordinator import advance, run_workpiece
 from taskforge.effects.context import Context
 from taskforge.effects.events import StageCompleted
-from taskforge.effects.issues import Hold, Restart, Transient
+from taskforge.effects.issues import Hold, LogFailure, Restart, Superseded, Transient
 from taskforge.effects.log import EventLog, JsonlSink, fold
 from taskforge.harness.protocol import Harness, Stopped, StopReason, Tool
 from taskforge.llm.glm_client import EndpointSource
@@ -41,7 +42,6 @@ from taskforge.model.review import (
     BandRules,
     Budget,
     Decision,
-    Incomplete,
     Modify,
     Retry,
 )
@@ -59,6 +59,18 @@ from taskforge.resources.verifier import RoundVerifier
 from taskforge.stages.classify import replayable_grade
 from taskforge.stages.exits import Decided
 from taskforge.wiring import build_config, install
+
+
+def published(destination: Path) -> Published:
+    journal = read_published(str(destination))
+    assert journal is not None
+    return journal
+
+
+def published_workpiece(destination: Path) -> Workpiece:
+    workpiece = published(destination).head.workpiece
+    assert workpiece is not None
+    return workpiece
 
 
 class RecordingEnv(FakeEnv):
@@ -299,18 +311,17 @@ async def test_driver_persists_programming_failure_then_reraises(
     with pytest.raises(RuntimeError, match="exhaust"):
         await driver.one(args)
     destination = tmp_path / "out" / driver.proposal_key(args.proposals)
-    result = WORKPIECE.validate_json((destination / "workpiece.json").read_bytes())
+    result = published_workpiece(destination)
     assert result.terminal == Terminal.HELD
     assert "bug:" in str(result.decisions[-1]) and "Traceback" in str(result.decisions[-1])
-    assert json.loads((destination / "status.json").read_text())["terminal"] == "held"
-    assert await JsonlSink(str(destination / "events.jsonl")).read()
+    assert published(destination).head.status.terminal is Terminal.HELD
+    assert published(destination).events
 
     # An Iris retry has a fresh local directory, but must not rerun this held workpiece.
+    head = (destination / HEAD).read_bytes()
     args.work_dir = str(tmp_path / "retry-work")
     await driver.one(args)
-    assert (Path(args.work_dir) / driver.proposal_key(args.proposals) / "events.jsonl").read_bytes() == (
-        destination / "events.jsonl"
-    ).read_bytes()
+    assert (destination / HEAD).read_bytes() == head
 
 
 async def test_driver_resumes_published_partial_log_without_repeated_inference(
@@ -337,24 +348,27 @@ async def test_driver_resumes_published_partial_log_without_repeated_inference(
     args = driver_args
 
     monkeypatch.setattr(checkpoint, "CHECKPOINT_EVENTS", 1)
-    final_publish = driver.publish
-    # Simulate preemption: only periodic snapshots reach storage, not the finally upload.
-    monkeypatch.setattr(driver, "publish", lambda *_args: None)
+    final_publish = CheckpointSink.finish
+
+    async def preempted(*_args: object) -> None:
+        """Simulate preemption: only periodic checkpoints reach storage, not the final publication."""
+
+    monkeypatch.setattr(CheckpointSink, "finish", preempted)
     with pytest.raises(asyncio.CancelledError):
         await driver.one(args)
-    monkeypatch.setattr(driver, "publish", final_publish)
+    monkeypatch.setattr(CheckpointSink, "finish", final_publish)
     destination = tmp_path / "out" / driver.proposal_key(args.proposals)
-    assert json.loads((destination / "status.json").read_text())["terminal"] is None
+    assert published(destination).head.status.terminal is None
     args.work_dir = str(tmp_path / "second")
     await driver.one(args)
-    assert WORKPIECE.validate_json((destination / "workpiece.json").read_bytes()).terminal == Terminal.ACCEPTED
+    assert published_workpiece(destination).terminal == Terminal.ACCEPTED
     assert isinstance(first.inference, FakeInference) and len(first.inference.requests) == 2
     assert isinstance(second.inference, FakeInference) and len(second.inference.requests) == len(script()) - 2
-    published = (destination / "events.jsonl").read_bytes()
+    head = (destination / HEAD).read_bytes()
     # Even with no resources left to construct, another fresh attempt exits successfully.
     args.work_dir = str(tmp_path / "third")
     await driver.one(args)
-    assert (destination / "events.jsonl").read_bytes() == published
+    assert (destination / HEAD).read_bytes() == head
 
 
 @pytest.mark.parametrize("reason", tuple(StopReason))
@@ -451,15 +465,15 @@ async def test_driver_only_resumes_held_on_request_and_reexecutes_ungraded_trial
     monkeypatch.setattr(driver, "runtime", fake_runtime)
     await driver.one(driver_args)
     destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
-    assert WORKPIECE.validate_json((destination / "workpiece.json").read_bytes()).terminal is Terminal.HELD
-    published = (destination / "events.jsonl").read_bytes()
+    assert published_workpiece(destination).terminal is Terminal.HELD
+    head = (destination / HEAD).read_bytes()
     driver_args.work_dir += "-skip"
     await driver.one(driver_args)
-    assert (destination / "events.jsonl").read_bytes() == published
+    assert (destination / HEAD).read_bytes() == head
     driver_args.resume_held = True
     driver_args.work_dir += "-resume"
     await driver.one(driver_args)
-    assert WORKPIECE.validate_json((destination / "workpiece.json").read_bytes()).terminal is Terminal.ACCEPTED
+    assert published_workpiece(destination).terminal is Terminal.ACCEPTED
     assert isinstance(second.inference, FakeInference) and not second.inference.requests
 
 
@@ -488,7 +502,7 @@ async def test_environment_startup_transient_replays_stage_or_holds_without_bug(
     monkeypatch.setattr(driver, "runtime", fake_runtime)
     await driver.one(driver_args)
     destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
-    result = WORKPIECE.validate_json((destination / "workpiece.json").read_bytes())
+    result = published_workpiece(destination)
     assert envs.calls == min(failures + 1, 3)
     assert result.terminal is (Terminal.ACCEPTED if failures == 1 else Terminal.HELD)
     if failures == 3:
@@ -496,47 +510,64 @@ async def test_environment_startup_transient_replays_stage_or_holds_without_bug(
         assert "bug:" not in str(result.decisions[-1])
 
 
-async def test_recover_resumes_a_stream_published_without_status(tmp_path: Path) -> None:
-    """An interrupted publish leaves the stream without status.json; that is a resume, never a fresh start."""
-    destination, workdir = tmp_path / "published", tmp_path / "work"
-    workdir.mkdir()
-    assert await driver.recover(workdir, str(destination)) is None
-    destination.mkdir()
-    sink = JsonlSink(str(destination / "events.jsonl"))
-    await EventLog(sink=sink).record(StageCompleted(Stage.AUTHOR, "", "Held", 0, Terminal.HELD))
-    restored = await driver.recover(workdir, str(destination))
-    assert restored is not None and restored.terminal is Terminal.HELD and not restored.finished
-    assert (workdir / "events.jsonl").read_bytes() == Path(sink.path).read_bytes()
-    assert not (workdir / "status.json").exists()
-
-
-async def test_driver_holds_an_undecodable_stream_without_touching_it(
-    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("found", ["format 1", "format 3"])
+async def test_driver_fails_closed_on_another_journal_format_without_touching_it(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, found: str
 ) -> None:
     destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
-    (destination / "events.jsonl.parts").mkdir(parents=True)
-    first = JsonlSink(str(destination / "events.jsonl"))
-    await EventLog(sink=first).record(StageCompleted(Stage.AUTHOR, "", "Held", 0, Terminal.HELD))
-    second = JsonlSink(str(Path(driver_args.work_dir + "-other") / "events.jsonl"))
-    log = EventLog(sink=second)
-    await log.record(StageCompleted(Stage.AUTHOR, "", "draft"))
-    await log.record(StageCompleted(Stage.VALIDATE, "", "ready"))
-    (destination / "events.jsonl.parts" / "000000000002.jsonl").write_bytes(Path(second.path).read_bytes())
-    (destination / "status.json").write_text(json.dumps({"terminal": None}))
-    published = (destination / "events.jsonl").read_bytes()
+    destination.mkdir(parents=True)
+    if found == "format 1":
+        (destination / "events.jsonl").write_text('{"sequence": 1}\n')
+    else:
+        (destination / HEAD).write_text(json.dumps({"format": 3, "writer": "newer"}))
+    before = {path: path.read_bytes() for path in destination.rglob("*")}
 
     @asynccontextmanager
     async def unexpected(*_: object) -> AsyncIterator[None]:
-        pytest.fail("An undecodable stream must not start the runtime")
+        pytest.fail("A journal in another format must not start the runtime")
         yield
 
     monkeypatch.setattr(driver, "runtime", unexpected)
-    await driver.one(driver_args)
-    workpiece = WORKPIECE.validate_json((destination / "workpiece.json").read_bytes())
-    assert workpiece.terminal is Terminal.HELD
-    assert isinstance(decision := workpiece.decisions[-1], Incomplete) and "diverged" in decision.reasons[0]
-    assert json.loads((destination / "status.json").read_text())["terminal"] == "held"
-    assert (destination / "events.jsonl").read_bytes() == published
+    with pytest.raises(LogFailure, match=f"journal {found}"):
+        await driver.one(driver_args)
+    assert {path: path.read_bytes() for path in destination.rglob("*")} == before
+
+
+async def test_second_driver_on_a_live_root_supersedes_the_first_which_publishes_nothing(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A relaunch racing a not-yet-dead driver takes the head; the old driver stops and cannot publish."""
+    monkeypatch.setattr(checkpoint, "CHECKPOINT_EVENTS", 1)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    takeover = asyncio.Event()
+
+    class TakenOver(FakeInference):
+        @override
+        async def complete(self, request: InferenceRequest) -> Completion:
+            if len(self.requests) == 2:
+                journal = published(destination)
+                await CheckpointSink(
+                    JsonlSink(str(Path(driver_args.work_dir) / "relaunch.jsonl")), str(destination)
+                ).claim(journal)
+                takeover.set()
+            return await super().complete(request)
+
+    first = replace(resources(Envs(), ()), inference=TakenOver(script()))
+
+    @asynccontextmanager
+    async def fake_runtime(
+        policy: Policy, _source: EndpointSource, _key: str
+    ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
+        yield build_config(policy, {}), first
+
+    monkeypatch.setattr(driver, "runtime", fake_runtime)
+    with pytest.raises(ExceptionGroup) as raised:
+        await driver.one(driver_args)
+    assert raised.group_contains(Superseded)
+    assert takeover.is_set()
+    journal = published(destination)
+    assert journal.head.status.terminal is None and journal.head.workpiece is None
+    assert isinstance(first.inference, FakeInference) and len(first.inference.requests) < len(script())
 
 
 class ScriptedAuthor(Harness):
@@ -632,7 +663,7 @@ async def test_root_recorded_with_previous_author_prompt_resumes_through_a_promp
     monkeypatch.setattr(driver, "DEFAULTS_DIR", previous)
     await driver.one(driver_args)
     destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
-    assert WORKPIECE.validate_json((destination / "workpiece.json").read_bytes()).terminal is Terminal.HELD
+    assert published_workpiece(destination).terminal is Terminal.HELD
     assert isinstance(first.inference, FakeInference) and len(first.inference.requests) == 3
 
     monkeypatch.setattr(driver, "DEFAULTS_DIR", DEFAULTS_DIR)
@@ -648,5 +679,5 @@ async def test_root_recorded_with_previous_author_prompt_resumes_through_a_promp
             await driver.one(driver_args)
         return
     await driver.one(driver_args)
-    assert WORKPIECE.validate_json((destination / "workpiece.json").read_bytes()).terminal is Terminal.ACCEPTED
+    assert published_workpiece(destination).terminal is Terminal.ACCEPTED
     assert [ResolvedTurnGuard.turn(request)[-1].tool_call_id for request in resumed.requests] == ["write", "grade"]

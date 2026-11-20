@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import json
+import asyncio
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 
@@ -10,15 +10,16 @@ from rolloutengine.models import ConversationRecord, GradedRollout, ModelTurn, R
 from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grading_result import GradeResult, Outcome
 
+from taskforge.checkpoint import CheckpointSink
 from taskforge.effects.events import Event, Resolved, ScopeEntered, ScopeExited, StageCompleted
-from taskforge.effects.log import JsonlSink, Record
+from taskforge.effects.log import JsonlSink, Record, Status
 from taskforge.llm.policy import LLMPolicy
 from taskforge.lowering import lower_with_settings, lowering_settings
 from taskforge.model.llm import Completion, Usage
 from taskforge.model.proposal import TaskProposal
 from taskforge.model.review import Abandon, Incomplete
 from taskforge.model.stage import Stage
-from taskforge.model.workpiece import WORKPIECE, Terminal, Workpiece
+from taskforge.model.workpiece import Terminal, Workpiece
 from taskforge.policy import load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.report import reason_class, report
@@ -45,7 +46,7 @@ def test_report_reason_class(reason: str, expected: str) -> None:
     assert reason_class(reason) == expected
 
 
-async def test_report_reads_parts_counts_usage_once_and_uses_decision_time(
+async def test_report_reads_journals_counts_usage_once_and_uses_decision_time(
     tmp_path: Path, proposal: TaskProposal, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr("taskforge.report.time.time", lambda: 1000000.0)
@@ -82,16 +83,14 @@ async def test_report_reads_parts_counts_usage_once_and_uses_decision_time(
         directory = tmp_path / name
         directory.mkdir()
         decisions = (Abandon(reasons),) if terminal is Terminal.ABANDONED else (Incomplete(reasons),)
-        (directory / "workpiece.json").write_bytes(
-            WORKPIECE.dump_json(Workpiece(name, proposal, terminal=terminal, decisions=decisions))
-        )
-        (directory / "status.json").write_text(json.dumps({"terminal": terminal}))
         data = events if name == "accepted" else [(0, StageCompleted(Stage.REVIEW, "", "Done", terminal=terminal))]
         records = tuple(Record(i, 1000000 - age + offset, event) for i, (offset, event) in enumerate(data, 1))
-        sink = JsonlSink(str(directory / "events.jsonl"))
-        await sink.write(records[:1])
-        if len(records) > 1:
-            sink.append_bytes(b"".join(sink._line(record) for record in records[1:]))
+        sink = CheckpointSink(JsonlSink(str(tmp_path / f"{name}.jsonl")), str(directory))
+        await sink.claim(None)
+        await sink.local.write(records[:1])
+        await asyncio.to_thread(sink._publish, Status(), None)
+        await sink.local.write(records[1:])
+        await sink.finish(Status(terminal=terminal), Workpiece(name, proposal, terminal=terminal, decisions=decisions))
     lines = await report(str(tmp_path))
     assert "terminal=accepted count=2" in lines
     assert "terminal=held reason=Restart count=1" in lines
