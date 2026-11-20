@@ -369,6 +369,26 @@ The bound tokenizer must map the frozen stop IDs to `<|end_of_text|>` and
 `<|eot_id|>`; an incompatible tokenizer fails before allocation. Retained
 trajectories use the supplied run identity.
 
+Mochi HF model exports use the adopted rounds in
+`experiments/post_training/long_loop/rounds/mochi-{base,sft}-eval.yaml` through
+`experiments.post_training.long_loop.round_runner`. This path binds the
+DP16/EP16 serving allocation and inherits `PROFILES["three-rack"]` from
+`experiments/post_training/long_loop/nvl72.py`: InfiniBand transport,
+`NCCL_IB_HCA=ibp` (an HCA name prefix), and a 262144-byte inference NCCL buffer.
+`experiments.evaluation.micro210` does not select this serving profile.
+
+From a clean checkout, preflight an adopted round with:
+
+```bash
+uv run python -m experiments.post_training.long_loop.round_runner \
+  --round experiments/post_training/long_loop/rounds/mochi-base-eval.yaml \
+  --through eval --version 2026.11.20.1 \
+  --source-revision "$(git rev-parse HEAD)" --validation-output /tmp/mochi-eval
+```
+
+Check `/tmp/mochi-eval/*/launch.yaml` and `compiled.yaml` before adding `--run`
+to that command. For SFT, use its round path and the version declared there.
+
 ## Pre-launch review
 
 Before submitting a large run:

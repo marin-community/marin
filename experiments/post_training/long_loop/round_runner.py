@@ -62,7 +62,7 @@ from experiments.post_training.long_loop.exp4 import (
     release_artifact,
 )
 from experiments.post_training.long_loop.exp4_data import NEMOTRON_SOURCE, pool_steps
-from experiments.post_training.long_loop.nvl72 import MochiProfile, build_run, validate_model_geometry
+from experiments.post_training.long_loop.nvl72 import PROFILES, MochiProfile, build_run, validate_model_geometry
 from experiments.post_training.long_loop.optimizer_admission import optimizer_group_receipt
 from experiments.post_training.long_loop.recipe_bundle import require_clean_revision, runtime_source_manifest
 from experiments.post_training.long_loop.run_spec import FilePin, read_pin
@@ -434,6 +434,9 @@ def adopted_round_evaluation(spec: AdoptedHfRound) -> ArtifactStep:
     adopted = ArtifactStep.adopt(
         model.name, model.version, model.uri, kind=LevanterCheckpoint, config=dataclasses.asdict(model)
     )
+    transport = PROFILES["three-rack"].patch
+    nccl_buffer_size_bytes = transport.trainer.policy.nccl_buffer_size_bytes
+    assert nccl_buffer_size_bytes is not None
     return micro210_artifact_step(
         ArtifactHfModel(adopted, model.tokenizer_uri, model.tokenizer_revision, relative_path=""),
         name=f"{spec.name}/eval",
@@ -448,6 +451,8 @@ def adopted_round_evaluation(spec: AdoptedHfRound) -> ArtifactStep:
             engine_init_kwargs=serving.engine_init_kwargs,
             cuda_allocator_config=serving.cuda_allocator_config,
             judge_gpu_count=serving.judge_gpu_count,
+            nccl_buffer_size_bytes=nccl_buffer_size_bytes,
+            network_env=dict(transport.extra_env),
         ),
     )
 
