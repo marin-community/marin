@@ -25,7 +25,10 @@ from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert imp
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.upstream import task_files
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.upstream.task_files import grader_source
 from experiments.post_training.task_curation.swe_rebench_fidelity_driver import (
+    CHURN_THRESHOLD,
+    CHURN_WINDOW,
     TRANSIENT_RETRY_DELAYS_SEC,
+    ChurnMonitor,
     transient_daytona_error,
     transient_daytona_text,
 )
@@ -393,12 +396,6 @@ def test_transient_daytona_classification_retries_infra_and_never_grading():
 def test_churn_monitor_trips_at_twenty_percent_and_stays_quiet_below():
     """Ruling 2026-11-20 (the wave-v9 churn): more than about 20% of the trials in the
     rolling window ending reward=None/infra trips the typed QUOTA/INFRA stop."""
-    from experiments.post_training.task_curation.swe_rebench_fidelity_driver import (
-        CHURN_THRESHOLD,
-        CHURN_WINDOW,
-        ChurnMonitor,
-    )
-
     assert CHURN_WINDOW == 50 and CHURN_THRESHOLD == 0.2
     monitor = ChurnMonitor()
     for _ in range(CHURN_WINDOW):
