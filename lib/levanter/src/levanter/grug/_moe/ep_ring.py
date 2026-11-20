@@ -138,12 +138,12 @@ def _scatter_add_dispatch_combine(
     # Invalid rows scatter out of range and are dropped: their ragged_dot output is unspecified, and a zero weight
     # times a NaN row is still NaN.
     combine_token = jnp.where(valid, token, tokens)
-    return _DispatchCombine(
-        dispatch=lambda x: _take_valid_rows(x, token, valid),
-        combine=lambda rows, weights: jnp.zeros((tokens, rows.shape[1]), rows.dtype)
-        .at[combine_token]
-        .add(rows * weights[:, None], mode="drop"),
-    )
+
+    def combine(rows, weights):
+        weighted = rows * weights[:, None]
+        return jnp.zeros((tokens, rows.shape[1]), weighted.dtype).at[combine_token].add(weighted, mode="drop")
+
+    return _DispatchCombine(dispatch=lambda x: _take_valid_rows(x, token, valid), combine=combine)
 
 
 def _gather_dispatch_combine(
@@ -173,10 +173,13 @@ def _moe_mlp_ep_ring_local(
     num_experts: int,
     capacity_factor: float,
     token_sharding_axes: tuple[str, ...],
+    combine_in_fp32: bool = False,
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
     """Ring-style EP routed path: all-gather dispatch + psum-scatter collect.
 
     ``make_dispatch_combine`` chooses how rows move between the gathered token buffer and the dispatch slots.
+    With ``combine_in_fp32`` the weights keep their (float32) dtype, so the weighted rows, their per-token sum
+    and the psum-scatter run in float32, and the output is cast to ``x_local``'s dtype at the end.
     """
     # #2710 ring EP strategy: gather tokens and their selected-expert routing
     # assignments across expert shards, then psum-scatter back to local tokens.
@@ -225,7 +228,9 @@ def _moe_mlp_ep_ring_local(
         )
 
         dispatch_combine = make_dispatch_combine(local_idx, valid, tokens, topk)
-        weight_local = jnp.take(weight_flat, local_idx, axis=0).astype(x_local.dtype)
+        weight_local = jnp.take(weight_flat, local_idx, axis=0)
+        if not combine_in_fp32:
+            weight_local = weight_local.astype(x_local.dtype)
 
         x_dispatch = tree_checkpoint_name(dispatch_combine.dispatch(x_global), _CHECKPOINT_DISPATCH_INPUT)
         weight_dispatch = jnp.where(valid, weight_local, jnp.zeros_like(weight_local))
@@ -244,5 +249,7 @@ def _moe_mlp_ep_ring_local(
         # #2710 ring EP strategy: collect only this shard's token slice after
         # reducing contributions from experts across the EP mesh.
         out_local = jax.lax.psum_scatter(out_global, "expert", scatter_dimension=0, tiled=True)
+        if combine_in_fp32:
+            out_local = out_local.astype(x_local.dtype)
         dropped_total = jax.lax.psum(dropped_local, token_sharding_axes)
     return out_local, CapacityDrops(sender_dropped=jnp.zeros_like(dropped_total), receiver_dropped=dropped_total)

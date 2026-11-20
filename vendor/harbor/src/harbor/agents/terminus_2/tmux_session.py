@@ -35,6 +35,10 @@ class TmuxBatchProtocolError(RuntimeError):
     """A batched tmux call returned without its response markers."""
 
 
+class TmuxExecTimeoutError(RuntimeError):
+    """A tmux command's sandbox exec did not return before its deadline."""
+
+
 class ModelInitiatedTmuxFailure(NonZeroAgentExitCodeError):
     """A model command ended the tmux session or killed its command runner."""
 
@@ -787,11 +791,16 @@ class TmuxSession:
         markers = _BatchMarkers.create()
         script = self._build_batch_script(keystroke_batches, markers)
         total_wait = sum(max(0.0, batch.duration_sec) for batch in keystroke_batches)
-        result = await self.environment.exec(
-            command=script,
-            timeout_sec=math.ceil(total_wait + self._batch_exec_timeout_margin_sec),
-            user=self._user,
-        )
+        timeout_sec = math.ceil(total_wait + self._batch_exec_timeout_margin_sec)
+        try:
+            result = await self.environment.exec(
+                command=script, timeout_sec=timeout_sec, user=self._user
+            )
+        except TimeoutError as error:
+            raise TmuxExecTimeoutError(
+                f"{self.environment.session_id}: batched tmux call exceeded "
+                f"{timeout_sec}s"
+            ) from error
         stdout = result.stdout or ""
         sent_index = None
         while match := re.match(rf"{re.escape(markers.sent)}(\d+)\n", stdout):
