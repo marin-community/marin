@@ -22,6 +22,7 @@ def test_adopted_evaluation_has_no_training_input_and_rejects_changed_data(tmp_p
     (model / "config.json").write_bytes(config)
     data = tmp_path / "data"
     data.mkdir()
+    monkeypatch.setattr("experiments.post_training.long_loop.nvl72_evaluation.PREPARED_INPUTS", str(data))
     raw = b"pinned evaluation input"
     (data / "rollouts.parquet").write_bytes(raw)
     spec = NVL72EvaluationSpec(

@@ -76,4 +76,3 @@ serving:
         - vllm::unified_kv_cache_update
         - vllm::grug_moe_short_conv
   cuda_allocator_config: expandable_segments:True
-  judge_gpu_count: 4

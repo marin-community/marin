@@ -196,7 +196,7 @@ def resolve_spec(
 
 
 def allocation_peaks(resolved: dict) -> dict[str, int]:
-    """Count serialized stage allocations, including the co-hosted eval judge."""
+    """Count serialized stage allocations, without a GPU role for the API judge."""
     execution = resolved["execution"]
     for runtime in (execution["coordinator"], resolved["rl"]["execution"], resolved["evaluation"]["execution"]):
         if runtime["priority"] != "production" or runtime["cluster"] != "cw-rno2a":
@@ -224,7 +224,6 @@ def allocation_peaks(resolved: dict) -> dict[str, int]:
             nodes += (plan["num_inference_engines"] + per_node - 1) // per_node
             nodes += plan["reference_num_nodes"] or 0
         peaks[stage] = nodes * width
-    peaks["evaluation"] += resolved["evaluation"]["judge_gpu_count"]
     peaks = {key: value + coordinator_count for key, value in peaks.items()}
     if max(peaks.values()) > 256:
         raise ValueError(f"Run exceeds the authorized 256 H100 allocation: {peaks}")

@@ -401,5 +401,5 @@ def test_smoke_cannot_bypass_allocation_controls_by_scaling_eval(tmp_path):
         acknowledge_experimental_controls=True,
         experimental_controls_reason="Deliberate reduced eval allocation",
     )
-    assert resolved["gpu_peaks"]["evaluation"] == 16
-    assert resolved["experimental_controls"]["changes"] == [{"control": "gpus/evaluation", "default": 136, "actual": 16}]
+    assert resolved["gpu_peaks"]["evaluation"] == 8
+    assert resolved["experimental_controls"]["changes"] == [{"control": "gpus/evaluation", "default": 128, "actual": 8}]

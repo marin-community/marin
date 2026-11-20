@@ -20,7 +20,7 @@ class PiPathScope(StrEnum):
     AGENT = "agent"
 
 
-def with_pi_runtime(task: TaskSpec, *, path_scope: PiPathScope) -> TaskSpec:
+def with_pi_runtime(task: TaskSpec, *, path_scope: PiPathScope, judge_model: str) -> TaskSpec:
     """Derive a task package with locked Pi tooling and the declared BixBench judge policy."""
     files = {resource.path: resource for resource in task.resources.verifier}
     config = tomllib.loads(resource_bytes(files["task.toml"]).decode())
@@ -32,7 +32,7 @@ def with_pi_runtime(task: TaskSpec, *, path_scope: PiPathScope) -> TaskSpec:
         config["verifier"]["env"] = {
             "OPENAI_API_KEY": "${OPENAI_API_KEY}",
             "OPENAI_BASE_URL": "${OPENAI_BASE_URL}",
-            "MODEL_NAME": "MiniMaxAI/MiniMax-M3-MXFP8",
+            "MODEL_NAME": judge_model,
         }
     original = environment.pop("docker_image", None)
     dockerfile = f"FROM {original}\n" if original else resource_bytes(files["environment/Dockerfile"]).decode()

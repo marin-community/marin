@@ -19,6 +19,8 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.timing import Duration
 from skyrlrecipe.locality import RoleTopologyMode
 
+from experiments.evaluation import micro210_policy
+from experiments.evaluation.judge_config import JudgeConfig
 from experiments.evaluation.micro210 import PREPARED_INPUTS, micro210_artifact_step
 from experiments.post_training.long_loop.adopted_sft import verify_adopted_sft
 from experiments.post_training.long_loop.archive_stage import archive_graph_run
@@ -311,6 +313,9 @@ def build_spec_graph(
         trained=learned,
     )
     evaluation = resolved["evaluation"]
+    canonical_judge = micro210_policy.read_micro210_policy(micro210_policy.POLICY_REFERENCE)["evaluation"]["judge"]
+    if draccus.decode(JudgeConfig, evaluation["judge"]) != draccus.decode(JudgeConfig, canonical_judge):
+        raise ValueError("Long-loop judge differs from the canonical Micro210 policy")
     canonical = micro210_artifact_step(
         TerminalPolicy(learned, expected_step=None), name=evaluation["name"], version=version
     )

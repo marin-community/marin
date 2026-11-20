@@ -139,7 +139,6 @@ class RoundServing:
     generator: dict
     engine_init_kwargs: dict
     cuda_allocator_config: str
-    judge_gpu_count: int
 
 
 @dataclass(frozen=True)
@@ -447,7 +446,6 @@ def adopted_round_evaluation(spec: AdoptedHfRound) -> ArtifactStep:
             generator=serving.generator,
             engine_init_kwargs=serving.engine_init_kwargs,
             cuda_allocator_config=serving.cuda_allocator_config,
-            judge_gpu_count=serving.judge_gpu_count,
         ),
     )
 

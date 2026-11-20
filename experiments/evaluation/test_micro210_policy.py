@@ -3,7 +3,6 @@
 
 import hashlib
 import json
-from contextlib import contextmanager
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -139,8 +138,6 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     monkeypatch.setenv("MARIN_TEMP_PREFIX", str(tmp_path / "temporary"))
     monkeypatch.setenv("TOGETHER_API_KEY", "unused-ambient-key")
     monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
-    counterpart_key = tmp_path / "counterpart-key"
-    counterpart_key.write_text("test-counterpart-key")
     token_content = {128001: "<|end_of_text|>", 128009: "<|eot_id|>"}
     monkeypatch.setattr(
         "experiments.evaluation.micro210.AutoTokenizer.from_pretrained",
@@ -160,22 +157,19 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
             deps=step.deps,
         )
     )
-    config = replace(config, counterpart_api_key=(f"file:{counterpart_key}",))
     submitted = []
 
-    @contextmanager
-    def serve_judge(_config):
-        submitted.append("judge")
-        yield SimpleNamespace(
-            model=SimpleNamespace(endpoint=SimpleNamespace(base_url="http://judge.test/v1", api_key="test"))
-        )
+    def resolve_key(spec):
+        assert spec == ("gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/1",)
+        return SimpleNamespace(value="test-together-key")
+
+    monkeypatch.setattr("experiments.evaluation.micro210.resolve_secret_spec", resolve_key)
 
     def submit_evaluation(skyrl, *, env_vars):
-        assert env_vars == {"JUDGE_API_KEY": "test", "OPENAI_API_KEY": "test-counterpart-key"}
+        assert env_vars == {"JUDGE_API_KEY": "test-together-key", "OPENAI_API_KEY": "test-together-key"}
         submitted.append(yaml.safe_load(skyrl.launch_config_yaml))
         return None
 
-    monkeypatch.setattr("experiments.evaluation.micro210.remote_inference", serve_judge)
     monkeypatch.setattr("experiments.evaluation.micro210.run_skyrl", submit_evaluation)
     run_micro210(config)
     record = json.loads((output / "canonical-evaluation.json").read_text())
@@ -184,13 +178,13 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
         "terminal_bench.harbor.daytona_provisioning": "terminal_bench.harbor.daytona_image_build",
         "terminal_bench.harbor.eval_daytona_provisioning": "terminal_bench.harbor.eval_daytona_image_build",
     }
-    assert submitted[1]["skyrl"]["terminal_bench"]["harbor"]["eval_daytona_image_build"] == "declarative"
+    assert submitted[0]["skyrl"]["terminal_bench"]["harbor"]["eval_daytona_image_build"] == "declarative"
     assert (
-        submitted[1]["skyrl"]["generator"]["eval_sampling_params"]
+        submitted[0]["skyrl"]["generator"]["eval_sampling_params"]
         == protocol["evaluation"]["config"]["generator"]["eval_sampling_params"]
     )
-    assert "eval_override_storage_mb" not in submitted[1]["skyrl"]["terminal_bench"]["harbor"]
-    assert submitted[1]["skyrl"]["generator"]["trajectory_retention"]["run_id"] == "test/micro210@2026.11.18"
+    assert "eval_override_storage_mb" not in submitted[0]["skyrl"]["terminal_bench"]["harbor"]
+    assert submitted[0]["skyrl"]["generator"]["trajectory_retention"]["run_id"] == "test/micro210@2026.11.18"
     altered = yaml.safe_load(config.skyrl.launch_config_yaml)
     altered["skyrl"]["terminal_bench"]["harbor"]["eval_override_storage_mb"] = 131072
     submitted.clear()

@@ -17,6 +17,7 @@ import tomli_w
 from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
+from experiments.evaluation.judge_config import MICRO210_JUDGE
 from experiments.post_training.long_loop.eval_runtime.pi_image import PiPathScope, with_pi_runtime
 from experiments.post_training.long_loop.rl_dataset_admission import file_digest
 
@@ -45,7 +46,7 @@ def pi_nonroot_task(task: TaskSpec) -> TaskSpec:
     """Keep task identity and grading, adding Pi and workspace ownership to SWE images."""
     if task.source.dataset != SOURCE:
         return task
-    prepared = with_pi_runtime(task, path_scope=PiPathScope.AGENT)
+    prepared = with_pi_runtime(task, path_scope=PiPathScope.AGENT, judge_model=MICRO210_JUDGE.model)
     files = {resource.path: resource for resource in prepared.resources.verifier}
     config = tomllib.loads(resource_bytes(files["task.toml"]).decode())
     agent = config.setdefault("agent", {})

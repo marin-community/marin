@@ -5,18 +5,14 @@
 
 import hashlib
 import json
+from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
 
 import click
 import draccus
 import yaml
-from iris.rpc.proto_display import priority_band_value
-from marin.evaluation.hardware import AcceleratorChoice, Platform
-from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.serving_config import inference_config_for_model
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.inference.iris import remote_inference
 from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
     ArtifactDataSource,
@@ -36,9 +32,10 @@ from marin.rl.skyrl import (
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
-from rigging.secrets import SecretSpec, resolve_secret_spec
+from rigging.secrets import resolve_secret_spec
 from transformers import AutoTokenizer
 
+from experiments.evaluation.judge_config import JudgeConfig
 from experiments.evaluation.micro210_policy import (
     MODEL_IDENTITY_PREFIX,
     Micro210Evaluation,
@@ -50,8 +47,10 @@ from experiments.post_training.long_loop.launch_validation import validate_befor
 from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 
 PREPARED_INPUTS = (
-    "s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp3/" "documents/mochi-exp3-final-eval-inputs/2026.11.18.61"
+    "gs://marin-us-east1/evaluation-policies/micro210/2026.11.20-together/"
+    "ba099cbc869af0dd1c14f14586557e38a812d6b956442e8b1f406b36cc42c7a0"
 )
+
 STOP_TOKEN_CONTENT = {128001: "<|end_of_text|>", 128009: "<|eot_id|>"}
 SERVING_GENERATOR_FIELDS = {
     "max_num_seqs",
@@ -74,7 +73,6 @@ class Micro210ServingProfile:
     generator: dict
     engine_init_kwargs: dict
     cuda_allocator_config: str
-    judge_gpu_count: int
 
 
 def serving_config(frozen: dict, profile: Micro210ServingProfile) -> dict:
@@ -104,9 +102,17 @@ class Micro210Run:
     skyrl: SkyRLRunConfig
     evaluation: Micro210Evaluation
     canonical_launch_sha256: str
-    counterpart_api_key: SecretSpec
     serving_profile: Micro210ServingProfile | None = None
     model_manifest_filename: str = MODEL_MANIFEST_FILENAME
+
+
+def judge_runtime_config(config: dict, judge: JudgeConfig) -> dict:
+    """Bind all runtime judge routes from the typed policy without changing other settings."""
+    config = deepcopy(config)
+    config["environment"]["task_sessions"]["remote_judge"].update(base_url=judge.base_url, api_key_env="JUDGE_API_KEY")
+    config["extra_env"]["JUDGE_BASE_URL"] = judge.base_url
+    config["terminal_bench"]["installed_agent"]["judge_model"] = judge.model
+    return config
 
 
 def validate_inputs(
@@ -131,7 +137,6 @@ def validate_inputs(
 
 
 def run_micro210(config: Micro210Run) -> SkyRLRun:
-    counterpart_api_key = resolve_secret_spec(config.counterpart_api_key).value
     if hashlib.sha256(config.skyrl.launch_config_yaml.encode()).hexdigest() != config.canonical_launch_sha256:
         raise ValueError("Canonical Micro210 refuses modified field: launch_config_yaml")
     validate_inputs(config.evaluation, PREPARED_INPUTS, model_manifest_filename=config.model_manifest_filename)
@@ -154,38 +159,9 @@ def run_micro210(config: Micro210Run) -> SkyRLRun:
         )
     )
     policy = config.evaluation.policy()["evaluation"]
-    judge = draccus.decode(ModelConfig, policy["judge"])
-    gpu_variant = policy["gpu_variant"]
-    judge_gpu_count = policy["judge_gpu_count"]
-    if config.serving_profile:
-        gpu_variant = config.serving_profile.gpu_variant
-        judge_gpu_count = config.serving_profile.judge_gpu_count
-        judge = replace(judge, resource_hint=replace(judge.resource_hint, gpu={gpu_variant: judge_gpu_count}))
-    launch = yaml.safe_load(config.skyrl.launch_config_yaml)
-    inference = inference_config_for_model(
-        judge,
-        AcceleratorChoice(
-            platform=Platform.GPU,
-            gpu_type=gpu_variant,
-            gpu_count=judge_gpu_count,
-            target_cluster=None,
-        ),
-        env_vars={},
-        priority=priority_band_value(launch["iris"]["priority"]),
-        capability_origin=policy["capability_origin"],
-        api_model=judge.location,
-    )
-    with remote_inference(inference) as served:
-        launch["skyrl"]["environment"]["task_sessions"]["remote_judge"]["base_url"] = served.model.endpoint.base_url
-        for section in (launch["skyrl"]["extra_env"], launch["runtime"]["task_env"]):
-            section["JUDGE_BASE_URL"] = served.model.endpoint.base_url
-        return run_skyrl(
-            replace(config.skyrl, launch_config_yaml=yaml.safe_dump(launch)),
-            env_vars={
-                "JUDGE_API_KEY": served.model.endpoint.api_key or "EMPTY",
-                "OPENAI_API_KEY": counterpart_api_key,
-            },
-        )
+    judge = draccus.decode(JudgeConfig, policy["judge"])
+    api_key = resolve_secret_spec((judge.credential,)).value
+    return run_skyrl(config.skyrl, env_vars={"JUDGE_API_KEY": api_key, "OPENAI_API_KEY": api_key})
 
 
 def micro210_step(model: Micro210Model, *, name: str, version: str, **overrides) -> ArtifactStep[SkyRLRun]:
@@ -240,6 +216,7 @@ def micro210_artifact_step(
         execution = serving_profile.execution
         gpu_variant = serving_profile.gpu_variant
         config = serving_config(frozen, serving_profile)
+    config = judge_runtime_config(config, draccus.decode(JudgeConfig, policy["judge"]))
     step = skyrl_step(
         SkyRLSpec(
             name=name,
@@ -281,7 +258,6 @@ def micro210_artifact_step(
             replace(run, launch_config_yaml=rendered),
             replace(binding, model=bound_model, output_uri=context.output_path),
             hashlib.sha256(rendered.encode()).hexdigest(),
-            ("env:TOGETHER_API_KEY",),
             serving_profile,
             model_manifest_filename,
         )

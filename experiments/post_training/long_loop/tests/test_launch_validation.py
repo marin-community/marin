@@ -26,7 +26,7 @@ def test_invalid_launch_fails_before_judge_allocation(monkeypatch):
         allocated.append(True)
         raise AssertionError("Invalid config reached judge allocation")
 
-    monkeypatch.setattr(judge, "remote_inference", allocate)
+    monkeypatch.setattr(judge, "resolve_secret_spec", allocate)
     config = SimpleNamespace(skyrl=SimpleNamespace(launch_config_yaml="unexpected_root_field: true\n"))
     with pytest.raises(ValueError, match="Strict SkyRL composition failed"):
         judge.run_judged(config)
