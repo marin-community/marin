@@ -122,7 +122,7 @@ def main() -> None:
         "--timeout",
         "259200",
         "--max-retries",
-        "0",
+        "3",
         "-e",
         "DAYTONA_TARGET",
         "us",
