@@ -15,6 +15,8 @@ Marin libraries and Harbor as editable dependencies from this checkout, using
 the paths in `vendor/skyrl/pyproject.toml`. Marin calls SkyRL through the executable.
 See [launching RL experiments](../references/rl-launching.md)
 for the artifact entry point, launch document, and resource configuration.
+For model-owned preset selection, experiment status and saved results, see the
+[RL experiments recipe](../recipes/rl-experiments.md).
 
 The Marin CLI uses SkyRL's `cpu` extra. Set `environment.task_sessions.local: {}`
 to enable the local task backend, which probes Linux bubblewrap before task
@@ -48,6 +50,14 @@ to check runtime behavior after dependency changes.
 
 The launcher lock targets Linux x86_64, Linux aarch64, and macOS ARM64.
 The pinned Ray release has no Intel macOS wheel.
+
+## Run records
+
+Native receipts and numeric metrics use the [FineStore run-record contract](https://github.com/marin-community/marin/blob/main/lib/finestore/README.md#package-boundary).
+See [RL launching](../references/rl-launching.md) for checkpoint continuation and retry procedures.
+
+Generate-only launches through Marin allocate the inference engines' nodes and
+reserve no trainer or reference nodes.
 
 ## Grug activation storage
 
@@ -101,7 +111,8 @@ as the numerical reference.
 
 ## Batch assembly
 
-The driver builds batches by default; use `--set trainer.batch_builder=worker` with `experiments.post_training.async_rl` for policy-worker slices. Keep `driver` for these configurations:
+The driver builds batches by default. Recipes that support policy-worker slicing can set
+`trainer.batch_builder=worker`. Keep `driver` for these configurations:
 
 | Worker startup refusal | Configurations |
 | --- | --- |
