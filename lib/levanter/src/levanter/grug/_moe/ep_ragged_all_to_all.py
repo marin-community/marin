@@ -821,6 +821,7 @@ def _shadow_routing(
     return routing, shadow_all
 
 
+@jax.custom_vjp
 def _shadow_weights(
     moe_w13_local: Float[Array, "Elocal H I2"],
     moe_w2_local: Float[Array, "Elocal I H"],
@@ -829,15 +830,37 @@ def _shadow_weights(
 ) -> tuple[Float[Array, "R H I2"], Float[Array, "R I H"]]:
     """Broadcast the shadowed experts' weights from their owners to every shard of the EP group.
 
-    The transpose of the ``psum`` is a ``psum``, so the gradient of each shadowed expert sums every
-    shard's contribution and lands on the owner.
+    The forward ``psum`` is exact, since only the owner contributes. The backward sums every shard's
+    gradient in float32 and adds it to the owner's weights, rounding once.
     """
+    weights, _ = _shadow_weights_fwd(moe_w13_local, moe_w2_local, experts, shard_id)
+    return weights
+
+
+def _shadow_weights_fwd(moe_w13_local, moe_w2_local, experts, shard_id):
     local_experts = moe_w13_local.shape[0]
     owned = (experts // local_experts == shard_id)[:, None, None]
     local = experts % local_experts
     w13 = jax.lax.psum(jnp.where(owned, moe_w13_local[local], 0), "expert")
     w2 = jax.lax.psum(jnp.where(owned, moe_w2_local[local], 0), "expert")
-    return w13, w2
+    return (w13, w2), (moe_w13_local, moe_w2_local, owned, local)
+
+
+def _shadow_weights_bwd(residuals, cotangents):
+    moe_w13_local, moe_w2_local, owned, local = residuals
+
+    def to_owner(local_weights, cotangent):
+        total = jax.lax.psum(cotangent.astype(jnp.float32), "expert")
+        # Every slot points at a real local expert, owned or not, so add: a set would let a non-owned
+        # slot's zero overwrite the owner's gradient.
+        gradient = jnp.zeros(local_weights.shape, jnp.float32).at[local].add(jnp.where(owned, total, 0))
+        return gradient.astype(local_weights.dtype)
+
+    w13_cotangent, w2_cotangent = cotangents
+    return to_owner(moe_w13_local, w13_cotangent), to_owner(moe_w2_local, w2_cotangent), None, None
+
+
+_shadow_weights.defvjp(_shadow_weights_fwd, _shadow_weights_bwd)
 
 
 def _shadow_combine(
