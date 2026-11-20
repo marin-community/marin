@@ -82,8 +82,8 @@ def launch_controller(
     command.extend(
         [
             "--secret",
-            "DAYTONA_API_KEY",
-            "gcp-secret://projects/hai-gcp-models/secrets/DAYTONA_EVAL_API_KEY/versions/1",
+            "DAYTONA_DATA_API_KEY",
+            "env:DAYTONA_DATA_API_KEY",
             "--secret",
             "DAYTONA_RL_API_KEY",
             "gcp-secret://projects/hai-gcp-models/secrets/DAYTONA_RL_API_KEY/versions/1",

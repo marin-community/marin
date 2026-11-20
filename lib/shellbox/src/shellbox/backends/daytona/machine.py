@@ -627,6 +627,7 @@ class DaytonaMachineFactory:
         network_policy: DaytonaNetworkPolicy | None = None,
         provider_wait_policy: ProviderWaitPolicy = ProviderWaitPolicy.PHASE,
         image_build: DaytonaImageBuild = DaytonaImageBuild.SNAPSHOT,
+        create_admission: Callable[[MachineSpec], Awaitable[None]] | None = None,
     ):
         self.client_factory = client_factory
         self.ttl_minutes = ttl_minutes
@@ -634,6 +635,7 @@ class DaytonaMachineFactory:
         self.network_policy = network_policy
         self.provider_wait_policy = ProviderWaitPolicy(provider_wait_policy)
         self.image_build = image_build
+        self.create_admission = create_admission
 
     def _clients(self) -> Callable[[], AsyncDaytona]:
         """Resolve the configured client factory for one provider session."""
@@ -735,6 +737,9 @@ class DaytonaMachineFactory:
             async with self.provider_wait_policy.timeout(timeout) as deadline:
                 name = f"shellbox-{uuid.uuid4().hex}"
                 params = await self._create_parameters(client, spec, name, deadline)
+                if self.create_admission is not None:
+                    with self.provider_wait_policy.wait():
+                        await self.create_admission(spec)
                 record_sandbox_lifecycle(SandboxLifecycleEvent.CREATE_REQUESTED, name)
 
                 async def delete_sandbox(_error_type, error, _traceback):

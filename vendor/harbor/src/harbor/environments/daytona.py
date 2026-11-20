@@ -6,6 +6,7 @@
 import asyncio
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
+from functools import partial
 from pathlib import Path
 
 from daytona import AsyncDaytona
@@ -20,6 +21,7 @@ from harbor.environments.capabilities import (
     EnvironmentResourceCapabilities,
 )
 from harbor.environments.docker_translate import COMPOSE_FILENAMES
+from harbor.environments.daytona_admission import admit_create
 from harbor.environments.artifacts import download_artifact
 from harbor.environments.execution import execute_shellbox_command
 from harbor.host_capabilities import HostCapabilities
@@ -48,7 +50,6 @@ from shellbox.backends.daytona.snapshot import (
 )
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.backends.daytona.provider import PROVIDER_REQUEST_TIMEOUT, ProviderWaitPolicy
-from functools import partial
 from shellbox.machine import MachineSpec, NetworkPolicy, UnsupportedMachineSpec
 from shellbox.process_session import (
     acquire_owned,
@@ -103,6 +104,7 @@ class DaytonaEnvironment(BaseEnvironment):
         network_policy: dict[str, str] | None = None,
         ttl_minutes: int = DEFAULT_SANDBOX_TTL_MINUTES,
         create_timeout: float = 600,
+        create_admission_command: list[str] | None = None,
         provisioning: DaytonaProvisioning = DaytonaProvisioning.SNAPSHOT,
         trial_attempt_timeout_sec: float | None = None,
         model_endpoint: str | None = None,
@@ -145,6 +147,8 @@ class DaytonaEnvironment(BaseEnvironment):
             create_timeout=create_timeout,
             provider_wait_policy=self.provider_wait_policy,
             network_policy=policy,
+            create_admission=(partial(admit_create, tuple(create_admission_command))
+                              if create_admission_command is not None else None),
         )
         self.model_endpoint, self.model_name = model_endpoint, model_name
         self.judge_access = JudgeAccess(judge_access)

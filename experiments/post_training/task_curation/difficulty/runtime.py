@@ -286,7 +286,7 @@ def require_daytona_connection_environment(daytona_api_key: str | None) -> None:
     missing = [
         name
         for name, value in (
-            ("DAYTONA_API_KEY or DAYTONA_RL_API_KEY", daytona_api_key),
+            ("DAYTONA_DATA_API_KEY", daytona_api_key),
             ("DAYTONA_API_URL", os.environ.get("DAYTONA_API_URL")),
             ("DAYTONA_TARGET", os.environ.get("DAYTONA_TARGET")),
         )
@@ -321,6 +321,7 @@ def run_trial_worker(
         # runs map the campaign's resolved credential onto that name without
         # printing it and without touching other campaigns' accounts.
         worker_env["DAYTONA_API_KEY"] = daytona_api_key
+        worker_env["DAYTONA_DATA_API_KEY"] = daytona_api_key
     for name, value in secrets.items():
         path = secrets_dir / name
         path.write_text(value)
@@ -444,7 +445,9 @@ def main() -> None:
     has_daytona = any(task.backend == "daytona" and task.reason is None for source in prepared for task in source.tasks)
     daytona_api_key = None
     if has_daytona:
-        daytona_api_key = require_secret("DAYTONA_API_KEY")
+        if action["daytona_account"] != "data":
+            raise ValueError("Difficulty Daytona attempts require the DATA account")
+        daytona_api_key = require_secret("DAYTONA_DATA_API_KEY")
         require_daytona_connection_environment(daytona_api_key)
     with solver_endpoint(args.solver, settings, priority_band_value(args.priority)) as (
         endpoint,

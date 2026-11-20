@@ -383,6 +383,41 @@ class LocalDaytona:
         self.closed = True
 
 
+def test_daytona_admission_waits_before_the_actual_sandbox_create():
+    async def scenario():
+        entered = asyncio.Event()
+        permitted = asyncio.Event()
+        seen = []
+        client = LocalDaytona()
+
+        class ControlProcess(LocalProcess):
+            async def exec(self, *args, **kwargs):
+                return SimpleNamespace(exit_code=0, result="/usr/bin/setsid")
+
+        client.sandbox.process = ControlProcess()
+        spec = MachineSpec(RegistryImage("fixture"), cpus=2, memory_mb=2049, storage_mb=3073, workdir="/app")
+
+        async def admission(request):
+            seen.append(request)
+            entered.set()
+            await permitted.wait()
+
+        factory = DaytonaDeclarativeMachineFactory(lambda: client, create_admission=admission)
+        creating = asyncio.create_task(factory.create(spec))
+        await entered.wait()
+        assert client.params is None and not client.snapshot.snapshots
+        permitted.set()
+        machine = await creating
+        try:
+            assert seen == [spec]
+            assert client.params.resources == Resources(cpu=2, memory=3, disk=4, gpu=None)
+        finally:
+            await machine.close()
+        assert client.deleted
+
+    asyncio.run(scenario())
+
+
 def test_daytona_close_waits_until_provider_destruction_and_records_owned_id(tmp_path):
     lifecycle = tmp_path / "sandbox-lifecycle.jsonl"
 

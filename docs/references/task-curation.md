@@ -2654,11 +2654,24 @@ obtain a new ruling before changing it. Historical costs before the binding do
 not consume the new budget. Estimates exclude hosted API and Daytona charges.
 
 
-The launcher resolves `DAYTONA_EVAL_API_KEY` and `DAYTONA_RL_API_KEY` from
-Secret Manager. Validation maps the EVAL key to Harbor's `DAYTONA_API_KEY` and
-uses declarative provisioning. Named snapshot preflight uses the RL key and
-preserves existing snapshots. See the
-[Daytona credential and account rules](https://github.com/marin-community/marin/blob/main/.agents/ops/daytona.md#credentials-and-account-selection). An unavailable original artifact recipe, unknown judge
+Difficulty uses the DATA organization (`DAYTONA_DATA_API_KEY`) for declarative
+sandboxes under ruling 71. The launcher forwards that dedicated credential and
+the worker maps it to Harbor's `DAYTONA_API_KEY`. It never falls back to EVAL.
+Named snapshot preflight resolves the RL key from Secret Manager and preserves
+existing snapshots within its snapshot limit. See the
+[Daytona credential and account rules](https://github.com/marin-community/marin/blob/main/.agents/ops/daytona.md#credentials-and-account-selection).
+Before each actor or verifier sandbox create, Harbor runs the inventory admission
+command. It sums resources of all started, starting and creating sandboxes across
+all inventory pages, reserves 20% of DATA's total 2,000 vCPU / 4,000 GiB RAM /
+10,000 GiB disk, and waits 30 seconds before rechecking insufficient capacity.
+Requests above 4 vCPU / 8 GiB RAM / 10 GiB disk fail without shrinking the task.
+The organization-usage endpoint is not required. Until the shared Shellbox
+inventory mode lands, the command is the temporary
+`difficulty.daytona_admission` module; Harbor only consumes its usage-report JSON.
+New DATA attempts have distinct action identities; existing EVAL receipts remain
+valid, and in-flight children drain before a controller replacement.
+
+An unavailable original artifact recipe, unknown judge
 route, unsupported compose document, network policy violation or protocol
 budget issue is escalated without excluding its source. Escalations are retained
 in `ESCALATIONS.md` beside the ledger and logged as `DIFFICULTY_ESCALATION` JSON

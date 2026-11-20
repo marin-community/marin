@@ -9,9 +9,10 @@ from finestore.rl.difficulty import SOLVER_MODELS, Solver
 from marin.evaluation.model_config import ModelConfig, ResourceHint, ServeConfig
 from marin.external_dependencies import VLLM_GPU_RELEASE, VllmGpuRelease, VllmGpuWheel
 
+from experiments.post_training.task_curation.difficulty_config import SNOWBALL_VLLM_RELEASE_TAG
+
 TARGET_CLUSTER = "cw-rno2a"
 GLM_RELAY_JOB = "/muchanem/glm53-relay-rno2a-g-20261027T0414Z"
-SNOWBALL_VLLM_RELEASE_TAG = "marin-vllm-gpu-20260924-01911be34fac"
 SNOWBALL_VLLM_RELEASE = VllmGpuRelease(
     release_tag=SNOWBALL_VLLM_RELEASE_TAG,
     source_commit="01911be34fac8715347962a8d791ca34a879e01e",

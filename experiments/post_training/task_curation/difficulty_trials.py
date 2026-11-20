@@ -38,6 +38,7 @@ from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, network_policy_qualified, read_source_runtime
 from verifyit.modes.grade_math import MATH_DEADLINE_REFERENCE_PARSE, MATH_VERIFIER_DEADLINE
 
+from experiments.post_training.task_curation.difficulty.launch import DATA_ADMISSION_COMMAND
 from experiments.post_training.task_curation.difficulty_config import CandidateRun
 from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence, write_same_json_evidence
 from experiments.post_training.task_curation.difficulty_prepared import PreparedTask
@@ -279,14 +280,13 @@ def math_deadline_phase(trial: Trial) -> str | None:
 def worker_host_capabilities(
     authentication: dict[str, str], environment: Mapping[str, str] | None = None
 ) -> HostCapabilities:
-    """Resolve host authority from the trial worker's own environment.
-
-    The worker inherits DAYTONA_API_KEY/DAYTONA_API_URL/DAYTONA_TARGET from the
-    campaign; passing an empty snapshot here would silently drop the Daytona
-    connection and fail every Daytona attempt at client creation.
-    """
+    """Bind Difficulty's Daytona authority exclusively to the DATA credential."""
+    source = dict(os.environ if environment is None else environment)
+    source.pop("DAYTONA_API_KEY", None)
+    if source.get("DAYTONA_DATA_API_KEY"):
+        source["DAYTONA_API_KEY"] = source["DAYTONA_DATA_API_KEY"]
     return host_capabilities_from_environment(
-        os.environ if environment is None else environment,
+        source,
         model_authentication=authentication,
     )
 
@@ -357,6 +357,7 @@ def run_task(
             options = {
                 "provisioning": config.daytona_provisioning,
                 "trial_attempt_timeout_sec": ATTEMPT_TIMEOUT,
+                "create_admission_command": list(DATA_ADMISSION_COMMAND),
             }
         if task.judge_model is not None:
             if judge_url is None or config.judge is None:

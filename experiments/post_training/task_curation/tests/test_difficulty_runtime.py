@@ -300,7 +300,7 @@ def test_campaign_refuses_daytona_sources_without_the_connection_environment(mon
         "environ",
         {"DAYTONA_API_URL": "https://app.daytona.io/api", "DAYTONA_TARGET": "us"},
     )
-    with pytest.raises(ValueError, match="DAYTONA_API_KEY or DAYTONA_RL_API_KEY"):
+    with pytest.raises(ValueError, match="DAYTONA_DATA_API_KEY"):
         difficulty_runtime.require_daytona_connection_environment(None)
 
     monkeypatch.setattr(

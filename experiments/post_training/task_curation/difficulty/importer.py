@@ -59,6 +59,7 @@ def catalog_sources(queue: str, queue_sha256: str) -> list[CatalogSource]:
             tuple((task["task_id"], task["task_sha256"]) for task in row["sample"]["tasks"]),
             queue,
             queue_sha256,
+            backend=row.get("backend"),
         )
         for row in json.loads(path.read_text())
     ]

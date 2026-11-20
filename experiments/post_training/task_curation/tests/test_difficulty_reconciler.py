@@ -162,6 +162,26 @@ def test_snowball_release_binding_allows_fixed_batch_after_recorded_legacy_failu
         assert next_actions == []
 
 
+def test_data_cutover_preserves_inflight_results_and_retries_only_changed_daytona_route():
+    source = replace(SOURCE, backend="daytona")
+    (current,) = plan([cell_state([], source, Solver.SMALL, CoveragePolicy())], [])
+    previous = replace(current, daytona_account=None)
+    running = replace(
+        row("running", outcome=Outcome.SUBMITTED),
+        task_id=None,
+        task_sha256=None,
+        action_id=action_id(previous),
+        job_id="/fixture/healthy-eval",
+    )
+    assert plan([cell_state([running], source, Solver.SMALL, CoveragePolicy())], [running]) == []
+    ended = replace(running, attempt_id="finished", outcome=Outcome.FINISHED)
+    rows = [running, ended]
+    assert plan([cell_state(rows, source, Solver.SMALL, CoveragePolicy())], rows) == [current]
+    assert current.daytona_account == "data" and action_id(current) != action_id(previous)
+    (local,) = plan([cell_state([], SOURCE, Solver.SMALL, CoveragePolicy())], [])
+    assert action_id(local) == action_id(previous)
+
+
 def test_provider_capacity_recovers_without_counting_waits_as_attempts():
     cell = blocked(Gap(GapReason.PROVIDER_CAPACITY_WAIT))
     assert isinstance(plan([cell], [])[0], RetryAfter)

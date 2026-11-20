@@ -9,6 +9,13 @@ from shellbox.backends.daytona.connection import DEFAULT_DAYTONA_API_URL
 JOB_TIMEOUT = Duration.from_hours(72)
 DAYTONA_API_URL = DEFAULT_DAYTONA_API_URL
 DAYTONA_TARGET = "us"
+DATA_ADMISSION_COMMAND = (
+    "python",
+    "-m",
+    "experiments.post_training.task_curation.difficulty.daytona_admission",
+    "--headroom",
+    "0.2",
+)
 
 
 def cpu_job_command(name: str) -> list[str]:

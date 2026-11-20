@@ -11,6 +11,7 @@ import time
 from tempfile import TemporaryDirectory
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from typing import Literal
 
@@ -86,6 +87,7 @@ from harbor.agents.taskcompendium import (
 )
 from harbor.environments.base import SandboxDiskFullError
 from harbor.environments.local import local_disk_pool, local_machine_factory
+from harbor.environments.daytona_admission import admit_create
 from harbor.environments.resource_policies import validate_local_resources
 from harbor.host_capabilities import MODEL_CREDENTIALS, MODEL_RELAY_PORT
 from harbor.environments.model_relay import ModelRelay, start_model_relays
@@ -521,6 +523,7 @@ class TaskSpecTrial(Trial):
             # shellbox Daytona path; the TaskSpec path pins that policy unconditionally,
             # so consume the argument instead of rejecting it.
             kwargs.pop("trial_attempt_timeout_sec", None)
+            command = kwargs.pop("create_admission_command", None)
             unknown = kwargs.keys() - {"ttl_minutes", "create_timeout"}
             if unknown:
                 raise ValueError(f"Unsupported TaskSpec Daytona arguments: {sorted(unknown)}")
@@ -528,7 +531,9 @@ class TaskSpecTrial(Trial):
             if connection is None:
                 raise ValueError("TaskSpec Daytona execution requires an explicit connection")
             self.factory = DaytonaDeclarativeMachineFactory(
-                connection.client_factory(), provider_wait_policy=ProviderWaitPolicy.JOB, **kwargs
+                connection.client_factory(), provider_wait_policy=ProviderWaitPolicy.JOB,
+                create_admission=partial(admit_create, tuple(command)) if command is not None else None,
+                **kwargs
             )
             contexts = Path(self._owned.enter_context(TemporaryDirectory(prefix="task-spec-build-")))
             for role, environment in (("actor", task.environment_requirements), ("verifier", task.grader.environment)):

@@ -95,6 +95,7 @@ class CatalogSource:
     queue_uri: str
     queue_sha256: str
     declaration_json: str | None = None
+    backend: str | None = None
 
 
 @dataclass(frozen=True)

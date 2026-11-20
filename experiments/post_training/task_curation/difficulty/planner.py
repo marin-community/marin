@@ -20,7 +20,7 @@ from experiments.post_training.task_curation.difficulty.state import (
     GapReason,
     LedgerRow,
 )
-from experiments.post_training.task_curation.difficulty_protocol import SNOWBALL_VLLM_RELEASE
+from experiments.post_training.task_curation.difficulty_config import SNOWBALL_VLLM_RELEASE_TAG
 
 MAX_TASKS_PER_JOB = 20
 MAX_GPU_HOURS_PER_JOB = 40.0
@@ -47,6 +47,7 @@ class AttemptBatch:
     n_attempts: int
     max_gpu_hours: float = MAX_GPU_HOURS_PER_JOB
     vllm_release_tag: str | None = None
+    daytona_account: str | None = None
 
 
 @dataclass(frozen=True)
@@ -123,6 +124,8 @@ def action_payload(action: Action) -> dict:
     # Unchanged solver routes retain their existing in-flight action identities.
     if isinstance(action, AttemptBatch) and action.vllm_release_tag is None:
         del payload["vllm_release_tag"]
+    if isinstance(action, AttemptBatch) and action.daytona_account is None:
+        del payload["daytona_account"]
     return payload
 
 
@@ -185,9 +188,15 @@ class AttemptRemediation:
                     source.queue_sha256,
                     source.evidence_ids,
                 )
-                release = SNOWBALL_VLLM_RELEASE.release_tag if cell.solver == Solver.SNOWBALL else None
+                release = SNOWBALL_VLLM_RELEASE_TAG if cell.solver == Solver.SNOWBALL else None
                 actions.append(
-                    AttemptBatch(cell.solver, (selected,), sum(n for _, _, n in tasks), vllm_release_tag=release)
+                    AttemptBatch(
+                        cell.solver,
+                        (selected,),
+                        sum(n for _, _, n in tasks),
+                        vllm_release_tag=release,
+                        daytona_account="data" if cell.source.backend == "daytona" else None,
+                    )
                 )
         return actions
 
@@ -435,6 +444,7 @@ def action_from_payload(payload: dict) -> Action:
             payload["n_attempts"],
             payload["max_gpu_hours"],
             payload.get("vllm_release_tag"),
+            payload.get("daytona_account"),
         )
     if kind == "RebuildEnvironmentArtifact":
         return RebuildEnvironmentArtifact(
