@@ -28,7 +28,6 @@ from pathlib import Path
 import pyarrow.parquet as pq
 import requests
 from huggingface_hub import CommitOperationAdd, HfApi, create_commit, create_repo, create_tag
-from huggingface_hub.errors import EntryAlreadyExists
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import get_secret
@@ -177,6 +176,12 @@ def commit_revision(api: HfApi, repo: str, revision: str) -> str:
     return sha
 
 
+def tag_revision(api: HfApi, repo: str, tag: str) -> str | None:
+    """The commit revision a tag points at, or None when the tag does not exist."""
+    refs = api.list_repo_refs(repo_id=repo, repo_type="dataset")
+    return next((ref.target_commit for ref in refs.tags if ref.name == tag), None)
+
+
 def tag_verifies(repo: str, tag: str, path: str, digest: str, byte_size: int | None) -> bool:
     """Whether an existing tag already holds the pinned bytes (read failures propagate)."""
     try:
@@ -186,54 +191,54 @@ def tag_verifies(repo: str, tag: str, path: str, digest: str, byte_size: int | N
     return True
 
 
-def ensure_tag(api: HfApi, repo: str, tag: str, revision: str, path: str, digest: str, byte_size: int | None) -> None:
-    """Create a tag at a revision, or accept one whose pinned bytes already verify."""
-    try:
-        create_tag(repo_id=repo, repo_type="dataset", tag=tag, revision=revision)
-    except EntryAlreadyExists:
+def publish_version(
+    api: HfApi,
+    repo: str,
+    tag: str,
+    commit_message: str,
+    card: str,
+    content: bytes | str,
+    path: str,
+    digest: str,
+    byte_size: int | None,
+) -> str:
+    """Commit one version unless its tag already carries verifying bytes; return the pinned revision."""
+    existing = tag_revision(api, repo, tag)
+    if existing is not None:
         if not tag_verifies(repo, tag, path, digest, byte_size):
-            raise ValueError(f"Tag {tag!r} on {repo} exists with bytes that do not match the pin") from None
+            raise ValueError(f"Tag {tag!r} on {repo} exists with bytes that do not match the pin")
+        return existing
+    operations = [
+        CommitOperationAdd(path_in_repo="README.md", path_or_fileobj=card.encode()),
+        CommitOperationAdd(path_in_repo=path, path_or_fileobj=content),
+    ]
+    create_commit(repo_id=repo, repo_type="dataset", operations=operations, commit_message=commit_message)
+    sha = commit_revision(api, repo, "main")
+    create_tag(repo_id=repo, repo_type="dataset", tag=tag, revision=sha)
+    return sha
 
 
 def publish_policy(api: HfApi, legacy: bytes, current: bytes) -> PolicyRevisions:
-    """Upload one policy commit per version to the public repo; return pinned revisions."""
+    """Publish one policy commit per version to the public repo; return pinned revisions."""
     create_repo(POLICY_REPO, repo_type="dataset", private=False, exist_ok=True)
-    legacy_ops = [
-        CommitOperationAdd(path_in_repo="README.md", path_or_fileobj=POLICY_CARD.encode()),
-        CommitOperationAdd(path_in_repo="policy.json", path_or_fileobj=legacy),
-    ]
-    create_commit(
-        repo_id=POLICY_REPO,
-        repo_type="dataset",
-        operations=legacy_ops,
-        commit_message=f"Publish Micro210 policy {LEGACY_POLICY_REFERENCE.revision}",
-    )
-    legacy_sha = commit_revision(api, POLICY_REPO, "main")
-    ensure_tag(
+    legacy_sha = publish_version(
         api,
         POLICY_REPO,
         LEGACY_POLICY_REFERENCE.revision,
-        legacy_sha,
+        f"Publish Micro210 policy {LEGACY_POLICY_REFERENCE.revision}",
+        POLICY_CARD,
+        legacy,
         "policy.json",
         LEGACY_POLICY_REFERENCE.sha256,
         LEGACY_POLICY_REFERENCE.byte_size,
     )
-    current_ops = [
-        CommitOperationAdd(path_in_repo="README.md", path_or_fileobj=POLICY_CARD.encode()),
-        CommitOperationAdd(path_in_repo="policy.json", path_or_fileobj=current),
-    ]
-    create_commit(
-        repo_id=POLICY_REPO,
-        repo_type="dataset",
-        operations=current_ops,
-        commit_message=f"Publish Micro210 policy {POLICY_REFERENCE.revision}",
-    )
-    current_sha = commit_revision(api, POLICY_REPO, "main")
-    ensure_tag(
+    current_sha = publish_version(
         api,
         POLICY_REPO,
         POLICY_REFERENCE.revision,
-        current_sha,
+        f"Publish Micro210 policy {POLICY_REFERENCE.revision}",
+        POLICY_CARD,
+        current,
         "policy.json",
         POLICY_REFERENCE.sha256,
         POLICY_REFERENCE.byte_size,
@@ -242,21 +247,19 @@ def publish_policy(api: HfApi, legacy: bytes, current: bytes) -> PolicyRevisions
 
 
 def publish_prepared(api: HfApi, source: PreparedSource) -> str:
-    """Upload the prepared table to the private repo; return the pinned revision."""
+    """Publish the prepared table to the private repo; return the pinned revision."""
     create_repo(PREPARED_REPO, repo_type="dataset", private=True, exist_ok=True)
-    operations = [
-        CommitOperationAdd(path_in_repo="README.md", path_or_fileobj=PREPARED_CARD.encode()),
-        CommitOperationAdd(path_in_repo=source.filename, path_or_fileobj=str(source.path)),
-    ]
-    create_commit(
-        repo_id=PREPARED_REPO,
-        repo_type="dataset",
-        operations=operations,
-        commit_message="Publish Micro210 prepared tasks",
+    return publish_version(
+        api,
+        PREPARED_REPO,
+        POLICY_REFERENCE.revision,
+        "Publish Micro210 prepared tasks",
+        PREPARED_CARD,
+        str(source.path),
+        source.filename,
+        source.digest,
+        None,
     )
-    sha = commit_revision(api, PREPARED_REPO, "main")
-    ensure_tag(api, PREPARED_REPO, POLICY_REFERENCE.revision, sha, source.filename, source.digest, None)
-    return sha
 
 
 def verify_readback(revisions: PolicyRevisions, source: PreparedSource, prepared_sha: str) -> None:
