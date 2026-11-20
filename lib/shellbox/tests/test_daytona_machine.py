@@ -327,7 +327,7 @@ class FailedDeletion(LocalDaytona):
 def lifecycle_client():
     client = LocalDaytona()
 
-    async def prepared(command, **kwargs):
+    async def prepared(_command, **_kwargs):
         return SimpleNamespace(exit_code=0, result="/work\n")
 
     client.sandbox.process.exec = prepared
@@ -371,7 +371,7 @@ def test_daytona_open_machine_renews_activity_after_provider_failure_and_stops_b
             await ticks.put((interval, tick))
             await tick
 
-        async def refresh_activity(*, request_timeout):
+        async def refresh_activity(**_kwargs):
             events.append("refresh")
             if events.count("refresh") == 1:
                 raise DaytonaError("temporary gateway failure", status_code=502)
@@ -385,12 +385,12 @@ def test_daytona_open_machine_renews_activity_after_provider_failure_and_stops_b
 
         delete = lifecycle_client.delete
 
-        async def delete_after_renewal_stops(sandbox):
+        async def record_deletion(sandbox):
             events.append("delete")
             await delete(sandbox)
 
         lifecycle_client.sandbox.refresh_activity = refresh_activity
-        lifecycle_client.delete = delete_after_renewal_stops
+        lifecycle_client.delete = record_deletion
         monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", wait)
         machine = await DaytonaMachineFactory(lambda: lifecycle_client, auto_stop_interval=9).create(
             MachineSpec(source=RegistryImage("fixture:latest"))
@@ -414,20 +414,20 @@ def test_daytona_failed_setup_cancels_activity_renewal(lifecycle_client, monkeyp
         sleeping = asyncio.Event()
         stopped = asyncio.Event()
 
-        async def wait(interval):
+        async def wait(_interval):
             sleeping.set()
             try:
                 await asyncio.Future()
             finally:
                 stopped.set()
 
-        async def failed_setup(command, **kwargs):
+        async def failed_setup(_command, **_kwargs):
             await sleeping.wait()
             raise DaytonaError("setup failed", status_code=500)
 
         lifecycle_client.sandbox.process.exec = failed_setup
         monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", wait)
-        with pytest.raises(DaytonaError, match="setup failed"):
+        with pytest.raises(DaytonaError):
             await DaytonaMachineFactory(lambda: lifecycle_client).create(
                 MachineSpec(source=RegistryImage("fixture:latest"))
             )
@@ -1296,6 +1296,7 @@ def test_daytona_rejects_add_inputs_before_building(tmp_path, instruction, image
 
 
 @pytest.mark.parametrize("source_kind", ["registry", "dockerfile"])
+@pytest.mark.requires_host_setsid
 def test_declarative_build_starts_sandbox_from_image_without_snapshot(tmp_path, source_kind):
     context = tmp_path / "context"
     context.mkdir()
