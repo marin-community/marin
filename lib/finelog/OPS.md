@@ -998,8 +998,9 @@ uv run --no-sync python scripts/ops/relay_mac_alerts.py \
   --resource-alerts "$HOME/.local/share/mac-resource-watch/state/alerts.jsonl"
 ```
 
-The adapter records content IDs in the SQLite file only after successful
-writes. It rescans retained lines to tolerate the resource tool's rolling file,
+The adapter limits each batch by row count and serialized bytes, below the
+Finelog client's queue limits. It saves content IDs after each confirmed batch.
+It rescans retained lines to tolerate the resource tool's rolling file,
 ignores an incomplete last line, and retries after delivery failure. Keep the
 adapter interval shorter than source-file rotation. Do not remove the original
 files or notifications when enabling it. The coordinator consumes only

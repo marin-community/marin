@@ -12,7 +12,6 @@ import yaml
 from finelog.deploy.config import load_finelog_config
 from finelog.deploy.connect import open_client
 from finelog.ops_feed import DEFAULT_STATE, Severity, Subscription, ack, emit, event_dict, poll
-from finelog.ops_feed_mac import MacSource, import_alerts
 
 
 @click.group()
@@ -61,17 +60,6 @@ def ack_cmd(settings, event_id: str) -> None:
     deployment, _ = settings
     with open_client(load_finelog_config(deployment), deployment) as client:
         click.echo(ack(client, event_id))
-
-
-@cli.command("import-alerts")
-@click.option("--source", type=click.Choice([source.value for source in MacSource]), required=True)
-@click.option("--path", type=click.Path(exists=True, path_type=Path), required=True)
-@click.pass_obj
-def import_cmd(settings, source: str, path: Path) -> None:
-    """Deliver retained producer alerts; retry safely after a failed import."""
-    deployment, state = settings
-    with open_client(load_finelog_config(deployment), deployment) as client:
-        click.echo(import_alerts(client, MacSource(source), path, destination=deployment, state=state))
 
 
 if __name__ == "__main__":

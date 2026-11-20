@@ -22,7 +22,6 @@ from finelog.client import LogClient
 from finelog.embedded import is_available, require_embedded_server
 from finelog.ops_feed import NAMESPACE, PAGE_SIZE, Event, Severity, Subscription, ack, emit, poll
 from finelog.ops_feed_cli import cli
-from finelog.ops_feed_mac import MacSource, import_alerts
 from finelog.rpc import logging_pb2
 
 
@@ -204,46 +203,5 @@ def test_ops_feed_cli_lowercase_severity_poll_and_ack(embedded_server, tmp_path,
         result = runner.invoke(cli, prefix + poll_args)
         assert result.exit_code == 0, result.output
         assert result.output == ""
-    finally:
-        client.close()
-
-
-@pytest.mark.parametrize("source", list(MacSource))
-def test_ops_feed_mac_import_replay_rotation_and_partial_write(embedded_server, tmp_path, source):
-    client = LogClient.connect(embedded_server.address)
-    path = tmp_path / "alerts.jsonl"
-    state = tmp_path / "state.sqlite"
-    if source == MacSource.JOB_WATCHDOG:
-        record = {
-            "entry": "private-owner",
-            "kind": "JOB_FAILED",
-            "severity": "critical",
-            "state": "failed",
-            "time_utc": "2026-11-20T10:00:00+00:00",
-            "message": "private@example.com",
-            "evidence": "secret",
-        }
-    else:
-        record = {
-            "metric": "ram",
-            "kind": "enter",
-            "value": 1.0,
-            "threshold": 2.0,
-            "direction": "below",
-            "ts": 1795168800,
-            "top_processes": [{"command": "private@example.com", "worktree": "secret"}],
-        }
-    line = json.dumps(record) + "\n"
-    try:
-        path.write_text(line + '{"partial":')
-        assert import_alerts(client, source, path, destination="test", state=state) == 1
-        # Replacing a rolling file with the same retained record must not replay it.
-        path.write_text(line)
-        assert import_alerts(client, source, path, destination="test", state=state) == 0
-        events = poll(client, [Subscription("*", Severity.INFO)], "reader", state=state)
-        assert len(events) == 1
-        assert "private" not in events[0].payload_json + events[0].subject
-        assert "secret" not in events[0].payload_json
-        assert events[0].source == source
     finally:
         client.close()
