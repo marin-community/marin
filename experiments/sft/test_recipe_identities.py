@@ -41,8 +41,8 @@ def test_sft_recipe_identities(monkeypatch):
     )
 
     assert [(step.name, step.version, step.fingerprint()) for step in steps] == [
-        ("checkpoints/snowball-openthoughts-agent-sft", "2026.09.23", "1c1f3fc7"),
-        ("checkpoints/snowball-openthoughts-agent-sft", "2026.11.19.1", "6a7e5ad4"),
+        ("checkpoints/snowball-openthoughts-agent-sft", "2026.09.23", "a2c0b0fc"),
+        ("checkpoints/snowball-openthoughts-agent-sft", "2026.11.19.1", "f5525031"),
         ("checkpoints/snowball/mixture-262k-32node", "2026.11.19.1", "300cf21f"),
         ("checkpoints/delphi-1e22-magpie-warmup-levanter-sft", "2026.07.15", "0ca53670"),
         ("checkpoints/delphi-1e22-wc50m-warmup-levanter-sft", "2026.07.15", "9c258a76"),

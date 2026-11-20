@@ -52,7 +52,6 @@ def snowball_mesh(nodes: int) -> MeshConfig:
 
 _BASE_MODEL = HFModel(
     model_ref=f"{HF_MODEL}@{HF_REVISION}",
-    tokenizer_path=HF_MODEL,
     model=SnowballConfig(),
     eos_token_ids=(128001, 128009),
 )
