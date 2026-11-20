@@ -500,6 +500,50 @@ def test_population_cache_verifies_pinned_bytes_and_retains_complete_task_conten
         )
 
 
+def test_legacy_input_fingerprints_name_the_missing_locator(tmp_path, monkeypatch):
+    """A pre-uri fingerprint fails with its source named, not with a field-name URI.
+
+    Fingerprints published before inputs became ``{uri: sha256}`` records carry
+    provenance fields such as ``dataset_id`` instead. With no prepared locator
+    the cache must refuse with the source and the offending key, and a prepared
+    locator bound to the legacy inputs' digest still serves the population.
+    """
+    documents = [task_document(str(index), f"Compute the square of {index}.") for index in range(30)]
+    fingerprint = fingerprint_source(documents, {}).model_copy(
+        update={
+            "inputs": {
+                "input_sha256": "a" * 64,
+                "dataset_id": "fixture/legacy-cohort",
+                "dataset_revision": "b" * 64,
+            }
+        }
+    )
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    with pytest.raises(ValueError, match="Missing co-located population locator for fixture: dataset_id"):
+        cache_population("fixture", fingerprint, cache, PopulationLocations(), {}, source_bucket="marin-us-east-02a")
+
+    prepared_payload = pa.Table.from_pylist([asdict(row) for row in content_rows(documents)])
+    prepared = tmp_path / "prepared.parquet"
+    pq.write_table(prepared_payload, prepared)
+    locations = PopulationLocations(
+        prepared={
+            "fixture": PreparedPopulation(
+                uri="s3://marin-us-east-02a/fixture/prepared.parquet",
+                sha256=hashlib.sha256(prepared.read_bytes()).hexdigest(),
+                inputs_sha256=canonical_sha256(fingerprint.inputs),
+                task_count=30,
+            )
+        }
+    )
+    monkeypatch.setattr(StoragePath, "read_bytes", lambda path: prepared.read_bytes())
+    population = read_population(
+        cache_population("fixture", fingerprint, cache, locations, {}, source_bucket="marin-us-east-02a"),
+        fingerprint.inputs,
+    )
+    assert len(population.rows) == 30
+
+
 def test_published_measurement_digest_survives_truncation_and_output_location():
     documents = [task_document(str(index), f"Compute the square of {index}.") for index in range(30)]
     fingerprint = fingerprint_source(documents, {})

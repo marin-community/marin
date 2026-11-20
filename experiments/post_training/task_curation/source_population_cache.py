@@ -143,7 +143,7 @@ def cache_population(
         for key, digest in sorted(fingerprint.inputs.items()):
             uri = locations.files.get(digest, key)
             if not uri.startswith(f"s3://{source_bucket}/"):
-                raise ValueError(f"Rerun requires co-located input: {uri}")
+                raise ValueError(f"Missing co-located population locator for {source_id}: {uri}")
             with tempfile.TemporaryFile() as local:
                 with StoragePath(local_paths.get(uri, uri)).open("rb") as remote:
                     sha = hashlib.sha256()

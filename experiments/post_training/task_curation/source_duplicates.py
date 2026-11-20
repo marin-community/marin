@@ -32,6 +32,7 @@ from experiments.post_training.task_curation.source_fingerprints import (
 from experiments.post_training.task_curation.source_population_cache import (
     PopulationLocations,
     cache_population,
+    population_preflight,
     read_hash_population,
     read_locator_manifest,
 )
@@ -215,6 +216,9 @@ def main() -> None:
         locations = (
             read_locator_manifest(args.population_locators) if args.population_locators else PopulationLocations()
         )
+        # Reject missing or out-of-region population locators before any caching starts:
+        # a late failure would surface only after minutes of population downloads.
+        population_preflight(source, locations, source_bucket="marin-us-east-02a")
         args.cache_dir.mkdir(parents=True, exist_ok=True)
         population_paths = {}
         for source_id in needed:
