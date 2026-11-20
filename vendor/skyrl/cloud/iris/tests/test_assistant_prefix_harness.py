@@ -381,6 +381,8 @@ async def test_assistant_prefix_real_client_preserves_prompt_and_raw_completion_
     submitted = []
 
     class Engine:
+        model_name = "assistant-prefix-test"
+
         async def generate(self, request):
             submitted.append(request)
             partial = interrupted and len(submitted) == 1
