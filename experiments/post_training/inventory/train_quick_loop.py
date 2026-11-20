@@ -221,6 +221,7 @@ def build_run(
     learner: Literal["megatron", "levanter"] = "megatron",
     verify_publication: bool = False,
     validate_native_checkpoint: bool = False,
+    coordinator_route: Literal["hub", "regional"] = "hub",
 ) -> ArtifactStep[SkyRLRun]:
     """Bind selected canonical tasks, pinned SFT weights and terminal outputs."""
     model = ArtifactStep.adopt(
@@ -269,8 +270,8 @@ def build_run(
             disk="2TB",
             priority="interactive",
             max_retries=0,
-            target_cluster=CLUSTER,
-            parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
+            target_cluster=CLUSTER if coordinator_route == "hub" else None,
+            parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG if coordinator_route == "hub" else None,
             coordinator_timeout_hours=36,
             job_timeout_seconds=24 * 60 * 60,
             container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
@@ -288,6 +289,13 @@ def build_run(
 @click.option("--steps", type=click.IntRange(min=1), default=DEFAULT_STEPS, show_default=True)
 @click.option("--export-hf", is_flag=True, help="Export the final Hugging Face model after training.")
 @click.option("--learner", type=click.Choice(["megatron", "levanter"]), default="megatron", show_default=True)
+@click.option(
+    "--coordinator-route",
+    type=click.Choice(["hub", "regional"]),
+    default="hub",
+    show_default=True,
+    help="Submit the coordinator through the Marin hub or directly to the CoreWeave regional controller.",
+)
 @click.option("--verify-publication", is_flag=True, help="Replay received weight bytes after every publication.")
 @click.option(
     "--validate-native-checkpoint",
@@ -308,6 +316,7 @@ def main(
     learner: Literal["megatron", "levanter"],
     verify_publication: bool,
     validate_native_checkpoint: bool,
+    coordinator_route: Literal["hub", "regional"],
 ) -> ArtifactStep[SkyRLRun]:
     if learner == "levanter" and export_hf:
         raise click.BadParameter("Levanter supports native checkpoints; terminal HF export is not implemented")
@@ -343,6 +352,7 @@ def main(
         learner=learner,
         verify_publication=verify_publication,
         validate_native_checkpoint=validate_native_checkpoint,
+        coordinator_route=coordinator_route,
     )
 
 

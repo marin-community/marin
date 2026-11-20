@@ -65,6 +65,11 @@ matching model, Adam, RNG, step, and model-averaging fingerprints after restore,
 followed by further optimizer updates. Full-model accelerator acceptance has not yet been
 established by the regression tests on this branch.
 
+`--coordinator-route regional` submits the coordinator directly through the
+configured CoreWeave Kubernetes context when hub handoff is unavailable. It
+preserves the training recipe and allocation. Before submitting a replacement,
+cancel the previous coordinator and confirm it is terminal to prevent duplicate runs.
+
 ## Batch and objective
 
 `levanter.policy_model.PolicyBatch` contains complete token sequences, attention
