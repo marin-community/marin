@@ -107,6 +107,8 @@ nav:
   - 'Reference':
       - 'reference/Configuration.md'
       - 'reference/Array-Stacked.md'
+      - 'reference/Layers.md'
+      - 'reference/Native-Model-Sharding.md'
       - "reference/Data-Formats.md"
       - 'reference/Trackers.md'
   - 'Developer Guide':
