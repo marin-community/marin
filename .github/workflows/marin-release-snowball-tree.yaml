@@ -57,7 +57,7 @@ jobs:
           args=()
           if [[ "$DRY_RUN" == "true" ]]; then args+=(--dry-run); fi
           if [[ "$BOOTSTRAP_UNRECORDED" == "true" ]]; then args+=(--bootstrap-unrecorded); fi
-          uv run --no-sync python scripts/ci/snowball_release.py \
+          uv run --no-sync python -m scripts.ci.snowball_release \
             --record "$RUNNER_TEMP/snowball-release.json" "${args[@]}"
       - name: Summarize the release record
         if: always()

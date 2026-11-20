@@ -23,7 +23,7 @@ def marina_process(monkeypatch):
         reply = replies.pop(0)
         if callable(reply):
             reply = reply()
-        return SimpleNamespace(stdout=json.dumps(reply))
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(reply), stderr="")
 
     monkeypatch.setattr(snowball_release.subprocess, "run", run)
     return replies, commands
@@ -98,7 +98,7 @@ def test_bootstrap_can_be_previewed_without_publishing(monkeypatch, tmp_path):
             reply = {"files": ["dist/index.html"]}
         else:
             raise AssertionError(f"Unexpected command: {command}")
-        return SimpleNamespace(stdout=json.dumps(reply))
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(reply), stderr="")
 
     monkeypatch.setattr(snowball_release.subprocess, "run", run)
 
