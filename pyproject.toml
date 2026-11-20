@@ -11,6 +11,10 @@ requires-python = ">=3.12"
 dependencies = [
     # workspaces
     "marin-iris",
+    # The source-fingerprint tool's baseline worktree (origin/main) imports tomli; the
+    # declaration comparisons run the baseline against this environment.
+    "tomli>=2.0",
+
     "marin-fray",
     "marin-haliax",
     "marin-levanter",
