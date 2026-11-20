@@ -23,7 +23,10 @@ from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert imp
     to_workspace,
 )
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.upstream import task_files
-from experiments.post_training.task_curation.datasets.swe_rebench_v2.upstream.task_files import grader_source
+from experiments.post_training.task_curation.datasets.swe_rebench_v2.upstream.task_files import (
+    grader_source,
+    solve_sh,
+)
 from experiments.post_training.task_curation.swe_rebench_fidelity_driver import (
     CHURN_THRESHOLD,
     CHURN_WINDOW,
@@ -423,7 +426,6 @@ def test_the_condensed_solve_script_moves_to_the_uniform_workspace():
     per-repo path; the condensed flow rewrites it to /testbed so the oracle's gold-patch
     delivery runs in the consolidated workspace. The upstream variant keeps the row's
     original paths (its digest image bakes the repo there)."""
-    from experiments.post_training.task_curation.datasets.swe_rebench_v2.upstream.task_files import solve_sh
 
     row = dict(PYTHON_ROW)
     original = solve_sh(row)
