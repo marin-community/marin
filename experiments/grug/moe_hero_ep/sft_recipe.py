@@ -6,17 +6,20 @@
 from dataclasses import dataclass, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Literal
 
 from fray.types import ResourceConfig
 from levanter.checkpoint import discover_checkpoint_candidates
-from marin.execution.lazy import OUT, StepContext, apply
+from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply
 from marin.execution.remote import remote
+from marin.experiment.namespacing import user_owned_name
 from marin.rl.skyrl import ArtifactHfModel
+from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.grug.moe_hero_ep.expert_placement import ExpertPlacement
-from experiments.grug.moe_hero_ep.hero_recipe import HERO_MODEL_CONFIG, with_transport_remat_mode
+from experiments.grug.moe_hero_ep.hero_recipe import HERO_MODEL_CONFIG, HeroThroughputResult, with_transport_remat_mode
 from experiments.grug.moe_hero_ep.launch_hero_sft import (
     build_sft_run,
     checkpoint_step,
@@ -30,7 +33,7 @@ from experiments.grug.moe_hero_ep.train import RouterBiasMode
 
 
 @dataclass(frozen=True, kw_only=True)
-class GrugHeroSFT:
+class MochiSFT:
     run_id: str
     initialize_from: str
     muon_lr: float
@@ -48,8 +51,19 @@ class GrugHeroSFT:
     stop_after_steps: int | None = None
     eval_every: int = 0
     expert_placement: ExpertPlacement | None = None
+    periodic_checkpoints: bool = False
 
     def trained(self, resources: ResourceConfig) -> ArtifactHfModel:
+        checkpoints = "periodic" if self.periodic_checkpoints else "final"
+        return self.export_model(self.training_step(resources, checkpoints=checkpoints))
+
+    def training_step(
+        self,
+        resources: ResourceConfig,
+        *,
+        checkpoints: Literal["periodic", "final", "none"] = "none",
+        prefix: str | None = None,
+    ) -> ArtifactStep[HeroThroughputResult]:
         allocation = sft_resources(self.dp_racks)
         if resources != replace(allocation, regions=resources.regions, target_cluster=resources.target_cluster):
             raise ValueError("Mochi SFT resources must match the GB200 allocation derived from dp_racks")
@@ -69,7 +83,13 @@ class GrugHeroSFT:
             expert_placement=self.expert_placement,
             version=self.version,
             resources=resources,
+            checkpoints=checkpoints,
         )
+        if checkpoints == "periodic":
+            return step
+        return replace(step, name=user_owned_name(f"grug/{self.run_id}"), output_prefix=prefix or marin_temp_bucket(3))
+
+    def export_model(self, step: ArtifactStep[HeroThroughputResult]) -> ArtifactHfModel:
         training = step.build_config(StepContext.for_fingerprint(step.runtime_args.keys(), step.deps))
         relative_path = "hf"
         export_step = apply(
@@ -86,7 +106,7 @@ class GrugHeroSFT:
             tokenizer_uri=self.tokenizer_uri,
             tokenizer_revision=self.tokenizer_revision,
         )
-        return ArtifactHfModel(step=export_step, relative_path=relative_path)
+        return ArtifactHfModel(step=replace(export_step, output_prefix=step.output_prefix), relative_path=relative_path)
 
 
 def _export_final_sft(

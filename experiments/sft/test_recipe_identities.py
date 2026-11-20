@@ -2,12 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import replace
+from types import SimpleNamespace
 
 from levanter.models.snowball import SnowballConfig
 from levanter.utils.mesh import MeshConfig
 
+from experiments.grug.moe_hero_ep import launch_hero_sft
 from experiments.post_training.curriculum_sft import math_trial, trial
 from experiments.post_training.iceball_micro import build_workflow
+from experiments.post_training.mochi_sft import MIXTURE_262K_176NODE
 from experiments.post_training.snowball_sft import MIXTURE_262K_32NODE, OPENTHOUGHTS_32K_4NODE, OPENTHOUGHTS_SPEC
 from experiments.sft.configs import delphi_1e22
 from experiments.sft.launcher import resources_from_accelerator, sft_step
@@ -22,6 +25,16 @@ def test_sft_recipe_identities(monkeypatch):
     monkeypatch.setattr("marin.experiment.checkpoints.resolve_lm_config", lambda *args: SnowballConfig(qk_mult=1.75))
     curriculum = math_trial.build_math_trial("2026.11.19.1", 1e-5, 10, "glm")["train"]
     [conversion] = [dep for dep in curriculum.deps if dep.name.startswith("checkpoints/hf-to-levanter/")]
+    monkeypatch.setattr("experiments.grug.moe_hero_ep.sft_recipe.checkpoint_step", lambda _: 393491)
+    anchors = {
+        text: [token_id]
+        for (_, text), token_id in zip(
+            launch_hero_sft.SPECIAL_TOKEN_ANCHORS, launch_hero_sft.EXPECTED_ANCHOR_IDS, strict=True
+        )
+    }
+    tokenizer = SimpleNamespace(encode=lambda text, *, add_special_tokens: anchors[text])
+    monkeypatch.setattr(launch_hero_sft, "load_tokenizer", lambda _: tokenizer)
+    mochi_export = MIXTURE_262K_176NODE.model().step
 
     old_mesh = MeshConfig(
         axes={"data": 1, "replica": 1, "model": 1, "context": 4, "expert": -1},
@@ -38,6 +51,8 @@ def test_sft_recipe_identities(monkeypatch):
         build_workflow(version="2026.11.19.1").sft,
         curriculum,
         conversion,
+        *mochi_export.deps,
+        mochi_export,
     )
 
     assert [(step.name, step.version, step.fingerprint()) for step in steps] == [
@@ -53,4 +68,6 @@ def test_sft_recipe_identities(monkeypatch):
             "2026.09.25.2",
             "cc7d2ded",
         ),
+        ("grug/hero-sft-fullab-step393k-v2", "2026.11.10", "f7dec57d"),
+        ("grug/hero-sft-fullab-step393k-v2-hf", "2026.11.10", "df950f55"),
     ]

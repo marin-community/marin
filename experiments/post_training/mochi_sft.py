@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Reproduce the production Mochi SFT run ``hero-sft-fullab-step393k-v2`` from issue #8089.
+"""Run the production Mochi SFT recipe at eleven, three, or one rack.
 
 The production launch in comment 6771184334 pins step 393491, 11 racks, both
 learning rates, clipping, replay share, expert placement, evaluation cadence, and
@@ -12,15 +12,20 @@ produce the permanent step 400407 reported in comment 6841382920.
 from dataclasses import replace
 from pathlib import Path
 
+import click
 from fray.types import ResourceConfig
+from marin.execution.lazy import ArtifactStep, lower
+from marin.execution.step_runner import StepRunner
+from marin.rl.skyrl import ArtifactHfModel
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.grug.moe_hero_ep import launch_hero_sft
 from experiments.grug.moe_hero_ep.expert_placement import ExpertPlacement
-from experiments.grug.moe_hero_ep.sft_recipe import GrugHeroSFT
+from experiments.grug.moe_hero_ep.sft_recipe import MochiSFT
 from experiments.grug.moe_hero_ep.train import RouterBiasMode
-from experiments.sft.launcher import SFTPreset, main
+from experiments.sft.launcher import SFTPreset
 
-MOCHI_SPEC = GrugHeroSFT(
+MOCHI_SPEC = MochiSFT(
     run_id="hero-sft-fullab-step393k-v2",
     initialize_from=(
         "s3://marin-us-east-02a/marin/grug/hero-lce-log65536sq-step390k/2026.08.19.2/checkpoints/step-393491"
@@ -33,6 +38,7 @@ MOCHI_SPEC = GrugHeroSFT(
     router_bias_mode=RouterBiasMode.FROZEN,
     capacity_factor=1.625,
     eval_every=500,
+    periodic_checkpoints=True,
     expert_placement=ExpertPlacement.from_json(
         Path(launch_hero_sft.__file__).with_name("hero_sft_expert_placement_step393491.json").read_text()
     ),
@@ -45,15 +51,58 @@ MOCHI_SPEC = GrugHeroSFT(
     tokenizer_uri="marin-community/marin-tokenizer-tools",
     tokenizer_revision="3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09",
 )
-MIXTURE_262K_176NODE = SFTPreset(
-    "mixture-262k-176node",
-    MOCHI_SPEC,
+
+
+def _preset(recipe: MochiSFT) -> SFTPreset[MochiSFT]:
+    resources = launch_hero_sft.sft_resources(recipe.dp_racks)
+    return SFTPreset(
+        f"mixture-262k-{resources.replicas}node",
+        recipe,
+        replace(resources, regions=("US-EAST-08A",), target_cluster="cw-us-east-08a"),
+    )
+
+
+MIXTURE_262K_176NODE = _preset(MOCHI_SPEC)
+MIXTURE_262K_16NODE = _preset(
     replace(
-        launch_hero_sft.sft_resources(MOCHI_SPEC.dp_racks), regions=("US-EAST-08A",), target_cluster="cw-us-east-08a"
-    ),
+        MOCHI_SPEC, run_id="mochi-sft-mixture-262k-16node", dp_racks=1, stop_after_steps=3, periodic_checkpoints=False
+    )
 )
-MOCHI_SFT = (MIXTURE_262K_176NODE,)
+MIXTURE_262K_48NODE = _preset(
+    replace(
+        MOCHI_SPEC, run_id="mochi-sft-mixture-262k-48node", dp_racks=3, stop_after_steps=3, periodic_checkpoints=False
+    )
+)
+MOCHI_SFT = (MIXTURE_262K_176NODE, MIXTURE_262K_16NODE, MIXTURE_262K_48NODE)
+_BY_NAME = {preset.name: preset for preset in MOCHI_SFT}
+
+
+def build_run(
+    preset: SFTPreset[MochiSFT], *, steps: int | None, export: bool, prefix: str | None
+) -> ArtifactStep | ArtifactHfModel:
+    if prefix is not None and not StoragePath(prefix).rooted:
+        raise ValueError("--prefix must be a storage URI or an absolute directory")
+    stop = preset.recipe.stop_after_steps if steps is None else steps
+    length = f"{stop}-steps" if stop is not None else "full"
+    suffix = "-export" if export else ""
+    recipe = replace(preset.recipe, stop_after_steps=stop, run_id=f"mochi-sft-{preset.name}-{length}{suffix}")
+    training = recipe.training_step(preset.resources, checkpoints="final" if export else "none", prefix=prefix)
+    return recipe.export_model(training) if export else training
+
+
+@click.command()
+@click.option("--preset", type=click.Choice(tuple(_BY_NAME)), required=True)
+@click.option("--steps", type=click.IntRange(min=1), help="Stop after this many SFT updates.")
+@click.option("--export", is_flag=True, help="Save the final native checkpoint and export it to Hugging Face format.")
+@click.option("--prefix", help="Output storage URI or absolute directory. Defaults to the cluster's three-day storage.")
+@click.option("--run", is_flag=True, help="Launch the selected workflow.")
+def main(preset: str, steps: int | None, export: bool, prefix: str | None, run: bool) -> None:
+    try:
+        result = build_run(_BY_NAME[preset], steps=steps, export=export, prefix=prefix)
+    except ValueError as error:
+        raise click.UsageError(str(error)) from error
+    StepRunner().run([lower(result.step if isinstance(result, ArtifactHfModel) else result)], dry_run=not run)
 
 
 if __name__ == "__main__":
-    main(MOCHI_SFT)
+    main()

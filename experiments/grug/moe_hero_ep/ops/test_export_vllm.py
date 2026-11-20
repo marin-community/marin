@@ -20,8 +20,8 @@ from levanter.checkpoint import save_checkpoint
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.testing.tokenizer import llama3_style_chat_tokenizer
 from marin.execution.artifact import read_record
-from marin.execution.lazy import materialized_config
-from marin.rl.skyrl import skyrl_cpu_command
+from marin.execution.lazy import ArtifactStep, StepContext, materialized_config
+from marin.rl.skyrl import ArtifactHfModel, skyrl_cpu_command
 from rigging.filesystem.storage_path import StoragePath
 from safetensors.numpy import load_file
 
@@ -33,7 +33,7 @@ from experiments.grug.moe_hero_ep.model import GRUG_MOE_ARTIFACT_SCHEMA_VERSION_
 from experiments.grug.moe_hero_ep.ops import upload_hf
 from experiments.grug.moe_hero_ep.ops.export_vllm import ExportConfig, export
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
-from experiments.post_training.mochi_sft import MIXTURE_262K_176NODE, MOCHI_SPEC
+from experiments.post_training.mochi_sft import MIXTURE_262K_16NODE, MIXTURE_262K_48NODE, MOCHI_SPEC, build_run
 
 
 @pytest.mark.parametrize(
@@ -188,6 +188,30 @@ def test_export_recovery_verifies_shards_and_preserves_completed_output(tmp_path
     assert {path.name: path.read_bytes() for path in root.iterdir()} == before
 
 
+def test_mochi_sft_three_rack_run_uses_scratch_without_checkpoints(monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin")
+    monkeypatch.delenv("MARIN_TEMP_PREFIX", raising=False)
+    monkeypatch.setattr(sft_recipe, "checkpoint_step", lambda _: 393491)
+    monkeypatch.setattr(launch_hero_sft, "special_token_init", lambda _: None)
+
+    step = build_run(MIXTURE_262K_48NODE, steps=None, export=False, prefix=None)
+    assert isinstance(step, ArtifactStep)
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args.keys(), step.deps))
+    allocation = step.runtime_args["train_resources"]
+    assert step.path().startswith("s3://marin-us-east-08a/tmp/ttl=3d/users/")
+    assert step.lower().output_path == step.path()
+    assert allocation.replicas == 48
+    assert allocation.device.count == 4
+    assert config.trainer.replica_axis_size == 3
+    assert config.stop_step == 393494
+    assert not config.trainer.save_checkpoints
+    assert config.trainer.trainer.load_checkpoint_path == [MOCHI_SPEC.initialize_from]
+
+    invalid = dataclasses.replace(MIXTURE_262K_48NODE.recipe, dp_racks=0)
+    with pytest.raises(ValueError, match="dp_racks must be positive"):
+        invalid.training_step(launch_hero_sft.sft_resources(0))
+
+
 @pytest.mark.timeout(240)
 def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
@@ -202,27 +226,33 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
     monkeypatch.setattr(launch_hero_sft, "special_token_init", lambda _: None)
     monkeypatch.setattr(sft_recipe, "configure_coreweave_s3", lambda: None)
     recipe = dataclasses.replace(
-        MOCHI_SPEC,
+        MIXTURE_262K_16NODE.recipe,
         initialize_from=str(initializer),
-        dp_racks=1,
-        stop_after_steps=1,
         eval_every=0,
         expert_placement=placement,
     )
-    allocation = launch_hero_sft.sft_resources(recipe.dp_racks)
-    resources = dataclasses.replace(MIXTURE_262K_176NODE.resources, replicas=allocation.replicas)
-    preset = dataclasses.replace(MIXTURE_262K_176NODE, recipe=recipe, resources=resources)
+    preset = dataclasses.replace(MIXTURE_262K_16NODE, recipe=recipe)
+    resources = preset.resources
     with pytest.raises(ValueError, match="GB200 allocation derived from dp_racks"):
         dataclasses.replace(preset, resources=dataclasses.replace(resources, replicas=1)).model()
     initializer_metadata.write_text(json.dumps({**initial, "is_temporary": True}))
     with pytest.raises(ValueError, match="temporary checkpoint"):
         preset.model()
     initializer_metadata.write_text(json.dumps(initial))
-    model = preset.model()
+    prefix = tmp_path / "selected-prefix"
+    model = build_run(preset, steps=1, export=True, prefix=str(prefix))
+    assert isinstance(model, ArtifactHfModel)
     [trained] = model.step.deps
     training = materialized_config(trained, str(tmp_path))
+    assert training.resources.replicas == 16
+    assert training.resources.device.count == 4
+    assert training.trainer.replica_axis_size == 1
+    assert training.trainer.save_checkpoints
+    assert training.trainer.trainer.checkpointer.save_interval is None
+    assert training.trainer.trainer.checkpointer.keep is None
     assert training.resources.regions == ("US-EAST-08A",)
     assert training.resources.target_cluster == "cw-us-east-08a"
+    assert Path(trained.path()).is_relative_to(prefix)
     checkpoints = Path(trained.path()) / f"expert-placement-{placement.fingerprint}" / "checkpoints"
     native, _ = native_fixture(str(checkpoints / "step-17"), master=True)
     native_fixture(str(checkpoints / "step-18"), master=True, step=18)
@@ -242,6 +272,7 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
     monkeypatch.setattr(upload_hf, "snapshot_download", download_tokenizer)
     monkeypatch.setattr(sft_recipe, "HERO_MODEL_CONFIG", native.model)
     output = Path(model.step.path())
+    assert output.is_relative_to(prefix)
     config = materialized_config(model.step, str(tmp_path))
     local_export = dataclasses.replace(model.step, run=lambda args: sft_recipe._export_final_sft(**args)).lower()
     assert local_export.fn is not None

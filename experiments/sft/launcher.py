@@ -62,6 +62,7 @@ Launch (a CPU coordinator job submits the training sub-job)::
 CoreWeave H100 runs use an ``s3://`` ``MARIN_PREFIX``. Use the recipe's H100 resources or pass
 ``--accelerator 8xH100`` for a recipe that takes its allocation from the command line.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -648,9 +649,9 @@ class SFTRecipe(Protocol):
 
 
 @dataclass(frozen=True)
-class SFTPreset:
+class SFTPreset[RecipeT: SFTRecipe]:
     name: str
-    recipe: SFTRecipe
+    recipe: RecipeT
     resources: ResourceConfig
 
     def model(self) -> ArtifactHfModel:

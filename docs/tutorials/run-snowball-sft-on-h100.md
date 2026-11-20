@@ -51,20 +51,24 @@ Preset names use `<data>-<seq-len>-<nodes>`.
 
 | Preset | What it reproduces | Training layout | Measured run | Model returned |
 | --- | --- | --- | --- | --- |
-| `mixture-262k-176node` | Production continuation `hero-sft-fullab-step393k-v2` from its pinned native checkpoint. | 176 nodes × 4 GB200s | 58.0 h of recorded training runtime. [Training run](https://wandb.ai/marin-community/marin_moe_sft/runs/hero-sft-fullab-step393k-v2) · CPU export worker time of 1 h 9 min 53 s. [Export worker](https://iris.oa.dev/#/job/%2Fatqamar%2Fclaude-one-loop-mochi-export-step-400407-peer) · [Verified export](https://iris.oa.dev/#/job/%2Fatqamar%2Fclaude-one-loop-mochi-export-readback) | Schema-3 BF16 HF export of permanent step `400407`. |
+| `mixture-262k-16node` | First three updates of the production continuation. | 1 rack, 16 nodes × 4 GB200s | CPU plan verified. | With `--export`, a schema-3 BF16 HF model. |
+| `mixture-262k-48node` | First three updates of the production continuation. | 3 racks, 48 nodes × 4 GB200s | CPU plan verified. | With `--export`, a schema-3 BF16 HF model. |
+| `mixture-262k-176node` | Full production continuation `hero-sft-fullab-step393k-v2` from its pinned native checkpoint. | 11 racks, 176 nodes × 4 GB200s | 58.0 h of recorded training runtime. [Training run](https://wandb.ai/marin-community/marin_moe_sft/runs/hero-sft-fullab-step393k-v2) · CPU export worker time of 1 h 9 min 53 s. [Export worker](https://iris.oa.dev/#/job/%2Fatqamar%2Fclaude-one-loop-mochi-export-step-400407-peer) · [Verified export](https://iris.oa.dev/#/job/%2Fatqamar%2Fclaude-one-loop-mochi-export-readback) | With `--export`, a schema-3 BF16 HF export of step `400407`. |
 
 Run the matching module with `--preset` to print its plan. Add `--run` in the coordinator to execute
 the plan. The preset supplies the training allocation.
 
 ```bash
 uv run python -m experiments.post_training.snowball_sft --preset mixture-262k-32node
-uv run python -m experiments.post_training.mochi_sft --preset mixture-262k-176node
+uv run python -m experiments.post_training.mochi_sft --preset mixture-262k-16node --steps 3 --export
 ```
 
-Use `SFTPreset.model()` in Python workflows. Snowball writes its HF model and
-tokenizer at `<training-output>/hf/step-N`. Mochi uses a separate CPU export step that reads the
-permanent training checkpoint and writes the weights, pinned tokenizer, and generation config at
-`<export-output>/hf`. The export can reuse a matching completed training artifact.
+Use `SFTPreset.model()` to request an export in Python workflows. Snowball writes its HF model and
+tokenizer at `<training-output>/hf/step-N`. The Mochi command defaults to training without checkpoints
+or exports. `--steps` sets the number of updates from the pinned starting checkpoint. `--export` saves
+the final native checkpoint and runs a separate CPU export that writes the weights, pinned tokenizer,
+and generation config at `<export-output>/hf`. New Mochi runs use the cluster's `tmp/ttl=3d/` prefix.
+Pass `--prefix` with a storage URI to keep outputs in another location.
 
 ## Checkpoints and recovery
 

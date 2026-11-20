@@ -204,6 +204,8 @@ class ArtifactStep(Generic[T]):
     """Opt-in hard pin: when set, :func:`lower` raises :class:`FingerprintMismatchError` if the
     config now fingerprints to something else, and the drift check raises rather than warns. Leave
     ``None`` to opt out."""
+    output_prefix: str | None = None
+    """Storage root for this produced artifact. Dependencies retain their own roots."""
 
     def __post_init__(self) -> None:
         validate_path_segment("name", self.name)
@@ -226,7 +228,7 @@ class ArtifactStep(Generic[T]):
         return fingerprint_hash(self.fingerprint_payload())
 
     def path(self, prefix: str | None = None) -> str:
-        resolved_prefix = prefix or marin_prefix()
+        resolved_prefix = self.output_prefix or prefix or marin_prefix()
         # An adopted artifact resolves to its source; a pin to its location; else the
         # canonical name@version address.
         location = self.adopt_source if self.adopt_source is not None else self.override_path
@@ -301,7 +303,9 @@ def materialized_config(handle: "ArtifactStep", prefix: str) -> Any:
 
 
 def _output_path_spec(handle: "ArtifactStep") -> str:
-    """The relative output path StepSpec should use: the pin if set, else ``{name}/{version}``."""
+    """The output path StepSpec should use, relative to the cluster root when possible."""
+    if handle.output_prefix is not None:
+        return handle.path()
     return handle.override_path or f"{handle.name}/{handle.version}"
 
 
