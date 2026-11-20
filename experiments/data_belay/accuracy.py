@@ -25,8 +25,9 @@ from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.grug.attention import AttentionMask
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
-from marin.execution.step_status import STATUS_SUCCESS, StatusFile
+from marin.execution.step_status import StatusFile
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.step_status import STATUS_SUCCESS
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.data_belay.results import TaskScore, choice_path, scores_json

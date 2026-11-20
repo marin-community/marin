@@ -7,10 +7,17 @@ import asyncio
 import dataclasses
 import json
 from collections.abc import Mapping
-from enum import StrEnum
 from functools import partial
 from typing import Any
 
+from evalrecords.records import (
+    DEFAULT_EVALUATION_CONCURRENCY,
+    JudgeIdentity,
+    TaskEvidence,
+    TaskEvidenceSetting,
+    scoring_settings,
+)
+from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT, Attempt, AttemptPhase
 from finestore.eval import (
     ARCHIVE_ROLLOUTS_TABLE,
     ARCHIVE_SAMPLES_TABLE,
@@ -70,10 +77,6 @@ from taskcompendium.models import ScriptGrader, TaskSpec, VerifyitGrader, grades
 from taskcompendium.submission import conversation_messages
 from verifyit.modes.grade_judge import JudgeConnection
 
-from marin.evaluation.records import DEFAULT_EVALUATION_CONCURRENCY, JudgeIdentity, scoring_settings
-
-ATTEMPTS_TABLE = "evaluation_attempts"
-RUN_OBJECT = "evaluation/run.json"
 # Bump when execution semantics change so resume cannot mix terminal grades from different implementations.
 EVALUATION_EXECUTION_REVISION = "2026.11.05.1"
 
@@ -112,26 +115,12 @@ class EvaluationRunConfig(RunModel):
     task_machine: MachineRuntimeSpec | None = None
     verifier_machine: MachineRuntimeSpec | None = None
     judge: JudgeIdentity | None = None
+    task_evidence: TaskEvidenceSetting = TaskEvidence.EMBEDDED
 
 
-class AttemptPhase(StrEnum):
-    STARTED = "started"
-    FINISHED = "finished"
-
-
-class Attempt(RunModel):
-    dataset: str
-    task_id: str
-    source_row: str
-    trial: int
-    retry: int
-    phase: AttemptPhase
-    seed: int | None
-    outcome: Outcome | None
-    error: str | None
-    result_blob: str | None
-    prompt_tokens: int | None
-    completion_tokens: int | None
+def saved_task_fields(task: TaskSpec, mode: TaskEvidence) -> dict[str, Any]:
+    """The task fields saved with an attempt; the item always names the task in its corpus."""
+    return {"task": task.model_dump(mode="json")} if mode is TaskEvidence.EMBEDDED else {}
 
 
 def generation_options(protocol: EvaluationProtocol, config: EvaluationRunConfig, trial: int) -> dict[str, Any]:
@@ -321,6 +310,7 @@ async def _score_likelihood(
     store: DataStore,
     attempt: Attempt,
     timeout: float | None,
+    evidence: TaskEvidence,
 ) -> Outcome:
     operation = case.item.operation
     assert isinstance(operation, ChoiceLikelihood | ContinuationLikelihood)
@@ -359,7 +349,7 @@ async def _score_likelihood(
     )
     primary = metrics.get(protocol.primary_metric)
     raw = {
-        "task": case.task.model_dump(mode="json"),
+        **saved_task_fields(case.task, evidence),
         "item": case.item.model_dump(mode="json"),
         "scores": [dataclasses.asdict(result) for result in results],
         "outcome": outcome,
@@ -490,7 +480,7 @@ async def _score_generation(
     sample = _sample(case, protocol, task, rollout, grade)
     turns = [step.turn for conversation in rollout.conversations for step in conversation.steps]
     raw = {
-        "task": task.model_dump(mode="json"),
+        **saved_task_fields(task, config.task_evidence),
         "item": case.item.model_dump(mode="json"),
         "grade": dataclasses.asdict(grade),
         "conversations": [dataclasses.asdict(conversation) for conversation in rollout.conversations],
@@ -717,7 +707,7 @@ async def run_evaluation(
                 if isinstance(case.item.operation, ChoiceLikelihood | ContinuationLikelihood):
                     assert likelihood is not None
                     outcome = await _score_likelihood(
-                        case, protocol, likelihood, store, attempt, config.limits.attempt_timeout
+                        case, protocol, likelihood, store, attempt, config.limits.attempt_timeout, config.task_evidence
                     )
                     failures += outcome is Outcome.INFRA_ERROR
                     continue

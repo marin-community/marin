@@ -18,10 +18,10 @@ from typing import Any
 from urllib.parse import quote
 
 import yaml
-from marin.evaluation.eval_measurements import measurement_from_record
-from marin.evaluation.records import CW_RECORDS_PREFIX, EvalRunRecord, RunStatus, read_record, record_path
-from marin.execution.step_status import STATUS_SUCCESS
+from evalrecords.eval_measurements import measurement_from_record
+from evalrecords.records import CW_RECORDS_PREFIX, EvalRunRecord, RunStatus, read_record, record_path
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.step_status import STATUS_SUCCESS
 
 ROOT = Path(__file__).resolve().parent
 MANIFEST = ROOT / "scorecard.yaml"

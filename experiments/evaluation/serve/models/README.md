@@ -48,6 +48,7 @@ serve:                          # ServeConfig -> model-server behavior
   reasoning_parser: qwen3
   vllm_batch_invariant: null    # VLLM_BATCH_INVARIANT; true/false is preserved
   vllm_use_flashinfer_sampler: null # VLLM_USE_FLASHINFER_SAMPLER; false uses the built-in sampler
+  vllm_use_nccl_symm_mem: null  # VLLM_USE_NCCL_SYMM_MEM; all-reduce, all-gather and reduce-scatter
   vllm_source: null             # GPU default is marin_fork; upstream requires vllm_version
   vllm_version: null            # exact upstream PyPI version, e.g. "0.29.0"
   vllm_plugin_requirements: []  # pinned packages installed with GPU vLLM in its isolated environment
@@ -98,6 +99,26 @@ The launch guard rejects `--enforce-eager` without the acknowledgement flag
 do not satisfy it automatically. Marin removes the acknowledgement flag before launching vLLM
 and rejects `--config` files and abbreviated eager flags.
 
+## NCCL symmetric memory
+
+Set `serve.vllm_use_nccl_symm_mem: true` to pass `VLLM_USE_NCCL_SYMM_MEM=1` to GPU vLLM workers.
+`false` disables it; an unset field leaves the worker environment unchanged and is omitted from
+`record.json`. vLLM ignores the request under `VLLM_BATCH_INVARIANT=1` or when its NCCL allocator
+fails to build. For Hero BF16 on 16 GB200 GPUs with full decode graphs, it raised throughput from
+1,321 to 1,399 output tokens/s/GPU at 1,024 requests in flight
+([issue #11430](https://github.com/marin-community/marin/issues/11430#issuecomment-6876476443)).
+
+## Hero serving settings
+
+Hero BF16 was measured on 16 GB200 GPUs at TP1/DP16/EP16; see
+[issue #11430](https://github.com/marin-community/marin/issues/11430) for the results. ShortConv
+models need `cudagraph_mode: PIECEWISE` with `vllm::unified_attention_with_output`,
+`vllm::unified_kv_cache_update` and `vllm::grug_moe_short_conv` in
+`compilation_config.splitting_ops`. On the pinned wheel, any other graph mode or a missing split op
+runs without CUDA graphs. Use `max_num_seqs: 128` for 1K outputs and about 96 for 4K outputs, which
+avoids KV-cache waiting. The catalog cannot launch this topology yet: it needs data parallelism
+across hosts.
+
 ## Multi-node GPU serving
 
 Set `serve.instances` to start independent model servers behind Marin's inference broker. Each
@@ -127,3 +148,57 @@ Dry runs show per-task hardware and serving geometry. `record.json` retains requ
 and reports resolved settings under `serving` after endpoint startup; `serving.effective` is false
 when startup did not produce an endpoint. Multi-node support and context capacity depend on the
 pinned vLLM version and model architecture and must be checked on the target hardware.
+
+## Session routing for native vLLM DP
+
+`marin-serve local` and `marin-serve iris` accept `--session-router`. With prefix caching enabled,
+reuse `X-Session-ID` on later turns to reach the same DP rank and KV cache. Direct serving remains the default.
+
+Two local replicas:
+
+```bash
+uv run marin-serve local Qwen/Qwen3-0.6B --launcher cuda \
+  --tensor-parallel-size 1 --data-parallel-size 2 --session-router \
+  --vllm-arg=--enable-prefix-caching
+```
+
+16 replicas on four 4-GPU Iris tasks:
+
+```bash
+uv run marin-serve iris Qwen/Qwen3-0.6B --cluster cw-us-east-08a --gpu GB200x4 \
+  --tensor-parallel-size 1 --data-parallel-size 16 \
+  --session-router --proxy-timeout 14400 \
+  --vllm-source marin-fork --vllm-release marin-vllm-gpu-manifest.json \
+  --vllm-arg=--enable-prefix-caching
+```
+
+`--vllm-release` reads `marin-vllm-gpu-manifest.json` from a [published release](https://github.com/marin-community/vllm/releases).
+Omitting it uses the normal runtime.
+The isolated `vllm-router==0.1.16` process uses vLLM's global internal DP frontend;
+external/hybrid balancing is unsupported. `/metrics` reports vLLM worker counters.
+
+Without a session ID, [upstream hashing](https://github.com/vllm-project/router/blob/v0.1.16/docs/load_balancing/README.md#consistent-hash)
+applies; identical bodies can select the same busy rank.
+
+HTTP retries are disabled; client SDK retries are separate. The router timeout is 14,400 seconds.
+Iris `--proxy-timeout` defaults to 600 seconds and raises the router timeout when larger.
+Streaming disconnects are detected on the next upstream chunk; stalled streams wait for timeout.
+
+Rank failures can remap sessions and lose cached prefixes. If a worker or router exits, cancel
+with `iris --cluster CLUSTER job cancel JOB`, wait for tasks to stop, then resubmit.
+
+In Python, set `VllmEngineConfig(router=VllmRouterConfig())` and `IrisConfig.serving_geometry`:
+
+```python
+ServingGeometry(
+    tensor_parallel_size=1,
+    data_parallel_size=16,
+    pipeline_parallel_size=1,
+    gpus_per_task=4,
+)
+```
+
+This gives four tasks, four local ranks per task and 16 router targets. Omitted model TP uses
+geometry; explicit TP must match. Multi-task or routed geometry requires `instances=1`, `broker=None`.
+`ServedModelConfig.object_store_load_mode` defaults to `STREAM`, which multi-task GPU serving requires.
+Single-task serving also supports local weight staging.

@@ -74,14 +74,6 @@ class FakeHubApi:
         self.uploads.append(kwargs)
 
 
-class FakePublisher:
-    def __init__(self):
-        self.calls = []
-
-    def publish(self, export_path: str, step: int) -> None:
-        self.calls.append((export_path, step))
-
-
 def _plan(tmp_path: Path, step: int = 12) -> CheckpointExportPlan:
     checkpoint_path = tmp_path / "checkpoints" / f"global_step_{step}"
     checkpoint_path.mkdir(parents=True)
@@ -131,13 +123,10 @@ def test_checkpoint_exporter_rejects_a_mismatched_checkpoint_marker(tmp_path):
 )
 def test_checkpoint_exporter_rejects_incomplete_conversion_result(tmp_path, worker_type, error):
     workers = worker_type()
-    publisher = FakePublisher()
-
     with pytest.raises(RuntimeError, match=error):
-        CheckpointExporter(_plan(tmp_path), workers, object(), publisher).run()
+        CheckpointExporter(_plan(tmp_path), workers, object()).run()
 
     assert workers.closed
-    assert publisher.calls == []
 
 
 def test_unsharded_cloud_export_verification_does_not_head_optional_index(monkeypatch):

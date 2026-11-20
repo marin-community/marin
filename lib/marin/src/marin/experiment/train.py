@@ -43,12 +43,8 @@ from marin.execution.remote import remote
 from marin.experiment.data import mixture
 from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
-from marin.training.training import (
-    LevanterCheckpoint,
-    TrainLmOnPodConfig,
-    resolve_training_env,
-    run_levanter_train_lm,
-)
+from marin.training.levanter import resolve_training_env, run_levanter_train_lm
+from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig
 
 # Compute in bf16, keep master params and optimizer state in f32. The universal marin
 # precision policy; it bears identity (it changes numerics), so overriding it is a

@@ -320,6 +320,7 @@ class TrainDpoConfig:
     hf_save_steps: int | None = 10000
     hf_save_dtype: Optional[str] = None
     hf_generation_eos_token_ids: Optional[list[int]] = None
+    hf_generation_config_defaults: dict[str, Any] | None = None
 
     peft_save_path: Optional[str] = None
     peft_hf_upload: bool | str = False
@@ -560,6 +561,7 @@ def _install_separate_reference_export_hooks(
             upload_to_hf=upload_to_hf,
             dtype=save_dtype,
             generation_config=export.generation_config,
+            generation_config_defaults=export.generation_config_defaults,
             field_dtype_overrides=trainer.config.field_dtype_overrides,
             **hf_upload_kwargs,
         )
@@ -862,6 +864,7 @@ def main(config: TrainDpoConfig):
             hf_save_steps=config.hf_save_steps,
             hf_save_dtype=config.hf_save_dtype,
             generation_config=generation_config,
+            generation_config_defaults=config.hf_generation_config_defaults,
             peft_save_path=config.peft_save_path,
             peft_hf_upload=config.peft_hf_upload,
             merged_hf_save_path=config.merged_hf_save_path,

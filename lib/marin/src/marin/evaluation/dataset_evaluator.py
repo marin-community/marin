@@ -9,6 +9,7 @@ import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
+from evalrecords.records import CuratedSettings, RunStatus
 from iris.client.client import JobFailedError, iris_ctx
 from iris.cluster.setup_scripts import default_setup_script
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
@@ -19,7 +20,6 @@ from rolloutengine.models import RolloutLimits
 
 from marin.evaluation.eval_env import EVALUATION_REQUEST_TIMEOUT_SECONDS
 from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.records import CuratedSettings, RunStatus
 from marin.evaluation.runner import (
     BACKEND_POLL_SECONDS,
     EvaluationError,
@@ -75,6 +75,7 @@ def runtime_config(
         source_limit=settings.source_limit,
         seed=settings.seed,
         judge=settings.judge,
+        task_evidence=settings.task_evidence,
         limits=RolloutLimits(
             max_turns=1,
             max_total_tokens=None,
@@ -125,7 +126,7 @@ class DatasetEvaluator:
                 run_worker, self.datasets, output_dir, execution_config(config), DEFAULT_MAX_ATTEMPTS
             ),
             name=f"curated-eval-{uuid.uuid4().hex[:8]}",
-            resources=ResourceSpec(cpu=8, memory="32g", disk="64g"),
+            resources=ResourceSpec(cpu=8, memory="12g", disk="64g"),
             environment=EnvironmentSpec(
                 setup_scripts=(default_setup_script(packages=("marin-core",), python_version=WORKER_PYTHON),),
                 secrets=secrets,

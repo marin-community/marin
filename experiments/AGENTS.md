@@ -54,4 +54,4 @@ dataset (or dataset family), built with the lazy data builders in
 - Write behavior: writes go directly to the local prefix.
 - Both `mirror://` copies and direct cross-region GCS reads share a single process-global `TransferBudget` (default 10 GB) that raises `TransferBudgetExceeded` when exhausted.
 
-Implementation references: `lib/iris/src/iris/marin_fs.py` and `rigging.filesystem` (the `TransferBudget`).
+Implementation references: `rigging.filesystem.mirror` and `rigging.filesystem.cross_region` (the `TransferBudget`).
