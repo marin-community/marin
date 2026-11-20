@@ -2,7 +2,7 @@
 
 from omegaconf import DictConfig
 from marinskyrl.inference_placement import validate_expert_block_transport
-from marinskyrl.runtime_options import GDNBackend, R3Transport, reference_model_required
+from marinskyrl.runtime_options import R3Transport, reference_model_required
 from skyrl_train.config.placement_geometry import num_rollout_gpus, validate_colocated_engine_geometry
 
 
@@ -20,12 +20,9 @@ def validate_batch_invariant_config(cfg: DictConfig) -> None:
         )
 
 
-
-
 def validate_megatron_config(cfg: DictConfig):
     # not yet supported + tested features
     assert cfg.generator.weight_sync_backend == "nccl", "only nccl is supported for megatron weight sync"
-    assert cfg.trainer.critic.model.path is None, "only GRPO training is currently supported for megatron"
 
     worker_configs = [(cfg.trainer.policy, "policy"), (cfg.trainer.ref, "ref")]
     for config, worker_type in worker_configs:
@@ -63,8 +60,6 @@ def _iter_config_kwargs(node):
 def validate_training_settings(cfg: DictConfig) -> None:
     if cfg.trainer.strategy != "megatron":
         raise ValueError(f"Unsupported training strategy: {cfg.trainer.strategy}")
-    if cfg.trainer.critic.model.path:
-        raise ValueError("Megatron does not support a critic worker")
     runtime_values = {
         "trainer.distributed.placement_group_timeout_seconds": cfg.trainer.distributed.placement_group_timeout_seconds,
         "trainer.distributed.worker_collective_timeout_seconds": (
@@ -103,19 +98,12 @@ def validate_training_settings(cfg: DictConfig) -> None:
             "trainer.algorithm.group_admission.stall_timeout must be positive when set; got "
             f"{group_admission_stall_timeout}"
         )
-    if cfg.trainer.algorithm.tis_lcs_alert_threshold < 0:
-        raise ValueError(
-            "trainer.algorithm.tis_lcs_alert_threshold must be non-negative; "
-            f"got {cfg.trainer.algorithm.tis_lcs_alert_threshold}"
-        )
     if cfg.trainer.progress.mode not in {"auto", "tqdm", "logging"}:
         raise ValueError(f"trainer.progress.mode must be one of auto, tqdm, logging; got {cfg.trainer.progress.mode!r}")
     if cfg.generator.r3_transport not in set(R3Transport):
         raise ValueError(
             f"generator.r3_transport must be one of by_value, resident, decentral; got {cfg.generator.r3_transport!r}"
         )
-    if cfg.generator.gdn_backend not in set(GDNBackend):
-        raise ValueError(f"generator.gdn_backend must be one of torch, flashqla; got {cfg.generator.gdn_backend!r}")
     use_ref_model = reference_model_required(cfg.trainer.algorithm)
     if cfg.trainer.policy.model.lora.rank > 0:
         raise ValueError("Megatron training does not support LoRA")

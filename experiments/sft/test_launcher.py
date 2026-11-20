@@ -15,16 +15,20 @@ from levanter.store.cache import SerialCacheWriter
 from levanter.utils.thread_utils import blocking_wait
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, materialized_config
+from marin.execution.step_status import StatusFile
 from marin.training.levanter import GPU_NCCL_TERMINATION_TIMEOUT_FLAG
 from marin.training.training import DEFAULT_HF_CHECKPOINTS_PATH
+from rigging.filesystem.step_status import STATUS_SUCCESS
 from rigging.timing import Duration
 
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig
 from experiments.june_tpu_67b_a2b.moe.sft_launch import GrugModel
 from experiments.post_training.snowball_sft import (
     HF_MODEL,
+    HF_REVISION,
     MIXTURE_262K_32NODE,
     MIXTURE_SPEC,
+    MIXTURE_TOKENIZER,
     OPENTHOUGHTS_32K_4NODE,
     OPENTHOUGHTS_SPEC,
     SNOWBALL_SFT,
@@ -128,7 +132,7 @@ def test_snowball_262k_mixture_binds_the_published_mixture(tmp_path, monkeypatch
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     model = MIXTURE_262K_32NODE.model()
     training = model.step
-    [manifest] = training.deps
+    manifest, mirror = training.deps
     submitted = {}
 
     def fake_remote(_fn, **kwargs):
@@ -146,6 +150,11 @@ def test_snowball_262k_mixture_binds_the_published_mixture(tmp_path, monkeypatch
     assert not list(tmp_path.iterdir())
     assert not submitted
 
+    mirror_path = mirror.path(str(tmp_path))
+    mirror_config = mirror.build_config(StepContext.for_run(mirror_path, str(tmp_path)))
+    assert (mirror_config.hf_dataset_id, mirror_config.revision) == (HF_MODEL, HF_REVISION)
+    StatusFile(mirror_path, worker_id="test-mirror").write_status(STATUS_SUCCESS)
+
     monkeypatch.setattr(sys, "argv", [*args, "--run"])
     with pytest.raises(SystemExit) as exit_info:
         launcher.main(SNOWBALL_SFT)
@@ -161,6 +170,8 @@ def test_snowball_262k_mixture_binds_the_published_mixture(tmp_path, monkeypatch
     pod_config = training.build_config(context)
     config = pod_config.train_config
     assert isinstance(config.data.components["sft/source/agenttrove"].format, SerializedChatLmDatasetFormat)
+    assert config.initialize_from_hf == mirror_path
+    assert config.data.tokenizer == MIXTURE_TOKENIZER
     assert model.relative_path == f"{DEFAULT_HF_CHECKPOINTS_PATH}/step-203"
 
     assert submitted["timeout"] == Duration.from_seconds(72_000)

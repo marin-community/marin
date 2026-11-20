@@ -241,8 +241,6 @@ def validate_dpo(cfg: DictConfig) -> None:
         raise ValueError("dpo trains single-turn preference completions; step-wise training is not supported")
     if cfg.trainer.use_sample_packing:
         raise ValueError("dpo requires use_sample_packing=false; packing reorders rows and breaks pair adjacency")
-    if cfg.trainer.critic.model.path:
-        raise ValueError("dpo trains the policy against a frozen reference; a critic model is not supported")
     if cfg.trainer.get("update_ref_every_epoch", False) or any(
         callback.get("type") == "ref_model_update" for callback in (cfg.trainer.get("callbacks") or [])
     ):

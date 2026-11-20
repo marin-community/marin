@@ -13,9 +13,11 @@ import tempfile
 import tomllib
 import uuid
 from collections import deque
+from collections.abc import Mapping
 from contextlib import ExitStack
 from dataclasses import asdict, dataclass, fields, replace
 from enum import StrEnum
+from functools import partial
 from pathlib import Path, PurePosixPath
 from typing import Literal, cast
 
@@ -236,7 +238,7 @@ class SkyRLRolePlan(_InferenceGeometry):
         if self.reference_num_nodes is not None:
             planned_gpus += self.reference_num_nodes * self.policy_num_gpus_per_node
         allocated_gpus = topology.num_nodes * topology.gpus_per_node
-        # SkyRL derives optional critic, teacher, and draft-trainer claims from the recipe
+        # SkyRL derives teacher and draft-trainer claims from the recipe
         # and validates that the complete role plan exactly consumes this allocation.
         if planned_gpus > allocated_gpus:
             placement = "colocated policy/rollout" if self.colocate_all else "policy + rollout"
@@ -294,9 +296,6 @@ class SkyRLRolePlan(_InferenceGeometry):
                 f"got {self.policy_num_gpus_per_node} and {topology.gpus_per_node}"
             )
 
-        critic_path = _declared_config_value(config, "trainer.critic.model.path")
-        if critic_path is not _MISSING_CONFIG_VALUE and critic_path:
-            raise ValueError("Marin SkyRL artifact topology does not yet describe a separate critic role")
         forward_batch = _declared_config_value(config, "trainer.micro_forward_batch_size_per_gpu")
         if forward_batch is not _MISSING_CONFIG_VALUE and forward_batch != self.micro_train_batch_size_per_gpu:
             raise ValueError(
@@ -726,6 +725,37 @@ class SkyRLOutputPaths:
 
 _MISSING_CONFIG_VALUE = object()
 
+_FORCED_SOCKET_ENV_VALUES = {
+    "NCCL_NET": {"Socket"},
+    "NCCL_IB_DISABLE": {"1"},
+}
+
+
+def reject_forced_socket_transport(task_env: dict, num_nodes: int) -> None:
+    """Refuse multi-node launches that force NCCL onto socket transport.
+
+    Multi-node jobs run on clusters whose InfiniBand fabric works with the
+    default environment (measured 85-88 GB/s all-reduce cross-node on
+    cw-rno2a and cw-us-east-02a). Forcing `NCCL_NET=Socket` or
+    `NCCL_IB_DISABLE=1` drops cross-node collectives onto TCP sockets,
+    measured at 12-24x lower bandwidth, and a partial override hangs at
+    bootstrap. See the transport audit in #11619.
+    """
+    if num_nodes <= 1:
+        return
+    offenders = [
+        f"{key}={task_env[key]}"
+        for key, forced_values in _FORCED_SOCKET_ENV_VALUES.items()
+        if str(task_env.get(key, "")).strip() in forced_values
+    ]
+    if offenders:
+        raise ValueError(
+            "Multi-node SkyRL launch forces NCCL onto socket transport via extra_env "
+            f"({', '.join(offenders)}). Remove the override so collectives use InfiniBand; "
+            "the two-node probe in experiments/post_training/nccl_transport_probe.py "
+            "verifies the fabric before a run. See marin-community/marin#11619."
+        )
+
 
 def _parsed_config(config_yaml: str) -> dict[str, object]:
     try:
@@ -875,10 +905,10 @@ def _launcher_command(config_path: str) -> list[str]:
     return skyrl_cpu_command("marinskyrl", "iris", "launch", "--config", config_path)
 
 
-def _run_launcher(command: list[str]) -> subprocess.CompletedProcess[str]:
+def _run_launcher(command: list[str], *, env_vars: Mapping[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     """Run the launcher, forwarding its live logs and keeping a tail to explain a failure."""
     tail: deque[str] = deque(maxlen=_LAUNCHER_DIAGNOSTIC_LINES)
-    environment = dict(os.environ)
+    environment = {**os.environ, **(env_vars or {})}
     for key in ("PYTHONPATH", "PYTHONHOME", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"):
         environment.pop(key, None)
     with (
@@ -901,7 +931,12 @@ def _run_launcher(command: list[str]) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(command, returncode, response.read(), "".join(tail))
 
 
-def run_skyrl(config: SkyRLRunConfig, *, forward_env: tuple[str, ...] = ()) -> SkyRLRun:
+def run_skyrl(
+    config: SkyRLRunConfig,
+    *,
+    forward_env: tuple[str, ...] = (),
+    env_vars: Mapping[str, str] | None = None,
+) -> SkyRLRun:
     """Run the nested SkyRL executable and return its validated result."""
     response: LaunchResult | None = None
     try:
@@ -911,7 +946,7 @@ def run_skyrl(config: SkyRLRunConfig, *, forward_env: tuple[str, ...] = ()) -> S
             command = _launcher_command(launch_file.name)
             for name in forward_env:
                 command.extend(("--forward-env", name))
-            completed = _run_launcher(command)
+            completed = _run_launcher(command, env_vars=env_vars)
         if not completed.stdout.strip():
             raise RuntimeError(
                 f"MarinSkyRL launcher exited {completed.returncode} without a terminal response:\n"
@@ -1018,6 +1053,7 @@ def _launch_config_yaml(
     task_env = recipe.get("extra_env", {})
     if not isinstance(task_env, dict):
         raise ValueError("SkyRL extra_env must be a mapping")
+    reject_forced_socket_transport(task_env, num_nodes)
     launch = {
         "schema_version": 1,
         "run": {
@@ -1192,7 +1228,7 @@ def skyrl_step(
         name=step_name,
         version=spec.version,
         artifact_type=SkyRLRun,
-        run=run_skyrl,
+        run=partial(run_skyrl, env_vars={}),
         build_config=build_config,
         deps=deps,
         runtime_args={_EXECUTION: execution},

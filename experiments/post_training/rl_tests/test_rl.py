@@ -303,19 +303,58 @@ def test_published_init_binds_export_tokenizer(
 
 def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatch):
     revisions = {
-        "speed-short": {"2026.11.13.1": "96e0d088", "2026.11.17.1": "363225a9", "2026.11.19.1": "371233d9"},
-        "data-short": {"2026.11.13.1": "7d9a590f", "2026.11.17.1": "772467a8", "2026.11.19.1": "cb07d91c"},
-        "speed-medium": {"2026.11.12.1": "e75349ff", "2026.11.17.1": "5cd852f4", "2026.11.19.1": "f8281b9d"},
-        "learning-medium": {"2026.11.12.1": "ba638a12", "2026.11.17.1": "2be6e5e2", "2026.11.19.1": "4aa3aed9"},
-        "data-medium": {"2026.11.12.1": "ba638a12", "2026.11.17.1": "2be6e5e2", "2026.11.19.1": "4aa3aed9"},
-        "speed-long": {"2026.11.11.1": "cd0a5f4e", "2026.11.17.1": "f29155cc", "2026.11.19.1": "9edc7b70"},
-        "train-long": {"2026.11.11.1": "4945b701", "2026.11.17.1": "b411c765", "2026.11.19.1": "e56a62fa"},
+        "speed-short": {
+            "2026.11.13.1": "96e0d088",
+            "2026.11.17.1": "363225a9",
+            "2026.11.19.1": "371233d9",
+            "2026.11.20.1": "8f532da2",
+        },
+        "data-short": {
+            "2026.11.13.1": "7d9a590f",
+            "2026.11.17.1": "772467a8",
+            "2026.11.19.1": "cb07d91c",
+            "2026.11.20.1": "a379319d",
+        },
+        "speed-medium": {
+            "2026.11.12.1": "e75349ff",
+            "2026.11.17.1": "5cd852f4",
+            "2026.11.19.1": "f8281b9d",
+            "2026.11.20.1": "8b7e47c8",
+        },
+        "learning-medium": {
+            "2026.11.12.1": "ba638a12",
+            "2026.11.17.1": "2be6e5e2",
+            "2026.11.19.1": "4aa3aed9",
+            "2026.11.20.1": "67306e75",
+            "2026.11.20.2": "b3044b9b",
+        },
+        "data-medium": {
+            "2026.11.12.1": "ba638a12",
+            "2026.11.17.1": "2be6e5e2",
+            "2026.11.19.1": "4aa3aed9",
+            "2026.11.20.1": "67306e75",
+            "2026.11.20.2": "b3044b9b",
+        },
+        "speed-long": {
+            "2026.11.11.1": "cd0a5f4e",
+            "2026.11.17.1": "f29155cc",
+            "2026.11.19.1": "9edc7b70",
+            "2026.11.20.1": "3d1fe22d",
+        },
+        "train-long": {
+            "2026.11.11.1": "4945b701",
+            "2026.11.17.1": "b411c765",
+            "2026.11.19.1": "e56a62fa",
+            "2026.11.20.1": "22473465",
+            "2026.11.20.2": "412d0576",
+        },
     }
     configs = assert_revisioned_native_configs(
         snowball_model.SNOWBALL, revisions, tmp_path=tmp_path, monkeypatch=monkeypatch
     )
     for name, config in zip(revisions, configs, strict=True):
         trainer, generator = config["skyrl"]["trainer"], config["skyrl"]["generator"]
+        assert {"NCCL_NET", "NCCL_IB_DISABLE", "NCCL_SOCKET_FAMILY"}.isdisjoint(config["runtime"]["task_env"])
         assert config["iris"]["allocation"]["num_nodes"] * config["iris"]["allocation"]["gpus_per_node"] <= 40
         generating = name in ("speed-short", "data-short")
         assert (
@@ -348,12 +387,12 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
                 sampling["max_generate_length"],
                 profile["n_samples_per_prompt"] if profile else generator["eval_n_samples_per_prompt"],
             ) == (0, False, 8192, 1)
-        if name in ("learning-medium", "data-medium"):
+        if name in ("learning-medium", "data-medium", "train-long"):
             assert next(row for row in trainer["callbacks"] if row["type"] == "evaluation")["eval_before_train"] is True
-            assert config["run"]["export_hf"] and "hf_model_save" in [row["type"] for row in trainer["callbacks"]]
-        if name == "train-long":
+            assert config["run"]["export_hf"] and trainer["hf_export_checkpoint"] == "best"
             kinds = [row["type"] for row in trainer["callbacks"]]
-            assert kinds.index("evaluation") < kinds.index("best_checkpoint")
+            assert kinds.index("evaluation") < kinds.index("best_checkpoint") < kinds.index("hf_model_save")
+        if name == "train-long":
             assert next(row for row in trainer["callbacks"] if row["type"] == "evaluation")["eval_on_train_end"] is False
 
 
@@ -635,7 +674,9 @@ def test_submission_exit_codes_and_publication_retries(
     if case == "child":
         finish()
         monkeypatch.setattr(
-            skyrl_api, "_run_launcher", lambda *args: pytest.fail("Cached coordinator run invoked native execution")
+            skyrl_api,
+            "_run_launcher",
+            lambda *args, **kwargs: pytest.fail("Cached coordinator run invoked native execution"),
         )
     arguments = ["--preset", preset.name, "--version", preset.revision, "--run"]
     if case != "data-short":
@@ -840,7 +881,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     source.rename(staged)
     native_calls = []
 
-    def native(command):
+    def native(command, *, env_vars=None):
         inspection = native_json()(
             "import json,sys\nfrom cloud.iris import launch\n"
             "args=launch.create_parser().parse_args(sys.argv[1:])\n"
