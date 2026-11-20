@@ -8,11 +8,13 @@ PubMedQA follows lm-eval v0.4.12's `pubmedqa` task. MedMCQA follows the `medmcqa
 EleutherAI/lm-evaluation-harness@d6de81643928d653435c431bae19945d41d32520.
 """
 
+from verifyit.spec import McqExtraction, McqSpec
+
 from taskcompendium.convert.answers import source_evidence
 from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.evaluation.corpus import chat_item
 from taskcompendium.evaluation.spec import EvaluationItem
-from taskcompendium.importers.evalchemy.grader import source_package
+from taskcompendium.grader import verifyit_package
 from taskcompendium.importers.fewshot import (
     ChoiceDocument,
     ChoiceTemplate,
@@ -69,9 +71,8 @@ def convert_medmcqa_cot(row: RawRow, context: ConversionContext) -> TaskSpec:
     task = conversation_task(
         row,
         events=(TextMessage(role="user", content=medmcqa_question(row.data) + MEDMCQA_COT_INSTRUCTION),),
-        package=source_package(
-            "medmcqa_cot",
-            {"expected": MEDMCQA_LETTERS[row.data["cop"]]},
+        package=verifyit_package(
+            McqSpec(MEDMCQA_LETTERS[row.data["cop"]], options=4, extraction=McqExtraction.MEDMCQA_COT_REFERENCE),
             environment=required_grader_environment(context),
         ),
         evidence=dict(row.data),

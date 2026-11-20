@@ -3,10 +3,14 @@
 
 import pytest
 from verifyit.grade import Status
+from verifyit.grade import grade as dispatch
+from verifyit.modes import grade_mcq
+from verifyit.spec import McqExtraction, McqSpec
 
-from taskcompendium.importers.evalchemy.scorers.choices import grade_medmcqa_cot
+SPEC = McqSpec("B", options=4, extraction=McqExtraction.MEDMCQA_COT_REFERENCE)
 
 
+# Expected letters follow lm-eval's medmcqa_cot regex filter with take_first on the same responses.
 @pytest.mark.parametrize(
     "response,reward,extracted",
     [
@@ -14,16 +18,21 @@ from taskcompendium.importers.evalchemy.scorers.choices import grade_medmcqa_cot
         ("Final Answer: **B**", 1, "B"),
         ("Final Answer:\nB", 1, "B"),
         ("Final Answer: A", 0, "A"),
-        # The first marker decides, as lm-eval's take_first filter does.
         ("Final Answer: A\nOn reflection, Final Answer: B", 0, "A"),
         ("final answer: b", 0, None),
         ("The answer is B.", 0, None),
+        ("Answer: B", 0, None),
         ("Final Answer: (B)", 0, None),
         ("", 0, None),
     ],
 )
-def test_medmcqa_cot_extraction(response, reward, extracted):
-    result = grade_medmcqa_cot("B", response)
+def test_medmcqa_cot_reference_extraction(response, reward, extracted):
+    result = grade_mcq.grade_mcq_candidate(SPEC, response)
     assert result.status == Status.SCORED
     assert result.reward == reward
     assert result.detail["extracted"] == extracted
+
+
+def test_medmcqa_cot_reference_grades_the_answer_file(tmp_path):
+    (tmp_path / "answer.txt").write_text("B is the vitamin C option.\n\nFinal Answer: B")
+    assert dispatch(SPEC, tmp_path, tmp_path).reward == 1

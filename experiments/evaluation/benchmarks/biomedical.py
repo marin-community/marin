@@ -33,7 +33,6 @@ from taskcompendium.importers.evalchemy.biomedical import (
     medmcqa_template,
     pubmedqa_template,
 )
-from taskcompendium.importers.evalchemy.grader import scorer_revision
 from taskcompendium.pipeline.inputs import SourceFormat
 
 from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmarks
@@ -53,7 +52,7 @@ MEDMCQA_SOURCE = HfSource(
     SourceFormat.PARQUET,
 )
 MEDMCQA_POPULATION = 4183
-MEDMCQA_COT_VERSION = "2026.11.19"
+MEDMCQA_COT_VERSION = "2026.11.20"
 
 
 def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
@@ -107,7 +106,7 @@ def chat_sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             name="medmcqa-cot",
             source=MEDMCQA_SOURCE,
             convert=convert_medmcqa_cot,
-            version=MEDMCQA_COT_VERSION + "-" + scorer_revision("medmcqa_cot"),
+            version=MEDMCQA_COT_VERSION,
             protocol=protocol,
             item_builder=medmcqa_cot_item,
             grader=BASIC_GRADER,

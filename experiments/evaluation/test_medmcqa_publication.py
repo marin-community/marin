@@ -1,17 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""MedMCQA CoT publication renders lm-eval's prompt and binds gold letters, subjects and final-only grading."""
-
-import json
+"""MedMCQA CoT publication renders lm-eval's prompt and binds the reference MCQ grader and subject groups."""
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 from fray.local_backend import LocalClient
 from taskcompendium.evaluation.corpus import evaluation_cases
-from taskcompendium.models import CommandSemantics, EnvironmentRequirements
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements, verifyit_spec
 from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
-from taskcompendium.runtime.resources import resource_bytes
+from verifyit.spec import McqExtraction, McqSpec
 from zephyr.context import ZephyrContext
 
 from experiments.evaluation.catalog import evaluation_benchmarks
@@ -74,8 +72,9 @@ def test_publication_renders_lm_eval_cot_prompt_with_subject_groups(tmp_path):
     assert {case.item.operation.response_selection for case in cases} == {"final_only"}
     [event] = cases[0].task.context.events
     assert (event.role, event.content) == ("user", SCURVY_PROMPT)
-    configs = [
-        json.loads(resource_bytes(next(r for r in case.task.resources.verifier if r.path == "config.json")))
-        for case in cases
+    reference = McqExtraction.MEDMCQA_COT_REFERENCE
+    assert [verifyit_spec(case.task.grader) for case in cases] == [
+        McqSpec("B", options=4, extraction=reference),
+        McqSpec("A", options=4, extraction=reference),
     ]
-    assert configs == [{"expected": "B"}, {"expected": "A"}]
+    assert all(case.task.grader.environment is not None for case in cases)
