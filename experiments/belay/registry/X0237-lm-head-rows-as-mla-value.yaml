@@ -89,6 +89,13 @@ trials:
   commit: b5d04ff211
   priority: batch
   note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
+  loss:
+  - 2.4084
+  delta:
+  - -0.0022
+  steps: 39210
+  baseline: s7n-d1024 2.4106 (same commit, seed 0)
+  step_time_change: 0%
 - id: t005
   variant: lm_head rows as gated value embeds in MLA
   rung: competitive-d1280
