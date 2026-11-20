@@ -9,6 +9,8 @@ from enum import StrEnum
 
 from finestore.rl.difficulty import Solver
 
+REPAIR_BLOCKED = "blocked"
+
 
 class GapReason(StrEnum):
     COVERAGE_SHORTFALL = "COVERAGE_SHORTFALL"

@@ -10,6 +10,7 @@ from typing import Protocol
 
 from finestore.rl.difficulty import Solver
 from rigging.filesystem.storage_path import StoragePath
+from shellbox.machine import Backend
 
 from experiments.post_training.task_curation.difficulty.ledger import digest
 from experiments.post_training.task_curation.difficulty.state import (
@@ -25,6 +26,7 @@ from experiments.post_training.task_curation.difficulty_config import DATA_ACCOU
 MAX_TASKS_PER_JOB = 20
 MAX_GPU_HOURS_PER_JOB = 40.0
 DECLARATIVE_EVIDENCE = "daytona:data:declarative"
+PANEL_INVENTORY_REVISION = "2026-11-20-census-artifact-record"
 
 
 @dataclass(frozen=True)
@@ -71,6 +73,7 @@ class FreezeSamplePanel:
     source: SourceAttempts
     cells: tuple[tuple[str, Solver], ...]
     declaration_json: str
+    inventory_revision: str | None = None
 
 
 @dataclass(frozen=True)
@@ -123,6 +126,8 @@ def action_payload(action: Action) -> dict:
         del payload["vllm_release_tag"]
     if isinstance(action, AttemptBatch) and action.daytona_account is None:
         del payload["daytona_account"]
+    if isinstance(action, FreezeSamplePanel) and action.inventory_revision is None:
+        del payload["inventory_revision"]
     return payload
 
 
@@ -192,7 +197,7 @@ class AttemptRemediation:
                         (selected,),
                         sum(n for _, _, n in tasks),
                         vllm_release_tag=release,
-                        daytona_account=DATA_ACCOUNT if cell.source.backend == "daytona" else None,
+                        daytona_account=DATA_ACCOUNT if cell.source.backend == Backend.DAYTONA else None,
                     )
                 )
         return actions
@@ -268,6 +273,7 @@ class TaskSpecRemediation:
                     selected_source(group[0]),
                     tuple(sorted((cell.source.source_id, cell.solver) for cell in group)),
                     source.declaration_json,
+                    PANEL_INVENTORY_REVISION,
                 )
             )
         return actions
@@ -374,23 +380,21 @@ def plan(
     for cell in sorted(cells, key=lambda c: (c.solver, c.source.source_id)):
         if cell.state in {CellStatus.MEASURED, CellStatus.TERMINAL} or cell.job_ids:
             continue
+        obsolete_snapshot = cell.source.backend == Backend.DAYTONA and any(
+            gap.reason == GapReason.DAYTONA_SNAPSHOT_PREFLIGHT_PENDING for gap in cell.gaps
+        )
         remaining = tuple(
             gap
             for gap in cell.gaps
             if not (gap.reason == GapReason.ENVIRONMENT_ARTIFACT_MISSING and gap.artifact_uri in available_artifacts)
-            and not (gap.reason == GapReason.DAYTONA_SNAPSHOT_PREFLIGHT_PENDING and cell.source.backend == "daytona")
+            and not (gap.reason == GapReason.DAYTONA_SNAPSHOT_PREFLIGHT_PENDING and obsolete_snapshot)
         )
         if remaining != cell.gaps:
             cell = replace(
                 cell,
                 gaps=remaining,
                 evidence_ids=cell.evidence_ids
-                + (
-                    (DECLARATIVE_EVIDENCE,)
-                    if any(gap.reason == GapReason.DAYTONA_SNAPSHOT_PREFLIGHT_PENDING for gap in cell.gaps)
-                    and cell.source.backend == "daytona"
-                    else ()
-                )
+                + ((DECLARATIVE_EVIDENCE,) if obsolete_snapshot else ())
                 + tuple(
                     sorted(
                         "available:" + uri
@@ -462,6 +466,7 @@ def action_from_payload(payload: dict) -> Action:
             source_attempts_from_payload(payload["source"]),
             tuple((source, Solver(solver)) for source, solver in payload["cells"]),
             payload["declaration_json"],
+            payload.get("inventory_revision"),
         )
     if kind == "RecheckExecutabilityAdmission":
         return RecheckExecutabilityAdmission(

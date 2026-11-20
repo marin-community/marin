@@ -4,7 +4,7 @@
 """Missing panels freeze automatically and become current-population attempt inputs."""
 
 import json
-from types import SimpleNamespace
+from dataclasses import replace
 
 from finestore.rl.curation import ActorCensusInput
 from finestore.rl.difficulty import Solver
@@ -13,19 +13,20 @@ from taskcompendium.models import ConversationInput, TaskSpec, TextMessage
 
 from experiments.post_training.task_curation.difficulty import catalog
 from experiments.post_training.task_curation.difficulty.executor import EscalationLog, execute_plan
-from experiments.post_training.task_curation.difficulty.ledger import read_rows
-from experiments.post_training.task_curation.difficulty.planner import AttemptBatch, FreezeSamplePanel, plan
+from experiments.post_training.task_curation.difficulty.ledger import append_rows, read_rows
+from experiments.post_training.task_curation.difficulty.planner import AttemptBatch, FreezeSamplePanel, action_id, plan
 from experiments.post_training.task_curation.difficulty.remediate import repair_action
-from experiments.post_training.task_curation.difficulty.state import CoveragePolicy, cell_state
+from experiments.post_training.task_curation.difficulty.state import CoveragePolicy, Outcome, cell_state
 from experiments.post_training.task_curation.difficulty_contracts import (
     CONTRACT_VINTAGE_ABSENT_OMITTED,
     difficulty_task_contract,
 )
 from experiments.post_training.task_curation.difficulty_samples import load_queue_sources
-from experiments.post_training.task_curation.lexical_artifacts import ActorCensus, SourceTextPopulation
+from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.lexical_contamination import write_text_population
 from experiments.post_training.task_curation.tests.prebuilt_fixtures import prebuilt_task
 from experiments.post_training.task_curation.tests.test_difficulty_executor import JobStore
+from experiments.post_training.task_curation.tests.test_difficulty_reconciler import row
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 
@@ -72,7 +73,7 @@ def test_missing_panel_freezes_one_shared_queue_then_plans_original_tasks(tmp_pa
                 converter_revision=population.converter_revision,
                 measured_tasks=2,
                 task_specs_sha256=population.task_specs_sha256,
-                evidence_url=str(tmp_path / "actor" / "summary.json"),
+                evidence_url=str(tmp_path / "population" / "summary.json"),
             ),
             "within_source_dedup": (
                 deduplication_evidence(
@@ -81,8 +82,6 @@ def test_missing_panel_freezes_one_shared_queue_then_plans_original_tasks(tmp_pa
             ),
         }
     )
-    # Only the census receipt store is substituted; sampling scans the real population parquet rows.
-    monkeypatch.setattr(ActorCensus, "raw_load", lambda path: SimpleNamespace(input_artifact=population.path))
     served = {"id": declaration.id, "declaration": declaration.model_dump(mode="json")}
 
     def query(_sql, params):
@@ -98,6 +97,16 @@ def test_missing_panel_freezes_one_shared_queue_then_plans_original_tasks(tmp_pa
     cells = [cell_state([], before, solver, CoveragePolicy()) for solver in solvers]
     (action,) = plan(cells, [])
     assert isinstance(action, FreezeSamplePanel) and len(action.cells) == 4
+    old = replace(
+        row("old-panel", outcome=Outcome.FINISHED),
+        source_id=before.source_id,
+        registry_revision=before.registry_revision,
+        task_id=None,
+        task_sha256=None,
+        action_id=action_id(replace(action, inventory_revision=None)),
+    )
+    append_rows(ledger, [old])
+    assert plan(cells, read_rows(ledger)) == [action]
     backend = JobStore(str(tmp_path / "jobs"))
     execute_plan([action], [], [before], ledger, backend, EscalationLog(ledger))
     result = repair_action(action, tmp_path / "repair", ledger)

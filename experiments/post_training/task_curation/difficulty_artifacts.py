@@ -4,10 +4,9 @@
 """Restore relocated grader artifacts without changing frozen TaskSpec paths."""
 
 import hashlib
-import os
 from pathlib import Path
-from tempfile import NamedTemporaryFile
 
+from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.runtime.local import ENVIRONMENT_MANIFEST, FILES_ARCHIVE, LOCK_FILE, load_manifest
 
@@ -23,7 +22,11 @@ def regional_lock_url(path: str) -> str:
 
 
 def restore_original_lock(path: str) -> bool:
-    """Restore verified lock siblings at the frozen path; never rewrite the task."""
+    """Restore original artifact bytes without rewriting the task.
+
+    Return True when a recorded relocation is restored or already matches.
+    Return False for unmapped paths or a missing regional lock.
+    """
     regional = regional_lock_url(path)
     if regional == path or not StoragePath(regional).exists():
         return False
@@ -44,13 +47,8 @@ def restore_original_lock(path: str) -> bool:
             if target.read_bytes() != payload:
                 raise ValueError(f"Frozen grader artifact differs from its regional copy: {target}")
             continue
-        with NamedTemporaryFile(dir=destination, delete=False) as temporary:
-            temporary.write(payload)
-            temporary_path = Path(temporary.name)
-        try:
-            os.replace(temporary_path, target)
-        finally:
-            temporary_path.unlink(missing_ok=True)
+        with atomic_rename(str(target)) as temporary:
+            Path(temporary).write_bytes(payload)
         if target.read_bytes() != payload:
             raise ValueError(f"Restored grader artifact changed on readback: {target}")
     return True

@@ -52,6 +52,10 @@ class LegacyReasonError(ValueError):
     """The complete audit found a reason outside the closed vocabulary."""
 
 
+ADMISSION_WRAPPERS = frozenset(
+    {DifficultyGap.EXECUTABILITY_ADMISSION_PENDING, DifficultyGap.FILTRATION_FINDINGS_ADMISSION_PENDING}
+)
+
 RAW_GAPS = {
     "Awaiting shared model provider capacity": GapReason.PROVIDER_CAPACITY_WAIT,
     "provider_wait": GapReason.PROVIDER_CAPACITY_WAIT,
@@ -62,10 +66,7 @@ RAW_GAPS = {
 def admission_cause(capability: str) -> tuple[DifficultyGap, str | None]:
     """Resolve nested admission details without changing historical ledger identities."""
     (cause,) = difficulty_gaps(capability)
-    while (
-        cause[0] in {DifficultyGap.EXECUTABILITY_ADMISSION_PENDING, DifficultyGap.FILTRATION_FINDINGS_ADMISSION_PENDING}
-        and cause[1]
-    ):
+    while cause[0] in ADMISSION_WRAPPERS and cause[1]:
         (cause,) = difficulty_gaps(cause[1])
     return cause
 
@@ -104,11 +105,7 @@ def legacy_gaps(reason: str | None) -> tuple[Gap, ...]:
     gaps = []
     for legacy, detail in parsed:
         canonical = LEGACY_GAPS[legacy]
-        if (
-            legacy
-            in {DifficultyGap.EXECUTABILITY_ADMISSION_PENDING, DifficultyGap.FILTRATION_FINDINGS_ADMISSION_PENDING}
-            and detail
-        ):
+        if legacy in ADMISSION_WRAPPERS and detail:
             try:
                 admission_cause(f"{legacy.value}:{detail}")
             except ValueError as error:

@@ -36,7 +36,7 @@ def test_original_actorless_calendar_ignores_unavailable_grader_lock(monkeypatch
     with tarfile.open(fixtures / "calendar.tar.gz") as archive:
         task = TaskSpec.model_validate_json(archive.extractfile("original-packet/task-spec.json").read())
     monkeypatch.setattr(
-        "experiments.post_training.task_curation.calibration_inventory.packages_lock_exists", lambda path: False
+        "experiments.post_training.task_curation.calibration_inventory.packages_lock_available", lambda path: False
     )
     assert is_nonagentic_task(task)
     assert task_blockers(task) == set()

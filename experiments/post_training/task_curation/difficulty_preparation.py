@@ -5,6 +5,7 @@
 
 import argparse
 import json
+from collections.abc import Sequence
 from pathlib import Path
 
 from finestore.rl.difficulty import DifficultyGap, difficulty_gap_reason, require_difficulty_gaps
@@ -13,11 +14,11 @@ from taskcompendium.harbor.adapter import declared_execution_limits, unsupported
 from taskcompendium.harbor.native_package import write_native_task
 from taskcompendium.harbor.runtime import write_source_runtime
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import ExecutionRequirements, NoGrader, judge_spec
+from taskcompendium.models import ExecutionRequirements, NoGrader, TaskSpec, judge_spec
 from taskcompendium.pipeline.resource_calibration import INITIAL_REQUIREMENTS
 
 from experiments.post_training.glm import GLM_MODEL
-from experiments.post_training.task_curation.calibration_inventory import packages_lock_exists
+from experiments.post_training.task_curation.calibration_inventory import packages_lock_available
 from experiments.post_training.task_curation.difficulty_artifacts import restore_original_lock
 from experiments.post_training.task_curation.difficulty_contracts import (
     difficulty_task_contract,
@@ -42,6 +43,23 @@ def source_gap_reason(gap: DifficultyGap, detail: str | None = None) -> str:
     return reason
 
 
+def restore_source_locks(tasks: Sequence[TaskSpec]) -> None:
+    locks = {
+        environment.packages_lock
+        for task in tasks
+        for environment in (
+            task.environment_requirements,
+            None if isinstance(task.grader, NoGrader) else task.grader.environment,
+        )
+        if environment is not None and environment.packages_lock is not None
+    }
+    restored = False
+    for lock in sorted(locks):
+        restored = restore_original_lock(lock) or restored
+    if restored:
+        packages_lock_available.cache_clear()
+
+
 def prepare_source(source: DifficultySource, root: Path) -> PreparedSource:
     tasks, runtimes = panel_task_runtimes(source.panel)
     frozen = {selected.task_id: selected.task_sha256 for selected in source.sample.tasks}
@@ -51,8 +69,8 @@ def prepare_source(source: DifficultySource, root: Path) -> PreparedSource:
     # The receipt was frozen by one code state; reproduce exactly that vintage's
     # serialization instead of assuming the current one (the hosted-v13 break).
     vintage = resolve_receipt_vintage(frozen, tasks, runtimes)
+    restore_source_locks(tasks)
     prepared = []
-    checked_locks = set()
     for task, runtime in zip(tasks, runtimes, strict=True):
         contract = difficulty_task_contract(task, runtime, vintage)
         selected = next(item for item in source.sample.tasks if item.task_id == task.id)
@@ -71,23 +89,13 @@ def prepare_source(source: DifficultySource, root: Path) -> PreparedSource:
             environments = [task.environment_requirements]
             if not isinstance(task.grader, NoGrader):
                 environments.append(task.grader.environment)
-            for environment in environments:
-                if (
-                    environment is None
-                    or environment.packages_lock is None
-                    or environment.packages_lock in checked_locks
-                ):
-                    continue
-                if restore_original_lock(environment.packages_lock):
-                    packages_lock_exists.cache_clear()
-                checked_locks.add(environment.packages_lock)
             missing = sorted(
                 {
                     environment.packages_lock
                     for environment in environments
                     if environment is not None
                     and environment.packages_lock is not None
-                    and not packages_lock_exists(environment.packages_lock)
+                    and not packages_lock_available(environment.packages_lock)
                 }
             )
             if missing:

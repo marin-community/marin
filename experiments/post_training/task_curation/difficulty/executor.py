@@ -294,9 +294,9 @@ def collect_finished(
                 continue
             reason = GapReason(result["reason"])
             detail = result["detail"]
-            route = record_source_repair(ledger, row.action_id, result, str(target))
-            if route is not None:
-                LOGGER.info("DIFFICULTY_SOURCE_REPAIR %s", route)
+            handoff_uri = record_source_repair(ledger, row.action_id, result, str(target))
+            if handoff_uri is not None:
+                LOGGER.info("DIFFICULTY_SOURCE_REPAIR %s", handoff_uri)
                 continue
         else:
             reason, detail = GapReason.EXECUTABILITY_ADMISSION_PENDING, f"Iris child {row.job_id}: {job.state}"

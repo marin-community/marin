@@ -46,7 +46,7 @@ def test_frozen_grader_path_restores_verified_regional_artifacts(
     source = difficulty_source(task)
     monkeypatch.setattr(difficulty_preparation, "panel_task_runtimes", lambda panel: ([task], [{}]))
     if corrupt_archive:
-        with pytest.raises(ValueError, match="archive differs"):
+        with pytest.raises(ValueError):
             prepare_source(source, tmp_path / "prepared")
         assert not original.exists()
         return

@@ -15,7 +15,7 @@ from functools import partial
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.task_curation.calibration_inventory import packages_lock_exists
+from experiments.post_training.task_curation.calibration_inventory import packages_lock_available
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.published_census import population_rows
 
@@ -65,7 +65,7 @@ def count_references(entry: CensusInput, output_root: str) -> dict:
                 "tasks": count,
                 "actor_tasks": roles_by_lock["actor"][uri],
                 "grader_tasks": roles_by_lock["grader"][uri],
-                "original_artifact_available": packages_lock_exists(uri),
+                "original_artifact_available": packages_lock_available(uri),
             }
             for uri, count in sorted(tasks_by_lock.items())
         ],

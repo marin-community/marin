@@ -16,7 +16,7 @@ from finestore.rl.curation import (
     DaytonaMeasurement,
     DaytonaSafety,
     IntegrityContractSummary,
-    SourceDeclaration,
+    QualifiedSourceDeclaration,
 )
 from finestore.schema import arrow_schema
 from marin.execution.artifact import ArtifactRecord, result_type_name, write_record
@@ -71,8 +71,8 @@ def test_bound_zero_actor_receipt_survives_catalog_arrow_roundtrip(tmp_path):
     source = number_source(tmp_path / "input")
     bound = bind_actor_census(source, census_receipt(source))
     declaration = bound.declaration
-    table = pa.Table.from_pylist([declaration.model_dump(mode="json")], schema=arrow_schema(SourceDeclaration))
-    restored = SourceDeclaration.model_validate(table.to_pylist()[0])
+    table = pa.Table.from_pylist([declaration.model_dump(mode="json")], schema=arrow_schema(QualifiedSourceDeclaration))
+    restored = QualifiedSourceDeclaration.model_validate(table.to_pylist()[0])
     assert restored.daytona_safety is DaytonaSafety.NOT_APPLICABLE
     assert restored.actor_census_input.converter_version == source.version
     assert restored.actor_census_input.measured_tasks == 1
@@ -220,8 +220,10 @@ def test_grading_census_retains_task_exceptions_and_clears_evidence_for_changed_
     assert records["invalid"]["status"] == "unassessable"
     assert receipt.scanned_task_specs_sha256 == digest
     bound = bind_grading_census(bind_actor_census(source, actor), receipt)
-    table = pa.Table.from_pylist([bound.declaration.model_dump(mode="json")], schema=arrow_schema(SourceDeclaration))
-    restored = SourceDeclaration.model_validate(table.to_pylist()[0])
+    table = pa.Table.from_pylist(
+        [bound.declaration.model_dump(mode="json")], schema=arrow_schema(QualifiedSourceDeclaration)
+    )
+    restored = QualifiedSourceDeclaration.model_validate(table.to_pylist()[0])
     assert restored.grading_environment == receipt.evidence
     changed = replace(
         bound, info=replace(bound.info, actor_census_input=binding.model_copy(update={"task_specs_sha256": "d" * 64}))

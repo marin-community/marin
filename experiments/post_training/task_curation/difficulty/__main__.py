@@ -6,6 +6,7 @@
 import argparse
 import json
 import logging
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -146,7 +147,7 @@ def main() -> None:
         result = plan_report(actions)
     else:
         result = status_report(rows, catalog, policy, args.since, actions)
-        result["source_repairs"] = source_repair_handoffs(args.ledger)
+        result["source_repairs"] = [asdict(handoff) for handoff in source_repair_handoffs(args.ledger)]
     if args.json:
         print(json.dumps(result, indent=2))
     elif args.command == "plan":

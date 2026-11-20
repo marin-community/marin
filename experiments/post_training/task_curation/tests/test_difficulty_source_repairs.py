@@ -3,7 +3,7 @@
 
 """Verified source-owned blockers become repair handoffs without escalation."""
 
-from dataclasses import replace
+from dataclasses import asdict, replace
 
 import pytest
 from finestore.rl.difficulty import Solver
@@ -86,9 +86,9 @@ def test_completed_source_rechecks_record_typed_handoffs_without_escalation(tmp_
     target = backend.complete_repair(action, result, ledger)
     rows = read_rows(ledger)
     (handoff,) = source_repair_handoffs(ledger)
-    assert handoff["route"] == route and handoff["evidence_uri"] == str(target)
-    assert handoff["registry_revision"] == source.registry_revision
-    assert handoff["blockers"] == result["blockers"]
+    assert handoff.route == route and handoff.evidence_uri == str(target)
+    assert handoff.registry_revision == source.registry_revision
+    assert asdict(handoff)["blockers"] == tuple(result["blockers"])
     assert not any(r.outcome == Outcome.ESCALATED for r in rows)
     assert not (tmp_path / "ledger" / "ESCALATIONS.md").exists()
     after = cell_state(rows, source, Solver.SMALL, CoveragePolicy())
@@ -101,5 +101,10 @@ def test_completed_source_rechecks_record_typed_handoffs_without_escalation(tmp_
         action_id=next(r.action_id for r in rows if r.outcome == Outcome.SUBMITTED),
         evidence_uri=str(target),
     )
-    assert len(record_completed_source_repairs(ledger, [previous])) == 1
-    assert source_repair_handoffs(ledger) == [handoff]
+    recovery = str(tmp_path / "recovery")
+    execute_plan(
+        [action], [observed], [source], recovery, JobStore(str(tmp_path / "recovery-jobs")), EscalationLog(recovery)
+    )
+    assert source_repair_handoffs(recovery) == []
+    assert len(record_completed_source_repairs(recovery, [previous])) == 1
+    assert source_repair_handoffs(recovery) == [handoff]

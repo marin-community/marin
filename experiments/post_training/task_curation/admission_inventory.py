@@ -13,6 +13,7 @@ from functools import partial
 import pyarrow as pa
 import pyarrow.parquet as pq
 from finestore.rl.curation import QualifiedSourceDeclaration, SourceDeclaration
+from marin.execution.artifact import RECORD_FILENAME
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
@@ -36,7 +37,8 @@ def inventory_source(declaration: SourceDeclaration, output_root: str, resume_ro
     binding = declaration.actor_census_input
     if binding is None:
         raise ValueError(f"Current source lacks its exact input census: {declaration.id}")
-    population = population_for_census(binding.evidence_url, declaration.id)
+    population_record = StoragePath(binding.evidence_url).parent / RECORD_FILENAME
+    population = population_for_census(str(population_record), declaration.id)
     expected = (declaration.id, declaration.dataset_id, declaration.dataset_revision, declaration.pipeline.version)
     actual = (population.source_id, population.dataset_id, population.dataset_revision, population.source_version)
     if actual != expected or (

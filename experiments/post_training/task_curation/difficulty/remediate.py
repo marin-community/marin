@@ -34,6 +34,7 @@ from experiments.post_training.task_curation.difficulty.planner import (
 )
 from experiments.post_training.task_curation.difficulty.selection import selected_tasks
 from experiments.post_training.task_curation.difficulty.state import (
+    REPAIR_BLOCKED,
     AdmissionBlocker,
     CatalogSource,
     CoveragePolicy,
@@ -51,7 +52,6 @@ from experiments.post_training.task_curation.difficulty_samples import (
 from experiments.post_training.task_curation.images.__main__ import declared_environments
 from experiments.post_training.task_curation.images.build import DEFAULT_REPOSITORY, EnvironmentBuild, build_environment
 
-REPAIR_BLOCKED = "blocked"
 STATIC_ADMISSION_CAUSES = frozenset(
     {
         DifficultyGap.EXECUTABILITY_ADMISSION_PENDING,

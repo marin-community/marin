@@ -34,6 +34,8 @@ from experiments.post_training.task_curation.tests.prebuilt_fixtures import preb
 from experiments.post_training.task_curation.tests.test_difficulty_executor import JobStore
 from experiments.post_training.task_curation.tests.test_difficulty_reconciler import row
 
+NESTED_VERIFIER_DEADLINE = "executability_admission_pending:math_verifier_deadline:comparison"
+
 
 @pytest.mark.parametrize("provider_missing", [False, True])
 @pytest.mark.parametrize(
@@ -43,7 +45,7 @@ from experiments.post_training.task_curation.tests.test_difficulty_reconciler im
         DifficultyGap.EXECUTABILITY_ADMISSION_PENDING,
         DifficultyGap.TOOL_PROVIDER_REQUIRED,
         DifficultyGap.MATH_VERIFIER_DEADLINE,
-        "executability_admission_pending:math_verifier_deadline:comparison",
+        NESTED_VERIFIER_DEADLINE,
     ],
 )
 def test_admission_recheck_uses_frozen_contracts_before_attempts_or_escalation(
@@ -92,7 +94,7 @@ def test_admission_recheck_uses_frozen_contracts_before_attempts_or_escalation(
     assert file_sha256(StoragePath(str(queue))) == sha
     runtime_unverified = legacy_reason in {
         DifficultyGap.MATH_VERIFIER_DEADLINE,
-        "executability_admission_pending:math_verifier_deadline:comparison",
+        NESTED_VERIFIER_DEADLINE,
     }
     if provider_missing or runtime_unverified:
         assert after.state == CellStatus.BLOCKED

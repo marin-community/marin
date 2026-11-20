@@ -25,7 +25,7 @@ from taskcompendium.grading_environment import (
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import NoGrader, TaskSpec
 
-from experiments.post_training.task_curation.calibration_inventory import packages_lock_exists
+from experiments.post_training.task_curation.calibration_inventory import packages_lock_available
 from experiments.post_training.task_curation.grading_binding import GradingCensusReceipt
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.prebuilt import validate_native_package
@@ -114,7 +114,7 @@ def census_source(config: GradingCensusInput, output_root: str) -> GradingCensus
                             environments.append(task.grader.environment)
                         for environment in environments:
                             lock = environment.packages_lock if environment is not None else None
-                            if lock and not packages_lock_exists(lock):
+                            if lock and not packages_lock_available(lock):
                                 missing_artifacts[lock] += 1
                         assessments.append({"task_id": document["id"], "task_sha256": task_hash, **assessment})
                     writer.write_table(pa.Table.from_pylist(assessments, schema=TASK_SCHEMA))

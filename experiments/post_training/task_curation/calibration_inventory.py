@@ -70,7 +70,7 @@ def image_blockers(image: str | None, dockerfile: bytes | None) -> set[str]:
 
 
 @cache
-def packages_lock_exists(path: str) -> bool:
+def packages_lock_available(path: str) -> bool:
     return StoragePath(regional_lock_url(path)).exists()
 
 
@@ -103,7 +103,7 @@ def task_blockers(task: TaskSpec) -> set[str]:
             if environment is None:
                 continue
             lock = environment.packages_lock
-            if lock and not packages_lock_exists(lock):
+            if lock and not packages_lock_available(lock):
                 blockers.add("missing_packages_lock")
     if not has_oracle_solution(task):
         blockers.add("requires_calibration_solution_and_empty_liveness")
