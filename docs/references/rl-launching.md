@@ -207,8 +207,8 @@ each training batch. Each Parquet training row supplies its `family`. The counts
 `trainer.train_batch_size`. Use `batch_policy: full_batch` and leave `data.sampling.kind` unset.
 Each family needs its group count times `max_staleness_steps + 1` usable rows so that every batch in
 the rollout window can use distinct prompts. A rejected group releases a slot in its own family.
-When the shared prompt order yields no available prompt from a rare family within two batches of draws,
-the loader scans the dataset for that family.
+Each family draws prompts from its own seeded passes. Checkpoints retain the position in each
+family’s order. Fixed family counts and curriculum sampling are separate launch modes.
 
 ## Artifact and runtime boundaries
 

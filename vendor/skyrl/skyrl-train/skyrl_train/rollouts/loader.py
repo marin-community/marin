@@ -78,6 +78,10 @@ class SeededPasses:
         self._position = 0
         self._order = self._pass_order(0)
 
+    def for_pool(self, num_rows: int) -> SeededPasses:
+        """Start an independent order with the same seed and shuffle policy."""
+        return SeededPasses(num_rows, seed=self._seed, shuffle=self._shuffle)
+
     def next_index(self) -> int:
         if self._position == self._num_rows:
             self._epoch += 1
@@ -160,6 +164,14 @@ class PromptLoader:
         self._family_minimums = dict(family_minimums or {})
         self._family_sizes = collections.Counter(self._families.values())
         self._order = order
+        self._family_rows: dict[str, list[int]] = collections.defaultdict(list)
+        for uid in sorted(self._families, key=self._uid_rows.__getitem__):
+            self._family_rows[self._families[uid]].append(self._uid_rows[uid])
+        self._family_orders = {}
+        if self._family_rows:
+            if not isinstance(order, SeededPasses):
+                raise ValueError("family prompt pools require seeded passes")
+            self._family_orders = {family: order.for_pool(len(rows)) for family, rows in self._family_rows.items()}
         self._batch_size = batch_size
         self._draw_limit = 2 * batch_size
         self._max_stale_retries = max_stale_retries
@@ -176,8 +188,8 @@ class PromptLoader:
     def next_prompt(self, live: Collection[str], family: str | None = None) -> dict | None:
         """Offer a prompt in the requested family whose uid is neither live nor quarantined.
 
-        Prompts awaiting regeneration come first, then up to two batches' worth of the prompt order's draws. If those
-        draws find no eligible uid, a scan starting after the previous match can pick a row the order weights at zero.
+        Prompts awaiting regeneration come first. A family lease advances only that family's seeded pass. Without
+        a family lease, two batches' worth of draws precede a scan that can pick a row the order weights at zero.
         """
 
         def eligible(uid: str) -> bool:
@@ -187,6 +199,8 @@ class PromptLoader:
             if eligible(prompt["uid"]):
                 del self._retries[position]
                 return self._label_family(prompt)
+        if family is not None:
+            return self._next_family_prompt(live, family)
         # Every usable dataset uid is live, so drawing would only advance the order. A quarantined uid is never live.
         if len(live) + len(self._quarantined) >= self._uid_count:
             return None
@@ -199,6 +213,22 @@ class PromptLoader:
             index = (self._scan_start + offset) % num_rows
             if eligible(self._dataset.uid(index)):
                 self._scan_start = index + 1
+                return self._offer(index)
+        return None
+
+    def _next_family_prompt(self, live: Collection[str], family: str) -> dict | None:
+        rows = self._family_rows.get(family)
+        if not rows:
+            return None
+        if len(live) + len(self._quarantined) >= len(rows) and all(
+            not self._available(self._dataset.uid(index), live) for index in rows
+        ):
+            return None
+        order = self._family_orders[family]
+        # At most the tail of the current pass and one complete pass can contain an available row.
+        for _ in range(2 * len(rows) - 1):
+            index = rows[order.next_index()]
+            if self._available(self._dataset.uid(index), live):
                 return self._offer(index)
         return None
 
@@ -272,10 +302,17 @@ class PromptLoader:
         }
 
     def state_dict(self) -> PromptLoaderState:
-        return PromptLoaderState(self._order.state_dict(), list(self._retries))
+        order = self._order.state_dict()
+        if self._family_orders:
+            order["family_orders"] = {family: passes.state_dict() for family, passes in self._family_orders.items()}
+        return PromptLoaderState(order, list(self._retries))
 
     def load_state_dict(self, state: PromptLoaderState) -> None:
         self._order.load_state_dict(state.order)
+        saved_families = state.order.get("family_orders", {})
+        for family, order in self._family_orders.items():
+            if family in saved_families:
+                order.load_state_dict(saved_families[family])
         self._retries = collections.deque(state.retries)
 
     def _log_name(self, uid: str) -> str:
