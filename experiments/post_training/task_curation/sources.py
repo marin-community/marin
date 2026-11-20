@@ -286,6 +286,7 @@ def all_sources() -> dict[str, RlDataSource]:
             info=replace(
                 source.info,
                 consumer_receipt=consumers.get(source_id),
+                consumer_requirements=tuple(sorted(consumers[source_id].requirements)) if source_id in consumers else (),
             ),
         )
         for source_id, source in selected.items()

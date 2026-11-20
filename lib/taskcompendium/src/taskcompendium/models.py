@@ -356,6 +356,7 @@ class ProviderRequirement(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    network_access: Literal["service_only"] | None = Field(default=None, exclude_if=lambda value: value is None)
     action_interface: str = Field(min_length=1)
     initial_state: JsonValue = Field(repr=False)
 

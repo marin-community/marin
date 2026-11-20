@@ -169,6 +169,16 @@ def status_extras() -> dict[str, Any]:
     """
     remediation = remediation_rows()
     return {
+        "consumer_inputs": {
+            source.info.id: {
+                "consumer_requirements": [need.value for need in source.info.consumer_requirements],
+                "consumer_receipt": (
+                    source.info.consumer_receipt.model_dump(mode="json") if source.info.consumer_receipt else None
+                ),
+            }
+            for source in all_sources().values()
+            if source.info.consumer_requirements
+        },
         "pending": pending_rows(),
         "stages": {
             **{row["id"]: row["stage"] for row in remediation if row["stage"]},
@@ -187,8 +197,18 @@ def status_extras() -> dict[str, Any]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--consumer-output", type=Path)
     args = parser.parse_args()
-    payload = json.dumps(status_extras(), indent=2) + "\n"
+    extras = status_extras()
+    payload = json.dumps(extras, indent=2) + "\n"
+    if args.consumer_output is not None:
+        encoded = json.dumps(extras["consumer_inputs"], sort_keys=True, separators=(",", ":"))
+        chunks = [encoded[start : start + 72] for start in range(0, len(encoded), 72)]
+        literals = [repr(chunk) if '"' in chunk else json.dumps(chunk) for chunk in chunks]
+        value = literals[0] if len(literals) == 1 else "(\n" + "".join(f"    {part}\n" for part in literals) + ")"
+        args.consumer_output.write_text(
+            "# Copyright The Marin Authors\n# SPDX-License-Identifier: Apache-2.0\n\n" + f"CONSUMER_INPUTS = {value}\n"
+        )
     # The release's clean frontend build empties dist/ before the build command runs,
     # so the output's parent directories cannot be assumed to exist.
     args.output.parent.mkdir(parents=True, exist_ok=True)

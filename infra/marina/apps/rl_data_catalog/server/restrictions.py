@@ -203,6 +203,7 @@ PRIVATE_DECLARATION_FIELDS = frozenset(
         "grading_environment",
         "actor_census_input",
         "consumer_receipt",
+        "consumer_requirements",
         "consumer_blockers",
         "oracle_filtration",
         "no_oracle_executability_policy",

@@ -3,22 +3,37 @@
 
 """Apply the current consumer policy to retained catalog declarations."""
 
+import json
+from functools import cache
 from typing import Any
 
-from finestore.rl.curation import ActorCensusInput, ConsumerReceipt, consumer_blockers
+from finestore.rl.curation import ActorCensusInput, ConsumerNeed, ConsumerReceipt, consumer_blockers
+
+from .consumer_evidence import CONSUMER_INPUTS
+
+
+@cache
+def packaged_consumer_inputs() -> dict[str, dict[str, Any]]:
+    """Read immutable scope and receipt metadata shipped with this app revision."""
+    return json.loads(CONSUMER_INPUTS)
 
 
 def consumer_projection(declaration: dict[str, Any]) -> dict[str, Any]:
-    """Keep old Available rows pending until their current consumer check passes."""
+    """Gate only bespoke needs; standard source declarations pass through unchanged."""
     if declaration["status"] not in {"Available", "Pending"}:
         return declaration
-    raw = declaration.get("consumer_receipt")
+    current = packaged_consumer_inputs().get(declaration["id"], declaration)
+    requirements = tuple(ConsumerNeed(need) for need in current.get("consumer_requirements", ()))
+    if not requirements:
+        return declaration
+    raw = current.get("consumer_receipt")
     binding = declaration.get("actor_census_input")
     reasons = consumer_blockers(
         ConsumerReceipt.model_validate(raw) if raw is not None else None,
         declaration["id"],
         ActorCensusInput.model_validate(binding) if binding is not None else None,
         (declaration.get("within_source_dedup") or {}).get("unique_count", 0),
+        requirements,
     )
     if not reasons:
         return declaration

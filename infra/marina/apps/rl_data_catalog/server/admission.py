@@ -165,7 +165,11 @@ def require_population_admission(declaration: SourceDeclaration) -> None:
     ):
         raise ValueError(f"Admission census belongs to another current population: {declaration.id}")
     if reasons := consumer_blockers(
-        declaration.consumer_receipt, declaration.id, binding, declaration.within_source_dedup.unique_count
+        declaration.consumer_receipt,
+        declaration.id,
+        binding,
+        declaration.within_source_dedup.unique_count,
+        declaration.consumer_requirements,
     ):
         raise ValueError(f"Consumer admission blocked: {declaration.id}: {', '.join(reasons)}")
     if blocker := population_admission_blocker(

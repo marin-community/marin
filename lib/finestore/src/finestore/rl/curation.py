@@ -803,12 +803,22 @@ class ActorCensusInput(CatalogRecord):
 CONSUMER_RUNTIME_COMMIT = "b937327803bd3656305b070f2b56c5176c7a6c9d"
 
 
+class ConsumerNeed(StrEnum):
+    TOOL_PROVIDER = "tool_provider"
+    CUSTOM_JUDGE = "custom_judge"
+    EXECUTION = "execution"
+    VERIFIER_ALLOCATION = "verifier_allocation"
+    SERVICE = "service"
+
+
 class ConsumerReason(StrEnum):
     RECEIPT_MISSING = "CONSUMER_RECEIPT_MISSING"
     RUNTIME_STALE = "CONSUMER_RUNTIME_STALE"
     POPULATION_MISMATCH = "CONSUMER_POPULATION_MISMATCH"
     SCHEMA_REJECTED = "CONSUMER_SCHEMA_REJECTED"
     TOOL_UNREGISTERED = "CONSUMER_TOOL_UNREGISTERED"
+    SERVICE_UNREGISTERED = "CONSUMER_SERVICE_UNREGISTERED"
+    EXECUTION_UNSUPPORTED = "CONSUMER_EXECUTION_UNSUPPORTED"
     JUDGE_UNREGISTERED = "CONSUMER_JUDGE_UNREGISTERED"
     LOADER_REJECTED = "CONSUMER_LOADER_REJECTED"
 
@@ -825,6 +835,7 @@ class ConsumerReceipt(CatalogRecord):
     failed_tasks: int = Field(ge=0)
     failures: dict[ConsumerReason, int]
     evidence_url: str
+    requirements: dict[ConsumerNeed, int] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _failure_counts(self) -> "ConsumerReceipt":
@@ -838,9 +849,15 @@ class ConsumerReceipt(CatalogRecord):
 
 
 def consumer_blockers(
-    receipt: ConsumerReceipt | None, source_id: str, binding: ActorCensusInput | None, retained_tasks: int
+    receipt: ConsumerReceipt | None,
+    source_id: str,
+    binding: ActorCensusInput | None,
+    retained_tasks: int,
+    requirements: Sequence[ConsumerNeed] = (),
 ) -> tuple[ConsumerReason, ...]:
-    """Return the reasons this population cannot enter current-runtime admission."""
+    """Check bespoke consumer needs; standard populations keep their existing admission."""
+    if not requirements:
+        return ()
     if receipt is None:
         return (ConsumerReason.RECEIPT_MISSING,)
     if receipt.runtime_commit != CONSUMER_RUNTIME_COMMIT:
@@ -864,7 +881,13 @@ def consumer_blockers(
         or binding.measured_tasks != retained_tasks
     ):
         return (ConsumerReason.POPULATION_MISMATCH,)
-    return tuple(sorted(receipt.failures))
+    bespoke_failures = {
+        ConsumerReason.TOOL_UNREGISTERED,
+        ConsumerReason.JUDGE_UNREGISTERED,
+        ConsumerReason.SERVICE_UNREGISTERED,
+        ConsumerReason.EXECUTION_UNSUPPORTED,
+    }
+    return tuple(sorted(set(receipt.failures) & bespoke_failures))
 
 
 class NoOracleStaticRetentionEvidence(CatalogRecord):
@@ -1045,6 +1068,7 @@ class QualifiedSourceDeclaration(SourceDeclaration):
     integrity_contracts: IntegrityContractSummary | None = None
     actor_census_input: ActorCensusInput | None = None
     consumer_receipt: ConsumerReceipt | None = None
+    consumer_requirements: list[ConsumerNeed] = Field(default_factory=list)
     converted_examples: ConvertedExamples | None = None
     oracle_filtration: OracleFiltrationEvidence | None = Field(default=None, exclude_if=lambda value: value is None)
     no_oracle_executability_policy: NoOracleExecutabilityPolicy | None = Field(

@@ -10,6 +10,7 @@ from typing import Annotated, Protocol
 from finestore.rl.curation import (
     DAYTONA_SAFE_SNAPSHOT_LIMIT,
     ActorCensusInput,
+    ConsumerNeed,
     ConsumerReceipt,
     ContentEvidenceReference,
     ConvertedExamples,
@@ -273,6 +274,7 @@ class SourceInfo:
     integrity_contracts: IntegrityContractSummary | None = None
     actor_census_input: ActorCensusInput | None = None
     consumer_receipt: ConsumerReceipt | None = None
+    consumer_requirements: tuple[ConsumerNeed, ...] = ()
     converted_examples: ConvertedExamples | None = None
     oracle_filtration: Annotated[OracleFiltrationEvidence | None, Field(exclude_if=lambda value: value is None)] = None
     no_oracle_executability_policy: Annotated[
@@ -410,6 +412,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
                 info.id,
                 info.actor_census_input,
                 info.within_source_dedup.unique_count if info.within_source_dedup else 0,
+                info.consumer_requirements,
             )
         )
         dataset = self.dataset
@@ -679,6 +682,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             self.info.id,
             self.info.actor_census_input,
             self.info.within_source_dedup.unique_count if self.info.within_source_dedup else 0,
+            self.info.consumer_requirements,
         ):
             return SourceStatus.PENDING
         return SourceStatus.AVAILABLE
@@ -813,6 +817,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             integrity_contracts=info.integrity_contracts,
             actor_census_input=info.actor_census_input,
             consumer_receipt=info.consumer_receipt,
+            consumer_requirements=info.consumer_requirements,
             converted_examples=info.converted_examples,
             oracle_filtration=info.oracle_filtration,
             no_oracle_executability_policy=info.no_oracle_executability_policy,

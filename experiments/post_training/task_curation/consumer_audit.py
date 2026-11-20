@@ -17,6 +17,9 @@ from tempfile import TemporaryDirectory
 import pyarrow.parquet as pq
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from taskcompendium.models import TaskSpec, judge_spec
+
+from experiments.post_training.task_curation.consumer_scope import ConsumerCapacity, consumer_needs
 
 RUNTIME_PATHS = (
     "lib/taskcompendium/src",
@@ -44,6 +47,7 @@ def audit_source(row: dict, runtime: Path, config: dict, output: str) -> dict:
     if not population["specs_output_dir"].startswith(config["regional_bucket"].rstrip("/") + "/"):
         raise ValueError("Population is outside this audit job region")
     digest = hashlib.sha256()
+    capacity = ConsumerCapacity.model_validate(config["capacity"])
     environment = {**os.environ, "PYTHONPATH": os.pathsep.join(str(runtime / path) for path in RUNTIME_PATHS)}
     with TemporaryDirectory(prefix="consumer-") as temporary:
         result_path = Path(temporary) / "result.json"
@@ -66,19 +70,31 @@ def audit_source(row: dict, runtime: Path, config: dict, output: str) -> dict:
                             for record in batch.to_pylist():
                                 serialized = record["task_spec"]
                                 digest.update(serialized.encode())
-                                process.stdin.write(json.dumps(serialized) + "\n")
+                                task = TaskSpec.model_validate_json(serialized)
+                                judge = judge_spec(task.grader)
+                                process.stdin.write(
+                                    json.dumps(
+                                        {
+                                            "task": serialized,
+                                            "needs": sorted(consumer_needs(task, capacity)),
+                                            "judge_model": judge.model if judge is not None else "",
+                                        }
+                                    )
+                                    + "\n"
+                                )
                 process.stdin.close()
                 if process.wait() != 0:
                     raise RuntimeError(f"Runtime probe failed for {row['source_id']}")
         result = json.loads(result_path.read_text())
-    if digest.hexdigest() != binding["task_specs_sha256"] or result["checked_tasks"] != binding["measured_tasks"]:
-        result["failures"]["CONSUMER_POPULATION_MISMATCH"] = result["checked_tasks"]
-        result["failed_tasks"] = result["checked_tasks"]
+    if result["checked_tasks"] != binding["measured_tasks"]:
+        raise ValueError("Consumer scan count differs from the frozen population")
+    result["scanned_task_specs_sha256"] = digest.hexdigest()
+    result["population_sha256_mismatch"] = digest.hexdigest() != binding["task_specs_sha256"]
     result.update(
         source_id=row["source_id"],
         dataset_id=binding["dataset_id"],
         dataset_revision=binding["dataset_revision"],
-        task_specs_sha256=digest.hexdigest(),
+        task_specs_sha256=binding["task_specs_sha256"],
         runtime_commit=config["runtime_commit"],
         evidence_url=destination,
     )

@@ -6,7 +6,7 @@
 from dataclasses import replace
 
 import pytest
-from finestore.rl.curation import ConsumerReason, OversightEvidence, OversightLevel
+from finestore.rl.curation import ConsumerNeed, ConsumerReason, OversightEvidence, OversightLevel
 from finestore.rl.status_taxonomy import SourceStatus
 
 from experiments.post_training.task_curation.tests.admission_fixtures import with_admission_census
@@ -23,6 +23,7 @@ def qualified_source(tmp_path):
         source,
         info=replace(
             source.info,
+            consumer_requirements=(ConsumerNeed.TOOL_PROVIDER,),
             oversight=OversightEvidence(
                 level=OversightLevel.SAMPLE,
                 verification="Executed controls",
@@ -31,7 +32,10 @@ def qualified_source(tmp_path):
     )
 
 
-@pytest.mark.parametrize("failure", [None, ConsumerReason.SCHEMA_REJECTED, ConsumerReason.TOOL_UNREGISTERED])
+@pytest.mark.parametrize(
+    "failure",
+    [None, ConsumerReason.JUDGE_UNREGISTERED, ConsumerReason.TOOL_UNREGISTERED, ConsumerReason.SERVICE_UNREGISTERED],
+)
 def test_consumer_failure_blocks_new_and_retained_admission(qualified_source, failure):
     source = qualified_source
     receipt = source.info.consumer_receipt
@@ -76,3 +80,26 @@ def test_passing_consumer_receipt_permits_qualified_population(qualified_source)
     projected = consumer_projection(source.declaration.model_dump(mode="json"))
     assert projected["status"] == "Available"
     assert projected.get("consumer_blockers", []) == []
+
+
+@pytest.mark.parametrize("status", ["Available", "Excluded"])
+def test_standard_sources_keep_status_without_a_receipt(qualified_source, status):
+    source = replace(
+        qualified_source, info=replace(qualified_source.info, consumer_requirements=(), consumer_receipt=None)
+    )
+    assert source.status is SourceStatus.AVAILABLE
+    declaration = {**source.declaration.model_dump(mode="json"), "status": status}
+    assert consumer_projection(declaration) is declaration
+
+
+def test_global_schema_drift_does_not_block_bespoke_admission(qualified_source):
+    source = qualified_source
+    receipt = source.info.consumer_receipt.model_copy(
+        update={
+            "failed_tasks": 1,
+            "failures": {ConsumerReason.SCHEMA_REJECTED: 1},
+        }
+    )
+    source = replace(source, info=replace(source.info, consumer_receipt=receipt))
+    assert source.status is SourceStatus.AVAILABLE
+    require_population_admission(source.declaration)

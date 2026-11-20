@@ -1,53 +1,42 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Check frozen TaskSpecs with the selected runtime's actual loader and registry.
-
-Run in a subprocess with PYTHONPATH set to the pinned runtime archive. Input and
-output are JSON lines; output contains counts and schema paths, never task text.
-"""
+"""Check bespoke needs in the pinned consumer; report global schema drift separately."""
 
 import json
 import sys
 from collections import Counter
 
 from pydantic import ValidationError
-from rolloutengine.harness.assistant_prefix import AssistantPrefixHarness
-from skyrl_gym.rollout_specs import TOOL_PROVIDERS, rollout_spec, shell_harness
-from taskcompendium.models import TaskSpec, VerifyitGrader, judge_spec
-from verifyit.grade import grader_for
+from skyrl_gym.rollout_specs import TOOL_PROVIDERS
+from taskcompendium.models import ProviderRequirement, TaskSpec
 
 
-def check_task(serialized: str, session: dict, judges: frozenset[str]) -> tuple[set[str], list[str]]:
-    document = json.loads(serialized)
+def check_task(record: dict, config: dict) -> tuple[set[str], list[str]]:
+    document = json.loads(record["task"])
     failures: set[str] = set()
     fields: list[str] = []
-    # Registry failures remain visible even when this runtime rejects the schema.
     for requirement in document["environment_requirements"].get("tool_providers", {}).values():
-        if requirement["action_interface"] not in TOOL_PROVIDERS:
+        interface = requirement["action_interface"]
+        if interface not in TOOL_PROVIDERS:
             failures.add("CONSUMER_TOOL_UNREGISTERED")
-    try:
-        task = TaskSpec.model_validate_json(serialized)
-    except ValidationError as error:
-        failures.add("CONSUMER_SCHEMA_REJECTED")
-        fields = [".".join(map(str, item["loc"])) for item in error.errors(include_input=False)]
-        return failures, fields
-    judge = judge_spec(task.grader)
-    if judge is not None and judge.model not in judges:
-        failures.add("CONSUMER_JUDGE_UNREGISTERED")
-    if isinstance(task.grader, VerifyitGrader):
+            continue
         try:
-            grader_for(task.grader.mode)
-        except (ValueError, ImportError, KeyError):
+            TOOL_PROVIDERS[interface].tools(ProviderRequirement.model_validate(requirement))
+        except (ValidationError, ValueError, NotImplementedError, KeyError):
+            failures.add("CONSUMER_TOOL_UNREGISTERED")
+    if "custom_judge" in record["needs"]:
+        model = record["judge_model"] or config["default_judge"]
+        if not model or model not in config["judges"]:
             failures.add("CONSUMER_JUDGE_UNREGISTERED")
+    if "execution" in record["needs"]:
+        failures.add("CONSUMER_EXECUTION_UNSUPPORTED")
+    if "service" in record["needs"] and not config["session"].get("retrieval_service"):
+        failures.add("CONSUMER_SERVICE_UNREGISTERED")
     try:
-        lowered = rollout_spec(task, session)
-        if session["task_session"] == "assistant_prefix":
-            AssistantPrefixHarness().check(task, lowered.limits)
-        else:
-            shell_harness(lowered.harness).check(task, lowered.limits)
-    except (ValueError, NotImplementedError, KeyError):
-        failures.add("CONSUMER_LOADER_REJECTED")
+        TaskSpec.model_validate_json(record["task"])
+    except ValidationError as error:
+        fields = [".".join(map(str, item["loc"])) for item in error.errors(include_input=False)]
     return failures, fields
 
 
@@ -55,14 +44,31 @@ def main() -> None:
     config = json.loads(sys.stdin.readline())
     failures: Counter[str] = Counter()
     fields: Counter[str] = Counter()
-    checked = failed = 0
+    needs: Counter[str] = Counter()
+    checked = failed = bespoke = schema_rejected = 0
     for line in sys.stdin:
-        reasons, rejected = check_task(json.loads(line), config["session"], frozenset(config["judges"]))
+        record = json.loads(line)
+        reasons, rejected = check_task(record, config)
         checked += 1
+        bespoke += bool(record["needs"])
         failed += bool(reasons)
+        schema_rejected += bool(rejected)
         failures.update(reasons)
         fields.update(rejected)
-    print(json.dumps({"checked_tasks": checked, "failed_tasks": failed, "failures": failures, "schema_paths": fields}))
+        needs.update(record["needs"])
+    print(
+        json.dumps(
+            {
+                "checked_tasks": checked,
+                "bespoke_tasks": bespoke,
+                "failed_tasks": failed,
+                "failures": failures,
+                "requirements": needs,
+                "global_schema_rejected_tasks": schema_rejected,
+                "schema_paths": fields,
+            }
+        )
+    )
 
 
 if __name__ == "__main__":

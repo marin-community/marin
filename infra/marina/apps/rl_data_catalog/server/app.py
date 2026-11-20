@@ -463,7 +463,8 @@ def create_api(services: AppletServices) -> FastAPI:
                         'dataset_id',declaration->'dataset_id','license_receipt',declaration->'license_receipt',
                         'within_source_dedup',declaration->'within_source_dedup',
                         'actor_census_input',declaration->'actor_census_input',
-                        'consumer_receipt',declaration->'consumer_receipt'
+                        'consumer_receipt',declaration->'consumer_receipt',
+                        'consumer_requirements',declaration->'consumer_requirements'
                     ) || CASE WHEN declaration ? 'data_restriction'
                         THEN jsonb_build_object('data_restriction',declaration->'data_restriction')
                         ELSE '{}'::jsonb END AS declaration

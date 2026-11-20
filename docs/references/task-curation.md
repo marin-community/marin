@@ -119,39 +119,50 @@ remain intact.
 
 ## Current admission policy
 
-Ruling 72 (2026-11-20): a source requires a passing `CONSUMER` receipt before
-Atlas can mark it Available or count tasks as Admitted. This applies to existing
-admissions, including legacy blends. A consumer failure keeps the source Pending;
-it does not exclude or delete its population.
+Ruling 72 (2026-11-20, clarified the same day): a source with bespoke consumer
+requirements needs a passing `CONSUMER` receipt before Atlas marks it Available
+or counts it as Admitted. Standard sources retain their existing status.
+Consumer failures hold a bespoke source Pending without excluding its tasks.
 
-The receipt binds the source ID, dataset revision, SHA-256 of the ordered concatenation of the stored `task_spec` UTF-8 strings
-and the number of those strings, and the current runtime commit in
-`finestore.rl.curation.CONSUMER_RUNTIME_COMMIT`. It checks every task with the
-runtime's TaskSpec loader, SkyRL rollout-spec builder and actual provider
-registry, including advertised tools and judge modes. Rejected schema fields,
-missing tools, unavailable judges and rejected rollout contracts carry typed
-`CONSUMER_*` reasons. Missing receipts and changed runtime or population pins
-also block. Change the canonical runtime pin and repeat the full check whenever
-the consumer changes; old receipts cannot qualify the new pin.
+`consumer_scope.consumer_needs` classifies each frozen TaskSpec. A required tool
+or provider, custom judge, service binding or distinct verifier allocation selects
+bespoke scope. CPU, memory, disk and deadlines select scope only when they exceed
+the configured consumer limits. Satisfiable non-default allocations are exempt.
+The audit configuration records the capacity and deadline limits explicitly.
+Shared schema drift, including integrity and execution fields unknown to an older
+runtime, is one global runtime-alignment issue. It is reported separately and
+never changes a source's admission status.
+
+The receipt binds the source ID, frozen dataset revision, population digest and
+count, scoped requirement counts, and runtime commit in
+`finestore.rl.curation.CONSUMER_RUNTIME_COMMIT`. The audit reads every frozen
+TaskSpec, classifies its needs, and checks the pinned consumer's real loader and
+provider registry. Bespoke failures use `CONSUMER_TOOL_UNREGISTERED`,
+`CONSUMER_JUDGE_UNREGISTERED`, `CONSUMER_SERVICE_UNREGISTERED` or
+`CONSUMER_EXECUTION_UNSUPPORTED`. Missing receipts and changed runtime or
+population pins invalidate bespoke admission. Standard sources need no receipt.
 
 Run `experiments.post_training.task_curation.consumer_audit` in the population's
-storage region with an explicit frozen input inventory, runtime git archive,
-archive SHA, session configuration and judge profile. The archive must come from
-the receipt runtime commit; its SHA-256 is checked before extraction. The JSON
-configuration names `runtime_commit`, `runtime_archive_sha256`, `regional_bucket`,
-`session` (the SkyRL rollout session settings), and `judges` (configured judge
-model names, with the empty string only when a default judge is bound). Derive
-the default judge from `MICRO210_JUDGE` in the consumer runtime
-`experiments/evaluation/judge_config.py`, and preserve each task
-`JudgeSpec`. It emits bounded counts
-and schema paths without task content. Keep result artifacts in regional storage,
-stage receipt metadata with the command below, publish it to the private
-`open-athena/marin-rl-data-atlas-registry` through the existing serialized
-registry publisher with SHA readback,, then commit references
-under `datasets/consumer_receipt_refs/`. The declaration, admission writer and
-served Atlas projection use the same receipt rule. The static check does not prove that a machine can start or that an original
-grader executes correctly; the backend and original-oracle gates remain required.
-Each declared blend population needs its own complete check, as each source does.
+storage region. Supply a frozen input inventory, runtime git archive and JSON
+configuration with `runtime_commit`, `runtime_archive_sha256`, `regional_bucket`,
+`session`, `capacity`, `default_judge` and `judges`. `capacity` contains `cpus`,
+`memory_mb`, `storage_mb`, `agent_timeout` and `verifier_timeout`. A null deadline
+means the consumer has no cap for that phase. Derive the judge roster and default
+from the actual `MICRO210_JUDGE` object in the consumer runtime's
+`experiments/evaluation/judge_config.py`; preserve each task's JudgeSpec.
+The archive SHA is checked before extraction. Results contain counts, hashes and
+schema paths without task content. Frozen-stream digest differences are recorded
+separately for provenance investigation.
+
+Keep results in regional storage. Stage the receipt metadata below, publish it to
+private `open-athena/marin-rl-data-atlas-registry` through the serialized registry
+publisher with SHA readback, and commit references under
+`datasets/consumer_receipt_refs/`. The source declarations, admission writer and
+served Atlas projection apply the same scope and receipt rule. The app package
+includes immutable scope and receipt metadata for retained declarations; standard
+rows pass through unchanged. This static check does not prove machine startup or
+original grader execution. Backend and original-oracle qualification remain
+required.
 
 ```bash
 uv run python -m experiments.post_training.task_curation.consumer_audit \
