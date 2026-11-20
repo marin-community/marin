@@ -24,6 +24,7 @@ from marin.inference.vllm_server import _LogPump, _native_logs_tail
 
 logger = logging.getLogger(__name__)
 LMCACHE_REQUIREMENT = "lmcache==0.5.7.post1"
+LMCACHE_KV_TRANSFER_FLAG = "--kv-transfer-config"
 _HOST = "127.0.0.1"
 _SHUTDOWN_GRACE_SECONDS = 30
 _LMCACHE_ENTRYPOINT = """\
@@ -58,7 +59,7 @@ class RunningLmcache:
     @property
     def vllm_args(self) -> tuple[str, ...]:
         return (
-            "--kv-transfer-config",
+            LMCACHE_KV_TRANSFER_FLAG,
             json.dumps(
                 {
                     "kv_connector": "LMCacheMPConnector",

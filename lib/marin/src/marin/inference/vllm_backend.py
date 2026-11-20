@@ -19,7 +19,7 @@ from marin.inference.config import (
     VllmSource,
     normalize_vllm_option,
 )
-from marin.inference.lmcache_server import LMCACHE_REQUIREMENT, lmcache_server
+from marin.inference.lmcache_server import LMCACHE_KV_TRANSFER_FLAG, LMCACHE_REQUIREMENT, lmcache_server
 from marin.inference.model_preparation import read_tool_chat_template
 from marin.inference.vllm_router import available_port
 from marin.inference.vllm_server import (
@@ -151,7 +151,7 @@ class VllmBackend:
             if self.config.lmcache_ram_gib is not None:
                 for arg in serve_args:
                     option = normalize_vllm_option(arg.partition("=")[0])
-                    if option in {"--kv-transfer-config", "--kv-offloading-size", "--kv-offloading-backend"}:
+                    if option in {LMCACHE_KV_TRANSFER_FLAG, "--kv-offloading-size", "--kv-offloading-backend"}:
                         raise ValueError(f"lmcache_ram_gib owns {option}; remove it from extra args")
                 cache_command = (
                     runtime_launcher.command(executable="python")

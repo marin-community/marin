@@ -64,6 +64,7 @@ from rigging.timing import Duration
 
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
+    LMCACHE_RAM_GIB_FLAG,
     WORKER_PYTHON_VERSION,
     BrokerConfig,
     InferenceProxyConfig,
@@ -103,7 +104,7 @@ _VLLM_ONLY_OPTIONS = {
     "vllm_source": "--vllm-source",
     "vllm_release": "--vllm-release",
     "session_router": "--session-router",
-    "lmcache_ram_gib": "--lmcache-ram-gib",
+    "lmcache_ram_gib": LMCACHE_RAM_GIB_FLAG,
     "data_parallel_size": "--data-parallel-size",
     "vllm_args": "--vllm-arg",
     "vllm_metrics_config": "--vllm-metrics-config",
@@ -427,7 +428,7 @@ def _wait_and_report_endpoint(
 )
 @click.option("--session-router", is_flag=True, help="Route stable X-Session-ID values to native DP ranks.")
 @click.option(
-    "--lmcache-ram-gib",
+    LMCACHE_RAM_GIB_FLAG,
     type=click.FloatRange(min=0, min_open=True),
     default=None,
     help="GiB per Iris task for a RAM cache shared by its local vLLM workers; include it in --memory.",

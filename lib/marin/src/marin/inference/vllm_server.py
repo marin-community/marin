@@ -1168,7 +1168,7 @@ def _wait_for_vllm_server(
     process = handle.process
     assert handle.log_pump is not None
 
-    def _check_process_alive() -> None:
+    def _check_startup_health() -> None:
         check_dependencies()
         # A distributed loader worker can report this fault while the API parent stays alive and
         # waits forever for the other ranks. Fail the task from the complete local logs so Iris
@@ -1201,7 +1201,7 @@ def _wait_for_vllm_server(
         handle.server_url,
         timeout_seconds=timeout_seconds,
         poll_interval_seconds=poll_interval_seconds,
-        check_alive=_check_process_alive,
+        check_alive=_check_startup_health,
     )
 
 

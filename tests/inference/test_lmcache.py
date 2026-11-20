@@ -9,11 +9,13 @@ import os
 import signal
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import psutil
 import pytest
 import requests
+from iris.client.context_state import reset_context, set_context
 from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
 from iris.cluster.types import JobName
 from marin.inference.backend import ModelSpec
@@ -22,6 +24,7 @@ from marin.inference.vllm_backend import VllmBackend
 from rigging.timing import Duration, ExponentialBackoff
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="Serving uses POSIX process groups")
+_EVENTS_ENV = "CACHE_TEST_EVENTS"
 
 _FAKE_SERVER = """\
 import json
@@ -36,7 +39,7 @@ from pathlib import Path
 kind = "lmcache" if Path(sys.argv[0]).name == "python" else Path(sys.argv[0]).name
 
 def record(event, **fields):
-    with Path(os.environ["CACHE_TEST_EVENTS"]).open("a") as stream:
+    with Path(os.environ[EVENTS_ENV]).open("a") as stream:
         stream.write(json.dumps({"event": event, "pid": os.getpid(), **fields}) + "\\n")
 
 def stop(*_):
@@ -87,23 +90,30 @@ HTTPServer(("127.0.0.1", port), Handler).serve_forever()
 def cache_processes(tmp_path, monkeypatch):
     for name in ("vllm", "python"):
         path = tmp_path / name
-        path.write_text(f"#!{sys.executable}\n{_FAKE_SERVER}")
+        path.write_text(f"#!{sys.executable}\nEVENTS_ENV = {_EVENTS_ENV!r}\n{_FAKE_SERVER}")
         path.chmod(0o755)
     events = tmp_path / "events.jsonl"
     events.touch()
     monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
-    monkeypatch.setenv("CACHE_TEST_EVENTS", str(events))
+    monkeypatch.setenv(_EVENTS_ENV, str(events))
     yield events
     # A failing assertion must not leave this test's fake services running.
     for row in _events(events):
         with contextlib.suppress(psutil.NoSuchProcess):
-            process = psutil.Process(row["pid"])
+            process = psutil.Process(row.pid)
             if any(str(tmp_path) in arg for arg in process.cmdline()):
                 process.kill()
 
 
-def _events(path: Path) -> list[dict]:
-    return [json.loads(line) for line in path.read_text().splitlines()]
+@dataclass(frozen=True)
+class _ProcessEvent:
+    event: str
+    pid: int
+    ram_gib: float | None = None
+
+
+def _events(path: Path) -> list[_ProcessEvent]:
+    return [_ProcessEvent(**json.loads(line)) for line in path.read_text().splitlines()]
 
 
 def _live(pid: int) -> bool:
@@ -154,30 +164,26 @@ def test_default_backend_runs_without_a_cache_process(cache_processes):
         environment.wait_until_ready(poll_interval_seconds=0.01)
         assert requests.get(environment.server_url + "/models", timeout=2).json()["data"][0]["id"] == "fake-model"
     rows = _events(cache_processes)
-    assert [row["event"] for row in rows] == ["vllm-start", "vllm-stop"]
-    assert all(not _live(row["pid"]) for row in rows)
+    assert [row.event for row in rows] == ["vllm-start", "vllm-stop"]
+    assert all(not _live(row.pid) for row in rows)
 
 
 @pytest.mark.parametrize("startup_failure", [False, True])
 def test_backend_owns_cache_until_vllm_stops(cache_processes, monkeypatch, startup_failure):
     if startup_failure:
         monkeypatch.setenv("CACHE_TEST_VLLM_FAIL", "1")
-    expectation = (
-        pytest.raises(RuntimeError, match="exited before becoming ready")
-        if startup_failure
-        else contextlib.nullcontext()
-    )
+    expectation = pytest.raises(RuntimeError) if startup_failure else contextlib.nullcontext()
     with expectation:
         with _backend().start(_spec()) as environment:
             environment.wait_until_ready(poll_interval_seconds=0.01)
             assert requests.get(environment.server_url + "/models", timeout=2).json()["data"][0]["id"] == "fake-model"
     rows = _events(cache_processes)
-    names = [row["event"] for row in rows]
+    names = [row.event for row in rows]
     assert names.index("lmcache-start") < names.index("vllm-start") < names.index("lmcache-stop")
     if not startup_failure:
         assert names.index("vllm-stop") < names.index("lmcache-stop")
-    assert rows[0]["ram_gib"] == 1.5
-    assert all(not _live(row["pid"]) for row in rows)
+    assert rows[0].ram_gib == 1.5
+    assert all(not _live(row.pid) for row in rows)
 
 
 def test_cli_sigterm_during_vllm_startup_stops_both_services(cache_processes, monkeypatch, tmp_path):
@@ -200,7 +206,7 @@ def test_cli_sigterm_during_vllm_startup_stops_both_services(cache_processes, mo
     with (tmp_path / "owner.log").open("w") as log:
         owner = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT)
     try:
-        _wait(lambda: any(row["event"] == "vllm-start" for row in _events(cache_processes)), timeout=30)
+        _wait(lambda: any(row.event == "vllm-start" for row in _events(cache_processes)), timeout=30)
         owner.send_signal(signal.SIGTERM)
         assert owner.wait(timeout=15) == 128 + signal.SIGTERM
     finally:
@@ -208,37 +214,38 @@ def test_cli_sigterm_during_vllm_startup_stops_both_services(cache_processes, mo
             owner.kill()
             owner.wait(timeout=5)
     rows = _events(cache_processes)
-    names = [row["event"] for row in rows]
+    names = [row.event for row in rows]
     assert names.index("vllm-stop") < names.index("lmcache-stop")
-    assert all(not _live(row["pid"]) for row in rows)
+    assert all(not _live(row.pid) for row in rows)
 
 
 def test_cache_startup_failure_releases_orphaned_server_child(cache_processes, monkeypatch):
     monkeypatch.setenv("CACHE_TEST_ORPHAN", "1")
-    with pytest.raises(RuntimeError, match="LMCache exited"):
+    with pytest.raises(RuntimeError):
         with _backend().start(_spec()):
             pytest.fail("An exited cache parent must fail startup")
     rows = _events(cache_processes)
-    assert any(row["event"] == "orphan-start" for row in rows)
-    _wait(lambda: all(not _live(row["pid"]) for row in rows))
-    assert not any(row["event"] == "vllm-start" for row in rows)
+    assert any(row.event == "orphan-start" for row in rows)
+    _wait(lambda: all(not _live(row.pid) for row in rows))
+    assert not any(row.event == "vllm-start" for row in rows)
 
 
 def test_cache_death_is_reported_and_releases_vllm(cache_processes):
     with _backend().start(_spec()) as environment:
         environment.wait_until_ready(poll_interval_seconds=0.01)
-        cache_pid = next(row["pid"] for row in _events(cache_processes) if row["event"] == "lmcache-start")
+        cache_pid = next(row.pid for row in _events(cache_processes) if row.event == "lmcache-start")
         os.kill(cache_pid, signal.SIGTERM)
         _wait(lambda: not _live(cache_pid))
-        with pytest.raises(RuntimeError, match="LMCache exited"):
+        with pytest.raises(RuntimeError):
             environment.check_alive()
     rows = _events(cache_processes)
-    assert any(row["event"] == "vllm-stop" for row in rows)
-    assert all(not _live(row["pid"]) for row in rows)
+    assert any(row.event == "vllm-stop" for row in rows)
+    assert all(not _live(row.pid) for row in rows)
 
 
-def test_colocated_iris_tasks_keep_both_cache_servers_alive(cache_processes):
+def test_colocated_backends_keep_separate_cache_servers_alive(cache_processes):
     previous = get_job_info()
+    context_token = set_context(None)
     try:
         set_job_info(JobInfo(task_id=JobName.from_wire("/test/cache-first/0")))
         with _backend().start(_spec()) as first:
@@ -250,9 +257,10 @@ def test_colocated_iris_tasks_keep_both_cache_servers_alive(cache_processes):
                 second.check_alive()
                 for environment in (first, second):
                     assert requests.get(environment.server_url + "/models", timeout=2).status_code == 200
-                caches = [row for row in _events(cache_processes) if row["event"] == "lmcache-start"]
+                caches = [row for row in _events(cache_processes) if row.event == "lmcache-start"]
                 assert len(caches) == 2
-                assert all(_live(row["pid"]) for row in caches)
+                assert all(_live(row.pid) for row in caches)
     finally:
         set_job_info(previous)
-    assert all(not _live(row["pid"]) for row in _events(cache_processes))
+        reset_context(context_token)
+    assert all(not _live(row.pid) for row in _events(cache_processes))

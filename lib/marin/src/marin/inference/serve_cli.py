@@ -13,6 +13,7 @@ import click
 from marin.external_dependencies import VLLM_FORK_REQUIREMENT
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
+    LMCACHE_RAM_GIB_FLAG,
     LevanterEngineConfig,
     ServedModelConfig,
     VllmEngineConfig,
@@ -32,7 +33,7 @@ _LOCAL_VLLM_OPTIONS = {
     "vllm_version": "--vllm-version",
     "vllm_release": "--vllm-release",
     "session_router": "--session-router",
-    "lmcache_ram_gib": "--lmcache-ram-gib",
+    "lmcache_ram_gib": LMCACHE_RAM_GIB_FLAG,
     "data_parallel_size": "--data-parallel-size",
     "max_num_batched_tokens": "--max-num-batched-tokens",
     "vllm_args": "--vllm-arg",
@@ -69,7 +70,7 @@ def main() -> None:
 )
 @click.option("--session-router", is_flag=True, help="Route stable X-Session-ID values to native DP ranks.")
 @click.option(
-    "--lmcache-ram-gib",
+    LMCACHE_RAM_GIB_FLAG,
     type=click.FloatRange(min=0, min_open=True),
     default=None,
     help="GiB for one task-local RAM cache shared by its vLLM workers; disabled when omitted.",

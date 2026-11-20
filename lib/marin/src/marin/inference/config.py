@@ -26,6 +26,7 @@ WORKER_PYTHON_VERSION = "3.12"
 # Stock CUDA vLLM runs in an isolated uv-tool environment and does not
 # participate in Marin's workspace dependency resolution.
 DEFAULT_CUDA_VLLM_VERSION = "0.25.1"
+LMCACHE_RAM_GIB_FLAG = "--lmcache-ram-gib"
 VLLM_METRIC_PREFIX = "vllm:"
 VLLM_DATA_PARALLEL_SIZE_FLAGS = ("--data-parallel-size", "--data_parallel_size", "-dp")
 VLLM_TOPOLOGY_ALIASES = {
