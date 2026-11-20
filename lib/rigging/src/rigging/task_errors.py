@@ -5,6 +5,11 @@
 
 Categories describe the source of a failure. Consumers choose training treatment
 separately from retry settings. Persisted exception names are stable identifiers.
+
+Producers register new persisted names here. Harbor's
+``test_every_persisted_harbor_exception_has_an_explicit_category`` checks its
+exception classes; SkyRL's ``test_terminal_error_treatment_contract`` freezes
+training treatment, including its TaskMachineError and TemplateError names.
 """
 
 from enum import StrEnum
@@ -15,10 +20,10 @@ from pydantic import BaseModel, Field
 class ErrorCategory(StrEnum):
     """Semantic category for a persisted task exception."""
 
-    INFRASTRUCTURE = "infrastructure"
-    AGENT = "agent"
-    PASSTHROUGH = "passthrough"
-    UNKNOWN = "unknown"
+    INFRASTRUCTURE = "infrastructure"  # Outside the agent; SkyRL excludes the sample.
+    AGENT = "agent"  # Attributable to the agent; SkyRL assigns zero reward.
+    PASSTHROUGH = "passthrough"  # Usable work remains; SkyRL keeps the verifier reward.
+    UNKNOWN = "unknown"  # Requires the consumer's configured fallback.
 
 
 _ERROR_CATEGORIES: dict[str, ErrorCategory] = {
@@ -147,7 +152,7 @@ def errors_by_category(category: ErrorCategory) -> frozenset[str]:
     """Return every persisted exception name mapped to ``category``.
 
     Consumers derive their default ``mask`` / ``zero`` / ``passthrough`` sets
-    from this rather than duplicating Harbor exception names.
+    from this registry.
     """
     return frozenset(name for name, value in _ERROR_CATEGORIES.items() if value == category)
 
@@ -166,8 +171,7 @@ def known_error_types() -> frozenset[str]:
     """Every persisted exception name with an explicit category decision.
 
     A name absent here resolves to :attr:`ErrorCategory.UNKNOWN` via
-    :func:`error_category`, but the absence itself signals contract drift;
-    Harbor's contract test enforces that every persisted exception is present.
+    :func:`error_category`. Producer contract tests check their persisted names.
     """
     return frozenset(_ERROR_CATEGORIES)
 
@@ -176,7 +180,7 @@ class RetrySettings(BaseModel):
     """Retry budget and name filters shared by task execution paths."""
 
     max_retries: int = Field(default=0, ge=0)
-    include_exceptions: set[str] | None = None
+    include_exceptions: set[str] | None = Field(default=None, description="No name inclusion filter when None")
     exclude_exceptions: set[str] | None = Field(
         default_factory=lambda: {
             "AgentTimeoutError",
@@ -184,7 +188,8 @@ class RetrySettings(BaseModel):
             "RewardFileNotFoundError",
             "RewardFileEmptyError",
             "VerifierOutputParseError",
-        }
+        },
+        description="Excluded names take precedence over included names",
     )
     wait_multiplier: float = 1.0
     min_wait_sec: float = 1.0
