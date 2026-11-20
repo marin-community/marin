@@ -41,7 +41,7 @@ case "$TEACHER_SOURCE" in
     ;;
   openai_compatible)
     TOKENIZER_FINGERPRINT=$("$PYTHON" -c \
-      'import sys; from skyrl_train.inference_engines.vllm_teacher_oracle import tokenizer_vocabulary_fingerprint; from skyrl_train.tokenizer import create_tokenizer; print(tokenizer_vocabulary_fingerprint(create_tokenizer(sys.argv[1], disable_fast_tokenizer=False)))' \
+      'import sys; from skyrl_train.tokenizer import tokenizer_vocabulary_fingerprint; from skyrl_train.tokenizer import create_tokenizer; print(tokenizer_vocabulary_fingerprint(create_tokenizer(sys.argv[1], disable_fast_tokenizer=False)))' \
       "$POLICY_MODEL")
     "$PYTHON" tests/fixtures/opd_http_teacher.py --port 18080 &
     teacher_pid=$!

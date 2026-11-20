@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Select training inventories from admitted curation artifacts and EvalLite from converted corpora."""
+"""Select training and evaluation task sets from admitted curation artifacts."""
 
 import hashlib
 import json
@@ -17,6 +17,17 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 from finestore.rl.curation import CurationMode
+from finestore.rl.strata import (
+    DifficultyBands,
+    MembershipState,
+    ReferenceMeasurement,
+    SelectionDefinition,
+    SelectionParent,
+    SelectionTaskRow,
+    TaskStrata,
+    read_selection_manifest,
+)
+from finestore.schema import arrow_schema
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from pydantic import BaseModel, ConfigDict, PositiveInt
@@ -47,7 +58,6 @@ from verifyit.json_objects import unique_object
 from zephyr.writers import write_parquet_file
 
 from experiments.post_training.task_curation.curation_catalog import MANIFEST_FILENAME
-from experiments.post_training.task_curation.datasets.nemotron_ultra.components import BLENDS
 
 SELECTION_PREFIX = "rl-data/task-selection"
 SELECTION_INPUT_PREFIX = "rl-data/selection-inputs"
@@ -64,7 +74,7 @@ TASK_MANIFEST_FILENAME = "task_manifest.parquet"
 TASK_SPEC_COLUMN = "task_spec"
 TASK_JSON_COLUMN = "task_json"
 LOWERED_TASK_SPEC_COLUMN = "lowered_task_spec"
-TASK_SCHEMA = pa.schema([pa.field(TASK_SPEC_COLUMN, pa.string(), nullable=False)])
+TASK_SCHEMA = pa.schema([pa.field(TASK_SPEC_COLUMN, pa.string(), nullable=False), *arrow_schema(TaskStrata)])
 HELDOUT_SCHEMA_VERSION = "0.27"
 STRUCTURE_CLOSURE_DATASET = "structure-closure"
 HELDOUT_FAMILIES = MappingProxyType(
@@ -84,23 +94,7 @@ AAII_CATEGORIES = MappingProxyType(
         STRUCTURAL_FAMILY: "format",
     }
 )
-TASK_MANIFEST_SCHEMA = pa.schema(
-    [
-        pa.field("task_id", pa.string(), nullable=False),
-        pa.field("family", pa.string(), nullable=False),
-        pa.field("aaii_category", pa.string(), nullable=False),
-        pa.field("agentic", pa.bool_(), nullable=False),
-        pa.field("grader_kind", pa.string(), nullable=False),
-        pa.field("upstream_pass_rate", pa.float64()),
-    ]
-)
-EVAL_LITE_MANIFEST_SCHEMA = pa.schema(
-    [
-        *(field for field in TASK_MANIFEST_SCHEMA if field.name != "upstream_pass_rate"),
-        *((name, pa.string()) for name in ("part", "source", "license")),
-        ("difficulty", pa.float64()),
-    ]
-)
+TASK_MANIFEST_SCHEMA = arrow_schema(SelectionTaskRow)
 
 
 class GraderKind(StrEnum):
@@ -177,6 +171,7 @@ class EvalLiteSource(BaseModel):
     family: str
     aaii_category: str
     license: str
+    topic: str = "untagged"
     count: PositiveInt
 
 
@@ -200,6 +195,8 @@ class EvalLiteRecipe(BaseModel):
     fast_counts: dict[str, PositiveInt]
     seed: int
     pass_rates: EvalLiteMeasurement | None = None
+    parent: SelectionParent | None = None
+    difficulty_bands: DifficultyBands | None = None
 
 
 @dataclass(frozen=True)
@@ -223,7 +220,6 @@ class EvalLiteRate:
 @dataclass(frozen=True)
 class EvalLiteSelection:
     tasks: tuple[tuple[TaskSpec, EvalLiteSource], ...]
-    fast: tuple[TaskSpec, ...]
     counts: dict[str, Counter[str]]
 
 
@@ -279,6 +275,10 @@ def validation_task(row: dict[str, Any], grader_environments: Mapping[str, Envir
     if isinstance(task.grader, ScriptGrader) and _grader_kind(task) == GraderKind.IMAGE:
         dataset = _grader_contract(task)["dataset"]
         if dataset not in grader_environments:
+            from experiments.post_training.task_curation.datasets.nemotron_ultra.components import (  # noqa: PLC0415 - curation-only dependency
+                BLENDS,
+            )
+
             raise ValueError(f"No admitted grader environment for {BLENDS[HELDOUT_BLEND][dataset].id}")
         task = task.model_copy(
             update={"grader": task.grader.model_copy(update={"environment": grader_environments[dataset]})}
@@ -371,9 +371,21 @@ def _chat_panel_task(case: EvaluationCase) -> TaskSpec:
     return task
 
 
-def task_records(tasks: Iterator[TaskSpec]) -> Iterator[dict[str, str]]:
+def task_records(tasks: Iterator[TaskSpec], strata: Mapping[str, TaskStrata]) -> Iterator[dict[str, Any]]:
     for task in tasks:
-        yield {TASK_SPEC_COLUMN: task.model_dump_json()}
+        tags = strata[task.id]
+        yield {TASK_SPEC_COLUMN: task.model_dump_json(), **tags.model_dump()}
+
+
+def _selection_row(task: TaskSpec, strata: TaskStrata, *, state: MembershipState) -> SelectionTaskRow:
+    return SelectionTaskRow(
+        task_id=task.id,
+        task_digest=canonical_sha256(task.model_dump(mode="json")),
+        **strata.model_copy(update={"agentic": "agentic" in task.tags}).model_dump(),
+        grader_kind=_grader_kind(task),
+        raw_source=task.source.model_dump_json(),
+        state=state,
+    )
 
 
 def _admitted_records(source: SelectionInput) -> Iterator[dict[str, str]]:
@@ -388,6 +400,10 @@ def _admitted_records(source: SelectionInput) -> Iterator[dict[str, str]]:
 
 
 def _grader_environments(sources: tuple[SelectionInput, ...]) -> dict[str, EnvironmentRequirements]:
+    from experiments.post_training.task_curation.datasets.nemotron_ultra.components import (  # noqa: PLC0415 - curation-only dependency
+        BLENDS,
+    )
+
     components = {BLENDS[HELDOUT_BLEND][dataset].id: dataset for dataset in HELDOUT_FAMILIES}
     environments = {}
     for source in sources:
@@ -418,18 +434,18 @@ def _grader_kind(task: TaskSpec) -> GraderKind:
     )
 
 
-def _manifest_records(tasks: tuple[TaskSpec, ...]) -> Iterator[dict[str, Any]]:
+def _manifest_records(tasks: tuple[TaskSpec, ...], active: set[str]) -> Iterator[dict[str, Any]]:
     for task in tasks:
         family = validation_family(task)
-        contract = None if family == STRUCTURAL_FAMILY else _grader_contract(task)
-        yield {
-            "task_id": task.id,
-            "family": family,
-            "aaii_category": AAII_CATEGORIES[family],
-            "agentic": "agentic" in task.tags,
-            "grader_kind": _grader_kind(task),
-            "upstream_pass_rate": None if contract is None else contract.get("pass_rate"),
-        }
+        row = _selection_row(
+            task,
+            TaskStrata(family=family, aai_category=AAII_CATEGORIES[family], source=task.source.dataset),
+            state=MembershipState.ACTIVE if task.id in active else MembershipState.CANDIDATE,
+        )
+        upstream = None if family == STRUCTURAL_FAMILY else _grader_contract(task).get("pass_rate")
+        yield row.model_copy(update={"measured_difficulty": 1 - upstream if upstream is not None else None}).model_dump(
+            mode="json"
+        )
 
 
 def _grader_counts(path: Path) -> dict[str, int]:
@@ -474,7 +490,7 @@ def write_training(
                 source_counts.eligible += 1
                 yield Candidate(task.id, row[TASK_JSON_COLUMN], source.source_id, contract)
 
-    def selected_records() -> Iterator[dict[str, str]]:
+    def selected_records() -> Iterator[dict[str, Any]]:
         groups = (
             [(source.source_id, config.recipe.source_limits[source.source_id], (source,)) for source in config.sources]
             if config.recipe.source_limits is not None
@@ -493,7 +509,17 @@ def write_training(
                 selected_ids.add(row.task_id)
                 selected_contracts.add(row.contract)
                 counts[row.source_id].selected += 1
-                yield {TASK_SPEC_COLUMN: row.task_json}
+                task = TaskSpec.model_validate_json(row.task_json)
+                family = next(source.family for source in config.sources if source.source_id == row.source_id)
+                yield {
+                    TASK_SPEC_COLUMN: row.task_json,
+                    **TaskStrata(
+                        family=family,
+                        aai_category=AAII_CATEGORIES.get(family, "untagged"),
+                        source=task.source.dataset,
+                        agentic="agentic" in task.tags,
+                    ).model_dump(),
+                }
 
     write_parquet_file(selected_records(), str(destination), schema=TASK_SCHEMA)
     return counts
@@ -510,16 +536,37 @@ def prepare(config: SelectionConfig) -> None:
         directory = Path(temporary)
         excluded = tuple(task for source in config.exclusions for task in _panel_source_tasks(source, environments))
         counts = write_training(config, selection.full, excluded, directory / TRAIN_FILENAME)
+        annotations = tuple(_manifest_records(selection.full, {task.id for task in selection.sample}))
+        strata = {
+            row["task_id"]: TaskStrata.model_validate({key: row[key] for key in TaskStrata.model_fields})
+            for row in annotations
+        }
         write_parquet_file(
-            task_records(iter(selection.sample)), str(directory / VALIDATION_FILENAME), schema=TASK_SCHEMA
+            task_records(iter(selection.sample), strata), str(directory / VALIDATION_FILENAME), schema=TASK_SCHEMA
         )
         write_parquet_file(
-            task_records(iter(selection.full)), str(directory / FULL_VALIDATION_FILENAME), schema=TASK_SCHEMA
+            task_records(iter(selection.full), strata), str(directory / FULL_VALIDATION_FILENAME), schema=TASK_SCHEMA
         )
-        write_parquet_file(
-            _manifest_records(selection.full), str(directory / TASK_MANIFEST_FILENAME), schema=TASK_MANIFEST_SCHEMA
-        )
+
+        def manifest_rows():
+            yield from annotations
+            for batch in pq.ParquetFile(directory / TRAIN_FILENAME).iter_batches(batch_size=PARQUET_BATCH_ROWS):
+                for value in batch.to_pylist():
+                    task = TaskSpec.model_validate_json(value[TASK_SPEC_COLUMN])
+                    tags = TaskStrata.model_validate({key: value[key] for key in TaskStrata.model_fields})
+                    yield _selection_row(task, tags, state=MembershipState.ACTIVE).model_dump(mode="json")
+
+        write_parquet_file(manifest_rows(), str(directory / TASK_MANIFEST_FILENAME), schema=TASK_MANIFEST_SCHEMA)
         summary = {
+            "selection_strata": (
+                SelectionDefinition(
+                    name=config.recipe.name,
+                    version=config.recipe.version,
+                    sampling="seeded source or family quotas; seeded validation per family",
+                    task_files=(TRAIN_FILENAME, FULL_VALIDATION_FILENAME),
+                    active_files=(TRAIN_FILENAME, VALIDATION_FILENAME),
+                ).model_dump(mode="json")
+            ),
             "recipe": config.recipe.model_dump(mode="json"),
             "sources": [asdict(source) for source in config.sources],
             "source_counts": {source: asdict(count) for source, count in counts.items()},
@@ -540,11 +587,15 @@ def prepare(config: SelectionConfig) -> None:
 def _publish_selection(directory: Path, output_path: str, task_files: tuple[str, ...], summary: dict[str, Any]) -> None:
     """Upload the task files and manifest, then the summary with each task file's grader-kind counts."""
     grader_kinds = {name.removesuffix(".parquet"): _grader_counts(directory / name) for name in task_files}
+    summary = {**summary, "grader_kind_counts": grader_kinds}
+    (directory / SUMMARY_FILENAME).write_text(json.dumps(summary))
+    read_selection_manifest(str(directory))
     destination = StoragePath(output_path)
+    if (destination / SUMMARY_FILENAME).exists():
+        raise FileExistsError(f"selection version is already published: {output_path}")
     destination.mkdirs()
     for name in (*task_files, TASK_MANIFEST_FILENAME):
         (destination / name).upload_from(str(directory / name))
-    summary = {**summary, "grader_kind_counts": grader_kinds}
     (destination / SUMMARY_FILENAME).write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
 
 
@@ -636,21 +687,6 @@ def _panel_keys(task: TaskSpec) -> PanelKeys:
 def _check_pass_rates(tasks: tuple[TaskSpec, ...], rates: Mapping[str, EvalLiteRate]) -> None:
     if not {task.id for task in tasks} <= rates.keys():
         raise ValueError("Pass-rate evidence must cover every selected panel task")
-    for task in tasks:
-        if rates[task.id].task_digest != canonical_sha256(task.model_dump(mode="json")):
-            raise ValueError(f"Pass-rate evidence measures different task content: {task.id}")
-
-
-def _fast_subset(recipe: EvalLiteRecipe, selected: list[tuple[TaskSpec, EvalLiteSource]]) -> tuple[TaskSpec, ...]:
-    """The seeded per-family fast quotas, in full-panel order."""
-    if recipe.fast_counts.keys() != {part.family for _, part in selected}:
-        raise ValueError("Fast-panel quotas must cover every selected family")
-    return _stratified_sample(
-        tuple(task for task, _ in selected),
-        {task.id: part.family for task, part in selected},
-        recipe.fast_counts,
-        recipe.seed,
-    )
 
 
 def select_eval_lite(
@@ -658,11 +694,12 @@ def select_eval_lite(
     sources: Mapping[str, Iterator[TaskSpec]],
     excluded: Iterator[TaskSpec],
     rates: Mapping[str, EvalLiteRate],
+    retained: Iterator[TaskSpec],
 ) -> EvalLiteSelection:
     """Select canonical tasks from source iterators, assigning duplicates to the first source."""
     excluded_keys = {key for task in excluded for key in _panel_keys(task).exclusion}
     selected: list[tuple[TaskSpec, EvalLiteSource]] = []
-    taken: set[tuple[str, str]] = set()
+    taken = {key for task in retained for key in _panel_keys(task).exact}
     audit: dict[str, Counter[str]] = {}
 
     def candidates(part: EvalLiteSource, counts: Counter[str]) -> Iterator[TaskSpec]:
@@ -694,48 +731,161 @@ def select_eval_lite(
         counts.update(eligible=eligible, selected=len(tasks))
         audit[part.source_id] = counts
     selected.sort(key=lambda entry: entry[0].id)
-    if recipe.pass_rates is not None:
+    if recipe.pass_rates is not None and recipe.parent is None:
         _check_pass_rates(tuple(task for task, _ in selected), rates)
-    return EvalLiteSelection(tuple(selected), _fast_subset(recipe, selected), audit)
+    return EvalLiteSelection(tuple(selected), audit)
+
+
+def _joint_subset(rows: Mapping[str, SelectionTaskRow], quotas: Mapping[str, int], seed: int) -> set[str]:
+    if quotas.keys() != {row.family for row in rows.values()}:
+        raise ValueError("Fast-panel quotas must cover every selected family")
+    selected = set()
+    for family, quota in quotas.items():
+        cells = {}
+        for row in rows.values():
+            if row.family == family and row.state != MembershipState.RETIRED:
+                cells.setdefault((row.source, row.topic, row.difficulty), []).append(row.task_id)
+        total = sum(map(len, cells.values()))
+        if total < quota:
+            raise ValueError(f"EvalLite active family shortfall: {family}: requested {quota}, eligible {total}")
+        counts = {cell: quota * len(ids) // total for cell, ids in cells.items()}
+        remainder = quota - sum(counts.values())
+        order = sorted(
+            cells, key=lambda cell: (-(quota * len(cells[cell]) % total), seeded_order(json.dumps(cell), seed))
+        )
+        for cell in order[:remainder]:
+            counts[cell] += 1
+        for cell, ids in cells.items():
+            selected.update(sorted(ids, key=lambda task_id: seeded_order(task_id, seed))[: counts[cell]])
+    return selected
 
 
 def prepare_eval_lite(config: EvalLiteConfig) -> None:
-    """Read pinned sources and publish the selected full panel, fast subset, manifest and audit summary."""
+    """Publish a retained task pool and a stratified active membership with reference evidence."""
     recipe = config.recipe
     rates = _eval_lite_measurements(recipe.pass_rates)
-    selection = select_eval_lite(
-        recipe,
-        {name: _panel_source_tasks(source, {}) for name, source in config.sources.items()},
-        (task for source in (*recipe.training, recipe.development) for task in _panel_source_tasks(source, {})),
-        rates,
+    raw_tasks, rows = {}, {}
+    reference_revisions = set()
+    if recipe.parent is not None:
+        parent = read_selection_manifest(recipe.parent.root)
+        if parent is None or (parent.definition.name, parent.definition.version) != (
+            recipe.parent.name,
+            recipe.parent.version,
+        ):
+            raise ValueError("EvalLite parent identity differs from its stored selection")
+        reference_revisions.update(parent.definition.reference_revisions)
+        for value in _parquet_rows(StoragePath(recipe.parent.root) / FULL_VALIDATION_FILENAME, TASK_SPEC_COLUMN):
+            raw = value[TASK_SPEC_COLUMN]
+            task = TaskSpec.model_validate_json(raw)
+            raw_tasks[task.id] = raw
+            rows[task.id] = parent.tasks[task.id].model_copy(
+                update={"task_digest": canonical_sha256(json.loads(raw)), "agentic": "agentic" in task.tags}
+            )
+    selection = (
+        select_eval_lite(
+            recipe,
+            {part.source_id: _panel_source_tasks(config.sources[part.source_id], {}) for part in recipe.sources},
+            (task for source in (*recipe.training, recipe.development) for task in _panel_source_tasks(source, {})),
+            rates,
+            (TaskSpec.model_validate_json(raw) for raw in raw_tasks.values()),
+        )
+        if recipe.sources
+        else EvalLiteSelection((), {})
     )
-    manifest = (
-        {
-            "task_id": task.id,
-            "family": part.family,
-            "aaii_category": part.aaii_category,
-            "agentic": "agentic" in task.tags,
-            "grader_kind": _grader_kind(task),
-            "part": part.source_id.lower().replace(":", "-"),
-            "source": task.source.model_dump_json(),
-            "license": part.license,
-            "difficulty": 1 - rates[task.id].mean_score if rates else None,
-        }
-        for task, part in selection.tasks
+    for task, part in selection.tasks:
+        row = _selection_row(
+            task,
+            TaskStrata(
+                family=part.family, aai_category=part.aaii_category, source=task.source.dataset, topic=part.topic
+            ),
+            state=MembershipState.CANDIDATE,
+        ).model_copy(update={"license": part.license})
+        if task.id in rows:
+            if rows[task.id].task_digest != row.task_digest:
+                raise ValueError(f"EvalLite task content changed across versions: {task.id}")
+            continue
+        raw_tasks[task.id], rows[task.id] = task.model_dump_json(), row
+    if recipe.pass_rates is not None:
+        reference_revisions.add(recipe.pass_rates.model_revision)
+    for task_id, row in rows.items():
+        references = list(row.references)
+        measurement = rates.get(task_id)
+        if measurement is not None:
+            if measurement.task_digest != row.task_digest:
+                raise ValueError(f"Pass-rate evidence measures different task content: {task_id}")
+            reference = ReferenceMeasurement(
+                task_digest=measurement.task_digest,
+                model_revision=measurement.model_revision,
+                attempted=measurement.attempted,
+                scored=measurement.samples,
+                passed=measurement.passed,
+                mean_score=measurement.mean_score,
+            )
+            if reference not in references:
+                references.append(reference)
+        saturated = bool(reference_revisions) and all(
+            bool(model_rows := [ref for ref in references if ref.model_revision == revision])
+            and all(
+                ref.attempted == ref.scored == PASS_RATE_ATTEMPTS and ref.mean_score in (0.0, 1.0) for ref in model_rows
+            )
+            and len({ref.mean_score for ref in model_rows}) == 1
+            for revision in reference_revisions
+        )
+        measured = 1 - measurement.mean_score if measurement is not None else row.measured_difficulty
+        rows[task_id] = row.model_copy(
+            update={
+                "references": references,
+                "measured_difficulty": measured,
+                "difficulty": (
+                    recipe.difficulty_bands.tag(1 - measured if measured is not None else None)
+                    if recipe.difficulty_bands is not None
+                    else row.difficulty
+                ),
+                "state": (
+                    MembershipState.RETIRED
+                    if saturated or row.state == MembershipState.RETIRED
+                    else MembershipState.CANDIDATE
+                ),
+                "retirement_reason": (
+                    "saturated for every declared reference model" if saturated else row.retirement_reason
+                ),
+            }
+        )
+    active = _joint_subset(rows, recipe.fast_counts, recipe.seed)
+    for task_id in active:
+        rows[task_id] = rows[task_id].model_copy(update={"state": MembershipState.ACTIVE})
+    definition = SelectionDefinition(
+        name=recipe.name,
+        version=recipe.version,
+        parent=recipe.parent,
+        family_quotas=recipe.fast_counts,
+        sampling=(
+            "proportional joint source/topic/difficulty cells within fixed family quotas; "
+            "largest remainders; seeded ties and task order"
+        ),
+        difficulty_bands=recipe.difficulty_bands,
+        reference_revisions=tuple(sorted(reference_revisions)),
     )
     with TemporaryDirectory(prefix="eval-lite-") as temporary:
         directory = Path(temporary)
-        full = (task for task, _ in selection.tasks)
-        write_parquet_file(task_records(full), str(directory / FULL_VALIDATION_FILENAME), schema=TASK_SCHEMA)
-        write_parquet_file(task_records(iter(selection.fast)), str(directory / VALIDATION_FILENAME), schema=TASK_SCHEMA)
-        write_parquet_file(manifest, str(directory / TASK_MANIFEST_FILENAME), schema=EVAL_LITE_MANIFEST_SCHEMA)
+        for filename, ids in ((FULL_VALIDATION_FILENAME, sorted(raw_tasks)), (VALIDATION_FILENAME, sorted(active))):
+            write_parquet_file(
+                ({TASK_SPEC_COLUMN: raw_tasks[task_id], **rows[task_id].strata.model_dump()} for task_id in ids),
+                str(directory / filename),
+                schema=TASK_SCHEMA,
+            )
+        write_parquet_file(
+            (row.model_dump(mode="json") for _, row in sorted(rows.items())),
+            str(directory / TASK_MANIFEST_FILENAME),
+            schema=TASK_MANIFEST_SCHEMA,
+        )
         summary = {
+            "selection_strata": definition.model_dump(mode="json"),
             "recipe": recipe.model_dump(mode="json"),
-            "full_validation_rows": len(selection.tasks),
-            "validation_rows": len(selection.fast),
-            "family_counts": dict(Counter(part.family for _, part in selection.tasks)),
-            "category_counts": dict(Counter(part.aaii_category for _, part in selection.tasks)),
-            "source_counts": {part.source_id: dict(selection.counts[part.source_id]) for part in recipe.sources},
+            "source_counts": {key: dict(value) for key, value in selection.counts.items()},
+            "full_validation_rows": len(rows),
+            "validation_rows": len(active),
+            "validation_family_counts": dict(Counter(rows[task_id].family for task_id in active)),
         }
         _publish_selection(directory, config.output_path, (FULL_VALIDATION_FILENAME, VALIDATION_FILENAME), summary)
 
@@ -748,6 +898,13 @@ def eval_lite_step(curated: dict[str, ArtifactStep], recipe: EvalLiteRecipe) -> 
     inputs = {part.source_id: curated[part.source_id] for part in recipe.sources}
     excluded = (*recipe.training, recipe.development)
     exclusions = _pinned_inputs(f"{recipe.name}/exclude", excluded)
+    parent_step = (
+        None
+        if recipe.parent is None
+        else ArtifactStep.adopt(
+            f"{SELECTION_INPUT_PREFIX}/{recipe.name}/parent", recipe.parent.version, recipe.parent.root
+        )
+    )
     measurement = recipe.pass_rates
     measurement_step = (
         None
@@ -762,6 +919,11 @@ def eval_lite_step(curated: dict[str, ArtifactStep], recipe: EvalLiteRecipe) -> 
         update = {
             "training": tuple(training),
             "development": development,
+            "parent": (
+                recipe.parent.model_copy(update={"root": context.artifact_path(parent_step)})
+                if recipe.parent is not None and parent_step is not None
+                else None
+            ),
             "pass_rates": (
                 measurement.model_copy(update={"uri": context.artifact_path(measurement_step)})
                 if measurement is not None and measurement_step is not None
@@ -783,7 +945,12 @@ def eval_lite_step(curated: dict[str, ArtifactStep], recipe: EvalLiteRecipe) -> 
         name=f"{SELECTION_PREFIX}/{recipe.name}",
         version=recipe.version,
         artifact_type=Artifact,
-        deps=(*inputs.values(), *exclusions, *((measurement_step,) if measurement_step is not None else ())),
+        deps=(
+            *inputs.values(),
+            *exclusions,
+            *((measurement_step,) if measurement_step is not None else ()),
+            *((parent_step,) if parent_step is not None else ()),
+        ),
         run=prepare_eval_lite,
         build_config=build_config,
     )
