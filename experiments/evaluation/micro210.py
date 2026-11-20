@@ -7,6 +7,8 @@ import hashlib
 import json
 from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
+from enum import StrEnum
+from pathlib import Path
 
 import click
 import draccus
@@ -81,6 +83,28 @@ class Micro210ServingProfile:
     cuda_allocator_config: str
     nccl_env: dict[str, str]
     nccl_buffer_size_bytes: int
+    model_manifest_filename: str = MODEL_MANIFEST_FILENAME
+
+
+class ServingProfileName(StrEnum):
+    POLICY = "policy"
+    MOCHI_GB200 = "mochi-gb200-cw-us-east-08a"
+
+
+def registered_serving_profile(name: ServingProfileName) -> Micro210ServingProfile | None:
+    """Select a reviewed serving binding; the default uses the frozen policy."""
+    if name is ServingProfileName.POLICY:
+        return None
+    profiles = yaml.safe_load(Path(__file__).with_name("micro210-serving-profiles.yaml").read_text())
+    profile = profiles[name.value]
+    execution = profile["execution"]
+    return Micro210ServingProfile(
+        **{
+            **profile,
+            "role_plan": draccus.decode(SkyRLRolePlan, profile["role_plan"]),
+            "execution": IrisSkyRLExecution(**{**execution, "required_env_vars": tuple(execution["required_env_vars"])}),
+        }
+    )
 
 
 def serving_config(frozen: dict, profile: Micro210ServingProfile) -> dict:
@@ -128,11 +152,10 @@ class Micro210Run:
 
 
 def judge_runtime_config(config: dict, judge: JudgeConfig) -> dict:
-    """Bind all runtime judge routes from the typed policy without changing other settings."""
+    """Bind the remote judge connection without changing installed-agent settings."""
     config = deepcopy(config)
     config["environment"]["task_sessions"]["remote_judge"].update(base_url=judge.base_url, api_key_env="JUDGE_API_KEY")
     config["extra_env"]["JUDGE_BASE_URL"] = judge.base_url
-    config["terminal_bench"]["installed_agent"]["judge_model"] = judge.model
     return config
 
 
@@ -187,7 +210,9 @@ def run_micro210(config: Micro210Run) -> SkyRLRun:
             data_relative_path=policy["evaluation"]["data_relative_path"],
             subset=config.subset,
         )
-    validate_before_allocation(config.skyrl.launch_config_yaml)
+    validate_before_allocation(
+        config.skyrl.launch_config_yaml, readable_uris=(config.evaluation.record().policy_reference.uri,)
+    )
     (StoragePath(config.evaluation.output_uri) / "canonical-evaluation.json").write_text(
         json.dumps(
             {
@@ -214,7 +239,13 @@ def run_micro210(config: Micro210Run) -> SkyRLRun:
 
 
 def micro210_step(
-    model: Micro210Model, *, name: str, version: str, subset: Micro210Subset | None = None, **overrides
+    model: Micro210Model,
+    *,
+    name: str,
+    version: str,
+    subset: Micro210Subset | None = None,
+    serving_profile: ServingProfileName = ServingProfileName.POLICY,
+    **overrides,
 ) -> ArtifactStep[SkyRLRun]:
     """Build the canonical evaluation graph; reject all policy override fields."""
     binding = micro210_evaluation(model, run_id=f"{name}@{version}", output_uri="<resolved-at-build>", **overrides)
@@ -222,11 +253,14 @@ def micro210_step(
     model_artifact = ArtifactStep.adopt(
         f"{name}/model", version, model.uri, kind=LevanterCheckpoint, config=asdict(model)
     )
+    profile = registered_serving_profile(serving_profile)
     return micro210_artifact_step(
         ArtifactHfModel(model_artifact, model.tokenizer_uri, model.tokenizer_revision, relative_path=""),
         name=name,
         version=version,
         model_binding=model,
+        serving_profile=profile,
+        model_manifest_filename=profile.model_manifest_filename if profile else MODEL_MANIFEST_FILENAME,
         subset=subset,
     )
 
@@ -340,6 +374,9 @@ def micro210_artifact_step(
 @click.option("--tokenizer-uri", required=True)
 @click.option("--tokenizer-revision", required=True)
 @click.option("--name", required=True)
+@click.option(
+    "--serving-profile", type=click.Choice([profile.value for profile in ServingProfileName]), default="policy"
+)
 @click.option("--benchmark", multiple=True, help="Evaluate only these benchmark rows from the frozen prepared inputs.")
 @rl_build_options
 def main(
@@ -349,6 +386,7 @@ def main(
     tokenizer_revision: str,
     name: str,
     benchmark: tuple[str, ...],
+    serving_profile: str,
 ) -> ArtifactStep:
     configure_coreweave_s3()
     model = Micro210Model(model_uri, MODEL_IDENTITY_PREFIX + model_manifest_sha256, tokenizer_uri, tokenizer_revision)
@@ -357,6 +395,7 @@ def main(
         name=name,
         version=resolve_version(name, None),
         subset=Micro210Subset(tuple(sorted(benchmark))) if benchmark else None,
+        serving_profile=ServingProfileName(serving_profile),
     )
 
 

@@ -5,30 +5,53 @@
 
 import hashlib
 import json
+import logging
 import os
 import subprocess
 import tempfile
+from contextlib import nullcontext
 from pathlib import Path
+from uuid import uuid4
 
 import yaml
+from fray.current_client import current_client
+from fray.iris_backend import FrayIrisClient
+from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
+from iris.cli.connect import open_iris_client
+from iris.cluster.client.job_info import get_job_info
 from marin.rl.skyrl import skyrl_cpu_command
+from rigging.config_discovery import find_project_root
 from rigging.filesystem.storage_path import StoragePath
+from rigging.secrets import SecretBehavior, get_secret
+from rigging.timing import Duration
 
 from experiments.post_training.long_loop.serving import serving_release
 
+logger = logging.getLogger(__name__)
 
-def validate_launch(document: str, directory: Path, *, model_config: bytes | None = None) -> dict:
+
+def validate_launch(
+    document: str, directory: Path, *, model_config: bytes | None = None, build_worker: bool = False
+) -> dict:
     directory.mkdir(parents=True, exist_ok=True)
     source = directory / "launch.yaml"
     source.write_text(document)
     compiled = directory / "compiled.yaml"
     command = skyrl_cpu_command(
-        "python", "-m", "experiments.post_training.long_loop.validate_launch", str(source), str(compiled)
+        "--group",
+        "harbor-test",
+        "python",
+        "-m",
+        "experiments.post_training.long_loop.validate_launch",
+        str(source),
+        str(compiled),
     )
     if model_config is not None:
         metadata = directory / "model-config.json"
         metadata.write_bytes(model_config)
         command.append(str(metadata))
+    if build_worker:
+        command.append("--build-worker")
     environment = dict(os.environ)
     for key in ("PYTHONPATH", "PYTHONHOME", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"):
         environment.pop(key, None)
@@ -42,9 +65,63 @@ def validate_launch(document: str, directory: Path, *, model_config: bytes | Non
     return receipt
 
 
-def validate_before_allocation(document: str) -> dict:
+def regional_preflight(document: str, readable_uris: tuple[str, ...]) -> None:
+    """Read evaluation dependencies and construct its worker in an isolated CPU task."""
+    launch = yaml.safe_load(document)
+    inputs = launch["inputs"]
+    for uri in (
+        *readable_uris,
+        *(str(StoragePath(item["uri"]) / item["relative_path"]) for item in inputs["validation_data"]),
+    ):
+        with StoragePath(uri).open("rb") as stream:
+            stream.read(1)
+    with tempfile.TemporaryDirectory(prefix="long-loop-regional-preflight-") as directory:
+        validate_launch(document, Path(directory), build_worker=True)
+
+
+def validate_before_allocation(document: str, *, readable_uris: tuple[str, ...] = ()) -> dict:
+    """Gate every long-loop evaluation on regional CPU admission before GPU allocation."""
     with tempfile.TemporaryDirectory(prefix="long-loop-validation-") as directory:
-        return validate_launch(document, Path(directory))
+        validation = validate_launch(document, Path(directory))
+    launch = yaml.safe_load(document)
+    sessions = launch["skyrl"]["environment"]["task_sessions"]
+    names = {"CW_KEY_ID", "CW_KEY_SECRET", "HF_TOKEN", "DAYTONA_TARGET"}
+    for settings in (
+        sessions.get("remote_judge") or {},
+        sessions.get("daytona") or {},
+        launch["skyrl"]["terminal_bench"].get("harbor", {}),
+    ):
+        names.update(value for key, value in settings.items() if key.endswith("api_key_env") and value is not None)
+    secrets = {name: value for name in names if (value := get_secret(name)) is not None}
+    iris = launch["iris"]
+    nested = get_job_info() is not None
+    request = JobRequest(
+        name=f"long-loop-eval-preflight-{uuid4().hex[:8]}",
+        entrypoint=Entrypoint.from_callable(regional_preflight, args=(document, readable_uris)),
+        resources=ResourceConfig.with_cpu(
+            cpu=4,
+            ram="16GB",
+            disk="64GB",
+            target_cluster=None if nested else iris["target_cluster"],
+            container_profile=iris.get("container_profile"),
+        ),
+        environment=create_environment(extras=["cpu"], secrets=secrets, secret_behavior=SecretBehavior.ISOLATE),
+        timeout=Duration.from_minutes(30),
+    )
+    context = (
+        nullcontext(None)
+        if nested
+        else open_iris_client(
+            config_file=Path(iris["parent_cluster_config"] or iris["cluster_config"]), workspace=find_project_root()
+        )
+    )
+    with context as iris_client:
+        client = current_client() if nested else FrayIrisClient.from_iris_client(iris_client)
+        handle = client.submit(request)
+        logger.info("Waiting for regional evaluation CPU preflight %s", handle.job_id)
+        handle.wait(raise_on_failure=True)
+    validation["regional_preflight_job_id"] = handle.job_id
+    return validation
 
 
 def _vllm_cpu_environment() -> dict[str, str]:

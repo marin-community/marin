@@ -3,18 +3,27 @@
 
 import hashlib
 import json
+import sys
+from contextlib import nullcontext
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
 import yaml
+from iris.client.client import IrisClient
+from iris.resources.state import JobState
 from marin.execution.artifact import read_record
 from marin.execution.lazy import ArtifactStep, StepContext, lower, run
 from rigging.filesystem.storage_path import StoragePath
+from rigging.secrets import SecretBehavior
+from tokenizers import Tokenizer, models
+from transformers import PreTrainedTokenizerFast
 
 from experiments.evaluation.judge_config import MICRO210_JUDGE
-from experiments.evaluation.micro210 import micro210_step, run_micro210, validate_judge_availability
+from experiments.evaluation.micro210 import ServingProfileName, micro210_step, run_micro210, validate_judge_availability
 from experiments.evaluation.micro210_policy import (
     POLICY_VERSION,
     Micro210Model,
@@ -169,6 +178,14 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
             deps=step.deps,
         )
     )
+    # Iris is the external admission boundary; this test does not allocate workers.
+    iris_client = MagicMock(spec=IrisClient)
+    iris_client.submit.return_value.job_id = "regional-preflight"
+    iris_client.submit.return_value.state_only.return_value = JobState.SUCCEEDED
+    monkeypatch.setattr(
+        "experiments.post_training.long_loop.launch_validation.open_iris_client",
+        lambda **kwargs: nullcontext(iris_client),
+    )
     submitted = []
 
     def submit_evaluation(skyrl, *, env_vars):
@@ -197,7 +214,16 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     )
     assert "eval_override_storage_mb" not in submitted[0]["skyrl"]["terminal_bench"]["harbor"]
     assert submitted[0]["skyrl"]["generator"]["trajectory_retention"]["run_id"] == "test/micro210@2026.11.18"
+    environment = iris_client.submit.call_args.kwargs["environment"]
+    assert environment.secret_behavior is SecretBehavior.ISOLATE
+    assert environment.secrets["JUDGE_API_KEY"] == "test-together-key"
+    assert not any(name.startswith("GOOGLE_") for name in environment.env_vars | environment.secrets)
     submitted.clear()
+    iris_client.submit.return_value.wait.side_effect = RuntimeError("regional input unreadable")
+    with pytest.raises(RuntimeError, match="regional input unreadable"):
+        run_micro210(config)
+    assert submitted == []
+    iris_client.submit.return_value.wait.side_effect = None
     monkeypatch.setattr(
         "experiments.evaluation.micro210.httpx.get",
         lambda url, **kwargs: httpx.Response(503, request=httpx.Request("GET", url)),
@@ -222,9 +248,10 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     assert submitted == []
 
 
-def test_canonical_evaluation_graph_lowers_with_its_final_run_binding():
+@pytest.mark.parametrize("profile", list(ServingProfileName))
+def test_canonical_evaluation_graph_lowers_with_its_final_run_binding(profile):
     model = Micro210Model("s3://fixture/export", "sha256:" + "a" * 64, "fixture/tokenizer", "b" * 40)
-    step = micro210_step(model, name="fixture/final-eval", version="2026.11.18.72")
+    step = micro210_step(model, name="fixture/final-eval", version="2026.11.18.72", serving_profile=profile)
     plan = lower(step)
     assert "fixture/final-eval@2026.11.18.72" in plan.fingerprint_payload
 
@@ -273,3 +300,61 @@ def test_api_judge_availability_rejects_unreachable_or_missing_model(monkeypatch
             validate_judge_availability(MICRO210_JUDGE, "fixture-key")
         return
     validate_judge_availability(MICRO210_JUDGE, "fixture-key")
+
+
+@pytest.mark.timeout(180)
+@pytest.mark.parametrize("profile", list(ServingProfileName))
+@pytest.mark.skipif(sys.platform == "darwin", reason="The frozen policy builds Linux bubblewrap task factories")
+def test_together_policy_builds_real_rollout_worker_without_inference_engines(tmp_path, monkeypatch, profile):
+    # The production evaluator and installed-agent blocks are frozen verbatim;
+    # only the model/tokenizer handle is replaced with a small offline fixture.
+    path = Path(__file__).with_name("fixtures") / "micro210-together-runtime.json"
+    raw = path.read_bytes()
+    monkeypatch.setattr(
+        "experiments.evaluation.micro210_policy.POLICY_REFERENCE",
+        replace(policy_fixture_reference(), uri=str(path), sha256=hashlib.sha256(raw).hexdigest(), byte_size=len(raw)),
+    )
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=Tokenizer(models.WordLevel({"<unk>": 0, "<eos>": 1}, unk_token="<unk>")),
+        eos_token="<eos>",
+    )
+    tokenizer.save_pretrained(tmp_path / "tokenizer")
+    monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
+    monkeypatch.setenv("JUDGE_API_KEY", "offline-judge")
+    monkeypatch.setenv("DAYTONA_EVAL_API_KEY", "offline-daytona")
+    step = micro210_step(
+        Micro210Model("s3://fixture/model", "sha256:" + "a" * 64, str(tmp_path / "tokenizer"), "b" * 40),
+        name="fixture/together-worker",
+        version="2026.11.20",
+        serving_profile=profile,
+    )
+    context = StepContext.for_run(
+        str(tmp_path / "output"), str(tmp_path), runtime_args=step.runtime_args, deps=step.deps
+    )
+    run = step.build_config(replace(context, is_fingerprint=True))
+    report = validate_launch(run.skyrl.launch_config_yaml, tmp_path / "preflight", build_worker=True)
+    # Construction is the startup contract: the regression previously failed
+    # here on the unsupported installed_agent.judge_model field, before any trial.
+    assert report["rollout_worker"] == {
+        "worker_type": "TaskRolloutWorker",
+        "installed_agent": True,
+        "judge_base_url": "https://api.together.xyz/v1",
+        "inference_engines": 0,
+    }
+
+
+@pytest.mark.timeout(120)
+def test_injected_judge_field_is_rejected_before_worker_allocation(tmp_path, monkeypatch):
+    monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
+    step = micro210_step(
+        Micro210Model("s3://fixture/model", "sha256:" + "a" * 64, "fixture/tokenizer", "b" * 40),
+        name="fixture/unsupported-judge",
+        version="2026.11.20",
+    )
+    context = StepContext.for_run(
+        str(tmp_path / "output"), str(tmp_path), runtime_args=step.runtime_args, deps=step.deps
+    )
+    launch = yaml.safe_load(step.build_config(replace(context, is_fingerprint=True)).skyrl.launch_config_yaml)
+    launch["skyrl"]["terminal_bench"]["installed_agent"]["judge_model"] = "zai-org/GLM-5.3-Flash"
+    with pytest.raises(ValueError, match="judge_model"):
+        validate_launch(yaml.safe_dump(launch), tmp_path / "preflight")

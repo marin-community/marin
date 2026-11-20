@@ -124,3 +124,13 @@ def test_selected_context_subprocess_is_independent_of_marin_installation(tmp_pa
     assert evidence["vllm_commit"] == release["source"]["fork_commit"]
     assert evidence["vllm_version"] == expected_version
     assert evidence["accepted"] and evidence["max_model_len"] == 65536
+
+
+def test_regional_preflight_rejects_unreadable_prepared_inputs(tmp_path):
+    policy = tmp_path / "policy.json"
+    policy.write_text("{}")
+    document = yaml.safe_dump(
+        {"inputs": {"validation_data": [{"uri": str(tmp_path / "unreadable"), "relative_path": "rollouts.parquet"}]}}
+    )
+    with pytest.raises(FileNotFoundError):
+        launch_validation.regional_preflight(document, (str(policy),))

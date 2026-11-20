@@ -795,22 +795,33 @@ binds each pool to an NVLink domain. Keep the same context, sampling, task
 selection and judge pins when comparing two policies. The result has no RL
 checkpoint or synthetic training-completion marker.
 
-### Mochi Micro210 evaluation admission
+### Mochi Micro210 evaluation
 
-Both adopted Mochi evaluation rounds declare their three IB transport variables and
-4-MiB NCCL buffer explicitly. The historical 256-KiB serving qualification
-predates the NVLSTree corruption finding in #11649. Compilation and PIECEWISE
-CUDA graphs remain enabled. Exact CPU preflight checks each local model role's
-TP × PP × DP rank count against its physical GPU allocation. API judge
-credentials and live model availability are checked before rollout allocation.
-Staged Mochi exports explicitly select `runai_streamer` with their RunAI loader
-buffer and concurrency options. CPU preflight rejects those options with an
-automatic loader.
+Launch Mochi evaluations through `experiments.evaluation.micro210` with the
+`--model-uri`, `--model-manifest-sha256`, `--tokenizer-uri`,
+`--tokenizer-revision` and
+`--serving-profile mochi-gb200-cw-us-east-08a`. This registered profile selects
+`export-manifest.json`, GB200 DP16/EP16 placement in CW08, the RunAI loader,
+InfiniBand transport and a 4-MiB NCCL buffer. Compilation and PIECEWISE CUDA
+graphs stay enabled. Omitting the profile keeps the frozen H100 allocation
+used by other Micro210 runs. The policy is `2026.11.20-together`; the tokenizer
+is `marin-community/marin-tokenizer-tools` at
+`3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09`.
 
-The gate-2 base/SFT evaluations using the earlier frozen MiniMax policy are
-preserved at `benfeuer/mochi-micro210-gate2-frozen` (commit `da0663fbea`). That
-source includes the self-hosted TP8 judge receipt and terminal checks; current
-rounds use the versioned API judge policy.
+The standard Micro210 entrypoint and long-loop evaluation stages run the shared
+preflight before allocating GPUs.
+An isolated CPU task in the run's cluster checks policy and prepared-input
+readability with only explicitly forwarded S3, tokenizer and task credentials,
+then constructs and closes the real rollout worker without inference engines.
+S3 and tokenizer credentials come from the submitting process’s named secret
+files or environment. The launcher resolves the policy’s versioned judge
+credential as described in [Micro210 judge policy](../../evaluation/README.md#micro210-judge-policy).
+Installed-agent settings are validated against the runtime schema; the judge
+connection remains in `environment.task_sessions.remote_judge`.
+
+The base/SFT evaluation source using the earlier frozen MiniMax policy remains
+on Git branch `benfeuer/mochi-micro210-gate2-frozen` (commit `da0663fbea`).
+Current evaluations use the versioned Together API judge policy.
 
 ### Fresh Exp3 RL after the Socket failure
 

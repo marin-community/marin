@@ -3,8 +3,11 @@
 
 """Compose a production launch document in SkyRL's frozen CPU environment."""
 
+import argparse
+import asyncio
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -15,17 +18,50 @@ from cloud.iris.runtime_environment import IRIS_TASK_IMAGE
 from omegaconf import OmegaConf
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
+from rigging.secrets import get_secret
 from skyrl_train import objective  # noqa: F401 - populate the runtime policy-loss registry
 from skyrl_train.models.grug_context_parallel import grug_cp_communication, validate_cp_attention
 from skyrl_train.models.grug_moe import GrugMoeConfig, grug_long_layer_flags
+from skyrl_train.rollouts.agent_runtime import InstalledAgentSettings
+from skyrl_train.rollouts.task_worker import TaskRolloutWorkerSpec
+from skyrl_train.rollouts.workers import WorkerShard
+from skyrl_train.tokenizer import tokenizer_from_config
 from skyrl_train.trajectory_runners.harbor.configuration import HarborConfigBuilder
 from skyrl_train.utils.utils import validate_cfg, validate_generator_cfg
 
 
-def main(source: Path, destination: Path, model_config: Path | None = None) -> None:
+async def validate_rollout_worker(config) -> dict:
+    """Build and close the production worker without starting inference engines."""
+    sessions = config.environment.task_sessions
+    for settings in (
+        sessions.get("remote_judge") or {},
+        sessions.get("daytona") or {},
+        config.terminal_bench_config.get("harbor", {}),
+    ):
+        for key, name in settings.items():
+            if key.endswith("api_key_env") and name is not None and (value := get_secret(name)) is not None:
+                os.environ[name] = value
+    worker = TaskRolloutWorkerSpec.from_config(config, [], harbor_config=config.terminal_bench_config).build(
+        tokenizer_from_config(config), WorkerShard(0, 1)
+    )
+    try:
+        return {
+            "worker_type": type(worker).__name__,
+            "installed_agent": worker.installed_agents is not None,
+            "judge_base_url": None if worker.judge_connection is None else worker.judge_connection.base_url,
+            "inference_engines": 0,
+        }
+    finally:
+        await worker.shutdown()
+
+
+def main(source: Path, destination: Path, model_config: Path | None = None, *, build_worker: bool = False) -> None:
     project = Path(__file__).resolve().parents[3] / "vendor/skyrl"
     config = load_launch_config(source)
     HarborConfigBuilder(config.skyrl.terminal_bench_config)
+    installed = config.skyrl.terminal_bench_config.get("installed_agent")
+    if installed is not None:
+        InstalledAgentSettings.model_validate(OmegaConf.to_container(installed, resolve=True))
     if config.runtime.entrypoint in {
         RL_ENTRYPOINTS[RLEntrypoint.GENERATE],
         RL_ENTRYPOINTS[RLEntrypoint.TERMINAL_BENCH_GENERATE],
@@ -85,12 +121,14 @@ def main(source: Path, destination: Path, model_config: Path | None = None) -> N
         engine = config.skyrl.generator.engine_init_kwargs
         if not engine.get("enable_auto_tool_choice") or not engine.get("tool_call_parser"):
             raise ValueError("Installed-agent tool requests require automatic tool choice and a tool parser")
+    worker = asyncio.run(validate_rollout_worker(config.skyrl)) if build_worker else None
     compiled = OmegaConf.to_yaml(config, resolve=True)
     destination.write_text(compiled)
     print(
         json.dumps(
             {
                 "task_image": IRIS_TASK_IMAGE,
+                "rollout_worker": worker,
                 "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
                 "compiled_sha256": hashlib.sha256(compiled.encode()).hexdigest(),
                 "validator": "load_launch_config + skyrl_train.utils.utils.validate_cfg",
@@ -107,4 +145,10 @@ def main(source: Path, destination: Path, model_config: Path | None = None) -> N
 
 
 if __name__ == "__main__":
-    main(Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]) if len(sys.argv) == 4 else None)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("source", type=Path)
+    parser.add_argument("destination", type=Path)
+    parser.add_argument("model_config", type=Path, nargs="?")
+    parser.add_argument("--build-worker", action="store_true")
+    args = parser.parse_args()
+    main(args.source, args.destination, args.model_config, build_worker=args.build_worker)
