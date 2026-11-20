@@ -9,6 +9,7 @@ item, numbers and coordinates with the symbolic math comparator, and other answe
 
 import json
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.answers import answer_task, source_defect, unsupported
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
 from taskcompendium.models import TaskSpec
@@ -79,11 +80,12 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id=f"TaskTrove:{PUZZLES_CONFIG}",
                 upstream_dataset=PUZZLES_CONFIG,
                 upstream_name=PUZZLES_CONFIG,
                 subset=None,
-                build_path="TaskTrove",
+                build_path="Task Trove",
                 origin=SourceOrigin.TASKTROVE,
                 family="math-answer",
                 tags=("agentic", "multi-turn"),

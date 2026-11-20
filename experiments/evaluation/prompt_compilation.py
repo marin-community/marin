@@ -68,6 +68,7 @@ def evaluation_source(
     """
     return RlDataSource(
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             origin=SourceOrigin.EVALCHEMY,
             upstream_dataset=name,
             upstream_name=name,

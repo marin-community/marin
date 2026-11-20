@@ -5,6 +5,7 @@
 
 from functools import partial
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.evaluation.spec import (
     CohortOrder,
     CohortPolicy,
@@ -69,6 +70,7 @@ THINKING = Sampling(
 def longbench_source(protocol_name: str, sampling: Sampling, seed: int | None) -> RlDataSource[EvaluationCorpusRecipe]:
     return RlDataSource(
         info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
             origin=SourceOrigin.LM_EVAL,
             upstream_dataset="LongBench-v2",
             upstream_name="LongBench-v2",

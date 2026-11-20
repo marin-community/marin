@@ -293,11 +293,12 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
                 id=f"TaskTrove:{MCQA_CONFIG}",
                 upstream_dataset=MCQA_CONFIG,
                 upstream_name=MCQA_CONFIG,
                 subset=None,
-                build_path="TaskTrove",
+                build_path="Task Trove",
                 origin=SourceOrigin.TASKTROVE,
                 family="qa-short-answer",
                 tags=("agentic", "multi-turn"),
