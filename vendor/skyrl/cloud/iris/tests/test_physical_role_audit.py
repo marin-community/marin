@@ -62,8 +62,6 @@ def test_policy_and_inference_replicas_cover_distinct_physical_racks():
     }
 
 
-
-
 @pytest.mark.parametrize("wrong_layout", ["split_policy", "overlapping_roles", "duplicate_gpu", "wrong_label"])
 def test_same_gpu_counts_reject_unsafe_physical_role_placement(wrong_layout):
     topology, nodes = three_rack_nodes()
@@ -108,7 +106,6 @@ def test_head_join_gate_writes_only_a_verified_physical_report(tmp_path, monkeyp
             cluster_resources=lambda: {"GPU": 192},
         ),
     )
-    monkeypatch.setenv("IRIS_OUTPUT_DIR", str(tmp_path))
 
     def join():
         task_runtime.wait_for_nodes("fixture", 48, 1, role_topology=topology, gpus_per_node=GPUS_PER_NODE, report_directory=tmp_path)
