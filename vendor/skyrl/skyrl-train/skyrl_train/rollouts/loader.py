@@ -162,7 +162,6 @@ class PromptLoader:
         self._dataset = dataset
         self._families = dict(families or {})
         self._family_minimums = dict(family_minimums or {})
-        self._family_sizes = collections.Counter(self._families.values())
         self._order = order
         self._family_rows: dict[str, list[int]] = collections.defaultdict(list)
         for uid in sorted(self._families, key=self._uid_rows.__getitem__):
@@ -257,7 +256,7 @@ class PromptLoader:
         family = self._families.get(uid)
         if family is not None and family in self._family_minimums:
             minimum = self._family_minimums[family]
-            usable = self._family_sizes[family] - sum(self._families.get(uid) == family for uid in self._quarantined)
+            usable = len(self._family_rows[family]) - sum(self._families.get(uid) == family for uid in self._quarantined)
             scope = f" in family {family!r}"
         else:
             minimum = self._batch_size

@@ -128,6 +128,10 @@ def test_family_prompt_passes_cover_each_pool_and_resume():
     assert draws(restored, "math", 89) == remaining_math
     assert draws(restored, "agentic", 3) == remaining_agentic
 
+    draws(original, "agentic", 1)
+    restored.load_state_dict(original.state_dict())
+    assert draws(restored, "agentic", 3) == draws(original, "agentic", 3)
+
 
 def test_quarantine_keeps_one_batch_of_prompts():
     # Every prompt fails, as in a sandbox outage: only the one spare prompt may leave the rotation.

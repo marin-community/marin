@@ -208,7 +208,7 @@ each training batch. Each Parquet training row supplies its `family`. The counts
 Each family needs its group count times `max_staleness_steps + 1` usable rows so that every batch in
 the rollout window can use distinct prompts. A rejected group releases a slot in its own family.
 Each family draws prompts from its own seeded passes. Checkpoints retain the position in each
-family’s order. Fixed family counts and curriculum sampling are separate launch modes.
+family’s order. Omit the family counts to use the configured prompt order, including curriculum sampling.
 
 ## Artifact and runtime boundaries
 
