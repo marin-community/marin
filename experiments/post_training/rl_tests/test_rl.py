@@ -570,6 +570,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
         },
         "train-long-harbor": {
             "2026.11.20.6": "76baa3fb",
+            "2026.11.20.7": "d1aacec3",
         },
         "eval-short": {
             "2026.11.19.1": "8144570a",
