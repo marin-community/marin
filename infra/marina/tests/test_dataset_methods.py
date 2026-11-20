@@ -24,6 +24,8 @@ def test_method_tags_union_variant_receipts_and_leave_parent_unchanged():
     assert parent.tags == frozenset({"rl"})
     assert projection["method_variants"][1]["input"]["variant_id"] == "sft-v1"
     assert variant_projection(DECLARATION, None)["method_tags"] == ["rl"]
+    with pytest.raises(ValueError, match="belong to their source"):
+        variant_projection({**DECLARATION, "id": "Fixture:other"}, [child.model_dump(mode="json")])
 
 
 @pytest.mark.parametrize("defect", ["missing_receipt", "wrong_content", "wrong_variant", "wrong_task_specs"])

@@ -13,7 +13,16 @@ from finestore.rl.curation import ContentEvidenceReference as SftEvidenceReferen
 from finestore.schema import SHA256_PATTERN
 
 Sha256 = Annotated[str, Field(pattern=SHA256_PATTERN)]
-REQUIRED_SFT_EVAL_FAMILIES = frozenset({"aa", "lm_eval", "uncheatable", "atlas_references"})
+
+
+class SftEvalFamily(StrEnum):
+    AA = "aa"
+    LM_EVAL = "lm_eval"
+    UNCHEATABLE = "uncheatable"
+    ATLAS_REFERENCES = "atlas_references"
+
+
+REQUIRED_SFT_EVAL_FAMILIES = frozenset(SftEvalFamily)
 
 
 class SftRecord(BaseModel):
@@ -50,7 +59,7 @@ class SftPreparationReceipt(SftRecord):
     registry_source: str = Field(min_length=1)
     implementation_sha256: Sha256
     stages: dict[SftStage, SftEvidenceReference]
-    eval_manifests: dict[str, SftEvidenceReference]
+    eval_manifests: dict[SftEvalFamily, SftEvidenceReference]
     eval_policy_sha256: Sha256
     output_manifest: SftEvidenceReference
     tokenizer: SftEvidenceReference

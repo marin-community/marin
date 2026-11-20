@@ -3,8 +3,11 @@
 
 """Behavior tests for the private-data restriction tier's shared helpers and publish guards."""
 
+import hashlib
 import json
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from finestore.rl.status_taxonomy import DataRestriction
 
@@ -20,6 +23,7 @@ from experiments.post_training.task_curation.raw_source_publish import publish_r
 from experiments.post_training.task_curation.remediation_publish import ReleasePlan
 from experiments.post_training.task_curation.source import SourceInfo, SourceOrigin
 from experiments.post_training.task_curation.tests.license_fixtures import fixture_license
+from experiments.post_training.task_curation.tests.prebuilt_fixtures import prebuilt_task
 from infra.marina.apps.rl_data_catalog.server import restriction_registry
 from infra.marina.apps.rl_data_catalog.server.restrictions import (
     PRIVATE_TEXT_MARKER,
@@ -365,7 +369,10 @@ def test_publish_helper_refuses_a_private_payload_before_any_upload(tmp_path, mo
         ),
     )
     tasks = tmp_path / "tasks.parquet"
-    tasks.write_bytes(b"fixture tasks")
+    serialized = json.dumps(json.loads(prebuilt_task("public-control")["lowered_task_spec"])["task"])
+    pq.write_table(
+        pa.table({"task_spec": [serialized], "task_sha256": [hashlib.sha256(serialized.encode()).hexdigest()]}), tasks
+    )
     private_card = tmp_path / "README.md"
     private_card.write_text(f"card quoting {PRIVATE_CANARY}")
 

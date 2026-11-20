@@ -89,7 +89,7 @@ uv run python -m infra.marina.apps.rl_data_catalog.prepare_preview \
 
 uv run python -m infra.marina.apps.rl_data_catalog.release_check \
   --dist "$PACKAGE" --source-counts "$COUNTS" --oracle-inventory "$INVENTORY" \
-  --production-version "$PRODUCTION_HOLD" --receipt "$ARTIFACTS/preflight.json"
+  --production-version "$PRODUCTION_HOLD" --expected-mode public --receipt "$ARTIFACTS/preflight.json"
 ```
 
 `--dist` takes the package directory containing `applet.toml`, not its `dist/`
@@ -150,7 +150,7 @@ uv run marina release "$PACKAGE" --base-version "$BASE_VERSION" --allow-dirty \
 
 uv run python -m infra.marina.apps.rl_data_catalog.release_check \
   --revision "$REVISION" --baseline "$ARTIFACTS/preflight.json" \
-  --production-version "$PRODUCTION_HOLD" --receipt "$ARTIFACTS/hosted.json"
+  --production-version "$PRODUCTION_HOLD" --expected-mode public --receipt "$ARTIFACTS/hosted.json"
 ```
 
 Set `REVISION` from `release.json`'s `version`; its `url` is the immutable URL and
@@ -235,7 +235,7 @@ same clean landed cut and successful version-2 preflight baseline:
 ```bash
 uv run python -m infra.marina.apps.rl_data_catalog.release_check \
   --revision "$REVISION" --baseline "$ARTIFACTS/preflight.json" \
-  --production-version "$PRODUCTION_HOLD" --full-browser-sweep \
+  --production-version "$PRODUCTION_HOLD" --expected-mode public --full-browser-sweep \
   --receipt "$ARTIFACTS/nightly-full.json"
 ```
 

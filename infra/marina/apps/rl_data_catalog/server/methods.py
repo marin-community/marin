@@ -9,12 +9,14 @@ from typing import Any, Literal, Self
 from finestore.sft import DatasetVariantInput, SftEvidenceReference, SftPreparationReceipt, SftRecord, Sha256
 from pydantic import Field, model_validator
 
+from .source_identity import canonical_source_id
+
 
 class VariantIdentity(SftRecord):
     source_id: str = Field(min_length=1)
     variant_id: str = Field(min_length=1)
-    repository: str = Field(min_length=1)
-    revision: str = Field(min_length=1)
+    repository: str | None = Field(default=None, min_length=1)
+    revision: str | None = Field(default=None, min_length=1)
     data_sha256: Sha256 | None = None
     task_specs_sha256: Sha256 | None = None
 
@@ -54,8 +56,8 @@ def rl_variant(declaration: dict[str, Any]) -> DatasetVariant:
         input=VariantIdentity(
             source_id=declaration["id"],
             variant_id="rl-environment",
-            repository=census.get("dataset_id") or declaration["dataset_id"],
-            revision=census.get("dataset_revision") or declaration["dataset_revision"],
+            repository=census.get("dataset_id") or declaration.get("dataset_id"),
+            revision=census.get("dataset_revision") or declaration.get("dataset_revision"),
             task_specs_sha256=census.get("task_specs_sha256"),
         ),
         tags=frozenset({"rl"}),
@@ -67,7 +69,9 @@ def variant_projection(declaration: dict[str, Any], records: list[dict] | None) 
         [DatasetVariant.model_validate(value) for value in records] if records is not None else [rl_variant(declaration)]
     )
     ids = [variant.input.variant_id for variant in variants]
-    if len(ids) != len(set(ids)) or any(variant.input.source_id != declaration["id"] for variant in variants):
+    if len(ids) != len(set(ids)) or any(
+        canonical_source_id(variant.input.source_id) != canonical_source_id(declaration["id"]) for variant in variants
+    ):
         raise ValueError("Dataset variants must have unique IDs and belong to their source")
     return {
         "method_tags": sorted({tag for variant in variants for tag in variant.tags}),

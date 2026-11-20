@@ -177,7 +177,7 @@ function sourceRow(row, others, canonical) {
     const method = node('td', value(row, 'method'), 'method-cell');
     const quality = node('td'); quality.append(qualityChip(row.quality, row.id, '', row.quality_explanation));
     if (row.quality_review_status) quality.firstElementChild.title = [quality.firstElementChild.title, row.quality_review_status].filter(Boolean).join('. ');
-    const result = node('td'), key = resultKey(row);
+    const result = node('td', undefined, 'result-cell'), key = resultKey(row);
     const provisional = row.result && row.result_provisional;
     const badge = node('span', resultLabels[key] + (provisional ? ' · provisional' : ''), `chip quality-${resultClasses[key]}${provisional ? ' result-provisional' : ''}`);
     result.append(badge);

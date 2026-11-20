@@ -22,11 +22,13 @@ from sqlalchemy import text
 from experiments.post_training.task_curation.tests.admission_fixtures import with_declaration_admission_census
 from infra.marina.apps.rl_data_catalog.server.app import migrate
 from infra.marina.apps.rl_data_catalog.server.evidence_content import pack_content
+from infra.marina.apps.rl_data_catalog.server.methods import rl_variant
 from infra.marina.apps.rl_data_catalog.server.quality import review_completeness
 from infra.marina.apps.rl_data_catalog.tests.backend_fixtures import backend_source_maps
 from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations
 from infra.marina.apps.rl_data_catalog.tests.difficulty_fixtures import difficulty_measurement
 from infra.marina.apps.rl_data_catalog.tests.filtration_fixtures import count_evidence, filtered_declaration
+from infra.marina.apps.rl_data_catalog.tests.method_fixtures import sft_variant
 from infra.marina.apps.rl_data_catalog.tests.review_fixtures import pending_review_declaration, review_declarations
 
 APP_ID = UUID("fb11c931-5861-4878-8bb5-a964d652b45f")
@@ -537,6 +539,27 @@ def readability_catalog(lexical_catalog: None, marina_database: DatabaseSpec) ->
     """Include frozen review packets and an archive in the readability walk."""
     engine = engine_for(marina_database, applet_schema(APP_ID))
     with engine.begin() as connection:
+        method_row = (
+            connection.execute(
+                text(
+                    "SELECT declaration,method_variants FROM atlas_sources WHERE load_id='lexical' AND id='Marin:clean'"
+                )
+            )
+            .mappings()
+            .one()
+        )
+        prior_variants = method_row["method_variants"]
+        variants = [
+            rl_variant(method_row["declaration"]).model_dump(mode="json"),
+            sft_variant("Marin:clean").model_dump(mode="json"),
+        ]
+        connection.execute(
+            text(
+                "UPDATE atlas_sources SET method_variants=CAST(:variants AS jsonb) "
+                "WHERE load_id='lexical' AND id='Marin:clean'"
+            ),
+            {"variants": json.dumps(variants)},
+        )
         connection.execute(
             text("UPDATE atlas_sources SET assessment_key='readability' WHERE load_id='lexical' AND id='Marin:clean'")
         )
@@ -595,6 +618,13 @@ def readability_catalog(lexical_catalog: None, marina_database: DatabaseSpec) ->
         yield
     finally:
         with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE atlas_sources SET method_variants=CAST(:variants AS jsonb) "
+                    "WHERE load_id='lexical' AND id='Marin:clean'"
+                ),
+                {"variants": json.dumps(prior_variants) if prior_variants is not None else None},
+            )
             connection.execute(
                 text("UPDATE atlas_sources SET assessment_key=NULL WHERE load_id='lexical' AND id='Marin:clean'")
             )

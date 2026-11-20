@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 from marina.journeys import Journey
 from playwright.sync_api import expect
 
@@ -9,8 +10,11 @@ from infra.marina.apps.rl_data_catalog.tests.method_fixtures import sft_variant
 APP_ROOT = "a/fb11c931-5861-4878-8bb5-a964d652b45f"
 
 
-def test_method_filter_and_variant_receipt_evidence(journey: Journey):
+@pytest.mark.parametrize("theme,width", [("light", 1440), ("dark", 1440), ("light", 390), ("dark", 390)])
+def test_method_filter_and_variant_receipt_evidence(journey: Journey, theme: str, width: int):
     page = journey.page
+    page.emulate_media(color_scheme=theme)
+    page.set_viewport_size({"width": width, "height": 1000})
     child = sft_variant("Marin:clean").model_dump(mode="json")
 
     def inventory(route):
@@ -41,4 +45,4 @@ def test_method_filter_and_variant_receipt_evidence(journey: Journey):
     variant = page.locator(".assessment-card").filter(has=page.get_by_text("Dataset variant: sft-v1", exact=True))
     expect(variant).to_contain_text("SFT")
     expect(variant.get_by_role("link", name="Open in Filer ↗", exact=True)).to_have_count(2)
-    page.screenshot(path=str(journey.shots / "method-variant-evidence.png"))
+    page.screenshot(path=str(journey.shots / f"method-variant-evidence-{theme}-{width}.png"))

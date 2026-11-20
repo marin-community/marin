@@ -2740,6 +2740,7 @@ def test_frozen_catalog_projects_measured_math_folds_and_directional_notes(catal
                         {
                             "id": source["id"],
                             "declaration": declaration,
+                            "method_variants": None,
                             "duplicate_group": stored,
                         }
                     ),
@@ -2891,6 +2892,7 @@ def test_overlap_refresh_binds_frozen_inputs_and_preserves_legacy_reviews(catalo
                         {
                             "id": source["id"],
                             "declaration": declaration,
+                            "method_variants": None,
                             "source_fingerprint": fingerprint.model_dump(mode="json"),
                         }
                     ),
@@ -2924,6 +2926,7 @@ def test_overlap_refresh_binds_frozen_inputs_and_preserves_legacy_reviews(catalo
                 "patch": json.dumps(
                     {
                         "id": "Marin:empty",
+                        "method_variants": None,
                         "declaration": {
                             **template["declaration"],
                             "id": "Marin:empty",

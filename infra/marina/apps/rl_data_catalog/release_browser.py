@@ -265,6 +265,7 @@ def evidence_cases(sources: list[dict[str, Any]], pending_ids: set[str] | None =
             row["daytona"]["state"],
             bool(row["daytona"].get("exempt")),
             row["intended_use"],
+            tuple(sorted(row.get("method_tags", []))),
             (row["backend_capabilities"] or {}).get("basis"),
             bool(row.get("quality_result_waiver")),
             bool(row.get("quality_review_status")),
