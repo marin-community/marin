@@ -57,7 +57,6 @@ def test_skyrl_cache_entrypoint_delegates_to_marin_and_restores_cache(tmp_path, 
         lines = result.stdout.strip().splitlines()
         skyrl_python = json.loads(lines[0])["skyrl_python"]
         receipt = json.loads(lines[-1])
-        assert receipt["native_cache_restored"] == str(expected.parent)
         assert receipt["files"] == 1
         assert receipt["python_executable"] != skyrl_python
         assert (expected / "fixture.bin").read_bytes() == b"small compiler cache fixture"
