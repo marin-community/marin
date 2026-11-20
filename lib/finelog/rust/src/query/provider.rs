@@ -402,16 +402,15 @@ impl NamespaceProvider {
 
     /// A pruning predicate over the segments' integer bounds, or `None` when
     /// `filters` cannot rule out any segment.
-    ///
-    /// Only conjuncts that read Int64 columns alone reach DataFusion. Its
-    /// rewrite of a prefix `LIKE` compares the column's bounds with `Utf8`
-    /// literals, which fails to evaluate against this schema's `Utf8View`
-    /// columns, and no string column has integer bounds to prune by.
+    /// A conjunct that reads any other column type never prunes here.
     fn int_bounds_predicate(
         &self,
         state: &dyn Session,
         filters: &[Expr],
     ) -> DFResult<Option<PruningPredicate>> {
+        // DataFusion rewrites a prefix `LIKE` into comparisons of the column's
+        // bounds with `Utf8` literals, which fail to evaluate against this
+        // schema's `Utf8View` columns.
         let reads_only_int64_columns = |conjunct: &&Expr| {
             conjunct.column_refs().into_iter().all(|column| {
                 self.schema
