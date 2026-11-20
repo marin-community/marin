@@ -14,6 +14,7 @@ from marin.datakit.chat_normalize import normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.nanoswe_lightning import (
     SOURCE_CHAT_SCHEMA,
+    SOURCE_ID,
     SOURCE_NAME,
     SPLIT_GLOBS,
     Split,
@@ -25,7 +26,6 @@ from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from rigging.log_setup import configure_logging
 
-HF_DATASET_ID = "nanoswe/nanoswe-trajs-261002"
 HF_REVISION = "64d22ccf2cf5c7693e19f329e5d56d2ea34e1cad"
 # v2: no outcome tag, JSON tool-call arguments, harness tool definitions, rows without a task id or grade dropped.
 TRANSFORM_VERSION = "v2"
@@ -34,7 +34,7 @@ TRANSFORM_VERSION = "v2"
 def download_step() -> StepSpec:
     return download_hf_step(
         "raw/nanoswe-trajs-261002",
-        hf_dataset_id=HF_DATASET_ID,
+        hf_dataset_id=SOURCE_ID,
         revision=HF_REVISION,
         hf_urls_glob=[SPLIT_GLOBS[Split.TRAIN], SPLIT_GLOBS[Split.VALIDATION]],
     )
