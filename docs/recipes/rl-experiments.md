@@ -16,6 +16,7 @@ The short loop, also called the quick loop, uses gated presets to compare one ch
 |---|---|---|---|---|
 | `speed-short` | Generation throughput per GPU | 8 H100s, 512 prompts × four answers, 14–17 min and about 2 H100-hours | Separate pass on the EvalLite pool. Gated on throughput and EvalLite pool family mean. | Screen a vLLM wheel, kernel or engine option before testing the full training loop with `speed-medium`. |
 | `data-short` | Fraction of prompts with both passing and failing answers | 8 H100s, 256 candidate training prompts × four answers, 10–15 min and about 2 H100-hours | Scores the sampled candidate tasks. Gated on mixed-answer fraction. | Screen a new `--tasks` selection before training on it with `data-medium`. |
+| `eval-short` | Published model scores | 8 H100s. The recorded run used 1.1 H100-hours. | Scores the full EvalLite pool without a control comparison. | Evaluate a published checkpoint in a generation-only job. |
 | `speed-medium` | Update time and policy agreement | 40 H100s, 10 updates. Wall time and cost are unmeasured. | Training metrics on updates 2–10. Gated on speed and mismatch. | Check startup, trainer kernels, parallelism, weight synchronization or numerics. Use `learning-medium` to measure quality after a precision change. |
 | `learning-medium` | EvalLite pool family mean and score gain per GPU-hour | 40 H100s, 25 updates. Wall time and cost are unmeasured. | EvalLite pool at steps 0 and 25. Gated on EvalLite pool family mean. | Compare objectives, optimizers, sampling, batch shape or initial weights. |
 | `data-medium` | Learning on a candidate training selection | 40 H100s, 25 updates. Wall time and cost are unmeasured. | EvalLite pool at steps 0 and 25. Shares the `learning-medium` gate and controls. | Train on a `--tasks` selection after it passes the short screen. |
@@ -24,10 +25,12 @@ The short loop, also called the quick loop, uses gated presets to compare one ch
 ### Long loop
 
 The long loop uses ungated training to build a model and retain its best eligible checkpoint.
+Use `train-long` for EvalLite or `train-long-harbor` to add the Harbor cohorts.
 
 | Preset | What it measures | Default work and estimated cost | Evaluation and gate | When to use it |
 |---|---|---|---|---|
 | `train-long` | Full training and checkpoint quality | 40 H100s, 100 updates by default, hours to days. Check the plan and use the reported GPU-hours for cost. | EvalLite active set of 100 tasks at step 0 and every 10 updates. Evaluation coverage invariants, without a calibrated control comparison. | Train a release candidate with checkpoint recovery and durable HF export. |
+| `train-long-harbor` | Full training with agentic checkpoint evaluation | 40 H100s, 100 updates by default, hours to days plus Harbor sandbox costs. | EvalLite plus 90 Harbor trials at each checkpoint evaluation. Coverage invariants without a calibrated control comparison. | Qualify current training weights on BFCL, SWE-bench Verified and OpenThoughts-TBLite. Requires the [Daytona evaluation account and sandbox capacity](#harbor-evaluation). |
 
 ## The loop
 
@@ -37,7 +40,7 @@ The long loop uses ungated training to build a model and retain its best eligibl
 3. [Run a preset](#which-experiment-to-run): use `data-short` then `data-medium` with
    `--tasks NAME@VERSION`, or choose the preset for the change.
 4. Read the [verdict](#compare-with-controls) for a gated run. For `learning-medium`,
-   `data-medium` and `train-long`, open the dashboard row in `rl_progress_url`.
+   `data-medium`, `train-long` and `train-long-harbor`, open the dashboard row in `rl_progress_url`.
 
 ## Run a preset
 
@@ -65,7 +68,7 @@ interface. Each preset's steps use its own `revision`.
   If tracking is undecided, ask whether to open a new issue, use an existing one, or run without an issue.
   Open a new issue only with the experimenter's explicit approval. The native attempt records the issue when supplied.
 - **Resume.** Repeat the original `--run --wait` invocation from the same source and inputs.
-  The executor reuses successful artifacts. When training resumes, `train-long` loads its
+  The executor reuses successful artifacts. When training resumes, either train-long preset loads its
   latest retained checkpoint and records the new attempt and parent checkpoint.
 
 Submission without `--wait` returns 0 when accepted. A terminal invocation returns 0 for PASS
@@ -100,7 +103,7 @@ The dashboard's detail view shows each evaluation step's counts and strata means
 family, AAII category and difficulty, and links to the run's Grafana window.
 
 After `--run --wait` observes the coordinator finish, the launcher publishes learning-medium,
-data-medium and train-long attempts using the caller's Marina login. The row shows the model and
+data-medium, train-long and train-long-harbor attempts using the caller's Marina login. The row shows the model and
 the issue link when the launch supplied a number. Record the finishing status's `rl_progress_url` with the verdict.
 Use `--marina-url ORIGIN` to publish to a local Marina stack; the default is the Marina service.
 
@@ -145,10 +148,10 @@ and record the complete frozen EvalLite in their recipe's `exclusions`. The buil
 Create an immutable candidate through [task curation](../references/task-curation.md#final-task-selection).
 Selections with AI-judged tasks are refused before submission.
 
-`--init NAME@VERSION` on `learning-medium` or `train-long` starts from a published initializer
+`--init NAME@VERSION` on `learning-medium` or either train-long preset starts from a published initializer
 or a retained RL HF export. The selected initializer supplies both weights and its tokenizer.
 Training recovery uses the run's native checkpoint lineage. Learning-medium, data-medium and
-train-long publish the checkpoint with the best eligible evaluation score. If step zero wins,
+both train-long presets export the checkpoint with the best eligible evaluation score. If step zero wins,
 the terminal receipt points to the initializer's HF checkpoint. A trained winner is converted to
 HF under `exports/global_step_<N>/policy`. If no evaluation is eligible, the native attempt completes
 with its recovery checkpoint and no HF export. The status shows `none eligible` and the evaluation
@@ -286,6 +289,34 @@ The dashboards are available through the [RL Grafana dashboard](https://grafana.
 [Marina RL progress](https://applets.marina.oa.dev/a/6c971887-1e22-45b1-9dcb-dd775829df57/) and
 [EvalDash](https://marina.oa.dev/evaldash/).
 
+## Harbor evaluation
+
+A Harbor cohort is a pinned sample of tasks from one benchmark. `train-long-harbor`
+evaluates cohorts of 30 tasks each from BFCL, SWE-bench Verified and OpenThoughts-TBLite.
+Set `DAYTONA_EVAL_API_KEY` and
+`DAYTONA_TARGET` for the evaluation account before submitting. Each cohort can run 30
+Daytona sandboxes at once, up to 90 across all three cohorts. Each sandbox builds the pinned
+task environment in declarative mode. The runner enables the HTTP endpoint that Harbor uses
+to evaluate the current training weights.
+
+A checkpoint is eligible when it scores at least 99% of the EvalLite active set and 90% of each Harbor cohort.
+`eval/all` pools native and Harbor rewards. Per-cohort metrics use `eval/harbor/<cohort>/`, and
+`eval/harbor/wall_seconds` measures the complete Harbor callback. The agents use the engine's
+serving window as their total context limit, with the reply cap inside it. SWE-bench uses
+the pinned harness's 3,000-second verifier timeout. OpenThoughts-TBLite uses each pinned
+verifier's timeout, capped at 3,600 seconds. A trial can retry once after phase cancellation
+or a Daytona sandbox setup, command transport or cleanup error. The retry list includes
+`TmuxExecTimeoutError`, `DaytonaOutputUnavailable` and `MachineTerminated`. A failed trial
+with unconfirmed teardown can retry even after verification. The selected attempt must
+have confirmed teardown for the archive to seal.
+
+This retry policy uses revision `2026.11.20.6` with fingerprint `76baa3fb`. The earlier
+revision `2026.11.20.5` has fingerprint `e1f1635a`.
+
+Trial artifacts are under `exports/inline_harbor/`. A Harbor error stops training. Repeat the same
+command to resume from the latest retained checkpoint. The separate
+[offline evaluation launcher](../explanations/evaluation.md) evaluates an exported model.
+
 ## What a run writes
 
 The status block names the run's artifact output and native job. Submission prints an open-ended
@@ -366,3 +397,38 @@ names only. A layout's coordinator deadline can be changed with `dataclasses.rep
 A control can omit a configuration key when its current value equals the native SkyRL schema
 default. An omitted key whose current value differs from that default makes the control stale.
 Candidate receipts must match their recorded inputs exactly.
+
+## Evaluate and publish a checkpoint
+
+Use `experiments.post_training.skyrl_evaluation.evaluate_model` to score a model in a separate evaluation
+job. Pass a `SkyRLPolicyModel` for an exported RL policy or an `ArtifactHfModel` for an SFT export,
+a serving `ModelConfig` with `location=""`, evaluation definitions, a version, and the accelerator
+and cluster settings.
+The artifact supplies the model URI, identity, and tokenizer. The serving config supplies the engine
+and generation settings.
+
+`resolve_evaluations` accepts registered suites such as `standard-local` or comma-separated evaluation
+names such as `mmlu-smoke,gsm8k-smoke`. The result gives the evaluation group ID, per-evaluation run IDs,
+records prefix, and result paths. Each run writes a record and an archive with per-question results.
+An RL policy record includes `rl_attempt` when both the training run ID and attempt ID are available.
+
+Use Snowball's `eval-short` to score published weights with the same EvalLite protocol as the
+trainer, in a generation-only job. Use trainer evaluation to track policy scores at the run's
+scheduled training steps. `eval-short` runs the full EvalLite pool on one node with eight H100s.
+A recorded run used 1.1 H100-hours.
+
+```bash
+uv run python -m experiments.post_training.snowball_rl \
+  --preset eval-short --init "$MODEL" --version dev --plan
+```
+
+Set `MODEL` to a published `NAME@VERSION`. Replace `--plan` with `--run` to submit.
+
+To publish a checkpoint export, enable export and set `trainer.hf_hub_repo_id` in the training recipe.
+Gated Snowball presets fix that setting. For a manual checkpoint export use `--hf-hub-repo-id` on
+`cloud.iris.export_hf_checkpoint`. A repository ID enables publication. New repositories are public by
+default. Select private visibility with `trainer.hf_hub_private: true` or `--hf-hub-private` on a manual
+export. The uploader rejects an existing repository with different visibility. It uploads
+`.marinskyrl-model-manifest.json` and the files it lists, then checks each file's size and SHA-256 at
+the upload commit. With `hf_upload_mode: all`, the step archive receives the same checks as the
+repository root.
