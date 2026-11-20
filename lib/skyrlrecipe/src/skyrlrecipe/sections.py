@@ -10,7 +10,7 @@ from typing import Annotated, Literal
 from pydantic import Field, NonNegativeInt, PositiveInt
 
 from .declared import Callback, CorrectionRule, LoggingBackend, Teacher, TeacherRouting
-from .model import NumberMap, OpenMap, Section, SectionMap, field, unset_field
+from .model import CountMap, NumberMap, OpenMap, Section, SectionMap, field, unset_field
 from .sampling import EvalSamplingParams
 
 
@@ -458,6 +458,7 @@ class RolloutBuffer(Section):
     """Directory, usually an S3 prefix, that holds each trainable group as its own object; a checkpoint then records
     URIs instead of copying groups. Nothing deletes the objects, so use an expiring prefix. null keeps payloads
     only in Ray's object store."""
+    groups_per_family: CountMap = unset_field()
 
 
 class TeacherScoring(Section):
@@ -657,6 +658,7 @@ class SpeculativeDecoding(Section):
 
 
 class SamplingParams(Section):
+    ignore_eos: bool = field(False)
     repetition_penalty: int | float = field(1.0)
     temperature: int | float = field(1.0)
     top_p: int | float = field(1.0)

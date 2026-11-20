@@ -75,6 +75,7 @@ def runtime_config(
         source_limit=settings.source_limit,
         seed=settings.seed,
         judge=settings.judge,
+        task_evidence=settings.task_evidence,
         limits=RolloutLimits(
             max_turns=1,
             max_total_tokens=None,

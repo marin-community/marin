@@ -5,24 +5,32 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
+from datetime import datetime, timezone
 
 import numpy as np
 import pytest
 import yaml
+from finestore.rl.run_records import read_attempt
+from rigging.filesystem.storage_path import StoragePath
 from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
 from iris.cluster.types import JobName
 from omegaconf import OmegaConf
 from safetensors.numpy import save
 
-from cloud.iris import hf_model_cache, task_runtime
+from cloud.iris import export_hf_checkpoint, hf_model_cache, task_runtime
 from cloud.iris.artifacts import CHECKPOINT_MARKER_FILENAME
 from cloud.iris.task_runtime import prepare_draft_model
 from marinskyrl.speculative_decoding import SpeculatorModelConfig
 from cloud.iris.hf_model_cache import HuggingFaceSnapshot, load_model_manifest
-from cloud.iris.launch import ExportedPolicy, LaunchOutcome, LaunchState, execute_launch
+from cloud.iris.launch import LaunchOutcome, LaunchState, execute_launch
 from cloud.iris.tests.launch_config_fixtures import raw_launch_config
 from cloud.iris.tests.model_snapshot_fixtures import memory_model_snapshot
-from marinskyrl.checkpoint_paths import policy_export_path
+from cloud.iris.iris_backend import supervise_iris_job
+from iris.resources.state import JobState
+from rigging.timing import Timestamp
+from marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME, HF_EXPORT_REQUEST_FILENAME, policy_export_path
+from skyrl_train.trainer import RayPPOTrainer
 
 
 @dataclass
@@ -48,6 +56,13 @@ class RecordingBackend:
 def _config_path(tmp_path: Path, *, submission: str = "wait") -> Path:
     config = raw_launch_config()
     config["run"]["submission"] = submission
+    config["artifacts"].update(
+        checkpoint_root=str(tmp_path / "checkpoints"),
+        export_root=str(tmp_path / "exports"),
+        attempts_root=str(tmp_path / "attempts"),
+        resolved_config_uri=str(tmp_path / "resolved.yaml"),
+        terminal_manifest_uri=str(tmp_path / "terminal.json"),
+    )
     config["inputs"]["train_data"] = [
         {
             "uri": "s3://data/gsm8k",
@@ -62,9 +77,8 @@ def _config_path(tmp_path: Path, *, submission: str = "wait") -> Path:
     return path
 
 
-def test_prepare_validates_without_submitting(tmp_path: Path, monkeypatch) -> None:
+def test_prepare_validates_without_submitting(tmp_path: Path) -> None:
     backend = RecordingBackend()
-    monkeypatch.setattr("cloud.iris.launch.StoragePath.exists", lambda _path: False)
 
     result = execute_launch(_config_path(tmp_path, submission="prepare"), backend=backend)
 
@@ -96,41 +110,8 @@ def test_existing_run_rejects_changed_starting_checkpoint(tmp_path, previous_ste
     assert resolved.read_text() == snapshot
 
 
-def test_wait_launches_exports_and_records_the_terminal_model(tmp_path: Path, monkeypatch) -> None:
+def test_detach_submits_without_exporting(tmp_path: Path) -> None:
     backend = RecordingBackend()
-    writes: list[tuple[str, dict]] = []
-    model = ExportedPolicy(
-        policy_export_uri="s3://runs/smoke/exports/global_step_8/policy",
-        global_step=8,
-        tokenizer_uri="tokenizer",
-        tokenizer_revision="revision",
-        checkpoint_root="s3://runs/smoke/checkpoints",
-        terminal_manifest_uri="s3://runs/smoke/terminal.json",
-    )
-    monkeypatch.setattr(
-        "cloud.iris.launch.StoragePath.exists",
-        lambda path: str(path).endswith("resolved.yaml"),
-    )
-    monkeypatch.setattr("cloud.iris.launch.StoragePath.read_text", lambda _path: "inputs: {}")
-    monkeypatch.setattr("cloud.iris.launch._exported_policy", lambda _config: model)
-    monkeypatch.setattr("cloud.iris.launch.write_json", lambda uri, payload: writes.append((uri, payload)))
-
-    result = execute_launch(_config_path(tmp_path), backend=backend)
-
-    assert result.state is LaunchState.SUCCEEDED
-    assert result.model == model
-    assert backend.launched and backend.exported
-    assert backend.launched_config is not None
-    assert backend.launched_config["inputs"]["train_data"][0]["kind"] == "directory"
-    assert [uri for uri, _ in writes] == [
-        "s3://runs/smoke/attempts/attempt-1.json",
-        "s3://runs/smoke/terminal.json",
-    ]
-
-
-def test_detach_submits_without_exporting(tmp_path: Path, monkeypatch) -> None:
-    backend = RecordingBackend()
-    monkeypatch.setattr("cloud.iris.launch.StoragePath.exists", lambda _path: False)
 
     result = execute_launch(_config_path(tmp_path, submission="detach"), backend=backend)
 
@@ -139,18 +120,18 @@ def test_detach_submits_without_exporting(tmp_path: Path, monkeypatch) -> None:
     assert not backend.exported
 
 
-def test_wait_does_not_commit_nonterminal_zero_exit_outcome(tmp_path: Path, monkeypatch) -> None:
+def test_wait_does_not_commit_nonterminal_zero_exit_outcome(tmp_path: Path) -> None:
     backend = RecordingBackend(outcome=LaunchOutcome("/user/still-running", "submitted", 0))
-    writes: list[tuple[str, dict]] = []
-    monkeypatch.setattr("cloud.iris.launch.StoragePath.exists", lambda _path: False)
-    monkeypatch.setattr("cloud.iris.launch.write_json", lambda uri, payload: writes.append((uri, payload)))
 
     result = execute_launch(_config_path(tmp_path), backend=backend)
 
     assert result.state is LaunchState.FAILED
     assert result.failure == "Iris job reached submitted"
     assert not backend.exported
-    assert [uri for uri, _ in writes] == ["s3://runs/smoke/attempts/attempt-1.json"]
+    record = read_attempt(str(tmp_path / "exports"), "attempt-1")
+    assert record is not None
+    assert record.native.result.model_dump(mode="json") == result.model_dump(mode="json")
+    assert not StoragePath(str(tmp_path / "terminal.json")).exists()
 
 
 @dataclass
@@ -158,6 +139,7 @@ class LocalLaunchBackend:
     """Iris I/O boundary with local resolved-config and export fixtures."""
 
     export_jobs: list[str] = field(default_factory=list)
+    outcome: LaunchOutcome = LaunchOutcome("/user/training", "succeeded", 0)
 
     def validate(self, _config_path: Path) -> None:
         raise AssertionError("this lifecycle test submits training")
@@ -171,7 +153,12 @@ class LocalLaunchBackend:
         checkpoint_root = Path(artifacts["checkpoint_root"])
         checkpoint_root.mkdir(parents=True)
         (checkpoint_root / CHECKPOINT_MARKER_FILENAME).write_text("3\n")
-        return LaunchOutcome("/user/training", "succeeded", 0)
+        status = SimpleNamespace(
+            state=JobState(self.outcome.job_state),
+            started_at=Timestamp.from_seconds(datetime(2026, 11, 7, 1, tzinfo=timezone.utc).timestamp()),
+            finished_at=Timestamp.from_seconds(datetime(2026, 11, 7, 2, tzinfo=timezone.utc).timestamp()),
+        )
+        return supervise_iris_job(SimpleNamespace(job_id=self.outcome.job_id, wait=lambda **_kwargs: status))
 
     def export_terminal_policy(self, config_path: Path) -> None:
         config = yaml.safe_load(config_path.read_text())
@@ -183,30 +170,48 @@ class LocalLaunchBackend:
             (root / name).write_text("{}")
 
 
-@pytest.mark.parametrize("export_hf", [None, True], ids=["default-native", "explicit-hf"])
-def test_completed_launch_defaults_to_native_result_and_exports_only_on_opt_in(tmp_path: Path, export_hf: bool | None):
+@pytest.mark.parametrize(
+    "export_hf,outcome,own_tokenizer",
+    [
+        (None, LaunchOutcome("/user/training", "succeeded", 0), False),
+        (True, LaunchOutcome("/user/training", "succeeded", 0), False),
+        (True, LaunchOutcome("/user/training", "succeeded", 0), True),
+        (None, LaunchOutcome("/user/training", "failed", 1), False),
+    ],
+    ids=["default-native", "explicit-hf", "embedded-tokenizer-hf", "failed-native"],
+)
+def test_launch_persists_attempt_result_and_exports_only_on_opt_in(
+    tmp_path: Path, export_hf: bool | None, outcome, own_tokenizer: bool
+):
     path = _config_path(tmp_path)
     config = yaml.safe_load(path.read_text())
     if export_hf is None:
         config["run"].pop("export_hf")
     else:
         config["run"]["export_hf"] = export_hf
+    if own_tokenizer:
+        config["inputs"]["model"].update(tokenizer_uri=None, tokenizer_revision=None)
     config["skyrl"]["trainer"].update(max_steps=3, eval_interval=3, ckpt_interval=3)
-    config["artifacts"] = {
-        "checkpoint_root": str(tmp_path / "checkpoints"),
-        "export_root": str(tmp_path / "exports"),
-        "attempts_root": str(tmp_path / "attempts"),
-        "resolved_config_uri": str(tmp_path / "resolved.yaml"),
-        "terminal_manifest_uri": str(tmp_path / "terminal.json"),
-    }
     path.write_text(yaml.safe_dump(config))
-    backend = LocalLaunchBackend()
+    backend = LocalLaunchBackend(outcome=outcome)
 
     result = execute_launch(path, backend=backend)
-
+    saved = read_attempt(str(tmp_path / "exports"), "attempt-1")
+    assert saved is not None
+    assert saved.iris_job_id == outcome.job_id
+    attempt = saved.native.model_dump(mode="json")
+    assert saved.native.result.started_at == "2026-11-07T01:00:00+00:00"
+    assert saved.native.result.finished_at == "2026-11-07T02:00:00+00:00"
+    assert not (tmp_path / "attempts").exists()
+    if outcome.exit_code:
+        assert result.state is LaunchState.FAILED
+        assert attempt["result"]["state"] == "failed"
+        assert attempt["result"]["failure"] == "Iris job reached failed"
+        assert not (tmp_path / "terminal.json").exists()
+        assert backend.export_jobs == []
+        return
     assert result.state is LaunchState.SUCCEEDED
     terminal = json.loads((tmp_path / "terminal.json").read_text())
-    attempt = json.loads((tmp_path / "attempts/attempt-1.json").read_text())
     assert terminal == attempt
     assert terminal["config"] == yaml.safe_load((tmp_path / "resolved.yaml").read_text())
     assert terminal["result"]["state"] == "succeeded"
@@ -214,10 +219,55 @@ def test_completed_launch_defaults_to_native_result_and_exports_only_on_opt_in(t
         assert backend.export_jobs == [str(tmp_path / "exports/global_step_3/policy")]
         assert result.model is not None and result.model.global_step == 3
         assert terminal["result"]["model"]["policy_export_uri"] == backend.export_jobs[0]
+        for key in ("tokenizer_uri", "tokenizer_revision"):
+            assert terminal["result"]["model"][key] == config["inputs"]["model"][key]
     else:
         assert backend.export_jobs == []
         assert result.model is None and terminal["result"]["model"] is None
         assert not (tmp_path / "exports/global_step_3").exists()
+
+
+@pytest.mark.parametrize("initializer_wins", [True, False], ids=["step-zero", "none-eligible"])
+def test_launch_publishes_the_selected_best_policy(tmp_path: Path, initializer_wins: bool):
+    path = _config_path(tmp_path)
+    config = yaml.safe_load(path.read_text())
+    initializer_uri = config["inputs"]["model"]["uri"]
+    config["skyrl"]["trainer"].update(max_steps=3, eval_interval=3, ckpt_interval=3, hf_export_checkpoint="best")
+    path.write_text(yaml.safe_dump(config))
+    checkpoint_root = tmp_path / "checkpoints"
+    checkpoint = checkpoint_root / "global_step_3"
+
+    class BestCheckpointBackend(LocalLaunchBackend):
+        def launch(self, config_path: Path) -> LaunchOutcome:
+            outcome = super().launch(config_path)
+            checkpoint.mkdir()
+            (checkpoint / "trainer_state.pt").write_bytes(b"complete")
+            if initializer_wins:
+                (checkpoint_root / BEST_CHECKPOINT_FILENAME).write_text(
+                    json.dumps({"step": 0, "model_format": "hf", "model_uri": initializer_uri})
+                )
+            trainer = RayPPOTrainer.__new__(RayPPOTrainer)
+            trainer.cfg = OmegaConf.load(config_path).skyrl
+            trainer.global_step = 3
+            trainer.all_timings = {}
+            trainer.handle_hf_export()
+            return outcome
+
+        def export_terminal_policy(self, config_path: Path) -> None:
+            export_hf_checkpoint.export_terminal_policy(config_path)
+
+    result = execute_launch(path, backend=BestCheckpointBackend())
+
+    assert result.state is LaunchState.SUCCEEDED, result.failure
+    terminal_model = json.loads((tmp_path / "terminal.json").read_text())["result"]["model"]
+    if initializer_wins:
+        assert result.model is not None and result.model.global_step == 0
+        assert (terminal_model["global_step"], terminal_model["policy_export_uri"]) == (0, initializer_uri)
+        assert terminal_model["tokenizer_uri"] == config["inputs"]["model"]["tokenizer_uri"]
+    else:
+        assert terminal_model is result.model is None
+    assert not list(checkpoint_root.glob(f"global_step_*/{HF_EXPORT_REQUEST_FILENAME}"))
+    assert not list((tmp_path / "exports").glob("global_step_*"))
 
 
 def _hub_config_path(tmp_path: Path, *, submission: str = "detach") -> Path:
@@ -352,7 +402,7 @@ def test_hub_models_are_not_downloaded_on_a_local_launcher(tmp_path, monkeypatch
         set_job_info(previous)
 
 
-@pytest.mark.parametrize("tokenizer_uri", ["org/policy", ""])
+@pytest.mark.parametrize("tokenizer_uri", ["org/policy", "", None])
 def test_policy_without_a_separate_tokenizer_rejects_model_only_mirrors(tmp_path, monkeypatch, tokenizer_uri):
     path = _hub_config_path(tmp_path)
     config = yaml.safe_load(path.read_text())

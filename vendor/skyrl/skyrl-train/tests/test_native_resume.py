@@ -21,7 +21,8 @@ from tests.cpu.tiny_training.cpu_backend import CPUStrategy
 class LocalPolicyGroup:
     """In-process policy RPC boundary backed by the real CPU save/load strategy."""
 
-    def __init__(self):
+    def __init__(self, config):
+        self.config = config
         self.strategy = CPUStrategy(max_grad_norm=1.0)
         self.model = torch.nn.Linear(1, 1, bias=False)
         self.model.weight.data.fill_(1.0)
@@ -42,7 +43,7 @@ class LocalPolicyGroup:
         checkpoint = root / f"global_step_{step}"
         self.strategy.save_checkpoint(self.model, str(checkpoint / "policy"), 0, self.optimizer, self.scheduler)
         torch.save(
-            {"global_step": step, "distillation_scored_tokens_total": step * 17},
+            {"config": self.config, "global_step": step, "distillation_scored_tokens_total": step * 17},
             checkpoint / TRAINER_STATE_FILENAME,
         )
         torch.save(
@@ -69,7 +70,7 @@ def trainer_factory(tmp_path, monkeypatch):
         trainer.cfg.trainer.reset_distillation_token_count_on_resume = reset
         trainer.resume_mode = ResumeMode(mode)
         trainer.colocate_all = True
-        trainer.policy_model = LocalPolicyGroup()
+        trainer.policy_model = LocalPolicyGroup(trainer.cfg)
         trainer._domain_balancer = None
         trainer._restored_rollout_state = None
         trainer.distillation_scored_tokens_total = 0

@@ -112,6 +112,23 @@ long, silent commands run has not been verified. Until that behavior is
 confirmed, set `--threshold` above the longest command timeout for those
 workloads.
 
+## Pi HTTP idle timeout
+
+Pi's HTTP idle timeout is separate from Harbor task and agent deadlines and
+provider execution deadlines. For a prepared policy that already selects Pi,
+pass the optional `http_idle_timeout` agent kwarg in seconds:
+
+```bash
+uv run --isolated --project vendor/harbor --frozen --extra runtime \
+  harbor run --config prepared-policy.yaml \
+  --agent-kwarg http_idle_timeout=360
+```
+
+Harbor writes Pi's existing `httpIdleTimeoutMs` setting in milliseconds and
+preserves other settings, including compaction. Omit the kwarg to keep the
+image's setting; the pinned Pi 0.87.0 defaults to five minutes. This override
+does not extend Harbor or provider execution deadlines.
+
 ## Snapshot preflight and reclamation
 
 Shellbox identifies snapshots for all launchers. One snapshot

@@ -134,6 +134,36 @@ This shape keeps validation mechanical. Adding a launch setting means adding one
 reading it where the behavior lives; it does not require adding matching CLI flags, argv builders, and
 forwarding tests at every process boundary.
 
+## Publish a checkpoint export
+
+The checkpoint-export GPU job stops after writing and verifying the object-store
+export. When its request includes `hf_hub_repo_id`, the launcher waits for that
+job to exit, then submits a CPU Iris job to upload through the existing Hub
+publisher. The CPU job targets the export's CoreWeave cluster or pins the GCS
+bucket's region on GCP. It reserves staging disk from the export manifest's file
+sizes and downloads up to four files at a time into Iris's disk-backed `/cache`
+mount. This bounds concurrent shard buffers and avoids Docker's memory-backed
+`/tmp`.
+Hub credentials and object-store credentials use Iris's inherited secret files.
+`hf_hub_private`, `hf_hub_revision`, and both `hf_upload_mode` values are preserved.
+
+A failed upload leaves `hf_export_request.json` pending. Rerun the same request:
+a verified object-store export skips GPU conversion and submits only CPU
+publication. A missing or corrupt export still requires conversion. For example,
+with the original checkpoint directory, resolved training configuration, and
+export placement in these variables:
+
+```bash
+uv run --directory vendor/skyrl --frozen --extra cpu --no-group dev \
+  python -m cloud.iris.export_hf_checkpoint \
+  --request "$CHECKPOINT_PATH" --launch-config "$LAUNCH_CONFIG" \
+  --cluster "$CLUSTER" --gpu-variant "$GPU_VARIANT"
+```
+
+Requests become complete only after all requested publication succeeds. Manual
+`--no-wait` exports remain available without a Hub destination; Hub publication
+requires waiting so the CPU job starts after the GPU allocation is released.
+
 ## SkyRL role plan
 
 `SkyRLRolePlan` is the source of truth for policy, rollout, and batch geometry. Every parallelism
@@ -202,12 +232,28 @@ parallelism. An omitted or null ETP inherits the role's TP before these checks.
 Context-parallel ranks participate in the expert grid, so EP need not divide dense
 data parallelism.
 
+Set `trainer.rollout_buffer.groups_per_family` for fixed numbers of prompt groups per task family in
+each training batch. Each Parquet training row supplies its `family`. The counts must sum to
+`trainer.train_batch_size`. Use `batch_policy: full_batch` and leave `data.sampling.kind` unset.
+Each family needs its group count times `max_staleness_steps + 1` usable rows so that every batch in
+the rollout window can use distinct prompts. A rejected group releases a slot in its own family.
+Each family draws prompts from its own seeded passes. Checkpoints retain the position in each
+family’s order. Omit the family counts to use the configured prompt order, including curriculum sampling.
+
 ## Artifact and runtime boundaries
 
 Identity-bearing inputs belong in `SkyRLSpec`: model and tokenizer,
 data artifacts, a starting native checkpoint, topology, seed, retention, and the rendered config. Cluster routing,
 host resources, priority, and retry policy belong in `IrisSkyRLExecution`; changing placement must
 not fork artifact identity.
+
+The `records` tracker requires a fresh attempt ID and `iris.max_retries=0`.
+Its Iris jobs also use zero preemption retries. After a preemption, start a fresh
+attempt with `trainer.resume_mode=from_path` and `trainer.resume_path` pointing
+to its saved `global_step_N` checkpoint. Known checkpoint ancestors contribute
+metrics through the resumed boundary; a checkpoint without recorded ancestry
+contributes only the new attempt's metrics. Other tracker backends retain Iris's
+ordinary preemption retry budget.
 
 `IrisSkyRLExecution.container_profile` accepts an `iris.rpc.job_pb2.ContainerProfile` enum for the
 coordinator and trainer jobs. Enum names are serialized at the launch boundary. It defaults to `None`,
@@ -339,7 +385,8 @@ For live submission, monitoring, or recovery, follow the `launch-rl` and `use-ir
 `lib/iris/OPS.md`. Do not restart a cluster or resubmit a failed run without explicit authority.
 
 For the current curation, training and evaluation recipe, see the
-[quick RL loop](../recipes/quick-rl-loop.md).
+[Snowball RL experiments](../recipes/rl-experiments.md) and the
+[selection handoff](task-curation.md#train-on-a-snowball-selection).
 
 ### NCCL SIMPLE buffers
 
