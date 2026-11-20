@@ -3,7 +3,7 @@
 import sys
 
 from skyrl_train.config.utils import get_default_config
-from skyrl_train.utils.utils import validate_cfg
+from skyrl_train.config.driver_validation import validate_cfg
 
 
 def test_flash_attention_config_validates_without_fa2(monkeypatch):

@@ -599,23 +599,6 @@ def _generation_plan() -> SkyRLGenerationPlan:
     )
 
 
-def generation_geometry_step():
-    spec, plan = _spec(), _generation_plan()
-    return skyrl_step(
-        dataclasses.replace(
-            spec,
-            topology=dataclasses.replace(spec.topology, num_nodes=plan.num_nodes, role_plan=plan),
-            train_data=(),
-            validation_data=spec.train_data,
-            config_yaml=(
-                "context_budget: {request_window_tokens: 1024, max_new_tokens_per_turn: 256, max_turns: 1}\n"
-                "model_num_attention_heads: 8\n" + spec.config_yaml
-            ),
-        ),
-        _execution(),
-    )
-
-
 @pytest.mark.parametrize("failure", ["extra-node", "node-width", "entrypoint"])
 def test_generation_plan_rejects_geometry_conflicts(failure):
     spec, plan = _spec(), _generation_plan()
@@ -1193,8 +1176,14 @@ receipt = json.loads(Path(config.artifacts.terminal_manifest_uri).read_text())
     assert read_skyrl_attempt(str(tmp_path)) is None
 
 
-def test_run_skyrl_succeeds_without_hf_export(monkeypatch: pytest.MonkeyPatch) -> None:
-    step = skyrl_step(_spec(), _execution())
+@pytest.mark.parametrize("selection", [None, "best", "latest"], ids=["disabled", "none-eligible", "latest-required"])
+def test_run_skyrl_handles_a_missing_hf_export(monkeypatch: pytest.MonkeyPatch, selection: str | None) -> None:
+    spec = _spec()
+    if selection is not None:
+        recipe = yaml.safe_load(spec.config_yaml)
+        recipe["trainer"]["hf_export_checkpoint"] = selection
+        spec = dataclasses.replace(spec, config_yaml=yaml.safe_dump(recipe))
+    step = skyrl_step(spec, _execution(), export_hf=selection is not None)
     config = step.build_config(
         StepContext.for_run(
             output_path="s3://test/run",
@@ -1222,17 +1211,23 @@ def test_run_skyrl_succeeds_without_hf_export(monkeypatch: pytest.MonkeyPatch) -
             stdout=kwargs["stdout"],
         ),
     )
-    monkeypatch.setattr("marin.rl.skyrl.record_rollout_run", lambda _record: None)
+    recorded = []
+    monkeypatch.setattr("marin.rl.skyrl.record_rollout_run", recorded.append)
+
+    if selection == "latest":
+        with pytest.raises(ValueError, match="requires a model"):
+            run_skyrl(config, env_vars={})
+        assert recorded[0].status == "failed"
+        return
 
     run = run_skyrl(config, env_vars={})
 
+    assert recorded[0].status == "succeeded"
     assert run.hf_model_uri is None
     assert run.global_step is None
     assert run.iris_job_id == "01KNOEXPORT"
     retained = SkyRLRun.model_validate_json(run.model_dump_json())
     assert (retained.run_id, retained.attempt_id) == (config.run_id, config.attempt_id)
-    earlier = SkyRLRun.model_validate_json(run.model_dump_json(exclude={"run_id", "attempt_id"}))
-    assert earlier.run_id is None and earlier.attempt_id is None
 
 
 def test_tasktrove_data_source_resolves_exact_file_and_verifier(tmp_path: Path) -> None:

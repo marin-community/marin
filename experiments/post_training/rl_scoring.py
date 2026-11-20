@@ -40,12 +40,12 @@ class EvalLiteVersionScore:
     digest_mismatches: tuple[str, ...]
 
 
-def _verified_score(answer: EvaluationAnswerRow) -> bool:
+def _has_verified_score(answer: EvaluationAnswerRow) -> bool:
     return answer.verification_status == "verified" and answer.verifier_score is not None
 
 
 def _scored_answer(answer: EvaluationAnswerRow) -> bool:
-    return _verified_score(answer) and not answer.error_type and not answer.error_treatment
+    return _has_verified_score(answer) and not answer.error_type and not answer.error_treatment
 
 
 def score_eval_lite_version(
@@ -93,7 +93,7 @@ def answer_table(evaluation_name: str, tasks: Sequence[EvaluationTaskRow]) -> pa
     for task, answer in sorted(
         ((row, value) for row in tasks for value in row.answers), key=lambda pair: (pair[0].step, pair[1].ordinal)
     ):
-        verified = _verified_score(answer)
+        verified = _has_verified_score(answer)
         rows.append(
             {
                 "evaluation": evaluation_name,
