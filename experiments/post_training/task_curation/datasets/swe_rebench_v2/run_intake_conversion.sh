@@ -11,7 +11,8 @@
 #   $4 = the source name (default: swe-rebench-v2-1-repaired)
 # Env:
 #   WORKDIR = the scratch directory (default /workspace)
-#   TARBALL_URI = the source tarball uri (default: the GitHub archive for $REVISION)
+#   TARBALL_URI = the source tarball uri (default: the GitHub archive for $REVISION; it must
+#     be an http(s) url — the tree does not exist when it downloads)
 set -euo pipefail
 set -x
 trap 'echo "INTAKE-CONVERSION FAILED: line $LINENO: $BASH_COMMAND" >&2' ERR
@@ -25,15 +26,18 @@ WORKDIR="${WORKDIR:-/workspace}"
 
 mkdir -p "$WORKDIR"
 cd "$WORKDIR"
-# The source tarball is staged through the object-storage stager (any uri: the GitHub archive
-# or a pre-uploaded revision tarball), listing-verified before extraction, and the extracted
-# tree is confirmed before running anything.
-uv run --frozen --with-editable ./lib/taskcompendium[pipeline] true 2>/dev/null || true
-python3 -m experiments.post_training.task_curation.datasets.swe_rebench_v2.stage_intake_inputs \
-  --uri "$TARBALL_URI" --output "$WORKDIR/marin-$REVISION.tar.gz" 2>/dev/null \
-  || uv run --frozen --with-editable ./lib/taskcompendium[pipeline] python -m \
-       experiments.post_training.task_curation.datasets.swe_rebench_v2.stage_intake_inputs \
-       --uri "$TARBALL_URI" --output "$WORKDIR/marin-$REVISION.tar.gz"
+# The repo tree does not exist yet, so the tarball download must not need the repo's own
+# modules: curl handles http(s) uris (the GitHub archive default). The object-storage stager
+# only runs after extraction (the license receipts below).
+case "$TARBALL_URI" in
+  https://* | http://*)
+    curl -fsSL --retry 5 --retry-delay 5 -o "marin-$REVISION.tar.gz" "$TARBALL_URI"
+    ;;
+  *)
+    echo "intake conversion: TARBALL_URI must be an http(s) url before the tree exists (got $TARBALL_URI)" >&2
+    exit 1
+    ;;
+esac
 tar -tzf "marin-$REVISION.tar.gz" > /dev/null
 tar -xzf "marin-$REVISION.tar.gz" -C "$WORKDIR"
 test -f "marin-$REVISION/experiments/post_training/task_curation/datasets/swe_rebench_v2/run_intake_conversion.sh" \
