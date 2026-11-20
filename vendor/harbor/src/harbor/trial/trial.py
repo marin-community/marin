@@ -336,6 +336,9 @@ class Trial(ABC):
                     await self._recover_outputs_safely()
                 finally:
                     cleanup_failure: BaseException | None = None
+                    # A failed agent-session cleanup is recorded but does not block
+                    # completion: the environment stop that follows ends every agent
+                    # command, and _stop_agent_environment marks its own failures.
                     for cleanup in (
                         self._cleanup_agents,
                         self._stop_agent_environment,
@@ -346,7 +349,6 @@ class Trial(ABC):
                             if isinstance(cleanup_error, asyncio.CancelledError):
                                 cleanup_failure = cleanup_error
                                 continue
-                            self._environment_cleanup_failed = True
                             if primary is None and cleanup_failure is None:
                                 cleanup_failure = cleanup_error
                             else:
