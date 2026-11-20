@@ -76,9 +76,12 @@ class TritonFlashBlockSizes:
 
 
 # Tile sweeps at 8 x 4096 tokens per GPU, 20 query heads, 5 KV heads, head_dim 128 and bf16 set the defaults,
-# which are the fastest found on MI300X (gfx942). On MI350X (gfx950), a second pipeline stage runs the
-# forward 14% (window 2048) to 19% (causal) faster; on MI300X it nearly doubles the forward's time.
-_TUNED_BLOCK_SIZES = {"gfx950": TritonFlashBlockSizes(num_stages=2)}
+# which are the fastest found on MI300X (gfx942). On MI350X and MI355X (gfx950), a second pipeline stage runs the
+# forward 14% (window 2048) to 19% (causal) faster, and 256x32 dQ tiles with 8 warps and 2 stages run forward plus
+# backward 3-4% faster; on MI300X the second forward stage nearly doubles the forward's time.
+_TUNED_BLOCK_SIZES = {
+    "gfx950": TritonFlashBlockSizes(num_stages=2, block_q_dq=256, block_k_dq=32, num_warps_dq=8, num_stages_dq=2)
+}
 # Untuned tiles small enough for float32 inputs in MI300X's 64 KiB of shared memory, which the bf16 tiles overflow.
 _FLOAT32_BLOCK_SIZES = TritonFlashBlockSizes(block_q=128, block_k=32, block_k_dkv=64)
 
@@ -166,6 +169,11 @@ def _dkv_query_ranges(
 # ``[full_lo, full_hi)`` and masked on ``[full_hi, hi)``. The bounds are clamped at zero, which they already satisfy,
 # so Triton can prove the load offsets non-negative; on MI350X that made the backward 1-2% faster.
 # Row tensors are ``[rows, head_dim]`` slices of a ``[B, S, H, D]`` array, ``row_stride = H * D`` apart.
+#
+# Every grid is ``(batch, head, block)``. Triton launches programs with the first grid axis varying fastest, so the
+# block index varies slowest: the longest blocks of every batch row and head start first and the short ones fill in
+# at the end. With the block index fastest, blocks of different lengths launch interleaved, which ran
+# ``gpu_pallas_triton_flash``'s kernels 1.2-1.5x slower on MI350X.
 
 
 @triton.jit
@@ -238,9 +246,9 @@ def _forward_kernel(
     block_q: tl.constexpr,
     block_k: tl.constexpr,
 ):
-    q_block = tl.num_programs(0) - 1 - tl.program_id(0)  # longest rows first
-    batch = tl.program_id(1).to(tl.int64)
-    head = tl.program_id(2)
+    batch = tl.program_id(0).to(tl.int64)
+    head = tl.program_id(1)
+    q_block = tl.num_programs(2) - 1 - tl.program_id(2)  # longest rows first
     kv_head = head // (num_q_heads // num_kv_heads)
     q_row_stride: tl.constexpr = num_q_heads * head_dim
     kv_row_stride: tl.constexpr = num_kv_heads * head_dim
@@ -331,9 +339,9 @@ def _dq_kernel(
     block_q: tl.constexpr,
     block_k: tl.constexpr,
 ):
-    q_block = tl.num_programs(0) - 1 - tl.program_id(0)
-    batch = tl.program_id(1).to(tl.int64)
-    head = tl.program_id(2)
+    batch = tl.program_id(0).to(tl.int64)
+    head = tl.program_id(1)
+    q_block = tl.num_programs(2) - 1 - tl.program_id(2)
     kv_head = head // (num_q_heads // num_kv_heads)
     q_row_stride: tl.constexpr = num_q_heads * head_dim
     kv_row_stride: tl.constexpr = num_kv_heads * head_dim
@@ -451,9 +459,9 @@ def _dkv_kernel(
     block_q: tl.constexpr,
     block_k: tl.constexpr,
 ):
-    k_block = tl.program_id(0)
-    batch = tl.program_id(1).to(tl.int64)
-    kv_head = tl.program_id(2)
+    batch = tl.program_id(0).to(tl.int64)
+    kv_head = tl.program_id(1)
+    k_block = tl.program_id(2)
     group: tl.constexpr = num_q_heads // num_kv_heads
     q_row_stride: tl.constexpr = num_q_heads * head_dim
     kv_row_stride: tl.constexpr = num_kv_heads * head_dim
@@ -574,7 +582,7 @@ def _forward(q, k, v, lower, *, block_sizes: TritonFlashBlockSizes):
             jax.ShapeDtypeStruct(q.shape, q.dtype),
             jax.ShapeDtypeStruct((batch, num_q_heads, seq_len), jnp.float32),
         ),
-        grid=(seq_len // block_sizes.block_q, batch, num_q_heads),
+        grid=(batch, num_q_heads, seq_len // block_sizes.block_q),
         num_warps=block_sizes.num_warps,
         num_stages=block_sizes.num_stages,
         name="grug_triton_flash_fwd",
@@ -600,7 +608,7 @@ def _backward(q, k, v, lower, out, lse, do, *, block_sizes: TritonFlashBlockSize
         delta,
         kernel=_dq_kernel,
         out_shape=jax.ShapeDtypeStruct(q.shape, q.dtype),
-        grid=(seq_len // block_sizes.block_q_dq, batch, num_q_heads),
+        grid=(batch, num_q_heads, seq_len // block_sizes.block_q_dq),
         num_warps=block_sizes.num_warps_dq,
         num_stages=block_sizes.num_stages_dq,
         name="grug_triton_flash_dq",
@@ -624,7 +632,7 @@ def _backward(q, k, v, lower, out, lse, do, *, block_sizes: TritonFlashBlockSize
         full,
         kernel=_dkv_kernel,
         out_shape=(jax.ShapeDtypeStruct(k.shape, k.dtype), jax.ShapeDtypeStruct(v.shape, v.dtype)),
-        grid=(seq_len // block_k, batch, num_kv_heads),
+        grid=(batch, num_kv_heads, seq_len // block_k),
         num_warps=block_sizes.num_warps_dkv,
         num_stages=block_sizes.num_stages_dkv,
         name="grug_triton_flash_dkv",
