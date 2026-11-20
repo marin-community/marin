@@ -47,6 +47,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.verif
 from experiments.post_training.task_curation.images.build import BASE_IMAGE
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.sources import all_sources
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 from experiments.post_training.task_curation.tasktrove.export import main
 from experiments.post_training.task_curation.tasktrove.harbor_export import UnsupportedHarborTask, harbor_record
 from experiments.post_training.task_curation.tests.conversion import converted_task, tasktrove_row
@@ -334,7 +335,7 @@ def test_harbor_emitted_wrapper_grades_text_and_private_resources(
 
 def test_harbor_cli_joins_registry_metadata_and_accounts_for_unsupported_rows(normalized_row, tmp_path) -> None:
     row, converted = normalized_row
-    source = all_sources()["Task Trove:" + row["source_row"].split("/", 1)[0]]
+    source = all_sources()[canonical_source_id("Task Trove:" + row["source_row"].split("/", 1)[0])]
     unsupported = converted.model_copy(update={"grader": NoGrader(reason="Needs source validation")})
     input_root, output_root = tmp_path / "input", tmp_path / "output"
     normalized = input_root / "normalize"
