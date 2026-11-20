@@ -110,12 +110,12 @@ async def create_env(request: pytest.FixtureRequest) -> AsyncIterator[Callable[[
     async def create() -> Env:
         match request.param:
             case "fake":
-                env = FakeEnv("test-image", {COMMAND: FakeCommand(VALUE, {OUTPUT: b"changed"})}, Notes())
+                env = FakeEnv("test-image", {COMMAND: FakeCommand(VALUE, {OUTPUT: b"changed"})})
             case "shellbox-memory":
                 machine = MemoryMachine()
                 owned = AsyncExitStack()
                 owned.push_async_callback(machine.close)
-                env = ShellboxEnv(machine, "test-image", Notes(), owned)
+                env = ShellboxEnv(machine, "test-image", owned)
             case _:
                 try:
                     factory = shellsim_factory()
@@ -123,9 +123,7 @@ async def create_env(request: pytest.FixtureRequest) -> AsyncIterator[Callable[[
                     pytest.skip("Optional sandbox dependency is not installed")
                 semantics = CommandSemantics.SHELL_SIMULATOR
                 requirements = EnvironmentRequirements(command_semantics=semantics, package_spec=PackageSpec())
-                env = await ShellboxEnvFactory(factory, machine_runtime(backend=request.param), 5, Notes()).create(
-                    requirements
-                )
+                env = await ShellboxEnvFactory(factory, machine_runtime(backend=request.param), 5).create(requirements)
         envs.append(env)
         return env
 
@@ -175,7 +173,7 @@ async def test_shellbox_failure_preserves_unresolved_history(
 ) -> None:
     machine = MemoryMachine()
     machine.failure = failure
-    env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack())
+    env = ShellboxEnv(machine, "image", AsyncExitStack())
     before = env.fingerprint()
     with pytest.raises(decision):
         await env.run(COMMAND, timeout=5)
@@ -186,7 +184,7 @@ async def test_shellbox_unexpected_runtime_error_propagates_without_reclassifica
     machine = MemoryMachine()
     bug = RuntimeError("unexpected adapter bug")
     machine.failure = bug
-    env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack())
+    env = ShellboxEnv(machine, "image", AsyncExitStack())
     with pytest.raises(RuntimeError) as caught:
         await env.run(COMMAND, timeout=5)
     assert caught.value is bug
@@ -203,7 +201,7 @@ async def test_shellbox_unexpected_runtime_error_propagates_without_reclassifica
 async def test_missing_file_is_tool_feedback_without_retry(operation: str, failure: Exception) -> None:
     machine = MemoryMachine()
     machine.failure = failure
-    env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack())
+    env = ShellboxEnv(machine, "image", AsyncExitStack())
     before = env.fingerprint()
     with pytest.raises(FileNotFoundError) as caught:
         if operation == "read":
@@ -222,7 +220,7 @@ async def test_missing_file_is_tool_feedback_without_retry(operation: str, failu
 async def test_cpu_exhaustion_holds_with_reason_without_retry() -> None:
     machine = MemoryMachine()
     machine.failure = MachineResourceExhausted("ShellSim terminated: cpu_exhausted")
-    env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack())
+    env = ShellboxEnv(machine, "image", AsyncExitStack())
     with pytest.raises(Hold, match="cpu_exhausted"):
         await run_command(RunCommand(COMMAND, 5), env, notify=Notes())
     assert machine.calls == 1
@@ -231,7 +229,7 @@ async def test_cpu_exhaustion_holds_with_reason_without_retry() -> None:
 @pytest.mark.parametrize("workdir", ["/workspace", "/custom/work"])
 async def test_relative_paths_use_environment_workdir(workdir: str) -> None:
     machine = MemoryMachine()
-    env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack(), workdir)
+    env = ShellboxEnv(machine, "image", AsyncExitStack(), workdir)
     await env.write(PurePosixPath("release_notes.py"), b"notes")
     assert machine.files == {f"{workdir}/release_notes.py": b"notes"}
     assert await env.read(PurePosixPath("release_notes.py")) == b"notes"
@@ -242,7 +240,7 @@ async def test_relative_paths_use_environment_workdir(workdir: str) -> None:
 async def test_websocket_setup_failure_retries_only_three_times() -> None:
     machine = MemoryMachine()
     machine.failure = ExecSetupFailed("handshake refused")
-    env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack())
+    env = ShellboxEnv(machine, "image", AsyncExitStack())
     events: list[Event[None]] = []
     with pytest.raises(Restart, match="exhausted its retry budget"):
         await run_command(RunCommand(COMMAND, 5), env, notify=events.append)
@@ -261,7 +259,7 @@ async def test_machine_startup_expected_failure_is_transient(
         yield MemoryMachine()
 
     monkeypatch.setattr(env_module, "prepare_machine", failed_start)
-    factory = ShellboxEnvFactory(shellsim_factory(), machine_runtime(backend="shellsim"), 5, Notes())
+    factory = ShellboxEnvFactory(shellsim_factory(), machine_runtime(backend="shellsim"), 5)
     with pytest.raises(Transient) as caught:
         await factory.create(EnvironmentRequirements(command_semantics=CommandSemantics.SHELL_SIMULATOR))
     assert caught.value.__cause__ is failure
@@ -278,7 +276,7 @@ async def test_machine_startup_expected_failure_is_transient(
 async def test_directory_read_names_requested_path_without_retry(failure: Exception) -> None:
     machine = MemoryMachine()
     machine.failure = failure
-    env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack())
+    env = ShellboxEnv(machine, "image", AsyncExitStack())
     with pytest.raises(IsADirectoryError) as caught:
         await read_file(ReadFile(PurePosixPath("/app")), env, notify=Notes())
     assert caught.value.filename == "/app"
@@ -289,7 +287,7 @@ async def test_noninteger_exec_status_requires_new_machine_without_retry() -> No
     detail = "container no longer accepts exec"
     machine = MemoryMachine()
     machine.failure = MachineTerminated(detail)
-    env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack())
+    env = ShellboxEnv(machine, "image", AsyncExitStack())
     events: list[Event[None]] = []
     with pytest.raises(Restart) as caught:
         await write_file(WriteFile(OUTPUT, b"data"), env, notify=events.append)
@@ -323,7 +321,7 @@ class TimedIrisMachine(IrisMachine):
 @pytest.mark.parametrize("exit_code,elapsed,reported", [(124, 0.2, 124), (137, 0.2, 124), (137, 0, 137), (7, 0, 7)])
 async def test_iris_command_is_bounded_inside_the_container(exit_code: int, elapsed: float, reported: int) -> None:
     machine = TimedIrisMachine(exit_code, elapsed)
-    env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack())
+    env = ShellboxEnv(machine, "image", AsyncExitStack())
     result = await env.run(COMMAND, timeout=0.1)
     assert (result.exit_code, result.stdout) == (reported, "partial")
     (command,) = machine.commands
@@ -353,7 +351,7 @@ def test_contained_timeout_preserves_the_command(script: str, timeout: str, code
 async def test_write_backend_path_failures_are_normalized(detail: str, expected: type[OSError]) -> None:
     machine = MemoryMachine()
     machine.failure = RuntimeError(f"Iris command failed: {detail}")
-    env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack())
+    env = ShellboxEnv(machine, "image", AsyncExitStack())
     with pytest.raises(expected) as caught:
         await env.write(OUTPUT, b"data")
     assert caught.value.filename == str(OUTPUT)

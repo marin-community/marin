@@ -23,10 +23,6 @@ from taskforge.resources.inference import InferenceClient, InferenceRequest, com
 from taskforge.resources.rollouts import SolverRollout
 
 
-def note(event: Event[None]) -> None:
-    pass
-
-
 def configure(ctx: Context, env: Env, client: InferenceClient, ids: Ids) -> None:
     for resource in (env, client, ids):
         ctx.resource(resource, resource.fingerprint)
@@ -40,7 +36,7 @@ async def test_reload_reexecutes_environment_but_reuses_inference_and_ids(tmp_pa
     path = PurePosixPath("/workspace/binary")
     result = CommandResult(0, "done", "", 0.1, False)
     script = {"build": FakeCommand(result, {path: b"result"})}
-    env = FakeEnv("image", script, note)
+    env = FakeEnv("image", script)
     client = FakeInference((Completion("answer"),))
     event = InferenceRequest(
         (Message(Role.USER, "solve"),),
@@ -56,7 +52,7 @@ async def test_reload_reexecutes_environment_but_reuses_inference_and_ids(tmp_pa
     assert await ctx.emit(NewId("author/0/id")) == "original"
     await ctx.drain()
 
-    replay_env = FakeEnv("image", script, note)
+    replay_env = FakeEnv("image", script)
     replay_client = FakeInference(())
     replay = Context(log=EventLog(replay_from=await sink.read()))
     configure(replay, replay_env, replay_client, Ids(lambda: "new"))

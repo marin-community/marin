@@ -151,7 +151,7 @@ class Environments(EnvFactory):
         cleanup = self.settings.limits.cleanup_timeout
         if cleanup is None:
             raise ValueError("Environment cleanup timeout must be explicit")
-        return await ShellboxEnvFactory(factory, runtime, cleanup, logging.info).create(requirements)
+        return await ShellboxEnvFactory(factory, runtime, cleanup).create(requirements)
 
 
 async def solver_turn(client: CompletionBackend, sampling: LLMPolicy, request: ModelRequest) -> ModelTurn:

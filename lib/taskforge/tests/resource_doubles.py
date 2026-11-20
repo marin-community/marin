@@ -13,7 +13,6 @@ from taskforge.effects.events import Fingerprint, ReplayPolicy
 from taskforge.effects.issues import ContextExceeded, Hold, Restart, Transient
 from taskforge.model.llm import Completion
 from taskforge.resources.env import CommandResult, RecordedEnv
-from taskforge.resources.execution import Notify
 from taskforge.resources.inference import InferenceClient, InferenceRequest
 from taskforge.resources.web import WebClient, WebFetch, WebSearch
 
@@ -27,8 +26,8 @@ class FakeCommand:
 class FakeEnv(RecordedEnv):
     """An in-memory filesystem and explicitly scripted shell effects, without a shell parser."""
 
-    def __init__(self, image: str, commands: Mapping[str, FakeCommand | Transient | Restart], notify: Notify) -> None:
-        super().__init__(image, notify)
+    def __init__(self, image: str, commands: Mapping[str, FakeCommand | Transient | Restart]) -> None:
+        super().__init__(image)
         self.commands = commands
         self.files: dict[PurePosixPath, bytes] = {}
 

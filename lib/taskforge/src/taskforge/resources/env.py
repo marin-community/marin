@@ -92,9 +92,8 @@ class RecordedEnv(Env):
     """An environment whose fingerprint chains every command and write; subclasses call ``record_command`` and
     ``record_write`` after each effect succeeds."""
 
-    def __init__(self, image: str, notify: Notify) -> None:
+    def __init__(self, image: str) -> None:
         self.digest = digest((image,))
-        self.notify = notify
         self.closed = False
 
     @override
@@ -139,12 +138,10 @@ def _machine_issue(error: RuntimeError) -> Hold | Restart | Transient:
 class ShellboxEnv(RecordedEnv):
     """An owned Shellbox machine; nonzero command exits remain ordinary results."""
 
-    def __init__(
-        self, machine: Machine, image: str, notify: Notify, owned: AsyncExitStack, workdir: str = DEFAULT_WORKDIR
-    ) -> None:
+    def __init__(self, machine: Machine, image: str, owned: AsyncExitStack, workdir: str = DEFAULT_WORKDIR) -> None:
         self.machine, self.owned = machine, owned
         self.workdir = PurePosixPath(workdir)
-        super().__init__(image, notify)
+        super().__init__(image)
 
     @asynccontextmanager
     async def _operation(self, path: PurePosixPath | None = None) -> AsyncIterator[None]:
@@ -267,7 +264,6 @@ class ShellboxEnvFactory(EnvFactory):
     factory: MachineFactory
     runtime: MachineRuntimeSpec
     cleanup_timeout: float
-    notify: Notify
 
     @override
     async def create(self, requirements: EnvironmentRequirements) -> ShellboxEnv:
@@ -281,7 +277,7 @@ class ShellboxEnvFactory(EnvFactory):
         except (TimeoutError, ConnectionError) as error:
             raise Transient("Environment startup did not resolve") from error
         image = digest((requirements, self.runtime))
-        return ShellboxEnv(machine, image, self.notify, owned, requirements.working_directory or DEFAULT_WORKDIR)
+        return ShellboxEnv(machine, image, owned, requirements.working_directory or DEFAULT_WORKDIR)
 
 
 async def run_command(event: RunCommand, env: Env, *, notify: Notify) -> CommandResult:

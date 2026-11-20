@@ -25,7 +25,8 @@ After a failed attempt, the client handles the failure by kind:
   until the pool has workers again, for up to ``hold_timeout``, without spending an attempt. An
   unreachable ``/health``, or a report without the pool, leads to an ordinary counted retry instead.
 * A 400 saying the prompt plus ``max_tokens`` exceeds the context window raises ``ContextExhausted``
-  at once. The client always sends the whole prompt with the policy's full ``max_tokens``. A prompt
+  at once. The client always sends the whole prompt, with the policy's full ``max_tokens`` unless it was
+  built with ``limit_output=False``, as Taskforge's production wiring builds it. A prompt
   that long usually means its parts belong in files, for a model in an agentic environment to read.
   When a continuation overflows the window, the call returns the output gathered so far with
   ``finish_reason == "length"``.
