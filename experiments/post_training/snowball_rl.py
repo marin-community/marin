@@ -410,7 +410,7 @@ _PRESETS = (
     replace(
         _TRAIN_LONG,
         name="train-long-harbor",
-        revision="2026.11.20.5",
+        revision="2026.11.20.6",
         harbor=harbor_evaluation(Path(__file__).with_name("rl_harbor.yaml")),
         gaps=(*_TRAIN_LONG.gaps, "harbor-on-daytona"),
     ),

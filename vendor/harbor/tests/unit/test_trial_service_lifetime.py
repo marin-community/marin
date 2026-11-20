@@ -355,7 +355,7 @@ async def test_late_relay_failure_stops_active_trial_without_cancelling_neighbor
         "teardown_cancelled_before_stop_error",
     ],
 )
-async def test_runtime_failure_preserves_reward_only_after_verification(tmp_path, monkeypatch, failure):
+async def test_runtime_failure_and_unconfirmed_teardown_remain_unscored(tmp_path, monkeypatch, failure):
     factory = ProcessTaskFactory(tmp_path / "guest")
     monkeypatch.setattr(local, "LocalMachineFactory", lambda **kwargs: factory)
     reward = 0 if failure.startswith("teardown") else 1
@@ -414,11 +414,9 @@ async def test_runtime_failure_preserves_reward_only_after_verification(tmp_path
         assert stored.completion is None and stored.verifier_result is None
         return
     if failure.startswith("teardown"):
-        assert result.verifier_result is not None and stored.verifier_result is not None
-        assert result.verifier_result.rewards == stored.verifier_result.rewards == {"reward": reward}
-        assert result.exception_info.exception_type == stored.exception_info.exception_type == "AgentTimeoutError"
+        assert result.verifier_result is None and stored.verifier_result is None
+        assert result.exception_info.exception_type == stored.exception_info.exception_type == "EnvironmentStopError"
         assert result.completion is None and stored.completion is None
-        assert [error.exception_type for error in stored.secondary_exception_info] == ["EnvironmentStopError"]
     else:
         assert result.verifier_result is None and stored.verifier_result is None
         assert error_category(result.exception_info.exception_type) is ErrorCategory.INFRASTRUCTURE

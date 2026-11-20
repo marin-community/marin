@@ -304,8 +304,13 @@ A checkpoint is eligible when it scores at least 99% of the EvalLite active set 
 serving window as their total context limit, with the reply cap inside it. SWE-bench uses
 the pinned harness's 3,000-second verifier timeout. OpenThoughts-TBLite uses each pinned
 verifier's timeout, capped at 3,600 seconds. A trial can retry once after phase cancellation
-or a Daytona sandbox setup, command transport or cleanup error. A verifier timeout ends that
-trial. Teardown errors after verification retain the reward and are recorded alongside it.
+or a Daytona sandbox setup, command transport or cleanup error. The retry list includes
+`TmuxExecTimeoutError`, `DaytonaOutputUnavailable` and `MachineTerminated`. A failed trial
+with unconfirmed teardown can retry even after verification. The selected attempt must
+have confirmed teardown for the archive to seal.
+
+This retry policy uses revision `2026.11.20.6` with fingerprint `76baa3fb`. The earlier
+revision `2026.11.20.5` has fingerprint `e1f1635a`.
 
 Trial artifacts are under `exports/inline_harbor/`. A Harbor error stops training. Repeat the same
 command to resume from the latest retained checkpoint. The separate

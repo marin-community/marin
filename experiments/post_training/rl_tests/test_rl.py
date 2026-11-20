@@ -527,7 +527,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             "2026.11.20.3": "e54674f6",
         },
         "train-long-harbor": {
-            "2026.11.20.5": "e1f1635a",
+            "2026.11.20.6": "76baa3fb",
         },
     }
     configs = assert_revisioned_native_configs(
