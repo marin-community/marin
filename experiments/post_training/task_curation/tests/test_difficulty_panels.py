@@ -4,20 +4,17 @@
 """Missing panels freeze automatically and become current-population attempt inputs."""
 
 import json
-from dataclasses import replace
 from types import SimpleNamespace
 
 from finestore.rl.curation import ActorCensusInput
 from finestore.rl.difficulty import Solver
-from iris.resources.state import JobState
 from marin.execution.artifact import ArtifactRecord, result_type_name, write_record
-from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.models import ConversationInput, TaskSpec, TextMessage
 
 from experiments.post_training.task_curation.difficulty import catalog
-from experiments.post_training.task_curation.difficulty.executor import EscalationLog, collect_finished, execute_plan
+from experiments.post_training.task_curation.difficulty.executor import EscalationLog, execute_plan
 from experiments.post_training.task_curation.difficulty.ledger import read_rows
-from experiments.post_training.task_curation.difficulty.planner import AttemptBatch, FreezeSamplePanel, action_id, plan
+from experiments.post_training.task_curation.difficulty.planner import AttemptBatch, FreezeSamplePanel, plan
 from experiments.post_training.task_curation.difficulty.remediate import repair_action
 from experiments.post_training.task_curation.difficulty.state import CoveragePolicy, cell_state
 from experiments.post_training.task_curation.difficulty_contracts import (
@@ -84,11 +81,11 @@ def test_missing_panel_freezes_one_shared_queue_then_plans_original_tasks(tmp_pa
             ),
         }
     )
-    # Only the census receipt store is substituted; sampling reads and verifies every real parquet row.
+    # Only the census receipt store is substituted; sampling scans the real population parquet rows.
     monkeypatch.setattr(ActorCensus, "raw_load", lambda path: SimpleNamespace(input_artifact=population.path))
     served = {"id": declaration.id, "declaration": declaration.model_dump(mode="json")}
 
-    def query(sql, params):
+    def query(_sql, params):
         if params:
             return {"rows": [{"declaration": served["declaration"]}]}
         minimal = {key: served["declaration"][key] for key in ("current_release", "pipeline", "actor_census_input")}
@@ -104,11 +101,7 @@ def test_missing_panel_freezes_one_shared_queue_then_plans_original_tasks(tmp_pa
     backend = JobStore(str(tmp_path / "jobs"))
     execute_plan([action], [], [before], ledger, backend, EscalationLog(ledger))
     result = repair_action(action, tmp_path / "repair", ledger)
-    target = StoragePath(ledger) / "v1" / "results" / (action_id(action) + ".json")
-    target.parent.mkdirs()
-    target.write_text(json.dumps(result))
-    backend.existing = [replace(backend.existing[0], state=JobState.SUCCEEDED)]
-    collect_finished(read_rows(ledger), backend.jobs(), ledger, EscalationLog(ledger))
+    backend.complete_repair(action, result, ledger)
     (after,) = catalog.served_catalog("fixture", queues=(), ledger=ledger)
     assert after.registry_revision == before.registry_revision
     expected = {

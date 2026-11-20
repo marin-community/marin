@@ -15,7 +15,10 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 
 from experiments.post_training.task_curation.admission_inventory import inventory_source
-from experiments.post_training.task_curation.difficulty.importer import population_revision
+from experiments.post_training.task_curation.difficulty.importer import (
+    declaration_population_revision,
+    population_revision,
+)
 from experiments.post_training.task_curation.difficulty.ledger import LEDGER_VERSION, PANELS_DIRECTORY
 from experiments.post_training.task_curation.difficulty.legacy import legacy_gaps
 from experiments.post_training.task_curation.difficulty.planner import (
@@ -30,10 +33,14 @@ from experiments.post_training.task_curation.difficulty.planner import (
     action_payload,
 )
 from experiments.post_training.task_curation.difficulty.selection import selected_tasks
-from experiments.post_training.task_curation.difficulty.state import GapReason
+from experiments.post_training.task_curation.difficulty.state import GapReason, PanelReference
 from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence
 from experiments.post_training.task_curation.difficulty_preparation import prepare_source
-from experiments.post_training.task_curation.difficulty_samples import load_queue_sources, prepare_sample
+from experiments.post_training.task_curation.difficulty_samples import (
+    load_queue_sources,
+    prepare_sample,
+    write_source_queue,
+)
 from experiments.post_training.task_curation.images.__main__ import declared_environments
 from experiments.post_training.task_curation.images.build import DEFAULT_REPOSITORY, EnvironmentBuild, build_environment
 
@@ -133,7 +140,7 @@ def recheck_admission(action: RecheckExecutabilityAdmission, local: Path) -> dic
 
 
 def freeze_panel(action: FreezeSamplePanel, ledger: str) -> dict:
-    """Freeze the current complete population; publish its queue only after byte verification."""
+    """Freeze a seed-zero sample of the current population and publish its verified queue."""
     declaration = QualifiedSourceDeclaration.model_validate_json(action.declaration_json)
     binding = declaration.actor_census_input
     if declaration.id != action.source.source_id:
@@ -144,14 +151,7 @@ def freeze_panel(action: FreezeSamplePanel, ledger: str) -> dict:
             "reason": GapReason.TASK_SPEC_FACTORY_PENDING,
             "detail": "Current served declaration lacks its exact input census; qualify the population first",
         }
-    revision = population_revision(
-        {
-            "release": declaration.current_release.model_dump(mode="json"),
-            "converter_version": declaration.pipeline.version,
-            "converter_revision": binding.converter_revision,
-            "task_specs_sha256": binding.task_specs_sha256,
-        }
-    )
+    revision = declaration_population_revision(declaration.model_dump(mode="json"))
     if revision != action.source.registry_revision:
         raise ValueError("Panel repair declaration differs from the planned population")
     root = StoragePath(ledger) / LEDGER_VERSION / "panel-builds" / action_id(action)
@@ -159,21 +159,15 @@ def freeze_panel(action: FreezeSamplePanel, ledger: str) -> dict:
     source = prepare_sample(declaration, inventory, str(root / "samples"), None)
     if population_revision(source.sample.model_dump(mode="json")) != revision:
         raise ValueError("Frozen sample differs from the planned population")
-    queue = root / "sources.json"
-    queue.write_text(json.dumps([source.model_dump(mode="json")], indent=2) + "\n")
-    reference = {
-        "source_id": declaration.id,
-        "registry_revision": revision,
-        "queue_uri": str(queue),
-        "queue_sha256": file_sha256(queue),
-    }
+    queue = write_source_queue(root / "sources.json", [source])
+    reference = PanelReference(declaration.id, revision, queue.uri, queue.sha256)
     index = StoragePath(ledger) / LEDGER_VERSION / PANELS_DIRECTORY / (action_id(action) + ".json")
-    (verified,) = load_queue_sources(str(queue), reference["queue_sha256"], (declaration.id,))
+    (verified,) = load_queue_sources(reference.queue_uri, reference.queue_sha256, (declaration.id,))
     if verified != source:
         raise ValueError("Published panel queue changed on readback")
     index.parent.mkdirs(exist_ok=True)
-    write_json_evidence(index, reference)
-    return {"status": "ready", **reference}
+    write_json_evidence(index, asdict(reference))
+    return {"status": "ready", **asdict(reference)}
 
 
 def repair_action(action: Action, local: Path, ledger: str) -> dict:

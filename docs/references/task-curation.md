@@ -2572,7 +2572,7 @@ uv run python -m experiments.post_training.task_curation.difficulty reconcile --
 `status` and `plan` read the current served declarations. A source whose current
 release has no matching frozen panel stays visible. The task-factory remediation
 schedules one shared `FreezeSamplePanel` CPU job for its affected solvers. It
-checks every retained task against the current source census, freezes the
+uses the current source census to scan the complete retained population, freezes the
 seed-zero panel with at most 100 tasks, and publishes its task queue under the
 ledger's `v1/panels` directory. The queue digest and population revision bind
 discovery to the source's exact release and converter. Subsequent plans discover

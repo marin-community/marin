@@ -11,8 +11,9 @@ from marin.external_dependencies import VLLM_GPU_RELEASE, VllmGpuRelease, VllmGp
 
 TARGET_CLUSTER = "cw-rno2a"
 GLM_RELAY_JOB = "/muchanem/glm53-relay-rno2a-g-20261027T0414Z"
+SNOWBALL_VLLM_RELEASE_TAG = "marin-vllm-gpu-20260924-01911be34fac"
 SNOWBALL_VLLM_RELEASE = VllmGpuRelease(
-    release_tag="marin-vllm-gpu-20260924-01911be34fac",
+    release_tag=SNOWBALL_VLLM_RELEASE_TAG,
     source_commit="01911be34fac8715347962a8d791ca34a879e01e",
     version="0.0.0.dev20260924+marin.01911be34fac.cu132",
     torch_backend="cu132",
@@ -23,7 +24,7 @@ SNOWBALL_VLLM_RELEASE = VllmGpuRelease(
             sm_targets=("9.0",),
             url=(
                 "https://github.com/marin-community/vllm/releases/download/"
-                "marin-vllm-gpu-20260924-01911be34fac/vllm-0.0.0.dev20260924%2Bmarin.01911be34fac.cu132-"
+                f"{SNOWBALL_VLLM_RELEASE_TAG}/vllm-0.0.0.dev20260924%2Bmarin.01911be34fac.cu132-"
                 "cp38-abi3-manylinux_2_28_x86_64.whl"
             ),
             sha256="d04fa6af4a7161f8995154cbdbbc8dddc61b9a9ff198b3947985b2d998ef60e0",

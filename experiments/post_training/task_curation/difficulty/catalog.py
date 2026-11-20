@@ -10,9 +10,9 @@ from marina.client import DEFAULT_MARINA_URL, applet_query
 from rigging.auth import TokenProvider
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.task_curation.difficulty.importer import catalog_sources, population_revision
+from experiments.post_training.task_curation.difficulty.importer import catalog_sources, declaration_population_revision
 from experiments.post_training.task_curation.difficulty.ledger import DEFAULT_LEDGER, LEDGER_VERSION, PANELS_DIRECTORY
-from experiments.post_training.task_curation.difficulty.state import CatalogSource, CellState, GapReason
+from experiments.post_training.task_curation.difficulty.state import CatalogSource, CellState, GapReason, PanelReference
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 DEFAULT_APPLET = "c9742a15-fb46-4d56-bc88-aa916351ebd3"
@@ -38,6 +38,17 @@ def available_artifact_uris(cells: Sequence[CellState]) -> frozenset[str]:
     return frozenset(uri for uri in artifacts if StoragePath(uri).exists())
 
 
+def published_panel_sources(ledger: str) -> list[CatalogSource]:
+    sources = []
+    for index in sorted((StoragePath(ledger) / LEDGER_VERSION / PANELS_DIRECTORY / "*.json").glob(), key=str):
+        reference = PanelReference(**json.loads(index.read_text()))
+        (source,) = catalog_sources(reference.queue_uri, reference.queue_sha256)
+        if (source.source_id, source.registry_revision) != (reference.source_id, reference.registry_revision):
+            raise ValueError(f"Published panel differs from its population binding: {index}")
+        sources.append(source)
+    return sources
+
+
 def served_catalog(
     applet_id: str,
     queues: tuple[tuple[str, str], ...] = DEFAULT_QUEUES,
@@ -57,24 +68,12 @@ def served_catalog(
     for uri, expected in queues:
         for source in catalog_sources(uri, expected):
             panels[(canonical_source_id(source.source_id), source.registry_revision)] = source
-    for index in sorted((StoragePath(ledger) / LEDGER_VERSION / PANELS_DIRECTORY / "*.json").glob(), key=str):
-        reference = json.loads(index.read_text())
-        (source,) = catalog_sources(reference["queue_uri"], reference["queue_sha256"])
-        if (source.source_id, source.registry_revision) != (reference["source_id"], reference["registry_revision"]):
-            raise ValueError(f"Published panel differs from its population binding: {index}")
+    for source in published_panel_sources(ledger):
         panels.setdefault((canonical_source_id(source.source_id), source.registry_revision), source)
     sources = []
     for row in declarations:
         declaration = row["declaration"]
-        census = declaration.get("actor_census_input")
-        pipeline = declaration.get("pipeline")
-        sample = {
-            "release": declaration.get("current_release"),
-            "converter_version": (pipeline or {}).get("version"),
-            "converter_revision": (census or {}).get("converter_revision"),
-            "task_specs_sha256": (census or {}).get("task_specs_sha256"),
-        }
-        revision = population_revision(sample)
+        revision = declaration_population_revision(declaration)
         match = panels.get((canonical_source_id(row["id"]), revision))
         if match is not None:
             sources.append(match)

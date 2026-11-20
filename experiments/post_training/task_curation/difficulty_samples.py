@@ -57,6 +57,14 @@ class OracleFilterBinding(BaseModel):
     receipt: ContentEvidenceReference
 
 
+def write_source_queue(path: StoragePath, sources: list[DifficultySource]) -> ContentEvidenceReference:
+    """Write an immutable frozen queue and return its stored byte identity."""
+    if path.exists():
+        raise FileExistsError(path)
+    path.write_text(json.dumps([source.model_dump(mode="json") for source in sources], indent=2) + "\n")
+    return ContentEvidenceReference(uri=str(path), sha256=file_sha256(path))
+
+
 def load_queue_sources(
     sources: str, sources_sha256: str, source_ids: tuple[str, ...] | None
 ) -> list["DifficultySource"]:
@@ -304,7 +312,7 @@ def main() -> None:
         futures = [pool.submit(prepare, declaration, inventory[declaration.id]) for declaration in declarations]
         sources = sorted((future.result() for future in futures), key=lambda item: item.declaration.id)
     queue = output / "sources.json"
-    queue.write_text(json.dumps([source.model_dump(mode="json") for source in sources], indent=2) + "\n")
+    write_source_queue(queue, sources)
     (output / "resampling-queue.json").write_text(
         json.dumps(
             [

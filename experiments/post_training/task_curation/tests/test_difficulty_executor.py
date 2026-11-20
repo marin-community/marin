@@ -49,6 +49,17 @@ class JobStore:
         self.existing.append(job)
         return job.job_id
 
+    def complete_repair(self, action, result: dict, ledger: str) -> StoragePath:
+        key = action_id(action)
+        target = StoragePath(ledger) / "v1" / "results" / (key + ".json")
+        target.parent.mkdirs()
+        target.write_text(json.dumps(result))
+        self.existing = [
+            replace(job, state=JobState.SUCCEEDED) if job.job_id.endswith(key[:24]) else job for job in self.existing
+        ]
+        collect_finished(read_rows(ledger), self.jobs(), ledger, EscalationLog(ledger))
+        return target
+
 
 def test_execution_records_submissions_and_replay_preserves_scheduler_state(tmp_path):
     ledger = str(tmp_path / "ledger")

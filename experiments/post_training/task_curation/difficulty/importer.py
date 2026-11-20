@@ -35,6 +35,19 @@ def population_revision(sample: dict) -> str:
     )
 
 
+def declaration_population_revision(declaration: dict) -> str:
+    census = declaration.get("actor_census_input") or {}
+    pipeline = declaration.get("pipeline") or {}
+    return population_revision(
+        {
+            "release": declaration.get("current_release"),
+            "converter_version": pipeline.get("version"),
+            "converter_revision": census.get("converter_revision"),
+            "task_specs_sha256": census.get("task_specs_sha256"),
+        }
+    )
+
+
 def catalog_sources(queue: str, queue_sha256: str) -> list[CatalogSource]:
     path = StoragePath(queue)
     if file_sha256(path) != queue_sha256:

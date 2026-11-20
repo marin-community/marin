@@ -98,6 +98,14 @@ class CatalogSource:
 
 
 @dataclass(frozen=True)
+class PanelReference:
+    source_id: str
+    registry_revision: str
+    queue_uri: str
+    queue_sha256: str
+
+
+@dataclass(frozen=True)
 class TerminalRuling:
     source_id: str
     solver: Solver

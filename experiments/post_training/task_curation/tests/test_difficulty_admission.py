@@ -8,19 +8,17 @@ from dataclasses import replace
 
 import pytest
 from finestore.rl.difficulty import Solver
-from iris.resources.state import JobState
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.models import ProviderRequirement, TaskSpec
 
 from experiments.post_training.task_curation import difficulty_preparation
-from experiments.post_training.task_curation.difficulty.executor import EscalationLog, collect_finished, execute_plan
+from experiments.post_training.task_curation.difficulty.executor import EscalationLog, execute_plan
 from experiments.post_training.task_curation.difficulty.importer import catalog_sources
 from experiments.post_training.task_curation.difficulty.ledger import append_rows, read_rows
 from experiments.post_training.task_curation.difficulty.planner import (
     AttemptBatch,
     RecheckExecutabilityAdmission,
-    action_id,
     plan,
 )
 from experiments.post_training.task_curation.difficulty.remediate import repair_action
@@ -77,11 +75,7 @@ def test_admission_recheck_uses_frozen_contracts_before_attempts_or_escalation(
     backend = JobStore(str(tmp_path / "jobs"))
     execute_plan([action], read_rows(ledger), [catalog], ledger, backend, EscalationLog(ledger))
     result = repair_action(action, tmp_path / "repair", ledger)
-    target = StoragePath(ledger) / "v1" / "results" / (action_id(action) + ".json")
-    target.parent.mkdirs()
-    target.write_text(json.dumps(result))
-    backend.existing = [replace(backend.existing[0], state=JobState.SUCCEEDED)]
-    collect_finished(read_rows(ledger), backend.jobs(), ledger, EscalationLog(ledger))
+    target = backend.complete_repair(action, result, ledger)
     rows = read_rows(ledger)
     after = cell_state(rows, catalog, Solver.SMALL, CoveragePolicy())
     assert file_sha256(StoragePath(str(queue))) == sha
