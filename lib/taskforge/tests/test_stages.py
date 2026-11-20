@@ -15,11 +15,11 @@ from lib.taskforge.tests.stage_fakes import CandidateEngine, Environments, Recor
 from rolloutengine.models import GradedRollout, Model, TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task, rollout_spec
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
-from taskcompendium.models import EnvironmentRequirements, TaskSpec
+from taskcompendium.models import EnvironmentRequirements, TaskResource, TaskSpec
 from taskcompendium.runtime.resources import inline_resource
 
 from taskforge.arms import decided, validated
-from taskforge.config import TaskforgeConfig
+from taskforge.config import TaskforgeConfig, WorkspaceHydration
 from taskforge.effects.context import Context
 from taskforge.effects.events import Note, Resolved
 from taskforge.effects.issues import ContextExceeded, Hold, OutputBudgetExhausted, Restart
@@ -50,11 +50,12 @@ from taskforge.model.review import (
     Incomplete,
     Modify,
     Retry,
+    SearchLimit,
     TrialResult,
     ValidationResult,
 )
 from taskforge.model.workpiece import WORKPIECE, Conversation, Submission, Terminal, Workpiece
-from taskforge.policy import GRADER_BASE_IMAGE, load_policy, sampling
+from taskforge.policy import GRADER_BASE_IMAGE, Policy, load_policy, sampling
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.grading import GradeCandidate, GradingResource, grade
 from taskforge.resources.inference import FakeInference
@@ -128,6 +129,23 @@ async def test_author_hydrates_revision_and_preserves_saved_session(workpiece: W
     assert isinstance(bundle.envs, Environments)
     assert bundle.envs.created[0].files[PurePosixPath("/workspace/proposal.json")] == render(workpiece.proposal).encode()
     assert bundle.envs.created[0].closed
+
+
+async def test_author_workspace_holds_caller_files_on_fresh_and_revision_entries(workpiece: Workpiece) -> None:
+    def proposal_id(entry: Workpiece, policy: Policy) -> tuple[TaskResource, ...]:
+        return (inline_resource("workspace/reference/id.txt", entry.proposal.header.id.encode()),)
+
+    hydration = WorkspaceHydration((inline_resource("workspace/reference/static.txt", b"static"),), proposal_id)
+    setup = replace(config(), workspace=hydration)
+    for entry in (workpiece.with_(submission=None), workpiece):
+        ctx = Context(log=EventLog())
+        bundle = resources(ctx)
+        await author(ctx, entry, setup, bundle)
+        await ctx.drain()
+        assert isinstance(bundle.envs, Environments)
+        files = bundle.envs.created[0].files
+        assert files[PurePosixPath("/workspace/reference/static.txt")] == b"static"
+        assert files[PurePosixPath("/workspace/reference/id.txt")] == workpiece.proposal.header.id.encode()
 
 
 async def test_author_new_session_and_failed_harness_close_environment(workpiece: Workpiece) -> None:
@@ -440,17 +458,15 @@ async def test_output_budget_retry(workpiece: Workpiece, solver: bool, failures:
         harness.run = run
         setup = replace(config(), adversaries={"finder": harness}, tools={"finder": {}})
         result = await adversary_result(ctx, workpiece, setup, bundle, rollout_spec(arithmetic_task()), "finder")
-        expected = (
-            AdversaryResult(
-                "finder",
+        if failures == 2:
+            assert (result.status, result.limit, result.findings) == (
                 AdversaryStatus.EXHAUSTED,
+                SearchLimit.OUTPUT_BUDGET,
                 (),
-                ("output budget exhausted twice without a report; counted as passed",),
             )
-            if failures == 2
-            else AdversaryResult("finder", AdversaryStatus.REPORTED, ())
-        )
-        assert result == expected
+            assert "ran out" in result.reasons[0]
+        else:
+            assert result == AdversaryResult("finder", AdversaryStatus.REPORTED, ())
         assert isinstance(bundle.envs, Environments) and len(bundle.envs.created) == 2
         assert all(env.closed for env in bundle.envs.created)
         evidence = ValidationResult(
@@ -648,7 +664,7 @@ async def test_adversary_interruptions_preserve_cause_and_close_environment(
 
 
 # full-s-20261108/S at f929478063: window exhaustion after 20 turns held otherwise reviewable tasks.
-# Owner ruling on #11111: an exhausted search counts as passed; its note explains an Accept, never a Modify.
+# An exhausted search may be accepted; its note says the budget ran out, on an Accept and never a Modify.
 @pytest.mark.parametrize("overflow", ["estimate", "provider"])
 @pytest.mark.parametrize("verdict", [Accept, Modify, Retry])
 async def test_adversary_window_exhaustion_passes_and_notes_only_an_accept(
@@ -670,8 +686,9 @@ async def test_adversary_window_exhaustion_passes_and_notes_only_an_accept(
     ctx = Context(log=EventLog())
     bundle = replace(resources(ctx), role_inference={"adversary": client})
     result = await adversary_result(ctx, workpiece, setup, bundle, rollout_spec(arithmetic_task()), "finder")
-    note = "context window exhausted without a report; counted as passed"
-    assert result == AdversaryResult("finder", AdversaryStatus.EXHAUSTED, (), (note,))
+    assert (result.status, result.limit, result.findings) == (AdversaryStatus.EXHAUSTED, SearchLimit.CONTEXT_WINDOW, ())
+    (note,) = result.reasons
+    assert "ran out" in note and "context window" in note
     current = replace(evidence(), task_digest=workpiece.submission.digest, adversary=(result,))
     if verdict is Modify:
         current = replace(current, controls=(replace(current.controls[0], met=False),))
