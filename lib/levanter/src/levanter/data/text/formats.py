@@ -15,7 +15,7 @@ from ._batch_tokenizer import BatchTokenizer
 
 
 @decode.register(Callable)
-def _decode_loss_weight_transform(value) -> Callable[[np.ndarray], np.ndarray]:
+def _decode_loss_weight_transform(_value) -> Callable[[np.ndarray], np.ndarray]:
     # Draccus resolves the Callable decoder even when the optional field contains null.
     raise ValueError("Loss-weight transforms must be supplied programmatically")
 

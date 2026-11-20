@@ -15,7 +15,7 @@ from marin.execution.build_context import resolve_version
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.rl.cli import rl_build_options
 from rigging.filesystem.s3_compat import configure_coreweave_s3
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.evaluation.micro210_policy import Micro210Model, micro210_evaluation
 from experiments.post_training.long_loop.__main__ import validate_graph
@@ -196,7 +196,7 @@ def exp4_plan(release: DataRelease, source_revision: str, version: str) -> dict:
         "expected_rollouts": 440,
     }
     for route in ("agentic", "nonagentic"):
-        resolved["datasets"][route]["uri"] = f"{OUTPUT_PREFIX}/long-loop-exp4/rl-pool-{route}/{version}"
+        resolved["datasets"][route]["uri"] = prefix_join(OUTPUT_PREFIX, "long-loop-exp4", f"rl-pool-{route}", version)
         resolved["datasets"][route]["data_file"] = "train.parquet"
     resolved["datasets"]["nonagentic"]["source_names"] = [
         *resolved["datasets"]["nonagentic"]["source_names"],

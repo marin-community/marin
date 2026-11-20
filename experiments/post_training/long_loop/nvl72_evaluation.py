@@ -28,6 +28,7 @@ from marin.rl.skyrl import (
 )
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.evaluation.corpus import file_sha256
 
 from experiments.post_training.long_loop.eval_runtime.judge import JudgedEvaluation, run_judged
 from experiments.post_training.long_loop.nvl72 import EXECUTION, SEED
@@ -73,9 +74,8 @@ def evaluation_from_spec(spec: NVL72EvaluationSpec, config_output: Path) -> Arti
     if model_config["num_experts"] % 12 or spec.context_tokens > model_config["max_position_embeddings"]:
         raise ValueError("The model does not support EP12 or the selected context")
     data = StoragePath(spec.data_uri) / "rollouts.parquet"
-    with data.open("rb") as stream:
-        if hashlib.file_digest(stream, "sha256").hexdigest() != spec.data_sha256:
-            raise ValueError("Pinned micro evaluation data differs from its SHA-256")
+    if file_sha256(data) != spec.data_sha256:
+        raise ValueError("Pinned micro evaluation data differs from its SHA-256")
     recipe = yaml.safe_load(RECIPE.read_text())
     config = recipe["config"]
     plan = SkyRLRolePlan(

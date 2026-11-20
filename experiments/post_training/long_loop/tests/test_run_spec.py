@@ -322,7 +322,7 @@ def test_rl_keeps_child_execution_profile_without_gpu_probe_jobs():
 
 
 @pytest.mark.integration
-def test_controlled_stage_allocations_and_deadlines_reach_dispatched_jobs(tmp_path, monkeypatch, coreweave_policy_read):
+def test_controlled_stage_allocations_and_deadlines_reach_dispatched_jobs(monkeypatch, coreweave_policy_read):
     monkeypatch.setenv("MARIN_PREFIX", "s3://test/long-loop")
     monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
     resolved = resolve_spec(SPEC, smoke=False)

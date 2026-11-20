@@ -21,7 +21,7 @@ sft:
   min_lr_ratio: 0.1
   learning_rate: 5.0e-05
   adam_learning_rate: 1.153846153846154e-05
-  # R2: Exp5 trains special-token updates at the base rate; the runner
+  # Special-token updates use the base learning rate; the runner
   # records 1.0 in the resolved plan and applies it to the spec.
   special_token_lr_multiplier: 1.0
   mesh:

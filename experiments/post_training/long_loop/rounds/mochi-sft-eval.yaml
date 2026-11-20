@@ -1,6 +1,4 @@
-# Draft for consolidation after placement control smoke109 serves.
-# Uses the repository's released runtime; smoke109's unreleased test wheel
-# requires separate qualification before treating that smoke as runtime parity.
+# Evaluate the pinned Mochi SFT export with the repository runtime.
 schema: 1
 name: mochi-long-loop/sft-evaluation
 version: "2026.11.19.110"

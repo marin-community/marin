@@ -77,7 +77,7 @@ class DomainWeightedOrder:
         self.window_position += 1
         return index
 
-    def observe(self, groups: Sequence[JudgedGroup]) -> dict[str, float]:
+    def observe(self, _groups: Sequence[JudgedGroup]) -> dict[str, float]:
         return {}
 
     def _take(self, route: str, count: int) -> list[int]:
@@ -196,7 +196,7 @@ class OrderedStages:
         self.stage_draws += 1
         return row
 
-    def observe(self, groups: Sequence[JudgedGroup]) -> dict[str, float]:
+    def observe(self, _groups: Sequence[JudgedGroup]) -> dict[str, float]:
         return {}
 
     def _take(self, label: str) -> int:
