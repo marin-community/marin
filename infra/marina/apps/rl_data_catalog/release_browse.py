@@ -14,7 +14,7 @@ def browse_invariants(fetch: Callable[[str], Any], sources: list[dict]) -> dict[
     required_measurements = set()
     qc_sources = qc_rows = unmapped_rows = 0
     for source in sources:
-        if source.get("data_restriction") == "private_always":
+        if source.get("data_restriction") == "private_always" or source.get("content_withheld"):
             continue
         if source["quality"] in {"FULL", "SAMPLE"}:
             panel = panels.get(source["id"])

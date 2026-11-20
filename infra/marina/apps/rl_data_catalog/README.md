@@ -29,8 +29,9 @@ The main table’s Difficulty cells, Difficulty page and source Evidence solver 
 individual rollout viewers. Attempts retain score, solver, trial identity,
 duration and exception metadata. Transcripts include tool calls and verifier
 output; Filer links retain the raw receipt/archive references. Outcomes without
-a recorded attempt artifact remain explicitly unavailable. PRIVATE_ALWAYS sources
-show a marker; the browser does not request their task/review/rollout content.
+a recorded attempt artifact remain explicitly unavailable. PRIVATE_ALWAYS and
+license-excluded sources show a marker; their task, review and rollout content
+is withheld. The release gate does not require their withheld content to be staged.
 
 Source Evidence renders its core API response without waiting for auxiliary ledgers.
 Each supplementary request has an 8-second deadline and its own visible error;

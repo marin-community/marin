@@ -373,8 +373,9 @@ Stage bulk content in the artifact's S3 region with
 `python -m infra.marina.apps.rl_data_catalog.stage_browse_evidence` and an explicit
 manifest URI/SHA, shard and output root. The manifest pins frozen declarations,
 review artifacts or complete difficulty observations and the producer code hashes.
-Keep the generated shard indexes and readback hashes. PRIVATE_ALWAYS content is
-refused before artifact reads; derived staging records carry the restriction.
+Keep the generated shard indexes and readback hashes. PRIVATE_ALWAYS and
+license-excluded content is refused before artifact reads; derived staging
+records carry the restriction.
 
 For a single selected panel or observation, the maintained loader commands are:
 
@@ -408,7 +409,9 @@ The blocking journeys exercise Quality chip → list → raw review and solver �
 attempt → rollout, both themes at 1440/390. Readability also visits the raw review,
 defect legend, attempt list and rollout. The blocking API coverage check requires every open FULL/SAMPLE source panel,
 matching task/raw-row counts, every recorded difficulty observation with attempts,
-and reconciled defect totals. Explicit not-mapped rows remain visible in provenance.
+and reconciled defect totals. Sources marked content-withheld by the API require
+no content staging. Original reviews without a unique batch mapping remain
+visible with that reason in the raw-review viewer.
 Candidate checks execute these API routes
 through the existing read-only SQL gateway before publication; hosted checks use
 the published routes. Verify cold and warm timings for the new pages and retain

@@ -250,6 +250,43 @@ def test_release_rejects_missing_review_rows_and_unstaged_attempts() -> None:
     assert browse_invariants(fetch, [{**source, "data_restriction": "private_always"}])["qc_sources"] == 0
 
 
+def test_release_requires_open_reviews_without_staging_license_withheld_content() -> None:
+    open_source = {"id": "Fixture:open", "quality": "SAMPLE", "difficulty": {"models": [], "historical": []}}
+    withheld_source = {
+        **open_source,
+        "id": "Fixture:license-excluded",
+        "content_withheld": True,
+        "withheld_reason": "license-excluded",
+        "difficulty": {
+            "models": [{"measurement_id": "withheld", "attempts_receipt": {"uri": "sealed", "sha256": "a" * 64}}],
+            "historical": [],
+        },
+    }
+    inventory = {
+        "panels": [
+            {
+                "source_id": open_source["id"],
+                "pipeline_key": "qc:open",
+                "task_count": 100,
+                "raw_count": 100,
+                "receipt": {},
+            }
+        ],
+        "rollouts": [],
+    }
+
+    def fetch(path):
+        return inventory if path == "api/qc/inventory" else {"defects": []}
+
+    result = browse_invariants(fetch, [withheld_source, open_source])
+    assert result["qc_sources"] == 1
+    assert result["qc_rows"] == 100
+    assert result["difficulty_measurements"] == 0
+    inventory["panels"] = []
+    with pytest.raises(ValueError, match="QC review coverage"):
+        browse_invariants(fetch, [withheld_source, open_source])
+
+
 def test_regional_loader_retries_a_lost_idempotent_write_reply() -> None:
     class LostReply(BaseHTTPRequestHandler):
         calls = 0
