@@ -42,56 +42,46 @@ def register_review_routes(api: FastAPI, engine: Engine) -> None:
             )
             panels = []
             for source_ids in batched(ids, QC_INVENTORY_BATCH):
+                # Correlated counts use each pipeline's composite indexes instead of
+                # scanning retained review history for every source batch.
                 panels.extend(
                     connection.execute(
                         text(
                             """
-                    WITH current_load AS (SELECT load_id FROM atlas_current WHERE name='latest'),
-                current_sources AS (
-                    SELECT s.load_id,s.id FROM atlas_sources s JOIN current_load USING(load_id)
-                    WHERE s.id IN (SELECT value FROM jsonb_array_elements_text(CAST(:source_ids AS JSONB)))
-                ),pipeline_keys AS (
-                    SELECT DISTINCT r.load_id,r.pipeline_key FROM atlas_review_current r
-                    JOIN current_sources s ON s.load_id=r.load_id AND s.id=r.source_id
-                ),
-                    population_counts AS (
-                        SELECT p.load_id,p.pipeline_key,SUM(p.sample_count)::BIGINT AS task_count
-                        FROM atlas_populations p JOIN pipeline_keys USING(load_id,pipeline_key)
-                        GROUP BY p.load_id,p.pipeline_key
-                    ),raw_counts AS (
-                        SELECT r.load_id,r.pipeline_key,COUNT(*) AS raw_count
-                        FROM atlas_raw_reviews r JOIN pipeline_keys USING(load_id,pipeline_key)
-                        GROUP BY r.load_id,r.pipeline_key
-                    ),link_counts AS (
-                        SELECT links.load_id,links.pipeline_key,COUNT(*) AS linked_count,
-                            COUNT(*) FILTER (WHERE batches.batch_key IS NULL) AS missing_batches
-                        FROM atlas_review_batch_tasks links JOIN pipeline_keys USING(load_id,pipeline_key)
-                        LEFT JOIN atlas_review_batches batches ON batches.load_id=links.load_id
-                            AND batches.pipeline_key=links.pipeline_key AND batches.batch_key=links.batch_key
-                        GROUP BY links.load_id,links.pipeline_key
-                    ),chunk_counts AS (
-                        SELECT chunks.load_id,chunks.pipeline_key,chunks.batch_key,COUNT(*) AS actual_count
-                        FROM atlas_review_batch_chunks chunks JOIN pipeline_keys USING(load_id,pipeline_key)
-                        GROUP BY chunks.load_id,chunks.pipeline_key,chunks.batch_key
-                    ),missing_chunks AS (
-                        SELECT batches.load_id,batches.pipeline_key,COUNT(*) AS missing_chunks
-                        FROM atlas_review_batches batches JOIN pipeline_keys USING(load_id,pipeline_key)
-                        LEFT JOIN chunk_counts chunks USING(load_id,pipeline_key,batch_key)
-                        WHERE batches.chunk_count<>COALESCE(chunks.actual_count,0)
-                        GROUP BY batches.load_id,batches.pipeline_key
+                    WITH current_sources AS (
+                        SELECT s.load_id,s.id FROM atlas_sources s JOIN atlas_current c USING(load_id)
+                        WHERE c.name='latest'
+                          AND s.id IN (SELECT value FROM jsonb_array_elements_text(CAST(:source_ids AS JSONB)))
                     )
                     SELECT s.id AS source_id,r.pipeline_key,a.scope,r.receipt,
-                        COALESCE(p.task_count,0) AS task_count,COALESCE(raw.raw_count,0) AS raw_count,
-                        COALESCE(links.linked_count,0) AS linked_count,
-                        COALESCE(links.missing_batches,0) AS missing_batches,
-                        COALESCE(chunks.missing_chunks,0) AS missing_chunks
+                        COALESCE(p.task_count,0) AS task_count,raw.raw_count,
+                        links.linked_count,links.missing_batches,chunks.missing_chunks
                     FROM current_sources s
                     LEFT JOIN atlas_review_current r ON r.load_id=s.load_id AND r.source_id=s.id
                     LEFT JOIN atlas_assessments a ON a.load_id=r.load_id AND a.pipeline_key=r.pipeline_key
-                    LEFT JOIN population_counts p ON p.load_id=r.load_id AND p.pipeline_key=r.pipeline_key
-                    LEFT JOIN raw_counts raw ON raw.load_id=r.load_id AND raw.pipeline_key=r.pipeline_key
-                    LEFT JOIN link_counts links ON links.load_id=r.load_id AND links.pipeline_key=r.pipeline_key
-                    LEFT JOIN missing_chunks chunks ON chunks.load_id=r.load_id AND chunks.pipeline_key=r.pipeline_key
+                    LEFT JOIN LATERAL (
+                        SELECT SUM(p.sample_count)::BIGINT AS task_count FROM atlas_populations p
+                        WHERE p.load_id=r.load_id AND p.pipeline_key=r.pipeline_key
+                    ) p ON TRUE
+                    LEFT JOIN LATERAL (
+                        SELECT COUNT(*) AS raw_count FROM atlas_raw_reviews raw
+                        WHERE raw.load_id=r.load_id AND raw.pipeline_key=r.pipeline_key
+                    ) raw ON TRUE
+                    LEFT JOIN LATERAL (
+                        SELECT COUNT(*) AS linked_count,
+                            COUNT(*) FILTER (WHERE batches.batch_key IS NULL) AS missing_batches
+                        FROM atlas_review_batch_tasks links
+                        LEFT JOIN atlas_review_batches batches ON batches.load_id=links.load_id
+                            AND batches.pipeline_key=links.pipeline_key AND batches.batch_key=links.batch_key
+                        WHERE links.load_id=r.load_id AND links.pipeline_key=r.pipeline_key
+                    ) links ON TRUE
+                    LEFT JOIN LATERAL (
+                        SELECT COUNT(*) AS missing_chunks FROM atlas_review_batches batches
+                        WHERE batches.load_id=r.load_id AND batches.pipeline_key=r.pipeline_key
+                          AND batches.chunk_count<>(SELECT COUNT(*) FROM atlas_review_batch_chunks chunks
+                              WHERE chunks.load_id=batches.load_id AND chunks.pipeline_key=batches.pipeline_key
+                                AND chunks.batch_key=batches.batch_key)
+                    ) chunks ON TRUE
                     ORDER BY s.id
                 """
                         ),

@@ -4021,10 +4021,11 @@ def test_archived_lineage_panel_grandfathered_with_marker(catalog_database, cata
 
 
 @pytest.mark.parametrize("shared_batch", [False, True, "chunked"])
+@pytest.mark.parametrize("inventory_batch", [1, 16])
 def test_additive_sample_browse_preserves_catalog_and_exposes_raw_reviews(
-    catalog_database, catalog_query, tmp_path, shared_batch, monkeypatch
+    catalog_database, catalog_query, tmp_path, shared_batch, inventory_batch, monkeypatch
 ):
-    monkeypatch.setattr("infra.marina.apps.rl_data_catalog.server.reviews.QC_INVENTORY_BATCH", 1)
+    monkeypatch.setattr("infra.marina.apps.rl_data_catalog.server.reviews.QC_INVENTORY_BATCH", inventory_batch)
     root = str(tmp_path / "sample-browse")
     publish_sample(root, "sample-browse")
     load_catalog(CurationCatalog(root), catalog_query)
@@ -4172,6 +4173,12 @@ def test_additive_sample_browse_preserves_catalog_and_exposes_raw_reviews(
             candidate.close()
         detail = client.get("/evidence", params={"source_id": "Marin:math", "task_id": items[0]["task_id"]}).json()
         assert detail["raw_review"] == expected_raw[0]["record"]
+        # An archived copy of the same pipeline must not inflate the selected panel.
+        catalog_query(
+            "INSERT INTO atlas_raw_reviews SELECT 'archive-'||load_id,pipeline_key,task_id,record,reviewer "
+            "FROM atlas_raw_reviews WHERE load_id=:load AND pipeline_key=:key",
+            {"load": load_id, "key": key},
+        )
         inventory = client.get("/qc/inventory").json()
         assert (
             len(inventory["panels"])
@@ -4183,6 +4190,12 @@ def test_additive_sample_browse_preserves_catalog_and_exposes_raw_reviews(
         assert panel["task_count"] == panel["raw_count"] == 3
         assert panel["linked_count"] == (3 if shared_batch else 0)
         assert panel["missing_batches"] == 0
+        unreviewed = next(row for row in inventory["panels"] if row["source_id"] == "Marin:unreviewed")
+        assert unreviewed["pipeline_key"] is None
+        assert {
+            name: unreviewed[name]
+            for name in ("task_count", "raw_count", "linked_count", "missing_batches", "missing_chunks")
+        } == dict.fromkeys(("task_count", "raw_count", "linked_count", "missing_batches", "missing_chunks"), 0)
         legend = client.get("/qc/defects").json()
         ambiguity = next(row for row in legend["defects"] if row["id"] == "ambiguity")
         assert ambiguity["count"] == 1
