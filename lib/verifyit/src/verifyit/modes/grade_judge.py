@@ -544,7 +544,7 @@ def _label_completion(
             usage,
             request=request,
         )
-    options: dict[str, Any] = {"reasoning": {"effort": spec.reasoning_effort}} if spec.reasoning_effort else {}
+    options: JudgeResponsesOptions = {"reasoning": {"effort": spec.reasoning_effort}} if spec.reasoning_effort else {}
     if isinstance(spec.temperature, (int, float)):
         options["temperature"] = spec.temperature
     request = {
@@ -823,6 +823,11 @@ def _complete(spec: JudgeSpec, client: openai.OpenAI, model: str, prompt: str, b
         max_completion_tokens=budget,
         **_chat_options(spec),
     )
+
+
+class JudgeResponsesOptions(TypedDict, total=False):
+    reasoning: dict[str, str]
+    temperature: float
 
 
 class JudgeChatOptions(TypedDict, total=False):

@@ -60,7 +60,7 @@ def rollout_spec(
 
 
 def rollout_limits(task: TaskSpec, limits: RolloutLimits, *, minimum_verifier_timeout: float | None) -> RolloutLimits:
-    """Set phase budgets and allow both phases and cleanup to finish within the attempt.
+    """Apply declared phase deadlines and preserve finite attempt bounds.
 
     Finite actor and verifier budgets extend an existing attempt deadline when their
     combined budget needs more time. Without a separate actor limit, preserve the attempt bound.

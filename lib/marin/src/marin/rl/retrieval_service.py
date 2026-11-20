@@ -24,6 +24,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import COREWEAVE_SECRET_NAMES, SecretBehavior, require_secret
 from rigging.timing import Duration
+from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.openresearcher import OpenResearcherState
 
 from marin.inference.iris import _terminate_job, _wait_for_endpoint
@@ -62,8 +63,7 @@ def stage_index(config: RetrievalServiceConfig) -> None:
         if not target.exists():
             with (source / "bm25" / entry["path"]).open("rb") as reader, target.open("xb") as writer:
                 shutil.copyfileobj(reader, writer, length=8 * 1024 * 1024)
-        with target.open("rb") as stream:
-            actual = hashlib.file_digest(stream, "sha256").hexdigest()
+        actual = file_sha256(StoragePath(str(target)))
         if target.stat().st_size != entry["bytes"] or actual != entry["sha256"]:
             raise ValueError(f"Index file differs from frozen manifest: {relative}")
 
@@ -139,7 +139,7 @@ class RetrievalServiceLaunch:
 
 @contextmanager
 def retrieval_service(launch: RetrievalServiceLaunch) -> Iterator[str]:
-    """Own one service child in the current RL run and wait for its pinned health."""
+    """Yield the ready private HTTP endpoint of a service owned by the current RL run."""
     if launch.resources.target_cluster is not None:
         raise ValueError("Retrieval service must inherit the RL run cluster")
     if launch.resources.regions is not None and tuple(launch.resources.regions) != (launch.config.region,):

@@ -24,24 +24,27 @@ from rolloutengine.harness.shell import ToolCallResult, ToolContext
 
 RETRIEVAL_RELAY_PORT = 8789
 RETRIEVAL_TIMEOUT = 300
+SEARCH_PATH = "/search"
+DOCUMENT_PATH = "/document"
 GUEST_CLIENT = """import base64, json, sys, urllib.request
 request = json.load(sys.stdin)
 endpoint, target = request.pop("endpoint"), request.pop("target")
 timeout = request.pop("timeout")
+path = request.pop("path")
 def call(path, body):
     req = urllib.request.Request(
         endpoint + path, data=json.dumps(body).encode(), headers={"Content-Type":"application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as response:
         return json.load(response)
 if request["name"] == "search":
-    result = call("/search", request)
+    result = call(path, request)
     with open(target, "w") as output:
         json.dump(result, output, ensure_ascii=False)
 else:
     offset = 0
     with open(target, "wb") as output:
         while True:
-            chunk = call("/document", {**request, "offset":offset})
+            chunk = call(path, {**request, "offset":offset})
             content = base64.b64decode(chunk["data"], validate=True)
             if not content and not chunk["done"]:
                 raise ValueError("Empty nonterminal retrieval chunk")
@@ -61,7 +64,7 @@ class RetrievalServiceSession:
     cleanup: AsyncExitStack
 
     async def _relay(self, request: HttpRequest) -> HttpResponse:
-        if request.method != "POST" or request.path not in {"/search", "/document"}:
+        if request.method != "POST" or request.path not in {SEARCH_PATH, DOCUMENT_PATH}:
             return HttpResponse(404, b"{}")
         response = await self.client.post(self.endpoint + request.path, content=request.body)
         response.raise_for_status()
@@ -79,6 +82,7 @@ class RetrievalServiceSession:
         remote = f"/tmp/retrieval-{uuid.uuid4().hex}.json"
         payload = {
             "endpoint": endpoint,
+            "path": SEARCH_PATH if name == "search" else DOCUMENT_PATH,
             "target": remote,
             "timeout": RETRIEVAL_TIMEOUT,
             "name": name,
