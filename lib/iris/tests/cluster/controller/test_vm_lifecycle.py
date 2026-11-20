@@ -47,6 +47,8 @@ from iris.cluster.platforms.types import (
     WorkerStatus,
 )
 from iris.cluster.platforms.vm_lifecycle import (
+    ControllerRestartNotStarted,
+    restart_controller,
     start_controller,
     stop_controller,
 )
@@ -76,11 +78,13 @@ class FakeWorkerHandle:
         internal_address: str = "10.0.0.1",
         wait_for_connection_result: bool = True,
         healthy: bool = True,
+        bootstrap_fails: bool = False,
     ):
         self._vm_id = vm_id
         self._internal_address = internal_address
         self._wait_for_connection_result = wait_for_connection_result
         self._healthy = healthy
+        self._bootstrap_fails = bootstrap_fails
         self.terminated = False
         self.bootstrap_calls: list[str] = []
         self.labels: dict[str, str] = {}
@@ -126,6 +130,8 @@ class FakeWorkerHandle:
 
     def bootstrap(self, script: str) -> None:
         self.bootstrap_calls.append(script)
+        if self._bootstrap_fails:
+            raise RuntimeError("bootstrap failed")
 
     def terminate(self, *, wait: bool = False) -> None:
         self.terminated = True
@@ -373,3 +379,31 @@ def test_stop_controller_duplicate_vms_raises(config):
 
     with pytest.raises(RuntimeError, match="Multiple controller VMs found"):
         stop_controller(platform, config)
+
+
+def test_restart_controller_ssh_probe_failure_does_not_bootstrap(config):
+    existing = FakeWorkerHandle(healthy=False)
+    platform = FakePlatform(existing_vms=[existing])
+
+    with pytest.raises(ControllerRestartNotStarted):
+        restart_controller(platform, config)
+
+    assert existing.bootstrap_calls == []
+
+
+def test_restart_controller_missing_vm_is_not_started(config):
+    platform = FakePlatform(existing_vms=[])
+
+    with pytest.raises(ControllerRestartNotStarted, match="No existing controller VM"):
+        restart_controller(platform, config)
+
+
+def test_restart_controller_bootstrap_failure_is_not_prestart(config):
+    existing = FakeWorkerHandle(bootstrap_fails=True)
+    platform = FakePlatform(existing_vms=[existing])
+
+    with pytest.raises(RuntimeError, match="bootstrap failed") as error:
+        restart_controller(platform, config)
+
+    assert not isinstance(error.value, ControllerRestartNotStarted)
+    assert existing.bootstrap_calls

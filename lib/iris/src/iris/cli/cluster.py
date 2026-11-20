@@ -68,6 +68,7 @@ from iris.cluster.platforms.gcp.worker_bootstrap import build_worker_bootstrap_s
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
 from iris.cluster.platforms.k8s.controller import PRINCIPAL_DIRECTORY_ENV_VAR, resolve_controller_secrets
 from iris.cluster.platforms.types import Labels
+from iris.cluster.platforms.vm_lifecycle import ControllerRestartNotStarted
 from iris.cluster.provenance import is_same_image_provenance, provenance_from_proto
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2
 from iris.rpc.proto_display import format_accelerator_display, vm_state_name
@@ -1371,6 +1372,7 @@ def controller_restart(
     else:
         pre_deploy_checkpoint = _take_pre_deploy_checkpoint(ctx, controller_url, checkpoint_timeout)
 
+    active_image = prior_record.image if prior_record else config.controller.image
     new_image = _build_forward_image(
         ctx,
         config,
@@ -1395,6 +1397,18 @@ def controller_restart(
 
     try:
         address = bundle.controller.restart_controller(config)
+    except ControllerRestartNotStarted as e:
+        click.echo(f"Controller restart did not reach the VM: {e}", err=True)
+        if prior_record and prior_record.phase in (RolloutPhase.COMMITTED, RolloutPhase.ROLLED_BACK):
+            safe_record = prior_record
+        else:
+            safe_record = RolloutRecord(
+                phase=RolloutPhase.COMMITTED,
+                image=active_image,
+                updated_at_ms=int(time.time() * 1000),
+            )
+        _record_rollout(remote_state_dir, safe_record)
+        raise SystemExit(1) from e
     except Exception as e:
         click.echo(f"Deploy failed its post-restart health check: {e}", err=True)
         _auto_rollback(bundle, config, remote_state_dir, previous_image, pre_deploy_checkpoint)
