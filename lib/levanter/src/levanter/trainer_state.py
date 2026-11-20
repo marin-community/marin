@@ -257,8 +257,14 @@ def take_train_step(
     trainable_model = trainables_only(model, is_trainable)
     _, trainable_model = partition_for_grad_overwrite(trainable_model)
 
-    updates, opt_state = optimizer.update(train_grads, opt_state, params=trainable_model, obj_fn=obj_fun, loss=loss)
-    updates = jax.tree.map(lambda update: update * jnp.asarray(learning_rate_scale, dtype=update.dtype), updates)
+    updates, opt_state = optimizer.update(
+        train_grads,
+        opt_state,
+        params=trainable_model,
+        obj_fn=obj_fun,
+        loss=loss,
+        learning_rate_scale=learning_rate_scale,
+    )
     model = apply_updates(model, updates, overwrites)
 
     return model, opt_state, updates

@@ -42,6 +42,7 @@ from levanter.grug.grug_moe import (
 from levanter.testing.devices import use_test_devices
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
+from levanter.trainer_state import TrainerState
 from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import StepContext
 from marin.testing.moe import ragged_ep
@@ -1886,3 +1887,50 @@ def test_muonh_resume_into_extension_scales_every_lr_group(tmp_path):
                     ratio / 0.05, rel=0.02
                 )
             params = optax.apply_updates(params, updates)
+
+
+def test_runtime_cooldown_enters_each_hero_optimizer_before_its_projection():
+    config = GrugMoeMuonHConfig(
+        learning_rate=0.2,
+        adam_lr=0.03,
+        warmup=0,
+        lr_schedule="constant",
+        use_syrk=False,
+    )
+    mesh = Mesh(np.asarray(jax.devices()[:1]), ("expert",), axis_types=(AxisType.Explicit,))
+    rng = np.random.default_rng(29)
+
+    def matrix(*shape):
+        return jnp.asarray(rng.normal(size=shape).astype(np.float32))
+
+    with jax.set_mesh(mesh):
+        params = {
+            "stacked_blocks": {"stacked": {"mlp": {"expert_mlp": {"w_up": matrix(1, 3, 8, 4)}}}},
+            "lm_head": matrix(8, 4),
+            "token_embed": matrix(8, 4),
+        }
+        grads = jax.tree.map(lambda leaf: matrix(*leaf.shape), params)
+        optimizer = config.build(4750)
+        state = TrainerState.init(optimizer, params, key=jax.random.PRNGKey(0), mp=jmp.get_policy("f32"))
+
+        @eqx.filter_jit
+        def take_step(state, scale):
+            return state.take_step(grads, key=state.training_key, learning_rate_scale=scale)[0]
+
+        for scale in (1.0, 0.55, 0.1):
+            expected_optimizer = dataclasses.replace(
+                config,
+                learning_rate=config.learning_rate * scale,
+                adam_lr=config.adam_lr * scale,
+            ).build(4750)
+            expected_updates, _ = expected_optimizer.update(grads, state.opt_state, state.model)
+            expected = optax.apply_updates(state.model, expected_updates)
+            state = take_step(state, jnp.asarray(scale))
+            for actual, target in zip(jax.tree.leaves(state.model), jax.tree.leaves(expected), strict=True):
+                np.testing.assert_allclose(actual, target, rtol=1e-5, atol=1e-6)
+            np.testing.assert_allclose(
+                jnp.linalg.norm(state.model["lm_head"]), jnp.linalg.norm(params["lm_head"]), rtol=1e-5
+            )
+            bank = state.model["stacked_blocks"]["stacked"]["mlp"]["expert_mlp"]["w_up"]
+            initial_bank = params["stacked_blocks"]["stacked"]["mlp"]["expert_mlp"]["w_up"]
+            np.testing.assert_allclose(jnp.linalg.norm(bank), jnp.linalg.norm(initial_bank), rtol=1e-5)

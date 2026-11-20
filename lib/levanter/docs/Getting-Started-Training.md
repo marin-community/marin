@@ -120,8 +120,10 @@ trainer:
 
 The cooldown uses the duration minus both reserves. In this example, usable time
 is 19h10m and the final 2h52m30s decreases the update multiplier linearly to 0.1.
-Rank zero broadcasts the multiplier together with its stop decision. It scales
-optimizer updates after moment calculations, so the optimizer's step-based
+Rank zero broadcasts the multiplier together with its stop decision. Optimizers opt in by wrapping their LR schedules in
+`levanter.optim.config.ScaledLrSchedule` with `optax.inject_hyperparams`; hero-EP
+MuonH uses this control for all three groups. The multiplier enters the actual
+LR before moment-preserving norm projections. The optimizer's step-based
 schedule (including any warmup) still applies. Use a constant base schedule after
 warmup for a plateau followed by this cooldown. The multiplier is logged as
 `optim/learning_rate_scale`; the completion receipt records the last applied

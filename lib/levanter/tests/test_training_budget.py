@@ -15,6 +15,7 @@ import pytest
 
 import levanter.training_budget as training_budget
 from levanter.checkpoint import CheckpointRetention, CheckpointerConfig, load_checkpoint
+from levanter.optim.config import ScaledLrSchedule
 from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.trainer_state import TrainerState
@@ -143,9 +144,15 @@ def test_wall_clock_cooldown_scales_both_adam_groups_after_step_warmup(tmp_path,
     def curve(peak):
         return optax.join_schedules([optax.linear_schedule(0, peak, 30), optax.constant_schedule(peak)], [30])
 
-    optimizer = optax.multi_transform(
-        {"muonh": optax.adam(curve(0.1)), "adam": optax.adam(curve(0.03))},
-        {"muonh": "muonh", "adam": "adam"},
+    def two_groups(learning_rate, adam_lr):
+        return optax.multi_transform(
+            {"muonh": optax.adam(learning_rate), "adam": optax.adam(adam_lr)},
+            {"muonh": "muonh", "adam": "adam"},
+        )
+
+    optimizer = optax.inject_hyperparams(two_groups)(
+        learning_rate=ScaledLrSchedule(curve(0.1)),
+        adam_lr=ScaledLrSchedule(curve(0.03)),
     )
     batch = hax.named(jnp.zeros(1), hax.Axis("batch", 1))
 
@@ -175,9 +182,10 @@ def test_wall_clock_cooldown_scales_both_adam_groups_after_step_warmup(tmp_path,
     assert receipt["final_learning_rate_scale"] == pytest.approx(0.105, abs=1e-6)
     restored = load_checkpoint({"model": {"muonh": jnp.asarray(0.0), "adam": jnp.asarray(0.0)}}, receipt["checkpoint"])
     expected = {"muonh": jnp.asarray(1.0), "adam": jnp.asarray(2.0)}
-    opt_state = optimizer.init(expected)
+    reference_optimizer = two_groups(curve(0.1), curve(0.03))
+    opt_state = reference_optimizer.init(expected)
     for scale in [1.0] * 33 + [0.55, 0.105]:
-        updates, opt_state = optimizer.update(jax.tree.map(jnp.ones_like, expected), opt_state, expected)
+        updates, opt_state = reference_optimizer.update(jax.tree.map(jnp.ones_like, expected), opt_state, expected)
         expected = optax.apply_updates(expected, jax.tree.map(lambda update: update * scale, updates))
     for group in expected:
         np.testing.assert_allclose(restored["model"][group], expected[group], rtol=1e-6)

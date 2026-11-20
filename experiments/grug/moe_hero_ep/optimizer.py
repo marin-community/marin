@@ -7,7 +7,7 @@ from enum import StrEnum
 import jax
 import jax.numpy as jnp
 import optax
-from levanter.optim.config import OptimizerConfig
+from levanter.optim.config import OptimizerConfig, ScaledLrSchedule
 from levanter.optim.util import CoefficientType
 from levanter.utils.jax_utils import leaf_key_paths
 
@@ -301,8 +301,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             return optax.multi_transform(transforms, self.create_mask)
 
         return optax.inject_hyperparams(optimizer)(
-            learning_rate=learning_rate_schedule,
-            adam_lr=adam_lr_schedule,
+            learning_rate=ScaledLrSchedule(learning_rate_schedule),
+            adam_lr=ScaledLrSchedule(adam_lr_schedule),
         )
 
     def create_mask(self, params):

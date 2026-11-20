@@ -52,7 +52,8 @@ After a 30-step linear warmup the base optimizer stays at peak LR. A rank-zero
 monotonic-clock controller broadcasts an update multiplier that decreases
 linearly from 1 to 0.1 over the final 15% of usable training time. With these
 reserves, usable time is 19h10m, cooldown starts at 16h17m30s and lasts 2h52m30s.
-It scales both optimizer groups without changing their moment calculations.
+Optax schedules apply the multiplier to all three optimizer groups before their
+updates, preserving MuonH/AdamH norm projections and moment calculations.
 Completion records and checks the final applied multiplier; telemetry logs it
 as `optim/learning_rate_scale`. These settings are experiment declarations,
 not restrictions on other schedule, precision or special-token choices.
