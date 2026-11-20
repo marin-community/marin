@@ -17,6 +17,7 @@ from marin.datakit.download.nanoswe_lightning import (
     SOURCE_ID,
     SOURCE_NAME,
     SPLIT_GLOBS,
+    TRANSFORM_VERSION,
     Split,
     transform,
     transform_chat,
@@ -27,8 +28,6 @@ from marin.execution.step_spec import StepSpec
 from rigging.log_setup import configure_logging
 
 HF_REVISION = "64d22ccf2cf5c7693e19f329e5d56d2ea34e1cad"
-# v2: no outcome tag, JSON tool-call arguments, harness tool definitions, rows without a task id or grade dropped.
-TRANSFORM_VERSION = "v2"
 
 
 def download_step() -> StepSpec:

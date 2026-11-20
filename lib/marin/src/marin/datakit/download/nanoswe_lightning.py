@@ -21,6 +21,7 @@ rollouts and hold out tasks; rows without a task id or a boolean grade are dropp
 
 import json
 from enum import StrEnum
+from typing import NamedTuple
 
 import pyarrow as pa
 from fray.types import ResourceConfig
@@ -39,6 +40,10 @@ from marin.datakit.download.rollout_transforms import (
 
 SOURCE_NAME = "nanoswe-lightning"
 SOURCE_ID = "nanoswe/nanoswe-trajs-261002"
+# Keys the processed outputs; bump it with any change to how rows convert. v3 checks every file_editor argument
+# against the harness schema; v2 dropped the outcome tag, wrote tool-call arguments as JSON and pinned the harness
+# tool definitions.
+TRANSFORM_VERSION = "v3"
 
 # Columns carried from the source row into every output document.
 METADATA_FIELDS = ("instance_id", "verified", "origin", "exit_status", "traj_hash", "n_toolcalls")
@@ -102,7 +107,8 @@ FILE_EDITOR_TOOL = {
     },
 }
 TOOLS = (BASH_TOOL, FILE_EDITOR_TOOL)
-_FILE_EDITOR_PARAMETERS = FILE_EDITOR_TOOL["function"]["parameters"]["properties"]
+_FILE_EDITOR_SCHEMA = FILE_EDITOR_TOOL["function"]["parameters"]
+_SHARD_TEMPLATE = "data-{shard:05d}-of-{total:05d}.parquet"
 
 
 class Split(StrEnum):
@@ -122,6 +128,31 @@ def _has_task_and_grade(row: dict) -> bool:
     return isinstance(instance_id, str) and bool(instance_id) and isinstance(row.get("verified"), bool)
 
 
+class ToolCall(NamedTuple):
+    name: str
+    arguments: dict
+    reasoning: str
+
+
+def _matches(value: object, schema: dict) -> bool:
+    """Whether ``value`` satisfies the subset of JSON Schema the harness tool definitions use."""
+    kind = schema.get("type")
+    if kind == "string" and not isinstance(value, str):
+        return False
+    if kind == "integer" and (not isinstance(value, int) or isinstance(value, bool)):
+        return False
+    if kind == "array":
+        if not isinstance(value, list) or not schema.get("minItems", 0) <= len(value) <= schema.get(
+            "maxItems", len(value)
+        ):
+            return False
+        if "items" in schema and not all(_matches(item, schema["items"]) for item in value):
+            return False
+    if "enum" in schema and value not in schema["enum"]:
+        return False
+    return "minimum" not in schema or value >= schema["minimum"]
+
+
 def _harness_arguments(name: str, arguments: dict) -> dict | None:
     """Return the arguments the harness would act on, or None if the harness would reject the call."""
     if name == "bash":
@@ -132,18 +163,17 @@ def _harness_arguments(name: str, arguments: dict) -> dict | None:
             counters.pipeline.update_counter(f"{SOURCE_NAME}/bash_extra_arguments_dropped", 1)
         return {"command": command}
     if name == "file_editor":
-        if not set(arguments) <= set(_FILE_EDITOR_PARAMETERS):
+        properties = _FILE_EDITOR_SCHEMA["properties"]
+        if not set(arguments) <= set(properties) or not set(_FILE_EDITOR_SCHEMA["required"]) <= set(arguments):
             return None
-        if arguments.get("command") not in _FILE_EDITOR_PARAMETERS["command"]["enum"]:
-            return None
-        if not isinstance(arguments.get("path"), str):
+        if not all(_matches(value, properties[key]) for key, value in arguments.items()):
             return None
         return arguments
     return None
 
 
-def _tool_call(message: dict) -> tuple[str, dict, str] | None:
-    """Return ``(name, arguments, reasoning)`` for an assistant turn, or None if it is malformed."""
+def _tool_call(message: dict) -> ToolCall | None:
+    """Return an assistant turn's tool call, or None if it is malformed."""
     parts = message.get("parts") or []
     if not parts or parts[-1].get("type") != "python" or any(part.get("type") != "text" for part in parts[:-1]):
         return None
@@ -165,7 +195,7 @@ def _tool_call(message: dict) -> tuple[str, dict, str] | None:
     if arguments is None:
         return None
     reasoning = "\n\n".join(text for text in ((part.get("text") or "").strip() for part in parts[:-1]) if text)
-    return name, arguments, reasoning
+    return ToolCall(name, arguments, reasoning)
 
 
 def _openai_messages(row: dict) -> list[dict] | None:
@@ -181,19 +211,18 @@ def _openai_messages(row: dict) -> list[dict] | None:
             call = _tool_call(message)
             if call is None:
                 return None
-            name, arguments, reasoning = call
             call_id = f"call_{index}"
             converted.append(
                 {
                     "role": "assistant",
                     "content": "",
-                    "reasoning_content": reasoning,
+                    "reasoning_content": call.reasoning,
                     "tool_calls": [
-                        {"id": call_id, "type": "function", "function": {"name": name, "arguments": arguments}}
+                        {"id": call_id, "type": "function", "function": {"name": call.name, "arguments": call.arguments}}
                     ],
                 }
             )
-            pending = (call_id, name)
+            pending = (call_id, call.name)
         elif role == "user" and pending is not None:
             call_id, name = pending
             converted.append(
@@ -257,7 +286,7 @@ def transform(input_path: str, output_path: str, split: Split) -> None:
         Dataset.from_files(prefix_join(input_path, SPLIT_GLOBS[split]))
         .flat_map(load_parquet_batched)
         .flat_map(row_to_doc)
-        .write_parquet(prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"), skip_existing=True)
+        .write_parquet(prefix_join(output_path, _SHARD_TEMPLATE), skip_existing=True)
     )
     ZephyrContext(name=f"{SOURCE_NAME}-{split}-transform", resources=ResourceConfig(cpu=1, ram="16g")).execute(pipeline)
 
@@ -267,11 +296,7 @@ def transform_chat(input_path: str, output_path: str, split: Split) -> None:
         Dataset.from_files(prefix_join(input_path, SPLIT_GLOBS[split]))
         .flat_map(load_parquet_batched)
         .flat_map(row_to_chat_doc)
-        .write_parquet(
-            prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"),
-            schema=SOURCE_CHAT_SCHEMA,
-            skip_existing=True,
-        )
+        .write_parquet(prefix_join(output_path, _SHARD_TEMPLATE), schema=SOURCE_CHAT_SCHEMA, skip_existing=True)
     )
     ZephyrContext(name=f"{SOURCE_NAME}-{split}-chat-transform", resources=ResourceConfig(cpu=1, ram="16g")).execute(
         pipeline
