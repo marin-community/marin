@@ -6,13 +6,13 @@
 import json
 import re
 import subprocess
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from finestore.rl.difficulty import PROTOCOL_ID, PROTOCOLS
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 
-from experiments.post_training.task_curation.difficulty.importer import population_revision
 from experiments.post_training.task_curation.difficulty.legacy import legacy_gaps
 from experiments.post_training.task_curation.difficulty.planner import (
     Action,
@@ -23,6 +23,7 @@ from experiments.post_training.task_curation.difficulty.planner import (
     RecheckExecutabilityAdmission,
     action_payload,
 )
+from experiments.post_training.task_curation.difficulty.selection import selected_tasks
 from experiments.post_training.task_curation.difficulty.state import GapReason
 from experiments.post_training.task_curation.difficulty_preparation import prepare_source
 from experiments.post_training.task_curation.difficulty_samples import load_queue_sources
@@ -87,42 +88,41 @@ def build_factory(action: BuildTaskSpecFactory, local: Path) -> dict:
     }
 
 
+@dataclass(frozen=True)
+class AdmissionBlocker:
+    task_id: str
+    task_sha256: str
+    reason: str
+
+
 def recheck_admission(action: RecheckExecutabilityAdmission, local: Path) -> dict:
     """Re-run frozen executability checks; retain blocked contracts as evidence."""
     sources = load_queue_sources(action.source.queue_uri, action.source.queue_sha256, (action.source.source_id,))
     (source,) = sources
-    if population_revision(source.sample.model_dump(mode="json")) != action.source.registry_revision:
-        raise ValueError("Admission recheck population changed after planning")
-    expected = {(task.task_id, task.task_sha256) for task in source.sample.tasks}
-    if {(task, sha) for task, sha, _ in action.source.tasks} != expected:
-        raise ValueError("Admission recheck does not cover the complete frozen sample")
     prepared = prepare_source(source, local / "admission")
-    if {task.task_id for task in prepared.tasks} != {task for task, _ in expected}:
-        raise ValueError("Admission recheck omitted frozen tasks")
+    tasks = selected_tasks(prepared, action.source)
+    if len(tasks) != len(prepared.sample.tasks):
+        raise ValueError("Admission recheck does not cover the complete frozen sample")
     hashes = {task.task_id: task.task_sha256 for task in source.sample.tasks}
-    blockers = [
-        {"task_id": task.task_id, "task_sha256": hashes[task.task_id], "reason": task.reason}
-        for task in prepared.tasks
-        if task.reason
-    ]
+    blockers = [AdmissionBlocker(task.task_id, hashes[task.task_id], task.reason) for task in tasks if task.reason]
     result = {
         "source_id": action.source.source_id,
         "registry_revision": action.source.registry_revision,
         "checked_tasks": len(prepared.tasks),
         "sample_receipt": prepared.sample_receipt.model_dump(mode="json"),
-        "blockers": blockers,
+        "blockers": [asdict(blocker) for blocker in blockers],
         "population_changed": False,
     }
     if not blockers:
         return {**result, "status": "ready"}
-    gap = legacy_gaps(blockers[0]["reason"])[0]
+    gap = legacy_gaps(blockers[0].reason)[0]
     return {
         **result,
         "status": "blocked",
         "reason": gap.reason,
         "detail": (
             "Frozen executability admission recheck still requires: "
-            + "; ".join(sorted({blocker["reason"] for blocker in blockers}))
+            + "; ".join(sorted({blocker.reason for blocker in blockers}))
             + ". Resolve the executor/provider contract or qualify a new admission population. "
             "Frozen tasks were retained."
         ),

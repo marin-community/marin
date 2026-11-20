@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from dataclasses import asdict, dataclass, replace
 from typing import Protocol
 
-from finestore.rl.difficulty import Solver
+from finestore.rl.difficulty import DifficultyGap, Solver
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.difficulty.ledger import digest
@@ -23,7 +23,10 @@ from experiments.post_training.task_curation.difficulty.state import (
 
 MAX_TASKS_PER_JOB = 20
 MAX_GPU_HOURS_PER_JOB = 40.0
-ADMISSION_CAPABILITY_PREFIXES = ("executability_admission_pending:", "filtration_findings_admission_pending:")
+ADMISSION_CAPABILITY_PREFIXES = tuple(
+    f"{gap.value}:"
+    for gap in (DifficultyGap.EXECUTABILITY_ADMISSION_PENDING, DifficultyGap.FILTRATION_FINDINGS_ADMISSION_PENDING)
+)
 
 
 @dataclass(frozen=True)
