@@ -548,6 +548,7 @@ def build_evaluation_batch(
         max_concurrent=spec.max_concurrent,
         instances=spec.instances,
         judge=judge,
+        prepared_judges=(policy_judge,) if policy_judge is not None else (),
         secret_env=secret_env,
         egress_allow=tuple(dict.fromkeys(rule for _, definition in definitions for rule in definition.egress_allow)),
         source_model_config=source_model_config,

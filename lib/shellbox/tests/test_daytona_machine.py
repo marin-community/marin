@@ -32,6 +32,7 @@ from daytona import (
     CreateSandboxFromSnapshotParams,
     DaytonaConfig,
     DaytonaConflictError,
+    DaytonaError,
     DaytonaNotFoundError,
     Image,
     Resources,
@@ -46,6 +47,7 @@ from shellbox.backends.daytona.machine import (
     DaytonaNetworkMode,
     DaytonaNetworkPolicy,
     _create_sandbox,
+    _delete_named_sandbox,
 )
 from shellbox.backends.daytona.snapshot import (
     SnapshotRequest,
@@ -1516,3 +1518,29 @@ def test_snapshot_request_interchange_rejects_a_mismatched_name(tmp_path) -> Non
 
     del spec["name"]
     assert SnapshotRequest.from_dict(spec) == request
+
+
+def test_sandbox_deletion_retries_a_gateway_error(monkeypatch) -> None:
+    class FlakyGateway:
+        def __init__(self):
+            self.gets = 0
+            self.deleted = []
+
+        async def get(self, name):
+            self.gets += 1
+            if self.gets == 1:
+                raise DaytonaError("Failed to get sandbox: 502 Bad Gateway", status_code=502)
+            return SimpleNamespace(name=name)
+
+        async def delete(self, sandbox):
+            self.deleted.append(sandbox.name)
+
+    async def no_wait(delay):
+        pass
+
+    monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", no_wait)
+    client = FlakyGateway()
+
+    asyncio.run(_delete_named_sandbox(client, "fixture"))
+
+    assert client.deleted == ["fixture"]
