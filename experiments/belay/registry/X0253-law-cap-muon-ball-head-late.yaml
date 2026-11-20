@@ -1,0 +1,12 @@
+id: X0253
+slug: law-cap-muon-ball-head-late
+name: Law-cap Muon ball + head/late anneals
+category: Optimizers
+summary: 🤖 Posted on behalf of @WhenWen.
+source: intake
+status: approved
+track: competitive-d512
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-7030639376
+  author: WhenWen
+  approved_by: WhenWen (trusted)
