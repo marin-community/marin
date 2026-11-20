@@ -183,6 +183,31 @@ or an extra GPU probe. The aggregate allocation remains at most 256 H100.
 CPU tests cover quota-buffer behavior, 102,400-token collation and checkpoint
 adoption. Actual learner execution provides the GPU behavior evidence.
 
+### Mochi optimizer settings and open SFT follow-up
+
+[PR #11640](https://github.com/marin-community/marin/pull/11640) is carried as
+`specs/mochi-optimizer.yaml`, a standalone legacy Grug `OptimizerConfig` preset.
+It selects corrected stacked-expert grouping, the hero 4-D Newton–Schulz backend,
+`expert_normalization: all_experts`, `global_grad_norm: 1.0`, and `use_syrk: true`.
+It retains the source PR's Snowball beta1, beta2, epsilon and learning-rate schedule.
+To opt in, replace the `optimizer` object in a copy of a legacy Grug recipe with
+this document and update that recipe's SHA-256 in its copied run spec. No existing
+run spec selects this preset. `specs/sft.yaml`, `specs/round1.yaml` and
+`sft-smoke.yaml` retain their current bytes and pins.
+
+The native `snowball_h100` profile keeps Adam; `snowball_exp3` keeps its separate
+hero optimizer. The Mochi RL rounds adopt pinned HF exports and do not run SFT.
+The generic `grug_moe_muonh_v1` optimizer now uses the corrected grouping from
+[PR #11639](https://github.com/marin-community/marin/pull/11639), including for
+historical Grug recipes loaded with this source. Reproduce historical Grug runs
+with their original pinned source revision; active run source pins are unchanged.
+
+Open follow-up: the authors of #11639 and #11640 report two runs with experts in
+MuonH on the 64-H100 data8 layout that did not finish their first step. The cause
+is unresolved. The preset is not qualified for that 64-H100 data8 layout; diagnose
+the first-step stall and confirm the SYRK backend on H100 before at-scale use.
+No GPU job or smoke was launched for this integration.
+
 ### Starting RL from a published HF export
 
 An `adopted_sft` file with `kind: hf_export` names an HF repository, its full
