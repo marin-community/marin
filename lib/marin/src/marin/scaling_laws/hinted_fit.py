@@ -114,22 +114,23 @@ class LadderScores:
     hinted: dict[HintMethod, ScoreCells]
     """Per hint method, its H > 0 cells."""
 
-    bits_per_byte: np.ndarray
+    bits_per_byte: np.ndarray | None
     """(n_models,) bits per byte of each model, aligned with the rows of `unhinted`; the first stage of
-    the two-stage baseline. Not resampled by the bootstrap."""
+    the two-stage baseline, which is skipped when this is None. Not resampled by the bootstrap."""
 
     def __post_init__(self):
         if not self.hinted:
             raise ValueError("at least one hint method is required")
         if np.any(self.unhinted.hint != 0):
             raise ValueError("unhinted cells must have hint == 0")
-        if self.bits_per_byte.shape != self.unhinted.capability.shape:
-            raise ValueError(
-                f"bits_per_byte {self.bits_per_byte.shape} must align with the unhinted cells "
-                f"{self.unhinted.capability.shape}"
-            )
-        if not np.all(np.isfinite(self.bits_per_byte)):
-            raise ValueError("bits_per_byte must be finite")
+        if self.bits_per_byte is not None:
+            if self.bits_per_byte.shape != self.unhinted.capability.shape:
+                raise ValueError(
+                    f"bits_per_byte {self.bits_per_byte.shape} must align with the unhinted cells "
+                    f"{self.unhinted.capability.shape}"
+                )
+            if not np.all(np.isfinite(self.bits_per_byte)):
+                raise ValueError("bits_per_byte must be finite")
         mismatched = [m for m, c in self.hinted.items() if c.n_problems != self.unhinted.n_problems]
         if mismatched:
             raise ValueError(f"hinted cells of {mismatched} do not share the unhinted cells' problems")
@@ -141,7 +142,7 @@ class LadderScores:
         return LadderScores(
             unhinted=self.unhinted.take_cells(keep),
             hinted={m: c.take_cells(c.capability <= limit) for m, c in self.hinted.items()},
-            bits_per_byte=self.bits_per_byte[keep],
+            bits_per_byte=None if self.bits_per_byte is None else self.bits_per_byte[keep],
         )
 
     def take_problems(self, problem_indices: np.ndarray) -> "LadderScores":
@@ -269,30 +270,39 @@ class LadderFit:
 
     joint: dict[HintMethod, JointLawParams]
     sigmoid_baseline: SigmoidParams
-    two_stage_baseline: TwoStageParams
+    two_stage_baseline: TwoStageParams | None
+    """None when the ladder has no bits per byte."""
 
     def forecasts(self, target_capability: float) -> dict[ForecastKind, float]:
         """Unhinted accuracy forecasts at `target_capability` (log10 training FLOPs)."""
         per_method = {ForecastKind(m.value): float(p.predict(target_capability, 0.0)) for m, p in self.joint.items()}
-        return {
+        forecasts = {
             **per_method,
             ForecastKind.HINTED_ENSEMBLE: float(np.mean(list(per_method.values()))),
             ForecastKind.SIGMOID_BASELINE: float(self.sigmoid_baseline.predict(target_capability)),
-            ForecastKind.TWO_STAGE_BASELINE: float(self.two_stage_baseline.predict(target_capability)),
         }
+        if self.two_stage_baseline is not None:
+            forecasts[ForecastKind.TWO_STAGE_BASELINE] = float(self.two_stage_baseline.predict(target_capability))
+        return forecasts
 
 
 def fit_ladder(ladder: LadderScores) -> LadderFit:
-    """Fit each hint method's joint law (its hinted cells plus the shared unhinted cells) and both baselines."""
+    """Fit each hint method's joint law (its hinted cells plus the shared unhinted cells) and the baselines.
+
+    The two-stage baseline is fitted only when the ladder has bits per byte.
+    """
     unhinted = ladder.unhinted
     joint = {}
     for method, cells in ladder.hinted.items():
         both = concat_cells([cells, unhinted])
         joint[method] = fit_joint_law(both.capability, both.hint, both.accuracy)
+    two_stage = None
+    if ladder.bits_per_byte is not None:
+        two_stage = fit_two_stage_baseline(unhinted.capability, ladder.bits_per_byte, unhinted.accuracy)
     return LadderFit(
         joint=joint,
         sigmoid_baseline=fit_sigmoid_baseline(unhinted.capability, unhinted.accuracy),
-        two_stage_baseline=fit_two_stage_baseline(unhinted.capability, ladder.bits_per_byte, unhinted.accuracy),
+        two_stage_baseline=two_stage,
     )
 
 

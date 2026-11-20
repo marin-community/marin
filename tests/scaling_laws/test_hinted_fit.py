@@ -18,14 +18,19 @@ from marin.scaling_laws.hinted_fit import (
     fit_two_stage_baseline,
 )
 
-# GSM8K x Delphi cell accuracies from the paper's released rollouts (tatsu-lab/hinted-scaling-laws@c0490e53,
-# data/results). Expected values below are printed by that commit's experiments/forecasting scripts.
+# Cell accuracies from the paper's released rollouts (tatsu-lab/hinted-scaling-laws@c0490e53, data/results):
+# GSM8K x Delphi (base models, seed means) and AIME x Qwen2.5-Instruct (chat models). Expected values below are
+# printed by that commit's experiments/forecasting scripts.
 DELPHI = json.loads((Path(__file__).parent / "delphi_gsm8k_cells.json").read_text())
+AIME_QWEN25 = json.loads((Path(__file__).parent / "aime_qwen25_cells.json").read_text())
+TABLE1_CELLS = {"gsm8k/delphi": DELPHI["seed_mean"], "aime/qwen25": AIME_QWEN25}
 
-# table1.py, GSM8K/Delphi joint-law parameters as printed (b1, b2, b0 to two decimals).
+# table1.py, as printed: joint-law b1, b2, b0 (two decimals) and in-sample MAE in percentage points.
 PAPER_TABLE1 = {
-    HintMethod.MASKING: JointLawParams(0.89, 4.20, -3.95, upper=1.000, lower=0.031, floor=0.0222),
-    HintMethod.TRUNCATION: JointLawParams(1.73, 2.46, -6.53, upper=1.000, lower=0.006, floor=0.0059),
+    ("gsm8k/delphi", HintMethod.MASKING): ((0.89, 4.20, -3.95), 4.11),
+    ("gsm8k/delphi", HintMethod.TRUNCATION): ((1.73, 2.46, -6.53), 1.05),
+    ("aime/qwen25", HintMethod.MASKING): ((1.89, 5.28, 32.66), 3.41),
+    ("aime/qwen25", HintMethod.TRUNCATION): ((1.64, 7.26, 25.44), 5.67),
 }
 # plot.py forecasts: fitted rungs -> absolute error forecasting the 1e23 rung (sigmoid baseline, hinted ensemble).
 PAPER_FORECAST_ERRORS = {
@@ -52,24 +57,26 @@ def _delphi_ladder() -> LadderScores:
         unhinted=unhinted,
         hinted={method: _cells(seed_mean[method.value]) for method in HintMethod},
         # The paper releases no BPB for two of these rungs; the two-stage forecast is checked separately.
-        bits_per_byte=np.ones_like(unhinted.capability),
+        bits_per_byte=None,
     )
 
 
-@pytest.mark.parametrize("method", list(HintMethod))
-def test_joint_law_reproduces_paper_table1_on_delphi(method: HintMethod):
-    seed_mean = DELPHI["seed_mean"]
-    c, h, y = (np.r_[seed_mean[method.value][k], seed_mean["unhinted"][k]] for k in ("capability", "hint", "accuracy"))
+@pytest.mark.parametrize(("pair", "method"), list(PAPER_TABLE1))
+def test_joint_law_reproduces_paper_table1(pair: str, method: HintMethod):
+    cells = TABLE1_CELLS[pair]
+    c, h, y = (np.r_[cells[method.value][k], cells["unhinted"][k]] for k in ("capability", "hint", "accuracy"))
 
     fit = fit_joint_law(c, h, y)
 
-    paper = PAPER_TABLE1[method]
-    assert fit.capability_slope == pytest.approx(paper.capability_slope, abs=0.005)
-    assert fit.hint_slope == pytest.approx(paper.hint_slope, abs=0.005)
-    assert fit.intercept == pytest.approx(paper.intercept, abs=0.005)
-    # lower and floor trade off when both sit near zero accuracy (perturbing inputs by 1e-8 moves the truncation
-    # floor by 0.001), so compare the fitted curves rather than those two parameters.
-    np.testing.assert_allclose(fit.predict(c, h), paper.predict(c, h), atol=2e-3)
+    (b1, b2, b0), paper_mae_pp = PAPER_TABLE1[(pair, method)]
+    assert fit.capability_slope == pytest.approx(b1, abs=0.005)
+    assert fit.hint_slope == pytest.approx(b2, abs=0.005)
+    assert fit.intercept == pytest.approx(b0, abs=0.005)
+    # A, L and F are checked through the in-sample MAE: L and F trade off near zero accuracy (perturbing the inputs
+    # by 1e-8 moves the Delphi truncation floor by 0.001) without changing the fitted curve.
+    residuals = np.abs(fit.predict(c, h) - y)
+    mae_pp = 100 * np.mean([residuals[c == model].mean() for model in np.unique(c)])
+    assert mae_pp == pytest.approx(paper_mae_pp, abs=0.005)
 
 
 def test_forecast_errors_reproduce_paper_on_delphi():
