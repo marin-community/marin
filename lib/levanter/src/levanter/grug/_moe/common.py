@@ -130,16 +130,19 @@ _CHECKPOINT_DISPATCH_INPUT = "grug_moe_dispatch_input"
 _CHECKPOINT_EXPERT_HIDDEN = "grug_moe_expert_hidden"
 _CHECKPOINT_DISPATCH_OUTPUT = "grug_moe_dispatch_output"
 _CHECKPOINT_MOE_OUTPUT = "grug_moe_output"
+# Integer routing maps (send slots, expert rows, group sizes); only ring_filtered tags them so far.
+_CHECKPOINT_ROUTING = "grug_moe_routing"
 
-# Checkpoint names every MoE backend tags on its dispatch tensors. A remat
-# policy of jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+# Checkpoint names MoE backends tag on their dispatch tensors and routing maps. A
+# remat policy of jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
 # keeps these alive for backward instead of re-running expert dispatch —
-# including the EP collectives — during the recompute.
+# including the EP collectives and the routing sorts — during the recompute.
 MOE_REMAT_SAVE_NAMES = (
     _CHECKPOINT_DISPATCH_INPUT,
     _CHECKPOINT_EXPERT_HIDDEN,
     _CHECKPOINT_DISPATCH_OUTPUT,
     _CHECKPOINT_MOE_OUTPUT,
+    _CHECKPOINT_ROUTING,
 )
 
 
