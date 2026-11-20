@@ -169,7 +169,7 @@ def grade_mcq_candidate(spec: McqSpec, candidate: str) -> Reward:
         answer = supergpqa_reference_answer(final_text(candidate), spec.option_texts)
         return scored(float(answer == expected), extracted=answer, expected=expected)
     if spec.extraction is McqExtraction.MEDMCQA_COT_REFERENCE:
-        match = MEDMCQA_FINAL_ANSWER.search(candidate)
+        match = MEDMCQA_FINAL_ANSWER.search(final_text(candidate))
         answer = match.group(1) if match else None
         return scored(float(answer == expected), extracted=answer, expected=expected)
     extracted = candidate.strip().upper()
