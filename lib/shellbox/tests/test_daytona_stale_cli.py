@@ -35,6 +35,7 @@ class FakeClient:
         self.rows = [
             FakeSandbox("idle", old, deleted),
             FakeSandbox("reactivated", old, deleted),
+            FakeSandbox("mismatched", old, deleted),
             FakeSandbox("failed", old, deleted, fail=True),
             FakeSandbox("unknown", None, deleted),
         ]
@@ -54,6 +55,8 @@ class FakeClient:
 
     async def get(self, sandbox_id, request_timeout):
         row = next(row for row in self.rows if row.id == sandbox_id)
+        if sandbox_id == "mismatched":
+            return SimpleNamespace(id="different", last_activity_at=row.last_activity_at, updated_at=None)
         if sandbox_id == "reactivated":
             return SimpleNamespace(id=sandbox_id, last_activity_at=datetime.now(UTC).isoformat(), updated_at=None)
         return row
@@ -83,6 +86,7 @@ def test_cli_dry_run_and_rechecked_delete_preserve_active_ids_and_append_ledger(
             ("idle", "delete requested"),
             ("idle", "deleted"),
             ("reactivated", "skipped on recheck"),
+            ("mismatched", "error: DaytonaError"),
             ("failed", "delete requested"),
             ("failed", "error: DaytonaError"),
         ]

@@ -69,7 +69,7 @@ async def _delete_candidates(
         try:
             sandbox = await client.get(decision.id, request_timeout=REQUEST_TIMEOUT)
             if sandbox.id != decision.id:
-                raise RuntimeError("Daytona returned a different sandbox ID")
+                raise DaytonaError("Daytona returned a different sandbox ID")
             rechecked = select_idle_sandboxes([_activity(sandbox)], now=datetime.now(UTC), minimum_idle=minimum_idle)
             if not rechecked.candidates:
                 skipped += 1
