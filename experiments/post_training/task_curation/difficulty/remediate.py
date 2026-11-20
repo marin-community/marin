@@ -50,6 +50,7 @@ from experiments.post_training.task_curation.difficulty_samples import (
 from experiments.post_training.task_curation.images.__main__ import declared_environments
 from experiments.post_training.task_curation.images.build import DEFAULT_REPOSITORY, EnvironmentBuild, build_environment
 
+REPAIR_BLOCKED = "blocked"
 STATIC_ADMISSION_CAUSES = frozenset(
     {
         DifficultyGap.EXECUTABILITY_ADMISSION_PENDING,
@@ -72,7 +73,7 @@ def rebuild_artifact(action: RebuildEnvironmentArtifact) -> dict:
     match = re.search(r"/images/env-([0-9a-f]{16})/[^/]+/requirements.lock$", action.uri)
     if match is None:
         return {
-            "status": "blocked",
+            "status": REPAIR_BLOCKED,
             "reason": GapReason.ENVIRONMENT_ARTIFACT_MISSING,
             "detail": "Original artifact recipe is not registered",
             "artifact_uri": action.uri,
@@ -84,7 +85,7 @@ def rebuild_artifact(action: RebuildEnvironmentArtifact) -> dict:
     ]
     if len(matches) != 1 or path.parent.exists():
         return {
-            "status": "blocked",
+            "status": REPAIR_BLOCKED,
             "reason": GapReason.ENVIRONMENT_ARTIFACT_MISSING,
             "detail": "Original environment identity needs a recovered recipe or a new qualified release",
             "artifact_uri": action.uri,
@@ -102,7 +103,7 @@ def build_factory(action: BuildTaskSpecFactory, local: Path) -> dict:
     reasons = sorted({task.reason for task in prepared.tasks if task.reason})
     if reasons:
         return {
-            "status": "blocked",
+            "status": REPAIR_BLOCKED,
             "reason": GapReason.TASK_SPEC_FACTORY_PENDING,
             "detail": "Original task factory still has typed preflight gaps",
             "legacy_reasons": reasons,
@@ -171,7 +172,7 @@ def recheck_admission(action: RecheckExecutabilityAdmission, local: Path, ledger
         if unverified:
             return {
                 **result,
-                "status": "blocked",
+                "status": REPAIR_BLOCKED,
                 "reason": GapReason.EXECUTABILITY_ADMISSION_PENDING,
                 "unverified_capabilities": unverified,
                 "detail": "Frozen contract checks cannot verify these admission prerequisites: " + "; ".join(unverified),
@@ -180,7 +181,7 @@ def recheck_admission(action: RecheckExecutabilityAdmission, local: Path, ledger
     gap = legacy_gaps(blockers[0].reason)[0]
     return {
         **result,
-        "status": "blocked",
+        "status": REPAIR_BLOCKED,
         "reason": gap.reason,
         "detail": (
             "Frozen executability admission recheck still requires: "
@@ -199,7 +200,7 @@ def freeze_panel(action: FreezeSamplePanel, ledger: str) -> dict:
         raise ValueError("Panel repair belongs to another source")
     if binding is None:
         return {
-            "status": "blocked",
+            "status": REPAIR_BLOCKED,
             "reason": GapReason.TASK_SPEC_FACTORY_PENDING,
             "detail": "Current served declaration lacks its exact input census; qualify the population first",
         }

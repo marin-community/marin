@@ -94,7 +94,7 @@ def test_admission_recheck_uses_frozen_contracts_before_attempts_or_escalation(
         assert after.state == CellStatus.BLOCKED
         if provider_missing:
             assert result["blockers"][0]["task_id"] == task.id
-            assert "task_spec_tool_provider_required" in result["blockers"][0]["reason"]
+            assert DifficultyGap.TOOL_PROVIDER_REQUIRED.value in result["blockers"][0]["reason"]
         else:
             assert result["blockers"] == []
             assert result["unverified_capabilities"] == [legacy_gaps(legacy_reason)[0].capability]
