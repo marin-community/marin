@@ -51,8 +51,8 @@ REQUEST_WINDOW_TOKENS = 24_576
 MAX_NEW_TOKENS = 8_192
 EVALUATION_API_KEY_ENV = "DAYTONA_EVAL_API_KEY"
 JUDGE_API_KEY_ENV = "TOGETHER_API_KEY"
-FORGE_DATASET = "forge-task-records"
-FORGE_MAX_TURNS = 16
+# A task without tools ends at its first reply, so the limit only bounds tool-using tasks.
+MAX_TURNS = 16
 TASK_MACHINE_TIMEOUTS = {"startup_timeout": 600, "cleanup_timeout": 60}
 # Agentic tasks run their shell on a machine that matches the task's command semantics.
 TASK_MACHINES = {
@@ -104,7 +104,7 @@ def training_recipe(steps: int, *, reproducible_serving: bool = False) -> SkyRLR
                 "daytona": {"api_key_env": EVALUATION_API_KEY_ENV, "ttl_minutes": 60},
                 "remote_judge": {"base_url": "https://api.together.xyz/v1", "api_key_env": JUDGE_API_KEY_ENV},
                 "task_spec": {
-                    "max_turns_by_dataset": {FORGE_DATASET: FORGE_MAX_TURNS},
+                    "session": {"max_turns": MAX_TURNS},
                     "task_machine_by_command_semantics": TASK_MACHINES,
                 },
             }
