@@ -202,6 +202,9 @@ def apply_settings(config: RecipePatch, settings: tuple[str, ...], preset: Prese
             key.startswith("NCCL_") for key in values.get("extra_env", {})
         ),
         "evaluation requests are fixed by the preset": any(key.startswith("eval_") for key in (*trainer, *generator)),
+        "Harbor evaluation requires generator.enable_http_endpoint": (
+            preset.harbor is not None and generator.get("enable_http_endpoint") is False
+        ),
         "select curated data with --tasks": has("data") and bool(values["data"].keys() - preset.data_settings),
         "use the preset's permitted setting sections": (
             setting_sections is not None and (bool(values.keys() - setting_sections) or has("generator.sampling_params"))

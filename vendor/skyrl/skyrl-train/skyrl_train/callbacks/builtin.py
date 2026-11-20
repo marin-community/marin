@@ -29,9 +29,6 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Type
 
-from iris.cluster.endpoints import TELEMETRY_ENDPOINT_PATH
-from iris.runtime.telemetry import FinelogRuntime
-from iris.runtime.telemetry import resolve as resolve_telemetry
 from loguru import logger
 from shellbox.backends.daytona.machine import DaytonaImageBuild
 from omegaconf import DictConfig, OmegaConf
@@ -49,6 +46,7 @@ from skyrl_train.distillation import DISTILLATION_SCORED_TOKENS_METRIC
 from skyrl_train.json_serialization import to_jsonable
 from skyrl_train.io import io
 from skyrl_train.inline_harbor_client import collect_harbor
+from skyrl_train.telemetry import TelemetryConfig, iris_resources
 from marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME, POLICY_CHECKPOINT_SUBDIRECTORY
 from marinskyrl.resource_locator import join_resource_path
 from skyrl_train.inference_engines.vllm.stats import VLLM_NUM_ENGINES_METRIC, IntervalReadMode
@@ -309,19 +307,16 @@ class BestCheckpointCallback(TrainerCallback):
         return control
 
 
-async def _harbor_telemetry_config(runtime: FinelogRuntime | None) -> dict[str, str] | None:
-    if runtime is None:
-        return None
-    try:
-        endpoint = await asyncio.to_thread(runtime.resolver, runtime.endpoint)
-    except Exception as error:
-        logger.warning("Harbor telemetry endpoint lookup failed ({})", type(error).__name__)
+def _harbor_telemetry_config() -> dict[str, str] | None:
+    config = TelemetryConfig.from_environment()
+    job_id = iris_resources().get("job_id")
+    if not (config.endpoint and config.run_id and config.execution_uid and job_id):
         return None
     return {
-        "endpoint": endpoint.rstrip("/") + TELEMETRY_ENDPOINT_PATH,
-        "root_run_uid": runtime.attributes["run_id"],
-        "execution_uid": runtime.attributes["execution_uid"],
-        "serving_job_id": runtime.attributes["job_id"],
+        "endpoint": config.endpoint,
+        "root_run_uid": config.run_id,
+        "execution_uid": config.execution_uid,
+        "serving_job_id": job_id,
     }
 
 
@@ -343,10 +338,11 @@ class HarborEvaluationCallback(TrainerCallback):
         self.cohorts = OmegaConf.to_container(cohorts, resolve=True) if OmegaConf.is_config(cohorts) else cohorts
         for cohort in self.cohorts:
             kwargs = cohort["job"].get("environment", {}).get("kwargs", {})
+            # Reject unknown image build modes before the trainer allocates GPUs.
             DaytonaImageBuild(kwargs.get("image_build", DaytonaImageBuild.SNAPSHOT))
         self.timeout = timeout
         self.minimum_coverage = minimum_coverage
-        self.minimum_primary_coverage = minimum_native_coverage
+        self.minimum_native_coverage = minimum_native_coverage
         self.daytona_api_key_env = daytona_api_key_env
 
     def _evaluation_cohorts(
@@ -368,7 +364,6 @@ class HarborEvaluationCallback(TrainerCallback):
         client = trainer.inference_engine_client
         if not client.enable_http_endpoint:
             raise ValueError("Harbor validation requires generator.enable_http_endpoint")
-        runtime = resolve_telemetry(run_id=trainer.cfg.get("runtime", {}).get("run_id"))
         cohorts = self._evaluation_cohorts(
             state.global_step,
             trainer.cfg.trainer.export_path,
@@ -378,13 +373,16 @@ class HarborEvaluationCallback(TrainerCallback):
         environment = os.environ.copy()
         environment["DAYTONA_API_KEY"] = environment[self.daytona_api_key_env]
         environment["OPENAI_API_KEY"] = "unused-local-inference"
+        if telemetry := _harbor_telemetry_config():
+            for cohort in cohorts:
+                cohort["job"]["telemetry"] = telemetry
         async with asyncio.timeout(self.timeout):
-            telemetry = await _harbor_telemetry_config(runtime)
-            if telemetry is not None:
-                for cohort in cohorts:
-                    cohort["job"]["telemetry"] = telemetry
             results = await collect_harbor(cohorts, pool, environment)
-        metrics = {f"eval/harbor/{name}/{key}": value for name, result in results.items() for key, value in result.items()}
+        metrics = {
+            f"eval/harbor/{name}/{key}": value
+            for name, result in results.items()
+            for key, value in result.items()
+        }
         metrics["eval/harbor/wall_seconds"] = time.perf_counter() - started_at
         return metrics
 
@@ -393,7 +391,7 @@ class HarborEvaluationCallback(TrainerCallback):
         scored = metrics["eval/all/num_scored"]
         reward_sum = metrics["eval/all/avg_verifier_score"] * scored if scored else 0.0
         # The counts cover the primary evaluation until Harbor results are added below.
-        metrics["eval/selection_eligible"] = float(scored >= self.minimum_primary_coverage * attempted)
+        metrics["eval/selection_eligible"] = float(scored >= self.minimum_native_coverage * attempted)
         for cohort in self.cohorts:
             name = cohort["name"]
             prefix = f"eval/harbor/{name}/"

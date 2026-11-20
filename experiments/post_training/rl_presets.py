@@ -349,6 +349,12 @@ class Preset:
             raise ValueError("held-out evaluations require a held-out task selection")
         if self.checkpoint_every is not None and (self.checkpoint_every <= 0 or not self.evaluations):
             raise ValueError("checkpoint export requires a positive checkpoint interval and an evaluation")
+        if self.harbor is not None:
+            if not isinstance(self.recipe.layout.workload, Training) or not self.evaluations:
+                raise ValueError("Harbor evaluation requires a training preset with an evaluation")
+            generator = self.recipe.config.generator
+            if generator is not None and generator.to_skyrl().get("enable_http_endpoint") is False:
+                raise ValueError("Harbor evaluation requires generator.enable_http_endpoint")
         for evaluation in self.evaluations[1:]:
             if evaluation.every is not None or evaluation.at_start:
                 raise ValueError(f"non-primary evaluation {evaluation.name} accepts neither every nor at_start")

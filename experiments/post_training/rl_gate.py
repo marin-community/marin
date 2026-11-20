@@ -564,10 +564,10 @@ def _current_configs(
         return tuple(compose_configs(paths))
 
 
-def _native_json(program: str, *arguments: str, timeout: int = 120, uv_options: tuple[str, ...] = ()):
+def _native_json(program: str, *arguments: str, timeout: int = 120):
     try:
         result = subprocess.run(
-            skyrl_cpu_command(*uv_options, "python", "-c", program, *arguments),
+            skyrl_cpu_command("python", "-c", program, *arguments),
             capture_output=True,
             text=True,
             timeout=timeout,
