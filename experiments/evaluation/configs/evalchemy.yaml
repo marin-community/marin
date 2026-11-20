@@ -18,6 +18,9 @@ evaluations:
   financebench:
     benchmark: financebench
     run: *together_judge
+  facts-grounding-v2:
+    benchmark: facts-grounding-v2
+    run: *together_judge
   simpleqa-verified:
     benchmark: simpleqa-verified
     run: *together_judge
@@ -100,6 +103,9 @@ evaluations:
   mrcr-65k:
     benchmark: mrcr
     protocol: 65k
+  longbench-v2-thinking:
+    benchmark: longbench-v2
+    protocol: thinking
 suites:
   smoke:
   - mmlu-smoke
