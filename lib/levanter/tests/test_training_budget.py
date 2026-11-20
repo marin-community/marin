@@ -105,8 +105,19 @@ def test_deadline_finalizes_and_restores_the_last_complete_update(
     np.testing.assert_allclose(restored["model"], 0.64, rtol=1e-6)
 
 
-def test_wall_clock_cooldown_scales_both_adam_groups_after_step_warmup(tmp_path, monkeypatch):
-    admission_times = [0.0] * 30 + [40.0, 50.0, 51.0, 55.5, 59.95, 61.0]
+@pytest.mark.parametrize(
+    "maximum_updates,expected_reason",
+    [(1000, TrainingStopReason.TIME_BOUND), (35, TrainingStopReason.MAXIMUM_UPDATES)],
+)
+def test_wall_clock_cooldown_follows_time_and_allows_the_safety_cap(
+    tmp_path, monkeypatch, maximum_updates, expected_reason
+):
+    admission_times = (
+        [0.0] * 30 + [40.0, 50.0, 51.0, 55.5, 59.95, 61.0]
+        if expected_reason == TrainingStopReason.TIME_BOUND
+        else [0.0] * 36
+    )
+    expected_scales = [1.0] * 33 + [0.55, 0.105] if expected_reason == TrainingStopReason.TIME_BOUND else [1.0] * 35
     clock = [admission_times[0]]
     monkeypatch.setattr(training_budget, "monotonic", lambda: clock[0])
     monkeypatch.setattr(training_budget, "time", lambda: 1000 + clock[0])
@@ -123,7 +134,7 @@ def test_wall_clock_cooldown_scales_both_adam_groups_after_step_warmup(tmp_path,
         id="wall-clock-cooldown",
         train_batch_size=1,
         per_device_parallelism=1,
-        num_train_steps=4750,
+        num_train_steps=maximum_updates,
         mp=jmp.get_policy("f32"),
         mesh=MeshConfig(axes={"data": 1, "model": 1, "replica": 1, "context": 1}),
         tracker=JsonFileTrackerConfig(output_path=str(tmp_path)),
@@ -174,28 +185,31 @@ def test_wall_clock_cooldown_scales_both_adam_groups_after_step_warmup(tmp_path,
     receipt = read_training_completion(
         telemetry_root=str(telemetry_root),
         checkpoint_root=str(checkpoint_root),
-        maximum_updates=4750,
+        maximum_updates=maximum_updates,
         budget=policy,
     )
     assert receipt["completed_updates"] == 35
-    assert receipt["stop_reason"] == TrainingStopReason.TIME_BOUND
-    assert receipt["final_learning_rate_scale"] == pytest.approx(0.105, abs=1e-6)
+    assert receipt["stop_reason"] == expected_reason
+    assert receipt["final_learning_rate_scale"] == pytest.approx(expected_scales[-1], abs=1e-6)
     restored = load_checkpoint({"model": {"muonh": jnp.asarray(0.0), "adam": jnp.asarray(0.0)}}, receipt["checkpoint"])
     expected = {"muonh": jnp.asarray(1.0), "adam": jnp.asarray(2.0)}
     reference_optimizer = two_groups(curve(0.1), curve(0.03))
     opt_state = reference_optimizer.init(expected)
-    for scale in [1.0] * 33 + [0.55, 0.105]:
+    for scale in expected_scales:
         updates, opt_state = reference_optimizer.update(jax.tree.map(jnp.ones_like, expected), opt_state, expected)
         expected = optax.apply_updates(expected, jax.tree.map(lambda update: update * scale, updates))
     for group in expected:
         np.testing.assert_allclose(restored["model"][group], expected[group], rtol=1e-6)
     changed = json.loads((telemetry_root / "completion.json").read_text())
-    changed["final_learning_rate_scale"] = 1.0
+    if expected_reason == TrainingStopReason.TIME_BOUND:
+        changed["final_learning_rate_scale"] = 1.0
+    else:
+        changed["cooldown"]["fraction"] = 0.2
     (telemetry_root / "completion.json").write_text(json.dumps(changed))
     with pytest.raises(ValueError):
         read_training_completion(
             telemetry_root=str(telemetry_root),
             checkpoint_root=str(checkpoint_root),
-            maximum_updates=4750,
+            maximum_updates=maximum_updates,
             budget=policy,
         )

@@ -4,8 +4,8 @@
 """Resolve the held Exp5 setup with R1 SFT parallelism and special-token rates.
 
 The 2026-11-20 user decision restores R1's sqrt(32) token multiplier,
-reversing the earlier 1.0 ruling. SFT uses a 4750-step safety cap, 30 warmup
-steps and a peak plateau before its remaining-time-triggered cooldown.
+reversing the earlier 1.0 ruling. SFT uses a 1000-step safety cap, 30 warmup
+steps and a peak plateau before its wall-clock-only cooldown.
 OpenResearcher's reserved share still prevents submission.
 """
 

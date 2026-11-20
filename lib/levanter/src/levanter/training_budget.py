@@ -167,9 +167,10 @@ def read_training_completion(
     if budget.cooldown is not None:
         if receipt["cooldown"] != asdict(budget.cooldown):
             raise ValueError("Training completion changed the declared wall-clock cooldown")
-        floor = budget.cooldown.min_lr_ratio
-        if abs(receipt["final_learning_rate_scale"] - floor) > max(floor * 0.1, 1e-7):
-            raise ValueError("Training final-update LR scale is not within 10% of the declared minimum")
+        if reason == TrainingStopReason.TIME_BOUND:
+            floor = budget.cooldown.min_lr_ratio
+            if not abs(receipt["final_learning_rate_scale"] - floor) <= max(floor * 0.1, 1e-7):
+                raise ValueError("Training final-update LR scale is not within 10% of the declared minimum")
     for key, expected in (
         ("duration_seconds", budget.duration.total_seconds()),
         ("finalization_reserve_seconds", budget.finalization_reserve.total_seconds()),

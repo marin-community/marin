@@ -104,7 +104,7 @@ def whole_run_lr_receipt(spec: SFTSpec, *, schedule: SftLrSchedule) -> dict:
     if actual != declared:
         raise ValueError("SFT optimizer settings differ from the declared LR schedule")
     steps = spec.num_train_steps
-    indices = {min(int(steps * fraction), steps - 1) for fraction in (0, 0.25, 0.5, 0.75, 1)}
+    indices = {min(int(steps * fraction), steps - 1) for fraction in (0, 0.25, 0.5, 0.75, 0.85, 1)}
     indices.update((min(schedule.warmup // 2, steps - 1), min(schedule.warmup, steps - 1)))
     samples = []
     for index in sorted(indices):
@@ -130,6 +130,7 @@ def whole_run_lr_receipt(spec: SFTSpec, *, schedule: SftLrSchedule) -> dict:
         usable = budget.training_duration.total_seconds()
         window = usable * budget.cooldown.fraction
         receipt["wall_clock_cooldown"] = {
+            "trigger": "remaining_wall_time_only",
             "duration_seconds": budget.duration.total_seconds(),
             "usable_training_seconds": usable,
             "cooldown_seconds": window,
@@ -143,7 +144,10 @@ def whole_run_lr_receipt(spec: SFTSpec, *, schedule: SftLrSchedule) -> dict:
                 }
                 for remaining in (usable, window, window / 2, 0)
             ],
-            "final_update_check": "Runtime completion checks the actual applied LR scale against the declared minimum",
+            "final_update_check": (
+                "Wall-clock stops require the final applied LR scale near the declared minimum; "
+                "the update safety cap never triggers cooldown"
+            ),
         }
     return receipt
 

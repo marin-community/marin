@@ -346,7 +346,7 @@ def test_round_sft_spec_holds_the_ruled_multiplier_by_construction(production_re
     [
         (360, "linear", {0: 0, 15: 0.5, 30: 1, 180: 0.5909090909090909, 359: 0.10272727272727272}),
         (746, "linear", {0: 0, 30: 1, 373: 0.5688547486033519, 745: 0.10125698324022347}),
-        (4750, "constant", {0: 0, 15: 0.5, 30: 1, 2375: 1, 4749: 1}),
+        (1000, "constant", {0: 0, 15: 0.5, 30: 1, 500: 1, 850: 1, 999: 1}),
     ],
 )
 def test_round_sft_spec_follows_the_declared_schedule_after_warmup(

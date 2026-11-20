@@ -46,7 +46,7 @@ matrices use MuonH, RMSNorm scales use Adam, and `lm_head`/`output_proj` use Ada
 This differs from R1's generic-file grouping (experts on Adam, stacked norm
 scales on MuonH).
 
-The 4,750-update limit is a safety cap. The 20-hour wall-clock budget terminates
+The 1,000-update limit is a safety cap. The 20-hour wall-clock budget terminates
 training, reserving 40 minutes for finalization and 10 minutes for an update.
 After a 30-step linear warmup the base optimizer stays at peak LR. A rank-zero
 monotonic-clock controller broadcasts an update multiplier that decreases
@@ -54,8 +54,11 @@ linearly from 1 to 0.1 over the final 15% of usable training time. With these
 reserves, usable time is 19h10m, cooldown starts at 16h17m30s and lasts 2h52m30s.
 Optax schedules apply the multiplier to all three optimizer groups before their
 updates, preserving MuonH/AdamH norm projections and moment calculations.
-Completion records and checks the final applied multiplier; telemetry logs it
-as `optim/learning_rate_scale`. These settings are experiment declarations,
+Only remaining wall time triggers cooldown; step 850 does not trigger it.
+Completion checks the final applied multiplier near the minimum for a wall-clock
+stop. Reaching the safety cap earlier is valid at the then-current LR and never
+forces cooldown. Telemetry logs the scale as `optim/learning_rate_scale`.
+These settings are experiment declarations,
 not restrictions on other schedule, precision or special-token choices.
 
 Source revisions are recorded in [the curriculum](../task_curation/exp5_curriculum.py).
@@ -72,7 +75,7 @@ be submitted. The launch hold also preserves the user's Exp4 evaluation review.
 uv run python -m experiments.post_training.long_loop.exp5 \
   --round experiments/post_training/long_loop/rounds/exp5-setup.yaml \
   --source-revision "$(git rev-parse HEAD)" \
-  --version 2026.11.20.96 \
+  --version 2026.11.20.97 \
   --validation-output /tmp/long-loop-exp5-setup
 ```
 

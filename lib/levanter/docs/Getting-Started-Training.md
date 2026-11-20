@@ -127,9 +127,10 @@ LR before moment-preserving norm projections. The optimizer's step-based
 schedule (including any warmup) still applies. Use a constant base schedule after
 warmup for a plateau followed by this cooldown. The multiplier is logged as
 `optim/learning_rate_scale`; the completion receipt records the last applied
-value and the completion reader checks that it is within 10% of the minimum.
-The step cap or exhausted data can stop training earlier; an early stop that
-misses the configured minimum fails that completion check.
+value. For a wall-clock stop, the completion reader checks that it is within 10%
+of the minimum. The step cap can stop training earlier at the then-current LR;
+it never triggers cooldown or requires the minimum. Exhausted data fails the
+completion check.
 
 ### Change Evaluation Parameters
 To change how often the model is evaluated during training, you can use the following command:

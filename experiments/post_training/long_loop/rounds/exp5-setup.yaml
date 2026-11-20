@@ -2,7 +2,7 @@
 # OpenResearcher's 5% share remains reserved; exp5.py refuses --run.
 schema: 1
 name: long-loop-exp5/round5
-version: "2026.11.20.96"
+version: "2026.11.20.97"
 slug: mochi-exp5
 cluster: cw-rno2a
 storage:
@@ -16,7 +16,7 @@ pools: exp5-prepared
 evaluation: frozen-micro210
 initializer: exp3-staged
 sft:
-  updates: 4750
+  updates: 1000
   batch_size: 256
   min_lr_ratio: 0.1
   learning_rate: 5.0e-05
