@@ -134,7 +134,7 @@ class NativeSharedRunner(BaseModel):
 
 
 class SharedIntegrityContract(BaseModel):
-    """The enforcement configuration published with a new SHARED task version."""
+    """The enforcement configuration published with a SHARED task version."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
     id: Literal["shared-pytest", "shared-native", "shared-source"] = "shared-pytest"

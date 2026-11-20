@@ -9,11 +9,14 @@ import importlib
 import json
 import threading
 from argparse import Namespace
+from collections.abc import Callable
 from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 HEALTH_PATH = "/health"
+SEARCH_PATH = "/search"
+DOCUMENT_PATH = "/document"
 BM25_RELATIVE_PATH = "index/bm25"
 CHUNK_BYTES = 1024 * 1024
 
@@ -28,7 +31,7 @@ class OpenResearcherIndex:
         self.tokenizer = backend.AutoTokenizer.from_pretrained(root / "tokenizer", local_files_only=True)
         self.top_k = top_k
         self.snippet_max_tokens = snippet_max_tokens
-        self._document = lru_cache(maxsize=document_cache_size)(
+        self.document: Callable[[str], bytes] = lru_cache(maxsize=document_cache_size)(
             lambda docid: json.dumps(self.searcher.get_document(docid), ensure_ascii=False).encode()
         )
 
@@ -43,9 +46,6 @@ class OpenResearcherIndex:
             )
             result.append({"docid": candidate["docid"], "score": candidate["score"], "snippet": snippet})
         return result
-
-    def document(self, docid: str) -> bytes:
-        return self._document(docid)
 
 
 def retrieval_handler(index: OpenResearcherIndex, state: dict) -> type[BaseHTTPRequestHandler]:
@@ -65,7 +65,7 @@ def retrieval_handler(index: OpenResearcherIndex, state: dict) -> type[BaseHTTPR
             self.respond({"state": state})
 
         def do_POST(self) -> None:
-            if self.path not in {"/search", "/document"}:
+            if self.path not in {SEARCH_PATH, DOCUMENT_PATH}:
                 self.send_error(404)
                 return
             length = int(self.headers["Content-Length"])
@@ -77,7 +77,7 @@ def retrieval_handler(index: OpenResearcherIndex, state: dict) -> type[BaseHTTPR
                 self.send_error(409)
                 return
             arguments = request["arguments"]
-            if self.path == "/search":
+            if self.path == SEARCH_PATH:
                 if request["name"] != "search" or set(arguments) != {"query"} or not isinstance(arguments["query"], str):
                     self.send_error(400)
                     return
