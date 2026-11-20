@@ -2,7 +2,7 @@
 # OpenResearcher's 5% share remains reserved; exp5.py refuses --run.
 schema: 1
 name: long-loop-exp5/round5
-version: "2026.11.20.90"
+version: "2026.11.20.91"
 slug: mochi-exp5
 cluster: cw-rno2a
 storage:
@@ -21,26 +21,21 @@ sft:
   min_lr_ratio: 0.1
   learning_rate: 5.0e-05
   adam_learning_rate: 1.153846153846154e-05
-  special_token_lr_multiplier: 1.0
+  warmup_steps: 30
+  special_token_lr_multiplier: 5.656854249492381
   mesh:
     axes:
-      data: 1
-      expert: 8
+      context: 8
+      data: -1
       model: 1
       replica: 1
-    dcn_axes:
-      context: 32
-      replica_dcn: 1
     batch_axis_name: batch
-    shared_mapping: {}
-    compute_mapping:
-      batch:
-        - replica_dcn
-        - data
-        - expert
-      position: context
+    compute_mapping: &id001 {}
+    dcn_axes:
+      replica_dcn: -1
     param_mapping:
       embed: data
+    shared_mapping: *id001
   resources:
     cpu: 64
     ram: 1500GB

@@ -20,6 +20,7 @@ from marin.execution.lazy import StepContext
 from experiments.post_training.long_loop import exp3_production
 from experiments.post_training.long_loop.exp3_production import GEOMETRY, production_sft_recipe, read_data_release
 from experiments.post_training.long_loop.exp3_recipe import exp3_sft_spec, whole_run_lr_receipt
+from experiments.post_training.long_loop.round_runner import load_round
 from experiments.post_training.long_loop.run_spec import resolve_spec
 from experiments.post_training.long_loop.shared_sft import select_shared_sft, shared_sft_spec
 from experiments.post_training.long_loop.tests.test_initializer_stage import prepared_sources as prepared_sources
@@ -84,9 +85,9 @@ def production_recipe(preview_release, monkeypatch):
     return production_sft_recipe(release, initial_eval_inputs=exp3_production.REFERENCE_INPUTS)
 
 
-@pytest.mark.parametrize("schedule_horizon", [None, 360])
+@pytest.mark.parametrize("schedule_horizon,warmup_steps", [(None, 0), (360, 0), (360, 30)])
 def test_full_recipe_survives_the_native_worker_boundary_without_smoke_geometry(
-    preview_release, production_recipe, schedule_horizon
+    preview_release, production_recipe, schedule_horizon, warmup_steps
 ):
     root = preview_release.parent
     release = read_data_release(str(preview_release), require_ready=False)
@@ -97,11 +98,15 @@ def test_full_recipe_survives_the_native_worker_boundary_without_smoke_geometry(
         recipe["trainer"]["num_train_steps"] = steps
         recipe["optimizer_schedule"] = {
             "horizon": steps,
-            "warmup": 0,
-            "decay": steps,
+            "warmup": warmup_steps,
+            "decay": steps - warmup_steps,
             "min_lr_ratio": 0.1,
             "lr_schedule": "linear",
         }
+    if warmup_steps:
+        round_spec = load_round(Path(__file__).parents[1] / "rounds/exp5-setup.yaml")
+        recipe["mesh"] = round_spec.sft.mesh
+        recipe["trainer"]["mesh"] = round_spec.sft.mesh
     spec = exp3_sft_spec("exp3-production-test", "2026.11.16.48", recipe)
     resources = draccus.decode(ResourceConfig, recipe["resources"])
     step = sft_step(spec, resources)
@@ -113,7 +118,11 @@ def test_full_recipe_survives_the_native_worker_boundary_without_smoke_geometry(
     assert config.trainer.num_train_steps == steps
     assert config.trainer.train_batch_size * config.train_seq_len == 67_108_864
     ici, dcn = config.trainer.mesh.axis_shapes(num_devices=256, num_slices=32)
-    assert ici["expert"] == 8 and dcn["context"] == 32
+    if warmup_steps:
+        assert ici["context"] == 8 and ici["data"] == 1 and dcn["replica_dcn"] == 32
+        assert ici.get("expert", 1) == 1
+    else:
+        assert ici["expert"] == 8 and dcn["context"] == 32
     assert request.resources.device.count * request.resources.replicas == 256
     assert request.timeout.to_seconds() == 72000
     assert config.trainer.training_budget.duration == timedelta(hours=20)
@@ -126,8 +135,13 @@ def test_full_recipe_survives_the_native_worker_boundary_without_smoke_geometry(
     if schedule_horizon is not None:
         for peak in (config.optimizer.learning_rate, config.optimizer.adam_lr):
             scheduler = config.optimizer.lr_scheduler(config.optimizer_num_train_steps, override_lr=peak)
-            for index in (0, 90, 180, 270, 359):
-                assert float(scheduler(index)) == pytest.approx(peak * (1 - 0.9 * index / 360), rel=1e-6)
+            for index in (0, 15, 30, 180, 359):
+                ratio = (
+                    index / warmup_steps
+                    if index < warmup_steps
+                    else 1 - 0.9 * (index - warmup_steps) / (360 - warmup_steps)
+                )
+                assert float(scheduler(index)) == pytest.approx(peak * ratio, rel=1e-6)
 
 
 def test_whole_run_preflight_rejects_the_inherited_flat_prefix_and_wrong_decay(production_recipe):

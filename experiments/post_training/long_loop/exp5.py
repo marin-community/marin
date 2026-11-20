@@ -1,7 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Resolve the held Exp5 setup; OpenResearcher's reserved share prevents submission."""
+"""Resolve the held Exp5 setup with R1 SFT parallelism and special-token rates.
+
+The 2026-11-20 user decision restores R1's sqrt(32) token multiplier,
+reversing the earlier 1.0 ruling, and adds 30 warmup steps within 360 updates.
+OpenResearcher's reserved share still prevents submission.
+"""
 
 import hashlib
 import json
@@ -19,7 +24,11 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.post_training.long_loop.__main__ import validate_graph
 from experiments.post_training.long_loop.exp3_production import StoragePin
-from experiments.post_training.long_loop.exp3_recipe import verified_initializer_model, whole_run_lr_receipt
+from experiments.post_training.long_loop.exp3_recipe import (
+    exp3_controls,
+    verified_initializer_model,
+    whole_run_lr_receipt,
+)
 from experiments.post_training.long_loop.exp4 import release_artifact
 from experiments.post_training.long_loop.exp4_data import NEMOTRON_SOURCE
 from experiments.post_training.long_loop.exp5_data import (
@@ -136,6 +145,8 @@ def main(round_path: Path, source_revision: str, validation_output: Path) -> Art
     spec = load_round(round_path)
     if not isinstance(spec, RoundSpec) or spec.pools != "exp5-prepared":
         raise click.UsageError("Exp5 setup requires a training round with pools: exp5-prepared")
+    if spec.sft.special_token_lr_multiplier != exp3_controls().special_token_lr_multiplier:
+        raise click.UsageError("Exp5 restores R1's sqrt(32) special-token multiplier; the 1.0 ruling was reversed")
     if context.params["default_version"] != spec.version:
         raise click.UsageError("--version must equal the round's immutable version")
     workspace = Path(__file__).resolve().parents[3]
@@ -153,6 +164,7 @@ def main(round_path: Path, source_revision: str, validation_output: Path) -> Art
         initial_eval_inputs=INITIAL_EVAL_INPUTS,
     )
     resolved["runtime_source"] = runtime_source_manifest(workspace, source_revision)
+    resolved["sft"]["special_token_lr_multiplier"] = spec.sft.special_token_lr_multiplier
     curriculum = prepared_curriculum()
     resolved["curriculum"] = {**asdict(curriculum), "identity": curriculum.identity}
     resolved["exp5_admission"] = {
@@ -168,6 +180,19 @@ def main(round_path: Path, source_revision: str, validation_output: Path) -> Art
             "--run is disabled so the reserved 0.05 cannot be redistributed."
         ),
         "science": "Reuse the exact qualified V7 science components; existing checked repairs are already present",
+        "sft_ruling": {
+            "reference": "9662fdba:experiments/post_training/long_loop/specs/sft.yaml",
+            "replaces_parallelism": "CP32/EP8",
+            "expert_axis_size": 1,
+            "remat_mode": "recompute_all",
+            "remat_implementation": "Native Snowball applies jax.checkpoint to every scanned layer",
+            "special_token_lr_reason": "Restore R1 sqrt(32); the 2026-11-20 user decision reverses the 1.0 ruling",
+            "memory_fit": "Unmeasured; requires execution on the requested GPU mesh",
+            "native_forward_blocker": (
+                "R1 omits the expert axis; current native Snowball forward partition specs still name it. "
+                "Tiny CPU abstract forward fails before model execution."
+            ),
+        },
         "initial_eval_inputs": {"prefix": INITIAL_EVAL_INPUTS, "files": [asdict(pin) for pin in INITIAL_EVAL_FILES]},
         "recipe_schema_migrations": [
             "Remove the unused tis_splice key from the frozen RL recipe",
@@ -214,6 +239,7 @@ def main(round_path: Path, source_revision: str, validation_output: Path) -> Art
             whole_run_lr_receipt(
                 round_sft_spec(spec, f"{spec.name}/sft", spec.version, resolved["sft"]),
                 min_lr_ratio=spec.sft.min_lr_ratio,
+                warmup_steps=spec.sft.warmup_steps,
             ),
             indent=2,
         )

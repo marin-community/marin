@@ -36,6 +36,16 @@ source requires a newer task schema and the `openresearcher-bm25:v1` provider;
 it is excluded from the prepared pool. `exp5.py` unconditionally refuses `--run`
 before resolving any artifacts.
 
+SFT uses the exact R1 mesh/sharding block from `9662fdba:specs/sft.yaml`: context 8
+inside each node and data replication across 32 nodes, replacing CP32/EP8. The
+special-token multiplier is restored to `5.656854249492381`; the earlier 1.0
+ruling is superseded. The 360-update optimizer horizon includes 30 linear warmup
+steps and 330 linear decay steps to a minimum LR ratio of 0.1. Native Snowball
+recomputes each layer under `jax.checkpoint`, matching R1's `recompute_all` policy.
+The exact R1 block omits an `expert` axis. Current native Snowball forward
+partition specs still name that axis; a tiny CPU abstract forward fails on this
+mismatch. This is an additional launch blocker. GPU memory fit remains unmeasured.
+
 Source revisions are recorded in [the curriculum](../task_curation/exp5_curriculum.py).
 The science inputs are `rqa`, `so`, `syn_mcq` and `vendor` at revision
 `1583049c1df02b418e07d14047eb37db9df46eba`; V7's existing publisher and native
@@ -50,7 +60,7 @@ be submitted. The launch hold also preserves the user's Exp4 evaluation review.
 uv run python -m experiments.post_training.long_loop.exp5 \
   --round experiments/post_training/long_loop/rounds/exp5-setup.yaml \
   --source-revision "$(git rev-parse HEAD)" \
-  --version 2026.11.20.90 \
+  --version 2026.11.20.91 \
   --validation-output /tmp/long-loop-exp5-setup
 ```
 

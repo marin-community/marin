@@ -102,6 +102,7 @@ class RoundSft:
     mesh: dict
     resources: dict
     special_token_lr_multiplier: float | None = None
+    warmup_steps: int = 0
 
 
 @dataclass(frozen=True)
@@ -481,7 +482,7 @@ def round_sft_spec(round_spec: RoundSpec, name: str, version: str, recipe: dict)
     )
     if spec.snowball_sft.special_token_lr_multiplier != multiplier:
         raise ValueError("Exp round special-token LR multiplier disagrees with its resolved recipe")
-    whole_run_lr_receipt(spec, min_lr_ratio=round_spec.sft.min_lr_ratio)
+    whole_run_lr_receipt(spec, min_lr_ratio=round_spec.sft.min_lr_ratio, warmup_steps=round_spec.sft.warmup_steps)
     return spec
 
 
@@ -492,6 +493,7 @@ def round_plan(round_spec: RoundSpec, release, source_revision: str, version: st
     sft = resolved["sft"]
     sft["batch_size"] = round_spec.sft.batch_size
     sft["mesh"] = round_spec.sft.mesh
+    sft["trainer"]["mesh"] = round_spec.sft.mesh
     sft["resources"] = round_spec.sft.resources
     updates = round_spec.sft.updates
     sft["stop_after_steps"] = updates
@@ -499,8 +501,8 @@ def round_plan(round_spec: RoundSpec, release, source_revision: str, version: st
     sft["target_positions"] = updates * sft["batch_size"] * sft["seq_len"]
     sft["optimizer_schedule"] = {
         "horizon": updates,
-        "warmup": 0,
-        "decay": updates,
+        "warmup": round_spec.sft.warmup_steps,
+        "decay": updates - round_spec.sft.warmup_steps,
         "min_lr_ratio": round_spec.sft.min_lr_ratio,
         "lr_schedule": "linear",
     }
@@ -752,6 +754,7 @@ def main(round_path: Path, source_revision: str, validation_output: Path, throug
             whole_run_lr_receipt(
                 round_sft_spec(round_spec, f"{round_spec.name}/sft", version, resolved["sft"]),
                 min_lr_ratio=round_spec.sft.min_lr_ratio,
+                warmup_steps=round_spec.sft.warmup_steps,
             ),
             indent=2,
         )

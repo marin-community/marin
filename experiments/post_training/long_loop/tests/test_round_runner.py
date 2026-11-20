@@ -25,6 +25,7 @@ from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.long_loop import __main__ as loop_main
 from experiments.post_training.long_loop import exp4, round_runner
+from experiments.post_training.long_loop.exp3_recipe import whole_run_lr_receipt
 from experiments.post_training.long_loop.round_runner import (
     DATA_RELEASES,
     RoundArchive,
@@ -339,6 +340,20 @@ def test_round_sft_spec_holds_the_ruled_multiplier_by_construction(production_re
         _annealed_recipe(production_recipe),
     )
     assert override.snowball_sft.special_token_lr_multiplier == 1.0
+
+
+def test_round_sft_spec_warmup_reaches_peak_then_decays_through_the_last_update(production_recipe):
+    round_spec = _round_spec(production_recipe, warmup_steps=30)
+    recipe = _annealed_recipe(production_recipe, warmup=30, decay=330)
+    spec = round_sft_spec(round_spec, "round-test/sft", "fixture", recipe)
+    receipt = whole_run_lr_receipt(spec, warmup_steps=round_spec.sft.warmup_steps)
+    samples = {sample["optimizer_update_index"]: sample["learning_rates"] for sample in receipt["samples"]}
+    expected_ratios = {0: 0, 15: 0.5, 30: 1, 180: 0.5909090909090909, 359: 0.10272727272727272}
+    for index, ratio in expected_ratios.items():
+        assert samples[index]["muonh"] == pytest.approx(5e-5 * ratio, rel=1e-6)
+        assert samples[index]["adam"] == pytest.approx(5e-5 * 3 / 13 * ratio, rel=1e-6)
+    with pytest.raises(ValueError):
+        round_sft_spec(_round_spec(production_recipe), "round-test/sft", "fixture", recipe)
 
 
 def test_round_sft_spec_rejects_disagreeing_multipliers(production_recipe):
