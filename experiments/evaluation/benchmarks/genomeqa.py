@@ -30,16 +30,15 @@ from taskcompendium.importers.genomeqa import (
 )
 from taskcompendium.pipeline.inputs import SourceFormat
 
+from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmarks
 from experiments.evaluation.benchmarks.environments import BASIC_GRADER
-from experiments.evaluation.preparation import EvaluationCorpusRecipe
 from experiments.evaluation.prompt_compilation import evaluation_source
 from experiments.post_training.task_curation.pipeline import HfSource, UrlSource
-from experiments.post_training.task_curation.source import RlDataSource
 
 VERSION = "2026.11.20"
 
 
-def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
+def benchmarks() -> list[EvaluationBenchmark]:
     protocol = EvaluationProtocol(
         benchmark="genomeqa",
         version=VERSION,
@@ -67,28 +66,27 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             context_reserve=0,
         ),
     )
-    return [
-        evaluation_source(
-            name="genomeqa",
-            source=HfSource(
-                DATASET,
-                REVISION,
-                tuple(f"{answer_format}/train-00000-of-00001.parquet" for answer_format in FORMATS),
-                SourceFormat.PARQUET,
-                read=read_genomeqa,
-            ),
-            convert=convert_genomeqa,
-            version=VERSION + "-" + scorer_revision("genomeqa"),
-            protocol=protocol,
-            item_builder=genomeqa_item,
-            grader=BASIC_GRADER,
-            inputs={
-                "prompt": UrlSource(
-                    PROMPT_URL,
-                    "bc932144c20e02ccb18e4d8407f90814ca4f8fdc389d9309cd0cbc1525db58a3",
-                    PROMPT_FILENAME,
-                    SourceFormat.GENERATED,
-                )
-            },
-        )
-    ]
+    source = evaluation_source(
+        name="genomeqa",
+        source=HfSource(
+            DATASET,
+            REVISION,
+            tuple(f"{answer_format}/train-00000-of-00001.parquet" for answer_format in FORMATS),
+            SourceFormat.PARQUET,
+            read=read_genomeqa,
+        ),
+        convert=convert_genomeqa,
+        version=VERSION + "-" + scorer_revision("genomeqa"),
+        protocol=protocol,
+        item_builder=genomeqa_item,
+        grader=BASIC_GRADER,
+        inputs={
+            "prompt": UrlSource(
+                PROMPT_URL,
+                "bc932144c20e02ccb18e4d8407f90814ca4f8fdc389d9309cd0cbc1525db58a3",
+                PROMPT_FILENAME,
+                SourceFormat.GENERATED,
+            )
+        },
+    )
+    return fixed_benchmarks([source], "chat")

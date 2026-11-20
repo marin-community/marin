@@ -13,7 +13,7 @@ from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
 from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat
 from zephyr.context import ZephyrContext
 
-from experiments.evaluation.benchmarks.genomeqa import sources
+from experiments.evaluation.catalog import evaluation_benchmarks
 from experiments.post_training.task_curation.pipeline import source_recipe
 
 
@@ -26,7 +26,8 @@ class ByteTokenizer:
 
 
 def test_published_genomeqa_requires_room_for_run_budget(tmp_path):
-    dataset = sources()[0].config
+    [declaration] = evaluation_benchmarks()["genomeqa"].resolve()
+    dataset = declaration.config
     source = tmp_path / "source"
     source.mkdir()
     (source / "binary").mkdir()

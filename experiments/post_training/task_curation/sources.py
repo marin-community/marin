@@ -3,7 +3,6 @@
 
 """The task catalog: training and evaluation dataset declarations, keyed by name."""
 
-from experiments.evaluation.benchmarks import genomeqa
 from experiments.evaluation.catalog import evaluation_benchmarks
 from experiments.post_training.task_curation.datasets import (
     campaign_releases,
@@ -48,7 +47,6 @@ def all_sources() -> dict[str, RlDataSource]:
         ):
             evaluation_sources.setdefault(source.info.id, source)
     sources = [
-        *genomeqa.sources(),
         *evaluation_sources.values(),
         *skyrl_math.sources(),
         *skyrl_code.sources(),
