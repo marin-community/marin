@@ -12,7 +12,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 import click
-from finestore.rl.rl_progress import ComparisonRole, GateResult, RunSummary
+from finestore.rl.rl_progress import AttemptSummary, ComparisonRole, GateResult
 from finestore.rl.run_records import AttemptRecord, attempt_lineage
 from marin.execution.artifact import read_record
 from marin.rl import skyrl_records
@@ -20,15 +20,15 @@ from marin.rl.skyrl_records import attempt_tracking, read_stored_skyrl_attempts,
 from pydantic import BaseModel, Field
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
+from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import rl_presets as presets
-from experiments.post_training import rl_recipe as recipe
 from experiments.post_training.rl_command import attempt_grafana_url
-from experiments.post_training.rl_scoring import (
-    GateInputs,
+from experiments.post_training.rl_measurements import (
     InvalidComparison,
+    RunInputs,
     evaluation_status,
-    read_gate_inputs,
+    read_run_inputs,
     training_invariants,
 )
 
@@ -37,14 +37,14 @@ APPLET_ID = tomllib.loads(
 )["applet_id"]
 
 
-def publish_result(summary: RunSummary, service_url: str | None = None) -> str:
+def publish_result(summary: AttemptSummary, service_url: str | None = None) -> str:
     """Upsert one native attempt and return its verified dashboard URL."""
     from marina import client  # noqa: PLC0415
 
     service_url = service_url or client.DEFAULT_MARINA_URL
     details = client.marina_request(service_url, "GET", f"/api/marina/applets/{APPLET_ID}")
     origin = client.applet_origin(service_url, details["authenticated_url"])
-    served = RunSummary.model_validate_json(
+    served = AttemptSummary.model_validate_json(
         json.dumps(
             client.marina_request(
                 origin, "POST", f"/a/{APPLET_ID}/api/runs", json_body=summary.model_dump(mode="json", exclude_unset=True)
@@ -69,7 +69,7 @@ class PublicationOutcome(BaseModel):
         return self.model_dump(mode="json", exclude={"urls"}, exclude_none=True)
 
 
-def label(inputs: GateInputs) -> str:
+def run_label(inputs: RunInputs) -> str:
     parts = [inputs.preset_name, *inputs.settings]
     if inputs.tasks:
         parts.append(f"tasks={inputs.tasks}")
@@ -83,20 +83,20 @@ def build_record(
     preset: presets.Preset,
     *,
     table: presets.ModelPresets,
-    receipt: AttemptRecord,
+    attempt: AttemptRecord,
     report: gate.GateReport | None = None,
     gate_name: str | None = None,
     evaldash_run_ids: tuple[str, ...] | None = None,
-) -> RunSummary:
+) -> AttemptSummary:
     """Build a terminal progress record from stored native outputs without live lookups."""
-    launch, result = recorded_launch(receipt), receipt.native.result
+    launch, result = recorded_launch(attempt), attempt.native.result
     if result.state not in {"succeeded", "failed"}:
         raise ValueError("A progress record requires a terminal native attempt")
     evidence = []
     try:
-        inputs = read_gate_inputs(run_output)
+        inputs = read_run_inputs(run_output)
     except FileNotFoundError:
-        inputs = GateInputs(preset_name=preset.name)
+        inputs = RunInputs(preset_name=preset.name)
         evidence.append("Stored RL inputs are unavailable; using the supplied preset.")
     preset = table.by_name[inputs.preset_name]
     if launch.max_steps is None:
@@ -104,7 +104,7 @@ def build_record(
     preset = preset.with_updates(launch.max_steps)
     attempt_id = launch.attempt_id
     provenance = result.provenance or {}
-    tracking = attempt_tracking(receipt, launch)
+    tracking = attempt_tracking(attempt, launch)
     started, finished = result.started_at, result.finished_at
     history = attempt_lineage(launch.export_root, attempt_id)
     complete_history = (
@@ -113,9 +113,9 @@ def build_record(
         and history[-1].record.resumed_step in (None, 0)
     )
     metrics = skyrl_records.read_skyrl_metrics(run_output, attempt_id=attempt_id)
-    invariants = training_invariants(preset, metrics) if receipt.metrics_started_at is not None else ()
+    invariants = training_invariants(preset, metrics) if attempt.metrics_started_at is not None else ()
     failed = [fact.name for fact in invariants if not fact.holds]
-    status = evaluation_status(run_output, preset, receipt, launch)
+    status = evaluation_status(run_output, preset, attempt, launch)
     evaluations = list(status.evaluations)
     failed.extend(fact.name for fact in status.evaluation_invariants if not fact.holds)
     if status.evaluation_error is not None:
@@ -147,23 +147,23 @@ def build_record(
         )
     if not provenance:
         evidence.append("Recorded source provenance is unavailable.")
-    return RunSummary(
-        run_id=receipt.run_id,
+    return AttemptSummary(
+        run_id=attempt.run_id,
         attempt_id=attempt_id,
-        label=label(inputs),
+        label=run_label(inputs),
         series=preset.name,
         model=launch.model_name,
-        issue=receipt.issue,
+        issue=attempt.issue,
         evaldash_run_ids=list(dict.fromkeys(evaldash_run_ids)) if evaldash_run_ids is not None else None,
         gate=gate_name,
         gate_result=(
             GateResult(
                 verdict=report.verdict,
-                label=report.label,
+                effect=report.effect,
                 reason=report.reason,
                 invariants=list(report.invariants),
                 comparisons=list(
-                    report.rows(ComparisonRole.OBJECTIVE, ComparisonRole.CONSTRAINT, ComparisonRole.REQUIREMENT)
+                    report.rows(ComparisonRole.OBJECTIVE, ComparisonRole.GUARD, ComparisonRole.REQUIREMENT)
                 ),
                 attempt_ids=list(report.run.attempt_ids),
                 replicates=report.run.replicates,
@@ -183,7 +183,7 @@ def build_record(
         measured_updates=list(preset.measured),
         iris_job_id=result.iris_job_id,
         wandb_url=tracking.get("wandb_url"),
-        grafana_url=attempt_grafana_url(receipt, launch),
+        grafana_url=attempt_grafana_url(attempt, launch),
         evaluations=evaluations,
         engine=tracking.get("engine"),
         source_revision=(
@@ -253,7 +253,7 @@ def publish_runs(
                     path,
                     preset,
                     table=table,
-                    receipt=receipt,
+                    attempt=receipt,
                     report=current_report,
                     gate_name=read_record(gate_path).name if current_report is not None else None,
                     evaldash_run_ids=evaldash_run_ids,
@@ -283,7 +283,7 @@ def publish_controls(
         raise click.UsageError(str(error)) from error
     configure_coreweave_s3()
     result = publish_runs(
-        [gate.control_path(preset, pin, index, table=table) for index in range(pin.runs)],
+        [gate.control_path(preset, pin, index, table=table) for index in range(pin.replicates)],
         table.by_name[pin.preset],
         table=table,
         service_url=service_url,
@@ -298,18 +298,18 @@ def command(table: presets.ModelPresets) -> click.Command:
 
     @click.command()
     @click.option("--preset", "preset_name", type=click.Choice(tuple(table.by_name)), required=True)
-    @click.option("--url", help="Marina origin (defaults to the Marina service).")
-    @click.option("--output", "run_output", help="Stored native run output; requires --attempt.")
-    @click.option("--attempt", help="Publish this stored attempt from --output, without native execution.")
+    @click.option("--marina-url", "url", help="Marina origin (defaults to the Marina service).")
+    @click.option("--run-output", "run_output", help="Stored native run output; requires --attempt.")
+    @click.option("--attempt", help="Publish this stored attempt from --run-output, without native execution.")
     @click.option("--evaldash-run-id", multiple=True, help="Link an EvalDash run to this attempt. Repeatable.")
     def command(
         preset_name: str, url: str | None, run_output: str | None, attempt: str | None, evaldash_run_id: tuple[str, ...]
     ) -> None:
         """Publish pinned controls or one stored native attempt."""
         if (run_output is None) != (attempt is None):
-            raise click.UsageError("--output and --attempt are required together")
+            raise click.UsageError("--run-output and --attempt are required together")
         if evaldash_run_id and attempt is None:
-            raise click.UsageError("--evaldash-run-id requires --output and --attempt")
+            raise click.UsageError("--evaldash-run-id requires --run-output and --attempt")
         if run_output is not None:
             configure_coreweave_s3()
             result = publish_runs(
@@ -321,7 +321,7 @@ def command(table: presets.ModelPresets) -> click.Command:
                 evaldash_run_ids=evaldash_run_id or None,
             )
             if result.unserved_records:
-                result.retry = "Repeat this publication command with --output and --attempt."
+                result.retry = "Repeat this publication command with --run-output and --attempt."
         else:
             result = publish_controls(table, preset_name, service_url=url)
         click.echo(json.dumps(result.to_dict()))

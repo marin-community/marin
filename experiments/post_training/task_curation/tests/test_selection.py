@@ -12,7 +12,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
-from finestore.rl.strata import DifficultyBands, MembershipState, SelectionParent, TaskStrata, read_selection_strata
+from finestore.rl.strata import DifficultyBands, MembershipState, SelectionParent, TaskStrata, read_selection_manifest
 from fray.local_backend import LocalClient
 from marin.execution.lazy import ArtifactStep, run
 from taskcompendium.convert.answers import source_evidence
@@ -41,7 +41,7 @@ from zephyr.context import ZephyrContext
 
 from experiments.evaluation.benchmarks.code import sources as code_sources
 from experiments.evaluation.benchmarks.reasoning import sources as reasoning_sources
-from experiments.post_training.rl_recipe import sampled_tasks_step
+from experiments.post_training.rl_compose import sampled_tasks_step
 from experiments.post_training.rl_scoring import EvalLiteVersionScore, score_eval_lite_version
 from experiments.post_training.rl_tests.fixtures import answer, evaluation_task_rows
 from experiments.post_training.task_curation.campaign import error_chain
@@ -209,7 +209,7 @@ def test_selection_filters_full_heldout_and_duplicates_before_sampling(tmp_path,
     assert {task.id for task in tasks} <= {"training-a", "training-b", "training-c"}
     for task in tasks:
         assert task == training[task.id]
-    panel = read_selection_strata(str(output))
+    panel = read_selection_manifest(str(output))
     assert panel is not None
     carried = pq.read_table(output / TRAIN_FILENAME).to_pylist()
     assert {row["family"] for row in carried} == {"calendar"}
@@ -231,7 +231,7 @@ def test_selection_filters_full_heldout_and_duplicates_before_sampling(tmp_path,
     )
     sampled = read_tasks(derived / TRAIN_FILENAME)
     assert len(sampled) == 1 and sampled[0] in tasks
-    subset = read_selection_strata(str(derived))
+    subset = read_selection_manifest(str(derived))
     assert subset is not None
     assert set(subset.tasks) == {sampled[0].id}
     assert subset.identity(sampled[0].id) == panel.identity(sampled[0].id)
@@ -716,7 +716,7 @@ def test_eval_lite_publication_preserves_untouched_strata_and_joins_initializer_
             assert evidence["prompt"] in prompt
             assert all(public_test in prompt for public_test in evidence["test_list"])
             assert "isinstance" not in prompt
-    panel = read_selection_strata(str(provisional))
+    panel = read_selection_manifest(str(provisional))
     assert panel is not None
     annotations = panel.tasks
     assert list(annotations) == [task.id for task in full]
@@ -746,7 +746,7 @@ def test_eval_lite_publication_preserves_untouched_strata_and_joins_initializer_
     measured = measured_eval_lite_recipe(settings, tmp_path, measured_tasks)
     final = publish_eval_lite(measured, tmp_path)
     assert read_tasks(final / FULL_VALIDATION_FILENAME) == full
-    final_panel = read_selection_strata(str(final))
+    final_panel = read_selection_manifest(str(final))
     assert final_panel is not None
     for index, task in enumerate(measured_tasks):
         row = final_panel.tasks[task.id]
@@ -822,7 +822,7 @@ def test_eval_lite_publication_preserves_untouched_strata_and_joins_initializer_
         }
     )
     successor_output = Path(run(eval_lite_step(inputs, successor))[0].path)
-    successor_panel = read_selection_strata(str(successor_output))
+    successor_panel = read_selection_manifest(str(successor_output))
     assert successor_panel is not None and successor_panel.definition.parent == successor.parent
 
     def retained_tasks(path):
@@ -844,7 +844,7 @@ def test_eval_lite_publication_preserves_untouched_strata_and_joins_initializer_
         attempt_id="successor",
         step=2,
         evaluation="eval/",
-        panel=successor_panel,
+        selection=successor_panel,
     )
     measured_rows = [
         row.model_copy(update={"task_digest": canonical_sha256(json.loads(successor_tasks[row.task_id]))})

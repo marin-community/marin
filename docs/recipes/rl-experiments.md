@@ -1,6 +1,6 @@
 # RL experiments
 
-Plan, submit and inspect an RL experiment through its model entry file. A named preset binds
+Plan, submit and inspect an RL experiment through its model entry. A named preset binds
 the task selection, initial weights and tokenizer, GPU layout, evaluation schedule and measurement
 window. Start with a plan to confirm the inputs, allocation and output path.
 
@@ -9,16 +9,27 @@ window. Start with a plan to confirm the inputs, allocation and output path.
 Each preset name is `<question>-<length>`, with short presets making no training updates,
 medium presets making 10–25, and long presets making 20 or more.
 
+### Short loop
+
+The short loop, also called the quick loop, compares one change against control runs.
+
 | Preset | What it measures | Default work and estimated cost | Evaluation and gate | When to use it |
 |---|---|---|---|---|
-| `speed-short` | Generation throughput per GPU | 8 H100s, 512 prompts × four answers, 14–17 min and about 2 H100-hours | Separate full EvalLite pass. Gated on throughput and EvalLite family mean. | Screen a vLLM wheel, kernel or engine option before testing the full training loop with `speed-medium`. |
+| `speed-short` | Generation throughput per GPU | 8 H100s, 512 prompts × four answers, 14–17 min and about 2 H100-hours | Separate pass on the EvalLite pool. Gated on throughput and EvalLite pool family mean. | Screen a vLLM wheel, kernel or engine option before testing the full training loop with `speed-medium`. |
 | `data-short` | Fraction of prompts with both passing and failing answers | 8 H100s, 256 candidate training prompts × four answers, 10–15 min and about 2 H100-hours | Scores the sampled candidate tasks. Gated on mixed-answer fraction. | Screen a new `--tasks` selection before training on it with `data-medium`. |
 | `eval-short` | Published model scores | 8 H100s. The recorded run used 1.1 H100-hours. | Scores the full EvalLite pool without a control comparison. | Evaluate a published checkpoint in a generation-only job. |
 | `speed-medium` | Update time and policy agreement | 40 H100s, 10 updates. Wall time and cost are unmeasured. | Training metrics on updates 2–10. Gated on speed and mismatch. | Check startup, trainer kernels, parallelism, weight synchronization or numerics. Use `learning-medium` to measure quality after a precision change. |
-| `learning-medium` | EvalLite family mean and score gain per GPU-hour | 40 H100s, 25 updates. Wall time and cost are unmeasured. | Full EvalLite at steps 0 and 25. Gated on EvalLite family mean. | Compare objectives, optimizers, sampling, batch shape or initial weights. |
-| `data-medium` | Learning on a candidate training selection | 40 H100s, 25 updates. Wall time and cost are unmeasured. | Full EvalLite at steps 0 and 25. Shares the `learning-medium` gate and controls. | Train on a `--tasks` selection after it passes the short screen. |
+| `learning-medium` | EvalLite pool family mean and score gain per GPU-hour | 40 H100s, 25 updates. Wall time and cost are unmeasured. | EvalLite pool at steps 0 and 25. Gated on EvalLite pool family mean. | Compare objectives, optimizers, sampling, batch shape or initial weights. |
+| `data-medium` | Learning on a candidate training selection | 40 H100s, 25 updates. Wall time and cost are unmeasured. | EvalLite pool at steps 0 and 25. Shares the `learning-medium` gate and controls. | Train on a `--tasks` selection after it passes the short screen. |
 | `speed-long` | Sustained asynchronous update time and policy agreement | 40 H100s, 20 updates, 45–75 min and 30–50 H100-hours | Training metrics on updates 3–20. Gated on speed and mismatch. | Measure grading, admission or throughput changes over a longer window. |
-| `train-long` | Full training and checkpoint quality | 40 H100s, 100 updates by default, hours to days. Check the plan and use the reported GPU-hours for cost. | EvalLite's 100 active tasks at step 0 and every 10 updates. Evaluation coverage invariants, without a calibrated control comparison. | Train a release candidate with checkpoint recovery and durable HF export. |
+
+### Long loop
+
+The long loop trains a model and keeps its best checkpoint with `train-long` or `train-long-harbor` where available.
+
+| Preset | What it measures | Default work and estimated cost | Evaluation and gate | When to use it |
+|---|---|---|---|---|
+| `train-long` | Full training and checkpoint quality | 40 H100s, 100 updates by default, hours to days. Check the plan and use the reported GPU-hours for cost. | EvalLite active set of 100 tasks at step 0 and every 10 updates. Evaluation coverage invariants, without a calibrated control comparison. | Train a release candidate with checkpoint recovery and durable HF export. |
 
 ## The loop
 
@@ -37,11 +48,11 @@ uv run python -m experiments.post_training.snowball_rl --preset speed-short --ve
 ```
 
 A plan without `--require` uses the declared control pin. With `--require`, planning also validates the pin
-and checks that control r0 recorded the requested metric. Gated execution and re-scoring require the pin's revision to match
+and checks that control r0 recorded the requested metric. Gated execution and comparison require the pin's revision to match
 the preset; a mismatch returns exit 4 before submission or INVALID during gate execution. Controls are collected
 after merge; `--control` and `train-long` need no pin.
 
-The command invokes the shared runner through the Snowball model file. Track or stage source files
+The command invokes the shared runner through the Snowball model entry. Track or stage source files
 under `experiments/`, `lib/` and `vendor/`. The full tracked working-tree hash forms part of the run
 name, so even a documentation edit can change it. `--version dev` satisfies the standard launcher
 interface. Each preset's steps use its own `revision`.
@@ -76,7 +87,7 @@ Publish a stored attempt after an app release, without starting native work:
 
 ```bash
 uv run python -m experiments.post_training.snowball_rl publish --preset train-long \
-  --output "$RUN_OUTPUT" --attempt "$ATTEMPT_ID" --url "$MARINA_ORIGIN"
+  --run-output "$RUN_OUTPUT" --attempt "$ATTEMPT_ID" --marina-url "$MARINA_ORIGIN"
 ```
 
 Set `RUN_OUTPUT` to the path in the run's status, `ATTEMPT_ID` to the selected native attempt,
@@ -92,7 +103,7 @@ family, AAII category and difficulty, and links to the run's Grafana window.
 After `--run --wait` observes the coordinator finish, the launcher publishes learning-medium,
 data-medium and train-long attempts using the caller's Marina login. The row shows the model and
 the issue link when the launch supplied a number. Record the finishing status's `rl_progress_url` with the verdict.
-Use `--url ORIGIN` to publish to a local Marina stack; the default is the Marina service.
+Use `--marina-url ORIGIN` to publish to a local Marina stack; the default is the Marina service.
 
 Repeat the original command with `--wait` from the same source and inputs. The executor reuses
 successful steps and runs failed work, then the launcher retries publication from stored outputs.
@@ -103,10 +114,10 @@ requires a report for exactly the current native attempts.
 Publish learning-medium or data-medium controls from their stored paths:
 
 ```bash
-uv run python -m experiments.post_training.snowball_rl publish --preset learning-medium --url "$MARINA_ORIGIN"
+uv run python -m experiments.post_training.snowball_rl publish --preset learning-medium --marina-url "$MARINA_ORIGIN"
 ```
 
-The pins in `snowball_rl.SNOWBALL.controls` must match the preset's current revision; unavailable pins
+The pins in `snowball_rl.SNOWBALL.control_pins` must match the preset's current revision; unavailable pins
 produce a usage error. Speed presets and data-short publish nothing. See the
 [dashboard and record contract](https://github.com/marin-community/marin/blob/2a13c0c0627c2a6b2dd6b44d898edd530b4e1b6d/infra/marina/apps/rl_progress/README.md) for native identity,
 recorded measurements and stored gate facts.
@@ -150,15 +161,15 @@ in their shared names. Collect controls only for an authorized calibration.
 
 ## Compare with controls
 
-The gate writes `gate_report.json` and `gate_report.md`. Status prints verdict, label, reason and report
-path, followed by the Markdown tables of objectives, constraints, invariants and reported statistics.
-JSON comparison rows have `objective`, `constraint`, `requirement`, `reported` or `slice` roles.
-`gate_inputs.json` records the requested settings and inputs for re-scoring; `run.config_changes` lists
-explicit settings and derived differences. Native elapsed time and allocated GPUs determine gain per H100-hour.
+The gate writes `gate_report.json` and `gate_report.md`. Status prints verdict, effect, reason and report
+path, followed by the Markdown tables of objectives, guards, invariants and reported statistics.
+JSON comparison rows have `objective`, `guard`, `requirement`, `reported` or `slice` roles.
+`run_inputs.json` records the requested settings and inputs for comparison; `run.config_changes` lists
+explicit settings and derived differences. Native elapsed time and allocated GPUs determine gain per GPU-hour.
 
-Each gated preset uses one control pin in `snowball_rl.SNOWBALL.controls`, with a source commit, revision and
+Each gated preset uses one control pin in `snowball_rl.SNOWBALL.control_pins`, with a source commit, revision and
 replicate count. Data-medium shares learning-medium's pin. Before submission, the command composes the
-candidate on CPU and checks every control against current defaults. During scoring, candidate configuration
+candidate on CPU and checks every control against current defaults. During comparison, candidate configuration
 must match its recorded inputs. The report states why a comparison is INVALID or an invariant fails.
 
 Guard tolerance is `t(1 - 0.025/k, df) * sd * sqrt(1/n_run + 1/n_control)`, where `k` is the number of
@@ -174,9 +185,9 @@ refuse requirements. Requirements change report identity while training names an
 Run stored comparisons on CPU:
 
 ```bash
-uv run python -m experiments.post_training.snowball_rl rescore \
+uv run python -m experiments.post_training.snowball_rl compare \
   --preset learning-medium --candidate "$CANDIDATE" --require 'eval_lite/aai_category/coding/mean>=control'
-uv run python -m experiments.post_training.snowball_rl rescore \
+uv run python -m experiments.post_training.snowball_rl compare \
   --preset speed-medium --leave-out r0
 ```
 
@@ -203,14 +214,14 @@ Reports use the caller's namespace under `MARIN_PREFIX`; controls are read-only.
 4. Controls are collected by CI after the default change merges, once per changed default.
    That CI workflow is planned separately; control collection is not a merge gate.
    The manual `--control` command remains available for an explicitly authorized calibration.
-   Source, revision and replicate count live in `snowball_rl.SNOWBALL.controls`.
-5. Validate a newly collected cohort with `snowball_rl rescore --leave-out rN` for every replicate.
+   Source, revision and replicate count live in `snowball_rl.SNOWBALL.control_pins`.
+5. Validate a newly collected control replicates with `snowball_rl compare --leave-out rN` for every replicate.
    Every leave-one-out verdict must PASS.
 
 ## Tasks and evaluation
 
 [EvalLite](../references/task-curation.md#evallite) is the held-out selection evaluated by speed-short,
-learning-medium and data-medium; train-long uses its 100-task subset. EvalLite evaluations request one
+learning-medium and data-medium; train-long uses the 100-task active set. EvalLite evaluations request one
 greedy answer per task with natural replies up to 8,192 tokens. Data-short evaluates a sample of 256
 candidate training tasks with four sampled answers each; it does not evaluate EvalLite.
 
@@ -230,9 +241,10 @@ The stored launch supplies the export root, evaluation prefix and expected answe
 
 ```python
 from finestore.rl.run_records import read_evaluations
-from finestore.rl.strata import read_selection_strata
+from finestore.rl.strata import read_selection_manifest
 from marin.rl.skyrl_records import read_stored_skyrl_attempts, recorded_launch
-from experiments.post_training.rl_scoring import evaluation_protocol, native_prefix, score_eval_lite_version
+from experiments.post_training.rl_measurements import evaluation_protocol, native_prefix
+from experiments.post_training.rl_scoring import score_eval_lite_version
 
 _, attempts = read_stored_skyrl_attempts(run_output)
 launch = recorded_launch(attempts[attempt_id])
@@ -244,16 +256,16 @@ rows = read_evaluations(
     step=step,
 )
 for root in version_roots:
-    panel = read_selection_strata(root)
-    if panel is None:
+    selection = read_selection_manifest(root)
+    if selection is None:
         raise ValueError(f"Missing selection manifest: {root}")
-    print(panel.definition.version, score_eval_lite_version(rows, panel, expected_answers=answers))
+    print(selection.definition.version, score_eval_lite_version(rows, selection, expected_answers=answers))
 ```
 
 Use a preset's evaluation name, such as `eval_lite_100` for train-long. The primary evaluation is
-stored under `eval/`, and named evaluations use `eval/<name>/`. The result reports scored tasks,
+stored under `eval/`, and additional evaluations use `eval/<name>/`. The result reports scored tasks,
 missing verified answers and digest mismatches. A version has a score only when all of its active
-tasks have matching content and complete verified answers. Evaluate the full retained pool to
+tasks have matching content and complete verified answers. Evaluate the full EvalLite pool to
 include tasks that were active in earlier versions.
 
 ## Telemetry and provenance
@@ -286,10 +298,10 @@ best checkpoint step, or `none eligible`.
 | Location | Contents and reader |
 |---|---|
 | `resolved-launch.yaml`, `terminal.json` | Native configuration and result; `read_stored_skyrl_attempt(output)` in `marin.rl.skyrl_records` reads the retained attempt without Iris. |
-| `gate_inputs.json` | The runner's declared task, initializer, settings and requirements. |
-| `exports/run-records/` | FineStore attempt receipts, numeric metrics and per-task evaluations. `read_skyrl_metrics(output, attempt_id=...)` reads a selected attempt. |
+| `run_inputs.json` | The runner's declared task, initializer, settings and requirements. |
+| `exports/run-records/` | FineStore attempt records, numeric metrics and per-task evaluations. `read_skyrl_metrics(output, attempt_id=...)` reads a selected attempt. |
 | FineStore `evaluations` table | One task per attempt, evaluation and step, with task content digest, ordered answers, native rewards, verifier bounds, normalized verifier scores, outcomes and canonical strata. `finestore.rl.run_records.read_evaluations` reads it. |
-| `exports/dumped_evals/<attempt_id>/...` | JSONL answers carrying attempt, step and final-turn identity; named evaluations also have their own export subtree. |
+| `exports/dumped_evals/<attempt_id>/...` | JSONL answers carrying attempt, step and final-turn identity; additional evaluations also have their own export subtree. |
 | Native checkpoint root | Recovery checkpoints in the 14-day TTL bucket. The receipt records their location and lineage; they are separate from durable exports. |
 | `exports/best_checkpoint.json` | The selected step and its evaluation evidence, written when a checkpoint is eligible. |
 | HF policy | The completed receipt identifies the HF model for `--init`, either the initializer or a converted checkpoint under `exports/`. |
@@ -316,8 +328,9 @@ IDs and TaskSpec digests against the saved per-task results.
 ## Add a model entry
 
 The shared `experiments/post_training/rl.py` builds the CLI and executes a `ModelPresets` value.
-`rl_presets.py` defines its types; `rl_recipe.py` composes launch specifications; `rl_gate.py`
-compares stored results; `rl_scoring.py` reads measurements. These modules contain no model table.
+`rl_presets.py` defines the types and `rl_compose.py` composes launch specifications. `rl_measurements.py`
+reads a stored run's metrics, scores and invariants. `rl_scoring.py` computes scores from answers,
+and `rl_gate.py` compares a candidate's measurements with pinned controls.
 
 `snowball_rl.py` is Snowball's model entry. Its `SNOWBALL` value contains the presets, the
 `p40` and `e8` layouts, immutable model and task references, evaluation selections and control pins.
@@ -329,23 +342,23 @@ To add a model, create an entry file and pass its `ModelPresets` to `rl.main`. E
 its own model, tasks, layout and recipe. A preset with held-out evaluations declares
 `held_out_tasks` and the evaluation profiles. A `mochi_rl.py` entry fits the same interface with the
 model label `mochi`, its own namespace, and Mochi's initializer, resources and evaluation choices.
-The model table's namespace owns run and control paths.
-The native launch-document census counts `rl_recipe.py`, where `SkyRLSpec` is
+The preset table's namespace owns run and control paths.
+The native launch-document census counts `rl_compose.py`, where `SkyRLSpec` is
 constructed; add the new table's builders to `tests/rl/launch_document_census.py` the same way
 as Snowball. Use `assert_revisioned_native_configs` in `skyrl_test_support.py` with the table's
 pinned revisions and native hashes.
 
 Python callers can pass `init: SkyRLModelSource` to `rl.main(table, argv=..., init=...)` or
-`build_run(preset, table=..., init=...)`. An `ArtifactHfModel` accepts any `ArtifactStep`;
+`build_experiment(preset, table=..., init=...)`. An `ArtifactHfModel` accepts any `ArtifactStep`;
 `tokenizer_uri=None` uses the export's own tokenizer files. An explicit tokenizer reference
 and revision are preserved. `--init NAME@VERSION` resolves a published model to the same type;
 an unpinned Hub tokenizer reference is resolved to a launch-time commit. Python `init` and
 `--init` together are refused. Planning retains an unbuilt initializer's producer dependency
 without reading its export. Stored inputs preserve its identity and export selector;
-rescoring uses the concrete export URI recorded by the candidate. At RL startup, after the
+comparison uses the concrete export URI recorded by the candidate. At RL startup, after the
 model is built, the checkpoint and loaded tokenizer vocabularies must match before engines load.
 
-The coordinator re-enters the calling module with the exact arguments. Run model files with
+The coordinator re-enters the calling module with the exact arguments. Run model entrys with
 `python -m PACKAGE.MODULE`; callers without module metadata can set `entry_module` on `rl.main`.
 Its `forward_env=("NAME", ...)` argument requires and forwards extra environment variables to
 the coordinator and native jobs, including terminal export. Configuration and logs contain
