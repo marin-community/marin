@@ -10,7 +10,11 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
-from finestore.rl.curation import ContentEvidenceReference, QualifiedSourceDeclaration, SourceDeclaration
+from finestore.rl.curation import (
+    ContentEvidenceReference,
+    QualifiedSourceDeclaration,
+    SourceDeclaration,
+)
 from finestore.rl.difficulty import DifficultySample, SampleTask
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -36,7 +40,10 @@ class DifficultySource(BaseModel):
     """A frozen panel and sample receipt; runtime qualification remains separate."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
-    declaration: SourceDeclaration
+    # The frozen queue's declarations carry the strict measured contract (current
+    # release, census input, quality result); main's legacy base rejects those
+    # fields, so the queue validates against the qualified subclass.
+    declaration: QualifiedSourceDeclaration
     panel: SamplePanel
     sample: DifficultySample
     sample_receipt: ContentEvidenceReference
