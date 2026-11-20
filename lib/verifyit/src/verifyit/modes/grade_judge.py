@@ -28,7 +28,7 @@ import time
 import unicodedata
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, TypeVar, cast
@@ -555,7 +555,8 @@ def _retry_after(error: openai.APIStatusError) -> float:
         return max(0.0, float(value))
     except ValueError:
         try:
-            return max(0.0, (parsedate_to_datetime(value) - datetime.now(UTC)).total_seconds())
+            # datetime.UTC is 3.11+; the grader machines run 3.10.
+            return max(0.0, (parsedate_to_datetime(value) - datetime.now(timezone.utc)).total_seconds())  # noqa: UP017
         except (TypeError, ValueError):
             return 0.0
 

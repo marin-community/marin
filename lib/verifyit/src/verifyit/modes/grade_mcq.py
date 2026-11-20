@@ -12,9 +12,9 @@ import re
 import string
 from collections.abc import Sequence
 from dataclasses import dataclass
-from enum import StrEnum
 from pathlib import Path
 
+from verifyit.compat import StrEnum
 from verifyit.grade import InvalidTask, Reward, empty_output_policy, read_output, scored
 from verifyit.spec import McqSpec
 
