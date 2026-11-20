@@ -69,6 +69,12 @@ def test_adopted_round_lowers_to_eval_with_pinned_model_and_standard_ep_placemen
         assert config["generator"][field] == 16
     assert config["generator"]["enforce_eager"] is False
     assert config["generator"]["engine_init_kwargs"]["compilation_config"]["cudagraph_mode"] == "PIECEWISE"
+    assert {key: config["extra_env"].get(key) for key in ("NCCL_NET", "NCCL_IB_DISABLE", "NCCL_IB_HCA")} == {
+        "NCCL_NET": "IB",
+        "NCCL_IB_DISABLE": "0",
+        "NCCL_IB_HCA": "ibp",
+    }
+    assert config["trainer"]["policy"]["nccl_buffer_size_bytes"] == 262144
     assert run.evaluation.model.uri == adopted_round.adopted_model.uri
     assert run.evaluation.model.identity == "sha256:" + adopted_round.adopted_model.export_manifest_sha256
     assert run.model_manifest_filename == "export-manifest.json"
@@ -89,7 +95,7 @@ def test_changed_adopted_metadata_is_rejected_before_building_a_gpu_job(adopted_
         adopted_round_evaluation(adopted_round)
 
 
-def test_serving_profile_cannot_change_frozen_sampling(adopted_round, tmp_path):
+def test_serving_profile_cannot_change_frozen_protocol(adopted_round, tmp_path):
     terminal = adopted_round_evaluation(adopted_round)
     context = StepContext.for_run(
         str(tmp_path / "evaluation"), str(tmp_path), runtime_args=terminal.runtime_args, deps=terminal.deps
@@ -98,4 +104,7 @@ def test_serving_profile_cannot_change_frozen_sampling(adopted_round, tmp_path):
     profile = dataclasses.replace(run.serving_profile, generator={"eval_sampling_params": {"temperature": 0}})
     frozen = json.loads(Path(policy_fixture_reference().uri).read_text())
     with pytest.raises(ValueError, match=r"protocol fields.*eval_sampling_params"):
+        serving_config(frozen, profile)
+    profile = dataclasses.replace(run.serving_profile, nccl_env={"DAYTONA_TARGET": "elsewhere"})
+    with pytest.raises(ValueError, match=r"protocol fields.*DAYTONA_TARGET"):
         serving_config(frozen, profile)
