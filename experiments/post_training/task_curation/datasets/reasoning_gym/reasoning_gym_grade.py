@@ -24,7 +24,7 @@ from verifyit.modes.grade_reasoning_gym import score_reasoning_gym_answer
 
 sys.path.insert(0, "/tests")
 
-from generate import ROWS_PER_TASK, encoded, task_seed
+from generate import ROWS_PER_TASK, encoded, task_seed, without_generation_day
 
 CONFIG = Path("/tests/config.json")
 ANSWER = Path("/app/answer.txt")
@@ -53,7 +53,7 @@ def main() -> None:
         raise ValueError(f"PYTHONHASHSEED must be {generation['python_hash_seed']} to regenerate the entry")
     with contextlib.redirect_stdout(sys.stderr):
         entry = regenerated_entry(generation)
-        if encoded(entry) != contract["entry"]:
+        if without_generation_day(encoded(entry)) != without_generation_day(contract["entry"]):
             raise ValueError("Regenerated entry differs from the recorded entry")
         reward = score_reasoning_gym_answer(generation["task"], entry, candidate(ANSWER.read_text(errors="replace")))
     print(reward)

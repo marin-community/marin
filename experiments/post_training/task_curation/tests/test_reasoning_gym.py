@@ -112,6 +112,35 @@ def test_generator_transport_keeps_symbolic_integers_exact():
     assert dataset.score_answer(entry["answer"], transported) == dataset.score_answer(entry["answer"], entry) == 1.0
 
 
+def time_intervals_entry(index: int, day: str | None = None) -> dict:
+    """An encoded ``time_intervals`` entry, with its start and end moved to ``day`` when one is given."""
+    seed = generate.task_seed("time_intervals")
+    entry = generate.encoded(
+        reasoning_gym.create_dataset("time_intervals", size=generate.ROWS_PER_TASK, seed=seed)[index]
+    )
+    if day is None:
+        return entry
+    metadata = entry["metadata"]
+    start, end = (f"{day} {metadata[key].split()[1]}" for key in ("start_time", "end_time"))
+    return {**entry, "metadata": {**metadata, "start_time": start, "end_time": end}}
+
+
+def test_time_only_entry_matches_its_record_from_another_day():
+    # dateutil dates the two times of a time-only question with the day the generator runs.
+    regenerated = time_intervals_entry(2)
+    assert regenerated["question"].startswith("A meeting started at 01:01:14 and ended at 06:10:42.")
+    recorded = time_intervals_entry(2, day="2026-11-04")
+    assert recorded != regenerated
+    assert generate.without_generation_day(recorded) == generate.without_generation_day(regenerated)
+
+
+def test_dated_entry_differs_from_a_record_with_another_start():
+    regenerated = time_intervals_entry(0)
+    assert regenerated["metadata"]["start_time"] == "2154-08-08 18:44:00"
+    recorded = time_intervals_entry(0, day="2154-08-07")
+    assert generate.without_generation_day(recorded) != generate.without_generation_day(regenerated)
+
+
 @pytest.fixture
 def noisy_generator_wheel(tmp_path) -> StoragePath:
     """A generator wheel that prints at import, construction, generation and scoring."""
