@@ -45,7 +45,6 @@ from omegaconf import DictConfig, OmegaConf
 from rigging.filesystem.storage_path import StoragePath
 from skyrl_train.hf_export_schema import (
     DEFAULT_HF_EXPORT_TIMEOUT,
-    DEFAULT_HF_HUB_PRIVATE,
     DEFAULT_HF_HUB_REVISION,
     DEFAULT_HF_UPLOAD_MODE,
     HFExportRequest,
@@ -268,7 +267,7 @@ def argument_parser() -> argparse.ArgumentParser:
     ap.add_argument("--export_path", help="defaults to <ckpt_path parent>/exports")
     ap.add_argument("--job-name", dest="job_name")
     ap.add_argument("--hf-hub-repo-id")
-    ap.add_argument("--hf-hub-private", action=argparse.BooleanOptionalAction, default=None)
+    ap.add_argument("--hf-hub-private", action="store_true", default=None)
     ap.add_argument("--hf-hub-revision")
     ap.add_argument("--hf-upload-mode", choices=tuple(HFUploadMode))
     ap.add_argument(
@@ -363,7 +362,7 @@ def manual_spec(args: argparse.Namespace, parser: argparse.ArgumentParser) -> Ex
             model_source_uri=args.model_source_uri,
             model_source_identity=args.model_source_identity,
             hf_hub_repo_id=args.hf_hub_repo_id,
-            hf_hub_private=args.hf_hub_private if args.hf_hub_private is not None else DEFAULT_HF_HUB_PRIVATE,
+            hf_hub_private=bool(args.hf_hub_private),
             hf_hub_revision=args.hf_hub_revision or DEFAULT_HF_HUB_REVISION,
             hf_upload_mode=HFUploadMode(args.hf_upload_mode or DEFAULT_HF_UPLOAD_MODE),
         )

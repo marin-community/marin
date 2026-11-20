@@ -603,7 +603,7 @@ class Trainer(Section):
     checkpoint_retention: Literal["latest", "best"] | None = field(None)
     checkpoint_keep_every: PositiveInt | None = field(None)
     hf_hub_repo_id: str | None = field(None)
-    hf_hub_private: bool = field(True)
+    hf_hub_private: bool = field(False)
     hf_hub_revision: str = field("main")
 
 

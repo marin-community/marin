@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from evalrecords.records import RunStatus, read_record, record_path
+from evalrecords.records import RunStatus, record_path
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.runner import _record
 from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord
@@ -20,7 +20,7 @@ from experiments.post_training.rl_tests.fixtures import write_skyrl_run_record
 from experiments.post_training.skyrl_evaluation import evaluate_model
 
 
-def evaluate_smoke(source, serving, *, timeout=None):
+def evaluate_smoke(source, serving):
     return evaluate_model(
         source,
         serving,
@@ -29,11 +29,10 @@ def evaluate_smoke(source, serving, *, timeout=None):
         accelerator="H100x1",
         submission_cluster="marin",
         federated_cluster="cw-rno2a",
-        job_timeout_seconds=timeout,
     )
 
 
-def remove_rl_run_ids(path, *, legacy=False):
+def remove_attempt_ids(path, *, legacy=False):
     receipt = ArtifactRecord.model_validate_json(path.read_text())
     assert receipt.result is not None
     del receipt.result["run_id"], receipt.result["attempt_id"]
@@ -43,30 +42,28 @@ def remove_rl_run_ids(path, *, legacy=False):
 
 
 @pytest.mark.parametrize(
-    ("model_fields", "job_timeout_seconds", "error"),
+    "model_fields",
     [
-        ({"revision": "starter-commit"}, None, "come from the model"),
-        ({"identity": "starter"}, None, "come from the model"),
-        ({"tokenizer": "org/tokenizer"}, None, "come from the model"),
-        ({"tokenizer_revision": "starter-commit"}, None, "come from the model"),
-        ({}, 0, "job_timeout_seconds must be positive"),
+        {"revision": "starter-commit"},
+        {"identity": "starter"},
+        {"tokenizer": "org/tokenizer"},
+        {"tokenizer_revision": "starter-commit"},
     ],
 )
-def test_evaluate_rejects_invalid_inputs_when_building_the_step(tmp_path, model_fields, job_timeout_seconds, error):
+def test_evaluate_rejects_invalid_inputs_when_building_the_step(tmp_path, model_fields):
     source = ArtifactHfModel(ArtifactStep.adopt("tests/model", "2026.10.26", str(tmp_path)))
-    with pytest.raises(ValueError, match=error):
-        evaluate_smoke(source, ModelConfig(name="candidate", location="", **model_fields), timeout=job_timeout_seconds)
+    with pytest.raises(ValueError, match="come from the model"):
+        evaluate_smoke(source, ModelConfig(name="candidate", location="", **model_fields))
 
 
-@pytest.mark.parametrize("source_kind", ["rl", "legacy-rl", "hf"])
-def test_evaluate_records_model_and_producing_rl_attempt(tmp_path, monkeypatch, source_kind):
+@pytest.mark.parametrize("source_kind", ["rl", "without-ids", "hf"])
+def test_evaluate_preserves_model_and_attempt_metadata_on_read_and_reuse(tmp_path, monkeypatch, source_kind):
     root = tmp_path / "model"
     export = root / "policy"
     export.mkdir(parents=True)
     producer_receipt = root / RECORD_FILENAME
     version = "2026.10.26"
     ids = {"run_id": "training-run", "attempt_id": "training-attempt"} if source_kind == "rl" else {}
-    job_timeout_seconds = 180 if source_kind == "rl" else None
     tokenizer = str(root / "pinned-tokenizer") if source_kind == "rl" else None
     if tokenizer is not None:
         Path(tokenizer).mkdir()
@@ -86,12 +83,11 @@ def test_evaluate_records_model_and_producing_rl_attempt(tmp_path, monkeypatch, 
             tokenizer_revision=tokenizer_revision,
             **ids,
         )
-        if source_kind == "legacy-rl":
-            remove_rl_run_ids(producer_receipt, legacy=True)
+        if source_kind == "without-ids":
+            remove_attempt_ids(producer_receipt, legacy=True)
 
     class Client:
-        def submit(self, *, entrypoint, timeout=None, **_kwargs):
-            assert (None if timeout is None else timeout.to_ms()) == (180_000 if source_kind == "rl" else None)
+        def submit(self, *, entrypoint, **_kwargs):
             _, (batch,), _ = entrypoint.resolve()
             for evaluation in batch.evaluations:
                 _record(batch, evaluation.identity, RunStatus.SUCCEEDED, None, {}, {}, {})
@@ -99,14 +95,13 @@ def test_evaluate_records_model_and_producing_rl_attempt(tmp_path, monkeypatch, 
 
     monkeypatch.setattr(pipeline_module, "iris_ctx", lambda: SimpleNamespace(client=Client()))
     monkeypatch.setattr(launch_module, "CW_RECORDS_PREFIX", str(tmp_path / "records"))
-    evaluation = evaluate_smoke(source, ModelConfig(name="candidate", location=str(root)), timeout=job_timeout_seconds)
+    evaluation = evaluate_smoke(source, ModelConfig(name="candidate", location=str(root)))
     result = evaluation.run(materialized_config(evaluation, str(tmp_path)))
 
     assert len(result.run_ids) == 2
     for run_id in result.run_ids:
         path = Path(record_path(result.records_prefix, run_id))
         record_json = json.loads(path.read_text())
-        assert "rl_run" not in record_json
         model = record_json["model"]
         assert model["location"] == str(export)
         config = model["config"]
@@ -116,14 +111,9 @@ def test_evaluate_records_model_and_producing_rl_attempt(tmp_path, monkeypatch, 
         assert config["tokenizer_revision"] == (tokenizer_revision or config["identity"])
         if source_kind == "rl":
             assert record_json["rl_attempt"] == ids
-            if run_id == result.run_ids[0]:
-                record_json["rl_run"] = record_json.pop("rl_attempt")
-                path.write_text(json.dumps(record_json))
-                attempt = read_record(str(path)).rl_attempt
-                assert attempt is not None and attempt.model_dump() == ids
         else:
             assert "rl_attempt" not in record_json
 
     if source_kind == "rl":
-        remove_rl_run_ids(producer_receipt)
+        remove_attempt_ids(producer_receipt)
         assert evaluation.run(materialized_config(evaluation, str(tmp_path))).run_ids == result.run_ids

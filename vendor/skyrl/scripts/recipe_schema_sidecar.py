@@ -16,7 +16,7 @@ from skyrl_train.dataset.preference_pairs import PreferencePairFormat
 from skyrl_train.dynamic_sampling import DynamicSamplingRewardSource, DynamicSamplingType
 from skyrl_train.error_treatment import ErrorTreatment
 from skyrl_train.group_admission import GroupAdvantageKind
-from skyrl_train.hf_export_schema import DEFAULT_HF_HUB_PRIVATE, HFUploadMode
+from skyrl_train.hf_export_schema import HFUploadMode
 from skyrl_train.utils.advantage_estimators import AdvantageEstimatorRegistry
 from skyrl_train.utils.trainer_utils import ResumeMode
 
@@ -214,7 +214,7 @@ UNDECLARED = MappingProxyType(
         "trainer.checkpoint_retention": ('Literal["latest", "best"] | None', None),
         "trainer.checkpoint_keep_every": ("PositiveInt | None", None),
         "trainer.hf_hub_repo_id": ("str | None", None),
-        "trainer.hf_hub_private": ("bool", DEFAULT_HF_HUB_PRIVATE),
+        "trainer.hf_hub_private": ("bool", False),
         "trainer.hf_hub_revision": ("str", "main"),
         "generator.sampling_params.min_tokens": ("NonNegativeInt", Ellipsis),
         "generator.eval_sampling_params.min_tokens": ("NonNegativeInt", Ellipsis),

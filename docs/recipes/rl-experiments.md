@@ -508,7 +508,7 @@ Use `experiments.post_training.skyrl_evaluation.evaluate_model` to score a model
 job. Pass a `SkyRLPolicyModel` for an exported RL policy or an `ArtifactHfModel` for an SFT export,
 a serving `ModelConfig`, evaluation definitions, a version, and the accelerator and cluster settings.
 The artifact supplies the model URI, identity, and tokenizer. The serving config supplies the engine
-and generation settings. Use `job_timeout_seconds` to set a deadline for the evaluation job.
+and generation settings.
 
 `resolve_evaluations` accepts registered suites such as `standard-local` or comma-separated evaluation
 names such as `mmlu-smoke,gsm8k-smoke`. The result gives the evaluation group ID, per-evaluation run IDs,
@@ -518,7 +518,7 @@ An RL policy record includes `rl_attempt` when both the training run ID and atte
 Use Snowball's `eval-short` to score published weights with the same EvalLite protocol as the
 trainer, in a generation-only job. Use trainer evaluation to track policy scores at the run's
 scheduled training steps. `eval-short` runs the full EvalLite pool on one node with eight H100s.
-A recorded run used 1.1 H100-hours. Its 100-task subset scored 0.57. [EvalLite run](https://iris.oa.dev/#/job/%2Fatqamar%2Fusers-ahmad-checkpoints-snowball-rl-eval-short-224fc25b8e-in-169b86d8-2026.11.19.1-coordinator-5dc8b038)
+A recorded run used 1.1 H100-hours.
 
 ```bash
 uv run python -m experiments.post_training.snowball_rl \
@@ -529,9 +529,9 @@ Set `MODEL` to a published `NAME@VERSION`. Replace `--plan` with `--run` to subm
 
 To publish a checkpoint export, enable export and set `trainer.hf_hub_repo_id` in the training recipe.
 Gated Snowball presets fix that setting. For a manual checkpoint export use `--hf-hub-repo-id` on
-`cloud.iris.export_hf_checkpoint`. Uploads default to private. Select public visibility with
-`trainer.hf_hub_private: false` or `--no-hf-hub-private` on a manual export. The publisher checks
-the repository's visibility before uploading. It uploads `.marinskyrl-model-manifest.json` and the
-files it lists, then checks each file's size and SHA-256 at the upload commit. Files larger than 64 MiB require LFS
-digest metadata. With `hf_upload_mode: all`, the step archive receives the same checks as the
+`cloud.iris.export_hf_checkpoint`. A repository ID enables publication. New repositories are public by
+default. Select private visibility with `trainer.hf_hub_private: true` or `--hf-hub-private` on a manual
+export. The uploader rejects an existing repository with different visibility. It uploads
+`.marinskyrl-model-manifest.json` and the files it lists, then checks each file's size and SHA-256 at
+the upload commit. With `hf_upload_mode: all`, the step archive receives the same checks as the
 repository root.

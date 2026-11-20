@@ -670,9 +670,7 @@ class EvalRunRecord(BaseModel):
     """A free-text note on why the launch was run (``--description``), e.g. ``Trying out a new sweep
     after fixing RL``. Shared by every record in a group and surfaced on the launch in the dashboard."""
     model: ModelRef
-    rl_attempt: RLAttemptRef | None = Field(
-        default=None, validation_alias=AliasChoices("rl_attempt", "rl_run"), exclude_if=lambda value: value is None
-    )
+    rl_attempt: RLAttemptRef | None = Field(default=None, exclude_if=lambda value: value is None)
     judge: HostedJudgeRef | None = None
     evaluation: EvalRef = Field(alias="eval")
     hardware: HardwareRef

@@ -152,7 +152,7 @@ def build_smoke(version: str) -> Smoke:
         )
 
     resume = replace(resume, build_config=resume_config, deps=(*resume.deps, train))
-    evaluation = evaluate_model(
+    evaluate = evaluate_model(
         SkyRLPolicyModel(resume),
         ModelConfig(
             name="skyrl-port-smoke",
@@ -168,7 +168,7 @@ def build_smoke(version: str) -> Smoke:
         submission_cluster=CLUSTER,
         federated_cluster=CLUSTER,
     )
-    return Smoke(train, resume, evaluation)
+    return Smoke(train, resume, evaluate)
 
 
 @click.command(help=__doc__)
