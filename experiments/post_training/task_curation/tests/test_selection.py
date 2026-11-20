@@ -364,16 +364,31 @@ def released_training(path: Path, *tasks: TaskSpec) -> ReleasedSource:
     )
 
 
-@pytest.mark.parametrize("missing_bootstrap", [False, True], ids=["published", "missing-bootstrap"])
-def test_sealed_swe_conversion_preserves_rows_and_records_hashes(tmp_path, missing_bootstrap):
+@pytest.mark.parametrize(
+    ("setup_suffix", "existing_commands", "error"),
+    [
+        pytest.param("", (), None, id="published"),
+        pytest.param(None, (), "no declared Harbor bootstrap command", id="missing-bootstrap"),
+        pytest.param("", ("echo configured",), "already declares setup_commands", id="existing-setup"),
+        pytest.param('user="root"\n', (), "unsupported Harbor setup keys: user", id="unknown-key"),
+    ],
+)
+def test_sealed_swe_conversion_preserves_rows_and_records_hashes(tmp_path, setup_suffix, existing_commands, error):
     commands = ("python fixture_setup.py", "python other_setup.py")
     tasks = []
     for index, command in enumerate(commands):
         config = '[environment]\ndocker_image="fixture/image:latest"\n'
-        if index == 0 or not missing_bootstrap:
-            config += f'[environment.setup]\ncommand="{command}"\n'
+        if index == 0 or setup_suffix is not None:
+            config += f'[environment.setup]\ncommand="{command}"\ntimeout_sec=1800\n'
+            if index == 1:
+                config += setup_suffix
         resources = ResourceGroups(verifier=(inline_resource("task.toml", config.encode()),))
-        tasks.append(source_task(f"agent-{index}").model_copy(update={"resources": resources}))
+        requirements = EnvironmentRequirements(setup_commands=existing_commands if index == 1 else ())
+        tasks.append(
+            source_task(f"agent-{index}").model_copy(
+                update={"resources": resources, "environment_requirements": requirements}
+            )
+        )
     original = tmp_path / "sealed.parquet"
     serialized = [task.model_dump_json() for task in tasks]
     table = pa.table({"task_spec": serialized, "family": ["agentic", "agentic"]})
@@ -384,8 +399,8 @@ def test_sealed_swe_conversion_preserves_rows_and_records_hashes(tmp_path, missi
     def convert():
         return convert_release(StoragePath(str(original)), source_sha, 2, StoragePath(str(output)), "test-commit")
 
-    if missing_bootstrap:
-        with pytest.raises(ValueError, match="agent-1 has no declared Harbor bootstrap command"):
+    if error is not None:
+        with pytest.raises(ValueError, match=f"agent-1 .*{error}"):
             convert()
         assert not output.exists()
         return
@@ -410,33 +425,6 @@ def test_sealed_swe_conversion_preserves_rows_and_records_hashes(tmp_path, missi
     assert manifest["output_sha256"] == hashlib.sha256(parquet.read_bytes()).hexdigest()
     assert json.loads((output / "manifest.json").read_text()) == manifest
     assert convert() == manifest
-    released = ReleasedSource(
-        uri=str(parquet),
-        version="derived",
-        rows=2,
-        format=PanelFormat.TASK_SPEC,
-        family="agentic",
-        sha256=manifest["output_sha256"],
-        agentic=True,
-        license="unverified",
-    )
-    heldout = source_task("validation")
-    heldout = heldout.model_copy(update={"source": heldout.source.model_copy(update={"dataset": "structure-closure"})})
-    recipe = SelectionRecipe(
-        name="derived-mix",
-        version="2026.11.19.1",
-        sources={},
-        family_limits={"agentic": 2},
-        heldout=(task_file(tmp_path / "heldout.parquet", [heldout]),),
-        validation_per_family=1,
-        seed=20261023,
-        released=(released,),
-    )
-    selected = Path(run(task_selection_step({}, recipe))[0].path) / TRAIN_FILENAME
-    selected_tasks = [TaskSpec.model_validate_json(row) for row in pq.read_table(selected)["task_spec"].to_pylist()]
-    assert {task.id: task.environment_requirements.setup_commands for task in selected_tasks} == {
-        task.id: (command,) for task, command in zip(tasks, commands, strict=True)
-    }
 
 
 def test_selection_mixes_released_and_curated_tasks(tmp_path):

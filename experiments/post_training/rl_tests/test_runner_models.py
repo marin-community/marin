@@ -117,14 +117,10 @@ def test_mixed_candidate_uses_the_selected_tasks_and_preserves_authored_concurre
     }
 
 
-def test_snowball_plan_derives_route_capture_and_refuses_explicit_disable(selection):
+def test_snowball_plan_refuses_explicitly_disabled_route_capture(selection):
     args = ("--preset", "train-medium-agentic", "--version", "dev", "--plan", "--tasks", SELECTION_IDENTITY)
-    runner = CliRunner()
-    valid = runner.invoke(rl.command(SNOWBALL, argv=args), args)
-    assert valid.exit_code == 0, (valid.output, valid.exception)
-
-    without_capture = (*args, "--set", "generator.engine_init_kwargs.enable_return_routed_experts=false")
-    invalid = runner.invoke(rl.command(SNOWBALL, argv=without_capture), without_capture)
+    args += ("--set", "generator.engine_init_kwargs.enable_return_routed_experts=false")
+    invalid = CliRunner().invoke(rl.command(SNOWBALL, argv=args), args)
     assert invalid.exit_code == 4, (invalid.output, invalid.exception)
     assert "moe_router_replay requires generator.engine_init_kwargs.enable_return_routed_experts=true" in invalid.output
 

@@ -3,7 +3,6 @@
 
 """Publish admitted SWE TaskSpecs with their declared Harbor bootstrap."""
 
-import argparse
 import hashlib
 import io
 import json
@@ -30,11 +29,16 @@ _TASK_COLUMN = "task_spec"
 
 def _bind_bootstrap(serialized: str) -> tuple[str, str]:
     task = TaskSpec.model_validate_json(serialized)
+    if task.environment_requirements.setup_commands:
+        raise ValueError(f"{task.id} already declares setup_commands")
     configs = [resource for resource in task.resources.verifier if resource.path == "task.toml"]
     if len(configs) != 1:
         raise ValueError(f"{task.id} must contain exactly one archived task.toml")
     config = tomllib.loads(resource_bytes(configs[0]).decode())
-    command = config.get("environment", {}).get("setup", {}).get("command")
+    setup = config.get("environment", {}).get("setup", {})
+    if unknown := setup.keys() - {"command", "timeout_sec"}:
+        raise ValueError(f"{task.id} has unsupported Harbor setup keys: {', '.join(sorted(unknown))}")
+    command = setup.get("command")
     if not isinstance(command, str) or not command.strip():
         raise ValueError(f"{task.id} has no declared Harbor bootstrap command")
     row = json.loads(serialized)
@@ -93,11 +97,9 @@ def convert_release(source: StoragePath, sha256: str, rows: int, output: Storage
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.parse_args()
     provenance = Provenance.capture()
     if provenance.dirty or not provenance.base_commit:
-        parser.error("Publish from a clean commit so the manifest identifies the converter")
+        raise SystemExit("Publish from a clean commit so the manifest identifies the converter")
     configure_coreweave_s3()
     manifest = convert_release(
         StoragePath(_SOURCE), _SOURCE_SHA256, _SOURCE_ROWS, StoragePath(_OUTPUT), provenance.base_commit

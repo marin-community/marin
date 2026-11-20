@@ -304,13 +304,6 @@ def load_launch_config(path: Path) -> DictConfig:
         if config.run.mode != RunMode.TRAIN:
             raise ValueError("checkpoint_export launch configs must already contain a composed SkyRL subtree")
         config = _compose_source_recipe(config)
-    if (checkpoint := config.inputs.starting_checkpoint) is not None:
-        with open_dict(config.skyrl):
-            config.skyrl.runtime = {
-                **config.skyrl.get("runtime", {}),
-                "model_source_identity": str(config.inputs.model.identity),
-                "starting_checkpoint_identity": str(checkpoint.identity),
-            }
     probe = config.skyrl.get("trainer", {}).get("mismatch_probe", {})
     if probe.get("enabled") and not probe.get("archive_uri"):
         artifact_root = posixpath.dirname(str(config.artifacts.resolved_config_uri))
