@@ -83,7 +83,7 @@ class Micro210ServingProfile:
     cuda_allocator_config: str
     nccl_env: dict[str, str]
     nccl_buffer_size_bytes: int
-    model_manifest_filename: str = MODEL_MANIFEST_FILENAME
+    model_manifest_filename: str
 
 
 class ServingProfileName(StrEnum):
@@ -260,7 +260,6 @@ def micro210_step(
         version=version,
         model_binding=model,
         serving_profile=profile,
-        model_manifest_filename=profile.model_manifest_filename if profile else MODEL_MANIFEST_FILENAME,
         subset=subset,
     )
 
@@ -272,10 +271,10 @@ def micro210_artifact_step(
     version: str,
     serving_profile: Micro210ServingProfile | None = None,
     model_binding: Micro210Model | None = None,
-    model_manifest_filename: str = MODEL_MANIFEST_FILENAME,
     subset: Micro210Subset | None = None,
 ) -> ArtifactStep[SkyRLRun]:
     """Bind a future committed model to the same frozen evaluator as a static export."""
+    model_manifest_filename = serving_profile.model_manifest_filename if serving_profile else MODEL_MANIFEST_FILENAME
     fingerprint_model = Micro210Model(
         "s3://unresolved/terminal-export",
         MODEL_IDENTITY_PREFIX + "0" * 64,
