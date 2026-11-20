@@ -126,6 +126,7 @@ def preserve_hf_runtime_settings(reloaded: LmConfig, requested: LmConfig) -> LmC
     return replace(
         reloaded,
         router_dot_fp32=requested.router_dot_fp32,
+        router_combine_fp32=requested.router_combine_fp32,
         moe_implementation=requested.moe_implementation,
         moe_capacity_factor=requested.moe_capacity_factor,
         fp32_activations=requested.fp32_activations,
