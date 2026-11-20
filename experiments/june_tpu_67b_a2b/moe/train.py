@@ -410,14 +410,15 @@ def _make_train_step(
         metrics = {"train/loss": loss, **summarized_metrics}
         updates, opt_state = optimizer.update(grads, state.opt_state, qb_params)
         params = optax.apply_updates(qb_params, updates)
+        # Checked every step: a step whose update is non-finite still has a finite loss.
+        metrics["train/params_finite"] = _tree_all_finite(params)
+        metrics["train/qb_betas_finite"] = jnp.all(jnp.isfinite(metrics["qb_beta_per_layer"]))
         if diagnose_numerics:
             metrics.update(
                 {
                     "train/supervised_tokens": jnp.sum(batch.loss_weight),
                     "train/grads_finite": _tree_all_finite(grads),
                     "train/updates_finite": _tree_all_finite(updates),
-                    "train/params_finite": _tree_all_finite(params),
-                    "train/qb_betas_finite": jnp.all(jnp.isfinite(metrics["qb_beta_per_layer"])),
                 }
             )
 
@@ -477,7 +478,8 @@ def _check_step_numerics(metrics: dict, step: int, diagnose_numerics: bool) -> N
     )
     if not bool(jnp.isfinite(metrics["train/loss"])):
         raise FloatingPointError(f"Non-finite Grug loss at step {step}: {diagnostics}")
-    if diagnose_numerics and not all(bool(metrics[key]) for key in _NUMERIC_DIAGNOSTIC_KEYS):
+    finite_keys = _NUMERIC_DIAGNOSTIC_KEYS if diagnose_numerics else ("train/params_finite", "train/qb_betas_finite")
+    if not all(bool(metrics[key]) for key in finite_keys):
         raise FloatingPointError(f"Non-finite Grug update at step {step}: {diagnostics}")
 
 
