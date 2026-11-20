@@ -203,7 +203,6 @@ class ProbeCollector:
         trajectory = concatenate_trajectory_batches(
             batches,
             require_rollout_logprobs=True,
-            tis_lcs_alert_threshold=float(trainer.cfg.trainer.algorithm.tis_lcs_alert_threshold),
         )
         return ProbeSamples(trajectory, uids, sample_ids, seeds)
 
@@ -272,9 +271,8 @@ class ProbeCollector:
             if self.source_manifest is None:
                 trajectory = trainer.postprocess_trajectory_batch(trajectory, uids)
             training_input = trainer.convert_to_training_input(trajectory, uids)
-            training_input["values"] = None
             if self.source_manifest is None:
-                training_input = trainer.compute_advantages_and_returns(training_input)
+                training_input = trainer.compute_advantages(training_input)
         finally:
             trainer.group_advantage_invariant = original_contract
             trainer.all_metrics = original_metrics

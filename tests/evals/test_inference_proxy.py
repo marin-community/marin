@@ -156,7 +156,9 @@ def test_remote_inference_uses_controller_minted_federated_capability_url(monkey
     iris = IrisConfig(
         worker_resources=ResourceConfig.with_gpu("H100", count=8, replicas=pipeline_size),
         worker_environment=create_environment(docker_image="test"),
-        serving_geometry=ServingGeometry(8, 1, pipeline_size, 8),
+        serving_geometry=ServingGeometry(
+            tensor_parallel_size=8, data_parallel_size=1, pipeline_parallel_size=pipeline_size, gpus_per_task=8
+        ),
     )
 
     with remote_inference(
