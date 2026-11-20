@@ -36,6 +36,7 @@ from experiments.post_training.task_curation.swe_rebench_fidelity_driver import 
     CHURN_WINDOW,
     TRANSIENT_RETRY_DELAYS_SEC,
     ChurnMonitor,
+    OutcomeLedger,
     transient_daytona_error,
     transient_daytona_text,
 )
@@ -494,8 +495,6 @@ def test_outcome_ledger_checkpoint_preserves_cross_pod_history(tmp_path):
     with an empty local sidecar, so checkpointing pod-local content alone erases every
     prior pod's durable rewards on each preemption (the wave-v11 churn stop lost
     ~3,700 graded rows this way)."""
-    from experiments.post_training.task_curation.swe_rebench_fidelity_driver import OutcomeLedger
-
     uri = tmp_path / "wave-outcomes.json"
     first = OutcomeLedger(str(uri), local_dir=tmp_path / "pod1")
     first.record(("task-a", "condensed", "nop"), {"rewards": {"reward": 0.0}})
