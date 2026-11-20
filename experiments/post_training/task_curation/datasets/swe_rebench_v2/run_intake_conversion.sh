@@ -32,5 +32,6 @@ uv run --frozen --with-editable ./lib/taskcompendium[pipeline] python -m \
   experiments.post_training.task_curation.driver \
   --source "$SOURCE_NAME" --mode quick \
   --license-receipts "$WORKDIR/license-receipts.json" \
+  --artifact-root "$OUTPUT_ROOT/artifacts" \
   --output-root "$OUTPUT_ROOT" \
   --max-workers 16 --run
