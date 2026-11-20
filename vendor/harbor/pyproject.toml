@@ -38,13 +38,12 @@ hr = "harbor.cli.main:app"
 hb = "harbor.cli.main:app"
 
 [project.optional-dependencies]
-runtime = ["harbor[archive,telemetry,daytona,sotopia]", "marin-shellbox", "gcsfs", "s3fs", "pydantic-settings"]
+runtime = ["harbor[archive,daytona,sotopia]", "marin-shellbox", "gcsfs", "s3fs", "pydantic-settings"]
 qemu = ["marin-shellbox[qemu]"]
 shellsim = ["marin-shellbox[shellsim]"]
-sotopia = ["harbor[archive,telemetry]", "numpy", "scipy", "scikit-learn"]
+sotopia = ["harbor[archive]", "numpy", "scipy", "scikit-learn"]
 analysis = ["claude-agent-sdk>=0.1.17"]
 archive = ["marin-finestore"]
-telemetry = ["marin-rigging"]
 datasets = ["datasets>=4.4.1"]
 daytona = ["marin-shellbox[daytona]"]
 all = ["harbor[analysis,runtime,qemu,shellsim,datasets,tinker]"]

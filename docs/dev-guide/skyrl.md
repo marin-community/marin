@@ -61,18 +61,15 @@ infrastructure failures are excluded, agent failures receive zero reward, and
 passthrough failures retain available verifier output. Unknown names use the
 configured fallback and emit an error log.
 
-`RuntimeServiceError`, `RuntimeLogCollectionError`, `EnvironmentStopError`,
-`DaytonaError`, `DaytonaDockerSetupError`, `InternalServerError`,
-`APIConnectionError`, and `APITimeoutError` now use Harbor's infrastructure
-category in SkyRL. They previously used SkyRL's unknown-error fallback.
+Add each new persisted exception name to `rigging.task_errors`. SkyRL applies
+per-name training overrides through `ErrorHandlingConfig`.
 
 The shared `ErrorIdentity` records the task error name, provider cause, operation,
 provider status, and retry disposition. Native Harbor exception records extend
 this identity with message and traceback details. TaskCompendium grades preserve
 the identity when a trial supplies one.
 
-Training overrides select treatment for each error name. Passthrough treatment
-also prevents retrying a result with usable verifier output.
+Passthrough treatment prevents retrying a result with usable verifier output.
 
 ## Run records
 

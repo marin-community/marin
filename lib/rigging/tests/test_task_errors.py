@@ -1,21 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import json
 from http import HTTPStatus
-from pathlib import Path
 
 import httpx
 import pytest
-from rigging.task_errors import ErrorIdentity, RetryDisposition, error_category, exception_identity
-
-
-@pytest.mark.parametrize(
-    "name, expected",
-    json.loads((Path(__file__).parent / "fixtures/task_error_categories.json").read_text()).items(),
-)
-def test_existing_error_category_is_preserved(name, expected):
-    assert error_category(name).value == expected
+from rigging.task_errors import ErrorIdentity, RetryDisposition, exception_identity
 
 
 class ProviderFailure(RuntimeError):

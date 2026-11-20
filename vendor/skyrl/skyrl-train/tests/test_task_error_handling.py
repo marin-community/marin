@@ -73,7 +73,7 @@ def test_terminal_error_treatment_contract(name, expected):
     assert classify_exception_type(name, ErrorHandlingConfig()) is expected
 
 
-def test_training_override_preserves_default_treatment():
+def test_training_override_masks_an_agent_timeout():
     config = ErrorHandlingConfig(mask_exceptions=frozenset({"AgentTimeoutError"}))
     assert classify_exception_type("AgentTimeoutError", config) is ErrorTreatment.MASK
     assert classify_exception_type("AgentTimeoutError", ErrorHandlingConfig()) is ErrorTreatment.ZERO
