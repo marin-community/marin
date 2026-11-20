@@ -411,10 +411,6 @@ class RayWrappedInferenceEngine(InferenceEngineInterface):
         finally:
             ray.cancel(gen)
 
-    async def get_served_model_name(self) -> str:
-        """Read the live actor's registered OpenAI serving model name."""
-        return await self.inference_engine_actor.get_served_model_name.remote()
-
     async def completion(self, request_payload: Dict[str, Any]) -> Dict[str, Any]:
         actor_task = await _submit_actor_task(self.inference_engine_actor.completion, request_payload)
         return await _await_actor_task(actor_task)
@@ -439,22 +435,20 @@ class RayWrappedInferenceEngine(InferenceEngineInterface):
         return await self.inference_engine_actor.get_stats.remote(read_mode=read_mode)
 
 
-def populate_engine_serving_metadata(
+def populate_engine_max_model_lens(
     engines: List["RayWrappedInferenceEngine"], *, timeout_seconds: float, kill_on_failure: bool = True
 ) -> None:
-    """Record each serving actor's resolved context limit and registered model name."""
+    """Record each serving actor's resolved context limit on its local wrapper."""
     actor_handles = [engine.inference_engine_actor for engine in engines]
     limit_refs = [actor.get_model_max_len.remote() for actor in actor_handles]
-    name_refs = [actor.get_served_model_name.remote() for actor in actor_handles]
     wait_for_inference_engine_startup(
-        [*limit_refs, *name_refs],
+        limit_refs,
         actor_handles,
         timeout_seconds=timeout_seconds,
         kill_on_failure=kill_on_failure,
     )
-    for engine, max_model_len, model_name in zip(engines, ray.get(limit_refs), ray.get(name_refs), strict=True):
+    for engine, max_model_len in zip(engines, ray.get(limit_refs), strict=True):
         engine.max_model_len = max_model_len
-        engine.model_name = model_name
 
 
 def _release_node_local_gang(actors: list, placement_groups: list) -> None:
@@ -1029,7 +1023,7 @@ def create_ray_wrapped_inference_engines(
                 kill_on_failure=False,
             )
 
-        populate_engine_serving_metadata(
+        populate_engine_max_model_lens(
             engines,
             timeout_seconds=engine_init_timeout_seconds,
             kill_on_failure=False,

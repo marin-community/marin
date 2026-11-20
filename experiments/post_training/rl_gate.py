@@ -496,11 +496,6 @@ def comparison_config(launch: dict, recorded: RecordedLaunch | None = None) -> d
         if value not in aliases:
             raise InvalidComparison(f"native model binding differs from declared inputs: {path}")
         set_path(config, path, "<model-staging>")
-    replace_alias(
-        "skyrl.generator.engine_init_kwargs.served_model_name",
-        [uri.rstrip("/").rsplit("/", 1)[-1] for uri in aliases],
-        "<served-model-name>",
-    )
     for field in ("checkpoint_root", "export_root", "attempts_root", "resolved_config_uri", "terminal_manifest_uri"):
         config["artifacts"][field] = f"<output:{field}>"
     for path, field, suffix in (

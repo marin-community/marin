@@ -136,9 +136,6 @@ def test_production_factories_constrain_workers_and_preserve_default_placement(t
             def get_model_max_len(self):
                 return 64
 
-            def get_served_model_name(self):
-                return "registered-test-model"
-
         backend = ModuleType("vllm")
         backend.__spec__, backend.__version__ = ModuleSpec("vllm", loader=None), "0.0.dev"
         registry = ModuleType("vllm.model_executor.models")
@@ -165,7 +162,6 @@ def test_production_factories_constrain_workers_and_preserve_default_placement(t
             assert policy_pg is None
 
         engines = create_ray_wrapped_inference_engines_from_config(config, None)
-        assert {engine.model_name for engine in engines} == {"registered-test-model"}
         inference_actors = ray.get([engine.inference_engine_actor.identity.remote() for engine in engines], timeout=60)
         assert len({actor["pg"] for actor in inference_actors}) == (config.generator.num_inference_engines if locality else 1)
         if locality:

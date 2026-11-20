@@ -100,7 +100,6 @@ from marinskyrl.process_diagnostics import (
 )
 from cloud.iris.paths import resolve_repo_path
 from cloud.iris.ray_ports import RayPort, allocated_ray_port, resolve_ray_ports
-from cloud.iris.role_topology import RoleTopology
 from cloud.iris.ray_storage import (
     RaySpillBackend,
     RaySpillTarget,
@@ -2252,12 +2251,13 @@ def _write_final_config(
     if policy_model is not None:
         OmegaConf.update(skyrl, "trainer.policy.model.source_uri", policy_model.source_uri, force_add=True)
         OmegaConf.update(skyrl, "trainer.policy.model.source_identity", policy_model.source_identity, force_add=True)
-        OmegaConf.update(
-            skyrl,
-            "generator.engine_init_kwargs.served_model_name",
-            original_model_path.rstrip("/").rsplit("/", 1)[-1],
-            force_add=True,
-        )
+        if OmegaConf.select(skyrl, "generator.engine_init_kwargs.served_model_name") is None:
+            OmegaConf.update(
+                skyrl,
+                "generator.engine_init_kwargs.served_model_name",
+                original_model_path.rstrip("/").rsplit("/", 1)[-1],
+                force_add=True,
+            )
     tokenizer_path = (
         policy_tokenizer.local_path
         if policy_tokenizer is not None

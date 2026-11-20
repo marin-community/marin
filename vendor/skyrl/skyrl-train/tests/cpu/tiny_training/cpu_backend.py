@@ -236,7 +236,6 @@ class CPUInferenceEngine(InferenceEngineInterface):
     """
 
     def __init__(self, model_path: str, seed: int):
-        self.model_name = model_path
         self.seed = seed
         self.request_count = 0
         self.model = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32).eval()

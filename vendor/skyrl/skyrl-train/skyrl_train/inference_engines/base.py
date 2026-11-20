@@ -124,7 +124,6 @@ def lora_disk_load_request(path: str) -> NamedWeightsUpdateRequest:
 
 
 class InferenceEngineInterface(ABC):
-    model_name: str
     weight_sync_relative_rank_offset: int | None = None
     max_model_len: int | None = None
 
