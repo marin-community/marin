@@ -28,6 +28,7 @@ from marin.rl.skyrl import (
     SkyRLRolePlan,
 )
 from pydantic import BaseModel, Field, PositiveInt
+from rigging.task_errors import RetrySettings
 from skyrlrecipe import RecipePatch, sections
 from skyrlrecipe.declared import (
     BestCheckpointCallback,
@@ -398,11 +399,13 @@ def validate_agentic_recipe(config: RecipePatch) -> None:
     attempt_timeout = harbor.get("trial_attempt_timeout_sec")
     if attempt_timeout is None:
         return
-    daytona = document.get("environment", {}).get("task_sessions", {}).get("daytona", {})
+    task_sessions = document.get("environment", {}).get("task_sessions", {})
+    daytona = task_sessions.get("daytona", {})
     if "ttl_minutes" in daytona and daytona["ttl_minutes"] * 60 < attempt_timeout:
         raise ValueError("Daytona ttl_minutes must cover trial_attempt_timeout_sec")
     stall = config.trainer.algorithm.group_admission.stall_timeout
-    if stall is not None and stall < (1 + harbor.get("max_retries", 0)) * attempt_timeout:
+    retry = RetrySettings.model_validate(task_sessions.get("retry", {}))
+    if stall is not None and stall < (1 + retry.max_retries) * attempt_timeout:
         raise ValueError("group_admission.stall_timeout must cover the Harbor attempt and configured retries")
 
 
