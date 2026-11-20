@@ -90,9 +90,25 @@ def test_standard_micro210_graph_binds_subset_without_changing_protocol(tmp_path
         config = step.build_config(replace(context, is_fingerprint=True))
         configs.append(yaml.safe_load(config.skyrl.launch_config_yaml)["skyrl"])
         if step is selected:
-            assert "evaluation/micro210/subset" in config.selected_inputs
-            dependency = next(dep for dep in step.deps if dep.name == "evaluation/micro210/subset")
+            assert "fixture/selected/inputs" in config.selection.inputs
+            dependency = next(dep for dep in step.deps if dep.name == "fixture/selected/inputs")
             assert dependency.deps[0].name == "evaluation/micro210/prepared"
     assert configs[0]["generator"]["eval_sampling_params"] == configs[1]["generator"]["eval_sampling_params"]
     assert configs[0]["terminal_bench"] == configs[1]["terminal_bench"]
     assert path.read_bytes() == raw
+
+
+def test_different_evaluations_keep_subset_artifacts_separate(tmp_path, monkeypatch):
+    monkeypatch.setattr("experiments.evaluation.micro210_policy.POLICY_REFERENCE", policy_fixture_reference())
+    monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
+    monkeypatch.setenv("MARIN_TEMP_PREFIX", str(tmp_path / "temporary"))
+    model = Micro210Model("s3://fixture/model", "sha256:" + "a" * 64, "fixture/tokenizer", "b" * 40)
+    paths = []
+    for name, benchmark in (("fixture/a", "swe"), ("fixture/b", "math")):
+        step = micro210_step(model, name=name, version="2026.11.20", subset=Micro210Subset((benchmark,)))
+        context = StepContext.for_run(
+            str(tmp_path / name), str(tmp_path), runtime_args=step.runtime_args, deps=step.deps
+        )
+        config = step.build_config(replace(context, is_fingerprint=True))
+        paths.append(config.selection.inputs)
+    assert paths[0] != paths[1]
