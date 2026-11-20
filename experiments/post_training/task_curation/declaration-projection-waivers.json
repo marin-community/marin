@@ -2,6 +2,10 @@
   "marina_url": "https://marina.oa.dev",
   "applet_id": "c9742a15-fb46-4d56-bc88-aa916351ebd3",
   "expires_when": "preview_refresh_strict_audit_passes",
-  "rule": "stale-or-missing-serving-projection-without-declaration-drift",
-  "reason": "preview projection lag; declaration drift 0; ruling 2026-11-19"
+  "rule": "post-seal-declaration-missing-served-projection",
+  "reason": "source declared after the sealed refresh; served-catalog projection pending; ruling 2026-11-20",
+  "source_ids": [
+    "TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2@repaired-20261118",
+    "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2@repaired-20261118"
+  ]
 }
