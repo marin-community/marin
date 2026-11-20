@@ -321,8 +321,19 @@ def _iris_submission_state(config_path: Path, config: DictConfig) -> SimpleNames
     return args
 
 
+def _forwarded_environment(names: tuple[str, ...]) -> dict[str, str]:
+    missing = [name for name in names if name not in os.environ]
+    if missing:
+        raise ValueError(f"Missing forwarded environment variables: {', '.join(missing)}")
+    return {name: os.environ[name] for name in names}
+
+
 class IrisBackend:
     """Validate and submit one resolved Hydra launch config."""
+
+    def __init__(self, *, forward_env: tuple[str, ...] = ()):
+        _forwarded_environment(forward_env)
+        self.forward_env = forward_env
 
     def validate(self, config_path: Path) -> None:
         _iris_submission_state(config_path, load_launch_config(config_path))
@@ -336,10 +347,10 @@ class IrisBackend:
         if workspace is None:
             raise RuntimeError("SkyRL launches require a Marin checkout")
         with contextlib.redirect_stdout(sys.stderr):
-            return launch(args, workspace)
+            return launch(args, workspace, forward_env=self.forward_env)
 
     def export_terminal_policy(self, config_path: Path) -> None:
-        export_terminal_policy(config_path)
+        export_terminal_policy(config_path, forward_env=self.forward_env)
 
 
 def _pod_resource_request_gib(pod: dict[str, Any], resource: str) -> float:
@@ -780,7 +791,7 @@ def build_config_task_command(args: SimpleNamespace) -> list[str]:
     return _build_task_shell(args, controller_cmd, pythonpath)
 
 
-def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
+def launch(args: SimpleNamespace, workspace: Path, *, forward_env: tuple[str, ...] = ()) -> LaunchOutcome:
     """Submit a resolved launch config and, unless detached, wait for its terminal state."""
     if get_job_info() is not None and (args.target_cluster or args.parent_cluster_config):
         print(
@@ -963,6 +974,7 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
         v = os.environ.get(k)
         if v:
             env_vars[k] = v
+    env_vars.update(_forwarded_environment(forward_env))
     env_vars.update(wandb_launch_environment(entity=args.wandb_entity))
     if not _is_checkpoint_export(args) and _rl_config_uses_daytona(args.config):
         for field in ("daytona_api_key_env", "eval_daytona_api_key_env"):

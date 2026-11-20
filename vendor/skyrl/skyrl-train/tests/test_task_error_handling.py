@@ -64,6 +64,9 @@ from skyrl_train.task_error_handling import ErrorHandlingConfig, classify_except
         ("APITimeoutError", ErrorTreatment.MASK),
         ("TaskMachineError", ErrorTreatment.MASK),
         ("TemplateError", ErrorTreatment.MASK),
+        ("DaytonaConnectionError", ErrorTreatment.MASK),
+        ("DaytonaOutputUnavailable", ErrorTreatment.MASK),
+        ("TmuxExecTimeoutError", ErrorTreatment.MASK),
     ],
 )
 def test_terminal_error_treatment_contract(name, expected):

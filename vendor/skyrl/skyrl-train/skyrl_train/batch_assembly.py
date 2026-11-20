@@ -29,7 +29,7 @@ from skyrl_train.trajectory_runners.types import BatchFields, TrajectoryBatch
 from skyrl_train.utils.advantage_estimators import batch_advantages, compute_advantages_and_returns
 from marinskyrl.runtime_options import OUTCOME_ADVANTAGE_ESTIMATORS
 from skyrl_train.utils.algorithm_registry import PolicyLossRegistry
-from skyrl_train.utils.utils import moe_router_replay_requested
+from skyrl_train.config.driver_validation import moe_router_replay_requested
 
 
 @dataclass(frozen=True)

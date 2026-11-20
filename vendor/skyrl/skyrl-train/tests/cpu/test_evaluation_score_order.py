@@ -17,6 +17,7 @@ from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import AutoTokenizer
 from rolloutengine.models import ModelTurn
 from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExitCodeReward, ScriptGrader
 
 from skyrl_train.batch_sampling import filter_trajectory_batch
@@ -43,9 +44,10 @@ from tests.cpu.tiny_training.tiny_model import build_tiny_policy
 def test_final_profiles_build_primary_and_additional_datasets_without_periodic_evaluation(tmp_path, experiment_type):
     config = get_default_config()
     primary, named = tmp_path / "primary" / "tasks.parquet", tmp_path / "named" / "tasks.parquet"
+    task = text_task("shared").model_copy(update={"tags": ("agentic",)})
+    digest = canonical_sha256(task.model_dump(mode="json"))
     for path in (primary, named):
         path.parent.mkdir()
-        task = text_task("shared")
         if experiment_type is BasePPOExp and path == primary:
             pq.write_table(
                 pa.table(
@@ -65,7 +67,7 @@ def test_final_profiles_build_primary_and_additional_datasets_without_periodic_e
         write_selection_panel(
             path.parent, [task], path.parent.name, "1",
             lambda _: {"family": path.parent.name, "source": "declared-source",
-                       "aai_category": "general", "topic": "algebra", "difficulty": "hard"},
+                       "aai_category": "general", "topic": "algebra", "difficulty": "hard", "agentic": True},
         )
     config.data.val_data = [str(primary)]
     config.data.task_cache_dir = str(tmp_path / "task-cache")
@@ -118,6 +120,8 @@ def test_final_profiles_build_primary_and_additional_datasets_without_periodic_e
         ("named", "named", "declared-source", "general", "algebra", "hard"),
     ]
     assert all(item.data_source != "declared-source" for item in identities)
+    assert all(item.evaluation_identity.strata.agentic for item in identities)
+    assert all(item.evaluation_identity.task_digest == digest for item in identities)
     assert OmegaConf.to_container(config, resolve=True) == original_config
     config.data.val_data = [str(primary), str(named)]
     with pytest.raises(ValueError, match="conflicting selection identities"):
@@ -151,6 +155,10 @@ def test_final_profiles_build_primary_and_additional_datasets_without_periodic_e
         payload = json.dumps(raw, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
         assert source_task.source.revision == "sha256:" + hashlib.sha256(payload).hexdigest()
         original = pq.read_table(primary)
+        changed = task.model_copy(update={"tags": ()})
+        pq.write_table(pa.table({"task_spec": [changed.model_dump_json()]}), primary)
+        with pytest.raises(ValueError, match="task content differs from selection manifest"):
+            experiment.get_eval_dataset([str(primary)])
         mismatched = original.set_column(
             original.schema.get_field_index("family"), "family", pa.array(["wrong-family"])
         )

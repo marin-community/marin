@@ -25,7 +25,7 @@ def resolve_skyrl_model(ctx: StepContext, source: ArtifactStep[SkyRLRun], model:
         model,
         location=resolved.uri,
         identity=resolved.identity,
-        tokenizer=resolved.tokenizer_uri,
+        tokenizer=resolved.tokenizer_uri or resolved.uri,
         tokenizer_revision=resolved.tokenizer_revision,
     )
 

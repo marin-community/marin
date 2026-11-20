@@ -4,21 +4,26 @@
 from pathlib import Path
 
 import pytest
+from finestore.layout import OnConflict
 from finestore.reader import ReadView
 from finestore.rl.run_records import (
     ATTEMPTS_TABLE,
+    EVALUATIONS_TABLE,
     METRICS_TABLE,
     AttemptRecord,
     AttemptRow,
     CheckpointReference,
+    EvaluationTaskRow,
     LaunchResult,
     LaunchState,
     MetricRow,
     read_attempt,
     read_attempt_metrics,
+    read_evaluations,
     register_run_tables,
     run_records_root,
     update_attempt,
+    write_evaluations,
 )
 from finestore.store import DataStore
 
@@ -34,6 +39,60 @@ def _write(export_root, attempt_id, metrics=None, **fields):
                     for name, value in values.items()
                 ]
             )
+
+
+def test_evaluations_read_legacy_strata_alongside_current_rows(tmp_path):
+    export = str(tmp_path)
+    answer = {
+        "ordinal": 0,
+        "native_uid": "answer",
+        "optimization_reward": 0.0,
+        "verifier_score": None,
+        "raw_verifier_score": None,
+        "score_min": None,
+        "score_max": None,
+        "verification_status": None,
+        "passed": False,
+        "outcome": "unavailable",
+        "error_type": None,
+        "error_treatment": None,
+    }
+    legacy = {
+        "attempt_id": "attempt",
+        "step": 1,
+        "evaluation": "eval/",
+        "panel_name": "eval-lite",
+        "panel_version": "old",
+        "task_id": "legacy",
+        "data_source": "fixture",
+        "strata": {"family": "agents"},
+        "agentic": True,
+        "score": None,
+        "outcome": "unavailable",
+        "error_type": None,
+        "answers": [answer],
+    }
+    with DataStore.open(run_records_root(export)) as store:
+        store.table(
+            EVALUATIONS_TABLE,
+            primary_key=("attempt_id", "step", "evaluation", "task_id"),
+            on_conflict=OnConflict.SUPERSEDE,
+        ).extend([legacy, {**legacy, "task_id": "unknown", "agentic": None}])
+    current = EvaluationTaskRow.model_validate(
+        {
+            **legacy,
+            "task_id": "current",
+            "task_digest": "digest",
+            "strata": {"family": "agents", "agentic": False},
+            "answers": [answer | {"response_token_count": 12}],
+        }
+    )
+    write_evaluations(export, [current])
+    rows = {row.task_id: row for row in read_evaluations(export, attempt_id="attempt", evaluation="eval/")}
+    assert rows["legacy"].strata.agentic is True and rows["legacy"].task_digest is None
+    assert rows["legacy"].answers[0].response_token_count is None
+    assert rows["unknown"].strata.agentic is False and rows["unknown"].task_digest is None
+    assert rows["current"] == current and rows["current"].strata.agentic is False
 
 
 def test_metric_history_bounds_checkpoint_ancestors_and_detects_damaged_lineage(tmp_path):

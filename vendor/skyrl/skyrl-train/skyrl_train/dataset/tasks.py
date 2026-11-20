@@ -18,6 +18,7 @@ from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
 from rolloutengine.validation import task_machine_reason
 from skyrl_gym.rollout_specs import is_shell_harness, rollout_spec, shell_harness
 from skyrl_gym.source_task import session_parameters, source_task
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import (
     EnvironmentRequirements,
     NoGrader,
@@ -36,7 +37,7 @@ from skyrl_train.inference_engines.chat_template import assistant_prefix_token_i
 from skyrl_train.dataset.harbor_import import HARBOR_TRIAL_SESSION
 from skyrl_train.rollouts.group_grader import task_group_grader
 from skyrl_train.task_inputs import TaskInput, TrajectoryMetadata, task_messages
-from finestore.rl.strata import TaskEvaluationIdentity, TaskStrata, read_selection_manifest
+from finestore.rl.strata import SelectionManifest, TaskEvaluationIdentity, TaskStrata, read_selection_manifest
 
 TASKCOMPENDIUM_ENVIRONMENT = "taskcompendium"
 TASK_ROLLOUT_COLUMN = "task_rollout_spec"
@@ -44,6 +45,16 @@ TASK_SPEC_COLUMN = "task_spec"
 TASK_EVALUATION_IDENTITY = "task_evaluation_identity"
 TASK_SCHEMA = pa.schema([pa.field(TASK_ROLLOUT_COLUMN, pa.string(), nullable=False)])
 PARQUET_BATCH_SIZE = 1024
+
+
+def task_evaluation_identity(task: dict, selection: SelectionManifest | None) -> TaskEvaluationIdentity:
+    digest = canonical_sha256(task)
+    if selection is None:
+        return TaskEvaluationIdentity(task_digest=digest, strata=TaskStrata(agentic="agentic" in task.get("tags", ())))
+    identity = selection.identity(task["id"])
+    if identity.task_digest != digest:
+        raise ValueError(f"evaluation task content differs from selection manifest: {task['id']}")
+    return identity
 
 
 def with_evaluation_identities(dataset: Dataset, identities: Iterable[TaskEvaluationIdentity | None]) -> Dataset:
@@ -292,12 +303,13 @@ class SourceTaskDataset(TaskDataset):
                         raise ValueError(f"selection input has no canonical task identity: {source}")
                     annotations.append(None)
                     continue
-                task = json.loads(row[column])
-                task_id = task["id"] if column == TASK_SPEC_COLUMN else task["task"]["id"]
-                identity = selection.identity(task_id) if selection is not None else None
+                document = json.loads(row[column])
+                task = document if column == TASK_SPEC_COLUMN else document["task"]
+                task_id = task["id"]
+                identity = task_evaluation_identity(task, selection)
                 if selection is not None and TASK_SPEC_COLUMN in row:
                     carried = {key: row[key] for key in TaskStrata.model_fields if key in row}
-                    if carried and TaskStrata.model_validate(carried) != identity.strata:
+                    if carried != identity.strata.model_dump(include=set(carried)):
                         raise ValueError(f"training row strata differ from selection manifest: {task_id}")
                 if task_id in identities and identities[task_id] != identity:
                     raise ValueError(f"task has conflicting selection identities in one input set: {task_id}")

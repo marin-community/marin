@@ -47,7 +47,7 @@ def text_task(task_id: str = "task", *, prompt="Question", source="fixture") -> 
 
 
 def write_selection_panel(
-    root: Path, tasks: Sequence[TaskSpec], name: str, version: str, strata: Callable[[TaskSpec], dict[str, str]]
+    root: Path, tasks: Sequence[TaskSpec], name: str, version: str, strata: Callable[[TaskSpec], dict[str, str | bool]]
 ) -> None:
     pq.write_table(pa.table({"task_spec": [task.model_dump_json() for task in tasks]}), root / "validation.parquet")
     rows = [

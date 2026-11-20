@@ -553,15 +553,18 @@ def test_qwen_smoke_hugging_face_model_input_reaches_the_runner_without_a_model_
 
 
 @pytest.mark.parametrize(
-    ("entrypoint", "records_enabled"), [("standard", True), ("generate", True), ("generate", False)]
+    ("entrypoint", "own_tokenizer", "records_enabled"),
+    [("standard", False, True), ("generate", False, True), ("standard", True, True), ("generate", False, False)],
 )
 def test_forwarded_launch_metadata_reaches_attempt_startup_record(
-    tmp_path: Path, monkeypatch, entrypoint, records_enabled
+    tmp_path: Path, monkeypatch, entrypoint, own_tokenizer, records_enabled
 ) -> None:
     destination = tmp_path / "launch.yaml"
     document = raw_launch_config()
     document["run"]["coordinator_iris_job_id"] = "/tests/coordinator"
     document["run"]["model"] = "test-policy"
+    if own_tokenizer:
+        document["inputs"]["model"].update(tokenizer_uri=None, tokenizer_revision=None)
     document["iris"]["max_retries"] = 0
     backends = ["console"]
     if records_enabled:
@@ -636,6 +639,9 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(
         "iris_job_id": "/tests/bootstrap-trainer",
         "coordinator_iris_job_id": "/tests/coordinator",
     }
+    assert attempt.native.config["inputs"]["model"]["tokenizer_uri"] == (
+        None if own_tokenizer else "s3://models/qwen-tokenizer"
+    )
     assert first_start <= datetime.fromisoformat(attempt.started_at) <= datetime.now(timezone.utc)
     assert attempt.vllm_version == ("fixture-vllm" if entrypoint == "generate" else None)
     fail = False

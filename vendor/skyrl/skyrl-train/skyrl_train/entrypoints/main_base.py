@@ -26,12 +26,11 @@ import asyncio
 import multiprocessing as mp
 
 from skyrl_train.config.placement_geometry import num_rollout_gpus
-from skyrl_train.config.utils import normalize_logging_backends
+from skyrl_train.config.driver_validation import validate_driver_config
 from skyrl_train.evaluation_profiles import EvaluationProfile, resolve_evaluation_profiles
 from skyrl_train.inference_engines.chat_template import get_custom_chat_template
 from skyrl_train.config.rollout_validation import (
     EntrypointOperation,
-    validate_rollout_launch,
 )
 from marinskyrl.speculative_decoding import (
     STANDARD_TRAINING_ENTRYPOINT,
@@ -183,7 +182,9 @@ def create_ray_wrapped_inference_engines_from_config(
     requested_logprobs = [cfg.generator.sampling_params.logprobs, cfg.generator.eval_sampling_params.logprobs]
     requested_logprobs.extend(
         profile.sampling_params.logprobs if profile.sampling_params is not None else None
-        for profile in (resolve_evaluation_profiles(cfg) if evaluation_profiles is None else evaluation_profiles).values()
+        for profile in (
+            resolve_evaluation_profiles(cfg) if evaluation_profiles is None else evaluation_profiles
+        ).values()
     )
     requested_logprobs = [
         value + 1
@@ -758,20 +759,10 @@ def run_ray_driver(
     from skyrl_train.entrypoints.ray_lifecycle import exit_without_ray_destructors, shutdown_ray  # noqa: PLC0415
     from marinskyrl.process_diagnostics import write_exception_receipt  # noqa: PLC0415
     from skyrl_train.telemetry import DRIVER_ROLE, process_telemetry  # noqa: PLC0415
-    from skyrl_train import objective  # noqa: F401, PLC0415 - register losses when the training runtime loads
-    from skyrl_train.rollouts.harbor_tasks import HarborTaskSettings  # noqa: PLC0415 - optional training dependencies
-    from skyrl_train.utils import validate_cfg  # noqa: PLC0415
     from skyrl_train.utils.logging_utils import log_exception_as_text  # noqa: PLC0415
-    from skyrl_train.utils.progress import configure_progress  # noqa: PLC0415 - keep launcher imports Torch-free
     from skyrl_train.utils.utils import initialize_ray  # noqa: PLC0415
 
-    normalize_logging_backends(cfg)
-    validate_rollout_launch(cfg, operation)
-    if cfg.get("terminal_bench_config") is not None:
-        HarborTaskSettings.from_config(cfg.terminal_bench_config)
-    validate_cfg(cfg)
-    configure_progress(cfg.trainer.progress)
-
+    validate_driver_config(cfg, operation)
     initialize_ray(cfg)
 
     with process_telemetry(DRIVER_ROLE):

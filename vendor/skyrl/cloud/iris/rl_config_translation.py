@@ -145,7 +145,7 @@ def parse_rl_config(document: Mapping[str, Any] | DictConfig) -> ParsedRLConfig:
 
     config_groups = raw.get("config_groups", {})
     if "algorithm_recipe" in config_groups:
-        group = _compose_config_groups({"algorithm_recipe": config_groups["algorithm_recipe"]}, config_name=None)
+        group = compose_config_groups({"algorithm_recipe": config_groups["algorithm_recipe"]}, config_name=None)
         raw = OmegaConf.to_container(OmegaConf.merge(OmegaConf.to_container(group, resolve=False), raw), resolve=False)
         assert isinstance(raw, dict)
     recipe = SkyRLRecipe.from_document(raw)
@@ -363,7 +363,8 @@ def _skyrl_config_sections(
     return sections
 
 
-def _compose_config_groups(config_groups: Mapping[str, str], *, config_name: str | None) -> DictConfig:
+def compose_config_groups(config_groups: Mapping[str, str], *, config_name: str | None) -> DictConfig:
+    """Compose native schema defaults with the selected Hydra configuration groups."""
     config_dir = Path(str(files("skyrl_train.config"))).resolve()
     group_overrides = [f"+{group_name}={config_name}" for group_name, config_name in config_groups.items()]
     with initialize_config_dir(version_base=None, config_dir=str(config_dir)):
@@ -390,7 +391,7 @@ def compose_skyrl_config(
     hpc: HPCGeometry,
 ) -> CompiledSkyRLConfig:
     """Compose the final SkyRL subtree from its config groups and launch values."""
-    config = _compose_config_groups(parsed.config_groups, config_name="ppo_base_config")
+    config = compose_config_groups(parsed.config_groups, config_name="ppo_base_config")
     OmegaConf.set_struct(config, False)
     config = OmegaConf.merge(config, _skyrl_config_sections(parsed, exp_args, hpc))
     _resolve_max_in_flight(config)

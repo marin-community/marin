@@ -136,11 +136,36 @@ def test_experiments_changes_select_dependent_marin_tests(tmp_path: Path) -> Non
 
 @pytest.mark.parametrize("select_tests", [select_changed_tests, select_local_tests])
 @pytest.mark.parametrize(
-    "changed_file",
-    ["experiments/moe/test_optimizer.py", "experiments/moe/optimizer.py", "lib/levanter/src/levanter/optim.py"],
+    "changed_file,expected",
+    [
+        (path, ["experiments/moe/test_optimizer.py"])
+        for path in (
+            "experiments/moe/test_optimizer.py",
+            "experiments/moe/optimizer.py",
+            "lib/levanter/src/levanter/optim.py",
+        )
+    ]
+    + [
+        (
+            path,
+            [
+                "experiments/post_training/curriculum_rl/test_launch.py",
+                "experiments/post_training/rl_tests/test_rl.py",
+                "experiments/post_training/rl_tests/test_rl_gate.py",
+                "tests/rl/test_skyrl.py",
+            ],
+        )
+        for path in ("vendor/skyrl/cloud/iris/launch_config.py",)
+    ]
+    + [
+        (
+            "vendor/skyrl/marinskyrl/checkpoint_paths.py",
+            ["experiments/post_training/rl_tests/test_rl.py", "tests/rl/test_skyrl.py"],
+        )
+    ],
 )
 def test_experiment_tests_run_for_test_and_dependency_changes(
-    tmp_path: Path, select_tests: Callable[[list[str], Path], SelectionResult], changed_file: str
+    tmp_path: Path, select_tests: Callable[[list[str], Path], SelectionResult], changed_file: str, expected: list[str]
 ) -> None:
     write(tmp_path, "lib/levanter/src/levanter/optim.py", "RATE = 1\n")
     write(tmp_path, "experiments/moe/optimizer.py", "from levanter.optim import RATE\n")
@@ -152,9 +177,19 @@ def test_experiment_tests_run_for_test_and_dependency_changes(
     write(tmp_path, "experiments/moe/test_unrelated.py", "def test_other():\n    assert True\n")
     write(tmp_path, "tests/test_unrelated.py", "def test_other():\n    assert True\n")
 
+    write(tmp_path, "experiments/post_training/rl_tests/test_rl.py", "def test_native_config():\n    pass\n")
+    write(
+        tmp_path,
+        "experiments/post_training/rl_tests/test_rl_gate.py",
+        "def test_native_protocol():\n    pass\n",
+    )
+    write(
+        tmp_path, "experiments/post_training/curriculum_rl/test_launch.py", "def test_native_allocation():\n    pass\n"
+    )
+    write(tmp_path, "tests/rl/test_skyrl.py", "def test_stored_record_boundary():\n    pass\n")
     selection = select_tests([changed_file], tmp_path)
 
-    assert leg_paths(selection.matrix, "marin") == ["experiments/moe/test_optimizer.py"]
+    assert leg_paths(selection.matrix, "marin") == expected
 
 
 @pytest.mark.parametrize(
@@ -389,11 +424,17 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
     ]
 
 
-def test_skyrl_changes_select_the_launch_census(tmp_path: Path) -> None:
+def test_skyrl_changes_select_native_launch_and_snowball_owners(tmp_path: Path) -> None:
     census = "tests/rl/test_rl_launch_documents.py"
-    write(tmp_path, census, "def test_launch(): pass\n")
-    for changed in ("vendor/skyrl/uv.lock", "lib/skyrlrecipe/src/skyrlrecipe/recipe.py"):
-        assert leg_paths(select_matrix([changed], tmp_path), "marin") == [census]
+    runner = "experiments/post_training/rl_tests/test_rl.py"
+    for path in (census, runner):
+        write(tmp_path, path, "def test_launch(): pass\n")
+    for changed in (
+        "vendor/skyrl/uv.lock",
+        "lib/skyrlrecipe/src/skyrlrecipe/recipe.py",
+        "vendor/skyrl/skyrl-train/skyrl_train/callbacks/builtin.py",
+    ):
+        assert sorted(leg_paths(select_matrix([changed], tmp_path), "marin")) == [runner, census]
 
 
 @pytest.mark.parametrize(

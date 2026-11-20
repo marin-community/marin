@@ -19,6 +19,7 @@ from skyrl_train.evaluation_profiles import (
     validate_generation_profiles,
 )
 from skyrl_train.config.rollout_validation import EntrypointOperation
+from skyrl_train.config.driver_validation import validate_generation_driver_config
 from skyrl_train.entrypoints.main_base import BasePPOExp
 from skyrl_train.entrypoints.evaluation_progress import forward_evaluation_progress, wait_for_evaluation
 from skyrl_train.inference_engines.base import NamedWeightsUpdateRequest, lora_disk_load_request
@@ -28,9 +29,8 @@ from skyrl_train.telemetry import record_training_metrics
 from skyrl_train.metric_names import (
     PROMPTS_DROPPED_TOO_LONG_METRIC,
 )
-from skyrl_train.utils.utils import validate_generator_cfg, initialize_ray
+from skyrl_train.utils.utils import initialize_ray
 from skyrl_train.config.placement_geometry import num_rollout_gpus
-from skyrl_train.config.utils import normalize_logging_backends
 from skyrl_train.evaluate import evaluate
 from skyrl_train.trajectory_runners.trajectory_retention import make_trajectory_sink
 from skyrl_train.utils.trainer_utils import build_eval_dataloader
@@ -168,8 +168,7 @@ def eval_entrypoint(cfg: DictConfig, progress: Queue) -> dict:
 
 
 def run(cfg: DictConfig) -> None:
-    normalize_logging_backends(cfg)
-    validate_generator_cfg(cfg)
+    validate_generation_driver_config(cfg)
     initialize_ray(cfg)
     progress = Queue(maxsize=256, actor_options={"num_cpus": 0})
     try:

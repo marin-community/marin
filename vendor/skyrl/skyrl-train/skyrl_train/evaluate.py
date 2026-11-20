@@ -305,7 +305,7 @@ def _evaluation_task_rows(
                 task_id=task_id,
                 data_source=sources[task_id],
                 strata=identity.strata,
-                agentic=identity.agentic,
+                task_digest=identity.task_digest,
                 score=float(np.mean(scores)) if scores else None,
                 outcome=next(iter(outcomes)) if len(outcomes) == 1 else "mixed",
                 error_type=next(iter(errors)) if len(errors) == 1 else "multiple",

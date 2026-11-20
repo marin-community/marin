@@ -1,20 +1,5 @@
 {
-  "name": "snowball-100k",
-  "version": "2026.11.10.1",
-  "sources": {
-    "MarinSkyRL:eurus2_code": "competitive_coding",
-    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_calendar_v2": "calendar",
-    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_comp_coding": "competitive_coding",
-    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_reasoning_gym": "reasoning_gym",
-    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_stem_mcqa": "stem",
-    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_structured_outputs_v2": "structural",
-    "MarinSkyRL:openscience": "stem",
-    "MarinSkyRL:reasoning_gym": "reasoning_gym",
-    "Task Trove:laion__nemotron-gym-agent-calendar-v2": "calendar",
-    "Task Trove:laion__nemotron-gym-instruction-following-calendar-v3": "calendar",
-    "Task Trove:laion__nemotron-gym-instruction-following-structured-v3": "structural",
-    "SnowballV01:structure-closure": "structural"
-  },
+  "exclusions": [],
   "family_limits": {
     "calendar": 9115,
     "competitive_coding": 22722,
@@ -22,6 +7,16 @@
     "stem": 22721,
     "structural": 22721
   },
+  "heldout": [
+    {
+      "format": "historical",
+      "rows": 910,
+      "uri": "s3://marin-us-east-02a/marin/rl-data/inputs/snowball-heldout/2026.10.23.1/validation.parquet",
+      "version": "2026.10.23.1"
+    }
+  ],
+  "name": "snowball-100k",
+  "seed": 20261019,
   "source_limits": {
     "MarinSkyRL:eurus2_code": 16970,
     "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_calendar_v2": 743,
@@ -31,27 +26,25 @@
     "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_structured_outputs_v2": 2079,
     "MarinSkyRL:openscience": 20790,
     "MarinSkyRL:reasoning_gym": 20800,
+    "SnowballV01:structure-closure": 11634,
     "Task Trove:laion__nemotron-gym-agent-calendar-v2": 2699,
     "Task Trove:laion__nemotron-gym-instruction-following-calendar-v3": 5673,
-    "Task Trove:laion__nemotron-gym-instruction-following-structured-v3": 9008,
-    "SnowballV01:structure-closure": 11634
+    "Task Trove:laion__nemotron-gym-instruction-following-structured-v3": 9008
   },
-  "heldout": [
-    {
-      "uri": "s3://marin-us-east-02a/marin/rl-data/inputs/snowball-heldout/2026.10.23.1/validation.parquet",
-      "version": "2026.10.23.1",
-      "rows": 910,
-      "format": "historical"
-    }
-  ],
+  "sources": {
+    "MarinSkyRL:eurus2_code": "competitive_coding",
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_calendar_v2": "calendar",
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_comp_coding": "competitive_coding",
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_reasoning_gym": "reasoning_gym",
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_stem_mcqa": "stem",
+    "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_structured_outputs_v2": "structural",
+    "MarinSkyRL:openscience": "stem",
+    "MarinSkyRL:reasoning_gym": "reasoning_gym",
+    "SnowballV01:structure-closure": "structural",
+    "Task Trove:laion__nemotron-gym-agent-calendar-v2": "calendar",
+    "Task Trove:laion__nemotron-gym-instruction-following-calendar-v3": "calendar",
+    "Task Trove:laion__nemotron-gym-instruction-following-structured-v3": "structural"
+  },
   "validation_per_family": 20,
-  "seed": 20261019,
-  "exclusions": [
-    {
-      "uri": "s3://marin-us-east-02a/marin/rl-data/task-selection/eval-lite/2026.11.11.1/full_validation.parquet",
-      "version": "2026.11.11.1",
-      "rows": 1500,
-      "format": "task_spec"
-    }
-  ]
+  "version": "2026.11.19.1"
 }
