@@ -583,8 +583,6 @@ class TaskRolloutWorker:
                     result = harbor_grading_failure(result)
                     delay = harbor.retry_delay(result.failure, retries)
                 if delay is None:
-                    if harbor is None and not retries:
-                        return result
                     return replace(result, metrics={**result.metrics, "rollout_retries": float(retries)})
                 logger.info("Task {} retry {} after {} seconds", task.id, retries + 1, delay)
                 await self._wait_before_retry(delay)
