@@ -36,7 +36,7 @@ def test_json_uri_pin_preserves_optimizer_numbers_and_rejects_changed_bytes(tmp_
 
 
 @pytest.fixture
-def coreweave_policy_read(monkeypatch):
+def coreweave_policy_read():
     """The pinned canonical Micro210 policy is read from CoreWeave storage."""
     configure_coreweave_s3()
     if s3_credentials(StoreType.COREWEAVE) is None:

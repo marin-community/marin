@@ -90,7 +90,7 @@ def seal_archive(root: str, inputs: list[ArchiveInput], provenance: dict) -> dic
 
 
 def assert_final_sft_checkpoint(output: str, final_sft: dict) -> dict:
-    """R1: after archival, the final SFT checkpoint must exist in full at a permanent path."""
+    """After archival, the final SFT checkpoint must exist in full at a permanent path."""
     uri = final_sft.get("uri") if isinstance(final_sft, dict) else None
     if not uri:
         raise ValueError("Archive plan must record the final SFT checkpoint")
@@ -146,7 +146,7 @@ def checkpoint_cleanup(
 ) -> None:
     """Delete inventoried superseded weights after verifying HF publication and evidence.
 
-    ``protected`` names checkpoints that R1 keeps regardless of inventory: the
+    ``protected`` names checkpoints retained regardless of inventory: the
     final SFT checkpoint is never a cleanup target.
     """
     manifest = verify_archive(root)

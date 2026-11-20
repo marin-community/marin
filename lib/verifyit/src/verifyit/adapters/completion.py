@@ -5,7 +5,8 @@
 
 import re
 from dataclasses import dataclass
-from enum import StrEnum
+
+from verifyit.compat import StrEnum
 
 REASONING_END_MARKERS = ("</think>", "<|end_think|>")
 BOX_START = re.compile(r"\\(?:boxed|fbox)\s*\{")

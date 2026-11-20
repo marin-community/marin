@@ -11,8 +11,9 @@ opening marker; otherwise that closing marker is stray.
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import NamedTuple
+
+from verifyit.compat import StrEnum
 
 REASONING_DELIMITERS = (
     ("<think>", "</think>"),

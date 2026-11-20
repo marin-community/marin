@@ -294,7 +294,7 @@ def recovery_round_graph(spec: RecoveryRound, *, through: str, source_revision: 
         raise ValueError("Recovery round identity differs from the pinned plan")
     if plan["rl"]["execution"]["cluster"] != spec.cluster:
         raise ValueError("Recovery round cluster differs from the pinned plan")
-    # Main removed this unused recipe flag in #10660. Keep its historical value in the pinned source plan.
+    # Keep the source-plan value while omitting the retired flag from the active recipe.
     plan["rl"]["config"]["trainer"]["algorithm"].pop("tis_splice")
     plan["marin_revision"] = source_revision
     plan["runtime_source"] = runtime_source_manifest(Path(__file__).resolve().parents[3], source_revision)
@@ -614,7 +614,7 @@ def resolve_round_pools(round_spec: RoundSpec, resolved: dict) -> dict[str, Arti
 
 
 def require_permanent_round_storage(round_spec: RoundSpec | AdoptedHfRound | AdoptedRlRound | RecoveryRound) -> None:
-    """R1: a round's outputs live at a permanent path, never under a scratch TTL prefix."""
+    """A round's outputs live at a permanent path, never under a scratch TTL prefix."""
     path = StoragePath(round_spec.storage.output_prefix)
     if PERMANENT_TMP_SEGMENT in path.segments:
         raise ValueError(
@@ -624,7 +624,7 @@ def require_permanent_round_storage(round_spec: RoundSpec | AdoptedHfRound | Ado
 
 
 def require_archive_binds_final_sft_checkpoint(resolved: dict) -> None:
-    """R1: the archive stage must bind the SFT selection so it can protect and verify it."""
+    """The archive stage must bind the SFT selection so it can protect and verify it."""
     stage_files = resolved["archive"].get("stage_files", {})
     sft_files = stage_files.get("sft", [])
     if not any(entry.get("path") == "selected.json" for entry in sft_files):

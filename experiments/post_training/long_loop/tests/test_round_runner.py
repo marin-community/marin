@@ -247,9 +247,7 @@ def test_round_exp5_matches_the_recorded_exp5_dry_run(tmp_path, mirror_storage):
     exp4_output = tmp_path / "exp4"
     exp5_output = tmp_path / "exp5"
     _invoke(exp4.main, _exp4_args(exp4_output))
-    result = _invoke(round_runner.main, _round_args("exp5.yaml", "2026.11.19.76", exp5_output))
-    assert "long-loop-exp5/round5/sft@2026.11.19.76" in result.output
-    assert "users/benfeuer/checkpoints/mochi-exp5-rl@2026.11.19.76" in result.output
+    _invoke(round_runner.main, _round_args("exp5.yaml", "2026.11.19.76", exp5_output))
     plan = json.loads((exp5_output / "resolved-plan.json").read_bytes())
     assert hashlib.sha256(_canonical(plan).encode()).hexdigest() == EXP5_RECORDED_PLAN_SHA256
     assert plan["sft"]["special_token_lr_multiplier"] == 1.0

@@ -338,8 +338,17 @@ async def test_agent_harness_uses_isolated_task_grading_and_engine_cleanup(answe
             await machine.run(Command(("true",)))
 
 
-@pytest.mark.parametrize("arguments", ['["invalid"]', '"invalid"', "null", "42"])
-async def test_shell_rejects_nonobject_arguments_and_grades_repaired_file(arguments):
+@pytest.mark.parametrize(
+    ("arguments", "error"),
+    [
+        *(
+            (arguments, "Tool arguments must be a JSON object")
+            for arguments in ('["invalid"]', '"invalid"', "null", "42")
+        ),
+        ('{"command": "echo \\ud83d > /workspace/answer"}', "shell command must be valid Unicode text"),
+    ],
+)
+async def test_shell_rejects_invalid_arguments_and_grades_repaired_file(arguments, error):
     rejected = shell_call("unused", call_id="rejected")
     rejected["tool_calls"][0]["function"]["arguments"] = arguments
     model = ReplayModel([rejected, shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done"}])
@@ -348,9 +357,7 @@ async def test_shell_rejects_nonobject_arguments_and_grades_repaired_file(argume
     )
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
     assert record.rollout.conversations[-1].messages[1] == rejected
-    assert json.loads(record.rollout.conversations[-1].messages[2]["content"]) == {
-        "error": "Tool arguments must be a JSON object"
-    }
+    assert json.loads(record.rollout.conversations[-1].messages[2]["content"]) == {"error": error}
 
 
 async def test_shell_harness_cuts_each_command_output_at_its_limit():
