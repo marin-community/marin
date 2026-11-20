@@ -119,6 +119,13 @@ def scale_with_grug_muonh(
     def update_fn(updates, state, params=None):
         if params is None:
             raise ValueError("scale_with_grug_muonh requires params for norm-preserving updates")
+        for leaf in jax.tree.leaves(params):
+            if getattr(leaf, "ndim", 0) >= 4:
+                raise ValueError(
+                    "scale_with_grug_muonh only supports 2-D and 3-D arrays; "
+                    "use GrugMoeMuonHConfig or experiments.grug.moe_hero_ep.optimizer.scale_with_grug_muonh "
+                    "for 4-D expert banks"
+                )
 
         muon_updates, next_state = muon_transform.update(updates, state, params)
         muonh_updates = _scale_invariant_hyperball_updates(params, muon_updates, learning_rate)
@@ -244,6 +251,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     def __post_init__(self):
         if self.global_grad_norm is not None and self.max_grad_norm is not None:
             raise ValueError("global_grad_norm and per-group max_grad_norm cannot both be set")
+        if self.global_grad_norm is not None and self.global_grad_norm <= 0:
+            raise ValueError(f"global_grad_norm must be positive, got {self.global_grad_norm}")
+        if self.max_grad_norm is not None and self.max_grad_norm <= 0:
+            raise ValueError(f"max_grad_norm must be positive, got {self.max_grad_norm}")
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)

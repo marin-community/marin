@@ -80,22 +80,29 @@ def test_muonh_update_matches_hero_with_optional_global_clip(clip):
         "mlp": {"expert_mlp": {"w_gate": jnp.arange(1, 49, dtype=jnp.float32).reshape(2, 2, 3, 4)}},
         "rms_attn": {"weight": jnp.ones((2, 4))},
     }
-    grads = jax.tree.map(lambda x: jnp.sin(x) * 0.2, params)
     settings = dict(learning_rate=0.02, warmup=0, max_grad_norm=None, use_syrk=False, expert_normalization="all_experts")
     actual = GrugMoeMuonHConfig(**settings, global_grad_norm=clip).build(100)
     reference = HeroMuonHConfig(**settings).build(100)
-    reference_grads = grads
-    if clip is not None:
-        reference_grads = clip_by_total_norm(grads, clip).grads
-    actual_updates, _ = actual.update(grads, actual.init(params), params)
-    expected_updates, _ = reference.update(reference_grads, reference.init(params), params)
-    for actual_leaf, expected_leaf in zip(
-        jax.tree.leaves(actual_updates), jax.tree.leaves(expected_updates), strict=True
-    ):
-        np.testing.assert_allclose(actual_leaf, expected_leaf, rtol=0, atol=3e-6)
-    np.testing.assert_array_equal(
-        actual_updates["mlp"]["expert_mlp"]["w_gate"], expected_updates["mlp"]["expert_mlp"]["w_gate"]
-    )
+    actual_state = actual.init(params)
+    expected_state = reference.init(params)
+    actual_params = params
+    expected_params = params
+    for step in range(2):
+        scale = step + 1
+        grads = jax.tree.map(lambda x, s=scale: jnp.sin(x * s) * 0.2, actual_params)
+        reference_grads = clip_by_total_norm(grads, clip).grads if clip is not None else grads
+        actual_updates, actual_state = actual.update(grads, actual_state, actual_params)
+        expected_updates, expected_state = reference.update(reference_grads, expected_state, expected_params)
+        for actual_leaf, expected_leaf in zip(
+            jax.tree.leaves(actual_updates), jax.tree.leaves(expected_updates), strict=True
+        ):
+            np.testing.assert_allclose(actual_leaf, expected_leaf, rtol=0, atol=3e-6)
+        if clip is None:
+            np.testing.assert_array_equal(
+                actual_updates["mlp"]["expert_mlp"]["w_gate"], expected_updates["mlp"]["expert_mlp"]["w_gate"]
+            )
+        actual_params = jax.tree.map(lambda p, u: p + u, actual_params, actual_updates)
+        expected_params = jax.tree.map(lambda p, u: p + u, expected_params, expected_updates)
 
 
 def test_global_clipping_preserves_optimizer_state_paths():
@@ -120,24 +127,40 @@ def test_muonh_state_matches_hero_layout(stacked):
 
 
 @pytest.mark.multidevice
-def test_muonh_sharded_expert_update_matches_hero():
+@pytest.mark.parametrize("clip", [None, 0.5])
+def test_muonh_sharded_expert_update_matches_hero(clip):
     mesh = jax.sharding.Mesh(np.asarray(jax.devices()), ("data",), axis_types=(jax.sharding.AxisType.Explicit,))
     with jax.set_mesh(mesh):
-        sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec(None, "data", None, None))
-        param = jax.device_put(jnp.arange(1, 49, dtype=jnp.float32).reshape(2, 2, 3, 4), sharding)
-        params = {"mlp": {"expert_mlp": {"w_gate": param}}}
-        grads = jax.tree.map(jnp.sin, params)
+        expert_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec(None, "data", None, None))
+        matrix_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec("data", None))
+        params = {
+            "matrix": jax.device_put(jnp.arange(1, 17, dtype=jnp.float32).reshape(4, 4), matrix_sharding),
+            "mlp": {
+                "expert_mlp": {
+                    "w_gate": jax.device_put(jnp.arange(1, 49, dtype=jnp.float32).reshape(2, 2, 3, 4), expert_sharding)
+                }
+            },
+        }
+        grads = jax.tree.map(lambda x: jax.sharding.reshard(jnp.sin(x), x.sharding), params)
         settings = dict(learning_rate=0.02, warmup=0, use_syrk=False, expert_normalization="all_experts")
-        actual = GrugMoeMuonHConfig(**settings).build(100)
+        actual = GrugMoeMuonHConfig(**settings, global_grad_norm=clip).build(100)
         reference = HeroMuonHConfig(**settings).build(100)
+        reference_grads = clip_by_total_norm(grads, clip).grads if clip is not None else grads
         actual_updates, _ = jax.jit(actual.update)(grads, actual.init(params), params)
-        expected_updates, _ = jax.jit(reference.update)(grads, reference.init(params), params)
-        np.testing.assert_allclose(
-            actual_updates["mlp"]["expert_mlp"]["w_gate"],
-            expected_updates["mlp"]["expert_mlp"]["w_gate"],
-            rtol=0,
-            atol=3e-6,
-        )
+        expected_updates, _ = jax.jit(reference.update)(reference_grads, reference.init(params), params)
+        for actual_leaf, expected_leaf in zip(
+            jax.tree.leaves(actual_updates), jax.tree.leaves(expected_updates), strict=True
+        ):
+            np.testing.assert_allclose(actual_leaf, expected_leaf, rtol=0, atol=3e-6)
+
+
+def test_scale_with_grug_muonh_rejects_4d_updates():
+    # _grug_scale_with_muon skips Newton-Schulz on 4-D leaves; direct callers must fail fast.
+    params = {"mlp": {"expert_mlp": {"w_gate": jnp.ones((2, 2, 3, 4), dtype=jnp.float32)}}}
+    grads = jax.tree.map(jnp.ones_like, params)
+    transform = scale_with_grug_muonh()
+    with pytest.raises(ValueError, match="4-D"):
+        transform.update(grads, transform.init(params), params)
 
 
 @pytest.mark.parametrize("shape", [(3, 4), (2, 3, 4)])
