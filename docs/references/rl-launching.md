@@ -256,6 +256,13 @@ to false as well. Without export, successful runs retain native recovery checkpo
 in-training evaluation, resolved configuration and terminal result records; `SkyRLRun.hf_model_uri`
 is null. Pipelines that serve the resulting model for downstream evaluation must request export.
 
+Recovery checkpoints, Ray logs and rendezvous state use lifecycle-managed scratch
+storage. To keep large checkpoints beside the compute, set
+`SkyRLRetentionPolicy(temporary_storage_prefix="s3://marin-us-east-02a")` for an
+`02a` run. This explicit destination takes precedence over the shared CoreWeave
+scratch bucket and `MARIN_TEMP_PREFIX`; TTL prefixes and retention still apply.
+The Snowball inventory quick loop uses this override for Megatron and Levanter.
+
 Every HF export writes `generation_config.json` through SkyRL's Hugging Face
 model lifecycle utilities. It keeps the explicit fields of the source model's
 generation config and fills in the rest:

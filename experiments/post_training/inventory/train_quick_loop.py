@@ -39,6 +39,7 @@ MODEL_ID = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 MODEL_REVISION = "fe666478454e79fe6027a0bab0388d9abd68f51a"
 MODEL_VERSION = "2026.09.21"
 MODEL_URI = "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
+TEMPORARY_STORAGE_PREFIX = "s3://marin-us-east-02a"
 DEFAULT_STEPS = 25
 ARTIFACT_NAME = "checkpoints/snowball-inventory"
 SELECTION_PREFIX = "rl-data/task-selection"
@@ -259,7 +260,10 @@ def build_run(
                 gpu_variant="H100",
                 role_plan=plan,
             ),
-            retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
+            retention=SkyRLRetentionPolicy(
+                resume_checkpoint_count=2,
+                temporary_storage_prefix=TEMPORARY_STORAGE_PREFIX,
+            ),
             seed=SEED,
         ),
         IrisSkyRLExecution(

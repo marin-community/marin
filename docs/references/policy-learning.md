@@ -31,6 +31,10 @@ The Torch rollout runtime and JAX learner runtime use separate frozen Python
 environments. The native profile explicitly selects attention/MoE kernels,
 FP32 routing and selective attention operations, and BF16 projection logits
 with FP32 softmax. Scoring and updates use the same precision settings.
+The learner overrides inherited CPU-coordinator JAX settings with
+`JAX_PLATFORMS=cuda,cpu`, retaining Ray's `CUDA_VISIBLE_DEVICES` assignment.
+CUDA must initialize successfully; the CPU backend supports checkpoint host
+staging. Bootstrap verifies the isolated CUDA backend before starting Ray.
 Recovery checkpoints contain native learner state; terminal HF export is not
 implemented for this strategy.
 

@@ -129,8 +129,10 @@ if [[ "$profile" == levanter ]]; then
     "import sys; from skyrl_train.workers.levanter.levanter_worker import LevanterRayActorGroup; assert 'jax' not in sys.modules"
   run_check levanter env -u CUDA_HOME -u NVRTC_HOME -u LIBRARY_PATH -u LD_LIBRARY_PATH \
     -u LD_PRELOAD -u VIRTUAL_ENV -u PYTHONPATH -u PYTHONHOME \
+    -u JAX_PLATFORM_NAME -u JAX_CUDA_VISIBLE_DEVICES -u JAX_ROCM_VISIBLE_DEVICES -u JAX_LOCAL_DEVICE_IDS \
+    JAX_PLATFORMS=cuda,cpu \
     "$levanter_environment/bin/python" -c \
-    "import jax; from marin.rl.levanter_worker_runtime import main; from levanter.policy_learner import SpmdPolicyLearner"
+    "import jax; from marin.rl.levanter_worker_runtime import main; from levanter.policy_learner import SpmdPolicyLearner; assert jax.default_backend() == 'gpu', f'Native learner precheck requires CUDA GPU backend, got {jax.default_backend()}'; print('[rl-iris] native CUDA runtime ready:', jax.__version__, [(device.platform, device.device_kind) for device in jax.local_devices()])"
 fi
 
 check_status=0

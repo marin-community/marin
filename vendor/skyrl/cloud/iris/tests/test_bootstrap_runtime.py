@@ -171,6 +171,9 @@ def test_levanter_bootstrap_keeps_torch_and_jax_environments_separate(tmp_path: 
     subprocess.run([sys.executable, "-m", "venv", "--without-pip", child], check=True)
     site_packages = next((child / "lib").glob("python*/site-packages"))
     receipt = tmp_path / "jax-runtime.json"
+    process_environment.update(
+        JAX_PLATFORMS="cpu", JAX_PLATFORM_NAME="cpu", JAX_CUDA_VISIBLE_DEVICES="7", CUDA_VISIBLE_DEVICES="0,1,2,3,4,5,6,7"
+    )
     # The bootstrap imports each runtime in its actual venv. The child checks
     # toolchain isolation while the parent still needs its frozen CUDA paths.
     _write_module(
@@ -179,7 +182,11 @@ def test_levanter_bootstrap_keeps_torch_and_jax_environments_separate(tmp_path: 
         "import json, os, sys\nfrom pathlib import Path\n"
         f"Path({str(receipt)!r}).write_text(json.dumps({{'prefix': sys.prefix, "
         "'inherited_cuda_paths': [name for name in ('CUDA_HOME', 'NVRTC_HOME', 'LIBRARY_PATH', "
-        "'LD_LIBRARY_PATH') if name in os.environ]}))\n",
+        "'LD_LIBRARY_PATH', 'JAX_PLATFORM_NAME', 'JAX_CUDA_VISIBLE_DEVICES') if name in os.environ], "
+        "'jax_platforms': os.environ.get('JAX_PLATFORMS'), 'gpu_visibility': os.environ.get('CUDA_VISIBLE_DEVICES')}))\n"
+        "__version__ = 'test'\n"
+        "def default_backend(): return 'cpu' if os.environ.get('JAX_PLATFORMS') == 'cpu' else 'gpu'\n"
+        "def local_devices(): return []\n",
     )
     _write_module(site_packages, "marin/__init__.py")
     _write_module(site_packages, "marin/rl/__init__.py")
@@ -190,7 +197,9 @@ def test_levanter_bootstrap_keeps_torch_and_jax_environments_separate(tmp_path: 
     result = _run_bootstrap(environment, process_environment, "levanter", project_root=project)
 
     assert result.returncode == 0, result.stderr
-    assert json.loads(receipt.read_text()) == {"prefix": str(child), "inherited_cuda_paths": []}
+    assert json.loads(receipt.read_text()) == {
+        "prefix": str(child), "inherited_cuda_paths": [], "jax_platforms": "cuda,cpu", "gpu_visibility": "0,1,2,3,4,5,6,7"
+    }
     activation = subprocess.run(
         ["bash", "-c", 'source "$1"; "$2" -c "import os; assert os.path.isdir(os.environ[\'CUDA_HOME\'])"',
          "bash", environment / "runtime.sh", environment / "bin" / "python"],

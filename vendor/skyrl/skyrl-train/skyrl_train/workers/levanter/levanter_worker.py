@@ -22,16 +22,22 @@ from skyrl_train.weight_sync.expert_block.levanter_sender import LevanterExpertB
 from skyrl_train.workers.levanter_batch import forward_payload, policy_payload, validate_algorithm
 
 
-def _child_environment(python_executable: str, memory_fraction: float) -> dict[str, str]:
+def _child_environment(
+    python_executable: str, memory_fraction: float, *, require_accelerator: bool
+) -> dict[str, str]:
     environment = dict(os.environ)
     for name in (
         "CUDA_HOME", "NVRTC_HOME", "LIBRARY_PATH", "LD_LIBRARY_PATH", "LD_PRELOAD",
         "VIRTUAL_ENV", "PYTHONHOME", "PYTHONPATH",
+        "JAX_PLATFORM_NAME", "JAX_CUDA_VISIBLE_DEVICES", "JAX_ROCM_VISIBLE_DEVICES", "JAX_LOCAL_DEVICE_IDS",
     ):
         environment.pop(name, None)
     environment["PATH"] = f"{Path(python_executable).parent}{os.pathsep}{os.defpath}"
     environment["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
     environment["XLA_PYTHON_CLIENT_MEM_FRACTION"] = str(memory_fraction)
+    # CPU coordinator defaults must not select the learner backend. CUDA comes
+    # first; the runtime verifies it before loading a model. CPU supports staging.
+    environment["JAX_PLATFORMS"] = "cuda,cpu" if require_accelerator else "cpu"
     return environment
 
 
@@ -117,7 +123,11 @@ class LevanterHostWorker:
         runtime = self.cfg.trainer.policy.levanter_config
         self.child = LearnerProcess(
             runtime.python_executable,
-            environment=_child_environment(runtime.python_executable, runtime.device_memory_fraction),
+            environment=_child_environment(
+                runtime.python_executable,
+                runtime.device_memory_fraction,
+                require_accelerator=self.initialization_config["require_accelerator"],
+            ),
             timeout_seconds=runtime.command_timeout_seconds,
         )
         try:

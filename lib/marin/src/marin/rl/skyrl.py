@@ -51,9 +51,9 @@ SKYRL_PROJECT = Path("vendor/skyrl")
 _COLOCATED_EXPERT_BLOCK_GPU_COUNT = 4
 
 
-def skyrl_temporary_run_path(output_path: str, *, ttl_days: int) -> str:
+def skyrl_temporary_run_path(output_path: str, *, ttl_days: int, temp_prefix: str | None = None) -> str:
     """Return the lifecycle-managed storage path for a SkyRL run."""
-    temporary_root = marin_temp_bucket(ttl_days=ttl_days, source_prefix=output_path)
+    temporary_root = marin_temp_bucket(ttl_days=ttl_days, source_prefix=output_path, temp_prefix=temp_prefix)
     return str(StoragePath(temporary_root) / _TEMPORARY_OUTPUT_PREFIX / StoragePath(output_path).key)
 
 
@@ -248,6 +248,7 @@ class SkyRLRetentionPolicy:
 
     resume_checkpoint_count: int = 2
     temporary_storage_ttl_days: int = SKYRL_TEMPORARY_STORAGE_TTL_DAYS
+    temporary_storage_prefix: str | None = None
 
     def __post_init__(self) -> None:
         if not 1 <= self.resume_checkpoint_count <= 10:
@@ -1043,6 +1044,7 @@ def skyrl_step(
             temporary_root = skyrl_temporary_run_path(
                 ctx.output_path,
                 ttl_days=spec.retention.temporary_storage_ttl_days,
+                temp_prefix=spec.retention.temporary_storage_prefix,
             )
         attempts_root = prefix_join(temporary_root, "attempts")
         output = SkyRLOutputPaths(

@@ -118,8 +118,26 @@ def _initialize_distributed(config: dict) -> None:
             local_device_ids=list(range(distributed["local_device_count"])),
             initialization_timeout=config["initialization_timeout_seconds"],
         )
-    if jax.local_device_count() != distributed["local_device_count"]:
-        raise ValueError("JAX local device count differs from the reserved learner GPUs")
+    backend = jax.default_backend()
+    requires_gpu = config["require_accelerator"] and backend != "gpu"
+    if requires_gpu or jax.local_device_count() != distributed["local_device_count"]:
+        observed = {
+            "expected_local_devices": distributed["local_device_count"],
+            "local_devices": jax.local_device_count(),
+            "global_devices": jax.device_count(),
+            "backend": backend,
+            "device_kinds": sorted({device.device_kind for device in jax.local_devices()}),
+            "selectors": {
+                name: os.environ.get(name)
+                for name in ("JAX_PLATFORMS", "JAX_PLATFORM_NAME", "JAX_CUDA_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES")
+            },
+        }
+        reason = (
+            "Native learner requires CUDA GPU devices"
+            if requires_gpu
+            else "JAX local device count differs from the reserved learner GPUs"
+        )
+        raise ValueError(f"{reason}: {json.dumps(observed)}")
 
 
 def _projection_dtype(runtime: dict) -> jnp.dtype | None:

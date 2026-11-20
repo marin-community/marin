@@ -663,33 +663,43 @@ def test_starting_checkpoint_binds_identity_and_rejects_cached_output_reuse(tmp_
         StepRunner().run([runs[1].lower()])
 
 
-def test_skyrl_step_routes_disposable_state_to_ttl_storage(
+def test_skyrl_step_routes_disposable_state_to_explicit_ttl_storage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("MARIN_TEMP_PREFIX", "s3://hero-checkpoints")
     monkeypatch.setattr(
-        "marin.rl.skyrl.skyrl_temporary_run_path",
-        lambda _output_path, *, ttl_days: f"s3://temp/ttl={ttl_days}d/skyrl/users/alice/run",
+        cluster_config, "MARIN_CLUSTER_CONFIG_DIRS", (str(Path(__file__).resolve().parents[2] / "config"),)
     )
-    spec = dataclasses.replace(_spec(), name="users/alice/tests/iceball-rl", version="dev")
+    cluster_config.reset_data_config_cache()
+    spec = dataclasses.replace(
+        _spec(),
+        name="users/alice/tests/iceball-rl",
+        version="dev",
+        retention=SkyRLRetentionPolicy(temporary_storage_prefix="s3://marin-us-east-02a"),
+    )
     step = skyrl_step(spec, _execution())
     output_path = "s3://durable/users/alice/tests/iceball-rl/dev"
-    config = step.build_config(
-        StepContext.for_run(
-            output_path=output_path,
-            prefix="s3://durable",
-            runtime_args=step.runtime_args,
-            deps=step.deps,
+    try:
+        config = step.build_config(
+            StepContext.for_run(
+                output_path=output_path,
+                prefix="s3://durable",
+                runtime_args=step.runtime_args,
+                deps=step.deps,
+            )
         )
-    )
+    finally:
+        cluster_config.reset_data_config_cache()
 
     assert step.name == "users/alice/tests/iceball-rl"
-    assert config.output.checkpoint_root == "s3://temp/ttl=14d/skyrl/users/alice/run/checkpoints"
+    temporary_root = "s3://marin-us-east-02a/tmp/ttl=14d/skyrl/users/alice/tests/iceball-rl/dev"
+    assert config.output.checkpoint_root == f"{temporary_root}/checkpoints"
     assert config.output.export_root == f"{output_path}/exports"
     launch = yaml.safe_load(config.launch_config_yaml)
     assert launch["artifacts"] == {
-        "checkpoint_root": "s3://temp/ttl=14d/skyrl/users/alice/run/checkpoints",
+        "checkpoint_root": f"{temporary_root}/checkpoints",
         "export_root": f"{output_path}/exports",
-        "attempts_root": "s3://temp/ttl=14d/skyrl/users/alice/run/attempts",
+        "attempts_root": f"{temporary_root}/attempts",
         "resolved_config_uri": f"{output_path}/resolved-launch.yaml",
         "terminal_manifest_uri": f"{output_path}/terminal.json",
         "resume_checkpoint_count": 2,

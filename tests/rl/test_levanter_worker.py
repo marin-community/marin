@@ -5,8 +5,10 @@
 
 import concurrent.futures
 import copy
+import json
 import os
 import socket
+import subprocess
 import sys
 from contextlib import contextmanager
 
@@ -20,6 +22,57 @@ from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 from marin.rl.levanter_worker_protocol import LearnerProcess
 from tokenizers import Tokenizer, models
 from transformers import PreTrainedTokenizerFast
+
+
+@pytest.mark.parametrize("require_accelerator", [True, False])
+def test_native_child_backend_intent_overrides_inherited_coordinator_platform(require_accelerator, monkeypatch):
+    host_module = pytest.importorskip("skyrl_train.workers.levanter.levanter_worker")
+    monkeypatch.setenv("JAX_PLATFORMS", "cpu" if require_accelerator else "cuda,cpu")
+    monkeypatch.setenv("JAX_PLATFORM_NAME", "cpu")
+    monkeypatch.setenv("JAX_CUDA_VISIBLE_DEVICES", "7")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1,2,3,4,5,6,7")
+    environment = host_module._child_environment(sys.executable, 0.9, require_accelerator=require_accelerator)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import json, os, sys
+import jax
+from marin.rl.levanter_worker_runtime import _initialize_distributed
+try:
+    count = jax.local_device_count()
+    _initialize_distributed({
+        "distributed": {"num_processes": 1, "local_device_count": count},
+        "require_accelerator": sys.argv[1] == "true",
+    })
+    backend = jax.default_backend()
+except (RuntimeError, ValueError) as error:
+    receipt = {"initialized": False, "error": str(error)}
+else:
+    receipt = {"initialized": True, "backend": backend}
+receipt["gpu_visibility"] = os.environ.get("CUDA_VISIBLE_DEVICES")
+receipt["jax_platforms"] = os.environ.get("JAX_PLATFORMS")
+print(json.dumps(receipt))
+""",
+            str(require_accelerator).lower(),
+        ],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=True,
+    )
+    receipt = json.loads(result.stdout)
+    assert receipt["gpu_visibility"] == "0,1,2,3,4,5,6,7"
+    assert receipt["jax_platforms"] == ("cuda,cpu" if require_accelerator else "cpu")
+    if require_accelerator:
+        if receipt["initialized"]:
+            assert receipt["backend"] == "gpu"
+        else:
+            assert "cuda" in receipt["error"].lower()
+    else:
+        assert receipt["initialized"] and receipt["backend"] == "cpu"
 
 
 def _hf_initializer(path):
