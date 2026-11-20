@@ -125,13 +125,15 @@ async def test_report_names_format_1_roots_and_counts_a_claimed_empty_root_as_ru
     assert "workpieces=1 since_hours=1" in lines and "terminal=running count=1" in lines
 
 
-async def test_a_freshly_reclaimed_root_counts_as_running_in_a_short_window(tmp_path: Path) -> None:
+async def test_a_freshly_reclaimed_root_counts_as_running_in_a_short_window(
+    tmp_path: Path, proposal: TaskProposal
+) -> None:
     """A held root resumed now is running now, though its newest event is a day old."""
     destination = str(tmp_path / "reclaimed")
     first = CheckpointSink(tmp_path / "work", destination)
     first.claim(None)
     await first.local.write((Record(1, time.time() - 86400, Note("yesterday")),))
-    await asyncio.to_thread(first._publish, Status(terminal=Terminal.HELD), None)
+    await first.finish(Status(terminal=Terminal.HELD), Workpiece("reclaimed", proposal, terminal=Terminal.HELD))
     CheckpointSink(tmp_path / "work", destination).claim(read_journal(destination))
     lines = await report(str(tmp_path), 1)
     assert "workpieces=1 since_hours=1" in lines and "terminal=running count=1" in lines

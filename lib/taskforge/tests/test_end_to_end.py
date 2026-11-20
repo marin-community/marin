@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from typing import cast, override
 
 import pytest
+from botocore.exceptions import ClientError
 from lib.taskforge.tests.effect_fakes import local_records
 from lib.taskforge.tests.resource_doubles import FakeCommand, FakeEnv, FakeInference, FakeWeb
 from lib.taskforge.tests.stage_fakes import CandidateEngine, SolverEngine, solver_model
@@ -30,7 +31,7 @@ from taskforge.checkpoint import HEAD, HEAD_JSON, CheckpointSink, Head, Journal,
 from taskforge.config import TaskforgeConfig
 from taskforge.coordinator import advance, run_workpiece
 from taskforge.effects.context import Context
-from taskforge.effects.events import StageCompleted
+from taskforge.effects.events import Resolved, StageCompleted
 from taskforge.effects.issues import Hold, LogFailure, Restart, Superseded, Transient
 from taskforge.effects.log import EventLog, JsonlSink, Record, Status, decode, fold
 from taskforge.harness.protocol import Harness, Stopped, StopReason, Tool
@@ -612,6 +613,112 @@ async def test_resume_decodes_published_history_before_claiming_and_leaves_it_un
     with pytest.raises(LogFailure):
         await driver.one(driver_args)
     assert tree(destination) == before
+
+
+MALFORMED_REQUEST = {
+    "type": Resolved.kind,
+    "payload": {"request": {}, "fingerprints": [], "value": None, "replayed": False},
+}
+FINISHED = {"stage": "review", "round": 1, "terminal": "accepted"}
+
+
+@pytest.mark.parametrize(
+    "change, event, code",
+    [
+        ({"format": "3"}, None, driver.CORRUPT),
+        ({"format": 3.0}, None, driver.CORRUPT),
+        ({"format": 2.0}, None, driver.CORRUPT),
+        ({"format": True}, None, driver.CORRUPT),
+        ({"format": 3}, None, driver.NEEDS_MIGRATION),
+        ({"status": FINISHED, "workpiece": None}, None, driver.CORRUPT),
+        ({}, MALFORMED_REQUEST, driver.CORRUPT),
+    ],
+    ids=["string", "float", "float 2", "bool", "format 3", "finished without workpiece", "resolved without request"],
+)
+async def test_driver_refuses_a_damaged_head_or_history_before_skipping_or_claiming(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, change: dict[str, object], event: object, code: int
+) -> None:
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    (destination / "chunks").mkdir(parents=True)
+    events = json.dumps({"sequence": 1, "wall_time": 0.0, "event": event}).encode() + b"\n" if event else b""
+    chunks = (hashlib.sha256(events).hexdigest() + ".jsonl",) if events else ()
+    for name in chunks:
+        (destination / "chunks" / name).write_bytes(events)
+    head = HEAD_JSON.dump_python(Head(2, "earlier", chunks, len(events), Status(), None, 0.0), mode="json")
+    (destination / HEAD).write_text(json.dumps({**head, **change}))
+    before = tree(destination)
+    monkeypatch.setattr(driver, "runtime", unexpected_runtime)
+    with pytest.raises(LogFailure) as raised:
+        await driver.one(driver_args)
+    assert driver.exit_code(raised.value) == code
+    assert tree(destination) == before
+
+
+async def test_a_collision_at_a_checkpoint_digest_exits_corrupt_and_publishes_no_hold(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Other bytes already sit under the name of the first checkpoint's chunk; the real ``_put`` refuses them."""
+    monkeypatch.setattr(checkpoint, "CHECKPOINT_EVENTS", 1)
+    put = checkpoint._put
+
+    def collide_once(directory: str, suffix: str, data: bytes) -> str:
+        target = Path(directory) / (hashlib.sha256(data).hexdigest() + suffix)
+        if not target.parent.exists():
+            target.parent.mkdir(parents=True)
+            target.write_bytes(b"other bytes\n")
+        return put(directory, suffix, data)
+
+    monkeypatch.setattr(checkpoint, "_put", collide_once)
+    built = resources(Envs(), script())
+
+    @asynccontextmanager
+    async def fake_runtime(
+        policy: Policy, _source: EndpointSource, _key: str
+    ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
+        yield build_config(policy, {}), built
+
+    monkeypatch.setattr(driver, "runtime", fake_runtime)
+    with pytest.raises(Exception) as raised:
+        await driver.one(driver_args)
+    assert driver.exit_code(raised.value) == driver.CORRUPT
+    head = published(Path(driver_args.output) / driver.proposal_key(driver_args.proposals)).head
+    assert (head.chunks, head.status, head.workpiece) == ((), Status(), None)
+
+
+@pytest.mark.parametrize("code", ["SlowDown", "AccessDenied"])
+async def test_a_count_triggered_storage_error_retries_or_stops_without_a_bug_hold(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, code: str
+) -> None:
+    """One exhausted throttle is retried from the committed offset; a refusal stops publication at once."""
+    monkeypatch.setattr(checkpoint, "CHECKPOINT_EVENTS", 1)
+    put, calls = checkpoint._put, []
+
+    def fail_first(directory: str, suffix: str, data: bytes) -> str:
+        calls.append(data)
+        if len(calls) == 1:
+            raise ClientError({"Error": {"Code": code, "Message": code}}, "PutObject")
+        return put(directory, suffix, data)
+
+    monkeypatch.setattr(checkpoint, "_put", fail_first)
+    built = resources(Envs(), script())
+
+    @asynccontextmanager
+    async def fake_runtime(
+        policy: Policy, _source: EndpointSource, _key: str
+    ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
+        yield build_config(policy, {}), built
+
+    monkeypatch.setattr(driver, "runtime", fake_runtime)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    if code == "SlowDown":
+        await driver.one(driver_args)
+        assert published_workpiece(destination).terminal is Terminal.ACCEPTED
+        assert [record.sequence for record in history(destination)] == list(range(1, len(history(destination)) + 1))
+        return
+    with pytest.raises(Exception) as raised:
+        await driver.one(driver_args)
+    assert driver.exit_code(raised.value) is None and len(calls) == 1
+    assert published(destination).head.status == Status()
 
 
 class TakenOverWhileBlocked(FakeInference):

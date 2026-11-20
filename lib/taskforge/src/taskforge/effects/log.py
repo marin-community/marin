@@ -89,13 +89,14 @@ def _decode(data: Mapping[str, Any], known: dict[str, Event[object]]) -> Event[o
     if cls is None:
         raise LogFailure(f"Unknown event kind {data['type']!r}")
     restored = _restore(data["payload"], known)
+    if cls in (Resolved, Retrying) and not isinstance(request := restored["request"], Event):
+        raise LogFailure(f"{data['type']} names no request event")
     if cls is Resolved:
-        request = restored["request"]
         value = TypeAdapter(cast(Any, request.result_type)).validate_python(restored["value"])
         fingerprints = TypeAdapter(tuple[Fingerprint, ...]).validate_python(restored["fingerprints"])
         event = Resolved(request, fingerprints, value, restored["replayed"])
     elif cls is Retrying:
-        event = Retrying(restored["request"], restored["attempt"], restored["cause"])
+        event = Retrying(request, restored["attempt"], restored["cause"])
     else:
         event = TypeAdapter(cls).validate_python(restored)
     known[event_digest(event)] = event

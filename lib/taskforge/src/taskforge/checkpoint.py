@@ -21,14 +21,13 @@ from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import override
 
-from botocore.exceptions import ClientError
 from pydantic import TypeAdapter
 from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
 from rigging.filesystem.factory import open_url, url_to_fs
+from rigging.filesystem.s3_errors import is_transient_s3_error
 from rigging.filesystem.storage_path import prefix_join
-from s3fs.core import S3_RETRYABLE_ERRORS
 
-from taskforge.effects.issues import CorruptJournal, LogFailure, Superseded, UnsupportedFormat
+from taskforge.effects.issues import CorruptJournal, LogFailure, PublicationFailed, Superseded, UnsupportedFormat
 from taskforge.effects.log import JsonlSink, Record, Sink, Status
 from taskforge.model.workpiece import WORKPIECE, Workpiece
 
@@ -38,9 +37,6 @@ FORMAT_1 = frozenset({"events.jsonl", "events.jsonl.parts", "status.json", "work
 HEAD = "journal.json"
 CHECKPOINT_EVENTS = 25
 CHECKPOINT_SECONDS = 60
-# Publication goes through rigging's botocore client, which re-raises service (ClientError) and transport
-# (HTTPClientError, ...) errors untranslated once its retries run out; local I/O raises OSError.
-UPLOAD_ERRORS: tuple[type[Exception], ...] = (OSError, ClientError, *S3_RETRYABLE_ERRORS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,11 +112,16 @@ def read_journal(destination: str) -> Journal | None:
         return None
     try:
         found = json.loads(current.data).get("format")
-        if isinstance(found, int) and found != JOURNAL_FORMAT:
+        if type(found) is not int:
+            raise ValueError(f"format {found!r} is no integer")
+        if found != JOURNAL_FORMAT:
             raise UnsupportedFormat(f"{destination}/{HEAD} has journal format {found}; this reader reads 2")
-        return Journal(destination, HEAD_JSON.validate_json(current.data), current.version)
+        head = HEAD_JSON.validate_json(current.data)
+        if head.status.terminal is not None and head.workpiece is None:
+            raise ValueError(f"terminal {head.status.terminal} names no workpiece")
     except (ValueError, AttributeError) as error:  # Not JSON, not an object, or not a format-2 head.
         raise CorruptJournal(f"{destination}/{HEAD} is no format-2 head: {error}") from error
+    return Journal(destination, head, current.version)
 
 
 async def _drained(work: Coroutine[object, object, None]) -> None:
@@ -144,7 +145,8 @@ class CheckpointSink(Sink):
         self.lock = asyncio.Lock()
         self.timer: asyncio.Task[None] | None = None
         self.owner: asyncio.Task[object] | None = None
-        self.superseded: Superseded | None = None
+        self.stopped: LogFailure | None = None
+        """Why this writer publishes nothing more: supersession, corruption or a storage refusal."""
 
     def _swap(self, head: Head, expected: str | None) -> None:
         try:
@@ -183,19 +185,17 @@ class CheckpointSink(Sink):
             head = replace(head, workpiece=name)
         self._swap(replace(head, status=status, published_at=time.time()), current.version)
 
-    def _supersede(self, error: Superseded) -> None:
-        if self.superseded is None:
-            self.superseded = error
+    def _stop(self, error: LogFailure) -> None:
+        if self.stopped is None:
+            self.stopped = error
             logging.error("%s", error)
-            if self.owner is not None:
+            if self.owner is not None and self.owner is not asyncio.current_task():
                 self.owner.cancel()
 
     @override
     async def write(self, records: Sequence[Record]) -> None:
-        if self.superseded is not None:
-            raise self.superseded
-        if self.timer is not None and self.timer.done():
-            self.timer.result()
+        if self.stopped is not None:
+            raise self.stopped
         async with self.lock:
             await _drained(self.local.write(records))
             self.pending += len(records)
@@ -203,11 +203,19 @@ class CheckpointSink(Sink):
                 await self._upload()
 
     async def _upload(self) -> None:
+        """Publish the new lines; after a transient storage error they stay pending and the next upload resends them."""
         try:
             await _drained(asyncio.to_thread(self._publish, Status(), None))
-        except Superseded as error:
-            self._supersede(error)
+        except (Superseded, CorruptJournal) as error:
+            self._stop(error)
             raise
+        except Exception as error:
+            if is_transient_s3_error(error):
+                logging.warning("Checkpoint upload to %s failed; retrying: %r", self.destination, error)
+                return
+            failure = PublicationFailed(f"Cannot publish a checkpoint of {self.destination}: {error!r}")
+            self._stop(failure)
+            raise failure from error
         self.pending = 0
 
     async def finish(self, status: Status, workpiece: Workpiece) -> None:
@@ -224,19 +232,14 @@ class CheckpointSink(Sink):
                 async with self.lock:
                     try:
                         await self._upload()
-                    except Superseded:
+                    except LogFailure:  # Stopped; the owner is cancelled.
                         return
-                    except UPLOAD_ERRORS as error:
-                        # The local log stays complete; the next tick republishes from the head's covered size.
-                        logging.warning(
-                            "Checkpoint upload to %s failed; retrying next tick: %r", self.destination, error
-                        )
 
     @asynccontextmanager
     async def running(self) -> AsyncIterator[None]:
         """Run the timer; every tick reads the head, so a writer that lost it, idle or not, cancels this block.
 
-        The block then raises ``Superseded``; remote effects already completed stay done.
+        The block then raises why the writer stopped; remote effects already completed stay done.
         """
         stop = asyncio.Event()
         self.owner = asyncio.current_task()
@@ -247,7 +250,7 @@ class CheckpointSink(Sink):
             owner, self.owner = self.owner, None
             stop.set()
             await self.timer
-            if self.superseded is not None:
+            if self.stopped is not None:
                 if owner is not None and owner.cancelling():
                     owner.uncancel()
-                raise self.superseded
+                raise self.stopped

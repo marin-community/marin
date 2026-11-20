@@ -55,6 +55,13 @@ class CorruptJournal(LogFailure):
     """
 
 
+class PublicationFailed(LogFailure):
+    """A checkpoint failed for a reason retrying cannot fix, such as denied access; the writer publishes nothing more.
+
+    A hold would need the same storage, so the process fails for an operator to repair access and rerun.
+    """
+
+
 class ContextExceeded(Exception):
     """The provider rejected the conversation because its context window is full.
 

@@ -27,7 +27,16 @@ from rigging.secrets import get_secret, list_secret_names, require_secret
 from taskforge.checkpoint import CheckpointSink, read_journal
 from taskforge.coordinator import reasons, run_workpiece
 from taskforge.effects.events import StageCompleted
-from taskforge.effects.issues import CorruptJournal, Hold, LogFailure, Restart, Superseded, Transient, UnsupportedFormat
+from taskforge.effects.issues import (
+    CorruptJournal,
+    Hold,
+    LogFailure,
+    PublicationFailed,
+    Restart,
+    Superseded,
+    Transient,
+    UnsupportedFormat,
+)
 from taskforge.effects.log import EventLog, Status, fold
 from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal
 from taskforge.model.review import Incomplete
@@ -132,8 +141,8 @@ async def one(args: argparse.Namespace) -> None:
             )
             async with runtime(policy, source, get_secret("PARALLEL_API_KEY") or "") as (config, resources):
                 wp = await run_workpiece(proposal, config, resources, log, install=install)
-    except* Superseded:
-        raise
+    except* (Superseded, CorruptJournal, PublicationFailed):
+        raise  # The writer stopped; it publishes neither a hold nor a final head.
     except* (Hold, Restart, Transient, LogFailure) as error:
         wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete(reasons(error))))
         await log.record(StageCompleted(None, "", "Held", wp.round, Terminal.HELD))
@@ -147,7 +156,7 @@ async def one(args: argparse.Namespace) -> None:
             raise error.exceptions[0] from None
         raise
     finally:
-        if checkpoints.superseded is None:
+        if checkpoints.stopped is None:
             await checkpoints.finish(fold(tuple(record.event for record in log.records)), wp)
 
 

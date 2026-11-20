@@ -10,13 +10,14 @@ import threading
 from pathlib import Path
 
 import pytest
+from botocore.exceptions import ClientError, ConnectionClosedError, EndpointConnectionError
 from lib.taskforge.tests.effect_fakes import local_records
 from rigging.filesystem.conditional_object import ConditionalObject, VersionedBytes
 
 from taskforge import checkpoint
 from taskforge.checkpoint import HEAD, CheckpointSink, Journal, read_journal
 from taskforge.effects.events import Note, StageCompleted
-from taskforge.effects.issues import CorruptJournal, Superseded
+from taskforge.effects.issues import CorruptJournal, PublicationFailed, Superseded
 from taskforge.effects.log import EventLog, Status, decode
 from taskforge.model.proposal import TaskProposal
 from taskforge.model.stage import Stage
@@ -104,7 +105,7 @@ async def test_checkpoints_publish_immutable_chunks_of_only_new_bytes(tmp_path: 
     assert decode(journal(Path(sink.destination)).events()) == log.records
 
 
-async def test_failed_timer_upload_keeps_logging_and_republishes_from_the_head(
+async def test_transient_timer_upload_failure_keeps_the_timer_and_republishes_from_the_head(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(checkpoint, "CHECKPOINT_EVENTS", 100)
@@ -116,7 +117,7 @@ async def test_failed_timer_upload_keeps_logging_and_republishes_from_the_head(
     def reset_once(status: Status, workpiece: Workpiece | None) -> None:
         if not failed.is_set():
             failed.set()
-            raise ConnectionResetError("connection reset by peer")
+            raise EndpointConnectionError(endpoint_url="https://cwobject.com")
         publish(status, workpiece)
         published.set()
 
@@ -131,6 +132,30 @@ async def test_failed_timer_upload_keeps_logging_and_republishes_from_the_head(
     assert local_records(sink.local) == log.records
     await sink._upload()
     assert decode(journal(Path(sink.destination)).events()) == log.records
+
+
+@pytest.mark.parametrize("by_count", [True, False])
+async def test_a_storage_refusal_stops_publication_on_either_trigger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, by_count: bool
+) -> None:
+    monkeypatch.setattr(checkpoint, "CHECKPOINT_EVENTS", 1 if by_count else 100)
+    monkeypatch.setattr(checkpoint, "CHECKPOINT_SECONDS", 60 if by_count else 0.01)
+    sink = claimed(tmp_path)
+    calls = []
+
+    def refused(status: Status, workpiece: Workpiece | None) -> None:
+        calls.append(status)
+        raise ClientError({"Error": {"Code": "AccessDenied", "Message": "Access Denied"}}, "PutObject")
+
+    monkeypatch.setattr(sink, "_publish", refused)
+    log = EventLog(sink=sink)
+    with pytest.raises(PublicationFailed, match="AccessDenied"):
+        async with sink.running():
+            await log.record(Note("first"))
+            await asyncio.sleep(5)
+    with pytest.raises(PublicationFailed):
+        await log.record(Note("later"))
+    assert len(calls) == 1
 
 
 async def test_two_writers_claiming_the_same_head_cannot_both_proceed(tmp_path: Path) -> None:
@@ -189,7 +214,7 @@ class AckLost:
         version = self.target.write(data, expected_version=expected_version)
         if self.lost:
             self.lost -= 1
-            raise ConnectionResetError("response lost after the write landed")
+            raise ConnectionClosedError(endpoint_url="https://cwobject.com")
         return version
 
 
@@ -198,8 +223,7 @@ async def test_ambiguous_head_acknowledgement_is_reconciled_without_overlap(tmp_
     sink.head = AckLost(sink.head)
     log = EventLog(sink=sink)
     await log.record(Note("first"))
-    with pytest.raises(ConnectionResetError):
-        await sink._upload()
+    await sink._upload()
     await log.record(Note("second"))
     await sink._upload()
     published = journal(Path(sink.destination))
@@ -224,8 +248,7 @@ async def test_a_late_chunk_put_cannot_overwrite_committed_history(
         return put(directory, suffix, data)
 
     monkeypatch.setattr(checkpoint, "_put", time_out_first_put)
-    with pytest.raises(TimeoutError):
-        await sink._upload()
+    await sink._upload()
     await log.record(Note("second"))
     await sink._upload()
     put(*delayed[0])

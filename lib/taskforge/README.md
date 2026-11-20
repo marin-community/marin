@@ -120,16 +120,16 @@ Each workpiece publishes to `<output>/<capability>/<slot>/`:
 
 | path | contents |
 |---|---|
-| `journal.json` | the head: `format` (2); `writer`, the owning writer's random id; `chunks`, the chunk names in stream order; `size`, the bytes they hold; `status` (`stage`, `round`, `terminal`, which is `accepted`, `rejected`, `abandoned`, `held`, or `null` while running); `workpiece`, the terminal workpiece's object name or `null`; and `published_at`, the writer's clock at the swap |
+| `journal.json` | the head: `format` (the JSON integer 2); `writer`, the owning writer's random id; `chunks`, the chunk names in stream order; `size`, the bytes they hold; `status` (`stage`, `round`, `terminal`, which is `accepted`, `rejected`, `abandoned`, `held`, or `null` while running); `workpiece`, the terminal workpiece's object name or `null`; and `published_at`, the writer's clock at the swap |
 | `chunks/<sha256>.jsonl` | an immutable slice of the effect log (every request, result, tool call, retry, scope), ending at a line boundary and named by the SHA-256 of its bytes; published after 25 events or 60 s, whichever comes first |
 | `workpieces/<sha256>.json` | the immutable terminal workpiece (proposal, submission, evidence per round, decisions, terminal), named by the SHA-256 of its bytes; read it at `workpieces/<head.workpiece>` |
 
-The event stream is the head's `chunks`, concatenated in order, each read from `chunks/<name>`.
-A reader checks every chunk and workpiece against the digest in its name and fails with
-`CorruptJournal`, naming the path, when one is missing or altered or the head is malformed. A
-finished root is recognised from the head alone, with one GET. Chunks and workpieces that no head
-names (a writer that lost the head, or one that died before its swap) stay behind; nothing collects
-them.
+The event stream is the head's `chunks`, concatenated in order, each read from `chunks/<name>`. A
+reader checks every chunk and workpiece against the digest in its name and fails with
+`CorruptJournal`, naming the path, when one is missing or altered or the head is malformed,
+including a terminal `status` with a null `workpiece`. A finished root is recognised from the head
+alone, with one GET. Chunks and workpieces that no head names (a writer that lost the head, or one
+that died before its swap) stay behind; nothing collects them.
 
 Events are recorded by stable kinds (`inference.request`, `env.run_command`, ...; the table is in
 `effects/events.py`), never by Python module path. Each driver claims `journal.json` by
@@ -139,6 +139,11 @@ head; the first then fails with `Superseded` at its next checkpoint and publishe
 Readers follow only the chunks the head names. A root in any other journal format, including the
 format-1 layout (`events.jsonl`, `events.jsonl.parts/`, `status.json`), fails with an error naming
 the format found and is left untouched; such roots are converted once by a separate migration.
+A checkpoint upload that storage throttles, cannot reach, or fails internally (rigging's
+`is_transient_s3_error`) stays pending and is resent from the head's size on the next upload. Any
+other upload failure, such as denied access, stops the writer with `PublicationFailed`; a collision
+found while publishing is `CorruptJournal`. Neither publishes a hold, and the last committed head
+stays as it was.
 
 A driver restarted against the same output resumes each workpiece from its journal and prints
 `SKIP <id>: published terminal=<state>` for every published terminal, `held` included. Held
