@@ -170,7 +170,8 @@ def build_resources(
     execution = digest((settings, command_timeout))
     sampling = policy_sampling(policy)
     # Transport settings (provider.*, pools, context limits) shape how a request is served, not what it
-    # returns, so replay keys carry only the model, the role and what the request itself records.
+    # returns, so replay keys carry only the model, the role and what the request itself records. A solver
+    # trial also depends on the ShellSim output budget its factory enforces: exhaustion fails the trial.
     inference = {role: GlmInference(client, role) for role, client in clients.items()}
     return Resources(
         Environments(factories, settings),
@@ -178,7 +179,7 @@ def build_resources(
         RolloutResource(
             verifiers.rollouts,
             partial(solver_turn, clients["solver"], sampling),
-            digest((clients["solver"].model, sampling, execution)),
+            digest((clients["solver"].model, sampling, execution, policy.setting("sandbox.output_budget_mb", int))),
         ),
         GradingResource(verifiers.grades, execution, base_engine),
         Ids(),

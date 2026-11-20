@@ -1,12 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from typing import override
 
 import pytest
+from lib.taskforge.tests.resource_doubles import FakeWeb
+from lib.taskforge.tests.resources.inference_fakes import Backend as ScriptedBackend
 from rolloutengine.machines import _machine_spec
 from rolloutengine.test_support import arithmetic_task, machine_runtime, rollout_limits
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
@@ -26,7 +29,8 @@ from taskcompendium.models import (
 from verifyit.spec import JudgeSpec
 
 from taskforge.effects.context import Context
-from taskforge.effects.log import EventLog
+from taskforge.effects.events import Resolved
+from taskforge.effects.log import EventLog, Missing
 from taskforge.harness.protocol import ToolResult
 from taskforge.harness.tools.submit import SubmitTool
 from taskforge.lowering import (
@@ -38,10 +42,11 @@ from taskforge.lowering import (
     requirements,
 )
 from taskforge.model.controls import CONTROLS, Candidate, Control, ControlKind, RewardBand
-from taskforge.policy import GRADER_BASE_IMAGE, load_policy, resolution_lines
+from taskforge.policy import GRADER_BASE_IMAGE, Policy, load_policy, resolution_lines
 from taskforge.resources.env import ReadFile
+from taskforge.resources.rollouts import RolloutResource, SolverRollout
 from taskforge.resources.sandbox.factories import SANDBOX_SCHEDULING_TIMEOUT, shellsim_factory
-from taskforge.wiring import submit_gate
+from taskforge.wiring import build_resources, submit_gate
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,3 +191,31 @@ def test_shellsim_output_budget_is_declared_and_resolved_without_changing_shared
     assert isinstance(factory, ShellSimMachineFactory)
     assert factory.output == 512 * 1024 * 1024
     assert ShellSimMachineFactory().output == 128 * 1024 * 1024
+
+
+@pytest.mark.parametrize(
+    "overlay, reruns",
+    [
+        ({"provider.backoff_initial": 5.0}, False),
+        ({"provider.max_connections": 8}, False),
+        ({"solver.model": "other-model"}, True),
+        ({"sampling.temperature": 0.5}, True),
+        ({"sandbox.output_budget_mb": 512}, True),
+    ],
+)
+async def test_a_completed_solver_trial_replays_unless_its_model_sampling_or_output_cap_changes(
+    overlay: Mapping[str, object], reruns: bool
+) -> None:
+    """A tighter ShellSim output budget can exhaust a trial that passed under a generous one."""
+
+    def rollouts(policy: Policy) -> RolloutResource:
+        clients = {role: ScriptedBackend(()) for role in ("author", "solver", "adversary")}
+        clients["solver"].model = policy.setting("solver.model", str)
+        return build_resources(policy, clients, {}, FakeWeb({}, {})).rollouts
+
+    declared = load_policy(Path(__file__).parents[1] / "src/taskforge/policy/defaults")
+    spec = lower_with_settings(arithmetic_task(), lowering_settings(declared), {})
+    log = EventLog()
+    await log.record(Resolved(SolverRollout(spec, 0, 0), (rollouts(declared).fingerprint(),), "graded"))
+    found = log.lookup(SolverRollout(spec, 0, 0), (rollouts(declared.overlaid(overlay)).fingerprint(),))
+    assert isinstance(found, Missing) is reruns
