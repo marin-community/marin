@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Versioned SHARED grading protections and their agent-facing instructions."""
+"""Versioned SHARED grading protection contracts."""
 
 from enum import StrEnum
 from typing import Literal, Self

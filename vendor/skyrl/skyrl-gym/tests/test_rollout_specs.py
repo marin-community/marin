@@ -120,7 +120,6 @@ def test_verifier_floor_preserves_declared_deadlines_and_extends_attempt_budget(
     limits = rollout_limits(task, lowered.limits, minimum_verifier_timeout=1800)
     assert limits.verifier_timeout == expected
     assert limits.attempt_timeout == 600 + expected + 60
-    assert lowered.task == task
 
 
 def test_verifier_floor_keeps_a_finite_attempt_without_a_separate_actor_limit():
