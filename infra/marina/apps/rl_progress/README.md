@@ -3,55 +3,45 @@
 Maintained source for the private [RL progress dashboard](https://applets.marina.oa.dev/a/6c971887-1e22-45b1-9dcb-dd775829df57/).
 The stable UUID is declared in `applet.toml`. Preserve it when releasing updates.
 
-The overview leads with reward versus elapsed time. Unknown evaluation protocols
-remain unranked and incomplete coverage stays visible. W&B links identify the
-project unless a record supplies an exact run URL.
+Each run has one row with its attempts in a dropdown, latest first. Failed attempts
+are marked. The selected attempt supplies the run's details.
+The row shows the gate report's objectives (control → run, change and noise),
+guards and invariants, then verdict and effect. Replicate counts identify aggregate
+results. Attempts without report details remain descriptive; unknown measurements are explicit.
+A run-only link (`#run=<run_id>`) selects its latest attempt. Add
+`&attempt=<attempt_id>` to select a particular attempt. W&B links use the recorded
+run URL; the Grafana link uses the recorded native execution window. The Model column can filter by
+the recorded model. The issue number links to GitHub, and the opt-out is shown in the attempt details.
+Linked EvalDash evaluations open the recorded run IDs. The detail view includes per-step family, AAII-category and difficulty means and scored/attempted answer counts.
+The attempt details link to a grader report when one was published. It shows
+training and evaluation success rates, verification coverage, failures and
+latencies by environment and task source.
+
+Malformed records are skipped individually and named in a visible note.
 
 ## Data contract
 
-The backend reads the application-owned `rl_runs` table:
+The app's release migration creates its `rl_runs` table in the application schema.
+Each native `(run_id, attempt_id)` identifies one updatable JSON record. Repeat
+publication refreshes that attempt's record; null model, issue, EvalDash links, gate and gate-result values
+preserve their stored values. Other attempts remain separate.
 
-```sql
-CREATE TABLE rl_runs (
-    run_id text NOT NULL,
-    attempt_id text NOT NULL,
-    record jsonb NOT NULL,
-    imported_at timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (run_id, attempt_id)
-);
-```
+Native failures and failed training or evaluation invariants set `status: failed` and name `failed_facts`.
+Training grader errors are reported in rollout metrics; they do not fail an ungated run's status.
+Records carry native identity, source and engine facts, and the launcher's issue.
+The planned update count and measured update indices come from the run's effective configuration;
+the detail view shows them beside the observed optimizer count. Missing stored values are unknown.
+The gate result contains the report's objectives, guards, invariants, verdict and effect; controls and
+train-long have no gate verdict. Update counts use stored metrics and checkpoint parents.
+Lineage duration sums those native jobs' stored windows. Missing lineage records leave both
+measurements unknown; a missing window leaves elapsed time unknown with a timing note.
 
-The app creates this table on first release. Historical backfills go into
-`rl_archived_runs` with the same keys. The dashboard reads both stores through
-`rl_dashboard_runs` and uses the live record when an attempt appears in both.
-A disposable local preview can load synthetic records through the Marina data
-commands against the printed local origin.
-
-Each record retains its run/attempt identity, label, status, UTC submission/start/
-completion timestamps, timing scope, elapsed seconds, optimizer count, source/data/
-initializer identities, evaluation identity, baseline/final reward and attempted/
-scored counts, artifact URI, and evidence. `GET api/runs` adds coverage and
-comparison fields. A runtime evaluation protocol hash is distinct from a declared
-source protocol; absent runtime identity remains null. Names do not define a
-comparison group. Use `wandb_url` for an exact W&B run link when recorded.
-
-The overview groups runs by the recorded preset. New Quick RL records store
-the preset, model ID, eval selection identity, and requested GPU type and count.
-The picker also shows the historical Snowball presets. Historical rows with
-a recognized series use it as their preset. GPU type and count narrow the
-view and distinguish frontiers within it.
-
-The overview opens on `learning-medium` and selects its latest recorded preset
-revision. The revision filter keeps the 910-task development panel and the
-1,500-task held-out panel in separate views. Historical records preserve their
-score basis and can omit elapsed time when native timing is unavailable.
-Set `preset_revision` on the run registration when publishing a new preset
-revision. The importer carries it into the stored attempt.
-
-The control chart plots one completed,
-fully scored attempt per control run, grouped by matching evaluation, training,
-and runtime evidence. Its shaded band spans one sample standard deviation on
-either side of the mean when the group has two or more repeats.
+`POST /api/runs` validates each submitted record with the shared
+`finestore.rl.rl_progress.AttemptSummary`, upserts its native key and returns the stored
+record. `GET /api/runs` returns stored records and lists malformed historical rows
+in `skipped_records`. See the
+[Snowball publication rules](../../../../docs/recipes/rl-experiments.md#dashboard-publication)
+for record semantics, retries and publishing pinned controls.
 
 ## Validate and release
 
@@ -59,41 +49,21 @@ From the repository root:
 
 ```bash
 node --check infra/marina/apps/rl_progress/dist/app.js
-uv run pytest infra/marina/apps/rl_progress/tests
+uv run pytest -m integration infra/marina/tests/test_rl_progress.py
 uv run marina validate infra/marina/apps/rl_progress
 uv run marina release infra/marina/apps/rl_progress --local --json
 ```
 
-Check preset and hardware filtering, graph point links, cold-loaded run hash links,
-coverage exclusions, and the detail dialog's scrolling body, close control, Escape,
+Check cold-loaded run and attempt hash links, refresh after repeat publication,
+and the detail dialog's scrolling body, close control, Escape,
 and backdrop dismissal. Stop the local stack with Ctrl-C.
+
+The `Marin - Release RL Progress` workflow runs manually from main, with inspection as its default. The `rl-progress` CI job runs the packaged API and `marina journey rl_progress` browser owner.
+
+Deploy a Marina runtime containing `finestore.rl.rl_progress` before releasing the app package.
 
 For production, follow [Marina's release procedure](../../README.md). Inspect the
 current private revision, then release with its exact `--base-version`. Merging
 source does not publish it. Verify the deployed assets, selected revision and all
 stored records after release. Do not change access mode or rewrite historical
 results as part of a frontend update.
-
-## Import completed Quick RL attempts
-
-The Quick RL coordinator registers each native attempt in the regional CoreWeave
-dashboard inbox before starting SkyRL. The scheduled GitHub Actions workflow
-`marin-quick-rl-dashboard.yaml` calls the private app's `POST api/sync` every
-ten minutes. It uses the existing main-branch Marina deployment identity.
-Marina reads the small registrations and reports with its CoreWeave credentials
-and looks up coordinator timestamps through its existing VPC connection to Iris.
-It imports terminal attempts by their native keys. A repeated import leaves
-the existing snapshot intact. A failed import remains eligible on the next tick.
-
-The dashboard prefers the trainer's `elapsed_excluding_eval_seconds` from the
-attempt's `trainer_timing.json` in CoreWeave. It falls back to coordinator wall time minus both
-validation durations, then to unadjusted coordinator wall time. The timing
-definition is part of the frontier comparison key. Runs with only unadjusted
-wall time or mismatched evaluation identities stay unranked. Historical rows
-retain their original timing and evaluation groups.
-
-Run names and chart points open a separate grader page for the selected native
-attempt. The page uses the imported grader report, including per-environment
-success rates, verifier coverage, failure counts, and latency for training and
-evaluation. Failed attempts show any report they collected before termination.
-Historical attempts without a report show an empty state.

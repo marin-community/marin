@@ -83,6 +83,7 @@ ENDPOINT_BASE_NAME = "nccl-probe"
 
 NCCL_VERSION_RE = re.compile(r"NCCL version ([0-9.]+)")
 TRANSPORT_RE = re.compile(r"via (NET/(?:IB|Socket)\S*|NET/\S+)")
+IB_DEVICE_SELECTION_RE = re.compile(r"\bNET/IB\s*:\s*Using\b")
 
 DEFAULT_SOCKET_IFNAME = "^ibs,ibp,lo,docker,veth,cilium,lxc"
 
@@ -104,6 +105,7 @@ class NcclCensus:
 
     nccl_version: str
     transports: list[str]
+    ib_device_lines: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -164,9 +166,10 @@ def build_variants(extra_env: dict[str, str] | None = None) -> list[Variant]:
 
 
 def parse_nccl_census(lines: list[str]) -> NcclCensus:
-    """Extract the NCCL version and selected transports from NCCL INFO output."""
+    """Extract the version, transports, and InfiniBand device selection from NCCL INFO output."""
     version = ""
     transports: list[str] = []
+    ib_device_lines: list[str] = []
     for line in lines:
         if not version:
             match = NCCL_VERSION_RE.search(line)
@@ -175,7 +178,9 @@ def parse_nccl_census(lines: list[str]) -> NcclCensus:
         match = TRANSPORT_RE.search(line)
         if match and match.group(1) not in transports:
             transports.append(match.group(1))
-    return NcclCensus(nccl_version=version, transports=transports)
+        if IB_DEVICE_SELECTION_RE.search(line) and line not in ib_device_lines:
+            ib_device_lines.append(line)
+    return NcclCensus(nccl_version=version, transports=transports, ib_device_lines=ib_device_lines)
 
 
 def allocate_port_block(count: int) -> int:
@@ -415,6 +420,7 @@ def asdict_without_worker_noise(rank: RankResult) -> dict:
         "worker": rank.worker,
         "nccl_version": rank.census.nccl_version,
         "transports": rank.census.transports,
+        "ib_device_lines": rank.census.ib_device_lines,
     }
 
 

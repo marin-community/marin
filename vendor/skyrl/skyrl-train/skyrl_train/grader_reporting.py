@@ -11,6 +11,7 @@ from statistics import mean
 from typing import Literal, TypedDict
 
 import numpy as np
+from finestore.rl.rl_progress import GRADER_REPORT_FILENAME
 from marinskyrl.resource_locator import join_resource_path
 from rolloutengine.models import RolloutOperation
 from skyrl_gym.verification import VerificationStatus
@@ -122,12 +123,12 @@ class GraderStats:
         return rows
 
 
-type GraderReportSection = Literal["training", "evaluation", "evaluation_metadata", "evaluation_duration_seconds"]
+type GraderReportSection = Literal["training", "evaluation", "evaluation_duration_seconds"]
 
 
 def write_grader_report(export_path: str, key: str, sections: Mapping[GraderReportSection, object]) -> None:
     """Update the run report for one evaluation step or training attempt."""
-    path = join_resource_path(export_path, "grader_report.json")
+    path = join_resource_path(export_path, GRADER_REPORT_FILENAME)
     try:
         report = json.loads(io.read_bytes(path))
     except FileNotFoundError:
