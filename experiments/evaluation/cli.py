@@ -230,9 +230,11 @@ def cli() -> None:
 @click.option(
     "--task-evidence",
     type=click.Choice([mode.value for mode in TaskEvidence]),
-    default=TaskEvidence.EMBEDDED.value,
-    show_default=True,
-    help="What curated attempt evidence keeps of each task: a corpus reference, or a full copy with hidden tests.",
+    default=None,
+    help=(
+        "What curated attempt evidence keeps of each task: a corpus reference, or a full copy with hidden tests. "
+        "Default: what the benchmark declares, embedded unless it declares reference."
+    ),
 )
 @click.option(
     "--version",
@@ -295,7 +297,7 @@ def launch(
     max_concurrent: int,
     instances: int,
     seed: int | None,
-    task_evidence: str,
+    task_evidence: str | None,
     version: str | None,
     description: str | None,
     resume_results_path: str | None,
@@ -340,7 +342,7 @@ def launch(
         max_concurrent=max_concurrent,
         instances=instances,
         seed=seed,
-        task_evidence=TaskEvidence(task_evidence),
+        task_evidence=TaskEvidence(task_evidence) if task_evidence is not None else None,
         records_prefix=records_prefix,
         submission_cluster=EVALUATION_CONTROLLER_CLUSTER,
         federated_cluster=federated_cluster,

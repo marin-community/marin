@@ -27,7 +27,7 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 
 from experiments.evaluation.catalog import evaluation_benchmarks
-from experiments.evaluation.preparation import prepare_evaluation
+from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.config import PipelineOptions
 
@@ -99,11 +99,20 @@ def corpus_steps(selection: ResolvedEvaluationSelection, runtime: CampaignRuntim
     return tuple(prepare_evaluation(source, options) for source in sources)
 
 
+def selection_corpora(selection: EvaluationSelection) -> tuple[EvaluationCorpusRecipe, ...]:
+    sources = evaluation_benchmarks()[selection.benchmark].resolve(selection.protocol, selection.num_fewshot)
+    return tuple(source.config for source in sources if source.config is not None)
+
+
 def requires_judge(selection: EvaluationSelection) -> bool:
-    return any(
-        source.config is not None and source.config.protocol.requires_judge
-        for source in evaluation_benchmarks()[selection.benchmark].resolve(selection.protocol, selection.num_fewshot)
-    )
+    return any(corpus.protocol.requires_judge for corpus in selection_corpora(selection))
+
+
+def declared_task_evidence(selection: EvaluationSelection) -> TaskEvidence:
+    """Reference when any of the selection's corpora declares it, else embedded."""
+    if any(corpus.task_evidence is TaskEvidence.REFERENCE for corpus in selection_corpora(selection)):
+        return TaskEvidence.REFERENCE
+    return TaskEvidence.EMBEDDED
 
 
 def corpus_key(step: ArtifactStep) -> str:
@@ -117,9 +126,12 @@ def settings_for(
     limit: int | None,
     seed: int | None,
     default_seed: int | None,
-    task_evidence: TaskEvidence,
+    task_evidence: TaskEvidence | None,
 ) -> CuratedSettings:
-    """Resolve run settings; the seed is the launch seed, else the selection's, else ``default_seed``."""
+    """Resolve run settings; the seed is the launch seed, else the selection's, else ``default_seed``.
+
+    Task evidence is the launch's choice, else the one the selection's corpora declare.
+    """
     if model.effective_tokenizer_revision is None:
         raise ValueError("Curated evaluation requires an explicit tokenizer revision")
     run = selection.run
@@ -143,7 +155,7 @@ def settings_for(
         source_limit=limit if limit is not None else run.limit,
         seed=explicit_seed if explicit_seed is not None else default_seed,
         judge=run.judge,
-        task_evidence=task_evidence,
+        task_evidence=task_evidence if task_evidence is not None else declared_task_evidence(selection),
     )
 
 
