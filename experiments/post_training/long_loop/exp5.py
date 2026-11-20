@@ -4,7 +4,7 @@
 """Resolve the held Exp5 setup with R1 SFT parallelism and special-token rates.
 
 The 2026-11-20 user decision restores R1's sqrt(32) token multiplier,
-reversing the earlier 1.0 ruling, and adds 30 warmup steps within 360 updates.
+reversing the earlier 1.0 ruling, and adds 30 warmup steps within 746 updates.
 OpenResearcher's reserved share still prevents submission.
 """
 

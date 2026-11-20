@@ -313,8 +313,7 @@ def _round_spec(recipe: dict, **sft_overrides) -> RoundSpec:
     )
 
 
-def _annealed_recipe(recipe: dict, **schedule_overrides) -> dict:
-    updates = 360
+def _annealed_recipe(recipe: dict, *, updates: int = 360, **schedule_overrides) -> dict:
     recipe["stop_after_steps"] = updates
     recipe["trainer"]["num_train_steps"] = updates
     recipe["optimizer_schedule"] = {
@@ -342,13 +341,21 @@ def test_round_sft_spec_holds_the_ruled_multiplier_by_construction(production_re
     assert override.snowball_sft.special_token_lr_multiplier == 1.0
 
 
-def test_round_sft_spec_warmup_reaches_peak_then_decays_through_the_last_update(production_recipe):
-    round_spec = _round_spec(production_recipe, warmup_steps=30)
-    recipe = _annealed_recipe(production_recipe, warmup=30, decay=330)
+@pytest.mark.parametrize(
+    "updates,expected_ratios",
+    [
+        (360, {0: 0, 15: 0.5, 30: 1, 180: 0.5909090909090909, 359: 0.10272727272727272}),
+        (746, {0: 0, 30: 1, 373: 0.5688547486033519, 745: 0.10125698324022347}),
+    ],
+)
+def test_round_sft_spec_warmup_reaches_peak_then_decays_through_the_last_update(
+    production_recipe, updates, expected_ratios
+):
+    round_spec = _round_spec(production_recipe, updates=updates, warmup_steps=30)
+    recipe = _annealed_recipe(production_recipe, updates=updates, warmup=30, decay=updates - 30)
     spec = round_sft_spec(round_spec, "round-test/sft", "fixture", recipe)
     receipt = whole_run_lr_receipt(spec, warmup_steps=round_spec.sft.warmup_steps)
     samples = {sample["optimizer_update_index"]: sample["learning_rates"] for sample in receipt["samples"]}
-    expected_ratios = {0: 0, 15: 0.5, 30: 1, 180: 0.5909090909090909, 359: 0.10272727272727272}
     for index, ratio in expected_ratios.items():
         assert samples[index]["muonh"] == pytest.approx(5e-5 * ratio, rel=1e-6)
         assert samples[index]["adam"] == pytest.approx(5e-5 * 3 / 13 * ratio, rel=1e-6)
