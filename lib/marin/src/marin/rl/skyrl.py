@@ -81,8 +81,7 @@ def validate_megatron_geometry(geometry: MegatronGeometry, *, role: str, num_gpu
     # (ETP, EP, expert-DP, PP) grids. CP ranks also participate in the expert grid.
     if num_gpus % (tp * pp * cp) or num_gpus % (etp * ep * pp):
         raise ValueError(
-            f"Megatron {role} has {num_gpus} GPUs but requires {sizes}; "
-            "GPUs must be divisible by TP*PP*CP and ETP*EP*PP"
+            f"Megatron {role} has {num_gpus} GPUs but requires {sizes}; GPUs must be divisible by TP*PP*CP and ETP*EP*PP"
         )
 
 
@@ -883,6 +882,7 @@ def _launch_config_yaml(
     execution: IrisSkyRLExecution,
     *,
     export_hf: bool,
+    validate_model_uri: bool,
     run_id: str,
     attempt_id: str,
     model: ResolvedModelLocator,
@@ -898,7 +898,7 @@ def _launch_config_yaml(
         for callback in cast(list[dict[str, object]], callbacks):
             if callback["type"] == "best_checkpoint":
                 declared_model = callback.get("initial_model_uri")
-                if declared_model not in (None, "model-input", model.uri):
+                if validate_model_uri and declared_model not in (None, "model-input", model.uri):
                     raise ValueError("best_checkpoint.initial_model_uri disagrees with the adopted model")
                 callback["initial_model_uri"] = model.uri
     num_nodes = spec.topology.num_nodes
@@ -1057,6 +1057,7 @@ def skyrl_step(
                 spec,
                 execution,
                 export_hf=export_hf,
+                validate_model_uri=not ctx.is_fingerprint,
                 run_id=run_id,
                 attempt_id=attempt_id,
                 model=model,

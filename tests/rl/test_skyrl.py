@@ -1060,5 +1060,19 @@ def test_initial_selection_model_cannot_silently_override_the_adopted_checkpoint
     spec = _spec()
     recipe = yaml.safe_load(spec.config_yaml)
     recipe["trainer"]["callbacks"] = [{"type": "best_checkpoint", "initial_model_uri": "s3://other/baseline"}]
+    step = skyrl_step(dataclasses.replace(spec, config_yaml=yaml.safe_dump(recipe)), _execution())
     with pytest.raises(ValueError):
-        skyrl_step(dataclasses.replace(spec, config_yaml=yaml.safe_dump(recipe)), _execution())
+        materialized_config(step, prefix="s3://marin-us-east-08a")
+
+
+def test_initial_selection_model_accepts_the_concrete_adopted_checkpoint():
+    spec = _spec()
+    recipe = yaml.safe_load(spec.config_yaml)
+    recipe["trainer"]["callbacks"] = [
+        {"type": "best_checkpoint", "initial_model_uri": "s3://test/iceball-sft/hf/global_step-32"}
+    ]
+    step = skyrl_step(dataclasses.replace(spec, config_yaml=yaml.safe_dump(recipe)), _execution())
+    step.lower()
+    config = materialized_config(step, prefix="s3://marin-us-east-08a")
+    callback = yaml.safe_load(config.launch_config_yaml)["skyrl"]["trainer"]["callbacks"][0]
+    assert callback["initial_model_uri"] == "s3://test/iceball-sft/hf/global_step-32"
