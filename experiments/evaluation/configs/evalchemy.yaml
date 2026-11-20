@@ -53,7 +53,7 @@ evaluations:
       - gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest
   econevals-dwa:
     benchmark: econevals-synthetic-dwa
-    run:
+    run: &econevals_judge
       judge:
         deployment: together
         models:
@@ -65,88 +65,25 @@ evaluations:
       - gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest
   econevals-occupation:
     benchmark: econevals-synthetic-occupation
-    run:
-      judge:
-        deployment: together
-        models:
-          openai/gpt-oss-120b: provider-managed:openai/gpt-oss-120b
-        default_model: openai/gpt-oss-120b
-      judge_endpoint: https://api.together.xyz/v1
-      judge_api_key:
-      - env:TOGETHER_API_KEY
-      - gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest
+    run: *econevals_judge
   econevals-dwa-o3:
     benchmark: econevals-synthetic-dwa-o3
-    run:
-      judge:
-        deployment: together
-        models:
-          openai/gpt-oss-120b: provider-managed:openai/gpt-oss-120b
-        default_model: openai/gpt-oss-120b
-      judge_endpoint: https://api.together.xyz/v1
-      judge_api_key:
-      - env:TOGETHER_API_KEY
-      - gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest
+    run: *econevals_judge
   econevals-occupation-o3:
     benchmark: econevals-synthetic-occupation-o3
-    run:
-      judge:
-        deployment: together
-        models:
-          openai/gpt-oss-120b: provider-managed:openai/gpt-oss-120b
-        default_model: openai/gpt-oss-120b
-      judge_endpoint: https://api.together.xyz/v1
-      judge_api_key:
-      - env:TOGETHER_API_KEY
-      - gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest
+    run: *econevals_judge
   econevals-dwa-sampled:
     benchmark: econevals-synthetic-dwa-sampled
-    run:
-      judge:
-        deployment: together
-        models:
-          openai/gpt-oss-120b: provider-managed:openai/gpt-oss-120b
-        default_model: openai/gpt-oss-120b
-      judge_endpoint: https://api.together.xyz/v1
-      judge_api_key:
-      - env:TOGETHER_API_KEY
-      - gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest
+    run: *econevals_judge
   econevals-occupation-sampled:
     benchmark: econevals-synthetic-occupation-sampled
-    run:
-      judge:
-        deployment: together
-        models:
-          openai/gpt-oss-120b: provider-managed:openai/gpt-oss-120b
-        default_model: openai/gpt-oss-120b
-      judge_endpoint: https://api.together.xyz/v1
-      judge_api_key:
-      - env:TOGETHER_API_KEY
-      - gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest
+    run: *econevals_judge
   econevals-dwa-sampled-o3:
     benchmark: econevals-synthetic-dwa-sampled-o3
-    run:
-      judge:
-        deployment: together
-        models:
-          openai/gpt-oss-120b: provider-managed:openai/gpt-oss-120b
-        default_model: openai/gpt-oss-120b
-      judge_endpoint: https://api.together.xyz/v1
-      judge_api_key:
-      - env:TOGETHER_API_KEY
-      - gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest
+    run: *econevals_judge
   econevals-occupation-sampled-o3:
     benchmark: econevals-synthetic-occupation-sampled-o3
-    run:
-      judge:
-        deployment: together
-        models:
-          openai/gpt-oss-120b: provider-managed:openai/gpt-oss-120b
-        default_model: openai/gpt-oss-120b
-      judge_endpoint: https://api.together.xyz/v1
-      judge_api_key:
-      - env:TOGETHER_API_KEY
-      - gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest
+    run: *econevals_judge
   gsm8k-0shot:
     benchmark: gsm8k
     num_fewshot: 0

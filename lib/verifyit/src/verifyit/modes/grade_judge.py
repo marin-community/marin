@@ -219,6 +219,8 @@ def _validate_spec(spec: JudgeSpec) -> _ValidatedJudgeSpec:
         _validate_label_spec(spec, references)
     if spec.rubric == RUBRIC_PAIRWISE:
         _validate_pairwise_spec(spec)
+    elif spec.label_weights or spec.verdict_patterns:
+        raise InvalidTask("label weights and verdict patterns apply only to pairwise judges")
     for budget in (spec.max_completion_tokens, spec.incomplete_retry_tokens):
         if type(budget) is not int or budget < 0:
             raise InvalidTask("judge token budgets must be nonnegative integers")

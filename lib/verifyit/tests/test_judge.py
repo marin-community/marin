@@ -1183,13 +1183,18 @@ def test_pairwise_spec_roundtrips_through_toml():
         {"label_weights": {"A>>>B": 3.0}},
         {"label_weights": {"A>>B": 0.0}},
         {"prompt_template": "A: {answer_a}\nCandidate: {candidate}"},
-        {"label_scores": {"a>b": 1.0}},
         {"references": ("one", "two")},
     ],
 )
 def test_pairwise_rejects_invalid_contracts_before_calling_the_judge(unconfigured_judge, change):
     with pytest.raises(InvalidTask):
         grade_judge.grade_judge_candidate(replace(_pairwise_spec(), **change), "candidate")
+
+
+@pytest.mark.parametrize("change", [{"label_weights": {"PASS": 3.0}}, {"verdict_patterns": (r"\[\[(\w+)\]\]",)}])
+def test_pairwise_only_fields_are_rejected_on_label_judges(unconfigured_judge, change):
+    with pytest.raises(InvalidTask):
+        grade_judge.grade_judge_candidate(_label_spec(**change), "candidate")
 
 
 def test_judge_reply_sends_the_conversation_and_retries_transient_failures(fake_judge, monkeypatch):
