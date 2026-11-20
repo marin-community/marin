@@ -212,7 +212,7 @@ class DaytonaNetworkPolicy:
 
 
 class DaytonaOutputUnavailable(RuntimeError):
-    """A command ran, but its output could not be read back from the sandbox in time."""
+    """A command ran, but its output could not be read back from the sandbox."""
 
 
 class DaytonaMachine:
@@ -319,7 +319,7 @@ class DaytonaMachine:
             raise CommandOutputLost(f"Failed to measure command output: {count.result}")
         match = re.search(rf"(?m)^{COUNT_PREFIX}([0-9]+) ([0-9]+)$", count.result)
         if match is None:
-            raise RuntimeError(f"Invalid command output sizes: {count.result!r}")
+            raise DaytonaOutputUnavailable(f"Invalid command output sizes: {count.result!r}")
 
         stdout_size, stderr_size = map(int, match.groups())
         stdout, stdout_truncated = await self._download_output(stdout_path, stdout_size, limit)

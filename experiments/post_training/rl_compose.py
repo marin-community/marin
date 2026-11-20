@@ -17,6 +17,7 @@ import yaml
 from finestore.rl.strata import MembershipState, SelectionTaskRow, read_selection_manifest
 from finestore.schema import arrow_schema
 from iris.rpc import job_pb2
+from marin.evaluation.eval_env import DAYTONA_TARGET_ENV
 from marin.execution.artifact import Artifact, is_mutable_version, read_record, result_type_name
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, apply
@@ -202,6 +203,9 @@ def apply_settings(config: RecipePatch, settings: tuple[str, ...], preset: Prese
             key.startswith("NCCL_") for key in values.get("extra_env", {})
         ),
         "evaluation requests are fixed by the preset": any(key.startswith("eval_") for key in (*trainer, *generator)),
+        "Harbor evaluation requires generator.enable_http_endpoint": (
+            preset.harbor is not None and generator.get("enable_http_endpoint") is False
+        ),
         "select curated data with --tasks": has("data") and bool(values["data"].keys() - preset.data_settings),
         "use the preset's permitted setting sections": (
             setting_sections is not None and (bool(values.keys() - setting_sections) or has("generator.sampling_params"))
@@ -346,7 +350,10 @@ def _training_config(
             ),
         ),
     )
-    return apply_settings(config, settings, preset)
+    config = apply_settings(config, settings, preset)
+    if preset.harbor is not None:
+        config = config.merge(RecipePatch(generator=sections.Generator(enable_http_endpoint=True)))
+    return config
 
 
 def _refuse_judged(summary: dict, filename: str) -> None:
@@ -466,6 +473,8 @@ def run_step(
     """Bind an RL specification to its declared execution resources."""
     layout = preset.recipe.layout
     required_env = ("WANDB_API_KEY", "WANDB_ENTITY") if wandb_entity else ("WANDB_API_KEY",)
+    if preset.harbor is not None:
+        required_env += (preset.harbor.daytona_api_key_env, DAYTONA_TARGET_ENV)
     return skyrl_step(
         spec,
         IrisSkyRLExecution(
