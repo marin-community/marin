@@ -255,12 +255,19 @@ def test_gpu_job_without_a_complete_export_never_submits_upload(export_run, monk
     assert read_hf_export_request(run.spec.request.checkpoint_path).status is HFExportStatus.PENDING
 
 
-def test_completed_object_store_export_needs_no_job(export_run):
+@pytest.mark.parametrize(
+    ("completed", "expected_events"),
+    [(False, ["gpu", "gpu-finished"]), (True, [])],
+    ids=["fresh", "completed"],
+)
+def test_object_store_export_without_hub_repo_never_submits_publication(export_run, completed, expected_events):
     run = export_run
-    run.save()
+    if completed:
+        run.save()
     spec = replace(run.spec, request=replace(run.spec.request, hf_hub_repo_id=None))
     export_hf_checkpoint.submit_requested_export(spec, ["convert"])
-    assert run.events == []
+    assert run.events == expected_events
+    assert run.submissions == []
     assert read_hf_export_request(spec.request.checkpoint_path).status is HFExportStatus.COMPLETE
 
 
