@@ -88,6 +88,15 @@ def test_local_image_unpack_applies_layers_and_keeps_each_member_private(tmp_pat
     assert first.user == "0:0"
 
 
+def test_local_image_unpack_failure_reports_the_host_diagnostic(tmp_path, layered_oci_image):
+    umoci = tmp_path / "umoci"
+    umoci.write_text("#!/bin/sh\necho 'unpack: setxattr: operation not permitted' >&2\nexit 7\n")
+    umoci.chmod(0o755)
+    with pytest.raises(RuntimeError, match="umoci exited 7: unpack: setxattr: operation not permitted") as error:
+        prepare_local_image(layered_oci_image, tmp_path / "bundle", umoci=umoci)
+    assert isinstance(error.value.__cause__, subprocess.CalledProcessError)
+
+
 @pytest.mark.parametrize("tampering", ["config", "tag", "manifest-path"])
 def test_local_image_rejects_changed_or_invalid_identity_before_unpack(tmp_path, layered_oci_image, tampering):
     image = layered_oci_image

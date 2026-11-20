@@ -56,6 +56,11 @@ def prepare_local_image(image: PreparedImage, directory: Path, *, umoci: Path) -
             f"OCI image preparation requires umoci ({umoci}); install it on the host "
             "or pass LocalMachineFactory(umoci=Path(...))"
         ) from error
+    except subprocess.CalledProcessError as error:
+        raise RuntimeError(
+            f"Could not unpack OCI image {image.manifest_digest}: "
+            f"umoci exited {error.returncode}: {error.stderr.decode(errors='replace').strip()}"
+        ) from error
     metadata = json.loads((directory / "umoci.json").read_text())
     unpacked_digest = metadata["from_descriptor_path"]["descriptor_walk"][-1]["digest"]
     if unpacked_digest != image.manifest_digest:
