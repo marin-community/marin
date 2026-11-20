@@ -188,6 +188,7 @@ class SourceOrigin(StrEnum):
     MIROVERSE = "MiroVerse"
     OPENGCUA = "OpenGCUA"
     PAFITIS = "pafitis"
+    SWE_REBENCH = "SWE-rebench"
 
 
 class DatasetRelease(CatalogRecord):
