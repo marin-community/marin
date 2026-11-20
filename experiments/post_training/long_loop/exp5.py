@@ -4,7 +4,8 @@
 """Resolve the held Exp5 setup with R1 SFT parallelism and special-token rates.
 
 The 2026-11-20 user decision restores R1's sqrt(32) token multiplier,
-reversing the earlier 1.0 ruling, and adds 30 warmup steps within 746 updates.
+reversing the earlier 1.0 ruling. SFT uses a 4750-step safety cap, 30 warmup
+steps and a peak plateau before its remaining-time-triggered cooldown.
 OpenResearcher's reserved share still prevents submission.
 """
 
@@ -16,6 +17,7 @@ from functools import partial
 from pathlib import Path
 
 import click
+import draccus
 from marin.execution.lazy import ArtifactStep
 from marin.rl.cli import rl_build_options
 from marin.rl.curriculum import RlCurriculum
@@ -25,7 +27,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from experiments.post_training.long_loop.__main__ import validate_graph
 from experiments.post_training.long_loop.exp3_production import StoragePin
 from experiments.post_training.long_loop.exp3_recipe import (
-    exp3_controls,
+    SftLrSchedule,
     verified_initializer_model,
     whole_run_lr_receipt,
 )
@@ -145,8 +147,6 @@ def main(round_path: Path, source_revision: str, validation_output: Path) -> Art
     spec = load_round(round_path)
     if not isinstance(spec, RoundSpec) or spec.pools != "exp5-prepared":
         raise click.UsageError("Exp5 setup requires a training round with pools: exp5-prepared")
-    if spec.sft.special_token_lr_multiplier != exp3_controls().special_token_lr_multiplier:
-        raise click.UsageError("Exp5 restores R1's sqrt(32) special-token multiplier; the 1.0 ruling was reversed")
     if context.params["default_version"] != spec.version:
         raise click.UsageError("--version must equal the round's immutable version")
     workspace = Path(__file__).resolve().parents[3]
@@ -185,6 +185,11 @@ def main(round_path: Path, source_revision: str, validation_output: Path) -> Art
             "replaces_parallelism": "CP32/EP8",
             "expert_axis_size": 1,
             "parameter_precision": "Retain FP32 master parameters and BF16 compute; R1 used BF16 parameters",
+            "optimizer_grouping": (
+                "Retain corrected hero-EP grouping (#11639): stacked expert matrices use MuonH, "
+                "RMSNorm scales use Adam, lm_head/output_proj use AdamH; "
+                "R1 instead put experts on Adam and stacked norm scales on MuonH"
+            ),
             "remat_mode": "recompute_all",
             "remat_implementation": "Native Snowball applies jax.checkpoint to every scanned layer",
             "special_token_lr_reason": "Restore R1 sqrt(32); the 2026-11-20 user decision reverses the 1.0 ruling",
@@ -236,8 +241,7 @@ def main(round_path: Path, source_revision: str, validation_output: Path) -> Art
         json.dumps(
             whole_run_lr_receipt(
                 round_sft_spec(spec, f"{spec.name}/sft", spec.version, resolved["sft"]),
-                min_lr_ratio=spec.sft.min_lr_ratio,
-                warmup_steps=spec.sft.warmup_steps,
+                schedule=draccus.decode(SftLrSchedule, resolved["sft"]["optimizer_schedule"]),
             ),
             indent=2,
         )

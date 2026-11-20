@@ -9,6 +9,7 @@ from pathlib import Path
 
 import draccus
 import jax.numpy as jnp
+import jmp
 import pytest
 from fray.types import ResourceConfig
 from iris.rpc.proto_display import priority_band_value
@@ -19,7 +20,7 @@ from marin.execution.lazy import StepContext
 
 from experiments.post_training.long_loop import exp3_production
 from experiments.post_training.long_loop.exp3_production import GEOMETRY, production_sft_recipe, read_data_release
-from experiments.post_training.long_loop.exp3_recipe import exp3_sft_spec, whole_run_lr_receipt
+from experiments.post_training.long_loop.exp3_recipe import SftLrSchedule, exp3_sft_spec, whole_run_lr_receipt
 from experiments.post_training.long_loop.round_runner import load_round
 from experiments.post_training.long_loop.run_spec import resolve_spec
 from experiments.post_training.long_loop.shared_sft import select_shared_sft, shared_sft_spec
@@ -85,13 +86,15 @@ def production_recipe(preview_release, monkeypatch):
     return production_sft_recipe(release, initial_eval_inputs=exp3_production.REFERENCE_INPUTS)
 
 
+@pytest.mark.parametrize("precision", ["p=f32,c=bf16", "p=bf16,c=bf16"])
 @pytest.mark.parametrize("schedule_horizon,warmup_steps", [(None, 0), (360, 0), (360, 30)])
 def test_full_recipe_survives_the_native_worker_boundary_without_smoke_geometry(
-    preview_release, production_recipe, schedule_horizon, warmup_steps
+    preview_release, production_recipe, schedule_horizon, warmup_steps, precision
 ):
     root = preview_release.parent
     release = read_data_release(str(preview_release), require_ready=False)
     recipe = production_recipe
+    recipe["trainer"]["mp"] = precision
     steps = schedule_horizon or 746
     if schedule_horizon is not None:
         recipe["stop_after_steps"] = steps
@@ -127,7 +130,7 @@ def test_full_recipe_survives_the_native_worker_boundary_without_smoke_geometry(
     assert request.timeout.to_seconds() == 72000
     assert config.trainer.training_budget.duration == timedelta(hours=20)
     assert config.trainer.checkpointer.keep_last_temporary_checkpoints == 3
-    assert config.trainer.mp.param_dtype == jnp.float32
+    assert config.trainer.mp == jmp.get_policy(precision)
     assert config.optimizer_num_train_steps == (schedule_horizon or 4750)
     assert config.trainer.seed == config.data_seed == 0
     assert draccus.encode(config.data)["train_weights"] == release.data["train_weights"]
@@ -144,13 +147,14 @@ def test_full_recipe_survives_the_native_worker_boundary_without_smoke_geometry(
                 assert float(scheduler(index)) == pytest.approx(peak * ratio, rel=1e-6)
 
 
-def test_whole_run_preflight_rejects_the_inherited_flat_prefix_and_wrong_decay(production_recipe):
+def test_sft_lr_receipt_rejects_a_mismatch_with_the_declared_schedule(production_recipe):
     spec = exp3_sft_spec("lr-admission", "fixture", production_recipe)
-    with pytest.raises(ValueError, match="horizon must equal num_train_steps"):
-        whole_run_lr_receipt(spec)
+    declared = SftLrSchedule(spec.num_train_steps, 0, spec.num_train_steps, 0.1, "linear")
+    with pytest.raises(ValueError):
+        whole_run_lr_receipt(spec, schedule=declared)
     flat = replace(spec, optimizer_num_train_steps=spec.num_train_steps)
-    with pytest.raises(ValueError, match="entire horizon"):
-        whole_run_lr_receipt(flat)
+    with pytest.raises(ValueError):
+        whole_run_lr_receipt(flat, schedule=declared)
 
 
 @pytest.mark.integration

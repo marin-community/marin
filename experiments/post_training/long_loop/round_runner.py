@@ -28,8 +28,10 @@ from pathlib import Path
 
 import click
 import draccus
+import jmp
 import yaml
 from iris.cluster.client.job_info import get_job_info
+from levanter.training_budget import WallClockCooldown
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep
 from marin.rl.cli import rl_build_options
@@ -52,6 +54,7 @@ from experiments.post_training.long_loop.exp3_production import (
     production_plan,
 )
 from experiments.post_training.long_loop.exp3_recipe import (
+    SftLrSchedule,
     exp3_controls,
     verified_initializer_model,
     whole_run_lr_receipt,
@@ -103,6 +106,9 @@ class RoundSft:
     resources: dict
     special_token_lr_multiplier: float | None = None
     warmup_steps: int = 0
+    lr_schedule: str = "linear"
+    mp: str | None = None
+    wall_clock_cooldown_fraction: float | None = None
 
 
 @dataclass(frozen=True)
@@ -457,11 +463,7 @@ def adopted_round_evaluation(spec: AdoptedHfRound) -> ArtifactStep:
 
 
 def round_sft_spec(round_spec: RoundSpec, name: str, version: str, recipe: dict) -> SFTSpec:
-    """Build the round's SFT spec, carrying the shared learning-rate invariants.
-
-    The special-token rate defaults to 1.0 (R2); a round-level or resolved-section
-    override must agree with the built spec. Whole-run annealing is checked here.
-    """
+    """Bind and verify the round's declared precision, token rates and LR controls."""
     spec = shared_sft_spec(name, version, recipe)
     section_value = recipe.get("special_token_lr_multiplier")
     round_value = round_spec.sft.special_token_lr_multiplier
@@ -482,7 +484,25 @@ def round_sft_spec(round_spec: RoundSpec, name: str, version: str, recipe: dict)
     )
     if spec.snowball_sft.special_token_lr_multiplier != multiplier:
         raise ValueError("Exp round special-token LR multiplier disagrees with its resolved recipe")
-    whole_run_lr_receipt(spec, min_lr_ratio=round_spec.sft.min_lr_ratio, warmup_steps=round_spec.sft.warmup_steps)
+    schedule = draccus.decode(SftLrSchedule, recipe["optimizer_schedule"])
+    if (schedule.warmup, schedule.min_lr_ratio, schedule.lr_schedule) != (
+        round_spec.sft.warmup_steps,
+        round_spec.sft.min_lr_ratio,
+        round_spec.sft.lr_schedule,
+    ):
+        raise ValueError("Resolved schedule differs from the round declarations")
+    if round_spec.sft.mp is not None:
+        if spec.trainer_config is None or spec.trainer_config.mp != jmp.get_policy(round_spec.sft.mp):
+            raise ValueError("Built trainer precision differs from the round declaration")
+    budget = spec.trainer_config.training_budget if spec.trainer_config is not None else None
+    expected_cooldown = (
+        WallClockCooldown(round_spec.sft.wall_clock_cooldown_fraction, round_spec.sft.min_lr_ratio)
+        if round_spec.sft.wall_clock_cooldown_fraction is not None
+        else None
+    )
+    if (budget.cooldown if budget is not None else None) != expected_cooldown:
+        raise ValueError("Built wall-clock cooldown differs from the round declaration")
+    whole_run_lr_receipt(spec, schedule=schedule)
     return spec
 
 
@@ -504,8 +524,19 @@ def round_plan(round_spec: RoundSpec, release, source_revision: str, version: st
         "warmup": round_spec.sft.warmup_steps,
         "decay": updates - round_spec.sft.warmup_steps,
         "min_lr_ratio": round_spec.sft.min_lr_ratio,
-        "lr_schedule": "linear",
+        "lr_schedule": round_spec.sft.lr_schedule,
     }
+    if round_spec.sft.mp is not None:
+        sft["trainer"]["mp"] = round_spec.sft.mp
+    if round_spec.sft.wall_clock_cooldown_fraction is not None:
+        budget = sft["trainer"]["training_budget"]
+        if budget is None:
+            raise ValueError("Declared wall-clock cooldown requires a training budget")
+        budget["cooldown"] = draccus.encode(
+            WallClockCooldown(
+                fraction=round_spec.sft.wall_clock_cooldown_fraction, min_lr_ratio=round_spec.sft.min_lr_ratio
+            )
+        )
     # Record the effective special-token control in the resolved plan only when the
     # round departs from the qualified natural rate; a round at the natural rate keeps
     # the plan identical to the qualified recipe.
@@ -753,8 +784,7 @@ def main(round_path: Path, source_revision: str, validation_output: Path, throug
         json.dumps(
             whole_run_lr_receipt(
                 round_sft_spec(round_spec, f"{round_spec.name}/sft", version, resolved["sft"]),
-                min_lr_ratio=round_spec.sft.min_lr_ratio,
-                warmup_steps=round_spec.sft.warmup_steps,
+                schedule=draccus.decode(SftLrSchedule, resolved["sft"]["optimizer_schedule"]),
             ),
             indent=2,
         )

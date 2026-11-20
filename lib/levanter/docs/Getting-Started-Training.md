@@ -94,7 +94,7 @@ trainer:
 ```
 
 The reserves are explicit operating choices, inside the duration. They do not
-change the optimizer schedule or the maximum update count. Marin's Iris worker
+change the maximum update count. Without a cooldown, they do not change the optimizer schedule. Marin's Iris worker
 binds the deadline to the earliest task execution start. For direct Levanter
 execution, supply `deadline_epoch_seconds` explicitly. A previously bound earlier
 deadline is retained on recovery.
@@ -104,6 +104,30 @@ last checkpoint, waits for its native commit, and writes `completion.json` under
 the telemetry root with the actual update count, checkpoint and stop reason.
 Finalization after the deadline fails the run. The external execution deadline
 still applies; choose reserves from measured update and checkpoint times.
+
+To cool down by remaining wall time, add an explicit control:
+
+```yaml
+trainer:
+  training_budget:
+    duration: 20h
+    finalization_reserve: 40m
+    update_reserve: 10m
+    cooldown:
+      fraction: 0.15
+      min_lr_ratio: 0.1
+```
+
+The cooldown uses the duration minus both reserves. In this example, usable time
+is 19h10m and the final 2h52m30s decreases the update multiplier linearly to 0.1.
+Rank zero broadcasts the multiplier together with its stop decision. It scales
+optimizer updates after moment calculations, so the optimizer's step-based
+schedule (including any warmup) still applies. Use a constant base schedule after
+warmup for a plateau followed by this cooldown. The multiplier is logged as
+`optim/learning_rate_scale`; the completion receipt records the last applied
+value and the completion reader checks that it is within 10% of the minimum.
+The step cap or exhausted data can stop training earlier; an early stop that
+misses the configured minimum fails that completion check.
 
 ### Change Evaluation Parameters
 To change how often the model is evaluated during training, you can use the following command:

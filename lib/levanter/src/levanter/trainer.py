@@ -317,6 +317,7 @@ class Trainer:
         if config.training_budget is not None and config.native_telemetry_root is None:
             raise ValueError("Time-limited training requires an explicit native telemetry root")
         self._completed_updates: int | None = None
+        self._last_learning_rate_scale = 1.0
         self._training_stop_reason: TrainingStopReason | None = None
         self.optimizer = optimizer
         self._raw_loss_function = loss_fn
@@ -468,6 +469,7 @@ class Trainer:
                         maximum_updates=self.num_train_steps,
                         budget=budget,
                         stop_reason=self._training_stop_reason,
+                        final_learning_rate_scale=self._last_learning_rate_scale,
                     )
                 except Exception as e:
                     problems.append(e)
@@ -589,7 +591,7 @@ class Trainer:
     def checkpoint_path(self) -> str:
         return self.checkpoint_search_paths[0]
 
-    def train_step(self, state: S, *batch: X, **batch_kwargs) -> StepInfo[S]:
+    def train_step(self, state: S, *batch: X, learning_rate_scale: Scalar = 1.0, **batch_kwargs) -> StepInfo[S]:
         """
         Performs a single training step.
         """
@@ -597,6 +599,7 @@ class Trainer:
         # so we avoid running them when they're not needed
         # this results in two compiles, but the cost of the second compile is worth it
         hooks_this_time = any((state.step + 1) % h.every == 0 for h in self.hooks.jit_hooks)
+        scale = jnp.asarray(learning_rate_scale, dtype=jnp.float32)
 
         self.hooks.emit_event(ProgressEvent.TRAIN_STEP_STARTED)
         with capture_time() as step_time:
@@ -608,13 +611,16 @@ class Trainer:
             # that GPU host-side step_num timing matches TPU device-side "Steps" semantics.
             with jax.profiler.StepTraceAnnotation("train", step_num=int(state.step)):
                 if hooks_this_time:
-                    result = self._maybe_save_jaxpr("train_step", self._jit_train_step_fn, state, batch, batch_kwargs)
+                    result = self._maybe_save_jaxpr(
+                        "train_step", self._jit_train_step_fn, state, batch, batch_kwargs, scale
+                    )
                 else:
                     result = self._maybe_save_jaxpr(
-                        "train_step_hooks", self._jit_train_step_fn_no_hook, state, batch, batch_kwargs
+                        "train_step_hooks", self._jit_train_step_fn_no_hook, state, batch, batch_kwargs, scale
                     )
 
             loss = result.loss.item()
+            self._last_learning_rate_scale = float(learning_rate_scale)
             if self.config.offload_opt_state:
                 offloaded = move_tree_to_memory_kind(result.new_state.opt_state, memory_kind="pinned_host")
                 jax.block_until_ready(offloaded)
@@ -635,7 +641,11 @@ class Trainer:
                     self.hooks.run_jit_hooks_outside_step(info, result.hook_infos)
 
             # Log metrics from loss function and throughput metrics
-            metrics_to_log = {**result.loss_metrics, "throughput/hook_time": hook_time()}
+            metrics_to_log = {
+                **result.loss_metrics,
+                "throughput/hook_time": hook_time(),
+                "optim/learning_rate_scale": self._last_learning_rate_scale,
+            }
             levanter.tracker.log(metrics_to_log, step=info.step)
 
         return info
@@ -662,7 +672,8 @@ class Trainer:
                 )
 
             with phase(self.journal, "first_step" if is_first_step else "steady_state", step=int(state.step)):
-                info = self.train_step(state, example)
+                scale = iter_data.learning_rate_scale if isinstance(iter_data, TimeLimitedIterator) else 1.0
+                info = self.train_step(state, example, learning_rate_scale=scale)
             state = info.state
 
             if is_first_step:
@@ -831,7 +842,7 @@ class Trainer:
             donate_args=(True,),
         )
 
-    def _train_step(self, state: S, batch, batch_kwargs, _no_hooks=False) -> TrainStepResult[S]:
+    def _train_step(self, state: S, batch, batch_kwargs, learning_rate_scale, _no_hooks=False) -> TrainStepResult[S]:
         key, new_key = jax.random.split(state.training_key)
         model = inference_mode(state.model, False)
 
@@ -850,7 +861,9 @@ class Trainer:
                 loss_for_opt, _metrics = result
                 return loss_for_opt.scalar()
 
-        new_state, updates = state.take_step(grads, obj_fun=obj_fun, loss=loss, key=new_key)
+        new_state, updates = state.take_step(
+            grads, obj_fun=obj_fun, loss=loss, key=new_key, learning_rate_scale=learning_rate_scale
+        )
         new_state = hax.shard(new_state, self.parameter_axis_mapping)
 
         hook_infos = None

@@ -130,6 +130,7 @@ class TrainerState(eqx.Module, Generic[M]):
         obj_fun: Callable[[M], Scalar] | None = None,
         loss: float | None = None,
         key: PRNGKeyArray,
+        learning_rate_scale: Scalar = 1.0,
     ) -> tuple[S, M]:
         assert isinstance(self, TrainerState)  # make pyrefly happy
         model, opt_state, updates = take_train_step(
@@ -140,6 +141,7 @@ class TrainerState(eqx.Module, Generic[M]):
             obj_fun=obj_fun,
             loss=loss,
             is_trainable=self.is_trainable,
+            learning_rate_scale=learning_rate_scale,
         )
 
         if self.model_averaging is not None:
@@ -234,6 +236,7 @@ def take_train_step(
     obj_fun: Optional[Callable[[M], Scalar]] = None,
     loss: Optional[float] = None,
     is_trainable: FilterTree = True,
+    learning_rate_scale: Scalar = 1.0,
 ) -> tuple[M, OptState, M]:
     """
 
@@ -255,6 +258,7 @@ def take_train_step(
     _, trainable_model = partition_for_grad_overwrite(trainable_model)
 
     updates, opt_state = optimizer.update(train_grads, opt_state, params=trainable_model, obj_fn=obj_fun, loss=loss)
+    updates = jax.tree.map(lambda update: update * jnp.asarray(learning_rate_scale, dtype=update.dtype), updates)
     model = apply_updates(model, updates, overwrites)
 
     return model, opt_state, updates

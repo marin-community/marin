@@ -50,6 +50,7 @@ def test_time_bound_selects_the_actual_final_checkpoint_without_shortening_the_m
     telemetry = tmp_path / "telemetry"
     telemetry.mkdir()
     record_training_completion(
+        final_learning_rate_scale=1.0,
         telemetry_root=str(telemetry),
         checkpoint=checkpoint,
         completed_updates=2,

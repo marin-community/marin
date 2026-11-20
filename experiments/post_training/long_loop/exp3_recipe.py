@@ -6,10 +6,9 @@
 import hashlib
 import json
 import math
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 import draccus
-import jax.numpy as jnp
 from fray.types import GpuConfig, ResourceConfig
 from iris.rpc.proto_display import priority_band_value
 from levanter.data.text.datasets import LmDataConfig
@@ -18,6 +17,7 @@ from levanter.models.snowball import SnowballConfig
 from levanter.models.snowball_sft import SnowballSftConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
+from levanter.training_budget import budget_learning_rate_scale
 from levanter.utils.mesh import MeshConfig
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.fsutil.verified_copy import COMPLETION_MANIFEST
@@ -81,40 +81,71 @@ def exp3_controls() -> SnowballSftConfig:
     return SnowballSftConfig(TOKEN_IDS, ANCHOR_IDS, math.sqrt(32), True, True)
 
 
-def whole_run_lr_receipt(spec: SFTSpec, *, min_lr_ratio: float = 0.1, warmup_steps: int = 0) -> dict:
-    """Validate whole-run annealing against the optimizer's actual update indices."""
-    horizon = spec.optimizer_num_train_steps
-    if horizon != spec.num_train_steps or spec.trainer_config is None or horizon != spec.trainer_config.num_train_steps:
-        raise ValueError("SFT optimizer schedule horizon must equal num_train_steps")
-    assert horizon is not None
+@dataclass(frozen=True)
+class SftLrSchedule:
+    horizon: int
+    warmup: int
+    decay: int
+    min_lr_ratio: float
+    lr_schedule: str
+
+
+def whole_run_lr_receipt(spec: SFTSpec, *, schedule: SftLrSchedule) -> dict:
+    """Verify declared optimizer fields and sample the configured LR controls."""
+    if spec.trainer_config is None or spec.trainer_config.num_train_steps != spec.num_train_steps:
+        raise ValueError("SFT trainer maximum differs from the declared update maximum")
+    if spec.optimizer_num_train_steps != schedule.horizon:
+        raise ValueError("SFT optimizer horizon differs from its declared schedule")
     optimizer = spec.optimizer
     if not isinstance(optimizer, GrugMoeMuonHConfig):
-        raise ValueError("Whole-run SFT annealing requires the qualified GrugMoeMuonH optimizer")
-    if not 0 <= warmup_steps < horizon or optimizer.warmup != warmup_steps:
-        raise ValueError("SFT optimizer warmup must equal the configured warmup within its horizon")
-    if optimizer.decay != horizon - warmup_steps or optimizer.lr_schedule != "linear":
-        raise ValueError("SFT requires linear decay across the entire horizon after configured warmup")
-    if optimizer.min_lr_ratio != min_lr_ratio:
-        raise ValueError(f"SFT requires min_lr_ratio={min_lr_ratio}")
+        raise ValueError("This two-group SFT receipt requires the declared GrugMoeMuonH optimizer")
+    actual = (optimizer.warmup, optimizer.decay, optimizer.min_lr_ratio, optimizer.lr_schedule)
+    declared = (schedule.warmup, schedule.decay, schedule.min_lr_ratio, schedule.lr_schedule)
+    if actual != declared:
+        raise ValueError("SFT optimizer settings differ from the declared LR schedule")
+    steps = spec.num_train_steps
+    indices = {min(int(steps * fraction), steps - 1) for fraction in (0, 0.25, 0.5, 0.75, 1)}
+    indices.update((min(schedule.warmup // 2, steps - 1), min(schedule.warmup, steps - 1)))
     samples = []
-    indices = {min(int(horizon * fraction), horizon - 1) for fraction in (0, 0.25, 0.5, 0.75, 1)}
-    indices.update((warmup_steps // 2, warmup_steps))
     for index in sorted(indices):
         rates = {}
         for name, peak in (("muonh", optimizer.learning_rate), ("adam", optimizer.adam_lr)):
-            schedule = optimizer.lr_scheduler(horizon, override_lr=peak)
-            rates[name] = float(schedule(index))
-            floor = peak * min_lr_ratio
-            if index == horizon - 1 and abs(rates[name] - floor) > floor * 0.1:
-                raise ValueError(f"SFT final-update {name} LR is not within 10% of min_lr")
-        samples.append({"fraction": index / horizon, "optimizer_update_index": index, "learning_rates": rates})
-    return {
-        "num_train_steps": horizon,
-        "optimizer_num_train_steps": horizon,
-        "warmup_steps": warmup_steps,
-        "decay_steps": horizon - warmup_steps,
+            curve = optimizer.lr_scheduler(schedule.horizon, override_lr=peak)
+            rates[name] = float(curve(index))
+            if index == steps - 1 and schedule.lr_schedule != "constant" and steps >= schedule.horizon:
+                floor = peak * schedule.min_lr_ratio
+                if abs(rates[name] - floor) > max(floor * 0.1, 1e-12):
+                    raise ValueError(f"SFT declared anneal final-update {name} LR is not within 10% of min_lr")
+        samples.append({"fraction": index / steps, "optimizer_update_index": index, "learning_rates": rates})
+    receipt = {
+        "num_train_steps": steps,
+        "optimizer_num_train_steps": schedule.horizon,
+        "warmup_steps": schedule.warmup,
+        "decay_steps": schedule.decay,
+        "lr_schedule": schedule.lr_schedule,
         "samples": samples,
     }
+    budget = spec.trainer_config.training_budget
+    if budget is not None and budget.cooldown is not None:
+        usable = budget.training_duration.total_seconds()
+        window = usable * budget.cooldown.fraction
+        receipt["wall_clock_cooldown"] = {
+            "duration_seconds": budget.duration.total_seconds(),
+            "usable_training_seconds": usable,
+            "cooldown_seconds": window,
+            "start_after_seconds": usable - window,
+            "fraction": budget.cooldown.fraction,
+            "min_lr_ratio": budget.cooldown.min_lr_ratio,
+            "samples": [
+                {
+                    "remaining_training_seconds": remaining,
+                    "learning_rate_scale": budget_learning_rate_scale(budget, remaining),
+                }
+                for remaining in (usable, window, window / 2, 0)
+            ],
+            "final_update_check": "Runtime completion checks the actual applied LR scale against the declared minimum",
+        }
+    return receipt
 
 
 def exp3_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
@@ -137,8 +168,6 @@ def exp3_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
     if trainer.training_budget is not None:
         if trainer.training_budget.duration.total_seconds() != recipe["task_timeout_seconds"]:
             raise ValueError("Exp3 training duration must match its unchanged hard execution deadline")
-    if trainer.mp.param_dtype != jnp.float32 or trainer.mp.compute_dtype != jnp.bfloat16:
-        raise ValueError("Exp3 requires retained FP32 parameters and BF16 computation")
     if not recipe["wandb_entity"] or not recipe["wandb_project"]:
         raise ValueError("Exp3 requires an explicit W&B entity and project")
     if recipe["packing_cap"] != 256:
@@ -192,17 +221,17 @@ def exp3_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
     )
     if "optimizer_schedule" not in recipe:
         return spec
-    schedule = recipe["optimizer_schedule"]
+    schedule = draccus.decode(SftLrSchedule, recipe["optimizer_schedule"])
     spec = replace(
         spec,
         optimizer=replace(
             exp3_optimizer(weight_decay=recipe["weight_decay"]),
-            warmup=schedule["warmup"],
-            decay=schedule["decay"],
-            min_lr_ratio=schedule["min_lr_ratio"],
-            lr_schedule=schedule["lr_schedule"],
+            warmup=schedule.warmup,
+            decay=schedule.decay,
+            min_lr_ratio=schedule.min_lr_ratio,
+            lr_schedule=schedule.lr_schedule,
         ),
-        optimizer_num_train_steps=schedule["horizon"],
+        optimizer_num_train_steps=schedule.horizon,
     )
-    whole_run_lr_receipt(spec, min_lr_ratio=schedule["min_lr_ratio"], warmup_steps=schedule["warmup"])
+    whole_run_lr_receipt(spec, schedule=schedule)
     return spec

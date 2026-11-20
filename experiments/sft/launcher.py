@@ -223,7 +223,7 @@ def _levanter_train_config(
     only its class matters; native init (``initialize_model_from_checkpoint_path``) does not re-derive
     it, so it must be the architecture the checkpoint was saved with.
     """
-    return TrainLmConfig(
+    config = TrainLmConfig(
         data=data_config,
         model=model_config,
         optimizer=spec.optimizer,
@@ -256,6 +256,10 @@ def _levanter_train_config(
         evaluation_data=spec.evaluation_data,
         initial_eval_match=spec.initial_eval_match,
     )
+
+    if spec.trainer_config is not None and config.trainer.mp != spec.trainer_config.mp:
+        raise ValueError("Native worker precision differs from the declared trainer policy")
+    return config
 
 
 def _levanter_pod_config(

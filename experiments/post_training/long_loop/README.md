@@ -36,18 +36,26 @@ source requires a newer task schema and the `openresearcher-bm25:v1` provider;
 it is excluded from the prepared pool. `exp5.py` unconditionally refuses `--run`
 before resolving any artifacts.
 
-SFT uses the Exp1/R1 mesh/sharding block from `9662fdba:specs/sft.yaml`: context 8
-inside each node and data replication across 32 nodes, replacing CP32/EP8. The
-special-token multiplier is restored to `5.656854249492381`; the earlier 1.0
-ruling is superseded by the 2026-11-20 decision. The 746-update optimizer horizon includes 30 linear warmup
-steps and 716 linear decay steps to a minimum LR ratio of 0.1. Native Snowball
-recomputes each layer under `jax.checkpoint`, matching R1's `recompute_all` policy.
-An explicit size-one `expert` axis preserves R1 parallelism and supplies the
-axis name required by native Snowball partition specs. GPU memory fit remains
-unmeasured. At batch 256 and context 262,144, the 746-update maximum is
-50,063,212,544 packed positions. The inherited 20-hour deadline and training
-budget remain. At the cited R1 estimate of about 21 hours for all 746 updates,
-the unchanged deadline can stop training before update 746.
+SFT uses Exp1/R1's context-8 mesh across 32 nodes, with an explicit size-one
+expert axis for native Snowball. The declared special-token multiplier is
+`5.656854249492381`. FP32 master parameters and BF16 compute are retained;
+R1's frozen spec used BF16 parameters. Native Snowball recomputes each scanned
+layer under `jax.checkpoint` (`recompute_all`). GPU memory fit is unmeasured.
+The corrected hero-EP optimizer grouping (#11639) is retained: stacked expert
+matrices use MuonH, RMSNorm scales use Adam, and `lm_head`/`output_proj` use AdamH.
+This differs from R1's generic-file grouping (experts on Adam, stacked norm
+scales on MuonH).
+
+The 4,750-update limit is a safety cap. The 20-hour wall-clock budget terminates
+training, reserving 40 minutes for finalization and 10 minutes for an update.
+After a 30-step linear warmup the base optimizer stays at peak LR. A rank-zero
+monotonic-clock controller broadcasts an update multiplier that decreases
+linearly from 1 to 0.1 over the final 15% of usable training time. With these
+reserves, usable time is 19h10m, cooldown starts at 16h17m30s and lasts 2h52m30s.
+It scales both optimizer groups without changing their moment calculations.
+Completion records and checks the final applied multiplier; telemetry logs it
+as `optim/learning_rate_scale`. These settings are experiment declarations,
+not restrictions on other schedule, precision or special-token choices.
 
 Source revisions are recorded in [the curriculum](../task_curation/exp5_curriculum.py).
 The science inputs are `rqa`, `so`, `syn_mcq` and `vendor` at revision
@@ -63,7 +71,7 @@ be submitted. The launch hold also preserves the user's Exp4 evaluation review.
 uv run python -m experiments.post_training.long_loop.exp5 \
   --round experiments/post_training/long_loop/rounds/exp5-setup.yaml \
   --source-revision "$(git rev-parse HEAD)" \
-  --version 2026.11.20.94 \
+  --version 2026.11.20.95 \
   --validation-output /tmp/long-loop-exp5-setup
 ```
 

@@ -10,6 +10,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 import click
+import draccus
 from iris.cluster.client.job_info import get_job_info
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import OUT, ArtifactStep, apply
@@ -29,7 +30,11 @@ from experiments.post_training.long_loop.exp3_production import (
     baseline_files,
     production_plan,
 )
-from experiments.post_training.long_loop.exp3_recipe import verified_initializer_model, whole_run_lr_receipt
+from experiments.post_training.long_loop.exp3_recipe import (
+    SftLrSchedule,
+    verified_initializer_model,
+    whole_run_lr_receipt,
+)
 from experiments.post_training.long_loop.exp3_rl_restart import restart_recipe
 from experiments.post_training.long_loop.exp4_data import NEMOTRON_SOURCE, pool_steps
 from experiments.post_training.long_loop.optimizer_admission import optimizer_group_receipt
@@ -285,7 +290,11 @@ def main(
     )
     (validation_output / "sft-lr-schedule.json").write_text(
         json.dumps(
-            whole_run_lr_receipt(shared_sft_spec("long-loop-exp4/round4/sft", version, resolved["sft"])), indent=2
+            whole_run_lr_receipt(
+                shared_sft_spec("long-loop-exp4/round4/sft", version, resolved["sft"]),
+                schedule=draccus.decode(SftLrSchedule, resolved["sft"]["optimizer_schedule"]),
+            ),
+            indent=2,
         )
     )
     model = verified_initializer_model(INITIALIZER_RECEIPT, INITIALIZER_SHA256)

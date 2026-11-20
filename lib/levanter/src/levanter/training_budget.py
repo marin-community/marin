@@ -5,7 +5,7 @@
 
 import json
 from collections.abc import Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from time import monotonic, time
@@ -27,6 +27,18 @@ class TrainingStopReason(StrEnum):
 
 
 @dataclass(frozen=True)
+class WallClockCooldown:
+    """Linear LR cooldown over the final fraction of usable training time."""
+
+    fraction: float
+    min_lr_ratio: float
+
+    def __post_init__(self):
+        if not 0 < self.fraction <= 1 or not 0 <= self.min_lr_ratio <= 1:
+            raise ValueError("Cooldown requires a fraction in (0, 1] and an LR ratio in [0, 1]")
+
+
+@dataclass(frozen=True)
 class TrainingBudgetConfig:
     """Execution duration and explicit reserves for updates and final checkpointing."""
 
@@ -34,12 +46,28 @@ class TrainingBudgetConfig:
     finalization_reserve: timedelta
     update_reserve: timedelta
     deadline_epoch_seconds: float | None = None
+    cooldown: WallClockCooldown | None = None
 
     def __post_init__(self):
         if min(self.finalization_reserve, self.update_reserve) < timedelta(0):
             raise ValueError("Training reserves must be nonnegative")
         if self.duration <= self.finalization_reserve + self.update_reserve:
             raise ValueError("Training duration must exceed its finalization and update reserves")
+
+    @property
+    def training_duration(self) -> timedelta:
+        return self.duration - self.finalization_reserve - self.update_reserve
+
+
+def budget_learning_rate_scale(budget: TrainingBudgetConfig, remaining: float) -> float:
+    """Return the update multiplier for remaining usable training seconds."""
+    if budget.cooldown is None:
+        return 1.0
+    cooldown = budget.cooldown
+    window = cooldown.fraction * budget.training_duration.total_seconds()
+    return min(
+        1.0, max(cooldown.min_lr_ratio, cooldown.min_lr_ratio + (1 - cooldown.min_lr_ratio) * remaining / window)
+    )
 
 
 class TimeLimitedIterator[T](Iterator[T]):
@@ -57,20 +85,27 @@ class TimeLimitedIterator[T](Iterator[T]):
             - (budget.finalization_reserve + budget.update_reserve).total_seconds()
         )
         self.stop_reason: TrainingStopReason | None = None
+        self.learning_rate_scale = 1.0
 
     def __iter__(self) -> "TimeLimitedIterator[T]":
         return self
 
     def __next__(self) -> T:
-        stop = broadcast_one_to_all(np.asarray(monotonic() >= self.cutoff), is_source=jax.process_index() == 0)
-        if bool(stop):
+        remaining = self.cutoff - monotonic()
+        decision = broadcast_one_to_all(
+            np.asarray([remaining <= 0, budget_learning_rate_scale(self.budget, remaining)], dtype=np.float32),
+            is_source=jax.process_index() == 0,
+        )
+        if bool(decision[0]):
             self.stop_reason = TrainingStopReason.TIME_BOUND
             raise StopIteration
         try:
-            return next(self.batches)
+            batch = next(self.batches)
         except StopIteration:
             self.stop_reason = TrainingStopReason.DATA_EXHAUSTED
             raise
+        self.learning_rate_scale = float(decision[1])
+        return batch
 
 
 def record_training_completion(
@@ -81,6 +116,7 @@ def record_training_completion(
     maximum_updates: int,
     budget: TrainingBudgetConfig,
     stop_reason: TrainingStopReason | None,
+    final_learning_rate_scale: float,
 ) -> None:
     """Write a completion receipt only after the final native checkpoint commits."""
     if jax.process_index() != 0:
@@ -109,6 +145,8 @@ def record_training_completion(
         "update_reserve_seconds": budget.update_reserve.total_seconds(),
         "finalized_epoch_seconds": finalized,
         "finalized_at": datetime.fromtimestamp(finalized, UTC).isoformat(),
+        "cooldown": asdict(budget.cooldown) if budget.cooldown is not None else None,
+        "final_learning_rate_scale": final_learning_rate_scale,
     }
     (StoragePath(telemetry_root) / COMPLETION_FILE).write_text(json.dumps(receipt, indent=2))
 
@@ -126,6 +164,12 @@ def read_training_completion(
         raise ValueError("Training completion stop reason disagrees with its update count")
     if reason == TrainingStopReason.DATA_EXHAUSTED:
         raise ValueError("Training exhausted its data before the controlled duration or update maximum")
+    if budget.cooldown is not None:
+        if receipt["cooldown"] != asdict(budget.cooldown):
+            raise ValueError("Training completion changed the declared wall-clock cooldown")
+        floor = budget.cooldown.min_lr_ratio
+        if abs(receipt["final_learning_rate_scale"] - floor) > max(floor * 0.1, 1e-7):
+            raise ValueError("Training final-update LR scale is not within 10% of the declared minimum")
     for key, expected in (
         ("duration_seconds", budget.duration.total_seconds()),
         ("finalization_reserve_seconds", budget.finalization_reserve.total_seconds()),
