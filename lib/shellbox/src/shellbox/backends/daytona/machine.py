@@ -267,13 +267,13 @@ class DaytonaMachine:
         # stay under the command directory until its normal cleanup.
         count = await self.sandbox.process.exec(
             _control_command(
-                "measure() { "
+                "measure_and_cap() { "
                 'size=$(wc -c < "$1") || return; '
                 'if [ "$size" -gt "$2" ] && [ "$2" -gt 0 ]; then '
                 f'head -c "$2" "$1" > "$1{CLIPPED_OUTPUT_SUFFIX}" || return; '
                 'fi; printf "%d" "$size"; }; '
-                f"out=$(measure {shlex.quote(stdout_path)} {limit}) && "
-                f"err=$(measure {shlex.quote(stderr_path)} {limit}) && "
+                f"out=$(measure_and_cap {shlex.quote(stdout_path)} {limit}) && "
+                f"err=$(measure_and_cap {shlex.quote(stderr_path)} {limit}) && "
                 f'printf \'{COUNT_PREFIX}%s %s\\n\' "$out" "$err"'
             ),
             cwd=CONTROL_CWD,
@@ -285,21 +285,25 @@ class DaytonaMachine:
             raise RuntimeError(f"Invalid command output sizes: {count.result!r}")
 
         stdout_size, stderr_size = map(int, match.groups())
+        stdout, stdout_truncated = await self._download_output(stdout_path, stdout_size, limit)
+        stderr, stderr_truncated = await self._download_output(stderr_path, stderr_size, limit)
         return Result(
             exit_code=exit_code,
-            stdout=await self._download_output(stdout_path, stdout_size, limit),
-            stderr=await self._download_output(stderr_path, stderr_size, limit),
-            stdout_truncated=stdout_size > limit,
-            stderr_truncated=stderr_size > limit,
+            stdout=stdout,
+            stderr=stderr,
+            stdout_truncated=stdout_truncated,
+            stderr_truncated=stderr_truncated,
             reason=ExitReason.EXITED,
         )
 
-    async def _download_output(self, path: str, size: int, limit: int) -> bytes:
+    async def _download_output(self, path: str, size: int, limit: int) -> tuple[bytes, bool]:
+        """Return the bounded stream bytes and whether any bytes were dropped."""
+        truncated = size > limit
         if not size or not limit:
-            return b""
-        data = await self.sandbox.fs.download_file(f"{path}{CLIPPED_OUTPUT_SUFFIX}" if size > limit else path)
+            return b"", truncated
+        data = await self.sandbox.fs.download_file(f"{path}{CLIPPED_OUTPUT_SUFFIX}" if truncated else path)
         assert isinstance(data, bytes)
-        return data
+        return data, truncated
 
     async def _stop_command(self, pidfile: str, completed_path: str) -> None:
         async with asyncio.timeout(INTERRUPT_TIMEOUT):
