@@ -83,6 +83,16 @@ class RolloutWorkerResources:
         )
 
 
+    def validate_node_capacity(self, cpus: float) -> None:
+        """Reject a pool whose workers alone exceed their pinned node's CPU capacity."""
+        required = self.num_workers * self.cpus_per_worker
+        if required > cpus:
+            raise ValueError(
+                f"Rollout workers request {required} CPUs on the driver node; this node has {cpus:g}. "
+                "Reduce trajectory_runner.rollout_workers.num_workers or cpus_per_worker."
+            )
+
+
 class RolloutWorkerStalledError(TimeoutError):
     """A rollout worker completed no request before its progress deadline."""
 
