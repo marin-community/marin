@@ -673,19 +673,11 @@ class SFTPreset[RecipeT: SFTRecipe]:
     name: str
     recipe: RecipeT
     resources: ResourceConfig
-    cross_region_clusters: tuple[str, ...] = ()
-    """RL coordinator clusters that may run this preset instead of ``resources.target_cluster``.
-
-    Listing a cluster opts into reading the preset's data across regions from that cluster.
-    """
 
     def model(self, *, coordinator_cluster: str | None = None, coordinator_prefix: str | None = None) -> ArtifactHfModel:
-        """Build the model export, on the coordinator's cluster when it is a listed cross-region cluster."""
-        resources = self.resources
-        if coordinator_cluster in self.cross_region_clusters:
-            resources = replace(resources, target_cluster=coordinator_cluster)
+        """Build the model export using the preset's fixed allocation."""
         return self.recipe.trained(
-            resources, coordinator_cluster=coordinator_cluster, coordinator_prefix=coordinator_prefix
+            self.resources, coordinator_cluster=coordinator_cluster, coordinator_prefix=coordinator_prefix
         )
 
 

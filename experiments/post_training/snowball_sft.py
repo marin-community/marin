@@ -87,7 +87,8 @@ MIXTURE_RESOURCES = replace(
     regions=("US-EAST-02A",),
     target_cluster="cw-us-east-02a",
 )
-MIXTURE_TOKENIZER = "s3://marin-us-east-02a/marin/grug_sft/tokenizer/2026.09.18"
+_DATA_BUCKET = "s3://marin-us-east-02a/"
+MIXTURE_TOKENIZER = f"{_DATA_BUCKET}marin/grug_sft/tokenizer/2026.09.18"
 MIXTURE_SEQ_LEN = 262_144
 MIXTURE_BATCH_SIZE = 256
 
@@ -103,7 +104,7 @@ _SFT_FORMAT = {
 }
 
 
-def _publish_data_manifest(*, output: str, sha256: str) -> None:
+def _publish_data_manifest(*, output: str, sha256: str, bucket: str = _DATA_BUCKET) -> None:
     sources = Path(__file__).with_name("snowball_sft_data")
     data = yaml.safe_load((sources / "sft-data.yaml").read_text())["data"]
     data["components"] = json.loads((sources / "sft-components.json").read_text())
@@ -117,6 +118,8 @@ def _publish_data_manifest(*, output: str, sha256: str) -> None:
     contents = (json.dumps(data, sort_keys=True, separators=(",", ":")) + "\n").encode()
     if hashlib.sha256(contents).hexdigest() != sha256:
         raise ValueError(f"{_MIXTURE_NAME} data manifest does not match its SHA-256 pin")
+    # A regional copy keeps every object path and changes only the bucket.
+    contents = contents.replace(_DATA_BUCKET.encode(), bucket.encode())
     directory = StoragePath(output)
     directory.mkdirs()
     (directory / _MANIFEST).write_bytes(contents)
@@ -144,9 +147,32 @@ MIXTURE_SPEC = replace(
     per_device_parallelism=1,
     xla_flags=("--xla_gpu_shard_autotuning=false",),
 )
-# The mixture's caches live in s3://marin-us-east-02a; RL on cw-rno2a trains there and reads them across regions.
-MIXTURE_262K_32NODE = SFTPreset(_MIXTURE_NAME, MIXTURE_SPEC, MIXTURE_RESOURCES, cross_region_clusters=("cw-rno2a",))
-SNOWBALL_SFT = (OPENTHOUGHTS_32K_4NODE, MIXTURE_262K_32NODE)
+MIXTURE_262K_32NODE = SFTPreset(_MIXTURE_NAME, MIXTURE_SPEC, MIXTURE_RESOURCES)
+
+# The same mixture on cw-rno2a, reading a copy of its caches and tokenizer in that region's bucket.
+_RNO_BUCKET = "s3://marin-us-east-08a/"
+_RNO_NAME = f"{_MIXTURE_NAME}-rno2a"
+_RNO_TOKENIZER = MIXTURE_TOKENIZER.replace(_DATA_BUCKET, _RNO_BUCKET)
+_RNO_DATA = apply(
+    f"documents/snowball/{_RNO_NAME}",
+    _publish_data_manifest,
+    version="2026.11.20.1",
+    output=OUT,
+    sha256=_MANIFEST_SHA256,
+    bucket=_RNO_BUCKET,
+)
+MIXTURE_262K_32NODE_RNO2A = SFTPreset(
+    _RNO_NAME,
+    replace(
+        MIXTURE_SPEC,
+        name=f"checkpoints/snowball/{_RNO_NAME}",
+        version="2026.11.20.1",
+        model=replace(MIXTURE_SPEC.model, tokenizer_path=_RNO_TOKENIZER),
+        prepared_data=PreparedData(_RNO_DATA, _MANIFEST, _RNO_TOKENIZER),
+    ),
+    replace(MIXTURE_RESOURCES, regions=("RNO2A",), target_cluster="cw-rno2a"),
+)
+SNOWBALL_SFT = (OPENTHOUGHTS_32K_4NODE, MIXTURE_262K_32NODE, MIXTURE_262K_32NODE_RNO2A)
 
 
 if __name__ == "__main__":
