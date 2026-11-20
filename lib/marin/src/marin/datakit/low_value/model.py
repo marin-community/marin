@@ -77,7 +77,8 @@ class LowValueModel:
         return 1 / (1 + np.exp(-np.clip(logits, -700, 700)))
 
 
-def _pinned_bytes(path: str, sha256: str) -> bytes:
+def read_pinned_bytes(path: str, sha256: str) -> bytes:
+    """Return artifact bytes only when their SHA-256 matches the supplied pin."""
     with open_url(path, "rb") as stream:
         content = stream.read()
     digest = hashlib.sha256(content).hexdigest()
@@ -88,7 +89,7 @@ def _pinned_bytes(path: str, sha256: str) -> bytes:
 
 def read_pinned_json(path: str, sha256: str) -> dict:
     """Read JSON only after verifying the caller's immutable artifact digest."""
-    return json.loads(_pinned_bytes(path, sha256))
+    return json.loads(read_pinned_bytes(path, sha256))
 
 
 def load_model(path: str, sha256: str) -> LowValueModel:
@@ -129,7 +130,7 @@ def load_model_tokenizer(model: LowValueModel) -> MarinTokenizer:
     for name, sha256 in model.tokenizer_files_sha256:
         if Path(name).name != name:
             raise ValueError("Tokenizer file names must be basenames")
-        contents[name] = _pinned_bytes(prefix_join(model.tokenizer_path, name), sha256)
+        contents[name] = read_pinned_bytes(prefix_join(model.tokenizer_path, name), sha256)
     directory.parent.mkdir(parents=True, exist_ok=True)
     with FileLock(str(directory) + ".lock"):
         directory.mkdir(exist_ok=True)
