@@ -76,6 +76,7 @@ from experiments.grug.moe_hero_ep.launch_scaling_ladder import (
 )
 from experiments.grug.moe_hero_ep.model import GrugModelConfig
 from experiments.grug.moe_hero_ep.train import (
+    CHECKPOINT_METADATA_FILE,
     GrugEvalConfig,
     GrugRunConfig,
     HeldOutEvalOnly,
@@ -307,7 +308,7 @@ def special_token_init(start_step: int, tokenizer_path: str = SFT_TOKENIZER, *, 
 
 
 def checkpoint_metadata(checkpoint: str) -> dict:
-    return json.loads((StoragePath(checkpoint) / "metadata.json").read_text())
+    return json.loads((StoragePath(checkpoint) / CHECKPOINT_METADATA_FILE).read_text())
 
 
 def checkpoint_step(checkpoint: str) -> int:

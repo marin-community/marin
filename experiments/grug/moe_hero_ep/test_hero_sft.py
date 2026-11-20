@@ -398,10 +398,10 @@ def test_expert_placement_moves_host_offloaded_optimizer_state():
     assert gate_moments >= 1
 
 
-def _write_checkpoint_metadata(path, placement: ExpertPlacement | None) -> str:
+def _write_checkpoint_metadata(path, placement: ExpertPlacement | None, step: int = 0) -> str:
     path.mkdir(parents=True)
     recorded = {} if placement is None else placement.checkpoint_metadata()
-    (path / "metadata.json").write_text(json.dumps({"step": 0, "timestamp": "2026-11-09T00:00:00", **recorded}))
+    (path / "metadata.json").write_text(json.dumps({"step": step, "timestamp": "2026-11-09T00:00:00", **recorded}))
     return str(path)
 
 
@@ -549,19 +549,11 @@ def test_eval_only_records_the_dropless_metrics_and_the_checkpoint_it_scored(tmp
     assert record["metrics"] == {"eval_dropless/loss": 1.5}
 
 
-def _write_step_metadata(path, step: int, placement: ExpertPlacement | None) -> str:
-    path.mkdir(parents=True)
-    recorded = {} if placement is None else placement.checkpoint_metadata()
-    (path / "metadata.json").write_text(json.dumps({"step": step, "is_temporary": False, **recorded}))
-    return str(path)
-
-
 def test_launch_refuses_to_reseed_a_checkpoint_that_already_trained_sft(tmp_path):
-    base = _write_step_metadata(tmp_path / "base" / f"step-{HERO_SFT_BASE_STEP}", HERO_SFT_BASE_STEP, None)
-    later = _write_step_metadata(tmp_path / "later" / "step-400407", 400_407, None)
-    placed = _write_step_metadata(
-        tmp_path / "placed" / f"step-{HERO_SFT_BASE_STEP}", HERO_SFT_BASE_STEP, _placement([[1, 0, 3, 2]])
-    )
+    base_dir = f"step-{HERO_SFT_BASE_STEP}"
+    base = _write_checkpoint_metadata(tmp_path / "base" / base_dir, None, HERO_SFT_BASE_STEP)
+    later = _write_checkpoint_metadata(tmp_path / "later" / "step-400407", None, 400_407)
+    placed = _write_checkpoint_metadata(tmp_path / "placed" / base_dir, _placement([[1, 0, 3, 2]]), HERO_SFT_BASE_STEP)
 
     assert start_step_for(base, reseed_special_tokens=True) == HERO_SFT_BASE_STEP
     with pytest.raises(ValueError, match="past the hero base step"):

@@ -92,6 +92,9 @@ from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 logger = logging.getLogger(__name__)
 
+# Each complete checkpoint directory holds its step and run metadata in this file.
+CHECKPOINT_METADATA_FILE = "metadata.json"
+
 HERO_EP_RUNTIME_ENV = {
     "LD_PRELOAD": "libjemalloc.so.2",
     "MALLOC_CONF": "background_thread:true,dirty_decay_ms:0,muzzy_decay_ms:0,narenas:2",
@@ -757,6 +760,22 @@ def build_tagged_evaluator(
     )
 
 
+def dropless_eval(
+    evaluator: TaggedEvaluator, params: Transformer, *, train_mesh: Mesh, eval_mesh: Mesh, prefix: str
+) -> dict[str, float]:
+    """Score ``params`` from ``train_mesh`` with the dropless ``evaluator`` on ``eval_mesh``, with PGLE off.
+
+    JAX does not reshard across explicit meshes, so the params move to the expert-collapsed eval mesh first.
+    """
+    with set_mesh(eval_mesh):
+        # `model` must stay a local. In a multi-process run the move copies each leaf, also when the leaf
+        # stays on its devices. The copy adds to the train-mesh params, and the train step needs almost the
+        # whole device budget for its temporary buffer, thus this copy must die before the next step.
+        model = _move_tree_to_eval_mesh(params, train_mesh)
+        with jax_config.enable_pgle(False):
+            return eval_model(evaluator, model, prefix=prefix)
+
+
 def validate_eval_only(config: GrugRunConfig) -> None:
     """An eval-only run scores and exits: it needs evaluation sets and must neither restore nor save a train state."""
     if config.eval is None:
@@ -778,25 +797,29 @@ def _write_held_out_scores(
 ) -> None:
     """Run each configured evaluator once on the loaded parameters and write the metrics as JSON from process 0.
 
-    The dropless evaluator runs exactly as the training-time dropless hook does, so its metrics are
-    comparable with a training run's ``eval_dropless`` curve.
+    Dropless metrics are logged under ``<prefix>_dropless``, the names a training run's dropless evals use.
     """
     assert config.eval is not None and config.eval_only is not None
     metrics: dict[str, float] = {}
-    with jax_config.enable_pgle(False):
-        if evaluator is not None:
+    if evaluator is not None:
+        with jax_config.enable_pgle(False):
             metrics.update(eval_model(evaluator, state.params, prefix=config.eval.prefix))
-        if dropless_evaluator is not None and dropless_eval_mesh is not None:
-            with set_mesh(dropless_eval_mesh):
-                model = _move_tree_to_eval_mesh(state.params, mesh)
-                metrics.update(eval_model(dropless_evaluator, model, prefix=f"{config.eval.prefix}_dropless"))
-            del model
+    if dropless_evaluator is not None and dropless_eval_mesh is not None:
+        metrics.update(
+            dropless_eval(
+                dropless_evaluator,
+                state.params,
+                train_mesh=mesh,
+                eval_mesh=dropless_eval_mesh,
+                prefix=f"{config.eval.prefix}_dropless",
+            )
+        )
     if not metrics:
         raise ValueError("eval_only found no evaluation sets")
     levanter.tracker.log(metrics, step=0)
     if jax.process_index() != 0:
         return
-    metadata = (StoragePath(config.eval_only.weights_checkpoint) / "metadata.json").read_bytes()
+    metadata = (StoragePath(config.eval_only.weights_checkpoint) / CHECKPOINT_METADATA_FILE).read_bytes()
     scored = dropless_evaluator if dropless_evaluator is not None else evaluator
     assert scored is not None
     record = {
@@ -1764,21 +1787,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     step_count = int(step.step)
                     if step_count < 0 or step_count == last_dropless_eval_step:
                         return
-                    # `model` must stay a local. In a multi-process run the move copies each leaf,
-                    # also when the leaf stays on its devices. The copy adds to the train-mesh
-                    # params, and the train step needs almost the whole device budget for its
-                    # temporary buffer, thus this copy must die before the next step.
-                    with (
-                        callbacks.progress_event_scope(
-                            step.emit_event,
-                            callbacks.ProgressEvent.EVALUATION_STARTED,
-                            callbacks.ProgressEvent.EVALUATION_FINISHED,
-                        ),
-                        set_mesh(_mesh),
+                    with callbacks.progress_event_scope(
+                        step.emit_event,
+                        callbacks.ProgressEvent.EVALUATION_STARTED,
+                        callbacks.ProgressEvent.EVALUATION_FINISHED,
                     ):
-                        model = _move_tree_to_eval_mesh(step.model, mesh)
-                        with jax_config.enable_pgle(False):
-                            log_dict = eval_model(_ev, model, prefix=_prefix)
+                        log_dict = dropless_eval(_ev, step.model, train_mesh=mesh, eval_mesh=_mesh, prefix=_prefix)
                         levanter.tracker.log(log_dict, step=step_count)
                     last_dropless_eval_step = step_count
 
