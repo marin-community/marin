@@ -17,7 +17,6 @@ import yaml
 from finestore.rl.strata import MembershipState, SelectionTaskRow, read_selection_manifest
 from finestore.schema import arrow_schema
 from iris.rpc import job_pb2
-from marin.evaluation.eval_env import DAYTONA_EVAL_API_KEY_ENV
 from marin.execution.artifact import Artifact, is_mutable_version, read_record, result_type_name
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, apply
