@@ -35,9 +35,9 @@ trials:
   step_time_change: -1%
 potential:
   score: 7
-  rationale: −0.0203 at equal data = equal time (step time within 1%); ladder and MFU not run → 7
+  rationale: −0.0203 at equal data = equal time (step time within 1%); ladder (#48, per-rung decay) held, MFU not run → 7
   model: claude-opus-5-5
-  date: '2026-11-19'
+  date: '2026-11-20'
   inputs_digest: e7a7588580fd
 code_commits:
 - 54230870c0c11e0485d8751d4dd09451a5cddc53
