@@ -1,11 +1,11 @@
 """Capture blocked inference processes before readiness-timeout teardown."""
 
-import json
 import os
 import shutil
 import socket
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 import psutil
@@ -14,37 +14,47 @@ from iris.cluster.runtime.profile import LocalProfileDispatch, capture_threads
 from loguru import logger
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
-from marinskyrl.environment_contract import DEBUG_ARTIFACT_DIR_ENV, DEBUG_MODE_ENV, DebugMode
+from marinskyrl.environment_contract import DEBUG_ARTIFACT_DIR_ENV, DEBUG_MODE_ENV, DebugMode, write_atomic_json
 
 STARTUP_DUMP_TIMEOUT = 90
 MAX_CONCURRENT_STACK_DUMPS = 8
 INFERENCE_PROCESS_NAMES = ("AsyncVLLMInferenceEngine", "EngineCore")
 
 
-def capture_process_stacks(pid: int, root: str, profiler: str) -> dict:
-    """Persist native frames, or capture Python frames and the native unwind error."""
+@dataclass(frozen=True)
+class StackCaptureReceipt:
+    pid: int
+    native: bool = False
+    stack_path: str | None = None
+    native_error: str | None = None
+    python_error: str | None = None
+
+
+def capture_process_stacks(pid: int, root: str, profiler: str) -> StackCaptureReceipt:
+    """Attempt native and Python capture; persist frames or the capture errors."""
     directory = Path(root) / "stacks"
     directory.mkdir(parents=True, exist_ok=True)
     prefix = directory / f"startup-timeout.{socket.gethostname()}.{pid}"
     dispatch = LocalProfileDispatch(pyspy_bin=profiler, resume_pid=pid)
-    receipt = {"pid": pid, "native": False}
+    receipt = StackCaptureReceipt(pid=pid)
     for native in (True, False):
         try:
             frames = capture_threads(dispatch, pid=str(pid), include_native=native, subprocesses=False)
             if not frames.strip():
                 raise RuntimeError("Profiler returned no frames")
-            destination = Path(f"{prefix}.{'native' if native else 'python'}.txt")
-            destination.write_bytes(frames)
-            receipt.update(native=native, stack_path=str(destination))
-            break
         except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
-            receipt["native_error" if native else "python_error"] = str(error)
-    Path(f"{prefix}.json").write_text(json.dumps(receipt, sort_keys=True))
+            receipt = replace(receipt, native_error=str(error)) if native else replace(receipt, python_error=str(error))
+            continue
+        destination = Path(f"{prefix}.{'native' if native else 'python'}.txt")
+        destination.write_bytes(frames)
+        receipt = replace(receipt, native=native, stack_path=str(destination))
+        break
+    write_atomic_json(Path(f"{prefix}.json"), asdict(receipt))
     return receipt
 
 
-def capture_node_stacks(root: str) -> list[dict]:
-    """Dump actor constructors and EngineCore children in this job's task container."""
+def capture_node_stacks(root: str) -> list[StackCaptureReceipt]:
+    """Dump processes whose titles match inference actors or EngineCore in the task container."""
     pids = []
     for process in psutil.process_iter(["pid", "name", "cmdline"]):
         try:
