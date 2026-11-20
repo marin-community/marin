@@ -237,6 +237,11 @@ class SkyRLTopology:
             raise ValueError("SkyRL policy_mini_batch_size must be divisible by micro_train_batch_size_per_gpu")
 
 
+class SkyRLCheckpointStorage(StrEnum):
+    TEMPORARY = "temporary"
+    PERMANENT = "permanent"
+
+
 @dataclass(frozen=True)
 class SkyRLRetentionPolicy:
     """Temporary storage lifetime and rolling resume depth for one SkyRL run.
@@ -247,6 +252,7 @@ class SkyRLRetentionPolicy:
 
     resume_checkpoint_count: int = 2
     temporary_storage_ttl_days: int = SKYRL_TEMPORARY_STORAGE_TTL_DAYS
+    native_checkpoint_storage: SkyRLCheckpointStorage = SkyRLCheckpointStorage.TEMPORARY
 
     def __post_init__(self) -> None:
         if not 1 <= self.resume_checkpoint_count <= 10:
@@ -1014,8 +1020,13 @@ def skyrl_step(
                 ttl_days=spec.retention.temporary_storage_ttl_days,
             )
         attempts_root = prefix_join(temporary_root, "attempts")
+        checkpoint_prefix = (
+            ctx.output_path
+            if spec.retention.native_checkpoint_storage == SkyRLCheckpointStorage.PERMANENT
+            else temporary_root
+        )
         output = SkyRLOutputPaths(
-            checkpoint_root=prefix_join(temporary_root, "checkpoints"),
+            checkpoint_root=prefix_join(checkpoint_prefix, "checkpoints"),
             export_root=prefix_join(ctx.output_path, "exports"),
             attempts_root=attempts_root,
             resolved_config_uri=prefix_join(ctx.output_path, "resolved-launch.yaml"),

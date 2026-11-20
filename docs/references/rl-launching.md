@@ -360,3 +360,10 @@ does not establish correctness for every message size or topology. Check resolve
 role settings and the effective `NCCL_BUFFSIZE` in worker INIT logs before scaling
 a new configuration. Reference workers now retain larger buffers, so include that
 memory in colocated-role capacity estimates.
+
+
+Set `SkyRLRetentionPolicy.native_checkpoint_storage` to
+`SkyRLCheckpointStorage.PERMANENT` to write native checkpoints, including best
+and final, under the permanent artifact output's `checkpoints/` directory.
+The default remains temporary storage. Attempt diagnostics keep their TTL path.
+No existing checkpoint is moved when this policy changes.

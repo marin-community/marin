@@ -26,6 +26,7 @@ from marin.rl.skyrl import (
     ArtifactHfModel,
     IrisSkyRLExecution,
     MegatronGeometry,
+    SkyRLCheckpointStorage,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
     SkyRLSpec,
@@ -1026,3 +1027,19 @@ def test_reject_forced_socket_transport_allows_non_forcing_env() -> None:
     reject_forced_socket_transport({"NCCL_SOCKET_FAMILY": "AF_INET"}, num_nodes=32)
     reject_forced_socket_transport({"NCCL_NET": "Socket"}, num_nodes=1)
     reject_forced_socket_transport({}, num_nodes=32)
+
+
+@pytest.mark.parametrize("storage", list(SkyRLCheckpointStorage))
+def test_native_checkpoint_placement_is_separate_from_attempt_storage(storage, monkeypatch):
+    monkeypatch.setattr("marin.rl.skyrl.skyrl_temporary_run_path", lambda *args, **kwargs: "s3://ttl/run")
+    spec = dataclasses.replace(_spec(), retention=SkyRLRetentionPolicy(native_checkpoint_storage=storage))
+    step = skyrl_step(spec, _execution())
+    config = step.build_config(
+        StepContext.for_run("s3://durable/run", "s3://durable", runtime_args=step.runtime_args, deps=step.deps)
+    )
+    root = "s3://durable/run/checkpoints" if storage == SkyRLCheckpointStorage.PERMANENT else "s3://ttl/run/checkpoints"
+    launch = yaml.safe_load(config.launch_config_yaml)
+    assert config.output.checkpoint_root == launch["artifacts"]["checkpoint_root"] == root
+    assert config.output.attempts_root == "s3://ttl/run/attempts"
+    assert config.output.export_root == "s3://durable/run/exports"
+    assert config.draft_checkpoint_root is None
