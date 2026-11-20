@@ -342,7 +342,7 @@ def test_together_policy_builds_real_rollout_worker_without_inference_engines(tm
     assert report["rollout_worker"] == {
         "worker_type": "TaskRolloutWorker",
         "installed_agent": True,
-        "judge_base_url": "https://api.together.xyz/v1",
+        "judge_base_url": json.loads(raw)["evaluation"]["judge"]["base_url"],
         "inference_engines": 0,
     }
 
