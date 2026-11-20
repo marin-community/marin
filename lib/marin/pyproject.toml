@@ -47,6 +47,7 @@ dependencies = [
     "requests>=2.33.0",
     "resiliparse>=0.17.2",
     "s3fs>=2024",
+    "scipy",
     "shellsim>=0.1.39",
     "tqdm",
     "tqdm-loggable",
