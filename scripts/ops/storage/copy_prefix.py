@@ -143,6 +143,11 @@ def storage_prefix(url: str) -> str:
         raise click.BadParameter(f"{url}: bucket {parsed.bucket} is not a declared CoreWeave bucket")
     if not parsed.key:
         raise click.BadParameter(f"{url}: copying a whole bucket is not supported; name a prefix")
+    # Storage routing parses every URL through StoragePath, which drops empty key segments, so
+    # such a prefix would silently address a different one.
+    raw_key = url.split("://", 1)[1].partition("/")[2]
+    if raw_key.removesuffix("/") != parsed.key:
+        raise click.BadParameter(f"{url}: prefixes with empty path segments (//) are not supported")
     return f"s3://{parsed.bucket}/{parsed.key}"
 
 

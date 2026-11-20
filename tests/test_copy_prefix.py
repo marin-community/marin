@@ -1,6 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import click
+import pytest
+
 from scripts.ops.storage.copy_prefix import (
     CopiedObject,
     CopyShard,
@@ -10,6 +13,7 @@ from scripts.ops.storage.copy_prefix import (
     progress_line,
     shard_id,
     shard_is_copied,
+    storage_prefix,
 )
 
 
@@ -93,3 +97,10 @@ def test_progress_line_for_a_source_of_only_empty_files_counts_files_and_shards(
     progress = Progress(done_bytes=0, total_bytes=0, done_files=3, total_files=10, done_shards=1, total_shards=4)
 
     assert progress_line(progress, rate=0) == "progress: 0 B / 0 B, 3/10 files, 1/4 shards"
+
+
+def test_a_prefix_with_an_empty_path_segment_is_rejected_and_a_trailing_slash_is_dropped() -> None:
+    with pytest.raises(click.BadParameter, match="s3://marin-us-east-02a/a//b"):
+        storage_prefix("s3://marin-us-east-02a/a//b")
+
+    assert storage_prefix("s3://marin-us-east-02a/a/b/") == "s3://marin-us-east-02a/a/b"
