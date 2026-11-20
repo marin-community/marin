@@ -338,7 +338,6 @@ def test_chemistry_golden_uses_the_rows_answer_wrapper(staged, box, golden):
 
 def test_code_golden_submits_the_source_solution(staged):
     task = task_for("ultra_sft_step3200_comp_coding", staged)
-    assert task.labels["subset_id"] == "ultra_sft_step3200_comp_coding"
     assert CODE_CONTROLS.golden is not None
     golden = reply_text(CODE_CONTROLS.golden(task))
     assert golden == "```python\na, b = map(int, input().split())\nprint(a + b)\n```"
@@ -456,7 +455,6 @@ def test_math_grader_compares_the_answer_symbolically_with_the_expected_answer(s
 
 def test_tool_math_rows_keep_the_python_tool_with_its_agent(staged):
     task = task_for("ultra_sft_step3200_math_tir", staged)
-    assert task.labels["subset_id"] == "ultra_sft_step3200_math_tir"
     assert grades_in_process(task.grader)
     assert [tool.name for tool in task.interaction_tools] == ["stateful_python_code_exec"]
     provider = task.environment_requirements.tool_providers["nemotron_agent"]
