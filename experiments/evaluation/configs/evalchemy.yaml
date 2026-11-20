@@ -65,6 +65,10 @@ evaluations:
     num_fewshot: 0
     run:
       limit: 64
+  supergpqa-sample:
+    benchmark: supergpqa
+    run:
+      limit: 2500
   olympiadbench-deterministic:
     benchmark: olympiadbench
     protocol: deterministic

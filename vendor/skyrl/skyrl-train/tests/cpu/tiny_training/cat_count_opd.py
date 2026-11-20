@@ -33,7 +33,7 @@ from aiohttp import web
 from examples.cat_count.cpu_canary import HELD_OUT_N, TEMPLATE, TRAIN_N
 from examples.cat_count.synthetic_teacher import SyntheticTeacher, TeacherNoise, WordCountTarget, application
 from omegaconf import DictConfig, OmegaConf
-from skyrl_train.inference_engines.vllm_teacher_oracle import tokenizer_vocabulary_fingerprint
+from skyrl_train.tokenizer import tokenizer_vocabulary_fingerprint
 from skyrl_train.tokenizer import create_tokenizer
 
 from tests.cpu.tiny_training.cat_count import FAST_STEPS, cat_count_config

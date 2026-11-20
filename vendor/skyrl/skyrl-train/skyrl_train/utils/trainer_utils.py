@@ -12,9 +12,10 @@ from torch.utils.data import Dataset, Subset
 from skyrl_train.trajectory_runners.trajectory_processing import (
     get_metrics_from_trajectory_batch,
     get_rollout_metrics,
+    task_timing_metrics,
 )
 from skyrl_train.trajectory_runners.base import TrajectoryBatch
-from skyrl_train.trajectory_runners.trajectory_reward_shaping import DEFAULT_ACCEPTED_STOP_REASONS
+from skyrl_train.config.reward_shaping import DEFAULT_ACCEPTED_STOP_REASONS
 from transformers import AutoTokenizer
 from skyrl_train.io import io
 from skyrl_train.metric_names import ENVIRONMENT_METRIC_PREFIX
@@ -219,6 +220,7 @@ def evaluation_response_metrics(trajectory_batch: TrajectoryBatch) -> Dict[str, 
     stops = trajectory_batch.get("stop_reasons")
     metrics = {key.removeprefix("consumed/"): value for key, value in consumed_stop_metrics(stops, count).items()}
     if trajectory_batch.get("env_metrics") is not None:
+        metrics.update(task_timing_metrics(trajectory_batch["env_metrics"]))
         environments = set(trajectory_batch["env_classes"])
         for environment in environments:
             indices = [i for i, name in enumerate(trajectory_batch["env_classes"]) if name == environment]
@@ -311,6 +313,10 @@ def dump_per_dataset_eval_results(
     concat_all_envs: List[str],
     eval_metrics: Dict[str, float],
     uids: List[str],
+    *,
+    attempt_id: str,
+    step: int,
+    ordinals: List[int],
 ):
     """Dump evaluation results per dataset and overall aggregated results."""
 
@@ -337,6 +343,12 @@ def dump_per_dataset_eval_results(
                 verification = (trajectory_batch.get("verification_results") or [None] * len(input_prompts))[i]
                 entry = {
                     "uid": uids[i],
+                    "attempt_id": attempt_id,
+                    "step": step,
+                    "ordinal": ordinals[i],
+                    "is_last_step": (trajectory_batch.get("is_last_step") or [True] * len(input_prompts))[i],
+                    "identity_disposition": "task_spec" if trajectory_batch.get("task_ids") else "preference_input",
+                    "task_id": (trajectory_batch.get("task_ids") or [None] * len(input_prompts))[i],
                     "prompt_token_ids": trajectory_batch["prompt_token_ids"][i],
                     "response_token_ids": trajectory_batch["response_ids"][i],
                     "input_prompt": input_prompts[i],

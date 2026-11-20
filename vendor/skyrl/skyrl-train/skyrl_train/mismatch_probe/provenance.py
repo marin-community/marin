@@ -12,7 +12,7 @@ from finestore.rl import mismatch_probe as mismatch
 from omegaconf import OmegaConf
 from rigging.provenance import launch_provenance
 
-from skyrl_train.inference_engines.vllm_teacher_oracle import tokenizer_vocabulary_fingerprint
+from skyrl_train.tokenizer import tokenizer_vocabulary_fingerprint
 from skyrl_train.mismatch_probe.protocol import request_seed
 
 

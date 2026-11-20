@@ -15,6 +15,7 @@ from cloud.iris import telemetry_env  # noqa: E402
 from marinskyrl.environment_contract import (  # noqa: E402
     EXECUTION_UID_ENV,
     RUN_ID_ENV,
+    RUN_MODEL_ENV,
     TELEMETRY_ENDPOINT_ENV,
     TRAINING_TYPE_ENV,
     TrainingType,
@@ -88,7 +89,7 @@ def test_telemetry_environment_unreachable_controller_returns_nothing(monkeypatc
 
 def test_telemetry_environment_round_trips_through_trainer_config(monkeypatch) -> None:
     _in_cluster(monkeypatch)
-    exported = telemetry_env.telemetry_environment(training_type=TrainingType.ASYNC)
+    exported = telemetry_env.telemetry_environment(training_type=TrainingType.ASYNC, model="test-policy")
     for name, value in exported.items():
         monkeypatch.setenv(name, value)
 
@@ -98,6 +99,7 @@ def test_telemetry_environment_round_trips_through_trainer_config(monkeypatch) -
     assert config.execution_uid == exported[EXECUTION_UID_ENV]
     assert config.training_type is TrainingType.ASYNC
     assert exported[TRAINING_TYPE_ENV] == "async"
+    assert config.model == exported[RUN_MODEL_ENV] == "test-policy"
 
 
 def test_telemetry_environment_omits_an_unset_training_type(monkeypatch) -> None:

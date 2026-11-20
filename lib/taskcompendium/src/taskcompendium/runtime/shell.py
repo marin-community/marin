@@ -131,6 +131,11 @@ async def run_shell_call(
         or not isinstance(command, str)
     ):
         return json.dumps({"error": f"{tool.definition.name} requires one string {tool.command_parameter}"})
+    # A JSON \u escape can decode to a lone surrogate, which no machine can encode for Bash.
+    try:
+        command.encode()
+    except UnicodeEncodeError:
+        return json.dumps({"error": f"{tool.definition.name} {tool.command_parameter} must be valid Unicode text"})
     result = await machine.run(
         Command(("bash", "-c", command), cwd=cwd, timeout=timeout, output_limit_bytes=output_limit_bytes)
     )
