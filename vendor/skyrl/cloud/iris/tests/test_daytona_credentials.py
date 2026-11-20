@@ -7,15 +7,22 @@ import cloud.iris.iris_backend as launcher
 
 
 @pytest.mark.parametrize("export", [False, True])
-@pytest.mark.parametrize("backend", ["remote_judge", "daytona"])
-def test_backend_secret_is_resolved_for_training_without_mutating_launch_config(monkeypatch, export, backend):
+@pytest.mark.parametrize(
+    "task_sessions",
+    [
+        {"remote_judge": {"api_key_env": "JUDGE_TEST_KEY"}},
+        {"daytona_accounts": {"daytona": {"api_key_env": "JUDGE_TEST_KEY"}}},
+    ],
+    ids=["remote_judge", "daytona"],
+)
+def test_backend_secret_is_resolved_for_training_without_mutating_launch_config(monkeypatch, export, task_sessions):
     config = OmegaConf.create(
         {
             "runtime": {
                 "entrypoint": launcher.CHECKPOINT_EXPORT_ENTRYPOINT if export else "train",
                 "task_env": {"SETTING": 1},
             },
-            "skyrl": {"environment": {"task_sessions": {backend: {"api_key_env": "JUDGE_TEST_KEY"}}}},
+            "skyrl": {"environment": {"task_sessions": task_sessions}},
         }
     )
     serialized = OmegaConf.to_yaml(config)
@@ -47,15 +54,24 @@ def test_inline_validation_forwards_separate_org_credentials_without_serializing
         {
             "runtime": {"entrypoint": "train", "task_env": {}},
             "skyrl": {
-                "environment": {"task_sessions": {"daytona": {"api_key_env": "DAYTONA_RL_API_KEY"}}},
+                "environment": {
+                    "task_sessions": {
+                        "daytona_accounts": {
+                            "daytona": {"api_key_env": "GRADER_ORG_KEY"},
+                            "daytona_rl": {"api_key_env": "DAYTONA_RL_API_KEY"},
+                        }
+                    }
+                },
                 "trainer": {"callbacks": [{"type": "harbor_evaluation", "daytona_api_key_env": "EVAL_ORG_KEY"}]},
             },
         }
     )
     serialized = OmegaConf.to_yaml(config)
+    monkeypatch.setenv("GRADER_ORG_KEY", "grader-credential")
     monkeypatch.setenv("DAYTONA_RL_API_KEY", "rl-credential")
     monkeypatch.setenv("EVAL_ORG_KEY", "eval-credential")
     assert launcher.config_task_environment(config) == {
+        "GRADER_ORG_KEY": "grader-credential",
         "DAYTONA_RL_API_KEY": "rl-credential",
         "EVAL_ORG_KEY": "eval-credential",
     }

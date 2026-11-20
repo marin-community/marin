@@ -18,11 +18,10 @@ def task_machine_factories(task_sessions: DictConfig) -> dict[str, MachineFactor
     factories: dict[str, MachineFactory] = {"shellsim": ShellSimMachineFactory()}
     if task_sessions.get("local") is not None:
         factories[Backend.LOCAL] = LocalMachineFactory()
-    daytona = task_sessions.get("daytona")
-    if daytona is not None:
-        factories[Backend.DAYTONA] = DaytonaMachineFactory(
-            client_factory=partial(AsyncDaytona, DaytonaConfig(api_key=os.environ[daytona.api_key_env])),
-            ttl_minutes=int(daytona.ttl_minutes),
+    for name, account in (task_sessions.get("daytona_accounts") or {}).items():
+        factories[name] = DaytonaMachineFactory(
+            client_factory=partial(AsyncDaytona, DaytonaConfig(api_key=os.environ[account.api_key_env])),
+            ttl_minutes=int(account.ttl_minutes),
         )
     if shutil.which("docker") is not None:
         factories[Backend.DOCKER] = DockerMachineFactory()

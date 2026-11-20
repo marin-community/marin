@@ -53,3 +53,20 @@ def test_unknown_trainer_keys_are_rejected():
     raw["trainer"]["unknown_backend"] = {}
     with pytest.raises(ValueError, match="trainer.unknown_backend.*\\n.*Extra inputs"):
         compose_skyrl_config(parse_rl_config(raw), {}, LaunchTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100"))
+
+
+def test_each_daytona_account_backs_its_named_backend_with_its_own_key(monkeypatch):
+    monkeypatch.setenv("GRADER_ORG_KEY", "grader-credential")
+    monkeypatch.setenv("TRAINING_ORG_KEY", "training-credential")
+    config = composed_config(
+        {
+            "daytona_accounts": {
+                "daytona": {"api_key_env": "GRADER_ORG_KEY", "ttl_minutes": 60},
+                "daytona_rl": {"api_key_env": "TRAINING_ORG_KEY", "ttl_minutes": 30},
+            }
+        }
+    )
+    factories = task_machine_factories(config.environment.task_sessions)
+    keys = {name: factories[name].client_factory.args[0].api_key for name in ("daytona", "daytona_rl")}
+    assert keys == {"daytona": "grader-credential", "daytona_rl": "training-credential"}
+    assert factories["daytona_rl"].ttl_minutes == 30

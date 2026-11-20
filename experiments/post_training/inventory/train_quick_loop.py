@@ -51,7 +51,11 @@ EVAL_TOP_P = 0.95
 MAX_NUM_SEQS = 1
 REQUEST_WINDOW_TOKENS = 24_576
 MAX_NEW_TOKENS = 8_192
+# Image graders run in the Daytona evaluation organization and training task machines in the RL organization.
 EVALUATION_API_KEY_ENV = "DAYTONA_EVAL_API_KEY"
+TRAINING_API_KEY_ENV = "DAYTONA_RL_API_KEY"
+TRAINING_DAYTONA_ACCOUNT = "daytona_rl"
+DAYTONA_TTL_MINUTES = 60
 JUDGE_API_KEY_ENV = "TOGETHER_API_KEY"
 # A task without tools ends at its first reply, so the limit only bounds tool-using tasks.
 MAX_TURNS = 16
@@ -72,7 +76,7 @@ TASK_MACHINES = {
         cleanup_timeout=TASK_MACHINE_CLEANUP_TIMEOUT,
     ),
     CommandSemantics.LINUX_PROCESS: MachineRuntimeSpec(
-        backend=Backend.DAYTONA,
+        backend=TRAINING_DAYTONA_ACCOUNT,
         network=NetworkPolicy.ALLOW,
         cpus=1,
         memory_mb=2048,
@@ -107,7 +111,10 @@ def training_recipe(steps: int, *, reproducible_serving: bool = False) -> SkyRLR
         environment=sections.Environment(
             task_sessions={
                 "local": {},
-                "daytona": {"api_key_env": EVALUATION_API_KEY_ENV, "ttl_minutes": 60},
+                "daytona_accounts": {
+                    Backend.DAYTONA.value: {"api_key_env": EVALUATION_API_KEY_ENV, "ttl_minutes": DAYTONA_TTL_MINUTES},
+                    TRAINING_DAYTONA_ACCOUNT: {"api_key_env": TRAINING_API_KEY_ENV, "ttl_minutes": DAYTONA_TTL_MINUTES},
+                },
                 "remote_judge": {"base_url": "https://api.together.xyz/v1", "api_key_env": JUDGE_API_KEY_ENV},
                 "task_spec": {
                     "session": {"max_turns": MAX_TURNS},
@@ -257,7 +264,7 @@ def build_run(
             job_timeout_seconds=24 * 60 * 60,
             container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
             wandb_entity="marin-community",
-            required_env_vars=(EVALUATION_API_KEY_ENV, JUDGE_API_KEY_ENV),
+            required_env_vars=(EVALUATION_API_KEY_ENV, TRAINING_API_KEY_ENV, JUDGE_API_KEY_ENV),
         ),
         export_hf=export_hf,
     )

@@ -17,8 +17,9 @@ and an 8,192-token response limit.
 A selection can include tool-using tasks. The launcher runs shell-simulator
 tasks on ShellSim without network access and Linux tasks on a Daytona sandbox
 with 1 CPU, 2 GB of memory and 10 GB of disk. A tool-using task has at most
-16 model turns; an answer-only task ends at its first reply. The Daytona
-sandboxes use the account of `DAYTONA_EVAL_API_KEY`. The optimizer state stays
+16 model turns; an answer-only task ends at its first reply. Linux task
+sandboxes use the Daytona RL organization (`DAYTONA_RL_API_KEY`); image graders
+use the evaluation organization (`DAYTONA_EVAL_API_KEY`). The optimizer state stays
 on the CPU, because a full-window trajectory needs the GPU memory for the
 policy update.
 
