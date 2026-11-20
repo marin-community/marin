@@ -21,42 +21,46 @@ that produced its tasks. Curation receipts live in the [RL Data Atlas](rl-data-a
 
 Build a curriculum with `weighted_curriculum(...)` or `ordered_curriculum(...)`
 ([curriculum.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/curriculum.py)).
-The builder resolves each named source against the catalog and records, per source: the catalog
-name, the source's version, its pinned dataset, and the pipeline identity. The builder rejects an
-unknown source name and a source without a pinned dataset, so a curriculum always names pinned
-inputs.
+Both take the pool steps the run trains on, so the curriculum's entries pin the same records the
+spec's `train_data` carries. `weighted_curriculum` is the RL analog of
+`mixture()`: the caller maps pool steps to weights, and each entry records the pool's artifact
+identity — the provenance chain that ends in the source declaration, its pinned release and its
+receipts. Two pools sharing a label are rejected because the label is the trainer's sampling key.
 
-`weighted_curriculum(name, version, weights={source: weight}, seed=...)` declares a weight-random
+`weighted_curriculum(name, version, train={pool_step: weight}, seed=...)` declares a weight-random
 mix. The trainer composes every training window into the exact weighted mixture, the behavior of
 `weighted_quotas` in
 [domain_sampling.py](https://github.com/marin-community/marin/blob/main/vendor/skyrl/skyrl-train/skyrl_train/domain_sampling.py).
 
-`ordered_curriculum(name, version, stages=(...), quotas={source: quota}, seed=...)` declares the
-sequence the trainer consumes in order, and `quotas` bounds each stage visit in prompts (an absent
-quota runs one full pass over that source's rows). After the last stage the sequence restarts, so a
-longer run cycles the declared order. The trainer's `OrderedStages` sampler draws this sequence
-deterministically from the seed.
+`ordered_curriculum(name, version, stages=(CurriculumStage(...), ...), pools={label: pool_step},
+seed=...)` declares the schedule as `CurriculumStage` objects in the order the trainer consumes
+them, each stage carrying its own draw quota (an absent quota runs one exact pass over that pool's
+rows, reshuffled on entry). After the last stage the sequence restarts, so a longer run cycles the
+declared order. Every stage label must resolve to a pool, and every pool must be visited. The
+trainer's `OrderedStages` sampler draws this sequence deterministically from the seed, and rejects
+a stage sequence whose per-label demand inside one training window exceeds a pool's row count.
 
-Both modes take a `seed`. The curriculum validates itself at construction: an unknown source, an
-unpinned source, an empty stage order, and a non-positive weight or quota are errors.
+Both modes require an explicit `seed`. The curriculum validates itself at construction: an unpinned
+pool, an empty stage order, and a non-positive weight or quota are errors.
 
-The curriculum's `fingerprint` hashes the canonical source entries: each one's trainer label,
-catalog `name@version`, pinned dataset (name, revision, URL), and pipeline identity. It also hashes
-the mode, the weights, the stage order and quotas, and the seed. The same inputs fingerprint
-identically; bumping a source's version, changing a weight, reordering stages, or changing the seed
+The curriculum's `fingerprint` hashes the canonical pool entries: each one's trainer label, pool
+artifact identity, and weight. It also hashes the mode, the stage order and quotas, and the seed.
+The same inputs fingerprint identically; changing a pool, a weight, the stage order, or the seed
 produces a different fingerprint. The curriculum's own `version` is identity, not content:
 re-badging the same mix keeps the fingerprint, as with every artifact.
 
 ## Launch with a curriculum
 
-Pass the curriculum to `SkyRLSpec` (`curriculum=...`). The spec requires `data.kind=parquet` —
-curricula sample labeled prompt pools — and renders the curriculum's projection into the recipe's
-`data.sampling` subtree: `kind=domain-weighted` with `domain_weights`, or `kind=ordered` with
-`stages`. A recipe that already declares disagreeing sampling values is rejected at construction.
-Rows are matched to sources by the pool's `teacher_route` column, the same key both modes resolve.
+Pass the curriculum to `SkyRLSpec` (`curriculum=...`). Construction rejects a curriculum whose
+entries name pools the run does not train on, pin a different pool identity than `train_data`
+carries, or pair with a recipe that declares `data.kind` other than `parquet` — curricula sample
+labeled prompt pools. The input recipe stays unchanged; the curriculum's sampling projection
+combines with it when the launch config is built: `kind=domain-weighted` with `domain_weights`, or
+`kind=ordered` with `stages`. Rows are matched to sources by the pool's `teacher_route` column, the
+same key both modes resolve.
 
 The launch document records the full curriculum under `inputs.curriculum`: its identity, mode,
-seed, sampling projection, per-source provenance, and stage order.
+seed, sampling projection, per-pool identities, and stage order.
 
 ## Recover a run's curriculum
 
@@ -80,5 +84,7 @@ print(launch["inputs"]["curriculum"]["sources"])
 ```
 
 The identity recovers the exact mix: rebuild the curriculum with the matching builder using the recorded
-sources, weights, stages, and seed, and its fingerprint must equal the recorded one. A matching
-fingerprint means the rebuilt mix samples identically.
+pool identities, weights, stages, and seed, and its fingerprint must equal the recorded one. A matching
+fingerprint means the rebuilt mix samples identically. The pool identities tie the record to the
+artifact graph, so the pinned source records behind each pool — its declaration, release pin, and
+receipts — are recoverable from the run's dependency chain.
