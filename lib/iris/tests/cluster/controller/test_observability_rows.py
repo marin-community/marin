@@ -7,6 +7,7 @@ import dataclasses
 import json
 import logging
 import sqlite3
+import threading
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,12 +15,13 @@ from pathlib import Path
 import pytest
 from finelog.deploy.config import load_finelog_config
 from iris.cluster.config import load_config
-from iris.cluster.controller import observability_rows, ops, writes
+from iris.cluster.controller import observability_rows, ops, write_lock_cost, writes
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.federation_store import ControllerFederationStore
 from iris.cluster.controller.observability_rows import ObservabilityRowTables
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
+from iris.cluster.controller.write_lock_cost import PendingCost
 from iris.cluster.federation.store import HandoffAdmission, HandoffSpec
 from iris.cluster.stats.tables import IrisJob, IrisJobConfig, IrisTask, IrisTaskAttempt
 from iris.cluster.types import JobName
@@ -711,6 +713,55 @@ def test_slow_rows_are_logged_and_counted_in_the_dbs_lock_cost(state, monkeypatc
 
     (warning,) = [r.getMessage() for r in caplog.records if "under the write lock" in r.getMessage()]
     assert "finelog.controller_rows: false" in warning
-    lock_cost = state._db._lock_cost
-    assert lock_cost.rows > 0
-    assert 0 < lock_cost.row_seconds <= lock_cost.lock_held_seconds
+
+
+def _emitted(monkeypatch, state) -> list[PendingCost]:
+    """Capture what each write transaction emits, checking the write lock is already released."""
+    lock = state._db._lock
+    emitted: list[PendingCost] = []
+
+    def emit(pending: PendingCost) -> None:
+        free: list[bool] = []
+
+        def probe() -> None:
+            acquired = lock.acquire(blocking=False)
+            free.append(acquired)
+            if acquired:
+                lock.release()
+
+        thread = threading.Thread(target=probe)
+        thread.start()
+        thread.join()
+        assert free == [True], "emitted while the write lock was held"
+        emitted.append(pending)
+
+    monkeypatch.setattr(write_lock_cost, "emit", emit)
+    return emitted
+
+
+def test_a_submit_emits_one_row_record_after_releasing_the_lock(state, monkeypatch):
+    emitted = _emitted(monkeypatch, state)
+    _attach(state, "marin")
+
+    submit_job(state, "train", make_job_request("train", replicas=3))
+
+    (record,) = [r for pending in emitted for r in pending.row_transactions]
+    assert (record.job_rows, record.job_config_rows, record.task_rows) == (1, 1, 3)
+    assert record.snapshot_seconds > 0 and record.enqueue_seconds > 0
+
+
+def test_a_rolled_back_transaction_emits_no_row_record(state, monkeypatch):
+    submit_job(state, "train", make_job_request("train"))
+    emitted = _emitted(monkeypatch, state)
+    _attach(state, "marin")
+
+    def fail_after_the_snapshot() -> None:
+        raise RuntimeError("made-up failure after the snapshot")
+
+    with pytest.raises(RuntimeError, match="made-up failure"):
+        with state._db.transaction() as cur:
+            observability_rows.record_job_changes(cur, [JobName.root("test-user", "train")])
+            cur.register_pre_commit(fail_after_the_snapshot)
+
+    assert [r for pending in emitted for r in pending.row_transactions] == []
+    assert emitted, "the rolled-back transaction still reports its lock time"

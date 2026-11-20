@@ -185,34 +185,63 @@ the archive.
 
 The rows are read just before each write transaction commits and enqueued just
 after, both under the controller's write lock, so every other writer waits for
-them. Each minute the controller emits these to `telemetry_v1.iris`
-(`service = 'iris-controller'`), as native delta counters and a gauge:
+them. The controller emits to `telemetry_v1.iris` (`service = 'iris-controller'`),
+always after releasing the lock:
 
-| Name | Meaning |
-| --- | --- |
-| `iris_controller_write_lock_held_seconds` | Total time write transactions held the lock (not maintenance such as WAL checkpoints) |
-| `iris_observability_rows_seconds` | The part of that spent on observability rows: snapshot plus enqueue |
-| `iris_observability_rows_count` | Rows snapshotted and enqueued |
-| `iris_observability_rows_max_seconds` | The slowest single transaction's row time in the minute |
+| Name | Kind | Meaning |
+| --- | --- | --- |
+| `iris_observability_rows_transaction` | event, one per transaction that copies rows | `body_json` holds `job_rows`, `job_config_rows`, `task_rows`, `attempt_rows`, their total `rows`, `snapshot_seconds`, `enqueue_seconds` and their total `seconds` |
+| `iris_controller_write_lock_held_seconds` | delta counter, once a minute | Time write transactions held the lock (not maintenance such as WAL checkpoints) |
+| `iris_controller_write_lock_wait_seconds` | delta counter, once a minute | Time write transactions waited to acquire it |
+
+The event holds counts and durations only: no job ids, users or names. One event
+per transaction pairs each burst's row count with its time, so the per-row cost
+and the fixed cost per transaction can be read off, and so can how close a table
+gets to the Finelog client's 10,000-row buffer. Expect at most one event per
+reconcile tick that changes rows, plus one per submit: on the order of 10,000 a
+day on `marin`, and up to one per second while an unchanged attempt observation
+still writes an attempt row. The controller's RPC telemetry in
+`telemetry_v1.iris.rpc` writes about 9 million rows a day.
+
+The lock counters are summed in a window that closes with the first write
+transaction ending 60 s or more after it opened, so a quiet controller emits
+longer windows, and the last window before shutdown is not emitted. A
+transaction that rolls back after its snapshot emits no row event, though its
+lock time is counted. The wait is timed around `acquire()`; it is near zero for
+a re-entrant acquire by the thread already holding the lock.
 
 A transaction whose rows take over 100 ms also logs `observability rows: N rows
 took M ms under the write lock`, at most once a minute.
 
-The row cost as a share of lock time, per hour:
+Row time against rows, per hour (the slope is the per-row cost):
 
 ```sql
 SELECT date_trunc('hour', to_timestamp_millis(timestamp_ms)) AS hour,
-       sum(value) FILTER (WHERE name = 'iris_observability_rows_seconds')
-         / nullif(sum(value) FILTER (WHERE name = 'iris_controller_write_lock_held_seconds'), 0)
-         AS row_share_of_lock_time,
-       sum(value) FILTER (WHERE name = 'iris_observability_rows_seconds') AS row_seconds
+       count(*) AS transactions,
+       max(CAST(json_get(body_json, 'rows') AS BIGINT)) AS max_rows,
+       max(CAST(json_get(body_json, 'seconds') AS DOUBLE)) AS max_seconds,
+       sum(CAST(json_get(body_json, 'seconds') AS DOUBLE)) AS row_seconds
 FROM "telemetry_v1.iris"
-WHERE service = 'iris-controller'
-  AND name IN ('iris_observability_rows_seconds', 'iris_controller_write_lock_held_seconds')
+WHERE service = 'iris-controller' AND name = 'iris_observability_rows_transaction'
   AND timestamp_ms >= <start_ms> AND timestamp_ms < <end_ms>
 GROUP BY 1
 ORDER BY 1;
 ```
+
+Lock time per hour, to compare `row_seconds` against:
+
+```sql
+SELECT date_trunc('hour', to_timestamp_millis(timestamp_ms)) AS hour, name, sum(value) AS seconds
+FROM "telemetry_v1.iris"
+WHERE service = 'iris-controller'
+  AND name IN ('iris_controller_write_lock_held_seconds', 'iris_controller_write_lock_wait_seconds')
+  AND timestamp_ms >= <start_ms> AND timestamp_ms < <end_ms>
+GROUP BY 1, 2
+ORDER BY 1, 2;
+```
+
+`telemetry_v1.iris` has no rows before this change ships, so check after the
+first deploy that both queries return data.
 
 To turn the copy off, set it in the cluster config and restart the controller:
 
@@ -224,6 +253,6 @@ finelog:
 
 The controller then attaches no row tables: write transactions mark, read and
 write no rows, and the controller logs `observability rows are off` at start.
-It still emits `iris_controller_write_lock_held_seconds`, so lock time before and
-after the switch can be compared. Rows for changes made while it is off are not
+It still emits the lock counters, so lock time before and after the switch can
+be compared. Rows for changes made while it is off are not
 written later.

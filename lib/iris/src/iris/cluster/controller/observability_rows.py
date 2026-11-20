@@ -45,7 +45,7 @@ from sqlalchemy.engine.cursor import CursorResult
 from iris.cluster.constraints import get_device_variant
 from iris.cluster.controller.codec import proto_from_json
 from iris.cluster.controller.schema import job_config_table, jobs_table, task_attempts_table, tasks_table
-from iris.cluster.controller.write_lock_cost import CostWindow
+from iris.cluster.controller.write_lock_cost import CostWindow, RowTransactionCost
 from iris.cluster.redaction import redact_string
 from iris.cluster.stats.tables import IrisJob, IrisJobConfig, IrisTask, IrisTaskAttempt, stats_timestamp
 from iris.cluster.types import LOCAL_CLUSTER, JobName, WorkerId, get_gpu_count, get_tpu_count
@@ -184,7 +184,8 @@ def _write(tables: ObservabilityRowTables, marked: _Marked, lock_cost: CostWindo
     """Enqueue the snapshotted rows; a table whose write fails is logged and its rows dropped.
 
     This runs after commit but still under the write lock, so its time counts with
-    the snapshot's as the rows' cost, and a slow total is logged.
+    the snapshot's as the rows' cost: the transaction's row counts and both times go
+    to ``lock_cost`` as one record, and a slow total is logged.
     """
     started = time.monotonic()
     for table, rows in (
@@ -201,11 +202,17 @@ def _write(tables: ObservabilityRowTables, marked: _Marked, lock_cost: CostWindo
         # committed transaction and skip the hooks registered after it (cache invalidations).
         except Exception:
             logger.exception("observability rows: write failed, dropping %d %s rows", len(rows), type(rows[0]).__name__)
-    enqueue_seconds = time.monotonic() - started
-    lock_cost.add_row_time(enqueue_seconds)
-    seconds = marked.snapshot_seconds + enqueue_seconds
-    rows = len(marked.job_rows) + len(marked.config_rows) + len(marked.task_rows) + len(marked.attempt_rows)
-    lock_cost.add_row_transaction(seconds, rows)
+    cost = RowTransactionCost(
+        job_rows=len(marked.job_rows),
+        job_config_rows=len(marked.config_rows),
+        task_rows=len(marked.task_rows),
+        attempt_rows=len(marked.attempt_rows),
+        snapshot_seconds=marked.snapshot_seconds,
+        enqueue_seconds=time.monotonic() - started,
+    )
+    lock_cost.add_row_transaction(cost)
+    seconds = cost.snapshot_seconds + cost.enqueue_seconds
+    rows = cost.job_rows + cost.job_config_rows + cost.task_rows + cost.attempt_rows
     if seconds >= SLOW_ROWS_SECONDS and _slow_rows_log.should_run():
         logger.warning(
             "observability rows: %d rows took %.0f ms under the write lock "
@@ -289,7 +296,6 @@ def _snapshot_or_drop(cur: RowCursor, tables: ObservabilityRowTables, marked: _M
         marked.task_rows.clear()
         marked.attempt_rows.clear()
     marked.snapshot_seconds = time.monotonic() - started
-    lock_cost.add_row_time(marked.snapshot_seconds)
 
 
 def _snapshot(cur: RowCursor, tables: ObservabilityRowTables, marked: _Marked) -> None:

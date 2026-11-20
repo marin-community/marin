@@ -246,10 +246,11 @@ def write_transaction(
     the yielded ``Tx`` as ``tx.caches`` so write sinks can reach a memo through
     the cursor (see :mod:`iris.cluster.controller.caches`).
 
-    The time from acquiring ``write_lock`` to releasing it is added to
-    ``lock_cost``, which emits a summary each minute
+    The time spent waiting for ``write_lock`` and holding it is added to
+    ``lock_cost``; its records are emitted after the lock is released
     (:mod:`iris.cluster.controller.write_lock_cost`).
     """
+    requested_at = time.monotonic()
     write_lock.acquire()
     acquired_at = time.monotonic()
     conn: Connection | None = None
@@ -275,10 +276,9 @@ def write_transaction(
         if conn is not None:
             conn.close()
         now = time.monotonic()
-        cost = lock_cost.add_lock_held(now - acquired_at, now)
-        if cost is not None:
-            write_lock_cost.emit(cost)
+        pending = lock_cost.close_transaction(acquired_at - requested_at, now - acquired_at, now)
         write_lock.release()
+        write_lock_cost.emit(pending)
 
 
 @contextmanager
