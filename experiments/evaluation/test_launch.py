@@ -585,7 +585,11 @@ def test_policy_judge_startup_failure_preserves_infrastructure_evidence(
     command.extend(["--policy-finalization-config", str(campaign / "finalization.yaml")])
     result = CliRunner().invoke(cli, command)
     assert result.exit_code == 0, result.output
-    executor = submitted_batches[-1].evaluations[0].executor
+    batch = submitted_batches[-1]
+    # The batch prepares the policy judge's weights beside the candidate; the evaluation serves it.
+    assert batch.judge is None
+    assert [judge.model.location for judge in batch.prepared_judges] == ["MiniMaxAI/MiniMax-M3-MXFP8"]
+    executor = batch.evaluations[0].executor
 
     class FailedJob:
         job_id = "/test/policy-judge"

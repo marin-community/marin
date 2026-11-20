@@ -22,11 +22,11 @@ import re
 import threading
 from collections.abc import Callable, Sequence
 from dataclasses import replace
-from enum import StrEnum
 from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
+from verifyit.compat import StrEnum
 from verifyit.grade import (
     GradingInfraError,
     InvalidTask,
@@ -160,30 +160,49 @@ def _is_expression(parsed: list) -> bool:
     return any(not isinstance(item, str) for item in parsed)
 
 
-def _split_members(text: str) -> list[str]:
-    """The comma-separated members of a sequence, ignoring commas nested inside brackets.
+def _scan_brackets(value: str) -> tuple[list[tuple[int, int]], int | None]:
+    """Walk ``value`` once, tracking bracket nesting.
 
-    One optional layer of enclosing brackets is dropped, so ``[1, 2]`` and ``1, 2`` read alike.
+    Returns the spans of the comma-separated top-level members — commas inside brackets
+    never split — and the index where the bracket stack first empties again, which for a
+    ``value[0]`` that opens a bracket is exactly where its pair closes.
     """
-    value = strip_math_delimiters(text)
-    for command in SIZE_COMMANDS:
-        value = value.replace(command, "")
-    value = value.strip()
-    if len(value) > 1 and value[0] in CLOSERS and value[-1] == CLOSERS[value[0]]:
-        value = value[1:-1]
-    members: list[str] = []
+    spans: list[tuple[int, int]] = []
     stack: list[str] = []
+    first_close: int | None = None
     start = 0
     for index, char in enumerate(value):
         if char in CLOSERS:
             stack.append(CLOSERS[char])
         elif stack and char == stack[-1]:
             stack.pop()
+            if not stack and first_close is None:
+                first_close = index
         elif char == "," and not stack:
-            members.append(value[start:index].strip())
+            spans.append((start, index))
             start = index + 1
-    members.append(value[start:].strip())
-    return members
+    spans.append((start, len(value)))
+    return spans, first_close
+
+
+def _split_members(text: str) -> list[str]:
+    """The comma-separated members of a sequence, ignoring commas nested inside brackets.
+
+    One optional layer of enclosing brackets is dropped, so ``[1, 2]`` and ``1, 2`` read alike,
+    but only when the first bracket opens the whole text — its balanced close at the last
+    character: ``[1, 2], [3, 4]`` keeps both bracketed members, and ``(1,2),(3,4)`` keeps both
+    parenthesized pairs.
+    """
+    value = strip_math_delimiters(text)
+    for command in SIZE_COMMANDS:
+        value = value.replace(command, "")
+    value = value.strip()
+    spans, first_close = _scan_brackets(value)
+    if len(value) > 1 and value[0] in CLOSERS and value[-1] == CLOSERS[value[0]] and first_close == len(value) - 1:
+        # The first opener encloses the whole text: the members are its interior's top level.
+        value = value[1:-1]
+        spans = _scan_brackets(value)[0]
+    return [value[start:end].strip() for start, end in spans]
 
 
 class MathMemberPolicy(StrEnum):

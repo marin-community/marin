@@ -12,13 +12,13 @@ import sys
 import traceback
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from enum import StrEnum
 from fractions import Fraction
 from functools import cache
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+from verifyit.compat import StrEnum
 from verifyit.file_ops.read import read_text
 from verifyit.numeric import MAX_NUMERIC_DIGITS, numeric_literal
 from verifyit.spec import (

@@ -119,7 +119,10 @@ and saves task-level verifier outcomes. Under the run artifact's `exports/`,
 per-dataset JSONL responses and `aggregated_results.jsonl`; compare its
 `avg_score` and `pass_at_1` metrics alongside verifier coverage. The final update saves a checkpoint;
 HF export is opt-in with `--export-hf` and adds a separate export job after training.
-Local graders require the privileged container profile; image graders and host judges use their configured backends.
+Local graders require the privileged container profile. Image graders and host
+judges use their configured backends. The selection's task and grader
+requirements determine which phases use Daytona. Quick-loop training and
+validation can both use the Daytona eval account.
 
 ## Compare the iteration
 

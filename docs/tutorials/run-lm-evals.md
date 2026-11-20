@@ -58,6 +58,17 @@ eligible rows fails rather than producing an empty score. GraphWalks requires a
 reference-dependent output allowance of at least 8,192 tokens, so a blanket
 512-token smoke budget cannot exercise it.
 
+[LongBench v2](https://huggingface.co/datasets/zai-org/LongBench-v2) asks 503
+multiple-choice questions over contexts of 8,000 to 2 million words, with the
+upstream [THUDM/LongBench](https://github.com/THUDM/LongBench/tree/2e00731f8d0bff23dc4325161044d0ed8af94c1e)
+prompt and answer parser. Each item is published in full and middle-truncated to
+token budgets from 8K to 894K, and a run sends the largest copy that fits the
+served context. Serve a long context, such as `qwen3.5-35b-a3b-262k` or
+`qwen3-32b-yarn-128k`. `longbench-v2` decodes greedily with thinking off and 4,096
+output tokens; `longbench-v2-thinking` samples with thinking on and 32,768 output
+tokens, which leaves less room for the prompt. A limit takes short, medium and
+long items in turn.
+
 ## Launch file-backed evaluations
 
 A selection document names benchmark protocols and experiment overrides:
