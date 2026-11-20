@@ -22,8 +22,8 @@ from typing import Annotated, ClassVar, Literal, NoReturn
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, field_validator, model_validator
 from rigging.filesystem.path_validation import validate_relative_file_path, validate_relative_file_paths
+from shellbox.machine import Backend, PackageSpec, UnsupportedMachineSpec
 from shellbox.machine import CommandSemantics as CommandSemantics
-from shellbox.machine import PackageSpec, UnsupportedMachineSpec
 from verifyit.candidate import candidate_spec
 from verifyit.grade import InvalidTask
 from verifyit.json_objects import unique_object
@@ -361,6 +361,7 @@ class EnvironmentRequirements(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     capabilities: tuple[str, ...] = ()
+    required_backend: Backend | None = Field(default=None, exclude_if=lambda value: value is None)
     command_semantics: CommandSemantics | None = None
     docker_image: str | None = Field(default=None, pattern=DOCKER_IMAGE_PATTERN)
     docker_build: DockerBuildContext | None = None
@@ -982,3 +983,13 @@ class TaskSpec(BaseModel):
             if self.grader.conversation_path in installed:
                 raise ValueError("The conversation path collides with a verifier resource")
         return self
+
+
+def declared_verifier_timeout(task: TaskSpec) -> float | None:
+    """Return the longest verifier budget in the task's declared execution requirements."""
+    deadlines = [
+        requirement.verifier_timeout_sec
+        for requirement in (task.execution_requirements, task.verifier_execution_requirements)
+        if requirement is not None
+    ]
+    return max(deadlines, default=None)

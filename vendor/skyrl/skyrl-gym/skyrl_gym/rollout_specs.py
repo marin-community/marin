@@ -14,7 +14,7 @@ from taskcompendium.openresearcher import OPENRESEARCHER_ACTION_INTERFACE
 from rolloutengine.harness.shell import ShellHarness, ToolProvider
 from rolloutengine.models import MachineRuntimeSpec, RolloutLimits, TaskRolloutSpec, TraceMode
 from taskcompendium.fetch import FETCH_ACTION_INTERFACE
-from taskcompendium.models import ExecutionRequirements, TaskSpec
+from taskcompendium.models import ExecutionRequirements, TaskSpec, declared_verifier_timeout
 from taskcompendium.runtime.shell import ShellToolConfig
 
 from skyrl_gym.nemotron_tools import NEMOTRON_PYTHON_INTERFACE, NemotronPythonProvider
@@ -52,21 +52,33 @@ def rollout_spec(
             shell_tool=ShellToolConfig.model_validate(shell_tool),
         )
         harness += ":" + json.dumps(shell_settings.model_dump(), sort_keys=True, separators=(",", ":"))
-    requirements = task.execution_requirements
-    if requirements is not None:
-        for name, declared in (
-            ("total_turn_timeout", requirements.agent_timeout_sec),
-            ("verifier_timeout", requirements.verifier_timeout_sec),
-        ):
-            configured = settings.get(name)
-            settings[name] = declared if configured is None else min(configured, declared)
     return TaskRolloutSpec(
         task=task,
         harness=harness,
         task_machine=_declared_machine(task_machine, task.execution_requirements),
         verifier_machine=_declared_machine(verifier_machine, task.verifier_execution_requirements),
-        limits=RolloutLimits.model_validate(settings),
+        limits=rollout_limits(task, RolloutLimits.model_validate(settings), minimum_verifier_timeout=None),
         trace=trace,
+    )
+
+
+def rollout_limits(task: TaskSpec, limits: RolloutLimits, *, minimum_verifier_timeout: float | None) -> RolloutLimits:
+    """Give fresh and stored tasks the run floor and their complete declared verifier budget."""
+    declared = task.execution_requirements
+    actor = limits.total_turn_timeout
+    if declared is not None:
+        actor = declared.agent_timeout_sec if actor is None else min(actor, declared.agent_timeout_sec)
+    deadlines = [
+        value
+        for value in (minimum_verifier_timeout, limits.verifier_timeout, declared_verifier_timeout(task))
+        if value is not None
+    ]
+    timeout = max(deadlines, default=None)
+    attempt = limits.attempt_timeout
+    if attempt is not None and timeout is not None:
+        attempt = None if actor is None else max(attempt, actor + timeout + limits.cleanup_timeout)
+    return limits.model_copy(
+        update={"total_turn_timeout": actor, "verifier_timeout": timeout, "attempt_timeout": attempt}
     )
 
 
@@ -75,18 +87,22 @@ def _declared_machine(
 ) -> MachineRuntimeSpec | None:
     if runtime is None or requirements is None:
         return runtime
-    return runtime.model_copy(update={
-        name: max(getattr(runtime, name) or 0, getattr(requirements, name))
-        for name in ("cpus", "memory_mb", "storage_mb")
-    })
+    return runtime.model_copy(
+        update={
+            name: max(getattr(runtime, name) or 0, getattr(requirements, name))
+            for name in ("cpus", "memory_mb", "storage_mb")
+        }
+    )
 
 
-TOOL_PROVIDERS: Mapping[str, ToolProvider] = MappingProxyType({
-    FETCH_ACTION_INTERFACE: FetchProvider(),
-    NEMOTRON_PYTHON_INTERFACE: NemotronPythonProvider(),
-    BROWSECOMP_ACTION_INTERFACE: BrowseCompProvider(command_timeout=300),
-    OPENRESEARCHER_ACTION_INTERFACE: OpenResearcherServiceProvider(endpoint=None),
-})
+TOOL_PROVIDERS: Mapping[str, ToolProvider] = MappingProxyType(
+    {
+        FETCH_ACTION_INTERFACE: FetchProvider(),
+        NEMOTRON_PYTHON_INTERFACE: NemotronPythonProvider(),
+        BROWSECOMP_ACTION_INTERFACE: BrowseCompProvider(command_timeout=300),
+        OPENRESEARCHER_ACTION_INTERFACE: OpenResearcherServiceProvider(endpoint=None),
+    }
+)
 """Host tools every Shellbox harness serves, by action interface."""
 
 
@@ -98,7 +114,10 @@ def shell_harness(name: str) -> ShellHarness:
     return ShellHarness(
         command_timeout=settings.command_timeout,
         shell_tool=settings.shell_tool,
-        tools={**TOOL_PROVIDERS, OPENRESEARCHER_ACTION_INTERFACE: OpenResearcherServiceProvider(settings.retrieval_service)},
+        tools={
+            **TOOL_PROVIDERS,
+            OPENRESEARCHER_ACTION_INTERFACE: OpenResearcherServiceProvider(settings.retrieval_service),
+        },
     )
 
 

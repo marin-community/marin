@@ -15,6 +15,7 @@ from taskcompendium.models import (
     ScriptGrader,
     TaskSpec,
     VerifyitGrader,
+    declared_verifier_timeout,
     grades_with_judge,
     require_resolved_environment,
 )
@@ -67,12 +68,11 @@ def validate_spec(spec: TaskRolloutSpec, machine_factories: Mapping[str, Machine
         if any((getattr(runtime, name) or 0) < getattr(declared, name) for name in ("cpus", "memory_mb", "storage_mb")):
             raise ValueError("Selected machine is smaller than the task's declared allocation")
     if declared := task.execution_requirements:
-        for limit, deadline in (
-            (spec.limits.total_turn_timeout, declared.agent_timeout_sec),
-            (spec.limits.verifier_timeout, declared.verifier_timeout_sec),
-        ):
-            if limit is None or limit > deadline:
-                raise ValueError("Rollout phase limits must honor the task's declared deadlines")
+        if spec.limits.total_turn_timeout is None or spec.limits.total_turn_timeout > declared.agent_timeout_sec:
+            raise ValueError("Rollout actor limit must honor the task's declared deadline")
+    minimum = declared_verifier_timeout(task)
+    if minimum is not None and spec.limits.verifier_timeout is not None and spec.limits.verifier_timeout < minimum:
+        raise ValueError("Rollout verifier limit is shorter than the task's declared deadline")
     grader = task.grader
     judge = grades_with_judge(grader)
     host_judge = judge and isinstance(grader, VerifyitGrader)

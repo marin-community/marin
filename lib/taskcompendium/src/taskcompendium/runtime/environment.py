@@ -56,6 +56,10 @@ def bound_machine_spec(requirements: EnvironmentRequirements, factory: MachineFa
 def validate_machine_spec(requirements: EnvironmentRequirements, factory: MachineFactory, spec: MachineSpec) -> None:
     """Ask the selected factory to reject unsupported requirements before preparation."""
     require_resolved_environment(requirements)
+    if requirements.required_backend is not None and factory.backend != requirements.required_backend:
+        raise UnsupportedMachineSpec(
+            f"Task requires the {requirements.required_backend.value} backend, selected {factory.backend.value}"
+        )
     factory.check_environment(requirements, bound_machine_spec(requirements, factory, spec))
 
 

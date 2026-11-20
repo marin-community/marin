@@ -402,3 +402,20 @@ documents into bounded frames and assembles the complete JSON tool result.
 Search keeps OpenResearcher's top-five results and snippet policy. The index
 stays on the CPU service and does not occupy the actor disk. Each task keeps
 its declared JudgeSpec, including its model and request controls.
+
+Tasks can require a backend through the typed
+`environment_requirements.required_backend` field. A LOCAL tool runs inside a
+Shellbox bubblewrap machine on the Iris worker. Enable
+`environment.task_sessions.local: {}` for that run. The common TaskSpec loader
+selects the required backend without a dataset-specific override; a different
+backend fails validation before machine or model startup. Keep the actor network
+denied and qualify its pinned image and persistent tool state on that backend.
+
+The SkyRL default verifier floor is 1,800 seconds, defined by
+`environment.task_sessions.task_spec.minimum_verifier_timeout`. The common
+dataset loader applies the greater of that floor, the stored runtime limit and
+the task's declared verifier deadline. This covers fresh TaskSpecs and stored
+`task_rollout_spec` inputs. It extends a finite outer attempt budget to include
+the actor, verifier and cleanup phases. Original grader commands retain their
+own timeouts and verdict protocol; exceeding an infrastructure deadline remains
+an infrastructure timeout, never a successful grade.
