@@ -1,34 +1,6 @@
 {
   "pending": [
     {
-      "id": "FWeindel:validated-tasks/facet_v2",
-      "name": "facet-v2",
-      "display_name": "FACET terminal tasks",
-      "status": "Pending",
-      "origin": "FWeindel",
-      "upstream_dataset": "validated-tasks",
-      "upstream_url": "https://huggingface.co/datasets/FWeindel/validated-tasks/tree/317659ac88c8b706d318020c5fc3813a931fb6ec/facet_v2",
-      "notes": "Original native task and verifier contents; pending current-pin controls and admission.",
-      "stage": "Measurements pending",
-      "dataset_id": null,
-      "dataset_revision": null,
-      "reasons": []
-    },
-    {
-      "id": "FWeindel:validated-tasks/facet_v3",
-      "name": "facet-v3",
-      "display_name": "FACET terminal tasks",
-      "status": "Pending",
-      "origin": "FWeindel",
-      "upstream_dataset": "validated-tasks",
-      "upstream_url": "https://huggingface.co/datasets/FWeindel/validated-tasks/tree/317659ac88c8b706d318020c5fc3813a931fb6ec/facet_v3",
-      "notes": "Original native task and verifier contents; pending current-pin controls and admission.",
-      "stage": "Measurements pending",
-      "dataset_id": null,
-      "dataset_revision": null,
-      "reasons": []
-    },
-    {
       "id": "OpenAthena:pdbthink-coordinate-tasks",
       "name": "pdbthink-coordinate-train",
       "display_name": "PDBThink v1.3.0 coordinate tasks",

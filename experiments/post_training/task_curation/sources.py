@@ -103,7 +103,6 @@ CASCADE_RETAINED_SUBSETS = ("multi-domain-RL", "MOPD")
 
 # Awaiting the intake measurements listed in docs/references/task-curation.md#pending-source-intake.
 PENDING_MEASUREMENT_SOURCES = (
-    *facet.sources(),
     *pdbthink.sources(),
     *(source for source in cascade.sources() if source.info.subset not in CASCADE_RETAINED_SUBSETS),
     *lean_proofs.sources(),
@@ -152,6 +151,7 @@ def configured_sources() -> list[RlDataSource]:
         *ifbench.sources(),
         *openresearcher.sources(),
         *polaris.sources(),
+        *facet.sources(),
         *fineenvs.sources(fineenvs.PUBLISHED_IMAGES),
         *structure_closure.sources(),
         *thoughtcrime.sources(),
