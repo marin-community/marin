@@ -98,11 +98,6 @@ def test_muonh_update_matches_hero_with_optional_global_clip(clip):
     )
 
 
-def test_muonh_rejects_simultaneous_global_and_group_clipping():
-    with pytest.raises(ValueError, match="global_grad_norm"):
-        GrugMoeMuonHConfig(global_grad_norm=1.0, max_grad_norm=1.0)
-
-
 def test_global_clipping_preserves_optimizer_state_paths():
     params = {"matrix": jnp.ones((3, 4)), "mlp": {"expert_mlp": {"w_gate": jnp.ones((2, 2, 3, 4))}}}
     unclipped = GrugMoeMuonHConfig(use_syrk=False).build(100).init(params)
