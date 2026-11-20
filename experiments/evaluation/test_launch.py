@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 from click.testing import CliRunner
-from evalrecords.records import RunStatus
+from evalrecords.records import RunStatus, TaskEvidence
 from iris.client.client import IrisClient
 from iris.cluster.client import remote_client
 from iris.rpc import controller_pb2, job_pb2
@@ -344,7 +344,7 @@ def test_relaunch_changed_scoring_settings_use_distinct_steps(tmp_path, submitte
 
 
 @pytest.mark.parametrize("cache_key", [None, "pipeline-artifact"])
-def test_relaunch_changed_request_concurrency_preserves_identity(tmp_path, cache_key):
+def test_relaunch_changed_request_concurrency_and_task_evidence_preserves_identity(tmp_path, cache_key):
     config = tmp_path / "custom.yaml"
     config.write_text("evaluations:\n  custom:\n    benchmark: gsm8k\n")
     model = models()["qwen3-8b"]
@@ -373,7 +373,9 @@ def test_relaunch_changed_request_concurrency_preserves_identity(tmp_path, cache
 
     model = replace(model, evaluation_num_concurrent=64)
     tuned = replace(model.serve, max_num_batched_tokens=8192, max_num_seqs=128, gpu_memory_utilization=0.9)
-    after = prepare_evaluation_batch(replace(spec, model=replace(model, serve=tuned)))
+    after = prepare_evaluation_batch(
+        replace(spec, model=replace(model, serve=tuned), task_evidence=TaskEvidence.REFERENCE)
+    )
     StepRunner().run(build_evaluation_steps(after, execute))
 
     assert executed == []

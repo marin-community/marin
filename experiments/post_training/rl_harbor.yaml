@@ -27,7 +27,9 @@ job:
     - DaytonaConflictError
     - DaytonaConnectionError
     - DaytonaTimeoutError
-    - DaytonaCommandError
+    - TmuxExecTimeoutError
+    - DaytonaOutputUnavailable
+    - MachineTerminated
     max_retries: 1
   trial_attempt_timeout_sec: 1800
   verifier:

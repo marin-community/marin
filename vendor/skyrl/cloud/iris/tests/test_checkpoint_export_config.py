@@ -116,7 +116,7 @@ def test_checkpoint_export_config_carries_request_fields_as_data(tmp_path: Path,
     args = [
         "--launch-config", str(path), "--ckpt_path", "s3://run/checkpoints", "--step", "7",
         "--model_path", "Qwen/Qwen3-8B", "--num-nodes", "1", "--gpus-per-node", "4",
-        "--gpu-variant", "H100", "--hf-hub-repo-id", "org/model",
+        "--gpu-variant", "H100", "--hf-hub-repo-id", "org/model", "--hf-hub-revision", "release",
     ]
     if private:
         args.append("--hf-hub-private")
@@ -133,9 +133,12 @@ def test_checkpoint_export_config_carries_request_fields_as_data(tmp_path: Path,
     assert config.iris.allocation.gpu_variant == "H100"
     assert config.skyrl.trainer.placement.policy_num_nodes == 1
     assert config.skyrl.trainer.placement.policy_num_gpus_per_node == 4
-    assert config.skyrl.checkpoint_export.checkpoint_path == request.checkpoint_path
-    assert config.skyrl.checkpoint_export.export_root == request.export_path
-    assert config.skyrl.checkpoint_export.hf_hub_private is private
+    assert (request.hf_hub_repo_id, request.hf_hub_private, request.hf_hub_revision) == ("org/model", private, "release")
+    assert OmegaConf.to_container(config.skyrl.checkpoint_export) == {
+        "step": request.step,
+        "checkpoint_path": request.checkpoint_path,
+        "export_root": request.export_path,
+    }
 
 
 def test_checkpoint_export_config_preserves_saved_policy_geometry_on_whole_nodes() -> None:

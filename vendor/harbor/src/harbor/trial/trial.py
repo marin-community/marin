@@ -12,6 +12,7 @@ from typing import Any
 
 from harbor_config.errors import ErrorCategory, error_category
 from harbor_config.models.trial.config import TaskConfig
+from shellbox.machine import CommandOutputLost
 
 from harbor.agents.factory import AgentFactory
 from harbor.environments.base import BaseEnvironment, SandboxDiskFullError
@@ -48,6 +49,7 @@ from harbor.tasks.client import TaskClient
 from harbor.trial.artifact_handler import ArtifactHandler
 from harbor.trial.attempt import trial_paths, trial_relative_path
 from harbor.trial.errors import (
+    AgentCommandOutputLostError,
     AgentDiskFullError,
     AgentSetupTimeoutError,
     AgentTimeoutError,
@@ -345,16 +347,9 @@ class Trial(ABC):
                                 cleanup_failure = cleanup_error
                                 continue
                             self._environment_cleanup_failed = True
-                            preserve_reward = (
-                                isinstance(cleanup_error, Exception)
-                                and not isinstance(cleanup_error, ArtifactPersistenceError)
-                                and self.result.has_verifier_rewards
-                            )
-                            if primary is None and cleanup_failure is None and not preserve_reward:
+                            if primary is None and cleanup_failure is None:
                                 cleanup_failure = cleanup_error
                             else:
-                                if preserve_reward:
-                                    self.logger.warning("Cleanup failed after verification", exc_info=True)
                                 self.result.secondary_exception_info.append(
                                     ExceptionInfo.from_exception(cleanup_error)
                                 )
@@ -443,23 +438,18 @@ class Trial(ABC):
             or self._pending_cleanup_tasks
         ):
             self.result.completion = None
-            if (
-                self._artifact_persistence_failure is not None
-                or not self._environment_cleanup_failed
-                or not self.result.has_verifier_rewards
+            self.result.verifier_result = None
+            prior = self.result.exception_info
+            if prior is None or error_category(prior.exception_type) in (
+                ErrorCategory.AGENT,
+                ErrorCategory.PASSTHROUGH,
             ):
-                self.result.verifier_result = None
-                prior = self.result.exception_info
-                if prior is None or error_category(prior.exception_type) in (
-                    ErrorCategory.AGENT,
-                    ErrorCategory.PASSTHROUGH,
-                ):
-                    await self._record_exception(
-                        self._artifact_persistence_failure
-                        or PhaseCancellationError(
-                            "A cancelled trial phase did not finish before finalization"
-                        )
+                await self._record_exception(
+                    self._artifact_persistence_failure
+                    or PhaseCancellationError(
+                        "A cancelled trial phase did not finish before finalization"
                     )
+                )
         elif (
             self._is_agent_environment_stopped and not self._environment_cleanup_failed
         ):
@@ -667,6 +657,9 @@ class Trial(ABC):
         except SandboxDiskFullError as exc:
             primary = exc
             raise AgentDiskFullError(str(exc)) from exc
+        except CommandOutputLost as exc:
+            primary = exc
+            raise AgentCommandOutputLostError(str(exc)) from exc
         except BaseException as exc:
             primary = exc
             raise
@@ -772,7 +765,9 @@ class Trial(ABC):
             ) from timeout_error
         try:
             await task
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as cancellation:
+            if vars(cancellation).get("__notes__"):
+                self.result.secondary_exception_info.append(ExceptionInfo.from_exception(cancellation))
             raise timeout_error from None
         except ArtifactPersistenceError as error:
             self._artifact_persistence_failure = error

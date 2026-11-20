@@ -148,7 +148,7 @@ def upload_directory(local_path: str, cloud_path: str) -> None:
     logger.info(f"Uploaded {local_path} to {cloud_path}")
 
 
-def download_directory(cloud_path: str, local_path: str) -> None:
+def download_directory(cloud_path: str, local_path: str, *, batch_size: int | None = None) -> None:
     """Download a cloud directory to local storage."""
     if not is_cloud_path(cloud_path):
         raise ValueError(f"Source must be a cloud path, got: {cloud_path}")
@@ -159,9 +159,9 @@ def download_directory(cloud_path: str, local_path: str) -> None:
     # _strip_protocol, which rstrips separators and would silently undo it.
     if cloud_path.startswith("s3://"):
         source_path = fs._strip_protocol(cloud_path) + "/"
-        fs.get(source_path, local_path, recursive=True)
+        fs.get(source_path, local_path, recursive=True, batch_size=batch_size)
     else:
-        fs.get(cloud_path.rstrip("/") + "/", local_path, recursive=True)
+        fs.get(cloud_path.rstrip("/") + "/", local_path, recursive=True, batch_size=batch_size)
     logger.info(f"Downloaded {cloud_path} to {local_path}")
 
 
@@ -211,7 +211,7 @@ def local_work_dir(output_path: str):
 
 
 @contextmanager
-def local_read_dir(input_path: str):
+def local_read_dir(input_path: str, *, staging_dir: str | None = None):
     """
     Context manager that provides a local directory with content from input_path.
 
@@ -220,6 +220,7 @@ def local_read_dir(input_path: str):
 
     Args:
         input_path: The source path (local or cloud)
+        staging_dir: Parent for temporary staging. Use disk-backed storage for large exports.
 
     Yields:
         str: Local directory path containing the content
@@ -230,9 +231,10 @@ def local_read_dir(input_path: str):
             model = AutoModel.from_pretrained(read_dir)
     """
     if is_cloud_path(input_path):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # Download everything from cloud path to temp_dir
-            download_directory(input_path, temp_dir)
+        with tempfile.TemporaryDirectory(dir=staging_dir) as temp_dir:
+            # s3fs buffers several 50 MiB ranges per active file. Limit the number
+            # of simultaneous files so large exports fit in the publication job.
+            download_directory(input_path, temp_dir, batch_size=4)
             logger.info(f"Downloaded directory contents from {input_path}")
             yield temp_dir
     else:

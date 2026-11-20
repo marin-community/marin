@@ -385,11 +385,11 @@ attempt. Only selected final attempts contribute normalized rows.
 Preflight captures the selected Harbor runtime's error categories. Agent failures are
 scoreable model outcomes. Passthrough failures need a verifier result to be scored.
 Infrastructure and undecided failures remain unscored. Relay loss, runtime-log collection
-failure and teardown failure before verification are retryable infrastructure errors.
-When sandbox teardown fails or times out after verification, Harbor keeps the verifier
-reward, records the teardown error separately and skips the retry. Cancellation clears
-the reward. Unknown error names fail the evaluation. Marin requires the scored fraction
-to meet `min_completion_rate` (default 0.9), independently of archive sealing.
+failure and sandbox teardown failure are retryable infrastructure errors. A failed
+attempt with unconfirmed teardown retries within its budget, even when a verifier has
+returned a reward. The archive requires confirmed teardown for the selected attempt.
+Cancellation clears the reward. Unknown error names fail the evaluation. Marin requires
+the scored fraction to meet `min_completion_rate` (default 0.9), independently of archive sealing.
 
 ## Ownership boundary
 

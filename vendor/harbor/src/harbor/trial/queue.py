@@ -440,9 +440,13 @@ class TrialQueue:
             with bind_attempt(attempt_context):
                 result = await self._run_admitted_attempt(trial_config, attempt)
 
-            if result.exception_info is None or result.has_verifier_rewards:
+            if result.exception_info is None:
                 break
-            if not self._should_retry_exception(result.exception_info.exception_type):
+            # The archive rejects a final attempt whose teardown was not
+            # confirmed, so a failed attempt without completion always retries.
+            if result.completion is not None and not self._should_retry_exception(
+                result.exception_info.exception_type
+            ):
                 break
             if attempt == self._retry_config.max_retries:
                 break

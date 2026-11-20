@@ -163,9 +163,12 @@ def timeout_result(
     )
     secondary = list(result.secondary_exception_info)
     timeout_info = _exception_info(timeout_error)
-    if type(timeout_error) is TimeoutError and result.has_verifier_rewards:
-        # A plain phase timeout after a verifier reward is a teardown failure.
-        result.completion = None
+    if (
+        type(timeout_error) is TimeoutError
+        and result.has_verifier_rewards
+        and result.completion is not None
+    ):
+        # A completed attempt already has confirmed teardown and durable evidence.
         result.secondary_exception_info.append(timeout_info)
         return result
     if result.exception_info is not None and (

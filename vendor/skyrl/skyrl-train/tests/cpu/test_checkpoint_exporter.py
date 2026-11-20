@@ -7,13 +7,13 @@ from types import SimpleNamespace
 import pytest
 import torch
 from huggingface_hub import RepoFile
-from omegaconf import OmegaConf
 from safetensors.torch import save_file
 
 from marinskyrl.model_manifest import MODEL_MANIFEST_FILENAME, write_local_model_manifest
-from skyrl_train.checkpoint_exporter import CheckpointExportPlan, CheckpointExporter, RayPolicyExportWorkers, hub_publisher
+from skyrl_train.checkpoint_exporter import CheckpointExportPlan, CheckpointExporter, RayPolicyExportWorkers
 from skyrl_train.hf_export_schema import HFUploadMode
 from skyrl_train.hf_model_io import verify_hf_model_export
+from skyrl_train.hf_publisher import HuggingFacePublisher
 
 
 class FakePolicyExportWorkers:
@@ -118,14 +118,6 @@ class FakeHubApi:
         return str(target)
 
 
-class FakePublisher:
-    def __init__(self):
-        self.calls = []
-
-    def publish(self, export_path: str, step: int) -> None:
-        self.calls.append((export_path, step))
-
-
 def _plan(tmp_path: Path, step: int = 12) -> CheckpointExportPlan:
     checkpoint_path = tmp_path / "checkpoints" / f"global_step_{step}"
     checkpoint_path.mkdir(parents=True)
@@ -144,9 +136,8 @@ def test_checkpoint_exporter_converts_only_the_policy_model(tmp_path, monkeypatc
     workers = FakePolicyExportWorkers()
     tokenizer = object()
 
-    monkeypatch.setattr("skyrl_train.hf_publisher.HfApi", lambda: pytest.fail("publication requires a repository ID"))
-    publisher = hub_publisher(OmegaConf.create({"checkpoint_export": {}}))
-    result = CheckpointExporter(plan, workers, tokenizer, publisher=publisher).run()
+    monkeypatch.setattr("skyrl_train.hf_publisher.HfApi", lambda: pytest.fail("conversion contacted the Hub"))
+    result = CheckpointExporter(plan, workers, tokenizer).run()
 
     assert result.step == 12
     assert result.export_path == str(tmp_path / "exports" / "global_step_12" / "policy")
@@ -177,13 +168,10 @@ def test_checkpoint_exporter_rejects_a_mismatched_checkpoint_marker(tmp_path):
 )
 def test_checkpoint_exporter_rejects_incomplete_conversion_result(tmp_path, worker_type, error):
     workers = worker_type()
-    publisher = FakePublisher()
-
     with pytest.raises(RuntimeError, match=error):
-        CheckpointExporter(_plan(tmp_path), workers, object(), publisher).run()
+        CheckpointExporter(_plan(tmp_path), workers, object()).run()
 
     assert workers.closed
-    assert publisher.calls == []
 
 
 def test_unsharded_cloud_export_verification_does_not_head_optional_index(monkeypatch):
@@ -240,18 +228,18 @@ def test_ray_policy_export_workers_loads_model_state_without_training_state():
 @pytest.mark.parametrize(
     ("visibility", "requested", "upload_mode", "corrupt", "missing_manifest", "error"),
     [
-        (None, None, HFUploadMode.ALL, None, False, None),
-        pytest.param(None, None, HFUploadMode.LATEST, None, False, None, id="root-only"),
+        (None, False, HFUploadMode.ALL, None, False, None),
+        pytest.param(None, False, HFUploadMode.LATEST, None, False, None, id="root-only"),
         (None, True, HFUploadMode.ALL, None, False, None),
-        (True, None, HFUploadMode.ALL, None, False, "visibility differs"),
+        (True, False, HFUploadMode.ALL, None, False, "visibility differs"),
         (False, True, HFUploadMode.ALL, None, False, "visibility differs"),
-        (False, None, HFUploadMode.ALL, "config.json", False, "differs from the model manifest"),
+        (False, False, HFUploadMode.ALL, "config.json", False, "differs from the model manifest"),
         (
-            False, None, HFUploadMode.ALL, "checkpoints/step_12/model.safetensors",
+            False, False, HFUploadMode.ALL, "checkpoints/step_12/model.safetensors",
             False, "differs from the model manifest",
         ),
         pytest.param(
-            None, None, HFUploadMode.LATEST, None, True, "publication requires a model manifest", id="missing-manifest"
+            None, False, HFUploadMode.LATEST, None, True, "publication requires a model manifest", id="missing-manifest"
         ),
     ],
 )
@@ -268,13 +256,8 @@ def test_hf_publisher_checks_visibility_and_uploaded_files(
         (export_path / MODEL_MANIFEST_FILENAME).unlink()
     (export_path / "worker.log").write_text("worker log")
     api = FakeHubApi(tmp_path / "downloads", visibility, corrupt)
-    monkeypatch.setattr("skyrl_train.hf_publisher.HfApi", lambda: api)
     monkeypatch.setenv("HF_HUB_OFFLINE", "1")
-    settings = {"hf_hub_repo_id": "org/model", "hf_upload_mode": upload_mode.value}
-    if requested is not None:
-        settings["hf_hub_private"] = requested
-    publisher = hub_publisher(OmegaConf.create({"checkpoint_export": settings}))
-    assert publisher is not None
+    publisher = HuggingFacePublisher(repo_id="org/model", private=requested, upload_mode=upload_mode, api=api)
 
     if error:
         with pytest.raises(ValueError, match=error):
@@ -287,7 +270,7 @@ def test_hf_publisher_checks_visibility_and_uploaded_files(
 
     publisher.publish(str(export_path), step=12)
 
-    assert api.private is (requested is True)
+    assert api.private is requested
     paths = [file.path for file in manifest.files] + [MODEL_MANIFEST_FILENAME]
     expected = {path: (export_path / path).read_bytes() for path in paths}
     snapshots = [expected]
