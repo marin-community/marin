@@ -113,6 +113,28 @@ def test_apply_output_path_sets_run_specific_temp_checkpoints(trainer_config):
     )
     assert checkpointer.append_run_id_to_base_path is False
     assert updated.hf_save_path == "gs://marin-us-east5/experiments/grug/base-trial/hf"
+    assert updated.hf_generation_config_defaults == {
+        "do_sample": True,
+        "temperature": 0.6,
+        "top_p": 0.95,
+    }
+
+
+def test_apply_output_path_preserves_explicit_generation_config_defaults(trainer_config):
+    explicit = {"do_sample": True, "temperature": 0.2}
+    with patch(
+        "marin.training.training.marin_temp_bucket",
+        return_value="gs://tmp/ttl=14d/checkpoints-temp/example-run",
+    ):
+        updated = apply_output_path(
+            train_lm.TrainLmConfig(
+                trainer=trainer_config,
+                hf_generation_config_defaults=explicit,
+            ),
+            "gs://bucket/checkpoints/lm/example-run",
+        )
+
+    assert updated.hf_generation_config_defaults == explicit
 
 
 @pytest.mark.parametrize(

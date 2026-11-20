@@ -194,7 +194,7 @@ allocation then disagrees with the derived role plan and is rejected before subm
 
 The preflight requires positive role dimensions, checks batch divisibility, and requires an explicit
 forward microbatch size to equal the training microbatch size. It checks local engine placement,
-rejects unsupported transport settings and separate critic roles, and requires an explicit KL-loss
+rejects unsupported transport settings and requires an explicit KL-loss
 setting. For every launcher, preflight checks policy and reference Megatron parallelism against
 the GPUs assigned to each role. Megatron builds separate dense and expert grids. The role GPU count
 must be divisible by both `TP * PP * CP` and `ETP * EP * PP`, where ETP is expert tensor
@@ -209,6 +209,14 @@ data artifacts, a starting native checkpoint, topology, seed, retention, and the
 host resources, priority, and retry policy belong in `IrisSkyRLExecution`; changing placement must
 not fork artifact identity.
 
+The `records` tracker requires a fresh attempt ID and `iris.max_retries=0`.
+Its Iris jobs also use zero preemption retries. After a preemption, start a fresh
+attempt with `trainer.resume_mode=from_path` and `trainer.resume_path` pointing
+to its saved `global_step_N` checkpoint. Known checkpoint ancestors contribute
+metrics through the resumed boundary; a checkpoint without recorded ancestry
+contributes only the new attempt's metrics. Other tracker backends retain Iris's
+ordinary preemption retry budget.
+
 `IrisSkyRLExecution.container_profile` accepts an `iris.rpc.job_pb2.ContainerProfile` enum for the
 coordinator and trainer jobs. Enum names are serialized at the launch boundary. It defaults to `None`,
 which leaves the Iris default in effect. In-pod sandbox graders need namespace capabilities: use
@@ -219,6 +227,22 @@ Use artifact dependencies for model and data handoffs. A raw checkpoint path hid
 can point at an incomplete export. Keep resume behavior and terminal export explicit. Use Marin's
 temporary-storage helper for checkpoints and trajectories so paths have a bounded lifetime and do
 not repeat a source bucket prefix.
+
+Shared W&B trackers bound final SDK uploads to 30 seconds per process. The
+training entrypoint first waits up to 30 seconds for remote node loggers, then
+finishes its own uploads using the same SDK deadline. These waits can take up to
+60 seconds, plus other cleanup. Upload timeouts produce warnings and preserve
+the workload's success or original exception. W&B may show the run as Crashed
+or Failed after a primary upload timeout even when training succeeds. Some W&B
+records may remain unuploaded. Other cleanup can still exhaust the existing
+120-second teardown watchdog.
+
+Marin sets the run's export root (`trainer.export_path`) to `<run output>/exports`.
+Set `trainer.dump_data_batch: true` to save diagnostic `TrainingInputBatch`
+pickle files under `<trainer.export_path>/dumped_data/global_step_<step>_training_input.pkl`.
+Local and cloud export paths use the same format. Dumps contain the batch after
+importance-sampling corrections and advantage calculation. Group UIDs and raw
+rewards are removed before dumping.
 
 SkyRL keeps the two most recent recovery checkpoints by default. For an RSI loop
 that needs only the latest recovery point, set
@@ -232,6 +256,16 @@ model and a separate export job. The structured launch config defaults `run.expo
 to false as well. Without export, successful runs retain native recovery checkpoints,
 in-training evaluation, resolved configuration and terminal result records; `SkyRLRun.hf_model_uri`
 is null. Pipelines that serve the resulting model for downstream evaluation must request export.
+
+Every HF export writes `generation_config.json` through SkyRL's Hugging Face
+model lifecycle utilities. It keeps the explicit fields of the source model's
+generation config and fills in the rest:
+`bos_token_id`, `eos_token_id` as the union of the tokenizer EOS id and the
+end-of-turn tokens the chat template emits (128001 and 128009 for the Llama 3
+header template), and `do_sample: true`, `temperature: 0.6`, `top_p: 0.95`.
+vLLM applies these sampling values to requests that omit them. SkyRL rollouts
+send explicit sampling parameters, and behavior-logprob training sets
+`generation_config: vllm` so the checkpoint's defaults never reach rollouts.
 
 The `best_checkpoint` callback accepts a `selection_metric` whose values must be
 finite normalized scores in [0, 1], with larger values preferred. Set
@@ -313,4 +347,25 @@ For live submission, monitoring, or recovery, follow the `launch-rl` and `use-ir
 `lib/iris/OPS.md`. Do not restart a cluster or resubmit a failed run without explicit authority.
 
 For the current curation, training and evaluation recipe, see the
-[quick RL loop](../recipes/quick-rl-loop.md).
+[Snowball RL experiments](../recipes/rl-experiments.md) and the
+[selection handoff](task-curation.md#train-on-a-snowball-selection).
+
+### NCCL SIMPLE buffers
+
+Policy and reference roles resolve `nccl_buffer_size_bytes` to 4,194,304 bytes
+(4 MiB) by default. The role runtime environment sets `NCCL_BUFFSIZE` explicitly,
+including inference engines that receive the policy's weight-sync setting. This
+prevents an inherited small-buffer value from replacing the resolved default.
+A `null` value deliberately delegates sizing to the process environment and NCCL
+config files.
+
+NCCL 2.30.7 can return incorrect NVLSTree reductions when its tuned staging payload
+exceeds a SIMPLE FIFO slot. A 256-KiB buffer reproduced this failure through both
+the native C API and ProcessGroupNCCL. A 1-MiB buffer also failed at 512-MiB
+messages; 4-MiB controls passed the tested 16–512-MiB range. See
+[the investigation and source-library A/B](https://github.com/marin-community/marin/issues/11649).
+This mitigation uses the existing library and preserves byte verification. It
+does not establish correctness for every message size or topology. Check resolved
+role settings and the effective `NCCL_BUFFSIZE` in worker INIT logs before scaling
+a new configuration. Reference workers now retain larger buffers, so include that
+memory in colocated-role capacity estimates.

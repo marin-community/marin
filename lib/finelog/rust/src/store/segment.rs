@@ -499,13 +499,13 @@ pub(crate) fn segment_metadata_from_parquet(
     })
 }
 
-fn metadata_int64_bounds(
+pub(crate) fn metadata_int64_bounds(
     md: &ParquetMetaData,
-    key_column: &str,
+    column: &str,
 ) -> Option<(Option<i64>, Option<i64>)> {
     let schema = md.file_metadata().schema_descr();
     let col_idx =
-        (0..schema.num_columns()).find(|&i| schema.column(i).path().parts() == [key_column])?;
+        (0..schema.num_columns()).find(|&i| schema.column(i).path().parts() == [column])?;
     let mut lo: Option<i64> = None;
     let mut hi: Option<i64> = None;
     for rg in md.row_groups() {

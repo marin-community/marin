@@ -12,6 +12,7 @@ from harbor.agents.terminus_2.tmux_session import (
     ModelInitiatedTmuxFailure,
     TmuxBatchProtocolError,
     TmuxCommandError,
+    TmuxExecTimeoutError,
     TmuxKeystrokeBatch,
     TmuxSession,
     TmuxSessionEndedError,
@@ -515,6 +516,18 @@ async def test_send_keys_and_capture_preserves_transport_exception(tmux_session)
         await tmux_session.send_keys_and_capture([_batch("echo hi\n")])
 
     assert exc_info.value is transport_error
+
+
+async def test_send_keys_and_capture_classifies_sandbox_timeout(tmux_session):
+    tmux_session.environment.exec = AsyncMock(
+        side_effect=TimeoutError("Sandbox command timed out")
+    )
+
+    with pytest.raises(TmuxExecTimeoutError) as exc_info:
+        await tmux_session.send_keys_and_capture([_batch("cargo build\n")])
+
+    assert error_category(type(exc_info.value).__name__) is ErrorCategory.INFRASTRUCTURE
+    assert is_resume_retryable(type(exc_info.value).__name__)
 
 
 def test_tmux_session_rejects_invalid_batch_timeout_margin(mock_environment):

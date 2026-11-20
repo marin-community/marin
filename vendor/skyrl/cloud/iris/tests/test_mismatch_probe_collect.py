@@ -71,7 +71,6 @@ def _trainer(runner, *, runner_limit=8, serving_dp=2, max_num_seqs=1):
                     "seed": 42,
                     "prompts": {"count": 2, "samples_per_prompt": 3},
                 },
-                "algorithm": {"tis_lcs_alert_threshold": 0.0},
             },
             "trajectory_runner": {"max_concurrent_tasks": runner_limit},
             "generator": {

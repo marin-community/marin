@@ -420,6 +420,7 @@ class Trial(ABC):
         await self.agent_environment.run_healthcheck()
         await self._upload_injected_skills()
         await self._upload_setup_files()
+        await self._emit(TrialEvent.ENVIRONMENT_READY)
         with self.agent_environment.with_default_user(self.task.config.agent.user):
             await self._setup_agent()
         self.result.agent_info = self.agent.to_agent_info()
@@ -756,7 +757,9 @@ class Trial(ABC):
             ) from timeout_error
         try:
             await task
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as cancellation:
+            if vars(cancellation).get("__notes__"):
+                self.result.secondary_exception_info.append(ExceptionInfo.from_exception(cancellation))
             raise timeout_error from None
         except ArtifactPersistenceError as error:
             self._artifact_persistence_failure = error
