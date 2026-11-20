@@ -117,11 +117,19 @@ continuations and have no generation output budget.
 Judge deployments belong under `run`: `judge` records a `JudgeIdentity`,
 `judge_endpoint` is a credential-free endpoint, and `judge_api_key` contains ordered
 secret references. The standard
-FinanceBench and OlympiadBench definitions use Together and record its model alias
+FinanceBench, OlympiadBench and EconEvals definitions use Together and record its model alias
 as provider-managed. A provider alias does not establish the exact weights served.
 Supply explicit judge deployment identities for reproducible private deployments.
 The [September 25 publication campaign](https://github.com/marin-community/marin/tree/main/experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled)
 supplies its separately pinned hosted judge through `--policy-finalization-config`.
+
+EconEvals scores are not directly comparable with the
+[EconEvals paper](https://arxiv.org/abs/2607.19375), which judged with gpt-4.1-mini. The `econevals`
+suite uses the paper's o3-mini baseline; strong models beat it on most items, so compare them with
+the `econevals-o3` suite, which judges against o3's released answers. The `econevals-sampled` and
+`econevals-sampled-o3` suites keep six questions from each category, about a tenth of the items,
+for development runs. The judge often prefers whichever answer it reads first, and such split items
+score 0.5, so treat score differences under about 0.1 as noise.
 
 Harbor files retain Harbor's `JobConfig` schema and `--harbor-config` option.
 Harbor execution is independent of curated TaskSpec evaluation.

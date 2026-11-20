@@ -25,6 +25,7 @@ publishing. Reuse passing checks while their inputs remain unchanged.
 | `use-echo` | Searching prior work and maintaining shared knowledge or incident records | Repository procedures belong in `OPS.md` or `docs/`; search alone does not require a write |
 | `echo-log` | Reading and appending the shared agent work log, one entry per milestone | Search, wiki notes, and incident records belong to `use-echo`; an entry links evidence and does not replace the PR, issue, or report |
 | `research-engineering` | Iterative design and data exploration, experiments, runnable research branches, notebooks, and promotion into Marin | Background research uses experiment records; domain skills own execution and `manage-pr` owns contribution PRs |
+| `press-office` | Editorial triage of landed logbook index records and closed experiment issues for Research Notes | Research engineering owns the evidence record. Publication is a separate editorial decision. |
 | `curate-experiments` | Report-index curation and explicitly requested archive tags and issue breadcrumbs | Archival does not authorize deleting experiment files; scheduled issue summaries use an assigned procedure |
 
 ## Operations and measurement

@@ -37,6 +37,7 @@ checkpoint_export:
   step: null
   checkpoint_path: null
   export_root: null
+  # Keep these defaults for rl_gate comparisons against sealed controls.
   hf_hub_repo_id: null
   hf_hub_private: false
   hf_hub_revision: main
