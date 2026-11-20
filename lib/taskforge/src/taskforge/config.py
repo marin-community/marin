@@ -11,7 +11,6 @@ from typing import Protocol, cast
 from taskcompendium.models import TaskResource
 
 from taskforge.harness.protocol import Harness, Tool
-from taskforge.harness.tools.submit import Gate
 from taskforge.model.review import BandRules, Budget, Decision
 from taskforge.model.stage import Exit, Stage
 from taskforge.model.workpiece import Workpiece
@@ -57,7 +56,6 @@ class TaskforgeConfig:
     author: Harness
     adversaries: Mapping[str, Harness]
     tools: Mapping[str, Mapping[str, Tool[object]]]
-    submit_gate: Gate
     review: ReviewRules
     band: BandRules
     budget: Budget

@@ -135,30 +135,6 @@ class GlmInference(InferenceClient):
         )
 
 
-class FakeInference(InferenceClient):
-    def __init__(
-        self, completions: Sequence[Completion | Transient | Restart | Hold | ContextExceeded], *, identity: str = "fake"
-    ) -> None:
-        self.script = tuple(completions)
-        self.requests: list[InferenceRequest] = []
-        self.identity = identity
-
-    @override
-    def fingerprint(self) -> Fingerprint:
-        return Fingerprint("inference", self.identity, ReplayPolicy.CACHE)
-
-    @override
-    async def complete(self, request: InferenceRequest) -> Completion:
-        index = len(self.requests)
-        self.requests.append(request)
-        if index >= len(self.script):
-            raise RuntimeError("Fake inference script exhausted")
-        result = self.script[index]
-        if isinstance(result, Transient | Restart | Hold | ContextExceeded):
-            raise result
-        return result
-
-
 def _retries(attempts: Sequence[Attempt]) -> tuple[str, ...]:
     return tuple(
         f"{attempt.outcome}:{attempt.http_status}"

@@ -3,7 +3,7 @@
 
 """GLM-5.3 chat completions through the ``openai`` SDK, retried by one loop.
 
-``GlmClient`` implements ``taskforge.llm.client.ModelClient``, with ``LLMProviderConfig`` supplying
+``GlmClient`` serves ``taskforge.resources.inference.CompletionBackend``, with ``LLMProviderConfig`` supplying
 the model, the retry budget and backoff, the hold and stall timeouts and the connection pool. The
 client builds each request and sends it through the SDK with the SDK's retries turned off, then
 retries failed attempts itself. The SDK retries only before a response starts, which rules out
@@ -47,11 +47,6 @@ vLLM's GLM tool parser reports a reply cut off by ``max_tokens`` inside a tool c
 ``tool_calls`` segment as ``LENGTH`` whenever its completion tokens use up ``max_tokens``, which
 also catches a reply ending exactly on the budget. ``Attempt.events`` holds the chunks as the server
 sent them.
-
-``complete_structured`` sends ``output_type``'s JSON schema as the ``response_format`` with
-continuations off, then validates the reply and asks for repairs through ``taskforge.llm.structured``.
-That module also appends a user turn describing each field, since the chat template renders nothing
-from ``response_format``.
 """
 
 import asyncio
@@ -71,7 +66,6 @@ import openai
 from openai.lib.streaming.chat import ChatCompletionStreamState
 from openai.types import CompletionUsage
 from openai.types.chat import ChatCompletionChunk
-from pydantic import BaseModel
 from rigging.timing import ExponentialBackoff
 
 from taskforge.llm.client import (
@@ -83,7 +77,6 @@ from taskforge.llm.client import (
     FinishReason,
     ModelRequestRejected,
     ModelUnavailable,
-    StructuredResult,
     ToolCall,
     Usage,
 )
@@ -95,7 +88,6 @@ from taskforge.llm.policy import (
     continuation_messages,
     reasoning_continuation_messages,
 )
-from taskforge.llm.structured import complete_structured, response_format
 
 logger = logging.getLogger(__name__)
 
@@ -277,8 +269,8 @@ class GlmClient:
     Args:
         source: Supplies the endpoint. The client asks it again during holds and after a connection
             error.
-        provider: The model, the retry budget and backoff, the hold and stall timeouts, the connection
-            pool size and the structured-call repair budget.
+        provider: The model, the retry budget and backoff, the hold and stall timeouts and the connection
+            pool size.
     """
 
     def __init__(self, source: EndpointSource, provider: LLMProviderConfig, limit_output: bool = True) -> None:
@@ -461,33 +453,6 @@ class GlmClient:
             continuations=len(segments) - 1,
             attempts=tuple(attempts),
         )
-
-    async def complete_schema(
-        self, messages: Sequence[Message], output_type: type[BaseModel], policy: LLMPolicy
-    ) -> Completion:
-        """Request a reply constrained to ``output_type``'s JSON schema, with continuations off.
-
-        vLLM applies the schema's grammar from the start of each request, so a JSON object cut off by
-        the output limit cannot resume in a second request. A cut reply returns with
-        ``finish_reason == "length"``.
-        """
-        fields = {"response_format": response_format(output_type)}
-        return await self.complete(messages, replace(policy, max_continuations=0), fields)
-
-    async def complete_structured[T: BaseModel](
-        self, messages: Sequence[Message], output_type: type[T], policy: LLMPolicy
-    ) -> StructuredResult[T]:
-        """Request a reply as ``output_type`` and return it validated, repairing invalid replies.
-
-        vLLM decodes the answer under ``output_type``'s JSON schema with xgrammar, after the reasoning
-        block. The model reads the fields from the last user turn, holding
-        ``taskforge.llm.structured.schema_instruction(output_type)``. The client then validates the
-        reply with ``output_type`` to run its pydantic validators. It sends an invalid reply back for
-        correction up to the provider's ``structured_repairs`` times, then raises
-        ``StructuredOutputError``. A reply cut off by the output limit raises ``StructuredOutputError``
-        at once, with no repair.
-        """
-        return await complete_structured(self, messages, output_type, policy, self._provider.structured_repairs)
 
     async def _segment(
         self,

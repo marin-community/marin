@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 from typing import override
 
 import pytest
+from lib.taskforge.tests.resource_doubles import FakeCommand, FakeEnv
 from rolloutengine.test_support import machine_runtime
 from shellbox.backends.iris.machine import IrisMachine
 from shellbox.machine import (
@@ -34,8 +35,6 @@ from taskforge.resources import env as env_module
 from taskforge.resources.env import (
     CommandResult,
     Env,
-    FakeCommand,
-    FakeEnv,
     ReadFile,
     RunCommand,
     ShellboxEnv,

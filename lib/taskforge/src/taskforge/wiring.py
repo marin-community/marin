@@ -9,7 +9,7 @@ from collections.abc import AsyncIterator, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field, replace
 from functools import partial
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 from types import MappingProxyType
 from typing import override
 
@@ -51,8 +51,8 @@ from taskforge.model.review import BandOutcome, BandRules, Budget
 from taskforge.model.workpiece import Submission
 from taskforge.policy import Policy, load_policy, resolution_lines
 from taskforge.policy import sampling as policy_sampling
+from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.bundle import Resources
-from taskforge.resources.clock import Clock, Now, now
 from taskforge.resources.env import Env, EnvFactory, ShellboxEnvFactory
 from taskforge.resources.grading import GradeCandidate, GradingResource, grade
 from taskforge.resources.ids import Ids, NewId, new_id
@@ -129,7 +129,6 @@ def install(ctx: Context, resources: Resources) -> None:
         (InferenceRequest, partial(complete, notify=ctx.emit), resources.inference_for("author")),
         (SolverRollout, partial(run_rollout, notify=ctx.emit), rollouts),
         (GradeCandidate, partial(grade, notify=ctx.emit), grading),
-        (Now, now, resources.clock),
         (NewId, new_id, resources.ids),
         (WebSearch, partial(search, notify=ctx.emit), resources.web),
         (WebFetch, partial(fetch, notify=ctx.emit), resources.web),
@@ -196,7 +195,6 @@ def build_resources(
             digest((provider, clients["solver"].model, sampling, execution)),
         ),
         GradingResource(verifiers.grades, execution, base_engine),
-        Clock(),
         Ids(),
         factories,
         web,
@@ -283,7 +281,6 @@ def build_config(policy: Policy, arm: str, factories: Mapping[str, MachineFactor
         author,
         adversaries,
         tools,
-        gate,
         default_review,
         band,
         budget,
@@ -307,7 +304,7 @@ async def runtime(
     policy: Policy, arm: str, source: EndpointSource, parallel_api_key: str
 ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
     policy = provider_policy(policy)
-    declared = load_policy(Path(__file__).parent / "policy/defaults")
+    declared = load_policy(DEFAULTS_DIR)
     logging.info("\n".join(resolution_lines(declared, policy)))
     logging.info(
         "provider.unavailable_wait declared=%s resolved=%s iris_call_cap=%gs",
@@ -315,10 +312,13 @@ async def runtime(
         policy.setting("provider.unavailable_wait", float),
         DEFAULT_RETRY_MAX_ELAPSED,
     )
+    # provider.structured_repairs has no reader. It stays in policy.json because build_resources digests every
+    # provider.* entry into the inference and rollout fingerprints of recorded logs.
     provider_fields = {
         key.removeprefix("provider."): value
         for key, value in policy.entries.items()
-        if key.startswith("provider.") and key not in ("provider.unavailable_wait", "provider.pool")
+        if key.startswith("provider.")
+        and key not in ("provider.unavailable_wait", "provider.pool", "provider.structured_repairs")
     }
     # The wrapper owns both busy retries and empty-pool waits under one deadline.
     provider_fields.update(max_attempts=1, hold_timeout=0)

@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import override
 
+from lib.taskforge.tests.resource_doubles import FakeEnv
 from rolloutengine.models import (
     GradedRollout,
     Model,
@@ -24,7 +25,7 @@ from taskforge.effects.issues import Hold, Restart
 from taskforge.harness.protocol import Harness, Tool
 from taskforge.model.stage import Exit
 from taskforge.model.workpiece import Conversation
-from taskforge.resources.env import EnvFactory, FakeEnv
+from taskforge.resources.env import EnvFactory
 from taskforge.resources.inference import InferenceClient
 from taskforge.resources.rollouts import Engine
 

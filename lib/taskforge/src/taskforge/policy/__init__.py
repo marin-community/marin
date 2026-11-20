@@ -67,13 +67,6 @@ class Policy:
             raise ValueError(f"policy entry {key} is {value!r}, not a {kind.__name__}")
         return value
 
-    def stage_digest(self, prefix: str) -> str:
-        """The sha256 of the sorted entries under ``prefix``: a prompt by its template's sha256, a setting by value."""
-        under = {key: value for key, value in self.entries.items() if key.startswith(f"{prefix}.")}
-        return digest(
-            {key: value.sha256 if isinstance(value, Prompt) else value for key, value in sorted(under.items())}
-        )
-
     def overlaid(self, *overlays: Mapping[str, object]) -> "Policy":
         """This policy with each overlay's values in place, in order; a string replaces a prompt's template.
 

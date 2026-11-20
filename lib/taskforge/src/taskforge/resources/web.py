@@ -63,26 +63,6 @@ class ParallelWeb(WebClient):
         return await self._post("/extract", {"urls": [url]})
 
 
-class FakeWeb(WebClient):
-    def __init__(self, searches: Mapping[str, str], pages: Mapping[str, str], *, identity: str = "fake") -> None:
-        self.searches, self.pages, self.identity = dict(searches), dict(pages), identity
-        self.requests: list[WebSearch | WebFetch] = []
-
-    @override
-    def fingerprint(self) -> Fingerprint:
-        return Fingerprint("web", self.identity, ReplayPolicy.CACHE)
-
-    @override
-    async def search(self, query: str) -> str:
-        self.requests.append(WebSearch(query))
-        return self.searches[query]
-
-    @override
-    async def fetch(self, url: str) -> str:
-        self.requests.append(WebFetch(url))
-        return self.pages[url]
-
-
 async def search(event: WebSearch, client: WebClient, *, notify: Notify) -> str:
     return await retry_effect(event, lambda: client.search(event.query), notify)
 

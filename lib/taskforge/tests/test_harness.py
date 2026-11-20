@@ -10,6 +10,7 @@ from typing import override
 
 import httpx
 import pytest
+from lib.taskforge.tests.resource_doubles import FakeCommand, FakeEnv, FakeInference, FakeWeb
 from rolloutengine.models import GradedRollout, Model, TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task, rollout_limits
 from shellbox.backends.iris.machine import ExecOutput, IrisMachine
@@ -47,8 +48,6 @@ from taskforge.model.llm import Completion, FinishReason, Message, Role, ToolCal
 from taskforge.model.workpiece import Conversation, Submission
 from taskforge.resources.env import (
     CommandResult,
-    FakeCommand,
-    FakeEnv,
     ReadFile,
     RunCommand,
     ShellboxEnv,
@@ -58,9 +57,8 @@ from taskforge.resources.env import (
     write_file,
 )
 from taskforge.resources.grading import GradeCandidate, GradingResource, grade
-from taskforge.resources.inference import FakeInference
 from taskforge.resources.rollouts import Engine
-from taskforge.resources.web import FakeWeb, ParallelWeb, WebFetch, WebSearch, fetch, search
+from taskforge.resources.web import ParallelWeb, WebFetch, WebSearch, fetch, search
 
 pytestmark = pytest.mark.asyncio
 

@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock
 import pytest
 from jsonschema import Draft202012Validator, ValidationError
 from lib.taskforge.tests.fake_resources import resources
+from lib.taskforge.tests.resource_doubles import FakeInference
 from lib.taskforge.tests.stage_fakes import CandidateEngine, Environments, RecordingHarness, SolverEngine, solver_model
 from rolloutengine.models import GradedRollout, Model, TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task, rollout_spec
@@ -27,15 +28,10 @@ from taskforge.effects.log import EventLog
 from taskforge.harness.loop import AgenticHarness
 from taskforge.harness.protocol import Returned, Stopped, StopReason, Submitted
 from taskforge.harness.tools.adversary import AdversaryClaim, AdversaryReport
-from taskforge.lowering import machine_backend, requirements
+from taskforge.lowering import lowering_settings, machine_backend, requirements
 from taskforge.model.controls import CONTROL, CONTROLS, Candidate, Control, ControlKind, RewardBand
 from taskforge.model.llm import Completion, Message, Role, ToolCall, Usage
-from taskforge.model.proposal import (
-    REQUIRED_HEADINGS,
-    ResearchNeed,
-    TaskProposal,
-    render,
-)
+from taskforge.model.proposal import ResearchNeed, TaskProposal, render
 from taskforge.model.review import (
     VALIDATION_RESULT,
     Accept,
@@ -58,7 +54,6 @@ from taskforge.model.workpiece import WORKPIECE, Conversation, Submission, Termi
 from taskforge.policy import GRADER_BASE_IMAGE, Policy, load_policy, sampling
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.grading import GradeCandidate, GradingResource, grade
-from taskforge.resources.inference import FakeInference
 from taskforge.resources.rollouts import SolverRollout
 from taskforge.stages.author import author
 from taskforge.stages.classify import grade_cause, replayable_grade
@@ -66,7 +61,7 @@ from taskforge.stages.exits import Decided, Validated
 from taskforge.stages.review import review
 from taskforge.stages.rules import default_review
 from taskforge.stages.validate import adversary_result, claim_result, control_result, solver_result, validate
-from taskforge.wiring import build_config
+from taskforge.wiring import build_config, submit_gate
 
 
 @pytest.fixture
@@ -74,9 +69,7 @@ def workpiece(proposal: TaskProposal) -> Workpiece:
     proposal = replace(
         proposal,
         header=replace(proposal.header, id="sum", research=(), research_need=ResearchNeed.NOT_NEEDED),
-        body="\n\n".join(
-            f"## {heading}\n" + "Compute the exact sum using a script. " * 7 for heading in REQUIRED_HEADINGS
-        ),
+        body="## Task\n" + "Compute the exact sum using a script. " * 7,
     )
     controls = tuple(
         Control(Candidate(reply), RewardBand(Outcome.GRADED, reward_min=lo, reward_max=hi), kind)
@@ -282,14 +275,14 @@ async def test_validate_returns_lowering_failure_without_starting_trials(workpie
     assert result.lowering_error is not None
     assert not result.solver and not result.controls
     assert workpiece.submission is not None
-    setup = config(harness)
+    gate = partial(submit_gate, settings=lowering_settings(load_policy(DEFAULTS_DIR)), factories={})
     if authored:
         assert result.lowering_cause is Cause.INVALID_TASK
-        assert setup.submit_gate(workpiece.submission) == ("Task resources require a task machine",)
+        assert gate(workpiece.submission) == ("Task resources require a task machine",)
     else:
         assert result.lowering_cause is Cause.GRADER_INFRA
         with pytest.raises(Hold, match="Lowering failed"):
-            setup.submit_gate(workpiece.submission)
+            gate(workpiece.submission)
     assert isinstance(
         default_review(workpiece.with_(evidence=(result,)), config(harness).band, config(harness).budget),
         Modify if authored else Incomplete,

@@ -288,9 +288,6 @@ class EventLog:
     def lookup[T](self, event: Event[T], fingerprints: tuple[Fingerprint, ...]) -> T | Missing:
         return cast(T | Missing, self._index.get((event_digest(event), fingerprints), Missing()))
 
-    def resolved(self) -> Sequence[Resolved[object]]:
-        return tuple(record.event for record in self._records if isinstance(record.event, Resolved))
-
 
 @dataclass(frozen=True, slots=True)
 class Status:

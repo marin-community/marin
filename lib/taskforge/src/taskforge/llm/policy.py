@@ -92,8 +92,6 @@ class LLMProviderConfig:
         backoff_factor: Growth of the delay after each wait.
         stall_timeout: Seconds without a streamed token before the client abandons an attempt.
         max_connections: httpx connection-pool size; sized for hundreds of concurrent calls.
-        structured_repairs: How many times an invalid structured reply is sent back for correction before the
-            call fails.
     """
 
     model: str
@@ -104,7 +102,6 @@ class LLMProviderConfig:
     backoff_factor: float
     stall_timeout: float
     max_connections: int
-    structured_repairs: int
 
 
 def continuation_messages(messages: Sequence[Message], partial: str) -> list[Message]:

@@ -6,6 +6,7 @@ from dataclasses import replace
 
 import pytest
 from lib.taskforge.tests.fake_resources import resources
+from lib.taskforge.tests.resource_doubles import FakeInference
 from rolloutengine.models import TraceMode
 from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grader import verifyit_package
@@ -23,7 +24,7 @@ from taskforge.model.llm import Completion
 from taskforge.policy import load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.grading import GradeCandidate, GradingResource
-from taskforge.resources.inference import FakeInference, InferenceRequest
+from taskforge.resources.inference import InferenceRequest
 from taskforge.resources.judge import JudgeEngine
 from taskforge.wiring import install
 

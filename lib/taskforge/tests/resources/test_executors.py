@@ -5,6 +5,7 @@ from pathlib import PurePosixPath
 from typing import override
 
 import pytest
+from lib.taskforge.tests.resource_doubles import FakeCommand, FakeEnv
 from lib.taskforge.tests.resources.rollout_fakes import twelve
 from rolloutengine.models import GradedRollout, Model, Rollout, RolloutInterrupted, RolloutOperation, TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task, rollout_spec
@@ -12,7 +13,7 @@ from taskcompendium.grading_result import GradeResult, Outcome
 
 from taskforge.effects.events import Event, Retrying
 from taskforge.effects.issues import Restart, Transient
-from taskforge.resources.env import CommandResult, FakeCommand, FakeEnv, RunCommand, run_command
+from taskforge.resources.env import CommandResult, RunCommand, run_command
 from taskforge.resources.rollouts import Engine, RolloutResource, SolverRollout, run_rollout
 
 

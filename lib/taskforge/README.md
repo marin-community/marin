@@ -18,7 +18,7 @@ This file covers how to run it.
 | `src/taskforge/harness/` | the agentic loop and its tools (`shell`, `read_file`, `write_file`, `grade`, `submit`, `validate`, `report`, `finish`, web) |
 | `src/taskforge/stages/` | `author`, `validate`, `review`; the review rules; prompt summaries |
 | `src/taskforge/model/` | frozen data: proposal, workpiece, task spec, verdicts, decisions |
-| `src/taskforge/llm/` | the GLM transport kept from the previous Taskforge: client, policy, structured output, wire helpers |
+| `src/taskforge/llm/` | the GLM transport kept from the previous Taskforge: client, policy, wire helpers |
 | `src/taskforge/policy/` | the policy record: `defaults/policy.json` and `defaults/prompts/<role>/*.md` |
 | `src/taskforge/lowering.py` | `TaskSpec` → `TaskRolloutSpec` for the host; the only place that chooses machines |
 | `src/taskforge/arms.py` | the S and T transition tables |

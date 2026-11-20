@@ -4,6 +4,7 @@
 from functools import partial
 from pathlib import Path, PurePosixPath
 
+from lib.taskforge.tests.resource_doubles import FakeCommand, FakeEnv, FakeInference
 from rolloutengine.models import GradedRollout, Rollout
 from rolloutengine.test_support import arithmetic_task, rollout_spec
 from taskcompendium.grading_result import GradeResult, Outcome
@@ -15,21 +16,10 @@ from taskforge.effects.log import EventLog, JsonlSink, Record
 from taskforge.llm.policy import LLMPolicy
 from taskforge.model.controls import Candidate
 from taskforge.model.llm import Completion, Message, Role, ToolSchema
-from taskforge.resources.clock import Clock, Now, now
-from taskforge.resources.env import (
-    CommandResult,
-    Env,
-    FakeCommand,
-    FakeEnv,
-    ReadFile,
-    RunCommand,
-    WriteFile,
-    run_command,
-    write_file,
-)
+from taskforge.resources.env import CommandResult, Env, ReadFile, RunCommand, WriteFile, run_command, write_file
 from taskforge.resources.grading import GradeCandidate
 from taskforge.resources.ids import Ids, NewId, new_id
-from taskforge.resources.inference import FakeInference, InferenceClient, InferenceRequest, complete
+from taskforge.resources.inference import InferenceClient, InferenceRequest, complete
 from taskforge.resources.rollouts import SolverRollout
 
 
@@ -37,17 +27,16 @@ def note(event: Event[None]) -> None:
     pass
 
 
-def configure(ctx: Context, env: Env, client: InferenceClient, clock: Clock, ids: Ids) -> None:
-    for resource in (env, client, clock, ids):
+def configure(ctx: Context, env: Env, client: InferenceClient, ids: Ids) -> None:
+    for resource in (env, client, ids):
         ctx.resource(resource, resource.fingerprint)
     ctx.handle(RunCommand, partial(run_command, notify=ctx.emit), uses=(env,))
     ctx.handle(WriteFile, partial(write_file, notify=ctx.emit), uses=(env,))
     ctx.handle(InferenceRequest, partial(complete, notify=ctx.emit), uses=(client,))
-    ctx.handle(Now, now, uses=(clock,))
     ctx.handle(NewId, new_id, uses=(ids,))
 
 
-async def test_reload_reexecutes_environment_but_reuses_inference_clock_and_ids(tmp_path: Path) -> None:
+async def test_reload_reexecutes_environment_but_reuses_inference_and_ids(tmp_path: Path) -> None:
     path = PurePosixPath("/workspace/binary")
     result = CommandResult(0, "done", "", 0.1, False)
     script = {"build": FakeCommand(result, {path: b"result"})}
@@ -60,22 +49,20 @@ async def test_reload_reexecutes_environment_but_reuses_inference_clock_and_ids(
     )
     sink = JsonlSink(str(tmp_path / "events.jsonl"))
     ctx = Context(log=EventLog(sink=sink))
-    configure(ctx, env, client, Clock(lambda: 12.5), Ids(lambda: "original"))
+    configure(ctx, env, client, Ids(lambda: "original"))
     await ctx.emit(WriteFile(path, b"\xff\x00"))
     assert (await ctx.emit(event)).content == "answer"
     assert await ctx.emit(RunCommand("build", 5)) == result
-    assert await ctx.emit(Now("author/0/start")) == 12.5
     assert await ctx.emit(NewId("author/0/id")) == "original"
     await ctx.drain()
 
     replay_env = FakeEnv("image", script, note)
     replay_client = FakeInference(())
     replay = Context(log=EventLog(replay_from=await sink.read()))
-    configure(replay, replay_env, replay_client, Clock(lambda: 99), Ids(lambda: "new"))
+    configure(replay, replay_env, replay_client, Ids(lambda: "new"))
     await replay.emit(WriteFile(path, b"\xff\x00"))
     assert (await replay.emit(event)).content == "answer"
     await replay.emit(RunCommand("build", 5.0))
-    assert await replay.emit(Now("author/0/start")) == 12.5
     assert await replay.emit(NewId("author/0/id")) == "original"
     assert await replay.emit(NewId("author/1/id")) == "new"
     await replay.drain()

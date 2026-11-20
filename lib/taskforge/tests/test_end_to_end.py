@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from typing import override
 
 import pytest
+from lib.taskforge.tests.resource_doubles import FakeCommand, FakeEnv, FakeInference, FakeWeb
 from lib.taskforge.tests.stage_fakes import CandidateEngine, SolverEngine, solver_model
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.models import GradedRollout, Model, Rollout, TaskRolloutSpec
@@ -36,14 +37,12 @@ from taskforge.model.stage import Stage
 from taskforge.model.workpiece import WORKPIECE, Conversation, Terminal, Workpiece
 from taskforge.policy import Policy, load_policy
 from taskforge.resources.bundle import Resources
-from taskforge.resources.clock import Clock
-from taskforge.resources.env import CommandResult, EnvFactory, FakeCommand, FakeEnv
+from taskforge.resources.env import CommandResult, EnvFactory
 from taskforge.resources.grading import GradingResource
 from taskforge.resources.ids import Ids
-from taskforge.resources.inference import FakeInference, InferenceRequest
+from taskforge.resources.inference import InferenceRequest
 from taskforge.resources.rollouts import Engine, RolloutResource
 from taskforge.resources.verifier import RoundVerifier
-from taskforge.resources.web import FakeWeb
 from taskforge.stages.classify import replayable_grade
 from taskforge.wiring import build_config, install
 
@@ -111,7 +110,6 @@ def resources(envs: Envs, responses: Sequence[Completion]) -> Resources:
         FakeInference(responses),
         RolloutResource(SolverEngine(2), solver_model, "solver"),
         GradingResource(CandidateEngine(), "grader"),
-        Clock(lambda: 1),
         Ids(lambda: "workpiece"),
         {},
         FakeWeb({}, {}),

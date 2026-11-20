@@ -9,7 +9,6 @@ from types import MappingProxyType
 
 from shellbox.machine import MachineFactory
 
-from taskforge.resources.clock import Clock
 from taskforge.resources.env import EnvFactory
 from taskforge.resources.grading import GradingResource
 from taskforge.resources.ids import Ids
@@ -25,7 +24,6 @@ class Resources:
     inference: InferenceClient
     rollouts: RolloutResource
     grading: GradingResource
-    clock: Clock
     ids: Ids
     factories: Mapping[str, MachineFactory]
     web: WebClient
