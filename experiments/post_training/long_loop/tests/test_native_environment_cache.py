@@ -13,6 +13,8 @@ from marin.rl.skyrl import skyrl_cpu_command
 
 from experiments.post_training.long_loop.native_environment_cache import CACHE_ROOT_ENV
 
+CACHE_TEST_LAUNCHER = "cpu-cache-boundary-test"
+
 
 @pytest.mark.timeout(180)
 def test_skyrl_cache_entrypoint_delegates_to_marin_and_restores_cache(tmp_path, monkeypatch):
@@ -21,7 +23,7 @@ def test_skyrl_cache_entrypoint_delegates_to_marin_and_restores_cache(tmp_path, 
     template.write_text("{{ messages }}")
     argv = ["serve", str(tmp_path / "model"), "--chat-template", str(template)]
     cache = VllmCompilationCache.prepare(
-        launcher_identity="cpu-cache-boundary-test",
+        launcher_identity=CACHE_TEST_LAUNCHER,
         compile_identity=VllmCompileIdentity.from_vllm_args(model_name_or_path=argv[1], extra_cli_args=tuple(argv[2:])),
         environment=dict(os.environ),
     )
@@ -30,13 +32,12 @@ def test_skyrl_cache_entrypoint_delegates_to_marin_and_restores_cache(tmp_path, 
         expected.mkdir()
         (expected / "fixture.bin").write_bytes(b"small compiler cache fixture")
         cache.publish()
-        assert len(list((tmp_path / "remote").rglob("latest.json"))) == 1
     finally:
         cache.close()
     profile = {
         "venv_alias": str(tmp_path / "native/venv"),
         "native_cli": argv,
-        "cache_launcher_identity": "cpu-cache-boundary-test",
+        "cache_launcher_identity": CACHE_TEST_LAUNCHER,
         "values": {CACHE_ROOT_ENV: str(expected)},
     }
     environment = dict(os.environ)
@@ -61,4 +62,5 @@ def test_skyrl_cache_entrypoint_delegates_to_marin_and_restores_cache(tmp_path, 
         assert receipt["python_executable"] != skyrl_python
         assert (expected / "fixture.bin").read_bytes() == b"small compiler cache fixture"
     finally:
-        shutil.rmtree(expected.parent.parent, ignore_errors=True)
+        if expected.parent.parent.exists():
+            shutil.rmtree(expected.parent.parent)

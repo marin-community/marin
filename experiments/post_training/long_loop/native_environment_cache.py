@@ -33,7 +33,7 @@ class CacheReceipt:
 
 
 def restore_cache(request: CachePreparation) -> CacheReceipt:
-    """Restore the native cache and release its manager before retaining the files."""
+    """Restore compiler caches to the requested native path."""
     cache = VllmCompilationCache.prepare(
         launcher_identity=request.launcher_identity,
         compile_identity=VllmCompileIdentity.from_vllm_args(
