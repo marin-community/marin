@@ -180,9 +180,10 @@ uv run marin-serve iris Qwen/Qwen3-0.6B --cluster marin --tpu v6e-4 \
   --session-router --vllm-arg=--enable-prefix-caching
 ```
 
-Single-host TPU serving with `--data-parallel-size > 1` uses `tpu-inference` multi-process DP
-(`TPU_MULTIPROCESS_DP=1`), which isolates physical chips per DP rank behind the same `vllm-router`
-consistent-hash frontend. Multi-host TPU serving does not support `--data-parallel-size > 1`.
+For single-host TPU serving with `--data-parallel-size > 1`, `tpu-inference` automatically enables
+multi-process DP (`TPU_MULTIPROCESS_DP=1`) on online `vllm serve` and isolates physical chips per
+DP rank behind the same `vllm-router` consistent-hash frontend (Marin does not set that variable).
+Multi-host TPU serving does not support `--data-parallel-size > 1`.
 On pinned `tpu-inference` (`2f327d385a90`), `tpu_worker.py` sizes chips per rank using
 `get_num_cores_per_chip()` (`2` on `v5p`/`v4`), even though JAX runs `v5p`/`v4` in Megacore mode
 (one JAX device per chip); this breaks `TP > 1` with `DP > 1` on `v5p`/`v4` while single-core-per-chip

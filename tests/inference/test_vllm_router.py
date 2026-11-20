@@ -272,16 +272,17 @@ def test_managed_router_rejects_native_load_balancers_that_cannot_dispatch_globa
 
 
 @pytest.mark.parametrize(
-    "with_geometry,native_args,routed,rank_count",
+    "launcher,with_geometry,native_args,routed,rank_count",
     [
-        (False, ("-dp", "4"), True, 4),
-        (True, (), True, 4),
-        (True, (), False, 4),
-        (True, ("-dp", "2"), False, 2),
+        (VllmLauncherType.PREINSTALLED, False, ("-dp", "4"), True, 4),
+        (VllmLauncherType.TPU, False, ("--data-parallel-size", "4"), True, 4),
+        (VllmLauncherType.PREINSTALLED, True, (), True, 4),
+        (VllmLauncherType.PREINSTALLED, True, (), False, 4),
+        (VllmLauncherType.PREINSTALLED, True, ("-dp", "2"), False, 2),
     ],
 )
 def test_iris_serving_preserves_staged_weights_and_rank_routing(
-    monkeypatch, tmp_path, with_geometry, native_args, routed, rank_count
+    monkeypatch, tmp_path, launcher, with_geometry, native_args, routed, rank_count
 ):
     argv_path = tmp_path / "argv.json"
     monkeypatch.setattr(
@@ -320,6 +321,11 @@ def test_iris_serving_preserves_staged_weights_and_rank_routing(
         if with_geometry
         else None
     )
+    worker_resources = (
+        ResourceConfig.with_tpu("v6e-4")
+        if launcher is VllmLauncherType.TPU
+        else ResourceConfig.with_gpu("H100", count=4)
+    )
     service = IrisServiceConfig(
         model=ServedModelConfig(
             weights=str(weights),
@@ -327,9 +333,11 @@ def test_iris_serving_preserves_staged_weights_and_rank_routing(
             chat_template_content="{{ messages }}",
             object_store_load_mode=ObjectStoreLoadMode.STAGE_LOCAL,
         ),
-        engine=VllmEngineConfig(router=VllmRouterConfig() if routed else None, extra_args=native_args),
+        engine=VllmEngineConfig(
+            launcher=launcher, router=VllmRouterConfig() if routed else None, extra_args=native_args
+        ),
         iris=IrisConfig(
-            worker_resources=ResourceConfig.with_gpu("H100", count=4),
+            worker_resources=worker_resources,
             worker_environment=create_environment(docker_image="test"),
             serving_geometry=geometry,
             cache_ttl_days=0,
@@ -362,52 +370,3 @@ def test_multitask_router_rejects_local_staging_before_submission():
                 ),
             ),
         )
-
-
-def test_tpu_iris_serving_routes_sessions_across_dp_ranks(monkeypatch, tmp_path):
-    argv_path = tmp_path / "argv.json"
-    monkeypatch.setattr(
-        "marin.inference.vllm_backend.vllm_launcher", lambda _: FakeVllmLauncher("record-args", str(argv_path))
-    )
-    registered_metadata = {}
-
-    @contextmanager
-    def registered(_name, address, metadata=None, **_kwargs):
-        if metadata is not None:
-            registered_metadata.update(metadata)
-            _assert_native_rank_affinity(f"{address}/v1", 4)
-        yield
-
-    context = SimpleNamespace(registry=SimpleNamespace(registered=registered))
-    monkeypatch.setattr("marin.inference.iris.iris_ctx", lambda: context)
-    service = IrisServiceConfig(
-        model=ServedModelConfig(
-            weights="fake",
-            tensor_parallel_size=1,
-            chat_template_content="{{ messages }}",
-        ),
-        engine=VllmEngineConfig(
-            launcher=VllmLauncherType.TPU,
-            router=VllmRouterConfig(),
-            extra_args=("--data-parallel-size", "4"),
-        ),
-        iris=IrisConfig(
-            worker_resources=ResourceConfig.with_tpu("v6e-4"),
-            worker_environment=create_environment(docker_image="test"),
-            cache_ttl_days=0,
-        ),
-        endpoint_name="/serve/tpu-router",
-        timeout_hours=0,
-        port_name=None,
-    )
-    context_token = set_context(None)
-    set_job_info(JobInfo(task_id=JobName.from_wire("/alice/tpu-router/0")))
-    try:
-        run_iris_service(service)
-    finally:
-        set_job_info(None)
-        reset_context(context_token)
-    native_argv = json.loads(argv_path.read_text())
-    assert "--data-parallel-size" in native_argv
-    assert native_argv[native_argv.index("--data-parallel-size") + 1] == "4"
-    assert int(registered_metadata["data_parallel_size"]) == 4
