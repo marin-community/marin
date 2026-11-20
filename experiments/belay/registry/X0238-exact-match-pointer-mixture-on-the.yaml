@@ -60,7 +60,8 @@ trials:
   batch: X0238
   date: '2026-11-20'
   comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0238
-  wandb: []
+  wandb:
+  - belay-X0238d512-seed0
   settings:
     pointer_mixture: 'true'
   commit: 0ef398cb6e
