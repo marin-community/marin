@@ -39,10 +39,6 @@ ALL_ACCOUNTS: tuple[tuple[str, str], ...] = (
 )
 
 
-def _connection(api_key: str) -> DaytonaConnection:
-    return DaytonaConnection(api_key=api_key)
-
-
 def _profile(arguments: argparse.Namespace) -> SandboxProfile | None:
     given = [arguments.cpu is not None, arguments.memory_gib is not None, arguments.disk_gib is not None]
     if any(given) and not all(given):
@@ -133,7 +129,7 @@ async def _run(arguments: argparse.Namespace) -> None:
                 else:
                     print(f"{account}: skipped (missing {name})")
                 continue
-            usage = await account_usage(_connection(api_key))
+            usage = await account_usage(DaytonaConnection(api_key=api_key))
             try:
                 region = _launch_region(usage, arguments, profile)
             except RuntimeError as error:
@@ -156,7 +152,7 @@ async def _run(arguments: argparse.Namespace) -> None:
     api_key = os.environ.get(arguments.api_key_env)
     if not api_key:
         raise SystemExit(f"Missing Daytona credential environment variable: {arguments.api_key_env}")
-    usage = await account_usage(_connection(api_key))
+    usage = await account_usage(DaytonaConnection(api_key=api_key))
     region = _launch_region(usage, arguments, profile)
     if arguments.json:
         print(json.dumps(usage_report(usage, profile, region=region, headroom=headroom), indent=2, sort_keys=True))
