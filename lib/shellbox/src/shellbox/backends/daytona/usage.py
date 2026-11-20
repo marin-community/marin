@@ -10,14 +10,42 @@ from datetime import UTC, datetime
 from typing import NotRequired, TypedDict
 
 from daytona import AsyncDaytona, AsyncSandbox
-from daytona_api_client_async import SandboxState
+from daytona_api_client_async import SandboxDesiredState, SandboxState
 
 from shellbox.backends.daytona.connection import DaytonaConnection
 
 REQUEST_TIMEOUT_SECONDS = 30.0
 DEFAULT_HEADROOM = 0.2
 GB_TO_GIB = 10**9 / 2**30
-CHARGED_STATES = frozenset((SandboxState.STARTED, SandboxState.STARTING, SandboxState.CREATING))
+# Provider quota rules: daytonaio/daytona@b5a5d9e, apps/api/src/organization/constants/.
+COMPUTE_CHARGED_STATES = frozenset(
+    (
+        SandboxState.CREATING,
+        SandboxState.RESTORING,
+        SandboxState.STARTED,
+        SandboxState.STARTING,
+        SandboxState.STOPPING,
+        SandboxState.PENDING_BUILD,
+        SandboxState.BUILDING_SNAPSHOT,
+        SandboxState.UNKNOWN,
+        SandboxState.PULLING_SNAPSHOT,
+        SandboxState.FORKING,
+        SandboxState.PAUSING,
+        SandboxState.RESUMING,
+    )
+)
+CONDITIONAL_COMPUTE_CHARGED_STATES = frozenset((SandboxState.RESIZING, SandboxState.SNAPSHOTTING))
+DISK_CHARGED_STATES = (
+    COMPUTE_CHARGED_STATES
+    | CONDITIONAL_COMPUTE_CHARGED_STATES
+    | frozenset(
+        (
+            SandboxState.STOPPED,
+            SandboxState.PAUSED,
+            SandboxState.ARCHIVING,
+        )
+    )
+)
 
 
 class CapacityReport(TypedDict):
@@ -37,7 +65,8 @@ class LimitsReport(TypedDict):
 class SandboxCounts(TypedDict):
     total: int
     started: int
-    charged: int
+    compute_charged: int
+    disk_charged: int
     by_state: dict[str, int]
 
 
@@ -54,7 +83,10 @@ class UsageReport(TypedDict):
     usage_source: str
     org_limits: LimitsReport
     headroom_fraction: float
-    charged_states: list[str]
+    compute_charged_states: list[str]
+    conditional_compute_charged_states: list[str]
+    conditional_compute_desired_state: str
+    disk_charged_states: list[str]
     resources: dict[str, CapacityReport]
     sandboxes: SandboxCounts
     max_concurrency: NotRequired[ConcurrencyReport]
@@ -110,6 +142,8 @@ class AccountUsage:
     cpu: ResourceCapacity
     memory_gib: ResourceCapacity
     disk_gib: ResourceCapacity
+    compute_sandboxes: int
+    disk_sandboxes: int
     sandbox_states: tuple[tuple[str, int], ...]
     observed_at: str
 
@@ -127,23 +161,39 @@ async def _inventory_sandboxes(client: AsyncDaytona) -> list[AsyncSandbox]:
 
 
 async def account_usage_from_client(client: AsyncDaytona, limits: OrganizationLimits) -> AccountUsage:
-    """Sum started, starting and creating allocations without organization API calls."""
+    """Aggregate allocations using provider compute and disk quota rules."""
     sandboxes = await _inventory_sandboxes(client)
     organization_ids = {sandbox.organization_id for sandbox in sandboxes}
     if len(organization_ids) > 1 or (sandboxes and not all(organization_ids)):
         raise ValueError("Sandbox inventory must identify exactly one organization")
-    active = [sandbox for sandbox in sandboxes if sandbox.state in CHARGED_STATES]
-    for sandbox in active:
+    for sandbox in sandboxes:
+        if sandbox.state is None or sandbox.state == SandboxState.UNKNOWN_DEFAULT_OPEN_API:
+            raise ValueError(f"Sandbox {sandbox.id} has an unclassified state")
+        if sandbox.state in CONDITIONAL_COMPUTE_CHARGED_STATES and sandbox.desired_state in (
+            None,
+            SandboxDesiredState.UNKNOWN_DEFAULT_OPEN_API,
+        ):
+            raise ValueError(f"Sandbox {sandbox.id} lacks the desired state needed to account for compute")
+    compute = [
+        sandbox
+        for sandbox in sandboxes
+        if sandbox.state in COMPUTE_CHARGED_STATES
+        or (sandbox.state in CONDITIONAL_COMPUTE_CHARGED_STATES and sandbox.desired_state == SandboxDesiredState.STARTED)
+    ]
+    disk = [sandbox for sandbox in sandboxes if sandbox.state in DISK_CHARGED_STATES]
+    for sandbox in disk:
         for value in (sandbox.cpu, sandbox.memory, sandbox.disk):
             if value is None or not math.isfinite(value) or value <= 0:
-                raise ValueError(f"Active sandbox {sandbox.id} lacks a positive resource allocation")
+                raise ValueError(f"Quota-charged sandbox {sandbox.id} lacks a positive resource allocation")
     states = Counter(sandbox.state.value if sandbox.state else "unknown" for sandbox in sandboxes)
     return AccountUsage(
         organization_id=next(iter(organization_ids), None),
         limits=limits,
-        cpu=ResourceCapacity(limits.cpu, sum(sandbox.cpu for sandbox in active)),
-        memory_gib=ResourceCapacity(limits.memory_gb * GB_TO_GIB, sum(sandbox.memory for sandbox in active)),
-        disk_gib=ResourceCapacity(limits.disk_gb * GB_TO_GIB, sum(sandbox.disk for sandbox in active)),
+        cpu=ResourceCapacity(limits.cpu, sum(sandbox.cpu for sandbox in compute)),
+        memory_gib=ResourceCapacity(limits.memory_gb * GB_TO_GIB, sum(sandbox.memory for sandbox in compute)),
+        disk_gib=ResourceCapacity(limits.disk_gb * GB_TO_GIB, sum(sandbox.disk for sandbox in disk)),
+        compute_sandboxes=len(compute),
+        disk_sandboxes=len(disk),
         sandbox_states=tuple(sorted(states.items())),
         observed_at=datetime.now(UTC).isoformat(),
     )
@@ -173,7 +223,10 @@ def usage_report(
             "per_sandbox": asdict(usage.limits.per_sandbox),
         },
         "headroom_fraction": headroom,
-        "charged_states": sorted(state.value for state in CHARGED_STATES),
+        "compute_charged_states": sorted(state.value for state in COMPUTE_CHARGED_STATES),
+        "conditional_compute_charged_states": sorted(state.value for state in CONDITIONAL_COMPUTE_CHARGED_STATES),
+        "conditional_compute_desired_state": SandboxDesiredState.STARTED.value,
+        "disk_charged_states": sorted(state.value for state in DISK_CHARGED_STATES),
         "resources": {
             name: {
                 "quota": capacity.quota,
@@ -186,7 +239,8 @@ def usage_report(
         "sandboxes": {
             "total": sum(states.values()),
             "started": states.get("started", 0),
-            "charged": sum(states.get(state.value, 0) for state in CHARGED_STATES),
+            "compute_charged": usage.compute_sandboxes,
+            "disk_charged": usage.disk_sandboxes,
             "by_state": states,
         },
     }

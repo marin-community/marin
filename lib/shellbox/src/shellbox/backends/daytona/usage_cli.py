@@ -84,7 +84,7 @@ def _print_report(report: AccountReport) -> None:
     print(f"account {report['account']}  organization {report['organization_id'] or 'empty inventory'}")
     print(
         f"  sandboxes {report['sandboxes']['total']}  started {report['sandboxes']['started']}"
-        f"  charged {report['sandboxes']['charged']}"
+        f"  compute charged {report['sandboxes']['compute_charged']}  disk charged {report['sandboxes']['disk_charged']}"
     )
     print("  resource       quota         used          remaining     available")
     for name, resource in report["resources"].items():
