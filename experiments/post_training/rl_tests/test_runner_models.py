@@ -126,11 +126,11 @@ def test_checkpoint_retention_refuses_incompatible_presets(changes, error):
         (
             "mochi",
             {
-                "train-medium": {"2026.11.19.1": "8b5a970e", "2026.11.20.1": "1205c021"},
-                "train-long": {"2026.11.19.1": "db854d78", "2026.11.20.1": "af2ae9df"},
+                "train-medium": {"2026.11.19.1": "8b5a970e", "2026.11.20.1": "674dadce"},
+                "train-long": {"2026.11.19.1": "db854d78", "2026.11.20.1": "b6144722"},
                 "train-long-3rack": {"2026.11.19.1": "a0e17c94", "2026.11.20.1": "bc381480"},
-                "train-medium-agentic": {"2026.11.19.1": "3f203da5", "2026.11.20.1": "5165c274"},
-                "train-long-agentic": {"2026.11.19.1": "bef4849f", "2026.11.20.1": "cd4c1681"},
+                "train-medium-agentic": {"2026.11.19.1": "3f203da5", "2026.11.20.1": "5f0a0fa1"},
+                "train-long-agentic": {"2026.11.19.1": "bef4849f", "2026.11.20.1": "9c4ea508"},
                 "train-long-agentic-3rack": {"2026.11.19.1": "87a6ba8f", "2026.11.20.1": "15da2779"},
             },
         ),

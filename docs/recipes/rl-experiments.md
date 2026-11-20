@@ -52,7 +52,9 @@ Detached launches use the trainer’s rolling checkpoint window.
 A five-node smoke used 12.7 H100-hours for one update with the v3 selection and a custom layout.
 [Snowball smoke](https://iris.oa.dev/#/job/%2Fatqamar%2Fusers-ahmad-checkpoints-snowball-rl-train-medium-agentic-0b68f259dc-in-3f9941b9-2026.11.19.1-coordinator-7982cea2)
 
-Snowball’s agentic presets use context parallelism 5 for a 102,400-token window because smaller layouts with context parallelism 1 ran out of memory during policy backpropagation with a 32,768-token window.
+The smaller Snowball layouts pack one trajectory per replica with context parallelism of one and
+no separate packing token budget, and the campaign layout splits a 102,400-token request into
+20,480 packed token positions per context rank, with an update at that length still unmeasured.
 
 ### Task selection and native resume
 

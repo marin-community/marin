@@ -182,9 +182,6 @@ _ONE_TURN = RecipePatch(
     extra_env={
         "OT_AGENT_RAY_OBJECT_STORE_CAP_GIB": "32",
         "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
-        "NCCL_NET": "Socket",
-        "NCCL_IB_DISABLE": "1",
-        "NCCL_SOCKET_FAMILY": "AF_INET",
     },
 )
 
@@ -216,7 +213,7 @@ _THREE_RACK_PATCH = RecipePatch(
             }
         },
     ),
-    extra_env={"NCCL_NET": "IB", "NCCL_IB_DISABLE": "0", "NCCL_IB_HCA": "ibp"},
+    extra_env={"NCCL_NET": "IB", "NCCL_IB_DISABLE": "0", "NCCL_IB_HCA": "ibp", "NCCL_SOCKET_FAMILY": "AF_INET"},
 )
 
 _EVALUATION = Evaluation(
