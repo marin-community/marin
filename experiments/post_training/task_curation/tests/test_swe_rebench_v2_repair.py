@@ -225,8 +225,9 @@ def test_admission_receipt_labels_carry_upstream_image_defect(tmp_path):
             },
         },
     }
-    staged = tmp_path / "admission-receipts.json"
-    staged.write_text(json.dumps(receipts))
+    staged = tmp_path / "staged" / "admission_receipts"
+    staged.mkdir(parents=True)
+    (staged / "admission-receipts.json").write_text(json.dumps(receipts))
 
     labels = admission_receipt_labels("alecstrong__sql-psi-365", StoragePath(str(staged)))
     assert labels["swe_rebench_admission_receipt"] == "upstream_image_defect"
@@ -237,8 +238,9 @@ def test_admission_receipt_labels_carry_upstream_image_defect(tmp_path):
     assert admission_receipt_labels("alecstrong__sql-psi-365", None) == {}
     assert admission_receipt_labels("somebody__else-1", StoragePath(str(staged))) == {}
     # A malformed receipt value must fail fast, not silently admit.
-    bad = tmp_path / "bad-receipts.json"
-    bad.write_text(json.dumps({"x": {"receipt": "looks_fine_to_me"}}))
+    bad = tmp_path / "staged" / "bad_receipts"
+    bad.mkdir(parents=True)
+    (bad / "admission-receipts.json").write_text(json.dumps({"x": {"receipt": "looks_fine_to_me"}}))
     with pytest.raises(ValueError):
         admission_receipt_labels("x", StoragePath(str(bad)))
 
