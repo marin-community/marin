@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Literal
 
+from harbor.utils.artifact_writer import get_artifact_writer
 from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment, ExecResult
 from harbor.utils.env import (
@@ -17,9 +18,7 @@ from harbor.utils.env import (
 )
 from harbor.utils.templating import render_prompt_template
 
-REQUIRED_MODEL_PRICE_FIELDS = frozenset(
-    {"input_cost_per_token", "output_cost_per_token"}
-)
+REQUIRED_MODEL_PRICE_FIELDS = frozenset({"input_cost_per_token", "output_cost_per_token"})
 
 COMMAND_ERROR_TAIL = 2000
 
@@ -47,10 +46,7 @@ def sandbox_deadline_command(command: str, timeout: float | None) -> str:
     # Keep the supervisor alive on TERM so timeout's later KILL reaches
     # descendants that ignore TERM. A caught trap resets in external children.
     supervised = f"trap ':' TERM; {command}"
-    return (
-        f"timeout -k {kill_after:g} -s TERM {term_after:g} "
-        f"bash -o pipefail -c {shlex.quote(supervised)}"
-    )
+    return f"timeout -k {kill_after:g} -s TERM {term_after:g} bash -o pipefail -c {shlex.quote(supervised)}"
 
 
 class NonZeroAgentExitCodeError(RuntimeError):
@@ -106,9 +102,7 @@ def with_prompt_template(fn: _F) -> _F:
     """
 
     @functools.wraps(fn)
-    async def wrapper(
-        self: BaseInstalledAgent, instruction: str, *args: Any, **kwargs: Any
-    ) -> None:
+    async def wrapper(self: BaseInstalledAgent, instruction: str, *args: Any, **kwargs: Any) -> None:
         instruction = self.render_instruction(instruction)
         return await fn(self, instruction, *args, **kwargs)
 
@@ -152,40 +146,28 @@ def _coerce_value(
     match type:
         case "str":
             if isinstance(value, bool):
-                raise ValueError(
-                    f"Invalid value for '{kwarg_name}': expected str, got bool"
-                )
+                raise ValueError(f"Invalid value for '{kwarg_name}': expected str, got bool")
             if isinstance(value, (int, float)):
                 return str(value)
             if not isinstance(value, str):
-                raise ValueError(
-                    f"Invalid value for '{kwarg_name}': expected str, got {value.__class__.__name__}"
-                )
+                raise ValueError(f"Invalid value for '{kwarg_name}': expected str, got {value.__class__.__name__}")
             return value
 
         case "int":
             if isinstance(value, bool):
-                raise ValueError(
-                    f"Invalid value for '{kwarg_name}': expected int, got bool"
-                )
+                raise ValueError(f"Invalid value for '{kwarg_name}': expected int, got bool")
             if isinstance(value, int):
                 return value
             if isinstance(value, float):
                 if value != int(value):
-                    raise ValueError(
-                        f"Invalid value for '{kwarg_name}': float {value} is not an integer"
-                    )
+                    raise ValueError(f"Invalid value for '{kwarg_name}': float {value} is not an integer")
                 return int(value)
             if isinstance(value, str):
                 try:
                     return int(value)
                 except ValueError:
-                    raise ValueError(
-                        f"Invalid value for '{kwarg_name}': cannot parse '{value}' as int"
-                    )
-            raise ValueError(
-                f"Invalid value for '{kwarg_name}': expected int, got {value.__class__.__name__}"
-            )
+                    raise ValueError(f"Invalid value for '{kwarg_name}': cannot parse '{value}' as int")
+            raise ValueError(f"Invalid value for '{kwarg_name}': expected int, got {value.__class__.__name__}")
 
         case "bool":
             return parse_bool_env_value(value, name=kwarg_name)
@@ -198,8 +180,7 @@ def _coerce_value(
             normalized = value.strip().lower()
             if choices and normalized not in choices:
                 raise ValueError(
-                    f"Invalid value for '{kwarg_name}': '{value}'. "
-                    f"Valid values: {', '.join(sorted(choices))}"
+                    f"Invalid value for '{kwarg_name}': '{value}'. Valid values: {', '.join(sorted(choices))}"
                 )
             return normalized
 
@@ -248,9 +229,7 @@ class BaseInstalledAgent(BaseAgent, ABC):
         self._resolved_flags = self._resolve_flag_values()
         self._resolved_env_vars = self._resolve_env_values()
 
-        self._prompt_template_path = (
-            Path(prompt_template_path) if prompt_template_path else None
-        )
+        self._prompt_template_path = Path(prompt_template_path) if prompt_template_path else None
         self._version = version
 
     def _resolve_raw_value(
@@ -273,9 +252,7 @@ class BaseInstalledAgent(BaseAgent, ABC):
             raw = self._resolve_raw_value(flag)
             if raw is None:
                 continue
-            resolved[flag.kwarg] = _coerce_value(
-                raw, flag.type, flag.choices, flag.kwarg
-            )
+            resolved[flag.kwarg] = _coerce_value(raw, flag.type, flag.choices, flag.kwarg)
         return resolved
 
     def build_cli_flags(self) -> str:
@@ -306,9 +283,7 @@ class BaseInstalledAgent(BaseAgent, ABC):
                 continue
             coerced = _coerce_value(raw, env_var.type, env_var.choices, env_var.kwarg)
             if env_var.type == "bool":
-                resolved[env_var.env] = (
-                    env_var.bool_true if coerced else env_var.bool_false
-                )
+                resolved[env_var.env] = env_var.bool_true if coerced else env_var.bool_false
             else:
                 resolved[env_var.env] = str(coerced)
         return resolved
@@ -321,9 +296,7 @@ class BaseInstalledAgent(BaseAgent, ABC):
         """Get a task capability, allowing an explicit agent override."""
         value = self._extra_env.get(key)
         if value is not None:
-            validate_task_environment(
-                {key: value}, protected_values=self._protected_values
-            )
+            validate_task_environment({key: value}, protected_values=self._protected_values)
         return value
 
     def _has_env(self, key: str) -> bool:
@@ -334,9 +307,7 @@ class BaseInstalledAgent(BaseAgent, ABC):
         result: dict[str, str] = {}
         for key, value in self._extra_env.items():
             if key.startswith(prefix):
-                validate_task_environment(
-                    {key: value}, protected_values=self._protected_values
-                )
+                validate_task_environment({key: value}, protected_values=self._protected_values)
                 result[key[len(prefix) :]] = value
         return result
 
@@ -384,9 +355,7 @@ class BaseInstalledAgent(BaseAgent, ABC):
         if self._extra_env:
             merged_env = dict(env) if env else {}
             merged_env.update(self._extra_env)
-        validate_task_environment(
-            merged_env or {}, protected_values=self._protected_values
-        )
+        validate_task_environment(merged_env or {}, protected_values=self._protected_values)
 
         self.logger.debug(
             f"Running command: {self._redact_output(command)}",
@@ -414,8 +383,13 @@ class BaseInstalledAgent(BaseAgent, ABC):
             failure_path = failure_dir / f"{uuid4().hex}.json"
             evidence_error = None
             try:
-                failure_dir.mkdir(parents=True, exist_ok=True)
-                failure_path.write_text(json.dumps(asdict(diagnostics)))
+                writer = get_artifact_writer()
+                pending = await writer.submit_required(
+                    failure_path,
+                    lambda: json.dumps(asdict(diagnostics)),
+                    description="redacted installed-agent command failure",
+                )
+                await writer.await_write(pending)
             except OSError as error:
                 evidence_error = error
             self.logger.debug(
@@ -465,9 +439,7 @@ class BaseInstalledAgent(BaseAgent, ABC):
         timeout_sec: int | None = None,
     ) -> Any:
         """Execute a command as root (for system packages, symlinks, etc.)."""
-        return await self._exec(
-            environment, command, user="root", env=env, cwd=cwd, timeout_sec=timeout_sec
-        )
+        return await self._exec(environment, command, user="root", env=env, cwd=cwd, timeout_sec=timeout_sec)
 
     async def exec_as_agent(
         self,
@@ -478,9 +450,7 @@ class BaseInstalledAgent(BaseAgent, ABC):
         timeout_sec: int | None = None,
     ) -> Any:
         """Execute a command as the default agent user."""
-        return await self._exec(
-            environment, command, env=env, cwd=cwd, timeout_sec=timeout_sec
-        )
+        return await self._exec(environment, command, env=env, cwd=cwd, timeout_sec=timeout_sec)
 
     def render_instruction(self, instruction: str) -> str:
         """Render the instruction through the prompt template, if configured."""
