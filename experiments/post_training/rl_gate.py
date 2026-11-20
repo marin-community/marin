@@ -531,7 +531,6 @@ def _comparison_document(launch: dict, recorded: RecordedLaunch | None = None) -
         "<run-identity>",
     )
     runtime = config["skyrl"].get("runtime", {})
-    config["run"].pop("sft_preset", None)
     for field in ("run_id", "model", "attempt_id", "coordinator_iris_job_id", "iris_job_id"):
         runtime.pop(field, None)
     if not runtime:

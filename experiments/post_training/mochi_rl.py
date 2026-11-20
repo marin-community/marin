@@ -206,7 +206,6 @@ _TRAIN_LONG = Preset(
     publishes=False,
     control_preset=None,
     checkpoints="none",
-    owned_keys=frozenset({"generator.run_engines_locally"}),
     data_settings=frozenset({"shuffle"}),
     tasks="snowball-100k@2026.11.19.1",
     model=_MODEL,

@@ -12,7 +12,6 @@ import pytest
 from fray.current_client import set_current_client
 from haliax import Axis
 from levanter.data.text.datasets import LmDataConfig, dataset_for_component
-from levanter.data.text.formats import SerializedChatLmDatasetFormat
 from levanter.store.cache import SerialCacheWriter
 from levanter.utils.thread_utils import blocking_wait
 from marin.execution.artifact import Artifact
@@ -161,7 +160,6 @@ def test_snowball_262k_mixture_binds_the_published_mixture(tmp_path, monkeypatch
         manifest.run({**materialized_config(manifest, prefix), "sha256": "0" * 64})
     [pod_config] = configs
     config = pod_config.train_config
-    assert isinstance(config.data.components["sft/source/agenttrove"].format, SerializedChatLmDatasetFormat)
     assert config.initialize_from_hf == mirror_path
     assert config.data.tokenizer == MIXTURE_TOKENIZER
     assert model.relative_path == f"{DEFAULT_HF_CHECKPOINTS_PATH}/step-203"

@@ -219,7 +219,6 @@ _TASK_SET = EVALUATIONS["eval_lite_100"]
 _BATCH_KEYS = frozenset(BATCH_SETTINGS)
 
 _OWNED_KEYS = frozenset(_MODE_KEYS)
-_BEST_EXPORT_KEYS = _OWNED_KEYS | {"trainer.hf_export_checkpoint"}
 
 _SPEED_KEYS = frozenset(
     {"generator.sampling_params.logprobs", "trainer.training_metrics", "generator.apply_overlong_filtering"}
@@ -251,7 +250,7 @@ _LEARNING_MEDIUM = _snowball(
     export="best",
     name="learning-medium",
     recipe=_ASYNC_P40,
-    owned_keys=_BEST_EXPORT_KEYS,
+    owned_keys=_OWNED_KEYS,
     updates=25,
     measured=range(21, 26),
     checkpoint_every=26,
@@ -277,7 +276,7 @@ _TRAIN_LONG = _snowball(
     export="best",
     name="train-long",
     recipe=_ASYNC_P40,
-    owned_keys=_BEST_EXPORT_KEYS,
+    owned_keys=_OWNED_KEYS,
     updates=100,
     measured=range(1, 101),
     tasks_input="optional",

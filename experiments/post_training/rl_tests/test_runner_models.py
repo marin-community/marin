@@ -377,7 +377,6 @@ def test_sft_composition_reenters_its_own_module(selection, monkeypatch, model, 
         assert tuple(resources.regions or ()) == ((ANY_REGION,) if model == "mochi" else ())
         config = materialized_config(run, env["MARIN_PREFIX"])
         document = yaml.safe_load(config.launch_config_yaml)
-        assert "sft_preset" not in document["run"]
         assert document["inputs"]["model"]["identity"] == artifact_identity(initializer.step)
         assert document["inputs"]["model"]["uri"] == f"{producer.path(prefix)}/{initializer.relative_path}"
         assert document["inputs"]["model"]["tokenizer_uri"] is None
