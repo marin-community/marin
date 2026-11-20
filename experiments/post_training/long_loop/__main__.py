@@ -67,7 +67,7 @@ def validate_graph(
                 "geometry": asdict(judge.iris.serving_geometry) if judge.iris.serving_geometry else None,
                 "resources": asdict(resources),
                 "coscheduling": coscheduling.group_by if coscheduling else None,
-                "root_cluster": config.serving_profile.judge_target_cluster if config.serving_profile else None,
+                "root_cluster": config.remote_judge.target_cluster if config.remote_judge else None,
                 "child_cluster_pin": cluster_directive(convert_constraints(resources)),
             }
         rows.append(row)

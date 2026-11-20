@@ -704,6 +704,32 @@ binds each pool to an NVLink domain. Keep the same context, sampling, task
 selection and judge pins when comparing two policies. The result has no RL
 checkpoint or synthetic training-completion marker.
 
+### Frozen Mochi Micro210 evaluation
+
+`rounds/mochi-base-eval.yaml` and `rounds/mochi-sft-eval.yaml` bind the pinned
+exports to the frozen Micro210 policy. Run the exact `round_runner --through eval`
+command without `--run` before submission. Preflight lowers the judge and every
+rollout role, rejecting a GPU allocation smaller than its model parallelism.
+The YAML declares IB transport and a 4-MiB NCCL buffer explicitly; the historical
+256-KiB serving qualification predates the NVLSTree corruption finding in #11649.
+Compilation and PIECEWISE CUDA graphs remain enabled.
+
+The separate `micro210_judge` root runs directly on `cw-rno2a` with one H100x8
+host, preserving the frozen judge's TP8. Its children inherit regional placement
+without a federation cluster pin. Preflight it with `python -m
+experiments.evaluation.micro210_judge --round <round.yaml> --source-revision
+<clean-commit>`; add `--run` only inside the regional Iris root. Give every new
+service a fresh receipt path. The root publishes an endpoint receipt and appends
+`endpoint.json.terminal.json` when it exits, preserving both artifacts.
+Consumers verify policy and judge identity, reject terminated services, and
+check the live `/models` endpoint before allocating rollout GPUs.
+
+Both evaluations share the judge and should start together. The judge and each
+evaluation have the requested three-day task limit; the judge's limit begins
+at service submission, so it is not a guarantee of three further days after an
+evaluation waits for readiness. Monitor terminal events and use a fresh judge
+and round identity after any service failure or expiry.
+
 ### Fresh Exp3 RL after the Socket failure
 
 `exp3_rl_restart` adopts the sealed `.51` SFT export and data inputs without

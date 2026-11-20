@@ -51,7 +51,7 @@ def main(round_path: Path, source_revision: str, do_run: bool) -> None:
             json.dumps(
                 {
                     "source_revision": source_revision,
-                    "root_cluster": spec.serving.judge_target_cluster,
+                    "root_cluster": spec.serving.remote_judge.target_cluster,
                     "resources": asdict(resources),
                     "geometry": asdict(inference.iris.serving_geometry),
                     "child_cluster_pin": None,
@@ -62,21 +62,25 @@ def main(round_path: Path, source_revision: str, do_run: bool) -> None:
         return
     if info is None or list(resources.regions or ()) != [info.worker_region]:
         raise ValueError("Judge root must run in the configured serving region")
-    receipt = StoragePath(spec.serving.judge_endpoint_receipt)
+    receipt = StoragePath(spec.serving.remote_judge.endpoint_receipt)
     if receipt.exists():
         raise ValueError("Judge endpoint receipt already exists; use a fresh round identity")
-    with remote_inference(inference) as served:
-        if served.tensor_parallel_size != inference.model.tensor_parallel_size:
-            raise ValueError("Running judge tensor parallelism differs from the frozen judge")
-        endpoint = Micro210JudgeEndpoint(
-            config.evaluation.record().canonical_spec_sha256,
-            micro210_judge_sha256(config),
-            served.tensor_parallel_size,
-            served.model.endpoint,
-            tuple(str(job.job_id) for job in served.jobs),
-        )
-        receipt.write_text(json.dumps(asdict(endpoint)))
-        wait_all(served.jobs)
+    terminal_receipt = StoragePath(spec.serving.remote_judge.endpoint_receipt + ".terminal.json")
+    try:
+        with remote_inference(inference) as served:
+            if served.tensor_parallel_size != inference.model.tensor_parallel_size:
+                raise ValueError("Running judge tensor parallelism differs from the frozen judge")
+            endpoint = Micro210JudgeEndpoint(
+                config.evaluation.record().canonical_spec_sha256,
+                micro210_judge_sha256(config),
+                served.tensor_parallel_size,
+                served.model.endpoint,
+                tuple(str(job.job_id) for job in served.jobs),
+            )
+            receipt.write_text(json.dumps(asdict(endpoint)))
+            wait_all(served.jobs)
+    finally:
+        terminal_receipt.write_text(json.dumps({"terminated": True}))
 
 
 if __name__ == "__main__":

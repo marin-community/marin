@@ -39,7 +39,7 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from experiments.evaluation.micro210 import Micro210ServingProfile, micro210_artifact_step
+from experiments.evaluation.micro210 import Micro210RemoteJudge, Micro210ServingProfile, micro210_artifact_step
 from experiments.evaluation.micro210_policy import Micro210Model, micro210_evaluation
 from experiments.post_training.long_loop.__main__ import validate_graph
 from experiments.post_training.long_loop.adopted_sft import pinned_json
@@ -62,7 +62,7 @@ from experiments.post_training.long_loop.exp4 import (
     release_artifact,
 )
 from experiments.post_training.long_loop.exp4_data import NEMOTRON_SOURCE, pool_steps
-from experiments.post_training.long_loop.nvl72 import PROFILES, MochiProfile, build_run, validate_model_geometry
+from experiments.post_training.long_loop.nvl72 import MochiProfile, build_run, validate_model_geometry
 from experiments.post_training.long_loop.optimizer_admission import optimizer_group_receipt
 from experiments.post_training.long_loop.recipe_bundle import require_clean_revision, runtime_source_manifest
 from experiments.post_training.long_loop.run_spec import FilePin, read_pin
@@ -139,10 +139,9 @@ class RoundServing:
     generator: dict
     engine_init_kwargs: dict
     cuda_allocator_config: str
-    judge_gpu_count: int
-    judge_gpu_variant: str
-    judge_target_cluster: str
-    judge_endpoint_receipt: str
+    nccl_env: dict
+    nccl_buffer_size_bytes: int
+    remote_judge: Micro210RemoteJudge
 
 
 @dataclass(frozen=True)
@@ -437,15 +436,13 @@ def adopted_round_evaluation(spec: AdoptedHfRound) -> ArtifactStep:
     adopted = ArtifactStep.adopt(
         model.name, model.version, model.uri, kind=LevanterCheckpoint, config=dataclasses.asdict(model)
     )
-    transport = PROFILES["three-rack"].patch
-    nccl_buffer_size_bytes = transport.trainer.policy.nccl_buffer_size_bytes
-    assert nccl_buffer_size_bytes is not None
     return micro210_artifact_step(
         ArtifactHfModel(adopted, model.tokenizer_uri, model.tokenizer_revision, relative_path=""),
         name=f"{spec.name}/eval",
         version=spec.version,
         model_binding=binding,
         model_manifest_filename="export-manifest.json",
+        remote_judge=serving.remote_judge,
         serving_profile=Micro210ServingProfile(
             gpu_variant=serving.gpu_variant,
             role_plan=roles,
@@ -453,12 +450,8 @@ def adopted_round_evaluation(spec: AdoptedHfRound) -> ArtifactStep:
             generator=serving.generator,
             engine_init_kwargs=serving.engine_init_kwargs,
             cuda_allocator_config=serving.cuda_allocator_config,
-            judge_gpu_count=serving.judge_gpu_count,
-            nccl_buffer_size_bytes=nccl_buffer_size_bytes,
-            network_env=dict(transport.extra_env),
-            judge_gpu_variant=serving.judge_gpu_variant,
-            judge_target_cluster=serving.judge_target_cluster,
-            judge_endpoint_receipt=serving.judge_endpoint_receipt,
+            nccl_buffer_size_bytes=serving.nccl_buffer_size_bytes,
+            nccl_env=serving.nccl_env,
         ),
     )
 

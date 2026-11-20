@@ -12,6 +12,7 @@ from pathlib import Path
 
 import click
 import draccus
+import httpx
 import yaml
 from iris.cluster.config import load_config
 from iris.rpc.proto_display import priority_band_value
@@ -69,7 +70,7 @@ SERVING_GENERATOR_FIELDS = {
     "vllm_attention_backend",
 }
 SERVING_ENGINE_FIELDS = {"compilation_config", "model_loader_extra_config", "moe_backend"}
-SERVING_NETWORK_FIELDS = {"NCCL_NET", "NCCL_IB_DISABLE", "NCCL_IB_HCA", "NCCL_DEBUG", "NCCL_DEBUG_SUBSYS"}
+SERVING_NCCL_ENV_FIELDS = {"NCCL_NET", "NCCL_IB_DISABLE", "NCCL_IB_HCA"}
 
 
 @dataclass(frozen=True)
@@ -82,19 +83,26 @@ class Micro210ServingProfile:
     generator: dict
     engine_init_kwargs: dict
     cuda_allocator_config: str
-    judge_gpu_count: int
     nccl_buffer_size_bytes: int
-    network_env: dict[str, str]
-    judge_gpu_variant: str
-    judge_target_cluster: str
-    judge_endpoint_receipt: str
+    nccl_env: dict[str, str]
+
+
+@dataclass(frozen=True)
+class Micro210RemoteJudge:
+    """Placement and receipt owned by a separate regional judge root."""
+
+    gpu_count: int
+    gpu_variant: str
+    target_cluster: str
+    endpoint_receipt: str
+    priority: str
 
 
 def serving_config(frozen: dict, profile: Micro210ServingProfile) -> dict:
     config = runtime_policy_config(frozen).config
     unknown = set(profile.generator) - SERVING_GENERATOR_FIELDS
     unknown_engine = set(profile.engine_init_kwargs) - SERVING_ENGINE_FIELDS
-    unknown_network = set(profile.network_env) - SERVING_NETWORK_FIELDS
+    unknown_network = set(profile.nccl_env) - SERVING_NCCL_ENV_FIELDS
     if unknown or unknown_engine or unknown_network:
         raise ValueError(
             f"Serving profile cannot override protocol fields: {sorted(unknown | unknown_engine | unknown_network)}"
@@ -112,7 +120,7 @@ def serving_config(frozen: dict, profile: Micro210ServingProfile) -> dict:
         **profile.engine_init_kwargs,
     }
     config["extra_env"]["PYTORCH_CUDA_ALLOC_CONF"] = profile.cuda_allocator_config
-    config["extra_env"].update(profile.network_env)
+    config["extra_env"].update(profile.nccl_env)
     config["trainer"].setdefault("policy", {})["nccl_buffer_size_bytes"] = profile.nccl_buffer_size_bytes
     return config
 
@@ -125,6 +133,7 @@ class Micro210Run:
     counterpart_api_key: SecretSpec
     serving_profile: Micro210ServingProfile | None = None
     model_manifest_filename: str = MODEL_MANIFEST_FILENAME
+    remote_judge: Micro210RemoteJudge | None = None
 
 
 @dataclass(frozen=True)
@@ -163,9 +172,9 @@ def micro210_judge_inference(config: Micro210Run) -> RemoteInferenceConfig:
     judge = draccus.decode(ModelConfig, policy["judge"])
     gpu_variant = policy["gpu_variant"]
     judge_gpu_count = policy["judge_gpu_count"]
-    if config.serving_profile:
-        gpu_variant = config.serving_profile.judge_gpu_variant
-        judge_gpu_count = config.serving_profile.judge_gpu_count
+    if config.remote_judge:
+        gpu_variant = config.remote_judge.gpu_variant
+        judge_gpu_count = config.remote_judge.gpu_count
         judge = replace(judge, resource_hint=replace(judge.resource_hint, gpu={gpu_variant: judge_gpu_count}))
     accelerator = AcceleratorChoice(
         platform=Platform.GPU,
@@ -174,7 +183,7 @@ def micro210_judge_inference(config: Micro210Run) -> RemoteInferenceConfig:
         target_cluster=None,
     )
     serving_geometry(judge.serve, accelerator)
-    priority = config.serving_profile.execution.priority if config.serving_profile else policy["execution"]["priority"]
+    priority = config.remote_judge.priority if config.remote_judge else policy["execution"]["priority"]
     inference = inference_config_for_model(
         judge,
         accelerator,
@@ -183,11 +192,9 @@ def micro210_judge_inference(config: Micro210Run) -> RemoteInferenceConfig:
         capability_origin=policy["capability_origin"],
         api_model=judge.location,
     )
-    if config.serving_profile:
+    if config.remote_judge:
         cluster = load_config(
-            Path(__file__).resolve().parents[2]
-            / "lib/iris/config"
-            / f"{config.serving_profile.judge_target_cluster}.yaml"
+            Path(__file__).resolve().parents[2] / "lib/iris/config" / f"{config.remote_judge.target_cluster}.yaml"
         )
         if cluster.platform.coreweave is None:
             raise ValueError("The Mochi judge requires a regional CoreWeave controller")
@@ -212,13 +219,20 @@ def micro210_judge_sha256(config: Micro210Run) -> str:
 @contextmanager
 def micro210_judge_endpoint(config: Micro210Run, inference: RemoteInferenceConfig) -> Iterator[OpenAIEndpoint]:
     """Use the co-hosted judge or a receipt verified against the frozen judge."""
-    if config.serving_profile is None:
+    if config.remote_judge is None:
         with remote_inference(inference) as served:
             yield served.model.endpoint
         return
-    receipt = StoragePath(config.serving_profile.judge_endpoint_receipt)
+    receipt = StoragePath(config.remote_judge.endpoint_receipt)
+    terminal = StoragePath(config.remote_judge.endpoint_receipt + ".terminal.json")
+
+    def receipt_ready() -> bool:
+        if terminal.exists():
+            raise ValueError("Remote Micro210 judge has terminated; use a fresh round identity")
+        return receipt.exists()
+
     ExponentialBackoff(initial=1, maximum=30).wait_until_or_raise(
-        receipt.exists,
+        receipt_ready,
         Duration.from_seconds(config.evaluation.policy()["evaluation"]["execution"]["job_timeout_seconds"]),
         "Remote Micro210 judge did not publish its endpoint receipt",
     )
@@ -230,6 +244,19 @@ def micro210_judge_endpoint(config: Micro210Run, inference: RemoteInferenceConfi
         or endpoint.endpoint.model != inference.model.api_model
     ):
         raise ValueError("Remote Micro210 judge receipt differs from the frozen judge")
+    try:
+        response = httpx.get(
+            endpoint.endpoint.url("models"),
+            headers={"Authorization": f"Bearer {endpoint.endpoint.api_key or 'EMPTY'}"},
+            timeout=30,
+        )
+        response.raise_for_status()
+    except httpx.HTTPError:
+        # The receipt contains a capability URL; never include it in an error.
+        raise ValueError("Remote Micro210 judge is unreachable before rollout allocation") from None
+    if endpoint.endpoint.model not in {model["id"] for model in response.json()["data"]}:
+        raise ValueError("Remote Micro210 judge does not serve the frozen model")
+    receipt_ready()
     yield endpoint.endpoint
 
 
@@ -249,6 +276,7 @@ def run_micro210(config: Micro210Run) -> SkyRLRun:
                     {
                         "serving_profile": asdict(config.serving_profile),
                         "model_manifest_filename": config.model_manifest_filename,
+                        "remote_judge": asdict(config.remote_judge) if config.remote_judge else None,
                     }
                     if config.serving_profile
                     else {}
@@ -294,6 +322,7 @@ def micro210_artifact_step(
     serving_profile: Micro210ServingProfile | None = None,
     model_binding: Micro210Model | None = None,
     model_manifest_filename: str = MODEL_MANIFEST_FILENAME,
+    remote_judge: Micro210RemoteJudge | None = None,
 ) -> ArtifactStep[SkyRLRun]:
     """Bind a future committed model to the same frozen evaluator as a static export."""
     fingerprint_model = Micro210Model(
@@ -367,6 +396,7 @@ def micro210_artifact_step(
             ("env:TOGETHER_API_KEY",),
             serving_profile,
             model_manifest_filename,
+            remote_judge,
         )
 
     configured = replace(step, run=run_micro210, build_config=build, expected_fingerprint=None)

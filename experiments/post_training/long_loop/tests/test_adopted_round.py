@@ -8,6 +8,7 @@ import hashlib
 import json
 from pathlib import Path
 
+import httpx
 import pytest
 import yaml
 from marin.execution.lazy import StepContext, lower
@@ -103,7 +104,7 @@ def test_adopted_round_lowers_to_eval_with_pinned_model_and_standard_ep_placemen
     # qualified cross-host IB transport and inference-actor NCCL buffer.
     validate_launch(run.skyrl.launch_config_yaml, tmp_path / "compiled")
     compiled = yaml.safe_load((tmp_path / "compiled/compiled.yaml").read_text())
-    assert compiled["skyrl"]["trainer"]["policy"]["nccl_buffer_size_bytes"] == 262144
+    assert compiled["skyrl"]["trainer"]["policy"]["nccl_buffer_size_bytes"] == 4194304
     environment = compiled["runtime"]["task_env"]
     assert environment["NCCL_NET"] == "IB"
     assert environment["NCCL_IB_DISABLE"] == "0"
@@ -119,7 +120,11 @@ def test_changed_adopted_metadata_is_rejected_before_building_a_gpu_job(adopted_
 @pytest.mark.parametrize("judge_gpus", [4, 8])
 def test_exact_graph_preflight_validates_judge_and_rollout_device_counts(adopted_round, tmp_path, judge_gpus):
     spec = dataclasses.replace(
-        adopted_round, serving=dataclasses.replace(adopted_round.serving, judge_gpu_count=judge_gpus)
+        adopted_round,
+        serving=dataclasses.replace(
+            adopted_round.serving,
+            remote_judge=dataclasses.replace(adopted_round.serving.remote_judge, gpu_count=judge_gpus),
+        ),
     )
     terminal = adopted_round_evaluation(spec)
     output = tmp_path / "preflight"
@@ -141,11 +146,15 @@ def test_exact_graph_preflight_validates_judge_and_rollout_device_counts(adopted
     }
 
 
-def test_remote_judge_receipt_preserves_frozen_identity(adopted_round, tmp_path):
+@pytest.mark.parametrize("failure", [None, "identity", "terminated", "unreachable", "model"])
+def test_remote_judge_receipt_preserves_frozen_identity(adopted_round, tmp_path, monkeypatch, failure):
     receipt = tmp_path / "judge.json"
     spec = dataclasses.replace(
         adopted_round,
-        serving=dataclasses.replace(adopted_round.serving, judge_endpoint_receipt=str(receipt)),
+        serving=dataclasses.replace(
+            adopted_round.serving,
+            remote_judge=dataclasses.replace(adopted_round.serving.remote_judge, endpoint_receipt=str(receipt)),
+        ),
     )
     terminal = adopted_round_evaluation(spec)
     context = StepContext.for_run(
@@ -160,13 +169,34 @@ def test_remote_judge_receipt_preserves_frozen_identity(adopted_round, tmp_path)
         OpenAIEndpoint("https://judge.invalid/v1", inference.model.api_model),
         ("/fixture/judge/worker",),
     )
+    if failure == "identity":
+        endpoint = dataclasses.replace(endpoint, judge_sha256="0" * 64)
     receipt.write_text(json.dumps(dataclasses.asdict(endpoint)))
+    if failure == "terminated":
+        Path(str(receipt) + ".terminal.json").write_text('{"terminated": true}')
+
+    def models(url, **kwargs):
+        assert url == endpoint.endpoint.url("models")
+        return httpx.Response(
+            503 if failure == "unreachable" else 200,
+            json={"data": [{"id": "wrong-model" if failure == "model" else inference.model.api_model}]},
+            request=httpx.Request("GET", url),
+        )
+
+    monkeypatch.setattr("experiments.evaluation.micro210.httpx.get", models)
+    if failure:
+        message = {
+            "identity": "differs from the frozen judge",
+            "terminated": "has terminated",
+            "unreachable": "unreachable before rollout allocation",
+            "model": "does not serve the frozen model",
+        }[failure]
+        with pytest.raises(ValueError, match=message):
+            with micro210_judge_endpoint(run, inference):
+                pytest.fail("An invalid judge must never be connected")
+        return
     with micro210_judge_endpoint(run, inference) as connected:
         assert connected == endpoint.endpoint
-    receipt.write_text(json.dumps(dataclasses.asdict(dataclasses.replace(endpoint, judge_sha256="0" * 64))))
-    with pytest.raises(ValueError, match="differs from the frozen judge"):
-        with micro210_judge_endpoint(run, inference):
-            pytest.fail("A different judge must never be connected")
 
 
 def test_serving_profile_cannot_change_frozen_sampling(adopted_round, tmp_path):
