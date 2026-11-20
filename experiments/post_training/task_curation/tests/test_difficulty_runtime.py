@@ -22,7 +22,7 @@ from taskcompendium.grader import verifyit_package
 from taskcompendium.models import TaskSpec
 from verifyit.spec import JudgeSpec
 
-from experiments.post_training.task_curation import difficulty_campaign
+from experiments.post_training.task_curation.difficulty import runtime as difficulty_runtime
 from experiments.post_training.task_curation.difficulty_config import CandidateRun
 from experiments.post_training.task_curation.difficulty_prepared import PreparedSource, PreparedTask
 from experiments.post_training.task_curation.difficulty_sampling import sampling_settings
@@ -72,21 +72,22 @@ print(json.dumps([context, completion_budget_from_count(
         results.append(json.loads(result.stdout))
         return result
 
-    monkeypatch.setattr(difficulty_campaign, "forwarded_secrets", lambda: {})
+    monkeypatch.setattr(difficulty_runtime, "forwarded_secrets", lambda: {})
 
     def unavailable_secret(name):
         raise AssertionError(f"Judgeless worker looked up {name}")
 
-    monkeypatch.setattr(difficulty_campaign, "require_secret", unavailable_secret)
-    monkeypatch.setattr(difficulty_campaign.subprocess, "run", native_worker)
+    monkeypatch.setattr(difficulty_runtime, "require_secret", unavailable_secret)
+    monkeypatch.setattr(difficulty_runtime.subprocess, "run", native_worker)
     try:
-        difficulty_campaign.run_trial_worker(
+        difficulty_runtime.run_trial_worker(
             tmp_path / "prepared.json",
             tmp_path / "candidate.json",
             tmp_path,
             StoragePath(str(tmp_path / "output")),
             "fixture",
-            recovery_arguments=[],
+            ledger=str(tmp_path / "ledger"),
+            action_manifest=str(tmp_path / "action.json"),
             judge=None,
         )
     finally:
@@ -102,7 +103,7 @@ def test_campaign_qualifies_only_required_judge_routes(tmp_path, monkeypatch, di
     if with_judge:
         task = task.model_copy(
             update={
-                "grader": verifyit_package(JudgeSpec(model=difficulty_campaign.GLM_MODEL, references=("answer",))).grader
+                "grader": verifyit_package(JudgeSpec(model=difficulty_runtime.GLM_MODEL, references=("answer",))).grader
             }
         )
     source = difficulty_source(task)
@@ -113,7 +114,7 @@ def test_campaign_qualifies_only_required_judge_routes(tmp_path, monkeypatch, di
     digest = hashlib.sha256(template.read_bytes()).hexdigest()
     for solver in (Solver.SMALL, Solver.HOSTED):
         monkeypatch.setitem(
-            difficulty_campaign.PINS, solver, replace(difficulty_campaign.PINS[solver], template_sha256=digest)
+            difficulty_runtime.PINS, solver, replace(difficulty_runtime.PINS[solver], template_sha256=digest)
         )
     downloads, probes, secrets, launches = [], [], [], []
 
@@ -135,10 +136,10 @@ def test_campaign_qualifies_only_required_judge_routes(tmp_path, monkeypatch, di
 
     def secret(name):
         secrets.append(name)
-        assert with_judge and name == difficulty_campaign.TOGETHER_API_KEY_ENV
+        assert with_judge and name == difficulty_runtime.TOGETHER_API_KEY_ENV
         return "fixture-judge-key"
 
-    def launch(prepared_path, config_path, local_root, output, api_key, recovery_arguments, judge, daytona_api_key=None):
+    def launch(prepared_path, config_path, local_root, output, api_key, judge, ledger, action_manifest, daytona_api_key=None):
         config = CandidateRun.model_validate_json(config_path.read_text())
         assert config.judge == judge
         launches.append(config)
@@ -154,22 +155,24 @@ def test_campaign_qualifies_only_required_judge_routes(tmp_path, monkeypatch, di
                 workload="task_spec",
                 backend="local",
                 reason=None,
-                judge_model=difficulty_campaign.GLM_MODEL if with_judge else None,
+                judge_model=difficulty_runtime.GLM_MODEL if with_judge else None,
             )
         ],
     )
-    monkeypatch.setattr(difficulty_campaign, "hf_hub_download", download)
-    monkeypatch.setattr(difficulty_campaign, "worker_limits", limits)
-    monkeypatch.setattr(difficulty_campaign, "prepare_source", lambda source, root: prepared)
-    monkeypatch.setattr(difficulty_campaign, "solver_endpoint", endpoint)
-    monkeypatch.setattr(difficulty_campaign, "probe_endpoint", probe)
-    monkeypatch.setattr(difficulty_campaign, "require_secret", secret)
-    monkeypatch.setattr(difficulty_campaign, "run_trial_worker", launch)
+    monkeypatch.setattr(difficulty_runtime, "hf_hub_download", download)
+    monkeypatch.setattr(difficulty_runtime, "worker_limits", limits)
+    monkeypatch.setattr(difficulty_runtime, "prepare_source", lambda source, root: prepared)
+    monkeypatch.setattr(difficulty_runtime, "solver_endpoint", endpoint)
+    monkeypatch.setattr(difficulty_runtime, "probe_endpoint", probe)
+    monkeypatch.setattr(difficulty_runtime, "require_secret", secret)
+    monkeypatch.setattr(difficulty_runtime, "run_trial_worker", launch)
+    manifest = tmp_path / "action.json"
+    manifest.write_text(json.dumps({"sources": [{"source_id": source.sample.source_id, "tasks": [[task.id, "a" * 64, 1]]}]}))
     output = tmp_path / "output"
     monkeypatch.setattr(
         "sys.argv",
         [
-            "difficulty_campaign",
+            "difficulty_runtime",
             "--solver",
             "small",
             "--sources",
@@ -186,12 +189,14 @@ def test_campaign_qualifies_only_required_judge_routes(tmp_path, monkeypatch, di
             "3",
             "--priority",
             "interactive",
+            "--ledger", str(tmp_path / "ledger"),
+            "--action-manifest", str(manifest),
         ],
     )
-    difficulty_campaign.main()
+    difficulty_runtime.main()
     assert probes == ([Solver.SMALL, Solver.HOSTED] if with_judge else [Solver.SMALL])
-    assert set(downloads) == {difficulty_campaign.SOLVER_MODELS[solver] for solver in probes}
-    assert secrets == ([difficulty_campaign.TOGETHER_API_KEY_ENV] if with_judge else [])
+    assert set(downloads) == {difficulty_runtime.SOLVER_MODELS[solver] for solver in probes}
+    assert secrets == ([difficulty_runtime.TOGETHER_API_KEY_ENV] if with_judge else [])
     (config,) = launches
     serving = json.loads((output / "serving.json").read_text())
     if with_judge:
@@ -220,9 +225,9 @@ def test_solver_endpoint_passes_the_declared_band_to_serving_children(monkeypatc
         )
         yield session
 
-    monkeypatch.setattr(difficulty_campaign, "remote_inference", remote_inference)
+    monkeypatch.setattr(difficulty_runtime, "remote_inference", remote_inference)
     settings = sampling_settings(Solver.SMALL, [])
-    with difficulty_campaign.solver_endpoint(Solver.SMALL, settings, priority_band_value("interactive")) as (
+    with difficulty_runtime.solver_endpoint(Solver.SMALL, settings, priority_band_value("interactive")) as (
         endpoint,
         _api_model,
         _api_key,
@@ -233,54 +238,6 @@ def test_solver_endpoint_passes_the_declared_band_to_serving_children(monkeypatc
     assert captured[0].iris.priority == job_pb2.PRIORITY_BAND_INTERACTIVE
 
 
-def test_same_run_output_distinguishes_resume_from_a_new_version(tmp_path):
-    prepared = {"source_queue": "/sources.json", "source_queue_sha256": "1" * 64, "sources": []}
-
-    def variant(**changes):
-        return SimpleNamespace(**{**args.__dict__, **changes})
-
-    args = SimpleNamespace(
-        sources="/sources.json",
-        sources_sha256="1" * 64,
-        previous_campaign=None,
-        previous_serving_sha256=None,
-        solver=Solver.HOSTED,
-    )
-    output = StoragePath(str(tmp_path / "root"))
-    assert not difficulty_campaign.same_run_output(output, args)  # absent root
-
-    (tmp_path / "root").mkdir()
-    assert not difficulty_campaign.same_run_output(output, args)  # no prepared receipt yet
-
-    (tmp_path / "root" / "prepared.json").write_text(json.dumps(prepared))
-    assert difficulty_campaign.same_run_output(output, args)
-
-    assert not difficulty_campaign.same_run_output(output, variant(sources_sha256="2" * 64))
-
-    parent_file = tmp_path / "root" / "trials" / "parent-campaign.json"
-    parent_file.parent.mkdir()
-    parent_file.write_text(
-        json.dumps(
-            {
-                "root": "/other",
-                "source_queue_sha256": "1" * 64,
-                "serving_receipt": {"uri": "/other/serving.json", "sha256": "3" * 64},
-            }
-        )
-    )
-    # A root with a parent binding cannot be resumed by a parentless invocation.
-    assert not difficulty_campaign.same_run_output(output, args)
-    assert difficulty_campaign.same_run_output(
-        output, variant(previous_campaign="/other", previous_serving_sha256="3" * 64)
-    )
-    assert not difficulty_campaign.same_run_output(
-        output, variant(previous_campaign="/other", previous_serving_sha256="4" * 64)
-    )
-
-    (tmp_path / "root" / "serving.json").write_text(json.dumps({"solver": "small"}))
-    assert not difficulty_campaign.same_run_output(
-        output, variant(previous_campaign="/other", previous_serving_sha256="3" * 64)
-    )
 
 
 def test_every_judge_tier_carries_an_immutable_checkpoint_pin():
@@ -299,34 +256,34 @@ def test_hosted_endpoint_liveness_fails_fast_and_sends_the_hosted_model(monkeypa
         raise httpx.ConnectError("connection refused")
 
     monkeypatch.setattr(httpx.Client, "post", dead_post)
-    monkeypatch.setattr(difficulty_campaign, "TOGETHER_BASE_URL", "https://hosted.fixture/v1")
-    monkeypatch.setattr(difficulty_campaign, "require_secret", lambda name: "fixture-key")
+    monkeypatch.setattr(difficulty_runtime, "TOGETHER_BASE_URL", "https://hosted.fixture/v1")
+    monkeypatch.setattr(difficulty_runtime, "require_secret", lambda name: "fixture-key")
     try:
-        with difficulty_campaign.solver_endpoint(Solver.HOSTED, sampling_settings(Solver.HOSTED, []), 0):
+        with difficulty_runtime.solver_endpoint(Solver.HOSTED, sampling_settings(Solver.HOSTED, []), 0):
             raise AssertionError("The dead endpoint must fail the endpoint context")
     except RuntimeError as error:
         assert "liveness" in str(error) and "hosted.fixture" in str(error)
-    assert sent["model"] == difficulty_campaign.TOGETHER_MODEL
+    assert sent["model"] == difficulty_runtime.TOGETHER_MODEL
 
 
 def test_campaign_refuses_daytona_sources_without_the_connection_environment(monkeypatch):
     """The Daytona connection resolves from the worker's own environment at the
     first Daytona trial (only the API url defaults), so the campaign requires
     every name up front instead of dying hours into the run (large-v22-relay)."""
-    monkeypatch.setattr(difficulty_campaign.os, "environ", {"DAYTONA_API_KEY": "fixture-key"})
+    monkeypatch.setattr(difficulty_runtime.os, "environ", {"DAYTONA_API_KEY": "fixture-key"})
     with pytest.raises(ValueError, match="DAYTONA_API_URL, DAYTONA_TARGET"):
-        difficulty_campaign.require_daytona_connection_environment("fixture-key")
+        difficulty_runtime.require_daytona_connection_environment("fixture-key")
 
     monkeypatch.setattr(
-        difficulty_campaign.os,
+        difficulty_runtime.os,
         "environ",
         {"DAYTONA_API_URL": "https://app.daytona.io/api", "DAYTONA_TARGET": "us"},
     )
     with pytest.raises(ValueError, match="DAYTONA_API_KEY or DAYTONA_RL_API_KEY"):
-        difficulty_campaign.require_daytona_connection_environment(None)
+        difficulty_runtime.require_daytona_connection_environment(None)
 
     monkeypatch.setattr(
-        difficulty_campaign.os,
+        difficulty_runtime.os,
         "environ",
         {
             "DAYTONA_API_KEY": "fixture-key",
@@ -334,4 +291,4 @@ def test_campaign_refuses_daytona_sources_without_the_connection_environment(mon
             "DAYTONA_TARGET": "us",
         },
     )
-    difficulty_campaign.require_daytona_connection_environment("fixture-key")
+    difficulty_runtime.require_daytona_connection_environment("fixture-key")

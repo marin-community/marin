@@ -37,4 +37,3 @@ class CandidateRun(BaseModel):
     workers: int
     gpu_count: int
     attempts_per_task: int
-    task_limit: int | None

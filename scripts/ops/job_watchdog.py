@@ -48,7 +48,7 @@ Registry schema (YAML):
           type: json_field         # a field of a JSON status artifact
             location: s3://bucket/path/status.json, field: dotted.path, terminal_value: sealed
           type: log_regex          # regex over the newest task log line (Finelog)
-            cluster, job, pattern, failure_pattern, namespace: marin, log_window_minutes: 360
+            cluster, job, pattern, failure_pattern, log_contains, namespace: marin, log_window_minutes: 360
 """
 
 import argparse
@@ -165,6 +165,7 @@ class LogRegexProbe:
     job_is_prefix: bool = False
     pattern: str = ""
     failure_pattern: str | None = None
+    log_contains: str | None = None
     namespace: str = "marin"
     log_window_minutes: int = LOG_WINDOW_MINUTES
 
@@ -220,6 +221,7 @@ class FleetSnapshot:
     iris: dict[tuple[str, str], IrisJobView] = dataclasses.field(default_factory=dict)
     logs: dict[str, LogLine] = dataclasses.field(default_factory=dict)
     kueue: dict[str, list[dict[str, Any]]] = dataclasses.field(default_factory=dict)
+    filtered_logs: dict[str, dict[str, LogLine]] = dataclasses.field(default_factory=dict)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -430,12 +432,16 @@ def parse_probe(raw: Any, entry_id: str) -> IrisTaskStatesProbe | StorageObjects
             re.compile(failure_pattern)
         except re.error as e:
             raise RegistryError(f"{context}: failure_pattern does not compile: {e}") from e
+    log_contains = raw.get("log_contains")
+    if log_contains is not None and not isinstance(log_contains, str):
+        raise RegistryError(f"{context}: log_contains must be a string when present")
     return LogRegexProbe(
         cluster=_require_str(raw, "cluster", context),
         job=_require_str(raw, "job", context),
         job_is_prefix=bool(raw.get("job_is_prefix", False)),
         pattern=pattern,
         failure_pattern=failure_pattern,
+        log_contains=log_contains,
         namespace=str(raw.get("namespace", "marin")),
         log_window_minutes=int(raw.get("log_window_minutes", LOG_WINDOW_MINUTES)),
     )
@@ -967,6 +973,21 @@ def collect_fleet_snapshot(registry: Registry, now: datetime) -> FleetSnapshot:
             # Stale log data is safer than a dead tick: missing lines keep entries'
             # previous signatures, so stall clocks are not reset by a hub hiccup.
             logger.warning("finelog batch query failed; keeping previous log state: %s", e)
+    filters = {
+        entry.probe.log_contains
+        for entry in registry.entries
+        if isinstance(entry.probe, LogRegexProbe) and entry.probe.log_contains
+    }
+    for text in sorted(filters):
+        patterns = [
+            _log_pattern_for(IrisJobRef(entry.probe.cluster, entry.probe.job, entry.probe.job_is_prefix))
+            for entry in registry.entries
+            if isinstance(entry.probe, LogRegexProbe) and entry.probe.log_contains == text
+        ]
+        try:
+            snapshot.filtered_logs[text] = newest_finelog_lines(sorted(set(patterns)), now, contains=text)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            logger.warning("finelog filtered query failed for %r: %s", text, error)
     return snapshot
 
 
@@ -977,7 +998,7 @@ def _log_pattern_for(ref: IrisJobRef) -> str:
 
 
 def newest_finelog_lines(
-    patterns: list[str], now: datetime, window_minutes: int = LOG_WINDOW_MINUTES
+    patterns: list[str], now: datetime, window_minutes: int = LOG_WINDOW_MINUTES, *, contains: str | None = None
 ) -> dict[str, LogLine]:
     """Newest Finelog line per tracked pattern, in one query.
 
@@ -985,11 +1006,14 @@ def newest_finelog_lines(
     lines from one job cannot push a quiet job's newest line out of the result. A
     pattern LIMITs to one row: an exact job yields that job's newest line, and a
     prefix yields the single newest line under the prefix across matching jobs.
+    ``contains`` filters message content before selecting the newest line, so
+    later progress cannot hide an earlier escalation.
     """
     since_ms = int(now.timestamp() * 1000) - int(window_minutes * 60 * 1000)
     columns = 'key, seq, epoch_ms, "data", "cluster"'
+    content_filter = "" if contains is None else " AND contains(data, '" + contains.replace("'", "''") + "')"
     subqueries = " UNION ALL ".join(
-        f"(SELECT {columns} FROM \"log\" WHERE key LIKE '{pattern}' AND epoch_ms > {since_ms} "
+        f"(SELECT {columns} FROM \"log\" WHERE key LIKE '{pattern}' AND epoch_ms > {since_ms} {content_filter} "
         "ORDER BY epoch_ms DESC, seq DESC LIMIT 1)"
         for pattern in patterns
     )
@@ -1069,7 +1093,14 @@ def snapshot_probe_runner(snapshot: FleetSnapshot):
         if isinstance(entry.probe, JsonFieldProbe):
             return probe_json_field(entry.probe, lifecycle)
         if isinstance(entry.probe, LogRegexProbe):
-            return probe_log_regex(entry.probe, _resolve_log_line(snapshot, entry.probe), lifecycle)
+            if entry.probe.log_contains and entry.probe.log_contains not in snapshot.filtered_logs:
+                raise ProbeError(f"Finelog query for {entry.probe.log_contains!r} failed")
+            log_snapshot = (
+                dataclasses.replace(snapshot, logs=snapshot.filtered_logs[entry.probe.log_contains])
+                if entry.probe.log_contains
+                else snapshot
+            )
+            return probe_log_regex(entry.probe, _resolve_log_line(log_snapshot, entry.probe), lifecycle)
         raise ProbeError(f"unsupported probe type for {entry.id}")
 
     return runner

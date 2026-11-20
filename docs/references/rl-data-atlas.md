@@ -1286,32 +1286,18 @@ not acquire a solve-rate bar. Use Iris H100 serving in `cw-rno2a`, with explicit
 target placement and compilation and CUDA graphs enabled. Record GPU-hours per
 model and input/output tokens; jobs have a three-day limit.
 
-The campaign launcher consumes a frozen `difficulty_samples` source queue and
-its SHA256. Resolve `GLM_BULK_TOKEN` and `HF_TOKEN` in the launch shell, then
-forward them as host-side secret files:
+Use the [difficulty reconciler](task-curation.md#reconcile-difficulty-coverage)
+for current coverage, typed gaps, GPU-hour reports and bounded scheduling:
 
 ```bash
-uv run iris --cluster marin job run --no-wait \
-  --job-name <new-run-name> --target-cluster cw-rno2a \
-  --enable-extra-resources --cpu 32 --memory 128GB --disk 1TB \
-  --timeout 259200 --container-profile container_profile_privileged \
-  --egress-policy egress_policy_cluster \
-  --priority interactive \
-  --sync-package marin-core --extra cpu --extra dedup \
-  --secret GLM_BULK_TOKEN env:GLM_BULK_TOKEN --secret HF_TOKEN env:HF_TOKEN \
-  -- python -m experiments.post_training.task_curation.difficulty_campaign \
-  --solver hosted --sources <sources.json> --sources-sha256 <sha256> \
-  --output-root <new-s3-run-prefix> --local-root /tmp/<new-run-name> \
-  --workers 8 --attempts-per-task 3 \
-  --priority interactive
+uv run python -m experiments.post_training.task_curation.difficulty status --since 24h
+uv run python -m experiments.post_training.task_curation.difficulty plan
+uv run python -m experiments.post_training.task_curation.difficulty reconcile --once
 ```
 
-The launch shell's `--priority` sets the Iris root job's band, and the
-campaign requires the same explicit `--priority` argument to pass that band to
-its serving children; there is no hardcoded default. The scheduler preempts
-lower bands, so a production-band campaign evicts interactive peers such as
-the Snowball ablation roots — declare the band deliberately and keep the root
-and its serving children in the same band.
+The append-only ledger is authoritative. Legacy per-run catalogs remain
+historical evidence. The controller owns its child jobs and the fleet watchdog
+owns lifecycle alerts.
 
 Choose `small`, `large`, `hosted` or `snowball`. Local model serving requests
 2, 8 and 8 H100s for Small, Large and Snowball respectively; Hosted uses
@@ -1343,99 +1329,14 @@ Each source's attempt receipt links separate candidate and judge traffic
 archives and token counts. Final judge traffic, including replies that outlive
 an infrastructure-failed task, is sealed under `trials/judge/`.
 
-Inspect `serving.json`, `prepared.json`, `trials/*/measurement.json` and
-`completion.json` in the new run prefix. A completed coordinator can still have
-pending, blocked or unmeasured sources. Each infrastructure retry receives a
-fresh trial directory. A math verifier deadline is tagged with the grading
-phase that ran out: the reference parse is a property of the task, while the
-candidate parse and the comparison follow the reply (the deadline is spent in
-math-verify's equation comparison, mostly on wrong or regrouped replies).
-Three consecutive attempts whose deadline is in the reference parse block that
-task; the third attempt remains unscored and its receipt records the reason.
-A comparison-phase deadline is an unscored attempt that follows the reply: it
-never blocks by itself, and a task whose attempts end without a score because
-of comparison deadlines keeps the typed `math_verifier_deadline` gap on the
-measurement with its counts, so the source never reads as a complete
-measurement. Recovery re-reads bare-deadline blocks recorded before the phase
-tagging as retryable attempts. The measurement counts blocked tasks separately
-from pending tasks and excludes them from `n` and `solved`. When no retryable
-tasks remain, the source status is `blocked`. Keep existing run prefixes
-immutable.
-
-To continue a campaign after its worker has stopped and sealed
-`trials/model-requests-final.json`, select a new output prefix and add
-`--previous-campaign <old-run-prefix> --previous-serving-sha256 <old-serving.json-sha256>`.
-The digest is the previous run's own sealed `serving.json` SHA-256 — the file
-that run wrote, never that run's inherited `--previous-serving-sha256` pointer:
-a continuation of a v16 chain binds to v16's digest, and v16's own binding to
-v15's remains in v16's record. Use the same frozen source queue. The worker
-verifies the source selection, model revision, tokenizer, template, sampling
-and runtime before reading the previous attempt receipts. It verifies each
-scored archive and rechecks TaskSpec network qualification. A task's first
-valid score, including zero, is retained; blocked tasks are not retried.
-Individual attempt receipts also survive a source aggregate interrupted by a
-framework failure. Every continuation writes a new catalog and retains
-references to the previous attempts.
-A continuation records its parent serving and source-queue bindings before
-dispatch. Later runs verify this ancestry even when an interrupted worker never
-visited a source or wrote its aggregate; inherited scores remain reusable once.
-
-### Self-serve status: `difficulty report` and continuation `preflight`
-
-Answer campaign questions from the durable artifacts (never a hand-edited
-status log). `report` enumerates every run root under the difficulty tree, and
-answers per solver: identity, every run with its Iris job, submit/seal
-evidence and wall time, what "succeeded" sealed, per-run measured-vs-inherited
-accounting with pending and not_measured reason codes, per-run own GPU-hours
-and token deltas, per-run added sources (measured by this run and by no
-ancestor in its chain), current catalog totals over each frozen queue's
-population, and which runs are active right now per solver — including runs
-whose output root was never written. `--source <id>` shows one source across
-solvers; `--json` writes the document.
-
-```bash
-uv run --no-sync python -m experiments.post_training.task_curation.difficulty_rounds report \
-  [--solver hosted] [--source <id>] [--prepared] [--json out.json]
-```
-
-Every figure names its basis. A run killed before its `completion.json` is
-reported as unsealed with the reconstructed-traffic flag; a run that predates
-the per-run seal reports its own GPU-hours as derived from cumulative row
-deltas. The writer records exact figures going forward: the trials worker
-maintains a checkpointed `trials/run-seal.json` — rewritten after every
-aggregated source, so a timeout kill still leaves a seal — carrying this
-attempt's own GPU-hour windows and token deltas per source, the selection, and
-the Iris job id derived from `IRIS_TASK_ID`; `completion.json` embeds its
-totals. The seal is the authoritative per-run cost record; catalog rows carry
-cumulative chain totals.
-
-Before submitting a continuation, run the preflight — the launcher runs it
-automatically on every real continuation launch and refuses to submit on any
-mismatch:
-
-```bash
-uv run --no-sync python -m experiments.post_training.task_curation.difficulty_rounds preflight \
-  [--solver hosted] [--source-id <id> ...] \
-  [--previous-campaign <old-run-prefix> --previous-serving-sha256 <old-serving.json-sha256>]
-```
-
-With `--solver hosted` the preflight also sends one short chat completion to the
-Together endpoint, with a 60-second limit, using the served model name. The launcher runs the same gate automatically on every real launch
-(continuations and hosted fresh submissions) and refuses to submit on any
-mismatch; `--receipt-stage-only` skips the local staging.
-
-The preflight reproduces the campaign's failure classes locally: it checks that the hosted
-endpoint answers before submission (a dead endpoint refuses the submission in
-seconds instead of a 30-minute probe timeout), verifies the continuation
-bindings (frozen queue digest, parent ancestry, and the parent's
-`serving.json` digest computed programmatically — a hand-truncated digest is
-named, not submitted), verifies each selected source's frozen panel against
-its census, resolves the sample receipt's contract vintage, compares every
-prepared task digest against the frozen sample receipt, and stages every
-selected source locally with the campaign's own `prepare_source` (catching
-task-validation conflicts such as a runtime packet disagreeing with its task
-specs). A mismatch refuses with the task ID, the frozen and prepared digests,
-and the field-level difference, instead of a failed Iris root.
+Inspect the batch's `serving.json`, `prepared.json`, immutable trial receipts and
+completion evidence. Each infrastructure retry has a fresh trial directory.
+The reconciler selects missing tasks from the ledger, preserves original task
+and runtime bytes, and records a typed unscored row for protocol budget failures,
+including requests with zero input and output tokens. A reference-parse math
+verifier deadline blocks after three consecutive failures; candidate-parse and
+comparison deadlines remain unscored evidence. Neither condition supplies a
+solver zero. Keep all earlier run prefixes immutable.
 
 ### Frozen task-contract vintages
 
@@ -1453,13 +1354,12 @@ queue and the resampled 2026.11.17.5 queue prepare correctly, and a task
 whose bytes changed after its freeze fails with the precise diff under every
 recorded vintage.
 
-Per-source token and GPU figures sum available source aggregates. An interrupted
-source may lack those totals; use every campaign's final model-traffic receipt,
-its `trials/run-seal.json`, and Iris serving allocation durations for the
-complete per-model cost report.
+Historical token and GPU figures describe available source windows; interrupted
+windows can be absent. The reconciler reports the cost basis with the ledger
+totals and preserves candidate and judge traffic archives.
 
-Typed `difficulty_measurements` live in a FineStore catalog or campaign archive.
-Load them into an installed Atlas after its schema migration:
+Historical `difficulty_measurements` remain in FineStore catalogs and campaign
+archives. The legacy Atlas projection loader can still load those archives:
 
 ```bash
 uv run python -m infra.marina.apps.rl_data_catalog.load_difficulty \

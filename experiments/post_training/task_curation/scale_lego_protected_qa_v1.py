@@ -40,7 +40,7 @@ from taskcompendium.harbor.shared_source import (
 from taskcompendium.integrity import SharedDependencyState
 
 from experiments.post_training.task_curation.datasets.prime_intellect import swe as swe_module
-from experiments.post_training.task_curation.difficulty_campaign import worker_limits
+from experiments.post_training.task_curation.difficulty.runtime import worker_limits
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 LOGGER = logging.getLogger("scale-lego-protected-qa")

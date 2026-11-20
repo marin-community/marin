@@ -583,3 +583,49 @@ def test_snapshot_runner_missing_job_is_probe_error() -> None:
     runner = jw.snapshot_probe_runner(snapshot)
     with pytest.raises(jw.ProbeError, match="not in the fleet list"):
         runner(entry, datetime.now(UTC))
+
+
+def test_filtered_log_probe_keeps_escalations_visible_after_newer_progress(monkeypatch):
+    now = datetime(2026, 11, 20, 12, tzinfo=UTC)
+    registry = jw.parse_registry(
+        {
+            "coordinator": "c",
+            "entries": [
+                {
+                    "id": "difficulty",
+                    "owner": "o",
+                    "iris": {"cluster": "cl", "job": "/u/controller"},
+                    "probe": {
+                        "type": "log_regex",
+                        "cluster": "cl",
+                        "job": "/u/controller",
+                        "log_contains": "DIFFICULTY_ESCALATION",
+                        "failure_pattern": "DIFFICULTY_ESCALATION",
+                    },
+                }
+            ],
+        }
+    )
+
+    def external_query(command, timeout_seconds=120):
+        if "iris" in command:
+            return "/u/controller  running  2026-11-20T10:00:00+00:00"
+        # Simulate Finelog applying its SQL content predicate before LIMIT 1.
+        filtered = "contains(data, 'DIFFICULTY_ESCALATION')" in command[-1]
+        return json.dumps(
+            {
+                "key": "/u/controller/0:0",
+                "seq": 10 if filtered else 11,
+                "epoch_ms": int(now.timestamp() * 1000) - (1000 if filtered else 0),
+                "cluster": "cl",
+                "data": 'DIFFICULTY_ESCALATION {"action_id":"a"}' if filtered else "ordinary progress",
+            }
+        )
+
+    monkeypatch.setattr(jw, "run_readonly", external_query)
+    snapshot = jw.collect_fleet_snapshot(registry, now)
+    _, sink = collect_alerts()
+    result = jw.run_tick(registry, jw.WatchdogState(), jw.snapshot_probe_runner(snapshot), sink, now)
+    assert result.statuses[0].state == jw.EntryState.FAILED
+    assert len(result.fired) == 1
+    assert "DIFFICULTY_ESCALATION" in result.fired[0].evidence["detail"]

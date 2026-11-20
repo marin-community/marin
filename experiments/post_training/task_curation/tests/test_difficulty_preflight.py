@@ -1,17 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Behavior tests for the continuation preflight.
-
-The preflight exists because hosted-v13 was submitted and only died later in
-the campaign's first prepare call. These tests pin the refusal behavior: a
-mismatched frozen receipt, a changed queue, a wrong serving digest, an
-unsealed parent, or a queue mixing hosted judge tiers each refuse with the
-reason named.
-"""
+"""Frozen-contract, staging and judge-route preflight behavior."""
 
 import json
-from pathlib import Path
 
 import pytest
 from finestore.rl.difficulty import SampleTask
@@ -22,12 +14,10 @@ from experiments.post_training.glm import GLM_MODEL
 from experiments.post_training.task_curation import difficulty_preflight, difficulty_prepared
 from experiments.post_training.task_curation.difficulty_contracts import (
     CONTRACT_VINTAGE_ABSENT_OMITTED,
-    difficulty_task_contract,
 )
 from experiments.post_training.task_curation.difficulty_preflight import (
-    SourcePreflight,
     load_queue_sources,
-    preflight_continuation,
+    preflight_batch,
     preflight_source,
 )
 from experiments.post_training.task_curation.tests.test_difficulty_contracts import _task
@@ -43,96 +33,16 @@ def _frozen_source(difficulty_source, task: TaskSpec, task_sha256: str):
     return source.model_copy(update={"sample": frozen_sample})
 
 
-def _fake_parent(tmp_path: Path, queue_sha256: str) -> Path:
-    parent = tmp_path / "parent"
-    (parent / "trials").mkdir(parents=True)
-    (parent / "prepared.json").write_text(json.dumps({"source_queue_sha256": queue_sha256, "sources": []}))
-    (parent / "serving.json").write_text(json.dumps({"solver": "hosted"}))
-    (parent / "trials" / "model-requests-final.json").write_text("{}")
-    return parent
-
-
-def test_preflight_passes_a_matching_continuation(tmp_path, monkeypatch, difficulty_source):
-    task = _task()
-    contract = difficulty_task_contract(task, {}, CONTRACT_VINTAGE_ABSENT_OMITTED)
-    source = _frozen_source(difficulty_source, task, contract["task_sha256"])
-    parent = _fake_parent(tmp_path, QUEUE_SHA)
-    monkeypatch.setattr(difficulty_preflight, "load_queue_sources", lambda *a, **k: [source])
-    monkeypatch.setattr(
-        difficulty_preflight,
-        "preflight_source",
-        lambda source, stage_root=None: SourcePreflight(source.declaration.id, CONTRACT_VINTAGE_ABSENT_OMITTED, 1, None),
-    )
-    receipt = preflight_continuation(
-        QUEUE,
-        QUEUE_SHA,
-        None,
-        str(parent),
-        file_sha256(parent / "serving.json"),
-    )
-    assert receipt["sources"] == 1
-    assert receipt["failures"] == []
-    assert receipt["previous_campaign"] == str(parent)
-    assert receipt["previous_serving_sha256"] == file_sha256(parent / "serving.json")
-
-
 def test_preflight_names_a_drifted_frozen_receipt(tmp_path, monkeypatch, difficulty_source):
     task = _task()
     source = _frozen_source(difficulty_source, task, "f" * 64)
-    parent = _fake_parent(tmp_path, QUEUE_SHA)
     monkeypatch.setattr(difficulty_preflight, "load_queue_sources", lambda *a, **k: [source])
     monkeypatch.setattr(difficulty_preflight, "panel_task_runtimes", lambda panel: ([task], [{}]))
     with pytest.raises(ValueError) as error:
-        preflight_continuation(QUEUE, QUEUE_SHA, None, str(parent), file_sha256(parent / "serving.json"))
+        preflight_batch(QUEUE, QUEUE_SHA, None)
     message = str(error.value)
     assert "Fixture:one" in message or task.id in message
     assert "every recorded contract vintage" in message
-
-
-def test_preflight_refuses_a_serving_digest_mismatch(tmp_path, monkeypatch):
-    parent = _fake_parent(tmp_path, QUEUE_SHA)
-    monkeypatch.setattr(difficulty_preflight, "load_queue_sources", lambda *a, **k: [])
-    with pytest.raises(ValueError, match="serving receipt differs"):
-        preflight_continuation(QUEUE, QUEUE_SHA, None, str(parent), "5" * 64)
-
-
-def test_preflight_refuses_a_changed_frozen_queue(tmp_path, monkeypatch):
-    parent = _fake_parent(tmp_path, "old" + "0" * 61)
-    monkeypatch.setattr(difficulty_preflight, "load_queue_sources", lambda *a, **k: [])
-    with pytest.raises(ValueError, match="cannot change the frozen source queue"):
-        preflight_continuation(QUEUE, QUEUE_SHA, None, str(parent), "5" * 64)
-
-
-def test_preflight_refuses_an_unsealed_parent(tmp_path, monkeypatch):
-    parent = _fake_parent(tmp_path, QUEUE_SHA)
-    serving_digest = file_sha256(parent / "serving.json")
-    (parent / "trials" / "model-requests-final.json").unlink()
-    monkeypatch.setattr(difficulty_preflight, "load_queue_sources", lambda *a, **k: [])
-    with pytest.raises(ValueError, match="has not sealed"):
-        preflight_continuation(QUEUE, QUEUE_SHA, None, str(parent), serving_digest)
-
-
-def test_preflight_refuses_a_missing_parent_prepared_receipt(tmp_path, monkeypatch):
-    parent = _fake_parent(tmp_path, QUEUE_SHA)
-    (parent / "prepared.json").unlink()
-    monkeypatch.setattr(difficulty_preflight, "load_queue_sources", lambda *a, **k: [])
-    with pytest.raises(ValueError, match=r"no prepared\.json"):
-        preflight_continuation(QUEUE, QUEUE_SHA, None, str(parent), "5" * 64)
-
-
-def test_preflight_refuses_a_partial_continuation_binding(tmp_path, monkeypatch):
-    monkeypatch.setattr(difficulty_preflight, "load_queue_sources", lambda *a, **k: [])
-    with pytest.raises(ValueError, match="both the previous campaign and its serving receipt"):
-        preflight_continuation(QUEUE, QUEUE_SHA, None, str(tmp_path / "parent"), None)
-
-
-def test_preflight_names_a_truncated_serving_digest(tmp_path, monkeypatch):
-    """small-v22 died on a hand-truncated digest; the preflight names it instead."""
-    parent = _fake_parent(tmp_path, QUEUE_SHA)
-    digest = file_sha256(parent / "serving.json")
-    monkeypatch.setattr(difficulty_preflight, "load_queue_sources", lambda *a, **k: [])
-    with pytest.raises(ValueError, match="not a full sha256"):
-        preflight_continuation(QUEUE, QUEUE_SHA, None, str(parent), digest[:16])
 
 
 def test_preflight_probes_the_hosted_endpoint_and_refuses_a_dead_one(monkeypatch):
@@ -148,7 +58,7 @@ def test_preflight_probes_the_hosted_endpoint_and_refuses_a_dead_one(monkeypatch
     monkeypatch.setattr(difficulty_preflight, "require_secret", lambda name: "fixture-key")
     monkeypatch.setattr(difficulty_preflight, "load_queue_sources", lambda *a, **k: [])
     with pytest.raises(ValueError, match=r"Hosted endpoint liveness failed.*liveness"):
-        preflight_continuation(QUEUE, QUEUE_SHA, None, probe_hosted=True)
+        preflight_batch(QUEUE, QUEUE_SHA, None, probe_hosted=True)
     assert calls == [(difficulty_preflight.TOGETHER_BASE_URL, difficulty_preflight.TOGETHER_MODEL)]
 
 
@@ -160,7 +70,7 @@ def test_preflight_skips_the_hosted_probe_for_local_solvers(monkeypatch):
         lambda *a: calls.append(a),
     )
     monkeypatch.setattr(difficulty_preflight, "load_queue_sources", lambda *a, **k: [])
-    preflight_continuation(QUEUE, QUEUE_SHA, None)
+    preflight_batch(QUEUE, QUEUE_SHA, None)
     assert calls == []
 
 
@@ -251,7 +161,7 @@ def test_preflight_refuses_a_queue_mixing_judge_tiers(tmp_path, monkeypatch, dif
     monkeypatch.setattr(difficulty_preflight, "panel_task_runtimes", lambda panel: ([task], [{}]))
     monkeypatch.setattr(difficulty_preflight, "prepare_source", lambda source, root: prepared[id(source)])
     with pytest.raises(ValueError, match="split the source queue"):
-        preflight_continuation(QUEUE, QUEUE_SHA, None, stage_root=tmp_path / "tasks")
+        preflight_batch(QUEUE, QUEUE_SHA, None, stage_root=tmp_path / "tasks")
 
 
 def test_preflight_records_a_single_judge_tier(tmp_path, monkeypatch, difficulty_source):
@@ -266,7 +176,7 @@ def test_preflight_records_a_single_judge_tier(tmp_path, monkeypatch, difficulty
         "prepare_source",
         lambda source, root: _prepared_source(source, "MiniMaxAI/MiniMax-M3-MXFP8"),
     )
-    receipt = preflight_continuation(QUEUE, QUEUE_SHA, None, stage_root=tmp_path / "tasks")
+    receipt = preflight_batch(QUEUE, QUEUE_SHA, None, stage_root=tmp_path / "tasks")
     assert receipt["judge_tier"] == "MEDIUM"
     assert receipt["failures"] == []
 
@@ -282,7 +192,7 @@ def test_preflight_records_the_relay_route_without_a_hosted_tier(tmp_path, monke
         "prepare_source",
         lambda source, root: _prepared_source(source, GLM_MODEL),
     )
-    receipt = preflight_continuation(QUEUE, QUEUE_SHA, None, stage_root=tmp_path / "tasks")
+    receipt = preflight_batch(QUEUE, QUEUE_SHA, None, stage_root=tmp_path / "tasks")
     assert receipt["judge_tier"] == "relay"
 
 
@@ -292,5 +202,5 @@ def test_preflight_skips_the_tier_gate_without_staging(tmp_path, monkeypatch, di
     source = difficulty_source(task)
     monkeypatch.setattr(difficulty_preflight, "load_queue_sources", lambda *a, **k: [source])
     monkeypatch.setattr(difficulty_preflight, "panel_task_runtimes", lambda panel: ([task], [{}]))
-    receipt = preflight_continuation(QUEUE, QUEUE_SHA, None)
+    receipt = preflight_batch(QUEUE, QUEUE_SHA, None)
     assert "judge_tier" not in receipt

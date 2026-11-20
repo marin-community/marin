@@ -3,40 +3,28 @@
 
 """Execute prepared difficulty tasks in Harbor's locked production runtime."""
 
-import argparse
 import asyncio
 import dataclasses
 import hashlib
-import io
 import json
 import logging
 import math
 import os
 import tarfile
-import time
-from collections.abc import Mapping
-from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager, nullcontext
+from collections.abc import Callable, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import uuid4
 
 from finestore.rl.curation import ContentEvidenceReference
 from finestore.rl.difficulty import (
-    MEASUREMENTS,
     PROTOCOL_ID,
     PROTOCOLS,
     DifficultyAttempt,
     DifficultyGap,
-    DifficultyMeasurement,
     difficulty_gap_reason,
-    join_difficulty_gap_reasons,
-    measurement_from_attempts,
-    register_difficulty,
-    require_difficulty_gaps,
 )
-from finestore.store import DataStore
 from harbor.environments.docker_translate import MissingPreparedImageError
 from harbor.host_capabilities import HostCapabilities, host_capabilities_from_environment
 from harbor.models.trial.config import AgentConfig, EnvironmentConfig, TaskConfig, TrialConfig
@@ -44,24 +32,15 @@ from harbor.trial.trial import Trial
 from harbor.utils.artifact_writer import get_artifact_writer
 from harbor_config.errors import ErrorCategory, error_category
 from pydantic import ValidationError
-from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.filesystem.transfer import copy
-from rigging.secrets import require_secret
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, network_policy_qualified, read_source_runtime
-from taskcompendium.request_budget import RequestBudget
 from verifyit.modes.grade_math import MATH_DEADLINE_REFERENCE_PARSE, MATH_VERIFIER_DEADLINE
 
 from experiments.post_training.task_curation.difficulty_config import CandidateRun
 from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence, write_same_json_evidence
-from experiments.post_training.task_curation.difficulty_prepared import PreparedSource, PreparedTask
-from experiments.post_training.task_curation.difficulty_recovery import (
-    CampaignParent,
-    previous_campaign,
-    recovered_source,
-)
-from experiments.post_training.task_curation.difficulty_relay import budget_relay
+from experiments.post_training.task_curation.difficulty_prepared import PreparedTask
 from experiments.post_training.task_curation.difficulty_sampling import request_parameters
 
 LOGGER = logging.getLogger(__name__)
@@ -188,17 +167,9 @@ def archive_model_traffic(
     """Archive one source's known model replies and count their reported usage."""
     input_tokens = output_tokens = 0
     archive.parent.mkdir(parents=True, exist_ok=True)
-    # A resumed run's per-source archive continues the killed attempt's archive:
-    # its existing entries are carried forward so the destination keeps covering
-    # every route this run version served, instead of colliding with it.
-    prior_entries = []
     if destination.exists():
-        with tarfile.open(fileobj=io.BytesIO(destination.read_bytes()), mode="r:gz") as prior:
-            for member in prior.getmembers():
-                prior_entries.append((member, None if member.isdir() else prior.extractfile(member)))
+        raise FileExistsError(destination)
     with tarfile.open(archive, "w:gz", compresslevel=1) as stream:
-        for member, data in prior_entries:
-            stream.addfile(member, data)
         for task in tasks:
             task_key = hashlib.sha256(task.task_id.encode()).hexdigest()
             for number in range(attempts_per_task):
@@ -212,7 +183,7 @@ def archive_model_traffic(
                     usage = response.get("upstream_usage") or response["body"].get("usage") or {}
                     input_tokens += usage.get("prompt_tokens", 0)
                     output_tokens += usage.get("completion_tokens", 0)
-    copy(str(archive), str(destination), no_clobber=not prior_entries)
+    copy(str(archive), str(destination), no_clobber=True)
     return ModelTraffic(
         ContentEvidenceReference(uri=str(destination), sha256=file_sha256(StoragePath(str(archive)))),
         input_tokens,
@@ -336,6 +307,7 @@ def run_task(
     output: str,
     judge_url: str | None,
     prior_math_deadlines: int,
+    record_attempt: Callable[[StoragePath], None] | None = None,
 ) -> TaskOutcome:
     key = hashlib.sha256(task.task_id.encode()).hexdigest()
     destination = StoragePath(output) / key
@@ -347,11 +319,7 @@ def run_task(
     attempts = []
     pending_reason = None
     math_deadlines = prior_math_deadlines
-    # A resumed run continues after a killed attempt's durable per-attempt
-    # evidence instead of colliding with it.
-    existing = sorted(int(path.name) for path in (destination / "*").glob() if path.name.isdigit())
-    first_number = existing[-1] + 1 if existing else 0
-    for number in range(first_number, first_number + config.attempts_per_task):
+    for number in range(config.attempts_per_task):
         local = root / key / f"{number:02d}"
         local.mkdir(parents=True, exist_ok=False)
         endpoint = f"{base_url}/{root.name}-{key}-{number}/v1"
@@ -543,313 +511,9 @@ def run_task(
                 "judge_temperature": JUDGE_TEMPERATURE if task.judge_model is not None else None,
             },
         )
+        if record_attempt is not None:
+            record_attempt(destination / f"{number:02d}" / "attempt.json")
         attempts.append(attempt)
         if reward is not None or unserved or provider_wait or terminal_deadline:
             break
     return TaskOutcome(attempts, pending_reason)
-
-
-def main() -> None:
-    logging.basicConfig(level=logging.INFO)
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--sources", required=True)
-    parser.add_argument("--config", required=True)
-    parser.add_argument("--output-root", required=True)
-    parser.add_argument("--local-root", required=True, type=Path)
-    parser.add_argument("--previous-campaign")
-    parser.add_argument("--previous-serving-sha256")
-    parser.add_argument("--source-queue-sha256")
-    args = parser.parse_args()
-    configure_coreweave_s3()
-    config = CandidateRun.model_validate_json(Path(args.config).read_text())
-    sources = [PreparedSource.model_validate(row) for row in json.loads(Path(args.sources).read_text())]
-    recovery_arguments = (args.previous_campaign, args.previous_serving_sha256, args.source_queue_sha256)
-    if any(recovery_arguments) and not all(recovery_arguments):
-        raise ValueError("Continuation requires the previous campaign, serving digest and current source queue digest")
-    previous = previous_campaign(*recovery_arguments) if all(recovery_arguments) else None
-    output = StoragePath(args.output_root)
-    # A retried root resumes from its own trials output: the campaign binds the
-    # root as the recovery parent, so the existing per-source evidence is the
-    # chain being continued, not a conflicting prior campaign.
-    resumed = previous is not None and str(previous.root) == str(output.parent)
-    if output.exists() and not resumed:
-        raise FileExistsError("Preserve previous difficulty attempts and select a new version")
-    if args.local_root.exists():
-        raise FileExistsError("Preserve previous difficulty attempts and select a new version")
-    args.local_root.mkdir(parents=True)
-    if previous is not None and not resumed:
-        write_json_evidence(
-            output / "parent-campaign.json",
-            CampaignParent(
-                root=str(previous.root),
-                source_queue_sha256=args.source_queue_sha256,
-                serving_receipt={"uri": str(previous.root / "serving.json"), "sha256": args.previous_serving_sha256},
-            ).model_dump(mode="json"),
-        )
-    key = "EMPTY" if config.api_key_secret is None else require_secret(config.api_key_secret)
-    run_seal = RunSealState(
-        solver=config.solver,
-        selection_source_ids=tuple(source.sample.source_id for source in sources),
-        started_at=datetime.now(UTC).isoformat(),
-    )
-    write_replaced_json_evidence(output / "run-seal.json", run_seal.payload())
-    has_judge = any(task.judge_model is not None and task.reason is None for source in sources for task in source.tasks)
-    judge = config.judge if has_judge else None
-    if has_judge and judge is None:
-        raise ValueError("Eligible judges require an explicit production judge configuration")
-    judge_root = args.local_root / "judge"
-    if has_judge:
-        judge_root.mkdir()
-    with (
-        preserved_model_traffic(args.local_root, output),
-        preserved_model_traffic(judge_root, output / "judge") if has_judge else nullcontext(),
-        budget_relay(
-            endpoint=config.endpoint,
-            model=config.api_model,
-            api_key=key,
-            tokenizer_model=config.identity.tokenizer,
-            tokenizer_revision=config.identity.tokenizer_revision,
-            parameters=request_parameters(config.settings),
-            budget=RequestBudget(
-                config.settings.context_tokens, config.settings.input_tokens, config.settings.output_tokens
-            ),
-            provider_limits=config.provider_limits,
-            receipts=args.local_root / "model-requests",
-        ) as relay,
-        (
-            budget_relay(
-                endpoint=judge.endpoint,
-                model=judge.api_model,
-                api_key=require_secret(judge.api_key_secret) if judge.api_key_secret is not None else "EMPTY",
-                tokenizer_model=judge.identity.tokenizer,
-                tokenizer_revision=judge.identity.tokenizer_revision,
-                parameters={"temperature": JUDGE_TEMPERATURE},
-                budget=None,
-                provider_limits=judge.provider_limits,
-                receipts=judge_root / "model-requests",
-            )
-            if judge is not None
-            else nullcontext()
-        ) as judge_relay,
-    ):
-        with ThreadPoolExecutor(max_workers=config.workers) as executor:
-            for source in sources:
-                started = time.monotonic()
-                source_key = hashlib.sha256(source.sample.source_id.encode()).hexdigest()
-                if resumed and (output / source_key / "measurement.json").exists():
-                    # The killed attempt already published this source's durable
-                    # measurement and catalog row; re-processing it would replay
-                    # scored tasks and duplicate the row.
-                    LOGGER.info(
-                        "%s %s: already measured by the retried attempt; skipping",
-                        config.solver,
-                        source.sample.source_id,
-                    )
-                    continue
-                recovered = (
-                    recovered_source(
-                        previous,
-                        source,
-                        config.solver,
-                        config.identity,
-                        config.settings,
-                        request_parameters(config.settings),
-                        None if config.judge is None else config.judge.identity,
-                    )
-                    if previous is not None
-                    else None
-                )
-                old_attempts = recovered.attempts if recovered is not None else []
-                terminal = {attempt.task_id for attempt in old_attempts if attempt.status in {"scored", "blocked"}}
-                selected_tasks = source.tasks if config.task_limit is None else source.tasks[: config.task_limit]
-                tasks = [task for task in selected_tasks if task.task_id not in terminal]
-                futures = [
-                    executor.submit(
-                        run_task,
-                        task,
-                        config,
-                        relay,
-                        args.local_root / source_key,
-                        str(output / source_key / "attempts"),
-                        judge_relay,
-                        0 if recovered is None else recovered.math_deadline_streaks.get(task.task_id, 0),
-                    )
-                    for task in tasks
-                ]
-                try:
-                    outcomes = [future.result() for future in futures]
-                except BaseException:
-                    for future in futures:
-                        future.cancel()
-                    raise
-                attempts = old_attempts + [attempt for outcome in outcomes for attempt in outcome.attempts]
-                pending_reasons = {
-                    task.task_id: outcome.pending_reason
-                    for task, outcome in zip(tasks, outcomes, strict=True)
-                    if outcome.pending_reason is not None
-                }
-                previous_measurement = None if recovered is None else recovered.measurement
-                traffic = archive_model_traffic(
-                    args.local_root / "model-requests",
-                    tasks,
-                    config.attempts_per_task,
-                    source_key,
-                    args.local_root / source_key / "model-requests.tar.gz",
-                    output / source_key / "model-requests.tar.gz",
-                )
-                source_has_judge = any(task.judge_model is not None and task.reason is None for task in tasks)
-                judge_traffic = (
-                    archive_model_traffic(
-                        judge_root / "model-requests",
-                        tasks,
-                        config.attempts_per_task,
-                        source_key,
-                        args.local_root / source_key / "judge-requests.tar.gz",
-                        output / source_key / "judge-requests.tar.gz",
-                    )
-                    if source_has_judge
-                    else None
-                )
-                input_tokens = (
-                    traffic.input_tokens
-                    + (0 if previous_measurement is None else previous_measurement.input_tokens)
-                    + (0 if recovered is None else recovered.prior_input_tokens)
-                )
-                output_tokens = (
-                    traffic.output_tokens
-                    + (0 if previous_measurement is None else previous_measurement.output_tokens)
-                    + (0 if recovered is None else recovered.prior_output_tokens)
-                )
-                judge_input_tokens = (
-                    0
-                    if judge_traffic is None
-                    else judge_traffic.input_tokens + (0 if recovered is None else recovered.prior_judge_input_tokens)
-                )
-                judge_output_tokens = (
-                    0
-                    if judge_traffic is None
-                    else judge_traffic.output_tokens + (0 if recovered is None else recovered.prior_judge_output_tokens)
-                )
-                attempt_receipts = [] if recovered is None else list(recovered.attempt_receipts)
-                for path in sorted((output / source_key / "attempts" / "*" / "*" / "attempt.json").glob(), key=str):
-                    ref = ContentEvidenceReference(uri=str(path), sha256=file_sha256(path))
-                    # A resumed run's recovery already gathered these receipts;
-                    # duplicates would replay the same attempt twice downstream.
-                    if ref not in attempt_receipts:
-                        attempt_receipts.append(ref)
-                # This campaign's own rolling per-source ledger: a resumed run
-                # replaces the killed attempt's interrupted aggregate, which its
-                # attempts and token totals are fully carried into.
-                receipt = write_replaced_json_evidence(
-                    output / source_key / "attempts.json",
-                    {
-                        "attempts": [item.model_dump(mode="json") for item in attempts],
-                        "pending_reasons": pending_reasons,
-                        "input_tokens": input_tokens,
-                        "output_tokens": output_tokens,
-                        "gpu_hour_basis": (
-                            "sum of recorded source trial windows; "
-                            "startup, teardown and interrupted source windows excluded"
-                        ),
-                        "model_requests": traffic.receipt.uri,
-                        "model_requests_sha256": traffic.receipt.sha256,
-                        "judge_model_requests": (
-                            None if judge_traffic is None else judge_traffic.receipt.model_dump(mode="json")
-                        ),
-                        "judge_input_tokens": None if judge_traffic is None else judge_input_tokens,
-                        "judge_output_tokens": None if judge_traffic is None else judge_output_tokens,
-                        "judge_temperature": JUDGE_TEMPERATURE if source_has_judge else None,
-                        "judge_token_basis": (
-                            "this source window; prior campaign traffic remains in linked receipts"
-                            if source_has_judge
-                            else None
-                        ),
-                        "attempt_receipts": [ref.model_dump(mode="json") for ref in attempt_receipts],
-                        "previous_campaign": None if previous is None else str(previous.root),
-                    },
-                )
-                # Durably seal the traffic drained so far after each source, so a
-                # killed worker loses at most its in-flight source's traffic.
-                seal_model_traffic(args.local_root, output)
-                if has_judge:
-                    seal_model_traffic(judge_root, output / "judge")
-                own_window_gpu_hours = config.gpu_count * (time.monotonic() - started) / 3600
-                payload = dict(
-                    measurement_id=uuid4().hex,
-                    protocol_id=PROTOCOL_ID,
-                    created_at=datetime.now(UTC).isoformat(),
-                    source_id=source.sample.source_id,
-                    release=source.sample.release,
-                    converter_version=source.sample.converter_version,
-                    solver=config.solver,
-                    status="pending",
-                    reason=difficulty_gap_reason(DifficultyGap.AWAITING_SCORED_COVERAGE),
-                    sample=source.sample,
-                    sample_receipt=source.sample_receipt,
-                    model=config.identity,
-                    settings=config.settings,
-                    n=0,
-                    solved=0,
-                    wilson_95=None,
-                    infrastructure_attempts=0,
-                    pending_tasks=len(source.sample.tasks),
-                    attempts_receipt=receipt,
-                    gpu_hours=(
-                        own_window_gpu_hours + (0 if previous_measurement is None else previous_measurement.gpu_hours)
-                    ),
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
-                )
-                measurement = measurement_from_attempts(DifficultyMeasurement(**payload), attempts)
-                environment_blocked_tasks = {task.task_id for task in tasks if task.reason is not None}
-                environment_blocked_tasks.update(
-                    task.task_id
-                    for task, outcome in zip(tasks, outcomes, strict=True)
-                    if outcome.pending_reason
-                    in {
-                        MISSING_PREPARED_IMAGE_REASON,
-                        UNSUPPORTED_COMPOSE_DOCUMENT_REASON,
-                        NETWORK_POLICY_REASON,
-                    }
-                )
-                environment_blockers = sorted({pending_reasons[task_id] for task_id in environment_blocked_tasks})
-                if not terminal and tasks and len(environment_blocked_tasks) == len(tasks):
-                    blockers_reason = join_difficulty_gap_reasons(environment_blockers)
-                    require_difficulty_gaps(blockers_reason)
-                    measurement = DifficultyMeasurement.model_validate(
-                        {
-                            **measurement.model_dump(mode="json"),
-                            "status": "not_measured",
-                            "reason": blockers_reason,
-                        }
-                    )
-                elif pending_reasons:
-                    pending_reason = join_difficulty_gap_reasons(list(pending_reasons.values()))
-                    require_difficulty_gaps(pending_reason)
-                    measurement = measurement.model_copy(update={"reason": pending_reason})
-                with DataStore.open(str(output / "catalog")) as store:
-                    register_difficulty(store)
-                    with store.transaction() as transaction:
-                        transaction.table(MEASUREMENTS).add(measurement.model_dump(mode="json"))
-                write_json_evidence(output / source_key / "measurement.json", measurement.model_dump(mode="json"))
-                run_seal.record(
-                    source_key,
-                    source.sample.source_id,
-                    own_window_gpu_hours,
-                    traffic,
-                    judge_traffic,
-                )
-                write_replaced_json_evidence(output / "run-seal.json", run_seal.payload())
-                LOGGER.info(
-                    "%s %s: %s, scored=%d, solved=%d, pending=%d",
-                    config.solver,
-                    source.sample.source_id,
-                    measurement.status,
-                    measurement.n,
-                    measurement.solved,
-                    measurement.pending_tasks,
-                )
-
-
-if __name__ == "__main__":
-    main()

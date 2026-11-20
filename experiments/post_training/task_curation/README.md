@@ -1091,8 +1091,11 @@ nor changes Atlas admission.
 ## Difficulty measurement
 
 The Difficulty campaigns measure solver difficulty per source with
-`difficulty_campaign.py` (serving, judge route, scheduling) and
-`difficulty_trials.py` (Harbor trials, measurements). Two rules are absolute:
+the `difficulty` package (ledger, planning and child-job scheduling) and
+`difficulty_trials.py` (Harbor trials). Use `python -m
+experiments.post_training.task_curation.difficulty status`, `plan`, or
+`reconcile --once`; see the
+[reconciler reference](../../../docs/references/task-curation.md#reconcile-difficulty-coverage). Two rules are absolute:
 
 1. **No ad-lib reasons.** Every not-measured reason a record carries is a
    `DifficultyGap` member (`lib/finestore/src/finestore/rl/difficulty.py`)
@@ -1105,6 +1108,6 @@ The Difficulty campaigns measure solver difficulty per source with
 
 2. **One judge route per run version.** The campaign serves the shared GLM
    relay or one locally hosted `JUDGE_TIERS` tier
-   (`JUDGE_TIER_SERVING` in `difficulty_campaign.py`); a queue mixing routes
+   (`JUDGE_TIER_SERVING` in `difficulty/runtime.py`); a queue mixing routes
    must be split. Judge endpoints are validated by the serving probe before
    any judged trial dispatches.

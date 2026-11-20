@@ -1,0 +1,359 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Pure, bounded remediation plans with stable evidence-based identities."""
+
+from collections.abc import Sequence
+from dataclasses import asdict, dataclass, replace
+from typing import Protocol
+
+from finestore.rl.difficulty import Solver
+
+from experiments.post_training.task_curation.difficulty.ledger import digest
+from experiments.post_training.task_curation.difficulty.state import CellState, CellStatus, Gap, GapReason, LedgerRow
+
+MAX_SOURCES_PER_JOB = 20
+MAX_TASKS_PER_JOB = 20
+MAX_GPU_HOURS_PER_JOB = 40.0
+
+
+@dataclass(frozen=True)
+class SourceAttempts:
+    source_id: str
+    registry_revision: str
+    tasks: tuple[tuple[str, str, int], ...]
+    queue_uri: str
+    queue_sha256: str
+    evidence_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class AttemptBatch:
+    solver: Solver
+    sources: tuple[SourceAttempts, ...]
+    n_attempts: int
+    max_gpu_hours: float = MAX_GPU_HOURS_PER_JOB
+
+
+@dataclass(frozen=True)
+class RebuildEnvironmentArtifact:
+    uri: str
+    cells: tuple[tuple[str, Solver], ...]
+    evidence_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class BuildSnapshot:
+    source: SourceAttempts
+    solver: Solver
+
+
+@dataclass(frozen=True)
+class BuildTaskSpecFactory:
+    source: SourceAttempts
+    solver: Solver
+
+
+@dataclass(frozen=True)
+class QualifyJudgeRoute:
+    model: str
+    cells: tuple[tuple[str, Solver], ...]
+    evidence_ids: tuple[str, ...]
+    requested_temperature: float | None = None
+
+
+@dataclass(frozen=True)
+class RetryAfter:
+    provider: str
+    source: SourceAttempts
+    solver: Solver
+
+
+@dataclass(frozen=True)
+class Escalate:
+    reason: GapReason
+    evidence: tuple[str, ...]
+    source: SourceAttempts
+    solver: Solver
+    detail: str | None
+
+
+Action = (
+    AttemptBatch
+    | RebuildEnvironmentArtifact
+    | BuildSnapshot
+    | BuildTaskSpecFactory
+    | QualifyJudgeRoute
+    | RetryAfter
+    | Escalate
+)
+
+
+def action_payload(action: Action) -> dict:
+    return {"kind": type(action).__name__, **asdict(action)}
+
+
+def action_id(action: Action) -> str:
+    return digest(action_payload(action))
+
+
+def selected_source(cell: CellState) -> SourceAttempts:
+    return SourceAttempts(
+        cell.source.source_id,
+        cell.source.registry_revision,
+        cell.missing,
+        cell.source.queue_uri,
+        cell.source.queue_sha256,
+        cell.evidence_ids,
+    )
+
+
+class Remediation(Protocol):
+    def plan(self, cells: Sequence[CellState]) -> list[Action]: ...
+
+
+@dataclass(frozen=True)
+class AttemptRemediation:
+    def plan(self, cells: Sequence[CellState]) -> list[Action]:
+        actions: list[Action] = []
+        for cell in cells:
+            source = selected_source(cell)
+            # A source can require several bounded jobs. Each owns disjoint tasks.
+            for start in range(0, len(source.tasks), MAX_TASKS_PER_JOB):
+                tasks = source.tasks[start : start + MAX_TASKS_PER_JOB]
+                selected = SourceAttempts(
+                    source.source_id,
+                    source.registry_revision,
+                    tasks,
+                    source.queue_uri,
+                    source.queue_sha256,
+                    source.evidence_ids,
+                )
+                actions.append(AttemptBatch(cell.solver, (selected,), sum(n for _, _, n in tasks)))
+        return actions
+
+
+@dataclass(frozen=True)
+class ProviderRemediation:
+    available: frozenset[Solver] = frozenset()
+
+    def plan(self, cells: Sequence[CellState]) -> list[Action]:
+        actions: list[Action] = []
+        for cell in cells:
+            if cell.solver in self.available:
+                actions.extend(AttemptRemediation().plan([cell]))
+            else:
+                actions.append(RetryAfter(cell.solver.value, selected_source(cell), cell.solver))
+        return actions
+
+
+@dataclass(frozen=True)
+class ArtifactRemediation:
+    def plan(self, cells: Sequence[CellState]) -> list[Action]:
+        grouped: dict[str, list[CellState]] = {}
+        actions: list[Action] = []
+        for cell in cells:
+            for gap in cell.gaps:
+                if gap.reason != GapReason.ENVIRONMENT_ARTIFACT_MISSING:
+                    continue
+                if not gap.artifact_uri or not gap.artifact_uri.startswith("s3://"):
+                    actions.append(
+                        Escalate(
+                            gap.reason,
+                            cell.evidence_ids,
+                            selected_source(cell),
+                            cell.solver,
+                            f"Relocate and bind original artifact to regional S3: {gap.artifact_uri}",
+                        )
+                    )
+                    continue
+                grouped.setdefault(gap.artifact_uri, []).append(cell)
+        for uri, group in sorted(grouped.items()):
+            actions.append(
+                RebuildEnvironmentArtifact(
+                    uri,
+                    tuple((c.source.source_id, c.solver) for c in group),
+                    tuple(sorted({e for c in group for e in c.evidence_ids})),
+                )
+            )
+        return actions
+
+
+@dataclass(frozen=True)
+class SnapshotRemediation:
+    def plan(self, cells: Sequence[CellState]) -> list[Action]:
+        return [BuildSnapshot(selected_source(cell), cell.solver) for cell in cells]
+
+
+@dataclass(frozen=True)
+class TaskSpecRemediation:
+    def plan(self, cells: Sequence[CellState]) -> list[Action]:
+        return [BuildTaskSpecFactory(selected_source(cell), cell.solver) for cell in cells]
+
+
+@dataclass(frozen=True)
+class JudgeRemediation:
+    def plan(self, cells: Sequence[CellState]) -> list[Action]:
+        grouped: dict[tuple[str, float | None], list[CellState]] = {}
+        actions: list[Action] = []
+        for cell in cells:
+            for gap in cell.gaps:
+                if gap.reason != GapReason.JUDGE_ROUTE_UNQUALIFIED:
+                    continue
+                if gap.judge_model:
+                    grouped.setdefault((gap.judge_model, gap.judge_temperature), []).append(cell)
+                else:
+                    actions.append(
+                        Escalate(
+                            gap.reason,
+                            cell.evidence_ids,
+                            selected_source(cell),
+                            cell.solver,
+                            "Judge identity is missing from legacy evidence",
+                        )
+                    )
+        for (model, temperature), group in sorted(grouped.items(), key=lambda item: (item[0][0], str(item[0][1]))):
+            actions.append(
+                QualifyJudgeRoute(
+                    model,
+                    tuple((c.source.source_id, c.solver) for c in group),
+                    tuple(sorted({e for c in group for e in c.evidence_ids})),
+                    temperature,
+                )
+            )
+        return actions
+
+
+@dataclass(frozen=True)
+class EscalationRemediation:
+    reason: GapReason
+
+    def plan(self, cells: Sequence[CellState]) -> list[Action]:
+        return [
+            Escalate(
+                self.reason,
+                cell.evidence_ids,
+                selected_source(cell),
+                cell.solver,
+                next((gap.capability for gap in cell.gaps if gap.reason == self.reason), None),
+            )
+            for cell in cells
+        ]
+
+
+REMEDIATIONS: dict[GapReason, Remediation] = {
+    GapReason.COVERAGE_SHORTFALL: AttemptRemediation(),
+    GapReason.NO_MEASUREMENT_ROW: AttemptRemediation(),
+    GapReason.PROVIDER_CAPACITY_WAIT: ProviderRemediation(),
+    GapReason.ENVIRONMENT_ARTIFACT_MISSING: ArtifactRemediation(),
+    GapReason.DAYTONA_SNAPSHOT_PREFLIGHT_PENDING: SnapshotRemediation(),
+    GapReason.TASK_SPEC_FACTORY_PENDING: TaskSpecRemediation(),
+    GapReason.JUDGE_ROUTE_UNQUALIFIED: JudgeRemediation(),
+    GapReason.PROTOCOL_INPUT_BUDGET_EXCEEDED: EscalationRemediation(GapReason.PROTOCOL_INPUT_BUDGET_EXCEEDED),
+    GapReason.NETWORK_POLICY_VIOLATION: EscalationRemediation(GapReason.NETWORK_POLICY_VIOLATION),
+    GapReason.UNSUPPORTED_COMPOSE_DOCUMENT: EscalationRemediation(GapReason.UNSUPPORTED_COMPOSE_DOCUMENT),
+    GapReason.EXECUTABILITY_ADMISSION_PENDING: EscalationRemediation(GapReason.EXECUTABILITY_ADMISSION_PENDING),
+}
+
+
+def plan(
+    cells: Sequence[CellState],
+    ledger: Sequence[LedgerRow],
+    available_providers: frozenset[Solver] = frozenset(),
+    available_artifacts: frozenset[str] = frozenset(),
+) -> list[Action]:
+    """Return only actions whose exact evidence has not already been acted on."""
+    recorded = {row.action_id for row in ledger if row.action_id}
+    grouped: dict[GapReason, list[CellState]] = {}
+    for cell in sorted(cells, key=lambda c: (c.solver, c.source.source_id)):
+        if cell.state in {CellStatus.MEASURED, CellStatus.TERMINAL} or cell.job_ids:
+            continue
+        remaining = tuple(
+            gap
+            for gap in cell.gaps
+            if not (gap.reason == GapReason.ENVIRONMENT_ARTIFACT_MISSING and gap.artifact_uri in available_artifacts)
+        )
+        if remaining != cell.gaps:
+            cell = replace(
+                cell,
+                gaps=remaining,
+                evidence_ids=cell.evidence_ids
+                + tuple(
+                    sorted(
+                        "available:" + uri
+                        for uri in available_artifacts
+                        if any(gap.artifact_uri == uri for gap in cell.gaps)
+                    )
+                ),
+            )
+        hard = tuple(
+            gap
+            for gap in remaining
+            if gap.reason
+            not in {GapReason.COVERAGE_SHORTFALL, GapReason.PROVIDER_CAPACITY_WAIT, GapReason.NO_MEASUREMENT_ROW}
+        )
+        for gap in hard or remaining or (Gap(GapReason.COVERAGE_SHORTFALL),):
+            grouped.setdefault(gap.reason, []).append(cell)
+    actions = {}
+    for reason, selected in sorted(grouped.items()):
+        remediation = (
+            ProviderRemediation(available_providers)
+            if reason == GapReason.PROVIDER_CAPACITY_WAIT
+            else REMEDIATIONS[reason]
+        )
+        for action in remediation.plan(selected):
+            key = action_id(action)
+            if key not in recorded:
+                actions[key] = action
+    return [actions[key] for key in sorted(actions)]
+
+
+def source_attempts_from_payload(value: dict) -> SourceAttempts:
+    return SourceAttempts(
+        value["source_id"],
+        value["registry_revision"],
+        tuple(tuple(task) for task in value["tasks"]),
+        value["queue_uri"],
+        value["queue_sha256"],
+        tuple(value["evidence_ids"]),
+    )
+
+
+def action_from_payload(payload: dict) -> Action:
+    """Normalize one content-addressed action at the executor boundary."""
+    kind = payload["kind"]
+    if kind == "AttemptBatch":
+        return AttemptBatch(
+            Solver(payload["solver"]),
+            tuple(source_attempts_from_payload(s) for s in payload["sources"]),
+            payload["n_attempts"],
+            payload["max_gpu_hours"],
+        )
+    if kind == "RebuildEnvironmentArtifact":
+        return RebuildEnvironmentArtifact(
+            payload["uri"], tuple((s, Solver(m)) for s, m in payload["cells"]), tuple(payload["evidence_ids"])
+        )
+    if kind == "QualifyJudgeRoute":
+        return QualifyJudgeRoute(
+            payload["model"],
+            tuple((s, Solver(m)) for s, m in payload["cells"]),
+            tuple(payload["evidence_ids"]),
+            payload.get("requested_temperature"),
+        )
+    if kind == "BuildSnapshot":
+        return BuildSnapshot(source_attempts_from_payload(payload["source"]), Solver(payload["solver"]))
+    if kind == "BuildTaskSpecFactory":
+        return BuildTaskSpecFactory(source_attempts_from_payload(payload["source"]), Solver(payload["solver"]))
+    if kind == "RetryAfter":
+        return RetryAfter(
+            payload["provider"], source_attempts_from_payload(payload["source"]), Solver(payload["solver"])
+        )
+    if kind == "Escalate":
+        return Escalate(
+            GapReason(payload["reason"]),
+            tuple(payload["evidence"]),
+            source_attempts_from_payload(payload["source"]),
+            Solver(payload["solver"]),
+            payload["detail"],
+        )
+    raise ValueError(f"Unknown action kind: {kind}")

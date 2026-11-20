@@ -44,7 +44,7 @@ from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert imp
     task_toml,
 )
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.upstream import task_files
-from experiments.post_training.task_curation.difficulty_campaign import worker_limits
+from experiments.post_training.task_curation.difficulty.runtime import worker_limits
 from experiments.post_training.task_curation.scale_lego_protected_qa_v1 import (
     ATTEMPT_TIMEOUT,
     adapt_for_local,

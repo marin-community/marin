@@ -2479,9 +2479,10 @@ Difficulty measures how hard a source's selected tasks are for the
 never changes a source's status and never maintains its own exclusion or hold
 list: a blocking condition is recorded as typed evidence, and a SOURCE-owned
 condition becomes an exclusion candidate through the normal admission
-procedure. The campaigns run with
-`experiments/post_training/task_curation/difficulty_campaign.py` (serving and
-scheduling) and `difficulty_trials.py` (Harbor trial execution).
+procedure. The `experiments.post_training.task_curation.difficulty` entry point
+reconciles the current served catalog against an append-only attempt ledger.
+The `difficulty.runtime` module retains solver and judge serving;
+`difficulty_trials.py` retains Harbor trial execution.
 
 ### Typed gaps, not free text
 
@@ -2524,7 +2525,7 @@ re-run the executability-filtered admission pass after static findings; host a
 non-GLM judge through `JUDGE_TIER_SERVING` and qualify the GLM route at the
 recorded temperature deviation where the source declares another setting. A
 run version serves exactly one judge route
-(`campaign_judge_tier` in `difficulty_campaign.py`); split a queue that mixes
+(`batch_judge_tier` in `difficulty/runtime.py`); split a queue that mixes
 routes. The gate in `difficulty_preparation.py` accepts the GLM route and every
 `JUDGE_TIERS` model (`SERVED_JUDGE_MODELS`); a validated endpoint is confirmed
 at serving time by the judge probe and identity receipt.
@@ -2548,89 +2549,100 @@ in a private remediation version. Never exclude on oversight-level grounds:
 QUICK oversight admits a source while hiding it from the default view and
 default training selections.
 
-### Running measurement rounds
+### Reconcile difficulty coverage
 
-`experiments/post_training/task_curation/difficulty_rounds.py` is the operating
-layer for launches, polling, seal detection, coverage recomputes and qualified
-snapshot exports. A long round is watched by the job watchdog over the round
-registry and the Iris lifecycle; agents do not poll live jobs by hand. Run it
-from a worktree on the rounds' code lineage with a clean
-tree, and source the credentials first — the S3 and serving probes read them from
-the environment and nothing is ever printed:
+Use one entry point for status, read-only planning and execution:
 
 ```bash
-set -a; source /Users/benfeuer/Documents/secrets.env; set +a
-export DAYTONA_EVAL_API_KEY="$(gcloud secrets versions access latest \
-  --project=hai-gcp-models --secret=DAYTONA_EVAL_API_KEY)"
+uv run python -m experiments.post_training.task_curation.difficulty status --since 24h
+uv run python -m experiments.post_training.task_curation.difficulty plan
+uv run python -m experiments.post_training.task_curation.difficulty reconcile --once
 ```
 
-Submit one round (fresh or continuation) with every launch parameter explicit.
-The root job federates to the serving peer, runs privileged under the cluster
-egress policy, forwards the serving secrets, and maps the Daytona eval key onto
-the names Harbor reads:
+`status` and `plan` read the current served declarations. A source whose current
+release has no matching frozen panel stays visible and needs a new SAMPLE panel.
+`--queue <sources.json> --queue-sha256 <sha256>` selects an explicit historical
+view for either command; it does not change the served catalog. `--json` emits
+structured output. `--since` accepts hours, days or a timezone-qualified ISO date.
+
+The ledger lives at
+`s3://marin-us-east-02a/marin/rl-data/atlas/difficulty-ledger/`
+([Filer](https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Frl-data%2Fatlas%2Fdifficulty-ledger%2F)).
+Its `v1/rows` partitions preserve original task hashes, attempt identities,
+solver, population revision, typed causes, evidence links and GPU-hours.
+Repeated imports deduplicate immutable attempt receipts. Historical source-window
+costs are separate accounting rows; they exclude startup, teardown and
+interrupted source windows. New attempts share each reserved GPU interval among
+the tasks active in that interval. Per-source idle cost is recorded separately.
+
+Each (source, solver) cell at the served population has one of four states: `MEASURED`, `NEEDS_ATTEMPTS`, `BLOCKED` or
+`TERMINAL`. Coverage requires a scored receipt for every selected task at the
+current population and task hash. Provider waits never supply scores or count
+as task attempts. A network-policy violation remains blocking even if a legacy
+catalog called the source measured. `TERMINAL` requires an explicit ruling for
+that source, solver, population and typed cause; projection waivers do not
+waive difficulty measurement.
+
+`GapReason` in `difficulty/state.py` is the closed reconciler vocabulary.
+The importer accepts registered legacy spellings and fails on unknown reasons.
+Compound reasons preserve every cause. Network policy takes precedence over
+input budget; capacity waits remain secondary to protocol or source blockers.
+Artifact kind, URI, judge model and required capability are separate fields.
+Planning rechecks missing-artifact URIs. Sources whose Python
+`requirements.lock` files have been restored can re-enter measurement.
+
+A local `reconcile` starts one interactive Iris CPU controller in `cw-rno2a`.
+All attempt and repair jobs are its children. Send the returned controller ID
+to the fleet-watchdog coordinator for one registry entry using a `log_regex`
+probe. The registry schema is documented in
+[`scripts/ops/job_watchdog.py`](https://github.com/marin-community/marin/blob/main/scripts/ops/job_watchdog.py). Without `--once`, it takes a fresh catalog and evidence
+snapshot every minute. With `--once`, it schedules one plan and stays alive to
+collect those children's terminal results. The lease and content-addressed
+job names prevent duplicate submissions. Repeating an unchanged plan schedules
+nothing. Each attempt batch has at most 20 tasks and a 40 GPU-hour reservation
+bound. The cap is 22 active Difficulty Iris jobs in the owner's namespace, including
+the controller, legacy campaigns and serving children. A candidate or judge
+repair reserves headroom for its serving children before those jobs appear.
+Serving keeps compilation and CUDA graphs enabled.
+
+The launcher resolves `DAYTONA_EVAL_API_KEY` and `DAYTONA_RL_API_KEY` from
+Secret Manager. Validation maps the EVAL key to Harbor's `DAYTONA_API_KEY` and
+uses declarative provisioning. Named snapshot preflight uses the RL key and
+preserves existing snapshots. See the
+[Daytona credential and account rules](https://github.com/marin-community/marin/blob/main/.agents/ops/daytona.md#credentials-and-account-selection). An unavailable original artifact recipe, unknown judge
+route, unsupported compose document, network policy violation or protocol
+budget issue is escalated without excluding its source. Escalations are retained
+in `ESCALATIONS.md` beside the ledger and logged as `DIFFICULTY_ESCALATION` JSON
+for the watchdog. Other cells continue.
+
+Backfill legacy roots in an Iris CPU job in the source region:
 
 ```bash
-uv run --no-sync python -m experiments.post_training.task_curation.difficulty_rounds launch \
-  --solver small --priority interactive \
-  --job-name atlas-difficulty-small-20261116-v17a11 \
-  --output-root s3://marin-rno2a/marin/rl-data/atlas/difficulty/2026.11.17.2/small-v17a \
-  --local-root /tmp/atlas-difficulty-small-20261116-v17a11 \
-  --source-ids-file /tmp/v17a-source-ids.txt \
-  --previous-campaign s3://marin-rno2a/marin/rl-data/atlas/difficulty/2026.11.17.1/small-v17a \
-  --previous-serving-sha256 <sealed serving.json sha256> \
-  --dry-run   # drop for the real submission
+python -m experiments.post_training.task_curation.difficulty import \
+  --discover-root s3://marin-rno2a/marin/rl-data/atlas/difficulty/
 ```
 
-`--previous-serving-sha256` is the previous run's own sealed `serving.json`
-SHA-256, never an inherited pointer (see
-[rl-data-atlas.md](rl-data-atlas.md)). `launch` refuses when the output root
-exists or an Iris job with the same name is already live, and records the
-submit command in its state output. `--daytona-api-url` and `--daytona-target`
-default to the documented eval-account values (`https://app.daytona.io/api`,
-`us`); keep them explicit when a round runs against a different account.
+The importer includes linked ancestors and interrupted per-task receipts. It
+writes an import seal only after the complete reason audit passes. Reconciliation
+refuses to submit before that initial seal. Preserve running legacy jobs and
+import their terminal outputs; do not restart their continuation chains.
+Completed per-run partitions are reused. Pass `--run-root <finished-root>` to
+force a fresh import of a job that was still running during the first scan.
 
-Poll primary evidence, check a seal, and recompute coverage in file mode:
+After a regional reason audit reports unknown strings, add their typed mappings
+and run the gated launcher locally. It replays all catalog reasons and the
+complete regional failure report before it can submit another import:
 
 ```bash
-uv run --no-sync python -m experiments.post_training.task_curation.difficulty_rounds poll \
-  --campaign hosted=atlas-difficulty-hosted-20261114-v12,s3://marin-rno2a/marin/rl-data/atlas/difficulty/2026.11.14.44/hosted-v12
-uv run --no-sync python -m experiments.post_training.task_curation.difficulty_rounds seal \
-  --output-root s3://marin-rno2a/marin/rl-data/atlas/difficulty/2026.11.17.1/small-v17a \
-  --job-id /benfeuer/atlas-difficulty-small-20261116-v17a10
-uv run --no-sync python -m experiments.post_training.task_curation.difficulty_rounds coverage \
-  --measurements s3://marin-rno2a/marin/rl-data/atlas/difficulty/2026.11.14.47/qualified-v1 \
-  --measurements s3://marin-rno2a/marin/rl-data/atlas/difficulty/2026.11.16.62/small-v17b \
-  --output-dir /tmp/coverage-20261117
+uv run python -m experiments.post_training.task_curation.difficulty launch-import \
+  --report CAPTURED_REPORT.json --audit-log COMPLETE_AUDIT.log \
+  --base s3://marin-rno2a/marin/rl-data/atlas/difficulty/ \
+  --job-name atlas-difficulty-ledger-import-<version>
 ```
 
-`coverage` groups observations per canonical source id (stripping the selected
-task lists exactly like the app's loader) and writes the coverage document, the
-declarations and the campaign queue beside each other. The applet query mode
-(`--applet-id`) becomes available once the `atlas_difficulty_coverage` load
-runs; until then the file mode above is the supported path.
-
-Chain a sealed round into the next one. `next-round` waits for the seal,
-recomputes coverage over the configured measurement roots plus the sealed round,
-emits the queue, and refuses to submit when the queue digest is already in the
-ledger — the idempotency guard against double-submitting a round:
-
-```bash
-uv run --no-sync python -m experiments.post_training.task_curation.difficulty_rounds next-round \
-  --watch-job-id /benfeuer/atlas-difficulty-small-20261116-v17a10 \
-  --watch-output-root s3://marin-rno2a/marin/rl-data/atlas/difficulty/2026.11.17.1/small-v17a \
-  --job-name atlas-difficulty-small-20261116-v17a11 \
-  --output-root s3://marin-rno2a/marin/rl-data/atlas/difficulty/2026.11.17.2/small-v17a \
-  --measurements s3://marin-rno2a/marin/rl-data/atlas/difficulty/2026.11.14.47/qualified-v1 \
-  --measurements s3://marin-rno2a/marin/rl-data/atlas/difficulty/2026.11.16.62/small-v17b \
-  --measurements s3://marin-rno2a/marin/rl-data/atlas/difficulty/2026.11.16.65/small-v17c \
-  --ledger /Users/benfeuer/Documents/experiments/active/atlas-difficulty/round-ledger.jsonl \
-  --priority interactive --dry-run
-```
-
-Round sequencing follows the standing rulings: canary before rounds, one round
-per solver chain at a time, continuations bind to their parent's frozen source
-queue, and a mid-flight coverage snapshot never doubles as the final queue —
-recompute after the round seals.
+The gate records the report, log and mapping hashes. Unknown reasons prevent
+submission. The regional importer still validates every newly read receipt
+before publishing its seal.
 
 ## Sources without oracle solutions
 
