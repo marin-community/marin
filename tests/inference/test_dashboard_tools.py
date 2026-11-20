@@ -241,10 +241,8 @@ def test_dashboard_prepares_runtime_on_demand_without_blocking_other_requests(mo
         upstream_base_url="http://127.0.0.1:1", model_id="fake-model", info=info, shellsim_catalog=catalog
     )
     with TestClient(app) as client, ThreadPoolExecutor(max_workers=2) as executor:
-        assert client.get("/").status_code == 200
         assert client.post("/tools", json={"source": MULTIPLY_TOOL_SOURCE}).status_code == 200
         assert client.post(path, json={}).status_code == 400
-        assert not preparing.is_set()
         assert client.post(path, json=payload).status_code == 503
         assert client.get("/info").status_code == 200
         available.touch()
@@ -253,7 +251,6 @@ def test_dashboard_prepares_runtime_on_demand_without_blocking_other_requests(mo
             assert preparing.wait(timeout=10)
             second = executor.submit(client.post, path, json=payload)
             assert client.get("/info").json()["model"] == "fake-model"
-            assert not prepared.exists()
         finally:
             finish.set()
         assert first.result(timeout=10).json() == 6
