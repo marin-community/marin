@@ -15,7 +15,7 @@ from aiohttp.test_utils import TestServer
 pytest.importorskip("daytona")
 
 from daytona import AsyncDaytona, DaytonaConfig
-from daytona_api_client_async import SandboxState
+from daytona_api_client_async import SandboxDesiredState, SandboxState
 from shellbox.backends.daytona import usage_cli
 from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.backends.daytona.usage import (
@@ -28,9 +28,24 @@ from shellbox.backends.daytona.usage import (
 LIMITS = OrganizationLimits(100, 100, 100, SandboxProfile(4, 8, 10))
 
 
-def sandbox(identifier, state=SandboxState.STARTED, *, organization_id="org", cpu=2, memory=4, disk=10):
+def sandbox(
+    identifier,
+    state=SandboxState.STARTED,
+    *,
+    organization_id="org",
+    cpu=2,
+    memory=4,
+    disk=10,
+    desired_state=SandboxDesiredState.STARTED,
+):
     return SimpleNamespace(
-        id=identifier, state=state, organization_id=organization_id, cpu=cpu, memory=memory, disk=disk
+        id=identifier,
+        state=state,
+        organization_id=organization_id,
+        cpu=cpu,
+        memory=memory,
+        disk=disk,
+        desired_state=desired_state,
     )
 
 
@@ -100,14 +115,55 @@ def test_usage_reads_every_http_page_and_never_calls_organization_api():
         report = usage_report(usage, SandboxProfile(2, 4, 10))
         assert requests == [("GET", "/sandbox", None), ("GET", "/sandbox", "second")]
         assert report["organization_id"] == "org"
-        assert report["sandboxes"] == {"total": 6, "started": 1, "charged": 3, "by_state": dict.fromkeys(states, 1)}
+        assert report["sandboxes"] == {
+            "total": 6,
+            "started": 1,
+            "compute_charged": 3,
+            "disk_charged": 4,
+            "by_state": dict.fromkeys(states, 1),
+        }
         assert report["resources"]["cpu"] == {"quota": 100, "used": 6, "remaining": 94, "available": 74}
         assert report["resources"]["memory_gib"]["used"] == 12
-        assert report["resources"]["disk_gib"]["used"] == 30
+        assert report["resources"]["disk_gib"]["used"] == 40
         assert report["resources"]["memory_gib"]["quota"] == pytest.approx(100_000_000_000 / 2**30)
-        assert report["max_concurrency"]["limit"] == 4
+        assert report["max_concurrency"]["limit"] == 3
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("state", "desired_state", "compute", "disk"),
+    [
+        (SandboxState.CREATING, SandboxDesiredState.STARTED, 2, 10),
+        (SandboxState.RESTORING, SandboxDesiredState.STARTED, 2, 10),
+        (SandboxState.STARTED, SandboxDesiredState.STARTED, 2, 10),
+        (SandboxState.STARTING, SandboxDesiredState.STARTED, 2, 10),
+        (SandboxState.STOPPING, SandboxDesiredState.STOPPED, 2, 10),
+        (SandboxState.PENDING_BUILD, SandboxDesiredState.STARTED, 2, 10),
+        (SandboxState.BUILDING_SNAPSHOT, SandboxDesiredState.STARTED, 2, 10),
+        (SandboxState.UNKNOWN, SandboxDesiredState.STARTED, 2, 10),
+        (SandboxState.PULLING_SNAPSHOT, SandboxDesiredState.STARTED, 2, 10),
+        (SandboxState.FORKING, SandboxDesiredState.STARTED, 2, 10),
+        (SandboxState.PAUSING, SandboxDesiredState.STARTED, 2, 10),
+        (SandboxState.RESUMING, SandboxDesiredState.STARTED, 2, 10),
+        (SandboxState.STOPPED, SandboxDesiredState.STOPPED, 0, 10),
+        (SandboxState.PAUSED, SandboxDesiredState.STOPPED, 0, 10),
+        (SandboxState.ARCHIVING, SandboxDesiredState.STOPPED, 0, 10),
+        (SandboxState.RESIZING, SandboxDesiredState.STARTED, 2, 10),
+        (SandboxState.RESIZING, SandboxDesiredState.STOPPED, 0, 10),
+        (SandboxState.SNAPSHOTTING, SandboxDesiredState.STARTED, 2, 10),
+        (SandboxState.SNAPSHOTTING, SandboxDesiredState.STOPPED, 0, 10),
+        (SandboxState.ARCHIVED, SandboxDesiredState.STOPPED, 0, 0),
+        (SandboxState.DESTROYED, SandboxDesiredState.STOPPED, 0, 0),
+        (SandboxState.ERROR, SandboxDesiredState.STARTED, 0, 0),
+    ],
+)
+def test_provider_transition_and_stopped_state_allocations_reduce_headroom(state, desired_state, compute, disk):
+    row = sandbox("one", state, desired_state=desired_state)
+    report = usage_report(asyncio.run(account_usage_from_client(InventoryClient([row]), LIMITS)))
+    assert report["resources"]["cpu"]["used"] == compute
+    assert report["resources"]["memory_gib"]["used"] == compute * 2
+    assert report["resources"]["disk_gib"]["used"] == disk
 
 
 @pytest.mark.parametrize(
@@ -136,7 +192,7 @@ def test_empty_inventory_reports_unused_quota_without_other_api_access():
     usage = asyncio.run(account_usage_from_client(InventoryClient([]), LIMITS))
     report = usage_report(usage, SandboxProfile(2, 4, 10), headroom=0)
     assert report["organization_id"] is None
-    assert report["sandboxes"] == {"total": 0, "started": 0, "charged": 0, "by_state": {}}
+    assert report["sandboxes"] == {"total": 0, "started": 0, "compute_charged": 0, "disk_charged": 0, "by_state": {}}
     assert report["max_concurrency"]["limit"] == 9
 
 
@@ -148,6 +204,9 @@ def test_empty_inventory_reports_unused_quota_without_other_api_access():
         [sandbox("missing-cpu", cpu=None)],
         [sandbox("missing-memory", memory=None)],
         [sandbox("missing-disk", disk=None)],
+        [sandbox("stopped-missing-disk", SandboxState.STOPPED, disk=None)],
+        [sandbox("unknown-state", state=None)],
+        [sandbox("resizing-unknown-desired", SandboxState.RESIZING, desired_state=None)],
     ],
 )
 def test_uncertain_inventory_cannot_report_free_capacity(rows):
