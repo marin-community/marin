@@ -9,13 +9,12 @@ from collections import Counter
 
 from pydantic import ValidationError
 from rolloutengine.grading import judge_connection
-from skyrl_gym.rollout_specs import TOOL_PROVIDERS, rollout_spec, shell_harness
+from skyrl_gym.rollout_specs import rollout_spec, shell_harness
 from taskcompendium.models import TaskSpec
 from verifyit.modes.grade_judge import JudgeConnection
 
 
 def check_task(record: dict, config: dict) -> tuple[set[str], list[str]]:
-    document = json.loads(record["task"])
     failures: set[str] = set()
     fields: list[str] = []
     judge_binding = config.get("judge_binding")
@@ -24,15 +23,12 @@ def check_task(record: dict, config: dict) -> tuple[set[str], list[str]]:
     except ValidationError as error:
         task = None
         fields = [".".join(map(str, item["loc"])) for item in error.errors(include_input=False)]
-    for requirement in document["environment_requirements"].get("tool_providers", {}).values():
-        if requirement["action_interface"] not in TOOL_PROVIDERS:
-            failures.add("CONSUMER_TOOL_UNREGISTERED")
     lowered = None
     if task is not None and record["needs"]:
         try:
             lowered = rollout_spec(task, config["session"])
             if config["session"]["task_session"] == "shellbox" and "tool_provider" in record["needs"]:
-                shell_harness(lowered.harness).check(task, lowered.limits)
+                shell_harness(lowered.harness, retrieval_service=config["retrieval_service"]).check(task, lowered.limits)
         except (ValueError, NotImplementedError, KeyError):
             failures.add(
                 "CONSUMER_TOOL_UNREGISTERED" if "tool_provider" in record["needs"] else "CONSUMER_EXECUTION_UNSUPPORTED"
@@ -58,7 +54,7 @@ def check_task(record: dict, config: dict) -> tuple[set[str], list[str]]:
                 failures.add("CONSUMER_JUDGE_UNREGISTERED")
     if "execution" in record["needs"]:
         failures.add("CONSUMER_EXECUTION_UNSUPPORTED")
-    if "service" in record["needs"] and not config["session"].get("retrieval_service"):
+    if "service" in record["needs"] and not config["retrieval_service"]:
         failures.add("CONSUMER_SERVICE_UNREGISTERED")
     return failures, fields
 
