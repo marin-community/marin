@@ -47,6 +47,10 @@ from experiments.post_training.task_curation.source import RlDataSource
 
 VERSION = "2026.11.17.1"
 PREFIX = "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/fweindel-fineenvs/2026.11.17.1"
+PUBLISHED_IMAGES = ContentEvidenceReference(
+    uri=PREFIX + "/registry-allocation-v1/result.json",
+    sha256="7c4addbd1859763159c8c3f9642ffe5ebe896e26c090d32b407157e8ae7e6b40",
+)
 INPUT_SUMMARY = ContentEvidenceReference(
     uri=PREFIX + "/native-input-summary-v1/result.json",
     sha256="b9a03a4fe7a3728dbf9c76e04e9735e6f87d4e02b6b9b9e949a7340d9077346d",

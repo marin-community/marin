@@ -1,6 +1,6 @@
 {
   "repo": "open-athena/marin-rl-data-atlas-registry",
-  "revision": "fb78e1efcc879e9d68a11093573167dacf02f3ff",
+  "revision": "4a86adc53a03e90d047e69e5a3a8c18d9ef9838a",
   "path": "experiments/post_training/task_curation/datasets/grading_census_receipts/part-001.json",
-  "sha256": "94214b21ce5c3ce5a68000dcc6a23947363886a4910385acba98f06f17148687"
+  "sha256": "fffdc2209474e61398e3c44d41c3d0eb6bb7b1fdbd971de6597de7ca69019404"
 }

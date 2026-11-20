@@ -36,6 +36,7 @@ from experiments.post_training.task_curation.datasets.evalchemy import nupa as e
 from experiments.post_training.task_curation.datasets.evalchemy import reasoning as eval_reasoning
 from experiments.post_training.task_curation.datasets.evalchemy import simpleqa as eval_simpleqa
 from experiments.post_training.task_curation.datasets.facet import tasks as facet
+from experiments.post_training.task_curation.datasets.fineenvs import tasks as fineenvs
 from experiments.post_training.task_curation.datasets.full_content_results import full_content_result_bindings
 from experiments.post_training.task_curation.datasets.grading_measurements import grading_census_receipts
 from experiments.post_training.task_curation.datasets.ifbench import tasks as ifbench
@@ -151,6 +152,7 @@ def configured_sources() -> list[RlDataSource]:
         *ifbench.sources(),
         *openresearcher.sources(),
         *polaris.sources(),
+        *fineenvs.sources(fineenvs.PUBLISHED_IMAGES),
         *structure_closure.sources(),
         *thoughtcrime.sources(),
         *campaign_releases.sources(),
