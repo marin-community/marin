@@ -9,7 +9,7 @@ from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Literal, NotRequired, TypeAlias, TypeVar, TypedDict
+from typing import Literal, TypeAlias, TypeVar
 
 import equinox as eqx
 import jax
@@ -33,6 +33,7 @@ from levanter.data.mixture import (
 )
 from levanter.data.packing import GreedyPrepackedDataset
 from levanter.data.passthrough_tokenizer import PassthroughTokenizer
+from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.data.sharded_datasource import (
     ShardedDataSource,
     UrlDataSource,
@@ -52,7 +53,16 @@ from levanter.data.text.formats import (
     LmDatasetFormatBase,
     PrebuiltLmDatasetFormat,
     ProcessedChatDict,
+    SerializedChatLmDatasetFormat,
     TextLmDatasetFormat,
+    TokenSeqDict,
+)
+from levanter.data.text.serialized_chat import mask_serialized_chat
+from levanter.data.text.length_bucket import (
+    LengthBucket,
+    LengthBucketIndex,
+    LengthBucketTokenSeqDataset,
+    load_bucket_length_stats,
 )
 from levanter.models.lm_model import LmExample
 from levanter.schedule import BatchSchedule, IntSchedule
@@ -69,11 +79,6 @@ T = TypeVar("T")
 
 logger = logging.getLogger("levanter.data.text")
 CACHE_METADATA_WORKERS = 32
-
-
-class TokenSeqDict(TypedDict):
-    input_ids: np.ndarray
-    loss_weights: NotRequired[np.ndarray]
 
 
 class TokenSeqDataset(AsyncDataset[TokenSeqDict]):
@@ -336,6 +341,9 @@ class DatasetComponent(DatasetComponentBase):
     cache_dir: str | None = None
     format: LmDatasetFormatBase = field(default_factory=TextLmDatasetFormat)
     pack: bool | int | None = None
+    pack_lookahead_window: int | None = None
+    """Opt-in bounded first-fit lookahead for the packer, in documents. ``None`` (default)
+    keeps the sequential packer; see [pack_documents][levanter.data.packing.pack_documents]."""
     tags: list[str] | None = None
     split: str = "validation"
     flat_cache: bool = False
@@ -360,11 +368,42 @@ class ConcatDatasetComponent(DatasetComponentBase):
     tags: list[str] | None = None
 
 
+@DatasetComponentBase.register_subclass("length_skew")
+@dataclass(frozen=True)
+class LengthSkewDatasetComponent(DatasetComponentBase):
+    """Split a training cache into virtual buckets with a relative long-token sampling weight."""
+
+    child: DatasetComponent
+    threshold: int
+    long_weight: float
+    stats_path: str
+    stats_key: str
+
+
+def _length_bucket_weights(component: LengthSkewDatasetComponent, seq_len: int) -> dict[LengthBucket, float]:
+    stats = load_bucket_length_stats(component.stats_path).buckets[component.stats_key]
+    long_tokens = stats.tokens_above[component.threshold]
+    if component.long_weight <= 0:
+        raise ValueError("The long-token sampling weight must be positive")
+    weights = {
+        bucket: tokens * multiplier
+        for bucket, tokens, multiplier in (
+            (LengthBucket.SHORT, stats.total_tokens - long_tokens, 1.0),
+            (LengthBucket.LONG, long_tokens, component.long_weight),
+        )
+        if tokens >= seq_len
+    }
+    total = sum(weights.values())
+    if not total:
+        raise ValueError(f"Length-skew component {component.stats_key} has no {seq_len}-token sequences")
+    return {bucket: weight / total for bucket, weight in weights.items()}
+
+
 def _effective_pack(component: DatasetComponent) -> bool | int:
     if component.pack is not None:
         return component.pack
     fmt = component.format
-    if isinstance(fmt, TextLmDatasetFormat):
+    if isinstance(fmt, TextLmDatasetFormat | SerializedChatLmDatasetFormat):
         return False
     if isinstance(fmt, ChatLmDatasetFormat):
         return True if fmt.pack is None else fmt.pack
@@ -402,12 +441,14 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
         slice_strategy: Literal["left", "right", "raise", "drop"] = "left",
         loss_weights_key: str | None = None,
         block_cross_document_attention: bool = True,
+        lookahead_window: int | None = None,
     ):
         self.packed: GreedyPrepackedDataset[dict] = GreedyPrepackedDataset(
             cache.jagged_array_tree(),
             Pos.size,
             max_segments_per_example=max_segments_per_example,
             slice_strategy=slice_strategy,
+            lookahead_window=lookahead_window,
         )
         self.Pos = Pos
         self.block_cross_document_attention = block_cross_document_attention
@@ -465,12 +506,14 @@ class ChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, ProcessedChatDict]
         slice_strategy: Literal["left", "right", "raise", "drop"] = "left",
         mask_user_turns: bool = True,
         block_cross_document_attention: bool = True,
+        lookahead_window: int | None = None,
     ):
         self.packed: GreedyPrepackedDataset[ProcessedChatDict] = GreedyPrepackedDataset(
             cache.jagged_array_tree(),
             Pos.size,
             max_segments_per_example=max_segments_per_example,
             slice_strategy=slice_strategy,
+            lookahead_window=lookahead_window,
         )
         self.Pos = Pos
         self.block_cross_document_attention = block_cross_document_attention
@@ -513,7 +556,32 @@ def dataset_for_component(
     block_cross_document_attention: bool,
 ) -> AsyncDataset[GrugLmExample]:
     pack = _effective_pack(component)
+    if component.pack_lookahead_window is not None and not pack:
+        raise ValueError(
+            f"Component {component.cache_dir} sets pack_lookahead_window but pack={pack!r} disables packing; "
+            "the lookahead window only applies to packed datasets."
+        )
     fmt = component.format
+    if isinstance(fmt, SerializedChatLmDatasetFormat):
+        max_segments, slice_strategy = _resolve_pack_config(pack)
+        dataset = PackedTokenDataset(
+            cache,
+            Pos,
+            max_segments_per_example=max_segments,
+            slice_strategy=slice_strategy,
+            lookahead_window=component.pack_lookahead_window,
+        )
+
+        def apply_chat_mask(example: GrugLmExample) -> GrugLmExample:
+            masked = mask_serialized_chat(
+                example, message_start_id=fmt.message_start_id, assistant_prefix=fmt.assistant_prefix
+            )
+            # Loss masking needs each document's boundary even with cross-document attention.
+            if not block_cross_document_attention:
+                masked = dataclasses.replace(masked, attn_mask=GrugAttentionMask.causal())
+            return masked
+
+        return dataset.map(apply_chat_mask)
     if isinstance(fmt, TextLmDatasetFormat):
         if pack:
             max_segments, slice_strategy = _resolve_pack_config(pack)
@@ -523,6 +591,7 @@ def dataset_for_component(
                 max_segments_per_example=max_segments,
                 slice_strategy=slice_strategy,
                 block_cross_document_attention=block_cross_document_attention,
+                lookahead_window=component.pack_lookahead_window,
             )
         return CausalLmDataset(
             TokenSeqDataset(cache, Pos.size),
@@ -540,8 +609,11 @@ def dataset_for_component(
             slice_strategy=slice_strategy,
             mask_user_turns=fmt.mask_user_turns,
             block_cross_document_attention=block_cross_document_attention,
+            lookahead_window=component.pack_lookahead_window,
         )  # type: ignore
     elif isinstance(fmt, PrebuiltLmDatasetFormat):
+        if component.pack_lookahead_window is not None:
+            raise ValueError("pack_lookahead_window is not supported for prebuilt datasets.")
         return PrebuiltLmDataset(
             cache,
             Pos,
@@ -796,6 +868,11 @@ class LmDataConfig:
     and the mixture) and listed its sources in the same order (which assigns each source's shuffle key and mixture
     slots), and the current launch restores the checkpoint at the last ``end_step``. Restoring an earlier step
     re-reads data."""
+    mixture_start_step: int | None = None
+    """The training step that reads the mixture's first sequence, for a run that continues on a new data store.
+    Each source then starts at the beginning of its shuffled order at this step, whatever the batch size, and a
+    restore at a later step continues in place. A restore before this step raises. The steps of ``train_weights``
+    stages count from this step. Requires the restart stop strategy, and excludes ``prior_context_phases``."""
 
     def __post_init__(self):
         if self.components and self.train_weights is None:
@@ -812,6 +889,19 @@ class LmDataConfig:
                         raise ValueError("Weight keys must be subset of component keys.")
             else:
                 raise ValueError(f"Invalid train_weights type: {type(weights)}")
+
+        for name, component in self.components.items():
+            if not isinstance(component, LengthSkewDatasetComponent):
+                continue
+            if (
+                self.prior_context_phases
+                or name in (self.max_train_batches or {})
+                or name in (self.num_validation_sequences or {})
+            ):
+                raise ValueError("Length skew excludes context history and per-component sequence limits")
+            for bucket in LengthBucket:
+                if f"{name}/{bucket}" in self.components:
+                    raise ValueError(f"Component {name}/{bucket} collides with a virtual length bucket")
 
         if self.max_train_batches is not None or self.num_validation_sequences is not None:
             assert (
@@ -832,6 +922,12 @@ class LmDataConfig:
             end_steps = [phase.end_step for phase in self.prior_context_phases]
             if end_steps != sorted(set(end_steps)) or end_steps[0] <= 0:
                 raise ValueError(f"prior_context_phases must end at increasing positive steps, got {end_steps}")
+
+        if self.mixture_start_step is not None:
+            if self.prior_context_phases:
+                raise ValueError(
+                    "mixture_start_step excludes prior_context_phases, which replay this config's sources"
+                )
 
     @cached_property
     def the_tokenizer(self) -> MarinTokenizer:
@@ -890,6 +986,32 @@ class LmDataConfig:
                     datasets[name] = ConcatDataset(child_datasets)
                 continue
 
+            if isinstance(component, LengthSkewDatasetComponent):
+                if split != "train":
+                    continue
+                cache = caches.get(name)
+                if cache is None:
+                    raise ValueError(f"No cache available for length-skew component {name}")
+                if not isinstance(component.child.format, TextLmDatasetFormat) or _effective_pack(component.child):
+                    raise ValueError("Length skew requires an unpacked text cache")
+                stats = load_bucket_length_stats(component.stats_path)
+                cell_stats = stats.buckets[component.stats_key]
+                index = LengthBucketIndex(
+                    cache,
+                    component.threshold,
+                    statistics=cell_stats,
+                    chunk_rows=stats.chunk_rows,
+                )
+                for bucket in _length_bucket_weights(component, Pos.size):
+                    token_dataset = LengthBucketTokenSeqDataset(index, Pos.size, bucket=bucket)
+                    datasets[f"{name}/{bucket}"] = CausalLmDataset(
+                        token_dataset,
+                        Pos,
+                        eos_id=self.the_tokenizer.eos_token_id,
+                        block_cross_document_attention=self.block_cross_document_attention,
+                    )
+                continue
+
             if not isinstance(component, DatasetComponent):
                 raise ValueError(f"Unsupported component type for {name}: {type(component)}")
 
@@ -927,9 +1049,11 @@ class LmDataConfig:
     ) -> MixtureDataset[GrugLmExample]:
         """Return the training mixture, with each source's start offset when ``prior_context_phases`` is set."""
         mix_key, shuffle_key = jax.random.split(key)
-        weights = self.train_weights
+        weights = self._training_weights(Pos.size)
         if isinstance(weights, list):
-            weights = rescale_mixture_schedule_for_batch_schedule(weights, batch_schedule)
+            weights = rescale_mixture_schedule_for_batch_schedule(
+                weights, batch_schedule, start_step=self.mixture_start_step or 0
+            )
         initial_batch_size = batch_schedule.batch_size_at_step(0)
         datasets, doc_caches = self._train_sets_and_caches(Pos, key=shuffle_key, initial_batch_size=initial_batch_size)
         start_offsets = (
@@ -937,6 +1061,8 @@ class LmDataConfig:
             if self.prior_context_phases
             else None
         )
+        if start_offsets is not None:
+            logger.info("Context-switch start offsets, in %d-token sequences per source: %s", Pos.size, start_offsets)
         return MixtureDataset(
             datasets=datasets,
             weights=weights,
@@ -944,7 +1070,38 @@ class LmDataConfig:
             key=mix_key,
             block_size=self.mixture_block_size,
             start_offsets=start_offsets,
+            first_index=(
+                0
+                if self.mixture_start_step is None
+                else batch_schedule.global_data_offset_by_step(self.mixture_start_step)
+            ),
         )
+
+    def _training_weights(self, seq_len: int) -> dict[str, float] | list[tuple[int, dict[str, float]]] | None:
+        bucket_weights = {
+            name: _length_bucket_weights(component, seq_len)
+            for name, component in self.components.items()
+            if isinstance(component, LengthSkewDatasetComponent) and self._has_nonzero_weight(name)
+        }
+        if not bucket_weights:
+            return self.train_weights
+
+        def expand(weights: dict[str, float]) -> dict[str, float]:
+            expanded: dict[str, float] = {}
+            for name, weight in weights.items():
+                if name in bucket_weights:
+                    expanded.update(
+                        {f"{name}/{bucket}": weight * share for bucket, share in bucket_weights[name].items()}
+                    )
+                else:
+                    expanded[name] = weight
+            return expanded
+
+        weights = self.train_weights
+        if isinstance(weights, list):
+            return [(step, expand(stage)) for step, stage in weights]
+        assert weights is not None
+        return expand(weights)
 
     def _prior_context_phase_offsets(
         self,
@@ -1019,6 +1176,10 @@ class LmDataConfig:
         initial_batch_size: int | None = None,
         key: PRNGKeyArray,
     ) -> Mapping[str, AsyncDataset[GrugLmExample]]:
+        """Return shuffled sources, which can include multiple buckets per component.
+
+        Use ``train_mixture`` to combine these sources with their resolved sampling weights.
+        """
         if self.prior_context_phases:
             raise ValueError(
                 "prior_context_phases need per-source start offsets; build training data with train_mixture"
@@ -1126,6 +1287,10 @@ class LmDataConfig:
             if isinstance(component, ConcatDatasetComponent):
                 for child_name, child in component.children.items():
                     items.append((f"{name}/{child_name}", child))
+                continue
+            if isinstance(component, LengthSkewDatasetComponent):
+                if split == "train":
+                    items.append((name, component.child))
                 continue
             if not isinstance(component, DatasetComponent):
                 raise ValueError(f"Unsupported component type for {name}: {type(component)}")

@@ -35,13 +35,14 @@ from finestore.rl.curation import (
 )
 from finestore.store import DataStore
 from marina.applets import AppletServices, validate_query
+from marina.client import AppletQuery
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, CurriculumCoverage
 
-from infra.marina.applets.rl_data_catalog.load import Query, load_catalog
-from infra.marina.applets.rl_data_catalog.load_curriculum import load_curriculum
-from infra.marina.applets.rl_data_catalog.server.app import create_api, migrate
+from infra.marina.apps.rl_data_catalog.load import load_catalog
+from infra.marina.apps.rl_data_catalog.load_curriculum import load_curriculum
+from infra.marina.apps.rl_data_catalog.server.app import create_api, migrate
 
 
 @pytest.fixture
@@ -69,7 +70,7 @@ def catalog_database(database_url: str) -> Iterator[Engine]:
 
 
 @pytest.fixture
-def catalog_query(catalog_database: Engine) -> Query:
+def catalog_query(catalog_database: Engine) -> AppletQuery:
     def query(sql: str, parameters: dict[str, Any]) -> dict[str, Any]:
         validate_query(sql)
         with catalog_database.begin() as connection:
@@ -274,6 +275,7 @@ def curriculum_release(tmp_path: Path, unavailable_status: str = "insufficient_c
                 "source_key": identifier + "-key",
                 "population": "converted",
                 "intended_use": "train",
+                "basis": "matched",
                 "task_count": count,
                 "ready_count": ready,
                 "insufficient_context_count": count - ready if unavailable_status == "insufficient_context" else 0,
@@ -360,8 +362,8 @@ def curriculum_release(tmp_path: Path, unavailable_status: str = "insufficient_c
 def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
     catalog_database, catalog_query, tmp_path, monkeypatch, unavailable_status
 ):
-    monkeypatch.setattr("infra.marina.applets.rl_data_catalog.load.MAX_BATCH_BYTES", 2500)
-    monkeypatch.setattr("infra.marina.applets.rl_data_catalog.load_curriculum.DELETE_BATCH_SIZE", 1)
+    monkeypatch.setattr("infra.marina.apps.rl_data_catalog.load.MAX_BATCH_BYTES", 2500)
+    monkeypatch.setattr("infra.marina.apps.rl_data_catalog.load_curriculum.DELETE_BATCH_SIZE", 1)
     engine = catalog_database
     query = catalog_query
 
@@ -378,6 +380,7 @@ def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
         assert source["coverage"] == {
             "example_count": 300,
             "intended_use": "train",
+            "basis": "matched",
             "top_area": {"subject_id": "D01", "node_id": "subject:D01", "name": "Mathematics", "instances": 200},
         }
         assert source["assessment"]["admitted"]["grade"] == "unknown"

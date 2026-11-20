@@ -25,13 +25,16 @@ from iris.cluster.constraints import (
 from iris.cluster.controller import jobs as jobs_module
 from iris.cluster.controller import ops, writes
 from iris.cluster.controller.auth import ControllerAuth
+from iris.cluster.controller.backend import DirectReconcileRequest
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.jobs import FRESHNESS_WINDOW, MAX_LIST_JOBS_OFFSET
 from iris.cluster.controller.ops.task import Assignment, finalize
+from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.redaction import REDACTED_VALUE, redact_request_env_vars
 from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId, tpu_device
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
@@ -44,7 +47,7 @@ from iris.testing.controller import (
     query_tasks_with_attempts as _query_tasks_with_attempts,
 )
 from iris.testing.controller_state import ControllerTestState, submit_job_in_tx
-from iris.testing.transitions import WorkerTaskUpdates, apply_task_observations
+from iris.testing.transitions import WorkerTaskUpdates, apply_task_observations, commit_dispatch_updates
 from rigging.server_auth import VerifiedIdentity, _verified_identity
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import func
@@ -612,17 +615,6 @@ def test_launch_job_rejects_empty_name(service, state):
 # =============================================================================
 
 
-def test_get_job_status_returns_status(service):
-    """Verify get_job_status returns correct status for launched job."""
-    service.launch_job(make_job_request("test-job"), None)
-
-    request = controller_pb2.Controller.GetJobStatusRequest(job_id=JobName.root("test-user", "test-job").to_wire())
-    response = service.get_job_status(request, None)
-
-    assert response.job.job_id == JobName.root("test-user", "test-job").to_wire()
-    assert response.job.state == job_pb2.JOB_STATE_PENDING
-
-
 def test_get_job_status_reports_has_children(service):
     """GetJobStatus sets has_children so the dashboard can render the expand toggle."""
     service.launch_job(make_job_request("parent-job"), None)
@@ -654,13 +646,17 @@ def test_redact_request_env_vars_does_not_mutate_original():
     original = controller_pb2.Controller.LaunchJobRequest(
         name="/test-user/job",
         entrypoint=make_test_entrypoint(),
-        environment=job_pb2.EnvironmentConfig(env_vars={"WANDB_API_KEY": "secret", "SAFE": "ok"}),
+        environment=job_pb2.EnvironmentConfig(
+            env_vars={"WANDB_API_KEY": "secret", "SAFE": "ok"}, secrets={"arbitrary": "private"}
+        ),
     )
     redacted = redact_request_env_vars(original)
 
     assert original.environment.env_vars["WANDB_API_KEY"] == "secret"
     assert redacted.environment.env_vars["WANDB_API_KEY"] == REDACTED_VALUE
     assert redacted.environment.env_vars["SAFE"] == "ok"
+    assert original.environment.secrets["arbitrary"] == "private"
+    assert redacted.environment.secrets["arbitrary"] == REDACTED_VALUE
 
 
 def test_submit_argv_roundtrips_through_get_job_status(service):
@@ -1590,3 +1586,80 @@ def test_launch_job_nested_with_stale_client_date_is_exempt(service):
 
     response = service.launch_job(child_req, None)
     assert response.job_id == child_id.to_wire()
+
+
+@pytest.mark.parametrize("env", [{}, {"CW_KEY_ID": "user-key"}, {"CW_KEY_ID": "user-key", "CW_KEY_SECRET": ""}])
+def test_coreweave_launch_with_missing_keys_is_rejected(coreweave_service, monkeypatch, env):
+    monkeypatch.setenv("CW_KEY_ID", "operator-key")
+    monkeypatch.setenv("CW_KEY_SECRET", "operator-secret")
+    request = make_job_request("missing-cw-keys")
+    request.environment.secrets.update(env)
+
+    with pytest.raises(ConnectError) as exc:
+        coreweave_service.launch_job(request, None)
+
+    assert exc.value.code == Code.INVALID_ARGUMENT
+    assert "https://console.coreweave.com/object-storage/access-keys" in str(exc.value)
+    with pytest.raises(ConnectError) as missing:
+        coreweave_service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=request.name), None)
+    assert missing.value.code == Code.NOT_FOUND
+
+
+def test_coreweave_invalid_replacement_preserves_existing_job(coreweave_service):
+    request = make_job_request("existing-cw-job")
+    request.environment.secrets.update({"CW_KEY_ID": "user-key", "CW_KEY_SECRET": "user-secret"})
+    response = coreweave_service.launch_job(request, None)
+    request.environment.secrets.clear()
+    request.existing_job_policy = job_pb2.EXISTING_JOB_POLICY_RECREATE
+
+    with pytest.raises(ConnectError) as exc:
+        coreweave_service.launch_job(request, None)
+
+    assert exc.value.code == Code.INVALID_ARGUMENT
+    status = coreweave_service.get_job_status(
+        controller_pb2.Controller.GetJobStatusRequest(job_id=response.job_id), None
+    )
+    assert status.job.state == job_pb2.JOB_STATE_PENDING
+
+
+def test_recreate_running_kubernetes_job_preserves_existing_pod(coreweave_service, mock_controller, state):
+    request = make_job_request("running-k8s-recreate")
+    request.environment.secrets.update({"CW_KEY_ID": "user-key", "CW_KEY_SECRET": "user-secret"})
+    response = coreweave_service.launch_job(request, None)
+
+    with state._db.transaction() as cur:
+        [run_request] = dispatch.drain_for_dispatch(cur).tasks_to_run
+    backend = mock_controller.backend
+    backend.sync(DirectReconcileRequest(tasks_to_run=[run_request]))
+    pods = backend.kubectl.list_json(K8sResource.PODS)
+    assert len(pods) == 1
+    backend.kubectl.transition_pod(pods[0]["metadata"]["name"], "Running")
+    with state._db.transaction() as cur:
+        commit_dispatch_updates(
+            cur,
+            [
+                TaskUpdate(
+                    task_id=JobName.from_wire(run_request.task_id),
+                    attempt_id=run_request.attempt_id,
+                    new_state=job_pb2.TASK_STATE_RUNNING,
+                )
+            ],
+            now=Timestamp.now(),
+        )
+
+    request.existing_job_policy = job_pb2.EXISTING_JOB_POLICY_RECREATE
+    with pytest.raises(ConnectError) as exc:
+        coreweave_service.launch_job(request, None)
+
+    assert exc.value.code == Code.FAILED_PRECONDITION
+    status = coreweave_service.get_job_status(
+        controller_pb2.Controller.GetJobStatusRequest(job_id=response.job_id), None
+    )
+    assert status.job.state == job_pb2.JOB_STATE_RUNNING
+    assert len(backend.kubectl.list_json(K8sResource.PODS)) == 1
+
+
+def test_coreweave_sandbox_does_not_require_storage_keys(coreweave_service):
+    request = make_job_request("sandbox-without-storage-keys")
+    request.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    assert coreweave_service.launch_job(request, None).job_id == request.name

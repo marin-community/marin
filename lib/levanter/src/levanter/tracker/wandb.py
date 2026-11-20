@@ -23,6 +23,7 @@ import wandb
 from draccus import field
 from git import InvalidGitRepositoryError, NoSuchPathError, Repo
 from rigging.provenance import Provenance
+from rigging.secrets import get_secret
 
 from levanter.tracker.background import maybe_wrap_background
 from levanter.tracker.helpers import generate_pip_freeze, infer_experiment_git_root
@@ -475,6 +476,8 @@ class WandbConfig(TrackerConfig):
         process_count = jax.process_count()
         initialization_error = None
         try:
+            if mode not in {"disabled", "offline", "dryrun"} and (key := get_secret("WANDB_API_KEY")):
+                git_settings["api_key"] = key
             init_kwargs = dict(
                 entity=self.entity,
                 project=self.project,

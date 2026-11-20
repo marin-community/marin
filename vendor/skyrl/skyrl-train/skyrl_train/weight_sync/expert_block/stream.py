@@ -198,13 +198,13 @@ class Stream:
         return None
 
 
-def bind(participant: int, plan: Schedule, rendezvous: Rendezvous, device: torch.device, **tensors) -> tuple:
+def bind(participant: int, plan: Schedule, rendezvous: Rendezvous, device: torch.device, *, backend: str, **tensors) -> tuple:
     """Create and warm this participant's groups and build its ``Stream``.
 
     ``tensors`` are this side's ``Stream`` keyword arguments. If anything fails, the groups already
     created are destroyed. Returns ``(groups, stream, warm-up seconds)``.
     """
-    groups = create_groups(participant, plan.groups, rendezvous)
+    groups = create_groups(participant, plan.groups, rendezvous, backend=backend)
     try:
         warm = warm_groups(participant, plan.groups, groups, device)
         stream = Stream(participant, plan, groups, device=device, **tensors)

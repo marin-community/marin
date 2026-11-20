@@ -4,6 +4,7 @@
 import asyncio
 import json
 import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from typing import Any
@@ -47,6 +48,41 @@ def test_build_kvstore_spec_normalizes_file_uri(tmp_path):
     spec = build_kvstore_spec(f"file://{tmp_path}/cache")
 
     assert spec == {"driver": "file", "path": str(tmp_path / "cache")}
+
+
+def test_tensorstore_s3_reads_with_mounted_credentials(tmp_path, monkeypatch):
+    credentials = tmp_path / "credentials"
+    credentials.write_text("[default]\naws_access_key_id = test-key\naws_secret_access_key = test-secret\n")
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(credentials))
+    for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_CONFIG_FILE", "AWS_PROFILE"):
+        monkeypatch.delenv(name, raising=False)
+
+    authorized_request = threading.Event()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if "Credential=test-key/" in self.headers.get("Authorization", ""):
+                authorized_request.set()
+            self.send_response(404)
+            self.end_headers()
+
+        def log_message(self, _format, *_args):
+            pass
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        try:
+            monkeypatch.setenv("AWS_ENDPOINT_URL", f"http://127.0.0.1:{server.server_port}")
+            spec = build_kvstore_spec("s3://bucket/cache")
+            # The local server has no bucket subdomain; only credential delivery is under test.
+            spec["endpoint"] = f"http://127.0.0.1:{server.server_port}"
+            store = ts.KvStore.open(spec).result(timeout=_ASYNC_TEST_TIMEOUT)
+            assert store.read("missing").result(timeout=_ASYNC_TEST_TIMEOUT).state == "missing"
+            assert authorized_request.is_set()
+        finally:
+            server.shutdown()
+            thread.join()
 
 
 @pytest.mark.tpu
@@ -338,7 +374,7 @@ def test_serialization_stages_all_leaves_before_tensorstore_open_completes(monke
     write_started = threading.Event()
 
     class FakeStore:
-        def write(self, data, *, can_reference_source_data_indefinitely):
+        def write(self, data):
             writes.append(np.array(data, copy=True))
             write_started.set()
             return SimpleNamespace(commit=commit_future)
@@ -415,8 +451,7 @@ def test_serialization_starts_all_opens_before_the_staging_budget_waits(monkeypa
             self.future.force()
 
     class FakeStore:
-        def write(self, data, *, can_reference_source_data_indefinitely):
-            assert can_reference_source_data_indefinitely
+        def write(self, data):
             writes.append(np.array(data, copy=True))
             return SimpleNamespace(commit=commit_future)
 
@@ -530,6 +565,20 @@ def test_replica_aware_restore_broadcasts_across_processes():
     eight_device_checkpoints.replica_aware_restore_across_processes()
 
 
+def test_a_multi_process_save_waits_for_another_writers_lock_file():
+    """Advisory OS locks do not exclude writers on different NFS clients; lock files do."""
+    assert eight_device_checkpoints.save_waits_for_held_lock_across_processes()
+
+
+def test_a_save_after_an_interrupted_save_to_the_same_directory_commits():
+    """A lock file left by a crashed save would otherwise block every later save to that step."""
+    results = eight_device_checkpoints.resave_after_interrupted_save_across_processes()
+
+    values = np.arange(eight_device_checkpoints.DISTRIBUTED_ARRAY_SIZE, dtype=np.float32)
+    for restored in results:
+        np.testing.assert_array_equal(restored, np.stack([values, values + 1, values + 2]))
+
+
 def test_checkpoint_written_on_one_mesh_loads_on_another():
     """Content must not depend on the mesh that wrote it, so writer layout can keep changing."""
     run_on_eight_devices(eight_device_checkpoints.a_checkpoint_loads_on_another_mesh)
@@ -558,6 +607,17 @@ def test_host_arrays_without_a_sharding_roundtrip():
         restored = tree_deserialize_leaves_tensorstore(tmpdir, {"w": jnp.zeros(10, dtype=jnp.float32)})
 
     np.testing.assert_array_equal(np.asarray(restored["w"]), source["w"])
+
+
+def test_bfloat16_checkpoint_preserves_nonzero_payload(tmp_path):
+    # This 2.5 MiB shape reproduces referenced-source writes persisting fill values.
+    shape = (5, 64, 64, 64)
+    source = {"expert": np.full(shape, 0.125, dtype=jnp.bfloat16)}
+
+    tree_serialize_leaves_tensorstore(str(tmp_path), source)
+    restored = tree_deserialize_leaves_tensorstore(str(tmp_path), {"expert": jnp.zeros(shape, dtype=jnp.bfloat16)})
+
+    np.testing.assert_array_equal(np.asarray(restored["expert"]), source["expert"])
 
 
 def test_arrays_with_a_zero_length_axis_roundtrip():

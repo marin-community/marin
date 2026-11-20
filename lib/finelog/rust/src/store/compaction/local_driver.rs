@@ -24,7 +24,8 @@ use crate::partition_policy::PhysicalPartitionPolicy;
 use crate::store::catalog::Catalog;
 use crate::store::compaction::config::{CompactionConfig, CompactionJob};
 use crate::store::compaction::executor::{
-    run_job_with_partition_policy, CompactionExecution, OutputPolicy, PlannedSwap,
+    read_segment_projected, run_job_with_partition_policy, CompactionExecution, OutputPolicy,
+    PlannedSwap,
 };
 use crate::store::compaction::planner::{plan, UnpartitionedRunPolicy};
 use crate::store::legacy::archive::evict_segment;
@@ -120,6 +121,7 @@ pub fn run_job(compaction: &LocalCompaction<'_>, job: &CompactionJob) -> Result<
             output: OutputPolicy::PromoteWhenUnchanged,
         },
         |path| compaction.segments.key_bounds(path),
+        |path| read_segment_projected(Path::new(path), None),
     )?;
     let merged_inputs = swap.removed.len();
     let input_arrow_bytes = swap.input_arrow_bytes;

@@ -20,6 +20,7 @@ test = [
     "pytest-asyncio",
     "pytest-timeout",
     "marin-shellbox[daytona,shellsim]",
+    "marin-taskcompendium[pipeline]",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -47,6 +48,7 @@ known-first-party = ["rolloutengine"]
 
 [tool.pyrefly]
 disable-project-excludes-heuristics = true
-project-includes = ["src"]
+use-ignore-files = false
+project-includes = ["src/**/*.py"]
 search-path = ["src"]
 python-interpreter = "../../.venv/bin/python"

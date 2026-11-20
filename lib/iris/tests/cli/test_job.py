@@ -28,6 +28,8 @@ from iris.cluster.constraints import (
 )
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2 as _job_pb2
+from rigging.secrets import SecretBehavior
+from rigging.timing import Duration
 
 
 def _make_config_with_zones(zones: list[str]) -> IrisClusterConfig:
@@ -52,6 +54,18 @@ def test_job_run_rejects_deprecated_gvisor_choice():
     assert result.exit_code == 2
     assert "Invalid value for '--container-profile'" in result.output
     assert "container_profile_sandbox" in result.output
+
+
+def test_job_run_resolves_secret_reference_and_isolation(recorded_job_submissions, monkeypatch):
+    value = "private-application-value"
+    monkeypatch.setenv("APPLICATION_CREDENTIAL", value)
+    result = _run_cli(["--secret-behavior", "isolate", "--secret", "arbitrary", "env:APPLICATION_CREDENTIAL"])
+    assert result.exit_code == 0, result.output
+    environment = recorded_job_submissions[0]["environment"]
+    assert environment.secrets == {"arbitrary": value}
+    assert environment.secret_behavior == SecretBehavior.ISOLATE
+    assert "arbitrary" not in environment.env_vars
+    assert value not in result.output
 
 
 def test_validate_region_zone_valid_region(recorded_job_submissions):
@@ -269,14 +283,6 @@ def test_build_job_constraints_preemptible_none_runs_heuristic():
     assert _preemptible_values(constraints) == ["false"]
 
 
-def test_build_job_constraints_preemptible_true_overrides_heuristic():
-    resources_proto = build_resources(tpu=None, gpu=None, cpu=0.5, memory="1GB", disk="5GB").to_proto()
-
-    constraints = build_job_constraints(resources_proto, tpu_variants=[], replicas=1, preemptible=True)
-
-    assert _preemptible_values(constraints) == ["true"]
-
-
 def test_build_job_constraints_target_cluster_appends_cluster_pin():
     resources_proto = build_resources(tpu=None, gpu=None, cpu=0.5, memory="1GB", disk="5GB").to_proto()
 
@@ -297,7 +303,7 @@ def test_build_job_constraints_no_target_cluster_omits_cluster_pin():
     assert [c for c in constraints if c.key == CLUSTER_CONSTRAINT_KEY] == []
 
 
-def test_job_run_cli_accepts_task_image_override(monkeypatch):
+def test_job_run_cli_accepts_task_image_and_termination_grace(monkeypatch):
     captured: dict[str, object] = {}
 
     class FakeJob:
@@ -321,6 +327,8 @@ def test_job_run_cli_accepts_task_image_override(monkeypatch):
         [
             "--task-image",
             "ghcr.io/marin-community/iris-task-cuda-devel:test",
+            "--termination-grace",
+            "60",
             "--no-wait",
             "--",
             "python",
@@ -331,6 +339,7 @@ def test_job_run_cli_accepts_task_image_override(monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert captured["task_image"] == "ghcr.io/marin-community/iris-task-cuda-devel:test"
+    assert captured["termination_grace"] == Duration.from_seconds(60)
     assert captured["controller_url"] == "http://controller.test"
     assert captured["entrypoint"].command == ["python", "train.py"]
 

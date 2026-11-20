@@ -24,10 +24,11 @@ from dataclasses import dataclass, field
 from itertools import batched
 
 from rigging.timing import Timestamp
-from sqlalchemy import Table, bindparam, case, delete, func, insert, select, text, update
+from sqlalchemy import Table, bindparam, case, delete, func, insert, or_, select, text, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 
+from iris.cluster.controller import observability_rows
 from iris.cluster.controller.caches import CacheRegistry
 from iris.cluster.controller.codec import proto_to_json
 from iris.cluster.controller.db import Tx
@@ -54,7 +55,7 @@ from iris.cluster.controller.schema import (
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.federation.store import FederationDirection, HandoffState
 from iris.cluster.types import LOCAL_CLUSTER, TERMINAL_JOB_STATES, AttemptUid, JobName, WorkerId
-from iris.rpc import job_pb2
+from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import timestamp_from_proto
 
 REGISTERED_WRITE_FUNCTIONS: list[Callable] = []
@@ -253,6 +254,7 @@ def stamp_backend(tx: Tx, pins: list[tuple[JobName, str]]) -> None:
         for chunk in batched(job_ids, _ID_CHUNK_SIZE):
             tx.execute(update(jobs_table).where(jobs_table.c.job_id.in_(chunk)).values(backend_id=backend_id))
             tx.execute(update(tasks_table).where(tasks_table.c.job_id.in_(chunk)).values(backend_id=backend_id))
+            observability_rows.record_job_changes(tx, chunk)
 
 
 @writes_to(job_config_table)
@@ -277,14 +279,17 @@ def insert_job_config(
     max_retries_failure: int,
     max_retries_preemption: int,
     timeout_ms: int | None,
+    termination_grace_ms: int,
     preemption_policy: int,
     existing_job_policy: int,
     priority_band: int,
     task_image: str,
     container_profile: int = 0,
     egress_policy: int = 0,
+    egress_allow_json: list[str] | None = None,
     submit_argv_json: list | None = None,
     fail_if_exists: bool = False,
+    coscheduling_group_sizes: Sequence[int] = (),
 ) -> None:
     """Insert one row into ``job_config``."""
     tx.execute(
@@ -298,6 +303,7 @@ def insert_job_config(
             constraints_json=constraints_json,
             has_coscheduling=has_coscheduling,
             coscheduling_group_by=coscheduling_group_by,
+            coscheduling_group_sizes=list(coscheduling_group_sizes),
             scheduling_timeout_ms=scheduling_timeout_ms,
             max_task_failures=max_task_failures,
             entrypoint_json=entrypoint_json,
@@ -307,12 +313,14 @@ def insert_job_config(
             max_retries_failure=max_retries_failure,
             max_retries_preemption=max_retries_preemption,
             timeout_ms=timeout_ms,
+            termination_grace_ms=termination_grace_ms,
             preemption_policy=preemption_policy,
             existing_job_policy=existing_job_policy,
             priority_band=priority_band,
             task_image=task_image,
             container_profile=container_profile,
             egress_policy=egress_policy,
+            egress_allow_json=egress_allow_json if egress_allow_json is not None else [],
             submit_argv_json=submit_argv_json if submit_argv_json is not None else [],
             fail_if_exists=fail_if_exists,
         )
@@ -512,7 +520,18 @@ def mark_jobs_running(tx: Tx, job_ids: Iterable[JobName], now_ms: int) -> None:
 
     Non-PENDING jobs keep their state; ``started_at_ms`` is set only if still NULL (first assignment wins).
     """
+    changed: list[JobName] = []
     for chunk in batched(job_ids, _ID_CHUNK_SIZE):
+        # Only the observability rows need to know which jobs this changes.
+        if tx.observability_rows is not None:
+            changed.extend(
+                tx.execute(
+                    select(jobs_table.c.job_id).where(
+                        jobs_table.c.job_id.in_(chunk),
+                        or_(jobs_table.c.state == job_pb2.JOB_STATE_PENDING, jobs_table.c.started_at_ms.is_(None)),
+                    )
+                ).scalars()
+            )
         tx.execute(
             update(jobs_table)
             .where(jobs_table.c.job_id.in_(chunk))
@@ -524,6 +543,7 @@ def mark_jobs_running(tx: Tx, job_ids: Iterable[JobName], now_ms: int) -> None:
                 started_at_ms=func.coalesce(jobs_table.c.started_at_ms, now_ms),
             )
         )
+    observability_rows.record_job_changes(tx, changed)
 
 
 @writes_to(meta_table)
@@ -579,6 +599,7 @@ def insert_attempt(
                     attempt_uid=attempt_uid,
                 )
             )
+            observability_rows.record_attempt_changes(tx, [(task_id, attempt_id)])
             return attempt_uid
         except IntegrityError as exc:
             # Re-mint only on an attempt_uid collision; any other constraint
@@ -604,6 +625,7 @@ def bulk_insert_tasks(tx: Tx, task_rows: list[dict]) -> None:
     if not task_rows:
         return
     tx.execute(insert(tasks_table), task_rows)
+    observability_rows.record_task_changes(tx, [row["task_id"] for row in task_rows])
     for row in task_rows:
         record_federation_change(tx, row["job_id"], task_index=row["task_index"])
 
@@ -677,6 +699,7 @@ def assign_to_worker(
     if priority_band is not None:
         values["priority_band"] = priority_band
     tx.execute(update(tasks_table).where(tasks_table.c.task_id == task_id).values(**values))
+    observability_rows.record_task_changes(tx, [task_id])
     record_federation_change(tx, task_id.parent, task_index=task_id.task_index)
 
 
@@ -714,6 +737,7 @@ def promote_for_dispatch(
             priority_band=priority_band,
         )
     )
+    observability_rows.record_task_changes(tx, [task_id])
 
 
 # ---------------------------------------------------------------------------
@@ -763,6 +787,7 @@ def remove_worker(
     ``current_worker_*`` to NULL before the delete so the row history
     is observable to readers in the same write transaction.
     """
+    observability_rows.record_worker_removal(tx, worker_id)
     tx.execute(update(task_attempts_table).where(task_attempts_table.c.worker_id == worker_id).values(worker_id=None))
     tx.execute(update(tasks_table).where(tasks_table.c.current_worker_id == worker_id).values(current_worker_id=None))
     tx.execute(delete(workers_table).where(workers_table.c.worker_id == worker_id))
@@ -914,8 +939,8 @@ def insert_mirrored_job_config(
     """Insert the ``job_config`` companion for a job mirrored from a peer.
 
     Sets the name and the resources the peer reports. The columns describing how to
-    run the job (entrypoint, bundle, retries, timeouts) keep their defaults, since the
-    peer runs it and the parent only renders it.
+    run the job (entrypoint, bundle) keep their defaults, since the peer runs it
+    and the parent only renders it. Requested limits are applied by each sync.
 
     ``priority_band`` is the parent's band, which is what the peer's own inheritance
     resolves for this child unless the child overrode it — the sync summary carries no
@@ -931,6 +956,23 @@ def insert_mirrored_job_config(
             res_disk_bytes=int(resources.disk_bytes),
             res_device_json=proto_to_json(resources.device),
             priority_band=priority_band,
+        )
+    )
+
+
+@writes_to(job_config_table)
+def mirror_federated_job_limits(tx: Tx, job_id: JobName, limits: controller_pb2.Controller.FederationJobLimits) -> None:
+    """Keep the hub's displayed limits equal to the execution peer's request."""
+    tx.execute(
+        update(job_config_table)
+        .where(job_config_table.c.job_id == job_id)
+        .values(
+            timeout_ms=limits.timeout.milliseconds or None,
+            scheduling_timeout_ms=limits.scheduling_timeout.milliseconds or None,
+            max_retries_failure=limits.max_retries_failure,
+            max_retries_preemption=limits.max_retries_preemption,
+            max_task_failures=limits.max_task_failures,
+            termination_grace_ms=limits.termination_grace.milliseconds,
         )
     )
 
@@ -1078,6 +1120,7 @@ def mirror_federated_attempts(
                 pod_name=attempt.pod_name,
                 pod_uid=attempt.pod_uid,
                 node_name=attempt.node_name,
+                topology_json=dict(attempt.topology),
                 terminal_reason=attempt.terminal_reason,
             )
             .on_conflict_do_update(
@@ -1091,6 +1134,7 @@ def mirror_federated_attempts(
                     "pod_name": attempt.pod_name,
                     "pod_uid": attempt.pod_uid,
                     "node_name": attempt.node_name,
+                    "topology_json": dict(attempt.topology),
                     "terminal_reason": attempt.terminal_reason,
                 },
             )

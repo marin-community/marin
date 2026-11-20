@@ -18,7 +18,7 @@ import hashlib
 import json
 import re
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from functools import lru_cache, partial
 from typing import Any
@@ -79,7 +79,7 @@ from experiments.post_training.task_curation.pipeline import (
     RowDecoder,
     process_rows,
 )
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 
 ULTRA_REPO = "nvidia/Nemotron-RL-Ultra-Training-Blends"
 ULTRA_REVISION = "482392c14c6418e26804ea2e5d10359df9877df4"
@@ -474,13 +474,15 @@ BASE_RECIPE_VERSION = "3"
 REPAIRED_RECIPE_VERSION = "4"
 TOOLCALL_SCHEMA_RECIPE_VERSION = "6"
 EXECUTABLE_GRADER_RECIPE_VERSION = "6"
+REASONING_MARKUP_RECIPE_VERSION = "7"
 RECIPE_VERSIONS = {
     "ultra_sft_step3200_nvarc_transductive": REPAIRED_RECIPE_VERSION,
     "ultra_sft_step3200_structured_outputs_v2": REPAIRED_RECIPE_VERSION,
     "ultra_sft_step3200_structured_outputs_v3": REPAIRED_RECIPE_VERSION,
     "ultra_v3_agentic_rl_step73_structured_outputs_v2": REPAIRED_RECIPE_VERSION,
     "ultra_sft_step3200_toolcall_schema": TOOLCALL_SCHEMA_RECIPE_VERSION,
-    "ultra_sft_step3200_comp_coding": EXECUTABLE_GRADER_RECIPE_VERSION,
+    "ultra_sft_step3200_calendar_v2": REASONING_MARKUP_RECIPE_VERSION,
+    "ultra_sft_step3200_comp_coding": REASONING_MARKUP_RECIPE_VERSION,
     "ultra_sft_step3200_lean": EXECUTABLE_GRADER_RECIPE_VERSION,
     "ultra_sft_step3200_reasoning_gym": EXECUTABLE_GRADER_RECIPE_VERSION,
 }
@@ -1118,7 +1120,7 @@ def _source(blend: str, path: str) -> RlDataSource[CurationRecipe]:
     inputs = {SWE_GYM.repo: SWE_GYM} if split else dict(component.inputs)
     return RlDataSource(
         pipeline=process_rows,
-        info=BLENDS[blend][path],
+        info=replace(BLENDS[blend][path], task_format=TaskFormat.MARINSKYRL),
         config=CurationRecipe(
             name=pipeline_name(blend, path),
             source=HfSource(

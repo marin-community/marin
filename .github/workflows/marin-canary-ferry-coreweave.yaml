@@ -163,10 +163,9 @@ jobs:
           fi
           echo "job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
           echo "Submitted job: $JOB_ID"
-        # Object-storage auth is not passed per-job: `cluster start` folds the
-        # CoreWeave creds + cwlota endpoint + FSSPEC_S3 into the iris-ci
-        # iris-task-env Secret, which every task pod inherits via envFrom.
         env:
+          CW_KEY_ID: ${{ secrets.CW_ACCESS_KEY_ID }}
+          CW_KEY_SECRET: ${{ secrets.CW_SECRET_ACCESS_KEY }}
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           CANARY_TARGET_TOKENS: ${{ inputs.target_tokens || env.CANARY_TARGET_TOKENS }}

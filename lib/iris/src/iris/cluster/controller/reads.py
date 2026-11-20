@@ -112,9 +112,11 @@ class PendingDispatchRow:
     constraints_json: str | None
     task_image: str
     timeout_ms: int | None
+    termination_grace_ms: int
     # Coscheduling + priority drive Kueue gang admission on the direct path.
     has_coscheduling: bool
     coscheduling_group_by: str  # "" when not coscheduled
+    coscheduling_group_sizes: list[int]
     # Current tasks.priority_band. Before first direct dispatch, the drain
     # resolves parent inheritance from job_config and stamps the result; a
     # redrive reads that fixed band back from the task row.
@@ -123,6 +125,7 @@ class PendingDispatchRow:
     # to DEFAULT when the backend applies it.
     container_profile: int  # job_pb2.ContainerProfile
     egress_policy: int  # job_pb2.EgressPolicy
+    egress_allow_json: list[str]  # rule strings; see iris.cluster.egress
 
 
 @dataclass(frozen=True, slots=True)
@@ -636,6 +639,7 @@ def get_job_detail(tx: Tx, job_id: JobName):
             job_config_table.c.constraints_json,
             job_config_table.c.has_coscheduling,
             job_config_table.c.coscheduling_group_by,
+            job_config_table.c.coscheduling_group_sizes,
             job_config_table.c.scheduling_timeout_ms,
             job_config_table.c.max_task_failures,
             job_config_table.c.entrypoint_json,
@@ -645,12 +649,14 @@ def get_job_detail(tx: Tx, job_id: JobName):
             job_config_table.c.max_retries_failure,
             job_config_table.c.max_retries_preemption,
             job_config_table.c.timeout_ms,
+            job_config_table.c.termination_grace_ms,
             job_config_table.c.preemption_policy,
             job_config_table.c.existing_job_policy,
             job_config_table.c.priority_band,
             job_config_table.c.task_image,
             job_config_table.c.container_profile,
             job_config_table.c.egress_policy,
+            job_config_table.c.egress_allow_json,
             job_config_table.c.submit_argv_json,
             job_config_table.c.fail_if_exists,
         )
@@ -1000,6 +1006,7 @@ ATTEMPT_COLS = (
     task_attempts_table.c.pod_name,
     task_attempts_table.c.pod_uid,
     task_attempts_table.c.node_name,
+    task_attempts_table.c.topology_json,
     task_attempts_table.c.terminal_reason,
     task_attempt_outputs_table.c.archive_json.label("output_archive_json"),
 )
@@ -1686,12 +1693,15 @@ PENDING_DISPATCH_COLS = (
     job_config_table.c.constraints_json,
     job_config_table.c.task_image,
     job_config_table.c.timeout_ms,
+    job_config_table.c.termination_grace_ms,
     job_config_table.c.has_coscheduling,
     job_config_table.c.coscheduling_group_by,
+    job_config_table.c.coscheduling_group_sizes,
     # Current stamped task band; see PendingDispatchRow.priority_band.
     local_tasks.c.priority_band,
     job_config_table.c.container_profile,
     job_config_table.c.egress_policy,
+    job_config_table.c.egress_allow_json,
 )
 
 
@@ -1716,11 +1726,14 @@ def pending_dispatch_row(r) -> PendingDispatchRow:
         constraints_json=r.constraints_json,
         task_image=str(r.task_image),
         timeout_ms=int(_tms) if _tms is not None else None,
+        termination_grace_ms=int(r.termination_grace_ms),
         has_coscheduling=bool(r.has_coscheduling),
         coscheduling_group_by=str(r.coscheduling_group_by),
+        coscheduling_group_sizes=list(r.coscheduling_group_sizes),
         priority_band=int(r.priority_band),
         container_profile=int(r.container_profile),
         egress_policy=int(r.egress_policy),
+        egress_allow_json=list(r.egress_allow_json),
     )
 
 
@@ -1788,14 +1801,9 @@ _RECONCILE_ROWS_STMT = (
         task_attempts_table.c.state.label("attempt_state"),
         local_tasks.c.job_id,
         task_attempts_table.c.attempt_uid,
+        local_tasks.c.current_attempt_id,
     )
-    .select_from(
-        task_attempts_table.join(
-            local_tasks,
-            (local_tasks.c.task_id == task_attempts_table.c.task_id)
-            & (local_tasks.c.current_attempt_id == task_attempts_table.c.attempt_id),
-        )
-    )
+    .select_from(task_attempts_table.join(local_tasks, local_tasks.c.task_id == task_attempts_table.c.task_id))
     .where(
         task_attempts_table.c.worker_id.is_not(None),
         task_attempts_table.c.finished_at_ms.is_(None),
@@ -1816,6 +1824,10 @@ def load_reconcile_rows(tx: Tx, worker_ids: Iterable[WorkerId]) -> list[Reconcil
     chance to report -- with the real terminal status or via the MISSING
     synthesis in ``handle_reconcile`` -- so the reconcile path can stamp
     finished_at_ms. Without this, a single lost RPC strands the attempt forever.
+
+    Superseded attempts are included too: a preempted worker-bound attempt keeps
+    its capacity charge (``finished_at_ms`` NULL) after a retry assigns the task a
+    newer attempt, so it stays in the plan until the worker confirms termination.
     """
     target_ids = set(worker_ids)
     if not target_ids:
@@ -1830,6 +1842,7 @@ def load_reconcile_rows(tx: Tx, worker_ids: Iterable[WorkerId]) -> list[Reconcil
             attempt_state=int(row.attempt_state),
             job_id=row.job_id,
             attempt_uid=AttemptUid(str(row.attempt_uid)),
+            superseded=int(row.attempt_id) != int(row.current_attempt_id),
         )
         for row in rows
         if row.worker_id in target_ids

@@ -1,5 +1,4 @@
 import asyncio
-import concurrent.futures
 import contextlib
 import logging
 import os
@@ -32,14 +31,12 @@ from skyrl_train.utils import ray_noset_visible_devices, get_ray_pg_ready_with_t
 from skyrl_train.utils.constants import DEFAULT_RAY_PLACEMENT_GROUP_TIMEOUT_SECONDS
 from skyrl_train.io import io
 from skyrl_train.utils.numa import physical_gpu_id_for_worker, set_numa_affinity_for_gpu
-from skyrl_train.tensor_math import masked_mean
 from skyrl_train.distributed.dispatch import ActorInfo, Dispatch, DispatchRegistry, DispatchSettings, MeshRank
 from skyrl_train.distributed import collective_phase_diagnostics as _phase_diagnostics
 from skyrl_train.distributed.strategy import DistributedStrategy
 from loguru import logger
 from skyrl_train.distributed.utils import init_custom_process_group, init_worker_process_group_with_device
 from skyrl_train.utils.algorithm_registry import PolicyLossRegistry
-from skyrl_train.utils.policy_math import ppo_critic_loss
 from skyrl_train.utils.importance_ratio_diagnostics import (
     LogRatioMonitor,
 )
@@ -58,8 +55,8 @@ from skyrl_train.training_batch import (
     gradient_accumulation_steps,
     per_data_parallel_batch_size,
 )
-from skyrl_train.trajectory_selection import optimization_samples_per_prompt
-from skyrl_train.utils.metrics import mean_metrics, policy_progress_metrics, policy_training_metrics
+from skyrl_train.config.trajectory_selection import optimization_samples_per_prompt
+from skyrl_train.utils.metrics import policy_progress_metrics, policy_training_metrics
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
 from skyrl_train.models.grug_query_bias import (
     GrugLossFreeBiasUpdater,
@@ -79,6 +76,12 @@ from skyrl_train.utils.utils import (
 )
 from omegaconf import DictConfig
 from pathlib import Path
+import time
+from skyrl_train.batch_assembly import BatchPlan, assemble_rank_slice, forward_input, install_plan_advantages
+from skyrl_train.batch_metrics import advantage_metrics, forward_metrics, install_correction, token_staleness_metrics
+from skyrl_train.rollouts.payloads import RolloutReader
+from skyrl_train.utils.advantage_estimators import apply_loop_advantages, drop_advantage_inputs
+from skyrl_train.metric_reduction import WorldReduction
 
 
 def _grug_query_bias_updater(
@@ -106,8 +109,6 @@ class DistributedTorchRayActor:
         world_size,
         rank,
         local_rank,
-        master_addr,
-        master_port,
         sequence_parallel_size,
         record_memory=False,
         pin_to_ray_gpu_id=False,
@@ -122,10 +123,8 @@ class DistributedTorchRayActor:
         self._world_size = world_size
         self._rank = rank
         self._local_rank = local_rank
-        self._master_addr = master_addr if master_addr else self._get_current_node_ip()
-        self._master_port = master_port if master_port else self._get_free_port()
-        os.environ["MASTER_ADDR"] = self._master_addr
-        os.environ["MASTER_PORT"] = str(self._master_port)
+        self._master_addr = self._get_current_node_ip() if rank == 0 else None
+        self._master_port = self._get_free_port() if rank == 0 else None
         os.environ["WORLD_SIZE"] = str(self._world_size)
         os.environ["RANK"] = str(self._rank)
         # Device pinning. `LOCAL_RANK` is consumed by every strategy's
@@ -192,45 +191,22 @@ class DistributedTorchRayActor:
         set_numa_affinity_for_gpu(physical_gpu_id)
         os.environ["LOCAL_RANK"] = resolved_local_rank
         self.sequence_parallel_size: int = sequence_parallel_size
-        self._checkpoint_upload_executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=1,
-            thread_name_prefix="checkpoint-upload",
-        )
-        self._checkpoint_upload_future: concurrent.futures.Future[None] | None = None
         self.record_memory = record_memory
         if record_memory:
             torch.cuda.memory._record_memory_history()
         configure_ray_worker_logging()
 
-    def _start_checkpoint_upload(self, upload: io.PendingDirectoryUpload | None) -> None:
-        if upload is None:
-            return
-        if self._checkpoint_upload_future is not None:
-            if not self._checkpoint_upload_future.done():
-                raise RuntimeError("cannot stage a checkpoint while the previous upload is still running")
-            self._checkpoint_upload_future.result()
-        self._checkpoint_upload_future = self._checkpoint_upload_executor.submit(upload.publish)
-
-    async def wait_checkpoint_upload(self) -> None:
-        """Wait without blocking this actor's event loop for its staged shard upload."""
-        future = self._checkpoint_upload_future
-        if future is None:
-            return
-        try:
-            await asyncio.wrap_future(future)
-        finally:
-            if self._checkpoint_upload_future is future:
-                self._checkpoint_upload_future = None
-
     def get_node_local_rank(self):
         return self._local_rank
 
-    def init_worker_process_group(self):
+    def init_worker_process_group(self, master_addr: str, master_port: int):
         # Device-pinned NCCL PG init via the shared helper — pins set_device(LOCAL_RANK) and
         # passes device_id so ProcessGroupNCCL never guesses the device (fixes the cw-rno2a
         # unmasked-CVD collective deadlock; see init_worker_process_group_with_device).
         init_worker_process_group_with_device(
-            timeout_seconds=int(self.cfg.trainer.distributed.worker_collective_timeout_seconds)
+            master_addr=master_addr,
+            master_port=master_port,
+            timeout_seconds=int(self.cfg.trainer.distributed.worker_collective_timeout_seconds),
         )
 
         # setup device mesh
@@ -321,6 +297,7 @@ class Worker(DistributedTorchRayActor):
         if telemetry_config.endpoint is not None:
             self._telemetry.enter_context(ProcessTelemetry(telemetry_config, WORKER_ROLE))
         enable_trainer_batch_invariance(cfg.trainer.algorithm.batch_invariant)
+        self._weight_sync_pg_options = None
 
     @property
     def device(self) -> torch.device:
@@ -455,6 +432,7 @@ class Worker(DistributedTorchRayActor):
                     world_size=world_size,
                     rank=0,
                     group_name=group_name,
+                    pg_options=self._weight_sync_pg_options,
                 )
             )
             results = await asyncio.gather(*tasks)
@@ -484,7 +462,6 @@ class Worker(DistributedTorchRayActor):
         # chunk land on EVERY rank (ungated; no-op when the batch carries no routes).
         log_r3_resident_set(self._rank, data)
         # run in micro batches of cfg.trainer.micro_forward_batch_size_per_gpu
-        # TODO (sumanthrh): this can be in the policy/critic impl if the micro batch size can be specific to policy, critic, etc.
         micro_batches = data.chunk(self.cfg.trainer.micro_forward_batch_size_per_gpu)
 
         outputs = []
@@ -635,8 +612,6 @@ class PPORayActorGroup:
                 world_size=world_size,
                 rank=0,
                 local_rank=0,
-                master_addr=None,
-                master_port=None,
                 sequence_parallel_size=self.sequence_parallel_size,
                 record_memory=self.record_memory,
                 pin_to_ray_gpu_id=self._pin_to_ray_gpu_id,
@@ -653,8 +628,6 @@ class PPORayActorGroup:
                 world_size=world_size,
                 rank=0,
                 local_rank=0,
-                master_addr=None,
-                master_port=None,
                 sequence_parallel_size=self.sequence_parallel_size,
                 record_memory=self.record_memory,
                 pin_to_ray_gpu_id=self._pin_to_ray_gpu_id,
@@ -663,7 +636,6 @@ class PPORayActorGroup:
         self._actor_handlers = [master_actor]
         # Create worker actors
         if world_size > 1:
-            master_addr, master_port = ray.get(master_actor.get_master_addr_port.remote())
             for rank in range(1, world_size):
                 local_rank = rank % self._num_gpus_per_node
 
@@ -686,8 +658,6 @@ class PPORayActorGroup:
                         world_size=world_size,
                         rank=rank,
                         local_rank=local_rank,
-                        master_addr=master_addr,
-                        master_port=master_port,
                         sequence_parallel_size=self.sequence_parallel_size,
                         record_memory=self.record_memory,
                         pin_to_ray_gpu_id=self._pin_to_ray_gpu_id,
@@ -704,8 +674,6 @@ class PPORayActorGroup:
                         world_size=world_size,
                         rank=rank,
                         local_rank=local_rank,
-                        master_addr=master_addr,
-                        master_port=master_port,
                         sequence_parallel_size=self.sequence_parallel_size,
                         record_memory=self.record_memory,
                         pin_to_ray_gpu_id=self._pin_to_ray_gpu_id,
@@ -713,9 +681,11 @@ class PPORayActorGroup:
                     )
                 self._actor_handlers.append(worker_actor)
 
+        master_addr, master_port = ray.get(master_actor.get_master_addr_port.remote())
+
         # Initialize process group
         logger.info("Initializing process group for RayActorGroup")
-        ray.get([actor.init_worker_process_group.remote() for actor in self._actor_handlers])
+        ray.get([actor.init_worker_process_group.remote(master_addr, master_port) for actor in self._actor_handlers])
         logger.info("Initialized process group for RayActorGroup")
         self.actor_infos = [ActorInfo(actor, ray.get(actor.get_mesh_rank.remote())) for actor in self._actor_handlers]
         logger.info(f"Mesh Ranks: {[actor_info.rank for actor_info in self.actor_infos]}")
@@ -726,6 +696,37 @@ class PPORayActorGroup:
             r3_dispatch_put_timeout_seconds=float(self.cfg.generator.r3_dispatch_put_timeout_seconds),
         )
         return dispatch_class.dispatch(self.actor_infos, method_name, *args, settings=settings, **kwargs)
+
+    def share_batch_groups(self, plan: BatchPlan, reader: ObjectRef) -> list[ObjectRef]:
+        """Share each group through its first intersecting DP collection actor."""
+        dp_size = self.actor_infos[0].rank.dp_size
+        owners = {actor.rank.dp: actor for actor in self.actor_infos if actor.rank.is_collection_dp_rank()}
+        group_owners = {}
+        for dp in range(dp_size):
+            for index in plan.group_indices(dp, dp_size):
+                group_owners.setdefault(index, dp)
+        return [
+            owners[dp].handle.share_batch_groups.remote(
+                plan.global_step, reader, tuple(index for index, owner in group_owners.items() if owner == dp)
+            )
+            for dp in range(dp_size)
+        ]
+
+    def load_batch(
+        self, plan: BatchPlan, reader: ObjectRef, shared: list[tuple[tuple[int, ObjectRef], ...]], pad_token_id: int
+    ) -> list[ObjectRef]:
+        """Load each rank's intersecting shared groups on all of its mesh replicas."""
+        references = {index: ref for result in shared for index, ref in result}
+        plan_ref = ray.put(plan)
+        tasks = []
+        for actor in self.actor_infos:
+            indices = plan.group_indices(actor.rank.dp, actor.rank.dp_size)
+            tasks.append(
+                actor.handle.load_batch.remote(
+                    plan_ref, reader, indices, tuple(references[index] for index in indices), pad_token_id
+                )
+            )
+        return tasks
 
     def async_init_model(
         self,
@@ -768,30 +769,6 @@ class PPORayActorGroup:
         if nonblocking:
             return refs
         return ray.get(refs)
-
-    def run_method(self, dispatch_type: str, method_name: str, *args, **kwargs) -> Optional[TrainingOutputBatch]:
-        """Run a method on all actors using specified dispatch type synchronously.
-
-        The method should either return `None` or a `TrainingOutputBatch` object.
-
-        Args:
-            dispatch_type: Type of dispatch to use ("mesh" or "pass_through")
-            method_name: Name of the method to call on actors
-            *args: Positional arguments to pass to the method
-            **kwargs: Keyword arguments to pass to the method
-
-        Returns:
-            Collect results from all the actors.
-        """
-        dispatch_class: Dispatch = DispatchRegistry.get(dispatch_type)
-        # validate the dispatch args to be sent to `.dispatch`
-        args, kwargs = dispatch_class.validate_dispatch_args(*args, **kwargs)
-
-        # Dispatch the method call
-        object_refs = self._dispatch(dispatch_class, method_name, *args, **kwargs)
-        # Collect results from all the actors
-        ret = dispatch_class.sync_collect(self.actor_infos, object_refs)
-        return ret
 
     def async_run_ray_method(self, dispatch_type: str, method_name: str, *args, **kwargs) -> List[ObjectRef]:
         """Run a method on all actors using specified dispatch type asynchronously.
@@ -865,6 +842,88 @@ class PolicyWorkerBase(Worker):
         self._policy_train_spans: bool = self.cfg.trainer.policy_train_spans
         self._memory = LearnerCudaMetrics(enabled=self._policy_train_spans, rank=self._rank)
         self._model_version_step: int | None = None
+        self._loaded_batch: tuple[BatchPlan, TrainingInputBatch] | None = None
+
+    async def share_batch_groups(
+        self, batch_id: int, reader: RolloutReader, indices: tuple[int, ...]
+    ) -> tuple[tuple[int, ObjectRef], ...]:
+        references = await reader.share(batch_id, indices)
+        return tuple(zip(indices, references, strict=True))
+
+    async def load_batch(
+        self,
+        plan: BatchPlan,
+        reader: RolloutReader,
+        indices: tuple[int, ...],
+        references: tuple[ObjectRef, ...],
+        pad_token_id: int,
+    ) -> float:
+        """Assemble and retain the rank's rows using the complete batch's normalization rules."""
+        if self._loaded_batch is not None:
+            raise ValueError(f"worker batch {plan.global_step} is already loaded")
+        started = time.perf_counter()
+        groups = await reader.read_shared(plan.global_step, indices, references)
+        rows = plan.rank_rows(self.mesh_rank.dp, self.mesh_rank.dp_size)
+        data = await asyncio.to_thread(
+            assemble_rank_slice,
+            plan,
+            indices,
+            [group.trajectory_batch for group in groups],
+            rows,
+            pad_token_id=pad_token_id,
+            algorithm=self.cfg.trainer.algorithm,
+        )
+        self._loaded_batch = plan, data
+        return time.perf_counter() - started
+
+    def _forward_loaded_logprobs(self, data: TrainingInputBatch) -> torch.Tensor:
+        return self.forward(data)["output"]
+
+    def prepare_loaded(self, batch_id: int) -> TrainingOutputBatch:
+        """Retain policy scores and finalized training tensors with globally reduced metrics."""
+        plan, batch = self._loaded_batch
+        assert plan.global_step == batch_id
+        batch["action_log_probs"] = self._forward_loaded_logprobs(forward_input(batch))
+        batch["base_action_log_probs"] = None
+        reduction = WorldReduction(self.strategy.all_reduce, self.mesh_rank.is_collection_dp_rank())
+        metrics = (
+            token_staleness_metrics(batch, plan.facts, reduction=reduction) if self.cfg.trainer.training_metrics else {}
+        )
+        metrics.update(
+            forward_metrics(
+                batch,
+                staleness=batch.pop("rollout_staleness"),
+                algorithm=self.cfg.trainer.algorithm,
+                reduction=reduction,
+                training_metrics_enabled=self.cfg.trainer.training_metrics,
+                rollout_logprobs_enabled=self.cfg.generator.sampling_params.logprobs is not None,
+            )
+        )
+        algorithm = self.cfg.trainer.algorithm
+        metrics.update(install_correction(batch, algorithm, reduction=reduction))
+        rows = plan.rank_rows(self.mesh_rank.dp, self.mesh_rank.dp_size)
+        scores = install_plan_advantages(batch, plan, rows, algorithm, reduction=reduction)
+        metrics.update(
+            advantage_metrics(
+                batch,
+                reduction=reduction,
+                step_wise=False,
+                group_scores=(plan.uids, scores),
+            )
+        )
+        drop_advantage_inputs(apply_loop_advantages(batch))
+        output = TrainingOutputBatch({})
+        output.metadata = {"batch_metrics": metrics}
+        return output
+
+    def train_loaded(self, batch_id: int) -> TrainingOutputBatch:
+        plan, batch = self._loaded_batch
+        assert plan.global_step == batch_id
+        return self.ppo_train(batch)
+
+    def unload_batch(self, batch_id: int) -> None:
+        if self._loaded_batch is not None and self._loaded_batch[0].global_step == batch_id:
+            self._loaded_batch = None
 
     async def _begin_vllm_layerwise_weight_reload(self, inference_engine_client, *, enabled: bool) -> None:
         """Open a rank-synchronized vLLM reload around a streamed weight update."""
@@ -960,7 +1019,6 @@ class PolicyWorkerBase(Worker):
         dataloader = TrainingBatchIterator(train_data, self.cfg.trainer.micro_train_batch_size_per_gpu)
 
         # Clear fragmented GPU memory before training to avoid OOM at step boundaries
-        # (matches CriticWorkerBase.ppo_train behavior)
         torch.cuda.empty_cache()
 
         micro_batches_per_mini_batch = gradient_accumulation_steps(
@@ -1285,7 +1343,7 @@ class PolicyWorkerBase(Worker):
         return status
 
     def save_checkpoint(self, ckpt_dir: Path, tokenizer=None):
-        upload = self.strategy.save_checkpoint(
+        self.strategy.save_checkpoint(
             model=self.model,
             optimizer=self.optimizer,
             scheduler=self.scheduler,
@@ -1294,7 +1352,6 @@ class PolicyWorkerBase(Worker):
             tokenizer=tokenizer,
             client_state={},
         )
-        self._start_checkpoint_upload(upload)
 
     def load_checkpoint(
         self,
@@ -1351,182 +1408,6 @@ class PolicyWorkerBase(Worker):
 
     def process_sequences(self, sequences, input_len, eos_token_id, pad_token_id):
         return self.model.process_sequences(sequences, input_len, eos_token_id, pad_token_id)
-
-
-class CriticWorkerBase(Worker):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.model: nn.Module = None
-        self.scheduler: LRScheduler = None
-        self.optimizer: Optimizer = None
-        self.strategy: DistributedStrategy = None
-        self.record_memory: bool = False
-        self.mesh_rank: MeshRank = None
-        self.critic_loss_fn: Callable = ppo_critic_loss
-
-    def _normalize_mini_batch_size(self):
-        """
-        Normalize batch sizes based on device mesh and generation parameters.
-        """
-        if not hasattr(self, "mesh_rank") or self.mesh_rank is None:
-            raise RuntimeError("mesh_rank must be initialized before calling _normalize_mini_batch_size()")
-
-        self.critic_mini_batch_size_per_gpu = per_data_parallel_batch_size(
-            self.cfg.trainer.critic_mini_batch_size,
-            optimization_samples_per_prompt(self.cfg),
-            self.mesh_rank.dp_size,
-        )
-
-    def _forward_micro_batch(
-        self,
-        micro_batch: TrainingInputBatch,
-    ) -> TrainingOutputBatch:
-        """Generates critic values."""
-        device = self.device
-        micro_batch.to(device)
-        sequences = micro_batch["sequences"]
-        response_length = micro_batch.metadata["response_length"]
-        attention_mask = micro_batch["attention_mask"]
-        self.model.eval()
-        with torch.no_grad(), torch.autocast(dtype=torch.bfloat16, device_type=self.device.type):
-            value = self.model(
-                sequences,
-                response_length,
-                attention_mask,
-            )
-        self.model.train()  # reset model state
-        value = value.to("cpu")
-        output = TrainingOutputBatch(
-            {"output": value},
-        )
-        output.metadata = micro_batch.metadata
-        return output
-
-    def save_hf_model(self, export_dir: str, tokenizer):
-        # Save model in HuggingFace safetensors format
-        self.strategy.save_hf_model(
-            self.model,
-            export_dir,
-            tokenizer=tokenizer,
-        )
-
-    def ppo_train(self, train_data: TrainingInputBatch) -> TrainingOutputBatch:
-        global_step = train_data.metadata["global_step"]
-        dataloader = TrainingBatchIterator(train_data, self.cfg.trainer.micro_train_batch_size_per_gpu)
-
-        torch.cuda.empty_cache()
-        self.model.train()
-
-        micro_batches_per_mini_batch = gradient_accumulation_steps(
-            self.critic_mini_batch_size_per_gpu,
-            self.cfg.trainer.micro_train_batch_size_per_gpu,
-        )
-        # The number of steps (over micro batches) to accumulate gradients before taking an optimizer step.
-        accumulation_steps = micro_batches_per_mini_batch
-
-        all_metrics = defaultdict(list)
-        critic_update_steps = 0
-        for epoch in range(self.cfg.trainer.update_epochs_per_batch):
-            pbar = tqdm(
-                dataloader,
-                desc=f"Critic Train epoch [{epoch + 1}/{self.cfg.trainer.update_epochs_per_batch}]",
-                disable=not self.strategy.is_rank_0(),
-            )
-            for local_step, experience in enumerate(pbar):
-                status = self.training_step(experience, global_step, local_step, accumulation_steps)
-                critic_update_steps += 1
-
-                # for DP
-                # TODO (sumanthrh): this assumes all workers are data parallel.
-                # We should get more accurate metrics with seq parallel or TP.
-                # There are metrics like entropy where we get average over local data size
-                status = self.strategy.all_reduce(status)
-
-                for k, v in status.items():
-                    all_metrics[k].append(v)
-                pbar.set_postfix(status)
-
-        torch.distributed.barrier()
-
-        status_mean = mean_metrics(all_metrics)
-        status_mean["critic_update_steps"] = critic_update_steps / accumulation_steps
-
-        output = TrainingOutputBatch()
-        output.metadata = {"train_status": status_mean}
-        return output
-
-    def training_step(self, experience: Experience, global_step, local_step, accumulation_steps) -> Dict[str, float]:
-        """
-        Perform one micro-batch of training, accumulate gradients, and step the optimizer only after `accumulation_steps` micro-batches.
-        """
-        experience.to_device(self.device)
-
-        sequences = experience.sequences
-        old_values = experience.values
-        returns = experience.returns
-        num_actions = experience.num_actions
-        attention_mask = experience.attention_mask
-        loss_mask = experience.loss_mask
-
-        with torch.autocast(dtype=torch.bfloat16, device_type=self.device.type):
-            # critic loss
-            values, output = self.model(
-                sequences,
-                num_actions=num_actions,
-                attention_mask=attention_mask,
-                return_output=True,
-            )
-            # loss function
-            loss, clipfrac = self.critic_loss_fn(
-                values,
-                old_values,
-                returns,
-                config=self.cfg.trainer.algorithm,
-                loss_mask=loss_mask,
-            )
-        loss = loss / accumulation_steps
-        self.strategy.backward(loss, self.model, self.optimizer)
-        grad_norm = None
-        if (local_step + 1) % accumulation_steps == 0:
-            grad_norm = self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler, name="critic")
-            if grad_norm is not None:
-                grad_norm = grad_norm.detach().cpu().item()
-
-        # status
-        status = {
-            "critic_loss": loss.item(),
-            "values_mean": masked_mean(values, loss_mask).item(),
-            "critic_lr": self.scheduler.get_last_lr()[0],
-            "values_clipfrac": clipfrac,
-        }
-        if grad_norm is not None:
-            status["raw_grad_norm"] = grad_norm
-        return status
-
-    def save_checkpoint(self, ckpt_dir: str, tokenizer=None):
-        upload = self.strategy.save_checkpoint(
-            model=self.model,
-            optimizer=self.optimizer,
-            scheduler=self.scheduler,
-            ckpt_dir=ckpt_dir,
-            node_local_rank=self.get_node_local_rank(),
-            tokenizer=tokenizer,
-        )
-        self._start_checkpoint_upload(upload)
-
-    def load_checkpoint(
-        self,
-        ckpt_dir=None,
-        load_training_state=True,
-    ):
-        _, states = self.strategy.load_checkpoint(
-            model=self.model,
-            optimizer=self.optimizer if load_training_state else None,
-            scheduler=self.scheduler if load_training_state else None,
-            ckpt_dir=ckpt_dir,
-            load_training_state=load_training_state,
-        )
-        return states
 
 
 class RefWorkerBase(Worker):

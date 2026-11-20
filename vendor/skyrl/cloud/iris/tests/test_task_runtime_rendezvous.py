@@ -129,6 +129,7 @@ def _worker_args(tmp_path):
         ray_spill_backend=task_runtime.RaySpillBackend.LOCAL,
         ray_spill_dir=str(tmp_path / "spill"),
         cluster_join_timeout=1,
+        ray_labels={},
     )
 
 
@@ -144,7 +145,7 @@ def _isolate_worker_runtime(tmp_path, monkeypatch, payload):
         "_runtime_versions",
         lambda: (payload.python_version, payload.ray_version),
     )
-    monkeypatch.setattr(task_runtime, "ray_start_worker", lambda *_args: None)
+    monkeypatch.setattr(task_runtime, "ray_start_worker", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(task_runtime, "wait_for_nodes", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(task_runtime, "ray_stop", lambda: None)
     monkeypatch.setattr(task_runtime, "RayLogSyncSession", _FakeRayLogSyncSession)
@@ -159,7 +160,7 @@ def _isolate_worker_runtime(tmp_path, monkeypatch, payload):
     return handlers
 
 
-def test_worker_exits_zero_after_current_head_succeeds(tmp_path, monkeypatch):
+def test_worker_exits_zero_after_current_head_succeeds(tmp_path, monkeypatch, iris_ray_ports):
     payload = _head_payload()
     _isolate_worker_runtime(tmp_path, monkeypatch, payload)
     write_head_result(str(tmp_path), payload.gang_epoch)
@@ -167,7 +168,7 @@ def test_worker_exits_zero_after_current_head_succeeds(tmp_path, monkeypatch):
     assert task_runtime.run_worker(_worker_args(tmp_path)) == 0
 
 
-def test_worker_termination_without_current_head_success_is_nonzero(tmp_path, monkeypatch):
+def test_worker_termination_without_current_head_success_is_nonzero(tmp_path, monkeypatch, iris_ray_ports):
     payload = _head_payload()
     handlers = _isolate_worker_runtime(tmp_path, monkeypatch, payload)
     write_head_result(str(tmp_path), "prior-epoch")

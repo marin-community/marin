@@ -12,12 +12,14 @@ from pathlib import Path
 import pulumi
 import pytest
 import yaml
+from pulumi.output import Unknown
 from pulumi.runtime import MockCallArgs, MockResourceArgs, Mocks
 
 from infra.loom.infrastructure import (
     ROOT,
     DeploymentConfig,
     GitHubFederationConfig,
+    OAuthClientConfig,
     ProfileConfig,
     RemoteMcpConfig,
     WatchConfig,
@@ -54,6 +56,17 @@ class RecordingMocks(Mocks):
             outputs["email"] = f"{args.args['accountId']}@example.iam.gserviceaccount.com"
             outputs["uniqueId"] = "99887766554433221100"
         return outputs, []
+
+
+class SkippedPreviewBuildMocks(RecordingMocks):
+    """docker-build reports the bare tag as its ref when a preview skips the build."""
+
+    def new_resource(self, args: MockResourceArgs):
+        resource_id, outputs = super().new_resource(args)
+        if args.typ == "docker-build:index:Image":
+            outputs["ref"] = outputs["tags"][0]
+            del outputs["digest"]
+        return resource_id, outputs
 
 
 def deployment_config() -> DeploymentConfig:
@@ -306,6 +319,7 @@ def test_profile_manifest_renders_github_repositories_and_secret_references() ->
                 "ops",
                 {
                     "agent": "codex",
+                    "docArtifact": "doc",
                     "githubRepositories": ["marin-community/marin", "marin-community/vllm"],
                     "mcpAccess": {"mode": "all", "groups": []},
                     "env": {"OPS_TOKEN": {"secretRef": "projects/example/secrets/ops-token/versions/7"}},
@@ -313,6 +327,7 @@ def test_profile_manifest_renders_github_repositories_and_secret_references() ->
             ),
         )
     )
+    assert profiles[0]["profile"]["doc_artifact"] == "doc"
     assert profiles[0]["profile"]["github_repositories"] == [
         "marin-community/marin",
         "marin-community/vllm",
@@ -377,6 +392,37 @@ def test_remote_mcp_rejects_unsafe_or_ambiguous_configuration(override: dict[str
 
     with pytest.raises(ValueError, match="remote MCP"):
         RemoteMcpConfig.parse(value)
+
+
+def test_oauth_clients_render_in_stable_order_as_public_declarations() -> None:
+    clients = (
+        OAuthClientConfig.parse("zeta", {"name": " Zeta ", "redirectUris": ["http://[::1]/callback"]}),
+        OAuthClientConfig.parse("alpha", {"name": "Alpha", "redirectUris": ["https://alpha.example/callback"]}),
+    )
+    manifest = json.loads(_deployment_manifest(replace(deployment_config(), oauth_clients=clients), [], []))
+
+    assert manifest["oauth_clients"] == [
+        {"client_id": "alpha", "name": "Alpha", "redirect_uris": ["https://alpha.example/callback"]},
+        {"client_id": "zeta", "name": "Zeta", "redirect_uris": ["http://[::1]/callback"]},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("client_id", "override"),
+    [
+        ("claude ai", {}),
+        ("claude-ai", {"name": " "}),
+        ("claude-ai", {"redirectUris": []}),
+        ("claude-ai", {"redirectUris": ["http://claude.ai/api/mcp/auth_callback"]}),
+        ("claude-ai", {"redirectUris": ["https://claude.ai/api/mcp/auth_callback#fragment"]}),
+    ],
+)
+def test_oauth_client_rejects_unstable_ids_and_unsafe_redirects(client_id: str, override: dict[str, object]) -> None:
+    value: dict[str, object] = {"name": "claude.ai", "redirectUris": ["https://claude.ai/api/mcp/auth_callback"]}
+    value.update(override)
+
+    with pytest.raises(ValueError, match="OAuth client"):
+        OAuthClientConfig.parse(client_id, value)
 
 
 @pulumi.runtime.test
@@ -494,6 +540,19 @@ def test_release_rollout_pins_metadata_to_the_built_image_digest():
 
 
 @pulumi.runtime.test
+def test_preview_without_a_built_image_leaves_the_vm_image_unknown():
+    # Regression: with the Loom commit unchanged, preview raised on the bare tag.
+    mocks = SkippedPreviewBuildMocks()
+    pulumi.runtime.set_mocks(mocks, project="marin-loom", stack="test", preview=True)
+    infrastructure = create_infrastructure(deployment_config())
+
+    def check(_: object) -> None:
+        assert isinstance(by_name(mocks, "loom").inputs["metadata"]["loom-image"], Unknown)
+
+    return infrastructure.activation.id.apply(check)
+
+
+@pulumi.runtime.test
 def test_profiles_and_workloads_render_to_vm_metadata():
     mocks = RecordingMocks()
     pulumi.runtime.set_mocks(mocks, project="marin-loom", stack="test", preview=False)
@@ -535,6 +594,37 @@ def test_existing_service_account_can_be_bound_to_a_workload_profile():
         assert mapping["service_account"] == "marin-grafana@example.iam.gserviceaccount.com"
         assert mapping["subject"] == "99887766554433221100"
         assert mapping["profiles"] == ["ops"]
+
+    return infrastructure.instance.id.apply(check)
+
+
+@pulumi.runtime.test
+def test_profiles_sharing_a_secret_adopt_it_once():
+    base = deployment_config()
+    shared = (
+        ProfileConfig.parse(
+            name,
+            {
+                "agent": "codex",
+                "env": {"CLAUDE_CODE_OAUTH_TOKEN": {"secretRef": f"projects/example/secrets/claude/{version}"}},
+            },
+        )
+        for name, version in (("review", "versions/latest"), ("pm", "versions/2"))
+    )
+    mocks = RecordingMocks()
+    pulumi.runtime.set_mocks(mocks, project="marin-loom", stack="test", preview=False)
+    infrastructure = create_infrastructure(replace(base, profiles=(*base.profiles, *shared)))
+
+    def check(_: object) -> None:
+        adopted = sorted(
+            (resource.inputs["secretId"], resource.resource_id)
+            for resource in mocks.resources
+            if resource.typ == "gcp:secretmanager/secret:Secret" and resource.name != "loom-dotenv"
+        )
+        assert adopted == [
+            ("claude", "projects/example/secrets/claude"),
+            ("ops-kubeconfig", "projects/example/secrets/ops-kubeconfig"),
+        ]
 
     return infrastructure.instance.id.apply(check)
 

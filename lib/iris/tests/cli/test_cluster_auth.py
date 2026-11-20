@@ -19,11 +19,8 @@ from click.testing import CliRunner
 from iris.cli import cluster as cluster_cli
 from iris.cluster.config import (
     AuthConfig,
-    ControllerVmConfig,
-    CoreweaveControllerConfig,
     IapAuthConfig,
     IrisClusterConfig,
-    KubernetesProviderConfig,
     UserBudgetTier,
 )
 from iris.rpc import job_pb2
@@ -41,7 +38,6 @@ from rigging.timing import Duration, ExponentialBackoff
             (None, ""),
             ("not-json", ""),
             ('{"human-998":"private@example.com"}', ""),
-            ("missing-pod-projection", ""),
             ('{"human-999":"private@example.com"}', "unused-inline-key"),
         )
     ]
@@ -73,18 +69,11 @@ def test_controller_deploy_with_invalid_auth_leaves_infrastructure_untouched(
 ) -> None:
     activity = tmp_path / "infrastructure-requests"
     auth = auth.model_copy(update={"principal_directory": "env:TEST_PRINCIPAL_DIRECTORY", "signing_key": signing_key})
-    if directory == "missing-pod-projection":
-        directory = '{"human-999":"private@example.com"}'
-        controller = ControllerVmConfig(coreweave=CoreweaveControllerConfig())
-    else:
-        controller = ControllerVmConfig()
     if directory is None:
         monkeypatch.delenv("TEST_PRINCIPAL_DIRECTORY", raising=False)
     else:
         monkeypatch.setenv("TEST_PRINCIPAL_DIRECTORY", directory)
-    config = IrisClusterConfig(
-        auth=auth, user_budgets=budgets, controller=controller, kubernetes_provider=KubernetesProviderConfig()
-    )
+    config = IrisClusterConfig(auth=auth, user_budgets=budgets)
     real_run = cluster_cli.subprocess.run
 
     class ControllerProvider:

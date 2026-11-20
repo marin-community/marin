@@ -69,7 +69,7 @@ def read_json(uri: str) -> dict[str, Any] | None:
 
 
 def terminal_checkpoint_step(checkpoint_root: str) -> int:
-    """Return the latest committed checkpoint step."""
+    """Return the recovery step named by the checkpoint marker."""
     marker_uri = join_resource_path(checkpoint_root, CHECKPOINT_MARKER_FILENAME)
     filesystem, marker_path = fs_and_path(marker_uri)
     if not filesystem.exists(marker_path):
@@ -127,12 +127,6 @@ def copy_file_inventory(
     with ThreadPoolExecutor(max_workers=min(FILE_COPY_WORKERS, len(inventory))) as executor:
         tuple(executor.map(copy_file, inventory))
     return tuple(entry for _, entry in inventory)
-
-
-def copy_tree(source_uri: str, destination: Path) -> tuple[FileEntry, ...]:
-    """Copy an object-store tree to an empty local directory and verify file sizes."""
-    filesystem, inventory = _source_inventory(source_uri)
-    return copy_file_inventory(filesystem, inventory, destination)
 
 
 @contextmanager

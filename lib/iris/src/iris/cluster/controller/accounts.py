@@ -16,6 +16,7 @@ from iris.cluster.controller import reads, writes
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.budget import compute_user_spend
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.federation_budget import FederationBudgets
 from iris.cluster.controller.schema import jobs_table, tasks_table, user_budgets_table
 from iris.cluster.types import TERMINAL_JOB_STATES, USER_JOB_STATES
 from iris.rpc import controller_pb2, job_pb2
@@ -27,6 +28,7 @@ from iris.rpc.proto_display import job_state_friendly, task_state_friendly
 class AccountDependencies:
     db: ControllerDB
     auth: ControllerAuth
+    budgets: FederationBudgets
 
 
 @dataclass(frozen=True)
@@ -105,6 +107,8 @@ def set_user_budget(
     """Set one user's budget limit and maximum priority band."""
     del context
     authorize(AuthzAction.MANAGE_BUDGETS)
+    if dependencies.budgets.parent_id:
+        raise ConnectError(Code.FAILED_PRECONDITION, f"Set budgets on parent {dependencies.budgets.parent_id!r}")
     if not request.user_id:
         raise ConnectError(Code.INVALID_ARGUMENT, "user_id is required")
     max_band = request.max_band or job_pb2.PRIORITY_BAND_INTERACTIVE
@@ -130,17 +134,7 @@ def get_user_budget(
     require_identity()
     if not request.user_id:
         raise ConnectError(Code.INVALID_ARGUMENT, "user_id is required")
-    with dependencies.db.read_snapshot() as snapshot:
-        budget = reads.get_user_budget(snapshot, request.user_id)
-        spend = compute_user_spend(snapshot)
-    if budget is None:
-        raise ConnectError(Code.NOT_FOUND, f"No budget found for user {request.user_id}")
-    return controller_pb2.Controller.GetUserBudgetResponse(
-        user_id=budget.user_id,
-        budget_limit=budget.budget_limit,
-        budget_spent=spend.get(request.user_id, 0),
-        max_band=budget.max_band,
-    )
+    return dependencies.budgets.snapshot().user(request.user_id)
 
 
 def list_user_budgets(

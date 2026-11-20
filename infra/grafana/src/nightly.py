@@ -32,6 +32,8 @@ class NightlyCellState(StrEnum):
     MISSING = "missing"
     UNAVAILABLE = "unavailable"
     RUN = "run"
+    # The run finished green but did not run its workload: there was no capacity.
+    SKIPPED = "skipped"
 
 
 class NightlyDurationState(StrEnum):
@@ -47,7 +49,10 @@ class NightlyDurationState(StrEnum):
 
 @dataclasses.dataclass(frozen=True)
 class NightlyRun:
-    """One GitHub Actions workflow run, as reported by the runs-list API."""
+    """One GitHub Actions workflow run, as reported by the runs-list API.
+
+    skipped is True when the run took its lane's skip step (see NightlyLane.skip_step).
+    """
 
     id: int
     status: str
@@ -57,6 +62,7 @@ class NightlyRun:
     run_started_at: str | None
     updated_at: str
     url: str
+    skipped: bool
 
 
 @dataclasses.dataclass(frozen=True)
@@ -142,6 +148,8 @@ def _status_code(state: NightlyCellState, *, healthy: bool, duration_state: Nigh
         return 5
     if state == NightlyCellState.NOT_YET_DUE:
         return 6
+    if state == NightlyCellState.SKIPPED:
+        return 7
     return None
 
 
@@ -226,8 +234,22 @@ def _empty_row(
 def _run_row(lane: NightlyLane, date: str, ts: int, candidates: Sequence[NightlyRun], now: datetime) -> dict:
     """A (lane, day) cell matched to one or more runs; the latest-created one wins."""
     run = max(candidates, key=lambda candidate: _parse_instant(candidate.created_at))
-    completed = run.status == "completed"
     duration_seconds = _run_duration_seconds(run, now)
+    if run.skipped:
+        return _row(
+            lane,
+            date,
+            ts,
+            state=NightlyCellState.SKIPPED,
+            due=True,
+            healthy=False,
+            duration_state=NightlyDurationState.NOT_APPLICABLE,
+            duration_seconds=duration_seconds,
+            status=run.status,
+            conclusion=run.conclusion,
+            url=run.url,
+        )
+    completed = run.status == "completed"
     duration_state = _duration_state(duration_seconds, lane, completed=completed)
     healthy = _is_successful_run(run) and duration_state != NightlyDurationState.TOO_SHORT
     return _row(

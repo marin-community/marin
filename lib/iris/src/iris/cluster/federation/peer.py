@@ -31,6 +31,9 @@ from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 
+# Sync and cancel must return so the peer loop can deliver later handoffs.
+_PEER_RPC_TIMEOUT_MS = 60_000
+
 # A handoff carries a full request and a peer's cold boot can outrun the default
 # RPC deadline, so deliver LaunchJob with this floor to avoid spurious failures.
 _LAUNCH_JOB_TIMEOUT_FLOOR_MS = 180_000
@@ -131,7 +134,9 @@ class _PeerRpcConnection:
     """
 
     def __init__(self, controller_address: str, interceptors: Iterable[InterceptorSync]):
-        self._client = ControllerServiceClientSync(address=controller_address, interceptors=interceptors)
+        self._client = ControllerServiceClientSync(
+            address=controller_address, interceptors=interceptors, timeout_ms=_PEER_RPC_TIMEOUT_MS
+        )
 
     def list_backends(self) -> list[controller_pb2.Controller.BackendSummary]:
         response = self._client.list_backends(
@@ -211,21 +216,28 @@ class FederationPeer:
 
         On success, records the peer's backends, marks it reachable, and stamps the
         contact time. On failure, marks it unreachable and keeps the last-known
-        backends — staleness is signalled by ``reachable``.
+        backends — staleness is signalled by ``reachable``. An unexpected error also
+        marks it unreachable, so placement stops routing to it, then propagates.
         """
         try:
             backends = self._connection.list_backends()
         except (ConnectError, ConnectionError, OSError) as exc:
             logger.warning("Federation heartbeat to peer %s failed: %s", self.peer_id, exc)
-            with self._lock:
-                self._heartbeat = replace(self._heartbeat, reachable=False)
+            self._mark_unreachable()
             return
+        except Exception:
+            self._mark_unreachable()
+            raise
         with self._lock:
             self._heartbeat = PeerHeartbeat(
                 reachable=True,
                 backends=tuple(backends),
                 last_contact_ms=Timestamp.now().epoch_ms(),
             )
+
+    def _mark_unreachable(self) -> None:
+        with self._lock:
+            self._heartbeat = replace(self._heartbeat, reachable=False)
 
     def heartbeat(self) -> PeerHeartbeat:
         """The peer's latest heartbeat observation."""

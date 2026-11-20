@@ -12,7 +12,6 @@ from iris.cluster.config import (
     ControllerVmConfig,
     CoreweaveControllerConfig,
     CoreweavePlatformConfig,
-    DefaultsConfig,
     GcpControllerConfig,
     IrisClusterConfig,
     PlatformConfig,
@@ -57,11 +56,10 @@ def coreweave_config(*, state_dir: str = "s3://bucket/state", signing_key: list[
     )
 
 
-def gcp_config(*, inject_env: list[str] | None = None):
+def gcp_config():
     return IrisClusterConfig(
         controller=ControllerVmConfig(gcp=GcpControllerConfig(zone="us-central1-a")),
         storage=StorageConfig(remote_state_dir="gs://bucket/state"),
-        defaults=DefaultsConfig(inject_env=inject_env or []),
     )
 
 
@@ -141,13 +139,13 @@ def test_deploy_candidates_drop_ci_owned_configs():
 
 
 def test_kubernetes_requirements_cover_s3_keys_kubeconfig_and_signing_key():
-    config = coreweave_config(signing_key=["env:IRIS_SIGNING_KEY", "gcp-secret://p/secrets/k/versions/1"])
+    config = coreweave_config(signing_key="gcp-secret://p/secrets/k/versions/1")
     needs = requirements(config, s3_env=["CW_KEY_ID", "CW_KEY_SECRET"])
 
     assert {n.target for n in needs if n.kind is Need.ENV} == {"CW_KEY_ID", "CW_KEY_SECRET"}
     context_needs = [n for n in needs if n.kind is Need.KUBE_CONTEXT]
     assert [(n.target, n.source) for n in context_needs] == [("marin-gpu_US-EAST-02A", "~/.kube/coreweave-iris")]
-    # The env: reference addresses the pod, so only the persistent source is checked.
+    # The operator resolves the source; the rendered config points at its mounted file.
     assert [n.target for n in needs if n.kind is Need.SECRET] == ["gcp-secret://p/secrets/k/versions/1"]
     assert "kubectl" in {n.target for n in needs if n.kind is Need.COMMAND}
 
@@ -183,9 +181,9 @@ def test_probe_fails_when_the_command_is_absent():
     assert "not on PATH" in result.detail
 
 
-def test_gcp_cluster_needs_gcloud_and_its_injected_env():
-    needs = requirements(gcp_config(inject_env=["WANDB_API_KEY"]))
-    assert [n.target for n in needs if n.kind is Need.ENV] == ["WANDB_API_KEY"]
+def test_gcp_cluster_needs_gcloud_without_application_credentials():
+    needs = requirements(gcp_config())
+    assert [n.target for n in needs if n.kind is Need.ENV] == []
     assert "gcloud" in {n.target for n in needs if n.kind is Need.COMMAND}
     assert "kubectl" not in {n.target for n in needs if n.kind is Need.COMMAND}
 

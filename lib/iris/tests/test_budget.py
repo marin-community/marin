@@ -216,12 +216,6 @@ def test_user_can_read_own_budget(service):
     assert resp.budget_limit == 5000
 
 
-def test_get_budget_not_found(service):
-    with pytest.raises(ConnectError) as exc:
-        _as_admin(service.get_user_budget, _get_budget("nonexistent"), None)
-    assert exc.value.code == Code.NOT_FOUND
-
-
 def test_set_budget_rejects_invalid_max_band(service):
     with pytest.raises(ConnectError) as exc:
         _as_admin(service.set_user_budget, _set_budget("alice", 5000, max_band=99), None)

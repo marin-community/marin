@@ -560,8 +560,6 @@ class JaggedArrayStore:
         num_rows = self.num_rows
         offsets_futs: list = []
 
-        zero_pos = None
-
         with ts.Batch():
             for index in indices:
                 if index >= num_rows or index < 0:
@@ -569,14 +567,10 @@ class JaggedArrayStore:
                 offsets = self.offsets[index : index + 2].read()
                 offsets_futs.append(offsets)
 
-                if index == 0:
-                    zero_pos = len(offsets_futs) - 1
-
         offsets = [fut.result() for fut in offsets_futs]
-        offsets = [(offset[0], offset[-1]) for offset in offsets]
-
-        if zero_pos is not None:
-            offsets[zero_pos] = (0, offsets[zero_pos][1])
+        offsets = [
+            (0 if index == 0 else offset[0], offset[-1]) for index, offset in zip(indices, offsets, strict=True)
+        ]
 
         return offsets
 
@@ -584,8 +578,6 @@ class JaggedArrayStore:
         num_rows = await self.num_rows_async()
         offsets_futs: list = []
 
-        zero_pos = None
-
         with ts.Batch():
             for index in indices:
                 if index >= num_rows or index < 0:
@@ -593,14 +585,10 @@ class JaggedArrayStore:
                 offsets = self.offsets[index : index + 2].read()
                 offsets_futs.append(offsets)
 
-                if index == 0:
-                    zero_pos = len(offsets_futs) - 1
-
         offsets = await asyncio.gather(*[fut for fut in offsets_futs])
-        offsets = [(offset[0], offset[-1]) for offset in offsets]
-
-        if zero_pos is not None:
-            offsets[zero_pos] = (0, offsets[zero_pos][1])
+        offsets = [
+            (0 if index == 0 else offset[0], offset[-1]) for index, offset in zip(indices, offsets, strict=True)
+        ]
 
         return offsets
 

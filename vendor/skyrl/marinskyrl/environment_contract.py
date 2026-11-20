@@ -98,6 +98,7 @@ RAY_CLUSTER_OWNER_ENV = "SKYRL_RAY_CLUSTER_OWNER"
 NUMA_AFFINITY_ENV = "SKYRL_ENABLE_NUMA_AFFINITY"
 TELEMETRY_ENDPOINT_ENV = "SKYRL_TELEMETRY_ENDPOINT"
 RUN_ID_ENV = "SKYRL_RUN_ID"
+RUN_MODEL_ENV = "SKYRL_RUN_MODEL"
 TRAINING_TYPE_ENV = "SKYRL_TRAINING_TYPE"
 EXECUTION_UID_ENV = "SKYRL_EXECUTION_UID"
 
@@ -196,6 +197,13 @@ ENV_VAR_SPECS = (
         frozenset({EnvVarScope.RAY_WORKER, EnvVarScope.INFERENCE_WORKER}),
     ),
     EnvVarSpec(
+        "NCCL_MAX_NCHANNELS",
+        "trainer.policy.megatron_config.nccl_max_channels",
+        EnvVarSource.CONFIG,
+        frozenset({EnvVarScope.RAY_WORKER}),
+        frozenset({EnvVarWriter.PYTHON_ASSIGNMENT}),
+    ),
+    EnvVarSpec(
         VLLM_ALLOW_INSECURE_SERIALIZATION_ENV,
         "generator.fuse_weights",
         EnvVarSource.CONFIG,
@@ -277,6 +285,12 @@ ENV_VAR_SPECS = (
         ALL_RUNTIME_SCOPES,
     ),
     EnvVarSpec(
+        RUN_MODEL_ENV,
+        "runtime.telemetry",
+        EnvVarSource.EXTERNAL,
+        ALL_RUNTIME_SCOPES,
+    ),
+    EnvVarSpec(
         TRAINING_TYPE_ENV,
         "runtime.telemetry",
         EnvVarSource.EXTERNAL,
@@ -348,6 +362,7 @@ _BUILD_BOUNDARIES = {
     "WHEEL_VENV",
 }
 _RUNTIME_BOUNDARIES = {
+    "RIGGING_SECRETS_DIR",
     "AWS_CONFIG_FILE",
     "AWS_DEFAULT_REGION",
     "AWS_ENDPOINT_URL",
@@ -506,6 +521,7 @@ class EnvVarManager:
             MAX_JOBS_ENV,
             TELEMETRY_ENDPOINT_ENV,
             RUN_ID_ENV,
+            RUN_MODEL_ENV,
             TRAINING_TYPE_ENV,
             EXECUTION_UID_ENV,
         )

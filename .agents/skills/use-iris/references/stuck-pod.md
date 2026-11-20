@@ -27,4 +27,4 @@ kubectl --kubeconfig <file> --context <context> -n <namespace> \
 
 If `cwic` or authentication is unavailable, stop and use CoreWeave support. Never substitute force deletion. Verify the original UID is gone, no duplicate attempt is active, GPU capacity and daemonsets recovered, and node health passes. Uncordon only if this procedure cordoned the node and all checks pass. Never restart Iris as pod recovery.
 
-Publish the incident with `write-ops-log`, including the canonical attempt, node, provider operation, collateral workloads, and verification evidence.
+Publish the incident with `use-echo`'s incident procedure, including the canonical attempt, node, provider operation, collateral workloads, and verification evidence.

@@ -6,6 +6,7 @@
 import hashlib
 import json
 import os
+import re
 import subprocess
 import tempfile
 import threading
@@ -13,6 +14,7 @@ import uuid
 from dataclasses import dataclass, replace
 from functools import cache
 from pathlib import Path
+from typing import Any
 
 OCI_TAG = "image"
 
@@ -41,18 +43,44 @@ class PreparedImage:
     source: RegistryImage | DockerfileSource
 
 
+def _oci_blob(layout: Path, digest: str) -> Path:
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None:
+        raise ValueError("Only sha256 OCI digests are supported")
+    path = layout / "blobs" / "sha256" / digest.removeprefix("sha256:")
+    with path.open("rb") as blob:
+        actual = hashlib.file_digest(blob, "sha256").hexdigest()
+    if f"sha256:{actual}" != digest:
+        raise ValueError("Prepared image blob digest mismatch")
+    return path
+
+
+def _oci_json_blob(layout: Path, digest: str) -> dict[str, Any]:
+    return json.loads(_oci_blob(layout, digest).read_bytes())
+
+
+def _tagged_manifest_digest(layout: Path) -> str:
+    index = json.loads((layout / "index.json").read_text())
+    matching = [
+        entry
+        for entry in index["manifests"]
+        if entry.get("annotations", {}).get("org.opencontainers.image.ref.name") == OCI_TAG
+    ]
+    if len(matching) != 1:
+        raise ValueError("OCI layout must contain one image tag")
+    return matching[0]["digest"]
+
+
+def prepared_image_config(image: PreparedImage) -> dict[str, Any]:
+    """Read the digest-verified image config, requiring its OCI tag to remain pinned."""
+    if _tagged_manifest_digest(image.layout) != image.manifest_digest:
+        raise ValueError("Prepared image tag no longer selects its pinned manifest")
+    manifest = _oci_json_blob(image.layout, image.manifest_digest)
+    return _oci_json_blob(image.layout, manifest["config"]["digest"])
+
+
 def prepared_image_workdir(image: PreparedImage) -> str:
     """Read the selected image's initial working directory from its verified OCI config."""
-    algorithm, digest = image.manifest_digest.split(":", 1)
-    manifest_bytes = (image.layout / "blobs" / algorithm / digest).read_bytes()
-    if algorithm != "sha256" or hashlib.sha256(manifest_bytes).hexdigest() != digest:
-        raise ValueError("Prepared image manifest digest mismatch")
-    manifest = json.loads(manifest_bytes)
-    algorithm, digest = manifest["config"]["digest"].split(":", 1)
-    config_bytes = (image.layout / "blobs" / algorithm / digest).read_bytes()
-    if algorithm != "sha256" or hashlib.sha256(config_bytes).hexdigest() != digest:
-        raise ValueError("Prepared image config digest mismatch")
-    config = json.loads(config_bytes)
+    config = prepared_image_config(image)
     return config.get("config", {}).get("WorkingDir") or "/"
 
 
@@ -82,7 +110,7 @@ def image_source_key(source: RegistryImage | DockerfileSource) -> str:
 class ImageCache:
     """Reuse prepared sources within one Python process.
 
-    Registry references are snapshots for the lifetime of this cache.
+    Without a signature policy, registry references are process-lifetime snapshots.
     Dockerfile contexts are fingerprinted on each call so edits cause a new build.
     """
 
@@ -95,13 +123,14 @@ class ImageCache:
         self._guard = threading.Lock()
 
     def prepare(self, source: RegistryImage | DockerfileSource) -> PreparedImage:
-        """Prepare a source once per cache key, including concurrent callers."""
+        """Serialize preparation per source, reusing content unless a policy requires verification."""
         key = image_source_key(source)
         with self._guard:
             lock = self._locks.setdefault(key, threading.Lock())
         with lock:
             image = self._images.get(key)
-            if image is not None:
+            if image is not None and self.policy is None:
+                _manifest_digest(image.layout, expected=image.manifest_digest)
                 return replace(image, source=source)
             image = prepare_image(
                 source,
@@ -124,25 +153,16 @@ def _run(*args: str) -> None:
         raise RuntimeError(f"{' '.join(args[:2])} failed: {result.stderr[-2000:]}")
 
 
-def _manifest_digest(layout: Path) -> str:
-    index = json.loads((layout / "index.json").read_text())
-    matching = [
-        entry
-        for entry in index["manifests"]
-        if entry.get("annotations", {}).get("org.opencontainers.image.ref.name") == OCI_TAG
-    ]
-    if len(matching) != 1:
-        raise ValueError("OCI layout must contain one image tag")
-    digest = matching[0]["digest"]
-    algorithm, value = digest.split(":", 1)
-    if algorithm != "sha256" or len(value) != 64:
-        raise ValueError(f"Unsupported image digest: {digest}")
-    manifest_path = layout / "blobs" / algorithm / value
-    manifest = json.loads(manifest_path.read_text())
-    config_algorithm, config_hash = manifest["config"]["digest"].split(":", 1)
-    config = json.loads((layout / "blobs" / config_algorithm / config_hash).read_text())
+def _manifest_digest(layout: Path, *, expected: str | None = None) -> str:
+    digest = _tagged_manifest_digest(layout)
+    if expected is not None and digest != expected:
+        raise ValueError("Prepared image tag no longer selects its pinned manifest")
+    manifest = _oci_json_blob(layout, digest)
+    config = _oci_json_blob(layout, manifest["config"]["digest"])
     if config["os"] != "linux" or config["architecture"] != "amd64":
         raise ValueError("Only Linux amd64 images are supported")
+    for layer in manifest["layers"]:
+        _oci_blob(layout, layer["digest"])
     return digest
 
 
@@ -156,11 +176,22 @@ def prepare_image(
     """Copy or build an image and retain its selected platform by manifest digest.
 
     The default Skopeo policy accepts unsigned images. TLS verification remains
-    enabled. Pass a policy file when signature verification is required.
+    enabled. Digest-pinned platform manifests already present in the cache are
+    verified locally. A signature policy requires a fresh verified copy instead.
     """
     cache.mkdir(parents=True, exist_ok=True)
     if isinstance(source, RegistryImage) and ("://" in source.reference or not source.reference.strip()):
         raise ValueError("RegistryImage requires a container image reference without a URL scheme")
+    pinned_digest = None
+    if isinstance(source, RegistryImage):
+        match = re.fullmatch(r".+@(sha256:[0-9a-f]{64})", source.reference)
+        if match is not None:
+            pinned_digest = match[1]
+    if pinned_digest is not None and policy is None:
+        destination = cache / pinned_digest.replace(":", "-")
+        if destination.exists():
+            _manifest_digest(destination, expected=pinned_digest)
+            return PreparedImage(destination, pinned_digest, source)
     with tempfile.TemporaryDirectory(prefix="image-", dir=cache) as temporary:
         layout = Path(temporary) / "oci"
         skopeo_args = ["skopeo"]
@@ -197,4 +228,5 @@ def prepare_image(
                 layout.rename(destination)
             except FileExistsError:
                 pass  # Another process published this content-addressed layout.
+        _manifest_digest(destination, expected=digest)
         return PreparedImage(destination, digest, source)

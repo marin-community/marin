@@ -3,7 +3,9 @@
 
 """Tests for DockerRuntime mount resolution, staging, and container creation."""
 
+import json
 import subprocess
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -11,6 +13,7 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.runtime.docker import EGRESS_NETWORK, EGRESS_RESOLV_CONF, DockerRuntime, _security_flags
 from iris.cluster.runtime.types import NETWORK_MODE_HOST, NETWORK_MODE_NONE, ContainerConfig, MountKind, MountSpec
 from iris.rpc import job_pb2
+from rigging.timing import Duration
 
 
 @pytest.fixture
@@ -135,18 +138,17 @@ def test_run_container_shm_limit_matches_memory_or_tpu_fallback(
 
 
 @pytest.mark.parametrize(
-    "network_mode, expect_sysctls, expect_egress_resolv_conf",
+    "network_mode, resolv_conf, expect_sysctls",
     [
-        (NETWORK_MODE_NONE, False, False),
-        (NETWORK_MODE_HOST, False, False),
-        ("bridge", True, False),
-        (EGRESS_NETWORK, False, True),
+        (NETWORK_MODE_NONE, None, False),
+        (NETWORK_MODE_HOST, None, False),
+        (NETWORK_MODE_HOST, "/cache/egress-dns/task_attempt_0/resolv.conf", False),
+        ("bridge", None, True),
+        (EGRESS_NETWORK, EGRESS_RESOLV_CONF, False),
     ],
 )
-def test_create_container_network_flags(
-    monkeypatch, tmp_path, runtime, network_mode, expect_sysctls, expect_egress_resolv_conf
-):
-    """The container joins the configured network; a plain bridge gets sysctl tuning, the egress network public DNS."""
+def test_create_container_network_flags(monkeypatch, tmp_path, runtime, network_mode, resolv_conf, expect_sysctls):
+    """The container joins the configured network and resolver; only a plain bridge gets sysctl tuning."""
     commands: list[list[str]] = []
 
     def fake_run(cmd, **kwargs):
@@ -164,6 +166,7 @@ def test_create_container_network_flags(
         env={},
         mounts=[MountSpec("app", "/app", kind=MountKind.WORKDIR)],
         network_mode=network_mode,
+        resolv_conf=Path(resolv_conf) if resolv_conf else None,
         workdir_host_path=workdir,
     )
 
@@ -172,7 +175,8 @@ def test_create_container_network_flags(
     create_command = next(command for command in commands if command[:2] == ["docker", "create"])
     assert create_command[create_command.index("--network") + 1] == network_mode
     assert ("--sysctl" in create_command) == expect_sysctls
-    assert (f"{EGRESS_RESOLV_CONF}:/etc/resolv.conf:ro" in create_command) == expect_egress_resolv_conf
+    resolv_mounts = [arg for arg in create_command if arg.endswith(":/etc/resolv.conf:ro")]
+    assert resolv_mounts == ([f"{resolv_conf}:/etc/resolv.conf:ro"] if resolv_conf else [])
 
 
 def test_stage_bundle(monkeypatch, tmp_path, runtime, mock_bundle_store):
@@ -244,3 +248,58 @@ def test_security_flags_gvisor_profiles_use_runsc_runtime_and_default_caps(profi
     assert "--cap-drop" not in flags
     assert "--privileged" not in flags
     assert "no-new-privileges" not in flags
+
+
+@pytest.mark.parametrize("legacy_container", [False, True])
+def test_docker_discovery_restores_submitted_termination_grace(monkeypatch, runtime, tmp_path, legacy_container):
+    labels = {}
+
+    def docker(cmd, **kwargs):
+        if cmd[:2] == ["docker", "create"]:
+            for index, argument in enumerate(cmd[:-1]):
+                if argument == "--label":
+                    key, value = cmd[index + 1].split("=", 1)
+                    labels[key] = value
+            stdout = "container-id\n"
+        elif cmd[:2] == ["docker", "ps"]:
+            stdout = "container-id\n"
+        elif cmd[:2] == ["docker", "inspect"]:
+            stdout = json.dumps(
+                [
+                    {
+                        "Id": "container-id",
+                        "Config": {"Labels": labels},
+                        "State": {"Running": True},
+                        "Mounts": [{"Destination": "/app", "Source": str(tmp_path)}],
+                    }
+                ]
+            )
+        else:
+            stdout = ""
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr("iris.cluster.runtime.docker.subprocess.run", docker)
+    runtime.create_container(
+        ContainerConfig(
+            image="iris-task:latest",
+            entrypoint=job_pb2.RuntimeEntrypoint(run_command=job_pb2.CommandEntrypoint(argv=["train"])),
+            env={},
+            task_id="/user/checkpoint/0",
+            attempt_id=2,
+            attempt_uid="attempt-2",
+            termination_grace=Duration.from_ms(60123),
+            mounts=[MountSpec("app", "/app", kind=MountKind.WORKDIR)],
+            workdir_host_path=tmp_path,
+        )
+    ).run()
+
+    if legacy_container:
+        labels.pop("iris.termination_grace_ms")
+
+    discovered = runtime.discover_containers()
+
+    assert len(discovered) == 1
+    assert discovered[0].task_id == "/user/checkpoint/0"
+    assert discovered[0].attempt_id == 2
+    expected = Duration.from_seconds(10) if legacy_container else Duration.from_ms(60123)
+    assert discovered[0].termination_grace == expected

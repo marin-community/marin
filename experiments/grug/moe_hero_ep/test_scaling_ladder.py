@@ -2,20 +2,29 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+from types import SimpleNamespace
 
 import jax
 import jax.numpy as jnp
 import jax.tree_util as jtu
+import numpy as np
 import optax
 import pytest
+from levanter.checkpoint import Checkpointer, CheckpointInterval
 from levanter.data.text.datasets import BlockShuffleConfig
+from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import StepContext
 
 from experiments.grug.moe_hero_ep import launch_scaling_ladder
 from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import HarrierContextPhase
+from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
 from experiments.grug.moe_hero_ep.launch_diagnostics import build_diagnostic_run
-from experiments.grug.moe_hero_ep.launch_scaling_ladder import build_ladder_run
-from experiments.grug.moe_hero_ep.optimizer import _gate_router_decay_mask, _scale_by_adam_gate_router_decay
+from experiments.grug.moe_hero_ep.launch_scaling_ladder import build_ladder_run, hero_permanent_keeps
+from experiments.grug.moe_hero_ep.optimizer import (
+    ScheduleExtension,
+    _gate_router_decay_mask,
+    _scale_by_adam_gate_router_decay,
+)
 from experiments.grug.moe_hero_ep.train import FlopsBaseline
 
 # A miniature stacked-hero parameter tree: the two decay targets plus leaves that must be left alone.
@@ -40,7 +49,9 @@ def test_gate_router_decay_state_matches_plain_adam():
     assert jtu.tree_structure(decayed) == jtu.tree_structure(plain)
 
 
-@pytest.mark.parametrize(("count", "expected_wd"), [(0, 0.05), (54_000, 0.05 * (1 - 54_000 / 390_251)), (390_251, 0.0)])
+@pytest.mark.parametrize(
+    ("count", "expected_wd"), [(0, 0.05), (54_000, 0.05 * (1 - 54_000 / 390_251)), (390_251, 0.0), (391_000, 0.0)]
+)
 def test_gate_router_decay_anneals_from_the_step_count(count, expected_wd):
     total_steps = 390_251
     adam = optax.scale_by_adam(0.9, 0.95, 1e-8)
@@ -94,6 +105,8 @@ def test_diagnostic_run_matches_the_d6144_rack_local_recipe():
         dp_racks=1,
         num_steps=1,
         schedule_steps=390_251,
+        long_context_start_step=390_251,
+        restore_from="s3://bucket/checkpoints/step-390251",
         version="dev",
         gc_interval=100,
     )
@@ -106,7 +119,6 @@ def test_diagnostic_run_matches_the_d6144_rack_local_recipe():
     )
 
     # The diagnostic is one rack of the hero: the same model, and the hero's per-rack batch at its context.
-    # It trains at that context from its start, so it carries no context history.
     assert diagnostic_config.model == ladder_config.model
     assert (
         diagnostic_config.trainer.trainer.train_batch_size
@@ -129,6 +141,7 @@ def test_diagnostic_run_matches_the_d6144_rack_local_recipe():
         progress_watchdog=diagnostic_config.trainer.trainer.progress_watchdog,
         checkpointer=diagnostic_config.trainer.trainer.checkpointer,
         load_checkpoint_path=diagnostic_config.trainer.trainer.load_checkpoint_path,
+        load_checkpoint=diagnostic_config.trainer.trainer.load_checkpoint,
     )
     assert diagnostic_config.data.target_budget is ladder_config.data.target_budget is None
     assert diagnostic_config.data.experiment_budget is ladder_config.data.experiment_budget is None
@@ -160,7 +173,8 @@ def test_d6144_continues_the_checked_in_context_history_and_narrow_rungs_start_f
 
     phases = launch_scaling_ladder.HERO_CONTEXT_PHASES
     assert hero.flops_baseline == FlopsBaseline(phases[-1].end_step, launch_scaling_ladder.HERO_FLOPS_BASELINE_TOTAL)
-    assert [(p.end_step, p.seq_len) for p in hero.data.prior_context_phases] == [(p.end_step, p.seq_len) for p in phases]
+    # The long-context mix starts where the history ends instead of replaying it.
+    assert hero.data.prior_context_phases == []
     assert narrow.flops_baseline is None
     assert narrow.data.prior_context_phases == []
 
@@ -198,19 +212,40 @@ def test_scaling_ladder_keeps_hero_checkpoints_separate_from_shared_scratch(monk
     assert trainer.checkpointer.temporary_base_path == temporary_path
 
 
-def test_d6144_pins_permanent_checkpoint_at_55000_alongside_the_6000_cadence():
+def _permanent_steps(keep: list[dict[str, int | None]], steps: range) -> list[int]:
+    """The steps a Levanter checkpointer built from ``keep`` saves permanently."""
+    policies = SimpleNamespace(step_policies=[CheckpointInterval(**k) for k in keep])
+    return [step for step in steps if step % Checkpointer._get_current_step_save_interval(policies, step) == 0]
+
+
+def test_d6144_permanent_checkpoints_pin_55000_and_densify_over_the_final_5000_steps():
     step = build_ladder_run(run_id="test-d6144-ckpt", size="d6144", version="2026.08.18")
     ctx = StepContext.for_fingerprint(runtime_arg_keys=step.runtime_args, deps=step.deps)
-    keep = step.build_config(ctx).trainer.trainer.checkpointer.keep
+    config = step.build_config(ctx)
+    keep = config.trainer.trainer.checkpointer.keep
+    num_steps = config.trainer.trainer.num_train_steps
 
-    # Modular per-`until` ranges: the 6000 cadence holds up to 54000, the middle range pins exactly
-    # 55000, and the open-ended range restores the 6000 cadence for every step past it. Building the
-    # step already runs CheckpointerConfig's monotonic-interval validation.
-    assert keep == [
-        {"until": 54_000, "every": 6_000},
-        {"until": 55_000, "every": 55_000},
-        {"until": None, "every": 6_000},
-    ]
+    # Building the step already runs CheckpointerConfig's monotonic-interval validation.
+    assert num_steps == 390_251
+    assert _permanent_steps(keep, range(48_000, 62_001)) == [48_000, 54_000, 55_000, 60_000]
+    assert _permanent_steps(keep, range(378_000, num_steps + 1)) == [378_000, 384_000, *range(385_500, 390_001, 500)]
+
+
+@pytest.mark.parametrize("num_steps", [3_000, 5_000, 30_000, 59_000, 60_000, 61_000])
+def test_short_d6144_schedules_keep_valid_increasing_ranges_and_the_dense_tail(monkeypatch, num_steps):
+    keep = hero_permanent_keeps(num_steps)
+    untils = [k["until"] for k in keep[:-1]]
+    assert untils == sorted(set(untils))
+    assert keep[-1] == {"until": None, "every": 500}
+    tail = range(max(1, num_steps - 5000 + 1), num_steps + 1)
+    assert _permanent_steps(keep, tail) == [s for s in tail if s % 500 == 0]
+    _set_hero_seq_len(monkeypatch, 4096)  # a fresh run starts at 4K
+    step = build_ladder_run(
+        run_id="test-short-d6144", size="d6144", num_steps=num_steps, context_phases=(), version="2026.08.18"
+    )
+    # Building the config runs CheckpointerConfig's strictly increasing `until` validation.
+    config = step.build_config(StepContext.for_fingerprint(runtime_arg_keys=step.runtime_args, deps=step.deps))
+    assert config.trainer.trainer.checkpointer.keep == keep
 
 
 def _set_hero_seq_len(monkeypatch, seq_len):
@@ -272,3 +307,135 @@ def test_hero_context_history_rebuilds_the_prior_phases_it_trained_with(monkeypa
         ),
     ]
     assert config.flops_baseline == FlopsBaseline(completed_steps=350_400, total_flops=2e24)
+
+
+def test_hero_without_context_parallelism_keeps_its_16k_layout(monkeypatch):
+    _set_hero_seq_len(monkeypatch, 16384)
+    monkeypatch.setattr(launch_scaling_ladder, "HERO_CONTEXT_AXIS_SIZE", 1)
+    monkeypatch.setattr(launch_scaling_ladder, "HERO_BALANCE_ATTENTION_ROWS", False)
+    step = build_ladder_run(
+        run_id="test-d6144-cp1",
+        size="d6144",
+        version="dev",
+        context_phases=(HarrierContextPhase(end_step=257_553, seq_len=4096),),
+        flops_baseline_total=1.8e24,
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.trainer.expert_axis_size == 64
+    assert config.trainer.trainer.mesh == MeshConfig()
+    assert config.eval.eval_batch_size == 704
+
+
+def test_hero_context_parallelism_splits_each_rack_into_expert_and_sequence_shards(monkeypatch):
+    _set_hero_seq_len(monkeypatch, 65536)
+    monkeypatch.setattr(launch_scaling_ladder, "HERO_CONTEXT_AXIS_SIZE", 4)
+    monkeypatch.setattr(launch_scaling_ladder, "HERO_BALANCE_ATTENTION_ROWS", True)
+    step = build_ladder_run(
+        run_id="test-d6144-cp4",
+        size="d6144",
+        qk_mult=1.66,
+        version="dev",
+        context_phases=(
+            HarrierContextPhase(end_step=257_553, seq_len=4096),
+            HarrierContextPhase(end_step=376_900, seq_len=16384),
+        ),
+        flops_baseline_total=2e24,
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.trainer.expert_axis_size == 16
+    mesh_axes, _ = config.trainer.trainer.mesh.axis_shapes(num_devices=704, num_slices=1)
+    assert (mesh_axes["data"], mesh_axes["context"]) == (176, 4)
+    # One 65,536-token sequence per batch shard: 16,384 tokens per device per eval batch, as at 16K.
+    assert config.eval.eval_batch_size == 16 * 11
+
+
+def test_hero_context_axis_must_divide_the_sequence(monkeypatch):
+    _set_hero_seq_len(monkeypatch, 16386)
+    monkeypatch.setattr(launch_scaling_ladder, "HERO_CONTEXT_AXIS_SIZE", 4)
+    with pytest.raises(ValueError, match="context_axis_size=4 must divide max_seq_len=16386"):
+        build_ladder_run(run_id="test-d6144-seq", size="d6144", version="dev")
+
+
+def test_hero_context_axis_must_split_the_expert_bank(monkeypatch):
+    # EP16 x CP4 stores the bank over 64 shards; 32 experts pass a 16-way expert check but fail parameter init.
+    monkeypatch.setattr(
+        launch_scaling_ladder,
+        "HERO_MODEL_CONFIG",
+        dataclasses.replace(launch_scaling_ladder.HERO_MODEL_CONFIG, num_experts=32),
+    )
+    monkeypatch.setattr(launch_scaling_ladder, "HERO_CONTEXT_AXIS_SIZE", 4)
+    with pytest.raises(ValueError, match=r"must be divisible by expert \(16\) \* context \(4\) = 64"):
+        build_ladder_run(run_id="test-d6144-bank", size="d6144", version="dev")
+
+
+HERO_SCHEDULE_STEPS = 390_251
+_EXTENSION_STEPS = 1084
+_LR_EXTENSION_CANDIDATES = [
+    pytest.param(ScheduleExtension(steps=_EXTENSION_STEPS, final_lr_ratio=0.05), id="hold-5pct"),
+    pytest.param(ScheduleExtension(steps=_EXTENSION_STEPS, final_lr_ratio=0.01), id="decay-5pct-to-1pct"),
+]
+
+
+def _hero_optimizer(extension=None):
+    optimizer = MoeHeuristic().build_optimizer_config(
+        num_train_steps=HERO_SCHEDULE_STEPS, batch_size=704, hidden_dim=6144, seq_len=65536
+    )
+    return dataclasses.replace(optimizer, schedule_extension=extension)
+
+
+def _lr_schedules(optimizer):
+    return [
+        optimizer.lr_scheduler(HERO_SCHEDULE_STEPS),
+        optimizer.lr_scheduler(HERO_SCHEDULE_STEPS, override_lr=optimizer.adam_lr),
+    ]
+
+
+def test_schedule_extension_preserves_rates_through_schedule_end():
+    extension = ScheduleExtension(steps=_EXTENSION_STEPS, final_lr_ratio=0.01)
+    counts = jnp.arange(HERO_SCHEDULE_STEPS + 1)
+    for original, extended in zip(
+        _lr_schedules(_hero_optimizer()), _lr_schedules(_hero_optimizer(extension)), strict=True
+    ):
+        assert jnp.array_equal(jax.vmap(original)(counts), jax.vmap(extended)(counts))
+
+
+@pytest.mark.parametrize("extension", _LR_EXTENSION_CANDIDATES)
+def test_schedule_extension_continues_from_the_floor_to_its_final_ratio(extension):
+    optimizer = _hero_optimizer(extension)
+    peaks = [optimizer.learning_rate, optimizer.adam_lr]
+    counts = jnp.arange(HERO_SCHEDULE_STEPS, HERO_SCHEDULE_STEPS + extension.steps + 2)
+    for peak, schedule in zip(peaks, _lr_schedules(optimizer), strict=True):
+        rates = np.asarray(jax.vmap(schedule)(counts))
+        fractions = np.minimum(np.arange(len(rates)) / extension.steps, 1.0)
+        expected = peak * (0.05 + (extension.final_lr_ratio - 0.05) * fractions)
+        np.testing.assert_allclose(rates, expected, rtol=1e-5)
+
+
+def _hero_config():
+    step = build_ladder_run(run_id="test-extension", size="d6144", version="dev")
+    return step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+
+def test_hero_extension_moves_only_the_stop_step_and_the_rate_past_the_schedule(monkeypatch):
+    monkeypatch.setattr(launch_scaling_ladder, "HERO_SCHEDULE_EXTENSION", None)
+    off = _hero_config()
+    extension = ScheduleExtension(steps=_EXTENSION_STEPS, final_lr_ratio=0.01)
+    monkeypatch.setattr(launch_scaling_ladder, "HERO_SCHEDULE_EXTENSION", extension)
+    on = _hero_config()
+
+    assert off.stop_after_steps == HERO_SCHEDULE_STEPS
+    assert on == dataclasses.replace(
+        off,
+        optimizer=dataclasses.replace(off.optimizer, schedule_extension=extension),
+        stop_after_steps=HERO_SCHEDULE_STEPS + _EXTENSION_STEPS,
+    )
+
+
+def test_hero_stop_step_is_not_a_periodic_eval_step():
+    # A periodic eval due at the stop step runs before the final save, so an eval failure there would lose
+    # the run's last steps. The forced eval after the final save still covers the stop step.
+    config = _hero_config()
+
+    assert config.stop_step % config.eval.steps_per_eval != 0

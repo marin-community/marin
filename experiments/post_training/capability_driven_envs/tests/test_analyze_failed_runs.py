@@ -6,7 +6,7 @@ import pytest
 pytest.importorskip("taskforge")
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from pydantic import BaseModel
 from rolloutengine.models import (
@@ -125,7 +125,9 @@ class Analyst:
     async def __aexit__(self, *exc: object) -> None:
         return None
 
-    async def complete(self, messages: Sequence[Message], policy: LLMPolicy):
+    async def complete(
+        self, messages: Sequence[Message], policy: LLMPolicy, request_fields: Mapping[str, object] | None = None
+    ):
         raise AssertionError("the analysis asks only for structured output")
 
     async def complete_structured[T: BaseModel](

@@ -33,7 +33,7 @@ guidelines.
 
 # GitHub pull requests
 
-Agents can use the `commit` skill for PR
+Agents can use the `manage-pr` skill for PR
 description style, testing requirements, and self-review.
 
 ## General code style

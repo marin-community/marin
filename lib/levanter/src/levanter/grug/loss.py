@@ -12,10 +12,11 @@ import jax.numpy as jnp
 from jax.sharding import PartitionSpec as P
 
 from haliax.jax_utils import named_call
-from levanter.grug.sharding import _axis_names, _current_mesh, _reshard_for_shard_map
+from levanter.grug.sharding import _axis_names, _current_mesh, _reshard_for_shard_map, keep_reduced
 from levanter.kernels.pallas.fused_cross_entropy_loss import (
     BlockSizes,
     fused_cross_entropy_loss_and_logsumexp_penalty,
+    linear_softmax_cross_entropy_weighted_sum,
 )
 from levanter.sharding import partition_spec_of
 
@@ -52,6 +53,7 @@ def fused_linear_softmax_cross_entropy_loss(
     precision: jax.lax.PrecisionLike = None,
     implementation: str | tuple[str, ...] | None = None,
     block_sizes: BlockSizes | None = None,
+    grad_in_forward_token_block_size: int | None = None,
 ) -> jax.Array:
     """Compute cross-entropy loss via the fused kernel path.
 
@@ -66,6 +68,10 @@ def fused_linear_softmax_cross_entropy_loss(
         precision: Optional matmul precision override for XLA/reference paths.
         implementation: Optional fused CE backend selection override.
         block_sizes: Optional kernel block-size override (tune v_block_size for large vocab).
+        grad_in_forward_token_block_size: Compute each shard's weighted loss sum with
+            ``linear_softmax_cross_entropy_weighted_sum`` in blocks of this many rows, which
+            computes the gradients in the forward pass. Needs a "sum" or "mean" reduction and
+            replaces ``implementation`` and ``block_sizes``.
 
     Returns:
         If reduction=="none": array with shape labels.shape.
@@ -84,6 +90,11 @@ def fused_linear_softmax_cross_entropy_loss(
         reduction_mode = reduction
     else:
         raise ValueError(f"Unknown reduction: {reduction}")
+    if grad_in_forward_token_block_size is not None:
+        if reduction_mode is None:
+            raise ValueError("grad_in_forward_token_block_size needs a 'sum' or 'mean' reduction")
+        if implementation is not None or block_sizes is not None:
+            raise ValueError("grad_in_forward_token_block_size replaces implementation and block_sizes")
 
     mesh = _current_mesh()
     has_mesh = mesh is not None and not mesh.empty
@@ -101,24 +112,35 @@ def fused_linear_softmax_cross_entropy_loss(
         flat_labels = shard_labels.reshape((-1,)).astype(jnp.int32)
         flat_weight = shard_weight.reshape((-1,))
 
-        loss = fused_cross_entropy_loss_and_logsumexp_penalty(
-            flat_hidden,
-            flat_labels,
-            shard_lm_head,
-            reduction=None,
-            weight=flat_weight,
-            logsumexp_weight=logsumexp_weight,
-            dtype=dtype,
-            logit_soft_cap=None,
-            precision=precision,
-            implementation=implementation,
-            block_sizes=block_sizes,
-        )
+        if grad_in_forward_token_block_size is not None:
+            local_sum = linear_softmax_cross_entropy_weighted_sum(
+                flat_hidden,
+                flat_labels,
+                shard_lm_head,
+                flat_weight,
+                logsumexp_weight=logsumexp_weight,
+                token_block_size=grad_in_forward_token_block_size,
+                dtype=dtype,
+                precision=precision,
+            )
+        else:
+            loss = fused_cross_entropy_loss_and_logsumexp_penalty(
+                flat_hidden,
+                flat_labels,
+                shard_lm_head,
+                reduction=None,
+                weight=flat_weight,
+                logsumexp_weight=logsumexp_weight,
+                dtype=dtype,
+                logit_soft_cap=None,
+                precision=precision,
+                implementation=implementation,
+                block_sizes=block_sizes,
+            )
+            if reduction_mode is None:
+                return loss.reshape(shard_labels.shape)
+            local_sum = jnp.sum(loss)
 
-        if reduction_mode is None:
-            return loss.reshape(shard_labels.shape)
-
-        local_sum = jnp.sum(loss)
         local_denom = jnp.sum(flat_weight)
         total_sum = _psum_over_axes(local_sum, token_sharding_axes)
         if reduction_mode == "sum":
@@ -130,7 +152,7 @@ def fused_linear_softmax_cross_entropy_loss(
         return _loss_shard(hidden, lm_head, labels, weight_array)
 
     hidden_spec = P(*token_dim_specs, None)
-    lm_head_spec = P(None, None)
+    lm_head_spec = keep_reduced(P(None, None), lm_head)
     label_spec = P(*token_dim_specs)
     hidden = _reshard_for_shard_map(hidden, mesh, hidden_spec)
     lm_head = _reshard_for_shard_map(lm_head, mesh, lm_head_spec)

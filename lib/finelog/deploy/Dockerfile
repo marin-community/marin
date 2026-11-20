@@ -14,7 +14,7 @@
 # Build the Vue SPA. Output is consumed by the runtime stage at
 # /app/dashboard/dist; the Rust server resolves and serves it from there (see
 # `DOCKER_VUE_DIST_DIR` in lib/finelog/rust/src/server/spa.rs).
-FROM node:22-slim AS dashboard
+FROM node:24-slim AS dashboard
 
 WORKDIR /build/dashboard
 
@@ -64,12 +64,14 @@ COPY lib/finelog/rust/ ./
 ENV FINELOG_SOURCE_COMMIT=${SOURCE_COMMIT} \
     FINELOG_SOURCE_TREE=${SOURCE_TREE} \
     FINELOG_SOURCE_DIRTY=${SOURCE_DIRTY}
+# Why `strip --strip-debug`: see `[profile.release]` in rust/Cargo.toml.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/rust/target \
     mold -run cargo build --profile ${CARGO_PROFILE} -p finelog \
       --bin finelog-server --bin finelog-migrate \
     && cp target/${CARGO_PROFILE}/finelog-server /finelog-server \
-    && cp target/${CARGO_PROFILE}/finelog-migrate /finelog-migrate
+    && cp target/${CARGO_PROFILE}/finelog-migrate /finelog-migrate \
+    && strip --strip-debug /finelog-server /finelog-migrate
 
 
 # ── Stage: runtime ───────────────────────────────────────────────────

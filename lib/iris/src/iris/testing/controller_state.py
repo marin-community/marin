@@ -15,11 +15,11 @@ projections through ``Controller`` constructor arguments.
 
 from dataclasses import dataclass
 
-from rigging.timing import Timestamp
+from rigging.timing import Duration, Timestamp
 from sqlalchemy import bindparam, select
 from sqlalchemy import update as sa_update
 
-from iris.cluster.controller import ops, reads, writes
+from iris.cluster.controller import observability_rows, ops, reads, writes
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
@@ -32,6 +32,7 @@ from iris.cluster.controller.schema import (
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import JobName, WorkerId
+from iris.preemption import resolve_termination_grace
 from iris.rpc import controller_pb2, job_pb2
 
 
@@ -93,6 +94,8 @@ def set_task_state_for_test(
             values["current_worker_id"] = None
             values["current_worker_address"] = None
         cur.execute(sa_update(tasks_table).where(tasks_table.c.task_id == task_id).values(**values))
+        # Stands in for a real transition, so it writes the task's controller row too.
+        observability_rows.record_task_changes(cur, [task_id])
 
 
 def create_attempt_for_test(ctrl: ControllerTestState, task_id: JobName, worker_id: WorkerId) -> int:
@@ -147,6 +150,9 @@ def submit_job_in_tx(
     # in cannot disagree with the band that gets stored.
     band = resolve_band_for_test(cur, job_id, int(request.priority_band))
     request.priority_band = band
+    request.termination_grace.milliseconds = resolve_termination_grace(
+        Duration.from_ms(request.termination_grace.milliseconds) if request.HasField("termination_grace") else None
+    ).to_ms()
     ops.job.submit(
         cur,
         job_id=job_id,

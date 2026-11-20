@@ -11,7 +11,8 @@ from verifyit.spec import McqSpec
 
 from skyrl_gym.task_records import TaskTransition
 from skyrl_gym.envs.aime.verifier import AIMERewardPolicy, AIMEVerifier
-from skyrl_gym.envs.cat_count.reward import cat_count_score
+from skyrl_gym.envs.cat_count.reward import TARGET_WORD, cat_count_score
+from skyrl_gym.envs.sequence.reward import sequence_score
 from skyrl_gym.envs.gsm8k.utils import compute_score as gsm8k_score
 from skyrl_gym.envs.ifeval.utils import compute_score as instruction_score
 from skyrl_gym.envs.mcq.utils import extract_mcq_answer
@@ -70,15 +71,33 @@ def grade_aime(turn: ModelTurn, config: dict, extras: dict) -> TaskTransition:
 
 def grade_cat_count(turn: ModelTurn, config: dict, extras: dict) -> TaskTransition:
     count = int(extras["extra_info"]["n"])
-    score = cat_count_score(turn.text, count, stop_reason=turn.stop_reason)
+    score = cat_count_score(turn.text, count, word=extras["extra_info"].get("word", TARGET_WORD), stop_reason=turn.stop_reason)
     return TaskTransition(
         done=True,
         reward=score.reward,
         grade=GradeResult(Outcome.GRADED, float(score.exact), passed=score.exact),
         metrics={
             "exact": float(score.exact),
-            "has_cat": float(score.cat_unigram_count > 0),
+            "has_target": float(score.target_unigram_count > 0),
             "junk": float(score.junk_words),
+            "truncated": float(score.truncated),
+            f"exact_n{count}": float(score.exact),
+            f"n_words_n{count}": float(score.n_words),
+        },
+    )
+
+
+def grade_sequence(turn: ModelTurn, _config: dict, extras: dict) -> TaskTransition:
+    items = [str(item) for item in extras["extra_info"]["items"]]
+    count = int(extras["extra_info"].get("n", len(items)))
+    score = sequence_score(turn.text, items, stop_reason=turn.stop_reason)
+    return TaskTransition(
+        done=True,
+        reward=score.reward,
+        grade=GradeResult(Outcome.GRADED, float(score.exact), passed=score.exact),
+        metrics={
+            "exact": float(score.exact),
+            "prefix_fraction": score.correct_prefix / len(items),
             "truncated": float(score.truncated),
             f"exact_n{count}": float(score.exact),
             f"n_words_n{count}": float(score.n_words),

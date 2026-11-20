@@ -526,6 +526,7 @@ def test_get_table_registers_complete_versioned_object_backed_spec(tracked_clien
         columns=(
             Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, trigram_index=True),
             Column(name="timestamp_ms", type=stats_pb2.COLUMN_TYPE_INT64),
+            Column(name="epoch_ms", type=stats_pb2.COLUMN_TYPE_INT64, catalog_bounds=True),
         ),
         key_column="timestamp_ms",
         sort_columns=("worker_id", "timestamp_ms"),
@@ -553,7 +554,7 @@ def test_get_table_registers_complete_versioned_object_backed_spec(tracked_clien
     client = LogClient.connect("http://h:1")
     try:
         table = client.get_table("iris.worker", schema, storage_policy=policy, table_spec=table_spec)
-        table.write([SimpleNamespace(worker_id="w-1", timestamp_ms=1)])
+        table.write([SimpleNamespace(worker_id="w-1", timestamp_ms=1, epoch_ms=1)])
         assert table.flush(timeout=5.0) == FlushResult.SUCCEEDED
 
         registered = tracked_clients[0].registered_specs["iris.worker"]
@@ -562,7 +563,8 @@ def test_get_table_registers_complete_versioned_object_backed_spec(tracked_clien
         assert registered.source_layout.partition.fields[0].bucket.buckets == 16
         assert registered.source_layout.target_object_bytes == 128 * 1024 * 1024
         assert registered.artifact_policy.revision == 4
-        assert registered.artifact_policy.indexes[0].column == "worker_id"
+        assert registered.logical_schema.columns[2].index.catalog_bounds
+        assert [index.column for index in registered.artifact_policy.indexes] == ["worker_id"]
         assert registered.operating_policy.l0_mode == stats_pb2.L0_MODE_OBJECT_STORE
         assert registered.operating_policy.local_cache.max_bytes == 1024
         assert registered.operating_policy.remote_retention.retain_forever

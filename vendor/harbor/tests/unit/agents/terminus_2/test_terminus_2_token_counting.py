@@ -14,15 +14,16 @@ from openai import AsyncOpenAI
 @pytest.mark.asyncio
 @pytest.mark.parametrize("count_mode", ["sync", "async"])
 @pytest.mark.parametrize(
-    "model_name",
+    ("model_name", "encoding_source"),
     [
-        "anthropic/claude-sonnet-4-5",
-        "gemini/gemini-2.5-pro",
-        "openrouter/anthropic/claude-sonnet-4-5",
+        ("anthropic/claude-sonnet-4-5", "explicit"),
+        ("gemini/gemini-2.5-pro", "explicit"),
+        ("openrouter/anthropic/claude-sonnet-4-5", "explicit"),
+        ("openai/gpt-4o", "model"),
     ],
 )
-async def test_proxy_without_tokenize_counts_with_explicit_encoding_and_generates(
-    tmp_path, monkeypatch, model_name, count_mode
+async def test_proxy_without_tokenize_counts_locally_and_generates(
+    tmp_path, monkeypatch, model_name, count_mode, encoding_source
 ):
     # A local encoding keeps tokenizer data loading offline while using real BPE.
     encoding = tiktoken.Encoding(
@@ -32,6 +33,7 @@ async def test_proxy_without_tokenize_counts_with_explicit_encoding_and_generate
         special_tokens={},
     )
     monkeypatch.setitem(tiktoken.registry.ENCODINGS, encoding.name, encoding)
+    monkeypatch.setitem(tiktoken.model.MODEL_TO_ENCODING, "gpt-4o", encoding.name)
     requests = []
 
     def proxy(request):
@@ -70,7 +72,7 @@ async def test_proxy_without_tokenize_counts_with_explicit_encoding_and_generate
         logs_dir=tmp_path,
         model_name=model_name,
         api_base="http://proxy/v1",
-        tokenizer_encoding=encoding.name,
+        tokenizer_encoding=encoding.name if encoding_source == "explicit" else None,
         model_info={"max_input_tokens": 32768, "max_output_tokens": 1024},
     )
     chat = Chat(agent._llm)

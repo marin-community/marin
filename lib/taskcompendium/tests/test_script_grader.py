@@ -426,15 +426,22 @@ async def test_script_grader_reads_extracted_answer_and_conversation_at_declared
 """
     grader = ScriptGrader(
         argv=("sh", "-c", report),
-        environment=GRADER_ENVIRONMENT,
+        environment=GRADER_ENVIRONMENT.model_copy(
+            update={
+                "setup_commands": ('test "$(cat /submission/final.txt)" = 12 && echo setup > /submission/final.txt',)
+            }
+        ),
         answer_path="/submission/final.txt",
         conversation_path="/tests/transcript.json",
         reward=FileReward(files=(RewardFile(path=REWARD_JSON, format=RewardFileFormat.JSON),)),
     )
-    task = arithmetic_task(grader).model_copy(update={"answer_format": JsonAnswer()})
+    task = arithmetic_task(grader).model_copy(
+        update={"answer_format": JsonAnswer(), "output_paths": ("/submission/final.txt",)}
+    )
     final = json.dumps({"answer": "12"})
 
-    result = await grade_in_sandbox(task, answered(task, final), FixtureImageFactory(), GRADER_MACHINE)
+    attempt = replace(answered(task, final), files={"/submission/final.txt": b"captured"})
+    result = await grade_in_sandbox(task, attempt, FixtureImageFactory(), GRADER_MACHINE)
 
     assert result.status == Outcome.GRADED, result.error
     assert result.detail == {
@@ -449,6 +456,72 @@ async def test_script_grader_reads_extracted_answer_and_conversation_at_declared
 NUMBER_FILE = (RewardFile(path=REWARD_TXT, format=RewardFileFormat.NUMBER),)
 JSON_FILE = (RewardFile(path=REWARD_JSON, format=RewardFileFormat.JSON),)
 DETAIL = {"cases": [{"passed": True}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reward,phase,exit_code,expected",
+    [
+        (ExitCodeReward(), "candidate", None, (Outcome.GRADED, 0.0, None)),
+        (StdoutReward(), "candidate", None, (Outcome.INFRA_ERROR, None, GradingFailure.TIMEOUT)),
+        (FileReward(files=NUMBER_FILE), "candidate", None, (Outcome.INFRA_ERROR, None, GradingFailure.TIMEOUT)),
+        (ExitCodeReward(), "preparation", None, (Outcome.INFRA_ERROR, None, GradingFailure.TIMEOUT)),
+        (ExitCodeReward(), "preparation", 1, (Outcome.INFRA_ERROR, None, GradingFailure.EXECUTION)),
+    ],
+)
+async def test_test_command_timeout_is_candidate_failure_but_preparation_failure_is_infra(
+    monkeypatch,
+    reward,
+    phase,
+    exit_code,
+    expected,
+):
+    original_run = VerifyitImageMachine.run
+    preparation = ("sh", "-c", "prepare-tests")
+    candidate = ("candidate-tests",)
+
+    async def run(machine, command):
+        if command.argv == (candidate if phase == "candidate" else preparation):
+            reason = ExitReason.TIMED_OUT if exit_code is None else ExitReason.EXITED
+            return Result(exit_code, b"", b"command failure", False, False, reason)
+        if command.argv == preparation:
+            return Result(0, b"", b"", False, False, ExitReason.EXITED)
+        return await original_run(machine, command)
+
+    monkeypatch.setattr(VerifyitImageMachine, "run", run)
+    grader = ScriptGrader(
+        argv=candidate,
+        reward=reward,
+        environment=GRADER_ENVIRONMENT.model_copy(update={"setup_commands": ("prepare-tests",)}),
+    )
+    task = arithmetic_task(grader)
+    result = await grade_in_sandbox(task, answered(task, "12"), FixtureImageFactory(), GRADER_MACHINE)
+    assert (result.status, result.reward, result.failure) == expected
+    assert result.diagnostics["stderr"] == "command failure"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("candidate_duration,expected_reward", [(2, 1.0), (4, 0.0)])
+async def test_slow_input_staging_preserves_the_candidate_time_limit(monkeypatch, candidate_duration, expected_reward):
+    original_run = VerifyitImageMachine.run
+    candidate = ("sh", "-c", "exit 0")
+
+    async def run(machine, command):
+        # Model a loaded worker: staging takes four seconds, independent of the candidate.
+        duration = 4 if command.argv[0] == "tar" else candidate_duration if command.argv == candidate else 0
+        if command.timeout is not None and duration > command.timeout:
+            return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
+        return await original_run(machine, command)
+
+    monkeypatch.setattr(VerifyitImageMachine, "run", run)
+    task = arithmetic_task(
+        ScriptGrader(argv=candidate, reward=ExitCodeReward(), environment=GRADER_ENVIRONMENT, timeout=3)
+    )
+    result = await grade_in_sandbox(
+        task, answered(task, "12"), FixtureImageFactory(), replace(GRADER_MACHINE, startup_timeout=10)
+    )
+    assert result.status == Outcome.GRADED, result.error
+    assert result.reward == expected_reward
 
 
 @pytest.mark.parametrize(
@@ -544,7 +617,10 @@ async def test_script_grader_reward_kinds(reward, script, expected):
 @pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
 @pytest.mark.asyncio
 async def test_verifyit_grader_with_environment_runs_verifyit_cli_in_grading_machine(answer, reward):
-    package = verifyit_package(NumericSpec("12", tolerance_abs=0, tolerance_rel=0), environment=GRADER_ENVIRONMENT)
+    environment = GRADER_ENVIRONMENT.model_copy(
+        update={"setup_commands": ("test -s /app/answer.txt && echo setup > /app/answer.txt",)}
+    )
+    package = verifyit_package(NumericSpec("12", tolerance_abs=0, tolerance_rel=0), environment=environment)
     task = arithmetic_task(package.grader)
 
     result = await grade_in_sandbox(task, answered(task, answer), FixtureImageFactory(), GRADER_MACHINE)

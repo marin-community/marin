@@ -46,9 +46,9 @@ from experiments.grug.moe_hero_ep.model import (
     Transformer,
     _batch_reshard,
     _embedding_gather,
+    _global_query_scale,
     _init_weight,
     _seq_axis,
-    _unstacked_blocks,
 )
 from experiments.grug.moe_hero_ep.train import _tree_to_memory_kind
 from experiments.grug.moe_pipeline.pipeline import (
@@ -110,8 +110,8 @@ def make_pipeline_mesh(
         )
 
     data_axis_size = jax.device_count() // fixed_axes
-    shape = (config.mpmd_stages, replica_axis_size, data_axis_size, context_axis_size, expert_axis_size, 1)
-    axis_names = (_PIPELINE_AXIS, "replica_dcn", "data", "context", "expert", "model")
+    shape = (config.mpmd_stages, replica_axis_size, data_axis_size, expert_axis_size, context_axis_size, 1)
+    axis_names = (_PIPELINE_AXIS, "replica_dcn", "data", "expert", "context", "model")
     devices = np.asarray(jax.devices(), dtype=object).reshape(shape)
     mesh = Mesh(devices, axis_names, axis_types=(AxisType.Explicit,) * len(axis_names))
     if mesh.is_multi_process:
@@ -189,6 +189,7 @@ class GrugMoePipelineStage(eqx.Module):
         # Metadata contains global key positions; shard its query dimension like the residual.
         bounds_spec = P(BATCH_AXES, _seq_axis(get_abstract_mesh()))
         long_bounds, short_bounds, valid = (reshard(value, bounds_spec) for value in (long_bounds, short_bounds, valid))
+        global_query_scale = _global_query_scale(cfg, long_bounds, valid)
         block_metrics = []
         for local_index, block in enumerate(self.blocks):
             layer_index = self.start_layer + local_index
@@ -199,6 +200,7 @@ class GrugMoePipelineStage(eqx.Module):
                 layer_mask,
                 disable_rope=is_long,
                 is_global=is_long,
+                global_query_scale=global_query_scale,
             )
             block_metrics.append(metrics)
 
@@ -274,7 +276,7 @@ def split_transformer(
         embed_norm=model.embed_norm,
         embed_gated_norm=model.embed_gated_norm,
         output_proj=model.output_proj,
-        blocks=_unstacked_blocks(model),
+        blocks=tuple(model.stacked_blocks.unstacked()),
         final_norm=model.final_norm,
         final_gated_norm=model.final_gated_norm,
         config=model.config,
@@ -679,6 +681,26 @@ def precompile_automatic_mpmd_step(step) -> int:
     return mpmd_primitives.precompile_pipeline_tasks(step.local_jaxpr, step.mpmd_mesh)
 
 
+def place_automatic_mpmd_batch(
+    compiled_step,
+    batches: GrugLmExample,
+    loss_denominator: jax.Array,
+    mpmd_mesh,
+    *,
+    memory_threshold: int | None = None,
+) -> tuple[GrugLmExample, jax.Array]:
+    """Place a batch and its loss denominator on the compiled pipeline meshes."""
+    pp, _ = _jaxpp_modules()
+    if memory_threshold is None and all(device.memory_stats() is None for device in jax.local_devices()):
+        memory_threshold = 0
+    return pp.spmd_to_mpmd_reshard(
+        mpmd_mesh,
+        (batches, loss_denominator),
+        compiled_step.in_shardings[0][1:3],
+        threshold=memory_threshold,
+    )
+
+
 def prepare_automatic_mpmd_step(
     step,
     state: GrugMoeAutomaticPipelineState,
@@ -731,13 +753,8 @@ def prepare_automatic_mpmd_step(
         )
 
     state = jax.tree.map(place_initial_scalar, state, args_shardings[0])
-    if memory_threshold is None and all(device.memory_stats() is None for device in jax.local_devices()):
-        memory_threshold = 0
-    batches, loss_denominator = pp.spmd_to_mpmd_reshard(
-        mpmd_mesh,
-        (batches, loss_denominator),
-        (args_shardings[1], args_shardings[2]),
-        threshold=memory_threshold,
+    batches, loss_denominator = place_automatic_mpmd_batch(
+        compiled, batches, loss_denominator, mpmd_mesh, memory_threshold=memory_threshold
     )
     return PreparedAutomaticMpmdStep(
         step=compiled,

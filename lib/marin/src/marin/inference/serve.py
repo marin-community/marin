@@ -19,6 +19,7 @@ class LocalInferenceSession:
     tensor_parallel_size: int | None
     chat_template_content: str | None
     _served: ServedModel
+    metrics_url: str | None = None
 
     def check_alive(self) -> None:
         """Raise when the local backend has stopped serving."""
@@ -71,4 +72,5 @@ def local_inference(
             tensor_parallel_size=model.tensor_parallel_size,
             chat_template_content=served.chat_template_content,
             _served=served,
+            metrics_url=served.metrics_url,
         )

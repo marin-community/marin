@@ -3,14 +3,13 @@
 
 """Construct isolated structure-completion probes from approved BFCL answers."""
 
-import argparse
 import hashlib
 import json
-from collections import Counter
-from dataclasses import asdict, dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass
 from enum import StrEnum
-from pathlib import Path
 
+from pydantic import TypeAdapter
 from verifyit.closure_scoring import (
     ClosureFormat,
     ClosureScore,
@@ -20,7 +19,6 @@ from verifyit.closure_scoring import (
 from verifyit.structure_closure import PrefixStatus, json_closure_state
 from verifyit.tool_call_markup import THINK_CLOSE, THINK_OPEN, TOOL_CLOSE, TOOL_OPEN
 
-TASK_ID_PREFIX = "structure-closure:"
 CLOSE_REQUIRED = "close_required"
 CONTINUE_REQUIRED = "continue_required"
 ESCAPE_CONTINUE_REQUIRED = "escape_continue_required"
@@ -59,13 +57,21 @@ class Family(StrEnum):
 class ClosureCase:
     case_id: str
     task_id: str
-    split: str
+    split: Split
     family: Family
     control: str
     instruction: str
     prefix: str
     expected: str
     source_sha256: str
+
+
+_CASE = TypeAdapter(ClosureCase)
+
+
+def parse_case(row: Mapping[str, object]) -> ClosureCase:
+    """Read a closure case from the curation row format."""
+    return _CASE.validate_python(row)
 
 
 def closure_format(family: Family) -> ClosureFormat:
@@ -93,7 +99,7 @@ def compact_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=True, separators=(",", ":"))
 
 
-def task_cases(task_id: str, answer: list, split: str, source_hash: str) -> list[ClosureCase]:
+def task_cases(task_id: str, answer: list[object], split: Split, source_hash: str) -> list[ClosureCase]:
     """Create known-content synthetic probes, never inferred tool-intent repairs."""
     task_digest = hashlib.sha256(task_id.encode()).digest()
     sentinel = task_id + STRING_ENDINGS[task_digest[0] % len(STRING_ENDINGS)]
@@ -167,93 +173,19 @@ def task_cases(task_id: str, answer: list, split: str, source_hash: str) -> list
     return cases
 
 
-def split_membership(partition: dict, split: dict) -> tuple[set[str], set[str]]:
-    """Require an exhaustive, disjoint train/validation partition of BFCL parents."""
-    train, validation, parity = (
-        set(split[key]) for key in ("train_task_ids", "diagnostic_reserved_task_ids", "parity_task_ids")
-    )
-    approved = {task["source_id"] for task in partition["complement"]}
-    if train & validation or (train | validation) & parity or train | validation != approved:
-        raise ValueError("Task split is not disjoint and exhaustive")
-    return train, validation
-
-
 def oracle_cases(task_id: str, raw: bytes, split: Split) -> list[ClosureCase]:
     """Decode the pinned BFCL oracle answer into structural task cases."""
     script = raw.decode()
     marker = "<< 'ORACLE_EOF'\n"
     if script.count(marker) != 1:
         raise ValueError("Unrecognized oracle heredoc")
-    payload = script.split(marker)[1].split("\nORACLE_EOF")[0]
+    _, _, body = script.partition(marker)
+    payload, delimiter, rest = body.partition("\nORACLE_EOF")
+    if not delimiter or (rest and not rest.startswith("\n")):
+        raise ValueError("Missing oracle heredoc terminator")
     if json_closure_state(payload).status != PrefixStatus.COMPLETE:
         raise ValueError("Invalid or duplicate-key oracle JSON")
     answer = json.loads(payload)
     if not isinstance(answer, list):
         raise ValueError("Expected answer array")
     return task_cases(task_id, answer, split, hashlib.sha256(raw).hexdigest())
-
-
-def build_benchmark(source: Path, split_file: Path, output: Path):
-    """Audit every source task, then publish a new immutable local candidate."""
-    if output.exists():
-        raise FileExistsError(output)
-    split = json.loads(split_file.read_text())
-    partition_file = source / "bfcl_complement-manifest.json"
-    partition = json.loads(partition_file.read_text())
-    train, _ = split_membership(partition, split)
-    cases, failures = [], []
-    for task in partition["complement"]:
-        path = source / "bfcl_complement" / task["name"] / "solution/solve.sh"
-        try:
-            raw = path.read_bytes()
-            cases.extend(
-                oracle_cases(
-                    task["source_id"],
-                    raw,
-                    Split.TRAIN if task["source_id"] in train else Split.VALIDATION,
-                )
-            )
-        except (OSError, ValueError) as error:
-            failures.append({"task": task["source_id"], "error": str(error)})
-    output.mkdir(parents=True)
-    failures_path = output / "conversion-failures.json"
-    failures_path.write_text(json.dumps(failures, indent=2) + "\n")
-    if failures:
-        raise ValueError(f"{len(failures)} tasks failed; see {failures_path}")
-    counts = Counter(f"{case.split}/{case.family}/{case.control}" for case in cases)
-    hashes = {}
-    for cohort in Split:
-        data = "".join(json.dumps(asdict(case), separators=(",", ":")) + "\n" for case in cases if case.split == cohort)
-        (output / f"{cohort}.jsonl").write_text(data)
-        hashes[cohort] = hashlib.sha256(data.encode()).hexdigest()
-    manifest = {
-        "status": "candidate-not-frozen",
-        "kind": "oracle-derived-varied-closure-with-reference-continuation-controls",
-        "variant_assignment": (
-            "sha256(task_id): byte 0 selects string ending; byte 1 selects fence marker; modulo variant count"
-        ),
-        "string_endings": STRING_ENDINGS,
-        "fence_markers": FENCE_MARKERS,
-        "counts": dict(counts),
-        "cases": len(cases),
-        "hashes": hashes,
-        "split_sha256": hashlib.sha256(split_file.read_bytes()).hexdigest(),
-        "partition_sha256": hashlib.sha256(partition_file.read_bytes()).hexdigest(),
-        "builder_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-        "limitation": (
-            "Candidate probes require separate structural, content and continuation-control audits. "
-            "The combined content-preserving score does not isolate closure. "
-            "Natural failure and free-generation transfer are not measured."
-        ),
-    }
-    (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    return manifest
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--source", type=Path, required=True)
-    parser.add_argument("--split", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
-    args = parser.parse_args()
-    print(json.dumps(build_benchmark(args.source, args.split, args.output), indent=2))

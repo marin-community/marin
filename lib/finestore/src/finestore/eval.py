@@ -311,6 +311,16 @@ class StepRecord:
     logprobs: list[float] | None
 
 
+@dataclasses.dataclass(frozen=True)
+class SourceArtifact:
+    """One evaluator-native file and its blob metadata."""
+
+    name: str
+    raw: bytes
+    content_type: str
+    metadata: Mapping[str, object] | None = None
+
+
 class EvaluationStore:
     """One eval run's FineStore archive.
 
@@ -367,6 +377,24 @@ class EvaluationStore:
             raw,
             metadata={"content_type": content_type, "sha256": hashlib.sha256(raw).hexdigest()},
         )
+
+    def add_source_artifacts(self, sources: Iterable[SourceArtifact]) -> list[str]:
+        """Commit native files and metadata atomically and return their blob URIs."""
+        uris = []
+        with self._store.unbounded_transaction() as transaction:
+            for source in sources:
+                uris.append(
+                    transaction.write_object(
+                        prefix_join(SOURCES_PREFIX, source.name),
+                        source.raw,
+                        metadata={
+                            **(source.metadata or {}),
+                            "content_type": source.content_type,
+                            "sha256": hashlib.sha256(source.raw).hexdigest(),
+                        },
+                    )
+                )
+        return uris
 
     def flush(self) -> None:
         """Write buffered rows to shards now, bounding how much a large payload holds in memory."""

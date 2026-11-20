@@ -13,6 +13,7 @@ from haliax.jax_utils import named_call
 from jax.sharding import PartitionSpec as P
 from jaxtyping import Array, Bool, Float, Int, Key
 
+from levanter.grug.sharding import _current_sharding
 from levanter.utils.activation import ActivationFunctionEnum
 
 _DEFAULT_EP_CAPACITY_FACTOR = 1.25
@@ -97,6 +98,7 @@ MoeActivation: TypeAlias = ActivationFunctionEnum | Callable[[jax.Array], jax.Ar
 MoeImplementation: TypeAlias = Literal[
     "ring",  # Expert-parallel all-gather + psum-scatter backend.
     "ring_gather_combine",  # `ring` moving activations only by gather; the default on GPUs.
+    "ring_filtered",  # Expert-parallel all-to-all sending each token only to shards that own its experts.
     "ragged_all_to_all",  # Expert-parallel ragged all-to-all backend.
     "fixed_all_to_all",  # Expert-parallel all-to-all with fixed sender/expert cells.
     "fixed_pooled_wave_all_to_all",  # Destination-pooled static waves with fixed receiver buffers.
@@ -109,11 +111,13 @@ _VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
 _EP_MOE_IMPLEMENTATIONS = (
     "ring",
     "ring_gather_combine",
+    "ring_filtered",
     "ragged_all_to_all",
     "fixed_all_to_all",
     "fixed_pooled_wave_all_to_all",
     "deepep",
 )
+_TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS = ("ring_filtered", "fixed_pooled_wave_all_to_all")
 # Local means no collectives over an expert axis. These backends can still run
 # under ordinary data/model sharding through the no-EP shard_map path.
 _LOCAL_MOE_IMPLEMENTATIONS = (
@@ -216,8 +220,9 @@ def split_moe_w13_output(
     return gate, up
 
 
-def _init_weight(key: Key[Array, ""], shape: tuple[int, ...], std: float) -> Float[Array, "..."]:
-    return std * jax.random.truncated_normal(key, -3, 3, shape)
+def _init_weight(key: Key[Array, ""], shape: tuple[int, ...], std: float, spec: P) -> Float[Array, "..."]:
+    # Sharding only after sampling leaves full expert-bank RNG temporaries on each chip.
+    return std * jax.random.truncated_normal(key, -3, 3, shape, out_sharding=_current_sharding(spec))
 
 
 @named_call
@@ -228,6 +233,7 @@ def _prepare_moe_dispatch(
     token_valid: Bool[Array, "T"],
     *,
     num_experts: int,
+    combine_in_fp32: bool = False,
 ) -> tuple[
     Float[Array, "TK H"],
     Float[Array, "TK"],
@@ -246,7 +252,9 @@ def _prepare_moe_dispatch(
     token_ids = jnp.arange(tokens * topk, dtype=jnp.int32) // topk
     token_ids_sort = token_ids[sort_idx]
     x_sort = x[token_ids_sort]
-    w_sort = dispatch_weights[sort_idx].astype(x.dtype)
+    w_sort = dispatch_weights[sort_idx]
+    if not combine_in_fp32:
+        w_sort = w_sort.astype(x.dtype)
     group_sizes = jnp.bincount(expert_ids, length=num_experts).astype(jnp.int32)
     return x_sort, w_sort, token_ids_sort, group_sizes
 

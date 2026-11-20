@@ -276,6 +276,7 @@ def normalize_device_type(device_type: str) -> str:
     Handles fray-specific formats:
     - TPU type strings: "v4-128" -> "v4", "v5litepod-16" -> "v5litepod"
     - Direct names are lowercased: "H100" -> "h100"
+    - "GB200" uses the "b200" peak FLOPS entry
 
     JAX device kind strings should be normalized by the caller (e.g., Levanter)
     before passing to this function.
@@ -284,6 +285,9 @@ def normalize_device_type(device_type: str) -> str:
         Normalized lowercase device type key for DEVICE_FLOPS lookup.
     """
     kind = device_type.lower()
+
+    if kind == "gb200":
+        return "b200"
 
     # Handle TPU type strings like "v4-128" -> "v4", "v5litepod-16" -> "v5litepod"
     if kind.startswith("v") and "-" in kind:

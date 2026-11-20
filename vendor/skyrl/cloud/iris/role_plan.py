@@ -6,7 +6,7 @@ role claims, physical bundles, and placement arithmetic used before Iris submiss
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any
 
@@ -23,7 +23,6 @@ from cloud.iris.runtime_environment import RuntimeProfile
 class ModelRoleKind(StrEnum):
     POLICY = "policy"
     REFERENCE = "reference"
-    CRITIC = "critic"
     ROLLOUT = "rollout"
     DRAFT_TRAINER = "draft_trainer"
     TEACHER = "teacher"
@@ -130,6 +129,10 @@ class SkyRLRolePlan:
         gpu_widths = {bundle.gpus_per_node for bundle in self.bundles}
         if len(gpu_widths) > 1:
             raise ValueError(f"Iris role bundles require one GPUs-per-node value; got {sorted(gpu_widths)}")
+
+    @property
+    def gpus_per_node(self) -> int:
+        return self.bundles[0].gpus_per_node
 
     def claim(self, role_id: str) -> ModelRoleClaim:
         matches = [claim for claim in self.claims if claim.role_id == role_id]
@@ -241,12 +244,10 @@ def _policy_claim(config: dict[str, Any], values: _RolePlanValues) -> ModelRoleC
 def _core_model_claims(config: dict[str, Any], values: _RolePlanValues) -> list[ModelRoleClaim]:
     placement = _at(config, "trainer.placement")
     use_reference = reference_model_required(_at(config, "trainer.algorithm"))
-    use_critic = bool(_optional_at(config, "trainer.critic.model.path"))
     strategy = derive_strategy(config) or RuntimeProfile.MEGATRON.value
     ref_num_nodes = int(placement.get("ref_num_nodes") or values.policy_num_nodes)
     ref_num_gpus_per_node = int(placement.get("ref_num_gpus_per_node") or values.policy_num_gpus_per_node)
 
-    shared_group = ALL_ROLES_COLOCATION_GROUP
     policy = _policy_claim(config, values)
     policy_group = policy.colocation_group
     claims = [policy]
@@ -270,25 +271,6 @@ def _core_model_claims(config: dict[str, Any], values: _RolePlanValues) -> list[
                 expert_parallel_size=1,
             )
         )
-    if use_critic:
-        critic_num_nodes = int(_at(config, "trainer.placement.critic_num_nodes"))
-        critic_num_gpus_per_node = int(_at(config, "trainer.placement.critic_num_gpus_per_node"))
-        claims.append(
-            ModelRoleClaim(
-                role_id=ModelRoleKind.CRITIC.value,
-                kind=ModelRoleKind.CRITIC,
-                execution=RoleExecution.LOCAL,
-                backend=strategy,
-                colocation_group=shared_group if values.colocate_all else ModelRoleKind.CRITIC.value,
-                num_nodes=critic_num_nodes,
-                gpus_per_node=critic_num_gpus_per_node,
-                replicas=critic_num_nodes * critic_num_gpus_per_node,
-                tensor_parallel_size=1,
-                pipeline_parallel_size=1,
-                data_parallel_size=critic_num_nodes * critic_num_gpus_per_node,
-                expert_parallel_size=1,
-            )
-        )
     return claims
 
 
@@ -298,25 +280,33 @@ def _minimum_disaggregated_rollout_nodes(
     tensor_parallel_size: int,
     pipeline_parallel_size: int,
     data_parallel_size: int,
+    expert_parallel_size: int,
     gpus_per_node: int,
     multiprocessing_backend: bool,
+    backend: str,
 ) -> int:
     """Return the smallest whole-node pool that SkyRL's current Ray placement can realize."""
     tensor_pipeline_size = tensor_parallel_size * pipeline_parallel_size
     per_engine_gpus = tensor_pipeline_size * data_parallel_size
+    expert_parallel_workers = (
+        backend == "vllm"
+        and tensor_parallel_size == pipeline_parallel_size == 1
+        and expert_parallel_size == data_parallel_size > gpus_per_node
+    )
 
     if tensor_pipeline_size > gpus_per_node:
         raise ValueError(
             f"each rollout TP*PP rank group requires {tensor_pipeline_size} GPUs but one node has {gpus_per_node}"
         )
     # Mirror the runtime's placement atoms, including otherwise wasted GPUs when an atom does not divide a node.
-    # The ray/uni path STRICT_PACKs each multi-GPU engine; the mp path packs node-atomic TP*PP actors per DP rank.
-    if not multiprocessing_backend and per_engine_gpus > gpus_per_node:
+    # Cross-host TP1/PP1 EP uses one-GPU PACK bundles. Other Ray engines use STRICT_PACK;
+    # the mp path packs node-atomic TP*PP actors per DP rank.
+    if not multiprocessing_backend and not expert_parallel_workers and per_engine_gpus > gpus_per_node:
         raise ValueError(
             f"each ray-backed rollout engine requires {per_engine_gpus} GPUs in one {gpus_per_node}-GPU node; "
             "reduce TP*PP*DP or use generator.inference_engine_mp_backend=true"
         )
-    if multiprocessing_backend:
+    if multiprocessing_backend or expert_parallel_workers:
         placement_atom_gpus = tensor_pipeline_size
         placement_atoms = replicas * data_parallel_size
     elif per_engine_gpus > 1:
@@ -342,8 +332,10 @@ def _rollout_claim(config: dict[str, Any], values: _RolePlanValues) -> ModelRole
             tensor_parallel_size=values.inference_engine_tensor_parallel_size,
             pipeline_parallel_size=values.inference_engine_pipeline_parallel_size,
             data_parallel_size=values.inference_engine_data_parallel_size,
+            expert_parallel_size=values.inference_engine_expert_parallel_size,
             gpus_per_node=values.policy_num_gpus_per_node,
             multiprocessing_backend=values.inference_engine_mp_backend,
+            backend=rollout_backend,
         )
         if rollout_is_local
         else 0
@@ -399,6 +391,15 @@ def derive_role_plan(config: dict[str, Any]) -> SkyRLRolePlan:
     claims.extend(_teacher_claims(config))
     claims.extend(_draft_trainer_claims(config, values))
     return _role_plan(tuple(claims), values)
+
+
+def derive_generation_role_plan(config: dict[str, Any]) -> SkyRLRolePlan:
+    """Derive an evaluation-only launch's footprint: its local engines, or the full plan when engines are remote."""
+    values = _role_plan_values(config)
+    if not values.run_engines_locally:
+        return derive_role_plan(config)
+    values = replace(values, colocate_all=False)
+    return _role_plan((_rollout_claim(config, values),), values)
 
 
 def derive_policy_export_role_plan(config: dict[str, Any]) -> SkyRLRolePlan:

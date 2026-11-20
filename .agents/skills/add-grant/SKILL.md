@@ -126,7 +126,7 @@ be added directly.
 - **Do not run `pulumi preview`/`up`** — a local preview decrypts and prints the
   real emails, and applying is the reviewer's step. CI runs a redacted preview on
   the PR.
-- Follow the `commit` skill to commit, push, and open the PR against `main`. Add
+- Follow the `manage-pr` skill to commit, push, and open the PR against `main`. Add
   the `agent-generated` label. Title the PR for the capability, not the person:
   `[iac] Grant eval-bucket read to a new operator`, never the email. The body
   states the resource, the role, and the one-line justification — **no personal

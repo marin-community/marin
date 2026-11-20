@@ -1,11 +1,21 @@
 """Harbor task runtime, verifier, and retry settings."""
 
+from collections.abc import Mapping
 from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
+from skyrlrecipe.declared import DEFAULT_RETRY_EXCLUSIONS
 
 HARBOR_EXCEPTION = "harbor_exception_type"
+# Harbor trials one run executes at once when its config leaves n_concurrent_trials unset.
+DEFAULT_CONCURRENT_TRIALS = 16
+
+
+def concurrent_trials(harbor: Mapping[str, Any]) -> int:
+    """The Harbor trials one run executes at once, from a ``terminal_bench_config.harbor`` mapping."""
+    value = harbor.get("n_concurrent_trials")
+    return DEFAULT_CONCURRENT_TRIALS if value is None else int(value)
 
 
 class EnvironmentType(StrEnum):
@@ -26,17 +36,6 @@ class VerifierConfig(BaseModel):
     override_timeout_sec: float | None = None
     max_timeout_sec: float | None = None
     disable: bool = False
-
-
-DEFAULT_RETRY_EXCLUSIONS = frozenset(
-    {
-        "AgentTimeoutError",
-        "VerifierTimeoutError",
-        "RewardFileNotFoundError",
-        "RewardFileEmptyError",
-        "VerifierOutputParseError",
-    }
-)
 
 
 class RetryConfig(BaseModel):

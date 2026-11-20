@@ -38,7 +38,7 @@ process exit after a verdict has been written.
 | `pytest` | pytest JSON report with required and protected tests |
 | `junit` | JUnit XML report |
 | `gotest` | `go test -json` events |
-| `judge` | reference-answer or checklist rubric through a configured model endpoint |
+| `judge` | reference-answer, checklist, label or pairwise rubric through a configured model endpoint |
 | `script` | legacy `test.sh` fallback with normalized reward files and fail-closed errors |
 
 `structure_closure` preserves trailing-output diagnostics separately from its first-region reward.
@@ -47,8 +47,11 @@ Callers with generation stop metadata remove configured terminal markers before 
 The `pytest` mode scores startup and collection errors attributed to editable candidate code as failed attempts.
 `PytestSpec.candidate_modules` names modules the task asks the candidate to implement.
 Missing imports of those modules score zero, including an empty submission.
+Only the modules the spec names in ``candidate_modules`` (and their submodules) count as
+candidate code; imports are never guessed from distribution metadata.
+Missing modules with an installed provider remain invalid tasks.
 Workspace-qualified candidate packages add the workspace parent to Python's import path.
-Unlisted missing dependencies, errors in restored task files, and genuine interruptions remain unscored.
+Missing dependencies imported by implementation code, errors in restored task files, and genuine interruptions remain unscored.
 `protected_paths_files` lists tests-directory manifests of trusted workspace paths restored by setup.
 Every batch is checked before returning a candidate startup or collection failure.
 
@@ -84,7 +87,7 @@ text to the mode's contract; missing files still score zero. Rewards must be fin
 in `[0, 1]`. Malformed verdicts, incomplete judge replies, and failed structured script producers
 become unscored infrastructure errors. Interrupted test runs cannot retain positive credit.
 
-Pytest collection errors score zero. When pytest fails before producing a report, VerifyIT
+Candidate-attributed pytest collection errors score zero. When pytest fails before producing a report, VerifyIT
 checks the interpreter and JSON-report plugin from a temporary directory isolated from task
 imports. A healthy baseline makes the failed task run a scored startup error; an unavailable
 baseline remains an infrastructure error. The task's original import paths and tests still
@@ -97,6 +100,14 @@ each request. Reference verdicts record `attempt_count` and `attempts` in `detai
 verdicts record them under each entry in `detail.criteria`. Each attempt contains `finish_reason`
 and `completion_tokens` (`null` when the endpoint omits usage). An exhausted retry remains
 `infra_error`, with the available attempt diagnostics in `detail`.
+
+The `judge` pairwise rubric ports Arena-Hard's comparison with one baseline answer in `references`.
+It sends the judge two requests, with the baseline as assistant A and then as assistant B. Each
+reply's verdict is the last match of the first `verdict_patterns` entry that matches. `label_scores`
+gives assistant A's score for each verdict and `label_weights` counts a verdict as several games.
+The reward is the candidate's weighted mean score over both games. `detail.metrics.win_rate` repeats
+it and `detail.metric_weights.win_rate` holds the game count, so a weighted mean over rows equals
+Arena-Hard's mean over games. A reply without a declared verdict is an `infra_error`.
 
 The mode modules expose direct candidate graders for callers holding extracted values.
 `aggregate_rewards` combines required components with ALL, MEAN, MAX, MIN, or PRODUCT;
@@ -117,16 +128,21 @@ repeated records and rejecting unexpected errors.
 `structure_closure` classifies partial JSON, delimited JSON, paired markers, and required code
 fences. `closure_scoring` compares a completed outer region with a known reference and reports
 syntax, content preservation, and trailing output separately. `tool_call_markup` classifies
-completed `<tool_call>` markup in decoded assistant text. These helpers inspect text; the caller
-retains the sampled tokens, supplies any generation stop markers, and decides when a completed
-attempt can be scored.
+completed `<tool_call>` markup in decoded assistant text. `reasoning_markup` classifies the
+reasoning span of a decoded reply; the caller states whether the prompt opened a span that a
+leading closer may close. The `reasoning_markup` grading mode scores one when the reply holds at
+most one closed span and no stray closer, taking the prompt to open no span and excusing a span
+left open by a length stop; its verdict names the violation otherwise.
+These helpers inspect text; the caller retains the sampled tokens, supplies any generation stop
+markers, and decides when a completed attempt can be scored.
 
 `candidate_spec(mode, parameters)` builds and validates the specification of an in-process mode
 from a JSON table. `grade_candidate(spec, candidate, resources)` scores an answer the caller
 already extracted, with no filesystem or harness operations. `IN_PROCESS_MODES` lists the modes it
 accepts: `unsolvable`, `exact`, `numeric`, `mcq`, `math`, `ifeval`, `json-schema`, `xml-elements`, `csv-columns`,
-`structured_exact` and `predicted_action`. Text modes take a string, `structured_exact` takes a
-decoded JSON value, and `predicted_action` takes a tuple of `FunctionCall`. A file the specification
+`structured_exact`, `structure_closure`, `reasoning_markup` and `predicted_action`. Text modes take a string, `structured_exact` takes a
+decoded JSON value, `predicted_action` takes a tuple of `FunctionCall`, and `reasoning_markup`
+takes a `ReasoningReply` of the reply text and its stop reason. A file the specification
 names, such as the `json-schema` schema, comes from `resources`, keyed by its path relative to the
 tests directory. A specification the mode rejects yields an `invalid_task` reward; a candidate of
 the wrong type raises `TypeError`. Judge, Reasoning Gym, execution and script modes run only
@@ -143,7 +159,7 @@ verdicts. File grading of `unsolvable` always scores zero because a file cannot 
 ## Install and use
 
 ```bash
-uv tool install --python ">=3.11" "marin-verifyit[math]"
+uv tool install --python ">=3.10" "marin-verifyit[math]"
 ```
 
 The `math` extra installs `math-verify` and `sympy` for symbolic expression grading. Exact,

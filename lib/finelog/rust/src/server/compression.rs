@@ -41,7 +41,9 @@ impl CompressionProvider for ZstdProvider {
                 return zstd::bulk::decompress(data, size)
                     .map(Bytes::from)
                     .map_err(|error| {
-                        ConnectError::internal(format!("zstd decompression failed: {error}"))
+                        ConnectError::invalid_argument(format!(
+                            "zstd decompression failed: {error}"
+                        ))
                     });
             }
         }

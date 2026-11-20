@@ -360,6 +360,7 @@ def _resolve_mount_map(config: ContainerConfig, cache_dir: Path | None = None) -
 
     WORKDIR mounts resolve to config.workdir_host_path (set by task_attempt).
     OUTPUT mounts resolve to config.output_host_path.
+    SECRET mounts resolve to config.secret_host_path.
     CACHE mounts resolve to shared subdirectories under cache_dir.
     TMPFS mounts resolve to per-task temp directories under cache_dir for isolation.
     """
@@ -372,6 +373,9 @@ def _resolve_mount_map(config: ContainerConfig, cache_dir: Path | None = None) -
             if config.output_host_path:
                 config.output_host_path.mkdir(parents=True, exist_ok=True)
                 result[mount.container_path] = str(config.output_host_path)
+        elif mount.kind == MountKind.SECRET:
+            if config.secret_host_path:
+                result[mount.container_path] = str(config.secret_host_path)
         elif mount.kind == MountKind.CACHE:
             if cache_dir:
                 host_dir = cache_dir / cache_host_dirname(mount.container_path)

@@ -8,7 +8,7 @@ from typing import Protocol
 
 from rolloutengine.harness.core import Harness, HarnessContext, ModelSession
 from rolloutengine.harness.step import StepHarness
-from rolloutengine.models import ModelTurn, Prompt, RolloutLimits, TaskRolloutSpec, Transition
+from rolloutengine.models import ContextRecovery, ModelTurn, Prompt, RolloutLimits, TaskRolloutSpec, Transition
 from shellbox.machine import Machine
 from taskcompendium.models import TaskSpec
 from taskcompendium.grading_result import GradeResult
@@ -16,6 +16,7 @@ from taskcompendium.grading_result import GradeResult
 from skyrl_gym.answer_tasks import (
     grade_aime,
     grade_cat_count,
+    grade_sequence,
     grade_gsm8k,
     grade_ifeval,
     grade_mcq,
@@ -72,6 +73,8 @@ class _StepEpisode:
 
 @dataclass(frozen=True)
 class _NemotronHarness:
+    context_recovery = ContextRecovery.NEVER
+
     open_episode: Callable[[HarnessContext], TaskEpisode]
 
     def check(self, task: TaskSpec, limits: RolloutLimits) -> None:
@@ -104,6 +107,7 @@ def episode_factories(*, executor: Executor | None = None) -> dict[str, EpisodeF
     answer_graders = {
         "aime": grade_aime,
         "cat_count": grade_cat_count,
+        "sequence": grade_sequence,
         "gsm8k": grade_gsm8k,
         "ifeval": grade_ifeval,
         "mcq": grade_mcq,

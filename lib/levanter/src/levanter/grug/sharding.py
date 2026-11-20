@@ -99,11 +99,9 @@ def _drop_absent_mesh_axes(mesh: Mesh | jax.sharding.AbstractMesh, spec: Partiti
     return P(*(keep(entry) for entry in spec))
 
 
-def _reshard_for_init(x: jax.Array, spec: PartitionSpec) -> jax.Array:
+def _current_sharding(spec: PartitionSpec) -> NamedSharding | None:
     mesh = _current_mesh()
-    if mesh is None or mesh.empty:
-        return x
-    return reshard(x, NamedSharding(mesh, _drop_absent_mesh_axes(mesh, spec)))
+    return None if mesh.empty else NamedSharding(mesh, _drop_absent_mesh_axes(mesh, spec))
 
 
 def _reshard_for_shard_map(
@@ -114,10 +112,27 @@ def _reshard_for_shard_map(
     return x
 
 
-_GRUG_MESH_AXIS_NAMES: tuple[str, ...] = ("replica_dcn", "data", "context", "expert", "model")
+def keep_reduced(spec: PartitionSpec, x: jax.Array) -> PartitionSpec:
+    """Preserve ``x``'s reduced mesh axes unless ``spec`` shards over them.
+
+    Without them, the gradient is all-reduced over those axes (by the shard_map transpose) instead of left unreduced.
+    """
+    x_spec = partition_spec_of(x)
+    if x_spec is None:
+        return spec
+    sharded = {name for entry in spec for name in _axis_names(entry)}
+    return spec.update(reduced=x_spec.reduced - sharded)
 
 
-def _compact_grug_mesh_shape(
+def replicate_keeping_reduced(x: jax.Array) -> jax.Array:
+    """Replicate ``x`` while preserving its reduced mesh axes."""
+    return reshard(x, keep_reduced(P(*(None,) * x.ndim), x))
+
+
+_GRUG_MESH_AXIS_NAMES: tuple[str, ...] = ("replica_dcn", "data", "expert", "context", "model")
+
+
+def compact_grug_mesh_shape(
     *,
     process_count: int,
     local_device_count: int,
@@ -126,6 +141,10 @@ def _compact_grug_mesh_shape(
     model_axis_size: int,
     context_axis_size: int = 1,
 ) -> tuple[int, ...]:
+    """Return the ``(replica_dcn, data, expert, context, model)`` sizes `compact_grug_mesh` would build.
+
+    Takes the device counts as arguments, so launchers can check a layout before the devices exist.
+    """
     if process_count <= 0:
         raise ValueError(f"process_count must be positive, got {process_count}")
     if local_device_count <= 0:
@@ -140,16 +159,16 @@ def _compact_grug_mesh_shape(
         raise ValueError(f"context_axis_size must be positive, got {context_axis_size}")
 
     global_device_count = process_count * local_device_count
-    fixed_axes = replica_axis_size * expert_axis_size * model_axis_size * context_axis_size
+    fixed_axes = replica_axis_size * expert_axis_size * context_axis_size * model_axis_size
     if global_device_count % fixed_axes != 0:
         raise ValueError(
             f"global_device_count ({global_device_count}) must be divisible by "
-            f"replica_axis_size ({replica_axis_size}) * context_axis_size ({context_axis_size}) * "
-            f"expert_axis_size ({expert_axis_size}) * model_axis_size ({model_axis_size})"
+            f"replica_axis_size ({replica_axis_size}) * expert_axis_size ({expert_axis_size}) * "
+            f"context_axis_size ({context_axis_size}) * model_axis_size ({model_axis_size})"
         )
 
     data_axis_size = global_device_count // fixed_axes
-    return (replica_axis_size, data_axis_size, context_axis_size, expert_axis_size, model_axis_size)
+    return (replica_axis_size, data_axis_size, expert_axis_size, context_axis_size, model_axis_size)
 
 
 def compact_grug_mesh(
@@ -161,17 +180,17 @@ def compact_grug_mesh(
 ) -> Mesh:
     """Return the compact explicit mesh used by raw Grug PartitionSpecs.
 
-    The mesh is always ``(replica_dcn, data, context, expert, model)``; length-1
+    The mesh is always ``(replica_dcn, data, expert, context, model)``; length-1
     axes are kept so downstream PartitionSpecs can name any axis unconditionally.
     ``data`` absorbs whatever the other axes leave free, so a 32-process job with
-    4 local devices can build an effective ``(4, 2, 1, 16, 1)`` Grug mesh.
+    4 local devices can build an effective ``(4, 2, 16, 1, 1)`` Grug mesh.
 
     Sequence placement on ``context`` is the responsibility of the model.
     """
     if replica_axis_size is None:
         replica_axis_size = jax.process_count()
 
-    shape = _compact_grug_mesh_shape(
+    shape = compact_grug_mesh_shape(
         process_count=jax.process_count(),
         local_device_count=jax.local_device_count(),
         expert_axis_size=expert_axis_size,

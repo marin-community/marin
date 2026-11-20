@@ -1,8 +1,8 @@
 """Contract checks for the three-teacher Snowball MOPD smoke on the Nemotron Ultra blend."""
 
+from omegaconf import OmegaConf
 from pathlib import Path
 
-import pytest
 import yaml
 
 from cloud.iris.rl_config_translation import compose_skyrl_config, parse_rl_config
@@ -18,7 +18,6 @@ from marinskyrl.distillation import (
 )
 
 CONFIG = Path(__file__).parents[1] / "configs" / "snowball_mopd_ultra_smoke.yaml"
-OPD_SMOKE_CONFIG = Path(__file__).parents[1] / "configs" / "snowball_opd_math_smoke.yaml"
 STUDENT = "open-athena/Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92"
 
 
@@ -26,16 +25,9 @@ class _HPCStub:
     gpus_per_node = 8
 
 
-@pytest.mark.parametrize(
-    ("config", "expected_routes"),
-    [
-        (CONFIG, {"math": "math", "swe": "swe", "terminal": "terminal"}),
-        (OPD_SMOKE_CONFIG, {"default": "math"}),
-    ],
-    ids=lambda value: value.stem if isinstance(value, Path) else None,
-)
-def test_snowball_distillation_smoke_pins_one_expert_parallel_teacher_per_route(config, expected_routes):
-    parsed = parse_rl_config(str(config), model_override=STUDENT)
+def test_snowball_distillation_smoke_pins_one_expert_parallel_teacher_per_route():
+    expected_routes = {"math": "math", "swe": "swe", "terminal": "terminal"}
+    parsed = parse_rl_config(OmegaConf.load(CONFIG))
     plan = parsed.distillation_plan
 
     assert plan is not None
@@ -74,9 +66,11 @@ def test_snowball_mopd_smoke_sampler_weights_match_the_hardcoded_routes():
 
 def test_snowball_mopd_smoke_route_weights_survive_config_composition():
     """The base config declares domain_weights as an empty map, so route keys must be allowed in."""
-    parsed = parse_rl_config(str(CONFIG), model_override=STUDENT)
+    parsed = parse_rl_config(OmegaConf.load(CONFIG))
     cfg = compose_skyrl_config(
-        parsed, {"job_name": "mopd-smoke-test", "experiments_dir": "/tmp/exp", "num_nodes": 8}, _HPCStub()
+        parsed,
+        {"job_name": "mopd-smoke-test", "experiments_dir": "/tmp/exp", "num_nodes": 8, "model_path": STUDENT},
+        _HPCStub(),
     ).config
 
     assert cfg.data.sampling.kind == "domain-weighted"

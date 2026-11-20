@@ -33,7 +33,8 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import experiment_main
 from marin.experiment.data import mixture
 from marin.experiment.namespacing import user_namespaced_name
-from marin.training.training import LevanterCheckpoint, resolve_checkpointer_output_path
+from marin.training.levanter import resolve_checkpointer_output_path
+from marin.training.training import LevanterCheckpoint
 
 from experiments.datasets.nemotron import nemotron_datasets
 from experiments.datasets.paloma import paloma_datasets

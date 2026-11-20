@@ -2,15 +2,65 @@ import asyncio
 import json
 import sys
 import tomllib
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Coroutine, TypeVar
 
 import yaml
-
+from harbor.host_capabilities import (
+    HostCapabilities,
+    OPENAI_API_URL,
+    endpoint_authentication,
+    host_capabilities_from_environment,
+    task_model_environment,
+)
 from harbor.models.task.config import MCPServerConfig, TpuSpec
+from harbor.models.trial.config import AgentConfig
 from harbor.utils.logger import logger
 
 T = TypeVar("T")
+
+
+def cli_host_capabilities(
+    environment: Mapping[str, str],
+    *,
+    environment_kwargs: Mapping[str, Any],
+    agents: Sequence[AgentConfig] = (),
+    verifier_environment: Mapping[str, str] = {},
+) -> HostCapabilities:
+    """Resolve host authority from the CLI's snapshot and declared relay endpoints."""
+    bindings: list[tuple[str, Mapping[str, str]]] = [(OPENAI_API_URL, {})]
+    if endpoint := environment_kwargs.get("model_endpoint"):
+        bindings.append((endpoint, verifier_environment))
+    if endpoint := environment_kwargs.get("candidate_model_endpoint"):
+        bindings.append((endpoint, agents[0].env if agents else {}))
+    for agent in agents:
+        if endpoint := agent.kwargs.get("api_base"):
+            bindings.append((endpoint, agent.env))
+    authentication = {}
+    for endpoint, declarations in bindings:
+        resolved = endpoint_authentication(endpoint, declarations, source=environment)
+        if (
+            endpoint in authentication
+            and authentication[endpoint] != resolved[endpoint]
+        ):
+            raise ValueError(
+                "Candidate and judge credentials conflict for the same host endpoint"
+            )
+        authentication.update(resolved)
+    return host_capabilities_from_environment(
+        environment, model_authentication=authentication
+    )
+
+
+def cli_guest_environment(environment_kwargs: Mapping[str, Any]) -> dict[str, str]:
+    """Declare guest model capabilities without copying host environment values."""
+    if not environment_kwargs.get("model_endpoint"):
+        return {}
+    model_name = environment_kwargs.get("model_name")
+    if not model_name:
+        raise ValueError("A model endpoint requires an explicit model_name")
+    return task_model_environment(model_name)
 
 
 def run_async(coro: Coroutine[Any, Any, T]) -> T:

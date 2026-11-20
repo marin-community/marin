@@ -7,7 +7,7 @@ A narrow record-bag threaded through the per-update kernel.
 """
 
 from collections.abc import Iterable
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from rigging.timing import Timestamp
 
@@ -36,6 +36,31 @@ _T = TypeVar("_T")
 def _first(old: Timestamp | None, new: Timestamp | None) -> Timestamp | None:
     """First-non-null fold: ``coalesce(col, new)`` where ``col`` is the earlier write."""
     return old if old is not None else new
+
+
+def _attempt_delta_changes_row(prior: Any, delta: AttemptRowDelta) -> bool:
+    """Whether flushing ``delta`` changes the attempt row ``prior`` (as ``_flush_attempts`` writes it).
+
+    ``started_at`` and ``finished_at`` are first-wins, so they change only an unset
+    column; every other field is last-non-null, so it changes a column it differs from.
+    """
+    return (
+        (delta.started_at is not None and prior.started_at_ms is None)
+        or (delta.finished_at is not None and prior.finished_at_ms is None)
+        or any(
+            new is not None and new != old
+            for new, old in (
+                (delta.state, prior.state),
+                (delta.exit_code, prior.exit_code),
+                (delta.error, prior.error),
+                (delta.pod_name, prior.pod_name),
+                (delta.pod_uid, prior.pod_uid),
+                (delta.node_name, prior.node_name),
+                (delta.terminal_reason, prior.terminal_reason),
+                (delta.topology, prior.topology_json),
+            )
+        )
+    )
 
 
 def _last_non_null(old: _T | None, new: _T | None) -> _T | None:
@@ -246,6 +271,14 @@ class Overlay:
         state last-wins; error/exit_code/container_id/status_message last-non-null;
         started_at first-non-null; finished_at last-wins (may clear to None).
         """
+        prior = self._snapshot.tasks.get(delta.task_id)
+        if (
+            prior is None
+            or delta.state != prior.state
+            or (delta.error is not None and delta.error != prior.error)
+            or (delta.exit_code is not None and delta.exit_code != prior.exit_code)
+        ):
+            self._effects.changed_tasks.add(delta.task_id)
         old = self._effects.tasks.get(delta.task_id)
         if old is None:
             self._effects.tasks[delta.task_id] = delta
@@ -269,6 +302,9 @@ class Overlay:
         ``finished_at`` is coalesce-with-column / first-wins).
         """
         key = (delta.task_id, delta.attempt_id)
+        prior = self._snapshot.attempts.get(key)
+        if prior is None or _attempt_delta_changes_row(prior, delta):
+            self._effects.changed_attempts.add(key)
         old = self._effects.attempts.get(key)
         if old is None:
             merged = delta
@@ -286,6 +322,7 @@ class Overlay:
                 node_name=_last_non_null(old.node_name, delta.node_name),
                 terminal_reason=_last_non_null(old.terminal_reason, delta.terminal_reason),
                 output_archive=_last_non_null(old.output_archive, delta.output_archive),
+                topology=_last_non_null(old.topology, delta.topology),
             )
         self._effects.attempts[key] = merged
         # The job-wide failure budget counts FAILED attempt deltas (job_basis); a

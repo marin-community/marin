@@ -1,42 +1,27 @@
 # BFCL structural completion tasks
 
-This curation source creates online training tasks that ask a model to continue an
-unfinished assistant message. The disjoint validation split measures the same
-completion behavior. Tasks cover JSON objects, arrays, nesting, escapes, tool
-and reasoning delimiters, code fences, and repeated tool openers. Some
-instructions include the reference answer; these measure conditional
-completion, not independent task solving.
+The task curation catalog exposes `bfcl-structure-closure-train` and
+`bfcl-structure-closure-validation`. The reader creates JSON, tool, reasoning,
+and code-fence cases during `process_rows`. Cases that include a reference
+in the prompt measure conditional completion. Each BFCL parent belongs to
+one cohort, and BFCL-Parity parents stay out of training and validation.
 
-The source directory contains `bfcl_complement-manifest.json` and each listed
-task's `bfcl_complement/<name>/solution/solve.sh`. The split JSON has
-`train_task_ids`, `diagnostic_reserved_task_ids` (validation), and
-`parity_task_ids`. Creation checks that training and validation parents are
-disjoint and that parity parents enter neither split.
+Shared download steps stage the published split audit, oracle inventory,
+and initializer tokenizer from a pinned Hugging Face release. The split audit
+stores the exact task IDs from the original diagnostic manifest. The inventory
+and audit must name the same original split checksum and agree on the
+training and validation task IDs. [Campaign release][release]
 
-`source.sources()` declares train and validation `RlDataSource` entries with
-`pipeline=process_rows`. Its custom reader expands each manifest parent into
-closure cases as the curation pipeline normalizes rows. The converter makes
-each row an ordinary TaskSpec with a user instruction, an
-assistant text prefix, and a `StructureClosureSpec` grader. Select
-RolloutEngine's `PrefillHarness` explicitly when training or evaluating; it
-grades the raw assistant continuation. Parsed reasoning and tool actions are
-unscored. The synthetic `write_result` tool is never executed.
+The download step fetches the original `solution/solve.sh` files at a pinned
+Harbor datasets commit and checks each file against its SHA-256 in the
+inventory. Case generation reads the answer heredoc as JSON. [Upstream BFCL
+source][upstream]
 
-`TrainingPrefix.NEAR_BOUNDARY` advances training continuation prefixes to a point where
-closing immediately would lose required content. For example, `["first", "second"]`
-may have prefix `["first", "secon`: appending `"]` gives valid JSON but loses
-the final `d`. Validation cases remain unchanged. Use `TrainingPrefix.ORIGINAL`
-for the initial boundaries.
+Tool cases use the staged tokenizer's native chat template and advertise the
+`write_result` tool schema. The reader serializes tool calls before advancing
+training continuation prefixes to a boundary where immediate closure would
+drop required content. Select RolloutEngine's `AssistantPrefixHarness` to
+preserve the raw continuation for the shared `StructureClosureSpec` grader.
 
-`ToolPrompt.NATIVE_DECLARED` uses a pinned tokenizer input to serialize tool
-calls with its chat template and advertise their schema.
-`tasks.paired_task_probes` creates four diagnostic TaskSpecs that cross
-declared and undeclared tools with compact and native serialization.
-
-The source factory requires pinned BFCL, split-manifest, and, for native tool
-serialization, tokenizer locations. The BFCL artifact is currently available
-only as an S3 path and the split-manifest location is not recorded here, so the
-factory is not yet in `all_sources()`. Supply those pins before publishing the
-source through the catalog.
-The [reproduction guide](../../../structure_closure/README.md) covers exact
-token exports and historical evaluation audits.
+[release]: https://huggingface.co/datasets/open-athena/Complex-Closure-RLVR-Snowball-67B-A2B-Artifacts/tree/d62ce3939fa900b2dad9344428bb7ac16917127a
+[upstream]: https://github.com/laude-institute/harbor-datasets/tree/6bedd7878dc5d6f3456b4d80b781eb3c2d84f262/datasets/bfcl

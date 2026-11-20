@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bounded GB200 diagnostics for the production EP64 MoE hero recipe."""
+"""Bounded GB200 diagnostics for the production MoE hero recipe."""
 
 import dataclasses
 import os
@@ -12,7 +12,6 @@ from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointDebugConfig, CheckpointerConfig
-from levanter.grug.sharding import _compact_grug_mesh_shape
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -20,28 +19,41 @@ from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
 from rigging.filesystem.storage_path import prefix_join
 
+from experiments.grug.moe_hero_ep.harrier_length_stats import harrier_length_statistics
+from experiments.grug.moe_hero_ep.harrier_long_context_mix import (
+    LONG_CONTEXT_TAG,
+    harrier_long_context_data_config,
+)
 from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
     HARRIER_MIX_2026_08_18_STORE,
     HARRIER_MIX_2026_08_18_TAG,
+    SIMULATED_EPOCHING_MAX_FLOPS,
     harrier_mix_2026_08_18_data_config,
 )
 from experiments.grug.moe_hero_ep.hero_recipe import (
     DEFAULT_WANDB_PROJECT,
-    HERO_EP_EXPERT_AXIS_SIZE,
+    HERO_BALANCE_ATTENTION_ROWS,
+    HERO_CONTEXT_AXIS_SIZE,
     HERO_EP_NODES,
     HERO_GPUS_PER_NODE,
     HERO_MASTER_PARAM_MODE,
+    HERO_MAX_GRAD_NORM,
     HERO_MODEL_CONFIG,
     HERO_NODE_CPU,
     HERO_NODE_DISK,
     HERO_NODE_RAM,
     HERO_PROCESSES_PER_TASK,
+    HERO_RACK_GPUS,
+    HERO_SCHEDULE_EXTENSION,
     HERO_TENSORSTORE_CACHE_BYTES,
     HERO_WATCH_INTERVAL,
     HeroThroughputResult,
+    hero_expert_axis_size,
     hero_grug_trainer_config,
     hero_rack_batch_size,
     hero_trainer_config,
+    validate_model_split,
+    validated_batch_axis_size,
     validation_datasets,
     with_transport_remat_mode,
 )
@@ -54,38 +66,11 @@ from experiments.grug.moe_hero_ep.train import (
     TrainingDataMode,
     WatchMode,
     _compute_flops,
-    grug_trainer_mesh_config,
     run_grug,
 )
 
 DEFAULT_HERO_STEPS = 25
 HERO_CHECKPOINT_INTERVAL = timedelta(minutes=15)
-# The hero has no tensor parallelism.
-HERO_MODEL_AXIS_SIZE = 1
-
-
-def validated_batch_axis_size(
-    *, device_count: int, dp_racks: int, batch_size: int, context_axis_size: int, expert_axis_size: int
-) -> int:
-    """Validate mesh and batch divisibility; return the replica * data * expert product.
-
-    Context and model axes do not partition the batch.
-    """
-    replica, data, _context, expert, _model = _compact_grug_mesh_shape(
-        process_count=device_count,
-        local_device_count=1,
-        expert_axis_size=expert_axis_size,
-        replica_axis_size=dp_racks,
-        model_axis_size=HERO_MODEL_AXIS_SIZE,
-        context_axis_size=context_axis_size,
-    )
-    batch_axes = replica * data * expert
-    if batch_size % batch_axes != 0:
-        raise ValueError(
-            f"batch_size={batch_size} must be divisible by the batch axes replica ({replica}) * "
-            f"data ({data}) * expert ({expert}) = {batch_axes}"
-        )
-    return batch_axes
 
 
 def build_diagnostic_run(
@@ -102,12 +87,19 @@ def build_diagnostic_run(
     capacity_factor: float | None = None,
     latent_dim: int | None = None,
     max_seq_len: int | None = None,
-    context_axis_size: int = 1,
-    expert_axis_size: int = HERO_EP_EXPERT_AXIS_SIZE,
+    context_axis_size: int = HERO_CONTEXT_AXIS_SIZE,
+    expert_axis_size: int | None = None,
+    balance_attention_rows: bool = HERO_BALANCE_ATTENTION_ROWS,
     qk_mult: float | None = None,
     qk_mult_long_scale: float | None = None,
+    log_scaling_n_floor: int | None = None,
+    log_scaling_alpha: float | None = None,
+    log_scaling_power: float | None = None,
+    disable_log_scaling: bool = False,
     restore_from: str | None = None,
+    long_context_start_step: int | None = None,
     moe_implementation: str | None = None,
+    ce_grad_in_forward_token_block_size: int | None = None,
     master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
     processes_per_task: int = HERO_PROCESSES_PER_TASK,
     eval_every: int = 0,
@@ -123,16 +115,24 @@ def build_diagnostic_run(
     training_data_mode: TrainingDataMode = TrainingDataMode.MIXTURE,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
-    """Build a bounded diagnostic run for the production EP64 hero recipe.
+    """Build a bounded diagnostic run for the production hero recipe.
 
     The overrides sweep expert count, expert width, routed top-k, and routing capacity from the
     hero spec. They keep the hidden dimension, so the compute-scaled optimizer values stay
     comparable across a sweep. ``None`` keeps the hero value.
 
+    The context axis and row balancing default to the hero's, and ``expert_axis_size=None`` fills the rest
+    of each rack (``hero_expert_axis_size``).
+
     ``batch_size`` is the global batch across all data-parallel racks. It does not scale with
     ``dp_racks``. ``None`` selects the hero's tokens per rack at the model's context length.
     ``batch_size``, ``max_seq_len``, and ``schedule_steps`` determine the heuristic token budget.
+
+    ``HERO_SCHEDULE_EXTENSION`` sets the learning rate past ``schedule_steps``, and ``num_steps`` can reach its
+    last step.
     """
+    if expert_axis_size is None:
+        expert_axis_size = hero_expert_axis_size(context_axis_size)
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
     if dp_racks <= 0:
@@ -148,7 +148,8 @@ def build_diagnostic_run(
     if profile_steps > 0 and profile_start_step >= num_steps:
         raise ValueError(f"profile_start_step must be less than num_steps={num_steps}, got {profile_start_step}")
     # `schedule_steps` sets the whole learning-rate schedule; `num_steps` is the absolute step the
-    # run stops at (a restore resumes mid-schedule, so it must lie past the restored step).
+    # run stops at (a restore resumes mid-schedule, so a stop at the restored step trains nothing and one
+    # before it fails).
     # Both matter, and they enter in different places. The optimizer heuristic scales learning rate,
     # adam_lr, and epsilon from a token budget (`num_train_steps * batch * seq`), which fixes the
     # peak. Warmup and decay are *fractions* of `TrainerConfig.num_train_steps`, so that field has to
@@ -157,8 +158,12 @@ def build_diagnostic_run(
     # rather than the head of a long one. Default keeps the two equal, which is the previous behavior.
     if schedule_steps is not None and schedule_steps <= 0:
         raise ValueError(f"schedule_steps must be positive, got {schedule_steps}")
-    if schedule_steps is not None and schedule_steps < num_steps:
-        raise ValueError(f"schedule_steps={schedule_steps} must be at least num_steps={num_steps}")
+    extension_steps = HERO_SCHEDULE_EXTENSION.steps if HERO_SCHEDULE_EXTENSION is not None else 0
+    if schedule_steps is not None and schedule_steps + extension_steps < num_steps:
+        raise ValueError(
+            f"num_steps={num_steps} must not pass schedule_steps={schedule_steps} "
+            f"plus the {extension_steps}-step schedule extension"
+        )
     total_schedule_steps = schedule_steps if schedule_steps is not None else num_steps
     model = HERO_MODEL_CONFIG
     overrides = {
@@ -172,12 +177,27 @@ def build_diagnostic_run(
             ("max_seq_len", max_seq_len),
             ("qk_mult", qk_mult),
             ("qk_mult_long_scale", qk_mult_long_scale),
+            ("log_scaling_n_floor", log_scaling_n_floor),
+            ("log_scaling_alpha", log_scaling_alpha),
+            ("log_scaling_power", log_scaling_power),
             ("moe_implementation", moe_implementation),
+            ("ce_grad_in_forward_token_block_size", ce_grad_in_forward_token_block_size),
         )
         if value is not None
     }
+    log_scaling_set = any(value is not None for value in (log_scaling_n_floor, log_scaling_alpha, log_scaling_power))
+    if disable_log_scaling:
+        if log_scaling_set:
+            raise ValueError("disable_log_scaling excludes the other log scaling options")
+        overrides.update(log_scaling_n_floor=None, log_scaling_alpha=None, log_scaling_power=None)
     if overrides:
         model = dataclasses.replace(model, **overrides)
+    floor = model.log_scaling_n_floor
+    if log_scaling_set and floor is not None and floor >= model.max_seq_len:
+        raise ValueError(
+            f"log_scaling_n_floor={floor} scales no query at max_seq_len={model.max_seq_len}; "
+            "this arm would be a control"
+        )
     model = with_transport_remat_mode(model)
     if batch_size is None:
         batch_size = hero_rack_batch_size(model.max_seq_len)
@@ -187,29 +207,15 @@ def build_diagnostic_run(
         hidden_dim=model.hidden_dim,
         seq_len=model.max_seq_len,
     )
+    optimizer = dataclasses.replace(optimizer, schedule_extension=HERO_SCHEDULE_EXTENSION)
     batch_axes = validated_batch_axis_size(
-        device_count=HERO_EP_NODES * HERO_GPUS_PER_NODE * dp_racks,
+        device_count=HERO_RACK_GPUS * dp_racks,
         dp_racks=dp_racks,
         batch_size=batch_size,
         context_axis_size=context_axis_size,
         expert_axis_size=expert_axis_size,
     )
-    if model.max_seq_len % context_axis_size:
-        raise ValueError(f"context_axis_size={context_axis_size} must divide max_seq_len={model.max_seq_len}")
-    # A bank that is not divisible by the expert axis fails inside `moe_mlp`, and one not divisible by
-    # the (expert, context) storage split fails in parameter init; both are after the rack is already
-    # allocated and the workspace is built. Reject them here instead.
-    bank_shards = expert_axis_size * context_axis_size
-    if model.num_experts % bank_shards != 0:
-        raise ValueError(
-            f"num_experts={model.num_experts} must be divisible by expert ({expert_axis_size}) * "
-            f"context ({context_axis_size}) = {bank_shards}, the expert bank's storage split"
-        )
-    local_experts = model.num_experts // expert_axis_size
-    if local_experts % model.num_expert_waves != 0:
-        raise ValueError(
-            f"local expert count={local_experts} must be divisible by num_expert_waves={model.num_expert_waves}"
-        )
+    validate_model_split(model, context_axis_size=context_axis_size, expert_axis_size=expert_axis_size)
     # The ragged transport requires one GPU per process; fail fast if this is not satisfied.
     if model.moe_implementation == RAGGED_MOE_IMPLEMENTATION and processes_per_task != HERO_GPUS_PER_NODE:
         raise ValueError(
@@ -231,11 +237,12 @@ def build_diagnostic_run(
         training_data_mode=training_data_mode,
         watch_mode=watch_mode,
         save_checkpoints=save_checkpoints,
+        max_grad_norm=HERO_MAX_GRAD_NORM,
+        context_axis_size=context_axis_size,
+        expert_axis_size=expert_axis_size,
+        balance_attention_rows=balance_attention_rows,
         gc_interval=gc_interval,
         master_param_mode=master_param_mode,
-    )
-    grug_trainer = dataclasses.replace(
-        grug_trainer, context_axis_size=context_axis_size, expert_axis_size=expert_axis_size
     )
     train_resources = ResourceConfig.with_gpu(
         "GB200",
@@ -247,7 +254,10 @@ def build_diagnostic_run(
     )
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
+    if long_context_start_step and restore_from is None:
+        raise ValueError("--long-context-start-step past step 0 requires --restore-from at or after that step")
     validation = validation_datasets() if eval_every > 0 else []
+    length_statistics = harrier_length_statistics() if long_context_start_step is not None else None
     flops_per_example, _ = _compute_flops(model_config=model)
     experiment_flops = flops_per_example * batch_size * total_schedule_steps
 
@@ -291,6 +301,7 @@ def build_diagnostic_run(
                     size_tag,
                     "gb200",
                     HARRIER_MIX_2026_08_18_TAG,
+                    *([LONG_CONTEXT_TAG] if long_context_start_step is not None else []),
                     "MHEP",
                 ],
                 group="moe-hero-ep",
@@ -310,17 +321,26 @@ def build_diagnostic_run(
                 keep_last_temporary_checkpoints=1,
                 debug=checkpoint_debug or CheckpointDebugConfig(),
             ),
+            context_axis_size=context_axis_size,
         )
-        if context_axis_size > 1:
-            trainer = dataclasses.replace(trainer, mesh=grug_trainer_mesh_config(context_axis_size))
-        data = harrier_mix_2026_08_18_data_config(
-            ctx=ctx,
-            total_steps=total_schedule_steps,
-            batch_size=batch_size,
-            max_seq_len=model.max_seq_len,
-            experiment_flops=experiment_flops,
-            validation=validation,
-        )
+        if length_statistics is None:
+            data = harrier_mix_2026_08_18_data_config(
+                ctx=ctx,
+                total_steps=total_schedule_steps,
+                batch_size=batch_size,
+                max_seq_len=model.max_seq_len,
+                enable_simulated_epoching=experiment_flops <= SIMULATED_EPOCHING_MAX_FLOPS,
+                validation=validation,
+            )
+        else:
+            assert long_context_start_step is not None
+            data = harrier_long_context_data_config(
+                ctx=ctx,
+                start_step=long_context_start_step,
+                max_seq_len=model.max_seq_len,
+                validation=validation,
+                stats_path=ctx.artifact_path(length_statistics),
+            )
         return GrugRunConfig(
             model=model,
             data=data,
@@ -352,7 +372,11 @@ def build_diagnostic_run(
         artifact_type=HeroThroughputResult,
         run=run_grug,
         build_config=build_config,
-        deps=(HARRIER_MIX_2026_08_18_STORE, *validation),
+        deps=(
+            HARRIER_MIX_2026_08_18_STORE,
+            *validation,
+            *((length_statistics,) if length_statistics is not None else ()),
+        ),
         runtime_args={"train_resources": train_resources},
     )
 
@@ -400,7 +424,8 @@ def build_diagnostic_run(
     show_default=True,
     help=(
         "Override the routed expert count. The count must be divisible by --expert-axis-size * --context-axis-size, "
-        f"and the local expert count must support {HERO_MODEL_CONFIG.num_expert_waves} waves."
+        "and with the pooled-wave transport the local expert count must split into its "
+        f"{HERO_MODEL_CONFIG.num_expert_waves} waves."
     ),
 )
 @click.option(
@@ -430,6 +455,12 @@ def build_diagnostic_run(
     "--moe-implementation",
     default=None,
     help="Override the MoE backend, e.g. ragged_all_to_all. Defaults to the hero spec.",
+)
+@click.option(
+    "--ce-grad-in-forward-token-block-size",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Compute the training cross-entropy's gradients in its forward, in blocks of this many rows per rank.",
 )
 @click.option(
     "--master-params",
@@ -539,11 +570,22 @@ def build_diagnostic_run(
 @click.option(
     "--context-axis-size",
     type=click.IntRange(min=1),
-    default=1,
+    default=HERO_CONTEXT_AXIS_SIZE,
     show_default=True,
     help="Context-parallel axis width. Partitions sequence positions across devices.",
 )
-@click.option("--expert-axis-size", type=click.IntRange(min=1), default=HERO_EP_EXPERT_AXIS_SIZE, show_default=True)
+@click.option(
+    "--expert-axis-size",
+    type=click.IntRange(min=1),
+    default=None,
+    help=f"Expert axis width. Defaults to the rest of the rack: {HERO_RACK_GPUS} / --context-axis-size.",
+)
+@click.option(
+    "--balance-attention-rows/--no-balance-attention-rows",
+    default=HERO_BALANCE_ATTENTION_ROWS,
+    show_default=True,
+    help="Deal rows to batch shards by attention cost.",
+)
 @click.option(
     "--qk-mult",
     type=click.FloatRange(min=0, min_open=True),
@@ -554,9 +596,46 @@ def build_diagnostic_run(
     "--qk-mult-long-scale",
     type=click.FloatRange(min=0, min_open=True),
     default=None,
-    help="Extra multiplier on --qk-mult for the global (full-causal) layers only. Defaults to 1.0.",
+    help="Extra multiplier on --qk-mult for the global (full-causal) layers only. Defaults to the hero configuration.",
+)
+@click.option(
+    "--log-scaling-n-floor",
+    type=click.IntRange(min=1),
+    default=None,
+    help=(
+        "Scale each global-layer query seeing n keys in its document by "
+        "(1 + --log-scaling-alpha * ln(max(n / this value, 1))) ** --log-scaling-power, on top of --qk-mult and "
+        "--qk-mult-long-scale. Unset keeps the hero's value."
+    ),
+)
+@click.option(
+    "--log-scaling-alpha",
+    type=click.FloatRange(min=0, min_open=True),
+    default=None,
+    help="Slope of the log scaling. Unset keeps the hero's value.",
+)
+@click.option(
+    "--log-scaling-power",
+    type=click.FloatRange(min=0, min_open=True),
+    default=None,
+    help="Exponent on the log scaling factor. Unset keeps the hero's value.",
+)
+@click.option(
+    "--no-log-scaling",
+    "disable_log_scaling",
+    is_flag=True,
+    help="Turn off the hero's log scaling, for a control arm. Excludes the other --log-scaling-* options.",
 )
 @click.option("--restore-from", default=None, help="Checkpoint to restore; outputs use this run's own path.")
+@click.option(
+    "--long-context-start-step",
+    type=click.IntRange(min=0),
+    default=None,
+    help=(
+        "Train on the long-context mix, starting each bucket at this step. Pass the --restore-from step so arms "
+        "on any rack count read the same sequence stream. Defaults to the Harrier mix."
+    ),
+)
 @build_options
 def main(
     run_id: str,
@@ -571,6 +650,7 @@ def main(
     capacity_factor: float | None,
     latent_dim: int | None,
     moe_implementation: str | None,
+    ce_grad_in_forward_token_block_size: int | None,
     master_params: str,
     processes_per_task: int,
     save_checkpoints: bool,
@@ -586,10 +666,16 @@ def main(
     training_data: str,
     seq_len: int | None,
     context_axis_size: int,
-    expert_axis_size: int,
+    expert_axis_size: int | None,
+    balance_attention_rows: bool,
     qk_mult: float | None,
     qk_mult_long_scale: float | None,
+    log_scaling_n_floor: int | None,
+    log_scaling_alpha: float | None,
+    log_scaling_power: float | None,
+    disable_log_scaling: bool,
     restore_from: str | None,
+    long_context_start_step: int | None,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_diagnostic_run(
         run_id=run_id,
@@ -606,10 +692,17 @@ def main(
         max_seq_len=seq_len,
         context_axis_size=context_axis_size,
         expert_axis_size=expert_axis_size,
+        balance_attention_rows=balance_attention_rows,
         qk_mult=qk_mult,
         qk_mult_long_scale=qk_mult_long_scale,
+        log_scaling_n_floor=log_scaling_n_floor,
+        log_scaling_alpha=log_scaling_alpha,
+        log_scaling_power=log_scaling_power,
+        disable_log_scaling=disable_log_scaling,
         restore_from=restore_from,
+        long_context_start_step=long_context_start_step,
         moe_implementation=moe_implementation,
+        ce_grad_in_forward_token_block_size=ce_grad_in_forward_token_block_size,
         master_param_mode=MasterParamMode(master_params),
         processes_per_task=processes_per_task,
         save_checkpoints=save_checkpoints,
