@@ -297,6 +297,168 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
         snowball.build_experiment(learning, table=snowball_model.SNOWBALL)
 
 
+def test_harbor_coverage_controls_best_checkpoint(selection, tmp_path):
+    table = snowball_model.SNOWBALL
+    preset = table.by_name["train-long-harbor"]
+    with pytest.raises(click.BadParameter, match=r"Harbor evaluation requires generator\.enable_http_endpoint"):
+        snowball.build_experiment(preset, table=table, settings=("generator.enable_http_endpoint=false",))
+
+    wider_window = ("context_budget.serving_window_tokens=28672",)
+    paths = []
+    for index, (settings, output_cap) in enumerate((((), None), (wider_window, 4096), (wider_window, 28672))):
+        step = snowball.build_experiment(preset, table=table, settings=settings).runs[0]
+        path = tmp_path / f"harbor-{index}.yaml"
+        document = yaml.safe_load(materialized_config(step, str(tmp_path)).launch_config_yaml)
+        if output_cap is not None:
+            callback = next(
+                row for row in document["skyrl"]["trainer"]["callbacks"] if row["type"] == "harbor_evaluation"
+            )
+            for cohort in callback["cohorts"]:
+                cohort["job"]["agents"][0]["kwargs"]["model_info"]["max_output_tokens"] = output_cap
+            if index == 1:
+                del callback["cohorts"][-1]["job"]["agents"][0]["kwargs"]["model_info"]["max_output_tokens"]
+        path.write_text(yaml.safe_dump(document))
+        paths.append(str(path))
+    selected = native_json("--isolated", "--group", "harbor-test")(
+        """
+import asyncio, json, os, sys
+from pathlib import Path
+from types import SimpleNamespace
+from cloud.iris.launch_config import load_launch_config
+from harbor.models.job.config import JobConfig
+from omegaconf import OmegaConf
+from skyrl_train.callbacks.base import CallbackHandler, TrainerState, TrainerControl
+from skyrl_train.callbacks.builtin import HarborEvaluationCallback, create_callbacks_from_config
+from skyrl_train.evaluation_pool import EvaluationPool
+
+config, changed = (load_launch_config(path) for path in map(Path, sys.argv[1:3]))
+try:
+    load_launch_config(Path(sys.argv[3]))
+except ValueError as error:
+    assert "Harbor output tokens must leave room for input" in str(error), str(error)
+else:
+    raise AssertionError("Harbor accepted a reply cap equal to the serving window")
+
+windows = []
+for launch in (config, changed):
+    window = launch.skyrl.generator.engine_init_kwargs.max_model_len
+    windows.append(window)
+    harbor = next(row for row in launch.skyrl.trainer.callbacks if row.type == "harbor_evaluation")
+    for cohort in harbor.cohorts:
+        job = JobConfig.model_validate(OmegaConf.to_container(cohort.job, resolve=True))
+        model_info = job.agents[0].kwargs["model_info"]
+        assert model_info["max_input_tokens"] == window, model_info
+        assert model_info.get("max_output_tokens", 0) < window, (model_info, window)
+        agent = job.agents[0]
+        verifier_budget = job.verifier.override_timeout_sec or job.verifier.max_timeout_sec
+        assert verifier_budget is not None
+        agent_budget = agent.override_setup_timeout_sec + agent.override_timeout_sec
+        assert agent_budget + verifier_budget < job.trial_attempt_timeout_sec
+        attempt_budget = job.trial_attempt_timeout_sec + job.trial_cleanup_grace_sec
+        assert 2 * attempt_budget + job.retry.min_wait_sec < harbor.timeout
+assert windows[0] != windows[1]
+
+changed_harbor = next(row for row in changed.skyrl.trainer.callbacks if row.type == "harbor_evaluation")
+changed_harbor.cohorts[0].job.environment.kwargs.image_build = "unrecognized-build"
+try:
+    create_callbacks_from_config(changed.skyrl)
+except ValueError as error:
+    assert "unrecognized-build" in str(error), str(error)
+else:
+    raise AssertionError("Harbor accepted an unknown Daytona image build")
+
+selected = []
+for index, (native, cohorts) in enumerate(((99, (27, 27, 27)), (98, (30, 30, 30)), (100, (26, 30, 30)))):
+    directory = Path(sys.argv[1]).parent / f"coverage-{index}"
+    config.skyrl.trainer.ckpt_path = str(directory)
+    metrics = {"eval/all/num_attempted": 100, "eval/all/num_scored": native, "eval/all/avg_verifier_score": 0.5}
+    harbor = next(row for row in config.skyrl.trainer.callbacks if row.type == "harbor_evaluation")
+    for cohort, scored in zip(harbor.cohorts, cohorts, strict=True):
+        prefix = f"eval/harbor/{cohort.name}/"
+        metrics.update({prefix + "num_attempted": 30, prefix + "num_scored": scored, prefix + "reward_sum": scored / 2})
+    handler = CallbackHandler(create_callbacks_from_config(config.skyrl))
+    state = TrainerState(global_step=0, epoch=0, total_steps=100, num_steps_per_epoch=100)
+    asyncio.run(handler.call_event_async("on_evaluate", state, TrainerControl(), metrics=metrics,
+                                       trainer=SimpleNamespace(cfg=config.skyrl)))
+    selected.append((directory / "best_checkpoint.json").exists())
+
+worker = r'''
+import json, socket, sys, traceback
+from harbor.models.job.config import JobConfig
+expected = json.loads(sys.argv[2])
+connection = socket.socket(fileno=int(sys.argv[1]))
+with connection.makefile("rwb") as stream:
+    for line in stream:
+        message = json.loads(line)
+        try:
+            job = JobConfig.model_validate(message["cohort"]["job"])
+            if expected is None:
+                assert job.telemetry is None
+            else:
+                assert job.telemetry is not None
+                actual = {
+                    "endpoint": job.telemetry.endpoint.get_secret_value(),
+                    "root_run_uid": job.telemetry.root_run_uid,
+                    "execution_uid": job.telemetry.execution_uid,
+                    "serving_job_id": job.telemetry.serving_job_id,
+                }
+                assert actual == expected, (actual, expected)
+            response = {"id": message["id"], "metrics": {"num_attempted": 1, "num_scored": 1, "reward_sum": 1}}
+        except Exception:
+            response = {"id": message["id"], "error": traceback.format_exc()}
+        stream.write((json.dumps(response) + "\\n").encode())
+        stream.flush()
+'''
+
+async def check_runtime_handoff():
+    callback = next(item for item in create_callbacks_from_config(config.skyrl)
+                    if isinstance(item, HarborEvaluationCallback))
+    trainer = SimpleNamespace(
+        cfg=config.skyrl,
+        inference_engine_client=SimpleNamespace(
+            enable_http_endpoint=True, model_name="policy", http_endpoint_host="127.0.0.1", http_endpoint_port=8000,
+        ),
+    )
+    original_exec = asyncio.create_subprocess_exec
+    expected = None
+
+    async def start_worker(*args, **kwargs):
+        return await original_exec(sys.executable, "-c", worker, args[-1], json.dumps(expected), **kwargs)
+
+    asyncio.create_subprocess_exec = start_worker
+    try:
+        endpoint = "http://127.0.0.1:4318/iris-capability/v1/telemetry"
+        os.environ.update(
+            SKYRL_RUN_ID=str(config.run.id),
+            SKYRL_EXECUTION_UID="iris:uid-native",
+            IRIS_TASK_ID="/test/native/0:1",
+        )
+        for enabled in (True, False):
+            if enabled:
+                os.environ["SKYRL_TELEMETRY_ENDPOINT"] = endpoint
+            else:
+                os.environ.pop("SKYRL_TELEMETRY_ENDPOINT", None)
+            expected = {
+                "endpoint": endpoint,
+                "root_run_uid": str(config.run.id),
+                "execution_uid": "iris:uid-native",
+                "serving_job_id": "/test/native",
+            } if enabled else None
+            async with EvaluationPool(3) as pool:
+                metrics = await callback.collect_evaluation(state, trainer=trainer, pool=pool)
+            assert all(metrics[f"eval/harbor/{cohort['name']}/num_scored"] == len(cohort["job"]["tasks"])
+                       for cohort in callback.cohorts), metrics
+    finally:
+        asyncio.create_subprocess_exec = original_exec
+os.environ["DAYTONA_EVAL_API_KEY"] = "test-eval-credential"
+asyncio.run(check_runtime_handoff())
+print(json.dumps(selected))
+""",
+        paths,
+    )
+    assert selected == [True, False, False]
+
+
 @pytest.mark.parametrize(
     ("kind", "record_config", "tokenizer", "revision"),
     [
@@ -347,6 +509,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             "2026.11.20.1": "8f532da2",
             "2026.11.20.3": "dc52613e",
             "2026.11.20.4": "b63f9f76",
+            "2026.11.20.7": "9bab85ef",
         },
         "data-short": {
             "2026.11.13.1": "7d9a590f",
@@ -355,6 +518,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             "2026.11.20.1": "a379319d",
             "2026.11.20.3": "d4749482",
             "2026.11.20.4": "92dc9404",
+            "2026.11.20.7": "0ad7e1de",
         },
         "speed-medium": {
             "2026.11.12.1": "e75349ff",
@@ -363,6 +527,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             "2026.11.20.1": "8b7e47c8",
             "2026.11.20.3": "dbc38bdf",
             "2026.11.20.4": "ed50475d",
+            "2026.11.20.7": "ed50475d",
         },
         "learning-medium": {
             "2026.11.12.1": "ba638a12",
@@ -372,6 +537,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             "2026.11.20.2": "b3044b9b",
             "2026.11.20.3": "4411fd8b",
             "2026.11.20.4": "3e93b666",
+            "2026.11.20.7": "3e93b666",
         },
         "data-medium": {
             "2026.11.12.1": "ba638a12",
@@ -381,6 +547,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             "2026.11.20.2": "b3044b9b",
             "2026.11.20.3": "4411fd8b",
             "2026.11.20.4": "3e93b666",
+            "2026.11.20.7": "3e93b666",
         },
         "speed-long": {
             "2026.11.11.1": "cd0a5f4e",
@@ -389,6 +556,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             "2026.11.20.1": "3d1fe22d",
             "2026.11.20.3": "87feb546",
             "2026.11.20.4": "fafdb7f1",
+            "2026.11.20.7": "fafdb7f1",
         },
         "train-long": {
             "2026.11.11.1": "4945b701",
@@ -398,12 +566,18 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             "2026.11.20.2": "412d0576",
             "2026.11.20.3": "e54674f6",
             "2026.11.20.4": "aa9d679d",
+            "2026.11.20.7": "aa9d679d",
+        },
+        "train-long-harbor": {
+            "2026.11.20.6": "76baa3fb",
+            "2026.11.20.7": "7977f209",
         },
         "eval-short": {
             "2026.11.19.1": "8144570a",
             "2026.11.20.1": "fad362ca",
             "2026.11.20.3": "85b0359d",
             "2026.11.20.4": "4b439968",
+            "2026.11.20.7": "4b439968",
         },
     }
     configs = assert_revisioned_native_configs(
@@ -443,7 +617,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
                 sampling["max_generate_length"],
                 profile["n_samples_per_prompt"] if profile else generator["eval_n_samples_per_prompt"],
             ) == (0, False, 8192, 1)
-        if name in ("learning-medium", "data-medium", "train-long"):
+        if name in ("learning-medium", "data-medium", "train-long", "train-long-harbor"):
             assert next(row for row in trainer["callbacks"] if row["type"] == "evaluation")["eval_before_train"] is True
             kinds = [row["type"] for row in trainer["callbacks"]]
             assert kinds.index("evaluation") < kinds.index("best_checkpoint") < kinds.index("hf_model_save")
