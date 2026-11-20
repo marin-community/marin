@@ -74,7 +74,7 @@ def test_adopted_round_lowers_to_eval_with_pinned_model_and_standard_ep_placemen
         "NCCL_IB_DISABLE": "0",
         "NCCL_IB_HCA": "ibp",
     }
-    assert config["trainer"]["policy"]["nccl_buffer_size_bytes"] == 262144
+    assert config["trainer"]["policy"]["nccl_buffer_size_bytes"] == 4194304
     assert run.evaluation.model.uri == adopted_round.adopted_model.uri
     assert run.evaluation.model.identity == "sha256:" + adopted_round.adopted_model.export_manifest_sha256
     assert run.model_manifest_filename == "export-manifest.json"

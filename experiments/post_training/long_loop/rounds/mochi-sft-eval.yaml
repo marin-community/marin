@@ -81,4 +81,4 @@ serving:
     NCCL_NET: IB
     NCCL_IB_DISABLE: '0'
     NCCL_IB_HCA: ibp
-  nccl_buffer_size_bytes: 262144
+  nccl_buffer_size_bytes: 4194304
