@@ -22,11 +22,11 @@ import re
 import threading
 from collections.abc import Callable, Sequence
 from dataclasses import replace
-from enum import StrEnum
 from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
+from verifyit.compat import StrEnum
 from verifyit.grade import (
     GradingInfraError,
     InvalidTask,
