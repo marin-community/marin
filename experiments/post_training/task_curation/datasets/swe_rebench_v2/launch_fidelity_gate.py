@@ -117,7 +117,7 @@ def main() -> None:
         "--extra",
         "dedup",
         "--priority",
-        "batch",
+        "production",
         "--no-preemptible",
         "--timeout",
         "259200",
