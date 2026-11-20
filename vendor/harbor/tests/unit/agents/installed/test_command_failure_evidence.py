@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -10,26 +11,61 @@ from harbor.agents.installed.mini_swe_agent import MiniSweAgent
 
 
 @pytest.mark.asyncio
-async def test_failed_install_preserves_error_tail_without_protected_credentials(tmp_path):
-    secret = "synthetic-protected-credential"
-    agent = MiniSweAgent(logs_dir=tmp_path, protected_values=frozenset({secret}))
-    stderr = "package installation preamble\n" * 100 + secret + "\nterminal dependency failure"
-    environment = SimpleNamespace(exec=AsyncMock(return_value=SimpleNamespace(return_code=2, stdout="", stderr=stderr)))
-    with pytest.raises(NonZeroAgentExitCodeError) as caught:
-        await agent.exec_as_agent(environment, command="false")
-    evidence = json.loads(next((tmp_path / "command-failures").glob("*.json")).read_text())
-    assert evidence["stderr"].endswith("<redacted>\nterminal dependency failure")
+@pytest.mark.parametrize("credential_source", ["protected", "huggingface"])
+async def test_failed_install_preserves_error_tail_without_credentials(
+    tmp_path, caplog, credential_source
+):
+    secret = (
+        "synthetic-protected-credential"
+        if credential_source == "protected"
+        else "hf_" + "Q" * 32
+    )
+    protected = frozenset({secret}) if credential_source == "protected" else frozenset()
+    agent = MiniSweAgent(logs_dir=tmp_path, protected_values=protected)
+    stderr = (
+        "package installation preamble\n" * 100
+        + secret
+        + "\nterminal dependency failure"
+    )
+    environment = SimpleNamespace(
+        exec=AsyncMock(
+            return_value=SimpleNamespace(return_code=2, stdout="", stderr=stderr)
+        )
+    )
+    with (
+        caplog.at_level(logging.DEBUG),
+        pytest.raises(NonZeroAgentExitCodeError) as caught,
+    ):
+        await agent.exec_as_agent(
+            environment, command="false", env={"RUN_MODE": "synthetic-runtime-value"}
+        )
+    evidence = json.loads(
+        next((tmp_path / "command-failures").glob("*.json")).read_text()
+    )
+    assert evidence["stderr"].endswith("terminal dependency failure")
     assert evidence["stderr"].startswith("package installation preamble")
     assert "terminal dependency failure" in str(caught.value)
     assert secret not in str(caught.value)
     assert secret not in json.dumps(evidence)
+    assert any(
+        vars(record).get("env_keys") == ["RUN_MODE"] for record in caplog.records
+    )
+    assert all(
+        "synthetic-runtime-value" not in repr(vars(record)) for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio
-async def test_evidence_write_failure_keeps_the_command_exit_as_primary_error(tmp_path, monkeypatch):
+async def test_evidence_write_failure_keeps_the_command_exit_as_primary_error(
+    tmp_path, monkeypatch
+):
     agent = MiniSweAgent(logs_dir=tmp_path)
     environment = SimpleNamespace(
-        exec=AsyncMock(return_value=SimpleNamespace(return_code=2, stdout="", stderr="dependency failed"))
+        exec=AsyncMock(
+            return_value=SimpleNamespace(
+                return_code=2, stdout="", stderr="dependency failed"
+            )
+        )
     )
 
     def cannot_write(*args, **kwargs):
@@ -44,10 +80,16 @@ async def test_evidence_write_failure_keeps_the_command_exit_as_primary_error(tm
 
 
 @pytest.mark.asyncio
-async def test_failure_evidence_serialization_does_not_block_other_trials(tmp_path, monkeypatch):
+async def test_failure_evidence_serialization_does_not_block_other_trials(
+    tmp_path, monkeypatch
+):
     agent = MiniSweAgent(logs_dir=tmp_path)
     environment = SimpleNamespace(
-        exec=AsyncMock(return_value=SimpleNamespace(return_code=2, stdout="", stderr="dependency failed"))
+        exec=AsyncMock(
+            return_value=SimpleNamespace(
+                return_code=2, stdout="", stderr="dependency failed"
+            )
+        )
     )
     entered = threading.Event()
     release = threading.Event()
