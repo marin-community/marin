@@ -5,6 +5,7 @@
 
 import hashlib
 import json
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
 
@@ -18,12 +19,15 @@ from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
+    SkyRLModelSource,
+    SkyRLPolicyModel,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
     SkyRLRun,
     SkyRLRunConfig,
     SkyRLSpec,
     SkyRLTopology,
+    resolve_skyrl_policy,
     run_skyrl,
     skyrl_step,
 )
@@ -52,6 +56,8 @@ PREPARED_INPUTS = f"hf://datasets/{PREPARED_REPO}@{PREPARED_COMMIT}"
 PREPARED_INPUTS_VERSION = "2026.11.20.1"
 
 STOP_TOKEN_CONTENT = {128001: "<|end_of_text|>", 128009: "<|eot_id|>"}
+# Plan-time and fingerprint stand-in for a model resolved at build; the SkyRL config names the real source.
+_UNEXPORTED_POLICY = Micro210Model("<skyrl-policy>", MODEL_IDENTITY_PREFIX + "0" * 64, "<skyrl-tokenizer>", "0" * 40)
 
 
 @dataclass(frozen=True)
@@ -104,12 +110,38 @@ def run_micro210(config: Micro210Run) -> SkyRLRun:
 
 def micro210_step(model: Micro210Model, *, name: str, version: str) -> ArtifactStep[SkyRLRun]:
     """Build the canonical evaluation graph for a model and run identity."""
-    binding = micro210_evaluation(model, run_id=f"{name}@{version}", output_uri="<resolved-at-build>")
-    frozen = binding.policy()
-    evaluation_policy = frozen["evaluation"]
     model_artifact = ArtifactStep.adopt(
         f"{name}/model", version, model.uri, kind=LevanterCheckpoint, config=asdict(model)
     )
+    source = ArtifactHfModel(model_artifact, model.tokenizer_uri, model.tokenizer_revision, relative_path="")
+    return _micro210_step(source, lambda _: model, name=name, version=version)
+
+
+def micro210_policy_step(run: ArtifactStep[SkyRLRun]) -> ArtifactStep[SkyRLRun]:
+    """Score the selected HF export of an RL run once the run completes."""
+
+    def exported(context: StepContext) -> Micro210Model:
+        if context.is_fingerprint:
+            return _UNEXPORTED_POLICY
+        policy = resolve_skyrl_policy(context, run)
+        manifest = (StoragePath(policy.uri) / MODEL_MANIFEST_FILENAME).read_bytes()
+        identity = MODEL_IDENTITY_PREFIX + hashlib.sha256(manifest).hexdigest()
+        return Micro210Model(policy.uri, identity, policy.tokenizer_uri, policy.tokenizer_revision)
+
+    name = f"evaluation/micro210/{run.name}"
+    return _micro210_step(SkyRLPolicyModel(run), exported, name=name, version=run.version)
+
+
+def _micro210_step(
+    source: SkyRLModelSource,
+    resolve_model: Callable[[StepContext], Micro210Model],
+    *,
+    name: str,
+    version: str,
+) -> ArtifactStep[SkyRLRun]:
+    binding = micro210_evaluation(_UNEXPORTED_POLICY, run_id=f"{name}@{version}", output_uri="<resolved-at-build>")
+    frozen = binding.policy()
+    evaluation_policy = frozen["evaluation"]
     inputs = ArtifactStep.adopt(
         "evaluation/micro210/prepared",
         PREPARED_INPUTS_VERSION,
@@ -133,7 +165,7 @@ def micro210_step(model: Micro210Model, *, name: str, version: str) -> ArtifactS
                     evaluation_policy["config"], draccus.decode(JudgeConfig, evaluation_policy["judge"])
                 )
             ),
-            model=ArtifactHfModel(model_artifact, model.tokenizer_uri, model.tokenizer_revision, relative_path=""),
+            model=source,
             train_data=(),
             validation_data=(ArtifactDataSource(inputs, relative_path=evaluation_policy["data_relative_path"]),),
             topology=SkyRLTopology(
@@ -155,7 +187,7 @@ def micro210_step(model: Micro210Model, *, name: str, version: str) -> ArtifactS
         rendered = yaml.safe_dump(document)
         return Micro210Run(
             replace(run, launch_config_yaml=rendered),
-            replace(binding, output_uri=context.output_path),
+            replace(binding, model=resolve_model(context), output_uri=context.output_path),
             hashlib.sha256(rendered.encode()).hexdigest(),
         )
 

@@ -246,7 +246,7 @@ def test_resume_inherits_the_source_runs_initializer(
 
     def collect(step):
         runs.append(step)
-        return apply("tests/after-rl", after_rl, version="2026.11.19.1", run=step)
+        return (apply("tests/after-rl", after_rl, version="2026.11.19.1", run=step),)
 
     preset = replace(preset, then=collect)
     table = replace(table, presets=(preset,))

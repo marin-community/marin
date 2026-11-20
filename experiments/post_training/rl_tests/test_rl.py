@@ -1357,7 +1357,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         assert "test-initializer-credential" not in result.output and len(native_calls) == 1
 
     mode, coordinator_module = "failed-following", "first_model_entry"
-    module(coordinator_module, following="lambda _: apply('tests/following', fail_following, version='2026.11.20.1')")
+    module(coordinator_module, following="lambda _: (apply('tests/following', fail_following, version='2026.11.20.1'),)")
     result = CliRunner().invoke(entry)
     assert result.exit_code == 3 and "post_run_error:" in result.output, (result.output, result.exception)
     assert "RL has a committed result" in result.output

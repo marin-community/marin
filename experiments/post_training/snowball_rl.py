@@ -48,6 +48,7 @@ from experiments.post_training.task_curation.selection import (
     TRAIN_FILENAME,
     VALIDATION_FILENAME,
 )
+from experiments.post_training.task_curation.task_health import task_health_step
 
 SEED = 20261020
 MODEL_ID = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
@@ -347,9 +348,19 @@ _TRAIN_LONG_AGENTIC = agentic_preset(
         stall_timeout=10_800,
     ).merge(_AGENTIC_PATCH),
 )
+
+
+def _task_health_and_micro210(run: ArtifactStep) -> tuple[ArtifactStep, ...]:
+    # Load Micro210's tokenizer dependencies only when the post-RL steps are planned.
+    from experiments.evaluation.micro210 import micro210_policy_step  # noqa: PLC0415
+
+    return task_health_step(run), micro210_policy_step(run)
+
+
 _TRAIN_MEDIUM_AGENTIC = replace(
     _TRAIN_LONG_AGENTIC.with_updates(10),
     name="train-medium-agentic",
+    then=_task_health_and_micro210,
     recipe=replace(
         _TRAIN_LONG_AGENTIC.recipe,
         layout=replace(
