@@ -240,11 +240,11 @@ def test_ray_policy_export_workers_loads_model_state_without_training_state():
     ("visibility", "requested", "corrupt", "oversize", "error"),
     [
         (None, None, None, False, None),
-        (None, False, None, False, None),
-        (False, None, None, False, "visibility differs"),
-        (True, False, None, False, "visibility differs"),
-        (True, None, "config.json", False, "differs from the model manifest"),
-        (True, None, "checkpoints/step_12/model.safetensors", False, "differs from the model manifest"),
+        (None, True, None, False, None),
+        (True, None, None, False, "visibility differs"),
+        (False, True, None, False, "visibility differs"),
+        (False, None, "config.json", False, "differs from the model manifest"),
+        (False, None, "checkpoints/step_12/model.safetensors", False, "differs from the model manifest"),
         (None, None, None, True, "lacks LFS SHA-256 metadata: tokenizer.json"),
     ],
 )
@@ -282,7 +282,7 @@ def test_hf_publisher_checks_visibility_and_uploaded_files(
 
     publisher.publish(str(export_path), step=12)
 
-    assert api.private is (True if requested is None else requested)
+    assert api.private is (requested is True)
     paths = [file.path for file in manifest.files] + [MODEL_MANIFEST_FILENAME]
     first, last = api.commits.values()
     expected = {path: (export_path / path).read_bytes() for path in paths}

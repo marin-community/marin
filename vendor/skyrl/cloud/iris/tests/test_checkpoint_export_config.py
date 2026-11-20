@@ -113,20 +113,20 @@ def test_checkpoint_export_config_carries_request_fields_as_data(tmp_path: Path,
     raw["skyrl"]["trainer"].update(RecipePatch(trainer=Trainer(hf_hub_repo_id="org/model")).to_skyrl()["trainer"])
     path = tmp_path / "training.yaml"
     OmegaConf.save(OmegaConf.create(raw), path)
-    if private:
+    if not private:
         with patch.object(export_hf_checkpoint, "validate_launch_config", wraps=validate_launch_config) as validate:
             export_hf_checkpoint.validate_checkpoint_export(load_launch_config(path))
         export = validate.call_args.args[0].skyrl.checkpoint_export
         assert export.hf_hub_repo_id == "org/model"
-        assert export.hf_hub_private is True
+        assert export.hf_hub_private is False
     parser = export_hf_checkpoint.argument_parser()
     args = [
         "--launch-config", str(path), "--ckpt_path", "s3://run/checkpoints", "--step", "7",
         "--model_path", "Qwen/Qwen3-8B", "--num-nodes", "1", "--gpus-per-node", "4",
         "--gpu-variant", "H100", "--hf-hub-repo-id", "org/model",
     ]
-    if not private:
-        args.append("--no-hf-hub-private")
+    if private:
+        args.append("--hf-hub-private")
     spec = export_hf_checkpoint.manual_spec(parser.parse_args(args), parser)
     request = spec.request
     config = load_launch_config(spec.launch_config_path)
@@ -299,7 +299,7 @@ def test_trainer_records_export_request_for_selected_checkpoint(tmp_path: Path, 
     assert request.checkpoint_path == str(selected)
     assert request.model_path == "org/policy"
     assert request.hf_hub_repo_id == "org/model"
-    assert request.hf_hub_private is True
+    assert request.hf_hub_private is False
     other_step = 20 if expected_step == 15 else 15
     assert read_hf_export_request(str(root / f"global_step_{other_step}")) is None
 

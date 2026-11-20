@@ -395,9 +395,10 @@ Set `MODEL` to a published `NAME@VERSION`. Replace `--plan` with `--run` to subm
 
 To publish a checkpoint export, enable export and set `trainer.hf_hub_repo_id` in the training recipe.
 Gated Snowball presets fix that setting. For a manual checkpoint export use `--hf-hub-repo-id` on
-`cloud.iris.export_hf_checkpoint`. Uploads default to private. Select public visibility with
-`trainer.hf_hub_private: false` or `--no-hf-hub-private` on a manual export. The publisher checks
-the repository's visibility before uploading. It uploads `.marinskyrl-model-manifest.json` and the
-files it lists, then checks each file's size and SHA-256 at the upload commit. Files larger than 64 MiB require LFS
+`cloud.iris.export_hf_checkpoint`. A repository ID enables publication. New repositories are public by
+default. Select private visibility with `trainer.hf_hub_private: true` or `--hf-hub-private` on a manual
+export. The uploader rejects an existing repository with different visibility. It uploads
+`.marinskyrl-model-manifest.json` and the files it lists, then checks each file's size and SHA-256 at
+the upload commit. Files larger than 64 MiB require LFS
 digest metadata. With `hf_upload_mode: all`, the step archive receives the same checks as the
 repository root.
