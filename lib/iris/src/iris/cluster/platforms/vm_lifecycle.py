@@ -65,6 +65,10 @@ HEALTH_CHECK_BACKOFF_INITIAL = 2.0
 HEALTH_CHECK_BACKOFF_MAX = 10.0
 
 
+class ControllerRestartNotStarted(RuntimeError):
+    """The controller restart failed before changing the VM."""
+
+
 @dataclass
 class ControllerStatus:
     """Status of the controller."""
@@ -420,17 +424,25 @@ def restart_controller(
     """
     _resolve_image = resolve_image or _identity_resolve_image
     label_prefix = config.platform.label_prefix or "iris"
-    port = _controller_port(config)
 
-    vm = _discover_controller_vm(platform, label_prefix)
-    if vm is None:
-        raise RuntimeError("No existing controller VM found. Use 'iris cluster start' to create one first.")
+    try:
+        port = _controller_port(config)
+        vm = _discover_controller_vm(platform, label_prefix)
+        if vm is None:
+            raise RuntimeError("No existing controller VM found. Use 'iris cluster start' to create one first.")
 
-    logger.info("Restarting controller container in-place on VM %s", vm.vm_id)
+        logger.info("Restarting controller container in-place on VM %s", vm.vm_id)
 
-    bootstrap_script = build_controller_bootstrap_script_from_config(
-        with_injected_task_env(config), resolve_image=_resolve_image
-    )
+        # A failed SSH probe proves the bootstrap script did not run and avoids
+        # updating GCE startup metadata before authorization is checked.
+        probe = vm.run_command("true", timeout=Duration.from_seconds(30))
+        if probe.returncode != 0:
+            raise RuntimeError(f"SSH probe failed on {vm.vm_id}: {probe.stderr}")
+        bootstrap_script = build_controller_bootstrap_script_from_config(
+            with_injected_task_env(config), resolve_image=_resolve_image
+        )
+    except Exception as e:
+        raise ControllerRestartNotStarted(f"Controller restart failed before VM bootstrap: {e}") from e
     vm.bootstrap(bootstrap_script)
 
     address = f"http://{vm.internal_address}:{port}"
