@@ -125,7 +125,7 @@ class DatasetEvaluator:
                 run_worker, self.datasets, output_dir, execution_config(config), DEFAULT_MAX_ATTEMPTS
             ),
             name=f"curated-eval-{uuid.uuid4().hex[:8]}",
-            resources=ResourceSpec(cpu=8, memory="32g", disk="64g"),
+            resources=ResourceSpec(cpu=8, memory="12g", disk="64g"),
             environment=EnvironmentSpec(
                 setup_scripts=(default_setup_script(packages=("marin-core",), python_version=WORKER_PYTHON),),
                 secrets=secrets,

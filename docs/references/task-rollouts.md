@@ -78,7 +78,7 @@ curation [task-selection artifact](task-curation.md#final-task-selection) end th
 Other tasks use `harness_by_dataset[task.source.dataset]` when configured, or
 `default_harness`, which defaults to Shellbox.
 Image graders use the configured image verifier backend; package
-graders use the configured local verifier. The inventory artifact contains the
+graders use the configured local verifier. The task-selection artifact contains the
 task and private grader, so changing rollout resources or deadlines does not
 rewrite the task Parquet.
 
