@@ -665,7 +665,9 @@ def test_submission_exit_codes_and_publication_retries(
     if case == "child":
         finish()
         monkeypatch.setattr(
-            skyrl_api, "_run_launcher", lambda *args: pytest.fail("Cached coordinator run invoked native execution")
+            skyrl_api,
+            "_run_launcher",
+            lambda *args, **kwargs: pytest.fail("Cached coordinator run invoked native execution"),
         )
     arguments = ["--preset", preset.name, "--version", preset.revision, "--run"]
     if case != "data-short":
@@ -870,7 +872,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     source.rename(staged)
     native_calls = []
 
-    def native(command):
+    def native(command, *, env_vars=None):
         inspection = native_json()(
             "import json,sys\nfrom cloud.iris import launch\n"
             "args=launch.create_parser().parse_args(sys.argv[1:])\n"
