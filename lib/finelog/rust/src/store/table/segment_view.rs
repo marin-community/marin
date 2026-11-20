@@ -212,11 +212,8 @@ impl SegmentView {
                     ))
                 })
                 .collect(),
-            column_bounds: segments
-                .iter()
-                .filter(|segment| !segment.column_bounds.is_empty())
-                .map(|segment| (segment.path.clone(), segment.column_bounds.clone()))
-                .collect(),
+            // A legacy-local table plans without column bounds.
+            column_bounds: BTreeMap::new(),
             seq_bounds: segments
                 .iter()
                 .map(|segment| (segment.path.clone(), (segment.min_seq, segment.max_seq)))

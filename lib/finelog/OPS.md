@@ -199,9 +199,8 @@ the bare column, such as
 the unconverted `extract(epoch from now()) * 1000` form also works. A bound on
 an expression of the column, such as `to_timestamp_millis(epoch_ms)`, is not
 used. A segment written before the column had bounds is scanned until
-maintenance reads its footer; on an object-backed table this backfill runs 64
-segments per table per tick. A legacy-local table keeps no bounds and is always
-scanned. Bounding `seq` as well still excludes segments when a sequence window
+maintenance reads its footer; on an object-backed table this backfill reads a
+bounded batch per tick. A legacy-local table is always scanned. Bounding `seq` as well still excludes segments when a sequence window
 is known.
 
 An unbounded substring query (`col LIKE '%…%'`) prunes only when that column

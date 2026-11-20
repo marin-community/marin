@@ -40,6 +40,7 @@ use crate::store::catalog::projection::{floor_persisted_high_water, namespace_ca
 use crate::store::catalog::{
     Catalog, ForwardingSettlement, PublishedObjectSegment, RegisteredNamespace, SpecLifecycle,
 };
+use crate::store::column_bounds::ColumnBounds;
 use crate::store::ipc::decode_one_record_batch;
 use crate::store::namespace_name::validate_namespace_name;
 use crate::store::object_store::{
@@ -176,7 +177,7 @@ pub struct NamespaceSnapshot {
     pub key_column: String,
     pub paths: Vec<String>,
     pub key_bounds: BTreeMap<String, (String, String)>,
-    pub column_bounds: BTreeMap<String, crate::store::column_bounds::ColumnBounds>,
+    pub column_bounds: BTreeMap<String, ColumnBounds>,
     pub seq_bounds: BTreeMap<String, (i64, i64)>,
     pub row_counts: BTreeMap<String, u64>,
     pub partitions: BTreeMap<String, crate::partition_policy::SegmentPartition>,
