@@ -7,6 +7,7 @@ import asyncio
 import json
 import math
 import os
+import re
 import shlex
 import shutil
 import signal
@@ -65,9 +66,11 @@ from shellbox.backends.docker.machine import DockerMachineFactory, docker
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import (
     Command,
+    CommandOutputLost,
     DockerImage,
     ExitReason,
     MachineSpec,
+    MachineTerminated,
     UnsupportedMachineSpec,
 )
 
@@ -597,6 +600,39 @@ def test_daytona_output_count_ignores_provider_diagnostics(tmp_path: Path) -> No
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_host_setsid
+def test_daytona_output_removed_by_the_guest_is_reported_as_lost(tmp_path: Path) -> None:
+    class ClearedTmpProcess(LocalProcess):
+        armed = False
+
+        async def exec(self, command, **kwargs):
+            if "wc -c" in command and self.armed:
+                # Stands in for a guest process (e.g. systemd starting) that clears /tmp once.
+                prefix = re.search(r"/tmp/\.shellbox-[0-9a-f]+", command)
+                assert prefix is not None
+                shutil.rmtree(prefix.group(0), ignore_errors=True)
+                self.armed = False
+            return await super().exec(command, **kwargs)
+
+    async def scenario():
+        client = LocalDaytona()
+        process = ClearedTmpProcess()
+        client.sandbox.process = process
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
+        process.armed = True
+        try:
+            with pytest.raises(CommandOutputLost):
+                await machine.run(Command(("printf", "output")))
+            following = await machine.run(Command(("printf", "ready")))
+            assert (following.exit_code, following.stdout) == (0, b"ready")
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.skipif(shutil.which("setsid") is None, reason="Daytona command execution needs setsid")
 @pytest.mark.parametrize("collection_timeout, succeeds", [(0.01, False), (1.0, True)])
 def test_daytona_output_collection_uses_its_own_deadline(collection_timeout: float, succeeds: bool):
@@ -746,6 +782,33 @@ def test_daytona_command_interruption_stops_descendants_and_preserves_next_comma
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_host_setsid
+def test_daytona_unanswered_command_cleanup_reports_a_lost_machine(tmp_path, monkeypatch):
+    monkeypatch.setattr("shellbox.backends.daytona.machine.INTERRUPT_TIMEOUT", 0.2)
+
+    class HungCleanup(LocalProcess):
+        armed = False
+
+        async def exec(self, command, **kwargs):
+            if self.armed and "rm -rf /tmp/.shellbox-" in command:
+                await asyncio.Future()
+            return await super().exec(command, **kwargs)
+
+    async def scenario():
+        client = LocalDaytona()
+        process = HungCleanup()
+        client.sandbox.process = process
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
+        process.armed = True
+        with pytest.raises(MachineTerminated):
+            await machine.run(Command(("true",)))
+        assert client.closed
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("interrupt_failure", ["exit", "timeout", "files"])
 @pytest.mark.parametrize("interruption", ["timeout", "cancel"])
 @pytest.mark.requires_host_setsid
@@ -786,6 +849,8 @@ def test_daytona_failed_interruption_cleanup_closes_machine(tmp_path, interrupt_
             with pytest.raises(RuntimeError) as failure:
                 await pending
             assert isinstance(failure.value.__cause__, TimeoutError if interrupt_failure == "timeout" else RuntimeError)
+            # An unanswered stop request means the sandbox is gone; an answered failure does not.
+            assert isinstance(failure.value, MachineTerminated) == (interrupt_failure == "timeout")
         assert client.deleted and client.closed
         with pytest.raises(RuntimeError, match="closed"):
             await machine.run(Command(("true",)))

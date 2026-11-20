@@ -219,6 +219,10 @@ class MachineTerminated(RuntimeError):
     """The machine ended before ``close``: killed, expired, preempted, or lost with its host."""
 
 
+class CommandOutputLost(RuntimeError):
+    """A process inside the machine removed a command's captured output before it was read."""
+
+
 class Machine(Protocol):
     """One writable task environment. Files persist until close."""
 
