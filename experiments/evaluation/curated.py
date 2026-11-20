@@ -27,7 +27,7 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 
 from experiments.evaluation.catalog import evaluation_benchmarks
-from experiments.evaluation.preparation import prepare_evaluation
+from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.config import PipelineOptions
 
@@ -98,17 +98,18 @@ def corpus_steps(selection: ResolvedEvaluationSelection, runtime: CampaignRuntim
     return tuple(prepare_evaluation(source, options) for source in sources)
 
 
+def selection_corpora(selection: EvaluationSelection) -> tuple[EvaluationCorpusRecipe, ...]:
+    sources = evaluation_benchmarks()[selection.benchmark].resolve(selection.protocol, selection.num_fewshot)
+    return tuple(source.config for source in sources if source.config is not None)
+
+
 def requires_judge(selection: EvaluationSelection) -> bool:
-    return any(
-        source.config is not None and source.config.protocol.requires_judge
-        for source in evaluation_benchmarks()[selection.benchmark].resolve(selection.protocol, selection.num_fewshot)
-    )
+    return any(corpus.protocol.requires_judge for corpus in selection_corpora(selection))
 
 
 def declared_task_evidence(selection: EvaluationSelection) -> TaskEvidence:
     """Reference when any of the selection's corpora declares it, else embedded."""
-    sources = evaluation_benchmarks()[selection.benchmark].resolve(selection.protocol, selection.num_fewshot)
-    if any(source.config is not None and source.config.task_evidence is TaskEvidence.REFERENCE for source in sources):
+    if any(corpus.task_evidence is TaskEvidence.REFERENCE for corpus in selection_corpora(selection)):
         return TaskEvidence.REFERENCE
     return TaskEvidence.EMBEDDED
 
