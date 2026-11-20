@@ -300,7 +300,9 @@ def source_map(
         demands, failures = task_demands({"task": task, "runtime": runtime})
         for role, needs in demands.items():
             declared = task.get("environment_requirements") if role == "agent" else task["grader"]["environment"]
-            assigned = "local" if role == "grader" and declared.get("packages_lock") else "daytona"
+            assigned = declared.get("required_backend") or (
+                "local" if role == "grader" and declared.get("packages_lock") else "daytona"
+            )
             assignments[role][assigned] += 1
             demand_counts[role].update(needs)
             shape = runtime.get("task_machine" if role == "agent" else "verifier_machine")
@@ -332,6 +334,12 @@ def source_map(
                 declared = task.get("environment_requirements") if role == "agent" else task["grader"]["environment"]
                 shape = runtime.get("task_machine" if role == "agent" else "verifier_machine")
                 requirements = EnvironmentRequirements.model_validate(declared)
+                if requirements.required_backend is not None and backend != requirements.required_backend.value:
+                    role_counts[backend][role][FitSupport.UNSUPPORTED] += 1
+                    blockers[backend][f"{role}:required_backend"] += 1
+                    errors[backend][f"{role}: task requires {requirements.required_backend.value}"] += 1
+                    outcomes.append(FitSupport.UNSUPPORTED)
+                    continue
                 settings = MachineRuntimeSpec.model_validate({**shape, "backend": backend})
                 try:
                     contract = task.get("integrity_contract")

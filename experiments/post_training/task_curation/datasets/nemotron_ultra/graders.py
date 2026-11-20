@@ -19,6 +19,7 @@ from typing import Any
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 from pydantic import JsonValue
+from shellbox.machine import Backend
 from taskcompendium.convert.answers import math_type, source_defect, unsupported
 from taskcompendium.convert.code import (
     CODE_GRADER_MEMORY_MB,
@@ -807,6 +808,7 @@ def _agent_task(
     if request.agent == PYTHON_AGENT:
         final_tools = request.tools if action else ()
         environment = EnvironmentRequirements(
+            required_backend=Backend.LOCAL,
             command_semantics=CommandSemantics.LINUX_PROCESS,
             docker_image=PYTHON_AGENT_IMAGE,
             working_directory="/workspace",

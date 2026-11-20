@@ -128,6 +128,28 @@ def test_lock_grader_storage_has_no_backend_and_quota_removal_preserves_mixed_de
     assert after.backends["local"].roles["agent"] == {Support.UNSUPPORTED: 1}
 
 
+def test_typed_local_requirement_preserves_limited_backend_support():
+    checkers = _verified_local_checkers()
+    document = {
+        "task": {
+            "environment_requirements": {
+                "required_backend": "local",
+                "command_semantics": "linux_process",
+                "docker_image": "example/image@sha256:" + "0" * 64,
+            },
+            "grader": {"kind": "none"},
+        },
+        "runtime": {},
+    }
+    mapped = source_map(
+        "local-tool", [document], production_matrix(checkers), checkers, {}, {"agent": RUNTIME, "grader": RUNTIME}
+    )
+    assert mapped.role_backend_assignments == {"agent": {"local": 1}}
+    assert mapped.backends["local"].roles["agent"] == {FitSupport.SUPPORTED: 1}
+    assert mapped.backends["daytona"].roles["agent"] == {FitSupport.UNSUPPORTED: 1}
+    assert mapped.backends["daytona"].blockers == {"agent:required_backend": 1}
+
+
 def test_grader_only_host_image_population_fits_local_and_excludes_image_backends():
     """A grader-only HostImage+lock population (Evalchemy:aime24) is not a backend-wide failure.
 

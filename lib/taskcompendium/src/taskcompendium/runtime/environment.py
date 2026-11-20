@@ -56,6 +56,10 @@ def bound_machine_spec(requirements: EnvironmentRequirements, spec: MachineSpec)
 
 def validate_machine_spec(requirements: EnvironmentRequirements, factory: MachineFactory, spec: MachineSpec) -> None:
     """Ask the selected factory to reject unsupported requirements before preparation."""
+    if requirements.required_backend is not None and factory.backend != requirements.required_backend:
+        raise UnsupportedMachineSpec(
+            f"Task requires the {requirements.required_backend.value} backend, selected {factory.backend.value}"
+        )
     if requirements.docker_build is not None and isinstance(spec.source, DockerfileSource):
         require_original_docker_build(requirements.docker_build, spec.source)
     else:

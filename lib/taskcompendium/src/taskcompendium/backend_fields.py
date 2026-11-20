@@ -6,6 +6,7 @@
 from shellbox.requirements import Requirement
 
 ENVIRONMENT_FIELDS = {
+    "required_backend": (),
     "capabilities": tuple(
         Requirement(name)
         for name in (

@@ -35,8 +35,8 @@ from pydantic import (
     model_validator,
 )
 from rigging.filesystem.path_validation import validate_relative_file_path, validate_relative_file_paths
+from shellbox.machine import Backend, PackageSpec, UnsupportedMachineSpec
 from shellbox.machine import CommandSemantics as CommandSemantics
-from shellbox.machine import PackageSpec, UnsupportedMachineSpec
 from verifyit.candidate import candidate_spec
 from verifyit.grade import InvalidTask
 from verifyit.json_objects import unique_object
@@ -381,6 +381,7 @@ class EnvironmentRequirements(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     capabilities: tuple[str, ...] = ()
+    required_backend: Backend | None = Field(default=None, exclude_if=lambda value: value is None)
     command_semantics: CommandSemantics | None = None
     docker_image: str | None = Field(default=None, pattern=DOCKER_IMAGE_PATTERN)
     docker_build: DockerBuildContext | None = None
@@ -433,6 +434,7 @@ def missing_environment(spec: Mapping) -> str | None:
         spec.get("answer_type") in {"file", "state", "workspace_state"}
         or bool(requirements.get("capabilities"))
         or requirements.get("command_semantics") is not None
+        or requirements.get("required_backend") is not None
         or bool(requirements.get("tool_providers"))
         or bool(requirements.get("setup_commands"))
         or bool(requirements.get("working_directory"))
