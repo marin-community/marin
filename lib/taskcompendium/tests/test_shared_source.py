@@ -518,11 +518,7 @@ def payload_of(files: dict[str, bytes]) -> dict:
 
 
 def protected_tree_hash() -> str:
-    """Content-address the protected root so tests can prove it was untouched.
-
-    The grade-time controller copy of the original test script is mechanism
-    state, not protected material, and is excluded.
-    """
+    """Hash the protected root, excluding the controller's grade-time test script copy."""
     digest = hashlib.sha256()
     for path in sorted(PROTECTED.rglob("*")):
         if path.relative_to(PROTECTED).as_posix() == "original-test.sh":
@@ -609,7 +605,7 @@ def test_bootstrap_preserves_the_exact_pre_bootstrap_state(source_image):
     assert stat.S_IMODE(scratch.stat().st_mode) == 0o600
     assert link.is_symlink() and os.readlink(link) == "../app.py"
     assert (WORKSPACE / "untracked_note.txt").read_text() == "untracked\n"
-    # The agent-facing tree keeps HEAD's own test bytes, not the declared base.
+    # The agent-facing tree keeps HEAD's test bytes until grading.
     assert (tests / "test_app.py").read_text() == HEAD_TEST
     assert (WORKSPACE / "pkg/conftest.py").read_text() == "NESTED_CONFTEST = 'base'\n"
 

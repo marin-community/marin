@@ -19,6 +19,9 @@ from verifyit.spec import PytestSpec, ScriptSpec, render_spec
 
 from taskcompendium.harbor.native_shared import native_runner
 from taskcompendium.integrity import (
+    AGENT_HOME,
+    BOOTSTRAP,
+    BOOTSTRAP_DIRECTORY,
     BOOTSTRAP_TIMEOUT,
     DEPENDENCY_AUDIT_PROBES,
     SharedDependencyState,
@@ -28,7 +31,6 @@ from taskcompendium.integrity import (
 from taskcompendium.native_integrity import TEST_PATTERNS
 from taskcompendium.runtime import shared_native, shared_pytest
 
-BOOTSTRAP = "/opt/taskcompendium-shared-bootstrap/control.py"
 BOOTSTRAP_INPUT = "/tmp/taskcompendium-shared-input.json"
 BOOTSTRAP_ARCHIVE = "setup_files/taskcompendium-shared-input.zlib"
 SETUP_PREFIX = "## Environment Setup (complete these steps first)\n\n```bash\n"
@@ -100,7 +102,7 @@ def shared_grader_script(contract: SharedIntegrityContract) -> bytes:
         "#!/bin/bash\nset -euo pipefail\n"
         f'control_python="{contract.protected_root}-bootstrap/python"\n'
         f'exec "$control_python" -I -S {contract.harness} grade --contract {contract.protected_root}/contract.json '
-        "--verifyit /opt/taskcompendium-shared-bootstrap/verifyit\n"
+        f"--verifyit {BOOTSTRAP_DIRECTORY}/verifyit\n"
     ).encode()
 
 
@@ -163,7 +165,7 @@ def harden_shared_swe(
         f"pathlib.Path({BOOTSTRAP_INPUT!r}).write_bytes("
         f"zlib.decompress(pathlib.Path('/{BOOTSTRAP_ARCHIVE}').read_bytes()))"
     )
-    control_python = "/opt/taskcompendium-shared-bootstrap/python"
+    control_python = f"{BOOTSTRAP_DIRECTORY}/python"
     bootstrap_command = (
         "set -euo pipefail\n"
         + setup
@@ -181,7 +183,7 @@ def harden_shared_swe(
     source_user = str(agent.get("user", "root"))
     source_environment = dict(environment.get("env", {}))
     if source_user in {str(contract.agent_uid), "taskcompendium-agent"}:
-        source_environment.setdefault("HOME", "/home/taskcompendium-agent")
+        source_environment.setdefault("HOME", AGENT_HOME)
     environment["env"] = source_environment
     agent["user"] = str(contract.agent_uid)
     verifier["user"] = "root"
@@ -207,17 +209,13 @@ def shared_image_layer(contract: SharedIntegrityContract) -> str:
         f"useradd --create-home --uid {contract.agent_uid} --user-group taskcompendium-agent\n"
         f"RUN getent passwd {contract.grader_uid} >/dev/null || "
         f"useradd --create-home --uid {contract.grader_uid} --user-group taskcompendium-grade\n"
-        f"RUN mkdir -p /home/taskcompendium-agent && "
-        f"chown {contract.agent_uid}:{contract.agent_uid} /home/taskcompendium-agent\n"
+        f"RUN mkdir -p {AGENT_HOME} && "
+        f"chown {contract.agent_uid}:{contract.agent_uid} {AGENT_HOME}\n"
         f"COPY taskcompendium-shared/control.py {BOOTSTRAP}\n"
-        + (
-            "COPY taskcompendium-shared/shared_pytest.py /opt/taskcompendium-shared-bootstrap/shared_pytest.py\n"
-            if native
-            else ""
-        )
+        + (f"COPY taskcompendium-shared/shared_pytest.py {BOOTSTRAP_DIRECTORY}/shared_pytest.py\n" if native else "")
         + 'RUN verifyit_path="$(readlink -f "$(command -v verifyit)")"; '
         'python_path="$(head -n 1 "$verifyit_path" | cut -c 3-)"; '
-        'ln -s "$python_path" /opt/taskcompendium-shared-bootstrap/python; '
-        'ln -s "$verifyit_path" /opt/taskcompendium-shared-bootstrap/verifyit\n'
-        "RUN chmod -R go-w /opt/taskcompendium-shared-bootstrap\n"
+        f'ln -s "$python_path" {BOOTSTRAP_DIRECTORY}/python; '
+        f'ln -s "$verifyit_path" {BOOTSTRAP_DIRECTORY}/verifyit\n'
+        f"RUN chmod -R go-w {BOOTSTRAP_DIRECTORY}\n"
     )

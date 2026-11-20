@@ -9,6 +9,8 @@ from typing import Literal, Self
 from pydantic import BaseModel, ConfigDict, model_validator
 
 PROTECTED_ROOT = "/opt/taskcompendium-shared"
+BOOTSTRAP_DIRECTORY = "/opt/taskcompendium-shared-bootstrap"
+BOOTSTRAP = f"{BOOTSTRAP_DIRECTORY}/control.py"
 AGENT_HOME = "/home/taskcompendium-agent"
 BOOTSTRAP_TIMEOUT = 1800.0
 DEPENDENCY_AUDIT_PROBES = ("dependencies-diff.json", "startup-hooks-diff.json")

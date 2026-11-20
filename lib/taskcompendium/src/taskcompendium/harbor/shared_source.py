@@ -35,6 +35,8 @@ from tomlkit.items import Table
 from taskcompendium.harbor.shared_package import shared_task_instruction
 from taskcompendium.integrity import (
     AGENT_HOME,
+    BOOTSTRAP,
+    BOOTSTRAP_DIRECTORY,
     BOOTSTRAP_TIMEOUT,
     DEPENDENCY_AUDIT_PROBES,
     SharedDependencyState,
@@ -45,8 +47,6 @@ from taskcompendium.integrity import (
 from taskcompendium.runtime import shared_pytest, shared_source
 from taskcompendium.runtime.shared_source import patch_paths
 
-BOOTSTRAP = "/opt/taskcompendium-shared-bootstrap/control.py"
-BOOTSTRAP_DIRECTORY = "/opt/taskcompendium-shared-bootstrap"
 BOOTSTRAP_INPUT = "/tmp/taskcompendium-source-input.json"
 SOURCE_ARCHIVE = "setup_files/taskcompendium-source-input.zlib"
 
