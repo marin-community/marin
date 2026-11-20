@@ -16,9 +16,7 @@ from tests.rl.launch_document_census import render_launch_census, runtime_launch
 from tests.rl.test_skyrl import generation_geometry_step
 
 
-# A cold SkyRL environment sync and the full batch of compositions share this deadline.
-@pytest.mark.timeout(540)
-def test_rl_launch_documents_load_with_the_vendored_launcher(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def _render_documents(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
     monkeypatch.setattr(rl_recipe, "SELECTION_ROOT", str(tmp_path / "selections"))
     monkeypatch.setattr(rl_recipe, "artifact_prefix", lambda _cluster: str(tmp_path / "artifacts"))
     producers = set()
@@ -43,6 +41,18 @@ def test_rl_launch_documents_load_with_the_vendored_launcher(tmp_path: Path, mon
     # The Snowball preset goldens and override test own the shared runner's documents.
     separate_owners = {"experiments/post_training/rl_recipe.py"}
     assert authored <= producers | separate_owners, authored - producers - separate_owners
+    return documents
+
+
+def test_rl_launch_documents_render_from_authored_specs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    assert _render_documents(tmp_path, monkeypatch)
+
+
+# A cold SkyRL environment sync and the full batch of compositions share this deadline.
+@pytest.mark.slow
+@pytest.mark.timeout(540)
+def test_rl_launch_documents_load_with_the_vendored_launcher(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    documents = _render_documents(tmp_path, monkeypatch)
     source = tmp_path / "source.json"
     source.write_text(json.dumps(documents))
     output = tmp_path / "loaded.json"

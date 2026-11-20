@@ -264,6 +264,9 @@ _TRAIN_MEDIUM = replace(
     checkpoints="latest",
     export="none",
 )
+_TRAIN_LONG_AGENTIC = replace(
+    agentic(_TRAIN_LONG, name="train-long-agentic", limits=_AGENTIC_LIMITS), revision="2026.11.20.2"
+)
 
 MOCHI = ModelPresets(
     model="mochi",
@@ -272,8 +275,11 @@ MOCHI = ModelPresets(
         _TRAIN_LONG,
         _TRAIN_LONG_3RACK,
         replace(agentic(_TRAIN_MEDIUM, name="train-medium-agentic", limits=_AGENTIC_LIMITS), harbor=None),
-        agentic(_TRAIN_LONG, name="train-long-agentic", limits=_AGENTIC_LIMITS),
-        agentic(_TRAIN_LONG_3RACK, name="train-long-agentic-3rack", limits=_AGENTIC_LIMITS),
+        _TRAIN_LONG_AGENTIC,
+        replace(
+            agentic(_TRAIN_LONG_3RACK, name="train-long-agentic-3rack", limits=_AGENTIC_LIMITS),
+            revision=_TRAIN_LONG_AGENTIC.revision,
+        ),
     ),
     namespace="mochi-rl",
     controls={},
