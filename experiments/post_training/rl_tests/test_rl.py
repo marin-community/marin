@@ -121,14 +121,15 @@ def test_launcher_refuses_invalid_driver_settings(
     exit_code = snowball.main(
         table,
         argv=["--preset", preset.name, "--version", preset.revision, mode, "--set", override],
+        entry_module="experiments.post_training.snowball_rl",
     )
 
     output = capsys.readouterr().out
+    client.submit.assert_not_called()
     assert exit_code == 4, output
     result = json.loads(output)
     assert result["verdict"] == "invalid"
     assert reason in result["reason"]
-    client.submit.assert_not_called()
 
 
 def test_preset_variants_compose(selection, tmp_path, monkeypatch):
@@ -1066,7 +1067,18 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         assert "test-initializer-credential" not in result.output and len(native_calls) == 1
 
     evaluations = read_evaluations(str(source / "exports"), attempt_id="recorded-attempt", evaluation="eval/")
-    replace_evaluations(source, [row for row in evaluations if row.step != 10])
+    replace_evaluations(
+        source,
+        [
+            row.model_copy(
+                update={
+                    "answers": [answer.model_copy(update={"error_treatment": "passthrough"}) for answer in row.answers]
+                }
+            )
+            for row in evaluations
+            if row.step != 10
+        ],
+    )
     (source / "exports/best_checkpoint.json").unlink()
     with edit_receipt(source) as receipt:
         receipt["result"]["model"] = None
@@ -1082,6 +1094,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     assert status["best_checkpoint_step"] == "none eligible"
     facts = {fact["name"]: fact for fact in status["evaluation_invariants"]}
     assert not facts[f"{preset.evaluations[0].name}/step-10/answers_complete"]["holds"]
+    assert not facts[f"{preset.evaluations[0].name}/task_coverage"]["holds"]
 
     mode, coordinator_module = "valid", "first_model_entry"
     module(coordinator_module)
