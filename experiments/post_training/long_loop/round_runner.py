@@ -140,6 +140,9 @@ class RoundServing:
     engine_init_kwargs: dict
     cuda_allocator_config: str
     judge_gpu_count: int
+    judge_gpu_variant: str
+    judge_target_cluster: str
+    judge_endpoint_receipt: str
 
 
 @dataclass(frozen=True)
@@ -453,6 +456,9 @@ def adopted_round_evaluation(spec: AdoptedHfRound) -> ArtifactStep:
             judge_gpu_count=serving.judge_gpu_count,
             nccl_buffer_size_bytes=nccl_buffer_size_bytes,
             network_env=dict(transport.extra_env),
+            judge_gpu_variant=serving.judge_gpu_variant,
+            judge_target_cluster=serving.judge_target_cluster,
+            judge_endpoint_receipt=serving.judge_endpoint_receipt,
         ),
     )
 

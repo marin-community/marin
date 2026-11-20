@@ -5,18 +5,22 @@
 
 import hashlib
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
 
 import click
 import draccus
 import yaml
 from iris.rpc.proto_display import priority_band_value
-from marin.evaluation.hardware import AcceleratorChoice, Platform
+from marin.evaluation.hardware import AcceleratorChoice, Platform, serving_geometry
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
+from marin.inference.config import RemoteInferenceConfig
 from marin.inference.iris import remote_inference
+from marin.inference.types import OpenAIEndpoint
 from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
     ArtifactDataSource,
@@ -37,6 +41,7 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import SecretSpec, resolve_secret_spec
+from rigging.timing import Duration, ExponentialBackoff
 from transformers import AutoTokenizer
 
 from experiments.evaluation.micro210_policy import (
@@ -78,6 +83,9 @@ class Micro210ServingProfile:
     judge_gpu_count: int
     nccl_buffer_size_bytes: int
     network_env: dict[str, str]
+    judge_gpu_variant: str
+    judge_target_cluster: str
+    judge_endpoint_receipt: str
 
 
 def serving_config(frozen: dict, profile: Micro210ServingProfile) -> dict:
@@ -117,6 +125,15 @@ class Micro210Run:
     model_manifest_filename: str = MODEL_MANIFEST_FILENAME
 
 
+@dataclass(frozen=True)
+class Micro210JudgeEndpoint:
+    canonical_spec_sha256: str
+    judge_sha256: str
+    tensor_parallel_size: int
+    endpoint: OpenAIEndpoint
+    jobs: tuple[str, ...]
+
+
 def validate_inputs(
     evaluation: Micro210Evaluation, inputs: str, *, model_manifest_filename: str = MODEL_MANIFEST_FILENAME
 ) -> None:
@@ -138,12 +155,82 @@ def validate_inputs(
                 raise ValueError(f"Canonical Micro210 tokenizer has incompatible stop token ID: {token_id}")
 
 
+def micro210_judge_inference(config: Micro210Run) -> RemoteInferenceConfig:
+    """Lower the frozen judge for both CPU preflight and runtime allocation."""
+    policy = config.evaluation.policy()["evaluation"]
+    judge = draccus.decode(ModelConfig, policy["judge"])
+    gpu_variant = policy["gpu_variant"]
+    judge_gpu_count = policy["judge_gpu_count"]
+    if config.serving_profile:
+        gpu_variant = config.serving_profile.judge_gpu_variant
+        judge_gpu_count = config.serving_profile.judge_gpu_count
+        judge = replace(judge, resource_hint=replace(judge.resource_hint, gpu={gpu_variant: judge_gpu_count}))
+    accelerator = AcceleratorChoice(
+        platform=Platform.GPU,
+        gpu_type=gpu_variant,
+        gpu_count=judge_gpu_count,
+        target_cluster=None,
+    )
+    serving_geometry(judge.serve, accelerator)
+    priority = config.serving_profile.execution.priority if config.serving_profile else policy["execution"]["priority"]
+    inference = inference_config_for_model(
+        judge,
+        accelerator,
+        env_vars={},
+        priority=priority_band_value(priority),
+        capability_origin=policy["capability_origin"],
+        api_model=judge.location,
+    )
+    if config.serving_profile:
+        inference = replace(
+            inference,
+            iris=replace(
+                inference.iris,
+                worker_resources=replace(
+                    inference.iris.worker_resources, target_cluster=config.serving_profile.judge_target_cluster
+                ),
+            ),
+        )
+    return inference
+
+
+def micro210_judge_sha256(config: Micro210Run) -> str:
+    return hashlib.sha256(
+        json.dumps(config.evaluation.policy()["evaluation"]["judge"], sort_keys=True).encode()
+    ).hexdigest()
+
+
+@contextmanager
+def micro210_judge_endpoint(config: Micro210Run, inference: RemoteInferenceConfig) -> Iterator[OpenAIEndpoint]:
+    """Use the co-hosted judge or a receipt verified against the frozen judge."""
+    if config.serving_profile is None:
+        with remote_inference(inference) as served:
+            yield served.model.endpoint
+        return
+    receipt = StoragePath(config.serving_profile.judge_endpoint_receipt)
+    ExponentialBackoff(initial=1, maximum=30).wait_until_or_raise(
+        receipt.exists,
+        Duration.from_seconds(config.evaluation.policy()["evaluation"]["execution"]["job_timeout_seconds"]),
+        "Remote Micro210 judge did not publish its endpoint receipt",
+    )
+    endpoint = draccus.decode(Micro210JudgeEndpoint, json.loads(receipt.read_bytes()))
+    if (
+        endpoint.canonical_spec_sha256 != config.evaluation.record().canonical_spec_sha256
+        or endpoint.judge_sha256 != micro210_judge_sha256(config)
+        or endpoint.tensor_parallel_size != inference.model.tensor_parallel_size
+        or endpoint.endpoint.model != inference.model.api_model
+    ):
+        raise ValueError("Remote Micro210 judge receipt differs from the frozen judge")
+    yield endpoint.endpoint
+
+
 def run_micro210(config: Micro210Run) -> SkyRLRun:
     counterpart_api_key = resolve_secret_spec(config.counterpart_api_key).value
     if hashlib.sha256(config.skyrl.launch_config_yaml.encode()).hexdigest() != config.canonical_launch_sha256:
         raise ValueError("Canonical Micro210 refuses modified field: launch_config_yaml")
     validate_inputs(config.evaluation, PREPARED_INPUTS, model_manifest_filename=config.model_manifest_filename)
     validate_before_allocation(config.skyrl.launch_config_yaml)
+    inference = micro210_judge_inference(config)
     (StoragePath(config.evaluation.output_uri) / "canonical-evaluation.json").write_text(
         json.dumps(
             {
@@ -161,36 +248,15 @@ def run_micro210(config: Micro210Run) -> SkyRLRun:
             indent=2,
         )
     )
-    policy = config.evaluation.policy()["evaluation"]
-    judge = draccus.decode(ModelConfig, policy["judge"])
-    gpu_variant = policy["gpu_variant"]
-    judge_gpu_count = policy["judge_gpu_count"]
-    if config.serving_profile:
-        gpu_variant = config.serving_profile.gpu_variant
-        judge_gpu_count = config.serving_profile.judge_gpu_count
-        judge = replace(judge, resource_hint=replace(judge.resource_hint, gpu={gpu_variant: judge_gpu_count}))
     launch = yaml.safe_load(config.skyrl.launch_config_yaml)
-    inference = inference_config_for_model(
-        judge,
-        AcceleratorChoice(
-            platform=Platform.GPU,
-            gpu_type=gpu_variant,
-            gpu_count=judge_gpu_count,
-            target_cluster=None,
-        ),
-        env_vars={},
-        priority=priority_band_value(launch["iris"]["priority"]),
-        capability_origin=policy["capability_origin"],
-        api_model=judge.location,
-    )
-    with remote_inference(inference) as served:
-        launch["skyrl"]["environment"]["task_sessions"]["remote_judge"]["base_url"] = served.model.endpoint.base_url
+    with micro210_judge_endpoint(config, inference) as endpoint:
+        launch["skyrl"]["environment"]["task_sessions"]["remote_judge"]["base_url"] = endpoint.base_url
         for section in (launch["skyrl"]["extra_env"], launch["runtime"]["task_env"]):
-            section["JUDGE_BASE_URL"] = served.model.endpoint.base_url
+            section["JUDGE_BASE_URL"] = endpoint.base_url
         return run_skyrl(
             replace(config.skyrl, launch_config_yaml=yaml.safe_dump(launch)),
             env_vars={
-                "JUDGE_API_KEY": served.model.endpoint.api_key or "EMPTY",
+                "JUDGE_API_KEY": endpoint.api_key or "EMPTY",
                 "OPENAI_API_KEY": counterpart_api_key,
             },
         )

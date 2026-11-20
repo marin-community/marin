@@ -1,7 +1,7 @@
 # Evaluate the pinned Mochi base export with the repository runtime.
 schema: 1
 name: mochi-base-micro210
-version: "2026.11.20.1"
+version: "2026.11.20.2"
 slug: mochi-base-micro210
 cluster: cw-us-east-08a
 storage:
@@ -10,7 +10,7 @@ storage:
 evaluation: frozen-micro210
 adopted_model:
   name: mochi-base-micro210/adopted-base
-  version: "2026.11.20.1"
+  version: "2026.11.20.2"
   uri: s3://marin-us-east-08a/marin/users/benfeuer/mochi-bringup/models/mochi-base-step393491/2026.11.17.1/hf
   export_manifest_sha256: fb5e8e8e04273075ff8245563cff3c3b1b2ea33111f0958be4b9ea5ef99426a2
   config_sha256: 1a05f3dbaddd2c1aa28064dc0d4140d53d80cf5c25a7c8418b0e013c91b1a43e
@@ -76,4 +76,7 @@ serving:
         - vllm::unified_kv_cache_update
         - vllm::grug_moe_short_conv
   cuda_allocator_config: expandable_segments:True
-  judge_gpu_count: 4
+  judge_gpu_count: 8
+  judge_gpu_variant: H100
+  judge_target_cluster: cw-rno2a
+  judge_endpoint_receipt: s3://marin-rno2a/marin/evaluation/mochi-micro210/judge/2026.11.20.2/endpoint.json

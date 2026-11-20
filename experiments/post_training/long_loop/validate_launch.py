@@ -10,6 +10,7 @@ from pathlib import Path
 
 from cloud.iris.launch_config import load_launch_config
 from cloud.iris.rl_config_translation import RL_ENTRYPOINTS, RLEntrypoint
+from cloud.iris.role_plan import ModelRoleKind, RoleExecution, derive_role_plan
 from cloud.iris.runtime_environment import IRIS_TASK_IMAGE
 from omegaconf import OmegaConf
 from rigging.filesystem.buckets import filesystem_for
@@ -63,6 +64,16 @@ def main(source: Path, destination: Path, model_config: Path | None = None) -> N
                         sliding_window=not is_long,
                     )
     submitted = OmegaConf.load(source)
+    role_geometry = []
+    for claim in derive_role_plan(OmegaConf.to_container(config.skyrl, resolve=True)).claims:
+        if claim.execution is RoleExecution.REMOTE:
+            continue
+        ranks = claim.tensor_parallel_size * claim.pipeline_parallel_size * claim.data_parallel_size
+        required = ranks * (claim.replicas if claim.kind is ModelRoleKind.ROLLOUT else 1)
+        allocated = claim.num_nodes * claim.gpus_per_node
+        if required > allocated:
+            raise ValueError(f"Role {claim.role_id} requires {required} GPUs but selected {allocated}")
+        role_geometry.append({"role": claim.role_id, "required_gpus": required, "allocated_gpus": allocated})
     expected_routes = OmegaConf.select(submitted, "skyrl.trainer.rollout_buffer.source_routes", default={})
     actual_routes = OmegaConf.select(config, "skyrl.trainer.rollout_buffer.source_routes", default={})
     if OmegaConf.to_container(OmegaConf.create(expected_routes)) != OmegaConf.to_container(
@@ -84,6 +95,7 @@ def main(source: Path, destination: Path, model_config: Path | None = None) -> N
                 "compiled_sha256": hashlib.sha256(compiled.encode()).hexdigest(),
                 "validator": "load_launch_config + skyrl_train.utils.utils.validate_cfg",
                 "runtime_entrypoint": config.runtime.entrypoint,
+                "role_geometry": role_geometry,
                 "python": sys.version,
                 "skyrl_lock_sha256": hashlib.sha256((project / "uv.lock").read_bytes()).hexdigest(),
                 "initializer_config_sha256": (
