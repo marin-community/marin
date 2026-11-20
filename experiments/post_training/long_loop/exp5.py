@@ -184,6 +184,7 @@ def main(round_path: Path, source_revision: str, validation_output: Path) -> Art
             "reference": "9662fdba:experiments/post_training/long_loop/specs/sft.yaml",
             "replaces_parallelism": "CP32/EP8",
             "expert_axis_size": 1,
+            "parameter_precision": "Retain FP32 master parameters and BF16 compute; R1 used BF16 parameters",
             "remat_mode": "recompute_all",
             "remat_implementation": "Native Snowball applies jax.checkpoint to every scanned layer",
             "special_token_lr_reason": "Restore R1 sqrt(32); the 2026-11-20 user decision reverses the 1.0 ruling",

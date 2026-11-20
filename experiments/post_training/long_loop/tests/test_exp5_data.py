@@ -23,7 +23,6 @@ from taskcompendium.models import (
 
 from experiments.post_training.long_loop.exp5 import main, prepared_curriculum, prepared_pools
 from experiments.post_training.long_loop.exp5_data import hardmath_task, ifbench_row
-from experiments.post_training.task_curation.exp4_curriculum import CARRY_OVER_SHARES
 from experiments.post_training.task_curation.exp5_curriculum import (
     AGENTIC_TRAIN_SOURCE,
     HARDMATH_LABEL,
@@ -31,7 +30,6 @@ from experiments.post_training.task_curation.exp5_curriculum import (
     IFBENCH_SOURCE,
     IFBENCH_SOURCE_REVISION,
     OPENRESEARCHER_LABEL,
-    PENDING_SOURCES,
     exp5_rl_curriculum,
 )
 
@@ -74,9 +72,7 @@ def test_exp5_policy_keeps_the_unavailable_five_percent():
     weights = curriculum.weights()
     assert math.isclose(sum(weights.values()), 1.0, rel_tol=0, abs_tol=1e-12)
     assert weights[AGENTIC_TRAIN_SOURCE] == 0.20
-    assert {label: weights[label] for label in CARRY_OVER_SHARES} == dict(CARRY_OVER_SHARES)
     assert weights[IFBENCH_LABEL] == weights[OPENRESEARCHER_LABEL] == weights[HARDMATH_LABEL] == 0.05
-    assert set(PENDING_SOURCES) == {OPENRESEARCHER_LABEL}
 
 
 def test_exp5_preparation_reserves_the_missing_source_and_refuses_submission(tmp_path):

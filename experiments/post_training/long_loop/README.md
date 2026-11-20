@@ -46,7 +46,8 @@ An explicit size-one `expert` axis preserves R1 parallelism and supplies the
 axis name required by native Snowball partition specs. GPU memory fit remains
 unmeasured. At batch 256 and context 262,144, the 746-update maximum is
 50,063,212,544 packed positions. The inherited 20-hour deadline and training
-budget remain; a 21-hour runtime estimate can reach that limit before step 746.
+budget remain. At the cited R1 estimate of about 21 hours for all 746 updates,
+the unchanged deadline can stop training before update 746.
 
 Source revisions are recorded in [the curriculum](../task_curation/exp5_curriculum.py).
 The science inputs are `rqa`, `so`, `syn_mcq` and `vendor` at revision
