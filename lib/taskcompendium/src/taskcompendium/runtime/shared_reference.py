@@ -141,7 +141,7 @@ def merge_actor_environment(root: Path, actor_sites: list[str]) -> None:
     """Record the actor sites in the grading runtime so verdicts observe agent-owned installs."""
     runtime_path = root / "runtime.json"
     runtime = json.loads(runtime_path.read_text())
-    runtime["sites"] = list(dict.fromkeys((*runtime["sites"], *actor_sites)))
+    runtime["sites"] = list(dict.fromkeys((*actor_sites, *runtime["sites"])))
     runtime_path.write_text(json.dumps(runtime, sort_keys=True) + "\n")
     baseline_path = root / "site-packages-baseline.json"
     baseline = json.loads(baseline_path.read_text())

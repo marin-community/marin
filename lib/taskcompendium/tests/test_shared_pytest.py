@@ -415,22 +415,25 @@ def test_grading_observes_agent_environment_installs(shared_runtime):
     site = subprocess.check_output(
         [str(actor_python), "-I", "-c", "import sysconfig;print(sysconfig.get_path('purelib'))"], text=True
     ).strip()
-    install = Path(site) / "actor_install.py"
+    install = Path(site) / "dependency.py"
     write = agent_command(runtime, f"open({str(install)!r}, 'w').write('VALUE = 1\\n')")
     assert write.returncode == 0, write.stderr
+    observed = subprocess.check_output(
+        [str(actor_python), "-I", "-c", "import dependency;print(dependency.VALUE)"], text=True
+    )
+    assert observed.strip() == "1"
     verdict = runtime.grade()
     diff = json.loads((Path(runtime.contract.report_directory) / "site-packages-diff.json").read_text())
     assert diff[str(install)]["after"] == hashlib.sha256(b"VALUE = 1\n").hexdigest()
     assert verdict["status"] == "scored", verdict
-    assert verdict["reward"] == 0
+    assert verdict["reward"] == 1
 
 
 @pytest.mark.parametrize("shared_runtime", ["frozen-reference"], indirect=True)
 def test_frozen_reference_keeps_root_executables_protected_during_editable_console_install(shared_runtime):
     runtime = shared_runtime
     workspace = runtime.candidate.parent
-    source_python = Path(json.loads((Path(runtime.contract.protected_root) / "runtime.json").read_text())["sites"][0])
-    source_python = source_python.parents[2] / "bin/python"
+    source_python = runtime.site.parents[2] / "bin/python"
     (workspace / "setup.py").write_text(
         "from setuptools import setup\n"
         "setup(name='source-entrypoint-fixture',version='0.0',py_modules=['candidate'],"
@@ -595,6 +598,30 @@ def test_shared_controller_restores_contract_paths_and_preserves_other_files(sha
     assert runtime.grade()["reward"] == 1
     assert (workspace / "extra_guard.py").read_text() == "reference\n"
     assert (workspace / "editable.py").read_text() == "agent change\n"
+
+
+@pytest.mark.parametrize("destination", ["external", "protected"])
+def test_shared_cleanup_preserves_files_behind_actor_symlink(shared_runtime, destination):
+    runtime = shared_runtime
+    workspace = Path(runtime.contract.workspace)
+    target = (
+        Path(runtime.contract.protected_root) / "hidden-extra"
+        if destination == "protected"
+        else workspace.parent / "external"
+    )
+    target.mkdir(exist_ok=True)
+    victim = target / "test_untouched.py"
+    victim.write_text("private material\n")
+    attack = agent_command(
+        runtime, f"from pathlib import Path;Path({str(workspace / 'tests')!r}).symlink_to({str(target)!r})"
+    )
+    assert attack.returncode == 0, attack.stderr
+    contract = runtime.contract.model_dump(mode="json")
+    contract["protected_test_patterns"] = ["**/tests/**/*", *contract["protected_test_patterns"]]
+    shared_pytest.prepare_grading(contract)
+    assert victim.read_text() == "private material\n"
+    assert not (workspace / "tests").is_symlink()
+    assert runtime.grade()["reward"] == 0
 
 
 @pytest.mark.parametrize(

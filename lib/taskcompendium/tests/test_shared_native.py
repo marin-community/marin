@@ -199,6 +199,37 @@ def test_native_grading_uses_live_dependencies_and_audits_changes(native_runtime
     assert str(dependencies / project.mutation_file) in diff
 
 
+@pytest.mark.parametrize("destination", ["external", "protected"])
+def test_native_cleanup_preserves_files_behind_actor_symlink(native_runtime, destination):
+    contract, _, _ = native_runtime
+    expected_reward = native_verdict(contract)["reward"]
+    workspace = Path(contract.workspace)
+    target = (
+        Path(contract.protected_root) / "hidden-extra" if destination == "protected" else workspace.parent / "external"
+    )
+    target.mkdir(exist_ok=True)
+    victim = target / "untouched.txt"
+    victim.write_text("private material\n")
+    shutil.rmtree(workspace / "tests")
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import pathlib,sys;pathlib.Path(sys.argv[1]).symlink_to(sys.argv[2])",
+            str(workspace / "tests"),
+            str(target),
+        ],
+        user=contract.agent_uid,
+        group=contract.agent_uid,
+        extra_groups=(),
+        check=True,
+    )
+    verdict = native_verdict(contract)
+    assert victim.read_text() == "private material\n"
+    assert not (workspace / "tests").is_symlink()
+    assert verdict["reward"] == expected_reward
+
+
 def test_native_actor_cannot_read_hidden_grading_material(native_runtime):
     contract, _, _ = native_runtime
     hidden = Path(contract.protected_root) / "tests/test_state.py"

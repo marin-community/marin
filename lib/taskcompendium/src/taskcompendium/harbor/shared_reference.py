@@ -202,7 +202,7 @@ def harden_shared_swe_reference(
     if environment.get("setup") is not None:
         raise ValueError("Reference mode cannot reorder an existing source initialization command")
     source_environment = dict(environment.get("env", {}))
-    actor = actor_environment_for(contract, source_path=source_environment.get("PATH") or DEFAULT_SOURCE_PATH)
+    actor = reference.actor_environment
     files[REFERENCE_INPUT] = reference.model_dump_json().encode()
     files[REFERENCE_BUNDLE] = bundle
     files[REFERENCE_INITIALIZER] = Path(shared_reference.__file__).read_bytes()
