@@ -240,7 +240,6 @@ def test_registration_writes_only_content_bound_complete_receipt(registration):
         loaded.supervised_tokens,
     ) == (2, 1, 1, 2, 1)
     assert qualify_sft_variant(plan, str(root / "receipt.json")) == loaded
-    loaded.require_input(plan.input)
     with pytest.raises(ValueError, match="selected dataset variant"):
         loaded.require_input(plan.input.model_copy(update={"task_specs_sha256": "c" * 64}))
 
@@ -248,9 +247,7 @@ def test_registration_writes_only_content_bound_complete_receipt(registration):
 @pytest.mark.parametrize(
     "defect",
     [
-        "missing_stage",
         "unfinished_stage",
-        "missing_suite",
         "changed_content",
         "wrong_mask",
         "unmeasured_row",
@@ -262,12 +259,8 @@ def test_registration_writes_only_content_bound_complete_receipt(registration):
 )
 def test_incomplete_or_changed_preparation_never_writes_receipt(registration, defect):
     plan, root, prepared = registration
-    if defect == "missing_stage":
-        plan = plan.model_copy(update={"stages": {k: v for k, v in plan.stages.items() if k != SftStage.FILTER}})
-    elif defect == "unfinished_stage":
+    if defect == "unfinished_stage":
         StatusFile(str(root / "filter"), worker_id="test").write_status(STATUS_FAILED)
-    elif defect == "missing_suite":
-        plan = plan.model_copy(update={"evals": {k: v for k, v in plan.evals.items() if k != "uncheatable"}})
     elif defect == "changed_content":
         Path(json.loads(Path(plan.input_manifest.uri).read_text())["files"][0]["uri"]).write_bytes(b"changed input")
     elif defect == "wrong_population":

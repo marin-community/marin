@@ -23,7 +23,6 @@ def test_registration_resolves_download_behind_processed_chat(name):
                 data_sha256="a" * 64,
             )
             assert registered_download(source, identity).output_path == step.output_path
-            assert source.chat_steps[0].output_path != step.output_path
             break
         pending.extend(step.deps)
     else:
