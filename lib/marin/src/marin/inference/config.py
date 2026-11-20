@@ -18,6 +18,8 @@ from fray.types import CpuConfig, EnvironmentConfig, GpuConfig, ResourceConfig, 
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration
 
+from marin.external_dependencies import VLLM_GPU_RELEASE, VllmGpuRelease
+
 # Worker and isolated vLLM environments use one Python version so cloudpickle
 # and the launched callable stay compatible.
 WORKER_PYTHON_VERSION = "3.12"
@@ -273,6 +275,7 @@ class VllmEngineConfig:
     launcher: VllmLauncherType = VllmLauncherType.PREINSTALLED
     source: VllmSource = VllmSource.UPSTREAM
     version: str | None = None
+    gpu_release: VllmGpuRelease = VLLM_GPU_RELEASE
     extra_requirements: tuple[str, ...] = ()
     compilation_cache: VllmCompilationCacheMode = VllmCompilationCacheMode.MANAGED
     startup_timeout_seconds: int = 1800

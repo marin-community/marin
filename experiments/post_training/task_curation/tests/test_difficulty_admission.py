@@ -76,7 +76,7 @@ def test_admission_recheck_uses_frozen_contracts_before_attempts_or_escalation(
     assert isinstance(action, RecheckExecutabilityAdmission) and len(action.cells) == 2
     backend = JobStore(str(tmp_path / "jobs"))
     execute_plan([action], read_rows(ledger), [catalog], ledger, backend, EscalationLog(ledger))
-    result = repair_action(action, tmp_path / "repair")
+    result = repair_action(action, tmp_path / "repair", ledger)
     target = StoragePath(ledger) / "v1" / "results" / (action_id(action) + ".json")
     target.parent.mkdirs()
     target.write_text(json.dumps(result))

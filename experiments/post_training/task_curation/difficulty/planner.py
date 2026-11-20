@@ -20,6 +20,7 @@ from experiments.post_training.task_curation.difficulty.state import (
     GapReason,
     LedgerRow,
 )
+from experiments.post_training.task_curation.difficulty_protocol import SNOWBALL_VLLM_RELEASE
 
 MAX_TASKS_PER_JOB = 20
 MAX_GPU_HOURS_PER_JOB = 40.0
@@ -45,6 +46,7 @@ class AttemptBatch:
     sources: tuple[SourceAttempts, ...]
     n_attempts: int
     max_gpu_hours: float = MAX_GPU_HOURS_PER_JOB
+    vllm_release_tag: str | None = None
 
 
 @dataclass(frozen=True)
@@ -64,6 +66,13 @@ class BuildSnapshot:
 class BuildTaskSpecFactory:
     source: SourceAttempts
     solver: Solver
+
+
+@dataclass(frozen=True)
+class FreezeSamplePanel:
+    source: SourceAttempts
+    cells: tuple[tuple[str, Solver], ...]
+    declaration_json: str
 
 
 @dataclass(frozen=True)
@@ -101,6 +110,7 @@ Action = (
     | RebuildEnvironmentArtifact
     | BuildSnapshot
     | BuildTaskSpecFactory
+    | FreezeSamplePanel
     | RecheckExecutabilityAdmission
     | QualifyJudgeRoute
     | RetryAfter
@@ -109,7 +119,11 @@ Action = (
 
 
 def action_payload(action: Action) -> dict:
-    return {"kind": type(action).__name__, **asdict(action)}
+    payload = {"kind": type(action).__name__, **asdict(action)}
+    # Unchanged solver routes retain their existing in-flight action identities.
+    if isinstance(action, AttemptBatch) and action.vllm_release_tag is None:
+        del payload["vllm_release_tag"]
+    return payload
 
 
 def action_id(action: Action) -> str:
@@ -171,7 +185,10 @@ class AttemptRemediation:
                     source.queue_sha256,
                     source.evidence_ids,
                 )
-                actions.append(AttemptBatch(cell.solver, (selected,), sum(n for _, _, n in tasks)))
+                release = SNOWBALL_VLLM_RELEASE.release_tag if cell.solver == Solver.SNOWBALL else None
+                actions.append(
+                    AttemptBatch(cell.solver, (selected,), sum(n for _, _, n in tasks), vllm_release_tag=release)
+                )
         return actions
 
 
@@ -230,7 +247,24 @@ class SnapshotRemediation:
 @dataclass(frozen=True)
 class TaskSpecRemediation:
     def plan(self, cells: Sequence[CellState]) -> list[Action]:
-        return [BuildTaskSpecFactory(selected_source(cell), cell.solver) for cell in cells]
+        actions: list[Action] = []
+        missing: dict[CatalogSource, list[CellState]] = {}
+        for cell in cells:
+            if cell.source.queue_uri:
+                actions.append(BuildTaskSpecFactory(selected_source(cell), cell.solver))
+            else:
+                missing.setdefault(cell.source, []).append(cell)
+        for source, group in missing.items():
+            if source.declaration_json is None:
+                raise ValueError(f"Missing frozen declaration for panel repair: {source.source_id}")
+            actions.append(
+                FreezeSamplePanel(
+                    selected_source(group[0]),
+                    tuple(sorted((cell.source.source_id, cell.solver) for cell in group)),
+                    source.declaration_json,
+                )
+            )
+        return actions
 
 
 @dataclass(frozen=True)
@@ -400,6 +434,7 @@ def action_from_payload(payload: dict) -> Action:
             tuple(source_attempts_from_payload(s) for s in payload["sources"]),
             payload["n_attempts"],
             payload["max_gpu_hours"],
+            payload.get("vllm_release_tag"),
         )
     if kind == "RebuildEnvironmentArtifact":
         return RebuildEnvironmentArtifact(
@@ -416,6 +451,12 @@ def action_from_payload(payload: dict) -> Action:
         return BuildSnapshot(source_attempts_from_payload(payload["source"]), Solver(payload["solver"]))
     if kind == "BuildTaskSpecFactory":
         return BuildTaskSpecFactory(source_attempts_from_payload(payload["source"]), Solver(payload["solver"]))
+    if kind == "FreezeSamplePanel":
+        return FreezeSamplePanel(
+            source_attempts_from_payload(payload["source"]),
+            tuple((source, Solver(solver)) for source, solver in payload["cells"]),
+            payload["declaration_json"],
+        )
     if kind == "RecheckExecutabilityAdmission":
         return RecheckExecutabilityAdmission(
             source_attempts_from_payload(payload["source"]),

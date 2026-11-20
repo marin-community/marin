@@ -3,6 +3,7 @@
 
 """Resolve frozen task panels against the current served source declarations."""
 
+import json
 from collections.abc import Sequence
 
 from marina.client import DEFAULT_MARINA_URL, applet_query
@@ -10,6 +11,7 @@ from rigging.auth import TokenProvider
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.difficulty.importer import catalog_sources, population_revision
+from experiments.post_training.task_curation.difficulty.ledger import DEFAULT_LEDGER, LEDGER_VERSION, PANELS_DIRECTORY
 from experiments.post_training.task_curation.difficulty.state import CatalogSource, CellState, GapReason
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
@@ -37,7 +39,10 @@ def available_artifact_uris(cells: Sequence[CellState]) -> frozenset[str]:
 
 
 def served_catalog(
-    applet_id: str, queues: tuple[tuple[str, str], ...] = DEFAULT_QUEUES, token_provider: TokenProvider | None = None
+    applet_id: str,
+    queues: tuple[tuple[str, str], ...] = DEFAULT_QUEUES,
+    token_provider: TokenProvider | None = None,
+    ledger: str = DEFAULT_LEDGER,
 ) -> list[CatalogSource]:
     """Keep every served source; unmatched pins need a fresh frozen task panel."""
     query = applet_query(DEFAULT_MARINA_URL, applet_id, token_provider=token_provider)
@@ -52,6 +57,12 @@ def served_catalog(
     for uri, expected in queues:
         for source in catalog_sources(uri, expected):
             panels[(canonical_source_id(source.source_id), source.registry_revision)] = source
+    for index in sorted((StoragePath(ledger) / LEDGER_VERSION / PANELS_DIRECTORY / "*.json").glob(), key=str):
+        reference = json.loads(index.read_text())
+        (source,) = catalog_sources(reference["queue_uri"], reference["queue_sha256"])
+        if (source.source_id, source.registry_revision) != (reference["source_id"], reference["registry_revision"]):
+            raise ValueError(f"Published panel differs from its population binding: {index}")
+        panels.setdefault((canonical_source_id(source.source_id), source.registry_revision), source)
     sources = []
     for row in declarations:
         declaration = row["declaration"]
@@ -65,7 +76,17 @@ def served_catalog(
         }
         revision = population_revision(sample)
         match = panels.get((canonical_source_id(row["id"]), revision))
-        sources.append(match or CatalogSource(row["id"], revision, (), "", ""))
+        if match is not None:
+            sources.append(match)
+            continue
+        (full,) = query(
+            "SELECT declaration FROM atlas_sources WHERE load_id = "
+            "(SELECT load_id FROM atlas_current WHERE name = 'latest') AND id=:source_id",
+            {"source_id": row["id"]},
+        )["rows"]
+        if any(full["declaration"][key] != declaration[key] for key in declaration):
+            raise ValueError("Served declaration changed while resolving its missing panel")
+        sources.append(CatalogSource(row["id"], revision, (), "", "", json.dumps(full["declaration"], sort_keys=True)))
     if len({canonical_source_id(source.source_id) for source in sources}) != len(sources):
         raise ValueError("Served catalog contains duplicate source identities")
     return sources

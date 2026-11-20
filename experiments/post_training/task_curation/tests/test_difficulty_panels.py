@@ -1,0 +1,129 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Missing panels freeze automatically and become current-population attempt inputs."""
+
+import json
+from dataclasses import replace
+from types import SimpleNamespace
+
+from finestore.rl.curation import ActorCensusInput
+from finestore.rl.difficulty import Solver
+from iris.resources.state import JobState
+from marin.execution.artifact import ArtifactRecord, result_type_name, write_record
+from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.models import ConversationInput, TaskSpec, TextMessage
+
+from experiments.post_training.task_curation.difficulty import catalog
+from experiments.post_training.task_curation.difficulty.executor import EscalationLog, collect_finished, execute_plan
+from experiments.post_training.task_curation.difficulty.ledger import read_rows
+from experiments.post_training.task_curation.difficulty.planner import AttemptBatch, FreezeSamplePanel, action_id, plan
+from experiments.post_training.task_curation.difficulty.remediate import repair_action
+from experiments.post_training.task_curation.difficulty.state import CoveragePolicy, cell_state
+from experiments.post_training.task_curation.difficulty_contracts import (
+    CONTRACT_VINTAGE_ABSENT_OMITTED,
+    difficulty_task_contract,
+)
+from experiments.post_training.task_curation.difficulty_samples import load_queue_sources
+from experiments.post_training.task_curation.lexical_artifacts import ActorCensus, SourceTextPopulation
+from experiments.post_training.task_curation.lexical_contamination import write_text_population
+from experiments.post_training.task_curation.tests.prebuilt_fixtures import prebuilt_task
+from experiments.post_training.task_curation.tests.test_difficulty_executor import JobStore
+from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
+
+
+def test_missing_panel_freezes_one_shared_queue_then_plans_original_tasks(tmp_path, monkeypatch, difficulty_source):
+    task = TaskSpec.model_validate(json.loads(prebuilt_task("panel")["lowered_task_spec"])["task"])
+    tasks = [
+        task.model_copy(
+            update={"id": name, "context": ConversationInput(events=(TextMessage(role="user", content=name),))}
+        )
+        for name in ("a", "b")
+    ]
+    declaration = difficulty_source(tasks[0]).declaration
+    files = write_text_population(((task.model_dump(mode="json"), {}) for task in tasks), str(tmp_path / "population"))
+    population = SourceTextPopulation(
+        path=str(tmp_path / "population"),
+        source_id=declaration.id,
+        dataset_id=declaration.dataset_id,
+        dataset_revision=declaration.dataset_revision,
+        source_version=declaration.pipeline.version,
+        converter_revision="fixture",
+        text_renderer_version="fixture",
+        task_count=files.task_count,
+        text_sha256=files.text_sha256,
+        task_specs_sha256=files.task_specs_sha256,
+        main_output_dir=files.main_output_dir,
+        specs_output_dir=files.specs_output_dir,
+        converter_rejections={},
+        admission_rejections={},
+    )
+    write_record(
+        ArtifactRecord(
+            output_path=population.path,
+            result_type=result_type_name(type(population)),
+            result=population.result_payload(),
+        )
+    )
+    declaration = declaration.model_copy(
+        update={
+            "task_count": 2,
+            "actor_census_input": ActorCensusInput(
+                dataset_id=population.dataset_id,
+                dataset_revision=population.dataset_revision,
+                converter_version=population.source_version,
+                converter_revision=population.converter_revision,
+                measured_tasks=2,
+                task_specs_sha256=population.task_specs_sha256,
+                evidence_url=str(tmp_path / "actor" / "summary.json"),
+            ),
+            "within_source_dedup": (
+                deduplication_evidence(
+                    population.dataset_id, population.dataset_revision, population.source_version, 2
+                ).model_copy(update={"drop_manifest_uri": files.drop_manifest_uri})
+            ),
+        }
+    )
+    # Only the census receipt store is substituted; sampling reads and verifies every real parquet row.
+    monkeypatch.setattr(ActorCensus, "raw_load", lambda path: SimpleNamespace(input_artifact=population.path))
+    served = {"id": declaration.id, "declaration": declaration.model_dump(mode="json")}
+
+    def query(sql, params):
+        if params:
+            return {"rows": [{"declaration": served["declaration"]}]}
+        minimal = {key: served["declaration"][key] for key in ("current_release", "pipeline", "actor_census_input")}
+        return {"rows": [{"id": served["id"], "declaration": minimal}]}
+
+    monkeypatch.setattr(catalog, "applet_query", lambda *args, **kwargs: query)
+    ledger = str(tmp_path / "ledger")
+    (before,) = catalog.served_catalog("fixture", queues=(), ledger=ledger)
+    solvers = (Solver.SMALL, Solver.LARGE, Solver.SNOWBALL, Solver.HOSTED)
+    cells = [cell_state([], before, solver, CoveragePolicy()) for solver in solvers]
+    (action,) = plan(cells, [])
+    assert isinstance(action, FreezeSamplePanel) and len(action.cells) == 4
+    backend = JobStore(str(tmp_path / "jobs"))
+    execute_plan([action], [], [before], ledger, backend, EscalationLog(ledger))
+    result = repair_action(action, tmp_path / "repair", ledger)
+    target = StoragePath(ledger) / "v1" / "results" / (action_id(action) + ".json")
+    target.parent.mkdirs()
+    target.write_text(json.dumps(result))
+    backend.existing = [replace(backend.existing[0], state=JobState.SUCCEEDED)]
+    collect_finished(read_rows(ledger), backend.jobs(), ledger, EscalationLog(ledger))
+    (after,) = catalog.served_catalog("fixture", queues=(), ledger=ledger)
+    assert after.registry_revision == before.registry_revision
+    expected = {
+        (task.id, difficulty_task_contract(task, {}, CONTRACT_VINTAGE_ABSENT_OMITTED)["task_sha256"]) for task in tasks
+    }
+    assert set(after.tasks) == expected
+    (frozen,) = load_queue_sources(after.queue_uri, after.queue_sha256, (after.source_id,))
+    assert frozen.sample.population_count == 2 and frozen.sample.seed == 0
+    rows = read_rows(ledger)
+    next_actions = plan([cell_state(rows, after, solver, CoveragePolicy()) for solver in solvers], rows)
+    assert len(next_actions) == 4 and all(isinstance(item, AttemptBatch) for item in next_actions)
+    assert not (tmp_path / "ledger" / "ESCALATIONS.md").exists()
+    assert catalog.served_catalog("fixture", queues=(), ledger=ledger) == [after]
+    served["declaration"] = declaration.model_copy(
+        update={"current_release": declaration.current_release.model_copy(update={"revision": "b" * 40})}
+    ).model_dump(mode="json")
+    (changed,) = catalog.served_catalog("fixture", queues=(), ledger=ledger)
+    assert changed.registry_revision != before.registry_revision and not changed.tasks

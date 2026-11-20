@@ -18,6 +18,7 @@ ACTIONS_DIRECTORY = "actions"
 IMPORTS_DIRECTORY = "imports"
 RESULTS_DIRECTORY = "results"
 ESCALATIONS_DIRECTORY = "escalations"
+PANELS_DIRECTORY = "panels"
 DEFAULT_LEDGER = "s3://marin-us-east-02a/marin/rl-data/atlas/difficulty-ledger"
 digest = json_sha256
 

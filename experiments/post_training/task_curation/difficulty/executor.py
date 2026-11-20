@@ -32,6 +32,7 @@ from experiments.post_training.task_curation.difficulty.planner import (
     BuildSnapshot,
     BuildTaskSpecFactory,
     Escalate,
+    FreezeSamplePanel,
     QualifyJudgeRoute,
     RebuildEnvironmentArtifact,
     RecheckExecutabilityAdmission,
@@ -330,7 +331,7 @@ def repaired_gap(action: Action) -> Gap:
         )
     if isinstance(action, BuildSnapshot):
         return Gap(GapReason.DAYTONA_SNAPSHOT_PREFLIGHT_PENDING)
-    if isinstance(action, BuildTaskSpecFactory):
+    if isinstance(action, (BuildTaskSpecFactory, FreezeSamplePanel)):
         return Gap(GapReason.TASK_SPEC_FACTORY_PENDING)
     if isinstance(action, RecheckExecutabilityAdmission):
         return Gap(GapReason.EXECUTABILITY_ADMISSION_PENDING)

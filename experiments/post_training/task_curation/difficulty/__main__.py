@@ -107,7 +107,11 @@ def main() -> None:
         return
     if bool(args.queue) != bool(args.queue_sha256):
         parser.error("historical mode requires --queue and --queue-sha256")
-    catalog = catalog_sources(args.queue, args.queue_sha256) if args.queue else served_catalog(args.applet_id)
+    catalog = (
+        catalog_sources(args.queue, args.queue_sha256)
+        if args.queue
+        else served_catalog(args.applet_id, ledger=args.ledger)
+    )
     rows = read_rows(args.ledger)
     policy = CoveragePolicy()
     cells = cells_for_catalog(rows, catalog, policy)

@@ -17,6 +17,7 @@ import pytest
 from finestore.rl.difficulty import Solver
 from iris.rpc import job_pb2
 from iris.rpc.proto_display import priority_band_value
+from marin.inference.vllm_backend import vllm_launcher
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration
 from taskcompendium.grader import verifyit_package
@@ -216,7 +217,8 @@ def test_campaign_qualifies_only_required_judge_routes(tmp_path, monkeypatch, di
         assert config.judge is serving["judge"] is serving["judge_provider_limits"] is None
 
 
-def test_solver_endpoint_passes_the_declared_band_to_serving_children(monkeypatch):
+@pytest.mark.parametrize("solver", [Solver.SMALL, Solver.SNOWBALL])
+def test_solver_endpoint_passes_the_declared_band_and_release_to_serving_children(monkeypatch, solver):
     captured = []
 
     @contextmanager
@@ -233,8 +235,10 @@ def test_solver_endpoint_passes_the_declared_band_to_serving_children(monkeypatc
         yield session
 
     monkeypatch.setattr(difficulty_runtime, "remote_inference", remote_inference)
-    settings = sampling_settings(Solver.SMALL, [])
-    with difficulty_runtime.solver_endpoint(Solver.SMALL, settings, priority_band_value("interactive")) as (
+    monkeypatch.setattr("marin.evaluation.serving_config._checkpoint_file_sizes", lambda *args: ())
+    monkeypatch.setattr("marin.inference.vllm_release.platform.machine", lambda: "x86_64")
+    settings = sampling_settings(solver, [])
+    with difficulty_runtime.solver_endpoint(solver, settings, priority_band_value("interactive")) as (
         endpoint,
         _api_model,
         _api_key,
@@ -246,6 +250,15 @@ def test_solver_endpoint_passes_the_declared_band_to_serving_children(monkeypatc
     assert captured[0].iris.worker_timeout == Duration.from_hours(72)
     assert captured[0].engine.startup_timeout_seconds == 259200
     assert captured[0].iris.endpoint_ready_timeout_seconds == 259200
+    if solver == Solver.SNOWBALL:
+        launcher = vllm_launcher(captured[0].engine)
+        command = launcher.command()
+        provenance = json.loads(command[-1])
+        assert provenance["source_commit"] == "01911be34fac8715347962a8d791ca34a879e01e"
+        assert provenance["wheel_sha256"] == "d04fa6af4a7161f8995154cbdbbc8dddc61b9a9ff198b3947985b2d998ef60e0"
+        requirements = [value for index, value in enumerate(command) if index and command[index - 1] == "--with"]
+        assert "torch==2.13.0+cu132" in requirements
+        assert provenance["wheel_url"] in launcher.cache_identity()
 
 
 def test_every_judge_tier_carries_an_immutable_checkpoint_pin():

@@ -142,6 +142,26 @@ def test_planner_schedules_only_missing_tasks_and_replay_submits_nothing(tmp_pat
     assert plan([cell], restored) == []
 
 
+@pytest.mark.parametrize("solver", [Solver.SMALL, Solver.SNOWBALL])
+def test_snowball_release_binding_allows_fixed_batch_after_recorded_legacy_failure(solver):
+    cell = cell_state([], SOURCE, solver, CoveragePolicy())
+    (current,) = plan([cell], [])
+    legacy = replace(current, vllm_release_tag=None)
+    failed = replace(
+        row("failed", outcome=Outcome.FINISHED),
+        solver=solver,
+        task_id=None,
+        task_sha256=None,
+        action_id=action_id(legacy),
+        job_id="/fixture/failed",
+    )
+    next_actions = plan([cell_state([failed], SOURCE, solver, CoveragePolicy())], [failed])
+    if solver == Solver.SNOWBALL:
+        assert next_actions == [current] and action_id(current) != action_id(legacy)
+    else:
+        assert next_actions == []
+
+
 def test_provider_capacity_recovers_without_counting_waits_as_attempts():
     cell = blocked(Gap(GapReason.PROVIDER_CAPACITY_WAIT))
     assert isinstance(plan([cell], [])[0], RetryAfter)

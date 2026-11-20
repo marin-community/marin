@@ -94,6 +94,7 @@ class CatalogSource:
     tasks: tuple[tuple[str, str], ...]
     queue_uri: str
     queue_sha256: str
+    declaration_json: str | None = None
 
 
 @dataclass(frozen=True)

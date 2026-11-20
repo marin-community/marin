@@ -66,7 +66,7 @@ def main() -> None:
             subprocess.run(command, check=True)
             result = {"status": "completed", "run_root": output}
         else:
-            result = repair_action(action, local)
+            result = repair_action(action, local, args.ledger)
     target = StoragePath(args.ledger) / LEDGER_VERSION / RESULTS_DIRECTORY / f"{key}.json"
     target.parent.mkdirs()
     if target.exists():

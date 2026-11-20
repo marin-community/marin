@@ -21,7 +21,6 @@ from huggingface_hub import hf_hub_download
 from iris.rpc.proto_display import priority_band_value
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.serving_config import inference_config_for_model
-from marin.external_dependencies import VLLM_GPU_RELEASE
 from marin.inference.config import VllmEngineConfig
 from marin.inference.iris import remote_inference
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -39,6 +38,7 @@ from experiments.post_training.task_curation.difficulty_protocol import (
     PINS,
     TARGET_CLUSTER,
     serving_model,
+    solver_vllm_release,
 )
 from experiments.post_training.task_curation.difficulty_provider import ProviderLimits
 from experiments.post_training.task_curation.difficulty_samples import load_queue_sources
@@ -196,7 +196,7 @@ def solver_endpoint(solver: Solver, settings: SamplingSettings, priority: int):
         raise ValueError("Difficulty local solvers require the vLLM engine")
     config = replace(
         config,
-        engine=replace(config.engine, startup_timeout_seconds=259200),
+        engine=replace(config.engine, gpu_release=solver_vllm_release(solver), startup_timeout_seconds=259200),
         iris=replace(
             config.iris,
             worker_timeout=JOB_TIMEOUT,
@@ -393,6 +393,9 @@ def main() -> None:
         raise FileExistsError("Preserve prior campaigns and select a new run version")
     sources = load_queue_sources(args.sources, args.sources_sha256, tuple(args.source_id or ()))
     pin = PINS[args.solver]
+    action = json.loads(StoragePath(args.action_manifest).read_text())
+    if args.solver == Solver.SNOWBALL and action["vllm_release_tag"] != solver_vllm_release(args.solver).release_tag:
+        raise ValueError("Snowball action does not bind its established vLLM GPU release")
     args.local_root.mkdir(parents=True)
     options = worker_limits(args.local_root)
     if args.registry_auth_secret is not None:
@@ -401,7 +404,6 @@ def main() -> None:
         authfile.chmod(384)
         options["registry_authfile"] = str(authfile)
     prepared = [prepare_source(source, args.local_root / "prepared") for source in sources]
-    action = json.loads(StoragePath(args.action_manifest).read_text())
     requested = {source["source_id"]: {task[0] for task in source["tasks"]} for source in action["sources"]}
     prepared = [
         source.model_copy(
@@ -548,7 +550,9 @@ def main() -> None:
                     "judge": judge_metadata,
                     "native_client_context_safety_buffer_tokens": NATIVE_CONTEXT_SAFETY_BUFFER,
                     "compilation_and_cuda_graphs_requested": True,
-                    "vllm_gpu_release": None if args.solver == Solver.HOSTED else asdict(VLLM_GPU_RELEASE),
+                    "vllm_gpu_release": (
+                        None if args.solver == Solver.HOSTED else asdict(solver_vllm_release(args.solver))
+                    ),
                     **probe,
                 },
             )

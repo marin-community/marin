@@ -2570,7 +2570,14 @@ uv run python -m experiments.post_training.task_curation.difficulty reconcile --
 ```
 
 `status` and `plan` read the current served declarations. A source whose current
-release has no matching frozen panel stays visible and needs a new SAMPLE panel.
+release has no matching frozen panel stays visible. The task-factory remediation
+schedules one shared `FreezeSamplePanel` CPU job for its affected solvers. It
+checks every retained task against the current source census, freezes the
+seed-zero panel with at most 100 tasks, and publishes its task queue under the
+ledger's `v1/panels` directory. The queue digest and population revision bind
+discovery to the source's exact release and converter. Subsequent plans discover
+that panel and schedule missing attempts. This preserves the
+population and does not claim content review or execution qualification.
 `--queue <sources.json> --queue-sha256 <sha256>` selects an explicit historical
 view for either command; it does not change the served catalog. `--json` emits
 structured output. `--since` accepts hours, days or a timezone-qualified ISO date.
@@ -2618,6 +2625,14 @@ bound. The cap is 22 active Difficulty Iris jobs in the owner's namespace, inclu
 the controller, legacy campaigns and serving children. A candidate or judge
 repair reserves headroom for its serving children before those jobs appear.
 Serving keeps compilation and CUDA graphs enabled.
+Snowball attempt manifests record its established
+`marin-vllm-gpu-20260924-01911be34fac` release tag. The inference launcher selects
+that release's wheel and pins its CUDA Torch ABI independently of the global
+vLLM release. The tag gives corrected Snowball batches new action identities; other
+solver routes retain their existing identities. Controller and child jobs use
+an immutable workspace bundle. A landed runtime fix requires a controller
+replacement. Existing children keep their original code and must finish or be
+replaced separately to use the fix.
 
 `--gpu-hour-budget` is an explicit campaign approval. The first controller binds
 its amount and start time in `v1/budget.json`; controller restarts retain that

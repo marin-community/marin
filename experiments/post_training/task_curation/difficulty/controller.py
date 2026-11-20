@@ -45,7 +45,7 @@ def run_controller(
         require_secret("MARINA_IAP_REFRESH_TOKEN"),
     )
     while True:
-        catalog = served_catalog(applet_id, token_provider=provider)
+        catalog = served_catalog(applet_id, token_provider=provider, ledger=ledger)
         rows = read_rows(ledger)
         cells = cells_for_catalog(rows, catalog, policy)
         available = available_artifact_uris(cells)
