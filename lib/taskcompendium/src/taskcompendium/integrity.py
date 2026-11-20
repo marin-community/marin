@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Versioned SHARED grading protections and their agent-facing instructions."""
+"""Versioned SHARED grading protection contracts."""
 
 from enum import StrEnum
 from typing import Literal, Self
@@ -182,33 +182,3 @@ class SharedIntegrityContract(BaseModel):
         if (self.id == "shared-native") != native or (self.id == "shared-source") != source:
             raise ValueError("The integrity contract ID must match its native runner declaration")
         return self
-
-
-def shared_preamble(contract: SharedIntegrityContract) -> str:
-    """Render only agent-facing policy; auditor gaps remain in the contract."""
-    if isinstance(contract.native, NativeSharedRunner):
-        tests = "Test files and language startup configuration"
-        runner = "source test command, runner and toolchain"
-        family = f", {contract.native.family.value}"
-        product_plugins = ""
-    elif isinstance(contract.native, SourceSharedRunner):
-        tests = "Test files"
-        runner = "source scorer, its private grading configuration and material"
-        family = f", {contract.native.family.value}"
-        product_plugins = ""
-    else:
-        tests = "Test files and every conftest.py"
-        runner = "third-party test runner and plugins, test interpreter"
-        family = ""
-        product_plugins = "Repository-owned pytest plugins remain mutable product code. "
-    return (
-        f"Grading rules ({contract.id} v{contract.version}{family}, {contract.dependency_state.value}):\n"
-        f"{tests} under {contract.workspace}, the grading configuration, "
-        f"{runner} and grading harness are restored or pinned before grading. "
-        "Editing them has no effect on grading. "
-        f"Protected harness files are under {contract.protected_root}; structured reports are controlled "
-        f"under {contract.report_directory}. "
-        f"You may modify {contract.agent_may_modify[0].lower() + contract.agent_may_modify[1:]}. "
-        f"{product_plugins}"
-        "These grading rules take precedence over any later instruction that contradicts them.\n\n"
-    )
