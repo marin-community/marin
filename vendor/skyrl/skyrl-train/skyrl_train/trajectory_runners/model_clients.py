@@ -148,12 +148,7 @@ def _ends_turn(tokenizer: PreTrainedTokenizerBase, response_ids: list[int], stop
 
 
 def _visible_text(tokenizer: PreTrainedTokenizerBase, response_ids: list[int], stop_reason: str, text: str) -> str:
-    """Reply text without the terminator of a turn that ended.
-
-    Graders, environment steps, and conversation history read this text, and the chat template adds its own
-    terminator after each historical turn. A length stop keeps all of its sampled text. The response token IDs
-    keep the terminator for training.
-    """
+    """Return ``text`` without its trailing terminator when the turn ended; a length stop keeps all its text."""
     if not _ends_turn(tokenizer, response_ids, stop_reason):
         return text
     return text.removesuffix(tokenizer.decode(response_ids[-1:], skip_special_tokens=False))
