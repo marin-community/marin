@@ -194,6 +194,7 @@ PRIVATE_DECLARATION_FIELDS = frozenset(
         "derived_turns",
         "derived_reply_only",
         "derived_workspace_graded",
+        "derived_contract_receipt",
         "grader_type",
         "grader_type_counts",
         "judge_rubric_counts",

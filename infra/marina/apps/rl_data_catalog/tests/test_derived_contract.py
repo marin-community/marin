@@ -14,6 +14,7 @@ from infra.marina.apps.rl_data_catalog.server.contract_selection import (
     select_contract_receipts,
 )
 from infra.marina.apps.rl_data_catalog.server.derived_contract import contract_projection
+from infra.marina.apps.rl_data_catalog.server.restrictions import PRIVATE_TEXT_MARKER, private_declaration_projection
 
 
 @pytest.mark.parametrize(
@@ -56,6 +57,17 @@ def test_changed_population_drops_derived_profile(changed: str | None) -> None:
         assert projected["grader_type_counts"] == {"script": 1, "llm-judge": 2}
         assert projected["derived_agentic"] is False and projected["derived_turns"] == "single-turn"
         assert projected["derived_contract_receipt"]["uri"] == receipt["evidence_url"]
+        withheld = private_declaration_projection(
+            {
+                **projected,
+                "data_restriction": "private_always",
+                "notes": "private prompt",
+                "quality_result": {"issues": ["private reviewer output"]},
+            }
+        )
+        assert withheld["derived_contract_receipt"] == projected["derived_contract_receipt"]
+        assert withheld["notes"] == PRIVATE_TEXT_MARKER
+        assert "quality_result" not in withheld
 
 
 PAIRS = json.loads((Path(__file__).parent / "fixtures/contract_supersessions.json").read_text())
