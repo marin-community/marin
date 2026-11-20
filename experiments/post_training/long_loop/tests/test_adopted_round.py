@@ -85,9 +85,9 @@ def test_adopted_round_lowers_to_eval_with_pinned_model_and_standard_ep_placemen
     # Regression: schema validation previously accepted a launch that lost the
     # qualified cross-host IB transport and inference-actor NCCL buffer.
     validate_launch(run.skyrl.launch_config_yaml, tmp_path / "compiled")
-    compiled = yaml.safe_load((tmp_path / "compiled/compiled.yaml").read_text())["skyrl"]
-    assert compiled["trainer"]["policy"]["nccl_buffer_size_bytes"] == 262144
-    environment = compiled["extra_env"]
+    compiled = yaml.safe_load((tmp_path / "compiled/compiled.yaml").read_text())
+    assert compiled["skyrl"]["trainer"]["policy"]["nccl_buffer_size_bytes"] == 262144
+    environment = compiled["runtime"]["task_env"]
     assert environment["NCCL_NET"] == "IB"
     assert environment["NCCL_IB_DISABLE"] == "0"
     assert environment["NCCL_IB_HCA"] == "ibp"
