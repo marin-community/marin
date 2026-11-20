@@ -37,8 +37,7 @@ def test_exception_handling(max_capacity):
         raise ValueError("Something went wrong!")
 
     with pytest.raises(ValueError):
-        for _ in BackgroundIterator(producer_with_exception, max_capacity=max_capacity):
-            pass
+        list(BackgroundIterator(producer_with_exception, max_capacity=max_capacity))
 
 
 @pytest.mark.timeout(10)
@@ -129,8 +128,7 @@ async def test_async_exception_handling(max_capacity):
         yield 0  # have to make sure it's an async coroutine
 
     with pytest.raises(ValueError):
-        for _ in BackgroundIterator(async_producer_with_exception, max_capacity=max_capacity):
-            pass
+        list(BackgroundIterator(async_producer_with_exception, max_capacity=max_capacity))
 
 
 @pytest.mark.asyncio
@@ -148,7 +146,6 @@ async def test_async_stop_event(max_capacity):
 
     iter1.stop()
 
-    # this doesn't work b/c pytest is stupid
     with pytest.raises(StopIteration):
         next(iter1)
         next(iter1)
