@@ -598,6 +598,8 @@ class Trainer(Section):
     step_wise_training: bool = field(False)
     mismatch_probe: MismatchProbe = Field(default_factory=MismatchProbe)
     enable_db_registration: bool = field(True)
+    checkpoint_retention: Literal["latest", "best"] | None = field(None)
+    checkpoint_keep_every: PositiveInt | None = field(None)
     hf_hub_repo_id: str | None = field(None)
     hf_hub_private: bool = field(False)
     hf_hub_revision: str = field("main")
