@@ -12,7 +12,7 @@ from upath import UPath
 
 from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment, ExecResult
-from harbor.utils.artifact_writer import get_artifact_writer
+from harbor.utils.artifact_writer import write_required
 from harbor.utils.env import (
     parse_bool_env_value,
     validate_task_environment,
@@ -34,16 +34,14 @@ class CommandFailureEvidence:
     stderr: str
 
 
-async def _write_command_failure(
-    destination: Path | UPath, evidence: CommandFailureEvidence
-) -> None:
-    writer = get_artifact_writer()
-    pending = await writer.submit_required(
-        destination,
-        lambda: json.dumps(asdict(evidence)),
-        description="redacted installed-agent command failure",
-    )
-    await writer.await_write(pending)
+def _redact_diagnostic_text(
+    text: str | None, *, protected_values: frozenset[str]
+) -> str:
+    value = text or ""
+    for secret in protected_values:
+        if secret:
+            value = value.replace(secret, "<redacted>")
+    return redact_string(value)
 
 
 SERVER_TIMEOUT_GRACE = 15.0
@@ -374,13 +372,6 @@ class BaseInstalledAgent(BaseAgent, ABC):
             return text[:max_len] + " ... [truncated]"
         return text
 
-    def _redact_diagnostic_text(self, text: str | None) -> str:
-        value = text or ""
-        for secret in self._protected_values:
-            if secret:
-                value = value.replace(secret, "<redacted>")
-        return redact_string(value)
-
     async def _exec(
         self,
         environment: BaseEnvironment,
@@ -401,9 +392,12 @@ class BaseInstalledAgent(BaseAgent, ABC):
         validate_task_environment(
             merged_env or {}, protected_values=self._protected_values
         )
+        redact_diagnostic = functools.partial(
+            _redact_diagnostic_text, protected_values=self._protected_values
+        )
 
         self.logger.debug(
-            f"Running command: {self._redact_diagnostic_text(command)}",
+            f"Running command: {redact_diagnostic(command)}",
             extra={
                 "user": str(user),
                 "env_keys": sorted(merged_env or {}),
@@ -420,15 +414,19 @@ class BaseInstalledAgent(BaseAgent, ABC):
         if result.return_code != 0:
             diagnostics = CommandFailureEvidence(
                 return_code=result.return_code,
-                command=self._redact_diagnostic_text(command),
-                stdout=self._redact_diagnostic_text(result.stdout),
-                stderr=self._redact_diagnostic_text(result.stderr),
+                command=redact_diagnostic(command),
+                stdout=redact_diagnostic(result.stdout),
+                stderr=redact_diagnostic(result.stderr),
             )
             failure_dir = self.logs_dir / "command-failures"
             failure_path = failure_dir / f"{uuid4().hex}.json"
             evidence_error = None
             try:
-                await _write_command_failure(failure_path, diagnostics)
+                await write_required(
+                    failure_path,
+                    lambda: json.dumps(asdict(diagnostics)),
+                    description="redacted installed-agent command failure",
+                )
             except OSError as error:
                 evidence_error = error
             self.logger.debug(
@@ -446,7 +444,7 @@ class BaseInstalledAgent(BaseAgent, ABC):
                 f"Full redacted output: {failure_path}"
             )
             if evidence_error is not None:
-                message += f"\nEvidence publication failed: {self._redact_diagnostic_text(str(evidence_error))}"
+                message += f"\nEvidence publication failed: {redact_diagnostic(str(evidence_error))}"
             # A return code of 128 + N (N in 1..64) is the shell's convention for
             # "terminated by signal N" — distinct from an ordinary non-zero exit.
             # Classify it so a signal kill (e.g. the agent's own kill -HUP hitting
@@ -463,8 +461,8 @@ class BaseInstalledAgent(BaseAgent, ABC):
         self.logger.debug(
             "Command outputs captured",
             extra={
-                "stdout": self._truncate_output(self._redact_diagnostic_text(result.stdout)),
-                "stderr": self._truncate_output(self._redact_diagnostic_text(result.stderr)),
+                "stdout": self._truncate_output(redact_diagnostic(result.stdout)),
+                "stderr": self._truncate_output(redact_diagnostic(result.stderr)),
             },
         )
         return result
