@@ -11,6 +11,7 @@ from typing import cast
 
 import pytest
 import reasoning_gym
+from reasoning_gym.factory import DATASETS
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.grader import grader_config
 from taskcompendium.models import TaskSpec, TextMessage, verifyit_spec
@@ -102,6 +103,33 @@ def test_generated_row_a_fresh_dataset_does_not_reproduce_is_rejected():
     result = convert_row(RECIPES["reasoning_gym_generated"], {**GENERATED_ROW, "reproducible": False})
     assert isinstance(result, ImportRejection)
     assert (result.kind, result.reason) == (ImportFailureKind.SOURCE_DEFECT, "irreproducible_entry")
+
+
+def generated_row(task_name: str, index: int) -> dict:
+    """Row ``index`` of ``task_name`` as the generator prints it with the locked ``reasoning_gym``."""
+    excluded = {name: "Not generated here" for name in DATASETS if name != task_name}
+    ((_, row),) = generate.generated_rows(declarations.GENERATOR_VERSION, excluded, 0, 0, 1, frozenset({index}))
+    return generate.encoded(row)
+
+
+def test_generated_row_whose_scorer_pays_the_recorded_wrong_answer_is_rejected():
+    # game_of_life_halting compares the truth values of the reply and the answer, both nonempty strings.
+    row = generated_row("game_of_life_halting", 0)
+    assert row["recorded_pinned_generator_controls"]["negative"] == {"candidate": "definitely wrong", "reward": 1.0}
+    result = convert_row(RECIPES["reasoning_gym_generated"], row)
+    assert isinstance(result, ImportRejection)
+    assert (result.kind, result.reason) == (ImportFailureKind.SOURCE_DEFECT, "wrong_answer_scores_full")
+
+
+def test_generated_row_of_a_task_that_pays_a_constant_reply_is_rejected():
+    # The recorded wrong answer scores 0.0 here; the constant NaN makes the scorer's distance NaN.
+    row = generated_row("complex_arithmetic", 0)
+    assert row["recorded_pinned_generator_controls"]["negative"]["reward"] == 0.0
+    score = cast(generate.Scorer, reasoning_gym.get_score_answer_fn("complex_arithmetic"))
+    assert score("NaN", row["entry"]) == 1.0
+    result = convert_row(RECIPES["reasoning_gym_generated"], row)
+    assert isinstance(result, ImportRejection)
+    assert (result.kind, result.reason) == (ImportFailureKind.SOURCE_DEFECT, "constant_reply_scores_full")
 
 
 def test_generator_transport_keeps_symbolic_integers_exact():

@@ -7,7 +7,8 @@
 the grader packages pin, in ``GENERATOR_PARTS`` parts that workers generate in parallel; a sample
 generates only its sampled rows. Its grader
 (``reasoning_gym_grade.py``) regenerates each entry before scoring, so the scorer sees the generator's
-Python values, and rows whose entry a fresh dataset does not reproduce are rejected.
+Python values, and rows whose entry a fresh dataset does not reproduce are rejected. So are rows whose
+scorer gave the recorded wrong answer the full reward, and the rows of ``CONSTANT_REPLY_TASKS``.
 ``tasktrove-reasoning-gym`` uses ``ReasoningGymSpec`` to preserve upstream fractional reward. Both
 run with the grader packages (``GRADER_PACKAGES``).
 The Nemotron Ultra ``reasoning_gym`` component is declared with the other Ultra components.
@@ -84,6 +85,16 @@ EXCLUDED_GENERATORS = (
         "worker and the grader's environment",
     ),
 )
+CONSTANT_REPLY_TASKS = (
+    ("coin_flip", "The reply 0 earns the full reward on every entry whose answer is below 1"),
+    ("complex_arithmetic", "The reply NaN earns the full reward on every entry"),
+    ("propositional_logic", "A disjunction that names a premise earns the full reward on most entries"),
+    ("puzzle24", "The scorer does not read the entry's numbers: 1*2*3*4 earns the full reward on every entry"),
+)
+"""Tasks whose scorer gives one reply the full reward on most entries while the recorded wrong answer scores less.
+
+Their rows are rejected at conversion, which records the reason. Excluding the generators instead would
+renumber the rows of every other task."""
 PYTHON_HASH_SEED = 0
 GENERATOR_PARTS = 32
 """Parts of the task registry generated on separate workers; the slowest task bounds each part."""
@@ -260,6 +271,14 @@ def convert_generated(row: RawRow, context: ConversionContext) -> TaskSpec | Imp
         )
     if reproducible is not True:
         return source_defect("irreproducible_entry", f"A fresh {task_name} dataset generates a different entry")
+    if recorded.negative.reward == 1.0:
+        return source_defect(
+            "wrong_answer_scores_full",
+            f"The {task_name} scorer gave the wrong answer {recorded.negative.candidate!r} the full reward",
+        )
+    constant_reply_defect = dict(CONSTANT_REPLY_TASKS).get(task_name)
+    if constant_reply_defect is not None:
+        return source_defect("constant_reply_scores_full", constant_reply_defect)
     contract = {
         "task": task_name,
         "entry": entry,
@@ -364,7 +383,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     parts=GeneratedRows(GENERATOR_VERSION, EXCLUDED_GENERATORS, PYTHON_HASH_SEED, GENERATOR_PARTS),
                 ),
                 convert=convert_generated,
-                version="1",
+                version="2",
                 intended_use=IntendedUse.TRAIN,
                 rubric=GENERATED_RUBRIC,
                 controls=GENERATED_CONTROLS,
