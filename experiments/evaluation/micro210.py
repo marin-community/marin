@@ -33,7 +33,7 @@ from marin.rl.skyrl import (
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
-from rigging.secrets import resolve_secret_spec
+from rigging.secrets import resolve_secret_spec, secret_path
 from transformers import AutoTokenizer
 
 from experiments.evaluation.judge_config import JudgeConfig
@@ -64,6 +64,7 @@ SERVING_GENERATOR_FIELDS = {
 }
 SERVING_ENGINE_FIELDS = {"compilation_config", "model_loader_extra_config", "moe_backend"}
 SERVING_NCCL_ENV_FIELDS = {"NCCL_NET", "NCCL_IB_DISABLE", "NCCL_IB_HCA"}
+JUDGE_SECRET_NAME = "TOGETHER_API_KEY"
 
 
 @dataclass(frozen=True)
@@ -185,7 +186,7 @@ def run_micro210(config: Micro210Run) -> SkyRLRun:
     )
     policy = config.evaluation.policy()["evaluation"]
     judge = draccus.decode(JudgeConfig, policy["judge"])
-    api_key = resolve_secret_spec((judge.credential,)).value
+    api_key = resolve_secret_spec((f"file:{secret_path(JUDGE_SECRET_NAME)}",)).value
     validate_judge_availability(judge, api_key)
     return run_skyrl(config.skyrl, env_vars={"JUDGE_API_KEY": api_key, "OPENAI_API_KEY": api_key})
 
@@ -242,7 +243,9 @@ def micro210_artifact_step(
         execution = serving_profile.execution
         gpu_variant = serving_profile.gpu_variant
         config = serving_config(frozen, serving_profile)
-    config = judge_runtime_config(config, draccus.decode(JudgeConfig, policy["judge"]))
+    judge = draccus.decode(JudgeConfig, policy["judge"])
+    config = judge_runtime_config(config, judge)
+    execution = replace(execution, coordinator_secret_specs=((JUDGE_SECRET_NAME, judge.credential),))
     step = skyrl_step(
         SkyRLSpec(
             name=name,

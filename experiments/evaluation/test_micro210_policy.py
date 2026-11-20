@@ -145,6 +145,10 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     monkeypatch.setattr("experiments.evaluation.micro210.PREPARED_INPUTS", str(inputs))
     monkeypatch.setenv("MARIN_TEMP_PREFIX", str(tmp_path / "temporary"))
     monkeypatch.setenv("TOGETHER_API_KEY", "unused-ambient-key")
+    secrets_dir = tmp_path / "secrets"
+    secrets_dir.mkdir()
+    (secrets_dir / "TOGETHER_API_KEY").write_text("test-together-key")
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(secrets_dir))
     monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
     token_content = {128001: "<|end_of_text|>", 128009: "<|eot_id|>"}
     monkeypatch.setattr(
@@ -153,6 +157,9 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     )
     binding = Micro210Model(str(model_dir), "sha256:" + hashlib.sha256(manifest).hexdigest(), "test/tokenizer", "a" * 40)
     step = micro210_step(binding, name="test/micro210", version="2026.11.18")
+    assert step.runtime_args["skyrl_execution"].coordinator_secret_specs == (
+        ("TOGETHER_API_KEY", "gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/1"),
+    )
     with pytest.raises(ValueError, match="eval_override_storage_mb"):
         micro210_step(binding, name="test/micro210", version="2026.11.18", eval_override_storage_mb=131072)
     output = tmp_path / "result"
@@ -166,12 +173,6 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
         )
     )
     submitted = []
-
-    def resolve_key(spec):
-        assert spec == ("gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/1",)
-        return SimpleNamespace(value="test-together-key")
-
-    monkeypatch.setattr("experiments.evaluation.micro210.resolve_secret_spec", resolve_key)
 
     def submit_evaluation(skyrl, *, env_vars):
         assert env_vars == {"JUDGE_API_KEY": "test-together-key", "OPENAI_API_KEY": "test-together-key"}
@@ -228,7 +229,7 @@ def test_canonical_evaluation_graph_lowers_with_its_final_run_binding():
     model = Micro210Model("s3://fixture/export", "sha256:" + "a" * 64, "fixture/tokenizer", "b" * 40)
     step = micro210_step(model, name="fixture/final-eval", version="2026.11.18.72")
     plan = lower(step)
-    assert "fixture/final-eval@2026.11.18.72" in plan.fingerprint_payload
+    assert plan.fingerprint_payload and "fixture/final-eval@2026.11.18.72" in plan.fingerprint_payload
 
 
 def test_new_prepared_inputs_do_not_reuse_old_policy_provenance(tmp_path, monkeypatch):

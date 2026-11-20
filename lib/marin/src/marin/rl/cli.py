@@ -21,6 +21,7 @@ from iris.cluster.client.job_info import get_job_info
 from iris.rpc import job_pb2
 from iris.rpc.proto_display import priority_band_value
 from rigging.config_discovery import find_project_root
+from rigging.secrets import resolve_secret_spec
 from rigging.timing import Duration
 
 from marin.execution.lazy import ArtifactStep, run
@@ -112,10 +113,20 @@ def _coordinator_request(
     env_vars: Mapping[str, str],
 ) -> tuple[str, JobRequest]:
     executions = _skyrl_executions(handles)
-    selected_env = {name: env_vars[name] for name in _COORDINATOR_ENV_VARS if name in env_vars}
+    secret_sources: dict[str, str] = {}
+    for execution in executions:
+        for name, source in execution.coordinator_secret_specs:
+            if name in secret_sources and secret_sources[name] != source:
+                raise ValueError(f"Conflicting coordinator secret sources for {name}")
+            secret_sources[name] = source
+    selected_env = {
+        name: env_vars[name] for name in _COORDINATOR_ENV_VARS if name in env_vars and name not in secret_sources
+    }
     for execution in executions:
         for name in execution.required_env_vars:
-            selected_env[name] = env_vars[name]
+            if name not in secret_sources:
+                selected_env[name] = env_vars[name]
+    secrets = {name: resolve_secret_spec((source,)).value for name, source in secret_sources.items()}
     route = _submission_route(executions)
     terminal = graph_handles(handles)[-1]
     job_name = sanitize_job_name(
@@ -137,7 +148,7 @@ def _coordinator_request(
                 job_pb2.ContainerProfile.Name(route.container_profile) if route.container_profile is not None else None
             ),
         ),
-        environment=create_environment(workspace=str(workspace), env_vars=selected_env, extras=["cpu"]),
+        environment=create_environment(workspace=str(workspace), env_vars=selected_env, secrets=secrets, extras=["cpu"]),
         priority=priority_band_value(route.priority),
         timeout=Duration.from_hours(route.timeout_hours),
     )

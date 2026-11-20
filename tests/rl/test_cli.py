@@ -86,6 +86,29 @@ def test_coordinator_request_requires_a_skyrl_step() -> None:
         _coordinator_request([_step()], "experiments.test_rl", ("--run",), 8, Path("/workspace/marin"), {})
 
 
+def test_coordinator_delivers_pinned_secret_instead_of_ambient_key(tmp_path: Path) -> None:
+    pinned = tmp_path / "judge-key"
+    pinned.write_text("pinned-key")
+    execution = dataclasses.replace(
+        _execution(),
+        required_env_vars=("TOGETHER_API_KEY",),
+        coordinator_secret_specs=(("TOGETHER_API_KEY", f"file:{pinned}"),),
+    )
+
+    _, request = _coordinator_request(
+        [_step(execution)],
+        "experiments.test_rl",
+        ("--run",),
+        1,
+        Path("/workspace/marin"),
+        {"TOGETHER_API_KEY": "ambient-key"},
+    )
+
+    assert request.environment is not None
+    assert request.environment.secrets["TOGETHER_API_KEY"] == "pinned-key"
+    assert "TOGETHER_API_KEY" not in request.environment.env_vars
+
+
 @pytest.mark.parametrize("missing_name", [None, "JUDGE_KEY", "EVAL_KEY"])
 def test_rl_launch_requires_and_forwards_credentials_before_submission(
     monkeypatch: pytest.MonkeyPatch, missing_name: str | None
