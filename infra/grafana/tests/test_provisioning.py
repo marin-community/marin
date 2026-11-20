@@ -390,9 +390,10 @@ def test_coreweave_storage_capacity_pages_critical_ops():
     [
         pytest.param([20, 30, 40, 50, 60, 70, 80], 100, 0, 0, 3.2, id="rapid-growth"),
         pytest.param([20, 21, 22, 23, 24, 25, 26], 100, 0, 0, 0.5, id="ample-headroom"),
-        pytest.param([80, 80, 80, 80, 80, 80, 80], 100, 0, 0, None, id="flat"),
-        pytest.param([80, 70, 60, 50, 40, 30, 20], 100, 0, 0, None, id="shrinking"),
-        pytest.param([20, 30, 40], 100, 0, 0, None, id="insufficient-history"),
+        pytest.param([60, 61, 62, 63, 64, 65, 66], 100, 0, 0, 0.9, id="projected-headroom-low"),
+        pytest.param([80, 80, 80, 80, 80, 80, 80], 100, 0, 0, 0.8, id="flat"),
+        pytest.param([80, 70, 60, 50, 40, 30, 20], 100, 0, 0, 0.2, id="shrinking"),
+        pytest.param([20, 30, 40], 100, 0, 0, 0.4, id="insufficient-history"),
         pytest.param([20, 30, 40, 50, 60, 70, 80], 100, 4, 0, None, id="stale"),
         pytest.param([20, 30, 40, 50, 60, 70, 80], 100, 0, 4, None, id="stale-source"),
         pytest.param([20, 30, 40, 50, 60, 70, 80], 400, 0, 0, 0.8, id="quota-increased"),
@@ -436,13 +437,16 @@ def test_coreweave_storage_growth_projects_recent_trends(
         evaluator = threshold["model"]["conditions"][0]["evaluator"]
         assert evaluator["type"] == "gt"
         assert (value > evaluator["params"][0]) == (projected_fraction > 1)
+        headroom = next(rule for rule in _rules() if rule["uid"] == "coreweave-storage-headroom")
+        daily_threshold = headroom["data"][1]["model"]["conditions"][0]["evaluator"]
+        assert (value > daily_threshold["params"][0]) == (projected_fraction > 0.8)
     route = _route_for(rule)
     assert route["receiver"] == "ops-slack"
     assert "active_time_intervals" not in route
     assert "mute_time_intervals" not in route
 
 
-def test_coreweave_storage_growth_does_not_count_replayed_source_observations_as_history():
+def test_coreweave_storage_growth_does_not_invent_growth_from_replayed_observations():
     rule = next(rule for rule in _rules() if rule["uid"] == "coreweave-storage-growth")
     source = rule["data"][0]
     sql = next(param["value"] for param in source["model"]["url_options"]["params"] if param["key"] == "sql")
@@ -459,7 +463,7 @@ def test_coreweave_storage_growth_does_not_count_replayed_source_observations_as
         ],
     )
 
-    assert database.execute(sql).fetchall() == []
+    assert database.execute(sql).fetchall() == [("US-EAST-02A", "STANDARD", 0.8)]
 
 
 def test_coreweave_storage_headroom_uses_latest_zone_and_class_and_daily_slack_route():

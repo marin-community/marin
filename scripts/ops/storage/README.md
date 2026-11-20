@@ -102,8 +102,9 @@ the Loom ops agent on that alert thread. The rule reads the quota metric, so it
 also follows a later quota change.
 
 `CoreWeaveStorageHeadroomLow` warns when a zone and storage class use more
-than 80% of their current quota. Grafana evaluates it every five minutes and
-delivers notifications to `#marin-alerts` between 15:00 and 16:00
+than 80% of their current quota or are projected to do so within 24 hours.
+Grafana evaluates it every five minutes and delivers notifications to
+`#marin-alerts` between 15:00 and 16:00
 `America/Los_Angeles` each day, leaving at least an hour before a 17:00 finish.
 The notification repeats after 23 hours, so the next afternoon is eligible
 even when daylight saving time begins. Changed alert groups can notify again
@@ -116,8 +117,9 @@ It uses the faster positive linear regression over the last 6 or 24 hours,
 measured at the source `observed_at` timestamps. The 6-hour estimate needs at
 least four distinct observations spanning three hours; the 24-hour estimate
 needs at least twelve spanning eighteen hours. Repeated collections of the
-same source timestamp count once. Flat or shrinking histories do not predict
-exhaustion. This Slack warning repeats every four hours while it fires.
+same source timestamp count once. Both warnings use this projection, with
+current usage as a floor when history is insufficient or has no positive
+trend. The exhaustion warning repeats every four hours while it fires.
 
 Both warnings group bucket bytes by zone and storage class, deduplicate
 retried collection rows, and use the newest snapshot for each group. They
