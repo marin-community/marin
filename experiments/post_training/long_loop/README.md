@@ -755,6 +755,9 @@ predates the NVLSTree corruption finding in #11649. Compilation and PIECEWISE
 CUDA graphs remain enabled. Exact CPU preflight checks each local model role's
 TP × PP × DP rank count against its physical GPU allocation. API judge
 credentials and live model availability are checked before rollout allocation.
+Staged Mochi exports explicitly select `runai_streamer` with their RunAI loader
+buffer and concurrency options. CPU preflight rejects those options with an
+automatic loader.
 
 The gate-2 base/SFT evaluations using the earlier frozen MiniMax policy are
 preserved at `benfeuer/mochi-micro210-gate2-frozen` (commit `da0663fbea`). That

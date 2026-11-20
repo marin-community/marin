@@ -63,8 +63,9 @@ SERVING_GENERATOR_FIELDS = {
     "vllm_v1_disable_multiproc",
     "vllm_attention_backend",
 }
-SERVING_ENGINE_FIELDS = {"compilation_config", "model_loader_extra_config", "moe_backend"}
+SERVING_ENGINE_FIELDS = {"compilation_config", "load_format", "model_loader_extra_config", "moe_backend"}
 SERVING_NCCL_ENV_FIELDS = {"NCCL_NET", "NCCL_IB_DISABLE", "NCCL_IB_HCA"}
+RUNAI_LOADER_FIELDS = frozenset({"distributed", "concurrency", "memory_limit"})
 
 
 @dataclass(frozen=True)
@@ -95,6 +96,12 @@ def serving_config(frozen: dict, profile: Micro210ServingProfile) -> dict:
     compilation = profile.engine_init_kwargs["compilation_config"]
     if compilation["mode"] != 3 or compilation["cudagraph_mode"] != "PIECEWISE":
         raise ValueError("Serving profiles require compilation mode 3 and PIECEWISE CUDA graphs")
+    loader_options = profile.engine_init_kwargs.get("model_loader_extra_config", {})
+    if RUNAI_LOADER_FIELDS.intersection(loader_options) and profile.engine_init_kwargs.get("load_format") not in {
+        "runai_streamer",
+        "runai_streamer_sharded",
+    }:
+        raise ValueError("RunAI loader options require an explicit RunAI load_format")
     _materialize_role_plan_config(config, profile.role_plan)
     config["generator"].update(profile.generator)
     config["generator"]["enforce_eager"] = False
