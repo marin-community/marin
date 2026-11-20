@@ -24,6 +24,7 @@ from experiments.post_training.task_curation.difficulty_config import DATA_ACCOU
 
 MAX_TASKS_PER_JOB = 20
 MAX_GPU_HOURS_PER_JOB = 40.0
+DECLARATIVE_EVIDENCE = "daytona:data:declarative"
 
 
 @dataclass(frozen=True)
@@ -377,12 +378,19 @@ def plan(
             gap
             for gap in cell.gaps
             if not (gap.reason == GapReason.ENVIRONMENT_ARTIFACT_MISSING and gap.artifact_uri in available_artifacts)
+            and not (gap.reason == GapReason.DAYTONA_SNAPSHOT_PREFLIGHT_PENDING and cell.source.backend == "daytona")
         )
         if remaining != cell.gaps:
             cell = replace(
                 cell,
                 gaps=remaining,
                 evidence_ids=cell.evidence_ids
+                + (
+                    (DECLARATIVE_EVIDENCE,)
+                    if any(gap.reason == GapReason.DAYTONA_SNAPSHOT_PREFLIGHT_PENDING for gap in cell.gaps)
+                    and cell.source.backend == "daytona"
+                    else ()
+                )
                 + tuple(
                     sorted(
                         "available:" + uri

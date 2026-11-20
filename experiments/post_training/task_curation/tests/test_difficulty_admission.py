@@ -43,6 +43,7 @@ from experiments.post_training.task_curation.tests.test_difficulty_reconciler im
         DifficultyGap.EXECUTABILITY_ADMISSION_PENDING,
         DifficultyGap.TOOL_PROVIDER_REQUIRED,
         DifficultyGap.MATH_VERIFIER_DEADLINE,
+        "executability_admission_pending:math_verifier_deadline:comparison",
     ],
 )
 def test_admission_recheck_uses_frozen_contracts_before_attempts_or_escalation(
@@ -89,7 +90,10 @@ def test_admission_recheck_uses_frozen_contracts_before_attempts_or_escalation(
     rows = read_rows(ledger)
     after = cell_state(rows, catalog, Solver.SMALL, CoveragePolicy())
     assert file_sha256(StoragePath(str(queue))) == sha
-    runtime_unverified = legacy_reason == DifficultyGap.MATH_VERIFIER_DEADLINE
+    runtime_unverified = legacy_reason in {
+        DifficultyGap.MATH_VERIFIER_DEADLINE,
+        "executability_admission_pending:math_verifier_deadline:comparison",
+    }
     if provider_missing or runtime_unverified:
         assert after.state == CellStatus.BLOCKED
         if provider_missing:

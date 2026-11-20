@@ -2595,9 +2595,27 @@ a verifier deadline or an unqualified hosted context; those ledger causes remain
 blocked and are escalated to the coordinator after the recheck.
 If a provider, shared executor or another preflight prerequisite is still
 unsupported, the result records each blocked task ID, hash and typed reason
-before escalation to the coordinator. It does not drop tasks or change source
+before escalation to the coordinator. Verified source-owned blockers use typed
+handoffs instead: the three Nemotron math-TIR tool-provider populations and the
+Nemotron-Gym ARC-AGI Python shared-executor population route to
+`scoped_consumer_gate`; RST and Multi-SWE unresolved builds route to
+`shared_grader_option_2`. Their full frozen-sample checks, blocked task hashes and
+result URI remain in `v1/source-repairs/`; these handoffs do not clear the gap or
+emit an escalation. Record completed checks from an older controller with
+`difficulty record-source-repairs --ledger <ledger-root>`. JSON status includes
+the typed `source_repairs` records. Handoffs do not drop tasks or change source
 status. Publishing a different task population requires its own admission
 evidence and a new frozen SAMPLE panel.
+
+Difficulty's DATA Daytona route provisions original images and Dockerfiles
+without named snapshots, so legacy snapshot-preflight gaps on Daytona sources
+enter attempt planning directly.
+Other blockers, including network policy, still apply. Frozen QA tasks that name
+the relocated `env-278169f50750da36` lock keep their original TaskSpec paths and
+hashes: preparation verifies and restores the regional lock, environment manifest
+and hashed file archive at the original lock path and its sibling filenames before
+the runtime reads them. It rejects existing local files that differ from the
+regional bytes rather than replacing them.
 
 ### How SOURCE gaps are escalated
 

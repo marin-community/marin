@@ -31,6 +31,10 @@ from experiments.post_training.task_curation.difficulty.ledger import (
 )
 from experiments.post_training.task_curation.difficulty.planner import action_id, plan
 from experiments.post_training.task_curation.difficulty.report import cells_for_catalog, plan_report, status_report
+from experiments.post_training.task_curation.difficulty.source_repairs import (
+    record_completed_source_repairs,
+    source_repair_handoffs,
+)
 from experiments.post_training.task_curation.difficulty.state import CoveragePolicy
 from experiments.post_training.task_curation.difficulty_report import discover_run_roots
 
@@ -55,6 +59,8 @@ def main() -> None:
     importer.add_argument("--discover-root")
     importer.add_argument("--refresh-run-root", action="append", default=[])
     importer.add_argument("--ledger", default=DEFAULT_LEDGER)
+    routes = commands.add_parser("record-source-repairs", help="Record typed handoffs from completed admission rechecks")
+    routes.add_argument("--ledger", default=DEFAULT_LEDGER)
     for name in ("audit", "launch-import"):
         audit_command = commands.add_parser(name)
         audit_command.add_argument("--report", type=Path, required=True)
@@ -78,6 +84,9 @@ def main() -> None:
             command.add_argument("--gpu-hour-budget", type=float, required=True)
     args = parser.parse_args()
     configure_coreweave_s3()
+    if args.command == "record-source-repairs":
+        print(json.dumps({"handoffs": record_completed_source_repairs(args.ledger, read_rows(args.ledger))}, indent=2))
+        return
     if args.command == "audit":
         proof = audit_captured_runs(args.report, args.audit_log)
         print(
@@ -137,6 +146,7 @@ def main() -> None:
         result = plan_report(actions)
     else:
         result = status_report(rows, catalog, policy, args.since, actions)
+        result["source_repairs"] = source_repair_handoffs(args.ledger)
     if args.json:
         print(json.dumps(result, indent=2))
     elif args.command == "plan":

@@ -15,7 +15,7 @@ from experiments.post_training.glm import GLM_MODEL
 from experiments.post_training.task_curation.difficulty.accounting import GpuAccounting
 from experiments.post_training.task_curation.difficulty.importer import import_runs, population_revision, receipt_row
 from experiments.post_training.task_curation.difficulty.ledger import append_rows, read_rows
-from experiments.post_training.task_curation.difficulty.legacy import legacy_gaps
+from experiments.post_training.task_curation.difficulty.legacy import LegacyReasonError, admission_cause, legacy_gaps
 from experiments.post_training.task_curation.difficulty.planner import (
     AttemptBatch,
     BuildSnapshot,
@@ -208,6 +208,31 @@ def test_snapshot_and_factory_plans_keep_the_exact_source_population():
     factory = plan([blocked(Gap(GapReason.TASK_SPEC_FACTORY_PENDING))], [])[0]
     assert isinstance(snapshot, BuildSnapshot) and snapshot.source.registry_revision == SOURCE.registry_revision
     assert isinstance(factory, BuildTaskSpecFactory) and factory.source.tasks == (("a", "a" * 64, 1), ("b", "b" * 64, 1))
+
+
+def test_data_declarative_attempts_bypass_snapshots_without_bypassing_network_policy():
+    cell = replace(blocked(Gap(GapReason.DAYTONA_SNAPSHOT_PREFLIGHT_PENDING)), source=replace(SOURCE, backend="daytona"))
+    (attempt,) = plan([cell], [])
+    assert isinstance(attempt, AttemptBatch) and attempt.daytona_account == "data"
+    assert attempt.sources[0].tasks == (("a", "a" * 64, 1), ("b", "b" * 64, 1))
+    compound = replace(cell, gaps=(*cell.gaps, Gap(GapReason.NETWORK_POLICY_VIOLATION)))
+    (escalation,) = plan([compound], [])
+    assert isinstance(escalation, Escalate) and escalation.reason == GapReason.NETWORK_POLICY_VIOLATION
+
+
+@pytest.mark.parametrize(
+    "reason,cause,detail",
+    [
+        ("executability_admission_pending:task_spec_unresolved_build", "task_spec_unresolved_build", None),
+        ("executability_admission_pending:math_verifier_deadline:comparison", "math_verifier_deadline", "comparison"),
+    ],
+)
+def test_nested_admission_causes_preserve_imported_receipt_identity(reason, cause, detail):
+    (gap,) = legacy_gaps(reason)
+    assert gap == Gap(GapReason.EXECUTABILITY_ADMISSION_PENDING, capability=reason)
+    assert admission_cause(gap.capability) == (cause, detail)
+    with pytest.raises(LegacyReasonError):
+        legacy_gaps("executability_admission_pending:invented_unregistered_contract")
 
 
 def test_judge_qualification_groups_shared_models_without_crossing_routes():

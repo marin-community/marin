@@ -21,6 +21,8 @@ from finestore.rl.difficulty import (
 # campaign catalogs (2026-11-16, atlas-preview-20261116-r20-v1 and the
 # 2026.11.14.47 qualified snapshot), normalized to one spelling per form.
 LEGACY_REASONS = {
+    "executability_admission_pending:task_spec_unresolved_build": {DifficultyGap.EXECUTABILITY_ADMISSION_PENDING},
+    "executability_admission_pending:math_verifier_deadline:comparison": {DifficultyGap.EXECUTABILITY_ADMISSION_PENDING},
     "Awaiting scored coverage": {DifficultyGap.AWAITING_SCORED_COVERAGE},
     "Selected tasks still lack scored solver attempts.": {DifficultyGap.AWAITING_SCORED_COVERAGE},
     "A candidate prompt exceeded the protocol input budget before dispatch. No solver score was assigned.": {

@@ -9,10 +9,10 @@ from finestore.rl.difficulty import (
     DifficultyGap,
     difficulty_gaps,
 )
-from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.glm import GLM_MODEL
 from experiments.post_training.task_curation.difficulty.state import ArtifactKind, Gap, GapReason
+from experiments.post_training.task_curation.difficulty_artifacts import regional_lock_url
 
 # Capability details preserve the precise legacy cause under the admission gap.
 LEGACY_GAPS = {
@@ -59,6 +59,17 @@ RAW_GAPS = {
 }
 
 
+def admission_cause(capability: str) -> tuple[DifficultyGap, str | None]:
+    """Resolve nested admission details without changing historical ledger identities."""
+    (cause,) = difficulty_gaps(capability)
+    while (
+        cause[0] in {DifficultyGap.EXECUTABILITY_ADMISSION_PENDING, DifficultyGap.FILTRATION_FINDINGS_ADMISSION_PENDING}
+        and cause[1]
+    ):
+        (cause,) = difficulty_gaps(cause[1])
+    return cause
+
+
 def legacy_gaps(reason: str | None) -> tuple[Gap, ...]:
     """Map every segment, refusing unknown strings even in mixed legacy reasons."""
     if reason is None:
@@ -93,6 +104,15 @@ def legacy_gaps(reason: str | None) -> tuple[Gap, ...]:
     gaps = []
     for legacy, detail in parsed:
         canonical = LEGACY_GAPS[legacy]
+        if (
+            legacy
+            in {DifficultyGap.EXECUTABILITY_ADMISSION_PENDING, DifficultyGap.FILTRATION_FINDINGS_ADMISSION_PENDING}
+            and detail
+        ):
+            try:
+                admission_cause(f"{legacy.value}:{detail}")
+            except ValueError as error:
+                raise LegacyReasonError(str(error)) from error
         artifact_uri = detail if canonical == GapReason.ENVIRONMENT_ARTIFACT_MISSING else None
         kind = None
         if artifact_uri == "prepared_image":
@@ -100,10 +120,10 @@ def legacy_gaps(reason: str | None) -> tuple[Gap, ...]:
         elif artifact_uri and artifact_uri.endswith("requirements.lock"):
             kind = ArtifactKind.REQUIREMENTS_LOCK
             if artifact_uri.startswith("/"):
-                suffix = "env-278169f50750da36/2026.10.08/requirements.lock"
-                if not artifact_uri.endswith(suffix):
+                relocated = regional_lock_url(artifact_uri)
+                if relocated == artifact_uri:
                     raise ValueError("Local environment artifact has no regional binding")
-                artifact_uri = str(StoragePath("s3://marin-us-east-02a/marin/images") / suffix)
+                artifact_uri = relocated
         gaps.append(
             Gap(
                 canonical,

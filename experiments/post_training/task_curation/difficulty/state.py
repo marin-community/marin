@@ -52,6 +52,13 @@ class Gap:
 
 
 @dataclass(frozen=True)
+class AdmissionBlocker:
+    task_id: str
+    task_sha256: str
+    reason: str
+
+
+@dataclass(frozen=True)
 class LedgerRow:
     registry_revision: str
     source_id: str

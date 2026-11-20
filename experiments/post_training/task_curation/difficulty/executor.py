@@ -45,6 +45,7 @@ from experiments.post_training.task_curation.difficulty.planner import (
     plan,
 )
 from experiments.post_training.task_curation.difficulty.report import cells_for_catalog
+from experiments.post_training.task_curation.difficulty.source_repairs import record_source_repair
 from experiments.post_training.task_curation.difficulty.state import (
     CatalogSource,
     CoveragePolicy,
@@ -293,6 +294,10 @@ def collect_finished(
                 continue
             reason = GapReason(result["reason"])
             detail = result["detail"]
+            route = record_source_repair(ledger, row.action_id, result, str(target))
+            if route is not None:
+                LOGGER.info("DIFFICULTY_SOURCE_REPAIR %s", route)
+                continue
         else:
             reason, detail = GapReason.EXECUTABILITY_ADMISSION_PENDING, f"Iris child {row.job_id}: {job.state}"
         key = digest([row.action_id, row.source_id, row.solver, "repair-unavailable"])

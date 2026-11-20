@@ -6,7 +6,7 @@
 import json
 import re
 import subprocess
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from pathlib import Path
 
 from finestore.rl.curation import QualifiedSourceDeclaration
@@ -20,7 +20,7 @@ from experiments.post_training.task_curation.difficulty.importer import (
     population_revision,
 )
 from experiments.post_training.task_curation.difficulty.ledger import LEDGER_VERSION, PANELS_DIRECTORY, read_rows
-from experiments.post_training.task_curation.difficulty.legacy import legacy_gaps
+from experiments.post_training.task_curation.difficulty.legacy import admission_cause, legacy_gaps
 from experiments.post_training.task_curation.difficulty.planner import (
     Action,
     BuildSnapshot,
@@ -34,6 +34,7 @@ from experiments.post_training.task_curation.difficulty.planner import (
 )
 from experiments.post_training.task_curation.difficulty.selection import selected_tasks
 from experiments.post_training.task_curation.difficulty.state import (
+    AdmissionBlocker,
     CatalogSource,
     CoveragePolicy,
     GapReason,
@@ -117,13 +118,6 @@ def build_factory(action: BuildTaskSpecFactory, local: Path) -> dict:
     }
 
 
-@dataclass(frozen=True)
-class AdmissionBlocker:
-    task_id: str
-    task_sha256: str
-    reason: str
-
-
 def unverified_admission_capabilities(action: RecheckExecutabilityAdmission, ledger: str) -> list[str]:
     """Retain active causes that frozen contract preparation cannot verify."""
     evidence = set(action.source.evidence_ids)
@@ -144,7 +138,7 @@ def unverified_admission_capabilities(action: RecheckExecutabilityAdmission, led
             for gap in cell_state(rows, source, solver, CoveragePolicy()).gaps
             if gap.reason == GapReason.EXECUTABILITY_ADMISSION_PENDING
             and gap.capability
-            and gap.capability.partition(":")[0] not in STATIC_ADMISSION_CAUSES
+            and admission_cause(gap.capability)[0] not in STATIC_ADMISSION_CAUSES
         }
     )
 

@@ -18,6 +18,7 @@ from taskcompendium.pipeline.resource_calibration import INITIAL_REQUIREMENTS
 
 from experiments.post_training.glm import GLM_MODEL
 from experiments.post_training.task_curation.calibration_inventory import packages_lock_exists
+from experiments.post_training.task_curation.difficulty_artifacts import restore_original_lock
 from experiments.post_training.task_curation.difficulty_contracts import (
     difficulty_task_contract,
     resolve_receipt_vintage,
@@ -51,6 +52,7 @@ def prepare_source(source: DifficultySource, root: Path) -> PreparedSource:
     # serialization instead of assuming the current one (the hosted-v13 break).
     vintage = resolve_receipt_vintage(frozen, tasks, runtimes)
     prepared = []
+    checked_locks = set()
     for task, runtime in zip(tasks, runtimes, strict=True):
         contract = difficulty_task_contract(task, runtime, vintage)
         selected = next(item for item in source.sample.tasks if item.task_id == task.id)
@@ -69,6 +71,16 @@ def prepare_source(source: DifficultySource, root: Path) -> PreparedSource:
             environments = [task.environment_requirements]
             if not isinstance(task.grader, NoGrader):
                 environments.append(task.grader.environment)
+            for environment in environments:
+                if (
+                    environment is None
+                    or environment.packages_lock is None
+                    or environment.packages_lock in checked_locks
+                ):
+                    continue
+                if restore_original_lock(environment.packages_lock):
+                    packages_lock_exists.cache_clear()
+                checked_locks.add(environment.packages_lock)
             missing = sorted(
                 {
                     environment.packages_lock

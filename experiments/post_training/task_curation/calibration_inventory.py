@@ -27,6 +27,7 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import DOCKER_IMAGE_PATTERN, TaskSpec
 from taskcompendium.runtime.resources import has_oracle_solution, resource_bytes
 
+from experiments.post_training.task_curation.difficulty_artifacts import regional_lock_url
 from experiments.post_training.task_curation.environment import dockerfile_lines
 from experiments.post_training.task_curation.full_qc_inputs import task_contract
 from experiments.post_training.task_curation.full_qc_review import load_inputs
@@ -70,7 +71,7 @@ def image_blockers(image: str | None, dockerfile: bytes | None) -> set[str]:
 
 @cache
 def packages_lock_exists(path: str) -> bool:
-    return StoragePath(path).exists()
+    return StoragePath(regional_lock_url(path)).exists()
 
 
 def task_blockers(task: TaskSpec) -> set[str]:
