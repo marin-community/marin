@@ -28,6 +28,7 @@ SCORERS = Path(__file__).parent / "scorers"
 DEPENDENCIES = {
     "gsm8k_cot": ("math.py", "minerva.py", "amc.py"),
     "minerva_math": ("math.py", "minerva.py", "amc.py"),
+    "gsm8k_first_hash": ("hinted.py",),
     "bbh_cot": ("choices.py",),
     "boxed_math": ("math.py", "amc.py", "minerva.py"),
     "amc": ("amc.py",),
