@@ -264,6 +264,10 @@ def restore_first_checkpoint(state, checkpointer, mesh):
     if step <= 0:
         raise ValueError(f"First-step restore gate requires step >= 1, got {step}")
     expected = checkpoint_samples(state)
+    # on_step returns early on a step it already saved and leaves a queued request unconsumed, so
+    # the gate's temporary request must target a step no earlier save has covered or it would
+    # attach to a later step and leave a queued extra save.
+    assert checkpointer._last_save_step < step
     checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
     checkpointer.on_step(tree=state, step=step)
     checkpointer.wait_until_finished()
@@ -524,9 +528,13 @@ class GrugRunConfig:
 
     def __post_init__(self):
         checkpointer = self.trainer.trainer.checkpointer
-        if self.first_checkpoint_restore_step is not None and checkpointer.keep_last_temporary_checkpoints < 1:
-            # The restore gate saves a temporary checkpoint and reloads it after commit-time pruning.
-            raise ValueError("first_checkpoint_restore_step requires keep_last_temporary_checkpoints >= 1")
+        if self.first_checkpoint_restore_step is not None:
+            if not self.trainer.save_checkpoints:
+                # The restore gate saves and reloads its copy through the run checkpointer.
+                raise ValueError("first_checkpoint_restore_step requires save_checkpoints")
+            if checkpointer.keep_last_temporary_checkpoints < 1:
+                # The restore gate saves a temporary checkpoint and reloads it after commit-time pruning.
+                raise ValueError("first_checkpoint_restore_step requires keep_last_temporary_checkpoints >= 1")
 
 
 def build_train_dataset(
@@ -1618,8 +1626,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         levanter.tracker.log(watch_stats, step=step)
 
                 if current_step == config.first_checkpoint_restore_step:
-                    if checkpointer is None:
-                        raise ValueError("First-step restore gate requires checkpointing")
+                    # GrugRunConfig.__post_init__ guarantees a checkpointer when the gate step is set.
+                    assert checkpointer is not None
                     with timing.span("first_checkpoint_save_restore_gate", step=current_step):
                         state = restore_first_checkpoint(state, checkpointer, mesh)
 

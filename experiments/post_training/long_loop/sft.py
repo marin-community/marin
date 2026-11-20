@@ -35,6 +35,7 @@ SMOKE_CONFIG = Path(__file__).with_name("sft-smoke.yaml")
 
 
 DEFAULT_TEMP_CHECKPOINT_COUNT = 1
+# draccus decodes this duration string into the checkpointer's `save_interval` timedelta.
 DEFAULT_TEMP_SAVE_INTERVAL = "30m"
 
 
