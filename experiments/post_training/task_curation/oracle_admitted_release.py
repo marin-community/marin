@@ -22,7 +22,7 @@ from finestore.rl.curation import (
     WithinSourceDedupEvidence,
 )
 from huggingface_hub import HfApi, hf_hub_download
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
@@ -372,7 +372,7 @@ def main() -> None:
         execution_release=item.execution_release,
         output_dedup=WithinSourceDedupEvidence.model_validate(metadata["dedup"]),
         actor=ActorCensusReceipt.model_validate(metadata["actor"]),
-        grading=RetainedGrading.model_validate(metadata["grading"]),
+        grading=TypeAdapter(RetainedGrading).validate_python(metadata["grading"]),
         lexical=LexicalContaminationEvidence.model_validate(metadata["lexical"]),
         sample=observed_sample,
         repair_evidence=item.repair_evidence,
