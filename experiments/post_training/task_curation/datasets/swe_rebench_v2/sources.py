@@ -116,14 +116,14 @@ def _declare() -> RlDataSource[CurationRecipe]:
                 # staging (the pipeline's staging cannot read object storage).
                 inputs={
                     IMAGE_BINDINGS_INPUT: UrlSource(
-                        url="https://raw.githubusercontent.com/marin-community/marin/ee4060cc88229599542313b0f42049827b4962ab/experiments/post_training/task_curation/datasets/swe_rebench_v2/inputs/base-image-bindings.json",
-                        sha256="b37ecc45b4a9e932619e7eb5d3c7e985bbe3a5f9fe7a5e6e64ad929afccc0c0d",
+                        url="https://raw.githubusercontent.com/marin-community/marin/be8aa40d334eaaa7e7c4c84f8c43ee66ae1efa2e/experiments/post_training/task_curation/datasets/swe_rebench_v2/inputs/base-image-bindings.json",
+                        sha256="b8f1719feefb4df78bec0638a082f470799dd16c77a0ea0a92bf75c5f2e08ff6",
                         filename="base-image-bindings.json",
                         format=SourceFormat.JSON,
                     ),
                     ADMISSION_RECEIPTS_INPUT: UrlSource(
-                        url="https://raw.githubusercontent.com/marin-community/marin/ee4060cc88229599542313b0f42049827b4962ab/experiments/post_training/task_curation/datasets/swe_rebench_v2/inputs/admission-receipts.json",
-                        sha256="2d465e3e55f1b9046e151074884be05de4b2b7a9239765a89c0c4372a3836183",
+                        url="https://raw.githubusercontent.com/marin-community/marin/be8aa40d334eaaa7e7c4c84f8c43ee66ae1efa2e/experiments/post_training/task_curation/datasets/swe_rebench_v2/inputs/admission-receipts.json",
+                        sha256="7db8c9c19b42d149f9bef89dd7ae74e010f416a9f37dd9b69e40fc2d896af52a",
                         filename="admission-receipts.json",
                         format=SourceFormat.JSON,
                     ),
