@@ -137,6 +137,8 @@ that declare model access. The worker passes its explicit remote-judge connectio
 to the host relay; provider credentials stay on the host.
 Task-environment model callers receive runtime relay access; tasks that declare
 model access only for verification retain verifier-only access.
+Verifier model aliases and credential templates are rewritten to the guest relay
+after task-specific bindings are applied, without exposing them to the agent.
 
 ## Harnesses
 
