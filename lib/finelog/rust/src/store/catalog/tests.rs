@@ -490,7 +490,7 @@ fn opening_an_old_catalog_adds_partition_metadata_without_losing_segments() {
 }
 
 #[test]
-fn published_snapshot_rebuild_preserves_segment_artifacts() {
+fn published_snapshot_rebuild_preserves_segment_artifacts_and_column_bounds() {
     let catalog = Catalog::open(None).unwrap();
     let artifacts = ArtifactReferences {
         binding: SourceBinding {
@@ -509,6 +509,10 @@ fn published_snapshot_rebuild_preserves_segment_artifacts() {
             },
         )]),
     };
+    let column_bounds = crate::store::column_bounds::ColumnBounds::from([(
+        "epoch_ms".to_string(),
+        crate::store::column_bounds::ColumnRange::new(1_000, 2_000),
+    )]);
     let segment = PublishedObjectSegment {
         row: SegmentRow {
             namespace: "a".to_string(),
@@ -531,6 +535,7 @@ fn published_snapshot_rebuild_preserves_segment_artifacts() {
             ..Default::default()
         },
         artifacts: artifacts.clone(),
+        column_bounds: column_bounds.clone(),
         migration_backfill: false,
         migration_source_id: None,
         migration_source_rows: None,
@@ -552,6 +557,24 @@ fn published_snapshot_rebuild_preserves_segment_artifacts() {
     let records = catalog.object_segments("a").unwrap();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].artifacts, artifacts);
+    assert_eq!(records[0].column_bounds, column_bounds);
+    let (source_json, stored_bounds): (String, Option<String>) = catalog
+        .inner
+        .lock()
+        .unwrap()
+        .conn
+        .query_row(
+            "SELECT source_json, column_bounds FROM object_segments WHERE namespace = 'a'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        source_json,
+        serde_json::to_string(&records[0].source).unwrap(),
+        "the bounds live in their own column, not in source_json"
+    );
+    assert!(stored_bounds.is_some());
 }
 
 #[test]

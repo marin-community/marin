@@ -17,16 +17,15 @@ from skyrl_train.trajectory_runners.types import (
 from skyrl_train.trajectory_runners.trajectory_retention import RETENTION_METRIC_PREFIX
 from skyrl_train.metric_names import (
     ENVIRONMENT_METRIC_PREFIX,
+    GENERATE_OUTCOME_METRIC_PREFIX,
     IDENTITY_AWARE_REWARD_METRIC_PREFIX,
     TASK_ROLLOUT_METRIC_PREFIX,
+    TASK_TIMING_KEYS,
     TIS_ALIGNED_TOKENS_METRIC,
     TIS_ALIGNMENT_ALERT_METRIC,
     TIS_EXACT_MATCH_FRACTION_METRIC,
-    TIS_LCS_FALLBACK_FRACTION_METRIC,
     TIS_UNALIGNED_FRACTION_METRIC,
     TIS_ALIGNMENT_FAIL_COUNT_METRIC,
-    TIS_LCS_FALLBACK_MESSAGES_METRIC,
-    TIS_LCS_FALLBACK_ALERT_METRIC,
     TIS_TITO_FULL_ATTEMPTS_METRIC,
     TIS_TITO_FULL_SUCCESS_FRACTION_METRIC,
     TIS_TITO_FULL_DECLINE_COUNT_METRIC,
@@ -237,17 +236,11 @@ def _concatenate_environment_metrics(
         ]
 
 
-def concatenate_trajectory_batches(
-    trajectory_batches: List[TrajectoryBatch],
-    *,
-    require_rollout_logprobs: bool = False,
-    tis_lcs_alert_threshold: float,
-    metrics: dict[str, float] | None = None,
+def normalize_trajectory_batches(
+    trajectory_batches: Sequence[TrajectoryBatch], *, fields: BatchFields
 ) -> TrajectoryBatch:
-    """Concatenate and validate rollout rows using whole-batch channel presence."""
+    """Concatenate rows using whole-batch field presence and route geometry."""
     assert trajectory_batches
-    _rollout_logprob_presence(trajectory_batches, required=require_rollout_logprobs)
-    fields = BatchFields.from_groups([BatchFields.from_batch(batch) for batch in trajectory_batches])
     any_has_logprobs = "rollout_logprobs" in fields.present
 
     # Handle mixed rollout_logprobs: if some batches have logprobs and others don't,
@@ -427,7 +420,7 @@ def concatenate_trajectory_batches(
         result["exclude_from_baseline"] = baseline_exclusions_concat
 
     _concatenate_environment_metrics(result, trajectory_batches, fields=fields)
-    for key in ("verification_results", "evidence_messages"):
+    for key in ("verification_results", "evidence_messages", "task_ids", "task_outcomes"):
         if key in fields.present:
             result[key] = [
                 value
@@ -442,6 +435,21 @@ def concatenate_trajectory_batches(
     for key in additional_keys:
         result[key] = sum([trajectory_batch[key] for trajectory_batch in trajectory_batches], [])
 
+    return result
+
+
+def concatenate_trajectory_batches(
+    trajectory_batches: List[TrajectoryBatch],
+    *,
+    require_rollout_logprobs: bool = False,
+    metrics: dict[str, float] | None = None,
+) -> TrajectoryBatch:
+    """Concatenate and validate rollout rows using whole-batch channel presence."""
+    assert trajectory_batches
+    _rollout_logprob_presence(trajectory_batches, required=require_rollout_logprobs)
+    fields = BatchFields.from_groups([BatchFields.from_batch(batch) for batch in trajectory_batches])
+    result = normalize_trajectory_batches(trajectory_batches, fields=fields)
+
     if metrics is None:
         metrics = get_rollout_metrics(
             result["response_ids"],
@@ -452,8 +460,7 @@ def concatenate_trajectory_batches(
         )
         metrics.update(
             rollout_counter_metrics(
-                [batch.get("rollout_metrics") or {} for batch in trajectory_batches],
-                tis_lcs_alert_threshold=tis_lcs_alert_threshold,
+                [batch.get("rollout_metrics") or {} for batch in trajectory_batches]
             )
         )
         result["rollout_metrics"] = metrics
@@ -467,15 +474,12 @@ def concatenate_trajectory_batches(
     return result
 
 
-def rollout_counter_metrics(
-    group_metrics: Sequence[dict[str, float]], *, tis_lcs_alert_threshold: float
-) -> dict[str, float]:
+def rollout_counter_metrics(group_metrics: Sequence[dict[str, float]]) -> dict[str, float]:
     """Aggregate token-weighted alignment and per-group failure and retention counters."""
     rollout_metrics = {}
     # TIS alignment metrics use token-weighted fractions across batches.
     total_aligned = 0.0
-    sum_exact = sum_lcs = sum_unaligned = 0.0
-    sum_fail = sum_lcs_msgs = 0.0
+    sum_exact = sum_unaligned = sum_fail = 0.0
     saw_tis = False
     for rm in group_metrics:
         n = rm.get(TIS_ALIGNED_TOKENS_METRIC)
@@ -484,20 +488,14 @@ def rollout_counter_metrics(
         saw_tis = True
         total_aligned += n
         sum_exact += rm.get(TIS_EXACT_MATCH_FRACTION_METRIC, 0.0) * n
-        sum_lcs += rm.get(TIS_LCS_FALLBACK_FRACTION_METRIC, 0.0) * n
         sum_unaligned += rm.get(TIS_UNALIGNED_FRACTION_METRIC, 0.0) * n
         sum_fail += rm.get(TIS_ALIGNMENT_FAIL_COUNT_METRIC, 0.0)
-        sum_lcs_msgs += rm.get(TIS_LCS_FALLBACK_MESSAGES_METRIC, 0.0)
     if saw_tis:
         denom = max(total_aligned, 1.0)
         rollout_metrics[TIS_ALIGNED_TOKENS_METRIC] = total_aligned
         rollout_metrics[TIS_EXACT_MATCH_FRACTION_METRIC] = sum_exact / denom
-        rollout_metrics[TIS_LCS_FALLBACK_FRACTION_METRIC] = sum_lcs / denom
         rollout_metrics[TIS_UNALIGNED_FRACTION_METRIC] = sum_unaligned / denom
         rollout_metrics[TIS_ALIGNMENT_FAIL_COUNT_METRIC] = sum_fail
-        rollout_metrics[TIS_LCS_FALLBACK_MESSAGES_METRIC] = sum_lcs_msgs
-        lcs_alert = 1.0 if (sum_lcs / denom) > tis_lcs_alert_threshold else 0.0
-        rollout_metrics[TIS_LCS_FALLBACK_ALERT_METRIC] = lcs_alert
         total_tito_attempts = sum(output.get(TIS_TITO_FULL_ATTEMPTS_METRIC, 0.0) for output in group_metrics)
         total_tito_successes = sum(
             output.get(TIS_TITO_FULL_SUCCESS_FRACTION_METRIC, 0.0) * output.get(TIS_TITO_FULL_ATTEMPTS_METRIC, 0.0)
@@ -510,7 +508,7 @@ def rollout_counter_metrics(
         total_tito_declines = sum(output.get(TIS_TITO_FULL_DECLINE_COUNT_METRIC, 0.0) for output in group_metrics)
         rollout_metrics[TIS_TITO_FULL_DECLINE_COUNT_METRIC] = total_tito_declines
         rollout_metrics[TIS_ALIGNMENT_ALERT_METRIC] = (
-            1.0 if sum_unaligned > 0 or lcs_alert or total_tito_declines > 0 else 0.0
+            1.0 if sum_unaligned > 0 or total_tito_declines > 0 else 0.0
         )
         for reason in TitoFullDeclineReason:
             name = f"{TIS_TITO_FULL_DECLINE_METRIC_PREFIX}{reason.value}"
@@ -521,7 +519,12 @@ def rollout_counter_metrics(
     for output in group_metrics:
         for name, value in output.items():
             if name.startswith(
-                (RETENTION_METRIC_PREFIX, IDENTITY_AWARE_REWARD_METRIC_PREFIX, TASK_ROLLOUT_METRIC_PREFIX)
+                (
+                    RETENTION_METRIC_PREFIX,
+                    IDENTITY_AWARE_REWARD_METRIC_PREFIX,
+                    TASK_ROLLOUT_METRIC_PREFIX,
+                    GENERATE_OUTCOME_METRIC_PREFIX,
+                )
             ):
                 rollout_metrics[name] = rollout_metrics.get(name, 0.0) + value
 
@@ -615,6 +618,24 @@ def apply_overlong_filtering(
     ]
 
 
+def task_timing_metrics(env_metrics: Sequence[dict[str, Any]]) -> dict[str, float]:
+    """Summarize each per-answer task timer over the rows that record it."""
+    metrics = {}
+    for key in TASK_TIMING_KEYS:
+        values = [row[key] for row in env_metrics if key in row]
+        if values:
+            p50, p95 = np.percentile(values, [50, 95])
+            metrics.update(
+                {
+                    f"{key}/mean": float(np.mean(values)),
+                    f"{key}/p50": float(p50),
+                    f"{key}/p95": float(p95),
+                    f"{key}/max": float(np.max(values)),
+                }
+            )
+    return metrics
+
+
 def get_rollout_metrics(
     responses: List[List[int]],
     rewards: Union[List[float], List[List[float]]],
@@ -681,9 +702,12 @@ def rollout_length_metrics(
         "generate/avg_tokens_zero_rewards": avg_tokens_zero_rewards.item(),
     }
 
+    if env_metrics is not None:
+        rollout_metrics.update(task_timing_metrics(env_metrics))
     if env_metrics is not None and env_classes is not None:
         env_to_metrics = defaultdict(list)
         for i, metrics in enumerate(env_metrics):
+            metrics = {key: value for key, value in metrics.items() if key not in TASK_TIMING_KEYS}
             # Skipped episodes (e.g. over-length prompts) never step the environment and
             # report an empty dict; per-environment aggregators only see stepped episodes.
             if metrics:

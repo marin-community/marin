@@ -12,6 +12,7 @@ from typing import Any
 
 from harbor_config.errors import ErrorCategory, error_category
 from harbor_config.models.trial.config import TaskConfig
+from shellbox.machine import CommandOutputLost
 
 from harbor.agents.factory import AgentFactory
 from harbor.environments.base import BaseEnvironment, SandboxDiskFullError
@@ -48,6 +49,7 @@ from harbor.tasks.client import TaskClient
 from harbor.trial.artifact_handler import ArtifactHandler
 from harbor.trial.attempt import trial_paths, trial_relative_path
 from harbor.trial.errors import (
+    AgentCommandOutputLostError,
     AgentDiskFullError,
     AgentSetupTimeoutError,
     AgentTimeoutError,
@@ -334,6 +336,9 @@ class Trial(ABC):
                     await self._recover_outputs_safely()
                 finally:
                     cleanup_failure: BaseException | None = None
+                    # A failed agent-session cleanup is recorded but does not block
+                    # completion: the environment stop that follows ends every agent
+                    # command, and _stop_agent_environment marks its own failures.
                     for cleanup in (
                         self._cleanup_agents,
                         self._stop_agent_environment,
@@ -341,8 +346,6 @@ class Trial(ABC):
                         try:
                             await cleanup()
                         except BaseException as cleanup_error:
-                            if not isinstance(cleanup_error, asyncio.CancelledError):
-                                self._environment_cleanup_failed = True
                             if primary is None and cleanup_failure is None:
                                 cleanup_failure = cleanup_error
                             else:
@@ -420,6 +423,7 @@ class Trial(ABC):
         await self.agent_environment.run_healthcheck()
         await self._upload_injected_skills()
         await self._upload_setup_files()
+        await self._emit(TrialEvent.ENVIRONMENT_READY)
         with self.agent_environment.with_default_user(self.task.config.agent.user):
             await self._setup_agent()
         self.result.agent_info = self.agent.to_agent_info()
@@ -651,6 +655,9 @@ class Trial(ABC):
         except SandboxDiskFullError as exc:
             primary = exc
             raise AgentDiskFullError(str(exc)) from exc
+        except CommandOutputLost as exc:
+            primary = exc
+            raise AgentCommandOutputLostError(str(exc)) from exc
         except BaseException as exc:
             primary = exc
             raise
@@ -756,7 +763,9 @@ class Trial(ABC):
             ) from timeout_error
         try:
             await task
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as cancellation:
+            if vars(cancellation).get("__notes__"):
+                self.result.secondary_exception_info.append(ExceptionInfo.from_exception(cancellation))
             raise timeout_error from None
         except ArtifactPersistenceError as error:
             self._artifact_persistence_failure = error

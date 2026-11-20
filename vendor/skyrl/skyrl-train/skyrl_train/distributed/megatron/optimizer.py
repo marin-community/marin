@@ -28,7 +28,7 @@ from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.core.utils import get_model_config
 from skyrl_train.distributed.megatron.grug_muonh import (
     MegatronGrugMuonH,
-    megatron_grug_expert_bank,
+    megatron_grug_parameter_banks,
     megatron_grug_route,
 )
 
@@ -148,12 +148,7 @@ def _register_grug_muonh(optim_config: Mapping) -> None:
             "muon_eps": muon_eps,
             "qkv_split_shapes": (query_rows, kv_rows, kv_rows),
             "offload_momentum": extra.get("offload_momentum", False),
-            "parameter_banks": {
-                parameter: bank
-                for chunk in model_chunks
-                for name, parameter in chunk.named_parameters()
-                if parameter.requires_grad and (bank := megatron_grug_expert_bank(name)) is not None
-            }
+            "parameter_banks": megatron_grug_parameter_banks(model_chunks)
             if extra.get("expert_normalization", "per_expert") == "all_experts"
             else {},
             "expert_parallel_group": pg_collection.ep,
@@ -307,10 +302,3 @@ def get_megatron_optimizer_param_scheduler(
     )
 
     return opt_param_scheduler
-
-
-def get_megatron_last_lr(optimizer):
-    """
-    Get the last learning rate from the optimizer parameter scheduler.
-    """
-    return optimizer.param_groups[0]["lr"]

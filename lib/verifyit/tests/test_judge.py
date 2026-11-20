@@ -14,6 +14,7 @@ from verifyit.modes import grade_judge
 from verifyit.spec import (
     Constraint,
     EmptyOutputPolicy,
+    JudgeCompletionPolicy,
     JudgeSpec,
     parse_spec,
     render_spec,
@@ -1140,3 +1141,43 @@ def test_empty_research_final_counts_in_both_metrics(tmp_path, unconfigured_judg
     result = grade_judge.grade(spec, tmp_path, _workspace(tmp_path, " "))
     assert result.status is Status.SCORED
     assert result.detail["metrics"] == {"pass_rate": 0.0, "rubric_points": 0.0}
+
+
+def test_judge_reply_sends_the_conversation_and_retries_transient_failures(fake_judge, monkeypatch):
+    fake_judge.http_statuses = [503, 200]
+    fake_judge.replies = ['{"sentence": "A.", "label": "supported"}\nAnything after the verdict.']
+    monkeypatch.setattr(grade_judge.random, "uniform", lambda *_: 0)
+    monkeypatch.setattr(grade_judge.time, "sleep", lambda _: None)
+    spec = JudgeSpec(references=("document",), exact_gate=False, transport_attempts=3, max_completion_tokens=64)
+    messages = [{"role": "system", "content": "Be strict."}, {"role": "user", "content": "Check this."}]
+    reply = grade_judge.judge_reply(spec, messages)
+    assert reply.text == '{"sentence": "A.", "label": "supported"}\nAnything after the verdict.'
+    assert [request["messages"] for request in fake_judge.requests] == [messages, messages]
+    assert fake_judge.requests[-1]["max_completion_tokens"] == 64
+    assert [attempt["outcome"] for attempt in reply.detail["transport_attempts"]] == ["failed", "succeeded"]
+
+
+def test_judge_reply_transport_failure_keeps_its_evidence(fake_judge):
+    fake_judge.http_statuses = [400]
+    spec = JudgeSpec(references=("document",), exact_gate=False, transport_attempts=3)
+    with pytest.raises(GradingInfraError) as raised:
+        grade_judge.judge_reply(spec, [{"role": "user", "content": "Check this."}])
+    [attempt] = raised.value.detail["transport_attempts"]
+    assert (attempt["status"], attempt["outcome"]) == (400, "failed")
+    assert raised.value.detail["judge_request"]["messages"] == [{"role": "user", "content": "Check this."}]
+
+
+def test_judge_reply_rejects_the_content_policy_before_any_request(fake_judge):
+    spec = JudgeSpec(references=("document",), exact_gate=False, completion_policy=JudgeCompletionPolicy.CONTENT)
+    with pytest.raises(InvalidTask):
+        grade_judge.judge_reply(spec, [{"role": "system", "content": "Be strict."}, {"role": "user", "content": "Hi."}])
+    assert fake_judge.requests == []
+
+
+@pytest.mark.parametrize("fault", [{"finish_reason": "length"}, {"refusal": "Cannot judge"}])
+def test_judge_reply_never_returns_an_incomplete_or_refused_reply(fake_judge, fault):
+    fake_judge.finish_reason = fault.get("finish_reason", "stop")
+    fake_judge.message_fields = {key: value for key, value in fault.items() if key == "refusal"}
+    spec = JudgeSpec(references=("document",), exact_gate=False)
+    with pytest.raises(GradingInfraError):
+        grade_judge.judge_reply(spec, [{"role": "user", "content": "Check this."}])

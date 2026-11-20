@@ -5,6 +5,7 @@
 
 import math
 from collections.abc import Callable
+from functools import partial
 from typing import NamedTuple, TypeAlias
 
 import jax
@@ -75,41 +76,62 @@ def _take_valid_rows(
     return jnp.where(slot_valid[:, None], rows, jnp.zeros_like(rows))
 
 
+class RowGathers(NamedTuple):
+    """The two row movements of a dispatch or combine. Each one's transpose is the other, so a custom VJP needs
+    both. Module-level functions keep the tuple hashable for ``nondiff_argnums``."""
+
+    take_valid: Callable[[Float[Array, "T H"], Int[Array, "P"], Bool[Array, "P"]], Float[Array, "P H"]]
+    """``where(valid, x[index], 0)`` row by row."""
+    gather_sum: Callable[[Float[Array, "P H"], Int[Array, "T K"]], Float[Array, "T H"]]
+    """``out[t] = sum_k rows[slots[t, k]]`` with out-of-range slots read as zero, summed in float32."""
+
+
+XLA_ROW_GATHERS = RowGathers(take_valid=_take_valid_rows, gather_sum=_gather_sum_slots)
+
+
 # The dispatch gather and the combine are transposes of each other. Autodiff would turn the gather's transpose,
 # and the combine itself, into scatter-adds over the token buffer, which ROCm runs at about 1.2 TB/s. With the
 # inverse map `slots` both directions are gathers: one reads each token's (at most K) slot rows.
-@jax.custom_vjp
+@partial(jax.custom_vjp, nondiff_argnums=(4,))
 def _dispatch_rows(
-    x: Float[Array, "T H"], slot_token: Int[Array, "P"], slot_valid: Bool[Array, "P"], slots: Int[Array, "T K"]
+    x: Float[Array, "T H"],
+    slot_token: Int[Array, "P"],
+    slot_valid: Bool[Array, "P"],
+    slots: Int[Array, "T K"],
+    gathers: RowGathers,
 ) -> Float[Array, "P H"]:
-    return _take_valid_rows(x, slot_token, slot_valid)
+    return gathers.take_valid(x, slot_token, slot_valid)
 
 
-def _dispatch_rows_fwd(x, slot_token, slot_valid, slots):
-    return _take_valid_rows(x, slot_token, slot_valid), slots
+def _dispatch_rows_fwd(x, slot_token, slot_valid, slots, gathers):
+    return gathers.take_valid(x, slot_token, slot_valid), slots
 
 
-def _dispatch_rows_bwd(slots, g):
-    return _gather_sum_slots(g, slots), None, None, None
+def _dispatch_rows_bwd(gathers, slots, g):
+    return gathers.gather_sum(g, slots), None, None, None
 
 
 _dispatch_rows.defvjp(_dispatch_rows_fwd, _dispatch_rows_bwd)
 
 
-@jax.custom_vjp
+@partial(jax.custom_vjp, nondiff_argnums=(4,))
 def _combine_rows(
-    rows: Float[Array, "P H"], slot_token: Int[Array, "P"], slot_valid: Bool[Array, "P"], slots: Int[Array, "T K"]
+    rows: Float[Array, "P H"],
+    slot_token: Int[Array, "P"],
+    slot_valid: Bool[Array, "P"],
+    slots: Int[Array, "T K"],
+    gathers: RowGathers,
 ) -> Float[Array, "T H"]:
-    return _gather_sum_slots(rows, slots)
+    return gathers.gather_sum(rows, slots)
 
 
-def _combine_rows_fwd(rows, slot_token, slot_valid, slots):
-    return _gather_sum_slots(rows, slots), (slot_token, slot_valid)
+def _combine_rows_fwd(rows, slot_token, slot_valid, slots, gathers):
+    return gathers.gather_sum(rows, slots), (slot_token, slot_valid)
 
 
-def _combine_rows_bwd(residuals, g):
+def _combine_rows_bwd(gathers, residuals, g):
     slot_token, slot_valid = residuals
-    return _take_valid_rows(g, slot_token, slot_valid), None, None, None
+    return gathers.take_valid(g, slot_token, slot_valid), None, None, None
 
 
 _combine_rows.defvjp(_combine_rows_fwd, _combine_rows_bwd)
@@ -138,12 +160,12 @@ def _scatter_add_dispatch_combine(
     # Invalid rows scatter out of range and are dropped: their ragged_dot output is unspecified, and a zero weight
     # times a NaN row is still NaN.
     combine_token = jnp.where(valid, token, tokens)
-    return _DispatchCombine(
-        dispatch=lambda x: _take_valid_rows(x, token, valid),
-        combine=lambda rows, weights: jnp.zeros((tokens, rows.shape[1]), rows.dtype)
-        .at[combine_token]
-        .add(rows * weights[:, None], mode="drop"),
-    )
+
+    def combine(rows, weights):
+        weighted = rows * weights[:, None]
+        return jnp.zeros((tokens, rows.shape[1]), weighted.dtype).at[combine_token].add(weighted, mode="drop")
+
+    return _DispatchCombine(dispatch=lambda x: _take_valid_rows(x, token, valid), combine=combine)
 
 
 def _gather_dispatch_combine(
@@ -155,8 +177,8 @@ def _gather_dispatch_combine(
     assignments = tokens * topk
     slots = _assignment_sources(jnp.where(valid, picked, assignments), send_size=assignments).reshape(tokens, topk)
     return _DispatchCombine(
-        dispatch=lambda x: _dispatch_rows(x, token, valid, slots),
-        combine=lambda rows, weights: _combine_rows(rows * weights[:, None], token, valid, slots),
+        dispatch=lambda x: _dispatch_rows(x, token, valid, slots, XLA_ROW_GATHERS),
+        combine=lambda rows, weights: _combine_rows(rows * weights[:, None], token, valid, slots, XLA_ROW_GATHERS),
     )
 
 
@@ -173,10 +195,13 @@ def _moe_mlp_ep_ring_local(
     num_experts: int,
     capacity_factor: float,
     token_sharding_axes: tuple[str, ...],
+    combine_in_fp32: bool = False,
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
     """Ring-style EP routed path: all-gather dispatch + psum-scatter collect.
 
     ``make_dispatch_combine`` chooses how rows move between the gathered token buffer and the dispatch slots.
+    With ``combine_in_fp32`` the weights keep their (float32) dtype, so the weighted rows, their per-token sum
+    and the psum-scatter run in float32, and the output is cast to ``x_local``'s dtype at the end.
     """
     # #2710 ring EP strategy: gather tokens and their selected-expert routing
     # assignments across expert shards, then psum-scatter back to local tokens.
@@ -225,7 +250,9 @@ def _moe_mlp_ep_ring_local(
         )
 
         dispatch_combine = make_dispatch_combine(local_idx, valid, tokens, topk)
-        weight_local = jnp.take(weight_flat, local_idx, axis=0).astype(x_local.dtype)
+        weight_local = jnp.take(weight_flat, local_idx, axis=0)
+        if not combine_in_fp32:
+            weight_local = weight_local.astype(x_local.dtype)
 
         x_dispatch = tree_checkpoint_name(dispatch_combine.dispatch(x_global), _CHECKPOINT_DISPATCH_INPUT)
         weight_dispatch = jnp.where(valid, weight_local, jnp.zeros_like(weight_local))
@@ -244,5 +271,7 @@ def _moe_mlp_ep_ring_local(
         # #2710 ring EP strategy: collect only this shard's token slice after
         # reducing contributions from experts across the EP mesh.
         out_local = jax.lax.psum_scatter(out_global, "expert", scatter_dimension=0, tiled=True)
+        if combine_in_fp32:
+            out_local = out_local.astype(x_local.dtype)
         dropped_total = jax.lax.psum(dropped_local, token_sharding_axes)
     return out_local, CapacityDrops(sender_dropped=jnp.zeros_like(dropped_total), receiver_dropped=dropped_total)

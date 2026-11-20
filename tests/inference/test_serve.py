@@ -175,6 +175,7 @@ def test_mirrored_model_keeps_tokenizer_revision_independent(
         yield SimpleNamespace(
             model_id="public-model",
             server_url="http://127.0.0.1:8000/v1",
+            metrics_url="http://127.0.0.1:8000/metrics",
             wait_until_ready=lambda: None,
         )
 
@@ -237,6 +238,7 @@ def test_vllm_backend_serves_model_and_tokenizer_revisions_independently(monkeyp
         yield SimpleNamespace(
             model_id="public-model",
             server_url="http://127.0.0.1:8000/v1",
+            metrics_url="http://127.0.0.1:8000/metrics",
             wait_until_ready=lambda: None,
         )
 
@@ -345,6 +347,43 @@ def test_resolved_model_keeps_requested_id_as_served_name(monkeypatch):
     assert resolved.model_id == "Qwen/Qwen3-0.6B"
 
 
+@pytest.mark.parametrize("dp_args,rank_count", [((), 4), (("--data-parallel-size", "1"), 1)])
+def test_local_cli_explicit_dp_overrides_native_args(monkeypatch, tmp_path, unused_tcp_port, dp_args, rank_count):
+    monkeypatch.setattr("marin.inference.vllm_backend.vllm_launcher", lambda _: FakeVllmLauncher("serve"))
+
+    def probe_then_stop(_seconds):
+        for rank, status in ((rank_count - 1, 200), (rank_count, 400)):
+            response = requests.post(
+                f"http://127.0.0.1:{unused_tcp_port}/v1/chat/completions",
+                json={"model": "fake-model", "messages": [{"role": "user", "content": "hello"}]},
+                headers={"X-data-parallel-rank": str(rank)},
+                timeout=10,
+            )
+            assert response.status_code == status
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("marin.inference.serve_cli.time", SimpleNamespace(sleep=probe_then_stop))
+    template = tmp_path / "chat.jinja"
+    template.write_text("{{ messages }}")
+    result = CliRunner().invoke(
+        serve_main,
+        [
+            "local",
+            str(tmp_path),
+            "--tensor-parallel-size",
+            "1",
+            "--port",
+            str(unused_tcp_port),
+            "--chat-template",
+            str(template),
+            "--vllm-arg=-dp",
+            "--vllm-arg=4",
+            *dp_args,
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+
 def test_staged_model_downloads_remote_weights_to_temporary_directory(monkeypatch):
     observed: dict[str, object] = {}
 
@@ -391,6 +430,7 @@ def test_speculative_model_uses_resolved_uri_in_vllm_launch(monkeypatch):
         yield SimpleNamespace(
             model_id="target",
             server_url="http://127.0.0.1:8000/v1",
+            metrics_url="http://127.0.0.1:8000/metrics",
             wait_until_ready=lambda: None,
         )
 
@@ -732,6 +772,7 @@ def test_run_iris_service_registers_without_worker_placement_metadata(monkeypatc
     def prepared_local_inference(*_args, **_kwargs):
         yield SimpleNamespace(
             model=RunningModel(OpenAIEndpoint("http://127.0.0.1:1/v1", model_id)),
+            metrics_url="http://127.0.0.1:1/metrics",
             backend_name="vllm",
             tensor_parallel_size=1,
             chat_template_content="{{ messages }}",
@@ -835,6 +876,7 @@ def test_pipeline_service_endpoint_and_shutdown_lifecycle(
                 wait_until_ready=ready,
                 check_alive=check_alive,
                 server_url="http://127.0.0.1:1/v1",
+                metrics_url="http://127.0.0.1:1/metrics",
             )
         finally:
             events.append("stopped")
@@ -851,7 +893,12 @@ def test_pipeline_service_endpoint_and_shutdown_lifecycle(
         iris=IrisConfig(
             worker_resources=ResourceConfig.with_gpu("H100", count=8, replicas=2),
             worker_environment=create_environment(docker_image="test"),
-            serving_geometry=ServingGeometry(tensor_parallel_size, data_parallel_size, 2, 8),
+            serving_geometry=ServingGeometry(
+                tensor_parallel_size=tensor_parallel_size,
+                data_parallel_size=data_parallel_size,
+                pipeline_parallel_size=2,
+                gpus_per_task=8,
+            ),
             cache_ttl_days=0,
         ),
         endpoint_name="/serve/pipeline",

@@ -16,7 +16,7 @@ PROSE_SUFFIXES = frozenset({".md", ".rst", ".txt", ".py", ".rs", ".go", ".ts", "
 TEST_PATH = re.compile(r"(^|/)(tests?|test_[^/]+|[^/]+_test\.[^/]+)(/|$)")
 PATTERN_CATALOGS = (
     ".agents/skills/simplify-code/",
-    "docs/dev-guide/writing-style/ai-writing-donts.md",
+    "docs/dev-guide/writing-style/review-prose.md",
 )
 
 PROSE_PATTERNS = (

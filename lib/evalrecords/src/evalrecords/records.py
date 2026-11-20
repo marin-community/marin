@@ -18,7 +18,7 @@ from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Literal, TypedDict
+from typing import Annotated, Any, Literal, TypedDict
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem.factory import open_url, url_to_fs
@@ -417,6 +417,19 @@ class EvaluationSelection(BaseModel):
         return "-".join(parts)
 
 
+class TaskEvidence(StrEnum):
+    """What each curated attempt's saved evidence keeps of its task."""
+
+    REFERENCE = "reference"
+    """The item's task id and source row; the run record's corpus manifest pins the task."""
+    EMBEDDED = "embedded"
+    """A full copy of the TaskSpec, including hidden test resources."""
+
+
+# Omitted when embedded, which matches records and runs written before this setting existed.
+TaskEvidenceSetting = Annotated[TaskEvidence, Field(exclude_if=lambda value: value is TaskEvidence.EMBEDDED)]
+
+
 class CuratedSettings(BaseModel):
     """Recorded selection and execution settings shared by launch and dashboard readers."""
 
@@ -428,11 +441,16 @@ class CuratedSettings(BaseModel):
     seed: int | None = None
     judge: JudgeIdentity | None = None
     concurrency: int = Field(default=DEFAULT_EVALUATION_CONCURRENCY, gt=0)
+    task_evidence: TaskEvidenceSetting = TaskEvidence.EMBEDDED
+
+
+# Request scheduling and how much of each task an attempt saves; neither changes a score.
+NON_SCORING_SETTINGS = frozenset({"concurrency", "task_evidence"})
 
 
 def scoring_settings(settings: Mapping[str, Any]) -> dict[str, Any]:
-    """Separate request scheduling from settings that govern saved observations."""
-    return {key: value for key, value in settings.items() if key != "concurrency"}
+    """Keep settings that affect scores and define a run's identity."""
+    return {key: value for key, value in settings.items() if key not in NON_SCORING_SETTINGS}
 
 
 class CuratedRef(BaseModel):
@@ -634,6 +652,15 @@ class RepeatAggregate(BaseModel):
     source_coverage: TaskCoverage | None = None
 
 
+class RLAttemptRef(BaseModel):
+    """The RL attempt that produced the evaluated model."""
+
+    model_config = ConfigDict(frozen=True)
+
+    run_id: str
+    attempt_id: str
+
+
 class EvalRunRecord(BaseModel):
     """The full account of one eval run, serialized to ``record.json``.
 
@@ -663,6 +690,7 @@ class EvalRunRecord(BaseModel):
     """A free-text note on why the launch was run (``--description``), e.g. ``Trying out a new sweep
     after fixing RL``. Shared by every record in a group and surfaced on the launch in the dashboard."""
     model: ModelRef
+    rl_attempt: RLAttemptRef | None = Field(default=None, exclude_if=lambda value: value is None)
     judge: HostedJudgeRef | None = None
     evaluation: EvalRef = Field(alias="eval")
     hardware: HardwareRef
