@@ -85,13 +85,24 @@ def _assert_gradients_match(actual, expected, *, tol):
         np.testing.assert_allclose(got / scale, want / scale, atol=tol, rtol=tol, err_msg=f"d{name}")
 
 
-@pytest.mark.parametrize("mask_name", list(MASKS))
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
-def test_flash_attention_forward_matches_reference(mask_name, dtype):
+# Every mask at 8 query heads per 2 KV heads, then GQA ratios 1, 2, 3, 6 and 8 under the causal and windowed masks.
+# The dK/dV kernel accumulates each KV head over its whole query-head group, whatever the group size.
+CASES = [
+    *((dtype, mask_name, 8, 2) for dtype in (jnp.float32, jnp.bfloat16) for mask_name in MASKS),
+    *(
+        (jnp.bfloat16, mask_name, num_q_heads, num_kv_heads)
+        for mask_name in ("causal", "window")
+        for num_q_heads, num_kv_heads in ((2, 2), (4, 2), (6, 2), (6, 1), (8, 1))
+    ),
+]
+
+
+@pytest.mark.parametrize("dtype,mask_name,num_q_heads,num_kv_heads", CASES)
+def test_flash_attention_forward_matches_reference(dtype, mask_name, num_q_heads, num_kv_heads):
     if dtype == jnp.float32 and _f32_dots_use_tf32():
         # About 2.7e-3 off on MI300X.
         pytest.skip("f32 Triton dots use TF32 on NVIDIA and gfx942")
-    q, k, v = _qkv(dtype)
+    q, k, v = _qkv(dtype, num_q_heads, num_kv_heads)
     mask = MASKS[mask_name]
     actual = _flash(q, k, v, mask)
     expected = _reference(q, k, v, mask)
@@ -100,13 +111,12 @@ def test_flash_attention_forward_matches_reference(mask_name, dtype):
     np.testing.assert_allclose(np.asarray(actual, np.float32), np.asarray(expected), atol=tol, rtol=tol)
 
 
-@pytest.mark.parametrize("mask_name", list(MASKS))
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
-def test_flash_attention_gradients_match_reference(mask_name, dtype):
+@pytest.mark.parametrize("dtype,mask_name,num_q_heads,num_kv_heads", CASES)
+def test_flash_attention_gradients_match_reference(dtype, mask_name, num_q_heads, num_kv_heads):
     if dtype == jnp.float32 and _f32_dots_use_tf32():
         # About 2.7e-3 off on MI300X.
         pytest.skip("f32 Triton dots use TF32 on NVIDIA and gfx942")
-    q, k, v = _qkv(dtype)
+    q, k, v = _qkv(dtype, num_q_heads, num_kv_heads)
     mask = MASKS[mask_name]
     cotangent = jax.random.normal(jax.random.key(1), q.shape, jnp.float32)
 
@@ -116,27 +126,6 @@ def test_flash_attention_gradients_match_reference(mask_name, dtype):
     expected = jax.grad(lambda *a: loss(_reference, *a), argnums=(0, 1, 2))(q, k, v)
     actual = jax.grad(lambda *a: loss(_flash, *a), argnums=(0, 1, 2))(q, k, v)
     _assert_gradients_match(actual, expected, tol=TOLERANCE[dtype])
-
-
-# GQA ratios 1, 2, 3, 6 and 8; the dK/dV kernel accumulates each KV head over its whole query-head group.
-@pytest.mark.parametrize("num_q_heads,num_kv_heads", [(2, 2), (4, 2), (6, 2), (6, 1), (8, 1)])
-@pytest.mark.parametrize("mask_name", ["causal", "window"])
-def test_flash_attention_gqa_ratios_match_reference(num_q_heads, num_kv_heads, mask_name):
-    q, k, v = _qkv(jnp.bfloat16, num_q_heads, num_kv_heads)
-    mask = MASKS[mask_name]
-    cotangent = jax.random.normal(jax.random.key(1), q.shape, jnp.float32)
-
-    def loss(attend, q, k, v):
-        return jnp.sum(attend(q, k, v, mask).astype(jnp.float32) * cotangent)
-
-    tol = TOLERANCE[jnp.bfloat16]
-    actual = _flash(q, k, v, mask)
-    np.testing.assert_allclose(
-        np.asarray(actual, np.float32), np.asarray(_reference(q, k, v, mask)), atol=tol, rtol=tol
-    )
-    expected_grads = jax.grad(lambda *a: loss(_reference, *a), argnums=(0, 1, 2))(q, k, v)
-    actual_grads = jax.grad(lambda *a: loss(_flash, *a), argnums=(0, 1, 2))(q, k, v)
-    _assert_gradients_match(actual_grads, expected_grads, tol=tol)
 
 
 def test_flash_attention_batch_sharded_mesh_keeps_output_and_gradient_sharding():
