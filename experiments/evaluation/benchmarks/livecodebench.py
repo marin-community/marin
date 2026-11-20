@@ -79,7 +79,9 @@ GRADER_STARTUP_ALLOWANCE = 60
 
 HERE = Path(__file__).parent
 GRADE = grade_script(HERE / "livecodebench_grade.py", *shipped_files(SCORERS, "livecodebench.py"))
-GRADER_REVISION = "1-" + canonical_sha256({resource.path: resource.source.content_base64 for resource in GRADE})[:16]
+CONVERSION_REVISION = "1-" + canonical_sha256({resource.path: resource.source.content_base64 for resource in GRADE})[:16]
+"""Names the prepared corpus. The hash follows the grade scripts; bump the leading counter whenever this
+module's conversion output changes, such as the prompt, the grader config or the test decoding."""
 EVIDENCE_FIELDS = (
     "question_id",
     "question_title",
@@ -182,7 +184,7 @@ def source() -> RlDataSource[EvaluationCorpusRecipe]:
                     "livecodebench/code_generation_lite", DATASET_REVISION, RELEASE_V6_FILES, SourceFormat.JSONL
                 ),
                 convert=convert_livecodebench,
-                version=GRADER_REVISION,
+                version=CONVERSION_REVISION,
                 intended_use=IntendedUse.EVAL,
                 grader=LIVECODEBENCH_GRADER,
             ),
