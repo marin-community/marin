@@ -898,7 +898,7 @@ async def test_attempt_deadline_returns_trial_timeout_and_persists_selection(
     )
     retry = RetrySettings(
         max_retries=1 if grading in {"verified", "empty"} else 0,
-        include_exceptions={"APIConnectionError"},
+        include_exceptions={"TimeoutError"},
         exclude_exceptions=None,
         min_wait_sec=0,
         max_wait_sec=0,
