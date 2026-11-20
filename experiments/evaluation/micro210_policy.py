@@ -11,8 +11,8 @@ from dataclasses import dataclass
 from rigging.filesystem.storage_path import StoragePath
 
 MODEL_IDENTITY_PREFIX = "sha256:"
-POLICY_DIGEST = "e0faa32c68994e8bf01d0ab7177893aa9c29f8c4309b9183de5c3dfcb6fa67aa"
-POLICY_REVISION = "2026.11.18"
+LEGACY_POLICY_DIGEST = "e0faa32c68994e8bf01d0ab7177893aa9c29f8c4309b9183de5c3dfcb6fa67aa"
+LEGACY_POLICY_REVISION = "2026.11.18"
 
 
 @dataclass(frozen=True)
@@ -24,14 +24,24 @@ class Micro210PolicyReference:
 
 
 # Human-readable copy (sha256: e0faa32c68994e8bf01d0ab7177893aa9c29f8c4309b9183de5c3dfcb6fa67aa): https://gist.github.com/penfever/b9b7be780c14969634e897621454deef/0b5add0ef2843418eaded61258a91f51f3b1b69a
-POLICY_REFERENCE = Micro210PolicyReference(
+LEGACY_POLICY_REFERENCE = Micro210PolicyReference(
     uri=(
         "s3://marin-us-east-08a/marin/users/benfeuer/evaluation-policies/micro210/"
-        f"{POLICY_REVISION}/{POLICY_DIGEST}/policy.json"
+        f"{LEGACY_POLICY_REVISION}/{LEGACY_POLICY_DIGEST}/policy.json"
     ),
+    revision=LEGACY_POLICY_REVISION,
+    sha256=LEGACY_POLICY_DIGEST,
+    byte_size=122243,
+)
+
+
+POLICY_DIGEST = "1d76aff3d1d8addd2d24904948dbada1a32e9b368a067297a1231c4a3ad7ea72"
+POLICY_REVISION = "2026.11.20-together"
+POLICY_REFERENCE = Micro210PolicyReference(
+    uri=("gs://marin-us-east1/evaluation-policies/micro210/" f"{POLICY_REVISION}/{POLICY_DIGEST}/policy.json"),
     revision=POLICY_REVISION,
     sha256=POLICY_DIGEST,
-    byte_size=122243,
+    byte_size=121416,
 )
 
 
@@ -71,10 +81,7 @@ class Micro210Evaluation:
     output_uri: str
 
     def policy(self) -> dict:
-        raw = StoragePath(POLICY_REFERENCE.uri).read_bytes()
-        if len(raw) != POLICY_REFERENCE.byte_size or hashlib.sha256(raw).hexdigest() != POLICY_REFERENCE.sha256:
-            raise ValueError("Canonical Micro210 specification hash mismatch")
-        return json.loads(raw)
+        return read_micro210_policy(POLICY_REFERENCE)
 
     def record(self) -> Micro210Record:
         self.policy()
@@ -86,3 +93,11 @@ def micro210_evaluation(model: Micro210Model, *, run_id: str, output_uri: str) -
     request = Micro210Evaluation(model, run_id, output_uri)
     request.policy()
     return request
+
+
+def read_micro210_policy(reference: Micro210PolicyReference) -> dict:
+    """Read and verify a policy from a current or historical evaluation record."""
+    raw = StoragePath(reference.uri).read_bytes()
+    if len(raw) != reference.byte_size or hashlib.sha256(raw).hexdigest() != reference.sha256:
+        raise ValueError("Canonical Micro210 specification hash mismatch")
+    return json.loads(raw)

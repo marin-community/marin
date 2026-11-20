@@ -3,7 +3,6 @@
 
 import hashlib
 import json
-from contextlib import contextmanager
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -12,8 +11,9 @@ import yaml
 from marin.execution.lazy import StepContext, lower
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.evaluation.judge_config import MICRO210_JUDGE
 from experiments.evaluation.micro210 import micro210_step, run_micro210
-from experiments.evaluation.micro210_policy import Micro210Model, micro210_evaluation
+from experiments.evaluation.micro210_policy import Micro210Model, micro210_evaluation, read_micro210_policy
 from tests.rl.micro210_fixture import policy_fixture_reference
 
 
@@ -67,8 +67,6 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     monkeypatch.setattr("experiments.evaluation.micro210.PREPARED_INPUTS", str(inputs))
     monkeypatch.setenv("MARIN_TEMP_PREFIX", str(tmp_path / "temporary"))
     monkeypatch.setenv("TOGETHER_API_KEY", "unused-ambient-key")
-    counterpart_key = tmp_path / "counterpart-key"
-    counterpart_key.write_text("test-counterpart-key")
     token_content = {128001: "<|end_of_text|>", 128009: "<|eot_id|>"}
     monkeypatch.setattr(
         "experiments.evaluation.micro210.AutoTokenizer.from_pretrained",
@@ -86,32 +84,36 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
             deps=step.deps,
         )
     )
-    config = replace(config, counterpart_api_key=(f"file:{counterpart_key}",))
     submitted = []
 
-    @contextmanager
-    def serve_judge(_config):
-        submitted.append("judge")
-        yield SimpleNamespace(
-            model=SimpleNamespace(endpoint=SimpleNamespace(base_url="http://judge.test/v1", api_key="test"))
-        )
+    def resolve_key(spec):
+        assert spec == ("gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/1",)
+        return SimpleNamespace(value="test-together-key")
+
+    monkeypatch.setattr("experiments.evaluation.micro210.resolve_secret_spec", resolve_key)
 
     def submit_evaluation(skyrl, *, env_vars):
-        assert env_vars == {"JUDGE_API_KEY": "test", "OPENAI_API_KEY": "test-counterpart-key"}
+        assert env_vars == {"JUDGE_API_KEY": "test-together-key", "OPENAI_API_KEY": "test-together-key"}
         submitted.append(yaml.safe_load(skyrl.launch_config_yaml))
         return None
 
-    monkeypatch.setattr("experiments.evaluation.micro210.remote_inference", serve_judge)
     monkeypatch.setattr("experiments.evaluation.micro210.run_skyrl", submit_evaluation)
     run_micro210(config)
+    launch = submitted[0]
+    assert launch["skyrl"]["environment"]["task_sessions"]["remote_judge"]["base_url"] == "https://api.together.ai/v1"
+    assert launch["skyrl"]["terminal_bench"]["installed_agent"]["judge_model"] == "zai-org/GLM-5.3-Flash"
+    assert all("test-together-key" not in str(value) for value in launch.values())
+    # The launch reserves only the candidate GPU described by this fixture.
+    assert launch["skyrl"]["trainer"]["placement"]["policy_num_nodes"] == 1
+    assert launch["skyrl"]["trainer"]["placement"]["policy_num_gpus_per_node"] == 1
     record = json.loads((output / "canonical-evaluation.json").read_text())
     assert record["canonical_spec_sha256"] == hashlib.sha256(raw).hexdigest()
     assert (
-        submitted[1]["skyrl"]["generator"]["eval_sampling_params"]
+        submitted[0]["skyrl"]["generator"]["eval_sampling_params"]
         == protocol["evaluation"]["config"]["generator"]["eval_sampling_params"]
     )
-    assert "eval_override_storage_mb" not in submitted[1]["skyrl"]["terminal_bench"]["harbor"]
-    assert submitted[1]["skyrl"]["generator"]["trajectory_retention"]["run_id"] == "test/micro210@2026.11.18"
+    assert "eval_override_storage_mb" not in submitted[0]["skyrl"]["terminal_bench"]["harbor"]
+    assert submitted[0]["skyrl"]["generator"]["trajectory_retention"]["run_id"] == "test/micro210@2026.11.18"
     altered = yaml.safe_load(config.skyrl.launch_config_yaml)
     altered["skyrl"]["terminal_bench"]["harbor"]["eval_override_storage_mb"] = 131072
     submitted.clear()
@@ -140,3 +142,11 @@ def test_canonical_evaluation_graph_lowers_with_its_final_run_binding():
     step = micro210_step(model, name="fixture/final-eval", version="2026.11.18.74")
     plan = lower(step)
     assert "fixture/final-eval@2026.11.18.74" in plan.fingerprint_payload
+
+
+@pytest.mark.parametrize("change", ["digest", "byte_size"])
+def test_policy_reference_verifies_hash_and_size(policy_reference, change):
+    bad = replace(policy_reference, **({"sha256": "0" * 64} if change == "digest" else {"byte_size": 1}))
+    with pytest.raises(ValueError, match="hash mismatch"):
+        read_micro210_policy(bad)
+    assert read_micro210_policy(policy_reference)["evaluation"]["judge"]["model"] == MICRO210_JUDGE.model
