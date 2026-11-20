@@ -265,10 +265,11 @@ source files. Read each command's `--help` before writing to production storage.
 The default Micro210 policy uses Together serverless `zai-org/GLM-5.3-Flash`
 (FP4) and Secret Manager version `TOGETHER_API_KEY/versions/1`. It allocates
 GPUs only for the candidate model. `JudgeConfig` records temperature 0,
-top-p 1, low reasoning effort, request timeouts and retry limits. The task-local
+top-p 0.95, low reasoning effort, request timeouts and retry limits. The task-local
 adapter maps the original choice constraint to Together regex decoding. Verdict
 labels, rubric prompts and the 128/512/2048 token schedule stay the same.
 BixBench keeps its JSON schema, 1024-token cap and 600-second request timeout.
+Its temperature is fixed at 1, matching the old pinned model's generation config.
 
 The policy and prepared tasks have new hashes. Scores from this judge and the
 old MiniMax M3 judge are not directly comparable. A paired re-score of one or

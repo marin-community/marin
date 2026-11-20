@@ -5,6 +5,7 @@
 
 import hashlib
 import json
+from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
 
 import click
@@ -43,7 +44,7 @@ from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 
 PREPARED_INPUTS = (
     "gs://marin-us-east1/evaluation-policies/micro210/2026.11.20-together/"
-    "8f782737a16b6d52eac634d1e55e061b26372eb0f9a71e0060ac06d3286fbdc3"
+    "ba099cbc869af0dd1c14f14586557e38a812d6b956442e8b1f406b36cc42c7a0"
 )
 
 STOP_TOKEN_CONTENT = {128001: "<|end_of_text|>", 128009: "<|eot_id|>"}
@@ -54,6 +55,15 @@ class Micro210Run:
     skyrl: SkyRLRunConfig
     evaluation: Micro210Evaluation
     canonical_launch_sha256: str
+
+
+def judge_runtime_config(config: dict, judge: JudgeConfig) -> dict:
+    """Bind all runtime judge routes from the typed policy without changing other settings."""
+    config = deepcopy(config)
+    config["environment"]["task_sessions"]["remote_judge"].update(base_url=judge.base_url, api_key_env="JUDGE_API_KEY")
+    config["extra_env"]["JUDGE_BASE_URL"] = judge.base_url
+    config["terminal_bench"]["installed_agent"]["judge_model"] = judge.model
+    return config
 
 
 def validate_inputs(evaluation: Micro210Evaluation, inputs: str) -> None:
@@ -114,7 +124,11 @@ def micro210_step(model: Micro210Model, *, name: str, version: str) -> ArtifactS
         SkyRLSpec(
             name=name,
             version=version,
-            config_yaml=yaml.safe_dump(evaluation_policy["config"]),
+            config_yaml=yaml.safe_dump(
+                judge_runtime_config(
+                    evaluation_policy["config"], draccus.decode(JudgeConfig, evaluation_policy["judge"])
+                )
+            ),
             model=ArtifactHfModel(model_artifact, model.tokenizer_uri, model.tokenizer_revision, relative_path=""),
             train_data=(),
             validation_data=(ArtifactDataSource(inputs, relative_path=evaluation_policy["data_relative_path"]),),

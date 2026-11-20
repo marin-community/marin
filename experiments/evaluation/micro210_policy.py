@@ -35,13 +35,13 @@ LEGACY_POLICY_REFERENCE = Micro210PolicyReference(
 )
 
 
-POLICY_DIGEST = "1d76aff3d1d8addd2d24904948dbada1a32e9b368a067297a1231c4a3ad7ea72"
+POLICY_DIGEST = "8f7ef8170fbef2880214cbf03f70d80cffa3114276e024389617777bf07f53e5"
 POLICY_REVISION = "2026.11.20-together"
 POLICY_REFERENCE = Micro210PolicyReference(
     uri=("gs://marin-us-east1/evaluation-policies/micro210/" f"{POLICY_REVISION}/{POLICY_DIGEST}/policy.json"),
     revision=POLICY_REVISION,
     sha256=POLICY_DIGEST,
-    byte_size=121416,
+    byte_size=121292,
 )
 
 

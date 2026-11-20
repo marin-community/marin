@@ -9,7 +9,7 @@
       "model": "zai-org/GLM-5.3-Flash",
       "base_url": "https://api.together.ai/v1",
       "temperature": 0.0,
-      "top_p": 1.0,
+      "top_p": 0.95,
       "reasoning_effort": "low",
       "token_budgets": [
         128,
@@ -22,7 +22,8 @@
       "bixbench_max_tokens": 1024,
       "bixbench_request_timeout": 600.0,
       "bixbench_transport_attempts": 3,
-      "credential": "gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/1"
+      "credential": "gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/1",
+      "bixbench_temperature": 1.0
     },
     "ray_timeouts": {
       "cluster_join_timeout": 60
@@ -99,7 +100,6 @@
             "override_setup_timeout_sec": 360
           },
           "cleanup_timeout": 60,
-          "judge_model": "zai-org/GLM-5.3-Flash",
           "run_timeout": 1800,
           "service_shutdown_timeout": 60,
           "service_startup_timeout": 60,
@@ -107,9 +107,7 @@
           "trial_reward_key": "reward"
         }
       },
-      "extra_env": {
-        "JUDGE_BASE_URL": "https://api.together.ai/v1"
-      },
+      "extra_env": {},
       "context_budget": {
         "request_window_tokens": 1024,
         "max_new_tokens_per_turn": 128,
@@ -118,7 +116,6 @@
       "environment": {
         "task_sessions": {
           "remote_judge": {
-            "base_url": "https://api.together.ai/v1",
             "api_key_env": "JUDGE_API_KEY"
           }
         }
