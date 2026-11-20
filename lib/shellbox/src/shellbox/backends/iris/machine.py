@@ -6,6 +6,7 @@
 import ast
 import asyncio
 import base64
+import errno
 import math
 import re
 import shlex
@@ -57,6 +58,8 @@ from shellbox.machine import (
 # argument at 128 KiB (MAX_ARG_STRLEN). An upload chunk travels base64-encoded inside one
 # `sh -c` script, so 64 KiB of data (87,384 encoded bytes) leaves room for the target path.
 TRANSFER_CHUNK_BYTES = 64 * 1024
+# Exit statuses of the path probe, above those sh and coreutils use for their own failures.
+PATH_IS_DIRECTORY, PATH_MISSING = 101, 102
 DEFAULT_MEMORY_MB = 2048
 DEFAULT_DISK_MB = 10240
 DEFAULT_SCHEDULING_TIMEOUT = 600
@@ -276,16 +279,36 @@ class IrisMachine:
             raise RuntimeError(f"Iris command failed ({response.exit_code}): {response.stderr or response.stdout}")
         return response.stdout
 
-    async def _upload_bytes(self, data: bytes, target: str) -> None:
+    async def _path_checked(self, path: str, script: str, *, exists: bool) -> str:
+        """Run ``script`` on a caller-chosen ``path``; a failure the path causes raises ``OSError``."""
+        quoted = shlex.quote(path)
+        probe = f"test -d {quoted} && exit {PATH_IS_DIRECTORY}; "
+        if exists:
+            probe += f"test -e {quoted} || exit {PATH_MISSING}; "
+        response = await self._script(probe + script)
+        if response.exit_code == PATH_IS_DIRECTORY:
+            raise IsADirectoryError(errno.EISDIR, "Is a directory", path)
+        if response.exit_code == PATH_MISSING:
+            raise FileNotFoundError(errno.ENOENT, "No such file or directory", path)
+        if response.exit_code:
+            raise OSError(f"Cannot access {path} ({response.exit_code}): {response.stderr or response.stdout}")
+        return response.stdout
+
+    async def _upload_bytes(self, data: bytes, target: str, *, caller_path: bool = False) -> None:
         quoted = shlex.quote(target)
-        await self._checked(f"mkdir -p {shlex.quote(str(PurePosixPath(target).parent))} && : > {quoted}")
+        create = f"mkdir -p {shlex.quote(str(PurePosixPath(target).parent))} && : > {quoted}"
+        await (self._path_checked(target, create, exists=False) if caller_path else self._checked(create))
         for offset in range(0, len(data), TRANSFER_CHUNK_BYTES):
             encoded = base64.b64encode(data[offset : offset + TRANSFER_CHUNK_BYTES]).decode("ascii")
             await self._checked(f"printf '%s' {encoded} | base64 -d >> {quoted}")
 
-    async def _download_bytes(self, source: str, limit: int | None = None) -> tuple[bytes, bool]:
+    async def _download_bytes(
+        self, source: str, limit: int | None = None, *, caller_path: bool = False
+    ) -> tuple[bytes, bool]:
         quoted = shlex.quote(source)
-        size = int((await self._checked(f"wc -c < {quoted}")).strip())
+        measure = f"wc -c < {quoted}"
+        measured = self._path_checked(source, measure, exists=True) if caller_path else self._checked(measure)
+        size = int((await measured).strip())
         count = size if limit is None else min(size, limit)
         chunks = []
         for offset in range(0, count, TRANSFER_CHUNK_BYTES):
@@ -377,7 +400,7 @@ class IrisMachine:
             finally:
                 await self._script(f"rm -f {shlex.quote(remote_archive)}")
             return
-        await self._upload_bytes(source.read_bytes(), target)
+        await self._upload_bytes(source.read_bytes(), target, caller_path=True)
 
     async def download(self, source: str, target: Path) -> None:
         probe = await self._script(f"test -d {shlex.quote(source)}")
@@ -394,7 +417,7 @@ class IrisMachine:
             finally:
                 await self._script(f"rm -f {shlex.quote(remote_archive)}")
             return
-        data, _ = await self._download_bytes(source)
+        data, _ = await self._download_bytes(source, caller_path=True)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
 

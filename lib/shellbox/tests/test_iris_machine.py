@@ -191,6 +191,32 @@ def test_iris_binary_command_and_file_round_trip(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
+def test_paths_the_caller_chose_fail_as_os_errors_and_transport_failures_do_not(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        machine, _ = local_machine(tmp_path)
+        source = tmp_path / "input.txt"
+        source.write_text("payload")
+        (tmp_path / "directory").mkdir()
+        try:
+            with pytest.raises(FileNotFoundError):
+                await machine.download(str(tmp_path / "missing.txt"), tmp_path / "out.txt")
+            with pytest.raises(IsADirectoryError):
+                await machine.upload(source, str(tmp_path / "directory"))
+            with pytest.raises(OSError, match="Cannot access"):
+                await machine.upload(source, str(tmp_path / "input.txt" / "child"))
+        finally:
+            await machine.close()
+        unreachable, _ = local_machine(tmp_path, FailingRpc())
+        try:
+            with pytest.raises(RuntimeError) as failure:
+                await unreachable.download(str(source), tmp_path / "out.txt")
+        finally:
+            await unreachable.close()
+        assert not isinstance(failure.value, OSError)
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("private_credentials", [False, True])
 def test_factory_uses_typed_iris_states_and_cancels_the_job(tmp_path, monkeypatch, caplog, private_credentials):
     task_id = JobName.from_wire("/fixture/sandbox/0")
