@@ -13,6 +13,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
+from finestore.rl.status_taxonomy import DataRestriction
 from marin.execution.lazy import ArtifactStep, run
 from taskcompendium.convert.answers import numeric_answer_task
 from taskcompendium.models import Source
@@ -28,7 +29,7 @@ from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.driver import main
 from experiments.post_training.task_curation.embedding import DescriptionEndpoint, curation_embedding_pipeline
 from experiments.post_training.task_curation.local import artifact_prefix
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 from experiments.post_training.task_curriculum.models import CurriculumCatalog
 
 
@@ -204,7 +205,15 @@ def test_curriculum_edit_reuses_task_artifacts_and_embeds_only_changed_anchor(tm
                     sample_size=None,
                     seed=0,
                     inventory=[
-                        RlDataSource(info=SourceInfo(id="source", title="Fixture", origin="fixture")).declaration
+                        RlDataSource(
+                            info=SourceInfo(
+                                data_restriction=DataRestriction.OPEN,
+                                upstream_dataset="source",
+                                upstream_name="source",
+                                build_path="test",
+                                origin=SourceOrigin.MARIN,
+                            )
+                        ).declaration
                     ],
                 )
             )
@@ -342,11 +351,36 @@ def test_publication_adds_declared_inventory_sources_without_placement(tmp_path,
             sample_size=None,
             seed=0,
             inventory=[
-                RlDataSource(info=SourceInfo(id="source", title="Fixture", origin="fixture")).declaration,
                 RlDataSource(
-                    info=SourceInfo(id="Pointer:release", title="Pointer", origin="fixture", count=7)
+                    info=SourceInfo(
+                        data_restriction=DataRestriction.OPEN,
+                        upstream_dataset="source",
+                        upstream_name="source",
+                        build_path="test",
+                        origin=SourceOrigin.MARIN,
+                    )
                 ).declaration,
-                RlDataSource(info=SourceInfo(id="Pointer:no-count", title="NoCount", origin="fixture")).declaration,
+                RlDataSource(
+                    info=SourceInfo(
+                        data_restriction=DataRestriction.OPEN,
+                        id="Marin:release",
+                        upstream_dataset="release",
+                        upstream_name="Pointer",
+                        build_path="test",
+                        origin=SourceOrigin.MARIN,
+                        count=7,
+                    )
+                ).declaration,
+                RlDataSource(
+                    info=SourceInfo(
+                        data_restriction=DataRestriction.OPEN,
+                        id="Marin:no-count",
+                        upstream_dataset="no-count",
+                        upstream_name="NoCount",
+                        build_path="test",
+                        origin=SourceOrigin.MARIN,
+                    )
+                ).declaration,
             ],
         )
         built = run(stages.publication, max_concurrent=1)[0]

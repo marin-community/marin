@@ -14,6 +14,7 @@ import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
 from finestore.reader import ReadView
+from finestore.rl.status_taxonomy import DataRestriction
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
 from taskcompendium.convert.answers import answer_task, exact_answer_task
@@ -32,7 +33,7 @@ from experiments.post_training.task_curation.datasets.tasktrove import calendar
 from experiments.post_training.task_curation.driver import main as curation_main
 from experiments.post_training.task_curation.local import artifact_prefix, run_local_steps
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, planned_lock_url, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 from experiments.post_training.task_curation.tasktrove.compare import source_file_path
 
 
@@ -45,7 +46,16 @@ def run_recipes(pipelines, input_root, output_root, *, inputs, max_workers, cach
     )
     sources = {
         name: RlDataSource(
-            pipeline=process_rows, info=SourceInfo(id=f"fixture:{name}", title=name, origin="fixture"), config=pipeline
+            pipeline=process_rows,
+            info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
+                id=f"Marin:{name}",
+                upstream_dataset=name,
+                upstream_name=name,
+                build_path="test",
+                origin=SourceOrigin.MARIN,
+            ),
+            config=pipeline,
         )
         for name, pipeline in pipelines.items()
     }

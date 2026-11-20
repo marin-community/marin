@@ -395,8 +395,20 @@ ArtifactSteps.
 ## Declarations
 
 An `RlDataSource` has `info`, a typed `config` and an optional `pipeline`.
-`SourceInfo` requires a stable `id`, display `title` and `origin`; it adds family,
-search tags, notes and an optional input-row count. The `deprecated` tag marks a
+`SourceInfo` generates `id` and `title` from its upstream identity keys:
+`id` is `<origin>:<upstream_dataset>[/<subset>][@<variant>]` and `title` is
+`<upstream_name> · <subset> · <variant>`, omitting absent parts. `origin` is a
+`SourceOrigin` naming the upstream provider; internal campaigns and pipelines
+belong in `build_path`. A declared historical ID resolves through the permanent
+alias table (`infra/marina/apps/rl_data_catalog/server/source_identity.py`) and
+must match its generated identity; new declarations must match their generated
+identities directly. Every configured source states its `data_restriction` tier
+explicitly; `PRIVATE_ALWAYS` keeps the source's content in its private store,
+and the declaration and every derived artifact inherit it. `current_release`
+pins the exact release consumed for training, separately from the upstream
+provenance URL, and `license_receipt` references the stage-0 license resolution
+that ingest and admission rest on (`RlDataSource.require_license` fails closed
+on it). The `deprecated` tag marks a
 source `Deprecated` in the catalog (overriding `excluded`), and its notes carry
 the deprecation reason. A source without a `pipeline` is `Inventory`: it stays
 visible in the Atlas with its evidence, but it is never admitted to selection and
@@ -1029,3 +1041,30 @@ grader as unsupported on Daytona, independently of the task machine's image.
 A mixed deployment may run the agent on Daytona and the grader locally, but
 that does not qualify both machine slots for Daytona. CalibForge declares an
 image for its grader.
+
+## Method tags and dataset variants
+
+Store method tags on pinned dataset variants, registered in
+`experiments/post_training/task_curation/datasets/method_variants.json`. The
+loader (`method_variants.py`) validates each registered variant against its own
+producer receipts: an SFT variant must carry a completed Datakit preparation
+receipt whose bytes hash-match the registered reference, and a converted variant
+must carry the producer's own `ConversionReceipt`, re-read from storage, with a
+matching parent and output. Variants are separate pinned records with their own
+receipts and lineage; keep parent and child variants separate.
+
+Two independent variants of one source are two records under one `source_id`: a
+filtered child declares its conversion lineage back to the environment variant,
+and an SFT variant declares its preparation receipt. Neither inherits the
+other's tag. A curriculum entry selects one variant explicitly (`name@variant`),
+so one entry can sample the filtered child while another samples the SFT
+conversion of the same source.
+
+The Atlas Method column shows the union over a source's variants; Evidence lists
+each variant and its receipt. A source without a completed Datakit SFT receipt
+shows RL only. Do not infer SFT qualification from mix membership. RL-to-SFT
+conversion is its own workflow: the prompt/response reformatting creates a new
+child and row lineage from pinned existing responses, and the conversion receipt
+grants no method tag. Prepare and register the child with Datakit before
+assigning SFT.
+
