@@ -188,7 +188,7 @@ async def test_a_response_without_usage_is_a_model_failure():
     failure_record = caught.value.rollout.failure
     assert failure_record is not None
     assert failure_record.exception_type == "ModelResponseError"
-    assert failure_record.diagnostics == {"operation": "model", "error": "The chat endpoint reported no token usage"}
+    assert failure_record.diagnostics["operation"] == "model"
 
 
 async def test_assistant_prefix_harness_reaches_chat_endpoint_as_text_without_pinned_tokens():

@@ -9,12 +9,12 @@ import json
 from collections.abc import Mapping, Sequence
 
 from pydantic import BaseModel
+from rigging.task_errors import ErrorIdentity
 from rolloutengine.models import (
     ConversationRecord,
     GradedRollout,
     ModelTurn,
     Rollout,
-    RolloutFailure,
     RolloutStep,
     Transition,
 )
@@ -95,14 +95,14 @@ ROLLOUTS = [
         Outcome.GRADED,
         0.0,
         {"role": "assistant", "content": "1"},
-        failure=RolloutFailure("ConnectionError", {FAILURE_OPERATION: "model"}),
+        failure=ErrorIdentity(exception_type="ConnectionError", diagnostics={FAILURE_OPERATION: "model"}),
     ),
     evaluated(
         "deadline",
         Outcome.UNAVAILABLE,
         None,
         {"role": "assistant", "content": "Let me count: one, two, three"},
-        failure=RolloutFailure("TimeoutError", {FAILURE_OPERATION: "attempt"}),
+        failure=ErrorIdentity(exception_type="TimeoutError", diagnostics={FAILURE_OPERATION: "attempt"}),
     ),
 ]
 

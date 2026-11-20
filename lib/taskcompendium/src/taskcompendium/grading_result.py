@@ -5,9 +5,17 @@
 
 from dataclasses import dataclass, field
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Any
 
-from rigging.task_errors import ErrorIdentity
+from rigging.task_errors import (
+    REWARD_FILE_EMPTY_ERROR,
+    REWARD_FILE_NOT_FOUND_ERROR,
+    VERIFIER_OUTPUT_PARSE_ERROR,
+    VERIFIER_RUNTIME_ERROR,
+    VERIFIER_TIMEOUT_ERROR,
+    ErrorIdentity,
+)
 
 
 class Outcome(StrEnum):
@@ -41,13 +49,15 @@ class GradeResult:
     error_identity: ErrorIdentity | None = None
 
 
-_GRADING_ERROR_TYPES = {
-    GradingFailure.TIMEOUT: "VerifierTimeoutError",
-    GradingFailure.MISSING_REWARD: "RewardFileNotFoundError",
-    GradingFailure.EMPTY_REWARD: "RewardFileEmptyError",
-    GradingFailure.INVALID_REWARD: "VerifierOutputParseError",
-    GradingFailure.EXECUTION: "VerifierRuntimeError",
-}
+_GRADING_ERROR_TYPES = MappingProxyType(
+    {
+        GradingFailure.TIMEOUT: VERIFIER_TIMEOUT_ERROR,
+        GradingFailure.MISSING_REWARD: REWARD_FILE_NOT_FOUND_ERROR,
+        GradingFailure.EMPTY_REWARD: REWARD_FILE_EMPTY_ERROR,
+        GradingFailure.INVALID_REWARD: VERIFIER_OUTPUT_PARSE_ERROR,
+        GradingFailure.EXECUTION: VERIFIER_RUNTIME_ERROR,
+    }
+)
 
 
 def grading_failure_identity(grade: GradeResult) -> ErrorIdentity | None:
@@ -56,4 +66,4 @@ def grading_failure_identity(grade: GradeResult) -> ErrorIdentity | None:
         return grade.error_identity
     if grade.status is not Outcome.INFRA_ERROR:
         return None
-    return ErrorIdentity(exception_type=_GRADING_ERROR_TYPES.get(grade.failure, "VerifierRuntimeError"))
+    return ErrorIdentity(exception_type=_GRADING_ERROR_TYPES.get(grade.failure, VERIFIER_RUNTIME_ERROR))

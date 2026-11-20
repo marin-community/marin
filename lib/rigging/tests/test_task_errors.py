@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from http import HTTPStatus
 from pathlib import Path
 
 import httpx
@@ -25,7 +26,12 @@ class ProviderFailure(RuntimeError):
 
 @pytest.mark.parametrize(
     "status, expected",
-    [(503, RetryDisposition.TRANSIENT), (401, RetryDisposition.PERMANENT), (409, RetryDisposition.UNKNOWN)],
+    [
+        (503, RetryDisposition.TRANSIENT),
+        (HTTPStatus.UNAUTHORIZED, RetryDisposition.PERMANENT),
+        (401, RetryDisposition.PERMANENT),
+        (409, RetryDisposition.UNKNOWN),
+    ],
 )
 def test_wrapped_provider_identity_preserves_retryability_in_json(status, expected):
     provider = ProviderFailure(status)
@@ -53,3 +59,17 @@ def test_provider_hidden_transport_cause_is_retryable_without_persisting_request
     assert failure.cause_type == "ConnectError"
     assert failure.retry_disposition is RetryDisposition.TRANSIENT
     assert "request capability" not in failure.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    "error, expected",
+    [
+        (httpx.ConnectError("connection lost"), RetryDisposition.TRANSIENT),
+        (httpx.UnsupportedProtocol("invalid request scheme"), RetryDisposition.PERMANENT),
+        (RuntimeError("unknown failure"), RetryDisposition.UNKNOWN),
+    ],
+)
+def test_transport_identity_distinguishes_connection_and_request_failures(error, expected):
+    wrapped = RuntimeError("task machine failed")
+    wrapped.__cause__ = error
+    assert exception_identity(wrapped).retry_disposition is expected

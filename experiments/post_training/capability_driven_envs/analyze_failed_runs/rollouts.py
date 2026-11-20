@@ -15,7 +15,7 @@ from taskcompendium.models import TaskSpec, TextMessage
 
 MAX_TASK_CHARS = 300
 FAILURE_OPERATION = "operation"
-"""The key of ``RolloutFailure.diagnostics`` that names the interrupted operation, as rolloutengine records it."""
+"""The key of ``ErrorIdentity.diagnostics`` that names the interrupted operation, as rolloutengine records it."""
 POLICY_INTERRUPTIONS = frozenset({RolloutOperation.ATTEMPT, RolloutOperation.ADVANCE})
 """The interruptions that the policy can cause: a slow or looping policy runs past the attempt deadline, and a bad
 tool call can stop the harness after a model turn."""

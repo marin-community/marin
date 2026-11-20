@@ -10,7 +10,6 @@ from rigging.task_errors import ErrorCategory, error_category, errors_by_categor
 from skyrl_train.error_treatment import ErrorTreatment
 
 
-AGENT_TIMEOUT_ERROR = "AgentTimeoutError"
 PASSTHROUGH_WITHOUT_LOGPROBS_ERROR = "PassthroughWithoutLogprobs"
 
 

@@ -82,7 +82,7 @@ from skyrl_train.rollouts.training_record import (
     TrainingRollout,
     reject_malformed_reasoning,
     training_rollout,
-    grading_failure,
+    rollout_with_verifier_failure,
 )
 from skyrl_train.task_error_handling import ErrorHandlingConfig
 from skyrl_train.trajectory_runners.types import (
@@ -223,6 +223,45 @@ async def _model_turn(
     )
 
 
+def _machine_diagnostics(error: TaskMachineError, status_code: int | None) -> dict[str, Any]:
+    """Return only provider metadata allowed in rollout diagnostics."""
+    assert error.__cause__ is not None
+    diagnostics: dict[str, Any] = {}
+    diagnostics["cause_error_type"] = type(error.__cause__).__name__
+    diagnostics["machine_operation"] = error.operation.value
+    provider_error = error.__cause__
+    if isinstance(provider_error, DaytonaError):
+        if status_code is not None:
+            diagnostics["provider_status_code"] = status_code
+        rate_limits = {
+            name.lower(): int(value)
+            for name, value in (provider_error.headers or {}).items()
+            if name.lower() in DAYTONA_RATE_LIMIT_HEADERS
+            and isinstance(value, str)
+            and value.isascii()
+            and value.isdecimal()
+            and len(value) <= 12
+        }
+        if rate_limits:
+            diagnostics["provider_rate_limits"] = rate_limits
+        # This identifies an SDK call, not the HTTP phase of a compound operation.
+        diagnostics["provider_sdk_call"] = "unknown"
+        nested_error: BaseException | None = provider_error
+        seen = set()
+        while nested_error is not None and id(nested_error) not in seen:
+            seen.add(id(nested_error))
+            traceback = nested_error.__traceback__
+            while traceback is not None:
+                frame = traceback.tb_frame
+                call = (frame.f_globals.get("__name__"), frame.f_code.co_name)
+                if call in DAYTONA_DIAGNOSTIC_CALLS:
+                    diagnostics["provider_sdk_call"] = ".".join(call)
+                traceback = traceback.tb_next
+            # The SDK translates HTTP errors with `raise ... from None`.
+            nested_error = nested_error.__cause__ or nested_error.__context__
+    return diagnostics
+
+
 def _failed_rollout(
     interruption: GradedRolloutInterrupted,
     lowered: TaskRolloutSpec,
@@ -241,38 +280,7 @@ def _failed_rollout(
     exception_type = type(error).__name__
     diagnostics = {"operation": interruption.operation.value, "timed_out": isinstance(error, TimeoutError)}
     if isinstance(error, TaskMachineError) and error.__cause__ is not None:
-        diagnostics["cause_error_type"] = type(error.__cause__).__name__
-        diagnostics["machine_operation"] = error.operation.value
-        provider_error = error.__cause__
-        if isinstance(provider_error, DaytonaError):
-            if failure.provider_status_code is not None:
-                diagnostics["provider_status_code"] = failure.provider_status_code
-            rate_limits = {
-                name.lower(): int(value)
-                for name, value in (provider_error.headers or {}).items()
-                if name.lower() in DAYTONA_RATE_LIMIT_HEADERS
-                and isinstance(value, str)
-                and value.isascii()
-                and value.isdecimal()
-                and len(value) <= 12
-            }
-            if rate_limits:
-                diagnostics["provider_rate_limits"] = rate_limits
-            # This identifies an SDK call, not the HTTP phase of a compound operation.
-            diagnostics["provider_sdk_call"] = "unknown"
-            nested_error: BaseException | None = provider_error
-            seen = set()
-            while nested_error is not None and id(nested_error) not in seen:
-                seen.add(id(nested_error))
-                traceback = nested_error.__traceback__
-                while traceback is not None:
-                    frame = traceback.tb_frame
-                    call = (frame.f_globals.get("__name__"), frame.f_code.co_name)
-                    if call in DAYTONA_DIAGNOSTIC_CALLS:
-                        diagnostics["provider_sdk_call"] = ".".join(call)
-                    traceback = traceback.tb_next
-                # The SDK translates HTTP errors with `raise ... from None`.
-                nested_error = nested_error.__cause__ or nested_error.__context__
+        diagnostics.update(_machine_diagnostics(error, failure.provider_status_code))
     if isinstance(error, TimeoutError):
         exception_type = {
             RolloutOperation.ATTEMPT: "TrialTimeoutError",
@@ -566,7 +574,7 @@ class TaskRolloutWorker:
                     )
                 if harbor is None:
                     return result
-                result = grading_failure(result)
+                result = rollout_with_verifier_failure(result)
                 delay = harbor.retry_delay(result.failure, retries)
                 if delay is None:
                     return replace(result, metrics={**result.metrics, "rollout_retries": float(retries)})

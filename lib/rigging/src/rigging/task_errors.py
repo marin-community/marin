@@ -7,11 +7,21 @@ Categories describe the source of a failure. Consumers choose training treatment
 separately from retry settings. Persisted exception names are stable identifiers.
 """
 
+from collections.abc import Mapping
 from enum import StrEnum
+from ssl import SSLCertVerificationError
+from types import MappingProxyType
 from typing import Any, Protocol, runtime_checkable
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
+
+AGENT_TIMEOUT_ERROR = "AgentTimeoutError"
+VERIFIER_TIMEOUT_ERROR = "VerifierTimeoutError"
+REWARD_FILE_NOT_FOUND_ERROR = "RewardFileNotFoundError"
+REWARD_FILE_EMPTY_ERROR = "RewardFileEmptyError"
+VERIFIER_OUTPUT_PARSE_ERROR = "VerifierOutputParseError"
+VERIFIER_RUNTIME_ERROR = "VerifierRuntimeError"
 
 
 class ErrorCategory(StrEnum):
@@ -23,74 +33,76 @@ class ErrorCategory(StrEnum):
     UNKNOWN = "unknown"
 
 
-_ERROR_CATEGORIES: dict[str, ErrorCategory] = {
-    # --- Task and context-management infrastructure ---
-    "TaskMachineError": ErrorCategory.INFRASTRUCTURE,
-    "TemplateError": ErrorCategory.INFRASTRUCTURE,
-    "ContextManagementInfrastructureError": ErrorCategory.INFRASTRUCTURE,
-    # --- Artifact persistence infrastructure ---
-    "ArtifactPersistenceError": ErrorCategory.INFRASTRUCTURE,
-    "ArtifactUploadTimeoutError": ErrorCategory.INFRASTRUCTURE,
-    "ArtifactWriteTimeoutError": ErrorCategory.INFRASTRUCTURE,
-    "ArtifactWriterBacklogError": ErrorCategory.INFRASTRUCTURE,
-    # --- Environment / sandbox infrastructure ---
-    "EnvironmentStartTimeoutError": ErrorCategory.INFRASTRUCTURE,
-    "TrialTimeoutError": ErrorCategory.INFRASTRUCTURE,
-    "PhaseCancellationError": ErrorCategory.INFRASTRUCTURE,
-    "RuntimeServiceError": ErrorCategory.INFRASTRUCTURE,
-    "RuntimeLogCollectionError": ErrorCategory.INFRASTRUCTURE,
-    "EnvironmentStopError": ErrorCategory.INFRASTRUCTURE,
-    "SandboxBuildFailedError": ErrorCategory.INFRASTRUCTURE,
-    "SandboxDiskFullError": ErrorCategory.INFRASTRUCTURE,
-    "ContainerRegistryThrottledError": ErrorCategory.INFRASTRUCTURE,
-    "SnapshotQuotaExceeded": ErrorCategory.INFRASTRUCTURE,
-    "HealthcheckError": ErrorCategory.INFRASTRUCTURE,
-    "DaytonaError": ErrorCategory.INFRASTRUCTURE,
-    "DaytonaConnectionError": ErrorCategory.INFRASTRUCTURE,
-    "DaytonaOutputUnavailable": ErrorCategory.INFRASTRUCTURE,
-    "DaytonaProcessError": ErrorCategory.INFRASTRUCTURE,
-    "DaytonaDockerSetupError": ErrorCategory.INFRASTRUCTURE,
-    "DaytonaSandboxStopError": ErrorCategory.INFRASTRUCTURE,
-    "BridgeOutageError": ErrorCategory.INFRASTRUCTURE,
-    "EnrootMemoryLimitExceededError": ErrorCategory.INFRASTRUCTURE,
-    "MissingExtraError": ErrorCategory.INFRASTRUCTURE,
-    # --- Agent lifecycle infrastructure (model never produced a real answer) ---
-    "AgentKilledBySignalError": ErrorCategory.INFRASTRUCTURE,
-    "AgentSetupTimeoutError": ErrorCategory.INFRASTRUCTURE,
-    "ModelAuthenticationError": ErrorCategory.INFRASTRUCTURE,
-    "ContextBudgetExceededError": ErrorCategory.INFRASTRUCTURE,
-    "LLMRequestTimeoutError": ErrorCategory.INFRASTRUCTURE,
-    "OpenAITransportConnectTimeoutError": ErrorCategory.INFRASTRUCTURE,
-    "InternalServerError": ErrorCategory.INFRASTRUCTURE,
-    "APIConnectionError": ErrorCategory.INFRASTRUCTURE,
-    "APITimeoutError": ErrorCategory.INFRASTRUCTURE,
-    "TmuxBatchProtocolError": ErrorCategory.INFRASTRUCTURE,
-    "TmuxCommandError": ErrorCategory.INFRASTRUCTURE,
-    "TmuxExecTimeoutError": ErrorCategory.INFRASTRUCTURE,
-    "TmuxSessionEndedError": ErrorCategory.INFRASTRUCTURE,
-    "Tau3RuntimeInfrastructureError": ErrorCategory.INFRASTRUCTURE,
-    # --- Verifier infrastructure ---
-    "DownloadVerifierDirError": ErrorCategory.INFRASTRUCTURE,
-    "RewardFileNotFoundError": ErrorCategory.INFRASTRUCTURE,
-    "RewardFileEmptyError": ErrorCategory.INFRASTRUCTURE,
-    "VerifierRuntimeError": ErrorCategory.INFRASTRUCTURE,
-    "VerifierOutputParseError": ErrorCategory.INFRASTRUCTURE,
-    "AddTestsDirError": ErrorCategory.INFRASTRUCTURE,
-    # --- Agent-attributable failures (reward zero) ---
-    "AgentTimeoutError": ErrorCategory.AGENT,
-    "AgentDiskFullError": ErrorCategory.AGENT,
-    "ContextLengthExceededError": ErrorCategory.AGENT,
-    "NonZeroAgentExitCodeError": ErrorCategory.AGENT,
-    "ModelInitiatedTmuxFailure": ErrorCategory.AGENT,
-    # --- Partial / real work; a verifier result may still be usable ---
-    "OutputLengthExceededError": ErrorCategory.PASSTHROUGH,
-    "TurnCapExhaustedError": ErrorCategory.PASSTHROUGH,
-    "MalformedModelResponseError": ErrorCategory.PASSTHROUGH,
-    # --- No safe default; force an explicit consumer decision ---
-    "TrialNotScoredError": ErrorCategory.UNKNOWN,
-    "VerificationNotCompletedError": ErrorCategory.UNKNOWN,
-    "VerifierTimeoutError": ErrorCategory.UNKNOWN,
-}
+_ERROR_CATEGORIES: Mapping[str, ErrorCategory] = MappingProxyType(
+    {
+        # --- Task and context-management infrastructure ---
+        "TaskMachineError": ErrorCategory.INFRASTRUCTURE,
+        "TemplateError": ErrorCategory.INFRASTRUCTURE,
+        "ContextManagementInfrastructureError": ErrorCategory.INFRASTRUCTURE,
+        # --- Artifact persistence infrastructure ---
+        "ArtifactPersistenceError": ErrorCategory.INFRASTRUCTURE,
+        "ArtifactUploadTimeoutError": ErrorCategory.INFRASTRUCTURE,
+        "ArtifactWriteTimeoutError": ErrorCategory.INFRASTRUCTURE,
+        "ArtifactWriterBacklogError": ErrorCategory.INFRASTRUCTURE,
+        # --- Environment / sandbox infrastructure ---
+        "EnvironmentStartTimeoutError": ErrorCategory.INFRASTRUCTURE,
+        "TrialTimeoutError": ErrorCategory.INFRASTRUCTURE,
+        "PhaseCancellationError": ErrorCategory.INFRASTRUCTURE,
+        "RuntimeServiceError": ErrorCategory.INFRASTRUCTURE,
+        "RuntimeLogCollectionError": ErrorCategory.INFRASTRUCTURE,
+        "EnvironmentStopError": ErrorCategory.INFRASTRUCTURE,
+        "SandboxBuildFailedError": ErrorCategory.INFRASTRUCTURE,
+        "SandboxDiskFullError": ErrorCategory.INFRASTRUCTURE,
+        "ContainerRegistryThrottledError": ErrorCategory.INFRASTRUCTURE,
+        "SnapshotQuotaExceeded": ErrorCategory.INFRASTRUCTURE,
+        "HealthcheckError": ErrorCategory.INFRASTRUCTURE,
+        "DaytonaError": ErrorCategory.INFRASTRUCTURE,
+        "DaytonaConnectionError": ErrorCategory.INFRASTRUCTURE,
+        "DaytonaOutputUnavailable": ErrorCategory.INFRASTRUCTURE,
+        "DaytonaProcessError": ErrorCategory.INFRASTRUCTURE,
+        "DaytonaDockerSetupError": ErrorCategory.INFRASTRUCTURE,
+        "DaytonaSandboxStopError": ErrorCategory.INFRASTRUCTURE,
+        "BridgeOutageError": ErrorCategory.INFRASTRUCTURE,
+        "EnrootMemoryLimitExceededError": ErrorCategory.INFRASTRUCTURE,
+        "MissingExtraError": ErrorCategory.INFRASTRUCTURE,
+        # --- Agent lifecycle infrastructure (model never produced a real answer) ---
+        "AgentKilledBySignalError": ErrorCategory.INFRASTRUCTURE,
+        "AgentSetupTimeoutError": ErrorCategory.INFRASTRUCTURE,
+        "ModelAuthenticationError": ErrorCategory.INFRASTRUCTURE,
+        "ContextBudgetExceededError": ErrorCategory.INFRASTRUCTURE,
+        "LLMRequestTimeoutError": ErrorCategory.INFRASTRUCTURE,
+        "OpenAITransportConnectTimeoutError": ErrorCategory.INFRASTRUCTURE,
+        "InternalServerError": ErrorCategory.INFRASTRUCTURE,
+        "APIConnectionError": ErrorCategory.INFRASTRUCTURE,
+        "APITimeoutError": ErrorCategory.INFRASTRUCTURE,
+        "TmuxBatchProtocolError": ErrorCategory.INFRASTRUCTURE,
+        "TmuxCommandError": ErrorCategory.INFRASTRUCTURE,
+        "TmuxExecTimeoutError": ErrorCategory.INFRASTRUCTURE,
+        "TmuxSessionEndedError": ErrorCategory.INFRASTRUCTURE,
+        "Tau3RuntimeInfrastructureError": ErrorCategory.INFRASTRUCTURE,
+        # --- Verifier infrastructure ---
+        "DownloadVerifierDirError": ErrorCategory.INFRASTRUCTURE,
+        REWARD_FILE_NOT_FOUND_ERROR: ErrorCategory.INFRASTRUCTURE,
+        REWARD_FILE_EMPTY_ERROR: ErrorCategory.INFRASTRUCTURE,
+        VERIFIER_RUNTIME_ERROR: ErrorCategory.INFRASTRUCTURE,
+        VERIFIER_OUTPUT_PARSE_ERROR: ErrorCategory.INFRASTRUCTURE,
+        "AddTestsDirError": ErrorCategory.INFRASTRUCTURE,
+        # --- Agent-attributable failures (reward zero) ---
+        AGENT_TIMEOUT_ERROR: ErrorCategory.AGENT,
+        "AgentDiskFullError": ErrorCategory.AGENT,
+        "ContextLengthExceededError": ErrorCategory.AGENT,
+        "NonZeroAgentExitCodeError": ErrorCategory.AGENT,
+        "ModelInitiatedTmuxFailure": ErrorCategory.AGENT,
+        # --- Partial / real work; a verifier result may still be usable ---
+        "OutputLengthExceededError": ErrorCategory.PASSTHROUGH,
+        "TurnCapExhaustedError": ErrorCategory.PASSTHROUGH,
+        "MalformedModelResponseError": ErrorCategory.PASSTHROUGH,
+        # --- No safe default; force an explicit consumer decision ---
+        "TrialNotScoredError": ErrorCategory.UNKNOWN,
+        "VerificationNotCompletedError": ErrorCategory.UNKNOWN,
+        VERIFIER_TIMEOUT_ERROR: ErrorCategory.UNKNOWN,
+    }
+)
 
 # Exception types whose on-disk trial result should be RE-RUN on a fresh
 # ``harbor jobs resume`` (a whole new job invocation), rather than kept as a
@@ -176,11 +188,11 @@ class RetrySettings(BaseModel):
     include_exceptions: set[str] | None = None
     exclude_exceptions: set[str] | None = Field(
         default_factory=lambda: {
-            "AgentTimeoutError",
-            "VerifierTimeoutError",
-            "RewardFileNotFoundError",
-            "RewardFileEmptyError",
-            "VerifierOutputParseError",
+            AGENT_TIMEOUT_ERROR,
+            VERIFIER_TIMEOUT_ERROR,
+            REWARD_FILE_NOT_FOUND_ERROR,
+            REWARD_FILE_EMPTY_ERROR,
+            VERIFIER_OUTPUT_PARSE_ERROR,
         }
     )
     wait_multiplier: float = 1.0
@@ -212,7 +224,7 @@ class ErrorIdentity(BaseModel):
 
 
 _TRANSIENT_HTTP_STATUS = frozenset({408, 429, 502, 503, 504})
-_PERMANENT_HTTP_STATUS = frozenset({400, 401, 403, 404, 405, 410, 422})
+_PERMANENT_HTTP_STATUS = frozenset({400, 401, 403, 405, 422})
 
 
 def http_retry_disposition(status_code: int | None) -> RetryDisposition:
@@ -243,16 +255,30 @@ def exception_identity(error: BaseException, *, operation: str | None = None) ->
         seen.add(id(current))
         if isinstance(current, HttpStatusError):
             status = current.status_code
-            if type(status) is int and 100 <= status <= 599:
-                status_code = status
+            if isinstance(status, int) and 100 <= status <= 599:
+                status_code = int(status)
                 disposition = http_retry_disposition(status)
                 break
             # SDKs can translate transport exceptions with `raise ... from None`.
             current = current.__cause__ or current.__context__
             continue
-        if isinstance(current, (TimeoutError, ConnectionError, httpx.TransportError)):
-            disposition = RetryDisposition.TRANSIENT
+        if isinstance(
+            current,
+            (
+                PermissionError,
+                FileNotFoundError,
+                SSLCertVerificationError,
+                httpx.LocalProtocolError,
+                httpx.UnsupportedProtocol,
+            ),
+        ):
+            disposition = RetryDisposition.PERMANENT
             break
+        if isinstance(
+            current,
+            (TimeoutError, ConnectionError, httpx.NetworkError, httpx.TimeoutException, httpx.RemoteProtocolError),
+        ):
+            disposition = RetryDisposition.TRANSIENT
         current = current.__cause__
     return ErrorIdentity(
         exception_type=type(error).__name__,

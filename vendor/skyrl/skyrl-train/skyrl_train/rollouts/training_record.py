@@ -142,7 +142,7 @@ def reject_malformed_reasoning(rollout: TrainingRollout) -> TrainingRollout:
     return replace(rollout, grade=grade, steps=steps)
 
 
-def grading_failure(rollout: TrainingRollout) -> TrainingRollout:
+def rollout_with_verifier_failure(rollout: TrainingRollout) -> TrainingRollout:
     """Retain an attempt's failure or attach the verifier's shared identity."""
     if rollout.failure is not None:
         return rollout
