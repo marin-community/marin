@@ -71,7 +71,7 @@ It imports terminal attempts by their native keys. A repeated import leaves
 the existing snapshot intact. A failed import remains eligible on the next tick.
 
 The dashboard prefers the trainer's `elapsed_excluding_eval_seconds` from the
-attempt report in CoreWeave. It falls back to coordinator wall time minus both
+attempt's `trainer_timing.json` in CoreWeave. It falls back to coordinator wall time minus both
 validation durations, then to unadjusted coordinator wall time. The timing
 definition is part of the frontier comparison key. Runs with only unadjusted
 wall time or mismatched evaluation identities stay unranked. Historical rows

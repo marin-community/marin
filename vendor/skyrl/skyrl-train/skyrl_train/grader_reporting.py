@@ -122,13 +122,11 @@ class GraderStats:
         return rows
 
 
-type GraderReportSection = Literal[
-    "training", "evaluation", "evaluation_metadata", "evaluation_duration_seconds", "timing"
-]
+type GraderReportSection = Literal["training", "evaluation", "evaluation_metadata", "evaluation_duration_seconds"]
 
 
 def write_grader_report(export_path: str, key: str, sections: Mapping[GraderReportSection, object]) -> None:
-    """Update one record in the attempt's grader report."""
+    """Update the run report for one evaluation step or training attempt."""
     path = join_resource_path(export_path, "grader_report.json")
     try:
         report = json.loads(io.read_bytes(path))

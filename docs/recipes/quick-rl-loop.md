@@ -138,11 +138,12 @@ rollouts that entered this phase. For an individual eval response, check
 `verification.diagnostics` in the per-dataset JSONL.
 
 The [RL iteration progress dashboard](https://applets.marina.oa.dev/a/6c971887-1e22-45b1-9dcb-dd775829df57/)
-imports terminal attempts automatically from the attempt report in object storage.
-Select a run or chart point to open its grader stats. The dashboard prefers the
-trainer's `elapsed_excluding_eval_seconds` and falls back to the Iris coordinator's
-wall time, with validation subtracted when both validation durations are available.
-Imports run every ten minutes.
+imports terminal attempts automatically from object storage. Select a run or chart
+point to open its grader stats. When SkyRL logs `elapsed_excluding_eval_seconds`,
+the launcher saves it beside the grader report as `trainer_timing.json`. The
+dashboard prefers that value and falls back to Iris coordinator wall time, with
+validation subtracted when both validation durations are available. Imports run
+every ten minutes.
 
 ## Compare the iteration
 
@@ -155,11 +156,8 @@ optimizer-update counts, finite metrics, initial/final attempted and scored
 counts and native checkpoint metadata; check the completed HF export only when requested.
 A missing verifier result is an evaluation error, not a wrong answer; report coverage with scores.
 
-Record the source revision, selection identity, initializer, and run version.
-Use `elapsed_excluding_eval_seconds` from the trainer completion log or the
-grader report. It covers trainer setup through shutdown and subtracts the time
-from every evaluation. Iris queueing and provisioning happen before this timer
-starts. Compare runs using the same timing definition. Hold the validation
+Record the source revision, selection identity, initializer, run version and
+elapsed submission-to-completion time with each comparison. Hold the validation
 panel fixed and change one recipe choice at a time. Reuse the published data for
 training-only changes; produce a new selection version when changing tasks or
 sampling. Update this page and the checked-in recipe when adopting a better

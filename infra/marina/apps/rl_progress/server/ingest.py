@@ -26,6 +26,7 @@ from sqlalchemy.engine import Engine
 INBOX = "s3://marin-us-east-02a/marin/rl-data/quick-loop-dashboard/v1"
 RUN_ROOT = re.compile(r"s3://marin-us-east-02a/marin/users/[\w.-]+/checkpoints/snowball-inventory/[\w.-]+")
 EVIDENCE_LIMIT = 2 * 1024 * 1024
+COORDINATOR_WALL_TIME = "coordinator_submission_to_terminal"
 logger = logging.getLogger(__name__)
 
 
@@ -115,7 +116,8 @@ def terminal_record(entry: dict, job: job_pb2.JobStatus) -> dict:
     native = terminal.get("result") or {}
     has_current_manifest = native.get("run_id") == entry["run_id"] and native.get("attempt_id") == attempt_id
     succeeded = job.state == job_pb2.JOB_STATE_SUCCEEDED and has_current_manifest and native["state"] == "succeeded"
-    grader_uri = root / "exports" / "grader_reports" / attempt_id / "grader_report.json"
+    report_dir = root / "exports" / "grader_reports" / attempt_id
+    grader_uri = report_dir / "grader_report.json"
     grader_report = read_object(grader_uri)
     baseline = _evaluation_measurement(grader_report or {}, 0)
     final = _evaluation_measurement(grader_report or {}, int(entry["expected_step"]))
@@ -128,8 +130,14 @@ def terminal_record(entry: dict, job: job_pb2.JobStatus) -> dict:
         baseline.duration + final.duration if baseline.duration is not None and final.duration is not None else None
     )
     adjusted = wall - validation if validation is not None and wall > validation else None
-    trainer_elapsed = (grader_report or {}).get("timing", {}).get("elapsed_excluding_eval_seconds")
-    if type(trainer_elapsed) in (int, float) and math.isfinite(trainer_elapsed) and trainer_elapsed > 0:
+    trainer_timing = read_object(report_dir / "trainer_timing.json") or {}
+    trainer_elapsed = trainer_timing.get("elapsed_excluding_eval_seconds")
+    if (
+        isinstance(trainer_elapsed, int | float)
+        and not isinstance(trainer_elapsed, bool)
+        and math.isfinite(trainer_elapsed)
+        and trainer_elapsed > 0
+    ):
         elapsed = trainer_elapsed
         timing_scope = "trainer_elapsed_excluding_eval"
     elif adjusted is not None:
@@ -137,10 +145,10 @@ def terminal_record(entry: dict, job: job_pb2.JobStatus) -> dict:
         timing_scope = "coordinator_wall_minus_validation"
     else:
         elapsed = wall
-        timing_scope = "coordinator_submission_to_terminal"
+        timing_scope = COORDINATOR_WALL_TIME
     common = (
         baseline.identity
-        if timing_scope != "coordinator_submission_to_terminal"
+        if timing_scope != COORDINATOR_WALL_TIME
         and baseline.identity == final.identity
         and entry["source_revision"] != "unknown"
         else None
@@ -193,7 +201,7 @@ def terminal_record(entry: dict, job: job_pb2.JobStatus) -> dict:
             *(["The coordinator did not produce a successful terminal attempt."] if not succeeded else []),
             *(
                 ["Trainer and validation timings are incomplete. Elapsed time includes validation."]
-                if timing_scope == "coordinator_submission_to_terminal"
+                if timing_scope == COORDINATOR_WALL_TIME
                 else []
             ),
         ],

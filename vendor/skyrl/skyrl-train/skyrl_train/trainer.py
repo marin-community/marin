@@ -231,9 +231,6 @@ def batch_summary(plan: BatchPlan) -> BatchSummary:
     )
 
 
-EVALUATION_TIMER_KEY = "eval"
-
-
 class RayPPOTrainer:
     """The rollout-buffer training loop.
 
@@ -305,7 +302,6 @@ class RayPPOTrainer:
         self.all_metrics = {}
         self.all_timings = {}
         self.all_startup_timings = {}
-        self.evaluation_wall_time = 0.0
         self._checkpoint_save_failures = 0.0
         self._ftpo_stopped = False
         self._shutdown_complete = False
@@ -667,7 +663,8 @@ class RayPPOTrainer:
                 and self.eval_dataset is not None
                 and self._last_evaluated_step != self.global_step
             ):
-                await self._evaluate_and_log(final_state, Timer(EVALUATION_TIMER_KEY, self.all_timings), commit=True)
+                with Timer("eval", self.all_timings):
+                    await self._evaluate_and_log(final_state, commit=True)
                 self._control.should_evaluate = False
         finally:
             if self.colocate_all:
@@ -779,7 +776,8 @@ class RayPPOTrainer:
         if self._control.should_evaluate and self.eval_dataset is not None:
             if step_wall is not None:
                 step_wall.start("evaluation")
-            await self._evaluate_and_log(state, Timer(EVALUATION_TIMER_KEY, self.all_timings), commit=False)
+            with Timer("eval", self.all_timings):
+                await self._evaluate_and_log(state, commit=False)
             self._control.should_evaluate = False
 
         if self._control.should_save_hf_model:
@@ -1633,49 +1631,37 @@ class RayPPOTrainer:
         finally:
             self.context.resume()
 
-    async def _evaluate_and_log(self, state: TrainerState, timer: Timer, *, commit: bool) -> None:
-        with timer:
-            async with self._evaluation_session() as pool:
-                async with asyncio.TaskGroup() as tasks:
-                    native = tasks.create_task(self.eval(evaluation_pool=pool))
-                    additional = [
-                        tasks.create_task(
-                            self.callback_handler.collect_evaluation(callback, state, trainer=self, pool=pool)
-                        )
-                        for callback in self.callback_handler.callbacks
-                    ]
-                eval_metrics = native.result()
-                for task in additional:
-                    eval_metrics.update(task.result())
-            self._control = await self.callback_handler.call_event_async(
-                "on_evaluate", state, self._control, metrics=eval_metrics, trainer=self
-            )
-            self._log_metrics_stdout(eval_metrics, step=self.global_step, kind="eval")
-            self.tracker.log(eval_metrics, step=self.global_step, commit=commit)
-            self._last_evaluated_step = self.global_step
-        self.evaluation_wall_time += timer.duration
+    async def _evaluate_and_log(self, state: TrainerState, *, commit: bool) -> None:
+        started = time.perf_counter()
+        async with self._evaluation_session() as pool:
+            async with asyncio.TaskGroup() as tasks:
+                native = tasks.create_task(self.eval(evaluation_pool=pool))
+                additional = [
+                    tasks.create_task(
+                        self.callback_handler.collect_evaluation(callback, state, trainer=self, pool=pool)
+                    )
+                    for callback in self.callback_handler.callbacks
+                ]
+            eval_metrics = native.result()
+            for task in additional:
+                eval_metrics.update(task.result())
+        self._control = await self.callback_handler.call_event_async(
+            "on_evaluate", state, self._control, metrics=eval_metrics, trainer=self
+        )
+        self._log_metrics_stdout(eval_metrics, step=self.global_step, kind="eval")
+        self.tracker.log(eval_metrics, step=self.global_step, commit=commit)
+        self._last_evaluated_step = self.global_step
         if self.cfg.trainer.get("dump_grader_report", False):
             write_grader_report(
                 str(self.cfg.trainer.grader_report_dir),
                 str(self.global_step),
-                {"evaluation_duration_seconds": timer.duration},
+                {"evaluation_duration_seconds": time.perf_counter() - started},
             )
-
-    def write_completion_timing(self, elapsed_excluding_eval: float) -> None:
-        """Publish the logged trainer duration in the attempt report."""
-        try:
-            write_grader_report(
-                str(self.cfg.trainer.grader_report_dir),
-                "elapsed_excluding_eval_seconds",
-                {"timing": elapsed_excluding_eval},
-            )
-        except Exception:
-            logger.exception("Could not persist the trainer completion time")
 
     async def _run_pretraining_evaluation(self, state: TrainerState) -> None:
         # Pre-step evaluation must not be mixed into the first optimizer step's inclusive timers.
-        pretrain_eval_timer = Timer("eval_before_train")
-        await self._evaluate_and_log(state, pretrain_eval_timer, commit=self.cfg.trainer.tracker_commit_each_step)
+        with Timer("eval_before_train") as pretrain_eval_timer:
+            await self._evaluate_and_log(state, commit=self.cfg.trainer.tracker_commit_each_step)
         startup_eval = {"startup/eval_before_train": pretrain_eval_timer.duration}
         self._log_metrics_stdout(startup_eval, step=self.global_step, kind="startup")
         self.tracker.log(startup_eval, step=self.global_step, commit=False)
