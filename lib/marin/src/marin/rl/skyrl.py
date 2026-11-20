@@ -244,7 +244,7 @@ class SkyRLCheckpointStorage(StrEnum):
 
 @dataclass(frozen=True)
 class SkyRLRetentionPolicy:
-    """Temporary storage lifetime and rolling resume depth for one SkyRL run.
+    """Native checkpoint placement, temporary storage lifetime, and rolling resume depth.
 
     When HF export is requested, a successful run produces a durable canonical
     export from its terminal checkpoint.

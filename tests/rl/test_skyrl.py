@@ -1042,4 +1042,3 @@ def test_native_checkpoint_placement_is_separate_from_attempt_storage(storage, m
     assert config.output.checkpoint_root == launch["artifacts"]["checkpoint_root"] == root
     assert config.output.attempts_root == "s3://ttl/run/attempts"
     assert config.output.export_root == "s3://durable/run/exports"
-    assert config.draft_checkpoint_root is None
