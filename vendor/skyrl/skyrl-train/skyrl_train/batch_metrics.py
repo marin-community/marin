@@ -259,8 +259,7 @@ def forward_metrics(
         valid = batch["loss_mask"] > 0
         differences = (batch["rollout_logprobs"][valid] - batch["action_log_probs"][valid]).exp().abs()
         metrics["policy/rollout_train_prob_diff_mean"] = reduction.mean(differences)
-        if reduction.exact_order_statistics:
-            metrics["policy/rollout_train_prob_diff_std"] = differences.std().item()
+        metrics["policy/rollout_train_prob_diff_std"] = reduction.std(differences)
     return metrics
 
 

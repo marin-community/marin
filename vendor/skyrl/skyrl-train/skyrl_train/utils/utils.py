@@ -328,6 +328,19 @@ def get_system_memory_metrics() -> dict:
         return {}
 
 
+def _policy_dp_size(cfg: DictConfig) -> int:
+    policy_world_size = cfg.trainer.placement.policy_num_nodes * cfg.trainer.placement.policy_num_gpus_per_node
+
+    pp = cfg.trainer.policy.megatron_config.pipeline_model_parallel_size
+    cp = cfg.trainer.policy.megatron_config.context_parallel_size
+    tp = cfg.trainer.policy.megatron_config.tensor_model_parallel_size
+    assert policy_world_size % (pp * cp * tp) == 0, (
+        f"policy_world_size {policy_world_size} should be divisible by (pp * cp * tp) {pp * cp * tp}. "
+        "This ensures that the data parallel size is an integer."
+    )
+    return policy_world_size // (pp * cp * tp)
+
+
 def validate_batch_sizes(cfg: DictConfig):
     """
     Validate configured batch sizes.
@@ -345,26 +358,12 @@ def validate_batch_sizes(cfg: DictConfig):
     assert cfg.trainer.micro_forward_batch_size_per_gpu > 0, "micro_forward_batch_size_per_gpu must be greater than 0"
 
     # Validate policy mini batch size
-    policy_world_size = cfg.trainer.placement.policy_num_nodes * cfg.trainer.placement.policy_num_gpus_per_node
-
-    pp = cfg.trainer.policy.megatron_config.pipeline_model_parallel_size
-    cp = cfg.trainer.policy.megatron_config.context_parallel_size
-    tp = cfg.trainer.policy.megatron_config.tensor_model_parallel_size
-    assert policy_world_size % (pp * cp * tp) == 0, (
-        f"policy_world_size {policy_world_size} should be divisible by (pp * cp * tp) {pp * cp * tp}. "
-        "This ensures that the data parallel size is an integer."
-    )
-    policy_dp_size = policy_world_size // (pp * cp * tp)
+    policy_dp_size = _policy_dp_size(cfg)
 
     assert cfg.trainer.train_batch_size % cfg.trainer.policy_mini_batch_size == 0, (
         f"train_batch_size {cfg.trainer.train_batch_size} should be divisible by policy_mini_batch_size {cfg.trainer.policy_mini_batch_size}"
     )
     optimization_group_size = optimization_samples_per_prompt(cfg)
-    if (
-        cfg.trainer.batch_builder == BatchBuilder.WORKER
-        and cfg.trainer.train_batch_size * optimization_group_size % policy_dp_size
-    ):
-        raise ValueError("trainer.batch_builder=worker does not support rows requiring DP padding")
     policy_mini_batch_size_per_gpu = cfg.trainer.policy_mini_batch_size * optimization_group_size // policy_dp_size
     assert policy_mini_batch_size_per_gpu > 0, (
         f"Invalid policy_mini_batch_size_per_gpu: {policy_mini_batch_size_per_gpu}. "
@@ -459,26 +458,16 @@ _OUTCOME_LOSSES = frozenset(
 )
 
 
-def require_worker_batch_config(cfg: DictConfig) -> None:
-    """Reject configuration settings unsupported by policy-worker assembly."""
+def worker_batch_refusal(cfg: DictConfig) -> str | None:
+    """Return the first reason policy-worker assembly is unavailable, or None."""
     algorithm = cfg.trainer.algorithm
     shaping = parse_trajectory_reward_shaping_config(cfg.generator.get("trajectory_reward_shaping"))
-    megatron = cfg.trainer.policy.megatron_config
-    expert_tensor_parallel = megatron.get("expert_tensor_parallel_size") or megatron.tensor_model_parallel_size
-    moe_etp = False
-    if expert_tensor_parallel > 1:
-        # Model registration imports utils while initializing the model package.
-        from skyrl_train.models import register_local_models
-
-        register_local_models()
-        model = cfg.trainer.policy.model
-        metadata = AutoConfig.from_pretrained(model.path, trust_remote_code=True, revision=model.get("revision"))
-        moe_etp = model_expert_count(metadata) is not None
     supported_loss = (
         algorithm.policy_loss_type in _OUTCOME_LOSSES and algorithm.advantage_estimator in OUTCOME_ADVANTAGE_ESTIMATORS
     ) or (
         algorithm.policy_loss_type == PolicyLossType.SFT and algorithm.advantage_estimator == AdvantageEstimator.UNIFORM
     )
+    train_rows = cfg.trainer.train_batch_size * int(cfg.generator.n_samples_per_prompt)
     restrictions = [
         ("DPO and reference-model objectives", reference_model_required(algorithm)),
         ("the configured loss and estimator", not supported_loss),
@@ -489,17 +478,46 @@ def require_worker_batch_config(cfg: DictConfig) -> None:
         ("advantage batch normalization", algorithm.advantage_batch_normalize),
         ("loop advantage credit", shaping.enabled and shaping.loop.advantage_penalty_per_token > 0),
         ("marker-target reasoning penalties", shaping.enabled and shaping.reasoning_span.charges_tokens),
-        ("ETP greater than one", moe_etp),
         ("dense batch dumping", cfg.trainer.dump_data_batch),
+        ("rows requiring DP padding", train_rows % _policy_dp_size(cfg)),
     ]
     for reason, unsupported in restrictions:
         if unsupported:
-            raise ValueError(f"trainer.batch_builder=worker does not support {reason}")
+            return reason
+    megatron = cfg.trainer.policy.megatron_config
+    etp = megatron.get("expert_tensor_parallel_size") or megatron.tensor_model_parallel_size
+    replay = moe_router_replay_requested(cfg)
+    if etp > 1 or replay:
+        # Model registration imports utils while initializing the model package.
+        from skyrl_train.models import register_local_models
+
+        register_local_models()
+        model = cfg.trainer.policy.model
+        try:
+            metadata = AutoConfig.from_pretrained(model.path, trust_remote_code=True, revision=model.get("revision"))
+        except Exception as error:
+            if cfg.trainer.batch_builder != BatchBuilder.AUTO:
+                raise
+            logger.warning("Could not read the policy model configuration for automatic batch assembly ({!r})", error)
+            return "model configuration unreadable"
+        experts = model_expert_count(metadata)
+        if replay and experts is None:
+            return "router replay without the model expert count"
+        if etp > 1 and experts is not None:
+            return "ETP greater than one"
+    return None
 
 
 def validate_cfg(cfg: DictConfig):
-    if BatchBuilder(cfg.trainer.batch_builder) is BatchBuilder.WORKER:
-        require_worker_batch_config(cfg)
+    builder = BatchBuilder(cfg.trainer.batch_builder)
+    if builder is not BatchBuilder.DRIVER:
+        reason = worker_batch_refusal(cfg)
+        if reason and builder is BatchBuilder.WORKER:
+            raise ValueError(f"trainer.batch_builder=worker does not support {reason}")
+        if builder is BatchBuilder.AUTO:
+            cfg.trainer.batch_builder = (BatchBuilder.DRIVER if reason else BatchBuilder.WORKER).value
+            description = f"{cfg.trainer.batch_builder} ({reason})" if reason else cfg.trainer.batch_builder
+            logger.info(f"Resolved trainer.batch_builder=auto to {description}")
     validate_mismatch_probe_config(cfg)
     if cfg.trainer.strategy != "megatron":
         raise ValueError(f"Unsupported training strategy: {cfg.trainer.strategy}")

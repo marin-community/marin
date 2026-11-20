@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from copy import deepcopy
 import json
 from pathlib import Path
@@ -9,7 +10,7 @@ from hydra import compose, initialize_config_dir
 from skyrl_gym.verification import VerificationResult
 from skyrl_train.trainer import RayPPOTrainer
 from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
-from skyrl_train.utils.utils import validate_cfg
+from skyrl_train.utils.utils import worker_batch_refusal, validate_cfg
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 from transformers import PreTrainedTokenizerFast
 from transformers.models.auto.configuration_auto import CONFIG_MAPPING
@@ -34,8 +35,6 @@ from skyrl_train.trajectory_runners.trajectory_processing import (
 )
 from skyrl_train.trajectory_runners.types import BatchFields
 from skyrl_train.utils.importance_ratio_diagnostics import mismatch_ratio_metrics
-from skyrl_train.metric_reduction import WorldReduction
-from tests.batch_assertions import WORKER_OMITTED_METRICS
 from skyrl_train.utils.advantage_estimators import (
     compute_advantages_and_returns,
 )
@@ -301,42 +300,47 @@ def test_dp_slices_with_fields_and_longest_rows_on_other_ranks_match_driver(dp_s
             worker_plan,
             rows,
             algorithm,
-            reduction=WorldReduction(lambda values, operation: values + other_scores, True),
+            reduction=SimpleNamespace(combine=lambda values, operation: values + other_scores),
         )
         assert_batch_exact(actual, expected)
 
 
 @pytest.mark.parametrize(
-    ("overrides", "message"),
+    ("overrides", "refusal"),
     [
-        ({}, None),
-        ({"batch.loop_advantages": [[0.0, 0.1]] * 4}, "g0.*nonzero loop credit"),
-        ({"batch.teacher_evidence": [None] * 4}, "g0.*teacher evidence"),
-        ({"batch.distillation": [None] * 4}, "g0.*teacher evidence"),
-        ({"batch.student_topk_indices": [None] * 4}, "g0.*teacher evidence"),
-        ({"batch.behavior_topk_logprobs": [None] * 4}, "g0.*teacher evidence"),
-        ({"rows": 3}, "g0.*rows requiring DP padding"),
+        ({}, (None, None)),
+        ({"batch.loop_advantages": [[0.0, 0.1]] * 4}, (None, "g0.*nonzero loop credit")),
+        ({"batch.teacher_evidence": [None] * 4}, (None, "g0.*teacher evidence")),
+        ({"batch.distillation": [None] * 4}, (None, "g0.*teacher evidence")),
+        ({"batch.student_topk_indices": [None] * 4}, (None, "g0.*teacher evidence")),
+        ({"batch.behavior_topk_logprobs": [None] * 4}, (None, "g0.*teacher evidence")),
+        ({"rows": 3}, (None, "g0.*rows requiring DP padding")),
         (
             {
                 "trainer.policy.megatron_config.moe_router_replay": True,
                 "batch.rollout_routed_experts": [np.zeros((2, 1, 1), dtype=np.uint8)] * 4,
+                "model_experts": 4,
             },
-            "g0.*route dtype without the model expert count",
+            (None, "g0.*route dtype without the model expert count"),
         ),
-        ({"trainer.algorithm.use_kl_loss": True}, "DPO and reference-model objectives"),
-        ({"trainer.algorithm.advantage_estimator": "reward"}, "configured loss and estimator"),
-        ({"trainer.algorithm.policy_loss_type": "clip_cov"}, "configured loss and estimator"),
-        ({"trainer.placement.colocate_all": True}, "colocated placement"),
-        ({"trainer.algorithm.distillation": {}}, "distillation"),
-        ({"trainer.trajectory_selector.type": "top_k"}, "trajectory selection"),
-        ({"trainer.step_wise_training": True}, "step-wise training"),
-        ({"trainer.algorithm.advantage_batch_normalize": True}, "advantage batch normalization"),
+        (
+            {"trainer.policy.megatron_config.moe_router_replay": True},
+            ("router replay without the model expert count", None),
+        ),
+        ({"trainer.algorithm.use_kl_loss": True}, ("DPO and reference-model objectives", None)),
+        ({"trainer.algorithm.advantage_estimator": "reward"}, ("the configured loss and estimator", None)),
+        ({"trainer.algorithm.policy_loss_type": "clip_cov"}, ("the configured loss and estimator", None)),
+        ({"trainer.placement.colocate_all": True}, ("colocated placement", None)),
+        ({"trainer.algorithm.distillation": {}}, ("distillation", None)),
+        ({"trainer.trajectory_selector.type": "top_k"}, ("trajectory selection", None)),
+        ({"trainer.step_wise_training": True}, ("step-wise training", None)),
+        ({"trainer.algorithm.advantage_batch_normalize": True}, ("advantage batch normalization", None)),
         (
             {
                 "generator.trajectory_reward_shaping.enabled": True,
                 "generator.trajectory_reward_shaping.loop.advantage_penalty_per_token": 0.1,
             },
-            "loop advantage credit",
+            ("loop advantage credit", None),
         ),
         (
             {
@@ -344,16 +348,19 @@ def test_dp_slices_with_fields_and_longest_rows_on_other_ranks_match_driver(dp_s
                 "generator.trajectory_reward_shaping.reasoning_span.target": "marker",
                 "generator.trajectory_reward_shaping.reasoning_span.penalty": 0.5,
             },
-            "marker-target reasoning penalties",
+            ("marker-target reasoning penalties", None),
         ),
-        ({"trainer.policy.megatron_config.expert_tensor_parallel_size": 2, "model_experts": 4}, "ETP greater than one"),
+        (
+            {"trainer.policy.megatron_config.expert_tensor_parallel_size": 2, "model_experts": 4},
+            ("ETP greater than one", None),
+        ),
         (
             {
                 "trainer.policy.megatron_config.expert_tensor_parallel_size": None,
                 "trainer.policy.megatron_config.tensor_model_parallel_size": 2,
                 "model_experts": 4,
             },
-            "ETP greater than one",
+            ("ETP greater than one", None),
         ),
         (
             {
@@ -362,27 +369,47 @@ def test_dp_slices_with_fields_and_longest_rows_on_other_ranks_match_driver(dp_s
                 "model_experts": 8,
                 "model_type": "grug_moe",
             },
-            "ETP greater than one",
+            ("ETP greater than one", None),
         ),
         (
             {
                 "trainer.policy.megatron_config.expert_tensor_parallel_size": None,
                 "trainer.policy.megatron_config.tensor_model_parallel_size": 2,
             },
-            None,
+            (None, None),
         ),
         (
             {"trainer.train_batch_size": 3, "trainer.policy_mini_batch_size": 3, "generator.n_samples_per_prompt": 3},
-            "rows requiring DP padding",
+            ("rows requiring DP padding", None),
         ),
-        ({"trainer.dump_data_batch": True}, "dense batch dumping"),
+        (
+            {
+                "trainer.algorithm.policy_loss_type": "sft",
+                "trainer.algorithm.advantage_estimator": "uniform",
+                "trainer.placement.policy_num_gpus_per_node": 4,
+                "trainer.train_batch_size": 6,
+                "trainer.policy_mini_batch_size": 6,
+                "generator.n_samples_per_prompt": 2,
+            },
+            (None, None),
+        ),
+        (
+            {
+                "trainer.policy.megatron_config.tensor_model_parallel_size": 2,
+                "trainer.policy.megatron_config.expert_tensor_parallel_size": None,
+                "model_type": "unreadable",
+            },
+            ("model configuration unreadable", None),
+        ),
+        ({"trainer.policy.megatron_config.moe_router_replay": True, "model_experts": 4}, (None, None)),
+        ({"trainer.dump_data_batch": True}, ("dense batch dumping", None)),
     ],
 )
 def test_worker_batch_rejects_settings_and_rows_that_change_driver_training_semantics(
-    tmp_path, overrides, message, monkeypatch
+    tmp_path, overrides, refusal, monkeypatch
 ):
     cfg = get_default_config()
-    cfg.trainer.batch_builder = "worker"
+    assert cfg.trainer.batch_builder == "auto"
     cfg.trainer.logger = "console"
     cfg.trainer.algorithm.use_kl_loss = False
     cfg.trainer.placement.colocate_all = False
@@ -392,12 +419,11 @@ def test_worker_batch_rejects_settings_and_rows_that_change_driver_training_sema
     cfg.trainer.train_batch_size = cfg.trainer.policy_mini_batch_size = 2
     cfg.trainer.micro_train_batch_size_per_gpu = cfg.trainer.micro_forward_batch_size_per_gpu = 1
     cfg.generator.n_samples_per_prompt = 2
-    metadata = (
-        {"model_type": overrides.get("model_type", "qwen2_moe"), "num_experts": overrides["model_experts"]}
-        if "model_experts" in overrides
-        else {"model_type": "qwen2"}
-    )
-    (tmp_path / "config.json").write_text(json.dumps(metadata))
+    metadata = {"model_type": overrides.get("model_type", "qwen2_moe" if "model_experts" in overrides else "qwen2")}
+    if "model_experts" in overrides:
+        metadata["num_experts"] = overrides["model_experts"]
+    if metadata["model_type"] != "unreadable":
+        (tmp_path / "config.json").write_text(json.dumps(metadata))
     cfg.trainer.policy.model.path = str(tmp_path)
     batch = {
         "prompt_token_ids": [[1]] * 4,
@@ -416,45 +442,46 @@ def test_worker_batch_rejects_settings_and_rows_that_change_driver_training_sema
     if metadata["model_type"] == "grug_moe":
         monkeypatch.delitem(CONFIG_MAPPING._extra_content, "grug_moe", raising=False)
 
-    def check():
-        validate_cfg(cfg)
-        group = AdmittedRollout(
-            0, "g0", 0, len(batch["response_ids"]), sum(map(len, batch["response_ids"])), RowFacts.from_batch(batch)
-        )
+    config_reason, batch_reason = refusal
+    assert worker_batch_refusal(cfg) == config_reason
+    if config_reason:
+        if config_reason == "router replay without the model expert count":
+            auto_cfg = deepcopy(cfg)
+            validate_cfg(auto_cfg)
+            assert auto_cfg.trainer.batch_builder == "driver"
+        cfg.trainer.batch_builder = "worker"
+        match = "Unrecognized model" if metadata["model_type"] == "unreadable" else config_reason
+        with pytest.raises(ValueError, match=match):
+            validate_cfg(cfg)
+        return
+
+    validate_cfg(cfg)
+    assert cfg.trainer.batch_builder == "worker"
+    group = AdmittedRollout(
+        0, "g0", 0, len(batch["response_ids"]), sum(map(len, batch["response_ids"])), RowFacts.from_batch(batch)
+    )
+    match = (
+        rf"^Policy-worker batch assembly: .*{batch_reason}\. Set trainer\.batch_builder=driver to train these rows\.$"
+    )
+    with pytest.raises(ValueError, match=match) if batch_reason else nullcontext():
         plan_worker_batch(cfg, (group,), global_step=0, dp_size=2, max_staleness_steps=0, num_experts=None)
 
-    if message is None:
-        check()
-    else:
-        with pytest.raises(ValueError, match=message):
-            check()
 
-
-def test_worker_ratio_moments_match_known_finite_token_values():
-    metrics = mismatch_ratio_metrics(
-        torch.tensor([[-1.0, 0.0, 1.0, 2.0, float("nan")]]),
-        torch.zeros(1, 5),
-        torch.ones(1, 5),
-        torch.zeros(1, 5),
-        reduction=WorldReduction(lambda values, operation: values, True),
-    )
-    expected = {
-        "log_ratio_mean_squared": 1.5,
-        "lower_clip_pressure": 0.25,
-        "upper_clip_pressure": 0.5,
-        "log_ratio_abs_max": 2.0,
-    }
-    for scope in ("pooled", "staleness0"):
-        assert {key: metrics[f"policy/mismatch/{scope}/{key}"] for key in expected} == expected
-
-
-def test_worker_ratio_keys_match_driver_for_mixed_staleness():
-    learner = torch.tensor([[-1.0, 0.0], [1.0, 2.0]])
-    sampler = torch.zeros_like(learner)
+def test_mismatch_ratio_statistics_match_known_values_for_mixed_staleness():
+    learner = torch.tensor([[-21.0, 0.0, 1.0, 8.125, float("nan")]], dtype=torch.float32)
+    sampler = torch.tensor([[-1.0, 0.0, 0.0078125, 0.125, 0.0]], dtype=torch.float32)
     mask = torch.ones_like(learner)
-    staleness = torch.tensor([[0, 0], [1, 1]])
-    driver = mismatch_ratio_metrics(learner, sampler, mask, staleness)
-    worker = mismatch_ratio_metrics(
-        learner, sampler, mask, staleness, reduction=WorldReduction(lambda values, operation: values, True)
-    )
-    assert worker.keys() == driver.keys() - WORKER_OMITTED_METRICS
+    staleness = torch.tensor([[0, 0, 1, 2, 0]])
+    metrics = mismatch_ratio_metrics(learner, sampler, mask, staleness)
+    for key, value in (
+        ("ess_fraction", 0.250620275328),
+        ("kl_k3", 747.915720782),
+        ("chi2", 2221528.63255),
+        ("log_ratio_abs_p95", 18.2),
+        ("log_ratio_abs_p99", 19.64),
+        ("lower_clip_pressure", 0.25),
+        ("upper_clip_pressure", 0.5),
+        ("log_ratio_mean_squared", 116.246108949),
+    ):
+        assert metrics[f"policy/mismatch/pooled/{key}"] == pytest.approx(value)
+    assert metrics["policy/mismatch/staleness0/log_ratio_abs_p95"] == pytest.approx(19.0)
