@@ -18,7 +18,6 @@ from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
 from rolloutengine.validation import task_machine_reason
 from skyrl_gym.rollout_specs import is_shell_harness, rollout_spec, shell_harness
 from skyrl_gym.source_task import session_parameters, source_task
-from taskcompendium.benchmark_environment import benchmark_env_id
 from taskcompendium.models import (
     EnvironmentRequirements,
     NoGrader,
@@ -86,7 +85,6 @@ class TaskDataset(PromptDataset):
                 extras = {**session_parameters(lowered.task).extras, **extras}
             extra_info = extras.get("extra_info") or {}
             ultra = extra_info.get("nemotron_ultra")
-            source_env_id = extras.get("env_id") or extras.get("env_name")
             metric_tags = (
                 (f"nemotron_ultra/coverage/{ultra['blend']}/{ultra['agent']}",)
                 if ultra is not None and "blend" in ultra and "agent" in ultra
@@ -104,10 +102,7 @@ class TaskDataset(PromptDataset):
                             teacher_route=extras.get("teacher_route"),
                             metric_tags=metric_tags,
                             task_id=lowered.task.id,
-                            env_id=benchmark_env_id(
-                                lowered.task,
-                                source_env_id=source_env_id if isinstance(source_env_id, str) else None,
-                            ),
+                            benchmark_id=lowered.task.labels.get("benchmark_id") or lowered.task.source.dataset,
                         ),
                         group_grader=task_group_grader(lowered),
                     ),

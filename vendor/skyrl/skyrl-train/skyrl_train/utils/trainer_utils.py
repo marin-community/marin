@@ -354,7 +354,7 @@ def dump_per_dataset_eval_results(
                     "error_treatment": (trajectory_batch.get("error_treatments") or [None] * len(input_prompts))[i],
                     "server_error": (trajectory_batch.get("server_errors") or [None] * len(input_prompts))[i],
                     "env_class": metadata[i].metric_class,
-                    "env_id": metadata[i].env_id,
+                    "benchmark_id": metadata[i].benchmark_id,
                     "task_id": metadata[i].task_id,
                     "data_source": data_source,
                     "env_metrics": (trajectory_batch.get("env_metrics") or [{}] * len(input_prompts))[i],

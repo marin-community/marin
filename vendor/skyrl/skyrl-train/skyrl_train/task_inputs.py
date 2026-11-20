@@ -22,7 +22,7 @@ class TrajectoryMetadata:
     teacher_route: str | None = None
     metric_tags: tuple[str, ...] = ()
     task_id: str | None = None
-    env_id: str | None = None
+    benchmark_id: str | None = None
 
 
 @dataclass(frozen=True)
