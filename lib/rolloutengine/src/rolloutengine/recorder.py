@@ -15,7 +15,7 @@ from shellbox.machine import Machine
 from taskcompendium.models import TaskSpec
 
 from rolloutengine.cleanup import _Cleanup
-from rolloutengine.harness.core import Harness, HarnessContext, reply_options_match
+from rolloutengine.harness.core import OUTPUT_LIMIT_OPTION_KEYS, Harness, HarnessContext, reply_options_match
 from rolloutengine.models import (
     BUDGET_STOP_REASON,
     LENGTH_STOP_REASON,
@@ -249,7 +249,7 @@ class _Recorder:
         if self.step_observations:
             raise RuntimeError("A turn has recorded final observations, so the harness cannot reply to it")
         if options is not None and not reply_options_match(conversation.options, options):
-            raise ValueError("A reply can change only max_tokens and max_completion_tokens")
+            raise ValueError(f"A reply can change only {', '.join(sorted(OUTPUT_LIMIT_OPTION_KEYS))}")
         if (
             self.stop_reason == LENGTH_STOP_REASON
             or self.budget_reached

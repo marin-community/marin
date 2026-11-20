@@ -86,8 +86,9 @@ class ScriptedClient:
 
 
 class HarborTrials:
-    def __init__(self, trial_error=None):
+    def __init__(self, trial_error=None, *, reserialized=False):
         self.trial_error = trial_error
+        self.reserialized = reserialized
         self.responses = []
 
     def original_harness(self, *args):
@@ -97,11 +98,18 @@ class HarborTrials:
         async def trial(complete):
             backend = AgentInferenceBackend("fixture", 128, tokenize, Decoder())
             with backend.session("trial", complete):
-                for message, max_tokens in [("Start", 8), ("Longer history", 1), ("Continue", 1)]:
+                for index, (message, max_tokens) in enumerate([("Start", 8), ("Longer history", 1), ("Continue", 1)]):
+                    messages = [{"role": "user", "content": message}]
+                    if index == 1 and self.reserialized:
+                        first = self.responses[0]["choices"][0]["message"]
+                        messages[:0] = [
+                            {"role": "user", "content": "Start"},
+                            {"role": first["role"], "content": first["content"], "reasoning_content": ""},
+                        ]
                     response = await backend.chat_completion(
                         {
                             "headers": {TRIAL_HEADER: "trial"},
-                            "json": {"messages": [{"role": "user", "content": message}], "max_tokens": max_tokens},
+                            "json": {"messages": messages, "max_tokens": max_tokens},
                         }
                     )
                     self.responses.append(response)
@@ -237,13 +245,20 @@ async def test_native_step_harness_keeps_length_stopped_rollout():
         ("max_turns", None),
         ("budget_reached", None),
         ("model-failure", None),
+        ("reserialized", None),
     ],
-    ids=["sampled-turn", "first-request", "agent-error-policy", "turn-budget", "token-budget", "model-failure"],
+    ids=[
+        "sampled-turn", "first-request", "agent-error-policy", "turn-budget", "token-budget", "model-failure",
+        "reserialized",
+    ],
 )
 async def test_harbor_trial_preserves_work_and_error_policy_after_generation_stops(open_worker, stop, trial_error):
     """Terminal responses retain sampled turns; model failures still fail the rollout."""
-    trials = HarborTrials(trial_error)
-    if stop in {"max_turns", "budget_reached"}:
+    trials = HarborTrials(trial_error, reserialized=stop == "reserialized")
+    if stop == "reserialized":
+        followup = {**sampled_reply("Finished"), "prompt_ids": [[1, 2, 3, 4, 5]], "response_ids": [[6]]}
+        replies = [sampled_reply(), followup, GenerationBudgetExceededError([1, 2, 3, 4])]
+    elif stop in {"max_turns", "budget_reached"}:
         replies = [sampled_reply()] * (2 if stop == "budget_reached" else 1)
     else:
         error = (
@@ -270,13 +285,19 @@ async def test_harbor_trial_preserves_work_and_error_policy_after_generation_sto
         batch = await worker.training_batch(request, [result])
     responses = trials.responses
     assert responses[-1]["error"]["type"] == (
-        "context_length_exceeded" if stop in {"context", "first-request"} else "generation_stopped"
+        "context_length_exceeded" if stop in {"context", "first-request", "reserialized"} else "generation_stopped"
     )
     assert responses[-1]["error"]["code"] == 400
     if stop == "first-request":
         assert result.stop_reason == "length"
         assert result.failure is None
         assert result.response_token_ids == ()
+        return
+    if stop == "reserialized":
+        assert result.grade.status == Outcome.GRADED
+        assert batch["response_ids"] == [[3, 4, 5, 6]]
+        assert batch["loss_masks"] == [[1, 0, 0, 1]]
+        assert np.sum(batch["rewards"]) == 0.75
         return
     turns = 2 if stop == "budget_reached" else 1
     served = [conversation for conversation in result.conversations if conversation.steps]

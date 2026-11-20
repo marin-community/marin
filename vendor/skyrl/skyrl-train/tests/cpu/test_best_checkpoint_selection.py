@@ -131,6 +131,7 @@ async def test_periodic_checkpoint_can_be_selected_on_write_once_storage(tmp_pat
         {
             "trainer": {
                 "ckpt_path": str(tmp_path),
+                "export_path": str(tmp_path / "exports"),
                 "ckpt_interval": 1,
                 "max_ckpts_to_keep": -1,
                 "offload_optimizer_during_rollouts": False,
@@ -177,6 +178,7 @@ async def test_periodic_checkpoint_can_be_selected_on_write_once_storage(tmp_pat
         if resume == "imported":
             output = tmp_path / "resumed"
             config.trainer.ckpt_path = str(output)
+            config.trainer.export_path = str(output / "exports")
             config.trainer.resume_path = str(tmp_path / "global_step_1")
         trainer = make_trainer()
         trainer.global_step, _ = trainer.load_checkpoints()

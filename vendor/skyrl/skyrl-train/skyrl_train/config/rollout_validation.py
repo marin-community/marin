@@ -46,6 +46,11 @@ def validate_groups_per_family(cfg: DictConfig) -> dict[str, int]:
     return dict(groups_per_family)
 
 
+def minimum_family_pool_sizes(groups_per_family: Mapping[str, int], max_staleness_steps: int) -> dict[str, int]:
+    """Return the number of distinct prompts each family needs across its open batches."""
+    return {family: (max_staleness_steps + 1) * count for family, count in groups_per_family.items()}
+
+
 def validate_family_pools(
     groups_per_family: Mapping[str, int], family_counts: Mapping[str | None, int], max_staleness_steps: int
 ) -> None:
@@ -57,9 +62,8 @@ def validate_family_pools(
             f"{GROUPS_PER_FAMILY_KEY} names {sorted(groups_per_family)}, "
             f"but training rows have families {sorted(map(str, family_counts))}"
         )
-    for family, group_count in groups_per_family.items():
+    for family, needed in minimum_family_pool_sizes(groups_per_family, max_staleness_steps).items():
         available = family_counts[family]
-        needed = (max_staleness_steps + 1) * group_count
         if available < needed:
             raise ValueError(f"{GROUPS_PER_FAMILY_KEY} requires {needed} rows for family {family!r}, found {available}")
 

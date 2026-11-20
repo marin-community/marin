@@ -23,6 +23,7 @@ from skyrl_train.config.rollout_validation import (
     FAMILY_COLUMN,
     GROUPS_PER_FAMILY_KEY,
     BatchPolicy,
+    minimum_family_pool_sizes,
     validate_family_pools,
     validate_groups_per_family,
 )
@@ -229,6 +230,7 @@ class TrainingContext:
                 max_stale_retries=config.trainer.rollout_buffer.max_stale_retries,
                 max_unusable_groups=config.trainer.rollout_buffer.max_unusable_groups,
                 families=families,
+                family_minimums=minimum_family_pool_sizes(groups_per_family, buffer_config.max_staleness_steps),
             ),
             buffer_config,
             start_rollout_buffer(buffer_config),

@@ -682,9 +682,6 @@ class RolloutBuffer:
                     )
                     if counts != self.config.groups_per_family:
                         raise RuntimeError(f"Rollout batch does not meet {GROUPS_PER_FAMILY_KEY}")
-                    metrics.update(
-                        {f"async/consumed_family/{family}": float(count) for family, count in counts.items()}
-                    )
                 selection = BatchSelection(metrics, stats.judged)
                 self._batch_taken = True
             elif (batch_id := self._over_budget_batch()) is not None:
