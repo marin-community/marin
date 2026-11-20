@@ -23,23 +23,52 @@ def main() -> None:
     parser.add_argument("--job-name", default="swe-repair-swe-rebench-convert")
     args = parser.parse_args()
 
-    script = (
-        f"experiments/post_training/task_curation/datasets/swe_rebench_v2/run_intake_conversion.sh"
-    )
+    script = "experiments/post_training/task_curation/datasets/swe_rebench_v2/run_intake_conversion.sh"
     command = (
         f"curl -fsSL {REPO}/{args.revision}.tar.gz | tar xz -C /workspace && "
         f"bash /workspace/marin-{args.revision}/{script} "
         f"{args.revision} {args.output_root} {args.license_uri}"
     )
     argv = [
-        "uv", "run", "--no-sync", "iris", "--cluster=cw-us-east-02a", "job", "run",
-        "--secret", "HF_TOKEN", "env:HF_TOKEN",
-        "--secret", "CW_KEY_ID", "env:CW_KEY_ID",
-        "--secret", "CW_KEY_SECRET", "env:CW_KEY_SECRET",
-        "--no-wait", "--job-name", args.job_name, "--replicas", "1",
-        "--cpu", "16", "--memory", "64GB", "--disk", "300GB", "--enable-extra-resources",
-        "--priority", "batch", "--no-preemptible", "--timeout", "259200", "--max-retries", "0",
-        "--", "bash", "-c", command,
+        "uv",
+        "run",
+        "--no-sync",
+        "iris",
+        "--cluster=cw-us-east-02a",
+        "job",
+        "run",
+        "--secret",
+        "HF_TOKEN",
+        "env:HF_TOKEN",
+        "--secret",
+        "CW_KEY_ID",
+        "env:CW_KEY_ID",
+        "--secret",
+        "CW_KEY_SECRET",
+        "env:CW_KEY_SECRET",
+        "--no-wait",
+        "--job-name",
+        args.job_name,
+        "--replicas",
+        "1",
+        "--cpu",
+        "16",
+        "--memory",
+        "64GB",
+        "--disk",
+        "300GB",
+        "--enable-extra-resources",
+        "--priority",
+        "batch",
+        "--no-preemptible",
+        "--timeout",
+        "259200",
+        "--max-retries",
+        "0",
+        "--",
+        "bash",
+        "-c",
+        command,
     ]
     completed = subprocess.run(argv)
     if completed.returncode:
