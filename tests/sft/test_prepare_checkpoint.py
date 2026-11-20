@@ -7,6 +7,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 from fray.types import ResourceConfig
+from levanter.models.qwen import Qwen3Config
 from levanter.optim.config import AdamConfig
 from marin.execution.lazy import materialized_config
 from safetensors.numpy import load, save
@@ -134,11 +135,12 @@ def test_hf_model_mirrors_hub_ref_on_cpu_before_training():
 
 
 def test_hf_model_separate_tokenizer_path():
-    """A distinct tokenizer_path is honored for the data tokenizer, not the init ref."""
-    step = sft_step(_spec(HFModel(_HF_REF, tokenizer_path="org/tokenizer")), ResourceConfig.with_cpu())
+    model = HFModel(_HF_REF, tokenizer_path="org/tokenizer", model=Qwen3Config(gradient_checkpointing=False))
+    step = sft_step(_spec(model), ResourceConfig.with_cpu())
     train_config = materialized_config(step, _PREFIX).train_config
     assert train_config.initialize_from_hf.startswith(_PREFIX)
     assert train_config.data.tokenizer == "org/tokenizer"
+    assert train_config.model.gradient_checkpointing is False
 
 
 def test_hf_model_bucket_path_loads_in_place():

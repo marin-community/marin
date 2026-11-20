@@ -326,8 +326,8 @@ class HFModel:
     fields and ``model`` supplies runtime settings.
     """
 
-    model_ref: str
-    tokenizer_path: str | None = None
+    model_ref: str  # pinned Hub ref, or a bucket/local HF snapshot dir
+    tokenizer_path: str | None = None  # defaults to the loaded checkpoint
     model: LmConfig = field(default_factory=Qwen3Config)
     eos_token_ids: Sequence[int] = LLAMA3_CHAT_EOS_TOKEN_IDS
     task_timeout_seconds: int | None = None
