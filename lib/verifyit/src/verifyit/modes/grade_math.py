@@ -21,6 +21,7 @@ import math
 import re
 import threading
 from collections.abc import Callable, Sequence
+from contextlib import contextmanager
 from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
@@ -45,6 +46,12 @@ SET_TYPES = frozenset({MathType.SET, MathType.INTERVAL})
 
 CLOSERS = {"(": ")", "[": "]", "{": "}"}
 SIZE_COMMANDS = ("\\left", "\\right", "\\big", "\\Big", "\\bigg", "\\Bigg")
+MATH_VERIFIER_DEADLINE = "math_verifier_deadline"
+MATH_DEADLINE_REFERENCE_PARSE = "reference_parse"
+MATH_DEADLINE_CANDIDATE_PARSE = "candidate_parse"
+MATH_DEADLINE_COMPARISON = "comparison"
+"""Which grading step ran out: the reference parse is a task property, while the
+candidate parse and the comparison follow the reply."""
 TIMEOUT = 5
 """Seconds math-verify may spend parsing or comparing one expression. Its timeout arms
 ``signal.alarm``, which only the main thread may do, so a worker thread runs without it."""
@@ -334,7 +341,25 @@ def grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
         return _grade_math_candidate(spec, candidate)
     except TimeoutException as error:
         # This backend exception inherits BaseException, unlike Python's TimeoutError.
-        raise GradingInfraError("math verifier deadline exhausted") from error
+        # Phase-tagged deadlines are raised by _deadline_phase below; this catch is the
+        # fallback for any site outside a tagged phase.
+        raise GradingInfraError("math verifier deadline exhausted", code=MATH_VERIFIER_DEADLINE) from error
+
+
+@contextmanager
+def _deadline_phase(phase: str):
+    """Re-raise a math-verify deadline from one grading step with its phase tagged.
+
+    The reference parse is a property of the task; the candidate parse and the
+    comparison follow the reply (the community replay on #11511: references parse in
+    under 0.5 s while wrong or regrouped equation replies run into the deadline).
+    """
+    from math_verify.errors import TimeoutException  # noqa: PLC0415
+
+    try:
+        yield
+    except TimeoutException as error:
+        raise GradingInfraError("math verifier deadline exhausted", code=MATH_VERIFIER_DEADLINE, phase=phase) from error
 
 
 def _grade_raw_math(spec: MathSpec, candidate: str) -> Reward:
@@ -351,35 +376,38 @@ def _grade_raw_math(spec: MathSpec, candidate: str) -> Reward:
         boxed = extract_boxed(candidate)
         candidate = f"\\boxed{{{boxed}}}" if boxed else ""
     gold_text = f"\\boxed{{{spec.expected}}}"
-    expected = _math_verify_parse(
-        gold_text, extraction_config=[LatexExtractionConfig()], parsing_timeout=_timeout(), raise_on_error=True
-    )
+    with _deadline_phase(MATH_DEADLINE_REFERENCE_PARSE):
+        expected = _math_verify_parse(
+            gold_text, extraction_config=[LatexExtractionConfig()], parsing_timeout=_timeout(), raise_on_error=True
+        )
     if not _is_expression(expected):
         raise InvalidTask("raw math profile could not parse the reference")
-    parsed = _math_verify_parse(
-        candidate,
-        extraction_config=[ExprExtractionConfig(), LatexExtractionConfig()],
-        parsing_timeout=_timeout(),
-        raise_on_error=True,
-    )
-    match = bool(parsed) and _verify(expected, parsed)
-    chosen = None
-    if parsed:
-        gold_strings = strings_of(expected)
-        prediction_strings = strings_of(parsed)
-        chosen = next(
-            (value for value in prediction_strings if any(_verify(gold, value) for gold in gold_strings)),
-            prediction_strings[0],
+    with _deadline_phase(MATH_DEADLINE_CANDIDATE_PARSE):
+        parsed = _math_verify_parse(
+            candidate,
+            extraction_config=[ExprExtractionConfig(), LatexExtractionConfig()],
+            parsing_timeout=_timeout(),
+            raise_on_error=True,
         )
-    if not match and spec.allow_additive_constant:
-        latex_prediction = _math_verify_parse(
-            candidate, extraction_config=[LatexExtractionConfig()], parsing_timeout=_timeout(), raise_on_error=True
-        )
-        match = _additive_constant_match(expected, latex_prediction)
-        if match:
+    with _deadline_phase(MATH_DEADLINE_COMPARISON):
+        match = bool(parsed) and _verify(expected, parsed)
+        chosen = None
+        if parsed:
+            gold_strings = strings_of(expected)
+            prediction_strings = strings_of(parsed)
             chosen = next(
-                strings_of([value])[0] for value in latex_prediction if _additive_constant_match(expected, [value])
+                (value for value in prediction_strings if any(_verify(gold, value) for gold in gold_strings)),
+                prediction_strings[0],
             )
+        if not match and spec.allow_additive_constant:
+            latex_prediction = _math_verify_parse(
+                candidate, extraction_config=[LatexExtractionConfig()], parsing_timeout=_timeout(), raise_on_error=True
+            )
+            match = _additive_constant_match(expected, latex_prediction)
+            if match:
+                chosen = next(
+                    strings_of([value])[0] for value in latex_prediction if _additive_constant_match(expected, [value])
+                )
     return scored(float(match), extracted=candidate, expected=spec.expected, parsed_candidate=chosen)
 
 
@@ -390,33 +418,39 @@ def _grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
 
         if spec.math_type is not MathType.SCALAR:
             raise InvalidTask("boxed math profile requires scalar math_type")
-        expected = _math_verify_parse(f"\\boxed{{{spec.expected}}}", parsing_timeout=_timeout(), raise_on_error=True)
+        with _deadline_phase(MATH_DEADLINE_REFERENCE_PARSE):
+            expected = _math_verify_parse(f"\\boxed{{{spec.expected}}}", parsing_timeout=_timeout(), raise_on_error=True)
         if not expected:
             raise InvalidTask("math-verify cannot parse boxed reference")
-        parsed = _candidate_parse(
-            lambda: _math_verify_parse(f"\\boxed{{{candidate}}}", parsing_timeout=_timeout(), raise_on_error=True)
-        )
+        with _deadline_phase(MATH_DEADLINE_CANDIDATE_PARSE):
+            parsed = _candidate_parse(
+                lambda: _math_verify_parse(f"\\boxed{{{candidate}}}", parsing_timeout=_timeout(), raise_on_error=True)
+            )
         if not parsed:
             return scored(0.0, reason="missing_parse", expected_parsed=bool(expected), candidate_parsed=bool(parsed))
-        match = bool(_verify(expected, parsed))
-        if not match and spec.allow_additive_constant:
-            match = _additive_constant_match(expected, parsed)
+        with _deadline_phase(MATH_DEADLINE_COMPARISON):
+            match = bool(_verify(expected, parsed))
+            if not match and spec.allow_additive_constant:
+                match = _additive_constant_match(expected, parsed)
         return scored(float(match), extracted=candidate, expected=spec.expected)
     is_list = spec.math_type is MathType.LIST
-    expected = _parsed_members(spec.expected) if is_list else [_parse(spec.expected)]
+    with _deadline_phase(MATH_DEADLINE_REFERENCE_PARSE):
+        expected = _parsed_members(spec.expected) if is_list else [_parse(spec.expected)]
     if not all(_is_expression(member) for member in expected):
         raise InvalidTask(f"math-verify cannot parse expected {spec.expected!r}")
 
-    parsed = _candidate_parse(lambda: _parsed_members(candidate) if is_list else [_parse(candidate)])
+    with _deadline_phase(MATH_DEADLINE_CANDIDATE_PARSE):
+        parsed = _candidate_parse(lambda: _parsed_members(candidate) if is_list else [_parse(candidate)])
     if not any(parsed):
         return scored(0.0, reason="unparsable", extracted=candidate, expected=spec.expected)
 
-    if is_list:
-        match = _members_match(expected, parsed)
-    else:
-        match = _verify(expected[0], parsed[0], allow_set_relation_comp=spec.math_type in SET_TYPES)
-    if not match and spec.allow_additive_constant and not is_list:
-        match = _additive_constant_match(expected[0], parsed[0])
+    with _deadline_phase(MATH_DEADLINE_COMPARISON):
+        if is_list:
+            match = _members_match(expected, parsed)
+        else:
+            match = _verify(expected[0], parsed[0], allow_set_relation_comp=spec.math_type in SET_TYPES)
+        if not match and spec.allow_additive_constant and not is_list:
+            match = _additive_constant_match(expected[0], parsed[0])
     return scored(float(bool(match)), extracted=candidate, expected=spec.expected)
 
 
