@@ -145,17 +145,6 @@ class JuneSnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[June
         return eqx.tree_at(lambda model: model.transformer, self, cast(Transformer, transformer))
 
 
-def june_trainable_filter(model: JuneSnowballLMHeadModel):
-    """Exclude fixed QB routing biases from gradients and optimizer weight decay."""
-    mask = jax.tree.map(lambda _: True, model)
-    assert model.transformer.blocks is not None
-    return eqx.tree_at(
-        lambda tree: tuple(block.mlp.router_bias for block in tree.transformer.blocks),
-        mask,
-        tuple(False for _ in model.transformer.blocks),
-    )
-
-
 class JunePipelineStage(eqx.Module):
     """One contiguous set of June blocks with only its owned boundary weights."""
 

@@ -236,14 +236,6 @@ class ExtractedDiagnosticLogSlice(DiagnosticLogsArtifact):
     content_fingerprint: str
 
 
-class ExtractedDiagnosticLogs(DiagnosticLogsArtifact):
-    """Combined result for the public diagnostic-log extraction helpers."""
-
-    ghalogs: ExtractedPartitionedDiagnosticLogs
-    logchunks: ExtractedDiagnosticLogSlice
-    loghub: ExtractedDiagnosticLogSlice
-
-
 class MaterializedDiagnosticLogParquet(DiagnosticLogsArtifact):
     """Reusable parquet shards for a diagnostic-log corpus or partition."""
 
@@ -395,12 +387,6 @@ def training_ready_sources() -> tuple[IngestionSourceManifest, ...]:
     """Return only source entries that are approved for training ingestion."""
 
     return tuple(source for source in SOURCE_INVENTORY if source.policy.training_allowed)
-
-
-def blocked_sources() -> tuple[IngestionSourceManifest, ...]:
-    """Return source entries blocked from both training and eval use."""
-
-    return tuple(source for source in SOURCE_INVENTORY if source.policy.usage_policy == UsagePolicy.BLOCKED)
 
 
 @dataclass
@@ -1092,49 +1078,6 @@ def extract_loghub(
     )
 
 
-def extract_diagnostic_logs(
-    ghalogs_input_path: str,
-    output_path: str,
-    *,
-    logchunks_input_path: str | None = None,
-    loghub_input_path: str | None = None,
-    max_ghalogs_members: int = DEFAULT_GHALOGS_MAX_MEMBERS,
-    max_logchunks_examples: int = DEFAULT_LOGCHUNKS_MAX_EXAMPLES,
-    max_loghub_files: int = DEFAULT_LOGHUB_MAX_FILES,
-) -> ExtractedDiagnosticLogs:
-    """Extract GHALogs for training plus LogChunks/LogHub as eval-only records."""
-    return ExtractedDiagnosticLogs(
-        ghalogs=extract_ghalogs(ghalogs_input_path, output_path, max_members=max_ghalogs_members),
-        logchunks=extract_logchunks(logchunks_input_path, output_path, max_examples=max_logchunks_examples),
-        loghub=extract_loghub(loghub_input_path, output_path, max_files=max_loghub_files),
-    )
-
-
-def extract_ghalogs_step(
-    *,
-    source_path: str,
-    max_members: int = DEFAULT_GHALOGS_MAX_MEMBERS,
-    output_path_prefix: str | None = None,
-) -> StepSpec:
-    """Return a StepSpec that materializes the capped GHALogs sample."""
-    source = SOURCE_MANIFESTS["ghalogs"]
-    return StepSpec(
-        name="processed/diagnostic_logs/ghalogs_public_sample",
-        output_path_prefix=output_path_prefix,
-        fn=lambda output_path: extract_ghalogs(source_path, output_path, max_members=max_members),
-        hash_attrs={
-            "version": "v6",
-            "source_path": source_path,
-            "source_label": source.source_label,
-            "max_members": max_members,
-            "job_log_chunk_bytes": _GHALOGS_JOB_LOG_CHUNK_BYTES,
-            "split_policy": "97% train / 1% dev / 1% test / 1% issue_5093_holdout",
-            "source_content_fingerprint": source.fingerprint(),
-            "sanitization_rules": "gh token/aws key/secret kv/email/user path/internal gs path",
-        },
-    )
-
-
 class _ShardRange(NamedTuple):
     """One contiguous byte range ``[start, stop)`` of the archive, downloaded as its own zephyr task."""
 
@@ -1469,49 +1412,3 @@ def ghalogs_public_normalize_steps(
         output_path_prefix=output_path_prefix,
     )
     return (download, materialized, train_partition, normalized)
-
-
-def extract_logchunks_step(
-    *,
-    source_path: str | None = None,
-    max_examples: int = DEFAULT_LOGCHUNKS_MAX_EXAMPLES,
-    output_path_prefix: str | None = None,
-) -> StepSpec:
-    """Return a StepSpec that materializes the capped LogChunks eval slice."""
-    source = SOURCE_MANIFESTS["logchunks"]
-    return StepSpec(
-        name="processed/diagnostic_logs/logchunks_eval_only",
-        output_path_prefix=output_path_prefix,
-        fn=lambda output_path: extract_logchunks(source_path, output_path, max_examples=max_examples),
-        hash_attrs={
-            "version": "v4",
-            "source_path": source_path,
-            "source_label": source.source_label,
-            "max_examples": max_examples,
-            "source_content_fingerprint": source.fingerprint(),
-            "sanitization_rules": "gh token/aws key/secret kv/email/user path/internal gs path",
-        },
-    )
-
-
-def extract_loghub_step(
-    *,
-    source_path: str | None = None,
-    max_files: int = DEFAULT_LOGHUB_MAX_FILES,
-    output_path_prefix: str | None = None,
-) -> StepSpec:
-    """Return a StepSpec that materializes the capped LogHub eval slice."""
-    source = SOURCE_MANIFESTS["loghub"]
-    return StepSpec(
-        name="processed/diagnostic_logs/loghub_eval_only",
-        output_path_prefix=output_path_prefix,
-        fn=lambda output_path: extract_loghub(source_path, output_path, max_files=max_files),
-        hash_attrs={
-            "version": "v4",
-            "source_path": source_path,
-            "source_label": source.source_label,
-            "max_files": max_files,
-            "source_content_fingerprint": source.fingerprint(),
-            "sanitization_rules": "gh token/aws key/secret kv/email/user path/internal gs path",
-        },
-    )
