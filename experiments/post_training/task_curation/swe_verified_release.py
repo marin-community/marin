@@ -8,6 +8,7 @@ import io
 import json
 import tomllib
 
+import click
 import pyarrow as pa
 import pyarrow.parquet as pq
 from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
@@ -17,13 +18,11 @@ from rigging.provenance import Provenance
 from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.resources import resource_bytes
 
-_SOURCE = (
-    "s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/"
-    "swe-verified-20261112-v4/release/agentic-train.parquet"
-)
+from experiments.post_training.task_curation import CANONICAL_ARTIFACT_ROOT
+
 _SOURCE_SHA256 = "453552f9d4e1fa27710f9434a303f7ab5ff390c22deb54572f9be885a2a80f5d"
 _SOURCE_ROWS = 5608
-_OUTPUT = "s3://marin-us-east-08a/marin/users/ahmad/rl-data/swe-verified-task-spec-setup/2026.11.19.1"
+_OUTPUT = StoragePath(CANONICAL_ARTIFACT_ROOT) / "rl-data" / "inputs" / "swe-verified-task-spec-setup" / "2026.11.19.1"
 _TASK_COLUMN = "task_spec"
 
 
@@ -96,14 +95,14 @@ def convert_release(source: StoragePath, sha256: str, rows: int, output: Storage
     return manifest
 
 
-def main() -> None:
+@click.command()
+@click.option("--source", required=True, help="Storage URI of the sealed v4 training Parquet.")
+def main(source: str) -> None:
     provenance = Provenance.capture()
     if provenance.dirty or not provenance.base_commit:
         raise SystemExit("Publish from a clean commit so the manifest identifies the converter")
     configure_coreweave_s3()
-    manifest = convert_release(
-        StoragePath(_SOURCE), _SOURCE_SHA256, _SOURCE_ROWS, StoragePath(_OUTPUT), provenance.base_commit
-    )
+    manifest = convert_release(StoragePath(source), _SOURCE_SHA256, _SOURCE_ROWS, _OUTPUT, provenance.base_commit)
     print(json.dumps({key: value for key, value in manifest.items() if key != "tasks"}))
 
 

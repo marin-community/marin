@@ -24,7 +24,7 @@
       "version": "2026.10.23.1"
     }
   ],
-  "name": "users/ahmad/snowball-100k-agentic",
+  "name": "snowball-100k-agentic",
   "released": [
     {
       "agentic": true,
@@ -33,7 +33,7 @@
       "license": "unverified",
       "rows": 5608,
       "sha256": "ae53e7a3678a3ef05c5364834644d8eefb5bdc258f78f3b4c4d316fa956a0192",
-      "uri": "s3://marin-us-east-08a/marin/users/ahmad/rl-data/swe-verified-task-spec-setup/2026.11.19.1/agentic-train.parquet",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/inputs/swe-verified-task-spec-setup/2026.11.19.1/agentic-train.parquet",
       "version": "2026.11.19.1"
     }
   ],
@@ -51,7 +51,7 @@
     "Task Trove:laion__nemotron-gym-agent-calendar-v2": 2699,
     "Task Trove:laion__nemotron-gym-instruction-following-calendar-v3": 5673,
     "Task Trove:laion__nemotron-gym-instruction-following-structured-v3": 9008,
-    "s3://marin-us-east-08a/marin/users/ahmad/rl-data/swe-verified-task-spec-setup/2026.11.19.1/agentic-train.parquet": 5608
+    "s3://marin-us-east-02a/marin/rl-data/inputs/swe-verified-task-spec-setup/2026.11.19.1/agentic-train.parquet": 5608
   },
   "sources": {
     "MarinSkyRL:eurus2_code": "nonagentic",

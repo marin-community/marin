@@ -78,7 +78,7 @@ no separate packing token budget, and the campaign layout splits a 102,400-token
 
 ### Task selection and native resume
 
-Pass `--tasks users/ahmad/snowball-100k-agentic@2026.11.19.2` for a mixed preset. The versioned
+Pass `--tasks snowball-100k-agentic@2026.11.19.2` for a mixed preset. The versioned
 selection contains the admitted SWE v4 agent tasks and the one-turn training rows. Both task
 families must be present, and training rows must be disjoint from the held-out evaluation.
 
@@ -91,7 +91,7 @@ run’s artifact name and version, as printed in its plan under `runs` as `name`
 ```bash
 uv run python -m experiments.post_training.mochi_rl \
   --preset train-medium-agentic --version 2026.11.19.1 --checkpoints latest \
-  --tasks users/ahmad/snowball-100k-agentic@2026.11.19.2 --resume "$SOURCE_RUN" --plan
+  --tasks snowball-100k-agentic@2026.11.19.2 --resume "$SOURCE_RUN" --plan
 ```
 
 ### Compose SFT and RL
@@ -110,8 +110,8 @@ uv run python -m experiments.post_training.mochi_rl \
 
 ### Convert released agent tasks
 
-Run `uv run python -m experiments.post_training.task_curation.swe_verified_release` from a clean
-commit to materialize the declared Harbor bootstrap in each released TaskSpec's `setup_commands`.
+Run `uv run python -m experiments.post_training.task_curation.swe_verified_release --source "$INPUT_URI"`
+from a clean commit to copy the declared Harbor bootstrap into each released TaskSpec's `setup_commands`.
 The converter checks the pinned input and writes versioned Parquet plus a manifest of source,
 output, commit, and per-row digests. Pin the derived file and its digest in the mixed selection recipe.
 
