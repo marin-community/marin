@@ -136,15 +136,7 @@ class RingBufferHandler(logging.Handler):
 
 
 class LiveStderrHandler(logging.StreamHandler):
-    """Write every record to the ``sys.stderr`` that is current at emit time.
-
-    Test capture and CLI harnesses (pytest, Click's ``CliRunner``) swap
-    ``sys.stderr`` and close the previous stream. A handler that binds the
-    stream once keeps writing into a closed capture, and logging then prints a
-    ``--- Logging error ---`` traceback into the next live stream, corrupting
-    whatever output that capture holds. Re-resolving the stream per record
-    keeps logging on the live stderr.
-    """
+    """Write each record to the current stderr after capture swaps streams."""
 
     def emit(self, record: logging.LogRecord) -> None:
         self.stream = sys.stderr

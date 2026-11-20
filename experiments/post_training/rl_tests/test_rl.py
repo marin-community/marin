@@ -61,8 +61,7 @@ pytestmark = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(
 
 
 def printed_status(output):
-    # The status document is stdout content; stderr (warnings, logging dumps)
-    # must not enter the parse, so callers pass result.stdout.
+    # CliRunner merges stderr into result.output; status is on result.stdout.
     marker = output.rfind("\npreset:")
     return yaml.safe_load(output[marker + 1 if marker >= 0 else 0 :].split("\n# ", 1)[0])
 
