@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pinned retrieval state for the licensed OpenResearcher data and freshly built BM25 index."""
+"""Pinned retrieval state for the licensed OpenResearcher data and pinned BM25 index."""
 
 from typing import Literal
 

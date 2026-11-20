@@ -51,7 +51,7 @@ from skyrl_gym.envs.nemotron_ultra.tool_comparison_verifyit import grade_expecte
 from skyrl_gym.envs.reasoning_gym.scoring import extract_answer
 from skyrl_gym.envs.instruction_verifyit import grade_nemotron_instructions
 from skyrl_gym.envs.verifyit_clients import grade_reasoning_entry
-from skyrl_gym.python_execution import PythonKernel
+from skyrl_gym.python_execution import PythonKernel, python_tool_output
 from skyrl_gym.lean_execution import compile_lean
 from skyrl_gym.task_records import fold_grades, grade_result, skipped_grade
 from skyrl_gym.task_sessions import BlockingOperations
@@ -268,13 +268,7 @@ class NemotronTaskSession:
             except (json.JSONDecodeError, TypeError) as error:
                 output = json.dumps({"error": f"Invalid tool call arguments: {error!r}"})
             else:
-                if function.get("name") != "stateful_python_code_exec":
-                    output = json.dumps({"error": f"Unknown tool: {function.get('name')}"})
-                elif not isinstance(arguments, dict) or not isinstance(arguments.get("code"), str):
-                    output = json.dumps({"error": "stateful_python_code_exec requires a string code argument"})
-                else:
-                    result = await self.python.execute(arguments["code"], timeout=10)
-                    output = (result.stdout + result.stderr).decode().removesuffix("\n")
+                output = await python_tool_output(self.python, function.get("name"), arguments)
             observations.append({"role": "tool", "tool_call_id": str(call.get("id")), "content": output})
         return observations
 

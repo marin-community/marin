@@ -14,7 +14,7 @@ from taskcompendium.openresearcher import OPENRESEARCHER_ACTION_INTERFACE
 from rolloutengine.harness.shell import ShellHarness, ToolProvider
 from rolloutengine.models import MachineRuntimeSpec, RolloutLimits, TaskRolloutSpec, TraceMode
 from taskcompendium.fetch import FETCH_ACTION_INTERFACE
-from taskcompendium.models import TaskSpec
+from taskcompendium.models import ExecutionRequirements, TaskSpec
 from taskcompendium.runtime.shell import ShellToolConfig
 
 from skyrl_gym.nemotron_tools import NEMOTRON_PYTHON_INTERFACE, NemotronPythonProvider
@@ -29,11 +29,6 @@ class ShellHarnessSettings(BaseModel):
     command_timeout: float | None
     retrieval_service: str | None = None
     shell_tool: ShellToolConfig
-
-
-def load_task_spec(serialized: str) -> TaskSpec:
-    """Parse a frozen canonical task without dropping fields or changing its contract."""
-    return TaskSpec.model_validate_json(serialized)
 
 
 def rollout_spec(
@@ -57,14 +52,33 @@ def rollout_spec(
             shell_tool=ShellToolConfig.model_validate(shell_tool),
         )
         harness += ":" + json.dumps(shell_settings.model_dump(), sort_keys=True, separators=(",", ":"))
+    requirements = task.execution_requirements
+    if requirements is not None:
+        for name, declared in (
+            ("total_turn_timeout", requirements.agent_timeout_sec),
+            ("verifier_timeout", requirements.verifier_timeout_sec),
+        ):
+            configured = settings.get(name)
+            settings[name] = declared if configured is None else min(configured, declared)
     return TaskRolloutSpec(
         task=task,
         harness=harness,
-        task_machine=task_machine,
-        verifier_machine=verifier_machine,
+        task_machine=_declared_machine(task_machine, task.execution_requirements),
+        verifier_machine=_declared_machine(verifier_machine, task.verifier_execution_requirements),
         limits=RolloutLimits.model_validate(settings),
         trace=trace,
     )
+
+
+def _declared_machine(
+    runtime: MachineRuntimeSpec | None, requirements: ExecutionRequirements | None
+) -> MachineRuntimeSpec | None:
+    if runtime is None or requirements is None:
+        return runtime
+    return runtime.model_copy(update={
+        name: max(getattr(runtime, name) or 0, getattr(requirements, name))
+        for name in ("cpus", "memory_mb", "storage_mb")
+    })
 
 
 TOOL_PROVIDERS: Mapping[str, ToolProvider] = MappingProxyType({

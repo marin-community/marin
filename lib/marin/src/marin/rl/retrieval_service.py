@@ -27,12 +27,14 @@ from rigging.timing import Duration
 from taskcompendium.openresearcher import OpenResearcherState
 
 from marin.inference.iris import _terminate_job, _wait_for_endpoint
+from marin.rl.retrieval_backend import HEALTH_PATH
 
 
 @dataclass(frozen=True)
 class RetrievalServiceConfig:
     state: OpenResearcherState
     index_uri: str
+    region: str
     root: str
     backend_python: str
     max_concurrent_requests: int
@@ -40,7 +42,7 @@ class RetrievalServiceConfig:
 
 
 def stage_index(config: RetrievalServiceConfig) -> None:
-    """Verify regional index bytes before loading a searcher or advertising health."""
+    """Copy missing regional index files, then verify every byte before service readiness."""
     if not config.index_uri.startswith("s3://"):
         raise ValueError("Retrieval index must be staged in the run regional bucket")
     source = StoragePath(config.index_uri)
@@ -70,12 +72,12 @@ def run_retrieval_service(config: RetrievalServiceConfig) -> None:
     info = get_job_info()
     if info is None:
         raise RuntimeError("Retrieval service must run inside its owning Iris job tree")
-    if info.worker_region is None:
-        raise RuntimeError("Retrieval service requires a known worker region")
+    if info.worker_region is not None and info.worker_region.lower() != config.region.lower():
+        raise ValueError("Retrieval service worker is outside the configured run region")
     bucket = data_buckets()[StoragePath(config.index_uri).bucket]
     if bucket.store is not StoreType.COREWEAVE or bucket.signing_region is None:
         raise ValueError("Retrieval service requires a declared regional CoreWeave bucket")
-    if bucket.signing_region.lower() != info.worker_region.lower():
+    if bucket.signing_region.lower() != config.region.lower():
         raise ValueError("Stage the index in the RL run region before launching its service")
     configure_coreweave_s3()
     stage_index(config)
@@ -103,7 +105,7 @@ def run_retrieval_service(config: RetrievalServiceConfig) -> None:
                     if process.poll() is not None:
                         raise RuntimeError("Pinned retrieval backend ended before readiness")
                     try:
-                        response = client.get(f"http://127.0.0.1:{port}/health")
+                        response = client.get(f"http://127.0.0.1:{port}{HEALTH_PATH}")
                     except httpx.ConnectError:
                         time.sleep(0.1)
                         continue
@@ -138,6 +140,9 @@ def retrieval_service(launch: RetrievalServiceLaunch) -> Iterator[str]:
     """Own one service child in the current RL run and wait for its pinned health."""
     if launch.resources.target_cluster is not None:
         raise ValueError("Retrieval service must inherit the RL run cluster")
+    if launch.resources.regions is not None and tuple(launch.resources.regions) != (launch.config.region,):
+        raise ValueError("Retrieval service placement must match its run region")
+    resources = replace(launch.resources, regions=(launch.config.region,))
     storage = {
         name: launch.environment.secrets[name] if name in launch.environment.secrets else require_secret(name)
         for name in COREWEAVE_SECRET_NAMES
@@ -151,7 +156,7 @@ def retrieval_service(launch: RetrievalServiceLaunch) -> Iterator[str]:
         JobRequest(
             name=launch.config.endpoint_name,
             entrypoint=Entrypoint.from_callable(run_retrieval_service, args=(launch.config,)),
-            resources=launch.resources,
+            resources=resources,
             environment=environment,
             timeout=launch.lifetime,
             max_retries_failure=0,
@@ -162,7 +167,7 @@ def retrieval_service(launch: RetrievalServiceLaunch) -> Iterator[str]:
     )
     try:
         address, _ = _wait_for_endpoint(job, launch.config.endpoint_name, launch.startup_timeout)
-        response = httpx.get(address + "/health", timeout=launch.startup_timeout, trust_env=False)
+        response = httpx.get(address + HEALTH_PATH, timeout=launch.startup_timeout, trust_env=False)
         response.raise_for_status()
         if response.json()["state"] != launch.config.state.model_dump(mode="json"):
             raise ValueError("Retrieval service health differs from the run pinned state")

@@ -58,6 +58,21 @@ def validate_spec(spec: TaskRolloutSpec, machine_factories: Mapping[str, Machine
     ):
         if spec.task_machine is not None and spec.task_machine.network is not NetworkPolicy.DENY:
             raise ValueError("Service-only task tools require a network-denied actor and a private relay")
+    for runtime, declared in (
+        (spec.task_machine, task.execution_requirements),
+        (spec.verifier_machine, task.verifier_execution_requirements),
+    ):
+        if runtime is None or declared is None:
+            continue
+        if any((getattr(runtime, name) or 0) < getattr(declared, name) for name in ("cpus", "memory_mb", "storage_mb")):
+            raise ValueError("Selected machine is smaller than the task's declared allocation")
+    if declared := task.execution_requirements:
+        for limit, deadline in (
+            (spec.limits.total_turn_timeout, declared.agent_timeout_sec),
+            (spec.limits.verifier_timeout, declared.verifier_timeout_sec),
+        ):
+            if limit is None or limit > deadline:
+                raise ValueError("Rollout phase limits must honor the task's declared deadlines")
     grader = task.grader
     judge = grades_with_judge(grader)
     host_judge = judge and isinstance(grader, VerifyitGrader)

@@ -615,12 +615,18 @@ def script_grading_task(trusted_bootstrap_task):
 
 
 @pytest.mark.parametrize("candidate,reward", [(b"print(42)\n", 1.0), (b"print(0)\n", 0.0)])
+@pytest.mark.parametrize("grader_timeout,runtime_timeout", [(30, None), (None, 5), (None, None)])
 def test_script_grader_scores_captured_files_in_sandbox_and_task_grading(
-    tmp_path, script_grading_task, candidate, reward
+    tmp_path, script_grading_task, candidate, reward, grader_timeout, runtime_timeout
 ):
+    script_grading_task = script_grading_task.model_copy(
+        update={"grader": script_grading_task.grader.model_copy(update={"timeout": grader_timeout})}
+    )
     factory = LocalGradingMachines(tmp_path)
     attempt = grading_attempt(finished(script_grading_task), RuntimeEvidence({"/app/numbers.py": candidate}, "{}"))
-    sandbox = asyncio.run(grade_in_sandbox(script_grading_task, attempt, factory, GRADER_MACHINE))
+    sandbox = asyncio.run(
+        grade_in_sandbox(script_grading_task, attempt, factory, GRADER_MACHINE, timeout=runtime_timeout)
+    )
     runtime = grade_task(script_grading_task, attempt, machine_factory=factory, machine_spec=GRADER_MACHINE)
     assert (sandbox.status, sandbox.reward) == (Outcome.GRADED, reward)
     assert (runtime.status, runtime.reward) == (Outcome.GRADED, reward)

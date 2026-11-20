@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Serve pinned retrieval through the same private process relay used by judges."""
+"""Serve pinned search results and complete documents to network-denied task actors."""
 
 import asyncio
 import json
@@ -19,19 +19,19 @@ from taskcompendium.browsecomp import browsecomp_tools
 from taskcompendium.models import FunctionDefinition, ProviderRequirement
 from taskcompendium.openresearcher import openresearcher_state
 
-from rolloutengine.harness.browsecomp import retrieval_output
+from rolloutengine.harness.browsecomp import INVALID_ARGUMENTS, retrieval_output
 from rolloutengine.harness.shell import ToolCallResult, ToolContext
 
 RETRIEVAL_RELAY_PORT = 8789
-# Each base64 frame stays under the existing relay's 4 MiB response cap.
-DOCUMENT_CHUNK_BYTES = 1024 * 1024
+RETRIEVAL_TIMEOUT = 300
 GUEST_CLIENT = """import base64, json, sys, urllib.request
 request = json.load(sys.stdin)
 endpoint, target = request.pop("endpoint"), request.pop("target")
+timeout = request.pop("timeout")
 def call(path, body):
     req = urllib.request.Request(
         endpoint + path, data=json.dumps(body).encode(), headers={"Content-Type":"application/json"})
-    with urllib.request.urlopen(req, timeout=300) as response:
+    with urllib.request.urlopen(req, timeout=timeout) as response:
         return json.load(response)
 if request["name"] == "search":
     result = call("/search", request)
@@ -66,11 +66,12 @@ class RetrievalServiceSession:
             or set(arguments) != {parameter}
             or not isinstance(arguments[parameter], str)
         ):
-            return ToolCallResult(json.dumps({"error": "Invalid offline search tool or arguments"}))
+            return ToolCallResult(INVALID_ARGUMENTS)
         remote = f"/tmp/retrieval-{uuid.uuid4().hex}.json"
         payload = {
             "endpoint": self.endpoint,
             "target": remote,
+            "timeout": RETRIEVAL_TIMEOUT,
             "name": name,
             "arguments": arguments,
             "state": self.requirement.initial_state,
@@ -81,7 +82,7 @@ class RetrievalServiceSession:
                     Command(
                         ("python3", "-c", GUEST_CLIENT),
                         stdin=json.dumps(payload).encode(),
-                        timeout=300,
+                        timeout=RETRIEVAL_TIMEOUT,
                     )
                 )
             )
@@ -115,7 +116,7 @@ class OpenResearcherServiceProvider:
             raise ValueError("Retrieval relay requires its thin actor machine and a service endpoint")
         cleanup = AsyncExitStack()
         try:
-            client = await cleanup.enter_async_context(httpx.AsyncClient(timeout=300, trust_env=False))
+            client = await cleanup.enter_async_context(httpx.AsyncClient(timeout=RETRIEVAL_TIMEOUT, trust_env=False))
             health = await client.get(self.endpoint + "/health")
             health.raise_for_status()
             if health.json()["state"] != context.requirement.initial_state:

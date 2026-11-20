@@ -16,7 +16,7 @@ from rolloutengine.harness.shell import task_prompt as marin_task_prompt
 from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS, assistant_prefix_prompt
 from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
 from rolloutengine.validation import task_machine_reason
-from skyrl_gym.rollout_specs import is_shell_harness, load_task_spec, rollout_spec, shell_harness
+from skyrl_gym.rollout_specs import is_shell_harness, rollout_spec, shell_harness
 from skyrl_gym.source_task import session_parameters, source_task
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import (
@@ -216,7 +216,7 @@ def _source_task_prompt(row: dict, index: int, *, source_name: str, environment_
 
 def _canonical_task_prompt(row: dict, _index: int, *, environment_configs: Mapping[str, dict]) -> dict:
     """Bind runtime settings when a canonical TaskSpec enters the trainer."""
-    task = load_task_spec(row[TASK_SPEC_COLUMN])
+    task = TaskSpec.model_validate_json(row[TASK_SPEC_COLUMN])
     config = environment_configs["task_spec"]
     final_event = task.context.events[-1]
     # Only the assistant-prefix harness keeps an unfinished assistant message last.

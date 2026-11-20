@@ -136,7 +136,8 @@ def test_service_child_submission_forwards_mounted_storage_credentials(monkeypat
             assert dict(wire.secrets) == {"CW_KEY_ID": "mounted-id", "CW_KEY_SECRET": "mounted-secret"}
             assert not {"CW_KEY_ID", "CW_KEY_SECRET", "DAYTONA_RL_API_KEY"} & wire.env_vars.keys()
             assert environment.secret_behavior is SecretBehavior.ISOLATE
-            assert request["ports"] == ["retrieval"]
+            region = next(item for item in request["constraints"] if item.key == "region")
+            assert tuple(item.value for item in region.values) == ("us-east-02a",)
             raise SubmissionCaptured
 
     launch = RetrievalServiceLaunch(
@@ -151,6 +152,7 @@ def test_service_child_submission_forwards_mounted_storage_credentials(monkeypat
                 include_get_document=True,
             ),
             index_uri="s3://fixture/index",
+            region="US-EAST-02A",
             root="/opt/openresearcher",
             backend_python="/usr/local/bin/python",
             max_concurrent_requests=64,

@@ -13,29 +13,31 @@ from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+HEALTH_PATH = "/health"
 CHUNK_BYTES = 1024 * 1024
 
 
 class OpenResearcherIndex:
     """Keep the source's searcher and tokenizer loaded for the life of one run."""
 
-    def __init__(self, root: Path, state: dict, document_cache_size: int):
+    def __init__(self, root: Path, top_k: int, snippet_max_tokens: int, document_cache_size: int):
         # These optional image dependencies are pinned by the service's immutable image.
         backend = importlib.import_module("browsecomp.retrieval")
         self.searcher = backend.BM25Searcher(Namespace(index_path=str(root / "index/bm25")))
         self.tokenizer = backend.AutoTokenizer.from_pretrained(root / "tokenizer", local_files_only=True)
-        self.state = state
+        self.top_k = top_k
+        self.snippet_max_tokens = snippet_max_tokens
         self._document = lru_cache(maxsize=document_cache_size)(
             lambda docid: json.dumps(self.searcher.get_document(docid), ensure_ascii=False).encode()
         )
 
     def search(self, query: str) -> list[dict]:
         result = []
-        for candidate in self.searcher.search(query, self.state["top_k"]):
+        for candidate in self.searcher.search(query, self.top_k):
             tokens = self.tokenizer.encode(candidate["text"], add_special_tokens=False)
             snippet = (
-                self.tokenizer.decode(tokens[: self.state["snippet_max_tokens"]], skip_special_tokens=True)
-                if len(tokens) > self.state["snippet_max_tokens"]
+                self.tokenizer.decode(tokens[: self.snippet_max_tokens], skip_special_tokens=True)
+                if len(tokens) > self.snippet_max_tokens
                 else candidate["text"]
             )
             result.append({"docid": candidate["docid"], "score": candidate["score"], "snippet": snippet})
@@ -56,7 +58,7 @@ def retrieval_handler(index: OpenResearcherIndex, state: dict) -> type[BaseHTTPR
             self.wfile.write(body)
 
         def do_GET(self) -> None:
-            if self.path != "/health":
+            if self.path != HEALTH_PATH:
                 self.send_error(404)
                 return
             self.respond({"state": state})
@@ -102,7 +104,7 @@ def retrieval_handler(index: OpenResearcherIndex, state: dict) -> type[BaseHTTPR
 
 
 class RetrievalServer(ThreadingHTTPServer):
-    """Bound concurrent requests to the run's explicit CPU service allocation."""
+    """Bound active requests to the configured service concurrency."""
 
     daemon_threads = True
 
@@ -134,7 +136,7 @@ def main() -> None:
     args = parser.parse_args()
     state = json.loads(args.state.read_bytes())
     with importlib.import_module("browsecomp.tool").source_diagnostics():
-        index = OpenResearcherIndex(args.root, state, args.concurrency)
+        index = OpenResearcherIndex(args.root, state["top_k"], state["snippet_max_tokens"], args.concurrency)
     with RetrievalServer(("0.0.0.0", args.port), retrieval_handler(index, state), args.concurrency) as server:
         server.serve_forever()
 
