@@ -1026,3 +1026,31 @@ def test_reject_forced_socket_transport_allows_non_forcing_env() -> None:
     reject_forced_socket_transport({"NCCL_SOCKET_FAMILY": "AF_INET"}, num_nodes=32)
     reject_forced_socket_transport({"NCCL_NET": "Socket"}, num_nodes=1)
     reject_forced_socket_transport({}, num_nodes=32)
+
+
+def test_best_checkpoint_binds_model_before_artifact_fingerprinting() -> None:
+    spec = _spec()
+    recipe = yaml.safe_load(spec.config_yaml)
+    recipe["trainer"]["callbacks"] = [
+        {
+            "type": "best_checkpoint",
+            "initial_model_uri": "model-input",
+            "expected_tasks": 2,
+            "minimum_scored_tasks": 2,
+        }
+    ]
+    fingerprints = []
+    for version in ("2026.11.16.1", "2026.11.16.2"):
+        model = dataclasses.replace(
+            spec.model,
+            step=ArtifactStep.adopt("tests/model", version, f"s3://test/model/{version}", kind=LevanterCheckpoint),
+        )
+        step = skyrl_step(dataclasses.replace(spec, config_yaml=yaml.safe_dump(recipe), model=model), _execution())
+        # Lowering enforces the fingerprint pinned when the artifact was constructed.
+        step.lower()
+        config = materialized_config(step, prefix="s3://marin-us-east-08a")
+        launch = yaml.safe_load(config.launch_config_yaml)
+        callback = launch["skyrl"]["trainer"]["callbacks"][0]
+        assert callback["initial_model_uri"] == f"s3://test/model/{version}/hf/global_step-32"
+        fingerprints.append(step.fingerprint())
+    assert fingerprints[0] != fingerprints[1]

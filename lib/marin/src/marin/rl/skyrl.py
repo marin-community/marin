@@ -893,6 +893,11 @@ def _launch_config_yaml(
 ) -> str:
     recipe = _parsed_config(spec.config_yaml)
     _materialize_role_plan_config(recipe, spec.topology.role_plan)
+    callbacks = _declared_config_value(recipe, "trainer.callbacks")
+    if callbacks is not _MISSING_CONFIG_VALUE and callbacks is not None:
+        for callback in cast(list[dict[str, object]], callbacks):
+            if callback["type"] == "best_checkpoint":
+                callback["initial_model_uri"] = model.uri
     num_nodes = spec.topology.num_nodes
     if execution.role_topology is not None:
         if not is_rack_based(spec.topology.gpu_variant) or spec.topology.gpus_per_node != NVL72_GPUS_PER_NODE:
