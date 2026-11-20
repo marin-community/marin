@@ -115,6 +115,20 @@ commit to materialize the declared Harbor bootstrap in each released TaskSpec's 
 The converter checks the pinned input and writes versioned Parquet plus a manifest of source,
 output, commit, and per-row digests. Pin the derived file and its digest in the mixed selection recipe.
 
+### Task health records
+
+`uv run python -m experiments.post_training.task_curation.task_health extract --cluster CLUSTER --run NAME@VERSION`
+reads a run's resolved launch and writes one row per installed-agent attempt to
+`s3://marin-us-east-02a/marin/rl-data/task-health/attempts/<run>/<version>/attempts.parquet`: the grade,
+the last phase started, the error, the image and setup digest, and output tails for ungraded attempts.
+`skip --selection NAME@VERSION --attempts ADDRESS... --version YYYY.MM.DD.N`, run from a clean commit,
+writes `skip.parquet` and `manifest.json` to `rl-data/task-health/skip/<selection>/<version>/`. It lists a
+task when at least `MIN_FAILED_ATTEMPTS` of its attempts failed in setup or verification and none graded,
+and every training row of an image and setup shared by at least `MIN_FAILED_TASKS_PER_ENVIRONMENT` listed
+tasks. Both values are 2, at the top of `task_health.py`. With `--release FILE`, a task leaves the list
+when that fixed task file holds a changed version of it. Add `skip.parquet` to a selection recipe's `exclusions` with format
+`task_spec`. Each output is written once. The feature is `task_health.py`, its test, and this section.
+
 ## The loop
 
 1. [Curate tasks](../references/task-curation.md#run-a-campaign) into an admitted corpus.
