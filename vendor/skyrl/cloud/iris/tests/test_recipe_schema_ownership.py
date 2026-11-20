@@ -159,6 +159,12 @@ def test_code_default_declarations_match_native_dataclasses_and_canonical_choice
             if key != "self"
         }
         assert set(callback.model_fields) - {"type"} == parameters.keys(), name
-        assert {key for key, field in callback.model_fields.items() if key != "type" and field.is_required()} == {
+        required = {
             key for key, parameter in parameters.items() if parameter.default is inspect.Parameter.empty
-        }, name
+        }
+        if name == "best_checkpoint":
+            # Marin binds the adopted checkpoint after resolving model artifacts.
+            required.remove("initial_model_uri")
+        assert {
+            key for key, field in callback.model_fields.items() if key != "type" and field.is_required()
+        } == required, name
