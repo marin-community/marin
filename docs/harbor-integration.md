@@ -374,7 +374,7 @@ Verifier rewards use `Grading(method="harbor:verifier")`. Samples link trajector
 Harbor saves each attempt's result, available trajectory and a record of whether the
 trajectory exists in one transaction. Completion waits for environment cleanup, service
 shutdown and required artifact writes. Missing required evidence leaves the attempt
-incomplete and retryable. At finalization, Harbor selects the final attempt for each trial.
+incomplete. At finalization, Harbor selects the final attempt for each trial.
 An incomplete selected attempt prevents sealing, which marks the archive complete.
 A later successful retry can complete the run. Resume can recover matching finalized
 Harbor files and rebuild derived tables. It keeps the original artifacts from every
@@ -385,9 +385,11 @@ attempt. Only selected final attempts contribute normalized rows.
 Preflight captures the selected Harbor runtime's error categories. Agent failures are
 scoreable model outcomes. Passthrough failures need a verifier result to be scored.
 Infrastructure and undecided failures remain unscored. Relay loss, runtime-log collection
-failure and teardown failure are retryable infrastructure errors. Unknown error names fail
-the evaluation. Marin requires the scored fraction to meet `min_completion_rate` (default
-0.9), independently of the archive's evidence requirements for sealing.
+failure and teardown failure before verification are retryable infrastructure errors.
+When sandbox teardown fails or times out after verification, Harbor keeps the verifier
+reward, records the teardown error separately and skips the retry. Cancellation clears
+the reward. Unknown error names fail the evaluation. Marin requires the scored fraction
+to meet `min_completion_rate` (default 0.9), independently of archive sealing.
 
 ## Ownership boundary
 
