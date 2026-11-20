@@ -14,6 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 HEALTH_PATH = "/health"
+BM25_RELATIVE_PATH = "index/bm25"
 CHUNK_BYTES = 1024 * 1024
 
 
@@ -23,7 +24,7 @@ class OpenResearcherIndex:
     def __init__(self, root: Path, top_k: int, snippet_max_tokens: int, document_cache_size: int):
         # These optional image dependencies are pinned by the service's immutable image.
         backend = importlib.import_module("browsecomp.retrieval")
-        self.searcher = backend.BM25Searcher(Namespace(index_path=str(root / "index/bm25")))
+        self.searcher = backend.BM25Searcher(Namespace(index_path=str(root / BM25_RELATIVE_PATH)))
         self.tokenizer = backend.AutoTokenizer.from_pretrained(root / "tokenizer", local_files_only=True)
         self.top_k = top_k
         self.snippet_max_tokens = snippet_max_tokens

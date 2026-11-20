@@ -26,6 +26,8 @@ from shellbox.machine import MachineSpec, NetworkPolicy
 from taskcompendium.models import ProviderRequirement
 from taskcompendium.openresearcher import OPENRESEARCHER_ACTION_INTERFACE, OpenResearcherState
 
+QA_SEARCH_QUERY = "quantum physics"
+
 
 class DocumentProbe(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -73,7 +75,7 @@ class QualificationResult(BaseModel):
 
 async def concurrent_search(endpoint: str, config: QualificationConfig) -> float:
     """Return elapsed time for the declared concurrent source-contract search batch."""
-    body = {"name": "search", "arguments": {"query": "quantum physics"}, "state": config.state.model_dump(mode="json")}
+    body = {"name": "search", "arguments": {"query": QA_SEARCH_QUERY}, "state": config.state.model_dump(mode="json")}
     async with httpx.AsyncClient(timeout=300, trust_env=False) as client:
         started = time.monotonic()
         responses = await asyncio.gather(
@@ -109,7 +111,7 @@ async def actor_retrieval(endpoint: str, config: QualificationConfig) -> tuple[D
         )
         session = await OpenResearcherServiceProvider(endpoint).open(ToolContext(machine, requirement))
         try:
-            hits = json.loads((await session.call("search", {"query": "quantum physics"})).content)
+            hits = json.loads((await session.call("search", {"query": QA_SEARCH_QUERY})).content)
             if len(hits) != config.state.top_k:
                 raise ValueError("Relay search did not preserve top-five results")
             documents = []

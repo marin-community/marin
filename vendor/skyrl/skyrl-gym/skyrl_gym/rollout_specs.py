@@ -14,7 +14,7 @@ from taskcompendium.openresearcher import OPENRESEARCHER_ACTION_INTERFACE
 from rolloutengine.harness.shell import ShellHarness, ToolProvider
 from rolloutengine.models import MachineRuntimeSpec, RolloutLimits, TaskRolloutSpec, TraceMode
 from taskcompendium.fetch import FETCH_ACTION_INTERFACE
-from taskcompendium.models import ExecutionRequirements, TaskSpec, declared_verifier_timeout
+from taskcompendium.models import EXECUTION_RESOURCE_FIELDS, ExecutionRequirements, TaskSpec, declared_verifier_timeout
 from taskcompendium.runtime.shell import ShellToolConfig
 
 from skyrl_gym.nemotron_tools import NEMOTRON_PYTHON_INTERFACE, NemotronPythonProvider
@@ -63,7 +63,11 @@ def rollout_spec(
 
 
 def rollout_limits(task: TaskSpec, limits: RolloutLimits, *, minimum_verifier_timeout: float | None) -> RolloutLimits:
-    """Give fresh and stored tasks the run floor and their complete declared verifier budget."""
+    """Set phase budgets and allow both phases and cleanup to finish within the attempt.
+
+    An unbounded actor phase leaves the attempt unbounded. Finite actor and verifier
+    budgets extend a finite attempt deadline when their combined budget needs more time.
+    """
     declared = task.execution_requirements
     actor = limits.total_turn_timeout
     if declared is not None:
@@ -89,8 +93,7 @@ def _declared_machine(
         return runtime
     return runtime.model_copy(
         update={
-            name: max(getattr(runtime, name) or 0, getattr(requirements, name))
-            for name in ("cpus", "memory_mb", "storage_mb")
+            name: max(getattr(runtime, name) or 0, getattr(requirements, name)) for name in EXECUTION_RESOURCE_FIELDS
         }
     )
 

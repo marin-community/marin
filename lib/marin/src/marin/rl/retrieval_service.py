@@ -27,7 +27,9 @@ from rigging.timing import Duration
 from taskcompendium.openresearcher import OpenResearcherState
 
 from marin.inference.iris import _terminate_job, _wait_for_endpoint
-from marin.rl.retrieval_backend import HEALTH_PATH
+from marin.rl.retrieval_backend import BM25_RELATIVE_PATH, HEALTH_PATH
+
+RETRIEVAL_PORT_NAME = "retrieval"
 
 
 @dataclass(frozen=True)
@@ -49,7 +51,7 @@ def stage_index(config: RetrievalServiceConfig) -> None:
     manifest = (source / "index-manifest.json").read_bytes()
     if hashlib.sha256(manifest).hexdigest() != config.state.index_manifest_sha256:
         raise ValueError("Index manifest differs from frozen retrieval state")
-    root = Path(config.root) / "index/bm25"
+    root = Path(config.root) / BM25_RELATIVE_PATH
     root.mkdir(parents=True, exist_ok=True)
     for entry in json.loads(manifest):
         relative = Path(entry["path"])
@@ -81,7 +83,7 @@ def run_retrieval_service(config: RetrievalServiceConfig) -> None:
         raise ValueError("Stage the index in the RL run region before launching its service")
     configure_coreweave_s3()
     stage_index(config)
-    port = context.get_port("retrieval")
+    port = context.get_port(RETRIEVAL_PORT_NAME)
     address = f"http://{info.advertise_host}:{port}"
     state_path = Path(config.root) / "service-state.json"
     state_path.write_text(config.state.model_dump_json())
@@ -161,7 +163,7 @@ def retrieval_service(launch: RetrievalServiceLaunch) -> Iterator[str]:
             timeout=launch.lifetime,
             max_retries_failure=0,
             max_retries_preemption=0,
-            ports=("retrieval",),
+            ports=(RETRIEVAL_PORT_NAME,),
         ),
         adopt_existing=False,
     )

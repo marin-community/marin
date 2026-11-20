@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from shellbox.machine import MachineFactory, NetworkPolicy
 from taskcompendium.models import (
     CONVERSATION_ANSWERS,
+    EXECUTION_RESOURCE_FIELDS,
     AnswerType,
     CommandSemantics,
     EnvironmentRequirements,
@@ -65,7 +66,7 @@ def validate_spec(spec: TaskRolloutSpec, machine_factories: Mapping[str, Machine
     ):
         if runtime is None or declared is None:
             continue
-        if any((getattr(runtime, name) or 0) < getattr(declared, name) for name in ("cpus", "memory_mb", "storage_mb")):
+        if any((getattr(runtime, name) or 0) < getattr(declared, name) for name in EXECUTION_RESOURCE_FIELDS):
             raise ValueError("Selected machine is smaller than the task's declared allocation")
     if declared := task.execution_requirements:
         if spec.limits.total_turn_timeout is None or spec.limits.total_turn_timeout > declared.agent_timeout_sec:

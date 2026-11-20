@@ -92,7 +92,9 @@ def test_frozen_tasks_bind_verifier_floor_and_typed_local_actor(tmp_path, stored
     path = tmp_path / "frozen.parquet"
     if stored:
         # Stored inputs carry their selected machine; only the common runtime deadline is rebound.
-        runtime = MachineRuntimeSpec.model_validate(configs["task_spec"]["required_actor"])
+        runtime = MachineRuntimeSpec.model_validate(
+            {**configs["task_spec"]["required_actor"], "backend": Backend.LOCAL}
+        )
         write_tasks(path, [lowered.model_copy(update={"task": task, "task_machine": runtime})])
     else:
         pq.write_table(pa.table({"task_spec": [task.model_dump_json()]}), path)

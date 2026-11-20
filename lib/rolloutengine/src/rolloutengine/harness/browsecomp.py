@@ -31,7 +31,6 @@ class OfflineSearchSession:
     machine: Machine
     state: BaseModel
     tools: tuple[FunctionDefinition, ...]
-    module: str
     command_timeout: float | None
 
     def request_command(self, name: str, arguments: dict[str, JsonValue]) -> Command | None:
@@ -41,7 +40,7 @@ class OfflineSearchSession:
         if name not in allowed or set(arguments) != {parameter} or not isinstance(arguments.get(parameter), str):
             return None
         return Command(
-            argv=("python3", "-m", self.module),
+            argv=("python3", "-m", BROWSECOMP_MODULE),
             stdin=json.dumps(
                 {"name": name, "arguments": arguments, "state": self.state.model_dump(mode="json")}
             ).encode(),
@@ -72,6 +71,4 @@ class BrowseCompProvider:
         if context.machine is None:
             raise ValueError("Offline BrowseComp requires its declared actor machine")
         state = browsecomp_state(context.requirement)
-        return OfflineSearchSession(
-            context.machine, state, browsecomp_tools(state), BROWSECOMP_MODULE, self.command_timeout
-        )
+        return OfflineSearchSession(context.machine, state, browsecomp_tools(state), self.command_timeout)

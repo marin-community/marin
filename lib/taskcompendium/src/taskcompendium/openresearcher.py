@@ -10,7 +10,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from taskcompendium.models import ProviderRequirement
 
 OPENRESEARCHER_ACTION_INTERFACE = "openresearcher-bm25:v1"
-OPENRESEARCHER_MODULE = "openresearcher.tool"
 
 
 class OpenResearcherState(BaseModel):

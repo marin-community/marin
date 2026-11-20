@@ -26,10 +26,8 @@ class DeliveredVerifierFile(BaseModel):
 class MultiSweDeliveryContract(BaseModel):
     """The typed SHARED integrity contract for Multi-SWE delivered-pipeline sources.
 
-    Same original-root delivery semantics as the root-delivery contract, with
-    the captured ``/home`` artifacts restored verbatim (the archive itself
-    carries modes and mtimes) and the reward parsed host-side by the pinned
-    upstream parser from the copied artifacts. ``archive_sha256`` pins the
+    Captured ``/home`` artifacts retain their bytes, modes and mtimes. The pinned
+    upstream parser reads the reward from those artifacts. ``archive_sha256`` pins the
     delivered capture archive bytes; ``undeclared_deadline`` records sources
     with no verifier deadline.
     """

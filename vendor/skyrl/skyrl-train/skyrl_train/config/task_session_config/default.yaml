@@ -36,7 +36,6 @@ task_spec:
     command_timeout: 30
     shell_tool: {}
   required_actor:
-    backend: local
     cpus: 1
     memory_mb: 8192
     storage_mb: null

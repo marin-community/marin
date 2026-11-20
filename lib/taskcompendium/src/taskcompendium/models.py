@@ -909,6 +909,9 @@ AnswerFormat = Annotated[
 ]
 
 
+EXECUTION_RESOURCE_FIELDS = ("cpus", "memory_mb", "storage_mb")
+
+
 class ExecutionRequirements(BaseModel):
     """Task-declared machine capacity and phase deadlines, in MiB and seconds."""
 

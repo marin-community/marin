@@ -45,7 +45,7 @@ async def qualify(rows: list[dict]) -> tuple[PythonProbe, ...]:
     factory = LocalMachineFactory()
     config_path = Path("vendor/skyrl/skyrl-train/skyrl_train/config/task_session_config/default.yaml")
     config = yaml.safe_load(config_path.read_text())["task_spec"]
-    runtime = MachineRuntimeSpec.model_validate(config["required_actor"])
+    runtime = MachineRuntimeSpec.model_validate({**config["required_actor"], "backend": Backend.LOCAL})
     assert runtime.backend == Backend.LOCAL and runtime.network is NetworkPolicy.DENY
     host_network = os.readlink("/proc/self/ns/net")
     results = []

@@ -6,10 +6,9 @@ from pydantic import JsonValue, TypeAdapter
 from rolloutengine.harness.shell import ToolCallResult, ToolContext
 from taskcompendium.models import FunctionDefinition, ProviderRequirement
 
-from skyrl_gym.python_execution import PythonKernel, python_tool_output
+from skyrl_gym.python_execution import PYTHON_TOOL_NAME, PythonKernel, python_tool_output
 
 NEMOTRON_PYTHON_INTERFACE = "nemotron-agent:ns_tools_simple_agent"
-PYTHON_TOOL_NAME = "stateful_python_code_exec"
 TOOL_DEFINITIONS = TypeAdapter(tuple[FunctionDefinition, ...])
 
 

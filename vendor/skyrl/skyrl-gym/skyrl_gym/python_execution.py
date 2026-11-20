@@ -16,6 +16,7 @@ KERNEL_STARTUP_TIMEOUT = 40.0
 KERNEL_CLEANUP_TIMEOUT = 10.0
 KERNEL_OUTPUT_LIMIT_BYTES = 65536
 KERNEL_RESULT = TypeAdapter(Result)
+PYTHON_TOOL_NAME = "stateful_python_code_exec"
 
 
 class PythonKernel:
@@ -107,7 +108,7 @@ class PythonKernel:
 
 async def python_tool_output(kernel: PythonKernel, name: str, arguments: JsonValue) -> str:
     """Execute the NeMo stateful Python action and preserve its observation format."""
-    if name != "stateful_python_code_exec":
+    if name != PYTHON_TOOL_NAME:
         return json.dumps({"error": f"Unknown tool: {name}"})
     if not isinstance(arguments, dict) or not isinstance(arguments.get("code"), str):
         return json.dumps({"error": "stateful_python_code_exec requires a string code argument"})
