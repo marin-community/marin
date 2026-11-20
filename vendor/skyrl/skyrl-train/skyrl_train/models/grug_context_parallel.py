@@ -1,9 +1,14 @@
 """Context-parallel communication constraints for Grug's mixed attention layers."""
 
 
+CP_RING = "p2p"
+CP_ALL_TO_ALL = "a2a"
+CP_ALL_GATHER = "all_gather"
+
+
 def grug_cp_communication(long_layers: tuple[bool, ...], *, hero: bool) -> list[str]:
     """Return the bridge's per-layer defaults before launch overrides."""
-    return ["a2a" if hero and not is_long else "p2p" for is_long in long_layers]
+    return [CP_ALL_TO_ALL if hero and not is_long else CP_RING for is_long in long_layers]
 
 
 def validate_cp_attention(
@@ -15,9 +20,9 @@ def validate_cp_attention(
         raise ValueError("Attention head counts must divide tensor parallelism")
     if context_parallel == 1:
         return
-    if sliding_window and communication not in {"all_gather", "a2a"}:
+    if sliding_window and communication not in {CP_ALL_GATHER, CP_ALL_TO_ALL}:
         raise ValueError(f"TE sliding-window CP does not support {communication}")
-    if communication == "a2a" and (
+    if communication == CP_ALL_TO_ALL and (
         (query_heads // tensor_parallel) % context_parallel
         or (kv_heads // tensor_parallel) % context_parallel
     ):
