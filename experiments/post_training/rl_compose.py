@@ -366,6 +366,9 @@ def run_spec(
     config = _training_config(preset, settings)
     explicit = override_document(settings)
     authored = config.to_skyrl()
+    for callback in authored.get("trainer", {}).get("callbacks") or []:
+        if callback["type"] == "best_checkpoint" and "initial_model_uri" in callback:
+            raise ValueError("best_checkpoint.initial_model_uri must be omitted; it is set from the adopted model")
     batch_changes = {
         field: value for key, field in BATCH_SETTINGS.items() if (value := get_path(authored, key)) is not MISSING
     }
@@ -385,9 +388,6 @@ def run_spec(
     workload = preset.recipe.layout.workload
     preset = preset.with_updates(config.trainer.max_steps)
     model = preset.model if init is None else init
-    selects_best = preset.checkpoint_every or (preset.export_hf and config.trainer.hf_export_checkpoint == "best")
-    # The artifact builder resolves checkpoint subpaths after producer materialization.
-    initial_model_uri = "model-input" if selects_best else None
     validation_data = ()
     evaluation_data = []
     profiles = {}
@@ -434,7 +434,8 @@ def run_spec(
                     chosen[0] if chosen else None,
                     profiles,
                     expected_tasks,
-                    initial_model_uri,
+                    selects_best=bool(preset.checkpoint_every)
+                    or (preset.export_hf and config.trainer.hf_export_checkpoint == "best"),
                 ),
             )
         )

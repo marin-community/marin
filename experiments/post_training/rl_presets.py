@@ -141,7 +141,7 @@ class Training:
         evaluation: Evaluation | None,
         profiles: dict[str, EvaluationProfile],
         expected_tasks: int,
-        initial_model_uri: str | None,
+        selects_best: bool,
     ) -> tuple[Callback, ...]:
         callbacks: list[Callback] = []
         if preset.checkpoint_every:
@@ -156,11 +156,10 @@ class Training:
                     **({"additional_evaluations": profiles} if profiles else {}),
                 )
             )
-        if initial_model_uri is not None:
+        if selects_best:
             callbacks.append(
                 BestCheckpointCallback(
                     type="best_checkpoint",
-                    initial_model_uri=initial_model_uri,
                     expected_tasks=expected_tasks,
                     minimum_scored_tasks=math.ceil(MINIMUM_TASK_COVERAGE * expected_tasks),
                 )
@@ -237,7 +236,7 @@ class Generation:
         evaluation: Evaluation | None,
         profiles: dict[str, EvaluationProfile],
         expected_tasks: int,
-        initial_model_uri: str | None,
+        selects_best: bool,
     ) -> tuple[Callback, ...]:
         return (EvaluationCallback(type="evaluation", additional_evaluations=profiles),) if profiles else ()
 

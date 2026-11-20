@@ -1019,7 +1019,6 @@ def _launch_config_yaml(
     execution: IrisSkyRLExecution,
     *,
     export_hf: bool,
-    validate_model_uri: bool,
     run_id: str,
     attempt_id: str,
     model: ResolvedModelLocator,
@@ -1035,9 +1034,8 @@ def _launch_config_yaml(
     _materialize_role_plan_config(recipe, spec.topology.role_plan)
     for callback in recipe.get("trainer", {}).get("callbacks") or []:
         if callback["type"] == _BEST_CHECKPOINT_CALLBACK:
-            declared_model = callback.get("initial_model_uri")
-            if validate_model_uri and declared_model not in (None, "model-input", model.uri):
-                raise ValueError("best_checkpoint.initial_model_uri disagrees with the adopted model")
+            if "initial_model_uri" in callback:
+                raise ValueError("best_checkpoint.initial_model_uri must be omitted; it is set from the adopted model")
             callback["initial_model_uri"] = model.uri
     num_nodes = spec.topology.num_nodes
     if execution.role_topology is not None:
@@ -1214,7 +1212,6 @@ def skyrl_step(
                 spec,
                 execution,
                 export_hf=export_hf,
-                validate_model_uri=not ctx.is_fingerprint,
                 run_id=run_id,
                 attempt_id=attempt_id,
                 model=model,

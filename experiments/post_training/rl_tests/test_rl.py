@@ -145,6 +145,16 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
     producer = apply("tests/computed-init", export_model, version="2026.11.17", output=OUT)
     own_model = ArtifactHfModel(producer)
     train = snowball_model.SNOWBALL.by_name["train-long"]
+    explicit_baseline = train.recipe.config.with_settings(
+        (
+            'trainer.callbacks=[{"type":"best_checkpoint","initial_model_uri":"s3://test/model/hf",'
+            '"expected_tasks":1,"minimum_scored_tasks":1}]',
+        )
+    )
+    with pytest.raises(ValueError, match=r"best_checkpoint.initial_model_uri must be omitted"):
+        recipe.run_spec(
+            replace(train, recipe=replace(train.recipe, config=explicit_baseline)), name="tests/explicit-baseline"
+        )
 
     def reject_export_read(*args, **kwargs):
         raise AssertionError("planning read an unbuilt export")
