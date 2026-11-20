@@ -233,7 +233,7 @@ def test_dashboard_prepares_runtime_on_demand_without_blocking_other_requests(mo
     monkeypatch.setattr(
         python_tool_routes,
         "_run_tool_worker",
-        lambda module, arguments, payload: subprocess.CompletedProcess(arguments, 0, b"6", b""),
+        lambda _module, arguments, _payload: subprocess.CompletedProcess(arguments, 0, b"6", b""),
     )
     info = ServingInfo("fake-model", "vllm", 1, 4096, "bfloat16", True, "/serve/fake")
     catalog = str(tmp_path / "catalog.json")
