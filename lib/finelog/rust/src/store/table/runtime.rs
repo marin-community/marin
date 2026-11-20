@@ -503,6 +503,7 @@ impl TableRuntime {
             ),
             paths: Vec::with_capacity(planned.len()),
             key_bounds: Default::default(),
+            column_bounds: Default::default(),
             seq_bounds: Default::default(),
             row_counts: Default::default(),
             partitions: Default::default(),
@@ -513,6 +514,10 @@ impl TableRuntime {
         for segment in planned {
             if let Some(bounds) = segment.key_bounds {
                 view.key_bounds.insert(segment.path.clone(), bounds);
+            }
+            if !segment.column_bounds.is_empty() {
+                view.column_bounds
+                    .insert(segment.path.clone(), segment.column_bounds);
             }
             view.seq_bounds
                 .insert(segment.path.clone(), (segment.min_seq, segment.max_seq));
@@ -698,6 +703,12 @@ impl TableRuntime {
     /// Clear the demand the scheduler is about to satisfy.
     pub fn clear_flush_demand(&self) {
         self.buffer.clear_demand();
+    }
+
+    /// The live query view's segments.
+    #[cfg(test)]
+    pub fn live_segments(&self) -> Vec<crate::store::types::LocalSegment> {
+        self.segments.segments()
     }
 
     /// Record flush demand directly. `forced` bypasses the coalescing window the

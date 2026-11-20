@@ -78,7 +78,7 @@ curation [task-selection artifact](task-curation.md#final-task-selection) end th
 Other tasks use `harness_by_dataset[task.source.dataset]` when configured, or
 `default_harness`, which defaults to Shellbox.
 Image graders use the configured image verifier backend; package
-graders use the configured local verifier. The inventory artifact contains the
+graders use the configured local verifier. The task-selection artifact contains the
 task and private grader, so changing rollout resources or deadlines does not
 rewrite the task Parquet.
 
@@ -115,6 +115,15 @@ Machine setup commands run as trusted root before task operations.
 When the execution user is set, the task machine runs an execution-user probe after root setup and before model inference.
 An explicit command user overrides that default.
 The verifier machine uses its own configured default user.
+
+Original Harbor trials run each `setup_commands` entry as root with `sh`, after
+environment staging and before agent installation. An entry's nonzero exit status
+fails the trial; output stays separate from model traces, and setup uses the
+configured installed-agent `setup_timeout` while counting toward the whole
+trial's time limit.
+For these trials, the Harbor task package defines the image, environment variables
+and agent user. TaskSpec may add `setup_commands` and their setup-only
+`working_directory`; other TaskSpec machine-environment overrides are rejected.
 
 ## Harnesses
 

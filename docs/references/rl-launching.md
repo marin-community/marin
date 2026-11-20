@@ -134,6 +134,36 @@ This shape keeps validation mechanical. Adding a launch setting means adding one
 reading it where the behavior lives; it does not require adding matching CLI flags, argv builders, and
 forwarding tests at every process boundary.
 
+## Publish a checkpoint export
+
+The checkpoint-export GPU job stops after writing and verifying the object-store
+export. When its request includes `hf_hub_repo_id`, the launcher waits for that
+job to exit, then submits a CPU Iris job to upload through the existing Hub
+publisher. The CPU job targets the export's CoreWeave cluster or pins the GCS
+bucket's region on GCP. It reserves staging disk from the export manifest's file
+sizes and downloads up to four files at a time into Iris's disk-backed `/cache`
+mount. This bounds concurrent shard buffers and avoids Docker's memory-backed
+`/tmp`.
+Hub credentials and object-store credentials use Iris's inherited secret files.
+`hf_hub_private`, `hf_hub_revision`, and both `hf_upload_mode` values are preserved.
+
+A failed upload leaves `hf_export_request.json` pending. Rerun the same request:
+a verified object-store export skips GPU conversion and submits only CPU
+publication. A missing or corrupt export still requires conversion. For example,
+with the original checkpoint directory, resolved training configuration, and
+export placement in these variables:
+
+```bash
+uv run --directory vendor/skyrl --frozen --extra cpu --no-group dev \
+  python -m cloud.iris.export_hf_checkpoint \
+  --request "$CHECKPOINT_PATH" --launch-config "$LAUNCH_CONFIG" \
+  --cluster "$CLUSTER" --gpu-variant "$GPU_VARIANT"
+```
+
+Requests become complete only after all requested publication succeeds. Manual
+`--no-wait` exports remain available without a Hub destination; Hub publication
+requires waiting so the CPU job starts after the GPU allocation is released.
+
 ## SkyRL role plan
 
 `SkyRLRolePlan` is the source of truth for policy, rollout, and batch geometry. Every parallelism
@@ -194,7 +224,7 @@ allocation then disagrees with the derived role plan and is rejected before subm
 
 The preflight requires positive role dimensions, checks batch divisibility, and requires an explicit
 forward microbatch size to equal the training microbatch size. It checks local engine placement,
-rejects unsupported transport settings and separate critic roles, and requires an explicit KL-loss
+rejects unsupported transport settings and requires an explicit KL-loss
 setting. For every launcher, preflight checks policy and reference Megatron parallelism against
 the GPUs assigned to each role. Megatron builds separate dense and expert grids. The role GPU count
 must be divisible by both `TP * PP * CP` and `ETP * EP * PP`, where ETP is expert tensor
@@ -208,6 +238,14 @@ Identity-bearing inputs belong in `SkyRLSpec`: model and tokenizer,
 data artifacts, a starting native checkpoint, topology, seed, retention, and the rendered config. Cluster routing,
 host resources, priority, and retry policy belong in `IrisSkyRLExecution`; changing placement must
 not fork artifact identity.
+
+The `records` tracker requires a fresh attempt ID and `iris.max_retries=0`.
+Its Iris jobs also use zero preemption retries. After a preemption, start a fresh
+attempt with `trainer.resume_mode=from_path` and `trainer.resume_path` pointing
+to its saved `global_step_N` checkpoint. Known checkpoint ancestors contribute
+metrics through the resumed boundary; a checkpoint without recorded ancestry
+contributes only the new attempt's metrics. Other tracker backends retain Iris's
+ordinary preemption retry budget.
 
 `IrisSkyRLExecution.container_profile` accepts an `iris.rpc.job_pb2.ContainerProfile` enum for the
 coordinator and trainer jobs. Enum names are serialized at the launch boundary. It defaults to `None`,
@@ -228,6 +266,13 @@ the workload's success or original exception. W&B may show the run as Crashed
 or Failed after a primary upload timeout even when training succeeds. Some W&B
 records may remain unuploaded. Other cleanup can still exhaust the existing
 120-second teardown watchdog.
+
+Marin sets the run's export root (`trainer.export_path`) to `<run output>/exports`.
+Set `trainer.dump_data_batch: true` to save diagnostic `TrainingInputBatch`
+pickle files under `<trainer.export_path>/dumped_data/global_step_<step>_training_input.pkl`.
+Local and cloud export paths use the same format. Dumps contain the batch after
+importance-sampling corrections and advantage calculation. Group UIDs and raw
+rewards are removed before dumping.
 
 SkyRL keeps the two most recent recovery checkpoints by default. For an RSI loop
 that needs only the latest recovery point, set
@@ -332,4 +377,25 @@ For live submission, monitoring, or recovery, follow the `launch-rl` and `use-ir
 `lib/iris/OPS.md`. Do not restart a cluster or resubmit a failed run without explicit authority.
 
 For the current curation, training and evaluation recipe, see the
-[quick RL loop](../recipes/quick-rl-loop.md).
+[Snowball RL experiments](../recipes/rl-experiments.md) and the
+[selection handoff](task-curation.md#train-on-a-snowball-selection).
+
+### NCCL SIMPLE buffers
+
+Policy and reference roles resolve `nccl_buffer_size_bytes` to 4,194,304 bytes
+(4 MiB) by default. The role runtime environment sets `NCCL_BUFFSIZE` explicitly,
+including inference engines that receive the policy's weight-sync setting. This
+prevents an inherited small-buffer value from replacing the resolved default.
+A `null` value deliberately delegates sizing to the process environment and NCCL
+config files.
+
+NCCL 2.30.7 can return incorrect NVLSTree reductions when its tuned staging payload
+exceeds a SIMPLE FIFO slot. A 256-KiB buffer reproduced this failure through both
+the native C API and ProcessGroupNCCL. A 1-MiB buffer also failed at 512-MiB
+messages; 4-MiB controls passed the tested 16–512-MiB range. See
+[the investigation and source-library A/B](https://github.com/marin-community/marin/issues/11649).
+This mitigation uses the existing library and preserves byte verification. It
+does not establish correctness for every message size or topology. Check resolved
+role settings and the effective `NCCL_BUFFSIZE` in worker INIT logs before scaling
+a new configuration. Reference workers now retain larger buffers, so include that
+memory in colocated-role capacity estimates.

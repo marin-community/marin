@@ -10,23 +10,15 @@ from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
-from fray.current_client import set_current_client
-from fray.local_backend import LocalClient
-from marin.execution.lazy import run
-from taskcompendium.evaluation.corpus import evaluation_cases
 from taskcompendium.grading import grade_remote_judge_answer
 from taskcompendium.grading_result import Outcome
 from taskcompendium.importers.evalchemy.judge_prompts import SIMPLEQA_VERIFIED_GRADER_TEMPLATE
 from taskcompendium.models import ConversationTrace, GradingAttempt, TextMessage
-from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from taskcompendium.submission import conversation_messages
 from verifyit.modes.grade_judge import JudgeConnection
-from zephyr.context import ZephyrContext
 
 from experiments.evaluation.benchmarks.simpleqa import simpleqa_source, simpleqa_verified_source
-from experiments.evaluation.preparation import prepare_evaluation
-from experiments.post_training.task_curation.campaign import CampaignRuntime
-from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions
+from experiments.evaluation.publication_cases import published_cases
 
 
 def write_simpleqa(file, rows):
@@ -36,32 +28,6 @@ def write_simpleqa(file, rows):
         writer.writerows(
             {"problem": row["question"], "answer": row["answer"], "metadata": repr(row["metadata"])} for row in rows
         )
-
-
-def published_cases(source, write_rows, tmp_path, monkeypatch, population):
-    dataset = source.config
-    root = tmp_path / "source"
-    file = root / dataset.files[0]
-    file.parent.mkdir(parents=True)
-    write_rows(file)
-    source = replace(
-        source,
-        config=replace(dataset, protocol=dataset.protocol.model_copy(update={"expected_population": population})),
-    )
-    runtime = CampaignRuntime()
-    options = PipelineOptions(SourceProcessingMode.QUICK, runtime, inputs=InputOverrides(root=str(root)))
-    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
-    client = LocalClient()
-    try:
-        with (
-            set_current_client(client),
-            ZephyrContext(client=client, max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context,
-            runtime.activate(context),
-        ):
-            artifact = run(prepare_evaluation(source, options), max_concurrent=1)[0]
-        return list(evaluation_cases(artifact.path))
-    finally:
-        client.shutdown()
 
 
 @pytest.fixture
