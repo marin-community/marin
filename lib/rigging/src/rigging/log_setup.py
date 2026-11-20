@@ -135,6 +135,22 @@ class RingBufferHandler(logging.Handler):
         )
 
 
+class LiveStderrHandler(logging.StreamHandler):
+    """Write every record to the ``sys.stderr`` that is current at emit time.
+
+    Test capture and CLI harnesses (pytest, Click's ``CliRunner``) swap
+    ``sys.stderr`` and close the previous stream. A handler that binds the
+    stream once keeps writing into a closed capture, and logging then prints a
+    ``--- Logging error ---`` traceback into the next live stream, corrupting
+    whatever output that capture holds. Re-resolving the stream per record
+    keeps logging on the live stderr.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.stream = sys.stderr
+        super().emit(record)
+
+
 @contextmanager
 def slow_log(log: logging.Logger, operation: str, threshold_ms: int = 100) -> Iterator[None]:
     """Log a WARNING if the enclosed block takes longer than threshold_ms.
@@ -243,7 +259,7 @@ def configure_logging(level: int = logging.INFO) -> LogRingBuffer:
 
     formatter = LevelPrefixFormatter(fmt=LOG_FORMAT, datefmt=LOG_DATEFMT)
 
-    stderr_handler = logging.StreamHandler(sys.stderr)
+    stderr_handler = LiveStderrHandler()
     stderr_handler.setLevel(level)
     stderr_handler.setFormatter(formatter)
     root.addHandler(stderr_handler)
