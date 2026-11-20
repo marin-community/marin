@@ -44,16 +44,19 @@ def test_grader_report_keeps_baseline_and_final_success_and_failure_by_source(tm
         ],
     )
     baseline.add(batch, [("taskcompendium", "math")] * 5 + [("taskcompendium", "code")] * 2)
-    write_grader_report(export_path, "evaluation", "0", baseline.summary())
+    write_grader_report(export_path, "0", {"evaluation": baseline.summary()})
 
     final = GraderStats()
     final.add(
         TrajectoryBatch(rewards=[1.0], verification_results=[VerificationResult.verified(1.0)]),
         [("taskcompendium", "math")],
     )
-    write_grader_report(export_path, "evaluation", "25", final.summary())
+    write_grader_report(export_path, "25", {"evaluation": final.summary()})
+    write_grader_report(export_path, "25", {"evaluation_duration_seconds": 3.5})
 
-    evaluations = json.loads((tmp_path / "grader_report.json").read_text())["evaluation"]
+    report = json.loads((tmp_path / "grader_report.json").read_text())
+    evaluations = report["evaluation"]
+    assert report["evaluation_duration_seconds"] == {"25": 3.5}
     code, math = evaluations["0"]
     assert code["data_source"] == "code"
     assert code["success_rate"] is None
@@ -109,7 +112,7 @@ async def test_training_report_counts_a_crashed_grader_in_a_rejected_group(tmp_p
 
     admission = await buffer.admit(timeout=1)
     assert len(admission.admitted) == 1
-    write_grader_report(str(tmp_path), "training", "attempt", buffer.grader_summary())
+    write_grader_report(str(tmp_path), "attempt", {"training": buffer.grader_summary()})
     (row,) = json.loads((tmp_path / "grader_report.json").read_text())["training"]["attempt"]
     assert row["attempted"] == 2
     assert row["success_rate"] == 1.0

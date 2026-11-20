@@ -14,6 +14,7 @@ from rigging.filesystem.buckets import MissingCredentials
 from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
+from rigging.telemetry.serialization import json_bytes
 
 DASHBOARD_INBOX = "rl-data/quick-loop-dashboard/v1"
 logger = logging.getLogger(__name__)
@@ -36,7 +37,7 @@ def run_dashboard_attempt(config: SkyRLRunConfig) -> SkyRLRun:
             "validation_identity": launch["inputs"]["validation_data"][0]["identity"],
             "initializer_identity": config.model.identity,
         }
-        identity = hashlib.sha256(json.dumps([config.run_id, config.attempt_id]).encode()).hexdigest()
+        identity = hashlib.sha256(json_bytes([config.run_id, config.attempt_id])).hexdigest()
         path = StoragePath(marin_prefix()) / DASHBOARD_INBOX / f"{identity}.json"
         try:
             path.write_text(json.dumps(entry, allow_nan=False))

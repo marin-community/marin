@@ -232,18 +232,19 @@ def _dump_eval_results(
         stats.add(rollouts.batch, zip(rollouts.env_classes, data_sources, strict=True))
         key = "eval_only" if global_step is None else str(global_step)
         export_path = str(cfg.trainer.export_path)
-        write_grader_report(export_path, "evaluation", key, stats.summary())
-        identity = {
-            "membership_sha256": hashlib.sha256(json.dumps(sorted(rollouts.uids)).encode()).hexdigest(),
-            "sampling": OmegaConf.to_container(cfg.generator.eval_sampling_params, resolve=True),
-            "samples_per_prompt": int(cfg.generator.eval_n_samples_per_prompt),
-            "backend": str(cfg.generator.backend),
-            "step_wise": bool(cfg.trainer.step_wise_training),
+        metadata = {
+            "identity": {
+                "membership_sha256": hashlib.sha256(json.dumps(sorted(rollouts.uids)).encode()).hexdigest(),
+                "sampling": OmegaConf.to_container(cfg.generator.eval_sampling_params, resolve=True),
+                "samples_per_prompt": int(cfg.generator.eval_n_samples_per_prompt),
+                "backend": str(cfg.generator.backend),
+                "step_wise": bool(cfg.trainer.step_wise_training),
+            },
+            "attempted": metrics["eval/all/num_attempted"],
+            "scored": metrics.get("eval/all/num_scored"),
+            "reward": metrics.get("eval/all/avg_verifier_score"),
         }
-        data_save_dir = evaluation_dump_dir(export_path, global_step)
-        io.write_bytes_atomic(
-            join_resource_path(data_save_dir, "dashboard_identity.json"), json.dumps(identity).encode()
-        )
+        write_grader_report(export_path, key, {"evaluation": stats.summary(), "evaluation_metadata": metadata})
     if not cfg.trainer.dump_eval_results:
         return
     with Timer("dump_eval_results"):

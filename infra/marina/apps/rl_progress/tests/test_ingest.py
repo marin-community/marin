@@ -4,7 +4,6 @@
 """Check the terminal evidence the dashboard ranks and serves."""
 
 import json
-from pathlib import Path
 
 from iris.rpc import job_pb2
 from rigging.filesystem.storage_path import StoragePath
@@ -49,18 +48,16 @@ def test_terminal_quick_loop_record_uses_coordinator_time_and_preserves_grader_s
             }
         },
     )
-    for step, reward, duration in [(0, 0.25, 8.0), (3, 0.75, 12.0)]:
-        directory = Path("exports/dumped_evals") / f"global_step_{step}_evals"
-        write(
-            str(directory / "aggregated_results.jsonl"),
-            {"eval/all/num_attempted": 20, "eval/all/num_scored": 20, "eval/all/avg_verifier_score": reward},
-        )
-        write(
-            str(directory / "dashboard_identity.json"),
-            {"membership_sha256": "panel", "sampling": {"temperature": 0.0}},
-        )
-        write(str(directory / "dashboard_duration.json"), {"duration_seconds": duration})
-    report = {"evaluation": {"3": [{"data_source": "code", "success_rate": 0.75}]}, "training": {}}
+    identity = {"membership_sha256": "panel", "sampling": {"temperature": 0.0}}
+    report = {
+        "evaluation": {"3": [{"data_source": "code", "success_rate": 0.75}]},
+        "training": {},
+        "evaluation_metadata": {
+            "0": {"attempted": 20, "scored": 20, "reward": 0.25, "identity": identity},
+            "3": {"attempted": 20, "scored": 20, "reward": 0.75, "identity": identity},
+        },
+        "evaluation_duration_seconds": {"0": 8.0, "3": 12.0},
+    }
     write("exports/grader_report.json", report)
     coordinator = job_pb2.JobStatus(state=job_pb2.JOB_STATE_SUCCEEDED)
     coordinator.submitted_at.epoch_ms = 100_000
@@ -82,9 +79,7 @@ def test_terminal_quick_loop_record_uses_coordinator_time_and_preserves_grader_s
     assert stale_attempt["grader_report"] is None
     assert comparison_fields(stale_attempt)["pareto_eligible"] is False
 
-    write(
-        "exports/dumped_evals/global_step_3_evals/dashboard_identity.json",
-        {"membership_sha256": "different-panel", "sampling": {"temperature": 0.0}},
-    )
+    report["evaluation_metadata"]["3"]["identity"] = identity | {"membership_sha256": "different-panel"}
+    write("exports/grader_report.json", report)
     different_panel = ingest.terminal_record(entry, coordinator)
     assert comparison_fields(different_panel)["pareto_eligible"] is False

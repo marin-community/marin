@@ -1,13 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Serve the existing Postgres run summaries without changing stored evidence."""
+"""Import Quick RL evidence and serve immutable run summaries from Postgres."""
 
 import hashlib
 import json
+from dataclasses import asdict
 from datetime import datetime
 
 from fastapi import FastAPI, HTTPException
+from rigging.telemetry.serialization import json_bytes
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
@@ -40,8 +42,8 @@ def comparison_fields(run: dict) -> dict:
         if evaluation.get("task_count") is not None and evaluation["task_count"] != len(task_ids):
             raise ValueError("Evaluation task count disagrees with membership")
     if evaluation.get("protocol") is not None:
-        protocol = json.dumps(evaluation["protocol"], sort_keys=True, separators=(",", ":"), allow_nan=False)
-        if hashlib.sha256(protocol.encode()).hexdigest() != evaluation.get("protocol_sha256"):
+        protocol = json_bytes(evaluation["protocol"])
+        if hashlib.sha256(protocol).hexdigest() != evaluation.get("protocol_sha256"):
             raise ValueError("Evaluation protocol does not match its recorded identity")
     expected = evaluation.get("task_count")
     if expected is None and evaluation.get("task_ids") is not None:
@@ -50,7 +52,7 @@ def comparison_fields(run: dict) -> dict:
     if evaluation.get("task_set_sha256") and evaluation.get("protocol_sha256") and run.get("timing_scope"):
         identity = {name: evaluation[name] for name in ("task_set_sha256", "protocol_sha256")}
         identity["timing_scope"] = run["timing_scope"]
-        key = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        key = hashlib.sha256(json_bytes(identity)).hexdigest()
 
     def complete(result):
         return result is not None and expected is not None and result["attempted"] == result["scored"] == expected
@@ -100,9 +102,9 @@ def create_api(services):
     @api.post("/sync")
     def sync():
         result = sync_attempts(engine)
-        if result["errors"]:
-            raise HTTPException(502, detail=result)
-        return result
+        if result.errors:
+            raise HTTPException(502, detail=asdict(result))
+        return asdict(result)
 
     @api.get("/graders")
     def graders(run_id: str, attempt_id: str):

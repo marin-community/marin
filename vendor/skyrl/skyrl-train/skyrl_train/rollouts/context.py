@@ -249,7 +249,7 @@ class TrainingContext:
             return
         summary = await self._buffer.grader_summary.remote()
         if summary:
-            write_grader_report(self._grader_report_path, "training", self._grader_report_attempt, summary)
+            write_grader_report(self._grader_report_path, self._grader_report_attempt, {"training": summary})
 
     async def pause_and_drain(self) -> None:
         """Stop dispatching new generation and finish already submitted groups."""

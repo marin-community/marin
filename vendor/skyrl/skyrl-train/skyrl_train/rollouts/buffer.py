@@ -25,7 +25,7 @@ from skyrl_train.group_admission import (
     GroupAdmissionStalledError,
     TrainingGroupInvariantError,
 )
-from skyrl_train.grader_reporting import GraderStats
+from skyrl_train.grader_reporting import EnvironmentSummary, GraderStats
 from skyrl_train.rollout_observability import rollout_wait
 from skyrl_train.rollouts.loader import JudgedGroup
 from skyrl_train.telemetry import GeneratedWork
@@ -709,7 +709,7 @@ class RolloutBuffer:
             self._changed.notify_all()
             return admission
 
-    def grader_summary(self) -> list[dict]:
+    def grader_summary(self) -> list[EnvironmentSummary]:
         """Report all completed groups, including groups rejected for training."""
         return self._grader_stats.summary()
 

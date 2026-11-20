@@ -37,11 +37,14 @@ jobs:
       - name: Import terminal attempts
         run: |
           uv run --no-sync python - <<'PY'
+          import tomllib
+          from pathlib import Path
           from urllib.parse import urlsplit
 
           from marina.client import DEFAULT_MARINA_URL, marina_request
 
-          app_id = "6c971887-1e22-45b1-9dcb-dd775829df57"
+          with Path("infra/marina/apps/rl_progress/applet.toml").open("rb") as manifest:
+              app_id = tomllib.load(manifest)["applet_id"]
           details = marina_request(DEFAULT_MARINA_URL, "GET", f"/api/marina/applets/{app_id}")
           url = urlsplit(details["authenticated_url"])
           origin = f"{url.scheme}://{url.netloc}"

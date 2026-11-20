@@ -122,7 +122,8 @@ from skyrl_train.utils.utils import (
 
 from skyrl_train.config.objective_spec import rollout_logprobs_required
 from skyrl_train.utils.algorithm_registry import PolicyLossRegistry
-from skyrl_train.evaluate import evaluation_dump_dir, evaluate, evaluate_step_wise, evaluation_session
+from skyrl_train.evaluate import evaluate, evaluate_step_wise, evaluation_session
+from skyrl_train.grader_reporting import write_grader_report
 from skyrl_train.evaluation_pool import EvaluationPool
 from skyrl_train.callbacks.base import TrainerCallback, TrainerState, TrainerControl, CallbackHandler
 from skyrl_train.callbacks.builtin import DefaultCallbackHandler, RefModelUpdateCallback
@@ -1651,10 +1652,10 @@ class RayPPOTrainer:
         self.tracker.log(eval_metrics, step=self.global_step, commit=commit)
         self._last_evaluated_step = self.global_step
         if self.cfg.trainer.get("dump_grader_report", False):
-            data_save_dir = evaluation_dump_dir(str(self.cfg.trainer.export_path), self.global_step)
-            payload = {"duration_seconds": time.perf_counter() - started}
-            io.write_bytes_atomic(
-                join_resource_path(data_save_dir, "dashboard_duration.json"), json.dumps(payload).encode()
+            write_grader_report(
+                str(self.cfg.trainer.export_path),
+                str(self.global_step),
+                {"evaluation_duration_seconds": time.perf_counter() - started},
             )
 
     async def _run_pretraining_evaluation(self, state: TrainerState) -> None:

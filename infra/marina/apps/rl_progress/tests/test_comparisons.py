@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Protect result eligibility while restoring the dashboard's read contract."""
+"""Verify the dashboard's evaluation and comparison eligibility."""
 
 import hashlib
 import json

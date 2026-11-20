@@ -5,10 +5,10 @@
 
 import json
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from statistics import mean
-from typing import Literal
+from typing import Literal, TypedDict
 
 import numpy as np
 from marinskyrl.resource_locator import join_resource_path
@@ -28,6 +28,27 @@ class _EnvironmentStats:
     rollout_failures: Counter[str] = field(default_factory=Counter)
     durations: list[float] = field(default_factory=list)
     passed: int = 0
+
+
+class GradingLatency(TypedDict):
+    count: int
+    mean: float | None
+    p95: float | None
+    max: float | None
+
+
+class EnvironmentSummary(TypedDict):
+    environment: str
+    data_source: str | None
+    attempted: int
+    verified: int
+    verification_coverage: float
+    passed: int
+    success_rate: float | None
+    verification_statuses: dict[str, int]
+    grading_failures: dict[str, int]
+    rollout_failures: dict[str, int]
+    grading_latency_seconds: GradingLatency
 
 
 class GraderStats:
@@ -69,9 +90,9 @@ class GraderStats:
             stats.durations.extend(other_stats.durations)
             stats.passed += other_stats.passed
 
-    def summary(self) -> list[dict]:
+    def summary(self) -> list[EnvironmentSummary]:
         """Return JSON-ready counts, rates, and latency statistics."""
-        rows = []
+        rows: list[EnvironmentSummary] = []
         for (environment, source), stats in sorted(
             self._environments.items(), key=lambda item: (item[0][0], item[0][1] or "", item[0][1] is not None)
         ):
@@ -101,14 +122,16 @@ class GraderStats:
         return rows
 
 
-def write_grader_report(
-    export_path: str, phase: Literal["training", "evaluation"], key: str, summary: list[dict]
-) -> None:
-    """Update one evaluation step or training attempt in the run's grader report."""
+type GraderReportSection = Literal["training", "evaluation", "evaluation_metadata", "evaluation_duration_seconds"]
+
+
+def write_grader_report(export_path: str, key: str, sections: Mapping[GraderReportSection, object]) -> None:
+    """Update the run report for one evaluation step or training attempt."""
     path = join_resource_path(export_path, "grader_report.json")
     try:
         report = json.loads(io.read_bytes(path))
     except FileNotFoundError:
         report = {"training": {}, "evaluation": {}}
-    report[phase][key] = summary
+    for section, value in sections.items():
+        report.setdefault(section, {})[key] = value
     io.write_bytes_atomic(path, (json.dumps(report, indent=2, allow_nan=False) + "\n").encode())

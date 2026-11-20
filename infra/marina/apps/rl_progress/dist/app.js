@@ -19,9 +19,8 @@ const identity = (run) => JSON.stringify([run.run_id, run.attempt_id]);
 const fixed = (run) => run.run_id.includes('snowball-inventory-batch-fixed');
 const arm = (run) => run.label.match(/\b([A-D]\d+)\b/)?.[1] ?? run.label;
 const color = (run) => colors[arm(run)[0]] ?? '#6d6a60';
-const number = (value, digits = 4) => Number.isFinite(value) ? value.toFixed(digits) : '—';
+const formatNumber = (value, digits = 4) => Number.isFinite(value) ? value.toFixed(digits) : '—';
 const hours = (run) => run.elapsed_seconds / 3600;
-const gain = (run) => run.final && run.baseline ? (run.final.reward - run.baseline.reward) / hours(run) : null;
 const day = (date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(date));
 function visibleRuns() {
   return runs.filter((run) => $('campaign').value === 'all' || fixed(run) === ($('campaign').value === 'fixed'));
@@ -56,11 +55,11 @@ function chart(id, rows, xValue, yValue, xLabel, yLabel, { dateAxis = false, lab
   for (let i = 0; i <= 4; i++) {
     const value = yMin + (yMax - yMin) * i / 4, y = py(value);
     root.append(svg('line', { x1: margin.left, x2: width - margin.right, y1: y, y2: y, class: 'axis' }));
-    root.append(svg('text', { x: margin.left - 9, y: y + 4, 'text-anchor': 'end', class: 'tick' }, number(value, yLabel.includes('Reward') ? 3 : 2)));
+    root.append(svg('text', { x: margin.left - 9, y: y + 4, 'text-anchor': 'end', class: 'tick' }, formatNumber(value, yLabel.includes('Reward') ? 3 : 2)));
   }
   for (let i = 0; i <= 3; i++) {
     const value = xMin + (xMax - xMin) * i / 3;
-    root.append(svg('text', { x: px(value), y: height - margin.bottom + 23, 'text-anchor': 'middle', class: 'tick' }, dateAxis ? day(value).slice(5) : number(value, 2)));
+    root.append(svg('text', { x: px(value), y: height - margin.bottom + 23, 'text-anchor': 'middle', class: 'tick' }, dateAxis ? day(value).slice(5) : formatNumber(value, 2)));
   }
   root.append(svg('text', { x: margin.left, y: 15, class: 'axis-label' }, yLabel));
   root.append(svg('text', { x: width / 2, y: height - 8, 'text-anchor': 'middle', class: 'axis-label' }, xLabel));
@@ -68,8 +67,8 @@ function chart(id, rows, xValue, yValue, xLabel, yLabel, { dateAxis = false, lab
   const frontier = new Set(eligible.filter((a) => !eligible.some((b) => a.comparison_key === b.comparison_key && hours(b) <= hours(a) && b.final.reward >= a.final.reward && (hours(b) < hours(a) || b.final.reward > a.final.reward))).map(identity));
   for (const point of points) {
     const { run, phase } = point;
-    const link = svg('a', { href: graderPage(run), class: 'dot', tabindex: '0', 'aria-label': `View ${run.label}: ${yLabel.toLowerCase()} ${number(point.y)}${phase === 'baseline' ? ' (baseline)' : ''}, ${number(hours(run), 2)} elapsed hours` });
-    link.append(svg('title', {}, `${run.label}\n${yLabel}${phase === 'baseline' ? ' (baseline)' : ''}: ${number(point.y)}\n${run.partial_coverage ? 'Incomplete evaluation; excluded' : run.provisional ? 'Provisional; unranked' : 'Complete evaluation'}\nClick for this run’s grader stats`));
+    const link = svg('a', { href: graderPage(run), class: 'dot', tabindex: '0', 'aria-label': `View ${run.label}: ${yLabel.toLowerCase()} ${formatNumber(point.y)}${phase === 'baseline' ? ' (baseline)' : ''}, ${formatNumber(hours(run), 2)} elapsed hours` });
+    link.append(svg('title', {}, `${run.label}\n${yLabel}${phase === 'baseline' ? ' (baseline)' : ''}: ${formatNumber(point.y)}\n${run.partial_coverage ? 'Incomplete evaluation; excluded' : run.provisional ? 'Provisional; unranked' : 'Complete evaluation'}\nClick for this run’s grader stats`));
     link.append(svg('circle', { cx: px(point.x), cy: py(point.y), r: phase === 'baseline' ? 5 : 6, fill: phase === 'baseline' || run.partial_coverage ? 'var(--panel)' : color(run), stroke: color(run), 'stroke-width': id === 'pareto' && frontier.has(identity(run)) ? 4 : 2, 'stroke-dasharray': run.partial_coverage ? '2 2' : 'none' }));
     root.append(link);
     if (labelDots && phase === 'final') root.append(svg('text', { x: px(point.x) + 10, y: py(point.y) - 10, class: 'dot-label' }, arm(run)));
@@ -98,9 +97,9 @@ function showDetails(run) {
   const facts = [
     ['Campaign', fixed(run) ? 'Fixed runtime' : 'Earlier runtime'], ['Run ID', run.run_id], ['Attempt ID', run.attempt_id],
     ['Status', `${run.status} · ${run.optimizer_steps} optimizer updates`],
-    ['Reward', `${number(run.baseline?.reward)} → ${number(run.final?.reward)}`],
+    ['Reward', `${formatNumber(run.baseline?.reward)} → ${formatNumber(run.final?.reward)}`],
     ['Coverage', `Baseline ${run.baseline?.scored ?? 0}/${run.baseline?.attempted ?? 0}; final ${run.final?.scored ?? 0}/${run.final?.attempted ?? 0}`],
-    ['Elapsed', `${number(hours(run), 2)} hours (${number(run.elapsed_seconds, 1)} seconds)`],
+    ['Elapsed', `${formatNumber(hours(run), 2)} hours (${formatNumber(run.elapsed_seconds, 1)} seconds)`],
     ['Timing scope', run.timing_scope], ['Submission date', run.run_date], ['Started', run.started_at], ['Completed', run.completed_at],
     ['Source', run.source_revision], ['Training data', run.data_identity], ['Initializer', run.initializer_identity],
     ['Evaluation', `${run.evaluation.name} · ${run.evaluation.version}`], ['Task set', run.evaluation.task_set_sha256],
@@ -125,7 +124,7 @@ function render() {
   chart('pareto', selected, hours, (run) => run.final?.reward, 'Elapsed hours', 'Final reward', { labelDots: true });
   chart('reward', selected, (run) => Date.parse(run.run_date ?? run.started_at), (run) => run.final?.reward, 'Run date (Los Angeles)', 'Reward', { dateAxis: true, baseline: true });
   chart('duration', selected, (run) => Date.parse(run.run_date ?? run.started_at), hours, 'Run date (Los Angeles)', 'Elapsed hours', { dateAxis: true });
-  chart('gain', selected.filter((run) => !run.partial_coverage), (run) => Date.parse(run.run_date ?? run.started_at), gain, 'Run date (Los Angeles)', 'Reward gain / hour', { dateAxis: true });
+  chart('gain', selected.filter((run) => !run.partial_coverage), (run) => Date.parse(run.run_date ?? run.started_at), (run) => run.gain_per_hour, 'Run date (Los Angeles)', 'Reward gain / hour', { dateAxis: true });
   $('frontier-note').textContent = selected.some((run) => run.pareto_eligible) ? 'Rings mark the frontier within each verified comparison group.' : 'These points are descriptive. No verified frontier is drawn because the runtime evaluation protocol is not recorded.';
   $('legend').replaceChildren(...[...new Set(selected.map(arm))].map((name) => {
     const item = element('span'); item.append(element('i', null, { class: 'swatch', style: `background:${colors[name[0]]}` }), document.createTextNode(name)); return item;
@@ -134,7 +133,7 @@ function render() {
     const tr = element('tr');
     const name = element('td');
     name.append(element('a', run.label, { href: graderPage(run) }));
-    tr.append(name, element('td', `${number(run.baseline?.reward)} → ${number(run.final?.reward)}`), element('td', `${number(hours(run), 2)} h`), element('td', run.optimizer_steps ?? '—'), element('td', `${run.baseline?.scored ?? 0}/${run.baseline?.attempted ?? 0} → ${run.final?.scored ?? 0}/${run.final?.attempted ?? 0}`), element('td', run.partial_coverage ? 'Incomplete · excluded' : run.provisional ? 'Provisional · unranked' : 'Complete'));
+    tr.append(name, element('td', `${formatNumber(run.baseline?.reward)} → ${formatNumber(run.final?.reward)}`), element('td', `${formatNumber(hours(run), 2)} h`), element('td', run.optimizer_steps ?? '—'), element('td', `${run.baseline?.scored ?? 0}/${run.baseline?.attempted ?? 0} → ${run.final?.scored ?? 0}/${run.final?.attempted ?? 0}`), element('td', run.partial_coverage ? 'Incomplete · excluded' : run.provisional ? 'Provisional · unranked' : 'Complete'));
     return tr;
   }));
 }

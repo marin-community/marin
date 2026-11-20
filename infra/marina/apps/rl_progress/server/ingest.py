@@ -9,8 +9,8 @@ import logging
 import math
 import re
 from contextlib import closing
-from datetime import UTC, datetime
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, TypedDict
 
 from iris.cluster.types import TERMINAL_JOB_STATES
 from iris.rpc import controller_pb2, job_pb2
@@ -18,6 +18,8 @@ from iris.rpc.controller_connect import ControllerServiceClientSync
 from marina.discovery import resolve_internal_ip
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
+from rigging.telemetry.serialization import json_bytes
+from rigging.timing import Timestamp
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
@@ -28,12 +30,11 @@ logger = logging.getLogger(__name__)
 
 
 def _digest(value: Any) -> str:
-    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
-    return hashlib.sha256(payload.encode()).hexdigest()
+    return hashlib.sha256(json_bytes(value)).hexdigest()
 
 
 def read_object(path: StoragePath) -> dict | None:
-    """Read a small JSON object, including a trainer's one-line aggregate."""
+    """Read one bounded Quick RL evidence object."""
     try:
         with path.open("rb") as source:
             raw = source.read(EVIDENCE_LIMIT + 1)
@@ -55,14 +56,25 @@ def run_root(terminal_uri: str) -> StoragePath:
     return StoragePath(root)
 
 
-def _eval(root: StoragePath, step: int) -> tuple[dict | None, dict | None, float | None]:
-    directory = root / "exports" / "dumped_evals" / f"global_step_{step}_evals"
-    metrics = read_object(directory / "aggregated_results.jsonl") or {}
-    identity = read_object(directory / "dashboard_identity.json")
-    timing = read_object(directory / "dashboard_duration.json") or {}
-    reward = metrics.get("eval/all/avg_verifier_score")
-    attempted = metrics.get("eval/all/num_attempted")
-    scored = metrics.get("eval/all/num_scored")
+class EvaluationScore(TypedDict):
+    reward: float
+    attempted: int
+    scored: int
+
+
+@dataclass(frozen=True)
+class EvaluationMeasurement:
+    score: EvaluationScore | None = None
+    identity: dict | None = None
+    duration: float | None = None
+
+
+def _evaluation_measurement(report: dict, step: int) -> EvaluationMeasurement:
+    key = str(step)
+    metrics = report.get("evaluation_metadata", {}).get(key, {})
+    reward = metrics.get("reward")
+    attempted = metrics.get("attempted")
+    scored = metrics.get("scored")
     score = None
     if (
         isinstance(reward, int | float)
@@ -73,15 +85,23 @@ def _eval(root: StoragePath, step: int) -> tuple[dict | None, dict | None, float
         and int(scored) == scored
         and int(attempted) == attempted
     ):
-        score = {"reward": reward, "attempted": int(attempted), "scored": int(scored)}
-    duration = timing.get("duration_seconds")
+        score = EvaluationScore(reward=reward, attempted=int(attempted), scored=int(scored))
+    duration = report.get("evaluation_duration_seconds", {}).get(key)
     if not isinstance(duration, int | float) or not math.isfinite(duration) or duration < 0:
         duration = None
-    return score, identity, duration
+    return EvaluationMeasurement(score, metrics.get("identity"), duration)
 
 
-def _iso(epoch_ms: int) -> str:
-    return datetime.fromtimestamp(epoch_ms / 1000, tz=UTC).isoformat()
+@dataclass
+class SyncCounts:
+    imported: int = 0
+    pending: int = 0
+    errors: int = 0
+
+
+def _registration_filename(run_id: str, attempt_id: str) -> str:
+    digest = _digest([run_id, attempt_id])
+    return f"{digest}.json"
 
 
 def terminal_record(entry: dict, job: job_pb2.JobStatus) -> dict:
@@ -91,48 +111,49 @@ def terminal_record(entry: dict, job: job_pb2.JobStatus) -> dict:
     native = terminal.get("result") or {}
     has_current_manifest = native.get("run_id") == entry["run_id"] and native.get("attempt_id") == entry["attempt_id"]
     succeeded = job.state == job_pb2.JOB_STATE_SUCCEEDED and has_current_manifest and native["state"] == "succeeded"
-    baseline, baseline_identity, baseline_time = _eval(root, 0) if has_current_manifest else (None, None, None)
-    final, final_identity, final_time = (
-        _eval(root, int(entry["expected_step"])) if has_current_manifest else (None, None, None)
-    )
+    grader_uri = root / "exports" / "grader_report.json"
+    grader_report = read_object(grader_uri) if has_current_manifest else None
+    baseline = _evaluation_measurement(grader_report or {}, 0)
+    final = _evaluation_measurement(grader_report or {}, int(entry["expected_step"]))
     submitted = job.submitted_at.epoch_ms
     finished = job.finished_at.epoch_ms
     if not (0 < submitted <= finished):
         raise ValueError("Iris omitted the coordinator's terminal timestamps")
     wall = (finished - submitted) / 1000
-    timed = baseline_time is not None and final_time is not None and wall > baseline_time + final_time
-    comparable = (
-        timed
-        and baseline_identity is not None
-        and baseline_identity == final_identity
-        and entry["source_revision"] != "unknown"
+    validation = (
+        baseline.duration + final.duration if baseline.duration is not None and final.duration is not None else None
     )
-    common = baseline_identity if comparable else None
-    grader_uri = root / "exports" / "grader_report.json"
-    grader_report = read_object(grader_uri) if has_current_manifest else None
+    adjusted = wall - validation if validation is not None and wall > validation else None
+    common = (
+        baseline.identity
+        if adjusted is not None and baseline.identity == final.identity and entry["source_revision"] != "unknown"
+        else None
+    )
     return {
         "run_id": entry["run_id"],
         "attempt_id": entry["attempt_id"],
         "label": entry["run_id"].rsplit("/", 1)[-1],
         "coordinator_job_id": entry["coordinator_job_id"],
         "iris_job_id": native.get("iris_job_id") if has_current_manifest else None,
-        "run_date": _iso(submitted),
+        "run_date": Timestamp(submitted).as_formatted_date(),
         "date_basis": "submission_acknowledged",
-        "started_at": _iso(job.started_at.epoch_ms or submitted),
-        "completed_at": _iso(finished),
-        "elapsed_seconds": wall - baseline_time - final_time if timed else wall,
-        "timing_scope": "coordinator_wall_minus_validation" if timed else "coordinator_submission_to_terminal",
+        "started_at": Timestamp(job.started_at.epoch_ms or submitted).as_formatted_date(),
+        "completed_at": Timestamp(finished).as_formatted_date(),
+        "elapsed_seconds": adjusted if adjusted is not None else wall,
+        "timing_scope": (
+            "coordinator_wall_minus_validation" if adjusted is not None else "coordinator_submission_to_terminal"
+        ),
         "coordinator_wall_seconds": wall,
-        "validation_seconds": {"baseline": baseline_time, "final": final_time},
+        "validation_seconds": {"baseline": baseline.duration, "final": final.duration},
         "status": "succeeded" if succeeded else "failed",
-        "optimizer_steps": entry["expected_step"] if succeeded else None,
+        "optimizer_steps": entry["expected_step"] if succeeded and final.score is not None else None,
         "source_revision": entry["source_revision"],
         "data_identity": entry["data_identity"],
         "initializer_identity": entry["initializer_identity"],
         "evaluation": {
             "name": "quick-rl-validation",
             "version": entry["validation_identity"],
-            "task_count": baseline["attempted"] if baseline is not None else None,
+            "task_count": baseline.score["attempted"] if baseline.score is not None else None,
             "task_set_sha256": _digest([entry["validation_identity"], common["membership_sha256"]]) if common else None,
             "protocol_sha256": (
                 _digest(
@@ -146,27 +167,25 @@ def terminal_record(entry: dict, job: job_pb2.JobStatus) -> dict:
                 else None
             ),
         },
-        "baseline": baseline,
-        "final": final if baseline is not None else None,
+        "baseline": baseline.score,
+        "final": final.score if baseline.score is not None else None,
         "artifact_uri": entry["terminal_manifest_uri"],
         "grader_report_uri": str(grader_uri) if grader_report is not None else None,
         "grader_report": grader_report,
         "evidence": [
             *(["The coordinator did not produce a successful terminal attempt."] if not succeeded else []),
-            *(["Validation timings are incomplete. Elapsed time includes validation."] if not timed else []),
+            *(["Validation timings are incomplete. Elapsed time includes validation."] if adjusted is None else []),
         ],
     }
 
 
-def sync_attempts(engine: Engine) -> dict[str, int]:
-    """Reconcile registered attempts once Iris records a terminal state."""
+def _pending_registrations(engine: Engine, counts: SyncCounts) -> list[dict]:
     filesystem, prefix = filesystem_for(INBOX)
     filesystem.invalidate_cache(prefix)
     paths = (StoragePath(INBOX) / "*.json").glob()
-    result = {"imported": 0, "pending": 0, "errors": 0}
     with engine.connect() as connection:
         imported = {
-            hashlib.sha256(json.dumps([row.run_id, row.attempt_id]).encode()).hexdigest() + ".json"
+            _registration_filename(row.run_id, row.attempt_id)
             for row in connection.execute(text("SELECT run_id, attempt_id FROM rl_runs"))
         }
     pending = []
@@ -175,14 +194,38 @@ def sync_attempts(engine: Engine) -> dict[str, int]:
             continue
         try:
             entry = read_object(path)
-            if entry is not None:
-                expected = hashlib.sha256(json.dumps([entry["run_id"], entry["attempt_id"]]).encode()).hexdigest()
-                if path.name != f"{expected}.json":
-                    raise ValueError("Registration filename disagrees with its attempt identity")
-                pending.append(entry)
+            if entry is None:
+                continue
+            if path.name != _registration_filename(entry["run_id"], entry["attempt_id"]):
+                raise ValueError("Registration filename disagrees with its attempt identity")
+            pending.append(entry)
         except (KeyError, OSError, ValueError):
             logger.exception("Could not read Quick RL registration %s", path)
-            result["errors"] += 1
+            counts.errors += 1
+    return pending
+
+
+def _insert_record(engine: Engine, record: dict) -> int:
+    with engine.begin() as connection:
+        saved = connection.execute(
+            text(
+                """INSERT INTO rl_runs (run_id, attempt_id, record)
+                VALUES (:run_id, :attempt_id, CAST(:record AS jsonb))
+                ON CONFLICT (run_id, attempt_id) DO NOTHING"""
+            ),
+            {
+                "run_id": record["run_id"],
+                "attempt_id": record["attempt_id"],
+                "record": json_bytes(record).decode(),
+            },
+        )
+        return saved.rowcount
+
+
+def sync_attempts(engine: Engine) -> SyncCounts:
+    """Reconcile registered attempts once Iris records a terminal state."""
+    result = SyncCounts()
+    pending = _pending_registrations(engine, result)
     if not pending:
         return result
     address = resolve_internal_ip(
@@ -195,24 +238,10 @@ def sync_attempts(engine: Engine) -> dict[str, int]:
                 request = controller_pb2.Controller.GetJobStatusRequest(job_id=entry["coordinator_job_id"])
                 job = client.get_job_status(request).job
                 if job.state not in TERMINAL_JOB_STATES:
-                    result["pending"] += 1
+                    result.pending += 1
                     continue
-                record = terminal_record(entry, job)
-                with engine.begin() as connection:
-                    saved = connection.execute(
-                        text(
-                            """INSERT INTO rl_runs (run_id, attempt_id, record)
-                            VALUES (:run_id, :attempt_id, CAST(:record AS jsonb))
-                            ON CONFLICT (run_id, attempt_id) DO NOTHING"""
-                        ),
-                        {
-                            "run_id": record["run_id"],
-                            "attempt_id": record["attempt_id"],
-                            "record": json.dumps(record, allow_nan=False),
-                        },
-                    )
-                    result["imported"] += saved.rowcount
+                result.imported += _insert_record(engine, terminal_record(entry, job))
             except Exception:
                 logger.exception("Could not reconcile Quick RL attempt %s", entry["attempt_id"])
-                result["errors"] += 1
+                result.errors += 1
     return result
