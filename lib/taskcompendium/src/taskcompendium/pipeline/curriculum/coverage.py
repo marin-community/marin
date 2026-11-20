@@ -6,7 +6,9 @@
 from collections import Counter
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
+from enum import StrEnum
 from functools import partial
+from typing import NamedTuple
 
 from finestore.schema import arrow_schema
 from rigging.filesystem.storage_path import StoragePath
@@ -42,6 +44,22 @@ class AtlasData:
     sample_paths: list[str]
     sample_task_count: int
     confidence_paths: list[str] = field(default_factory=list)
+
+
+class SampleKind(StrEnum):
+    SOURCE = "source"
+    AREA = "area"
+
+
+class SampleIdentity(NamedTuple):
+    source_id: str
+    task_id: str
+
+
+class SampleCandidate(NamedTuple):
+    kind: SampleKind
+    scope_id: str
+    identity: SampleIdentity
 
 
 def _task_coverage(
@@ -134,9 +152,9 @@ def _sample_groups(
     subject_distance: float,
     capability_distance: float,
     confidence_levels: Sequence[tuple[str, float, float]],
-) -> Iterator[dict]:
-    identity = {"source_id": row["source_id"], "task_id": row["task_id"]}
-    yield {"kind": "source", "scope_id": row["source_id"], "task": identity}
+) -> Iterator[SampleCandidate]:
+    identity = SampleIdentity(row["source_id"], row["task_id"])
+    yield SampleCandidate(SampleKind.SOURCE, row["source_id"], identity)
     levels = confidence_levels or (("", 1 - subject_distance, 1 - capability_distance),)
     for index, (_, subject_similarity, capability_similarity) in enumerate(levels):
         for subject, node in _task_coverage(
@@ -145,21 +163,21 @@ def _sample_groups(
             subject_distance=1 - subject_similarity,
             capability_distance=1 - capability_similarity,
         )["placements"]:
-            yield {"kind": "area", "scope_id": f"{index}/{subject}/{node}", "task": identity}
+            yield SampleCandidate(SampleKind.AREA, f"{index}/{subject}/{node}", identity)
 
 
 def _sample_tasks(
-    key: tuple[str, str],
-    rows: Iterator[dict],
+    key: tuple[SampleKind, str],
+    rows: Iterator[SampleCandidate],
     *,
     source_size: int,
     area_size: int,
     sampling_source_ids: Mapping[str, str],
-) -> Iterator[dict]:
+) -> Iterator[SampleCandidate]:
     _, selected = seeded_sample(
         rows,
-        size=source_size if key[0] == "source" else area_size,
-        key=lambda row: seeded_order(sampling_source_ids[row["task"]["source_id"]] + "\0" + row["task"]["task_id"], 0),
+        size=source_size if key[0] is SampleKind.SOURCE else area_size,
+        key=lambda row: seeded_order(sampling_source_ids[row.identity.source_id] + "\0" + row.identity.task_id, 0),
     )
     yield from selected
 
@@ -239,18 +257,18 @@ def build_curriculum_coverage(
             )
         )
         .group_by(
-            key=lambda row: (row["kind"], row["scope_id"]),
+            key=lambda row: (row.kind, row.scope_id),
             reducer=sample,
             combiner=sample,
             num_output_shards=context.max_workers,
         )
-        .map(lambda row: row["task"])
-        .deduplicate(key=lambda row: (row["source_id"], row["task_id"]), num_output_shards=context.max_workers),
+        .map(lambda row: row.identity)
+        .deduplicate(key=lambda row: (row.source_id, row.task_id), num_output_shards=context.max_workers),
         name="curriculum-review-sample-identities",
     )
     # The union is bounded by source/area sample sizes and taxonomy membership.
     # Keep full task bodies out of the much larger confidence-membership shuffle.
-    selected = frozenset((row["source_id"], row["task_id"]) for row in identities.results)
+    selected = frozenset((row.source_id, row.task_id) for row in identities.results)
     samples = context.execute(
         Dataset.from_list(list(task_paths))
         .load_parquet()
