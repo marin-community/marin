@@ -665,7 +665,9 @@ def sft_child_resources(resources: ResourceConfig, coordinator_cluster: str | No
         return resources
     if resources.target_cluster != coordinator_cluster:
         raise ValueError(f"SFT targets {resources.target_cluster}, but the RL coordinator targets {coordinator_cluster}")
-    return replace(resources, target_cluster=None)
+    # A CoreWeave peer already places the coordinator and its children in one region.
+    regions = () if coordinator_cluster.startswith("cw-") else resources.regions
+    return replace(resources, target_cluster=None, regions=regions)
 
 
 # Accelerator strings: "<count>x<gpu>" (e.g. "8xH100") for GPU, else a TPU slice variant ("v4-64").

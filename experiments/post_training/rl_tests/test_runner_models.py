@@ -565,6 +565,7 @@ def test_sft_composition_reenters_its_own_module(selection, monkeypatch, model, 
             else next(dependency for dependency in producer.deps if "train_resources" in dependency.runtime_args)
         )
         assert training.runtime_args["train_resources"].target_cluster is None
+        assert not training.runtime_args["train_resources"].regions
         config = materialized_config(run, env["MARIN_PREFIX"])
         document = yaml.safe_load(config.launch_config_yaml)
         assert document["run"]["sft_preset"] == sft.name

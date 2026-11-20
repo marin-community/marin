@@ -27,6 +27,10 @@
   "name": "snowball-100k-agentic",
   "released": [
     {
+      "admission": {
+        "sha256": "304c3db806ab843c9a13c00f9054790ef45ce927186a95d09046106d3b2c0fe8",
+        "uri": "s3://marin-us-east-02a/marin/rl-data/task-health/attempts/checkpoints/snowball-rl/train-medium-agentic-65c84cfbc4-in-9486f87b/2026.11.20.1/attempts.parquet"
+      },
       "agentic": true,
       "family": "agentic",
       "format": "task_spec",

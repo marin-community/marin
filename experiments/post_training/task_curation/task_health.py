@@ -246,7 +246,7 @@ def publish_skip_list(
     attempted = Counter(row["task_digest"] for row in rows)
     failures: defaultdict[str, list[dict]] = defaultdict(list)
     for row in rows:
-        if row["phase"] in FAILING_PHASES and row["task_digest"] not in graded:
+        if row["outcome"] == Outcome.INFRA_ERROR and row["phase"] in FAILING_PHASES and row["task_digest"] not in graded:
             failures[row["task_digest"]].append(row)
     broken = {digest: failed[0] for digest, failed in failures.items() if len(failed) >= MIN_FAILED_ATTEMPTS}
     environments = Counter((row["docker_image"], row["setup_sha256"]) for row in broken.values())

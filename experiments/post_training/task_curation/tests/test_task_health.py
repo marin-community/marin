@@ -189,6 +189,7 @@ def test_skip_lists_tasks_and_environments_that_fail_setup_or_verification(tmp_p
         "recovered": ("swe/recovered", SETUP),
         "infrastructure": ("swe/infrastructure", SETUP),
         "once": ("swe/once", SETUP),
+        "incomplete": ("swe/incomplete", SETUP),
         "shared-1": (SHARED_IMAGE, SETUP),
         "shared-2": (SHARED_IMAGE, SETUP),
         "shared-untried": (SHARED_IMAGE, SETUP),
@@ -197,7 +198,7 @@ def test_skip_lists_tasks_and_environments_that_fail_setup_or_verification(tmp_p
     tasks = {name: harbor_task(name, image, setup) for name, (image, setup) in environments.items()}
     selection = write_tasks(tmp_path / "selection" / TRAIN_FILENAME, list(tasks.values())).parent
 
-    def attempt(name: str, phase: Phase, error: str | None, outcome: Outcome = Outcome.INFRA_ERROR) -> dict:
+    def attempt(name: str, phase: Phase, error: str | None, outcome: Outcome | None = Outcome.INFRA_ERROR) -> dict:
         image, setup = environments[name]
         return {
             "task_id": name,
@@ -218,6 +219,8 @@ def test_skip_lists_tasks_and_environments_that_fail_setup_or_verification(tmp_p
         attempt("infrastructure", Phase.ENVIRONMENT, "Sandbox creation failed"),
         attempt("infrastructure", Phase.AGENT, "Agent timed out"),
         attempt("once", Phase.TASK_SETUP, SETUP_EXIT),
+        attempt("incomplete", Phase.TASK_SETUP, None, None),
+        attempt("incomplete", Phase.TASK_SETUP, None, None),
         attempt("shared-1", Phase.TASK_SETUP, SETUP_EXIT),
         attempt("shared-2", Phase.VERIFIER, MISSING_MODULE),
     ]

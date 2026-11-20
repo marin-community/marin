@@ -585,6 +585,9 @@ def test_grader_admission_preserves_published_selection_fingerprints():
     training = SelectionRecipe.model_validate_json((recipes / "snowball-100k.json").read_text())
     agentic = SelectionRecipe.model_validate_json((recipes / "snowball-100k-agentic.json").read_text())
     evaluation = EvalLiteRecipe.model_validate_json((recipes / "eval-lite.json").read_text())
+    for recipe in recipes.glob("*.json"):
+        for source in json.loads(recipe.read_text()).get("released", ()):
+            assert ReleasedSource.model_validate(source).admission is not None, recipe.name
 
     def curated(sources):
         return {
