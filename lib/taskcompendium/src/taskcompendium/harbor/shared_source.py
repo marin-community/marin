@@ -281,7 +281,7 @@ def source_bootstrap_command(setup: str, workspace: str) -> str:
         f"pathlib.Path({BOOTSTRAP_INPUT!r}).write_bytes("
         f"zlib.decompress(pathlib.Path({SOURCE_PAYLOAD!r}).read_bytes()))"
     )
-    probe = "import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)"
+    probe = "import sys; assert sys.version_info >= (3, 9); print(sys.executable)"
     lines = [
         "set -euo pipefail",
         f"git config --global --add safe.directory {shlex.quote(workspace)}",
@@ -290,8 +290,7 @@ def source_bootstrap_command(setup: str, workspace: str) -> str:
         'for control_dir in $(printf "%s\n" "$PATH" | tr ":" " "); do',
         "  for control_name in python3 python; do",
         '    [ -x "$control_dir/$control_name" ] || continue',
-        f'    if "$control_dir/$control_name" -c {shlex.quote(probe)} 2>/dev/null; then',
-        '      control_python="$control_dir/$control_name"',
+        f'    if control_python="$("$control_dir/$control_name" -I -S -B -c {shlex.quote(probe)} 2>/dev/null)"; then',
         "      break 2",
         "    fi",
         "  done",

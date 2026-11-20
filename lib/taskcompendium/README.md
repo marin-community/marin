@@ -51,6 +51,11 @@ dependencies stay mutable. The published integrity contract records dependency
 changes, startup hooks, and known gaps; it does not promise isolation from all
 candidate-produced output or interpreter startup hooks.
 
+Prime source adapters grant dependency writes only to each task Python's
+purelib and platlib directories. The root control interpreter and standard
+library stay read-only to the actor. Bootstrap rejects a control runtime or
+ancestor that the actor can modify.
+
 `shared_reference.harden_shared_swe_reference` compiles a previously captured
 trusted reference into a new package. The reference binds the source package,
 image context, controller, and declared actor environment. Keep source tests,

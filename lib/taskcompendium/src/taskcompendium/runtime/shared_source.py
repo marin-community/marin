@@ -32,6 +32,50 @@ from pathlib import Path, PurePosixPath
 
 NATIVE_SCRIPTS = "native_scripts.py"
 HUNK_HEADER = re.compile(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
+CONTROL_RUNTIME_PROBE = """import json,os,pathlib,sys,sysconfig
+mutable=[pathlib.Path(p).resolve() for p in json.loads(sys.argv[1])]
+sites={pathlib.Path(sysconfig.get_path(k)).resolve() for k in ('purelib','platlib')}
+paths={pathlib.Path(sys.executable).resolve(),pathlib.Path(sys.base_prefix).resolve()}
+paths.update(pathlib.Path(p).resolve() for p in sys.path if p)
+stdlib=pathlib.Path(sysconfig.get_path('stdlib')).resolve()
+for directory,children,files in os.walk(stdlib):
+    parent=pathlib.Path(directory)
+    children[:]=[name for name in children if (parent/name).resolve() not in sites]
+    paths.add(parent)
+    paths.update(parent/name for name in files)
+for path in paths:
+    if path in sites: continue
+    for candidate in (path,*path.parents):
+        if any(candidate.is_relative_to(root) for root in mutable) or os.access(candidate,os.W_OK):
+            raise SystemExit('Actor can modify root control runtime: '+str(candidate))
+"""
+
+
+def protect_control_runtime(common, contract: dict, mutable: list[str]) -> None:
+    """Refuse a root interpreter, stdlib, or ancestor the actor can modify."""
+    result = subprocess.run(
+        [sys.executable, "-I", "-S", "-B", "-c", CONTROL_RUNTIME_PROBE, json.dumps(mutable)],
+        user=contract["agent_uid"],
+        group=contract["agent_uid"],
+        extra_groups=(),
+        cwd="/",
+        env=common.clean_environment(),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if result.returncode:
+        raise ValueError(f"Unsafe root control runtime: {result.stderr.strip()}")
+
+
+def dependency_sites(common, dependencies: list[str], root: Path) -> list[str]:
+    """Locate mutable package directories without granting writes to Python itself."""
+    sites: set[str] = set()
+    probe = "import json,sysconfig;print(json.dumps([sysconfig.get_path(k) for k in ('purelib','platlib')]))"
+    for directory in dependencies:
+        python = Path(directory) / "bin/python"
+        sites.update(json.loads(common.checked([str(python), "-I", "-c", probe], cwd=root, timeout=30)))
+    return sorted(sites)
 
 
 def shared_controller():
@@ -372,10 +416,13 @@ def bootstrap(input_path: Path) -> None:
 
     dependencies = [path for path in runner["dependency_paths"] if Path(path).exists()]
     home = os.environ.get("HOME", "/root")
-    for directory in [*dependencies, str(Path(home) / ".cache")]:
+    mutable = [*dependency_sites(common, dependencies, root), str(Path(home) / ".cache")]
+    for directory in mutable:
         Path(directory).mkdir(parents=True, exist_ok=True)
         common.checked(["chgrp", "-R", str(contract["agent_uid"]), directory], cwd=root, timeout=120)
         common.checked(["chmod", "-R", "g+rwX", directory], cwd=root, timeout=120)
+
+    protect_control_runtime(common, contract, [*mutable, str(workspace)])
 
     baseline = common.inventory(dependencies)
     common.write_json(root / common.DEPENDENCY_BASELINE, baseline)
