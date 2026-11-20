@@ -110,20 +110,7 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
     expected_interface = interface or ("^ibs,ibp,lo,docker,veth,cilium,lxc" if args.cluster == "cw-rno2a" else None)
     assert request.environment.env_vars.get("NCCL_SOCKET_IFNAME") == expected_interface
 
-
-def test_task_shell_runs_the_interconnect_gate():
-    """Multi-node task shells run the NCCL transport gate before the controller."""
-    from cloud.iris.iris_backend import build_config_task_command
-
-    args = SimpleNamespace(
-        config=OmegaConf.create({"skyrl": {"trainer": {"debug_mode": "off"}}}),
-        launch_config_bundle=BundledLaunchConfig("/app/launch.yaml", "e30="),
-        model_path="s3://models/policy",
-        ray_spill_dir="/tmp/ray-spill",
-        ray_spill_backend=RaySpillBackend.LOCAL,
-        rendezvous_dir="s3://runs/rendezvous",
-    )
-    command = build_config_task_command(args)
-    shell = command[-1]
-    assert "nccl_transport_probe.py --mode gate --gate-coverage all-gpus --pynccl-init" in shell
-    assert "--gate-report-prefix s3://runs/rendezvous/interconnect-gate" in shell
+    shell = request.entrypoint.run_command.argv[-1]
+    assert "nccl_transport_probe.py --mode gate --gate-coverage all-gpus" in shell
+    assert "--gate-report-prefix s3://runs/rendezvous/interconnect-gate; " in shell
+    assert ("--pynccl-init" in shell) == (entrypoint != CHECKPOINT_EXPORT_ENTRYPOINT)

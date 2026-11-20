@@ -746,9 +746,11 @@ def _build_task_shell(
         args.rendezvous_dir, args.ray_spill_backend, args.ray_spill_dir
     ).shell_preflight()
     gate_report_prefix = f"{args.rendezvous_dir.rstrip('/')}/interconnect-gate"
+    # The frozen export runtime uses PyTorch NCCL and has no vLLM.
+    pynccl_check = "" if _is_checkpoint_export(args) else " --pynccl-init"
     transport_gate = (
         f"{RL_PYTHON} {APP_DIR}/experiments/post_training/nccl_transport_probe.py"
-        " --mode gate --gate-coverage all-gpus --pynccl-init"
+        f" --mode gate --gate-coverage all-gpus{pynccl_check}"
         f" --gate-report-prefix {shlex.quote(gate_report_prefix)}; "
     )
     bash = (
