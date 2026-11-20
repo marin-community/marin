@@ -31,7 +31,7 @@ from verifyit.spec import EmptyOutputPolicy, JudgeSpec
 from experiments.post_training.task_curation.datasets.openresearcher.assets import DATASET, DATASET_REVISION
 from experiments.post_training.task_curation.datasets.openresearcher.grounding_contract import CONTRACT_SHA256
 
-VERSION = "2026.11.15.1"
+VERSION = "2026.11.20.1"
 SOURCE_ID = "OpenResearcher:OpenResearcher-Dataset"
 GRADER_ROOT = Path(__file__).parent.parent / "browsecomp"
 RESEARCH_INSTRUCTION = """Answer the question using the offline search and get_document tools.
@@ -87,7 +87,9 @@ def convert_question(
             working_directory="/app",
             tool_providers={
                 "retrieval": ProviderRequirement(
-                    action_interface=OPENRESEARCHER_ACTION_INTERFACE, initial_state=state.model_dump(mode="json")
+                    action_interface=OPENRESEARCHER_ACTION_INTERFACE,
+                    initial_state=state.model_dump(mode="json"),
+                    network_access="service_only",
                 )
             },
         ),

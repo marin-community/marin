@@ -94,18 +94,21 @@ The versioned `openresearcher-bm25:v1` provider exposes `search` and
 pins the implementation, corpus, tokenizer and index manifest. The gold
 answer belongs only in private verifier resources.
 
-OpenResearcher `get_document` writes complete producer JSON to a unique temporary
-file in the actor machine and transfers it with `Machine.download`, preserving
-documents above the 16 MiB stdout capture limit. The session removes its temporary
-file after the call. Failed producers, failed transfers and malformed JSON still
-abort. Search and BrowseComp retain their existing capture limits.
-Against a sandbox using the pinned actor image, verify production-provider calls
+The RL run owns a regional Iris CPU service with the complete pinned BM25 index.
+The actor uses the thin grader image and declares `network_access: service_only`.
+Its external network stays disabled. Shellbox carries tool calls over its private
+process channel to the service. `get_document` transfers complete JSON in bounded
+frames to a temporary actor file and reads it with `Machine.download`, preserving
+documents above the stdout capture limit. Failed producers, transfers and malformed
+JSON abort the call. The index never occupies the actor disk. See
+[run-owned retrieval](../../../../../docs/references/rl-launching.md#run-owned-retrieval).
+Against a sandbox using the pinned thin actor image, verify production-provider calls
 for a normal document and pinned corpus document `7385` (18,388,915 UTF-8 bytes).
 Check the complete returned text against the corpus. The grounding JSON-line
 replay described above tests a separate transport path.
 
-Before `prepare`, record actor-image QA in the intake report. Its evidence must
-bind the actor image digest, the complete index-file manifest and the two
+Before `prepare`, record service and actor QA in the intake report. Its evidence must
+bind the actor image digest, service runtime, the complete index-file manifest and the two
 production-provider probes above. `prepare` creates the source's QUICK artifact
 after grounding and this QA. Its [`PreparationConfig`](prepare.py) binds the stage,
 question, grounding and benchmark hash receipts by SHA, the retrieval state,
@@ -123,7 +126,7 @@ Construct `state` with [`OpenResearcherState`](../../../../../lib/taskcompendium
 using the verified index manifest SHA and the implementation/tokenizer revisions
 in [`runtime.py`](runtime.py). The fixed corpus revision, top-five search,
 512-token snippets and `get_document` setting must match the physically tested
-actor image's `/opt/openresearcher/state.json`.
+service's health state.
 
 ```bash
 uv run python -m experiments.post_training.task_curation.datasets.openresearcher.prepare \

@@ -38,6 +38,7 @@ from taskcompendium.convert.script_grader import grade_script, script_package, s
 from taskcompendium.grader import GraderPackage, grader_config, verifyit_package
 from taskcompendium.models import (
     AnswerType,
+    CommandSemantics,
     EnvironmentRequirements,
     FinalAction,
     NoGrader,
@@ -137,7 +138,12 @@ JAILBREAK_AGENTS = (
 RDKIT_PROPERTIES = frozenset({"count", "bool", "presence", "fragment"})
 STRUCTURED_SCHEMA_TYPES = frozenset({"json", "yaml", "toml", "xml", "csv"})
 FORMAT_VERIFIER_TYPES = frozenset({"regex", "inline_prose", "string_match"})
-MATH_AGENTS = ("math_with_judge_simple_agent", "ns_tools_simple_agent")
+PYTHON_AGENT = "ns_tools_simple_agent"
+PYTHON_AGENT_IMAGE = (
+    "us-east1-docker.pkg.dev/hai-gcp-models/marin/nemo-skills-sandbox@sha256:"
+    "280e0871b02f5dc935c1b3fdfbf75c394cceb087a0a284b13918aeb22e10b104"
+)
+MATH_AGENTS = ("math_with_judge_simple_agent", PYTHON_AGENT)
 """The math components' agents: a plain chat, and a chat with a Python tool."""
 MATH_VERIFIER = "math_with_judge"
 JUDGE_REQUEST_TIMEOUT = 120.0
@@ -772,7 +778,10 @@ def convert_tool_action(row: RawRow, context: ConversionContext) -> NormalizedTa
 def _agent_provider(request: BlendRequest) -> dict[str, ProviderRequirement]:
     """The NeMo Gym agent that serves the request's tools and initial environment."""
     interface = AGENT_CAPABILITY_PREFIX + request.agent
-    return {"nemotron_agent": ProviderRequirement(action_interface=interface, initial_state=request.state)}
+    state = request.state
+    if request.agent == PYTHON_AGENT:
+        state = {**state, "tools": [tool.model_dump(mode="json") for tool in request.tools]}
+    return {"nemotron_agent": ProviderRequirement(action_interface=interface, initial_state=state)}
 
 
 def _source_contract(request: BlendRequest) -> dict[str, JsonValue]:
@@ -791,14 +800,24 @@ def _agent_task(
     expected_action = request.contract.get("expected_action", {})
     answers_with_call = isinstance(expected_action, dict) and expected_action.get("type") == "function_call"
     action = answers_with_call and bool(request.tools)
+    environment = EnvironmentRequirements(
+        capabilities=(AGENT_CAPABILITY_PREFIX + request.agent,), tool_providers=providers
+    )
+    final_tools = request.tools
+    if request.agent == PYTHON_AGENT:
+        final_tools = request.tools if action else ()
+        environment = EnvironmentRequirements(
+            command_semantics=CommandSemantics.LINUX_PROCESS,
+            docker_image=PYTHON_AGENT_IMAGE,
+            working_directory="/workspace",
+            tool_providers=providers,
+        )
     task = TaskSpec(
         id=row.id,
         source=row.source,
         context=request.context,
-        environment_requirements=EnvironmentRequirements(
-            capabilities=(AGENT_CAPABILITY_PREFIX + request.agent,), tool_providers=providers
-        ),
-        final_tools=request.tools,
+        environment_requirements=environment,
+        final_tools=final_tools,
         interaction_tools=request.tools,
         answer_type=AnswerType.NATIVE_ACTION if action else AnswerType.TEXT,
         answer_format=FinalAction() if action else PlainText(),
