@@ -105,6 +105,14 @@ def requires_judge(selection: EvaluationSelection) -> bool:
     )
 
 
+def declared_task_evidence(selection: EvaluationSelection) -> TaskEvidence:
+    """Reference when any of the selection's corpora declares it, else embedded."""
+    sources = evaluation_benchmarks()[selection.benchmark].resolve(selection.protocol, selection.num_fewshot)
+    if any(source.config is not None and source.config.task_evidence is TaskEvidence.REFERENCE for source in sources):
+        return TaskEvidence.REFERENCE
+    return TaskEvidence.EMBEDDED
+
+
 def corpus_key(step: ArtifactStep) -> str:
     """Identify the publication recipe and version independently of its storage region."""
     return f"{step.name}@{step.version}"
@@ -116,9 +124,12 @@ def settings_for(
     limit: int | None,
     seed: int | None,
     default_seed: int | None,
-    task_evidence: TaskEvidence,
+    task_evidence: TaskEvidence | None,
 ) -> CuratedSettings:
-    """Resolve run settings; the seed is the launch seed, else the selection's, else ``default_seed``."""
+    """Resolve run settings; the seed is the launch seed, else the selection's, else ``default_seed``.
+
+    Task evidence is the launch's choice, else the one the selection's corpora declare.
+    """
     if model.effective_tokenizer_revision is None:
         raise ValueError("Curated evaluation requires an explicit tokenizer revision")
     run = selection.run
@@ -142,7 +153,7 @@ def settings_for(
         source_limit=limit if limit is not None else run.limit,
         seed=explicit_seed if explicit_seed is not None else default_seed,
         judge=run.judge,
-        task_evidence=task_evidence,
+        task_evidence=task_evidence if task_evidence is not None else declared_task_evidence(selection),
     )
 
 

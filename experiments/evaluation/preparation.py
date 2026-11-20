@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from functools import partial
 
+from evalrecords.records import TaskEvidence
 from marin.execution.lazy import ArtifactStep, StepContext
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import MANIFEST_FILENAME, ItemBuilder, chat_variant_item
@@ -54,6 +55,8 @@ class EvaluationCorpusRecipe:
     item_builder: ItemBuilder
     protocol_name: str = "evalchemy"
     partition: str | None = None
+    task_evidence: TaskEvidence = TaskEvidence.EMBEDDED
+    """What attempt evidence keeps of each task when the launch does not choose."""
 
     def __post_init__(self) -> None:
         for source in (self.recipe.source, *self.recipe.inputs.values()):
