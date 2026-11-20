@@ -140,12 +140,7 @@ _DEFAULT_PATCH = RecipePatch(
         sampling_params=sections.SamplingParams(temperature=1.0, top_p=1.0, logprobs=0),
     ),
     trajectory_runner=sections.TrajectoryRunner(max_concurrent_tasks=1024),
-    extra_env={
-        "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
-        "NCCL_NET": "Socket",
-        "NCCL_IB_DISABLE": "1",
-        "NCCL_SOCKET_FAMILY": "AF_INET",
-    },
+    extra_env={"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"},
 )
 
 _MODE_KEYS = (
@@ -277,7 +272,7 @@ _SPEED_GUARDS = (
 
 _snowball = partial(
     Preset,
-    revision="2026.11.19.1",
+    revision="2026.11.20.1",
     tasks=_DEFAULT_TASKS,
     model=_DEFAULT_MODEL,
     seed=SEED,

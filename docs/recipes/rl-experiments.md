@@ -47,8 +47,9 @@ interface. Each preset's steps use its own `revision`.
   plan from the same source with the same inputs to look up an existing run.
   For a saved attempt, status can include its job ID, completed update, evaluations and verdict.
 - **Submit and wait.** Replace `--plan` with `--run` to submit an Iris coordinator. Add `--wait` for
-  the terminal report. To link an experiment issue, pass `--issue ISSUE_NUMBER`. The issue number
-  is optional and is stored on the native attempt when supplied.
+  the terminal report. Pass `--issue ISSUE_NUMBER` when the experimenter supplies an issue number.
+  If tracking is undecided, ask whether to open a new issue, use an existing one, or run without an issue.
+  Open a new issue only with the experimenter's explicit approval. The native attempt records the issue when supplied.
 - **Resume.** Repeat the original `--run --wait` invocation from the same source and inputs.
   The executor reuses successful artifacts. When training resumes, `train-long` loads its
   latest retained checkpoint and records the new attempt and parent checkpoint.

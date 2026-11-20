@@ -32,7 +32,8 @@ Use `use-iris` for job inspection and `use-fsutil` for object-store reads.
 4. Before submission, tell the person the preset, estimated budget and replicate count. Submit
    train-long or multiple 40-H100 replicates only when the person asked. Set `WANDB_API_KEY`.
    `WANDB_ENTITY` chooses the team, defaulting to `marin-community`.
-5. Pass the optional `--issue ISSUE_NUMBER` when the experimenter links the run to an issue.
+5. Pass `--issue ISSUE_NUMBER` if the experimenter supplied an issue number. If the context leaves
+   tracking undecided, ask whether to open a new issue, use an existing one, or run without an issue.
    Replace `--plan` with `--run` to submit and add `--wait` for the final report.
    Use a background process and record its process and job IDs so a yielded tool call
    does not cause a second submission.
@@ -55,7 +56,7 @@ uv run python -m experiments.post_training.snowball_rl --preset speed-medium \
 
 ## Record the experiment
 
-Open an issue through `file-issue` before the first run only when the experimenter asks for one.
+Open an issue through `file-issue` before the first run only with the experimenter's explicit approval.
 In **Description**, explain what changes and what the preset measures. In **Hypothesis or Goal**,
 state the expected result and the measure that would confirm it. Put the relevant PR or source in
 **Links**. For an existing issue, pass its number with `--issue`. Use the same issue for later
