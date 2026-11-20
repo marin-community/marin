@@ -63,6 +63,7 @@ logger = logging.getLogger(__name__)
 CONTROL_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
 CONTROL_CWD = "/"
 COUNT_PREFIX = "SHELLBOX_COUNT="
+CLIPPED_OUTPUT_SUFFIX = ".limited"
 PROVIDER_DIAGNOSTIC_CHAR_LIMIT = 4096
 RUN_COMMAND = (
     'pidfile=$1; completed=$2; shift 2; echo $$ > "$pidfile"; trap \': > "$completed"; rm -f "$pidfile"\' EXIT; "$@"'
@@ -261,9 +262,7 @@ class DaytonaMachine:
         finally:
             self._acquisitions.discard(acquisition)
 
-    async def _read_outputs(
-        self, stdout_path: str, stderr_path: str, limit: int
-    ) -> tuple[tuple[bytes, bool], tuple[bytes, bool]]:
+    async def _command_result(self, exit_code: int, stdout_path: str, stderr_path: str, limit: int) -> Result:
         # Measure and cap both streams in a single provider round trip. The files
         # stay under the command directory until its normal cleanup.
         count = await self.sandbox.process.exec(
@@ -271,7 +270,7 @@ class DaytonaMachine:
                 "measure() { "
                 'size=$(wc -c < "$1") || return; '
                 'if [ "$size" -gt "$2" ] && [ "$2" -gt 0 ]; then '
-                'head -c "$2" "$1" > "$1.limited" || return; '
+                f'head -c "$2" "$1" > "$1{CLIPPED_OUTPUT_SUFFIX}" || return; '
                 'fi; printf "%d" "$size"; }; '
                 f"out=$(measure {shlex.quote(stdout_path)} {limit}) && "
                 f"err=$(measure {shlex.quote(stderr_path)} {limit}) && "
@@ -286,17 +285,21 @@ class DaytonaMachine:
             raise RuntimeError(f"Invalid command output sizes: {count.result!r}")
 
         stdout_size, stderr_size = map(int, match.groups())
-        stdout = await self._download_output(stdout_path, stdout_size, limit)
-        stderr = await self._download_output(stderr_path, stderr_size, limit)
-        return stdout, stderr
+        return Result(
+            exit_code=exit_code,
+            stdout=await self._download_output(stdout_path, stdout_size, limit),
+            stderr=await self._download_output(stderr_path, stderr_size, limit),
+            stdout_truncated=stdout_size > limit,
+            stderr_truncated=stderr_size > limit,
+            reason=ExitReason.EXITED,
+        )
 
-    async def _download_output(self, path: str, size: int, limit: int) -> tuple[bytes, bool]:
-        truncated = size > limit
+    async def _download_output(self, path: str, size: int, limit: int) -> bytes:
         if not size or not limit:
-            return b"", truncated
-        data = await self.sandbox.fs.download_file(f"{path}.limited" if truncated else path)
+            return b""
+        data = await self.sandbox.fs.download_file(f"{path}{CLIPPED_OUTPUT_SUFFIX}" if size > limit else path)
         assert isinstance(data, bytes)
-        return data, truncated
+        return data
 
     async def _stop_command(self, pidfile: str, completed_path: str) -> None:
         async with asyncio.timeout(INTERRUPT_TIMEOUT):
@@ -398,10 +401,9 @@ class DaytonaMachine:
                     timeout=math.ceil(command.timeout + 10) if command.timeout is not None else None,
                 )
             async with asyncio.timeout(self.output_collection_timeout):
-                limit = command.output_limit_bytes
                 try:
-                    (stdout, stdout_truncated), (stderr, stderr_truncated) = await self._read_outputs(
-                        stdout_path, stderr_path, limit
+                    return await self._command_result(
+                        response.exit_code, stdout_path, stderr_path, command.output_limit_bytes
                     )
                 except Exception as error:
                     diagnostic = response.result or ""
@@ -416,14 +418,6 @@ class DaytonaMachine:
                         )
                     )
                     raise
-            return Result(
-                response.exit_code,
-                stdout,
-                stderr,
-                stdout_truncated,
-                stderr_truncated,
-                ExitReason.EXITED,
-            )
         except TimeoutError as error:
             if response is not None:
                 primary_error = RuntimeError("Cannot collect Daytona command output")
@@ -661,13 +655,13 @@ class DaytonaMachineFactory:
                     raise RuntimeError(f"Cannot resolve Daytona image workdir: {default_cwd.result!r}")
                 effective_spec = replace(spec, workdir=image_workdir)
             else:
-                workdir = await sandbox.process.exec(
+                workdir_result = await sandbox.process.exec(
                     _control_command(shlex.join(("mkdir", "-p", "--", spec.workdir))),
                     cwd=CONTROL_CWD,
                     timeout=INTERRUPT_TIMEOUT,
                 )
-                if workdir.exit_code:
-                    raise RuntimeError(f"Failed to create workdir {spec.workdir}: {workdir.result!r}")
+                if workdir_result.exit_code:
+                    raise RuntimeError(f"Failed to create workdir {spec.workdir}: {workdir_result.result!r}")
             machine = DaytonaMachine(
                 sandbox, effective_spec, lifetime, output_collection_timeout=self.output_collection_timeout
             )
