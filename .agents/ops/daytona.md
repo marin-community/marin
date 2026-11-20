@@ -105,7 +105,11 @@ Requests are sequential with a one-second pause between sandboxes per account.
 The ledger appends and flushes each deletion request and its result. Errors
 produce a nonzero exit status; the remaining IDs and accounts still run.
 Activity can change between the final check and deletion; use the command
-when that brief race is acceptable for the selected workload.
+when that brief race is acceptable for the selected workload. The idle rule
+uses provider timestamps. Whether Daytona updates activity timestamps while
+long, silent commands run has not been verified. Until that behavior is
+confirmed, set `--threshold` above the longest command timeout for those
+workloads.
 
 ## Snapshot preflight and reclamation
 

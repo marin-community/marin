@@ -16,10 +16,9 @@ from typing import TextIO
 
 from daytona import AsyncDaytona, AsyncSandbox, DaytonaError
 
-from shellbox.backends.daytona.connection import DEFAULT_DAYTONA_API_URL, DaytonaConnection
+from shellbox.backends.daytona.connection import ACCOUNT_KEY_ENVS, DEFAULT_DAYTONA_API_URL, DaytonaConnection
+from shellbox.backends.daytona.inventory import inventory_sandboxes
 from shellbox.backends.daytona.stale import DeletionState, SandboxActivity, SandboxDecision, select_idle_sandboxes
-from shellbox.backends.daytona.usage import inventory_sandboxes
-from shellbox.backends.daytona.usage_cli import ALL_ACCOUNTS
 
 REQUEST_TIMEOUT = 60
 DELETE_INTERVAL = 1.0
@@ -124,7 +123,7 @@ async def _account_error_count(
 
 
 async def _run(arguments: argparse.Namespace, ledger: TextIO | None) -> int:
-    accounts = ALL_ACCOUNTS if arguments.all else ((arguments.api_key_env, arguments.api_key_env),)
+    accounts = ACCOUNT_KEY_ENVS.items() if arguments.all else ((arguments.api_key_env, arguments.api_key_env),)
     errors = 0
     for account, name in accounts:
         api_key = os.environ.get(name)

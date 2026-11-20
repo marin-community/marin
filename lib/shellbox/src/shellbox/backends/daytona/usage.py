@@ -23,6 +23,7 @@ from daytona_api_client_async import (
 )
 
 from shellbox.backends.daytona.connection import DaytonaConnection
+from shellbox.backends.daytona.inventory import inventory_sandboxes
 from shellbox.backends.daytona.snapshot import list_snapshots
 
 REQUEST_TIMEOUT_SECONDS = 30.0
@@ -174,11 +175,6 @@ def max_concurrency(region: RegionCapacity, profile: SandboxProfile, *, headroom
             )
         ),
     )
-
-
-async def inventory_sandboxes(client: AsyncDaytona) -> list[AsyncSandbox]:
-    """Read every sandbox in the authenticated account across all pages."""
-    return [sandbox async for sandbox in client.list(request_timeout=REQUEST_TIMEOUT_SECONDS)]
 
 
 async def _fetch_usage_overview(client: AsyncDaytona, organization_id: str) -> OrganizationUsageOverview:
