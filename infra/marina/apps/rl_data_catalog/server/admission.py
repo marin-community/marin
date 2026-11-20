@@ -157,10 +157,6 @@ def require_declaration_admission(declaration: SourceDeclaration) -> None:
 def require_population_admission(declaration: SourceDeclaration) -> None:
     """Reject incomplete or differently pinned evidence before publication or loading."""
     binding, pipeline = declaration.actor_census_input, declaration.pipeline
-    if reasons := consumer_blockers(
-        declaration.consumer_receipt, declaration.id, binding, declaration.within_source_dedup.unique_count
-    ):
-        raise ValueError(f"Consumer admission blocked: {declaration.id}: {', '.join(reasons)}")
     if (
         binding is None
         or pipeline is None
@@ -168,6 +164,10 @@ def require_population_admission(declaration: SourceDeclaration) -> None:
         != (declaration.dataset_id, declaration.dataset_revision, pipeline.version)
     ):
         raise ValueError(f"Admission census belongs to another current population: {declaration.id}")
+    if reasons := consumer_blockers(
+        declaration.consumer_receipt, declaration.id, binding, declaration.within_source_dedup.unique_count
+    ):
+        raise ValueError(f"Consumer admission blocked: {declaration.id}: {', '.join(reasons)}")
     if blocker := population_admission_blocker(
         binding, declaration.within_source_dedup.unique_count, declaration.grading_environment
     ):

@@ -48,7 +48,7 @@ def test_consumer_failure_blocks_new_and_retained_admission(qualified_source, fa
     assert projected["status"] == "Pending"
     assert projected["consumer_blockers"] == [reason.value]
     assert projected["task_count"] == source.declaration.task_count
-    assert filtration(historical)["admitted_count"] == 0
+    assert filtration(historical)["admitted_count"] is None
 
 
 @pytest.mark.parametrize(
@@ -75,4 +75,4 @@ def test_passing_consumer_receipt_permits_qualified_population(qualified_source)
     require_population_admission(source.declaration)
     projected = consumer_projection(source.declaration.model_dump(mode="json"))
     assert projected["status"] == "Available"
-    assert projected["consumer_blockers"] == []
+    assert projected.get("consumer_blockers", []) == []

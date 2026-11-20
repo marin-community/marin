@@ -73,6 +73,7 @@ from experiments.post_training.task_curation.retained_release import (
     run_retained_import,
 )
 from experiments.post_training.task_curation.source import SourceInfo, SourceReference
+from experiments.post_training.task_curation.tests.admission_fixtures import with_consumer_receipt
 from experiments.post_training.task_curation.tests.license_fixtures import fixture_license, with_license
 from experiments.post_training.task_curation.tests.prebuilt_fixtures import prebuilt_source, prebuilt_task
 from infra.marina.apps.rl_data_catalog.server.admission import require_private_release
@@ -171,7 +172,10 @@ def test_unknown_manifest_task_prevents_publication(tmp_path, frozen_population)
 
 def test_existing_hf_destination_is_never_uploaded(tmp_path, monkeypatch):
     tasks, card = tmp_path / "tasks.parquet", tmp_path / "README.md"
-    tasks.write_bytes(b"fixture")
+    serialized = json.dumps(json.loads(prebuilt_task("existing")["lowered_task_spec"])["task"])
+    pq.write_table(
+        pa.table({"task_spec": [serialized], "task_sha256": [hashlib.sha256(serialized.encode()).hexdigest()]}), tasks
+    )
     card.write_text("fixture")
     uploaded = []
 
@@ -305,7 +309,7 @@ def retained_receipt(frozen_population):
         original_info=source.info,
         retained_dedup=dedup,
     )
-    return source, receipt
+    return with_consumer_receipt(source), receipt
 
 
 def test_binding_selects_private_retained_pin_and_uses_new_population_evidence(retained_receipt):
@@ -932,7 +936,9 @@ def test_qualified_retained_import_admits_exact_bytes_with_original_sample_prove
         local,
     )
     publication = receipt.publication.model_copy(update={"tasks_parquet_sha256": file_sha256(StoragePath(str(local)))})
-    source = with_license(bind_retained_release(original, receipt.model_copy(update={"publication": publication})))
+    source = with_consumer_receipt(
+        with_license(bind_retained_release(original, receipt.model_copy(update={"publication": publication})))
+    )
     monkeypatch.setattr(retained_release, "hf_hub_download", lambda *args, **kwargs: str(local))
     step = source.pipeline(source, PipelineOptions(mode, CampaignRuntime()))
     destination = tmp_path / "admitted"
@@ -958,7 +964,7 @@ def test_qualified_retained_import_admits_exact_bytes_with_original_sample_prove
 @pytest.mark.parametrize("missing", ["oversight", "actor", "private_receipt", "excluded"])
 def test_unqualified_retained_release_cannot_enter_admitted_import(retained_receipt, missing):
     original, receipt = retained_receipt
-    source = with_license(bind_retained_release(original, receipt))
+    source = with_consumer_receipt(with_license(bind_retained_release(original, receipt)))
     changes = {
         "oversight": {"oversight": None},
         "actor": {"daytona_snapshot_count": None},
@@ -988,7 +994,9 @@ def test_retained_admission_rejects_missing_grader_or_empty_population(tmp_path,
         local,
     )
     publication = receipt.publication.model_copy(update={"tasks_parquet_sha256": file_sha256(StoragePath(str(local)))})
-    source = with_license(bind_retained_release(original, receipt.model_copy(update={"publication": publication})))
+    source = with_consumer_receipt(
+        with_license(bind_retained_release(original, receipt.model_copy(update={"publication": publication})))
+    )
     assert source.config is not None
     monkeypatch.setattr(retained_release, "hf_hub_download", lambda *args, **kwargs: str(local))
     invocation = RetainedImport(

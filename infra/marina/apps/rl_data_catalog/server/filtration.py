@@ -41,10 +41,10 @@ def filtration(declaration: dict[str, Any], counts: SourceCountEvidence | None =
         "reason": "Filtration in progress: no complete current-pin admission receipt is recorded.",
     }
     projected = consumer_projection(declaration)
-    if projected["consumer_blockers"] and declaration["status"] in {"Available", "Pending"}:
+    if projected.get("consumer_blockers") and declaration["status"] in {"Available", "Pending"}:
         return {
             **pending,
-            "admitted_count": 0,
+            "admitted_count": None,
             "source_status": "Pending",
             "reason": ", ".join(projected["consumer_blockers"]),
         }

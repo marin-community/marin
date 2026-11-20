@@ -10,6 +10,8 @@ from finestore.rl.curation import ActorCensusInput, ConsumerReceipt, consumer_bl
 
 def consumer_projection(declaration: dict[str, Any]) -> dict[str, Any]:
     """Keep old Available rows pending until their current consumer check passes."""
+    if declaration["status"] not in {"Available", "Pending"}:
+        return declaration
     raw = declaration.get("consumer_receipt")
     binding = declaration.get("actor_census_input")
     reasons = consumer_blockers(
@@ -18,6 +20,10 @@ def consumer_projection(declaration: dict[str, Any]) -> dict[str, Any]:
         ActorCensusInput.model_validate(binding) if binding is not None else None,
         (declaration.get("within_source_dedup") or {}).get("unique_count", 0),
     )
+    if not reasons:
+        return declaration
+    notes = declaration.get("notes", "")
+    missing_reasons = [reason.value for reason in reasons if reason.value not in notes]
     return {
         **declaration,
         "status": "Pending" if reasons and declaration["status"] == "Available" else declaration["status"],
@@ -27,7 +33,7 @@ def consumer_projection(declaration: dict[str, Any]) -> dict[str, Any]:
                 None,
                 (
                     declaration.get("notes", ""),
-                    ", ".join(reason.value for reason in reasons),
+                    ", ".join(missing_reasons),
                 ),
             )
         ),

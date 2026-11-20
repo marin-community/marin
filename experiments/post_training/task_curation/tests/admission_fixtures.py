@@ -82,6 +82,17 @@ def consumer_receipt(source_id: str, binding: ActorCensusInput) -> ConsumerRecei
     )
 
 
+def with_consumer_receipt(source: RlDataSource) -> RlDataSource:
+    assert source.info.actor_census_input is not None
+    return replace(
+        source,
+        info=replace(
+            source.info,
+            consumer_receipt=consumer_receipt(source.info.id, source.info.actor_census_input),
+        ),
+    )
+
+
 def with_admission_census(source: RlDataSource) -> RlDataSource:
     assert source.dataset is not None and source.info.within_source_dedup is not None
     binding = actor_census_input(

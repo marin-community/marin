@@ -100,6 +100,7 @@ from experiments.post_training.task_curation.review_quality import quality_resul
 from experiments.post_training.task_curation.sample_qc_artifacts import SampleInventory
 from experiments.post_training.task_curation.tests.admission_fixtures import (
     actor_census_input,
+    consumer_receipt,
     grading_evidence,
     with_declaration_admission_census,
 )
@@ -334,6 +335,7 @@ def test_status_inventory_matches_source_statuses_without_loading_task_evidence(
         "stage",
         "exclusion_claims",
         "notes",
+        "consumer_blockers",
         "data_restriction",
         "updated_at",
     )
@@ -718,6 +720,9 @@ def publish_sample(
             "files": [],
         },
         actor_census_input=actor_census_input(FIXTURE_DATASET, FIXTURE_REVISION, "1", 3 - duplicates),
+        consumer_receipt=consumer_receipt(
+            source_id, actor_census_input(FIXTURE_DATASET, FIXTURE_REVISION, "1", 3 - duplicates)
+        ),
     )
     curation = CurationSummary(
         status="completed",
@@ -1612,6 +1617,9 @@ def test_loaded_lexical_evidence_drives_contamination_states(catalog_database, c
                 {
                     **historical,
                     "id": "Marin:historical",
+                    "consumer_receipt": (
+                        consumer_receipt("Marin:historical", benchmark_train.actor_census_input).model_dump(mode="json")
+                    ),
                     "upstream_dataset": "historical",
                     "is_benchmark": True,
                     "license_receipt": fixture_license(
@@ -3223,6 +3231,7 @@ def publish_full_bound_source(
         status="Available",
         pipeline={"name": "fixture", "version": "1", "source": "fixture", "revision": "1", "files": []},
         actor_census_input=actor_census_input("fixture", "1", "1", population),
+        consumer_receipt=consumer_receipt(source_id, actor_census_input("fixture", "1", "1", population)),
         quality_result=result,
         quality_result_finalization="accepted_incomplete",
         quality_result_waiver=waiver.model_dump(mode="json"),

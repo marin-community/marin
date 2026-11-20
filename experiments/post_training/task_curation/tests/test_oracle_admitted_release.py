@@ -40,7 +40,11 @@ from experiments.post_training.task_curation.retained_grading import RetainedGra
 from experiments.post_training.task_curation.sample_qc_artifacts import SamplePanel, SampleQCReview
 from experiments.post_training.task_curation.sample_qc_binding import SampleQCReceipt
 from experiments.post_training.task_curation.source import TaskFormat
-from experiments.post_training.task_curation.tests.admission_fixtures import actor_census_input, grading_evidence
+from experiments.post_training.task_curation.tests.admission_fixtures import (
+    actor_census_input,
+    grading_evidence,
+    with_consumer_receipt,
+)
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 from infra.marina.apps.rl_data_catalog.release_evidence import projected_sources, task_totals
 from infra.marina.apps.rl_data_catalog.server.filtration import filtration
@@ -162,7 +166,7 @@ def admitted_release(tmp_path):
 
 def test_native_filtered_pin_is_selectable_with_fresh_qualification(admitted_release):
     source, receipt = admitted_release
-    bound = bind_oracle_admitted_release(source, receipt)
+    bound = with_consumer_receipt(bind_oracle_admitted_release(source, receipt))
     bound = bind_derived_oversight(bound, receipt.sample, receipt.full_content)
 
     assert bound.pipeline is import_oracle_harbor_prebuilt
@@ -185,7 +189,9 @@ def test_native_filtered_pin_is_selectable_with_fresh_qualification(admitted_rel
 @pytest.mark.parametrize("missing_grading", [False, True])
 def test_served_oracle_rows_keep_real_qualification_independent_of_display_fields(admitted_release, missing_grading):
     source, receipt = admitted_release
-    bound = bind_derived_oversight(bind_oracle_admitted_release(source, receipt), receipt.sample, None)
+    bound = bind_derived_oversight(
+        with_consumer_receipt(bind_oracle_admitted_release(source, receipt)), receipt.sample, None
+    )
     declaration = bound.declaration.model_dump(mode="json")
     served = {
         **declaration,
@@ -218,7 +224,9 @@ def test_old_pin_sample_cannot_qualify_filtered_native_population(admitted_relea
 )
 def test_available_claim_without_fresh_qualification_cannot_project_admitted_counts(admitted_release, missing):
     source, receipt = admitted_release
-    bound = bind_derived_oversight(bind_oracle_admitted_release(source, receipt), receipt.sample, None)
+    bound = bind_derived_oversight(
+        with_consumer_receipt(bind_oracle_admitted_release(source, receipt)), receipt.sample, None
+    )
     declaration = bound.declaration.model_dump(mode="json")
     declaration[missing] = None
     projected = filtration(declaration)
@@ -239,7 +247,7 @@ def test_shared_native_oracles_cannot_replace_missing_integrity_contracts(admitt
 def test_canonical_filtered_pin_uses_the_fresh_output_version_and_consumer(admitted_release):
     source, native = admitted_release
     receipt = native.model_copy(update={"task_format": TaskFormat.TASKCOMPENDIUM})
-    bound = bind_oracle_admitted_release(source, receipt)
+    bound = with_consumer_receipt(bind_oracle_admitted_release(source, receipt))
 
     assert bound.pipeline is import_taskcompendium_prebuilt
     assert bound.version == receipt.actor.input.converter_version == "2026.11.14.2-final-private"
@@ -254,7 +262,7 @@ def test_answer_graded_release_does_not_claim_workspace_controls(admitted_releas
     record["filtration"]["exclusion_counts"] = {"oracle_failed": 1}
     receipt = OracleAdmittedReleaseReceipt.model_validate(record)
 
-    bound = bind_oracle_admitted_release(source, receipt)
+    bound = with_consumer_receipt(bind_oracle_admitted_release(source, receipt))
 
     assert bound.info.daytona_machine_slots == 0
     assert bound.info.recipe_qa_history.verification.startswith("Full original-oracle outcomes and applicable controls:")
@@ -266,7 +274,7 @@ def test_current_content_attaches_after_the_filtered_pin_is_selected(admitted_re
     source, receipt = admitted_release
     original_actor = actor_census_input(source.dataset.name, source.dataset.revision, source.version, 2)
     source = replace(source, info=replace(source.info, actor_census_input=original_actor))
-    selected = bind_oracle_admitted_release(source, receipt)
+    selected = with_consumer_receipt(bind_oracle_admitted_release(source, receipt))
     bound = bind_selected_source_content(source, selected, receipt.sample, None)
 
     assert bound.current_release == receipt.filtration.filtered_release
@@ -298,7 +306,7 @@ def test_byte_identical_repin_panel_binds_the_selected_pin_without_a_lineage(adm
     bytes are the served population's and the panel carries forward at the current pin.
     """
     source, receipt = admitted_release
-    selected = bind_oracle_admitted_release(source, receipt)
+    selected = with_consumer_receipt(bind_oracle_admitted_release(source, receipt))
     repinned = receipt.sample.model_copy(
         update={
             "review": receipt.sample.review.model_copy(
@@ -334,7 +342,7 @@ def test_archived_original_sample_does_not_replace_filtered_sample(admitted_rele
             )
         }
     )
-    selected = bind_oracle_admitted_release(source, receipt)
+    selected = with_consumer_receipt(bind_oracle_admitted_release(source, receipt))
     bound = bind_selected_source_content(source, selected, archived, None)
 
     assert bound.info.quality_result == receipt.sample.review.result
@@ -356,7 +364,7 @@ def test_fresh_full_result_attaches_after_filtered_sample(admitted_release):
         coverage_complete=True,
         finalization=QualityResultFinalization.COMPLETE,
     )
-    selected = bind_oracle_admitted_release(source, receipt)
+    selected = with_consumer_receipt(bind_oracle_admitted_release(source, receipt))
     bound = bind_selected_source_content(source, selected, receipt.sample, full)
 
     assert bound.info.quality_result == current_result
@@ -374,7 +382,9 @@ def test_filtered_evaluation_retains_measured_overlap_without_training_remediati
     record = receipt.model_dump(mode="json")
     record.update(intended_use="eval", lexical=measured.model_dump(mode="json"))
     evaluation = OracleAdmittedReleaseReceipt.model_validate(record)
-    bound = bind_derived_oversight(bind_oracle_admitted_release(source, evaluation), evaluation.sample, None)
+    bound = bind_derived_oversight(
+        with_consumer_receipt(bind_oracle_admitted_release(source, evaluation)), evaluation.sample, None
+    )
 
     assert not bound.admission_blockers
     assert bound.declaration.intended_use is SourceUse.EVAL
@@ -459,7 +469,9 @@ def test_filtered_release_sample_missing_tolerance_keeps_measured_counts(admitte
             OracleAdmittedReleaseReceipt.model_validate(raw)
         return
     receipt = OracleAdmittedReleaseReceipt.model_validate(raw)
-    bound = bind_derived_oversight(bind_oracle_admitted_release(source, receipt), receipt.sample, None)
+    bound = bind_derived_oversight(
+        with_consumer_receipt(bind_oracle_admitted_release(source, receipt)), receipt.sample, None
+    )
     assert bound.declaration.status == "Available" and bound.declaration.task_count == 100
     assert bound.declaration.oversight.value == "sample"
     assert bound.info.quality_result.reviewed == bound.info.independent_qc.reviewed == 95
@@ -495,7 +507,9 @@ def test_passing_population_is_selectable_with_pending_originals(admitted_releas
         }
     )
     qualified = OracleAdmittedReleaseReceipt.model_validate({**receipt.model_dump(), "filtration": filtration})
-    bound = bind_derived_oversight(bind_oracle_admitted_release(source, qualified), qualified.sample, None)
+    bound = bind_derived_oversight(
+        with_consumer_receipt(bind_oracle_admitted_release(source, qualified)), qualified.sample, None
+    )
     assert bound.declaration.status == "Available" and bound.declaration.task_count == 1
     assert bound.current_release == filtration.filtered_release
     assert bound.info.oracle_filtration == filtration
