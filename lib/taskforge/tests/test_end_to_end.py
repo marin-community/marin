@@ -631,7 +631,7 @@ class TakenOverWhileBlocked(FakeInference):
             while published(self.destination).head.size < stale.stat().st_size:
                 await asyncio.sleep(0.01)  # Take over only once the old writer has nothing pending.
             self.successor = CheckpointSink(self.workdir, str(self.destination))
-            self.history = await self.successor.claim(published(self.destination))
+            self.history = self.successor.claim(published(self.destination))
             try:
                 await asyncio.Event().wait()
             except asyncio.CancelledError:

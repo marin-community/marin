@@ -28,7 +28,7 @@ from taskforge.checkpoint import CheckpointSink, read_journal
 from taskforge.coordinator import reasons, run_workpiece
 from taskforge.effects.events import StageCompleted
 from taskforge.effects.issues import CorruptJournal, Hold, LogFailure, Restart, Superseded, Transient, UnsupportedFormat
-from taskforge.effects.log import EventLog, fold
+from taskforge.effects.log import EventLog, Status, fold
 from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal
 from taskforge.model.review import Incomplete
 from taskforge.model.workpiece import Terminal, Workpiece
@@ -86,10 +86,9 @@ def inputs(source: str, ranks: tuple[int, ...] = ()) -> tuple[str, ...]:
     return paths
 
 
-def run_policy(path: str) -> tuple[Policy, Policy]:
-    declared = load_policy(DEFAULTS_DIR)
+def run_policy(path: str) -> Policy:
     with open_url(path, "rt") as source:
-        return declared, declared.overlaid(parse_overlay(source.read()))
+        return load_policy(DEFAULTS_DIR).overlaid(parse_overlay(source.read()))
 
 
 def eligible(proposal: TaskProposal, policy: Policy) -> bool:
@@ -105,7 +104,7 @@ async def one(args: argparse.Namespace) -> None:
     configure_coreweave_s3()
     with open_url(args.proposals, "rt") as source:
         proposal = TASK_PROPOSAL.validate_json(source.read())
-    _, policy = run_policy(args.policy)
+    policy = run_policy(args.policy)
     if not eligible(proposal, policy):
         return
     identity = proposal_key(args.proposals)
@@ -114,13 +113,12 @@ async def one(args: argparse.Namespace) -> None:
     destination = prefix_join(args.output, str(identity))
     # Another journal format or undecodable history raises before anything is claimed or published.
     journal = await asyncio.to_thread(read_journal, destination)
-    if journal is not None:
-        terminal = journal.head.status.terminal
-        if journal.head.status.finished or (terminal is Terminal.HELD and not args.resume_held):
-            logging.info("SKIP %s: published terminal=%s", identity, terminal)
-            return
+    status = journal.head.status if journal else Status()
+    if status.finished or (status.terminal is Terminal.HELD and not args.resume_held):
+        logging.info("SKIP %s: published terminal=%s", identity, status.terminal)
+        return
     checkpoints = CheckpointSink(Path(args.work_dir) / identity, destination)
-    previous = await checkpoints.claim(journal)
+    previous = await asyncio.to_thread(checkpoints.claim, journal)
     log = EventLog(sink=checkpoints, replay_from=previous, replayable=replayable_grade)
     wp = Workpiece(proposal.header.id, proposal)
     try:
@@ -163,8 +161,8 @@ async def run(args: argparse.Namespace) -> None:
         path for path in inputs(args.proposals, args.ranks) if start <= proposal_bucket(path, args.buckets) < end
     )
     active: dict[asyncio.Task[int], tuple[str, subprocess.Popen[bytes]]] = {}
-    failures: list[tuple[str, int]] = []
-    _, policy = run_policy(args.policy)
+    labels, failed = Counter[str](), list[str]()
+    policy = run_policy(args.policy)
     skipped = completed = submitted = 0
     try:
         exhausted = False
@@ -195,22 +193,21 @@ async def run(args: argparse.Namespace) -> None:
                 for task in done:
                     path, _ = active.pop(task)
                     completed += 1
-                    if task.result() != 0:
-                        failures.append((path, task.result()))
+                    if (code := task.result()) == 0:
+                        continue
+                    label, action = OUTCOMES.get(code, ("failed", "see its log"))
+                    labels[label] += 1
+                    print(f"OUTCOME {label} exit={code} proposal={path}: {action}", flush=True)
+                    if code != SUPERSEDED:
+                        failed.append(path)
     finally:
         for _, process in active.values():
             if process.poll() is None:
                 process.terminate()
         await asyncio.gather(*active, return_exceptions=True)
-    labels = Counter[str]()
-    for path, code in failures:
-        label, action = OUTCOMES.get(code, ("failed", "see its log"))
-        labels[label] += 1
-        print(f"OUTCOME {label} exit={code} proposal={path}: {action}", flush=True)
-    failed = [path for path, code in failures if code != SUPERSEDED]
+    outcomes = " ".join(f"{label}={labels[label]}" for label, _ in OUTCOMES.values())
     print(
-        f"SUMMARY submitted={submitted} completed={completed} failed={len(failed)} skipped={skipped} "
-        f"superseded={labels['superseded']} needs_migration={labels['needs_migration']} corrupt={labels['corrupt']}",
+        f"SUMMARY submitted={submitted} completed={completed} failed={len(failed)} skipped={skipped} {outcomes}",
         flush=True,
     )
     if failed:

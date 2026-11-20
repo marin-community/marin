@@ -29,9 +29,9 @@ def journal(destination: Path) -> Journal:
     return published
 
 
-async def claimed(tmp_path: Path) -> CheckpointSink:
+def claimed(tmp_path: Path) -> CheckpointSink:
     sink = CheckpointSink(tmp_path / "work", str(tmp_path / "published"))
-    await sink.claim(read_journal(sink.destination))
+    sink.claim(read_journal(sink.destination))
     return sink
 
 
@@ -42,7 +42,7 @@ async def test_partial_checkpoint_on_event_count_or_timer(
     monkeypatch.setattr(checkpoint, "CHECKPOINT_EVENTS", 2 if by_count else 100)
     monkeypatch.setattr(checkpoint, "CHECKPOINT_SECONDS", 60 if by_count else 0.01)
     monkeypatch.setattr(checkpoint.time, "time", lambda: 123.0)
-    sink = await claimed(tmp_path)
+    sink = claimed(tmp_path)
     destination = Path(sink.destination)
     uploaded = threading.Event()
     publish = sink._publish
@@ -68,7 +68,7 @@ async def test_cancelled_checkpoint_drains_upload_before_final_publication(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(checkpoint, "CHECKPOINT_EVENTS", 1)
-    sink = await claimed(tmp_path)
+    sink = claimed(tmp_path)
     entered, release = threading.Event(), threading.Event()
     publish = sink._publish
 
@@ -91,7 +91,7 @@ async def test_cancelled_checkpoint_drains_upload_before_final_publication(
 
 
 async def test_checkpoints_publish_immutable_chunks_of_only_new_bytes(tmp_path: Path) -> None:
-    sink = await claimed(tmp_path)
+    sink = claimed(tmp_path)
     log = EventLog(sink=sink)
     await log.record(StageCompleted(Stage.AUTHOR, "", "draft"))
     await sink._upload()
@@ -109,7 +109,7 @@ async def test_failed_timer_upload_keeps_logging_and_republishes_from_the_head(
 ) -> None:
     monkeypatch.setattr(checkpoint, "CHECKPOINT_EVENTS", 100)
     monkeypatch.setattr(checkpoint, "CHECKPOINT_SECONDS", 0.01)
-    sink = await claimed(tmp_path)
+    sink = claimed(tmp_path)
     failed, published = threading.Event(), threading.Event()
     publish = sink._publish
 
@@ -134,14 +134,14 @@ async def test_failed_timer_upload_keeps_logging_and_republishes_from_the_head(
 
 
 async def test_two_writers_claiming_the_same_head_cannot_both_proceed(tmp_path: Path) -> None:
-    first = await claimed(tmp_path)
+    first = claimed(tmp_path)
     await EventLog(sink=first).record(Note("first"))
     await first._upload()
     seen = journal(Path(first.destination))
     contenders = [CheckpointSink(tmp_path / "work", first.destination) for _ in range(2)]
-    await contenders[0].claim(seen)
+    contenders[0].claim(seen)
     with pytest.raises(Superseded):
-        await contenders[1].claim(seen)
+        contenders[1].claim(seen)
     assert journal(Path(first.destination)).head.writer == contenders[0].writer
 
 
@@ -149,12 +149,12 @@ async def test_a_superseded_writer_stops_and_cannot_publish_status_or_chunks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, proposal: TaskProposal
 ) -> None:
     monkeypatch.setattr(checkpoint, "CHECKPOINT_SECONDS", 0.01)
-    stale = await claimed(tmp_path)
+    stale = claimed(tmp_path)
     log = EventLog(sink=stale)
     await log.record(Note("before takeover"))
     await stale._upload()
     successor = CheckpointSink(tmp_path / "work", stale.destination)
-    await successor.claim(journal(Path(stale.destination)))
+    successor.claim(journal(Path(stale.destination)))
     await log.record(Note("after takeover"))
     # The timer finds the head taken, cancels the running block and raises from it.
     with pytest.raises(Superseded):
@@ -194,7 +194,7 @@ class AckLost:
 
 
 async def test_ambiguous_head_acknowledgement_is_reconciled_without_overlap(tmp_path: Path) -> None:
-    sink = await claimed(tmp_path)
+    sink = claimed(tmp_path)
     sink.head = AckLost(sink.head)
     log = EventLog(sink=sink)
     await log.record(Note("first"))
@@ -211,7 +211,7 @@ async def test_a_late_chunk_put_cannot_overwrite_committed_history(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A chunk PUT reported as timed out lands after a retry from the same offset has been committed."""
-    sink = await claimed(tmp_path)
+    sink = claimed(tmp_path)
     log = EventLog(sink=sink)
     await log.record(Note("first"))
     delayed: list[tuple[str, str, bytes]] = []
@@ -233,7 +233,7 @@ async def test_a_late_chunk_put_cannot_overwrite_committed_history(
 
 
 async def test_torn_local_tail_is_not_published(tmp_path: Path) -> None:
-    sink = await claimed(tmp_path)
+    sink = claimed(tmp_path)
     log = EventLog(sink=sink)
     await log.record(Note("complete"))
     with Path(sink.local.path).open("ab") as output:
@@ -246,7 +246,7 @@ async def test_torn_local_tail_is_not_published(tmp_path: Path) -> None:
 
 
 async def test_reader_fails_closed_on_chunks_short_of_the_head(tmp_path: Path) -> None:
-    sink = await claimed(tmp_path)
+    sink = claimed(tmp_path)
     await EventLog(sink=sink).record(Note("complete"))
     await sink._upload()
     head = json.loads((Path(sink.destination) / HEAD).read_text())
@@ -302,7 +302,7 @@ def test_re_putting_a_committed_object_never_exposes_or_leaves_a_partial_one(tmp
 
 
 async def finished(tmp_path: Path, proposal: TaskProposal) -> Path:
-    sink = await claimed(tmp_path)
+    sink = claimed(tmp_path)
     await EventLog(sink=sink).record(Note("first"))
     await sink.finish(Status(terminal=Terminal.HELD), Workpiece(proposal.header.id, proposal, terminal=Terminal.HELD))
     return Path(sink.destination)
@@ -345,7 +345,7 @@ async def test_damaged_committed_objects_read_as_corrupt_naming_the_path(
     with pytest.raises(CorruptJournal, match=re.escape(str(damaged))):
         resumed = journal(destination)
         resumed.workpiece()
-        await CheckpointSink(tmp_path / "resume", str(destination)).claim(resumed)
+        CheckpointSink(tmp_path / "resume", str(destination)).claim(resumed)
     assert {path: path.read_bytes() for path in destination.rglob("*") if path.is_file()} == before
 
 

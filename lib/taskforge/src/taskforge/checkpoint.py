@@ -1,22 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Publish a workpiece's journal under one fenced writer.
+"""Publish a workpiece's journal (format 2; its layout is in the README) under one fenced writer.
 
-Journal format 2. A workpiece's output prefix holds:
-
-- ``journal.json``, the head: ``format`` (2); ``writer``, the owning writer's random id; ``chunks``, the event
-  chunk names in stream order; ``size``, the bytes they hold; ``status`` (``stage``, ``round``, ``terminal``);
-  ``workpiece``, the terminal workpiece's object name or null; and ``published_at``, the writer's clock at the swap.
-- ``chunks/<sha256>.jsonl``: immutable slices of the event stream, each ending at a line boundary and named by the
-  digest of its bytes.
-- ``workpieces/<sha256>.json``: an immutable terminal workpiece, named by the digest of its bytes.
-
-Objects are written before the head swap that names them. A writer claims the head by compare-and-swap on the
-version it observed and advances it the same way, so two writers starting from one head cannot both proceed, and a
-writer that lost the head can neither extend the stream nor publish a status. Content names make a late or retried
-PUT rewrite identical bytes, never committed ones. Objects no head names, a loser's or those a crashed writer wrote
-before its swap, stay behind unreferenced; nothing collects them.
+Chunks and workpieces are immutable objects named by the SHA-256 of their bytes, created only if absent and checked
+against their names when read. Each is written before the compare-and-swap of the head that names it. A writer claims
+the head on the version it observed and advances it the same way, so of two writers starting from one head at most
+one proceeds, and a writer that lost the head extends nothing.
 """
 
 import asyncio
@@ -25,12 +15,13 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Coroutine, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import override
 
+from botocore.exceptions import ClientError
 from pydantic import TypeAdapter
 from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
 from rigging.filesystem.factory import open_url, url_to_fs
@@ -47,9 +38,9 @@ FORMAT_1 = frozenset({"events.jsonl", "events.jsonl.parts", "status.json", "work
 HEAD = "journal.json"
 CHECKPOINT_EVENTS = 25
 CHECKPOINT_SECONDS = 60
-# s3fs translates service errors into OSError but re-raises its retryable transport errors (botocore
-# HTTPClientError, ResponseParserError, IncompleteRead, ...) untranslated once its own retries run out.
-UPLOAD_ERRORS: tuple[type[Exception], ...] = (OSError, *S3_RETRYABLE_ERRORS)
+# Publication goes through rigging's botocore client, which re-raises service (ClientError) and transport
+# (HTTPClientError, ...) errors untranslated once its retries run out; local I/O raises OSError.
+UPLOAD_ERRORS: tuple[type[Exception], ...] = (OSError, ClientError, *S3_RETRYABLE_ERRORS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +123,16 @@ def read_journal(destination: str) -> Journal | None:
         raise CorruptJournal(f"{destination}/{HEAD} is no format-2 head: {error}") from error
 
 
+async def _drained(work: Coroutine[object, object, None]) -> None:
+    """Run ``work`` to the end even when cancelled, then re-raise: a publishing thread or an fsync cannot stop midway."""
+    task = asyncio.create_task(work)
+    try:
+        await asyncio.shield(task)
+    except asyncio.CancelledError:
+        await task
+        raise
+
+
 class CheckpointSink(Sink):
     """Append to this writer's private local stream; publish its new complete lines after 25 events or 60 seconds."""
 
@@ -151,7 +152,8 @@ class CheckpointSink(Sink):
         except ConditionalWriteError as error:
             raise Superseded(f"Another writer advanced {self.destination}/{HEAD}; writer {self.writer} stops") from error
 
-    def _claim(self, journal: Journal | None) -> tuple[Record, ...]:
+    def claim(self, journal: Journal | None) -> tuple[Record, ...]:
+        """Own the head ``journal`` was read at and return its history, decoded before anything is claimed."""
         events = journal.events() if journal else b""
         try:
             records = self.local.start(events)
@@ -162,10 +164,6 @@ class CheckpointSink(Sink):
         self._swap(head, journal.version if journal else None)
         return records
 
-    async def claim(self, journal: Journal | None) -> tuple[Record, ...]:
-        """Own the head ``journal`` was read at and return its history, decoded before anything is claimed."""
-        return await asyncio.to_thread(self._claim, journal)
-
     def _publish(self, status: Status, workpiece: Workpiece | None) -> None:
         current = self.head.read()
         if current is None or (head := HEAD_JSON.validate_json(current.data)).writer != self.writer:
@@ -175,11 +173,11 @@ class CheckpointSink(Sink):
             events = source.read()
         # A torn last line is not yet part of the stream; the local sink truncates it on the next append.
         events = events[: events.rfind(b"\n") + 1]
-        if not events and workpiece is None:
-            return  # An idle checkpoint only confirms ownership.
         if events:
             chunk = _put(prefix_join(self.destination, "chunks"), ".jsonl", events)
             head = replace(head, chunks=(*head.chunks, chunk), size=head.size + len(events))
+        elif workpiece is None:
+            return  # An idle checkpoint only confirms ownership.
         if workpiece is not None:
             name = _put(prefix_join(self.destination, "workpieces"), ".json", WORKPIECE.dump_json(workpiece))
             head = replace(head, workpiece=name)
@@ -199,24 +197,14 @@ class CheckpointSink(Sink):
         if self.timer is not None and self.timer.done():
             self.timer.result()
         async with self.lock:
-            append = asyncio.create_task(self.local.write(records))
-            try:
-                await asyncio.shield(append)
-            except asyncio.CancelledError:
-                await append
-                raise
+            await _drained(self.local.write(records))
             self.pending += len(records)
             if self.pending >= CHECKPOINT_EVENTS:
                 await self._upload()
 
     async def _upload(self) -> None:
-        upload = asyncio.create_task(asyncio.to_thread(self._publish, Status(), None))
         try:
-            await asyncio.shield(upload)
-        except asyncio.CancelledError:
-            # A thread cannot be cancelled: drain it before final publication can begin.
-            await upload
-            raise
+            await _drained(asyncio.to_thread(self._publish, Status(), None))
         except Superseded as error:
             self._supersede(error)
             raise

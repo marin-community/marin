@@ -167,13 +167,12 @@ class JsonlSink(Sink):
                 tail = output.read(chunk) + tail
             complete = tail.rfind(b"\n")
             output.truncate(position + complete + 1)
-            last = json.loads(tail[:complete].split(b"\n")[-1])["sequence"] if complete >= 0 else 0
+            row = json.loads(tail[:complete].split(b"\n")[-1]) if complete >= 0 else {"sequence": 0}
+            last = row["sequence"]
             if records and records[-1].sequence < last:
                 raise LogFailure("Append batch predates the stream tail")
             for record in records:
-                if record.sequence == last and json.loads(self._line(record)) != json.loads(
-                    tail[:complete].split(b"\n")[-1]
-                ):
+                if record.sequence == last and json.loads(self._line(record)) != row:
                     raise LogFailure("Append batch conflicts with the stream tail")
                 if record.sequence <= last:
                     continue
