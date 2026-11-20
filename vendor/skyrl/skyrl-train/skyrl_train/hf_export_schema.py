@@ -8,7 +8,6 @@ from omegaconf import DictConfig
 HF_EXPORT_REQUEST_SCHEMA_VERSION = 1
 TRAINER_STATE_FILENAME = "trainer_state.pt"
 DEFAULT_HF_EXPORT_TIMEOUT = 7200
-DEFAULT_HF_HUB_PRIVATE = False
 DEFAULT_HF_HUB_REVISION = "main"
 
 
@@ -40,7 +39,7 @@ class HFExportRequest:
     schema_version: int = HF_EXPORT_REQUEST_SCHEMA_VERSION
     status: HFExportStatus = HFExportStatus.PENDING
     hf_hub_repo_id: str | None = None
-    hf_hub_private: bool = DEFAULT_HF_HUB_PRIVATE
+    hf_hub_private: bool = False
     hf_hub_revision: str = DEFAULT_HF_HUB_REVISION
     hf_upload_mode: HFUploadMode = DEFAULT_HF_UPLOAD_MODE
     attempts: int = 0
@@ -67,7 +66,7 @@ class HFExportRequest:
             model_source_uri=model.source_uri,
             model_source_identity=model.source_identity,
             hf_hub_repo_id=trainer.get("hf_hub_repo_id"),
-            hf_hub_private=trainer.get("hf_hub_private", DEFAULT_HF_HUB_PRIVATE),
+            hf_hub_private=trainer.get("hf_hub_private", False),
             hf_hub_revision=trainer.get("hf_hub_revision", DEFAULT_HF_HUB_REVISION),
             hf_upload_mode=HFUploadMode(trainer.get("hf_upload_mode", DEFAULT_HF_UPLOAD_MODE)),
         )

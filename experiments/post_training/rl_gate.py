@@ -512,11 +512,6 @@ def comparison_config(launch: dict, recorded: RecordedLaunch | None = None) -> d
         runtime.pop(field, None)
     if not runtime:
         config["skyrl"].pop("runtime", None)
-    for section in ("trainer", "checkpoint_export"):
-        export = config["skyrl"].get(section, {})
-        if "hf_hub_private" in export and not export.get("hf_hub_repo_id"):
-            # Without an upload destination, compare visibility using the stored controls' False default.
-            export["hf_hub_private"] = False
     return _config_values(config)
 
 
