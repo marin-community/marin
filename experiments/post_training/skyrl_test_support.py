@@ -10,7 +10,6 @@ from pathlib import Path
 import pytest
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import materialized_config
-from marin.rl.skyrl import skyrl_cpu_command
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.storage_path import StoragePath
 
@@ -42,15 +41,13 @@ def native_json(*uv_options: str):
     def execute(script, paths):
         source = str(find_project_root(Path(__file__)) / "vendor/skyrl")
         program = gate._native_program(source, ("cloud.iris.launch_config", "skyrl_train"), script)
-        result = subprocess.run(
-            skyrl_cpu_command(*uv_options, "python", "-c", program, *paths),
-            capture_output=True,
-            text=True,
-            timeout=170,
-        )
-        if result.returncode:
-            raise AssertionError(f"native test program exited {result.returncode}\n{result.stderr.strip()}")
-        return json.loads(result.stdout.splitlines()[-1])
+        try:
+            return gate._native_json(*uv_options, "python", "-c", program, *paths, timeout=170)
+        except gate.InvalidComparison as error:
+            cause = error.__cause__
+            if isinstance(cause, subprocess.CalledProcessError) and cause.stderr:
+                raise AssertionError(cause.stderr.strip()) from error
+            raise
 
     return execute
 

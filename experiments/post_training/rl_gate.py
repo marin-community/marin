@@ -564,10 +564,10 @@ def _current_configs(
         return tuple(compose_configs(paths))
 
 
-def _native_json(program: str, *arguments: str, timeout: int = 120):
+def _native_json(*command: str, timeout: int = 120):
     try:
         result = subprocess.run(
-            skyrl_cpu_command("python", "-c", program, *arguments),
+            skyrl_cpu_command(*command),
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -603,7 +603,7 @@ def compose_configs(paths: Sequence[str], *, validate_driver: bool = False) -> l
         "        launch_config.validate_launch_driver_config(config)\n"
         "print(json.dumps(documents))\n",
     )
-    return _native_json(program, *paths)
+    return _native_json("python", "-c", program, *paths)
 
 
 def validate_plan(preset: presets.Preset, spec: SkyRLSpec, step: ArtifactStep[SkyRLRun]) -> None:
@@ -665,7 +665,7 @@ def _schema_defaults(native_project: str, source_identity: str | None, groups: t
         "defaults['skyrl'] = OmegaConf.to_container(config, resolve=True, enum_to_str=True)\n"
         "print(json.dumps(defaults))\n",
     )
-    return _native_json(program, json.dumps(dict(groups)))
+    return _native_json("python", "-c", program, json.dumps(dict(groups)))
 
 
 def _check_control_config(
