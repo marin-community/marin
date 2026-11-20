@@ -13,7 +13,7 @@ from finestore.rl.curation import (
     LexicalContaminationEvidence,
     OversightEvidence,
     OversightLevel,
-    SourceDeclaration,
+    QualifiedSourceDeclaration,
     SourceOrigin,
     SourceQualityResult,
 )
@@ -43,7 +43,7 @@ def test_generated_identity_and_title_survive_catalog_serialization(tmp_path):
         daytona_count_basis="Fixture task requires no actor.",
     )
     source = replace(source, info=info)
-    declaration = SourceDeclaration.model_validate_json(source.declaration.model_dump_json())
+    declaration = QualifiedSourceDeclaration.model_validate_json(source.declaration.model_dump_json())
     assert declaration.id == "Marin:math/test@repaired"
     assert declaration.display_name == "Math · test · repaired"
     assert declaration.build_path == "Campaign Release"
@@ -53,7 +53,7 @@ def test_generated_identity_and_title_survive_catalog_serialization(tmp_path):
     with pytest.raises(ValueError, match="Source title"):
         replace(info, title="Math dataset converted from elsewhere")
     with pytest.raises(ValueError, match="Source title"):
-        SourceDeclaration.model_validate({**declaration.model_dump(), "display_name": "hand-set title"})
+        QualifiedSourceDeclaration.model_validate({**declaration.model_dump(), "display_name": "hand-set title"})
 
 
 def test_repaired_release_pin_is_separate_from_upstream_url(tmp_path):
@@ -167,7 +167,7 @@ def test_current_release_rejects_mismatched_release_identity(tmp_path, change):
 def test_na_cannot_hide_an_actor_requirement(tmp_path, field):
     declaration = number_source(tmp_path / "input").declaration.model_dump(mode="json")
     with pytest.raises(ValueError):
-        SourceDeclaration.model_validate({**declaration, field: 1})
+        QualifiedSourceDeclaration.model_validate({**declaration, field: 1})
 
 
 def test_quick_pipeline_identity_is_available_before_actor_census(tmp_path):

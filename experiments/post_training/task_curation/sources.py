@@ -107,7 +107,6 @@ PENDING_MEASUREMENT_SOURCES = (
     *(source for source in cascade.sources() if source.info.subset not in CASCADE_RETAINED_SUBSETS),
     *lean_proofs.sources(),
     *lean_numina.sources(),
-    *prime_swe.sources(),
     *swe_rebench_v2.sources(),
 )
 
@@ -160,6 +159,7 @@ def configured_sources() -> list[RlDataSource]:
         *repair_releases.sources(),
         *terminus_pivot.sources(),
         *prime_multiswe.sources(),
+        *prime_swe.sources(),
     ]
 
 
