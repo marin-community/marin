@@ -3,14 +3,18 @@
 
 """SWE-rebench V2.1 repair conversion: declared bases, task-start setup, family config."""
 
+import base64
+import io
 import json
 import re
+import tarfile
 import types
 
 import pytest
 import tomlkit
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.post_training.task_curation.datasets.native_harbor import unpack_native
 from experiments.post_training.task_curation.datasets.swe_rebench_v2 import groups
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert import (
     _flatten,
@@ -423,10 +427,6 @@ def test_native_solution_archive_rewrites_the_solve_workdir_to_testbed():
     solve script; the conversion rewrites the solution members to the uniform /testbed
     workspace with the same path-token boundaries, so the oracle's gold-patch delivery runs
     in the consolidated workspace."""
-    import base64
-    import io
-    import tarfile
-    from experiments.post_training.task_curation.datasets.native_harbor import unpack_native
 
     def member(name: str, payload: bytes, mode: int = 0o644) -> tarfile.TarInfo:
         info = tarfile.TarInfo(name)
