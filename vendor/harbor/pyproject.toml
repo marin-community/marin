@@ -72,7 +72,11 @@ constraint-dependencies = ["nltk>=3.10.4", "oauthlib>=4.0.1", "soupsieve>=4.0.0"
 exclude-dependencies = ["litellm"]
 default-groups = []
 # Local Rigging uses its development version while published FineStore pins a release floor.
-override-dependencies = ["marin-rigging"]
+override-dependencies = [
+    "marin-rigging",
+    # Torch pins an older NCCL; 2.32.6 fixes NVLSTree buffer corruption (#11649).
+    "nvidia-nccl-cu13>=2.32.6; sys_platform == 'linux'",
+]
 
 [tool.uv.build-backend]
 module-name = ["harbor", "harbor_config"]

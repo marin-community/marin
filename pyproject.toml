@@ -68,7 +68,7 @@ pipeline = [
     "marin-levanter",
     "jax[cuda13]==0.11.0",
     "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
-    "nvidia-nccl-cu13>=2.31.2; sys_platform == 'linux'",
+    "nvidia-nccl-cu13>=2.32.6; sys_platform == 'linux'",
     "nvidia-cutlass-dsl[cu13]==4.6.2; sys_platform == 'linux'",
     "flash-attn-4[cu13]>=4.0.0b28,<4.1; sys_platform == 'linux'",
     "quack-kernels[cu13]==0.6.4; sys_platform == 'linux'",
@@ -122,6 +122,8 @@ constraint-dependencies = [
     "opentelemetry-semantic-conventions>=0.1b0",
 ]
 override-dependencies = [
+    # Torch pins an older NCCL; 2.32.6 fixes NVLSTree buffer corruption (#11649).
+    "nvidia-nccl-cu12>=2.32.6; sys_platform == 'linux'",
     "omegaconf>=2.4.0.dev4",
     "aiofiles>=24.1.0",
     "anthropic>=0.71.0",
