@@ -12,9 +12,10 @@ from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.resources import inline_resource
 
 from taskforge.effects.context import Context
+from taskforge.effects.issues import Hold
 from taskforge.harness.protocol import ToolResult
 from taskforge.harness.tools.base import FILE_ERRORS, ValidatedTool
-from taskforge.lowering import LoweringSettings, check_candidates, lower_with_settings
+from taskforge.lowering import InvalidTaskSpec, LoweringSettings, check_candidates, lower_with_settings
 from taskforge.model.content_hash import pretty_json
 from taskforge.model.controls import Candidate
 from taskforge.model.verdict import grader_checks
@@ -67,9 +68,15 @@ class GradeTool(ValidatedTool[CandidateArgs]):
             task = TaskSpec.model_validate_json(await ctx.emit(ReadFile(PurePosixPath(self.task_path))))
             candidate = await read_candidate(ctx, args, task)
             check_candidates(task, (candidate,))
-            spec = lower_with_settings(task, self.settings, self.factories)
-        except (ValueError, NotImplementedError, *FILE_ERRORS) as error:
+        except (ValueError, *FILE_ERRORS) as error:
             return ToolResult(f"Cannot grade draft: {error}")
+        try:
+            spec = lower_with_settings(task, self.settings, self.factories)
+        except InvalidTaskSpec as error:
+            return ToolResult(f"Cannot grade draft: {error}")
+        except (ValueError, NotImplementedError) as error:
+            # A host that cannot run a valid draft is not the author's defect; submit's gate holds the same way.
+            raise Hold(f"Lowering failed: {error}") from error
         result = await ctx.emit(GradeCandidate(spec, candidate))
         try:
             checks = grader_checks(result)
