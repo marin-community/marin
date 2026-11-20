@@ -1,3 +1,17 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# ruff: noqa: E501 -- Inference prompt text preserves its original line breaks.
+
+"""Marin chat template for tokenizer export, Datakit rendering, and rollout tests.
+
+Marin and SkyRL both depend on this package, so they share one copy of the
+template. The template must remain self-contained so Hugging Face and vLLM can
+load it from tokenizer artifacts without importing Marin. Generation blocks
+identify assistant output without changing the rendered text.
+"""
+
+MARIN_CHAT_TEMPLATE = """
 {{ bos_token }}
 {%- if enable_thinking is defined -%}
   {%- if enable_thinking is sameas true -%}
@@ -26,17 +40,14 @@ Reasoning: {{ _reasoning_mode }}
 {{ _custom_instructions | trim }}
 {%- endif %}
 {% if _xml_tools_list or _python_tools %}
-{{ "
-### Tools
-" }}
+{{ "\n### Tools\n" }}
 You may call one or more functions to assist with the user query.
 {% if _xml_tools_list %}
 You are provided with function signatures within <tools> </tools> tags:
 
 <tools>
 {% for tool in _xml_tools_list %}
-{{ tool if tool is string else tool | tojson }}{{ "
-" }}
+{{ tool if tool is string else tool | tojson }}{{ "\n" }}
 {% endfor %}
 </tools>
 
@@ -52,8 +63,7 @@ When you send a message containing Python code between <|python_tag|> and <|eom_
 You can use the following tools in your python code like regular functions:
 <tools>
 {% for tool in _python_tools %}
-{{ tool if tool is string else tool | tojson }}{{ "
-" }}
+{{ tool if tool is string else tool | tojson }}{{ "\n" }}
 {% endfor %}
 </tools>
 {% endif %}
@@ -79,13 +89,11 @@ You can use the following tools in your python code like regular functions:
     {%- if call.get('id') -%}
       {%- set tool_names.by_id = dict(tool_names.by_id, **{call.id: function.name}) -%}
     {%- endif -%}
-    {{- '<tool_call>
-{"name": ' -}}
+    {{- '<tool_call>\n{"name": ' -}}
     {{- function.name | tojson -}}
     {{- ', "arguments": ' -}}
     {{- function.arguments if function.arguments is string else function.arguments | tojson -}}
-    {{- '}
-</tool_call>' -}}
+    {{- '}\n</tool_call>' -}}
   {%- endfor -%}
 {%- endmacro -%}
 
@@ -95,8 +103,7 @@ You can use the following tools in your python code like regular functions:
       or (content is mapping and content.get('text') is string)
       or (content is sequence and content is not string and content is not mapping
           and content | selectattr('type', 'equalto', 'text') | list | length == content | length) -%}
-  {{- '<|start_header_id|>' ~ message.role ~ '<|end_header_id|>
-' -}}
+  {{- '<|start_header_id|>' ~ message.role ~ '<|end_header_id|>\n' -}}
   {%- if message.role == 'assistant' -%}
     {% generation %}
     {%- if message.get('reasoning_content') -%}
@@ -112,18 +119,15 @@ You can use the following tools in your python code like regular functions:
     {%- if name -%}{{- ' name="' ~ name ~ '"' -}}{%- endif -%}
     {{- '>' -}}
     {{- text(content) if text_content else content | tojson if content is not none else '' -}}
-    {{- '</tool_response><|eot_id|>
-' -}}
+    {{- '</tool_response><|eot_id|>\n' -}}
   {%- elif message.role == 'ipython' -%}
     {{- {"output": text(content) if text_content else content} | tojson -}}
-    {{- '<|eot_id|>
-' -}}
+    {{- '<|eot_id|>\n' -}}
   {%- else -%}
-    {{- (text(content) | trim) ~ '<|eot_id|>
-' -}}
+    {{- (text(content) | trim) ~ '<|eot_id|>\n' -}}
   {%- endif -%}
 {%- endfor -%}
 {%- if add_generation_prompt -%}
-  {{- '<|start_header_id|>assistant<|end_header_id|>
-' -}}
+  {{- '<|start_header_id|>assistant<|end_header_id|>\n' -}}
 {%- endif -%}
+""".strip()

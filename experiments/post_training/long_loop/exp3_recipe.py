@@ -19,9 +19,9 @@ from levanter.models.snowball_sft import SnowballSftConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
-from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.fsutil.verified_copy import COMPLETION_MANIFEST
+from rolloutengine.chat_template import MARIN_CHAT_TEMPLATE
 
 from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
 from experiments.post_training.long_loop.sft import BASE_MODEL, BASE_REVISION

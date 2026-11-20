@@ -7,8 +7,6 @@ from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, NotRequired, Protocol
 from uuid import uuid4
 
-from rigging.redaction import redact_string
-
 import numpy as np
 from transformers import PreTrainedTokenizerBase
 from rolloutengine.models import RolloutContractError
@@ -46,6 +44,7 @@ from skyrl_train.trajectory_runners.types import TokenProvenance
 from skyrl_train.trajectory_runners.routed_experts import normalize_routed_experts
 from skyrl_train.rollout_observability import rollout_phase
 
+
 # The per-turn output limit, as the trainer config (`max_generate_length`) and vLLM (`max_tokens`) spell it. Chat
 # requests carry it only as `max_completion_tokens`, which vLLM prefers over `max_tokens`.
 _OUTPUT_LIMIT_KEYS = ("max_generate_length", "max_tokens")
@@ -60,7 +59,6 @@ class ModelClientOutput(InferenceEngineOutput):
     """Normalized model output with explicit token provenance."""
 
     token_provenance: TokenProvenance
-    raw_responses: NotRequired[list[str]]
     generation_token_budgets: NotRequired[list[int | None]]
     reasoning_violations: NotRequired[list[ReasoningViolation | None]]
     reasoning_violation_tokens: NotRequired[list[int | None]]
@@ -75,12 +73,11 @@ class ModelClient(Protocol):
 class ModelServerError(RuntimeError):
     """A model-serving failure with safe diagnostics for retained trajectories."""
 
-    def __init__(self, category: str, request_id: str | None, status_code: int | None, message: str = ""):
-        self.message = redact_string(message)[:4096]
+    def __init__(self, category: str, request_id: str | None, status_code: int | None):
         self.category = category
         self.request_id = request_id
         self.status_code = status_code
-        super().__init__(f"Model server error: {category}; request_id={request_id}; {self.message}")
+        super().__init__(f"Model server error: {category}; request_id={request_id}")
 
 
 class ContextLengthExceededError(ModelServerError):
@@ -140,11 +137,23 @@ class _ChatResult:
 TURN_END_MARKERS = frozenset({"<|eot_id|>", "<|im_end|>"})
 
 
-def _ends_turn(tokenizer, response_ids: list[int], finish_reason: str) -> bool:
-    """Whether the response ends with the EOS or a chat template's turn terminator."""
-    if not response_ids or finish_reason == "length":
-        return False
-    return response_ids[-1] in _turn_end_tokens(tokenizer)
+def _ends_turn(tokenizer: PreTrainedTokenizerBase, response_ids: list[int]) -> bool:
+    """Whether the response ends with the EOS or a chat template's turn terminator.
+
+    The stop reason does not matter: a terminator sampled as the last budgeted token still ends the turn.
+    """
+    return bool(response_ids) and response_ids[-1] in _turn_end_tokens(tokenizer)
+
+
+def _visible_text(tokenizer: PreTrainedTokenizerBase, response_ids: list[int], text: str) -> str:
+    """Reply text without the trailing turn terminator.
+
+    Graders, environment steps, and conversation history read this text, and the chat template adds its own
+    terminator after each historical turn. The response token IDs keep the terminator for training.
+    """
+    if not _ends_turn(tokenizer, response_ids):
+        return text
+    return text.removesuffix(tokenizer.decode(response_ids[-1:], skip_special_tokens=False))
 
 
 def _turn_end_tokens(tokenizer: PreTrainedTokenizerBase) -> set[int]:
@@ -282,45 +291,32 @@ class DirectModelClient:
     def __init__(self, inference_engine_client: InferenceEngineClient):
         self._client = inference_engine_client
 
-    async def generate(self, request: InferenceEngineInput, *, return_raw_text: bool = False) -> ModelClientOutput:
+    async def generate(self, request: InferenceEngineInput) -> ModelClientOutput:
         if request.get("chat_completion_params") is not None:
-            output = await self._generate_chat(request)
-        else:
-            generated = await self._client.generate(request)
-            output = ModelClientOutput(**generated, token_provenance=TokenProvenance.ENGINE)
-        tokenizer = self._client.tokenizer
-        turn_end_tokens = _turn_end_tokens(tokenizer)
-        # Normalize where replies become visible text and replayable messages.
-        # The exact training tokens and opt-in raw text keep the terminator.
-        for index, response_ids in enumerate(output["response_ids"]):
-            if not response_ids or response_ids[-1] not in turn_end_tokens:
-                continue
-            terminator = tokenizer.decode(response_ids[-1:], skip_special_tokens=False)
-            output["responses"][index] = output["responses"][index].removesuffix(terminator)
-            messages = output.get("assistant_messages")
-            if messages is not None and isinstance(messages[index].get("content"), str):
-                messages[index] = {**messages[index], "content": messages[index]["content"].removesuffix(terminator)}
-        if return_raw_text:
-            output["raw_responses"] = [
-                tokenizer.decode(token_ids, skip_special_tokens=False) for token_ids in output["response_ids"]
-            ]
-        return output
+            return await self._generate_chat(request)
+        output = await self._client.generate(request)
+        responses = [
+            _visible_text(self._client.tokenizer, response_ids, text)
+            for response_ids, text in zip(output["response_ids"], output["responses"], strict=True)
+        ]
+        return ModelClientOutput(**{**output, "responses": responses}, token_provenance=TokenProvenance.ENGINE)
 
     async def _generate_assistant_prefix(
         self, request: InferenceEngineInput, messages: list[dict[str, Any]], options: dict[str, Any], session_id: str
     ) -> _ChatResult:
         prompt_ids = assistant_prefix_token_ids(self._client.tokenizer, messages, options)
         sampling = dict(request.get("sampling_params") or {})
-        skip_special_tokens = options.get("skip_special_tokens", sampling.get("skip_special_tokens", True))
         requested_tokens = [
-            int(options[key]) for key in ("max_completion_tokens", "max_output_tokens") if options.get(key) is not None
+            int(options[key])
+            for key in ("max_completion_tokens", "max_output_tokens")
+            if options.get(key) is not None
         ]
         token_budget = _generation_token_budget(request, prompt_ids, requested_tokens)
         if token_budget is not None:
             sampling["max_tokens"] = token_budget
         sampling.pop("max_generate_length", None)
-        sampling.update(skip_special_tokens=skip_special_tokens, include_stop_str_in_output=True)
-        # Completion inference bypasses chat tool/reasoning parsers.
+        sampling.update(skip_special_tokens=False, include_stop_str_in_output=True)
+        # Raw completions retain delimiters and bypass chat tool/reasoning parsers.
         output = await self._client.generate(
             {
                 "prompts": None,
@@ -331,8 +327,8 @@ class DirectModelClient:
         )
         if output.get("prompt_ids") != [prompt_ids]:
             raise RolloutContractError("Assistant prefix inference did not report the rendered prompt token IDs")
-        text = output["responses"][0]
         response_ids = output["response_ids"][0]
+        text = _visible_text(self._client.tokenizer, response_ids, output["responses"][0])
         message = {**(output.get("assistant_messages") or [{"role": "assistant"}])[0], "content": text}
         return _ChatResult(
             prompt_ids,
@@ -400,9 +396,7 @@ class DirectModelClient:
             with rollout_phase("tokenize"):
                 messages, prompt_ids = await _render_chat_prompt(self._client.tokenize, render_request, continuation)
             requested_tokens = (
-                []
-                if chat_options.get("max_completion_tokens") is None
-                else [int(chat_options["max_completion_tokens"])]
+                [] if chat_options.get("max_completion_tokens") is None else [int(chat_options["max_completion_tokens"])]
             )
             token_budget = _generation_token_budget(request, prompt_ids, requested_tokens)
             if token_budget is not None:
@@ -444,19 +438,20 @@ class DirectModelClient:
                     category=response.get("error_category", "server_error"),
                     request_id=response.get("request_id", request_id),
                     status_code=error.get("code") if isinstance(error, dict) else None,
-                    message=str(error.get("message", "")) if isinstance(error, dict) else str(error),
                 )
             choice = response["choices"][0]
             response_ids = choice.get("token_ids")
             if not isinstance(response_ids, list) or not all(isinstance(token, int) for token in response_ids):
                 raise RuntimeError("vLLM chat completion did not return exact token IDs")
+            tokenizer = self._client.tokenizer
             message = choice["message"]
-            text = message.get("content") or ""
+            text = _visible_text(tokenizer, response_ids, message.get("content") or "")
+            if message.get("content") is not None:
+                message = {**message, "content": text}
             # Some serving configurations omit reasoning parsers and remove
             # special delimiters from content. Exact tokens retain the boundary.
-            tokenizer = self._client.tokenizer
             stop_reason = choice["finish_reason"]
-            semantic_ids = response_ids[:-1] if _ends_turn(tokenizer, response_ids, stop_reason) else response_ids
+            semantic_ids = response_ids[:-1] if _ends_turn(tokenizer, response_ids) else response_ids
             decoded = tokenizer.decode(semantic_ids, skip_special_tokens=False)
             if any(marker in decoded for pair in REASONING_DELIMITERS for marker in pair):
                 text = final_answer_text(decoded)
