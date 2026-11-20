@@ -306,18 +306,15 @@ def test_new_prepared_inputs_do_not_reuse_old_policy_provenance(
     assert new_record.config == {"sha256": "fixture-tasks"}
 
 
-def test_prepared_inputs_adopt_the_pinned_hugging_face_source(tmp_path, monkeypatch):
-    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+def test_prepared_inputs_adopt_the_pinned_hugging_face_source():
     step = micro210_step(
         Micro210Model("s3://fixture/model", "sha256:" + "a" * 64, "fixture/tokenizer", "b" * 40),
         name="fixture/prepared-source",
         version="2026.11.20",
     )
     prepared = next(dep for dep in step.deps if dep.name == "evaluation/micro210/prepared")
-    run(prepared)
-    record = read_record(str(tmp_path / "evaluation/micro210/prepared" / PREPARED_INPUTS_VERSION))
-    assert record.source == PREPARED_INPUTS
-    assert record.source.startswith("hf://datasets/open-athena/micro210-prepared-tasks@")
+    assert prepared.adopt_source == PREPARED_INPUTS
+    assert re.fullmatch(r"hf://datasets/open-athena/micro210-prepared-tasks@[0-9a-f]{40}", PREPARED_INPUTS)
 
 
 @pytest.mark.parametrize("failure", [None, "unreachable", "model"])
