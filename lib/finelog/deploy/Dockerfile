@@ -64,9 +64,7 @@ COPY lib/finelog/rust/ ./
 ENV FINELOG_SOURCE_COMMIT=${SOURCE_COMMIT} \
     FINELOG_SOURCE_TREE=${SOURCE_TREE} \
     FINELOG_SOURCE_DIRTY=${SOURCE_DIRTY}
-# The binaries keep their symbol table so profilers and gdb report function
-# names; `strip --strip-debug` after the build removes only the debug info that
-# the standard library and C dependencies bring in.
+# Why `strip --strip-debug`: see `[profile.release]` in rust/Cargo.toml.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/rust/target \
     mold -run cargo build --profile ${CARGO_PROFILE} -p finelog \
