@@ -60,7 +60,7 @@ def grader_source(log_parser: str) -> str:
     imports, definitions = _log_parser_library()
     if log_parser not in definitions or log_parser in GRADER_PROVIDED:
         raise ValueError(f"No log parser {log_parser!r}.")
-    template = (TEMPLATES / "grade.py").read_text(encoding="utf-8").replace("@@PARSER@@", log_parser)
+    template = (TEMPLATES / "grade.py.tmpl").read_text(encoding="utf-8").replace("@@PARSER@@", log_parser)
     stack = list(_loaded_names(ast.parse(template.replace("@@", "#@@"))) & definitions.keys())
     needed: set[str] = set()
     while stack:

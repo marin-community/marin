@@ -9,7 +9,7 @@ Vendored verbatim:
 - `log_parsers.py` ← `lib/harbor_tasks/log_parsers.py`
 - `task_files.py` ← `lib/harbor_tasks/task_files.py` (adapted: `HERE` points at this directory so the
   vendored templates and parsers load; module docstring unchanged)
-- `templates/{test.sh, solve.sh, apply_patch.sh, grade.py}` ← `lib/harbor_tasks/templates/`
+- `templates/{test.sh, solve.sh, apply_patch.sh, grade.py.tmpl}` ← `lib/harbor_tasks/templates/`
 - `LICENSE` ← the repository MIT license
 
 The dataset rows come from `ibragim-bad/SWE-rebench-V2.1` (CC BY 4.0), pinned at
