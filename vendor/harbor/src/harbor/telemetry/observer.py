@@ -1,12 +1,13 @@
 """Thin, failure-isolated Harbor telemetry hooks."""
 
-import contextlib
 import asyncio
+import contextlib
 import logging
+import threading
 import time
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID
 
@@ -18,7 +19,6 @@ logger = logging.getLogger(__name__)
 
 _MAX_EVENT_TEXT_BYTES = 4096
 _SHUTDOWN_TIMEOUT_SEC = 2.0
-_DRAIN_POLL_INTERVAL_SEC = 0.01
 _PHASE_DURATION_METRIC = "phase_duration_seconds"
 _WORK_COMPLETED_METRIC = "work_completed"
 _FAILURES_METRIC = "failures"
@@ -42,10 +42,23 @@ class AttemptIdentity:
     infrastructure_retry: int
 
 
+@dataclass
+class _Exporter:
+    config: TelemetryConfig
+    leases: set[object] = field(default_factory=set)
+
+
 @dataclass(frozen=True)
 class TelemetryRuntime:
     job_uid: str
+    job_name: str
     started_monotonic: float
+    _exporter: _Exporter = field(repr=False)
+    _lease: object = field(default_factory=object, repr=False)
+
+
+_EXPORTER_LOCK = threading.Lock()
+_EXPORTER: _Exporter | None = None
 
 
 _CURRENT_RUNTIME: ContextVar[TelemetryRuntime | None] = ContextVar(
@@ -62,7 +75,8 @@ def start_telemetry(
     job_uid: UUID,
     job_name: str,
 ) -> TelemetryRuntime | None:
-    """Start a job-owned exporter, or return None when export is unavailable."""
+    """Acquire a compatible exporter lease, or return None if unavailable."""
+    global _EXPORTER
     if config is None:
         return None
     try:
@@ -75,37 +89,78 @@ def start_telemetry(
         )
         return None
 
-    if telemetry.runtime_status().configured:
-        logger.warning(
-            "Harbor telemetry is already configured by another owner; "
-            "leaving that exporter unchanged"
-        )
-        return None
-    # Finelog indexes on the run_id column, so root_run_uid ships under that key.
-    attributes = {
-        "execution_uid": config.execution_uid,
-        "harbor_job_name": job_name,
-        "harbor_job_uid": str(job_uid),
-        "role": "orchestrator",
-        "run_id": config.root_run_uid,
-    }
-    if config.serving_job_id is not None:
-        attributes["serving_job_id"] = config.serving_job_id
-    telemetry.configure(
-        endpoint=config.endpoint.get_secret_value(),
-        service="harbor",
-        attributes=attributes,
-    )
-    if not telemetry.runtime_status().configured:
-        logger.warning("Harbor telemetry configuration did not start an exporter")
-        return None
+    with _EXPORTER_LOCK:
+        if _EXPORTER is None:
+            if telemetry.runtime_status().configured:
+                logger.warning(
+                    "Harbor telemetry is already configured by another owner; "
+                    "leaving that exporter unchanged"
+                )
+                return None
+            attributes = {
+                "execution_uid": config.execution_uid,
+                "role": "orchestrator",
+                "run_id": config.root_run_uid,
+            }
+            if config.serving_job_id is not None:
+                attributes["serving_job_id"] = config.serving_job_id
+            telemetry.configure(
+                endpoint=config.endpoint.get_secret_value(),
+                service="harbor",
+                attributes=attributes,
+            )
+            if not telemetry.runtime_status().configured:
+                logger.warning(
+                    "Harbor telemetry configuration did not start an exporter"
+                )
+                return None
+            _EXPORTER = _Exporter(config.model_copy(deep=True))
+        elif _EXPORTER.config != config:
+            logger.warning("Harbor telemetry has a different active export context")
+            return None
 
-    runtime = TelemetryRuntime(
-        job_uid=str(job_uid),
-        started_monotonic=time.monotonic(),
-    )
-    telemetry.event("job_started", {"harbor_job_uid": str(job_uid)})
+        runtime = TelemetryRuntime(
+            job_uid=str(job_uid),
+            job_name=job_name,
+            started_monotonic=time.monotonic(),
+            _exporter=_EXPORTER,
+        )
+        _EXPORTER.leases.add(runtime._lease)
+    _event(runtime, "job_started", {"harbor_job_uid": runtime.job_uid})
     return runtime
+
+
+def _attributes(
+    runtime: TelemetryRuntime, attributes: Mapping[str, str] | None = None
+) -> dict[str, str]:
+    return {
+        **(attributes or {}),
+        "harbor_job_uid": runtime.job_uid,
+        "harbor_job_name": runtime.job_name,
+    }
+
+
+def _event(
+    runtime: TelemetryRuntime,
+    name: str,
+    body: dict[str, Any],
+    *,
+    attributes: Mapping[str, str] | None = None,
+) -> None:
+    from rigging import telemetry
+    from rigging.telemetry.serialization import EventBody
+
+    telemetry.event(
+        name,
+        EventBody(
+            {
+                key: value
+                for key, value in body.items()
+                if value is not None and value != ""
+            }
+        ),
+        attributes=_attributes(runtime, attributes),
+    )
 
 
 @contextlib.contextmanager
@@ -149,10 +204,10 @@ def record_job_terminal(
         "phase": _JOB_SCOPE,
     }
     telemetry.histogram(_PHASE_DURATION_METRIC, unit="s").record(
-        duration, attributes=attributes
+        duration, attributes=_attributes(runtime, attributes)
     )
     telemetry.counter(_WORK_COMPLETED_METRIC, unit=_WORK_UNIT).add(
-        attributes={"outcome": outcome, "work_kind": _JOB_SCOPE}
+        attributes=_attributes(runtime, {"outcome": outcome, "work_kind": _JOB_SCOPE})
     )
     body: dict[str, Any] = {
         "duration_seconds": duration,
@@ -161,7 +216,7 @@ def record_job_terminal(
     }
     if error is not None:
         body.update(_error_body(error))
-    telemetry.event("job_terminal", body, attributes={"outcome": outcome})
+    _event(runtime, "job_terminal", body, attributes={"outcome": outcome})
 
 
 def trial_hook(
@@ -188,7 +243,7 @@ def _record_trial_event(runtime: TelemetryRuntime, event: TrialHookEvent) -> Non
     body.setdefault("harbor_trial_name", event.trial_id)
     body["task_name"] = event.task_name
     if event.event != TrialEvent.END or event.result is None:
-        telemetry.event(f"trial_{event.event.value}", body)
+        _event(runtime, f"trial_{event.event.value}", body)
         return
 
     outcome = _result_outcome(event.result)
@@ -198,16 +253,19 @@ def _record_trial_event(runtime: TelemetryRuntime, event: TrialHookEvent) -> Non
         body["duration_seconds"] = duration
         telemetry.histogram(_PHASE_DURATION_METRIC, unit="s").record(
             duration,
-            attributes={
-                "clock_domain": _CRITICAL_PATH_CLOCK_DOMAIN,
-                "outcome": outcome,
-                "phase": _TRIAL_SCOPE,
-            },
+            attributes=_attributes(
+                runtime,
+                {
+                    "clock_domain": _CRITICAL_PATH_CLOCK_DOMAIN,
+                    "outcome": outcome,
+                    "phase": _TRIAL_SCOPE,
+                },
+            ),
         )
     telemetry.counter(_WORK_COMPLETED_METRIC, unit=_WORK_UNIT).add(
-        attributes={"outcome": outcome, "work_kind": _TRIAL_SCOPE}
+        attributes=_attributes(runtime, {"outcome": outcome, "work_kind": _TRIAL_SCOPE})
     )
-    telemetry.event("trial_terminal", body, attributes={"outcome": outcome})
+    _event(runtime, "trial_terminal", body, attributes={"outcome": outcome})
 
 
 def record_failure(
@@ -227,8 +285,9 @@ def record_failure(
     else:
         status = "transport_error"
     attributes = {"failure_kind": failure_kind, "status": status}
-    telemetry.counter(_FAILURES_METRIC).add(attributes=attributes)
-    telemetry.event(
+    telemetry.counter(_FAILURES_METRIC).add(attributes=_attributes(runtime, attributes))
+    _event(
+        runtime,
         "failure",
         {
             **_attempt_body(runtime),
@@ -253,9 +312,10 @@ def record_queue_wait(duration: float, *, outcome: str) -> None:
         "phase": FAILURE_KIND_QUEUE_WAIT,
     }
     telemetry.histogram(_PHASE_DURATION_METRIC, unit="s").record(
-        max(0.0, duration), attributes=attributes
+        max(0.0, duration), attributes=_attributes(runtime, attributes)
     )
-    telemetry.event(
+    _event(
+        runtime,
         "trial_queue_wait",
         {
             **_attempt_body(runtime),
@@ -267,25 +327,27 @@ def record_queue_wait(duration: float, *, outcome: str) -> None:
 
 
 def shutdown_telemetry(runtime: TelemetryRuntime | None) -> None:
+    """Release one job and drain the exporter after its last lease."""
+    global _EXPORTER
     if runtime is None:
         return
-    deadline = time.monotonic() + _SHUTDOWN_TIMEOUT_SEC
-    _wait_for_export_queue(deadline)
     from rigging import telemetry
 
-    telemetry.shutdown(max(0.0, deadline - time.monotonic()))
-
-
-def _wait_for_export_queue(deadline: float) -> None:
-    from rigging import telemetry
-
-    status = telemetry.runtime_status()
-    while status.configured and status.queued_records:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
+    with _EXPORTER_LOCK:
+        owner = runtime._exporter
+        if owner is not _EXPORTER or runtime._lease not in owner.leases:
             return
-        time.sleep(min(_DRAIN_POLL_INTERVAL_SEC, remaining))
-        status = telemetry.runtime_status()
+        owner.leases.remove(runtime._lease)
+        if owner.leases:
+            return
+        deadline = time.monotonic() + _SHUTDOWN_TIMEOUT_SEC
+        try:
+            telemetry.flush(_SHUTDOWN_TIMEOUT_SEC)
+        finally:
+            try:
+                telemetry.shutdown(max(0.0, deadline - time.monotonic()))
+            finally:
+                _EXPORTER = None
 
 
 def _attempt_body(

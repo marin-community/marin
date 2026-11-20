@@ -25,10 +25,12 @@ The short loop, also called the quick loop, uses gated presets to compare one ch
 ### Long loop
 
 The long loop uses ungated training to build a model and retain its best eligible checkpoint.
+Use `train-long` for EvalLite or `train-long-harbor` to add the Harbor cohorts.
 
 | Preset | What it measures | Default work and estimated cost | Evaluation and gate | When to use it |
 |---|---|---|---|---|
 | `train-long` | Full training and checkpoint quality | 40 H100s, 100 updates by default, hours to days. Check the plan and use the reported GPU-hours for cost. | EvalLite active set of 100 tasks at step 0 and every 10 updates. Evaluation coverage invariants, without a calibrated control comparison. | Train a release candidate with checkpoint recovery and durable HF export. |
+| `train-long-harbor` | Full training with agentic checkpoint evaluation | 40 H100s, 100 updates by default, hours to days plus Harbor sandbox costs. | EvalLite plus 90 Harbor trials at each checkpoint evaluation. Coverage invariants without a calibrated control comparison. | Qualify current training weights on BFCL, SWE-bench Verified and OpenThoughts-TBLite. Requires the [Daytona evaluation account and sandbox capacity](#harbor-evaluation). |
 
 ## The loop
 
@@ -38,7 +40,7 @@ The long loop uses ungated training to build a model and retain its best eligibl
 3. [Run a preset](#which-experiment-to-run): use `data-short` then `data-medium` with
    `--tasks NAME@VERSION`, or choose the preset for the change.
 4. Read the [verdict](#compare-with-controls) for a gated run. For `learning-medium`,
-   `data-medium` and `train-long`, open the dashboard row in `rl_progress_url`.
+   `data-medium`, `train-long` and `train-long-harbor`, open the dashboard row in `rl_progress_url`.
 
 ## Run a preset
 
@@ -66,7 +68,7 @@ interface. Each preset's steps use its own `revision`.
   If tracking is undecided, ask whether to open a new issue, use an existing one, or run without an issue.
   Open a new issue only with the experimenter's explicit approval. The native attempt records the issue when supplied.
 - **Resume.** Repeat the original `--run --wait` invocation from the same source and inputs.
-  The executor reuses successful artifacts. When training resumes, `train-long` loads its
+  The executor reuses successful artifacts. When training resumes, either train-long preset loads its
   latest retained checkpoint and records the new attempt and parent checkpoint.
 
 Submission without `--wait` returns 0 when accepted. A terminal invocation returns 0 for PASS
@@ -101,7 +103,7 @@ The dashboard's detail view shows each evaluation step's counts and strata means
 family, AAII category and difficulty, and links to the run's Grafana window.
 
 After `--run --wait` observes the coordinator finish, the launcher publishes learning-medium,
-data-medium and train-long attempts using the caller's Marina login. The row shows the model and
+data-medium, train-long and train-long-harbor attempts using the caller's Marina login. The row shows the model and
 the issue link when the launch supplied a number. Record the finishing status's `rl_progress_url` with the verdict.
 Use `--marina-url ORIGIN` to publish to a local Marina stack; the default is the Marina service.
 
@@ -146,10 +148,10 @@ and record the complete frozen EvalLite in their recipe's `exclusions`. The buil
 Create an immutable candidate through [task curation](../references/task-curation.md#final-task-selection).
 Selections with AI-judged tasks are refused before submission.
 
-`--init NAME@VERSION` on `learning-medium` or `train-long` starts from a published initializer
+`--init NAME@VERSION` on `learning-medium` or either train-long preset starts from a published initializer
 or a retained RL HF export. The selected initializer supplies both weights and its tokenizer.
 Training recovery uses the run's native checkpoint lineage. Learning-medium, data-medium and
-train-long publish the checkpoint with the best eligible evaluation score. If step zero wins,
+both train-long presets export the checkpoint with the best eligible evaluation score. If step zero wins,
 the terminal receipt points to the initializer's HF checkpoint. A trained winner is converted to
 HF under `exports/global_step_<N>/policy`. If no evaluation is eligible, the native attempt completes
 with its recovery checkpoint and no HF export. The status shows `none eligible` and the evaluation
@@ -286,6 +288,34 @@ when recording a result.
 The dashboards are available through the [RL Grafana dashboard](https://grafana.oa.dev/d/marin-rl-runs/rl-post-training),
 [Marina RL progress](https://applets.marina.oa.dev/a/6c971887-1e22-45b1-9dcb-dd775829df57/) and
 [EvalDash](https://marina.oa.dev/evaldash/).
+
+## Harbor evaluation
+
+A Harbor cohort is a pinned sample of tasks from one benchmark. `train-long-harbor`
+evaluates cohorts of 30 tasks each from BFCL, SWE-bench Verified and OpenThoughts-TBLite.
+Set `DAYTONA_EVAL_API_KEY` and
+`DAYTONA_TARGET` for the evaluation account before submitting. Each cohort can run 30
+Daytona sandboxes at once, up to 90 across all three cohorts. Each sandbox builds the pinned
+task environment in declarative mode. The runner enables the HTTP endpoint that Harbor uses
+to evaluate the current training weights.
+
+A checkpoint is eligible when it scores at least 99% of the EvalLite active set and 90% of each Harbor cohort.
+`eval/all` pools native and Harbor rewards. Per-cohort metrics use `eval/harbor/<cohort>/`, and
+`eval/harbor/wall_seconds` measures the complete Harbor callback. The agents use the engine's
+serving window as their total context limit, with the reply cap inside it. SWE-bench uses
+the pinned harness's 3,000-second verifier timeout. OpenThoughts-TBLite uses each pinned
+verifier's timeout, capped at 3,600 seconds. A trial can retry once after phase cancellation
+or a Daytona sandbox setup, command transport or cleanup error. The retry list includes
+`TmuxExecTimeoutError`, `DaytonaOutputUnavailable` and `MachineTerminated`. A failed trial
+with unconfirmed teardown can retry even after verification. The selected attempt must
+have confirmed teardown for the archive to seal.
+
+This retry policy uses revision `2026.11.20.6` with fingerprint `76baa3fb`. The earlier
+revision `2026.11.20.5` has fingerprint `e1f1635a`.
+
+Trial artifacts are under `exports/inline_harbor/`. A Harbor error stops training. Repeat the same
+command to resume from the latest retained checkpoint. The separate
+[offline evaluation launcher](../explanations/evaluation.md) evaluates an exported model.
 
 ## What a run writes
 
