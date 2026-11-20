@@ -39,27 +39,31 @@ def test_read_summary(tmp_path):
     assert read_summary(str(tmp_path)) == summary
 
 
-def test_check_wandb_history_skipped_outside_ci(monkeypatch):
-    monkeypatch.delenv("RUN_ID", raising=False)
-    monkeypatch.delenv("WANDB_API_KEY", raising=False)
-    assert check_wandb_history(40) is None
-
-
 @pytest.mark.parametrize(
     ("state", "last_step", "ok"),
     [
         ("finished", 49, True),
         ("running", 49, True),
-        ("running", None, False),  # run created, history never uploaded
+        ("running", -1, False),  # run created, history never uploaded
         ("crashed", 13, False),  # upload stalled mid-run
     ],
 )
 def test_check_wandb_history(monkeypatch, state, last_step, ok):
-    monkeypatch.setenv("RUN_ID", "canary-gpu-1-1")
-    monkeypatch.setenv("WANDB_API_KEY", "fake")
     monkeypatch.setattr("scripts.ci.validate_canary_metrics.WANDB_HISTORY_WAIT_SECONDS", 0)
     run = SimpleNamespace(state=state, lastHistoryStep=last_step)
     with patch("scripts.ci.validate_canary_metrics.wandb.Api") as api:
         api.return_value.run.return_value = run
-        error = check_wandb_history(40)
+        error = check_wandb_history("marin-community/marin/canary-gpu-1-1", 40)
     assert (error is None) == ok
+
+
+def test_main_fails_when_wandb_history_is_missing(monkeypatch):
+    monkeypatch.setenv("RUN_ID", "canary-gpu-1-1")
+    monkeypatch.setenv("WANDB_API_KEY", "fake")
+    with (
+        patch("scripts.ci.validate_canary_metrics.resolve_canary_output_path", return_value="gs://fake"),
+        patch("scripts.ci.validate_canary_metrics.read_summary", return_value=HEALTHY_SUMMARY),
+        patch("scripts.ci.validate_canary_metrics.check_wandb_history", return_value="no history"),
+        pytest.raises(SystemExit, match="1"),
+    ):
+        main()

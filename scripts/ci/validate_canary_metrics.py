@@ -33,9 +33,13 @@ def _env_float(key: str, default: float) -> float:
     return float(raw) if raw else default
 
 
+def _min_steps() -> float:
+    return _env_float("CANARY_MIN_STEPS", 200)
+
+
 def _thresholds() -> list[tuple[str, str, Callable[[float, float], bool], float]]:
     return [
-        ("_step", "Steps completed", operator.ge, _env_float("CANARY_MIN_STEPS", 200)),
+        ("_step", "Steps completed", operator.ge, _min_steps()),
         ("train/loss", "Final loss", operator.le, _env_float("CANARY_MAX_LOSS", 8.0)),
     ]
 
@@ -100,21 +104,13 @@ WANDB_HISTORY_WAIT_SECONDS = 180
 WANDB_POLL_SECONDS = 15
 
 
-def check_wandb_history(min_steps: float) -> str | None:
-    """Return an error if the canary's W&B run did not receive its training history.
+def check_wandb_history(path: str, min_steps: float) -> str | None:
+    """Return an error unless the W&B run at ``path`` logged history through ``min_steps``.
 
-    The S3 summary above is written by the trainer itself, so it passes even when the
-    wandb-core upload stalls and Levanter's bounded finish/teardown drops the run's
-    whole history. Downstream consumers (MFU tracking, profile summaries) read W&B,
-    so a run that is empty there is a lost data point and must fail loudly.
-
-    Skipped (returns None) unless RUN_ID and WANDB_API_KEY are set, i.e. outside CI.
+    ``tracker_metrics.jsonl`` is written by the trainer, so it can pass while W&B holds
+    no history. Polls for up to ``WANDB_HISTORY_WAIT_SECONDS`` for ingestion to catch up.
+    A crashed or failed run is an error even with enough history.
     """
-    run_id = os.environ.get("RUN_ID")
-    if not run_id or not os.environ.get("WANDB_API_KEY"):
-        return None
-
-    path = f"{os.environ.get('WANDB_ENTITY', 'marin-community')}/{os.environ.get('WANDB_PROJECT', 'marin')}/{run_id}"
     api = wandb.Api(timeout=60)
     deadline = time.monotonic() + WANDB_HISTORY_WAIT_SECONDS
     while True:
@@ -122,7 +118,7 @@ def check_wandb_history(min_steps: float) -> str | None:
             run = api.run(path)
         except Exception as e:  # wandb raises CommError or ValueError for a missing run
             return f"Could not read W&B run {path}: {e}"
-        last_step = run.lastHistoryStep if run.lastHistoryStep is not None else -1
+        last_step = run.lastHistoryStep
         if last_step >= min_steps and run.state not in ("crashed", "failed"):
             print(f"W&B run {path}: state={run.state}, last history step {last_step}")
             return None
@@ -133,6 +129,18 @@ def check_wandb_history(min_steps: float) -> str | None:
             )
         time.sleep(WANDB_POLL_SECONDS)
         api.flush()
+
+
+def _wandb_run_path() -> str | None:
+    """The canary's W&B run path, or None when this is not a CI canary run (no RUN_ID)."""
+    run_id = os.environ.get("RUN_ID")
+    if not run_id:
+        return None
+    if not os.environ.get("WANDB_API_KEY"):
+        raise RuntimeError("RUN_ID is set but WANDB_API_KEY is not; cannot check the canary's W&B history.")
+    # Without WANDB_ENTITY, wandb.Api resolves the API key's default entity, as wandb.init does.
+    parts = [os.environ.get("WANDB_ENTITY"), os.environ.get("WANDB_PROJECT", "marin"), run_id]
+    return "/".join(p for p in parts if p)
 
 
 def main():
@@ -151,8 +159,10 @@ def main():
         print("FAILED: One or more metrics breached thresholds.")
         sys.exit(1)
 
-    wandb_error = check_wandb_history(_env_float("CANARY_MIN_STEPS", 200))
-    if wandb_error is not None:
+    wandb_path = _wandb_run_path()
+    if wandb_path is None:
+        print("Skipping the W&B history check: RUN_ID is not set.")
+    elif (wandb_error := check_wandb_history(wandb_path, _min_steps())) is not None:
         print(f"FAILED: {wandb_error}")
         sys.exit(1)
     print("PASSED: All metrics within thresholds.")
