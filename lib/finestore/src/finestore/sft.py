@@ -9,7 +9,10 @@ from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-Sha256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+from finestore.rl.curation import ContentEvidenceReference as SftEvidenceReference
+from finestore.schema import SHA256_PATTERN
+
+Sha256 = Annotated[str, Field(pattern=SHA256_PATTERN)]
 REQUIRED_SFT_EVAL_FAMILIES = frozenset({"aa", "lm_eval", "uncheatable", "atlas_references"})
 
 
@@ -26,11 +29,6 @@ class DatasetVariantInput(SftRecord):
     revision: str = Field(min_length=1)
     data_sha256: Sha256
     task_specs_sha256: Sha256 | None = None
-
-
-class SftEvidenceReference(SftRecord):
-    uri: str = Field(min_length=1)
-    sha256: Sha256
 
 
 class SftStage(StrEnum):
@@ -60,9 +58,10 @@ class SftPreparationReceipt(SftRecord):
     input_rows: int = Field(gt=0)
     training_rows: int = Field(gt=0)
     filtered_rows: int = Field(ge=0)
-    normalization_filtered_rows: int = Field(ge=0)
+    chat_rows: int = Field(gt=0)
+    normalization_counters: dict[str, dict[str, int | float]]
     stage_files: dict[SftStage, SftEvidenceReference]
-    input_tokens: int = Field(gt=0)
+    training_tokens: int = Field(gt=0)
     supervised_tokens: int = Field(gt=0)
     training_sha256: Sha256
     completed_at: datetime
@@ -73,11 +72,11 @@ class SftPreparationReceipt(SftRecord):
             raise ValueError("SFT registration requires every completed Datakit stage")
         if set(self.eval_manifests) != REQUIRED_SFT_EVAL_FAMILIES:
             raise ValueError("SFT registration requires core, Uncheatable and Atlas reference coverage")
-        if self.training_rows + self.filtered_rows + self.normalization_filtered_rows != self.input_rows:
+        if self.training_rows + self.filtered_rows != self.chat_rows:
             raise ValueError("SFT registration must account for the complete input population")
         if set(self.stage_files) != {SftStage.CHAT, SftStage.NORMALIZE, SftStage.DECONTAM}:
             raise ValueError("SFT registration requires pinned chat, text and decontamination files")
-        if self.supervised_tokens > self.input_tokens:
+        if self.supervised_tokens > self.training_tokens:
             raise ValueError("SFT supervision exceeds the tokenized population")
         return self
 

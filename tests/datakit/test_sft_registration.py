@@ -12,7 +12,13 @@ from finestore.sft import DatasetVariantInput, SftEvidenceReference, SftPreparat
 from marin.datakit.chat_normalize import ChatChannel, _normalize_chat_record
 from marin.datakit.chat_render import render_chat_record
 from marin.datakit.normalize import _make_normalize_fn
-from marin.datakit.sft_registration import SftEvalRequirement, SftRegistrationPlan, qualify_sft_variant
+from marin.datakit.sft_registration import (
+    SftEvalRequirement,
+    SftPreparationInput,
+    SftRegistrationPlan,
+    prepare_sft_training,
+    qualify_sft_variant,
+)
 from marin.execution.artifact import ArtifactRecord
 from marin.execution.step_status import StatusFile
 from openai_harmony import Message, Role
@@ -47,12 +53,17 @@ def artifact(path: Path, value: dict | None, deps=(), config=None) -> SftEvidenc
     return json_file(path / ".artifact.json", record.model_dump(mode="json"))
 
 
-@pytest.fixture
-def registration(tmp_path):
+@pytest.fixture(params=["parquet", "jsonl"])
+def registration(tmp_path, request):
     raw = parquet(
         tmp_path / "download/data.parquet",
         [{"prompt": "Question", "answer": "Answer"}, {"prompt": "Different", "answer": "Excluded"}],
     )
+    if request.param == "jsonl":
+        path = tmp_path / "download/data.jsonl"
+        path.write_text("\n".join(json.dumps(row) for row in pq.read_table(raw.uri).to_pylist()) + "\n")
+        Path(raw.uri).unlink()
+        raw = pin(path)
     input_manifest = json_file(tmp_path / "input.json", {"files": [raw.model_dump()], "rows": 2})
     identity = DatasetVariantInput(
         source_id="Fixture:source",
@@ -139,6 +150,13 @@ def registration(tmp_path):
         "paragraph_delimiter": "\n\n",
         "feature_filter_version": "fixture-v1",
     }
+    stage_files = {
+        stage: json_file(
+            tmp_path / f"{stage.name}-files.json",
+            {"files": [pin(paths[stage] / "outputs/main/part-000.parquet").model_dump()], "rows": 2},
+        )
+        for stage in [SftStage.CHAT, SftStage.NORMALIZE, SftStage.DECONTAM]
+    }
     stages = {
         SftStage.DOWNLOAD: artifact(
             paths[SftStage.DOWNLOAD], None, config={"hf_dataset_id": identity.repository, "revision": identity.revision}
@@ -202,23 +220,24 @@ def registration(tmp_path):
                 "input_rows": 2,
                 "filtered_rows": 1,
                 "output_manifest": output.model_dump(),
+                "input_manifest": input_manifest.model_dump(),
+                "stage_files": {stage.value: ref.model_dump() for stage, ref in stage_files.items()},
             },
             [paths[SftStage.DECONTAM]],
         ),
         SftStage.TRAINING: artifact(paths[SftStage.TRAINING], {"prepared": True}, [paths[SftStage.FILTER]]),
     }
+    stages[SftStage.TRAINING] = artifact(
+        paths[SftStage.TRAINING],
+        json.loads(Path(stages[SftStage.FILTER].uri).read_text())["result"],
+        [paths[SftStage.FILTER]],
+    )
     plan = SftRegistrationPlan(
         input=identity,
         registry_source="fixture",
         input_manifest=input_manifest,
         stages=stages,
-        stage_files={
-            stage: json_file(
-                tmp_path / f"{stage.name}-files.json",
-                {"files": [pin(paths[stage] / "outputs/main/part-000.parquet").model_dump()], "rows": 2},
-            )
-            for stage in [SftStage.CHAT, SftStage.NORMALIZE, SftStage.DECONTAM]
-        },
+        stage_files=stage_files,
         evals=evals,
         output_manifest=output,
         tokenizer=tokenizer_manifest,
@@ -236,7 +255,7 @@ def test_registration_writes_only_content_bound_complete_receipt(registration):
         loaded.input_rows,
         loaded.training_rows,
         loaded.filtered_rows,
-        loaded.input_tokens,
+        loaded.training_tokens,
         loaded.supervised_tokens,
     ) == (2, 1, 1, 2, 1)
     assert qualify_sft_variant(plan, str(root / "receipt.json")) == loaded
@@ -316,3 +335,34 @@ def test_incomplete_or_changed_preparation_never_writes_receipt(registration, de
     with pytest.raises(ValueError):
         qualify_sft_variant(plan, str(root / "receipt.json"))
     assert not (root / "receipt.json").exists()
+
+
+def test_preparation_produces_training_selection_and_qualifies_it(registration):
+    plan, root, _ = registration
+    configuration = SftPreparationInput(
+        source_id=plan.input.source_id,
+        variant_id=plan.input.variant_id,
+        repository=plan.input.repository,
+        revision=plan.input.revision,
+        task_specs_sha256=plan.input.task_specs_sha256,
+        stage_paths={stage: str(Path(ref.uri).parent) for stage, ref in plan.stages.items()},
+        tokenizer=plan.tokenizer,
+        chat_template=plan.chat_template,
+    )
+    result = prepare_sft_training(configuration, str(root / "actual-preparation"))
+    stages = dict(plan.stages)
+    stages[SftStage.FILTER] = artifact(
+        root / "filter", result.model_dump(mode="json"), [Path(stages[SftStage.DECONTAM].uri).parent]
+    )
+    stages[SftStage.TRAINING] = artifact(root / "training", result.model_dump(mode="json"), [root / "filter"])
+    completed = plan.model_copy(
+        update={
+            "input": result.input,
+            "input_manifest": result.input_manifest,
+            "output_manifest": result.output_manifest,
+            "stage_files": result.stage_files,
+            "stages": stages,
+        }
+    )
+    receipt = qualify_sft_variant(completed, str(root / "completed-receipt.json"))
+    assert (receipt.input_rows, receipt.training_rows, receipt.filtered_rows) == (2, 1, 1)
