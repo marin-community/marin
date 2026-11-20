@@ -176,7 +176,7 @@ def generated_module(body: str, imports: str = "") -> str:
 from __future__ import annotations
 from typing import Annotated, Literal
 from pydantic import Field, NonNegativeInt, PositiveInt
-from .model import NumberMap, OpenMap, Section, SectionMap, field, unset_field
+from .model import CountMap, NumberMap, OpenMap, Section, SectionMap, field, unset_field
 {imports}
 {body}
 '''
@@ -198,7 +198,10 @@ def section_paths(mapping: dict, sidecar: dict, owned: frozenset, prefix: str = 
         path = f"{prefix}.{key}".lstrip(".")
         annotation = sidecar["UNDECLARED"][path][0] if path in sidecar["UNDECLARED"] else sidecar["TYPES"].get(path)
         section = (
-            isinstance(value, dict) and value and path not in owned | sidecar["OPEN"] and annotation != "NumberMap"
+            isinstance(value, dict)
+            and value
+            and path not in owned | sidecar["OPEN"]
+            and annotation not in ("NumberMap", "CountMap")
             if prefix
             else path not in owned | sidecar["UNDECLARED"].keys() and annotation not in ("OpenMap", "OpenMap | None")
         )

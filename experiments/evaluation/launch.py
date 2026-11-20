@@ -29,6 +29,7 @@ from evalrecords.records import (
     ModelConfigRef,
     ModelRef,
     PromptFormat,
+    RLAttemptRef,
     RunStatus,
     TaskEvidence,
     list_records,
@@ -176,6 +177,7 @@ class LaunchSpec:
     """Reuse evaluation records for this key and the same resolved configuration."""
     run_id: str | None = None
     policy_finalization: PolicyFinalization | None = None
+    rl_attempt: RLAttemptRef | None = None
 
 
 # EvalDash scans these record roots (`DEFAULT_SCAN_PREFIXES` adds read-only legacy roots).
@@ -542,6 +544,7 @@ def build_evaluation_batch(
         user=user,
         version=spec.version,
         description=spec.description,
+        rl_attempt=spec.rl_attempt,
         records_prefix=records_prefix,
         model=model,
         accelerator=accelerator,
