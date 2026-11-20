@@ -77,7 +77,7 @@ def admission_receipt_labels(instance_id: str | None, receipts) -> dict[str, str
     """
     if receipts is None or not instance_id:
         return {}
-    staged = json.loads(StoragePath(str(receipts)).read_text())
+    staged = json.loads((StoragePath(str(receipts)) / "admission-receipts.json").read_text())
     entry = staged.get(instance_id)
     if not entry:
         return {}

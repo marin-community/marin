@@ -9,6 +9,8 @@ from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert import (
+    ADMISSION_RECEIPTS_INPUT,
+    IMAGE_BINDINGS_INPUT,
     VERSION,
     convert_row,
 )
@@ -16,7 +18,7 @@ from experiments.post_training.task_curation.datasets.swe_rebench_v2.groups impo
     UPSTREAM_DATASET,
     UPSTREAM_REVISION,
 )
-from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
+from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource, process_rows
 from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 from experiments.post_training.task_curation.within_source_binding import read_dedup_receipts
@@ -108,9 +110,22 @@ def _declare() -> RlDataSource[CurationRecipe]:
                     UPSTREAM_FILES,
                     SourceFormat.PARQUET,
                 ),
-                # The digest-pinned base-image bindings input is wired here once the Kaniko
-                # build job stages them; the converter rejects rows with a typed defect until then.
-                inputs={},
+                # The staged conversion inputs: the digest-pinned base-image bindings and the
+                # admission receipts (the upstream_image_defect labels), pinned by sha256.
+                inputs={
+                    IMAGE_BINDINGS_INPUT: UrlSource(
+                        url="s3://marin-us-east-02a/marin/rl-data/atlas/swe-repair/2026.11.17.1/base-image-bindings.json",
+                        sha256="b37ecc45b4a9e932619e7eb5d3c7e985bbe3a5f9fe7a5e6e64ad929afccc0c0d",
+                        filename="base-image-bindings.json",
+                        format=SourceFormat.JSON,
+                    ),
+                    ADMISSION_RECEIPTS_INPUT: UrlSource(
+                        url="s3://marin-us-east-02a/marin/rl-data/atlas/swe-repair/2026.11.17.1/admission-receipts.json",
+                        sha256="2d465e3e55f1b9046e151074884be05de4b2b7a9239765a89c0c4372a3836183",
+                        filename="admission-receipts.json",
+                        format=SourceFormat.JSON,
+                    ),
+                },
                 convert=convert_row,
                 intended_use=IntendedUse.TRAIN,
                 rubric=REPAIR_RUBRIC,
