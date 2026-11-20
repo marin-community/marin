@@ -10,6 +10,7 @@ import click
 from fray.types import ANY_REGION, ResourceConfig
 from marin.execution.lazy import lower
 from marin.execution.step_runner import StepRunner
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 from experiments.grug.moe_hero_ep import launch_hero_sft
 from experiments.grug.moe_hero_ep.expert_placement import ExpertPlacement
@@ -74,6 +75,7 @@ _BY_NAME = {preset.name: preset for preset in MOCHI_SFT_PRESETS}
 @click.option("--prefix", help="Output storage URI or absolute directory. Bounded runs default to three-day storage.")
 @click.option("--run", is_flag=True, help="Launch the selected workflow.")
 def main(preset: str, steps: int | None, export: bool, prefix: str | None, run: bool) -> None:
+    configure_coreweave_s3()
     chosen = _BY_NAME[preset]
     try:
         if export:
