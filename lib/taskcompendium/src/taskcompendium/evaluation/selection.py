@@ -3,6 +3,7 @@
 
 """Select reproducible cohorts from task annotations and declarative token budgets."""
 
+import hashlib
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -227,6 +228,10 @@ def _context_decision(
 
 
 def _candidate_rows(rows: Sequence[TaskRow], policy: CohortPolicy, context_window: int) -> list[TaskRow]:
+    if policy.order is CohortOrder.SHUFFLED:
+        if policy.groups:
+            raise ValueError("Shuffled cohort order does not support task groups")
+        return sorted(rows, key=lambda row: hashlib.sha256(row.source_row.encode()).digest())
     if not policy.groups:
         return list(rows)
     groups = [
@@ -340,7 +345,7 @@ def select_cases(
                         SelectionStatus.EXCLUDED if rank is None or record is not None else SelectionStatus.UNINSPECTED
                     ),
                     reason="group_filter" if rank is None else "source_limit",
-                    rank=rank if policy.order is CohortOrder.ROUND_ROBIN else None,
+                    rank=rank if policy.order is not CohortOrder.SOURCE else None,
                     context_window=context_window,
                     max_tokens=record.max_tokens if record is not None else None,
                     prompt_tokens=record.prompt_tokens if record is not None else None,

@@ -91,6 +91,20 @@ CI_BROAD_TRIGGERS: frozenset[str] = frozenset({"infra/ci/select_tests.py", ".git
 
 BROAD_TRIGGERS = LOCAL_BROAD_TRIGGERS | CI_BROAD_TRIGGERS
 
+_NATIVE_CONFIG = ("vendor/skyrl/cloud/iris/", "vendor/skyrl/skyrl-train/skyrl_train/config/")
+MARIN_NATIVE_CONFIG_TESTS = {
+    "tests/rl/test_rl_launch_documents.py": ("vendor/skyrl/", "lib/skyrlrecipe/"),
+    "experiments/post_training/curriculum_rl/test_launch.py": _NATIVE_CONFIG,
+    "tests/rl/test_skyrl.py": (
+        *_NATIVE_CONFIG,
+        "vendor/skyrl/marinskyrl/checkpoint_paths.py",
+        "vendor/skyrl/skyrl-train/skyrl_train/utils/tracking.py",
+    ),
+    "experiments/post_training/rl_tests/test_rl.py": ("vendor/skyrl/", "lib/skyrlrecipe/"),
+    "experiments/post_training/rl_tests/test_rl_gate.py": _NATIVE_CONFIG,
+    "experiments/post_training/rl_tests/test_rl_publication.py": _NATIVE_CONFIG,
+}
+
 # uv package names and pytest paths for each workspace scope.
 UV_PACKAGE: dict[str, str] = {
     "rigging": "marin-rigging",
@@ -188,6 +202,18 @@ DEFAULT_LEG_TIMEOUT = 15
 # Levanter's accelerator lanes use its selected files below.
 DEPENDENCY_MANIFESTS: tuple[str, ...] = ("uv.lock", "pyproject.toml")
 EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
+    "rl-progress": (
+        "infra/marina/",
+        "lib/finestore/src/finestore/rl/",
+        "lib/marin/src/marin/rl/",
+        "lib/marin/src/marin/execution/",
+        "experiments/post_training/rl",
+        "experiments/post_training/snowball_rl.py",
+        "experiments/post_training/skyrl_test_support.py",
+        "infra/ci/",
+        ".github/workflows/unified-unit.yaml",
+        *DEPENDENCY_MANIFESTS,
+    ),
     "skyrl-wheel": (
         "lib/skyrlrecipe/",
         "vendor/skyrl/",
@@ -770,18 +796,16 @@ def classify(
     native_changed: set[str] = set()
     experiment_asset_areas: set[str] = set()
 
-    launch_census = "tests/rl/test_rl_launch_documents.py"
-    if (repo_root / launch_census).is_file() and any(
-        path.startswith(("vendor/skyrl/", "lib/skyrlrecipe/")) for path in changed_files
-    ):
-        direct_tests["marin"].append(launch_census)
-
     for filepath in changed_files:
         if filepath in broad_triggers:
             broad = True
             continue
 
         forced.update(scope for scope, inputs in EXTERNAL_TEST_INPUTS.items() if filepath in inputs)
+
+        for owner, prefixes in MARIN_NATIVE_CONFIG_TESTS.items():
+            if filepath.startswith(prefixes) and (repo_root / owner).exists():
+                direct_tests["marin"].append(owner)
 
         # A native crate's rust/ tree is not on any import root, so this branch
         # runs before source-root handling. The change is invisible to the Python

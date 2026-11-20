@@ -7,9 +7,9 @@ import re
 import string
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
-from enum import StrEnum
 from typing import Any, cast
 
+from verifyit.compat import StrEnum
 from verifyit.grade import InvalidTask, PreparationCategory, Status, finalize_preparation_failure
 from verifyit.preparation.errors import InvalidPreparation, PreparationError, PreparationFailure
 

@@ -333,6 +333,13 @@ def test_snowball_moe_capacity_is_a_runtime_setting():
     assert preserve_hf_runtime_settings(reloaded, cfg).moe_capacity_factor == 4.0
 
 
+def test_hf_reload_keeps_router_combine_fp32():
+    requested = _tiny_config(router_combine_fp32=True)
+    reloaded = SnowballConfig.from_hf_config(requested.to_hf_config(requested.vocab_size))
+    assert not reloaded.router_combine_fp32
+    assert preserve_hf_runtime_settings(reloaded, requested).router_combine_fp32
+
+
 def test_snowball_fp32_activations_is_a_runtime_setting():
     """The runtime flag stays out of HF metadata and rejects the BF16-only fused backend."""
     cfg = _tiny_config(fp32_activations=True)
@@ -491,6 +498,42 @@ def test_fp32_router_dot_preserves_a_route_lost_to_bfloat16_rounding():
         low = routes(replace(compute, cfg=replace(cfg, router_dot_fp32=False)))
     np.testing.assert_array_equal(high, [[[0]]])
     np.testing.assert_array_equal(low, [[[1]]])
+
+
+def test_snowball_router_combine_fp32_rounds_the_weighted_sum_once():
+    cfg = _tiny_config(num_experts=4, num_experts_per_token=2, moe_implementation="scatter")
+    mesh = Mesh(
+        np.asarray(jax.devices()[:1]).reshape(1, 1, 1, 1, 1),
+        ("replica_dcn", "data", "expert", "context", "model"),
+        axis_types=(AxisType.Explicit,) * 5,
+    )
+    with jax.set_mesh(mesh):
+        inputs = jnp.zeros((1, 1, cfg.hidden_dim), jnp.bfloat16).at[0, 0, 0].set(1)
+        router = jnp.zeros((cfg.hidden_dim, cfg.num_experts)).at[0].set(jnp.array([0.25, 0, -4, -4]))
+        compute = jmp.get_policy("p=f32,c=bf16")
+        outputs = []
+        for flag in (True, False):
+            model = SnowballMoEMLP.init(replace(cfg, router_combine_fp32=flag), key=jax.random.key(0))
+            experts = model.expert_mlp
+            # SiLU(16) rounds to 16 in BF16. With up=1, the down projection
+            # gives exact expert outputs +1 and -1 in the first coordinate.
+            experts = replace(
+                experts,
+                w_gate=jnp.zeros(experts.w_gate.shape).at[:2, 0, 0].set(16),
+                w_up=jnp.zeros(experts.w_up.shape).at[:2, 0, 0].set(1),
+                w_down=jnp.zeros(experts.w_down.shape).at[:2, 0, 0].set(jnp.array([1 / 16, -1 / 16])),
+            )
+            model = compute.cast_to_compute(replace(model, router=router, expert_mlp=experts))
+            outputs.append(model(inputs)[0, 0, 0])
+
+    # The two selected logits are 1/4 and 0. Their normalized sigmoid
+    # weights multiply +1 and -1, so the combine is their difference.
+    sigmoid = 1 / (1 + math.exp(-0.25))
+    reference = 2.5 * (sigmoid - 0.5) / (sigmoid + 0.5)
+    high, low = outputs
+    assert high.dtype == low.dtype == jnp.bfloat16
+    assert high.item() == jnp.asarray(reference, dtype=jnp.bfloat16).item()
+    assert abs(high.item() - reference) < abs(low.item() - reference)
 
 
 @pytest.mark.parametrize(

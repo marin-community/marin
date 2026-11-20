@@ -219,10 +219,10 @@ def resolve_cached_model_path(
 
 def resolve_hf_model_ref(model: str, *, token: str | None = None) -> str | None:
     """Return a pinned ``repo@commit`` for a Hub model without deriving a storage path."""
-    from levanter.compat.hf_checkpoints import _is_hf_model_id  # noqa: PLC0415  # optional dep: transformers
+    from levanter.compat.hf_checkpoints import is_hf_model_id  # noqa: PLC0415  # optional dep: transformers
 
     repo, _, revision = model.partition("@")
-    if not _is_hf_model_id(repo):
+    if not is_hf_model_id(repo):
         return None
     requested_revision = revision or None
     if requested_revision is not None and _HF_COMMIT_PATTERN.fullmatch(requested_revision):

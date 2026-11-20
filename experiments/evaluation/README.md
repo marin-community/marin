@@ -259,3 +259,14 @@ platform. It checks a temporary copy and leaves the source unchanged.
 `upgrade-format` only after the smoke checks pass. These commands upgrade the
 FineStore format; `backfill-samples` rewrites normalized samples from retained
 source files. Read each command's `--help` before writing to production storage.
+
+## Micro210 judge policy
+
+Micro210 uses a [Together serverless judge](judge_config.py) and a
+[content-pinned policy](micro210_policy.py). Scores are not directly comparable
+to the 2026.11.18 MiniMax policy; see [#11818](https://github.com/marin-community/marin/pull/11818)
+for the proposed paired re-score.
+
+To read a past run's policy, pass the `policy_reference` from its
+`canonical-evaluation.json` to `read_micro210_policy` in the policy module.
+Mini840 keeps its existing judge policy.
