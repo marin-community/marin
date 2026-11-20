@@ -23,7 +23,7 @@ from skyrl_train.task_inputs import TrajectoryMetadata
 from skyrl_train.trajectory_runners.types import TrajectoryBatch
 
 
-def test_grader_report_keeps_baseline_and_final_success_by_task_and_environment(tmp_path):
+def test_grader_report_keeps_baseline_and_final_success_by_task_and_benchmark(tmp_path):
     export_path = str(tmp_path)
     math_a = TrajectoryMetadata("row-0", "taskcompendium", "blend", task_id="math-a", benchmark_id="math")
     math_b = TrajectoryMetadata("row-1", "taskcompendium", "other", task_id="math-b", benchmark_id="math")
