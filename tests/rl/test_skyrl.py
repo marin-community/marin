@@ -1475,3 +1475,11 @@ def test_reject_forced_socket_transport_allows_non_forcing_env() -> None:
     reject_forced_socket_transport({"NCCL_SOCKET_FAMILY": "AF_INET"}, num_nodes=32)
     reject_forced_socket_transport({"NCCL_NET": "Socket"}, num_nodes=1)
     reject_forced_socket_transport({}, num_nodes=32)
+
+
+def test_ttl_run_path_preserves_a_run_already_under_the_temporary_root(monkeypatch):
+    monkeypatch.setattr("marin.rl.skyrl.marin_temp_bucket", lambda **kwargs: "s3://regional/tmp/ttl=14d")
+    temporary = skyrl_temporary_run_path("s3://regional/marin/run", ttl_days=14)
+    assert skyrl_temporary_run_path(temporary, ttl_days=14) == temporary
+    sibling = skyrl_temporary_run_path("s3://regional/tmp/ttl=14d-other/run", ttl_days=14)
+    assert sibling == "s3://regional/tmp/ttl=14d/skyrl/tmp/ttl=14d-other/run"

@@ -20,6 +20,7 @@ PREFIXED_SECRET_RE = re.compile(
     r"|AKIA[0-9A-Z]{16}"
     r"|ASIA[0-9A-Z]{16}"
     r"|gh[pousr]_[A-Za-z0-9]{36,}"
+    r"|hf_[A-Za-z0-9]{20,}"
     r"|xox[abprs]-[A-Za-z0-9-]{10,}"
     r"|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+"
     r")(?![A-Za-z0-9_-])"
