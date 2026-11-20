@@ -11,8 +11,8 @@ Use `use-iris` for job inspection and `use-fsutil` for object-store reads.
 
 Map requests for a short loop, quick loop or long loop to the corresponding presets.
 
-- **Short loop** (also called **quick loop**) compares one change against control runs. Use `speed-*`, `data-*`, `learning-medium` or `data-medium`.
-- **Long loop** trains a model and keeps its best checkpoint. Use `train-long` or `train-long-harbor` where available.
+- **Short loop** (also called **quick loop**) uses gated presets to compare one change against control runs. Use `speed-*`, `data-*` or `learning-medium`.
+- **Long loop** uses ungated training to build a model and retain its best eligible checkpoint. Use `train-long`.
 
 ## Plan and submit
 

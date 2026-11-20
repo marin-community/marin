@@ -197,7 +197,9 @@ def apply_settings(config: RecipePatch, settings: tuple[str, ...], preset: Prese
         owned_keys |= _GATED_KEYS
     owners = {
         "use the preset's declared owned keys": any(has(path) for path in owned_keys),
-        "choose network transport in Layout": any(key.startswith("NCCL_") for key in values.get("extra_env", {})),
+        "network transport is fixed by the preset recipe": any(
+            key.startswith("NCCL_") for key in values.get("extra_env", {})
+        ),
         "evaluation requests are fixed by the preset": any(key.startswith("eval_") for key in (*trainer, *generator)),
         "select curated data with --tasks": has("data") and bool(values["data"].keys() - preset.data_settings),
         "use the preset's permitted setting sections": (

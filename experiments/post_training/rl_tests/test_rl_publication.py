@@ -199,6 +199,17 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
         assert row["engine"]["vllm_version"] == "fixture-vllm"
 
 
+@pytest.mark.parametrize("name", ["speed-short", "speed-medium", "speed-long", "data-short"])
+def test_control_publication_rejects_presets_without_dashboard_controls(monkeypatch, capsys, name):
+    def fail_storage_setup():
+        pytest.fail("Control publication configured storage for an unsupported preset")
+
+    monkeypatch.setattr(publication, "configure_coreweave_s3", fail_storage_setup)
+    result = runner.main(snowball_model.SNOWBALL, argv=["publish", "--preset", name])
+    assert result == 4
+    assert "Choose a dashboard preset with controls" in capsys.readouterr().err
+
+
 @pytest.mark.integration
 @pytest.mark.timeout(180)
 def test_snowball_publication_updates_attempts_and_publishes_controls(

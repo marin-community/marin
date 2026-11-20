@@ -1176,8 +1176,14 @@ receipt = json.loads(Path(config.artifacts.terminal_manifest_uri).read_text())
     assert read_skyrl_attempt(str(tmp_path)) is None
 
 
-def test_run_skyrl_succeeds_without_hf_export(monkeypatch: pytest.MonkeyPatch) -> None:
-    step = skyrl_step(_spec(), _execution())
+@pytest.mark.parametrize("selection", [None, "best", "latest"], ids=["disabled", "none-eligible", "latest-required"])
+def test_run_skyrl_handles_a_missing_hf_export(monkeypatch: pytest.MonkeyPatch, selection: str | None) -> None:
+    spec = _spec()
+    if selection is not None:
+        recipe = yaml.safe_load(spec.config_yaml)
+        recipe["trainer"]["hf_export_checkpoint"] = selection
+        spec = dataclasses.replace(spec, config_yaml=yaml.safe_dump(recipe))
+    step = skyrl_step(spec, _execution(), export_hf=selection is not None)
     config = step.build_config(
         StepContext.for_run(
             output_path="s3://test/run",
@@ -1205,10 +1211,18 @@ def test_run_skyrl_succeeds_without_hf_export(monkeypatch: pytest.MonkeyPatch) -
             stdout=kwargs["stdout"],
         ),
     )
-    monkeypatch.setattr("marin.rl.skyrl.record_rollout_run", lambda _record: None)
+    recorded = []
+    monkeypatch.setattr("marin.rl.skyrl.record_rollout_run", recorded.append)
+
+    if selection == "latest":
+        with pytest.raises(ValueError, match="requires a model"):
+            run_skyrl(config, env_vars={})
+        assert recorded[0].status == "failed"
+        return
 
     run = run_skyrl(config, env_vars={})
 
+    assert recorded[0].status == "succeeded"
     assert run.hf_model_uri is None
     assert run.global_step is None
     assert run.iris_job_id == "01KNOEXPORT"
