@@ -67,9 +67,9 @@ SPEC = SFTSpec(
     wandb_project="snowball-sft",
 )
 
-# Opt-in Snowball SFT preset enabling the serving-parity knobs on main that measurably help.
-# Add router_combine_fp32=True once PR 10686 merges. Diagnostic attention_implementation="torch_order"
-# and XLA excess-precision flags are intentionally omitted; see docs/references/serving-parity.md.
+# Opt-in Snowball SFT preset enabling the serving-parity settings available on main.
+# Diagnostic attention_implementation="torch_order" and XLA precision flags are omitted;
+# see docs/references/serving-parity.md for the full knob inventory and open follow-ups.
 VLLM_PARITY_SPEC = replace(
     SPEC,
     name="checkpoints/snowball-openthoughts-agent-sft-vllm-parity",

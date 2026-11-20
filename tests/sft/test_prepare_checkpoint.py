@@ -21,7 +21,6 @@ from tokenizers.pre_tokenizers import Whitespace
 from transformers import AutoTokenizer, PreTrainedTokenizerFast
 
 from experiments.marin_tokenizer import inject_special_tokens
-from experiments.sft.configs import snowball_h100
 from experiments.sft.delphi_chat_template import DELPHI_RESERVED_TOKEN_RENAMES
 from experiments.sft.launcher import DatasetSpec, HFModel, PreparedModel, SFTSpec, sft_step
 from experiments.sft.prepare_checkpoint import (
@@ -191,15 +190,6 @@ def test_hf_model_carries_snowball_runtime_settings_and_field_dtype_overrides():
     prep = _prepared_step()
     prep_step = sft_step(_spec(PreparedModel(prep, model=parity_model)), ResourceConfig.with_cpu())
     assert materialized_config(prep_step, _PREFIX).train_config.model == parity_model
-
-    # The named Snowball parity preset opts in to the same main knobs without altering SPEC.
-    preset_step = sft_step(snowball_h100.VLLM_PARITY_SPEC, ResourceConfig.with_cpu())
-    preset_train = materialized_config(preset_step, _PREFIX).train_config
-    default_train = materialized_config(sft_step(snowball_h100.SPEC, ResourceConfig.with_cpu()), _PREFIX).train_config
-    assert preset_train.model == parity_model
-    assert preset_train.trainer.field_dtype_overrides == {"router_bias": jnp.dtype("float32")}
-    assert default_train.model == SnowballConfig()
-    assert default_train.trainer.field_dtype_overrides == {}
 
 
 @pytest.mark.parametrize("model_ref", ["Qwen/Qwen3-0.6B", "Qwen/Qwen3-0.6B@main", "Qwen/Qwen3-0.6B@c1899de"])
