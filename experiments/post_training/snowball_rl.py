@@ -404,6 +404,17 @@ _PRESETS = (
         data_settings=frozenset({"shuffle", "sampling"}),
         evaluations=(replace(_TASK_SET, every=10, at_start=True),),
     ),
+    _snowball(
+        held_out_tasks=_DEFAULT_EVAL_LITE,
+        name="eval-short",
+        recipe=_GENERATING,
+        updates=0,
+        measured=range(1),
+        accepts_init=True,
+        owned_keys=_OWNED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
+        evaluations=(EVALUATIONS["eval_lite"],),
+        budget="8 min; 1.1 H100-h",
+    ),
 )
 
 SNOWBALL = ModelPresets(

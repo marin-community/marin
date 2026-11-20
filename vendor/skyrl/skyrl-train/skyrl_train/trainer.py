@@ -2751,8 +2751,10 @@ class RayPPOTrainer:
         return actor_info.rank
 
     async def save_checkpoints(self) -> None:
-        """Wait for prior uploads, then save and publish a complete checkpoint."""
+        """Ensure a complete checkpoint is published for the current step."""
         await self._drain_checkpoint_upload()
+        if self._last_saved_step == self.global_step:
+            return
         snapshot = await asyncio.to_thread(self._snapshot_checkpoint, await self._rollout_state())
         upload_duration, cleanup_duration = await self._finish_checkpoint_upload(snapshot)
         self.all_timings["checkpoint_upload"] = self.all_timings.get("checkpoint_upload", 0.0) + upload_duration
@@ -2990,6 +2992,8 @@ class RayPPOTrainer:
         logger.info("Successfully loaded policy checkpoint")
 
         logger.info(f"Successfully loaded complete checkpoint state from global_step_{global_step}")
+        if recovering_own_checkpoint:
+            self._last_saved_step = global_step
         if not recovering_own_checkpoint and self.cfg.trainer.get("reset_global_step_on_resume", False):
             logger.info("Resetting the trainer step to 0 at the explicit stage boundary")
             global_step = 0

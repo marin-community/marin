@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 import numpy as np
 from safetensors.numpy import save
-from omegaconf import OmegaConf
+from omegaconf import OmegaConf, open_dict
 
 from cloud.iris import export_hf_checkpoint, launch
 from cloud.iris.artifacts import CHECKPOINT_MARKER_FILENAME
@@ -30,6 +30,8 @@ from skyrl_train.hf_export import read_hf_export_request, write_hf_export_reques
 from skyrl_train.trainer import RayPPOTrainer
 from skyrl_train.hf_export_schema import HFExportRequest, HFExportStatus
 from marinskyrl.checkpoint_paths import policy_export_path, selected_export_checkpoint
+from skyrlrecipe import RecipePatch
+from skyrlrecipe.sections import Trainer
 
 
 def _training_config():
@@ -86,8 +88,8 @@ def _spec(request: HFExportRequest) -> ExportJobSpec:
     )
 
 
-@pytest.mark.parametrize("transport", ["broadcast", "expert_block"])
-def test_checkpoint_export_config_carries_request_fields_as_data(tmp_path: Path, transport: str) -> None:
+@pytest.mark.parametrize(("transport", "private"), [("broadcast", True), ("expert_block", False)])
+def test_checkpoint_export_config_carries_request_fields_as_data(tmp_path: Path, transport: str, private: bool) -> None:
     raw = raw_launch_config()
     raw["iris"]["allocation"]["gpus_per_node"] = 4
     raw["skyrl"]["trainer"]["placement"]["policy_num_gpus_per_node"] = 4
@@ -109,9 +111,17 @@ def test_checkpoint_export_config_carries_request_fields_as_data(tmp_path: Path,
     )
     path = tmp_path / "training.yaml"
     OmegaConf.save(OmegaConf.create(raw), path)
-    training = load_launch_config(path)
-    request = _request()
-    config = checkpoint_export_launch_config(training, request, _spec(request))
+    parser = export_hf_checkpoint.argument_parser()
+    args = [
+        "--launch-config", str(path), "--ckpt_path", "s3://run/checkpoints", "--step", "7",
+        "--model_path", "Qwen/Qwen3-8B", "--num-nodes", "1", "--gpus-per-node", "4",
+        "--gpu-variant", "H100", "--hf-hub-repo-id", "org/model",
+    ]
+    if private:
+        args.append("--hf-hub-private")
+    spec = export_hf_checkpoint.manual_spec(parser.parse_args(args), parser)
+    request = spec.request
+    config = load_launch_config(spec.launch_config_path)
     topology = validate_launch_config(config)
     assert (topology.num_nodes, topology.gpus_per_node) == (request.num_nodes, request.gpus_per_node)
 
@@ -122,8 +132,13 @@ def test_checkpoint_export_config_carries_request_fields_as_data(tmp_path: Path,
     assert config.iris.allocation.gpu_variant == "H100"
     assert config.skyrl.trainer.placement.policy_num_nodes == 1
     assert config.skyrl.trainer.placement.policy_num_gpus_per_node == 4
-    assert config.skyrl.checkpoint_export.checkpoint_path == request.checkpoint_path
-    assert config.skyrl.checkpoint_export.export_root == request.export_path
+    assert request.hf_hub_repo_id == "org/model"
+    assert request.hf_hub_private is private
+    assert OmegaConf.to_container(config.skyrl.checkpoint_export) == {
+        "step": request.step,
+        "checkpoint_path": request.checkpoint_path,
+        "export_root": request.export_path,
+    }
 
 
 def test_checkpoint_export_config_preserves_saved_policy_geometry_on_whole_nodes() -> None:
@@ -252,13 +267,18 @@ def test_export_selection_requires_the_best_initializer_uri(tmp_path: Path) -> N
         selected_export_checkpoint(str(tmp_path), "best", 20)
 
 
-@pytest.mark.parametrize(("selection", "expected_step"), [("best", 15), ("latest", 20)])
-def test_trainer_records_export_request_for_selected_checkpoint(tmp_path: Path, selection, expected_step) -> None:
+@pytest.mark.parametrize(("selection", "expected_step", "private"), [("best", 15, False), ("latest", 20, True)])
+def test_trainer_records_export_request_for_selected_checkpoint(tmp_path: Path, selection, expected_step, private) -> None:
     config = get_default_config()
     config.trainer.ckpt_path = str(tmp_path / "checkpoints")
     config.trainer.export_path = str(tmp_path / "exports")
     config.trainer.hf_export_checkpoint = selection
     config.trainer.export_hf_artifact = True
+    trainer_recipe = Trainer(hf_hub_repo_id="org/model")
+    if private:
+        trainer_recipe = trainer_recipe.replace(hf_hub_private=True)
+    with open_dict(config.trainer):
+        config.trainer.merge_with(RecipePatch(trainer=trainer_recipe).to_skyrl()["trainer"])
     config.trainer.policy.model.path = "org/policy"
     root = Path(config.trainer.ckpt_path)
     for step in (15, 20):
@@ -277,6 +297,8 @@ def test_trainer_records_export_request_for_selected_checkpoint(tmp_path: Path, 
     assert request.step == expected_step
     assert request.checkpoint_path == str(selected)
     assert request.model_path == "org/policy"
+    assert request.hf_hub_repo_id == "org/model"
+    assert request.hf_hub_private is private
     other_step = 20 if expected_step == 15 else 15
     assert read_hf_export_request(str(root / f"global_step_{other_step}")) is None
 

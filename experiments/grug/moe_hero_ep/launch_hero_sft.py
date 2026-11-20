@@ -10,6 +10,7 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import click
 from fray.cluster import ResourceConfig
@@ -72,6 +73,7 @@ from experiments.grug.moe_hero_ep.launch_scaling_ladder import (
     RESUME_CHECKPOINT_TTL_DAYS,
     RESUME_SAVE_INTERVAL,
 )
+from experiments.grug.moe_hero_ep.model import GrugModelConfig
 from experiments.grug.moe_hero_ep.train import (
     GrugEvalConfig,
     GrugRunConfig,
@@ -310,6 +312,23 @@ def checkpoint_step(checkpoint: str) -> int:
     return step
 
 
+def sft_resources(dp_racks: int) -> ResourceConfig:
+    if dp_racks <= 0:
+        raise ValueError(f"dp_racks must be positive, got {dp_racks}")
+    return ResourceConfig.with_gpu(
+        "GB200",
+        count=HERO_GPUS_PER_NODE,
+        cpu=HERO_NODE_CPU,
+        ram=HERO_NODE_RAM,
+        disk=HERO_NODE_DISK,
+        replicas=HERO_EP_NODES * dp_racks,
+    )
+
+
+def sft_model_config(capacity_factor: float) -> GrugModelConfig:
+    return with_transport_remat_mode(dataclasses.replace(HERO_MODEL_CONFIG, capacity_factor=capacity_factor))
+
+
 def build_sft_run(
     *,
     run_id: str,
@@ -327,25 +346,27 @@ def build_sft_run(
     checkpoint_root: str | None = None,
     expert_placement: ExpertPlacement | None = None,
     version: str | None = None,
+    resources: ResourceConfig | None = None,
+    checkpoints: Literal["periodic", "final", "none"] = "periodic",
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build the hero SFT run that continues ``initialize_from`` at ``start_step``.
 
     ``stop_after_steps`` bounds a smoke test to that many updates of the full one-epoch schedule.
     ``checkpoint_root`` puts every checkpoint, permanent ones included, below one lifecycle-managed prefix.
+    ``checkpoints`` selects periodic saves, a single final save, or training without checkpoint writes.
     ``eval_every`` counts absolute steps, so the first eval lands on the first multiple after ``start_step``;
     the trainer's first-step eval never fires on a restored run. ``capacity_factor`` replaces the hero's routed
     expert capacity; with a frozen bias, SFT data overflows the hero's 1.5. ``expert_placement`` renumbers the
     routed experts of ``initialize_from`` so each capacity block carries a similar load.
     """
-    if dp_racks <= 0:
-        raise ValueError(f"dp_racks must be positive, got {dp_racks}")
+    allocation = sft_resources(dp_racks)
     if muon_lr <= 0 or adam_lr <= 0:
         raise ValueError("learning rates must be positive")
     if expert_placement is not None and not expert_placement.permutes(initialize_from):
         raise ValueError(f"the expert placement permutes {expert_placement.source_checkpoint}, not {initialize_from}")
     if capacity_factor <= 0:
         raise ValueError(f"capacity_factor must be positive, got {capacity_factor}")
-    model = with_transport_remat_mode(dataclasses.replace(HERO_MODEL_CONFIG, capacity_factor=capacity_factor))
+    model = sft_model_config(capacity_factor)
     context_axis_size = HERO_CONTEXT_AXIS_SIZE
     expert_axis_size = hero_expert_axis_size(context_axis_size)
     if expert_placement is not None:
@@ -390,7 +411,7 @@ def build_sft_run(
             replica_axis_size=dp_racks,
             training_data_mode=TrainingDataMode.MIXTURE,
             watch_mode=WatchMode.INLINE,
-            save_checkpoints=True,
+            save_checkpoints=checkpoints != "none",
             max_grad_norm=max_grad_norm,
             context_axis_size=context_axis_size,
             expert_axis_size=expert_axis_size,
@@ -401,14 +422,7 @@ def build_sft_run(
         special_tokens=special_token_init(start_step),
         expert_placement=expert_placement,
     )
-    train_resources = ResourceConfig.with_gpu(
-        "GB200",
-        count=HERO_GPUS_PER_NODE,
-        cpu=HERO_NODE_CPU,
-        ram=HERO_NODE_RAM,
-        disk=HERO_NODE_DISK,
-        replicas=HERO_EP_NODES * dp_racks,
-    )
+    train_resources = allocation if resources is None else resources
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
     validation = validation_datasets() if eval_every > 0 else []
@@ -430,18 +444,19 @@ def build_sft_run(
     def build_config(ctx: StepContext) -> GrugRunConfig:
         # A placed run keeps its checkpoints under its placement's fingerprint, so a relaunch with another
         # placement, or none, starts again from the source checkpoint; the trainer would refuse to resume them.
-        output_path = ctx.output_path if expert_placement is None else _placement_path(ctx.output_path, expert_placement)
-        if checkpoint_root is None:
-            permanent_path = prefix_join(output_path, "checkpoints")
+        root = _sft_checkpoint_root(ctx.output_path, checkpoint_root, expert_placement)
+        permanent_path = prefix_join(root, "checkpoints")
+        if checkpoints != "periodic":
+            temporary_path = None
+            resume_paths = [permanent_path] if checkpoints == "final" else []
+        elif checkpoint_root is None:
             temporary_path = temporary_checkpoint_base_path(
-                output_path, ttl_days=RESUME_CHECKPOINT_TTL_DAYS, temp_prefix=HERO_RESUME_CHECKPOINT_PREFIX
+                root, ttl_days=RESUME_CHECKPOINT_TTL_DAYS, temp_prefix=HERO_RESUME_CHECKPOINT_PREFIX
             )
             resume_paths = checkpoint_resume_paths(
-                output_path, ttl_days=RESUME_CHECKPOINT_TTL_DAYS, temp_prefix=HERO_RESUME_CHECKPOINT_PREFIX
+                root, ttl_days=RESUME_CHECKPOINT_TTL_DAYS, temp_prefix=HERO_RESUME_CHECKPOINT_PREFIX
             )
         else:
-            root = checkpoint_root if expert_placement is None else _placement_path(checkpoint_root, expert_placement)
-            permanent_path = prefix_join(root, "checkpoints")
             temporary_path = prefix_join(root, "resume")
             resume_paths = [temporary_path, permanent_path]
         trainer = hero_trainer_config(
@@ -482,8 +497,8 @@ def build_sft_run(
             checkpointer=CheckpointerConfig(
                 base_path=permanent_path,
                 temporary_base_path=temporary_path,
-                save_interval=RESUME_SAVE_INTERVAL,
-                keep=[{"every": 500}],
+                save_interval=RESUME_SAVE_INTERVAL if checkpoints == "periodic" else None,
+                keep=[{"every": 500}] if checkpoints == "periodic" else None,
                 append_run_id_to_base_path=False,
                 delete_old_temp_checkpoints=True,
                 keep_last_temporary_checkpoints=1,
@@ -541,6 +556,16 @@ def _placement_label(placement: ExpertPlacement) -> str:
 
 def _placement_path(base: str, placement: ExpertPlacement) -> str:
     return prefix_join(base, _placement_label(placement))
+
+
+def permanent_checkpoint_dir(output: str, checkpoint_root: str | None, placement: ExpertPlacement | None) -> str:
+    """Return the directory shared by training and export for permanent checkpoints."""
+    return prefix_join(_sft_checkpoint_root(output, checkpoint_root, placement), "checkpoints")
+
+
+def _sft_checkpoint_root(output: str, checkpoint_root: str | None, placement: ExpertPlacement | None) -> str:
+    root = output if checkpoint_root is None else checkpoint_root
+    return _placement_path(root, placement) if placement is not None else root
 
 
 def _grad_norm(value: str) -> float | None:

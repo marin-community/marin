@@ -45,10 +45,12 @@ from shellbox.machine import (
     LINUX_PROCESS_CAPABILITIES,
     Backend,
     Command,
+    CommandOutputLost,
     CommandSemantics,
     ExecutionRequirements,
     ExitReason,
     MachineSpec,
+    MachineTerminated,
     NetworkPolicy,
     ProcessScope,
     Result,
@@ -209,6 +211,10 @@ class DaytonaNetworkPolicy:
         return {"network_block_all": mode == DaytonaNetworkMode.BLOCK_ALL}
 
 
+class DaytonaOutputUnavailable(RuntimeError):
+    """A command ran, but its output could not be read back from the sandbox in time."""
+
+
 class DaytonaMachine:
     """One Daytona sandbox. Each command gets a fresh process and shared files."""
 
@@ -310,7 +316,7 @@ class DaytonaMachine:
             cwd=CONTROL_CWD,
         )
         if count.exit_code:
-            raise RuntimeError(f"Failed to measure command output: {count.result}")
+            raise CommandOutputLost(f"Failed to measure command output: {count.result}")
         match = re.search(rf"(?m)^{COUNT_PREFIX}([0-9]+) ([0-9]+)$", count.result)
         if match is None:
             raise RuntimeError(f"Invalid command output sizes: {count.result!r}")
@@ -455,7 +461,7 @@ class DaytonaMachine:
                     raise
         except TimeoutError as error:
             if response is not None:
-                primary_error = RuntimeError("Cannot collect Daytona command output")
+                primary_error = DaytonaOutputUnavailable("Cannot collect Daytona command output")
                 raise primary_error from error
             if not deadline.expired():
                 primary_error = error
@@ -468,6 +474,10 @@ class DaytonaMachine:
                 primary_error = cancellation
                 await self._cleanup_cancelled_command(prefix, pidfile, completed_path, started, cancellation)
                 raise
+            except TimeoutError as error:
+                primary_error = MachineTerminated("Daytona sandbox stopped responding to the command stop request")
+                await self._close_preserving_failure(primary_error)
+                raise primary_error from error
             except Exception as error:
                 primary_error = RuntimeError("Cannot stop the Daytona command process group")
                 await self._close_preserving_failure(primary_error)
@@ -489,7 +499,11 @@ class DaytonaMachine:
                     raise
                 except Exception as error:
                     if primary_error is None:
-                        primary_error = RuntimeError("Cannot remove Daytona command files")
+                        primary_error = (
+                            MachineTerminated("Daytona sandbox stopped responding to command file cleanup")
+                            if isinstance(error, TimeoutError)
+                            else RuntimeError("Cannot remove Daytona command files")
+                        )
                         await self._close_preserving_failure(primary_error)
                         raise primary_error from error
                     primary_error.add_note(f"Daytona command cleanup failed: {error}")
