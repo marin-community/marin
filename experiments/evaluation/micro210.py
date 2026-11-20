@@ -36,17 +36,17 @@ from transformers import AutoTokenizer
 from experiments.evaluation.judge_config import JudgeConfig
 from experiments.evaluation.micro210_policy import (
     MODEL_IDENTITY_PREFIX,
+    PREPARED_COMMIT,
+    PREPARED_REPO,
     Micro210Evaluation,
     Micro210Model,
     micro210_evaluation,
 )
 from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 
-# The prepared table re-hosts benchmark items that must not be public, so it lives in a
-# private Hugging Face repository that CoreWeave tasks read with the standard HF_TOKEN.
-PREPARED_INPUTS_REPO = "open-athena/micro210-prepared-tasks"
-PREPARED_INPUTS_COMMIT = "d8fa0e259ae63b1978388b20a17f72036642dd05"
-PREPARED_INPUTS = f"hf://datasets/{PREPARED_INPUTS_REPO}@{PREPARED_INPUTS_COMMIT}"
+# The prepared table re-hosts benchmark items that must not be public; tasks read it
+# with the standard HF_TOKEN.
+PREPARED_INPUTS = f"hf://datasets/{PREPARED_REPO}@{PREPARED_COMMIT}"
 
 # Relocation needs a new adoption identity even though the prepared bytes are unchanged.
 PREPARED_INPUTS_VERSION = "2026.11.20.1"

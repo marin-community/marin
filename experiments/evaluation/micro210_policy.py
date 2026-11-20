@@ -39,15 +39,18 @@ LEGACY_POLICY_REFERENCE = Micro210PolicyReference(
 )
 
 
-POLICY_DIGEST = "8f7ef8170fbef2880214cbf03f70d80cffa3114276e024389617777bf07f53e5"
-POLICY_VERSION = "2026.11.20"
-POLICY_REVISION = f"{POLICY_VERSION}-together"
 POLICY_REFERENCE = Micro210PolicyReference(
     uri=f"hf://datasets/{POLICY_REPO}@{POLICY_COMMIT}/policy.json",
     revision=POLICY_REVISION,
     sha256=POLICY_DIGEST,
     byte_size=121292,
 )
+
+
+# The prepared table re-hosts benchmark items that must not be public, so it lives in a
+# private repository that CoreWeave tasks read with the standard HF_TOKEN.
+PREPARED_REPO = "open-athena/micro210-prepared-tasks"
+PREPARED_COMMIT = "d8fa0e259ae63b1978388b20a17f72036642dd05"
 
 
 @dataclass(frozen=True)

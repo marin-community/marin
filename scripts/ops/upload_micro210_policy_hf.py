@@ -9,7 +9,7 @@ items that must not be public, so it goes to the private
 ``open-athena/micro210-prepared-tasks`` repository. Both uploads run from an in-region
 CPU Iris task: the sources are the regional CoreWeave S3 copies, the task has no GCP
 credentials, and the script fails loudly before uploading anything whose bytes do not
-match the pinned SHA-256 and byte size.
+match the pins that ``experiments.evaluation.micro210_policy`` holds.
 
 After uploading, every pinned ``hf://`` reference is read back through
 :class:`~rigging.filesystem.storage_path.StoragePath` and verified (byte size, SHA-256,
@@ -19,38 +19,32 @@ pinned commit revisions for the code constants and never prints token material.
 """
 
 import hashlib
+import json
 import os
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 import pyarrow.parquet as pq
 import requests
 from huggingface_hub import CommitOperationAdd, HfApi, create_commit, create_repo, create_tag
+from huggingface_hub.errors import EntryAlreadyExists
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import get_secret
 
-POLICY_REPO = "open-athena/micro210-policy"
-PREPARED_REPO = "open-athena/micro210-prepared-tasks"
-
-POLICY_VERSION = "2026.11.20"
-POLICY_REVISION = f"{POLICY_VERSION}-together"
-POLICY_DIGEST = "8f7ef8170fbef2880214cbf03f70d80cffa3114276e024389617777bf07f53e5"
-POLICY_BYTES = 121292
-
-LEGACY_POLICY_REVISION = "2026.11.18"
-LEGACY_POLICY_DIGEST = "e0faa32c68994e8bf01d0ab7177893aa9c29f8c4309b9183de5c3dfcb6fa67aa"
-LEGACY_POLICY_BYTES = 122243
-
-PREPARED_REVISION = POLICY_REVISION
-PREPARED_DIGEST = "ba099cbc869af0dd1c14f14586557e38a812d6b956442e8b1f406b36cc42c7a0"
-PREPARED_BYTES = 17152253
-PREPARED_ROWS = 440
-PREPARED_FILENAME = "rollouts.parquet"
+from experiments.evaluation.micro210_policy import (
+    LEGACY_POLICY_REFERENCE,
+    POLICY_REFERENCE,
+    POLICY_REPO,
+    PREPARED_REPO,
+    Micro210PolicyReference,
+)
 
 # Migration source: the regional CoreWeave copies written when the inputs left GCS.
 # Code references never point here; they point at the HF repositories pinned above.
 S3_ROOT = "s3://marin-us-east-08a/marin/users/benfeuer/evaluation-policies/micro210"
+PREPARED_ROWS = 440
 
 POLICY_CARD = """\
 ---
@@ -115,30 +109,54 @@ The table contains no PII: no names, emails, or usernames.
 """
 
 
-def resolve_hf_token() -> bool:
-    """Make the task's forwarded HF_TOKEN visible to huggingface_hub; report availability."""
+@dataclass(frozen=True)
+class PolicyRevisions:
+    """The pinned commit revisions a publication left on the policy repository."""
+
+    legacy: str
+    current: str
+
+
+@dataclass(frozen=True)
+class PreparedSource:
+    """A verified local copy of the prepared table, with its protocol identity."""
+
+    path: Path
+    filename: str
+    digest: str
+
+
+def prepare_hf_token() -> None:
+    """Expose the task's forwarded HF_TOKEN to huggingface_hub; fail fast when absent."""
     token = os.environ.get("HF_TOKEN") or get_secret("HF_TOKEN")
-    if token:
-        os.environ["HF_TOKEN"] = token
-    return token is not None
+    if not token:
+        raise SystemExit("No HF_TOKEN available on this task; refusing to publish anonymously")
+    os.environ["HF_TOKEN"] = token
 
 
-def read_and_verify(uri: str, digest: str, byte_size: int) -> bytes:
-    """Read bytes through StoragePath and enforce the pinned size and SHA-256."""
+def read_and_verify(uri: str, digest: str, byte_size: int | None = None) -> bytes:
+    """Read bytes through StoragePath and enforce the pinned SHA-256 (and size, when given)."""
     raw = StoragePath(uri).read_bytes()
-    if len(raw) != byte_size or hashlib.sha256(raw).hexdigest() != digest:
+    if (byte_size is not None and len(raw) != byte_size) or hashlib.sha256(raw).hexdigest() != digest:
         raise ValueError(f"Pinned Micro210 input bytes mismatch at {uri}")
     return raw
 
 
-def read_prepared_source() -> Path:
-    """Fetch the prepared parquet from the regional copy and verify digest, size and rows."""
-    directory = StoragePath(f"{S3_ROOT}/{PREPARED_REVISION}/{PREPARED_DIGEST}")
+def s3_policy_source(reference: Micro210PolicyReference) -> str:
+    """The regional S3 copy of one policy version, keyed by its own digest."""
+    return f"{S3_ROOT}/{reference.revision}/{reference.sha256}/policy.json"
+
+
+def read_prepared_source(protocol: dict) -> PreparedSource:
+    """Fetch the prepared table from the regional copy and verify its digest and rows."""
+    digest = protocol["prepared_rollouts_sha256"]
+    filename = protocol["evaluation"]["data_relative_path"]
+    directory = StoragePath(f"{S3_ROOT}/{POLICY_REFERENCE.revision}/{digest}")
     try:
-        raw = read_and_verify(f"{directory}/{PREPARED_FILENAME}", PREPARED_DIGEST, PREPARED_BYTES)
+        raw = read_and_verify(str(directory / filename), digest)
     except Exception as error:
         raise ValueError(
-            f"Prepared parquet not verifiable at {directory}/{PREPARED_FILENAME}: "
+            f"Prepared table not verifiable at {directory / filename}: "
             f"directory holds {[str(entry) for entry in directory.ls()]}"
         ) from error
     with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as handle:
@@ -146,30 +164,38 @@ def read_prepared_source() -> Path:
         path = Path(handle.name)
     rows = pq.read_metadata(path).num_rows
     if rows != PREPARED_ROWS:
-        raise ValueError(f"Prepared parquet has {rows} rows, expected {PREPARED_ROWS}")
-    print(f"prepared source verified: {PREPARED_BYTES} bytes, sha256 {PREPARED_DIGEST}, {rows} rows")
-    return path
+        raise ValueError(f"Prepared table has {rows} rows, expected {PREPARED_ROWS}")
+    print(f"prepared source verified: {len(raw)} bytes, sha256 {digest}, {rows} rows")
+    return PreparedSource(path=path, filename=filename, digest=digest)
 
 
-def commit_revision(api: HfApi, repo: str, tag: str) -> str:
-    """Return the 40-character commit revision a tag points at."""
-    info = api.dataset_info(repo, revision=tag)
-    if len(info.sha) != 40:
-        raise ValueError(f"Repository {repo} tag {tag} has a non-commit revision: {info.sha}")
-    return info.sha
+def commit_revision(api: HfApi, repo: str, revision: str) -> str:
+    """Return the 40-character commit revision a repository revision resolves to."""
+    sha = api.dataset_info(repo, revision=revision).sha
+    if len(sha) != 40:
+        raise ValueError(f"Repository {repo} revision {revision} resolved to a non-commit: {sha}")
+    return sha
 
 
-def ensure_tag(api: HfApi, repo: str, tag: str, revision: str) -> None:
-    """Create a tag at a revision, tolerating an existing tag that already points there."""
+def tag_verifies(repo: str, tag: str, path: str, digest: str, byte_size: int | None) -> bool:
+    """Whether an existing tag already holds the pinned bytes (read failures propagate)."""
     try:
-        create_tag(repo_id=repo, repo_type="dataset", tag=tag, revision=revision, exist_ok=True)
-    except Exception:
-        if commit_revision(api, repo, tag) == revision:
-            return
-        raise
+        read_and_verify(f"hf://datasets/{repo}@{tag}/{path}", digest, byte_size)
+    except ValueError:
+        return False
+    return True
 
 
-def publish_policy(api: HfApi, current: bytes, legacy: bytes) -> tuple[str, str]:
+def ensure_tag(api: HfApi, repo: str, tag: str, revision: str, path: str, digest: str, byte_size: int | None) -> None:
+    """Create a tag at a revision, or accept one whose pinned bytes already verify."""
+    try:
+        create_tag(repo_id=repo, repo_type="dataset", tag=tag, revision=revision)
+    except EntryAlreadyExists:
+        if not tag_verifies(repo, tag, path, digest, byte_size):
+            raise ValueError(f"Tag {tag!r} on {repo} exists with bytes that do not match the pin") from None
+
+
+def publish_policy(api: HfApi, legacy: bytes, current: bytes) -> PolicyRevisions:
     """Upload one policy commit per version to the public repo; return pinned revisions."""
     create_repo(POLICY_REPO, repo_type="dataset", private=False, exist_ok=True)
     legacy_ops = [
@@ -180,9 +206,18 @@ def publish_policy(api: HfApi, current: bytes, legacy: bytes) -> tuple[str, str]
         repo_id=POLICY_REPO,
         repo_type="dataset",
         operations=legacy_ops,
-        commit_message=f"Publish Micro210 policy {LEGACY_POLICY_REVISION}",
+        commit_message=f"Publish Micro210 policy {LEGACY_POLICY_REFERENCE.revision}",
     )
-    ensure_tag(api, POLICY_REPO, LEGACY_POLICY_REVISION, commit_revision(api, POLICY_REPO, "main"))
+    legacy_sha = commit_revision(api, POLICY_REPO, "main")
+    ensure_tag(
+        api,
+        POLICY_REPO,
+        LEGACY_POLICY_REFERENCE.revision,
+        legacy_sha,
+        "policy.json",
+        LEGACY_POLICY_REFERENCE.sha256,
+        LEGACY_POLICY_REFERENCE.byte_size,
+    )
     current_ops = [
         CommitOperationAdd(path_in_repo="README.md", path_or_fileobj=POLICY_CARD.encode()),
         CommitOperationAdd(path_in_repo="policy.json", path_or_fileobj=current),
@@ -191,46 +226,65 @@ def publish_policy(api: HfApi, current: bytes, legacy: bytes) -> tuple[str, str]
         repo_id=POLICY_REPO,
         repo_type="dataset",
         operations=current_ops,
-        commit_message=f"Publish Micro210 policy {POLICY_REVISION}",
+        commit_message=f"Publish Micro210 policy {POLICY_REFERENCE.revision}",
     )
     current_sha = commit_revision(api, POLICY_REPO, "main")
-    ensure_tag(api, POLICY_REPO, POLICY_REVISION, current_sha)
-    return commit_revision(api, POLICY_REPO, LEGACY_POLICY_REVISION), current_sha
+    ensure_tag(
+        api,
+        POLICY_REPO,
+        POLICY_REFERENCE.revision,
+        current_sha,
+        "policy.json",
+        POLICY_REFERENCE.sha256,
+        POLICY_REFERENCE.byte_size,
+    )
+    return PolicyRevisions(legacy=legacy_sha, current=current_sha)
 
 
-def publish_prepared(api: HfApi, table: Path) -> str:
-    """Upload the prepared parquet to the private repo; return the pinned revision."""
+def publish_prepared(api: HfApi, source: PreparedSource) -> str:
+    """Upload the prepared table to the private repo; return the pinned revision."""
     create_repo(PREPARED_REPO, repo_type="dataset", private=True, exist_ok=True)
     operations = [
         CommitOperationAdd(path_in_repo="README.md", path_or_fileobj=PREPARED_CARD.encode()),
-        CommitOperationAdd(path_in_repo=PREPARED_FILENAME, path_or_fileobj=str(table)),
+        CommitOperationAdd(path_in_repo=source.filename, path_or_fileobj=str(source.path)),
     ]
     create_commit(
         repo_id=PREPARED_REPO,
         repo_type="dataset",
         operations=operations,
-        commit_message=f"Publish Micro210 prepared tasks {PREPARED_REVISION}",
+        commit_message="Publish Micro210 prepared tasks",
     )
     sha = commit_revision(api, PREPARED_REPO, "main")
-    ensure_tag(api, PREPARED_REPO, PREPARED_REVISION, sha)
+    ensure_tag(api, PREPARED_REPO, POLICY_REFERENCE.revision, sha, source.filename, source.digest, None)
     return sha
 
 
-def verify_readback(policy_sha: str, legacy_sha: str, prepared_sha: str) -> None:
+def verify_readback(revisions: PolicyRevisions, source: PreparedSource, prepared_sha: str) -> None:
     """Read every pinned reference back and verify bytes, and the public/private split."""
-    current = read_and_verify(f"hf://datasets/{POLICY_REPO}@{policy_sha}/policy.json", POLICY_DIGEST, POLICY_BYTES)
-    read_and_verify(f"hf://datasets/{POLICY_REPO}@{legacy_sha}/policy.json", LEGACY_POLICY_DIGEST, LEGACY_POLICY_BYTES)
-    read_and_verify(f"hf://datasets/{PREPARED_REPO}@{prepared_sha}/{PREPARED_FILENAME}", PREPARED_DIGEST, PREPARED_BYTES)
-    public_url = f"https://huggingface.co/datasets/{POLICY_REPO}/resolve/{policy_sha}/policy.json"
+    current = read_and_verify(
+        f"hf://datasets/{POLICY_REPO}@{revisions.current}/policy.json",
+        POLICY_REFERENCE.sha256,
+        POLICY_REFERENCE.byte_size,
+    )
+    read_and_verify(
+        f"hf://datasets/{POLICY_REPO}@{revisions.legacy}/policy.json",
+        LEGACY_POLICY_REFERENCE.sha256,
+        LEGACY_POLICY_REFERENCE.byte_size,
+    )
+    read_and_verify(f"hf://datasets/{PREPARED_REPO}@{prepared_sha}/{source.filename}", source.digest)
+    public_url = f"https://huggingface.co/datasets/{POLICY_REPO}/resolve/{revisions.current}/policy.json"
     anonymous = requests.get(public_url, timeout=120)
     if anonymous.status_code != 200 or anonymous.content != current:
         raise ValueError(f"Public policy is not anonymously readable: HTTP {anonymous.status_code}")
-    private_url = f"https://huggingface.co/datasets/{PREPARED_REPO}/resolve/{prepared_sha}/{PREPARED_FILENAME}"
+    private_url = f"https://huggingface.co/datasets/{PREPARED_REPO}/resolve/{prepared_sha}/{source.filename}"
     rejected = requests.get(private_url, timeout=120, allow_redirects=False)
     if rejected.status_code in (200, 301, 302, 307, 308):
-        raise ValueError("Prepared parquet repository is anonymously readable; it must stay private")
-    print(f"readback verified public policy anonymous read: HTTP 200, sha256 {POLICY_DIGEST}")
-    print(f"readback verified legacy policy revision {LEGACY_POLICY_REVISION}: sha256 {LEGACY_POLICY_DIGEST}")
+        raise ValueError("Prepared table repository is anonymously readable; it must stay private")
+    print(f"readback verified public policy anonymous read: HTTP 200, sha256 {POLICY_REFERENCE.sha256}")
+    print(
+        f"readback verified legacy policy revision {LEGACY_POLICY_REFERENCE.revision}: "
+        f"sha256 {LEGACY_POLICY_REFERENCE.sha256}"
+    )
     print(f"readback verified prepared table anonymously rejected: HTTP {rejected.status_code}")
 
 
@@ -246,8 +300,7 @@ def report_gcp_absence() -> None:
 
 def main() -> None:
     configure_coreweave_s3()
-    if not resolve_hf_token():
-        raise SystemExit("No HF_TOKEN available on this task; refusing to publish anonymously")
+    prepare_hf_token()
     api = HfApi()
     identity = api.whoami()
     in_org = any(org.get("name") == "open-athena" for org in identity.get("orgs", []))
@@ -256,22 +309,25 @@ def main() -> None:
         raise SystemExit("HF identity is not an open-athena member; refusing to publish")
 
     legacy = read_and_verify(
-        f"{S3_ROOT}/{LEGACY_POLICY_REVISION}/{LEGACY_POLICY_DIGEST}/policy.json",
-        LEGACY_POLICY_DIGEST,
-        LEGACY_POLICY_BYTES,
+        s3_policy_source(LEGACY_POLICY_REFERENCE),
+        LEGACY_POLICY_REFERENCE.sha256,
+        LEGACY_POLICY_REFERENCE.byte_size,
     )
-    current = read_and_verify(f"{S3_ROOT}/{POLICY_REVISION}/{POLICY_DIGEST}/policy.json", POLICY_DIGEST, POLICY_BYTES)
-    print(f"policy sources verified: legacy {LEGACY_POLICY_BYTES} bytes, current {POLICY_BYTES} bytes")
-    table = read_prepared_source()
+    current = read_and_verify(s3_policy_source(POLICY_REFERENCE), POLICY_REFERENCE.sha256, POLICY_REFERENCE.byte_size)
+    print(
+        f"policy sources verified: legacy {LEGACY_POLICY_REFERENCE.byte_size} bytes, "
+        f"current {POLICY_REFERENCE.byte_size} bytes"
+    )
+    source = read_prepared_source(json.loads(current))
     report_gcp_absence()
 
-    legacy_sha, policy_sha = publish_policy(api, current, legacy)
-    prepared_sha = publish_prepared(api, table)
+    revisions = publish_policy(api, legacy, current)
+    prepared_sha = publish_prepared(api, source)
     print("pinned revisions:")
-    print(f"  POLICY_COMMIT = {policy_sha}")
-    print(f"  LEGACY_POLICY_COMMIT = {legacy_sha}")
+    print(f"  POLICY_COMMIT = {revisions.current}")
+    print(f"  LEGACY_POLICY_COMMIT = {revisions.legacy}")
     print(f"  PREPARED_COMMIT = {prepared_sha}")
-    verify_readback(policy_sha, legacy_sha, prepared_sha)
+    verify_readback(revisions, source, prepared_sha)
     print("PASS")
 
 
