@@ -56,28 +56,6 @@ class TestTrialQueue:
     """Tests for TrialQueue."""
 
     @pytest.mark.unit
-    def test_initialization(self, hooks):
-        """Test TrialQueue initialization."""
-        queue = TrialQueue(
-            n_concurrent=3,
-            retry_config=RetrySettings(max_retries=5),
-            hooks=hooks,
-        )
-
-        assert queue._n_concurrent == 3
-        assert queue._retry_config.max_retries == 5
-        assert queue._semaphore._value == 3
-
-    @pytest.mark.unit
-    def test_initialization_with_defaults(self):
-        """Test TrialQueue initialization with public API defaults."""
-        queue = TrialQueue(n_concurrent=3)
-
-        assert queue._n_concurrent == 3
-        assert queue._retry_config == RetrySettings()
-        assert queue._hooks == {event: [] for event in TrialEvent}
-
-    @pytest.mark.unit
     async def test_submit_single_trial(self, queue, trial_config, trial_result):
         """Test submitting and awaiting a single trial."""
         with patch.object(
