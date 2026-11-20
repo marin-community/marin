@@ -30,7 +30,7 @@ from cloud.iris.tests.model_snapshot_fixtures import memory_model_snapshot
 from cloud.iris.iris_backend import supervise_iris_job
 from iris.resources.state import JobState
 from rigging.timing import Timestamp
-from marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME, policy_export_path, selected_export_step
+from marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME, policy_export_path
 from skyrl_train.checkpoint_listing import ROLLOUT_STATE_FILENAME
 from skyrl_train.hf_export import write_hf_export_request
 from skyrl_train.hf_export_schema import HFExportRequest, TRAINER_STATE_FILENAME
@@ -144,6 +144,7 @@ class LocalLaunchBackend:
     export_jobs: list[str] = field(default_factory=list)
     outcome: LaunchOutcome = LaunchOutcome("/user/training", "succeeded", 0)
     checkpoint_marker: str | None = "3\n"
+    export_step: int = 3
 
     def validate(self, _config_path: Path) -> None:
         raise AssertionError("this lifecycle test submits training")
@@ -169,8 +170,7 @@ class LocalLaunchBackend:
         config = yaml.safe_load(config_path.read_text())
         checkpoint_root = config["artifacts"]["checkpoint_root"]
         assert (Path(checkpoint_root) / CHECKPOINT_MARKER_FILENAME).read_text().strip() == "3"
-        step = selected_export_step(checkpoint_root, config["skyrl"]["trainer"]["hf_export_checkpoint"], 3)
-        output = policy_export_path(config["artifacts"]["export_root"], step)
+        output = policy_export_path(config["artifacts"]["export_root"], self.export_step)
         self.export_jobs.append(output)
         root = Path(output)
         root.mkdir(parents=True)
@@ -298,7 +298,9 @@ def test_launch_retains_checkpoints_only_after_success(
             json.dumps({"step": 1 if best_format == "native" else 0, "model_format": best_format})
         )
 
-    backend = LocalLaunchBackend(outcome=LaunchOutcome("/user/training", job_state, int(job_state == "failed")))
+    backend = LocalLaunchBackend(
+        outcome=LaunchOutcome("/user/training", job_state, int(job_state == "failed")), export_step=1
+    )
     result = execute_launch(path, backend=backend)
 
     assert result.state.value == job_state
