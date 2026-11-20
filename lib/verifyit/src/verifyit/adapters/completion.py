@@ -1,11 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Normalize provider completion fields before benchmark-specific extraction."""
+"""Reasoning and end-of-turn markers in completion text, and reasoning-trace removal."""
 
-from dataclasses import dataclass
-
-from verifyit.compat import StrEnum
 
 REASONING_END_MARKERS = ("</think>", "<|end_think|>")
 END_OF_TURN = (
@@ -24,19 +21,6 @@ END_OF_TURN = (
 )
 
 
-class CompletionStatus(StrEnum):
-    COMPLETED = "completed"
-    TRUNCATED = "truncated"
-    FAILED = "failed"
-
-
-@dataclass(frozen=True)
-class Completion:
-    content: str
-    reasoning: str = ""
-    status: CompletionStatus = CompletionStatus.COMPLETED
-
-
 def final_text(text: str) -> str:
     """Remove a preceding inline reasoning trace using the last end marker."""
     boundary = max(
@@ -44,12 +28,3 @@ def final_text(text: str) -> str:
         default=0,
     )
     return text[boundary:]
-
-
-def answer_text(completion: Completion) -> str:
-    """Prefer final content, allowing completed reasoning-only answers."""
-    if completion.content:
-        return final_text(completion.content)
-    if completion.status != CompletionStatus.COMPLETED:
-        return ""
-    return final_text(completion.reasoning)
