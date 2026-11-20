@@ -125,6 +125,20 @@
       "dataset_id": null,
       "dataset_revision": null,
       "reasons": []
+    },
+    {
+      "id": "SWE-rebench:ibragim-bad/SWE-rebench-V2.1",
+      "name": "swe-rebench-v2-1-repaired",
+      "display_name": "ibragim-bad/SWE-rebench-V2.1",
+      "status": "Pending",
+      "origin": "SWE-rebench",
+      "upstream_dataset": "ibragim-bad/SWE-rebench-V2.1",
+      "upstream_url": null,
+      "notes": "Repaired from the original author's re-verified ibragim-bad/SWE-rebench-V2.1@26c0145ded93168b0d5d095420155901ad2d5a2f (license PASS cc-by-4.0); ten consolidated shared base images replace the per-task digest-pinned images, the upstream combine.Dockerfile.j2 build step becomes the declared task-start setup, and the source's own Harbor verifier grades behind the SWE_REBENCH shared-source contract (upstream test.sh/grade.py bytes verbatim; reward channel unchanged). Fidelity-gated per group against the upstream digest images before the full population run; per-version toolchains and interpreter provisioning are declared base properties. Pending qualification.",
+      "stage": "Intake queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": []
     }
   ],
   "stages": {
