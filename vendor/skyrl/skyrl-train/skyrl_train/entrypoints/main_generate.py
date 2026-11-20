@@ -3,14 +3,16 @@ Main entrypoint for evaluation-only.
 """
 
 import asyncio
+import time
 from pathlib import Path
 from typing import Any, Protocol
 
 import ray
 from ray.util.queue import Queue
 from loguru import logger
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 from marinskyrl.runtime_options import EvaluationRunner
+from marinskyrl.engine_serving_probe import run_serving_probe
 
 from skyrl_train.config.rollout_validation import EntrypointOperation
 from skyrl_train.entrypoints.main_base import BasePPOExp
@@ -52,7 +54,19 @@ class EvalOnlyEntrypoint(BasePPOExp):
     async def _evaluate(self) -> dict[str, Any]:
         assert self.eval_dataset is not None, "The evaluation only entrypoint requires an eval dataset is provided"
 
+        startup_started = time.monotonic()
         inference_engine_client = self.create_inference_engine_client(operation=EntrypointOperation.GENERATE)
+        probe = self.cfg.generator.engine_init_kwargs.get("marin_engine_serving_probe")
+        if probe is not None:
+            try:
+                return await run_serving_probe(
+                    inference_engine_client.engines,
+                    OmegaConf.to_container(probe, resolve=True),
+                    time.monotonic() - startup_started,
+                )
+            finally:
+                inference_engine_client.shutdown_http_endpoint()
+
         await load_initial_policy_adapter(inference_engine_client, self.cfg)
         evaluation_runner = EvaluationRunner(self.cfg.trainer.evaluation_runner)
         trajectory_runner = (

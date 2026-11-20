@@ -20,6 +20,7 @@ from vllm.distributed.parallel_state import get_dp_group, get_ep_group, get_pp_g
 from vllm.distributed.weight_transfer.base import WeightTransferUpdateRequest
 from vllm.renderers.online_renderer import OnlineRenderer
 
+from marinskyrl.native_environment_control import finalize_actor_environment, record_environment
 from marinskyrl.resource_locator import is_cloud_uri, join_resource_path
 from skyrl_train.numa_policy import NUMA_AFFINITY_ENV
 from skyrl_train.config.behavior_logprobs import (
@@ -92,6 +93,9 @@ from skyrl_train.inference_engines.vllm.stats import (
 )
 from skyrl_train.utils import get_tcp_url, str_to_torch_dtype, torch_dtype_to_str
 import time
+
+
+record_environment("vllm-module-import")
 
 
 _exact_chat_prompt_token_ids: ContextVar[list[int] | None] = ContextVar("exact_chat_prompt_token_ids", default=None)
@@ -1067,6 +1071,7 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
 
         if "rope_scaling" in kwargs:
             kwargs.pop("rope_scaling")
+        finalize_actor_environment(kwargs.get("data_parallel_rank"))
         self.llm = self._create_engine(*args, **kwargs)
         self._weight_loader = VLLMWeightLoader(self.llm)
         self._policy_steps = PolicyStepStamps()

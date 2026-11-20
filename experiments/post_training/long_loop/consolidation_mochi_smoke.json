@@ -1,0 +1,129 @@
+{
+  "source_revision": "1868fe51b1a8d73c27263de4374f32d3098cec6e",
+  "round_sha256": "7dc5de1071993d7879c0fe6aa75cd68cce1f112104dca7921ac32b1e39d8b0bb",
+  "role_plan": {
+    "colocate_all": false,
+    "policy_num_nodes": 12,
+    "policy_num_gpus_per_node": 4,
+    "num_inference_engines": 1,
+    "inference_engine_tensor_parallel_size": 1,
+    "inference_engine_pipeline_parallel_size": 1,
+    "inference_engine_data_parallel_size": 12,
+    "inference_engine_expert_parallel_size": 12,
+    "train_batch_size": 32,
+    "policy_mini_batch_size": 32,
+    "micro_train_batch_size_per_gpu": 1,
+    "n_samples_per_prompt": 8,
+    "reference_num_nodes": null
+  },
+  "generator": {
+    "model_dtype": "bfloat16",
+    "run_engines_locally": true,
+    "backend": "vllm",
+    "vllm_attention_backend": "FLASH_ATTN",
+    "weight_sync_backend": "nccl",
+    "weight_sync_pause": {
+      "mode": "keep",
+      "clear_cache": true
+    },
+    "weight_sync_transport": "expert_block",
+    "expert_block_sync": {
+      "timeout_seconds": 600,
+      "verify": false
+    },
+    "enable_prefix_caching": true,
+    "enable_chunked_prefill": true,
+    "max_num_batched_tokens": 8192,
+    "enforce_eager": false,
+    "gpu_memory_utilization": 0.75,
+    "max_num_seqs": 16,
+    "enable_http_endpoint": false,
+    "error_handling": {
+      "enable_error_classification": true,
+      "default_error_treatment": "mask",
+      "preserve_logprobs_on_timeout": true
+    },
+    "chat_template": null,
+    "chat_template_kwargs": {
+      "enable_thinking": true
+    },
+    "engine_init_kwargs": {
+      "moe_backend": "triton",
+      "enable_auto_tool_choice": true,
+      "tool_call_parser": "hermes",
+      "model_loader_extra_config": {
+        "distributed": false,
+        "concurrency": 4,
+        "memory_limit": 8589934592
+      },
+      "compilation_config": {
+        "mode": 3,
+        "cudagraph_mode": "PIECEWISE",
+        "splitting_ops": [
+          "vllm::unified_attention_with_output",
+          "vllm::unified_kv_cache_update",
+          "vllm::grug_moe_short_conv"
+        ]
+      },
+      "enable_return_routed_experts": true
+    },
+    "sampling_params": {
+      "temperature": 0.7,
+      "top_p": 1.0,
+      "logprobs": 0,
+      "stop_token_ids": [
+        128001,
+        128009
+      ],
+      "skip_special_tokens": false
+    },
+    "eval_sampling_params": {
+      "temperature": 0.7,
+      "top_p": 1.0,
+      "stop_token_ids": [
+        128001,
+        128009
+      ],
+      "skip_special_tokens": false
+    },
+    "trajectory_reward_shaping": {
+      "enabled": true,
+      "overlong": {
+        "penalty_scale": 0.0
+      },
+      "reasoning_span": {
+        "penalty": 0.1,
+        "target": "marker"
+      }
+    },
+    "trajectory_retention": {
+      "enabled": true,
+      "phases": [
+        "train",
+        "eval"
+      ],
+      "sample_count_per_step": 0,
+      "sample_fraction": 0.1,
+      "always_retain_failures": false,
+      "always_retain_non_terminating": false,
+      "always_retain_loops": false,
+      "max_bytes_per_step": 67108864,
+      "max_bytes_per_run": 536870912,
+      "required": true
+    }
+  },
+  "extra_env": {
+    "DAYTONA_TARGET": "us",
+    "OT_AGENT_RAY_OBJECT_STORE_CAP_GIB": "32",
+    "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+    "VERIFYIT_JUDGE_MODEL": "openai/gpt-oss-120b",
+    "NCCL_NET": "IB",
+    "NCCL_IB_DISABLE": "0",
+    "NCCL_IB_HCA": "ibp"
+  },
+  "context_budget": {
+    "request_window_tokens": 65536,
+    "max_new_tokens_per_turn": 16384,
+    "max_turns": 128
+  }
+}

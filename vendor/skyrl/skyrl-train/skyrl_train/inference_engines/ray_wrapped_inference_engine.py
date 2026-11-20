@@ -14,6 +14,7 @@ from ray.util.placement_group import PlacementGroupSchedulingStrategy, placement
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 from transformers import AutoConfig, PretrainedConfig
 
+from marinskyrl.native_environment_control import actor_runtime_env as native_actor_runtime_env
 from marinskyrl.inference_placement import COLOCATED_EXPERT_BLOCK_GPU_COUNT, InferenceReplicaPlacement
 from skyrl_train.inference_engines.base import (
     InferenceEngineInterface,
@@ -567,6 +568,8 @@ def create_ray_wrapped_inference_engines(
         still require the ray backend for shared-GPU resource management.
     """
     engine_init_kwargs = dict(engine_init_kwargs)
+    native_environment_profile = engine_init_kwargs.pop("marin_native_environment_control", None)
+    engine_init_kwargs.pop("marin_engine_serving_probe", None)
     # Direct factory callers bypass generator config validation.
     validate_weight_sync_pause_backend(weight_sync_pause_policy, backend=backend, run_engines_locally=True)
     model_metadata_path = engine_init_kwargs.pop(MODEL_METADATA_PATH_KEY, pretrain)
@@ -597,6 +600,8 @@ def create_ray_wrapped_inference_engines(
         runai_streamer_enabled=engine_init_kwargs.get("load_format") == "runai_streamer",
         nccl_buffer_size_bytes=nccl_buffer_size_bytes,
     )
+    if native_environment_profile is not None:
+        inference_engine_runtime_env = native_actor_runtime_env(native_environment_profile, inference_engine_runtime_env)
     noset_visible_devices = ray_noset_visible_devices(ray.get(get_all_env_variables.remote()))
     use_hybrid_engine = shared_pg is not None
     tp_pp_size = tensor_parallel_size * pipeline_parallel_size
