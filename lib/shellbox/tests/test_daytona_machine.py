@@ -32,6 +32,7 @@ from daytona import (
     CreateSandboxFromSnapshotParams,
     DaytonaConfig,
     DaytonaConflictError,
+    DaytonaConnectionError,
     DaytonaError,
     DaytonaNotFoundError,
     Image,
@@ -744,6 +745,108 @@ def test_daytona_provider_timeout_remains_an_infrastructure_error(tmp_path, comm
         finally:
             await machine.close()
         assert client.closed and client.deleted
+
+    asyncio.run(scenario())
+
+
+class LostConnection(LocalProcess):
+    """Drop the connection of each request whose script contains ``marker``, at most ``losses`` times."""
+
+    def __init__(self, marker: str, *, losses: int, runs_first: bool):
+        super().__init__()
+        self.marker = marker
+        self.losses = losses
+        self.runs_first = runs_first
+
+    async def exec(self, command, **kwargs):
+        if self.marker not in command_script(command) or not self.losses:
+            return await super().exec(command, **kwargs)
+        self.losses -= 1
+        if self.runs_first:
+            await super().exec(command, **kwargs)
+        raise DaytonaConnectionError("Failed to execute command: [Errno 104] Connection reset by peer")
+
+
+class LostDownload(LocalFiles):
+    lost = False
+
+    async def download_file(self, source: str) -> bytes:
+        if not self.lost:
+            self.lost = True
+            raise DaytonaConnectionError("Failed to download file: [Errno 104] Connection reset by peer")
+        return await super().download_file(source)
+
+
+async def no_wait(delay):
+    pass
+
+
+@pytest.mark.parametrize("command_ran", [False, True])
+@pytest.mark.requires_host_setsid
+def test_daytona_command_runs_once_when_its_request_loses_the_connection(tmp_path, monkeypatch, command_ran):
+    monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", no_wait)
+
+    async def scenario():
+        client = LocalDaytona()
+        client.sandbox.process = LostConnection("candidate-run", losses=1, runs_first=command_ran)
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
+        try:
+            result = await machine.run(Command(("sh", "-c", "echo candidate-run >> runs; printf out; exit 7")))
+        finally:
+            await machine.close()
+        assert (result.exit_code, result.stdout, result.reason) == (7, b"out", ExitReason.EXITED)
+        assert (tmp_path / "runs").read_text() == "candidate-run\n"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.requires_host_setsid
+def test_daytona_command_fails_when_its_request_keeps_losing_the_connection(tmp_path, monkeypatch):
+    monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", no_wait)
+
+    async def scenario():
+        client = LocalDaytona()
+        client.sandbox.process = LostConnection("candidate-run", losses=math.inf, runs_first=False)
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
+        try:
+            with pytest.raises(DaytonaConnectionError):
+                await machine.run(Command(("sh", "-c", "echo candidate-run >> runs")))
+        finally:
+            await machine.close()
+        assert not (tmp_path / "runs").exists()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("lost", ["umask 077", "measure_and_cap", "tar xzf", "download"])
+@pytest.mark.requires_host_setsid
+def test_daytona_repeats_a_repeatable_request_that_lost_its_connection(tmp_path, monkeypatch, lost):
+    """The provider ran each of these requests before the connection dropped."""
+    monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", no_wait)
+
+    async def scenario():
+        client = LocalDaytona()
+        if lost == "download":
+            client.sandbox.fs = LostDownload()
+        else:
+            client.sandbox.process = LostConnection(lost, losses=1, runs_first=True)
+        workdir = tmp_path / "work"
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(workdir))
+        )
+        source = tmp_path / "source"
+        source.mkdir()
+        (source / "data").write_text("payload")
+        try:
+            await machine.upload(source, str(workdir / "uploaded"))
+            result = await machine.run(Command(("cat", "uploaded/data")))
+        finally:
+            await machine.close()
+        assert (result.exit_code, result.stdout) == (0, b"payload")
 
     asyncio.run(scenario())
 

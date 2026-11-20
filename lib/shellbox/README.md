@@ -268,6 +268,10 @@ Docker and Daytona stop the command's process group on a timeout. A successful s
 A failed stop without confirmed completion raises an infrastructure error and closes the machine.
 Docker and Daytona also stop the process group on caller cancellation. Daytona preserves the machine only after confirming the stop and removing private command files; otherwise it closes the machine.
 
+Daytona repeats a request that lost its connection up to three times. A command whose request lost its connection runs once:
+the command script claims its private directory before it runs, and the exit trap records the exit code that the machine then reads.
+The machine waits for that exit code until the command's timeout. If the connection stays lost, `Machine.run` raises the provider error.
+
 Docker keeps the process-group ID on the host and stops commands as the execution user or image default user.
 Before Docker machine reuse, a bounded root probe confirms that the group has no live members. Zombies do not prevent reuse.
 Daytona records process-group leader PIDs as root in a root-only directory before the command changes users.
