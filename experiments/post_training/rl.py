@@ -4,7 +4,7 @@
 """Run a declared RL preset and inspect its saved status or pinned-control verdict.
 
 Without --run, print the plan and saved status. Use --run --wait for a terminal result.
-Use the selected model module's rescore command to compare existing results on CPU.
+Use the selected model entry's compare command to compare existing results on CPU.
 """
 
 from __future__ import annotations
@@ -52,9 +52,9 @@ from marin.rl.skyrl_records import (
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance, git_output
 
+from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate, rl_publication
 from experiments.post_training import rl_presets as presets
-from experiments.post_training import rl_recipe as recipe
 from experiments.post_training.rl_command import (
     EXIT_CODES,
     REFUSAL_EXIT_CODE,
@@ -62,11 +62,12 @@ from experiments.post_training.rl_command import (
     attempt_grafana_url,
     grafana_url,
 )
-from experiments.post_training.rl_scoring import (
-    GATE_INPUTS_FILENAME,
-    GateInputs,
+from experiments.post_training.rl_measurements import (
+    RUN_INPUTS_FILENAME,
+    RunInputs,
     evaluation_status,
     read_recorded_launch,
+    run_inputs,
 )
 from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME
 
@@ -75,10 +76,10 @@ _FAILED_RUN_STATES = {JobState.FAILED, JobState.KILLED, JobState.WORKER_FAILED, 
 
 
 @dataclass(frozen=True)
-class RLRun:
+class RLExperiment:
     runs: tuple[ArtifactStep[SkyRLRun], ...]
     gate: ArtifactStep[rl_gate.GateReport] | None = None
-    inputs: GateInputs | None = None
+    inputs: RunInputs | None = None
 
 
 def _provenance(*, control: bool) -> Provenance:
@@ -96,9 +97,9 @@ def _provenance(*, control: bool) -> Provenance:
 
 
 def _run_rl(
-    config: SkyRLRunConfig, *, inputs: GateInputs, issue: int | None, forward_env: tuple[str, ...] = ()
+    config: SkyRLRunConfig, *, inputs: RunInputs, issue: int | None, forward_env: tuple[str, ...] = ()
 ) -> SkyRLRun:
-    path = StoragePath(config.output.resolved_config_uri).parent / GATE_INPUTS_FILENAME
+    path = StoragePath(config.output.resolved_config_uri).parent / RUN_INPUTS_FILENAME
     if not path.exists():
         path.parent.mkdirs()
         path.write_text(inputs.model_dump_json(indent=2) + "\n")
@@ -124,7 +125,7 @@ def _run_name(
     return user_owned_name(name + (f"-r{replicate}" if preset.gated else ""))
 
 
-def build_run(
+def build_experiment(
     preset: presets.Preset,
     *,
     table: presets.ModelPresets,
@@ -137,7 +138,7 @@ def build_run(
     issue: int | None = None,
     forward_env: tuple[str, ...] = (),
     _validate_plan: bool = False,
-) -> RLRun:
+) -> RLExperiment:
     """Construct an RL experiment: one run step per replicate and, for a gated preset, its gate step."""
     wandb_entity = os.environ.get(_WANDB_ENTITY_ENV)
     if not 1 <= replicates <= 5:
@@ -151,7 +152,7 @@ def build_run(
         raise click.BadParameter("this preset does not accept --tasks")
     if not preset.accepts_init and init is not None:
         raise click.BadParameter("this preset does not accept --init")
-    if (not preset.gated and replicates != 1) or (control and preset.controls != preset.name):
+    if (not preset.gated and replicates != 1) or (control and preset.control_preset != preset.name):
         raise click.BadParameter(f"{preset.name} does not accept this replicate or control selection")
     if control and (settings or tasks is not None or init is not None):
         raise click.BadParameter("controls use only the preset's pinned default inputs")
@@ -165,7 +166,8 @@ def build_run(
         and summary["recipe"]["heldout"] != recipe.selection_summary(default)["recipe"]["heldout"]
     ):
         raise click.BadParameter(
-            "candidate tasks use a different heldout input; curate against the default task selection"
+            "candidate tasks use a different development panel (recipe.heldout). "
+            "Curate against the default task selection."
         )
     if tasks is not None and preset.held_out_tasks is not None:
         task_set = recipe.selection_artifact(preset.held_out_tasks)
@@ -190,7 +192,7 @@ def build_run(
     rl_gate.validate_requirements(preset, requirements, table=table, control=control)
     provenance = _provenance(control=control)
     inputs_hash = fingerprint_hash(json.dumps(changes, sort_keys=True, default=str))
-    inputs = rl_gate.gate_inputs(
+    inputs = run_inputs(
         preset.name,
         settings,
         f"{tasks.name}@{tasks.version}" if tasks is not None else None,
@@ -214,7 +216,7 @@ def build_run(
     )
     if _validate_plan:
         rl_gate.validate_plan(preset, replace(spec, name=runs[0].name), runs[0])
-    return RLRun(tuple(runs), gate, inputs)
+    return RLExperiment(tuple(runs), gate, inputs)
 
 
 def _evaluation_failed(snapshot: dict, preset: presets.Preset) -> bool:
@@ -236,7 +238,7 @@ def _completed_update(path: str, workload: presets.Training | presets.Generation
 
 
 def _status(
-    run: RLRun,
+    run: RLExperiment,
     preset: presets.Preset,
     *,
     stored_only: bool = False,
@@ -312,7 +314,7 @@ def _status(
         if report is not None:
             verdict = {
                 "report": str(StoragePath(path) / rl_gate.GATE_REPORT_FILENAME),
-                **report.model_dump(mode="json", include={"verdict", "label", "reason"}),
+                **report.model_dump(mode="json", include={"verdict", "effect", "reason"}),
             }
     if "verdict" not in verdict and preset.gated:
         crashed = next((row for row in rows if str(row["state"]).lower() in _FAILED_RUN_STATES), None)
@@ -351,8 +353,8 @@ def _print_status(snapshot: dict) -> None:
         click.echo((StoragePath(snapshot["report"]).parent / rl_gate.GATE_MARKDOWN_FILENAME).read_text())
 
 
-def _from_handles(handles: list[ArtifactStep]) -> RLRun:
-    return RLRun(
+def _from_handles(handles: list[ArtifactStep]) -> RLExperiment:
+    return RLExperiment(
         tuple(step for step in handles if step.artifact_type is SkyRLRun),
         next((step for step in handles if step.artifact_type is rl_gate.GateReport), None),
     )
@@ -475,7 +477,7 @@ def command(
     @partial(_run_command, table, argv, entry_module)
     @click.option("--issue", type=click.IntRange(min=1), help="GitHub experiment issue for this launch.")
     @click.option("--plan", is_flag=True, help="Print the plan without submission (the default).")
-    @click.option("--url", help="Marina origin for run publication (defaults to the Marina service).")
+    @click.option("--marina-url", "url", help="Marina origin for run publication (defaults to the Marina service).")
     @click.option(
         "--wait",
         is_flag=True,
@@ -561,7 +563,7 @@ def command(
         missing = [name for name in forward_env if name not in os.environ]
         if missing:
             raise click.UsageError(f"missing required environment variables: {', '.join(missing)}")
-        run = build_run(
+        run = build_experiment(
             preset,
             table=table,
             forward_env=forward_env,
@@ -610,13 +612,13 @@ def main(
     entry_module: str | None = None,
     forward_env: tuple[str, ...] = (),
 ) -> int:
-    """Run the selected model table's CLI, retaining Click's exit status."""
+    """Run the selected preset table's CLI, retaining Click's exit status."""
     args = list(sys.argv[1:] if argv is None else argv)
     try:
-        if args and args[0] in {"rescore", "publish"}:
-            if init is not None and args[0] == "rescore":
-                raise click.UsageError("Python init cannot be used with rescore")
-            selected = (rl_gate if args[0] == "rescore" else rl_publication).command(table)
+        if args and args[0] in {"compare", "publish"}:
+            if init is not None and args[0] == "compare":
+                raise click.UsageError("Python init cannot be used with compare")
+            selected = (rl_gate if args[0] == "compare" else rl_publication).command(table)
             args = args[1:]
         else:
             selected = command(table, argv=tuple(args), init=init, entry_module=entry_module, forward_env=forward_env)
