@@ -4955,3 +4955,25 @@ immutable standing ruling for all eligible workspace-graded sources. Pass its
 JSON file as `collect --negative-control-policy global-policy.json`. Source IDs
 are not policy selectors. Unsealed version-4 metadata must be recollected to a
 new output version; raw Trial artifacts remain unchanged.
+
+## Method tags and dataset variants
+
+Store method tags on pinned dataset variants. The Atlas Method column shows the
+union over a source's variants; Evidence lists each variant and its receipt.
+The RL ingestion path creates an RL environment variant. Candidates enter that
+path first. A source without a completed Datakit SFT receipt shows RL only.
+Do not infer SFT qualification from mix membership.
+
+An SFT tag requires a successful final Datakit registration receipt matching the
+variant's source, variant ID, repository revision and content digest. Verify the
+receipt bytes and refuse a TaskSpec digest mismatch. Register variants in
+`experiments/post_training/task_curation/datasets/method_variants.json`; the
+loader verifies their preparation receipts. Keep parent and child variants
+separate.
+
+RL-to-SFT conversion is its own workflow. The prompt/response reformatter in
+`experiments/datakit/convert_chat_variant.py` creates a new child and row lineage
+from pinned existing responses. Teacher generation, when needed, runs before
+this reformatting step and supplies pinned outputs. The conversion receipt grants
+no method tag. Prepare and register the child with Datakit before assigning SFT;
+see [Datakit registration](../../experiments/datakit/README.md#sft-registration-receipt).

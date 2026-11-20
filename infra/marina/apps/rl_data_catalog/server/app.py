@@ -45,6 +45,7 @@ from .filtration import filtration
 from .identity_measurements import IDENTITY_REVIEWS_SQL, IDENTITY_SURVEY_SQL
 from .inventory_state import CachedInventory, inventory_input_key
 from .licensing import license_projection, license_registry_key
+from .methods import variant_projection
 from .quality import intended_use, issue_rate, quality_display, result, review_coverage
 from .quality_evidence import full_review_records, quality_explanation
 from .restrictions import (
@@ -120,6 +121,7 @@ TABLE_SOURCE_FIELDS = frozenset(
         "coverage",
         "difficulty",
         "intended_use",
+        "method_tags",
         "data_restriction",
         "backend_capabilities",
         "partial_overlaps",
@@ -262,6 +264,7 @@ def canonical_source_record(row: dict[str, Any]) -> dict[str, Any]:
         }
     if row.get("duplicate_group") is not None:
         result["duplicate_group"] = canonical_duplicate_group(row["duplicate_group"])
+    result.update(variant_projection(result["declaration"], row.get("method_variants")))
     return result
 
 
@@ -499,7 +502,7 @@ def create_api(services: AppletServices) -> FastAPI:
                     text(
                         """
                 SELECT s.id, s.declaration, s.assessment_key, s.latest_attempt_key,
-                    s.latest_attempt_status, s.reason, s.curation, s.review_completeness,
+                    s.latest_attempt_status, s.reason, s.curation, s.review_completeness, s.method_variants,
                     CASE WHEN s.source_fingerprint IS NULL THEN NULL ELSE jsonb_build_object(
                         'version', s.source_fingerprint->'version',
                         'seed', s.source_fingerprint->'seed',
@@ -548,6 +551,8 @@ def create_api(services: AppletServices) -> FastAPI:
                 inventory.append(
                     {
                         **served_declaration,
+                        "method_tags": row["method_tags"],
+                        "method_variants": row["method_variants"],
                         "data_restriction": restriction.value,
                         "task_count": row["task_count"],
                         "curation": None if withheld else row["curation"],
@@ -1016,6 +1021,8 @@ def create_api(services: AppletServices) -> FastAPI:
             "coverage": coverage,
             "difficulty": difficulty,
             "intended_use": intended_use(declaration),
+            "method_tags": source["method_tags"],
+            "method_variants": source["method_variants"],
             "contamination_status": contamination(declaration),
             "filtration": filtration(source["declaration"], counts.get(declaration["id"])),
             "curation": None if withheld else source["curation"],

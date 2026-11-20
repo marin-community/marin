@@ -143,6 +143,7 @@ from infra.marina.apps.rl_data_catalog.server.curriculum import (
     task_response,
 )
 from infra.marina.apps.rl_data_catalog.server.evidence_content import pack_content
+from infra.marina.apps.rl_data_catalog.server.methods import rl_variant
 from infra.marina.apps.rl_data_catalog.server.quality import result
 from infra.marina.apps.rl_data_catalog.server.review_content import task_request_evidence
 from infra.marina.apps.rl_data_catalog.server.schema import SCHEMA_SQL
@@ -150,6 +151,7 @@ from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_s
 from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations
 from infra.marina.apps.rl_data_catalog.tests.difficulty_fixtures import difficulty_measurement
 from infra.marina.apps.rl_data_catalog.tests.filtration_fixtures import count_evidence, filtered_declaration
+from infra.marina.apps.rl_data_catalog.tests.method_fixtures import sft_variant
 from infra.marina.apps.rl_data_catalog.tests.review_fixtures import review_declarations
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
@@ -4254,3 +4256,31 @@ def test_quality_explanation_inventory_detail_and_cache_follow_full_receipt_inpu
             archived["quality_explanation"]
             == client.get("/source", params={"source_id": source_id}).json()["quality_explanation"]
         )
+
+
+def test_dataset_method_variants_survive_catalog_and_api_projection(tmp_path, catalog_database, catalog_query):
+    root = str(tmp_path / "methods")
+    publish_sample(root, "method-snapshot")
+    load_catalog(CurationCatalog(root), catalog_query)
+    with catalog_database.begin() as connection:
+        row = (
+            connection.execute(text("SELECT load_id,id,declaration FROM atlas_sources ORDER BY id LIMIT 1"))
+            .mappings()
+            .one()
+        )
+        variants = [
+            rl_variant(row["declaration"]).model_dump(mode="json"),
+            sft_variant(row["id"]).model_dump(mode="json"),
+        ]
+        connection.execute(
+            text("UPDATE atlas_sources SET method_variants=CAST(:variants AS jsonb) WHERE load_id=:load AND id=:source"),
+            {"variants": json.dumps(variants), "load": row["load_id"], "source": row["id"]},
+        )
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        inventory = client.get("/sources", params={"projection": "table"}).json()["sources"]
+        source = next(source for source in inventory if source["id"] == row["id"])
+        assert source["method_tags"] == ["rl", "sft"]
+        assert "method_variants" not in source
+        evidence = client.get("/source", params={"source_id": row["id"]}).json()
+        assert evidence["method_tags"] == ["rl", "sft"]
+        assert evidence["method_variants"] == variants

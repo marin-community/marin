@@ -5,10 +5,11 @@ repository checker below for each new preview revision. Release-specific scripts
 and old deployment records are historical evidence, not a substitute for these
 gates.
 
-The target is the private preview app
-`c9742a15-fb46-4d56-bc88-aa916351ebd3`. Production
-`fb11c931-5861-4878-8bb5-a964d652b45f` must remain at the coordinator's explicit
-hold revision. This procedure never publishes production or changes access mode,
+The target is app
+`c9742a15-fb46-4d56-bc88-aa916351ebd3`, public on `atlas.oa.dev` since revision 35.
+Pass `--expected-mode public` for its release checks. The checker asserts the
+selected mode and does not change it. The archived prior app
+`fb11c931-5861-4878-8bb5-a964d652b45f` must remain at revision 76. This procedure never publishes production or changes access mode,
 datasets, infrastructure or service configuration.
 
 Run the commands below from the worktree root. Install the coordinator-provided

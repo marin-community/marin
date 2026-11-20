@@ -5,7 +5,7 @@ const resultClasses = {GOOD: 'good', SOME_ISSUES: 'some_issues', BAD: 'bad', UNK
 const useLabels = {train: 'Training', eval: 'Evaluation', unknown: 'Unknown'};
 const oracleValidationLabels = {executed: 'Oracle executed', verifier_executed: 'Verifier executed', skipped: 'Skipped'};
 const columns = [
-  ['display_name', 'Source'], ['examples', 'Examples'], ['filtration', 'Filtration'], ['use', 'Use'], ['quality', 'Quality'], ['result', 'Result'],
+  ['display_name', 'Source'], ['examples', 'Examples'], ['filtration', 'Filtration'], ['use', 'Use'], ['method', 'Method'], ['quality', 'Quality'], ['result', 'Result'],
   ['issue_rate', 'Issue rate'], ['contamination', 'Contamination'], ['overlap', 'Overlap'], ['backends', 'Backends'], ['grading', 'Grading'], ['grader_type', 'Grader'], ['area', 'Top curriculum area'], ['updated', 'Last updated'], ['evidence', 'Evidence'], ['difficulty', 'Difficulty'],
 ];
 const qualityOrder = {QUICK: 0, SAMPLE: 1, FULL: 2};
@@ -17,6 +17,7 @@ function value(row, key) {
   if (key === 'examples') return row.filtration.example_count;
   if (key === 'filtration') return row.filtration.state;
   if (key === 'use') return row.intended_use || 'unknown';
+  if (key === 'method') return (row.method_tags || ['rl']).join(' / ').toUpperCase();
   if (key === 'quality') return qualityOrder[row.quality];
   if (key === 'result') return resultKey(row);
   if (key === 'contamination') return row.contamination_status;
@@ -43,6 +44,7 @@ function matchesFilters(row) {
   const search = $('search').value.trim().toLowerCase();
   if (state.origin !== 'all' && originOf(row) !== state.origin) return false;
   if ($('use').value !== 'all' && value(row, 'use') !== $('use').value) return false;
+  if ($('method').value !== 'all' && !(row.method_tags || ['rl']).includes($('method').value)) return false;
   if ($('status').value !== 'all' && statusOf(row) !== $('status').value) return false;
   if ($('grader').value !== 'all' && (row.grader_type || 'pending') !== $('grader').value) return false;
   if ($('quality').value !== 'all' && row.quality !== $('quality').value) return false;
@@ -172,6 +174,7 @@ function sourceRow(row, others, canonical) {
     examples.title = row.filtration.reason;
     const filtration = node('td', undefined, 'filtration-cell'); filtration.append(filtrationChip(row.filtration));
     const use = node('td', useLabels[value(row, 'use')], 'use-cell');
+    const method = node('td', value(row, 'method'), 'method-cell');
     const quality = node('td'); quality.append(qualityChip(row.quality, row.id, '', row.quality_explanation));
     if (row.quality_review_status) quality.firstElementChild.title = [quality.firstElementChild.title, row.quality_review_status].filter(Boolean).join('. ');
     const result = node('td'), key = resultKey(row);
@@ -202,7 +205,7 @@ function sourceRow(row, others, canonical) {
     const backends = node('td', undefined, 'backends-cell'); backends.append(backendLink(row, state.daytonaLimit));
     const grading = node('td'); grading.append(gradingChips(row));
     const grader = node('td', undefined, 'grader-cell'); grader.append(graderChip(row));
-    tr.append(name, examples, filtration, use, quality, result, issueRate, contamination, overlap, backends, grading, grader, area, updated, evidence, difficulty); return tr;
+    tr.append(name, examples, filtration, use, method, quality, result, issueRate, contamination, overlap, backends, grading, grader, area, updated, evidence, difficulty); return tr;
 }
 function details(row) {
   $('detail-name').textContent = row.display_name; $('detail-notes').textContent = row.notes;
@@ -211,7 +214,7 @@ function details(row) {
   const fields = [
     ['Origin', originOf(row)], ['Build path', row.build_path], ['Status', row.status], ['Quality', row.quality], ['Result', resultLabels[resultKey(row)] + (row.result && row.result_provisional ? ' · provisional' : '')],
     ['Content review', row.quality_review_status],
-    ...filtrationRows(row), ['Use', useLabels[value(row, 'use')]],
+    ...filtrationRows(row), ['Use', useLabels[value(row, 'use')]], ['Method', value(row, 'method')],
     ['Coverage basis', row.coverage?.basis], ['Coverage gap', row.coverage?.unavailable_reason],
     ['Sampled grader qualification', row.oracle_validation && (oracleValidationLabels[row.oracle_validation] ?? row.oracle_validation)],
     ['Daytona', daytonaLabel(row.daytona)], ['Daytona evidence', row.daytona.reason || row.daytona.basis],
@@ -308,7 +311,7 @@ async function load() {
 }
 function viewUrl() {
   const params = new URLSearchParams();
-  for (const id of ['search', 'status', 'use', 'quality', 'result', 'grader', 'difficulty-model']) {
+  for (const id of ['search', 'status', 'use', 'method', 'quality', 'result', 'grader', 'difficulty-model']) {
     const item = $(id).value.trim();
     if (item && item !== 'all') params.set(id, item);
   }
@@ -322,7 +325,7 @@ function viewUrl() {
 function readLocation() {
   const params = new URLSearchParams(location.hash.slice(1));
   $('filters').reset(); $('search').value = params.get('search') || '';
-  for (const id of ['status', 'use', 'quality', 'result', 'grader']) if (params.has(id)) $(id).value = params.get(id);
+  for (const id of ['status', 'use', 'method', 'quality', 'result', 'grader']) if (params.has(id)) $(id).value = params.get(id);
   if (AtlasDifficulty.solvers.includes(params.get('difficulty-model'))) $('difficulty-model').value = params.get('difficulty-model');
   $('show-all').checked = params.get('all') === '1';
   expandedGroups.clear();
@@ -336,7 +339,7 @@ function update(replace = false) {
   history[replace ? 'replaceState' : 'pushState'](null, '', viewUrl());
   render();
 }
-for (const id of ['status', 'use', 'quality', 'result', 'grader']) $(id).addEventListener('change', () => update());
+for (const id of ['status', 'use', 'method', 'quality', 'result', 'grader']) $(id).addEventListener('change', () => update());
 $('difficulty-model').addEventListener('change', () => {
   state.sort = $('difficulty-model').value === 'all' ? 'display_name' : 'difficulty';
   state.direction = state.sort === 'difficulty' ? -1 : 1;

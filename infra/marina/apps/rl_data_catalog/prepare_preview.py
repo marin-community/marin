@@ -23,6 +23,7 @@ APP_SOURCE = Path("infra/marina/apps/rl_data_catalog")
 PRODUCTION_APP_ID = "fb11c931-5861-4878-8bb5-a964d652b45f"
 PREVIEW_APP_ID = "c9742a15-fb46-4d56-bc88-aa916351ebd3"
 MODEL_SOURCES = {
+    "sft.py": "lib/finestore/src/finestore/sft.py",
     "licenses.py": "lib/finestore/src/finestore/rl/licenses.py",
     "curation.py": "lib/finestore/src/finestore/rl/curation.py",
     "status_taxonomy.py": "lib/finestore/src/finestore/rl/status_taxonomy.py",
@@ -30,6 +31,7 @@ MODEL_SOURCES = {
     "source_fingerprints.py": "lib/taskcompendium/src/taskcompendium/source_fingerprints.py",
 }
 IMPORT_RELOCATIONS = {
+    "from finestore.sft import ": "from .bundled.sft import ",
     "from finestore.rl.licenses import ": "from .bundled.licenses import ",
     "from finestore.rl.curation import ": "from .bundled.curation import ",
     "from finestore.rl.status_taxonomy import ": "from .bundled.status_taxonomy import ",
@@ -39,6 +41,7 @@ IMPORT_RELOCATIONS = {
 
 RELOCATED_SERVER_FILES = (
     "server/app.py",
+    "server/methods.py",
     "server/rollouts.py",
     "server/licensing.py",
     "server/content_access.py",

@@ -63,6 +63,12 @@
     </ul>
   </section>
 
+  <section id="methods" aria-labelledby="methods-title">
+    <h2 id="methods-title">Method tags and dataset variants</h2>
+    <p>The Method column lists the union of a source's variant tags. RL environment variants carry RL. An SFT variant earns SFT only after the final Datakit registration check writes a receipt for its own revision and content. The Evidence page lists each variant and its receipts. An RL source without an SFT registration receipt shows RL only; inclusion in a dataset mix does not grant SFT.</p>
+    <p>Conversion is a separate workflow. It creates a new variant and a lineage receipt from pinned prompts and pinned existing responses or teacher outputs. The child must then pass the Datakit preparation and registration steps. Conversion and Atlas loading do not grant SFT or alter the parent variant. See the <a href="https://github.com/marin-community/marin/blob/main/experiments/datakit/README.md#sft-registration-receipt">Datakit registration procedure</a>.</p>
+  </section>
+
   <section id="workflows" aria-labelledby="flow-title">
     <h2 id="flow-title">Source workflows</h2>
     <p>Choose the flow that matches the change. Source status is <a href="#term-status">Pending, Available, Excluded or Deprecated</a>; difficulty, Quality and publication have separate states. The letters a–j refer to the <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#ingestion-stage-map">ingestion stage map</a>. Follow solid arrows for the required path and dashed arrows for a conditional route; advance only when the applicable gate passes.</p>

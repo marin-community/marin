@@ -470,6 +470,8 @@ def launch_postpublish(args: argparse.Namespace, artifacts: Path) -> dict[str, A
         str(args.baseline.resolve()),
         "--production-version",
         str(args.production_version),
+        "--expected-mode",
+        args.expected_mode,
         "--service-url",
         args.service_url,
         "--app-origin",
@@ -572,8 +574,8 @@ def run_checks(args: argparse.Namespace, artifacts: Path, receipt: ReleaseReceip
         if production["current_version"] != args.production_version:
             raise ValueError("Production changed from the explicitly expected revision")
         details = app_details(args.service_url, PREVIEW_APP_ID, session)
-        if details["mode"] != "private":
-            raise ValueError("The preview app is no longer private")
+        if details["mode"] != args.expected_mode:
+            raise ValueError(f"Atlas mode changed from the explicitly expected {args.expected_mode!r}")
         revision = args.revision or details["current_version"]
         provider = marina_token_provider()
         query = applet_query(args.service_url, PREVIEW_APP_ID, session=session, token_provider=provider)
@@ -666,6 +668,12 @@ def main() -> None:
     )
     parser.add_argument("--baseline", type=Path, help="Successful preflight receipt (required for --revision)")
     parser.add_argument("--production-version", type=int, required=True)
+    parser.add_argument(
+        "--expected-mode",
+        choices=("private", "public"),
+        default="private",
+        help="Expected target access mode; this checker never changes it",
+    )
     parser.add_argument(
         "--refresh-snapshot", help="Explicit intended selected catalog snapshot; historical evidence must still remain"
     )

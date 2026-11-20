@@ -48,6 +48,7 @@ from experiments.post_training.task_curation.catalog_identity import (
     identity_survey_payload,
 )
 from experiments.post_training.task_curation.full_content_results import FullContentResultBinding
+from experiments.post_training.task_curation.method_variants import source_variants
 from experiments.post_training.task_curation.retirement import retired_admission_source_ids
 from experiments.post_training.task_curation.review_quality import quality_result as recompute_review_result
 from infra.marina.apps.rl_data_catalog.historical_assessments import retain_prior_assessments
@@ -98,7 +99,7 @@ TABLE_COLUMNS = {
         "id TEXT, declaration JSONB, assessment_key TEXT, latest_attempt_key TEXT, "
         "latest_attempt_status TEXT, reason TEXT, curation JSONB, diagnostics JSONB, "
         "source_fingerprint JSONB, duplicate_group JSONB, review_completeness JSONB, "
-        "backend_verification_pending JSONB, sample_pin_stale JSONB"
+        "backend_verification_pending JSONB, sample_pin_stale JSONB, method_variants JSONB"
     ),
     "assessments": (
         "pipeline_key TEXT, source_id TEXT, scope TEXT, model JSONB, rubric TEXT, "
@@ -626,6 +627,7 @@ def load_catalog(
                 "duplicate_group": groups.get(row.id),
                 "backend_verification_pending": verification_pending.get(row.id),
                 "sample_pin_stale": sample_pin_stale.get(row.id),
+                "method_variants": source_variants(row.declaration.model_dump(mode="json")),
             }
             for row in sources
         ],

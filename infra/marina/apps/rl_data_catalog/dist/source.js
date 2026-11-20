@@ -165,6 +165,17 @@ function render(data, sourceId, auxiliary) {
   sections.push(supplement('Filtered private releases', auxiliary.pending, pending => candidateCards(pending, sourceId)));
   sections.push(card('Backend fit by role', [['Measured tasks', data.backend_capabilities?.task_count], ['Fit and blockers', backendDetails(data)]], 'Supported requires all present task/roles to be supported. Otherwise the backend is Unsupported; N/A is only for absent roles. Affected task counts are per role and may overlap. The Daytona safety label covers the actor only.'));
   sections.push(card('Grader profile', [['Grader', graderChip(d)], ['Per-type task counts', d.grader_type_counts], ['Judge rubrics', d.judge_rubric_counts], ['Judge tasks with reference', d.judge_reference_count], ['Judge tasks without reference', d.judge_no_reference_count], ['Current-input census receipt', d.derived_contract_receipt && pointer(d.derived_contract_receipt.uri)], ['Census binding', d.derived_contract_receipt?.input], ['Scanned TaskSpec bytes', d.derived_contract_receipt?.scanned_task_specs_sha256]], 'Derived from the measured task contracts. Unbound or changed inputs remain Pending.'));
+  for (const variant of data.method_variants || []) {
+    sections.push(card(`Dataset variant: ${variant.input.variant_id}`, [
+      ['Method', variant.tags.map(tag => tag.toUpperCase()).sort().join(' / ')],
+      ['Dataset', variant.input.repository], ['Revision', variant.input.revision],
+      ['Content SHA-256', variant.input.data_sha256], ['TaskSpec SHA-256', variant.input.task_specs_sha256],
+      ['SFT preparation receipt', variant.sft_receipt_reference && pointer(variant.sft_receipt_reference.uri)],
+      ['Training output', variant.sft_receipt && pointer(variant.sft_receipt.output_manifest.uri)],
+      ['Conversion parent', variant.conversion?.parent.variant_id],
+      ['Conversion receipt', variant.conversion && pointer(variant.conversion.receipt.uri)],
+    ]));
+  }
   sections.push(card('Grading environment', [['Required boundary', gradingChips(d)], ['Census', d.grading_environment]], 'SHARED grades in the task environment; SEPARATE uses an independent grading environment. Mismatches remain explicit.'));
   // Catalogs frozen before the derived-oversight fields keep the historical prose in
   // oversight_evidence and their receipt pointers at the FULL binding or QC evidence paths.
