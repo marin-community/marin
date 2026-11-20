@@ -1,0 +1,84 @@
+# Evaluate the pinned Mochi base export with the repository runtime.
+schema: 1
+name: mochi-base-micro210
+version: "2026.11.20.4"
+slug: mochi-base-micro210
+cluster: cw-us-east-08a
+storage:
+  output_prefix: s3://marin-us-east-08a/marin/users/benfeuer/mochi-long-loop
+  temporary_prefix: s3://marin-us-east-08a/tmp
+evaluation: frozen-micro210
+adopted_model:
+  name: mochi-base-micro210/adopted-base
+  version: "2026.11.20.4"
+  uri: s3://marin-us-east-08a/marin/users/benfeuer/mochi-bringup/models/mochi-base-step393491/2026.11.17.1/hf
+  export_manifest_sha256: fb5e8e8e04273075ff8245563cff3c3b1b2ea33111f0958be4b9ea5ef99426a2
+  config_sha256: 1a05f3dbaddd2c1aa28064dc0d4140d53d80cf5c25a7c8418b0e013c91b1a43e
+  checkpoint_step: 393491
+  tokenizer_uri: marin-community/marin-tokenizer-tools
+  tokenizer_revision: 3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09
+serving:
+  gpu_variant: GB200
+  # Four rollout hosts / 16 active GPUs. The existing planner also reserves
+  # four policy hosts, so admission requests eight hosts / 32 GPUs in one rack.
+  role_plan:
+    colocate_all: false
+    policy_num_nodes: 4
+    policy_num_gpus_per_node: 4
+    num_inference_engines: 1
+    inference_engine_tensor_parallel_size: 1
+    inference_engine_pipeline_parallel_size: 1
+    inference_engine_data_parallel_size: 16
+    inference_engine_expert_parallel_size: 16
+    train_batch_size: 1
+    policy_mini_batch_size: 1
+    micro_train_batch_size_per_gpu: 1
+    n_samples_per_prompt: 1
+  execution:
+    cluster: cw-us-east-08a
+    cluster_config: lib/iris/config/cw-us-east-08a.yaml
+    cpu: 120
+    memory: 900GB
+    disk: 2TB
+    priority: production
+    max_retries: 0
+    target_cluster: cw-us-east-08a
+    parent_cluster_config: lib/iris/config/marin.yaml
+    coordinator_timeout_hours: 96
+    job_timeout_seconds: 259200
+    wandb_entity: marin-community
+    required_env_vars:
+      - DAYTONA_RL_API_KEY
+      - DAYTONA_EVAL_API_KEY
+      - DAYTONA_TARGET
+      - TOGETHER_API_KEY
+      - MARIN_PREFIX
+      - MARIN_TEMP_PREFIX
+    container_profile: 4
+  generator:
+    vllm_attention_backend: FLASHINFER
+    max_num_seqs: 128
+    max_num_batched_tokens: 2048
+    gpu_memory_utilization: 0.9
+    enable_prefix_caching: false
+    vllm_v1_disable_multiproc: false
+  engine_init_kwargs:
+    moe_backend: triton
+    model_loader_extra_config:
+      distributed: false
+      concurrency: 4
+      memory_limit: 8589934592
+    compilation_config:
+      mode: 3
+      cudagraph_mode: PIECEWISE
+      splitting_ops:
+        - vllm::unified_attention_with_output
+        - vllm::unified_kv_cache_update
+        - vllm::grug_moe_short_conv
+  cuda_allocator_config: expandable_segments:True
+  nccl_env:
+    NCCL_NET: IB
+    NCCL_IB_DISABLE: "0"
+    NCCL_IB_HCA: ibp
+  # Four MiB avoids the NVLSTree corruption identified in #11649 / #11656.
+  nccl_buffer_size_bytes: 4194304

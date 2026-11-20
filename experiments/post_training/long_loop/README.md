@@ -711,6 +711,20 @@ binds each pool to an NVLink domain. Keep the same context, sampling, task
 selection and judge pins when comparing two policies. The result has no RL
 checkpoint or synthetic training-completion marker.
 
+### Mochi Micro210 evaluation admission
+
+Both adopted Mochi evaluation rounds declare their three IB transport variables and
+4-MiB NCCL buffer explicitly. The historical 256-KiB serving qualification
+predates the NVLSTree corruption finding in #11649. Compilation and PIECEWISE
+CUDA graphs remain enabled. Exact CPU preflight checks each local model role's
+TP × PP × DP rank count against its physical GPU allocation. API judge
+credentials and live model availability are checked before rollout allocation.
+
+The gate-2 base/SFT evaluations using the earlier frozen MiniMax policy are
+preserved at `benfeuer/mochi-micro210-gate2-frozen` (commit `da0663fbea`). That
+source includes the self-hosted TP8 judge receipt and terminal checks; current
+rounds use the versioned API judge policy.
+
 ### Fresh Exp3 RL after the Socket failure
 
 `exp3_rl_restart` adopts the sealed `.51` SFT export and data inputs without

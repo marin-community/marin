@@ -3,9 +3,8 @@
 
 import hashlib
 import json
-import shutil
 import struct
-import uuid
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -66,23 +65,16 @@ class Hub:
 
 
 @pytest.fixture
-def permanent_storage_root():
-    """Writable stand-in for permanent storage, outside pytest's temporary root.
-
-    The archive checker treats any ``tmp`` path segment as scratch storage, and Linux
-    pytest basetemps sit under ``/tmp``, so permanent-path fixtures need a root without
-    that segment. The directory is removed when the test ends.
-    """
-    root = Path.home() / f".marin-permanent-storage-test-{uuid.uuid4().hex}"
-    root.mkdir()
-    yield root
-    shutil.rmtree(root)
-
-
-@pytest.fixture
 def hub(tmp_path, monkeypatch):
     result = Hub(tmp_path / "hub")
     monkeypatch.setenv("HF_TOKEN", "test-token")
     monkeypatch.setattr(hf_archive, "HfApi", lambda **kwargs: result)
     monkeypatch.setattr(hf_archive, "hf_hub_download", result.download)
     return result
+
+
+@pytest.fixture
+def permanent_path():
+    """Local checkpoint storage outside the system scratch directory."""
+    with tempfile.TemporaryDirectory(prefix=".marin-checkpoint-test-", dir=Path.home()) as directory:
+        yield Path(directory)

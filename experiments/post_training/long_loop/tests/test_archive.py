@@ -163,8 +163,9 @@ def test_cleanup_is_verified_scoped_and_preserves_selected(tmp_path, hub):
 @pytest.mark.parametrize("unscored", [False, True])
 @pytest.mark.parametrize("max_checkpoints", [3, -1])
 def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(
-    tmp_path, monkeypatch, hub, permanent_storage_root, incomplete, unscored, max_checkpoints
+    permanent_path, monkeypatch, hub, incomplete, unscored, max_checkpoints
 ):
+    tmp_path = permanent_path
 
     report = tmp_path / "report"
     report.mkdir()
@@ -182,7 +183,7 @@ def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(
             }
         )
     )
-    selected = permanent_storage_root / "checkpoints" / "global_step_5"
+    selected = tmp_path / "checkpoints" / "global_step_5"
     selected.mkdir(parents=True)
     weight = selected / "weight"
     weight.write_bytes(b"selected-native-weights")
@@ -215,7 +216,7 @@ def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(
             },
         },
     }
-    exported = permanent_storage_root / "exports" / "global_step_5" / "policy"
+    exported = tmp_path / "exports" / "global_step_5" / "policy"
     exported.parent.mkdir(parents=True)
     Path(plan["hf_upload"]["source"]).rename(exported)
     plan["hf_upload"]["source"] = str(exported)
@@ -568,13 +569,14 @@ def test_wandb_history_fallback_propagates_provider_failure(tmp_path, monkeypatc
     assert not list(tmp_path.glob("scan-history*"))
 
 
-def test_best_rl_checkpoint_assertion(tmp_path, permanent_storage_root):
-    best = permanent_storage_root / "checkpoints" / "global_step_5"
+def test_best_rl_checkpoint_assertion(permanent_path):
+    tmp_path = permanent_path
+    best = tmp_path / "checkpoints" / "global_step_5"
     best.mkdir(parents=True)
     (best / "trainer_state.pt").write_bytes(b"best-state")
     (best / "policy").mkdir()
     (best / "policy" / "weights.distcp").write_bytes(b"best-weights")
-    final = permanent_storage_root / "checkpoints" / "global_step_6"
+    final = tmp_path / "checkpoints" / "global_step_6"
     final.mkdir(parents=True)
     (final / "trainer_state.pt").write_bytes(b"final-state")
     (final / "policy").mkdir()
@@ -589,13 +591,13 @@ def test_best_rl_checkpoint_assertion(tmp_path, permanent_storage_root):
     scratch = {"selected": str(tmp_path / "tmp" / "global_step_5"), "final": str(final)}
     with pytest.raises(ValueError, match="permanent path"):
         assert_best_rl_checkpoint(str(tmp_path / "archive2"), scratch)
-    missing_state = permanent_storage_root / "checkpoints" / "global_step_7"
+    missing_state = tmp_path / "checkpoints" / "global_step_7"
     missing_state.mkdir()
     (missing_state / "policy").mkdir()
     broken = {"selected": str(missing_state), "final": str(final)}
     with pytest.raises(ValueError, match=r"trainer_state\.pt"):
         assert_best_rl_checkpoint(str(tmp_path / "archive3"), broken)
-    empty = permanent_storage_root / "checkpoints" / "global_step_8"
+    empty = tmp_path / "checkpoints" / "global_step_8"
     empty.mkdir()
     (empty / "trainer_state.pt").write_bytes(b"state")
     hollow = {"selected": str(empty), "final": str(final)}

@@ -56,6 +56,7 @@
       "n_samples_per_prompt": 1
     },
     "config": {
+      "entrypoint": "generate",
       "trainer": {
         "strategy": "megatron",
         "algorithm": {

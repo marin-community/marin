@@ -14,6 +14,7 @@ from marin.execution.lazy import StepContext, lower
 from marin.experiment.cli import graph_handles
 
 from experiments.evaluation.micro210 import serving_config
+from experiments.post_training.long_loop.__main__ import validate_graph
 from experiments.post_training.long_loop.round_runner import adopted_round_evaluation, load_round
 from tests.rl.micro210_fixture import policy_fixture_reference
 
@@ -102,3 +103,15 @@ def test_serving_profile_cannot_change_frozen_sampling(adopted_round, tmp_path):
     frozen = json.loads(Path(policy_fixture_reference().uri).read_text())
     with pytest.raises(ValueError, match=r"protocol fields.*eval_sampling_params"):
         serving_config(frozen, profile)
+
+
+def test_exact_graph_preflight_records_all_local_allocations(adopted_round, tmp_path):
+    roles = {**adopted_round.serving.role_plan, "colocate_all": False, "policy_num_nodes": 1}
+    spec = dataclasses.replace(adopted_round, serving=dataclasses.replace(adopted_round.serving, role_plan=roles))
+    output = tmp_path / "preflight"
+    validate_graph(adopted_round_evaluation(spec), output, str(tmp_path))
+    row = json.loads((output / "graph.json").read_bytes())[-1]
+    assert {role["role"]: (role["required_gpus"], role["allocated_gpus"]) for role in row["role_geometry"]} == {
+        "policy": (4, 4),
+        "rollout": (16, 16),
+    }

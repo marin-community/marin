@@ -139,6 +139,8 @@ class RoundServing:
     generator: dict
     engine_init_kwargs: dict
     cuda_allocator_config: str
+    nccl_env: dict
+    nccl_buffer_size_bytes: int
 
 
 @dataclass(frozen=True)
@@ -446,6 +448,8 @@ def adopted_round_evaluation(spec: AdoptedHfRound) -> ArtifactStep:
             generator=serving.generator,
             engine_init_kwargs=serving.engine_init_kwargs,
             cuda_allocator_config=serving.cuda_allocator_config,
+            nccl_env=serving.nccl_env,
+            nccl_buffer_size_bytes=serving.nccl_buffer_size_bytes,
         ),
     )
 

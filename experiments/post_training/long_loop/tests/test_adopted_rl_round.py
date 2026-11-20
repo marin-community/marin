@@ -107,11 +107,11 @@ def test_round_adopts_sft_or_native_rl_without_sft_and_keeps_absolute_steps(
 
 @pytest.mark.parametrize("profile", ["one-rack", "three-rack"])
 def test_round_best_and_final_native_checkpoints_use_permanent_storage(
-    local_round, tmp_path, monkeypatch, permanent_storage_root
+    local_round, tmp_path, permanent_path, monkeypatch
 ):
     monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
     terminal = adopted_round_rl(local_round)
-    output = permanent_storage_root / "permanent" / "round"
+    output = permanent_path / "round"
     context = StepContext.for_run(
         str(output), str(output.parent), deps=terminal.deps, runtime_args=terminal.runtime_args
     )
