@@ -27,7 +27,7 @@ def published_queue(marina_url: str, applet_id: str) -> dict[str, Any]:
     """
     # marina is not a dependency of the marin-core test environment this module's
     # tests run under; import it where the query channel is actually used.
-    from marina.client import applet_query
+    from marina.client import applet_query  # noqa: PLC0415
 
     query = applet_query(marina_url, applet_id)
     rows = query(
