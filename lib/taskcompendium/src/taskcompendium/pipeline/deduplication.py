@@ -316,7 +316,7 @@ def unique_documents(
         with closing(sqlite3.connect(str(Path(scratch) / "tasks.sqlite"))) as database:
             database.execute("CREATE TABLE tasks (id TEXT PRIMARY KEY, contract TEXT, document TEXT, runtime TEXT)")
             for document, runtime in documents:
-                task = TaskSpec.model_validate(document)
+                task = TaskSpec.model_validate_json(json.dumps(document))
                 database.execute(
                     "INSERT INTO tasks VALUES (?, ?, ?, ?)",
                     (task.id, task_identity(task), task.model_dump_json(), json.dumps(runtime)),

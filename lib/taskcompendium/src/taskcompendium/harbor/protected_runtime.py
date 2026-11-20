@@ -8,7 +8,7 @@ from pathlib import Path, PurePosixPath
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from taskcompendium.identity import canonical_sha256
+from taskcompendium.identity import canonical_sha256, task_spec_sha256
 from taskcompendium.models import TaskSpec
 
 RUNTIME_BINDING_FILE = "expected-runtime.json"
@@ -101,7 +101,7 @@ class ProtectedRuntimeBinding(BaseModel):
     roles: dict[RuntimeRole, ExpectedRuntime]
 
     def require_task(self, task: TaskSpec) -> None:
-        if self.task_sha256 != canonical_sha256(task.model_dump(mode="json")):
+        if self.task_sha256 != task_spec_sha256(task):
             raise ValueError("Protected runtime binding belongs to another TaskSpec")
 
 
@@ -115,7 +115,7 @@ def write_runtime_binding(
 ) -> None:
     """Freeze the selected source roles and expected runtime before task checksums are measured."""
     binding = ProtectedRuntimeBinding(
-        task_sha256=canonical_sha256(task.model_dump(mode="json")), runtime_sha256=canonical_sha256(runtime), roles=roles
+        task_sha256=task_spec_sha256(task), runtime_sha256=canonical_sha256(runtime), roles=roles
     )
     with (directory / RUNTIME_BINDING_FILE).open("x") as stream:
         stream.write(binding.model_dump_json(indent=2) + "\n")

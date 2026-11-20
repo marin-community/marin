@@ -83,7 +83,7 @@ def repair_cohort(source: Path, output: Path, *, expected_sha256: str, expected_
             rows = []
             for row in batch.to_pylist():
                 document = json.loads(row["task_spec"])
-                original = TaskSpec.model_validate(document)
+                original = TaskSpec.model_validate_json(json.dumps(document))
                 before = hashlib.sha256(row["task_spec"].encode()).hexdigest()
                 if row["id"] != original.id or row["task_sha256"] != before or original.id in expected:
                     raise ValueError("PDBThink publication repeats a task or has a stale task hash")

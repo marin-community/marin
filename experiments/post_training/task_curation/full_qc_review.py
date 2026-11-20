@@ -148,7 +148,7 @@ def contract_batches(inputs: FullQCInputs) -> Iterator[ContractBatch]:
         identifier = document["id"]
         if identifier not in index:
             continue
-        task = TaskSpec.model_validate(document)
+        task = TaskSpec.model_validate_json(json.dumps(document))
         contract = task_contract(task, deployment)
         if task.id in seen or contract != index[task.id]:
             raise ValueError(f"Task differs from prepared contract: {task.id}")

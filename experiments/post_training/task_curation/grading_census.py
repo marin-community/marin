@@ -97,7 +97,7 @@ def census_source(config: GradingCensusInput, output_root: str) -> GradingCensus
                         task_count += 1
                         document = json.loads(encoded)
                         try:
-                            task = TaskSpec.model_validate(document)
+                            task = TaskSpec.model_validate_json(json.dumps(document))
                             if isinstance(task.grader, NoGrader) and any(
                                 resource.path == "task.toml" for resource in task.resources.verifier
                             ):

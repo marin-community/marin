@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 from finestore.rl.status_taxonomy import DataRestriction
-from taskcompendium.identity import canonical_sha256
+from taskcompendium.identity import canonical_sha256, task_spec_sha256
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.models import Confidence, Defect, ReviewRecord, ReviewStatus
 from taskcompendium.pipeline.review import review_payload
@@ -141,7 +141,7 @@ def freeze_sample(
     for row in selected:
         raw = tasks[row["task_id"]]
         task = TaskSpec.model_validate_json(raw["task_spec"])
-        assert canonical_sha256(task.model_dump(mode="json")) == row["task_sha256"]
+        assert task_spec_sha256(task) == row["task_sha256"]
         assert canonical_sha256(json.loads(raw["runtime"])) == row["runtime_sha256"]
         case_id = "Q" + hashlib.sha256(task.id.encode()).hexdigest()[:12]
         payload = review_payload(task.model_copy(update={"id": case_id}))

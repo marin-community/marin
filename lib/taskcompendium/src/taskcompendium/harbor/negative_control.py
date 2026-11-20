@@ -10,7 +10,7 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict, Field
 
 from taskcompendium.harbor.execution import native_execution_limits
-from taskcompendium.identity import canonical_sha256
+from taskcompendium.identity import task_spec_sha256
 from taskcompendium.models import ExecutionRequirements, NoGrader, TaskSpec
 from taskcompendium.runtime.resources import resource_bytes
 
@@ -58,7 +58,7 @@ def declared_setup_preparation(task: TaskSpec, source: NegativeControlSource, co
     if (
         negative_control_setup_kind(task) is not NegativeControlSetupKind.DECLARED_SETUP
         or task.id != source.task_id
-        or canonical_sha256(task.model_dump(mode="json")) != source.source_task_sha256
+        or task_spec_sha256(task) != source.source_task_sha256
         or task.environment_requirements.setup_commands != (setup["command"],)
         or setup != original_setup
         or native_execution_limits(config).requirements != source.execution_requirements

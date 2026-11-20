@@ -22,7 +22,7 @@ from taskcompendium.harbor.negative_control import (
     public_task_preparation,
     require_nop_trial_config,
 )
-from taskcompendium.identity import canonical_sha256
+from taskcompendium.identity import canonical_sha256, task_spec_json, task_spec_sha256
 
 from harbor.host_capabilities import HostCapabilities
 from harbor.models.task.task import Task
@@ -99,7 +99,7 @@ async def run_negative_control(
         specification = trial.specification
         if (
             specification.id != source.task_id
-            or canonical_sha256(specification.model_dump(mode="json")) != source.source_task_sha256
+            or task_spec_sha256(specification) != source.source_task_sha256
             or trial.shape != source.execution_requirements
             or trial.verifier_shape != source.verifier_execution_requirements
             or (trial.source_runtime.runtime_sha256 if trial.source_runtime is not None else None)
@@ -125,7 +125,7 @@ async def run_negative_control(
         _write_json(descriptor, preparation)
     elif isinstance(native_setup, DeclaredSourceSetup):
         assert preparation is not None
-        specification_bytes = native_setup.task_spec.model_dump_json(indent=2).encode()
+        specification_bytes = task_spec_json(native_setup.task_spec, indent=2).encode()
         (output_root / "source-task-spec.json").write_bytes(specification_bytes)
         shutil.copy2(packet.paths.config_path, output_root / "consumed-task.toml")
         preparation["task_spec_file_sha256"] = hashlib.sha256(specification_bytes).hexdigest()

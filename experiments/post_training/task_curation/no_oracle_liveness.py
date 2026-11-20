@@ -41,7 +41,7 @@ from rolloutengine.models import MachineRuntimeSpec
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.machine import HostImage, MachineSpec, NetworkPolicy
 from taskcompendium.grading_result import GradeResult, Outcome
-from taskcompendium.identity import canonical_sha256
+from taskcompendium.identity import canonical_sha256, task_spec_sha256
 from taskcompendium.models import ConversationTrace, GradingAttempt, NoGrader, TaskSpec, TextMessage
 from taskcompendium.runtime.grading import grade_empty_in_sandbox, grade_in_sandbox
 
@@ -98,7 +98,7 @@ async def run_one(
 ) -> LivenessResult:
     """Grade captured candidate files or an empty submission in the declared grader environment."""
     with tempfile.TemporaryDirectory(prefix="liveness-build-") as context:
-        task = TaskSpec.model_validate(spec["task"])
+        task = TaskSpec.model_validate_json(json.dumps(spec["task"]))
         if task.execution_requirements is None:
             raise ValueError(f"Verifier qualification requires explicit execution requirements: {task.id}")
         verifier_timeout = task.execution_requirements.verifier_timeout_sec
@@ -228,7 +228,7 @@ async def run(
             result = await run_one(specs[task_id], bases.get(task_id, "<unknown>"), cgroup_parent=cgroup_parent)
             result = replace(
                 result,
-                task_sha256=canonical_sha256(TaskSpec.model_validate(specs[task_id]["task"]).model_dump(mode="json")),
+                task_sha256=task_spec_sha256(TaskSpec.model_validate_json(json.dumps(specs[task_id]["task"]))),
                 runtime_sha256=canonical_sha256(specs[task_id]["runtime"]),
                 submission_kind="empty",
             )

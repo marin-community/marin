@@ -294,6 +294,10 @@ def test_new_private_pin_cannot_hide_a_resolved_upstream_ban(monkeypatch):
     monkeypatch.setattr(license_publication, "resolve_license", lambda target: receipt)
     with pytest.raises(ValueError, match="Recorded upstream ban"):
         license_publication.check_publication(receipt.source_id, receipt.dataset_id, receipt.revision, "train")
+    with pytest.raises(ValueError, match="Recorded upstream ban"):
+        license_publication.require_publication_license(
+            receipt, receipt.source_id, receipt.dataset_id, receipt.revision, "train"
+        )
 
 
 def lineage_receipt(revision: str, scope: list[str], *, with_source: bool = True) -> LicenseReceipt:
@@ -403,3 +407,13 @@ def test_check_publication_never_clears_a_restricted_pin(tmp_path, monkeypatch):
     registered_lineage(monkeypatch, receipt)
     with pytest.raises(ValueError, match="Published pin failed"):
         license_publication.check_publication(receipt.source_id, receipt.dataset_id, receipt.revision, "train")
+
+
+@pytest.mark.parametrize("revision", [REVISION, "b" * 40])
+def test_publication_license_gate_calls_current_checker_with_exact_pin(revision):
+    receipt = source_receipt(b"---\nlicense: apache-2.0\n---\n")
+    if revision != REVISION:
+        with pytest.raises(ValueError, match="another source revision"):
+            license_publication.require_publication_license(receipt, receipt.source_id, DATASET, revision, "train")
+        return
+    license_publication.require_publication_license(receipt, receipt.source_id, DATASET, revision, "train")

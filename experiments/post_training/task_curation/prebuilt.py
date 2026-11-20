@@ -46,7 +46,7 @@ from taskcompendium.grading_environment import (
     grading_environment_census,
     shared_integrity_issue,
 )
-from taskcompendium.identity import canonical_sha256
+from taskcompendium.identity import canonical_sha256, task_spec_json
 from taskcompendium.models import NoGrader, TaskSpec
 from taskcompendium.pipeline.audit_schema import NORMALIZED_SCHEMA
 from taskcompendium.pipeline.conversion import normalization_columns
@@ -115,7 +115,7 @@ def import_cohort(config: PrebuiltCohort) -> str:
         task = envelope.get("task") or {}
         if not envelope.get("runtime"):
             raise ValueError(f"{row['path']}: envelope carries no runtime machines")
-        spec = TaskSpec.model_validate(task)
+        spec = TaskSpec.model_validate_json(json.dumps(task))
         reason = missing_environment(spec.model_dump(mode="json"))
         if reason is not None:
             raise ValueError(f"{row['path']}: {reason}")
@@ -290,7 +290,7 @@ def deduplicate_cohort(tasks: Path, destination: StoragePath) -> tuple[pa.Table,
     lowered = "lowered_task_spec" in table.column_names
     specs = [
         (
-            TaskSpec.model_validate(json.loads(row["lowered_task_spec"])["task"])
+            TaskSpec.model_validate_json(json.dumps(json.loads(row["lowered_task_spec"])["task"]))
             if lowered
             else TaskSpec.model_validate_json(row["task_spec"])
         )
@@ -315,9 +315,9 @@ def _quick_view(config: PrebuiltCohort, tasks: Path, destination: str) -> Campai
     lowered = "lowered_task_spec" in table.column_names
     task_json = [
         (
-            TaskSpec.model_validate(json.loads(row["lowered_task_spec"])["task"]).model_dump_json()
+            task_spec_json(TaskSpec.model_validate_json(json.dumps(json.loads(row["lowered_task_spec"])["task"])))
             if lowered
-            else TaskSpec.model_validate_json(row["task_spec"]).model_dump_json()
+            else task_spec_json(TaskSpec.model_validate_json(row["task_spec"]))
         )
         for row in table.to_pylist()
     ]
@@ -440,7 +440,7 @@ def prebuilt_artifact(
                 (
                     TaskSpec.model_validate_json(row["task_spec"])
                     if invocation.encoding is PrebuiltEncoding.CANONICAL
-                    else TaskSpec.model_validate(json.loads(row["lowered_task_spec"])["task"])
+                    else TaskSpec.model_validate_json(json.dumps(json.loads(row["lowered_task_spec"])["task"]))
                 )
                 for row in table.to_pylist()
             )
@@ -453,7 +453,7 @@ def prebuilt_artifact(
                 task = TaskSpec.model_validate_json(serialized)
                 original_path = task.source.row
             else:
-                task = TaskSpec.model_validate(json.loads(row["lowered_task_spec"])["task"])
+                task = TaskSpec.model_validate_json(json.dumps(json.loads(row["lowered_task_spec"])["task"]))
                 serialized = task.model_dump_json()
                 original_path = row["path"]
             require_runnable_grader(task)

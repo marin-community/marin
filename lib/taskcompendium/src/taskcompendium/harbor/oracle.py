@@ -9,7 +9,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-from taskcompendium.identity import canonical_sha256
+from taskcompendium.identity import canonical_sha256, task_spec_sha256
 from taskcompendium.models import AnswerType, TaskSpec
 from taskcompendium.pipeline.fingerprints import callable_identity
 from taskcompendium.pipeline.models import ControlSubmission, OracleCommand
@@ -56,7 +56,7 @@ class OracleCommandBinding(BaseModel):
             raise ValueError("An original OracleCommand requires preserved source solution resources")
         if task.answer_type != AnswerType.TEXT or task.final_tools:
             raise ValueError("This OracleCommand delivery requires a text answer without final tool calls")
-        if self.task_sha256 != canonical_sha256(task.model_dump(mode="json")):
+        if self.task_sha256 != task_spec_sha256(task):
             raise ValueError("OracleCommand belongs to another TaskSpec")
         if self.resources_sha256 != oracle_resource_identity(task):
             raise ValueError("OracleCommand source resource bytes changed")
@@ -82,7 +82,7 @@ def write_oracle_command(
     if not isinstance(submission, OracleCommand) or submission.answer_file is None:
         return False
     binding = OracleCommandBinding(
-        task_sha256=canonical_sha256(task.model_dump(mode="json")),
+        task_sha256=task_spec_sha256(task),
         runtime_sha256=canonical_sha256(runtime),
         resources_sha256=oracle_resource_identity(task),
         source_revision=source_revision,

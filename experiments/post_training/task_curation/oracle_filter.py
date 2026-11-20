@@ -34,7 +34,7 @@ from taskcompendium.harbor.execution import native_execution_limits
 from taskcompendium.harbor.oracle import read_oracle_command
 from taskcompendium.harbor.protected_runtime import read_runtime_binding
 from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, TaskSpecRuntimeBinding, read_source_runtime
-from taskcompendium.identity import canonical_sha256
+from taskcompendium.identity import canonical_sha256, task_spec_sha256
 from taskcompendium.models import ExecutionRequirements, TaskSpec, decode_json_value
 from taskcompendium.pipeline.legacy_producer_1485 import LegacyProducer1485QualificationReceipt
 from taskcompendium.pipeline.legacy_roles import LegacyRoleQualificationReceipt
@@ -194,7 +194,7 @@ def source_runtime_binding(task: TaskSpec, runtime: dict | None) -> TaskSpecRunt
     if runtime is None:
         return None
     binding = TaskSpecRuntimeBinding(
-        task_sha256=canonical_sha256(task.model_dump(mode="json")),
+        task_sha256=task_spec_sha256(task),
         runtime_sha256=canonical_sha256(runtime),
         runtime=runtime,
     )
@@ -322,7 +322,7 @@ def require_recollection_binding(task: TaskSpec, mapping: Mapping, recollection:
 
 def row_task(row: dict) -> TaskSpec | None:
     if "lowered_task_spec" in row:
-        return TaskSpec.model_validate(json.loads(row["lowered_task_spec"])["task"])
+        return TaskSpec.model_validate_json(json.dumps(json.loads(row["lowered_task_spec"])["task"]))
     serialized = row.get("task_json", row.get("task_spec"))
     return TaskSpec.model_validate_json(serialized) if serialized is not None else None
 
@@ -634,7 +634,7 @@ def filter_cohort(
                                 f"No resource calibration mapping or immutable input evidence for {task.id}"
                             )
                         entry = MechanicalOracleTaskReceipt(
-                            task_sha256=canonical_sha256(task.model_dump(mode="json")),
+                            task_sha256=task_spec_sha256(task),
                             runtime_sha256=row_runtime_hash(row),
                             has_oracle=oracle,
                             exclusion_reason=OracleExclusionReason.EXECUTABILITY_PROOF_MISSING,
@@ -659,7 +659,7 @@ def filter_cohort(
                 checksum = ""
                 if task.id in mappings:
                     mapping = mappings[task.id]
-                    if mapping["task_sha256"] != canonical_sha256(task.model_dump(mode="json")):
+                    if mapping["task_sha256"] != task_spec_sha256(task):
                         raise ValueError(f"Task changed after Harbor export: {task.id}")
                     if mapping.get("runtime_sha256") != row_runtime_hash(row):
                         raise ValueError(f"Runtime changed after Harbor export: {task.id}")
@@ -810,7 +810,7 @@ def filter_cohort(
                     elif negative_control.passed(policy):
                         reason = OracleExclusionReason.NEGATIVE_CONTROL_PASSED
                 entry = OracleTaskReceipt(
-                    task_sha256=canonical_sha256(task.model_dump(mode="json")),
+                    task_sha256=task_spec_sha256(task),
                     runtime_sha256=row_runtime_hash(row),
                     harbor_task_checksum=checksum,
                     source_task_sha256=mapping["task_sha256"],
@@ -919,7 +919,7 @@ def write_task_map(cohort: Path, tasks_dir: Path, output: Path) -> None:
                 mappings[task.id] = {
                     **package,
                     "task_path": str(task_path),
-                    "task_sha256": canonical_sha256(task.model_dump(mode="json")),
+                    "task_sha256": task_spec_sha256(task),
                     "runtime_sha256": row_runtime_hash(row),
                 }
     output.write_text(json.dumps(mappings, indent=2) + "\n")
@@ -1151,7 +1151,7 @@ def calibration_contracts(cohort: Path, mappings: dict) -> Iterator[tuple[TaskSp
                     raise ValueError("Calibration task map must cover exactly the full converted population")
                 seen.add(task.id)
                 mapping = mappings[task.id]
-                if mapping["task_sha256"] != canonical_sha256(task.model_dump(mode="json")):
+                if mapping["task_sha256"] != task_spec_sha256(task):
                     raise ValueError(f"Task changed after Harbor export: {task.id}")
                 runtime = row_runtime(row)
                 runtime_sha256 = canonical_sha256(runtime) if runtime is not None else None
@@ -1362,9 +1362,9 @@ def write_retry_plan(
                 if task.id in selected:
                     raise ValueError(f"Duplicate retry task: {task.id}")
                 mapping = mappings[task.id]
-                if mapping["task_sha256"] != canonical_sha256(task.model_dump(mode="json")) or mapping.get(
-                    "runtime_sha256"
-                ) != row_runtime_hash(row):
+                if mapping["task_sha256"] != task_spec_sha256(task) or mapping.get("runtime_sha256") != row_runtime_hash(
+                    row
+                ):
                     raise ValueError(f"Retry input task changed: {task.id}")
                 calibration = ResourceCalibrationReceipt.model_validate(mapping["calibration"])
                 require_infrastructure_retry_parent(calibration, approvals[task.id])

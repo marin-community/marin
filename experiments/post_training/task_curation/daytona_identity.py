@@ -14,6 +14,7 @@ Daytona-safe. No Daytona API calls are made.
 
 import base64
 import io
+import json
 import tarfile
 import tempfile
 import tomllib
@@ -129,7 +130,7 @@ def native_task_toml(task: Mapping) -> bytes:
     from taskcompendium.runtime.resources import resource_bytes  # noqa: PLC0415
 
     if any(row["path"] == ARCHIVED_SOURCE_CONFIG for row in task["resources"].get("oracle", ())):
-        parsed = TaskSpec.model_validate(task)
+        parsed = TaskSpec.model_validate_json(json.dumps(task))
         configurations = source_task_configurations(parsed)
         if len(configurations) != 1:
             raise ValueError(f"{parsed.id}: expected one archived source task configuration")

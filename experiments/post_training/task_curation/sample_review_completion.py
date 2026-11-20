@@ -91,7 +91,7 @@ def freeze_topup_tasks(population: SourceTextPopulation, task_ids: tuple[str, ..
     runtimes: dict[str, dict] = {}
     for document, runtime in population_documents(population):
         if document["id"] in wanted:
-            tasks[document["id"]] = TaskSpec.model_validate(document)
+            tasks[document["id"]] = TaskSpec.model_validate_json(json.dumps(document))
             runtimes[document["id"]] = runtime
     missing = sorted(wanted - set(tasks))
     if missing:

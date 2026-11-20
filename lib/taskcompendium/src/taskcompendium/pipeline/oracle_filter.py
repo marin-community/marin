@@ -27,7 +27,7 @@ from taskcompendium.harbor.negative_control import (
     require_nop_trial_config,
 )
 from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, TaskSpecRuntimeBinding, network_policy_qualified
-from taskcompendium.identity import canonical_sha256
+from taskcompendium.identity import canonical_sha256, task_spec_sha256
 from taskcompendium.models import (
     ExecutionRequirements,
     NoGrader,
@@ -405,7 +405,7 @@ def trial_network_qualified(task: TaskSpec, runtime: dict | None, trial: OracleT
         return True
     binding = (
         TaskSpecRuntimeBinding(
-            task_sha256=canonical_sha256(task.model_dump(mode="json")),
+            task_sha256=task_spec_sha256(task),
             runtime_sha256=canonical_sha256(runtime),
             runtime=runtime,
         )
@@ -1800,7 +1800,7 @@ class OracleFilterReceipt(BaseModel):
         if task.id not in self.tasks:
             raise ValueError(f"Oracle filter receipt omits task {task.id}")
         entry = self.tasks[task.id]
-        if entry.task_sha256 != canonical_sha256(task.model_dump(mode="json")):
+        if entry.task_sha256 != task_spec_sha256(task):
             raise ValueError(f"Task changed after oracle filtering: {task.id}")
         if entry.runtime_sha256 != (canonical_sha256(runtime) if runtime is not None else None):
             raise ValueError(f"Runtime changed after oracle filtering: {task.id}")

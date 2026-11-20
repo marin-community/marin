@@ -9,7 +9,7 @@ import json
 from finestore.rl.curation import ContentEvidenceReference
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.identity import canonical_sha256
+from taskcompendium.identity import canonical_sha256, task_spec_sha256
 from taskcompendium.models import ExecutionRequirements, TaskSpec
 from taskcompendium.pipeline.legacy_roles import (
     LegacyRoleAdoptionDecision,
@@ -163,7 +163,7 @@ def legacy_role_qualifications(
         task = TaskSpec.model_validate_json(members["original-packet/task-spec.json"])
         if (
             task.id != task_id
-            or canonical_sha256(task.model_dump(mode="json")) != entry["task_sha256"]
+            or task_spec_sha256(task) != entry["task_sha256"]
             or observation["packet_task_sha256"] != entry["task_sha256"]
             or observation["packet_checksum"] != mapping["source_task_checksum"]
             or observation["raw_task_checksum"] != mapping["task_checksum"]
@@ -190,7 +190,7 @@ def legacy_role_qualifications(
             source_task_checksum=mapping["source_task_checksum"],
             consumed_task_sha256=observation["packet_task_sha256"],
             consumed_task_checksum=mapping["task_checksum"],
-            published_task_sha256=canonical_sha256(published.model_dump(mode="json")),
+            published_task_sha256=task_spec_sha256(published),
             result_sha256=final.result_sha256,
             calibration_sha256=canonical_sha256(calibration.model_dump(mode="json")),
             input_cohort_sha256=entry["cohort_sha256"],

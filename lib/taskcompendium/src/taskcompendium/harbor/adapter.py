@@ -13,6 +13,7 @@ import tomlkit
 from taskcompendium.browsecomp import BROWSECOMP_ACTION_INTERFACE, browsecomp_state, browsecomp_tools
 from taskcompendium.grading_environment import GradingEnvironmentMode, assess_grading_environment
 from taskcompendium.harbor.execution import native_execution_limits
+from taskcompendium.identity import task_spec_json
 from taskcompendium.integrity import MultiSweDeliveryContract, RootDeliveryContract
 from taskcompendium.models import (
     AnswerType,
@@ -175,7 +176,7 @@ def write_harbor_task(
     build_timeout = declared_build_timeout(task)
     directory.mkdir(parents=True, exist_ok=False)
     (directory / "environment").mkdir()
-    (directory / TASK_SPEC_FILE).write_text(task.model_dump_json() + "\n")
+    (directory / TASK_SPEC_FILE).write_text(task_spec_json(task) + "\n")
     # This is the human-readable task view; the TaskSpec agent consumes the complete conversation.
     (directory / "instruction.md").write_text(json.dumps(conversation_messages(task.context.events), ensure_ascii=False))
     (directory / "task.toml").write_text(

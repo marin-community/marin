@@ -46,7 +46,7 @@ from taskcompendium.harbor.adapter import (
     require_trial_budget,
     unsupported_harbor_contract,
 )
-from taskcompendium.identity import canonical_sha256
+from taskcompendium.identity import canonical_sha256, task_spec_json, task_spec_sha256
 from taskcompendium.integrity import MultiSweDeliveryContract, RootDeliveryContract
 from taskcompendium.harbor.protected_runtime import (
     RUNTIME_OBSERVATION_TIMEOUT,
@@ -471,7 +471,7 @@ class TaskSpecTrial(Trial):
                 self.paths.trial_dir / "tool-providers.json",
                 json.dumps(
                     {
-                        "task_sha256": canonical_sha256(task.model_dump(mode="json")),
+                        "task_sha256": task_spec_sha256(task),
                         "providers": {
                             name: requirement.model_dump(mode="json")
                             for name, requirement in task.environment_requirements.tool_providers.items()
@@ -796,7 +796,7 @@ class TaskSpecTrial(Trial):
             with TemporaryDirectory(prefix="task-spec-grader-") as directory:
                 local = Path(directory)
                 payload = local / "task.json"
-                payload.write_text(self.specification.model_dump_json())
+                payload.write_text(task_spec_json(self.specification))
                 await machine.upload(payload, "/tests/task-spec.json")
                 conversation = local / "conversation.json"
                 conversation.write_text(self.attempt.conversation.model_dump_json())

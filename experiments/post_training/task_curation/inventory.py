@@ -27,7 +27,7 @@ from taskcompendium.convert.structure_closure import structure_closure_task
 from taskcompendium.evaluation.corpus import EvaluationCase, evaluation_cases
 from taskcompendium.evaluation.spec import ChatGeneration, TextGeneration
 from taskcompendium.grader import grader_config
-from taskcompendium.identity import canonical_sha256
+from taskcompendium.identity import canonical_sha256, task_spec_sha256
 from taskcompendium.importers.evalchemy.assets.code_protocol import mbpp_example
 from taskcompendium.models import (
     SCHEMA_VERSION,
@@ -690,7 +690,7 @@ def _check_pass_rates(tasks: tuple[TaskSpec, ...], rates: Mapping[str, EvalLiteR
     if not {task.id for task in tasks} <= rates.keys():
         raise ValueError("Pass-rate evidence must cover every selected panel task")
     for task in tasks:
-        if rates[task.id].task_digest != canonical_sha256(task.model_dump(mode="json")):
+        if rates[task.id].task_digest != task_spec_sha256(task):
             raise ValueError(f"Pass-rate evidence measures different task content: {task.id}")
 
 

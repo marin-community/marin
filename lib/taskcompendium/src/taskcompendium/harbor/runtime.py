@@ -14,7 +14,7 @@ from taskcompendium.harbor.adapter import (
     declared_execution_limits,
     source_task_configurations,
 )
-from taskcompendium.identity import canonical_sha256
+from taskcompendium.identity import canonical_sha256, task_spec_sha256
 from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.resources import resource_bytes
 
@@ -49,7 +49,7 @@ class TaskSpecRuntimeBinding(BaseModel):
         return self
 
     def require_task(self, task: TaskSpec) -> None:
-        if self.task_sha256 != canonical_sha256(task.model_dump(mode="json")):
+        if self.task_sha256 != task_spec_sha256(task):
             raise ValueError("Source runtime belongs to another TaskSpec")
         declared = declared_execution_limits(task)
         verifier: dict[str, int | float] = (
@@ -138,7 +138,7 @@ def network_policy_qualified(binding: TaskSpecRuntimeBinding | None, observed: T
 def write_source_runtime(task: TaskSpec, runtime: dict, directory: Path) -> None:
     """Preserve the complete original runtime before measuring a packet's checksum."""
     binding = TaskSpecRuntimeBinding(
-        task_sha256=canonical_sha256(task.model_dump(mode="json")),
+        task_sha256=task_spec_sha256(task),
         runtime_sha256=canonical_sha256(runtime),
         runtime=runtime,
     )

@@ -97,7 +97,7 @@ def full_content_result_binding(
         raise ValueError("Actor census differs from the reviewed retained population")
     seen = set()
     for document, runtime in population_documents(population):
-        task = TaskSpec.model_validate(document)
+        task = TaskSpec.model_validate_json(json.dumps(document))
         contract = task_contract(task, runtime)
         if task.id in seen or task.id not in records or contract != {key: records[task.id][key] for key in contract}:
             raise ValueError("Final binding population differs from reviewed task/runtime contracts")

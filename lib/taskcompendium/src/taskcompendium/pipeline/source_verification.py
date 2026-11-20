@@ -27,7 +27,7 @@ from zephyr.dataset import Dataset, ShardInfo
 from zephyr.readers import load_parquet
 from zephyr.writers import write_parquet_file
 
-from taskcompendium.identity import canonical_sha256
+from taskcompendium.identity import canonical_sha256, task_spec_sha256
 from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.execution_telemetry import PhaseTelemetry, execute_phase
 from taskcompendium.pipeline.fingerprints import callable_identity
@@ -325,7 +325,7 @@ def _verify_sample_with_evidence(
     row: dict[str, Any], *, suite: CheckSuite, attempts: int, identity: str, report_path: str
 ) -> VerifiedSample:
     task = TaskSpec.model_validate_json(row["task_json"])
-    task_sha256 = canonical_sha256(task.model_dump(mode="json"))
+    task_sha256 = task_spec_sha256(task)
     trials = []
     evidence = []
     history = []
@@ -527,7 +527,7 @@ def _with_saved_row(
 ) -> dict[str, Any]:
     if not prior:
         return {**row, "saved_trials": {}}
-    digest = canonical_sha256(TaskSpec.model_validate_json(row["task_json"]).model_dump(mode="json"))
+    digest = task_spec_sha256(TaskSpec.model_validate_json(row["task_json"]))
     return {
         **row,
         "saved_trials": {attempt: prior[(digest, attempt)] for attempt in range(attempts) if (digest, attempt) in prior},
@@ -665,7 +665,7 @@ def _gate_with_previous(
     previous: dict[str, dict[str, list[CheckResult]]],
 ) -> dict[str, Any]:
     if row["task_id"] not in results and row["task_id"] in previous and is_accepted(row):
-        digest = canonical_sha256(TaskSpec.model_validate_json(row["task_json"]).model_dump(mode="json"))
+        digest = task_spec_sha256(TaskSpec.model_validate_json(row["task_json"]))
         checks = previous[row["task_id"]].get(digest)
         if checks is not None:
             return gate_source_row(row, status=status, results={row["task_id"]: checks})

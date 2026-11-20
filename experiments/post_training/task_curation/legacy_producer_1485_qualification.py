@@ -11,7 +11,7 @@ from pathlib import PurePosixPath
 from finestore.rl.curation import ContentEvidenceReference
 from pydantic import BaseModel, ConfigDict
 from taskcompendium.harbor.runtime import TaskSpecRuntimeBinding
-from taskcompendium.identity import canonical_sha256
+from taskcompendium.identity import canonical_sha256, task_spec_sha256
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.legacy_producer_1485 import (
     LegacyProducer1485AdoptionDecision,
@@ -186,7 +186,7 @@ def _qualified_1485_pass(
         or hashlib.sha256(original_runtime).hexdigest() != runtime_evidence["sha256"]
         or members["original-packet/task-spec.json"] != members[consumed_spec]
         or task.id != task_id
-        or canonical_sha256(task.model_dump(mode="json")) != entry["task_sha256"]
+        or task_spec_sha256(task) != entry["task_sha256"]
         or binding.task_sha256 != entry["task_sha256"]
         or binding.runtime_sha256 != entry["runtime_sha256"]
         or binding.model_dump(mode="json") != observation["source_runtime"]
@@ -217,7 +217,7 @@ def _qualified_1485_pass(
         source_task_checksum=mapping["source_task_checksum"],
         consumed_task_sha256=observation["packet_task_sha256"],
         consumed_task_checksum=mapping["task_checksum"],
-        published_task_sha256=canonical_sha256(published.model_dump(mode="json")),
+        published_task_sha256=task_spec_sha256(published),
         result_sha256=final.result_sha256,
         calibration_sha256=canonical_sha256(calibration.model_dump(mode="json")),
         input_cohort_sha256=entry["cohort_sha256"],

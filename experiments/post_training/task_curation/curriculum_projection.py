@@ -24,7 +24,7 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
-from taskcompendium.identity import canonical_sha256
+from taskcompendium.identity import canonical_sha256, task_spec_sha256
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.curriculum.coverage import STATISTIC_FIELDS, build_curriculum_coverage
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, AlignmentSource, CurriculumCoverage
@@ -260,8 +260,8 @@ def pinned_upstream_rows(
         upstream_counts[key] += 1
         if document["id"] not in selected:
             continue
-        task = TaskSpec.model_validate(document)
-        if canonical_sha256(task.model_dump(mode="json")) != semantic_tasks[task.id].task_hash:
+        task = TaskSpec.model_validate_json(json.dumps(document))
+        if task_spec_sha256(task) != semantic_tasks[task.id].task_hash:
             raise ValueError(f"Upstream identity TaskSpec differs from its public manifest: {task.id}")
         if key in rows:
             raise ValueError("Repeated public input has no unique pinned upstream row")

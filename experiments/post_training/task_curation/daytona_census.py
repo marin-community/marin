@@ -370,7 +370,7 @@ def converted_source(source, artifact_root: str, rejections: Counter, admission_
         for batch in pq.ParquetFile(Path(root) / config.files[0]).iter_batches(batch_size=32):
             for row in batch.to_pylist():
                 envelope = json.loads(row["lowered_task_spec"])
-                task = TaskSpec.model_validate(envelope["task"])
+                task = TaskSpec.model_validate_json(json.dumps(envelope["task"]))
                 if missing_environment(envelope["task"]) is not None:
                     admission_rejections["source_defect:missing_environment"] += 1
                 else:

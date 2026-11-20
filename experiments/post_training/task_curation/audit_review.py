@@ -12,7 +12,7 @@ from marin.inference.openai_chat import OpenAIChatClient
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import require_secret
-from taskcompendium.identity import canonical_sha256
+from taskcompendium.identity import task_spec_sha256
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.models import ReviewStatus
 from taskcompendium.pipeline.review import ChatReviewer
@@ -34,11 +34,11 @@ def main() -> None:
     if hashlib.sha256(raw).hexdigest() != args.sample_sha256:
         raise ValueError("Frozen sample bytes changed")
     rows = json.loads(raw)
-    tasks = [TaskSpec.model_validate(row["task"]) for row in rows]
+    tasks = [TaskSpec.model_validate_json(json.dumps(row["task"])) for row in rows]
     if len(tasks) != 100 or len({task.id for task in tasks}) != 100:
         raise ValueError("The paired audit requires exactly 100 distinct frozen tasks")
     for row, task in zip(rows, tasks, strict=True):
-        if canonical_sha256(task.model_dump(mode="json")) != row["contract"]["task_sha256"]:
+        if task_spec_sha256(task) != row["contract"]["task_sha256"]:
             raise ValueError("Frozen task contract changed")
     output = StoragePath(args.output)
     reviewer = ChatReviewer(

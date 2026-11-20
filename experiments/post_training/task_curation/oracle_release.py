@@ -19,7 +19,7 @@ from huggingface_hub import HfApi, hf_hub_download
 from pydantic import BaseModel, ConfigDict, TypeAdapter, model_validator
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
-from taskcompendium.identity import canonical_sha256
+from taskcompendium.identity import task_spec_sha256
 from taskcompendium.pipeline.oracle_filter import MechanicalOracleTaskReceipt, OracleExclusionReason, OracleFilterReceipt
 
 from experiments.post_training.task_curation.census_binding import bind_actor_census
@@ -108,10 +108,7 @@ def verify_oracle_release(
             source_sha = (
                 entry.task_sha256 if isinstance(entry, MechanicalOracleTaskReceipt) else entry.source_task_sha256
             )
-            if (
-                source_sha != canonical_sha256(task.model_dump(mode="json"))
-                or row_runtime_hash(row) != entry.runtime_sha256
-            ):
+            if source_sha != task_spec_sha256(task) or row_runtime_hash(row) != entry.runtime_sha256:
                 raise ValueError("Original task/runtime differs from canonical filtration")
             seen.add(task.id)
     if seen != receipt.tasks.keys() or len(seen) != evidence.original_count:

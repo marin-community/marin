@@ -8,6 +8,7 @@ snapshot counter and the liveness runner all read that envelope through these
 records, so its schema is checked at load rather than walked by string keys.
 """
 
+import json
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 
@@ -48,7 +49,7 @@ class LoweredSpec:
     def from_document(cls, document: dict) -> "LoweredSpec":
         runtime = document.get("runtime") or {}
         return cls(
-            TaskSpec.model_validate(document.get("task") or {}),
+            TaskSpec.model_validate_json(json.dumps(document.get("task") or {})),
             MachineShape.from_mapping(runtime.get("task_machine") or {}),
             MachineShape.from_mapping(runtime.get("verifier_machine") or {}),
         )

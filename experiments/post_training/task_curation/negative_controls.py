@@ -20,7 +20,7 @@ from taskcompendium.harbor.negative_control import (
     public_task_preparation,
 )
 from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, TaskSpecRuntimeBinding
-from taskcompendium.identity import canonical_sha256
+from taskcompendium.identity import canonical_sha256, task_spec_sha256
 from taskcompendium.models import ExecutionRequirements, TaskSpec
 from taskcompendium.pipeline.oracle_filter import (
     NativeVerifierGrade,
@@ -123,7 +123,7 @@ def _require_task_spec_preparation(
         or preparation["task_spec_file"] != "source-task-spec.json"
         or preparation["task_spec_file_sha256"] != hashlib.sha256(specification_bytes).hexdigest()
         or preparation["task_spec_sha256"] != source_task_sha256
-        or canonical_sha256(task.model_dump(mode="json")) != source_task_sha256
+        or task_spec_sha256(task) != source_task_sha256
         or preparation["public_preparation_sha256"] != canonical_sha256(public_task_preparation(task))
         or preparation["source_native_checksum"] != control["task_checksum"]
         or preparation["runtime_sha256"] != control["runtime_sha256"]

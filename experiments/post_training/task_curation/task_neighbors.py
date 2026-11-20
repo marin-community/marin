@@ -4,6 +4,7 @@
 """Symmetric content overlap against complete converted source populations."""
 
 import itertools
+import json
 import re
 import sys
 import unicodedata
@@ -66,7 +67,7 @@ class TaskContent:
 def content_rows(documents: Iterable[Mapping]) -> Iterable[TaskContent]:
     """Keep complete instruction text and content hashes, without task-ID joins."""
     for document in documents:
-        task = TaskSpec.model_validate(document.get("task", document))
+        task = TaskSpec.model_validate_json(json.dumps(document.get("task", document)))
         text = format_conversation(task.context.events)
         state = [
             event.model_dump(mode="json")

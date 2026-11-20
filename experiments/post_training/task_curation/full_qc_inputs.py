@@ -19,7 +19,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.grading_environment import assess_grading_environment
-from taskcompendium.identity import canonical_sha256
+from taskcompendium.identity import canonical_sha256, task_spec_sha256
 from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.resources import has_oracle_solution
 
@@ -46,7 +46,7 @@ class InputConfig:
 def task_contract(task: TaskSpec, runtime: dict) -> dict[str, str]:
     return {
         "task_id": task.id,
-        "task_sha256": canonical_sha256(task.model_dump(mode="json")),
+        "task_sha256": task_spec_sha256(task),
         "runtime_sha256": canonical_sha256(runtime),
     }
 
@@ -95,7 +95,7 @@ def prepare_inputs(config: InputConfig) -> FullQCInputs:
     with StoragePath(index_path).open("wb", auto_mkdir=True) as stream:
         with pq.ParquetWriter(stream, INDEX_SCHEMA, compression="zstd") as writer:
             for document, runtime in population_documents(population):
-                task = TaskSpec.model_validate(document)
+                task = TaskSpec.model_validate_json(json.dumps(document))
                 if task.id in seen:
                     raise ValueError(f"Duplicate task ID in frozen population: {task.id}")
                 seen.add(task.id)

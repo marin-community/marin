@@ -424,6 +424,16 @@ changes an admission or a quality label.
 **Jobs.** Use three-day job timeouts and an explicit `--target-cluster` in the
 data's region. Infrastructure failures are re-driven and never count as task failures.
 
+Task and oracle-control identity hashes bind the stored source JSON after
+canonical normalization (sorted keys and compact UTF-8 encoding).
+Parsing a frozen row under a newer TaskSpec model may expose added defaults,
+but those defaults do not change the row's identity or its controls.
+`task_spec_sha256` hashes the stored document after JSON validation. Admission
+checks use that identity and continue to reject task or runtime changes. New task
+construction and deliberate task edits receive identities for their new state.
+Publication validates current registry bans and the exact pinned license grant
+through `require_publication_license` before creating a repository.
+
 **Landing changes (temporary).** While CI is suspended, Atlas workers land their
 own committed changes on `atlas-env-audit` instead of opening child PRs. Run from
 your dedicated worktree on a named branch other than `main`:

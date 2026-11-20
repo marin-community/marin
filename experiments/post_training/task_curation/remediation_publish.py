@@ -15,7 +15,7 @@ from typing import Literal
 import pyarrow as pa
 import pyarrow.parquet as pq
 from finestore.rl.curation import ActorCensusInput, DatasetRelease, LexicalUse
-from finestore.rl.licenses import LicenseReceipt, require_license
+from finestore.rl.licenses import LicenseReceipt
 from finestore.rl.status_taxonomy import DataRestriction
 from huggingface_hub import HfApi, hf_hub_download
 from pydantic import BaseModel, ConfigDict, Field
@@ -33,12 +33,12 @@ from experiments.post_training.task_curation.license_publication import (
     check_publication,
     licensed_dataset_card,
     prepare_license_publication,
+    require_publication_license,
 )
 from experiments.post_training.task_curation.native_quick import source_slug
 from experiments.post_training.task_curation.publication_gate import require_public_data
 from experiments.post_training.task_curation.receipt_shards import read_receipt_shards
 from experiments.post_training.task_curation.retention_plan import RetentionPlan
-from infra.marina.apps.rl_data_catalog.server.licensing import require_unbanned
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 LOGGER = logging.getLogger(__name__)
@@ -262,10 +262,9 @@ def publish_plan(
     if plan.data_restriction is None:
         raise ValueError(f"Staged release plan declares no restriction tier: {plan.source_id}")
     require_public_data(plan.data_restriction, plan.source_id, plan.lexical_use.value + " release")
-    require_license(
-        license_receipt, plan.source_id, plan.source_dataset_id, plan.source_revision, plan.lexical_use.value, ban=None
+    require_publication_license(
+        license_receipt, plan.source_id, plan.source_dataset_id, plan.source_revision, plan.lexical_use.value
     )
-    require_unbanned(plan.source_id, plan.source_dataset_id, license_receipt)
     snapshot_required = (
         plan.lexical_use is LexicalUse.TRAIN
         and plan.raw_lexical_count > 0
@@ -456,13 +455,12 @@ def main() -> None:
         raise ValueError("Duplicate original raw source archive")
     receipts = read_license_receipts(args.license_receipts)
     for plan in plans:
-        require_license(
+        require_publication_license(
             receipts.get(plan.source_id),
             plan.source_id,
             plan.source_dataset_id,
             plan.source_revision,
             plan.lexical_use.value,
-            ban=None,
         )
     staged_measurements = None
     if args.lexical_receipts is not None:

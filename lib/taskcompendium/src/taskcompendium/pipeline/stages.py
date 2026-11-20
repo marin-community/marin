@@ -435,7 +435,7 @@ def checked_row(normalized: dict[str, Any]) -> CheckedRow:
     audit = normalized["audit"]
     if audit["decision"] is not None or audit["normalized"] is None:
         return CheckedRow(normalized, [])
-    return CheckedRow(normalized, task_checks(TaskSpec.model_validate(audit["normalized"])))
+    return CheckedRow(normalized, task_checks(TaskSpec.model_validate_json(json.dumps(audit["normalized"]))))
 
 
 def prepare_panel(
@@ -519,7 +519,9 @@ def assess_source_quality(
     ]
     reviews: list[ReviewRecord] = []
     if batches:
-        tasks = [[TaskSpec.model_validate(record["normalized"]) for record in batch] for batch in batches]
+        tasks = [
+            [TaskSpec.model_validate_json(json.dumps(record["normalized"])) for record in batch] for batch in batches
+        ]
         # One cache read covers the panel; each review batch receives its own entries.
         cached = {
             review_batch_id(task.id for task in batch): entries

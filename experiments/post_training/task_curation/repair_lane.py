@@ -253,7 +253,7 @@ def load_tracked_population(uris: tuple[str, ...], *, tracked_source_id: str) ->
 def _spec_rows(handle: pq.ParquetFile, column: str) -> Iterator[TaskSpec]:
     for batch in handle.iter_batches(batch_size=256, columns=[column]):
         for encoded in batch.column(column).to_pylist():
-            yield TaskSpec.model_validate(json.loads(encoded))
+            yield TaskSpec.model_validate_json(json.dumps(json.loads(encoded)))
 
 
 def _archive_rows(handle: pq.ParquetFile, tracked_source_id: str) -> Iterator[TaskSpec]:

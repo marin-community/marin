@@ -9,7 +9,7 @@ from finestore.rl.curation import ContentEvidenceReference
 
 from taskcompendium.grading_environment import GradingEnvironmentMode
 from taskcompendium.harbor.negative_control import NegativeControlSetupKind, negative_control_setup_kind
-from taskcompendium.identity import canonical_sha256
+from taskcompendium.identity import canonical_sha256, task_spec_sha256
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.oracle_filter import (
     ExecutabilityRunReceipt,
@@ -100,10 +100,10 @@ def oracle_receipt(
             nop["verifier_result"] = {"rewards": {"reward": 0}, "exit_code": 0}
             evidence = ContentEvidenceReference(uri="s3://fixtures/nop.tar.zst", sha256="e" * 64)
             negative = OracleNegativeControlReceipt(
-                source_task_sha256=canonical_sha256(task.model_dump(mode="json")),
+                source_task_sha256=task_spec_sha256(task),
                 source_task_checksum=checksum,
                 runtime_sha256=None,
-                consumed_task_sha256=canonical_sha256(task.model_dump(mode="json")),
+                consumed_task_sha256=task_spec_sha256(task),
                 consumed_task_checksum=checksum,
                 archive=evidence,
                 control=evidence,
@@ -126,9 +126,9 @@ def oracle_receipt(
                 original_public_setup=True,
             )
         entries[task.id] = OracleTaskReceipt(
-            task_sha256=canonical_sha256(task.model_dump(mode="json")),
+            task_sha256=task_spec_sha256(task),
             harbor_task_checksum=checksum,
-            source_task_sha256=canonical_sha256(task.model_dump(mode="json")),
+            source_task_sha256=task_spec_sha256(task),
             source_task_checksum=checksum,
             negative_control_applicability=applicability,
             negative_control=negative,

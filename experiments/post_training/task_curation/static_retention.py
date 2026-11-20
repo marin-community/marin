@@ -14,7 +14,7 @@ import pyarrow.parquet as pq
 from finestore.rl.curation import ContentEvidenceReference, NoOracleStaticBlocker, NoOracleStaticRetentionEvidence
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
-from taskcompendium.identity import canonical_sha256
+from taskcompendium.identity import task_spec_sha256
 from taskcompendium.pipeline.oracle_filter import MechanicalOracleTaskReceipt, OracleExclusionReason, OracleFilterReceipt
 from taskcompendium.pipeline.static_retention import NoOracleSourceContext, StaticRetainedTaskReceipt
 from taskcompendium.runtime.resources import has_oracle_solution
@@ -79,7 +79,7 @@ def collect_static_retention(
             checksums = native_task_checksums(task for task in tasks if task.id not in blocked)
             for index, (row, task) in enumerate(zip(rows, tasks, strict=True)):
                 identity = {
-                    "task_sha256": canonical_sha256(task.model_dump(mode="json")),
+                    "task_sha256": task_spec_sha256(task),
                     "runtime_sha256": row_runtime_hash(row),
                 }
                 entries[task.id] = (

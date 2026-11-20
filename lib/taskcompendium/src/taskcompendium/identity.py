@@ -5,9 +5,11 @@
 
 import hashlib
 import json
-from typing import Any
+from typing import Any, Protocol
 
-from taskcompendium.models import TaskSpec
+
+class TaskDocument(Protocol):
+    def source_document(self, *, exclude: frozenset[str] = frozenset()) -> dict[str, Any]: ...
 
 
 def canonical_sha256(row: dict[str, Any]) -> str:
@@ -16,9 +18,25 @@ def canonical_sha256(row: dict[str, Any]) -> str:
     return hashlib.sha256(document.encode()).hexdigest()
 
 
-def task_identity(task: TaskSpec) -> str:
+def task_spec_json(task: TaskDocument, *, indent: int | None = None) -> str:
+    """Serialize a validated source document without introducing model defaults."""
+    return json.dumps(
+        task.source_document(),
+        indent=indent,
+        separators=(",", ":") if indent is None else None,
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+
+
+def task_spec_sha256(task: TaskDocument) -> str:
+    """Hash the stored canonical source document, preserving its schema vintage."""
+    return canonical_sha256(task.source_document())
+
+
+def task_identity(task: TaskDocument) -> str:
     """Identify the complete public and private task contract, excluding provenance."""
-    return canonical_sha256(task.model_dump(mode="json", exclude=TASK_IDENTITY_EXCLUDED_FIELDS))
+    return canonical_sha256(task.source_document(exclude=TASK_IDENTITY_EXCLUDED_FIELDS))
 
 
 TASK_IDENTITY_EXCLUDED_FIELDS = frozenset({"id", "source", "tags", "labels"})

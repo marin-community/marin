@@ -18,7 +18,8 @@ from finestore.rl.curation import (
     SourceDeclaration,
 )
 from pydantic import TypeAdapter
-from taskcompendium.identity import canonical_sha256
+from taskcompendium.identity import canonical_sha256, task_identity, task_spec_json, task_spec_sha256
+from taskcompendium.integrity import SharedDependencyState, SharedIntegrityContract, SourceSharedRunner
 from taskcompendium.models import ExecutionRequirements, ResourceGroups, TaskSpec
 from taskcompendium.pipeline.models import IntendedUse
 from taskcompendium.pipeline.oracle_filter import MechanicalOracleTaskReceipt, OracleExclusionReason, OracleFilterReceipt
@@ -232,3 +233,66 @@ def test_passing_subset_preserves_pending_infrastructure(tmp_path, zero_release,
         OraclePendingExclusion(task_id=pending.id, reason=OraclePendingExclusionReason.INFRASTRUCTURE)
     ]
     assert restored.exclusion_counts == {"resource_calibration:infrastructure": 1}
+
+
+@pytest.mark.parametrize("mutation", [None, "task", "runtime", "new_field"])
+def test_frozen_shared_source_row_keeps_its_identity_after_schema_defaults(tmp_path, zero_release, mutation):
+    _, record = zero_release
+    current = TaskSpec.model_validate_json(json.dumps(json.loads(prebuilt_task("frozen")["lowered_task_spec"])["task"]))
+    current = current.model_copy(
+        update={
+            "resources": ResourceGroups(oracle=(inline_resource("solution/solve.sh", b"true\n"),)),
+            "integrity_contract": SharedIntegrityContract(
+                id="shared-source",
+                dependency_state=SharedDependencyState.AGENT_MUTABLE,
+                reference_sha256="a" * 64,
+                harness_sha256="b" * 64,
+                native=SourceSharedRunner(family="scale-swe"),
+            ),
+        }
+    )
+    document = current.model_dump(mode="json")
+    del document["integrity_contract"]["native"]["path_config_keys"]
+    frozen_json = json.dumps(document)
+    frozen = TaskSpec.model_validate_json(frozen_json)
+    assert frozen.model_dump(mode="json")["integrity_contract"]["native"]["path_config_keys"] == []
+    assert task_spec_sha256(frozen) == canonical_sha256(document)
+    assert json.loads(task_spec_json(frozen)) == document
+    assert task_spec_sha256(TaskSpec.model_validate_json(task_spec_json(frozen))) == task_spec_sha256(frozen)
+    assert task_identity(frozen.model_copy(update={"labels": {"provenance": "updated"}})) == task_identity(frozen)
+    original, output, filtered = (tmp_path / name for name in ("original.parquet", "tasks.parquet", "oracle.json"))
+    row = {"id": frozen.id, "task_spec": frozen_json, "runtime": None}
+    pq.write_table(pa.Table.from_pylist([row]), original)
+    pq.write_table(pa.Table.from_pylist([row]), output)
+    canonical = oracle_receipt([frozen]).model_copy(
+        update={"input_cohort_sha256": hashlib.sha256(original.read_bytes()).hexdigest()}
+    )
+    filtered.write_text(canonical.model_dump_json())
+
+    def reference(path):
+        return ContentEvidenceReference(uri=str(path), sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+
+    evidence = record.filtration.model_copy(
+        update={
+            "original_count": 1,
+            "admitted_count": 1,
+            "oracle_filter_version": canonical.version,
+            "exclusion_counts": {},
+            "original_cohort": reference(original),
+            "oracle_filter": reference(filtered),
+            "tasks_parquet": reference(output),
+        }
+    )
+    observed = verify_oracle_release(evidence, original, filtered, output)
+    assert observed.admits(frozen)
+    assert frozen == TaskSpec.model_validate(frozen.model_dump(mode="json"))
+    if mutation == "task":
+        with pytest.raises(ValueError, match="changed after oracle filtering"):
+            observed.admits(frozen.model_copy(update={"labels": {"changed": "yes"}}))
+    elif mutation == "runtime":
+        with pytest.raises(ValueError, match="Runtime changed"):
+            observed.admits(frozen, {"changed": True})
+    elif mutation == "new_field":
+        document["integrity_contract"]["native"]["path_config_keys"] = ["test_paths"]
+        with pytest.raises(ValueError, match="changed after oracle filtering"):
+            observed.admits(TaskSpec.model_validate_json(json.dumps(document)))

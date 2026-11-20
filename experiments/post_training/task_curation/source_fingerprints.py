@@ -13,7 +13,7 @@ from typing import Literal
 
 import dupekit
 import pyarrow as pa
-from taskcompendium.identity import canonical_sha256, task_identity
+from taskcompendium.identity import canonical_sha256, task_identity, task_spec_sha256
 from taskcompendium.models import ScriptGrader, TaskSpec, VerifyitGrader, format_conversation
 from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
 from taskcompendium.runtime.resources import resource_bytes
@@ -123,7 +123,7 @@ def fingerprint_source(documents: Iterable[Mapping], inputs: dict[str, str]) -> 
     def samples() -> Iterable[FingerprintSample]:
         nonlocal duplicate_count, signature
         for batch in itertools.batched(documents, FINGERPRINT_BATCH_SIZE):
-            tasks = [TaskSpec.model_validate(document.get("task", document)) for document in batch]
+            tasks = [TaskSpec.model_validate_json(json.dumps(document.get("task", document))) for document in batch]
             texts = [normalized_instruction(task) for task in tasks]
             sketches = (
                 dupekit.transform(
@@ -154,7 +154,7 @@ def fingerprint_source(documents: Iterable[Mapping], inputs: dict[str, str]) -> 
                 tests.add(tests_hash)
                 yield FingerprintSample(
                     task_id=task.id,
-                    task_sha256=canonical_sha256(task.model_dump(mode="json")),
+                    task_sha256=task_spec_sha256(task),
                     instruction_sha256=instruction_hash,
                     instruction=text[:REVIEW_INSTRUCTION_CHARACTERS],
                     instruction_characters=len(text),

@@ -23,7 +23,7 @@ from zephyr.input_file import InputFileSpec
 from zephyr.readers import load_parquet
 from zephyr.writers import write_jsonl_file
 
-from taskcompendium.identity import canonical_sha256
+from taskcompendium.identity import canonical_sha256, task_spec_sha256
 from taskcompendium.models import ConversationInput, TaskSpec, format_conversation
 from taskcompendium.pipeline.models import ReviewStatus
 from taskcompendium.pipeline.query_cache import cached_request_output
@@ -171,7 +171,7 @@ def task_semantic_input(task: TaskSpec, source: TaskInputFile) -> TaskSemanticIn
         source_id=source.source_id,
         source_key=source.source_key,
         task_id=task.id,
-        task_hash=canonical_sha256(task.model_dump(mode="json")),
+        task_hash=task_spec_sha256(task),
         content_hash=canonical_sha256(public),
         intended_use=source.intended_use,
         population=source.population,

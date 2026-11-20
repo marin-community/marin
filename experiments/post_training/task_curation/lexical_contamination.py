@@ -155,7 +155,7 @@ def write_text_population(documents: Iterable[tuple[dict, dict]], output_path: s
                     pending_drops.clear()
 
             for document, runtime in unique_documents(documents, record_drop):
-                task = TaskSpec.model_validate(document)
+                task = TaskSpec.model_validate_json(json.dumps(document))
                 # Preserve case and paragraph boundaries: the shared eval bloom uses this policy.
                 # Fingerprints use this same renderer, then normalize its text for similarity ranking.
                 text = format_conversation(task.context.events)

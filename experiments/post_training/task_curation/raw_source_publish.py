@@ -9,7 +9,7 @@ import json
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 
-from finestore.rl.licenses import LicenseReceipt, require_license
+from finestore.rl.licenses import LicenseReceipt
 from finestore.rl.status_taxonomy import DataRestriction
 from huggingface_hub import HfApi, hf_hub_download
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -22,11 +22,11 @@ from experiments.post_training.task_curation.license_publication import (
     check_publication,
     licensed_dataset_card,
     prepare_license_publication,
+    require_publication_license,
 )
 from experiments.post_training.task_curation.native_quick import source_slug
 from experiments.post_training.task_curation.publication_gate import require_public_data
 from experiments.post_training.task_curation.remediation_publish import RawSourceArchive
-from infra.marina.apps.rl_data_catalog.server.licensing import require_unbanned
 
 
 def publish_raw_source(
@@ -42,8 +42,7 @@ def publish_raw_source(
     if not isinstance(raw_tier, str):
         raise ValueError(f"Staged raw snapshot declares no restriction tier: {stage['source_id']}")
     require_public_data(DataRestriction(raw_tier), stage["source_id"], "raw source archive")
-    require_license(receipt, stage["source_id"], stage["dataset_id"], stage["revision"], use, ban=None)
-    require_unbanned(stage["source_id"], stage["dataset_id"], receipt)
+    require_publication_license(receipt, stage["source_id"], stage["dataset_id"], stage["revision"], use)
     identity = hashlib.sha256(stage["source_id"].encode()).hexdigest()[:8]
     receipt_path = StoragePath(evidence_root) / identity / "raw-source-archive.json"
     if receipt_path.exists():

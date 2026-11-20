@@ -21,7 +21,7 @@ from marin.execution.artifact import Artifact, ArtifactRecord, result_type_name,
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
-from taskcompendium.identity import canonical_sha256
+from taskcompendium.identity import canonical_sha256, task_spec_sha256
 from taskcompendium.models import (
     AnswerType,
     CommandSemantics,
@@ -185,7 +185,7 @@ def repair_task(task: TaskSpec, *, actor_image: str, grader_image: str) -> Norma
     )
     provenance = {
         "version": VERSION,
-        "original_task_sha256": canonical_sha256(task.model_dump(mode="json")),
+        "original_task_sha256": task_spec_sha256(task),
         "original_grader_sha256": NATIVE_GRADER_SHA256,
         "actor_build_sha256": canonical_sha256(native_build.model_dump(mode="json")),
         "fragment_sha256": hashlib.sha256(resource_bytes(fragment)).hexdigest(),
