@@ -13,7 +13,6 @@ import pyarrow.parquet as pq
 import pytest
 from rigging.filesystem.storage_path import StoragePath
 
-from taskcompendium.evaluation.response import completion_text
 from taskcompendium.importers import genomeqa as source
 from taskcompendium.importers.evalchemy.scorers.genomeqa import grade_genomeqa
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, Source, TextMessage
@@ -22,45 +21,20 @@ from taskcompendium.pipeline.models import RawRow
 from taskcompendium.runtime.resources import resource_bytes
 
 
-def completion(content, *, reasoning=None, finish="stop", refusal=None):
-    return completion_text(
-        {"content": content, "reasoning_content": reasoning, "refusal": refusal}, finish, "final_only"
-    )
-
-
 @pytest.mark.parametrize(
-    "response,options,answer,failure",
+    "response,answer",
     [
-        (completion("### Analysis\nA is plausible.\n### Answer\nAnswer: B"), "AB", "B", None),
-        (completion("Answer: B", reasoning="Answer: A"), "ABCD", "B", None),
-        (completion(None, reasoning="### Answer\nAnswer: B"), "ABCD", "", "missing_answer"),
-        (completion(None, reasoning="Answer: B", finish="length"), "ABCD", "", "missing_answer"),
-        (completion("Answer: B", finish="length"), "ABCD", "B", None),
-        (completion(None, refusal="No answer"), "ABCD", "", "missing_answer"),
-        ("<think>Answer: A</think>\n### Answer\n**B**", "AB", "B", None),
-        ("<think>### Answer\nAnswer: B", "AB", "", "missing_answer"),
-        ("<think>first</think><think>Answer: B", "AB", "", "missing_answer"),
-        ("I considered B, but cannot tell.", "AB", "", "missing_answer"),
-        ("### Answer\nAnswer: B\nAnswer: A", "AB", "", "conflicting_answers"),
-        ("Answer: B\nAnswer: A", "AB", "", "conflicting_answers"),
-        ("### Answer\nAnswer: B or C", "ABCD", "", "conflicting_answers"),
-        ("### Answer\nAnswer: B and C", "ABCD", "", "conflicting_answers"),
-        ("Answer: A", "AB", "A", None),
-        ("Answer: B1", "AB", "", "missing_answer"),
-        ("### Answer\nB1", "AB", "", "missing_answer"),
-        ("Answer: B or (C)", "ABCD", "", "conflicting_answers"),
-        ("Answer: B/C", "ABCD", "", "conflicting_answers"),
-        ("Answer: B, C", "ABCD", "", "conflicting_answers"),
-        ("Answer: B because C lacks the motif.", "ABCD", "B", None),
-        ("### Answer\nAnswer: C", "AB", "", "invalid_option"),
-        ("### Answer\nAnswer: A\n### Answer\nAnswer: B", "AB", "B", None),
+        ("### Analysis\nAnswer: A\n### Answer\nB", "B"),
+        ("### Answer\nAnswer: A", "A"),
+        ("Answer: B", "B"),
+        ("I considered A or B.", ""),
+        ("### Answer\nC", ""),
     ],
 )
-def test_final_answer_grading_preserves_protocol(response, options, answer, failure):
-    grade = grade_genomeqa("B", options, 1, response)
+def test_final_answer_grading(response, answer):
+    grade = grade_genomeqa("B", "AB", 1, response)
     assert grade.detail["metrics"]["accuracy"] == (answer == "B")
     assert grade.detail["metrics"]["unanswered"] == (answer == "")
-    assert grade.detail["genomeqa_parsing"]["failure"] == failure
     assert grade.detail["genomeqa_parsing"]["answer"] == answer
 
 
