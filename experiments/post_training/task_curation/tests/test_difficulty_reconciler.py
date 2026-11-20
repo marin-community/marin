@@ -207,7 +207,8 @@ def test_legacy_compound_reasons_keep_secondary_causes_and_relocate_local_locks(
         legacy_gaps("awaiting_scored_coverage; invented_failure")
 
 
-def test_import_replays_immutable_attempts_once_and_subtracts_inherited_cost(tmp_path):
+@pytest.mark.parametrize("indexed_parent", [True, False])
+def test_import_replays_immutable_attempts_once_and_subtracts_inherited_cost(tmp_path, indexed_parent):
     parent = tmp_path / "parent"
     child = tmp_path / "child"
     sample = {
@@ -246,7 +247,12 @@ def test_import_replays_immutable_attempts_once_and_subtracts_inherited_cost(tmp
     )
     reference = {"uri": str(attempt), "sha256": hashlib.sha256(attempt.read_bytes()).hexdigest()}
     for root in (parent, child):
-        (root / "trials" / source_key / "attempts.json").write_text(json.dumps({"attempt_receipts": [reference]}))
+        aggregate = (
+            {"attempt_receipts": [reference]}
+            if root == child or indexed_parent
+            else {"attempts": [{"task_id": "a", "status": "scored", "reward": 1.0}]}
+        )
+        (root / "trials" / source_key / "attempts.json").write_text(json.dumps(aggregate))
     (child / "trials" / "parent-campaign.json").write_text(json.dumps({"root": str(parent)}))
     ledger = str(tmp_path / "ledger")
     import_runs([str(child)], ledger)

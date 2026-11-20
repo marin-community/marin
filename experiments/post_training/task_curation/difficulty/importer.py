@@ -102,7 +102,8 @@ def source_rows(run: str, prepared: dict, solver: Solver, parent: str | None) ->
     root = run_path / "trials" / key
     measurement = optional_json(root / "measurement.json")
     aggregate = optional_json(root / "attempts.json")
-    # Interrupted sources can have attempt receipts without an aggregate.
+    # Interrupted sources lack an aggregate; early complete aggregates lack a
+    # receipt index. Both need discovery of the immutable per-task receipts.
     references = (aggregate or {}).get("attempt_receipts", [])
     own = {}
     for ref in references:
@@ -112,7 +113,11 @@ def source_rows(run: str, prepared: dict, solver: Solver, parent: str | None) ->
         except ValueError:
             continue  # Linked ancestor receipts are imported with their original run.
         own[str(path)] = ref
-    incomplete = (root / "attempts" / "*" / "*" / "attempt.json").glob() if measurement is None else []
+    incomplete = (
+        (root / "attempts" / "*" / "*" / "attempt.json").glob()
+        if measurement is None or "attempt_receipts" not in (aggregate or {})
+        else []
+    )
     for path in incomplete:
         if str(path) not in own:
             own[str(path)] = {"uri": str(path), "sha256": file_sha256(path)}
