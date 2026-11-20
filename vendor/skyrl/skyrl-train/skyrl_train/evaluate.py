@@ -350,7 +350,6 @@ def _dump_eval_results(
     global_step: int | None,
     tokenizer: AutoTokenizer,
     rollouts: _EvaluationRollouts,
-    data_sources: List[str | None],
     metrics: Dict[str, float],
 ) -> None:
     if not cfg.trainer.dump_eval_results:
@@ -364,7 +363,7 @@ def _dump_eval_results(
             data_save_dir,
             tokenizer,
             rollouts.batch,
-            data_sources,
+            rollouts.data_sources,
             rollouts.env_classes,
             metrics,
             rollouts.uids,
@@ -417,7 +416,6 @@ async def evaluate(
                 eval_dataloader, trajectory_runner, cfg, global_step, val_set_name, accumulator, pool
             )
         concatenated_batch = rollouts.batch
-        concat_data_sources = rollouts.data_sources
         vis = tokenizer.decode(rollouts.example_batch["response_ids"][0])
         log_example(
             logger,
@@ -429,11 +427,11 @@ async def evaluate(
         eval_metrics = _calculate_eval_metrics(
             concatenated_batch,
             rollouts.uids,
-            concat_data_sources,
+            rollouts.data_sources,
             cfg.generator.eval_n_samples_per_prompt,
         )
         _persist_evaluation(cfg, global_step, val_set_name, rollouts, records_export_root)
-        _dump_eval_results(cfg, global_step, tokenizer, rollouts, concat_data_sources, eval_metrics)
+        _dump_eval_results(cfg, global_step, tokenizer, rollouts, eval_metrics)
 
         return eval_metrics
     finally:
@@ -483,7 +481,6 @@ async def evaluate_step_wise(
             eval_dataloader, trajectory_runner, cfg, global_step, val_set_name, accumulator, pool
         )
     concatenated_batch = rollouts.batch
-    concat_data_sources = rollouts.data_sources
     vis = tokenizer.decode(rollouts.example_batch["response_ids"][0])
     logger.info(f"Eval output example: {vis}")
 
@@ -509,6 +506,6 @@ async def evaluate_step_wise(
         final_rollouts.batch, final_rollouts.uids, final_rollouts.data_sources, cfg.generator.eval_n_samples_per_prompt
     )
     _persist_evaluation(cfg, global_step, val_set_name, final_rollouts, records_export_root)
-    _dump_eval_results(cfg, global_step, tokenizer, rollouts, concat_data_sources, eval_metrics)
+    _dump_eval_results(cfg, global_step, tokenizer, rollouts, eval_metrics)
 
     return eval_metrics

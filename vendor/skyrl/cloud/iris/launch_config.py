@@ -342,7 +342,6 @@ def validate_launch_driver_config(config: DictConfig) -> None:
         validate_driver_config,
         validate_generation_driver_config,
     )
-    from skyrl_train.config.worker_environment import configured_ray_worker_environment  # noqa: PLC0415
 
     entrypoint = config.runtime.entrypoint
     if entrypoint == RL_ENTRYPOINTS[RLEntrypoint.GENERATE]:
@@ -354,8 +353,6 @@ def validate_launch_driver_config(config: DictConfig) -> None:
             else EntrypointOperation.TRAIN
         )
         validate_driver_config(config.skyrl, operation, check_runtime_resources=False)
-    # The local plan checks worker settings before the runtime probes GPU peer access.
-    configured_ray_worker_environment(config.skyrl)
 
 
 def hugging_face_models(config: DictConfig) -> tuple[TeacherModelSpec, ...]:

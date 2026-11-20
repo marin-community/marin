@@ -962,7 +962,11 @@ def run_skyrl(
             raise ValueError("successful MarinSkyRL response requires iris_job_id")
         model = response.model
         if config.export_hf and model is None:
-            raise ValueError("successful MarinSkyRL response requires a model when export_hf is enabled")
+            selection = _declared_config_value(
+                _parsed_config(config.launch_config_yaml), "skyrl.trainer.hf_export_checkpoint"
+            )
+            if selection != "best":
+                raise ValueError("successful MarinSkyRL response requires a model when export_hf is enabled")
         result = SkyRLRun(
             path=config.output.terminal_manifest_uri,
             hf_model_uri=model.policy_export_uri if model is not None else None,

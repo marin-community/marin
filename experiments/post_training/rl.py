@@ -191,7 +191,7 @@ def build_experiment(
     requirements: tuple[str, ...] = (),
     issue: int | None = None,
     forward_env: tuple[str, ...] = (),
-    _validate_plan: bool = False,
+    validate_plan: bool = False,
 ) -> RLExperiment:
     """Construct an RL experiment: one run step per replicate and, for a gated preset, its gate step."""
     wandb_entity = os.environ.get(_WANDB_ENTITY_ENV)
@@ -299,7 +299,7 @@ def build_experiment(
         if preset.gated and not control
         else None
     )
-    if _validate_plan:
+    if validate_plan:
         rl_gate.validate_plan(preset, replace(spec, name=runs[0].name), runs[0])
     return RLExperiment(tuple(runs), gate, inputs)
 
@@ -352,11 +352,17 @@ def _status(
             result.state.value if result else status_path.read_text().strip() if status_path.exists() else "not built"
         )
         best = {}
-        if preset.checkpoints == "best" and launch is not None:
-            best_path = StoragePath(launch.export_root) / "best_checkpoint.json"
-            best["best_checkpoint_step"] = (
-                json.loads(best_path.read_text())["step"] if best_path.exists() else "none eligible"
+        if receipt is not None and launch is not None:
+            native = receipt.native.config
+            exports_best = (
+                native["run"].get("export_hf")
+                and native["skyrl"]["trainer"].get("hf_export_checkpoint") == "best"
             )
+            if preset.checkpoints == "best" or exports_best:
+                best_path = StoragePath(launch.export_root) / "best_checkpoint.json"
+                best["best_checkpoint_step"] = (
+                    json.loads(best_path.read_text())["step"] if best_path.exists() else "none eligible"
+                )
         rows.append(
             {
                 "name": step.name,
@@ -714,6 +720,7 @@ def command(
         missing = [name for name in forward_env if name not in os.environ]
         if missing:
             raise click.UsageError(f"missing required environment variables: {', '.join(missing)}")
+        from_launcher = get_job_info() is None
         run = build_experiment(
             preset,
             table=table,
@@ -727,10 +734,10 @@ def command(
             control=control,
             requirements=requirements,
             issue=issue,
-            _validate_plan=not do_run,
+            validate_plan=from_launcher,
         )
         assert run.inputs is not None
-        if do_run and get_job_info() is None:
+        if do_run and from_launcher:
             validated = rl_gate.validate_candidate(
                 preset,
                 run.inputs,

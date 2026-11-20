@@ -87,7 +87,7 @@ def with_objectives(candidate: RunMeasurements, preset: presets.Preset) -> RunMe
     values = dict(candidate.values)
     for metric in preset.objectives:
         if metric.window == presets.WindowStatistic.GAIN_PER_GPU_HOUR:
-            gain = values.get(re.sub(r"_per_[^/]+_hour$", "", metric.key))
+            gain = values.get(metric.key.removesuffix("_per_gpu_hour"))
             if gain is not None and candidate.gpu_hours:
                 values[metric.key] = gain / candidate.gpu_hours
     return replace(candidate, values=values)
@@ -320,6 +320,26 @@ def _compare(
         if required:
             kind = "requirement" if role == ComparisonRole.REQUIREMENT else "guard"
             if row.delta is None:
+                evaluation = metric.key.split("/", 1)[0]
+                unavailable = [
+                    candidate for candidate in runs if not math.isfinite(candidate.values.get(metric.key, math.nan))
+                ]
+                if (
+                    role != ComparisonRole.REQUIREMENT
+                    and row.sd is not None
+                    and row.sd > 0
+                    and unavailable
+                    and all(
+                        metric.key not in candidate.values
+                        and any(
+                            fact.name == f"{evaluation}/task_coverage" and not fact.holds
+                            for fact in candidate.invariants
+                        )
+                        for candidate in unavailable
+                    )
+                ):
+                    rows.append(row)
+                    continue
                 raise InvalidComparison(f"missing or non-finite {kind} metric: {metric.key}")
             if row.sd == 0:
                 raise InvalidComparison(
@@ -403,6 +423,7 @@ def _config_values(value, prefix: str = "") -> dict[str, object]:
 
 
 def _comparison_document(launch: dict, recorded: RecordedLaunch | None = None) -> dict:
+    """Normalize native configuration and resolve its runtime aliases for comparison."""
     recorded = recorded or RecordedLaunch.from_document(launch, attempt=launch["run"]["attempt_id"])
     config = deepcopy(launch)
     if get_path(config, "skyrl.trainer.rollout_buffer.groups_per_family") == {}:

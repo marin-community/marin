@@ -360,7 +360,8 @@ def test_checkpoint_pruning_waits_for_the_terminal_receipt(completed_run_checkpo
     assert (root / CHECKPOINT_MARKER_FILENAME).read_text().strip() == "3"
 
 
-def test_launch_reuses_the_initializer_when_step_zero_wins(completed_run_checkpoints, tmp_path: Path):
+@pytest.mark.parametrize("initializer_wins", [True, False], ids=["step-zero", "none-eligible"])
+def test_launch_publishes_the_selected_best_policy(completed_run_checkpoints, tmp_path: Path, initializer_wins: bool):
     path, checkpoint_root = completed_run_checkpoints
     config = yaml.safe_load(path.read_text())
     initializer_uri = config["inputs"]["model"]["uri"]
@@ -368,12 +369,13 @@ def test_launch_reuses_the_initializer_when_step_zero_wins(completed_run_checkpo
     config["skyrl"]["trainer"]["hf_export_checkpoint"] = "best"
     path.write_text(yaml.safe_dump(config))
 
-    class InitializerWinsBackend(LocalLaunchBackend):
+    class BestCheckpointBackend(LocalLaunchBackend):
         def launch(self, config_path: Path) -> LaunchOutcome:
             outcome = super().launch(config_path)
-            (checkpoint_root / BEST_CHECKPOINT_FILENAME).write_text(
-                json.dumps({"step": 0, "model_format": "hf", "model_uri": initializer_uri})
-            )
+            if initializer_wins:
+                (checkpoint_root / BEST_CHECKPOINT_FILENAME).write_text(
+                    json.dumps({"step": 0, "model_format": "hf", "model_uri": initializer_uri})
+                )
             trainer = RayPPOTrainer.__new__(RayPPOTrainer)
             trainer.cfg = OmegaConf.load(config_path).skyrl
             trainer.global_step = 3
@@ -385,15 +387,19 @@ def test_launch_reuses_the_initializer_when_step_zero_wins(completed_run_checkpo
         def export_terminal_policy(self, config_path: Path) -> None:
             export_hf_checkpoint.export_terminal_policy(config_path)
 
-    result = execute_launch(path, backend=InitializerWinsBackend())
+    result = execute_launch(path, backend=BestCheckpointBackend())
 
     assert result.state is LaunchState.SUCCEEDED, result.failure
-    assert result.model is not None and result.model.global_step == 0
     terminal_model = json.loads((tmp_path / "terminal.json").read_text())["result"]["model"]
-    assert (terminal_model["global_step"], terminal_model["policy_export_uri"]) == (0, initializer_uri)
-    assert terminal_model["tokenizer_uri"] == config["inputs"]["model"]["tokenizer_uri"]
-    assert not list(checkpoint_root.glob("global_step_*"))
-    assert not (checkpoint_root / CHECKPOINT_MARKER_FILENAME).exists()
+    if initializer_wins:
+        assert result.model is not None and result.model.global_step == 0
+        assert (terminal_model["global_step"], terminal_model["policy_export_uri"]) == (0, initializer_uri)
+        assert terminal_model["tokenizer_uri"] == config["inputs"]["model"]["tokenizer_uri"]
+        assert not list(checkpoint_root.glob("global_step_*"))
+        assert not (checkpoint_root / CHECKPOINT_MARKER_FILENAME).exists()
+    else:
+        assert terminal_model is result.model is None
+    assert not list(checkpoint_root.glob(f"global_step_*/{HF_EXPORT_REQUEST_FILENAME}"))
     assert not list((tmp_path / "exports").glob("global_step_*"))
 
 

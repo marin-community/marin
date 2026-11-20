@@ -15,7 +15,7 @@ from skyrl_train.trajectory_runners.trajectory_processing import (
     task_timing_metrics,
 )
 from skyrl_train.trajectory_runners.base import TrajectoryBatch
-from skyrl_train.trajectory_runners.trajectory_reward_shaping import DEFAULT_ACCEPTED_STOP_REASONS
+from skyrl_train.config.reward_shaping import DEFAULT_ACCEPTED_STOP_REASONS
 from transformers import AutoTokenizer
 from skyrl_train.io import io
 from skyrl_train.metric_names import ENVIRONMENT_METRIC_PREFIX

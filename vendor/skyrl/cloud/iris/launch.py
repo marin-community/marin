@@ -166,11 +166,13 @@ def _prepare_model_caches(config: DictConfig) -> None:
     config.inputs.hugging_face_models = caches
 
 
-def _exported_policy(config: DictConfig) -> ExportedPolicy:
+def _exported_policy(config: DictConfig) -> ExportedPolicy | None:
     checkpoint_root = str(config.artifacts.checkpoint_root)
     selected = selected_export_checkpoint(
         checkpoint_root, str(config.skyrl.trainer.hf_export_checkpoint), terminal_checkpoint_step(checkpoint_root)
     )
+    if selected is None:
+        return None
     policy_uri = selected.initializer_uri
     if policy_uri is None:
         policy_uri = policy_export_path(str(config.artifacts.export_root), selected.step)
