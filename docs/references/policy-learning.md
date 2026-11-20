@@ -49,13 +49,20 @@ For a matched control, use `--learner megatron --verify-publication` with a
 distinct artifact version and the same selection URI. Levanter always verifies
 publication. CPU objective, native-model regression, and transport checks do not
 establish full-model accelerator acceptance. Before a comparison, use the same
-artifact entry point for a short `--steps 2` run, following [RL launching](rl-launching.md).
-Require all learner processes to report the pinned source, completed optimizer
-steps, matching publication versions with zero receiver byte mismatches,
-generation under those published versions, and a terminal native checkpoint.
+artifact entry point for a short `--steps 2 --validate-native-checkpoint` run,
+following [RL launching](rl-launching.md). The validation option checks that the
+first update changes parameters, saves complete native state, restarts the JAX
+learner processes, and checks exact restored state fingerprints before training
+continues. Parent actors and rollout engines remain in the same allocation.
+Leave this option disabled for performance comparisons.
+Require every learner process to report the pinned model revision and completed
+optimizer steps. Receiver replay receipts must identify the installed version
+and report zero byte mismatches against learner weights. Generation receipts
+must contain nonempty returned tokens stamped with the updated policy step:
+weight version `v` produces token stamps `v + 1`. Also require a terminal native checkpoint.
 Checkpoint continuation additionally requires fresh learner processes and
-matching model, Adam, RNG, step, and model-averaging fingerprints after restore
-and subsequent updates. Full-model accelerator acceptance has not yet been
+matching model, Adam, RNG, step, and model-averaging fingerprints after restore,
+followed by further optimizer updates. Full-model accelerator acceptance has not yet been
 established by the regression tests on this branch.
 
 ## Batch and objective

@@ -51,6 +51,7 @@ TYPES = MappingProxyType(
         "trainer.policy.levanter_config.python_executable": "str | None",
         "trainer.policy.levanter_config.command_timeout_seconds": "PositiveInt",
         "trainer.policy.levanter_config.initialization_timeout_seconds": "PositiveInt",
+        "trainer.policy.levanter_config.validate_checkpoint_roundtrip": "bool",
         "trainer.policy.levanter_config.coordinator_port": "Annotated[int, Field(ge=1, le=65535)]",
         "trainer.policy.levanter_config.device_memory_fraction": "Annotated[int | float, Field(gt=0, le=1)]",
         "trainer.policy.levanter_config.projection_block_size": "PositiveInt",

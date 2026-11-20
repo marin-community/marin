@@ -1,6 +1,7 @@
 from skyrl_train.inference_engines.base import (
     CHOICE_POLICY_STEPS_KEY,
     SESSION_ID_HEADER,
+    UNSTAMPED_POLICY_STEP,
     InferenceEngineInterface,
     InferenceEngineInput,
     InferenceEngineOutput,
@@ -32,6 +33,8 @@ from skyrl_train.inference_engines.utils import (
 )
 from omegaconf import DictConfig
 import threading
+import hashlib
+import json
 from collections import OrderedDict
 from loguru import logger
 import random
@@ -43,8 +46,74 @@ from skyrl_train.trajectory_runners.routed_experts import decode_routed_experts
 import base64
 import io
 import numpy as np
+from skyrl_train.telemetry import record_event
 
 ABORT_FINISH_REASON = "abort"
+
+_RECEIPT_CHUNK_TOKENS = 4096
+_RECEIPT_MAX_POLICY_STEPS = 16
+
+
+def _record_generation_receipt(token_rows, policy_rows, *, transport: str, request_id=None) -> None:
+    """Persist bounded evidence from returned engine tokens, without text or token IDs.
+
+    Hashes contain ordered rows of little-endian signed int64 values, each row
+    prefixed by its uint64 length. Scratch arrays contain at most 4096 tokens;
+    the histogram holds at most 16 policy steps even across many updates.
+    """
+    if policy_rows is None:
+        return
+    token_digest = hashlib.sha256()
+    policy_digest = hashlib.sha256()
+    counts: dict[int, int] = {}
+    overflow_tokens = 0
+    token_count = 0
+    policy_count = 0
+    stamped_count = 0
+    aligned = len(token_rows) == len(policy_rows)
+    for index, tokens in enumerate(token_rows):
+        token_count += len(tokens)
+        token_digest.update(len(tokens).to_bytes(8, "little"))
+        for start in range(0, len(tokens), _RECEIPT_CHUNK_TOKENS):
+            token_digest.update(np.asarray(tokens[start : start + _RECEIPT_CHUNK_TOKENS], dtype="<i8").tobytes())
+        if index >= len(policy_rows):
+            continue
+        steps = policy_rows[index]
+        aligned = aligned and len(tokens) == len(steps)
+        policy_count += len(steps)
+        policy_digest.update(len(steps).to_bytes(8, "little"))
+        for start in range(0, len(steps), _RECEIPT_CHUNK_TOKENS):
+            chunk = np.asarray(steps[start : start + _RECEIPT_CHUNK_TOKENS], dtype="<i8")
+            policy_digest.update(chunk.tobytes())
+            stamped_count += int(np.count_nonzero(chunk != UNSTAMPED_POLICY_STEP))
+            steps_in_chunk, token_counts = np.unique(chunk, return_counts=True)
+            for step, count in zip(steps_in_chunk, token_counts, strict=True):
+                step = int(step)
+                count = int(count)
+                if step in counts or len(counts) < _RECEIPT_MAX_POLICY_STEPS:
+                    counts[step] = counts.get(step, 0) + count
+                else:
+                    overflow_tokens += count
+    receipt = {
+        "schema_version": 1,
+        "transport": transport,
+        "response_count": len(token_rows),
+        "token_count": token_count,
+        "policy_token_count": policy_count,
+        "stamped_token_count": stamped_count,
+        "aligned": aligned,
+        "policy_step_counts": {str(step): count for step, count in sorted(counts.items())},
+        "policy_step_histogram_complete": overflow_tokens == 0,
+        "other_policy_step_tokens": overflow_tokens,
+        "token_ids_sha256": token_digest.hexdigest(),
+        "policy_steps_sha256": policy_digest.hexdigest(),
+    }
+    if request_id is not None:
+        receipt["request_id_sha256"] = hashlib.sha256(str(request_id).encode()).hexdigest()
+    histogram = json.dumps(receipt["policy_step_counts"], sort_keys=True, separators=(",", ":"))
+    event = {key: value for key, value in receipt.items() if key != "policy_step_counts"}
+    record_event("policy_generation_receipt", {**event, "policy_step_counts_json": histogram})
+    logger.info("policy_generation_receipt {}", json.dumps(receipt, sort_keys=True, separators=(",", ":")))
 
 
 def _route_rows(rows: Any, response_length: int) -> np.ndarray:
@@ -317,7 +386,7 @@ class InferenceEngineClient(InferenceEngineInterface):
             assert prompt_ids_list == [0], "Single prompt should map to index [0]"
             engine_idx = self._resolve_engine_idx(engine_idx)
             original_prompt_ids = prompt_token_ids[0]
-            return await self._generate_single_with_retry(
+            output = await self._generate_single_with_retry(
                 engine_idx=engine_idx,
                 original_prompt_ids=original_prompt_ids,
                 sampling_params=sampling_params,
@@ -326,6 +395,10 @@ class InferenceEngineClient(InferenceEngineInterface):
                     per_prompt_sampling_params[0] if per_prompt_sampling_params is not None else None
                 ),
             )
+            _record_generation_receipt(
+                output["response_ids"], output.get("response_policy_steps"), transport="generate"
+            )
+            return output
 
         # For batched generate(), pause/continue cannot be supported.
         if self.generation_paused_event.is_set():
@@ -452,6 +525,7 @@ class InferenceEngineClient(InferenceEngineInterface):
             output["routed_experts"] = [routes for routes in routed_experts if routes is not None]
         if all(row is not None for row in response_policy_steps):
             output["response_policy_steps"] = response_policy_steps
+            _record_generation_receipt(response_ids, response_policy_steps, transport="generate")
         return output
 
     async def begin_online_eagle_capture(self, config: Dict[str, Any]) -> List[OnlineEagleResult]:
@@ -471,9 +545,11 @@ class InferenceEngineClient(InferenceEngineInterface):
         ]
         results = await asyncio.gather(*awaitables, return_exceptions=True)
         return [
-            {"active": False, "error": f"{type(result).__name__}: {result}"}
-            if isinstance(result, BaseException)
-            else result
+            (
+                {"active": False, "error": f"{type(result).__name__}: {result}"}
+                if isinstance(result, BaseException)
+                else result
+            )
             for result in results
         ]
 
@@ -660,9 +736,11 @@ class InferenceEngineClient(InferenceEngineInterface):
             output["behavior_topk_logprobs"] = [accum_behavior_topk_logprobs]
         if saw_routed_experts:
             output["routed_experts"] = [
-                np.concatenate(accum_routed_experts, axis=0)
-                if accum_routed_experts
-                else np.empty((0, 0, 0), dtype=np.uint8)
+                (
+                    np.concatenate(accum_routed_experts, axis=0)
+                    if accum_routed_experts
+                    else np.empty((0, 0, 0), dtype=np.uint8)
+                )
             ]
         if accum_policy_steps:
             output["response_policy_steps"] = [accum_policy_steps]
@@ -680,9 +758,9 @@ class InferenceEngineClient(InferenceEngineInterface):
         original_request_json: Dict[str, Any] = original_request_payload.get("json", {}).copy()
         headers: Dict[str, str] = original_request_payload.get("headers", {}).copy()
 
-        assert not original_request_json.get("continue_final_message", False), (
-            "continue_final_message must be False for /chat/completions requests"
-        )
+        assert not original_request_json.get(
+            "continue_final_message", False
+        ), "continue_final_message must be False for /chat/completions requests"
 
         # Accumulated fields for building subsequent requests and final response. It is inplace-updated
         # in `_parse_partial_response_and_inplace_update_accum()`.
@@ -831,7 +909,16 @@ class InferenceEngineClient(InferenceEngineInterface):
         self._inc_inflight(engine_idx)
         try:
             # Always use the retry loop which also issues the first request inside
-            return await self._chat_completion_with_retry(engine_idx, request_payload)
+            response = await self._chat_completion_with_retry(engine_idx, request_payload)
+            choices = response.get("choices", [])
+            if choices and all(choice.get(CHOICE_POLICY_STEPS_KEY) is not None for choice in choices):
+                _record_generation_receipt(
+                    [choice.get("token_ids") or [] for choice in choices],
+                    [choice[CHOICE_POLICY_STEPS_KEY] for choice in choices],
+                    transport="chat_completion",
+                    request_id=response.get("id") or request_payload.get("headers", {}).get("x-request-id"),
+                )
+            return response
         finally:
             self._dec_inflight(engine_idx)
 
@@ -1331,9 +1418,9 @@ def _prepare_retry_request(
             original_request_json[EXACT_PROMPT_TOKEN_IDS_KEY] + accum.token_ids
         )
     if orig_max_tokens is not None:
-        assert orig_max_tokens - accum.completion_tokens >= 0, (
-            "orig_max_tokens - accum.completion_tokens must be non-negative"
-        )
+        assert (
+            orig_max_tokens - accum.completion_tokens >= 0
+        ), "orig_max_tokens - accum.completion_tokens must be non-negative"
         assert max_key is not None
         cur_request_json[max_key] = orig_max_tokens - accum.completion_tokens
 
@@ -1380,9 +1467,9 @@ def _parse_partial_response_and_inplace_update_accum(
     stop_reason: Optional[str] = choice.get("stop_reason", None)
     new_content: Optional[str] = choice["message"]["content"]
 
-    assert partial_response["usage"] is not None and partial_response["usage"]["completion_tokens"] is not None, (
-        "partial_response['usage']['completion_tokens'] must be present"
-    )
+    assert (
+        partial_response["usage"] is not None and partial_response["usage"]["completion_tokens"] is not None
+    ), "partial_response['usage']['completion_tokens'] must be present"
     new_completion_tokens: int = partial_response["usage"]["completion_tokens"]
 
     if response_role is None:

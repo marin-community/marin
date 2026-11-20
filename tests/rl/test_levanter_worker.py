@@ -90,7 +90,7 @@ def _learner_processes(config, process_count):
             local["distributed"].update(process_id=rank, coordinator_address=address)
             configs.append(local)
         receipts = _request_all(children, "initialize", configs)
-        yield children, receipts
+        yield children, receipts, configs
     finally:
         for child in children:
             child.close()
@@ -98,7 +98,9 @@ def _learner_processes(config, process_count):
 
 @pytest.mark.timeout(180)
 @pytest.mark.parametrize("process_count", [1, pytest.param(2, marks=pytest.mark.multidevice)])
-def test_native_learner_subprocess_updates_and_resumes_exactly(tmp_path, process_count):
+@pytest.mark.parametrize("host_restart", [False, True])
+def test_native_learner_subprocess_updates_and_resumes_exactly(tmp_path, process_count, host_restart, monkeypatch):
+    host_module = pytest.importorskip("skyrl_train.workers.levanter.levanter_worker") if host_restart else None
     initializer = tmp_path / "initializer"
     initializer.mkdir()
     _hf_initializer(initializer)
@@ -153,7 +155,7 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(tmp_path, process
     }
     payload = {"arrays": arrays, "response_length": 2, "global_step": 1}
     checkpoint = {"ckpt_dir": str(tmp_path / "checkpoint"), "include_fingerprints": True}
-    with _learner_processes(config, process_count) as (children, receipts):
+    with _learner_processes(config, process_count) as (children, receipts, configs):
         assert all(row["global_devices"] == count and row["microbatches"] == 2 for row in receipts)
         scores = _same_request(children, "forward", payload)[0]["output"]
         arrays.update(
@@ -164,6 +166,7 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(tmp_path, process
                 "kl_weights": np.zeros((batch_size, 2), dtype=np.float32),
             }
         )
+        before_models = _same_request(children, "model_fingerprint", {})
         updates = _same_request(children, "train", payload)
         assert all(update["optimizer_step"] == 1 and update["router_bias_unchanged"] == 1 for update in updates)
         after = _same_request(children, "forward", payload)[0]["output"]
@@ -172,6 +175,51 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(tmp_path, process
         for row in saved:
             for name in ("model", "opt_state", "training_key", "step"):
                 assert row["state_fingerprints"]["components"][name]["addressable_bytes"] > 0
+        if host_restart:
+            output_dir = tmp_path / "attempt-output"
+            monkeypatch.setenv("IRIS_OUTPUT_DIR", str(output_dir))
+            cfg = host_module.OmegaConf.create(
+                {
+                    "trainer": {
+                        "placement": {"policy_num_gpus_per_node": local_count},
+                        "policy": {
+                            "levanter_config": {
+                                "python_executable": sys.executable,
+                                "device_memory_fraction": 0.9,
+                                "command_timeout_seconds": 60,
+                                "initialization_timeout_seconds": 60,
+                                "validate_checkpoint_roundtrip": True,
+                            }
+                        },
+                    },
+                }
+            )
+            workers = [host_module.LevanterHostWorker(cfg, rank) for rank in range(process_count)]
+            for worker, child, local in zip(workers, children, configs, strict=True):
+                worker.child = child
+                worker.initialization_config = local
+                worker.sender = host_module.LevanterExpertBlockSender(worker.publication)
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=process_count) as pool:
+                    futures = [
+                        pool.submit(worker.validate_checkpoint_roundtrip, before, status)
+                        for worker, before, status in zip(workers, before_models, updates, strict=True)
+                    ]
+                    roundtrips = [future.result() for future in futures]
+            finally:
+                children[:] = [worker.child for worker in workers if worker.child is not None]
+            for rank, row in enumerate(roundtrips):
+                assert row["previous_runtime"]["pid"] != row["restored_runtime"]["pid"]
+                assert row["previous_runtime"]["backend"] == row["restored_runtime"]["backend"] == "cpu"
+                assert row["restored_runtime"]["global_model_parameters"] > 0
+                assert row["old_exit_code"] == 0
+                assert row["model_change"]["global_model_changed"]
+                assert row["saved"] == row["restored"]
+                assert row["saved"]["state_fingerprints"] == saved[rank]["state_fingerprints"]
+                assert workers[rank].publication("inventory", {})["version"] == 1
+                assert len(workers[rank].expert_block_rpc("inventory")) == local_count
+                artifact = output_dir / f"native-checkpoint-roundtrip-process-{rank}.json"
+                assert host_module.json.loads(artifact.read_text()) == row
         payload["global_step"] = 2
         expected = _same_request(children, "train", payload)
         expected_scores = _same_request(children, "forward", payload)[0]["output"]
@@ -179,7 +227,7 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(tmp_path, process
         _same_request(children, "shutdown", {})
         assert all(child.process.returncode == 0 for child in children)
 
-    with _learner_processes(config, process_count) as (children, _):
+    with _learner_processes(config, process_count) as (children, _, _):
         restored = _same_request(children, "load_checkpoint", checkpoint)
         for expected_saved, actual_saved in zip(saved, restored, strict=True):
             assert actual_saved["step"] == actual_saved["version"] == 1

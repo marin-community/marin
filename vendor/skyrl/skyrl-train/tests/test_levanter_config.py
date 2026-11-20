@@ -47,6 +47,7 @@ def test_authored_native_recipe_round_trip_preserves_runtime_precision_and_mesh(
                 levanter_config=sections.PolicyLevanterConfig(
                     python_executable="/opt/native/bin/python",
                     projection_logits_dtype="bfloat16",
+                    validate_checkpoint_roundtrip=True,
                     head_gate_fp32=True,
                     xsa_fp32=True,
                     fp32_activations=False,
@@ -68,6 +69,7 @@ def test_authored_native_recipe_round_trip_preserves_runtime_precision_and_mesh(
         "context": 1,
     }
     assert runtime.projection_logits_dtype == "bfloat16"
+    assert runtime.validate_checkpoint_roundtrip
     assert runtime.head_gate_fp32 and runtime.xsa_fp32
     assert not runtime.fp32_activations
     assert runtime.python_executable == "/opt/native/bin/python"

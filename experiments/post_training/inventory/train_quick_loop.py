@@ -60,8 +60,11 @@ def training_recipe(
     reproducible_serving: bool = False,
     learner: Literal["megatron", "levanter"] = "megatron",
     verify_publication: bool = False,
+    validate_native_checkpoint: bool = False,
 ) -> SkyRLRecipe:
     """Use the maintained Snowball geometry with synchronous RLOO-N updates."""
+    if validate_native_checkpoint and learner != "levanter":
+        raise ValueError("Native checkpoint validation requires the Levanter learner")
     preset = replace(
         DEFAULT,
         label="snowball-100k",
@@ -168,6 +171,7 @@ def training_recipe(
                             head_gate_fp32=True,
                             xsa_fp32=True,
                             device_memory_fraction=0.90,
+                            validate_checkpoint_roundtrip=validate_native_checkpoint,
                         )
                     ),
                 )
@@ -216,6 +220,7 @@ def build_run(
     reproducible_serving: bool = False,
     learner: Literal["megatron", "levanter"] = "megatron",
     verify_publication: bool = False,
+    validate_native_checkpoint: bool = False,
 ) -> ArtifactStep[SkyRLRun]:
     """Bind selected canonical tasks, pinned SFT weights and terminal outputs."""
     model = ArtifactStep.adopt(
@@ -235,6 +240,7 @@ def build_run(
                     reproducible_serving=reproducible_serving,
                     learner=learner,
                     verify_publication=verify_publication,
+                    validate_native_checkpoint=validate_native_checkpoint,
                 ).to_skyrl(),
                 sort_keys=False,
             ),
@@ -284,6 +290,11 @@ def build_run(
 @click.option("--learner", type=click.Choice(["megatron", "levanter"]), default="megatron", show_default=True)
 @click.option("--verify-publication", is_flag=True, help="Replay received weight bytes after every publication.")
 @click.option(
+    "--validate-native-checkpoint",
+    is_flag=True,
+    help="Validate a real update and exact checkpoint restoration in fresh native learner processes.",
+)
+@click.option(
     "--reproducible-serving",
     is_flag=True,
     help="Use batch-invariant serving with one sequence per rank and greedy evaluation.",
@@ -296,9 +307,12 @@ def main(
     reproducible_serving: bool,
     learner: Literal["megatron", "levanter"],
     verify_publication: bool,
+    validate_native_checkpoint: bool,
 ) -> ArtifactStep[SkyRLRun]:
     if learner == "levanter" and export_hf:
         raise click.BadParameter("Levanter supports native checkpoints; terminal HF export is not implemented")
+    if validate_native_checkpoint and learner != "levanter":
+        raise click.BadParameter("--validate-native-checkpoint requires --learner levanter")
     name = user_owned_name(ARTIFACT_NAME)
     selection_uri = selection_uri.rstrip("/")
     _, marker, identity = selection_uri.rpartition(f"/{SELECTION_PREFIX}/")
@@ -328,6 +342,7 @@ def main(
         reproducible_serving=reproducible_serving,
         learner=learner,
         verify_publication=verify_publication,
+        validate_native_checkpoint=validate_native_checkpoint,
     )
 
 

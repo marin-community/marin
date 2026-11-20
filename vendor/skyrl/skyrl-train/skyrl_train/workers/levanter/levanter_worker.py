@@ -1,6 +1,7 @@
 """SkyRL actor-group boundary over isolated, host-wide native JAX learners."""
 
 import asyncio
+import json
 import os
 import time
 from pathlib import Path
@@ -13,6 +14,7 @@ from omegaconf import OmegaConf
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from marin.rl.levanter_worker_protocol import LearnerProcess
+from marinskyrl.resource_locator import join_resource_path
 from skyrl_train.distributed.dispatch import ActorInfo, MeshRank, concatenate_outputs_after_mesh_dispatch
 from skyrl_train.training_batch import TrainingInputBatch, TrainingOutputBatch
 from skyrl_train.trajectory_selection import optimization_samples_per_prompt
@@ -92,6 +94,8 @@ class LevanterHostWorker:
         self.child = None
         self.sender = None
         self.coordinator_address = None
+        self.initialization_config = None
+        self._checkpoint_validation_complete = False
 
     def node_address(self) -> str:
         return ray.util.get_node_ip_address()
@@ -100,20 +104,30 @@ class LevanterHostWorker:
         self.coordinator_address = coordinator_address
 
     def init_model(self, model_path: str, num_training_steps: int):
+        self.initialization_config = _runtime_config(
+            self.cfg, model_path=model_path, num_training_steps=num_training_steps,
+            process_id=self.process_id, coordinator_address=self.coordinator_address,
+        )
+        receipt = self._start_child()
+        logger.info("Native Levanter learner initialized: {}", receipt)
+        self.sender = LevanterExpertBlockSender(self.publication)
+        return receipt
+
+    def _start_child(self):
         runtime = self.cfg.trainer.policy.levanter_config
         self.child = LearnerProcess(
             runtime.python_executable,
             environment=_child_environment(runtime.python_executable, runtime.device_memory_fraction),
             timeout_seconds=runtime.command_timeout_seconds,
         )
-        config = _runtime_config(
-            self.cfg, model_path=model_path, num_training_steps=num_training_steps,
-            process_id=self.process_id, coordinator_address=self.coordinator_address,
-        )
-        receipt = self.child.request("initialize", config, timeout_seconds=runtime.initialization_timeout_seconds)
-        logger.info("Native Levanter learner initialized: {}", receipt)
-        self.sender = LevanterExpertBlockSender(self.publication)
-        return receipt
+        try:
+            return self.child.request(
+                "initialize", self.initialization_config, timeout_seconds=runtime.initialization_timeout_seconds
+            )
+        except Exception:
+            self.child.close()
+            self.child = None
+            raise
 
     def _set_pad_token_id(self, pad_token_id: int) -> None:
         # Coordinator padding and explicit masks already carry token validity.
@@ -139,7 +153,14 @@ class LevanterHostWorker:
         for _ in range(self.cfg.trainer.update_epochs_per_batch):
             for start in range(0, data.batch_size - mini_batch_size + 1, mini_batch_size):
                 batch = data.slice(start, start + mini_batch_size)
+                validate_checkpoint = (
+                    self.cfg.trainer.policy.levanter_config.validate_checkpoint_roundtrip
+                    and not self._checkpoint_validation_complete
+                )
+                before_model = self.child.request("model_fingerprint", {}) if validate_checkpoint else None
                 status = self.child.request("train", policy_payload(batch, self.cfg.trainer.algorithm).as_dict())
+                if validate_checkpoint:
+                    self.validate_checkpoint_roundtrip(before_model, status)
                 fingerprint = status.pop("frozen_batch_sha256")
                 logger.info("Native policy update: {} frozen_batch_sha256={}", status, fingerprint)
                 updates.append(status)
@@ -150,6 +171,53 @@ class LevanterHostWorker:
         output = TrainingOutputBatch({})
         output.metadata = {"train_status": status}
         return output
+
+    def validate_checkpoint_roundtrip(self, before_model: dict, train_status: dict) -> dict:
+        """Restore the first updated policy in a fresh JAX child, keeping serving alive."""
+        checkpoint = join_resource_path(
+            self.initialization_config["runtime"]["checkpoint_dir"],
+            f"native-validation/optimizer-step-{train_status['optimizer_step']}",
+        )
+        previous = self.child.request("runtime_identity", {})
+        saved = self.child.request("save_checkpoint", {"ckpt_dir": checkpoint, "include_fingerprints": True})
+        model_change = self.child.request(
+            "validate_model_change",
+            {"before": before_model, "after": saved["state_fingerprints"]["components"]["model"]},
+        )
+        self.child.request("barrier", {})
+        self.child.request("shutdown", {})
+        old_exit_code = self.child.process.returncode
+        self.child.close()
+        self.child = None
+        self._start_child()
+        restored = self.child.request("load_checkpoint", {"ckpt_dir": checkpoint, "include_fingerprints": True})
+        if saved != restored:
+            raise RuntimeError("Fresh native learner did not restore model/Adam/RNG/step/averaging exactly")
+        current = self.child.request("runtime_identity", {})
+        if current["pid"] == previous["pid"]:
+            raise RuntimeError("Native checkpoint validation did not start a fresh learner process")
+        self.child.request("barrier", {})
+        self._checkpoint_validation_complete = True
+        receipt = {
+            "status": "passed",
+            "process_id": self.process_id,
+            "checkpoint": checkpoint,
+            "previous_runtime": previous,
+            "restored_runtime": current,
+            "old_exit_code": old_exit_code,
+            "before_update_model": before_model,
+            "model_change": model_change,
+            "saved": saved,
+            "restored": restored,
+            "frozen_batch_sha256": train_status["frozen_batch_sha256"],
+        }
+        encoded = json.dumps(receipt, sort_keys=True)
+        logger.info("NATIVE_CHECKPOINT_ROUNDTRIP {}", encoded)
+        if output_dir := os.environ.get("IRIS_OUTPUT_DIR"):
+            path = Path(output_dir) / f"native-checkpoint-roundtrip-process-{self.process_id}.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(encoded + "\n")
+        return receipt
 
     def init_weight_sync_state(self, inference_engine_client) -> None:
         if self.cfg.generator.weight_sync_transport != "expert_block":

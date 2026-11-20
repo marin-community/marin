@@ -3,11 +3,13 @@
 
 """Native Snowball policy learner, isolated from the SkyRL Torch runtime."""
 
+import asyncio
 import contextlib
 import ctypes
 import dataclasses
 import hashlib
 import json
+import math
 import os
 import signal
 import sys
@@ -31,6 +33,7 @@ from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 from levanter.policy import ClippedPolicyConfig
 from levanter.policy_learner import SpmdPolicyLearner
 from levanter.policy_model import PolicyBatch, policy_model_loss
+from levanter.tensorstore_serialization import _transfer_shard_to_pageable_host
 from levanter.tracker.tracker import NoopConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.mesh import MeshConfig
@@ -64,30 +67,45 @@ def _router_bias_fingerprint(model: SnowballLMHeadModel) -> str:
 def _state_fingerprint(tree) -> dict:
     """Hash this process's state shards in global-index order with bounded host memory."""
     digest = hashlib.sha256()
+    layout_digest = hashlib.sha256()
     addressable_bytes = 0
     for path, value in jax.tree_util.tree_flatten_with_path(tree)[0]:
         if not eqx.is_array(value):
             continue
         shards = (
             [
-                (repr(shard.index), shard.data)
+                (repr(shard.index), shard)
                 for shard in sorted(value.addressable_shards, key=lambda shard: repr(shard.index))
             ]
             if isinstance(value, jax.Array)
-            else [("host", value)]
+            else [("host", None)]
         )
         seen_indices = set()
-        for index, data in shards:
+        for index, shard in shards:
             if index in seen_indices:
                 continue
             seen_indices.add(index)
             descriptor = (jax.tree_util.keystr(path), value.shape, str(value.dtype), index)
-            digest.update(json.dumps(descriptor).encode())
-            array = np.ascontiguousarray(np.asarray(data))
+            encoded_descriptor = json.dumps(descriptor).encode()
+            digest.update(encoded_descriptor)
+            layout_digest.update(encoded_descriptor)
+            data = value if shard is None else shard.data
+            # NumPy conversion caches the host copy on a GPU JAX array. Reuse the
+            # checkpoint staging path so the original model/Adam shard retains none.
+            snapshot = (
+                asyncio.run(_transfer_shard_to_pageable_host(shard))
+                if shard is not None and data.device.platform == "gpu"
+                else np.asarray(data)
+            )
+            array = np.ascontiguousarray(snapshot)
             digest.update(memoryview(array.view(np.uint8)))
             addressable_bytes += array.nbytes
-            del array
-    return {"sha256": digest.hexdigest(), "addressable_bytes": addressable_bytes}
+            del array, snapshot
+    return {
+        "sha256": digest.hexdigest(),
+        "layout_sha256": layout_digest.hexdigest(),
+        "addressable_bytes": addressable_bytes,
+    }
 
 
 def _initialize_distributed(config: dict) -> None:
@@ -366,6 +384,33 @@ class NativePolicyRuntime:
             },
         }
 
+    def runtime_identity(self) -> dict:
+        return {
+            "pid": os.getpid(),
+            "process_id": jax.process_index(),
+            "backend": jax.default_backend(),
+            "device_kinds": sorted({device.device_kind for device in jax.devices()}),
+            "global_devices": jax.device_count(),
+            "local_devices": jax.local_device_count(),
+            "global_model_parameters": sum(
+                math.prod(value.shape) for value in jax.tree.leaves(self.state.model) if eqx.is_array(value)
+            ),
+            "source": self.source_identity,
+        }
+
+    def validate_model_change(self, payload: dict) -> dict:
+        before, after = payload["before"], payload["after"]
+        changed = before["sha256"] != after["sha256"]
+        same_layout = before["layout_sha256"] == after["layout_sha256"]
+        flags = np.asarray(multihost_utils.process_allgather(np.array([changed, same_layout], dtype=np.int32))).reshape(
+            -1, 2
+        )
+        if not np.all(flags[:, 1]):
+            raise RuntimeError("Native model shard layout changed during the optimizer update")
+        if not np.any(flags[:, 0]):
+            raise RuntimeError("Native optimizer update did not change model parameters on any process")
+        return {"local_model_changed": changed, "global_model_changed": True, "layout_unchanged": True}
+
     def publication(self, method: str, payload: dict):
         if method == "inventory":
             return self.publisher.inventory(self.version)
@@ -397,6 +442,12 @@ class NativePolicyRuntime:
             return self.checkpoint(method, payload)
         if method == "state_fingerprints":
             return self.state_fingerprints()
+        if method == "model_fingerprint":
+            return _state_fingerprint(self.state.model)
+        if method == "runtime_identity":
+            return self.runtime_identity()
+        if method == "validate_model_change":
+            return self.validate_model_change(payload)
         if method == "publication":
             return self.publication(payload["method"], payload["payload"])
         if method == "barrier":

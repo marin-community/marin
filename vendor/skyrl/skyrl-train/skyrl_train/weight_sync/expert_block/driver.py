@@ -10,9 +10,12 @@ byte count.
 import asyncio
 from collections import Counter
 from dataclasses import asdict, dataclass
+import json
 import time
 
+from loguru import logger
 from marinskyrl.inference_placement import InferenceReplicaPlacement
+from skyrl_train.telemetry import record_event
 from skyrl_train.weight_sync.expert_block.groups import RendezvousStore
 from skyrl_train.weight_sync.expert_block.schedule import (
     DenseSlice,
@@ -284,6 +287,12 @@ class ExpertBlockSync:
                     f"Trainer rank {replicas.participant} differs from its data-parallel peers on "
                     f"{replicas.mismatched_bytes} of {replicas.compared_bytes} bytes"
                 )
+        # Publish evidence only after every receiver and trainer report passed
+        # validation. The timing alone cannot attest version or byte coverage.
+        for report in receivers:
+            receipt = asdict(report)
+            record_event("expert_block_replay_receipt", receipt)
+            logger.info("expert_block_replay_receipt {}", json.dumps(receipt, sort_keys=True, separators=(",", ":")))
         return {"verify_seconds": time.perf_counter() - started}
 
     async def close(self) -> None:
