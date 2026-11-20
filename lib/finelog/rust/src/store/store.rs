@@ -1771,6 +1771,9 @@ mod tests {
 
     use arrow::array::{Int64Array, StringArray};
     use buffa::{Message, MessageField, MessageView};
+    use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+    use datafusion::datasource::physical_plan::FileScanConfig;
+    use datafusion::datasource::source::DataSourceExec;
 
     use super::*;
     use crate::levanter_metrics_policy::levanter_metrics_schema;
@@ -5446,10 +5449,6 @@ mod tests {
 
         /// How many segment files the physical scan for `sql` opens.
         async fn planned_segments(&self, sql: &str) -> usize {
-            use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
-            use datafusion::datasource::physical_plan::FileScanConfig;
-            use datafusion::datasource::source::DataSourceExec;
-
             let ctx = crate::query::make_ctx();
             ctx.register_table(
                 datafusion::common::TableReference::bare("iris.worker"),
@@ -5484,7 +5483,7 @@ mod tests {
 
         /// Assert each time filter returns the same rows with and without column
         /// bounds, and that its scan opens the paired number of segments.
-        async fn assert_results_unchanged(&self, cases: &[(&str, usize)]) {
+        async fn assert_pruning_keeps_rows(&self, cases: &[(&str, usize)]) {
             for &(filter, expected) in cases {
                 let sql = format!(
                     "SELECT worker_id, mem_bytes, timestamp_ms FROM \"iris.worker\" \
@@ -5648,7 +5647,7 @@ mod tests {
     async fn time_filters_prune_by_column_bounds() {
         let table = TimeBoundedTable::new("column_bounds_pruned", false).await;
         table
-            .assert_results_unchanged(&[
+            .assert_pruning_keeps_rows(&[
                 ("timestamp_ms >= 2000", 2),
                 ("timestamp_ms BETWEEN 1200 AND 2100", 2),
                 ("timestamp_ms > 2400.5", 2),
@@ -5671,7 +5670,7 @@ mod tests {
         }
         assert_eq!(table.recorded_bounds(), vec![None, None, None]);
         table
-            .assert_results_unchanged(&[
+            .assert_pruning_keeps_rows(&[
                 ("timestamp_ms >= 2000", 3),
                 ("timestamp_ms BETWEEN 1200 AND 2100", 3),
                 ("timestamp_ms > 2400.5", 3),
@@ -5699,7 +5698,7 @@ mod tests {
             ]
         );
         table
-            .assert_results_unchanged(&[
+            .assert_pruning_keeps_rows(&[
                 ("timestamp_ms >= 2000", 2),
                 ("timestamp_ms BETWEEN 1200 AND 2100", 3),
                 ("timestamp_ms > 2400.5", 2),
@@ -5768,7 +5767,7 @@ mod tests {
             "the backfill reuses each object"
         );
         table
-            .assert_results_unchanged(&[
+            .assert_pruning_keeps_rows(&[
                 ("timestamp_ms >= 2000", 2),
                 ("timestamp_ms BETWEEN 1200 AND 2100", 2),
                 ("timestamp_ms > 2400.5", 2),
