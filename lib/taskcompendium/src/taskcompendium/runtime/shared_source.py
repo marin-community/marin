@@ -351,8 +351,6 @@ def bootstrap(input_path: Path) -> None:
     if runner["family"] in ("scale-swe", "swe-rebench"):
         if config.get("workdir") != contract["workspace"]:
             raise ValueError("Source workdir differs from the published contract workspace")
-    elif contract["workspace"] != "/testbed":
-        raise ValueError("SWE-Lego grades in /testbed")
     pin_git(root, workspace)
 
     scope = capture_scope(workspace, runner, config)
@@ -380,8 +378,8 @@ def bootstrap(input_path: Path) -> None:
         common.checked(["chmod", "-R", "g+rwX", directory], cwd=root, timeout=120)
 
     baseline = common.inventory(dependencies)
-    common.write_json(root / "dependency-baseline.json", baseline)
-    common.write_json(root / "startup-baseline.json", common.hook_inventory(baseline))
+    common.write_json(root / common.DEPENDENCY_BASELINE, baseline)
+    common.write_json(root / common.STARTUP_BASELINE, common.hook_inventory(baseline))
     for item in (root, *root.rglob("*")):
         if item.is_symlink():
             continue
@@ -402,7 +400,7 @@ def prepare_grading(contract: dict, payload: dict) -> None:
     reports = Path(contract["report_directory"])
     common.reset_report_directory(contract, 0o770)
     dependencies = [path for path in contract["native"]["dependency_paths"] if Path(path).exists()]
-    baseline = json.loads((root / "dependency-baseline.json").read_text())
+    baseline = json.loads((root / common.DEPENDENCY_BASELINE).read_text())
     inventory = common.inventory(dependencies)
     common.write_json(reports / contract["audit_probes"][0], common.inventory_diff(baseline, inventory))
     common.write_json(
@@ -505,14 +503,13 @@ def grade(contract_path: Path) -> None:
 
 
 def parse_source_reward(reward_file: Path) -> float | None:
-    """Validate the source scorer's reward file: regular, finite, in [0, 1]."""
+    """Return a finite reward in [0, 1], or None for a missing or invalid file."""
     if reward_file.is_symlink() or not reward_file.is_file():
         return None
     try:
         reward = float(reward_file.read_text().strip())
     except ValueError:
         return None
-    # The declared reward domain of these source scorers is a finite [0, 1] float.
     if not math.isfinite(reward) or reward < 0.0 or reward > 1.0:
         return None
     return reward

@@ -26,9 +26,9 @@ from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
 SCORERS = Path(__file__).parent / "scorers"
 DEPENDENCIES = {
-    "gsm8k_cot": ("minerva.py", "amc.py"),
-    "minerva_math": ("minerva.py", "amc.py"),
-    "bbh_cot": (),
+    "gsm8k_cot": ("math.py", "minerva.py", "amc.py"),
+    "minerva_math": ("math.py", "minerva.py", "amc.py"),
+    "bbh_cot": ("choices.py",),
     "harness_generation": ("harness_generation.py", "minerva.py", "amc.py"),
 }
 
@@ -40,7 +40,7 @@ def scorer_files(scorer: str) -> tuple[TaskResource, ...]:
 
 
 def scorer_revision(scorer: str) -> str:
-    """Include the scorer, entry point and dependency bytes in the corpus identity."""
+    """Return the source scorer's content revision identifier."""
     digest = canonical_sha256(
         {
             "package.py": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),

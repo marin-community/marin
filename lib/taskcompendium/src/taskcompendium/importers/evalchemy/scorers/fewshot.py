@@ -6,64 +6,25 @@
 # Optional scorer dependencies load only for the selected environment.
 
 import json
-import re
 import sys
 from dataclasses import asdict
 from pathlib import Path
 
-from verifyit.grade import GradingInfraError, InvalidTask, Reward, infra_error, invalid_task, scored
-
-
-def normalize_numeric_answer(value: str) -> str:
-    return re.sub(r",|\$|(?s:.*#### )|\.$", "", value).lower()
-
-
-def grade_gsm8k_cot(document: dict, response: str) -> Reward:
-    expected = document["answer"].rsplit("####", 1)[-1].strip()
-    strict = re.findall(r"The answer is (\-?[0-9\.\,]+).", response)
-    flexible = re.findall(r"(-?[$0-9.,]{2,})|(-?[0-9]+)", response)
-    extracted = {
-        "strict-match": strict[0] if strict else "[invalid]",
-        "flexible-extract": next((value for value in flexible[-1] if value), "[invalid]") if flexible else "[invalid]",
-    }
-    metrics = {
-        f"exact_match,{name}": float(normalize_numeric_answer(value) == normalize_numeric_answer(expected))
-        for name, value in extracted.items()
-    }
-    return scored(metrics["exact_match,flexible-extract"], metrics=metrics, extracted=extracted)
-
-
-def grade_minerva_completion(document: dict, response: str) -> Reward:
-    from math_verify import parse, verify  # noqa: PLC0415 - optional math scorer dependencies
-
-    from .amc import last_boxed_answer  # noqa: PLC0415 - optional math scorer resources
-    from .minerva import is_equiv, normalize_final_answer  # noqa: PLC0415 - optional math scorer resources
-
-    matches = re.findall(
-        r"Final Answer: The final answer is(.*?). I hope it is correct.", response + "I hope it is correct."
-    )
-    answer = normalize_final_answer(matches[0].strip() if matches else "[invalidanswer]")
-    expected = normalize_final_answer(last_boxed_answer(document["solution"]))
-    metrics = {
-        "exact_match,none": float(is_equiv(answer, expected)),
-        "math_verify,none": float(bool(verify(gold=parse(document["solution"]), target=parse(response)))),
-    }
-    return scored(metrics["exact_match,none"], metrics=metrics, extracted=answer)
-
-
-def grade_bbh_cot(document: dict, response: str) -> Reward:
-    matches = re.findall(r"(?<=the answer is )(.*)(?=.)", response)
-    answer = matches[0] if matches else "[invalid]"
-    value = float(answer == document["target"])
-    return scored(value, metrics={"exact_match,get-answer": value}, extracted=answer)
+from verifyit.grade import GradingInfraError, InvalidTask, Reward, infra_error, invalid_task
 
 
 def score(scorer: str, config: dict, response: str) -> Reward:
     if scorer == "gsm8k_cot":
+        from .math import grade_gsm8k_cot  # noqa: PLC0415 - optional scorer resources
+
         return grade_gsm8k_cot(config["document"], response)
     if scorer == "minerva_math":
+        from .math import grade_minerva_completion  # noqa: PLC0415 - optional scorer resources
+
         return grade_minerva_completion(config["document"], response)
     if scorer == "bbh_cot":
+        from .choices import grade_bbh_cot  # noqa: PLC0415 - optional scorer resources
+
         return grade_bbh_cot(config["document"], response)
     if scorer == "harness_generation":
         from .harness_generation import grade_harness_generation_candidate  # noqa: PLC0415 - optional scorer

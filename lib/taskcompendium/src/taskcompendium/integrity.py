@@ -13,11 +13,14 @@ BOOTSTRAP_DIRECTORY = f"{PROTECTED_ROOT}-bootstrap"
 BOOTSTRAP_CONTROLLER = f"{BOOTSTRAP_DIRECTORY}/control.py"
 PRIVATE_DIRECTORY = f"{PROTECTED_ROOT}-private"
 PRIVATE_CONTEXT = "environment/taskcompendium-shared-private"
+CONTROLLER_CONTEXT = "environment/taskcompendium-shared/control.py"
+SHARED_CONTROLLER_CONTEXT = "environment/taskcompendium-shared/shared_pytest.py"
 AGENT_HOME = "/home/taskcompendium-agent"
 BOOTSTRAP_TIMEOUT = 1800.0
-PYTEST_AUDIT_PROBES = ("site-packages-diff.json", "startup-hooks-diff.json")
+STARTUP_HOOKS_REPORT = "startup-hooks-diff.json"
+PYTEST_AUDIT_PROBES = ("site-packages-diff.json", STARTUP_HOOKS_REPORT)
 # Pytest audits Python sites; native and source runners audit their declared dependency roots.
-DEPENDENCY_AUDIT_PROBES = ("dependencies-diff.json", "startup-hooks-diff.json")
+DEPENDENCY_AUDIT_PROBES = ("dependencies-diff.json", STARTUP_HOOKS_REPORT)
 
 
 class SharedDependencyState(StrEnum):

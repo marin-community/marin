@@ -237,5 +237,5 @@ def harden_shared_swe_reference(
         "instruction.md"
     ]
     files["tests/test.sh"] = shared_grader_script(contract)
-    files["environment/Dockerfile"] += (shared_user_layer(contract) + shared_private_image_layer(contract)).encode()
+    files["environment/Dockerfile"] += (shared_user_layer(contract) + shared_private_image_layer()).encode()
     return contract

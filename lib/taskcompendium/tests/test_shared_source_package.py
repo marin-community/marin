@@ -11,6 +11,7 @@ import zlib
 from pathlib import Path
 
 import pytest
+import tomlkit
 
 from taskcompendium.harbor.shared_source import (
     SCALE_SWE_PROFILE,
@@ -88,14 +89,10 @@ def test_scale_package_keeps_body_and_hides_all_tests_material():
     assert sorted(payload["tests"]) == ["config.json", "grade.py", "native_scripts.py", "scale_score.py", "test.sh"]
     assert bytes.fromhex(payload["tests"]["config.json"]) == original_config
     assert payload["spec"] == {"timeout": None}
-    assert "timeout_sec" not in files["task.toml"].decode().split("[verifier]")[-1].split("[agent]")[0]
-    setup = "\n".join(line for line in files["task.toml"].decode().splitlines() if "bootstrap" in line)
-    assert "taskcompendium-source-input.json" in setup
+    assert "timeout_sec" not in tomlkit.parse(files["task.toml"].decode())["verifier"]
     assert files["environment/taskcompendium-shared/control.py"]
     assert "taskcompendium-grade" in files["environment/Dockerfile"].decode()
-    # UID handover happens at build time: sandbox fs may deny runtime uid changes.
-    assert "RUN mkdir -p /repo && chown -R 10001:10001 /repo" in files["environment/Dockerfile"].decode()
-    assert files["task.toml"].decode().count("agent_mutable_v2") == 1
+    assert tomlkit.parse(files["task.toml"].decode())["metadata"]["execution_policy"] == "shared_agent_mutable_v2"
 
 
 def test_lego_contract_captures_patch_paths_and_declares_its_policy():
@@ -112,16 +109,15 @@ def test_lego_contract_captures_patch_paths_and_declares_its_policy():
         "Agent-installed pytest plugins and imports in the shared interpreter environments",
         "Candidate-produced test-output injection",
     )
-    assert "RUN mkdir -p /testbed && chown -R 10001:10001 /testbed" in files["environment/Dockerfile"].decode()
     payload = json.loads(zlib.decompress(files[SOURCE_ARCHIVE]))
     assert sorted(payload["tests"]) == ["config.json", "grade.py", "native_scripts.py", "test.sh"]
-    task_toml = files["task.toml"].decode()
+    task_toml = tomlkit.parse(files["task.toml"].decode())
     assert payload["spec"] == {"timeout": 900.0}
-    assert "timeout_sec = 900.0" in task_toml
-    assert 'user = "root"' in task_toml
-    assert "restart_environment = false" in task_toml
-    assert 'user = "10001"' in task_toml
-    assert 'environment_mode = "shared"' in task_toml
+    assert task_toml["verifier"]["timeout_sec"] == 900.0
+    assert task_toml["verifier"]["user"] == "root"
+    assert task_toml["verifier"]["restart_environment"] is False
+    assert task_toml["agent"]["user"] == "10001"
+    assert task_toml["verifier"]["environment_mode"] == "shared"
 
 
 def test_unknown_config_keys_and_missing_files_fail_closed():

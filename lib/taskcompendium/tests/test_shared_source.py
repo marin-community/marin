@@ -618,6 +618,7 @@ def source_image(shim, request, monkeypatch):
 def test_actor_cannot_read_bootstrap_payload_when_runner_skips_setup(source_image):
     payload = Path(SOURCE_PAYLOAD)
     assert payload.read_bytes()
+    assert WORKSPACE.stat().st_uid == AGENT_UID
     probe = (
         "from pathlib import Path\n"
         "try:\n"
@@ -938,7 +939,6 @@ def test_swe_rebench_reward_channel_and_test_files_scope(source_image):
 
 
 def contract_workspace_of(files: dict[str, bytes]) -> str:
-    """Read the workspace the hardened contract published for this package."""
     payload = json.loads(zlib.decompress(files[SOURCE_ARCHIVE]))
     return payload["contract"]["workspace"]
 
