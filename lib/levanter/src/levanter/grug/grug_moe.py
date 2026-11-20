@@ -52,7 +52,7 @@ from levanter.grug._moe.ep_common import (
 from levanter.grug._moe.ep_deepep import _moe_mlp_ep_deepep_local
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
 from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import _moe_mlp_ep_fixed_pooled_wave_a2a_local
-from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
+from levanter.grug._moe.ep_ragged_all_to_all import ShadowExperts, _moe_mlp_ep_ragged_a2a_local
 from levanter.grug._moe.ep_ring import (
     _gather_dispatch_combine,
     _moe_mlp_ep_ring_local,
@@ -381,6 +381,7 @@ class MoEExpertMlp(eqx.Module):
     expert_chunks: int = eqx.field(static=True, default=1)
     num_expert_waves: int = eqx.field(static=True, default=1)
     combine_in_fp32: bool = eqx.field(static=True, default=False)
+    shadow_experts: ShadowExperts | None = eqx.field(static=True, default=None)
 
     @staticmethod
     def init(
@@ -398,6 +399,7 @@ class MoEExpertMlp(eqx.Module):
         expert_chunks: int = 1,
         num_expert_waves: int = 1,
         combine_in_fp32: bool = False,
+        shadow_experts: ShadowExperts | None = None,
         pspecs: MoEExpertMlpPspecs = MoEExpertMlpPspecs(),
     ) -> "MoEExpertMlp":
         resolved_implementation = resolve_moe_implementation(implementation)
@@ -416,6 +418,7 @@ class MoEExpertMlp(eqx.Module):
             expert_chunks=expert_chunks,
             num_expert_waves=num_expert_waves,
             combine_in_fp32=combine_in_fp32,
+            shadow_experts=shadow_experts,
         )
 
     @named_call
@@ -446,6 +449,7 @@ class MoEExpertMlp(eqx.Module):
             expert_chunks=self.expert_chunks,
             num_expert_waves=self.num_expert_waves,
             combine_in_fp32=self.combine_in_fp32,
+            shadow_experts=self.shadow_experts,
         )
 
 
@@ -467,6 +471,7 @@ def moe_mlp(
     expert_chunks: int = 1,
     num_expert_waves: int = 1,
     combine_in_fp32: bool = False,
+    shadow_experts: ShadowExperts | None = None,
 ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], MoeDispatchCounts]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
@@ -507,6 +512,10 @@ def moe_mlp(
     `combine_in_fp32=True` weights and sums the expert outputs in float32 (float32 combine weights, and on the
     ring paths a float32 psum-scatter), casting to `x`'s dtype once at the end. Only the `ring`,
     `ring_gather_combine` and local `scatter` paths support it. Off, they cast the weights to `x`'s dtype first.
+
+    `shadow_experts` computes each expert-parallel group's most-loaded experts on every shard of the
+    group, outside the transport and its capacity (`ShadowExperts`). It requires `ragged_all_to_all` on an
+    expert axis of size two or more; callers that leave expert parallelism must clear it.
     """
     resolved_implementation = resolve_moe_implementation(implementation)
 
@@ -564,6 +573,14 @@ def moe_mlp(
             "combine_in_fp32 with expert parallelism is implemented only for ring and ring_gather_combine; "
             f"got implementation={resolved_implementation!r}"
         )
+    if shadow_experts is not None:
+        if resolved_implementation != "ragged_all_to_all" or not expert_parallel:
+            raise ValueError(
+                "shadow_experts requires ragged_all_to_all on an expert axis of size two or more; "
+                f"got implementation={resolved_implementation!r}, expert axis size {expert_axis_size}"
+            )
+        if shadow_experts.count > num_experts:
+            raise ValueError(f"shadow_experts.count={shadow_experts.count} exceeds num_experts={num_experts}")
 
     if mesh is None or mesh.empty:
         out, dropped = _moe_mlp_local(
@@ -630,7 +647,7 @@ def moe_mlp(
                 transport_capacity_factor=pooled_transport_capacity_factor,
             )
         elif resolved_implementation == "ragged_all_to_all":
-            shard_local_fn = _moe_mlp_ep_ragged_a2a_local
+            shard_local_fn = partial(_moe_mlp_ep_ragged_a2a_local, shadow_experts=shadow_experts)
         elif resolved_implementation == "fixed_all_to_all":
             shard_local_fn = _moe_mlp_ep_fixed_a2a_local
         elif resolved_implementation == "fixed_pooled_wave_all_to_all":
@@ -766,6 +783,7 @@ __all__ = [
     "MoeImplementation",
     "PspecAxis",
     "QBRoutedMoE",
+    "ShadowExperts",
     "moe_mlp",
     "moe_routing_stats",
     "moe_routing_stats_local",
