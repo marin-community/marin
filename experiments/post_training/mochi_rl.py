@@ -288,8 +288,8 @@ if __name__ == "__main__":
 
     def sft_presets():
         # Load the SFT training dependencies only for --sft.
-        from experiments.post_training.mochi_sft import MOCHI_SFT  # noqa: PLC0415
+        from experiments.post_training.mochi_sft import MOCHI_SFT_PRESETS  # noqa: PLC0415
 
-        return MOCHI_SFT
+        return MOCHI_SFT_PRESETS
 
     raise SystemExit(rl.main(MOCHI, sft_presets=sft_presets))

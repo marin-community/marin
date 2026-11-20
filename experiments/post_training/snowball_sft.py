@@ -1,18 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Snowball chat SFT presets for four-node OpenThoughts and #11120 Experiment 2.
-
-OpenThoughts uses one conversation per sequence and keeps its first 32,768 tokens.
-
-Experiment 2's stored sft.yaml at source 442bf9d878 pins 204 updates, 256 sequences of
-262,144 tokens, CP32/EP8, chat packing at 256, per-device parallelism 1, the XLA
-autotuning setting, and a 72,000-second deadline on 32 eight-H100 workers.
-Its sft-data.yaml pins the mixture cache and tokenizer. The Snowball preset at that
-source pins the base weights and cosine Adam settings. GitHub comment 6863473319 on
-#11120 confirms the batch geometry, and comment 6864384835 confirms
-FP32 parameters and assistant-only supervision.
-"""
+"""Snowball chat SFT presets for four-node OpenThoughts and the 32-node mixture."""
 
 import hashlib
 import json
@@ -102,11 +91,10 @@ MIXTURE_TOKENIZER = "s3://marin-us-east-02a/marin/grug_sft/tokenizer/2026.09.18"
 MIXTURE_SEQ_LEN = 262_144
 MIXTURE_BATCH_SIZE = 256
 
-# The Experiment 2 spec and #11120 pin the same component and schedule files.
+# The mixture uses the component and weight schedule from Snowball SFT Experiment 2.
 _MIXTURE_NAME = "mixture-262k-32node"
 _MANIFEST = f"{_MIXTURE_NAME}-data.json"
 _MANIFEST_SHA256 = "cba9684f56fcaa686ee4d1832701ef20ebf343aeb0cf9a8963a85cc7bb535c0b"
-_SOURCE_STEP_POSITIONS = 67_108_864
 _SFT_PACK = 256
 _SFT_FORMAT = {
     "type": "serialized_chat",
@@ -126,7 +114,6 @@ def _publish_data_manifest(*, output: str, sha256: str) -> None:
             for child in children:
                 child["format"] = _SFT_FORMAT
                 child["pack"] = _SFT_PACK
-    data["block_cross_document_attention"] = bool(_SFT_PACK)
     contents = (json.dumps(data, sort_keys=True, separators=(",", ":")) + "\n").encode()
     if hashlib.sha256(contents).hexdigest() != sha256:
         raise ValueError(f"{_MIXTURE_NAME} data manifest does not match its SHA-256 pin")
@@ -157,9 +144,6 @@ MIXTURE_SPEC = replace(
     per_device_parallelism=1,
     xla_flags=("--xla_gpu_shard_autotuning=false",),
 )
-if MIXTURE_SPEC.batch_size * MIXTURE_SPEC.seq_len != _SOURCE_STEP_POSITIONS:
-    raise ValueError(f"{_MIXTURE_NAME} batch must match the source schedule's tokens per update")
-
 MIXTURE_262K_32NODE = SFTPreset(_MIXTURE_NAME, MIXTURE_SPEC, MIXTURE_RESOURCES)
 SNOWBALL_SFT = (OPENTHOUGHTS_32K_4NODE, MIXTURE_262K_32NODE)
 

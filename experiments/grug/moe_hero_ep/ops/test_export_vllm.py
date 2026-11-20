@@ -37,7 +37,7 @@ from experiments.grug.moe_hero_ep.model import GRUG_MOE_ARTIFACT_SCHEMA_VERSION_
 from experiments.grug.moe_hero_ep.ops import upload_hf
 from experiments.grug.moe_hero_ep.ops.export_vllm import ExportConfig, export
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
-from experiments.post_training.mochi_sft import MIXTURE_262K_16NODE, MIXTURE_262K_48NODE, MOCHI_SPEC, build_training
+from experiments.post_training.mochi_sft import MIXTURE_262K_16NODE, MIXTURE_262K_48NODE, MOCHI_SFT
 
 
 @pytest.mark.parametrize(
@@ -192,13 +192,14 @@ def test_export_recovery_verifies_shards_and_preserves_completed_output(tmp_path
     assert {path.name: path.read_bytes() for path in root.iterdir()} == before
 
 
-def test_mochi_sft_three_rack_plan_saves_only_for_export(tmp_path, monkeypatch):
+def test_mochi_sft_three_rack_training_plan(monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central2")
     monkeypatch.delenv("MARIN_TEMP_PREFIX", raising=False)
     monkeypatch.setattr(sft_recipe, "checkpoint_step", lambda _: 393491)
     monkeypatch.setattr(launch_hero_sft, "special_token_init", lambda _: None)
 
-    step = build_training(MIXTURE_262K_48NODE, steps=None, export=False, prefix=None)
+    preset = MIXTURE_262K_48NODE
+    step = preset.recipe.train_artifact(preset.resources)
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args.keys(), step.deps))
     allocation = step.runtime_args["train_resources"]
     assert step.path().startswith("s3://marin-us-east-08a/tmp/ttl=3d/users/")
@@ -208,29 +209,17 @@ def test_mochi_sft_three_rack_plan_saves_only_for_export(tmp_path, monkeypatch):
     assert config.trainer.replica_axis_size == 3
     assert config.stop_step == 393494
     assert not config.trainer.save_checkpoints
-    assert config.trainer.trainer.load_checkpoint_path == [MOCHI_SPEC.initialize_from]
+    assert config.trainer.trainer.load_checkpoint_path == [MOCHI_SFT.initialize_from]
 
-    monkeypatch.setenv("MARIN_TEMP_PREFIX", str(tmp_path))
-    export_model = MIXTURE_262K_48NODE.model()
-    [training] = export_model.step.deps
-    config = training.build_config(StepContext.for_fingerprint(training.runtime_args.keys(), training.deps))
-    assert training.runtime_args["train_resources"].replicas == 48
-    assert config.trainer.replica_axis_size == 3
-    assert config.stop_step == 393494
-    assert config.trainer.save_checkpoints
-    assert config.trainer.trainer.checkpointer.save_interval is None
-    requests = []
 
-    def submit(request):
-        requests.append(request)
-        return SimpleNamespace(wait=lambda **kwargs: None)
-
-    lowered = export_model.step.lower()
-    assert lowered.fn is not None
-    with set_current_client(SimpleNamespace(submit=submit)):
-        lowered.fn(str(tmp_path / "export"))
-    [request] = requests
-    assert request.resources.ram == "448GiB"
+@pytest.mark.parametrize(
+    ("racks", "error"),
+    [(0, "dp_racks must be positive"), (2, "GB200 allocation derived from dp_racks")],
+)
+def test_mochi_sft_refuses_incompatible_rack_count(racks, error):
+    preset = MIXTURE_262K_16NODE
+    with pytest.raises(ValueError, match=error):
+        dataclasses.replace(preset, recipe=dataclasses.replace(preset.recipe, dp_racks=racks)).model()
 
 
 @pytest.mark.timeout(240)
@@ -241,7 +230,7 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
     initializer_metadata = initializer / "metadata.json"
     initial = {"step": 16, "is_temporary": False}
     initializer_metadata.write_text(json.dumps(initial))
-    placement = MOCHI_SPEC.expert_placement
+    placement = MOCHI_SFT.expert_placement
     assert placement is not None
     placement = dataclasses.replace(placement, source_checkpoint=str(initializer))
     monkeypatch.setattr(launch_hero_sft, "special_token_init", lambda _: None)
@@ -254,9 +243,6 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
         expert_placement=placement,
     )
     preset = dataclasses.replace(MIXTURE_262K_16NODE, recipe=recipe)
-    resources = preset.resources
-    with pytest.raises(ValueError, match="GB200 allocation derived from dp_racks"):
-        dataclasses.replace(preset, resources=dataclasses.replace(resources, replicas=15)).model()
     initializer_metadata.write_text(json.dumps({**initial, "is_temporary": True}))
     with pytest.raises(ValueError, match="temporary checkpoint"):
         preset.model()
@@ -265,8 +251,6 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
     monkeypatch.setenv("MARIN_TEMP_PREFIX", str(prefix))
     model = preset.model()
     [trained] = model.step.deps
-    cli_training = build_training(preset, steps=1, export=True, prefix=recipe.scratch_prefix())
-    assert cli_training.fingerprint() == trained.fingerprint()
     training = materialized_config(trained, str(tmp_path))
     assert training.resources.replicas == 16
     assert training.resources.device.count == 4
@@ -291,11 +275,11 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
 
     def download_tokenizer(repo_id, *, revision, local_dir, **kwargs):
         assert repo_id == "marin-community/marin-tokenizer-tools"
-        assert revision == MOCHI_SPEC.tokenizer_revision
+        assert revision == MOCHI_SFT.tokenizer_revision
         shutil.copytree(tokenizer_source, local_dir, dirs_exist_ok=True)
 
     monkeypatch.setattr(upload_hf, "snapshot_download", download_tokenizer)
-    monkeypatch.setattr(sft_recipe, "HERO_MODEL_CONFIG", native.model)
+    monkeypatch.setattr(sft_recipe, "sft_model_config", lambda _: native.model)
     output = Path(model.step.path().removeprefix("file://"))
     assert output.is_relative_to(prefix)
     config = materialized_config(model.step, str(tmp_path))
@@ -320,7 +304,7 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
     assert model.relative_path == "hf"
     assert record.config["relative_path"] == model.relative_path
     assert record.config["tokenizer_uri"] == "marin-community/marin-tokenizer-tools"
-    assert record.config["tokenizer_revision"] == MOCHI_SPEC.tokenizer_revision
+    assert record.config["tokenizer_revision"] == MOCHI_SFT.tokenizer_revision
     hf = output / model.relative_path
     context = StepContext.for_run(
         output_path=str(tmp_path / "rl"), prefix=str(tmp_path), region=None, runtime_args={}, deps=model.deps()

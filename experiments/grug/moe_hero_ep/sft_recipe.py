@@ -24,16 +24,17 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.grug.moe_hero_ep.expert_placement import ExpertPlacement
-from experiments.grug.moe_hero_ep.hero_recipe import HERO_MODEL_CONFIG, HeroThroughputResult, with_transport_remat_mode
+from experiments.grug.moe_hero_ep.hero_recipe import HeroThroughputResult
 from experiments.grug.moe_hero_ep.launch_hero_sft import (
     build_sft_run,
     checkpoint_step,
     permanent_checkpoint_dir,
+    sft_model_config,
     sft_resources,
 )
 from experiments.grug.moe_hero_ep.ops.export_cpu import (
+    DEFAULT_EXPORT_HOST_BUDGET_BYTES,
     DEFAULT_READ_HOST_BUDGET_BYTES,
-    DEFAULT_WRITE_HOST_BUDGET_BYTES,
     CpuExportConfig,
     export,
     full_expert_bank_read_bytes,
@@ -46,6 +47,8 @@ from experiments.sft.launcher import sft_child_resources
 
 @dataclass(frozen=True, kw_only=True)
 class MochiSFT:
+    """Train a Mochi mixture on the given number of GB200 racks and export its final checkpoint."""
+
     run_id: str
     initialize_from: str
     muon_lr: float
@@ -65,16 +68,35 @@ class MochiSFT:
     eval_every: int = 0
     expert_placement: ExpertPlacement | None = None
 
-    def trained(self, resources: ResourceConfig, *, coordinator_cluster: str | None = None) -> ArtifactHfModel:
-        recipe = replace(self, checkpoints="final") if self.checkpoints == "none" else self
-        prefix = None if self.checkpoints == "periodic" else self.scratch_prefix()
-        step = recipe.training_step(sft_child_resources(resources, coordinator_cluster), prefix=prefix)
-        return recipe.export_model(step, coordinator_cluster=coordinator_cluster)
+    def trained(
+        self,
+        resources: ResourceConfig,
+        *,
+        steps: int | None = None,
+        prefix: str | None = None,
+        coordinator_cluster: str | None = None,
+    ) -> ArtifactHfModel:
+        recipe, prefix = self._run_recipe(steps=steps, export=True, prefix=prefix)
+        training = recipe._training_artifact(sft_child_resources(resources, coordinator_cluster), prefix=prefix)
+        return recipe.export_model(training, prefix=prefix, coordinator_cluster=coordinator_cluster)
 
-    def scratch_prefix(self) -> str:
-        return marin_temp_bucket(3, source_prefix=self.initialize_from)
+    def train_artifact(
+        self, resources: ResourceConfig, *, steps: int | None = None, prefix: str | None = None
+    ) -> ArtifactStep[HeroThroughputResult]:
+        """Build the native training artifact."""
+        recipe, prefix = self._run_recipe(steps=steps, export=False, prefix=prefix)
+        return recipe._training_artifact(resources, prefix=prefix)
 
-    def training_step(
+    def _run_recipe(self, *, steps: int | None, export: bool, prefix: str | None) -> tuple["MochiSFT", str | None]:
+        stop = self.stop_after_steps if steps is None else steps
+        if stop is None and self.checkpoints == "periodic":
+            return self, prefix
+        recipe = replace(self, stop_after_steps=stop, checkpoints="final" if export else "none")
+        if prefix is None:
+            prefix = marin_temp_bucket(3, source_prefix=self.initialize_from)
+        return recipe, prefix
+
+    def _training_artifact(
         self,
         resources: ResourceConfig,
         *,
@@ -111,24 +133,28 @@ class MochiSFT:
         return replace(step, name=user_owned_name(f"grug/{run_id}"), output_path_prefix=prefix)
 
     def export_model(
-        self, step: ArtifactStep[HeroThroughputResult], *, coordinator_cluster: str | None = None
+        self,
+        step: ArtifactStep[HeroThroughputResult],
+        *,
+        prefix: str | None,
+        coordinator_cluster: str | None = None,
     ) -> ArtifactHfModel:
-        training = step.build_config(StepContext.for_fingerprint(step.runtime_args.keys(), step.deps))
+        expected_step = step.build_config(StepContext.for_fingerprint(step.runtime_args.keys(), step.deps)).stop_step
         relative_path = "hf"
         source_revision = self.source_revision
-        if step.output_path_prefix is not None:
+        export_resources = self.export_resources
+        export_fn: Callable[..., None] = _export_final_sft
+        if self.checkpoints == "final":
             try:
                 source_revision = os.environ.get("GIT_COMMIT") or get_git_commit()
             except (CalledProcessError, OSError) as error:
                 raise ValueError("Set GIT_COMMIT to the source revision when exporting a new Mochi SFT run") from error
-        export_fn: Callable[..., None] = _export_final_sft
-        export_resources = self.export_resources
-        if training.trainer.trainer.checkpointer.save_interval is None:
+            # A final-only checkpoint can store a whole expert bank in one native chunk.
             gib = 1024**3
             reservation_increment = 64 * gib
-            cache_bytes = full_expert_bank_read_bytes(training.model)
+            cache_bytes = full_expert_bank_read_bytes(sft_model_config(self.capacity_factor))
             read_budget = (cache_bytes + reservation_increment - 1) // reservation_increment * reservation_increment
-            host_bytes = read_budget + DEFAULT_WRITE_HOST_BUDGET_BYTES + 32 * gib
+            host_bytes = read_budget + DEFAULT_EXPORT_HOST_BUDGET_BYTES + 32 * gib
             export_resources = replace(export_resources, cpu=32, ram=f"{host_bytes // gib}GiB")
             export_fn = partial(_export_final_sft, read_host_budget_bytes=read_budget)
         export_step = apply(
@@ -141,7 +167,7 @@ class MochiSFT:
             version=step.version,
             output=OUT,
             trained=step,
-            expected_step=training.stop_step,
+            expected_step=expected_step,
             placement=self.expert_placement,
             capacity_factor=self.capacity_factor,
             source_revision=source_revision,
@@ -149,9 +175,7 @@ class MochiSFT:
             tokenizer_uri=self.tokenizer_uri,
             tokenizer_revision=self.tokenizer_revision,
         )
-        return ArtifactHfModel(
-            step=replace(export_step, output_path_prefix=step.output_path_prefix), relative_path=relative_path
-        )
+        return ArtifactHfModel(step=replace(export_step, output_path_prefix=prefix), relative_path=relative_path)
 
 
 def _export_final_sft(
@@ -177,7 +201,7 @@ def _export_final_sft(
         raise ValueError(f"Mochi SFT has no permanent checkpoint in {directory}")
     if final.step != expected_step:
         raise ValueError(f"Mochi SFT expected final step {expected_step}, found newest permanent step {final.step}")
-    model = with_transport_remat_mode(replace(HERO_MODEL_CONFIG, capacity_factor=capacity_factor))
+    model = sft_model_config(capacity_factor)
     destination = StoragePath(output) / relative_path
     config = CpuExportConfig(
         final.path, digest(final.metadata), model, str(destination), source_revision, read_host_budget_bytes

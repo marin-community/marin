@@ -627,13 +627,11 @@ class SFTSpec:
         if self.prepared_data is not None:
             if self.datasets:
                 raise ValueError("prepared_data and datasets are mutually exclusive")
-            if (
-                not isinstance(self.model, (PreparedModel, ConvertedCheckpointModel))
-                and self.prepared_data.tokenizer != self.model.tokenizer_cache_key()
-            ):
+            if self.prepared_data.tokenizer != self.model.tokenizer_cache_key():
                 raise ValueError("prepared_data.tokenizer must match the SFT model's tokenizer")
 
     def trained(self, resources: ResourceConfig, *, coordinator_cluster: str | None = None) -> ArtifactHfModel:
+        """Build the Levanter training step and resolve its final Hugging Face export."""
         if not isinstance(self.model, (HFModel, PreparedModel, ConvertedCheckpointModel, LevanterCheckpointModel)):
             raise ValueError(f"Build a Hugging Face export for the {type(self.model).__name__} trainer")
         resources = sft_child_resources(resources, coordinator_cluster)
@@ -646,11 +644,15 @@ class SFTSpec:
 
 
 class SFTRecipe(Protocol):
+    """Produce a Hugging Face export with tokenizer files for RL and serving."""
+
     def trained(self, resources: ResourceConfig, *, coordinator_cluster: str | None = None) -> ArtifactHfModel: ...
 
 
 @dataclass(frozen=True)
 class SFTPreset[RecipeT: SFTRecipe]:
+    """Bind a named SFT recipe to its training resources."""
+
     name: str
     recipe: RecipeT
     resources: ResourceConfig

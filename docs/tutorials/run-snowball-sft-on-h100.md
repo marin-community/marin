@@ -2,7 +2,7 @@
 
 The [Snowball SFT presets](https://github.com/marin-community/marin/blob/main/experiments/post_training/snowball_sft.py) train Levanter's `SnowballLMHeadModel` from pinned Hugging Face weights. The `openthoughts-32k-4node` preset transforms OpenThoughts Agent conversations, supervises assistant tokens, and saves a native Levanter checkpoint and a Hugging Face export.
 
-The preset is a 32,768-token, ten-step recipe on 32 H100s. A four-node smoke completed five updates and saved a native checkpoint and Hugging Face export. [Four-node run](https://iris.oa.dev/#/job/%2Fatqamar%2Fclaude-one-loop-sft-h100-stack-sync)
+The preset is a 32,768-token, ten-step recipe on 32 H100s. A four-node smoke overrode the step count to five and saved a native checkpoint and Hugging Face export at step 4.
 
 The mesh splits each sequence across four nodes and shards experts across eight H100s within a node. Attention keeps local queries and gathers the full keys and values. Large weight and optimizer leaves are sharded over both axes. The OpenThoughts preset puts one conversation in each sequence and keeps its first 32,768 tokens. Its scan layers are checkpointed during reverse mode to bound activation memory.
 
@@ -44,16 +44,16 @@ Preset names use `<data>-<seq-len>-<nodes>`.
 
 | Preset | What it reproduces | Training layout | Measured run | Model returned |
 | --- | --- | --- | --- | --- |
-| `openthoughts-32k-4node` | OpenThoughts Agent SFT with one conversation per sequence. | 4 nodes × 8 H100s | The five-update [smoke](https://iris.oa.dev/#/job/%2Fatqamar%2Fclaude-one-loop-sft-h100-stack-sync) used 17.0 H100-hours. The coordinator task ran for 33 min 34 s. | Final Levanter HF export. |
-| `mixture-262k-32node` | Snowball SFT with the published [supervised mixture](https://github.com/marin-community/marin/pull/11120) and its packed chat format. | 32 nodes × 8 H100s | CPU plan verified. | Final Levanter HF export with FP32 weights. |
+| `openthoughts-32k-4node` | OpenThoughts Agent SFT with one conversation per sequence. | 4 nodes × 8 H100s | The five-update smoke used 17.0 H100-hours. | Final Levanter HF export. |
+| `mixture-262k-32node` | Snowball SFT with the published [supervised mixture](https://github.com/marin-community/marin/pull/11120) and its packed chat format. | 32 nodes × 8 H100s | The H100 smoke used a five-update override. | Final Levanter HF export with FP32 weights. |
 
 ### Mochi
 
 | Preset | What it reproduces | Training layout | Measured run | Model returned |
 | --- | --- | --- | --- | --- |
-| `mixture-262k-16node` | Three updates using the production recipe. | 1 rack, 16 nodes × 4 GB200s | CPU plan verified. | With `--export`, a schema-3 BF16 HF model. |
-| `mixture-262k-48node` | Three updates using the production recipe. | 3 racks, 48 nodes × 4 GB200s | CPU plan verified. | With `--export`, a schema-3 BF16 HF model. |
-| `mixture-262k-176node` | Full production continuation `hero-sft-fullab-step393k-v2` from its pinned native checkpoint. | 11 racks, 176 nodes × 4 GB200s | 58.0 h of recorded training runtime. [Training run](https://wandb.ai/marin-community/marin_moe_sft/runs/hero-sft-fullab-step393k-v2) · CPU export worker time of 1 h 9 min 53 s. [Export worker](https://iris.oa.dev/#/job/%2Fatqamar%2Fclaude-one-loop-mochi-export-step-400407-peer) · [Verified export](https://iris.oa.dev/#/job/%2Fatqamar%2Fclaude-one-loop-mochi-export-readback) | With `--export`, a schema-3 BF16 HF export of step `400407`. |
+| `mixture-262k-16node` | Three updates using the production recipe. | 1 rack, 16 nodes × 4 GB200s | Three default updates used 13.27 GB200-hours and saved native step 393494. A CPU job exported the checkpoint. | With `--export`, a schema-3 BF16 HF model. |
+| `mixture-262k-48node` | Three updates using the production recipe. | 3 racks, 48 nodes × 4 GB200s | CPU plan only. | With `--export`, a schema-3 BF16 HF model. |
+| `mixture-262k-176node` | Full production continuation `hero-sft-fullab-step393k-v2` from its pinned native checkpoint. | 11 racks, 176 nodes × 4 GB200s | 58.0 h of recorded training runtime and 1 h 9 min 53 s of CPU export worker time. | With `--export`, a schema-3 BF16 HF export of step `400407`. |
 
 Run the matching module with `--preset` to print its plan. Add `--run` in the coordinator to execute
 the plan. The preset supplies the training allocation.
@@ -63,8 +63,9 @@ uv run python -m experiments.post_training.snowball_sft --preset mixture-262k-32
 uv run python -m experiments.post_training.mochi_sft --preset mixture-262k-16node --steps 3 --export
 ```
 
-Use `SFTPreset.model()` to request an export in Python workflows. Snowball writes its HF model and
-tokenizer at `<training-output>/hf/step-N`. Run Mochi jobs in a coordinator placed on `cw-us-east-08a`.
+Use `SFTPreset.model()` to request an export in Python workflows. Snowball's `--run` writes its HF model
+and tokenizer at `<training-output>/hf/step-N`. Mochi's `--run` needs `--export` to write an HF model.
+Run Mochi jobs in a coordinator placed on `cw-us-east-08a`.
 The short Mochi presets train without checkpoints or exports by default. A retry starts from the pinned
 checkpoint. `--steps` sets the number of updates from that point. `--export` saves the final native
 checkpoint and runs a CPU export that writes the weights, pinned tokenizer, and generation config at

@@ -317,7 +317,17 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
     def vocab_size(self) -> int:
         return self.Vocab.size
 
-    def compute_next_token_loss(self, example: LmExample, *, key=None, **kwargs) -> jnp.ndarray | NamedArray:
+    def compute_next_token_loss(
+        self,
+        example: LmExample,
+        *,
+        key=None,
+        reduction: Optional[hax.ReductionFunction] = cast(Optional[hax.ReductionFunction], hax.mean),
+        reduction_axis: Optional[hax.AxisSelection] = None,
+        logsumexp_weight: Optional[float] = None,
+        loss_dtype: Optional[jnp.dtype] = jnp.float32,
+        logit_soft_cap: Optional[float] = None,
+    ) -> jnp.ndarray | NamedArray:
         """
         Compute next-token cross-entropy for a language modeling example.
 
@@ -328,7 +338,11 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         return self._loss_from_activations(
             example,
             self.activations(example.tokens, example.attn_mask, key=key),
-            **kwargs,
+            reduction=reduction,
+            reduction_axis=reduction_axis,
+            logsumexp_weight=logsumexp_weight,
+            loss_dtype=loss_dtype,
+            logit_soft_cap=logit_soft_cap,
         )
 
     def next_token_loss_and_metrics(

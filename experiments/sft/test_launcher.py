@@ -120,6 +120,7 @@ def test_prepared_data_requires_matching_tokenizers_and_fixed_steps(tmp_path, sc
             name="weights", version="2026.11.19", source=str(tmp_path / "weights"), kind=Artifact
         )
         model = PreparedModel(weights)
+        source = replace(source, tokenizer=model.tokenizer_cache_key())
     if scenario == "declared":
         source = replace(source, tokenizer="different-tokenizer")
     tokenizer = "different-tokenizer" if scenario == "manifest" else source.tokenizer
