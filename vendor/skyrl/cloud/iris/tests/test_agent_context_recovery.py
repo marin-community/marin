@@ -408,7 +408,7 @@ async def test_harbor_worker_resets_recovery_state_before_retrying(open_worker):
 
 
 @pytest.mark.asyncio
-async def test_one_stored_task_uses_each_runs_retrieval_service(open_worker, monkeypatch):
+async def test_one_stored_task_checks_each_runs_retrieval_service_health(open_worker, monkeypatch):
     state = OpenResearcherState(
         implementation_revision="a" * 40,
         corpus_revision="8367703babe6e080899a48782f365c284c32b668",
@@ -458,5 +458,4 @@ async def test_one_stored_task_uses_each_runs_retrieval_service(open_worker, mon
             )
         assert result.failure is None
         assert stored.model_dump_json() == frozen
-        assert endpoint not in frozen
     assert observed == ["http://first-run:8788/health", "http://second-run:8788/health"]

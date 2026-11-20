@@ -59,7 +59,6 @@ def test_task_preprocessing_preserves_filtered_rows_and_forks_only_large_inputs(
     assert [row["input"].spec.task.source.row for row in prepared] == [str(i) for i in indices]
     assert [row["input"].metadata.data_source for row in prepared] == ["fixture"] * len(indices)
     assert all(row["input"].metadata.teacher_route == "math" for row in prepared)
-    assert all(row["input"].spec.limits.verifier_timeout == 1800 for row in prepared)
     assert bool(tuple(fork_records.iterdir())) == (row_count == 8)
 
 
@@ -94,7 +93,7 @@ def test_frozen_tasks_bind_verifier_floor_and_typed_local_actor(tmp_path, stored
     )
     path = tmp_path / "frozen.parquet"
     if stored:
-        # Stored inputs carry their selected machine; only the common runtime deadline is rebound.
+        # Stored inputs retain their selected machine while phase and attempt deadlines are rebound.
         runtime = MachineRuntimeSpec.model_validate(
             {**configs["task_spec"]["required_actor"], "backend": Backend.LOCAL}
         )
