@@ -30,7 +30,7 @@ from experiments.post_training.task_curation.license_resolution import LicenseTa
 from experiments.post_training.task_curation.sources import all_sources
 from infra.marina.apps.rl_data_catalog.server.licensing import source_license_ban
 
-CHECKER_VERSION = "atlas-license-check-v10"
+CHECKER_VERSION = "atlas-license-check-v11"
 logger = logging.getLogger(__name__)
 
 
