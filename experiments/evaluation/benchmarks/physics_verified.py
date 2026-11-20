@@ -8,7 +8,7 @@ authors' audited release (MIT). Prompts and grading follow its Humanity's Last E
 model answers in an Explanation/Answers/Confidence format, and one judge call returns a verdict per
 labelled reference answer. Accuracy counts a problem only when every answer is correct; partial credit
 is the mean fraction correct. The judge is the authors' GLM-5.3-Flash, served by Together; on the authors'
-published Qwen3.5-122B-A10B responses it matches their verdicts on 98% of answers.
+published Qwen3.5-122B-A10B responses it matches their verdicts on 97% of answers.
 """
 
 from taskcompendium.evaluation.spec import (

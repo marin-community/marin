@@ -345,37 +345,30 @@ def _validate_label_spec(spec: JudgeSpec, references: tuple[str, ...]) -> None:
             )
         ):
             raise InvalidTask("label metrics require named finite observations")
-    used = set()
-    for template in (spec.system_prompt, spec.prompt_template):
-        try:
-            for _, name, format_spec, conversion in string.Formatter().parse(template):
-                if name is None:
-                    continue
-                if name not in {"question", "reference", "candidate"} or format_spec or conversion:
-                    raise InvalidTask("judge template has an unsupported field")
-                used.add(name)
-        except ValueError as error:
-            raise InvalidTask("malformed judge template") from error
-    if not {"reference", "candidate"} <= used:
-        raise InvalidTask("judge template must include reference and candidate")
+    _validate_template_fields(spec, "reference")
 
 
 def _validate_answers_spec(spec: JudgeSpec, references: tuple[str, ...]) -> None:
     if not references or len(references) != len(spec.references) or not spec.prompt_template.strip():
         raise InvalidTask("answers rubric requires nonempty references and a prompt template")
+    _validate_template_fields(spec, "references")
+
+
+def _validate_template_fields(spec: JudgeSpec, reference_field: str) -> None:
+    """Allow only the question, reference and candidate fields, and require the last two."""
     used = set()
     for template in (spec.system_prompt, spec.prompt_template):
         try:
             for _, name, format_spec, conversion in string.Formatter().parse(template):
                 if name is None:
                     continue
-                if name not in {"question", "references", "candidate"} or format_spec or conversion:
+                if name not in {"question", reference_field, "candidate"} or format_spec or conversion:
                     raise InvalidTask("judge template has an unsupported field")
                 used.add(name)
         except ValueError as error:
             raise InvalidTask("malformed judge template") from error
-    if not {"references", "candidate"} <= used:
-        raise InvalidTask("judge template must include references and candidate")
+    if not {reference_field, "candidate"} <= used:
+        raise InvalidTask(f"judge template must include {reference_field} and candidate")
 
 
 def _answer_text(
@@ -479,7 +472,7 @@ def _judge_answers(
         reply = _answer_text(
             completion.text, spec.strip_reasoning_blocks, unfinished_error="judge has unfinished reasoning"
         )
-        verdicts = answer_verdicts(reply, len(references))
+        verdicts = _answer_verdicts(reply, len(references))
         if verdicts is None:
             raise GradingInfraError("judge returned malformed per-answer verdicts", **detail)
         answers, confidence = verdicts
@@ -494,7 +487,7 @@ def _judge_answers(
     raise RuntimeError("judge exhausted completion budgets")
 
 
-def answer_verdicts(reply: str, count: int) -> tuple[list[dict[str, Any]], int | None] | None:
+def _answer_verdicts(reply: str, count: int) -> tuple[list[dict[str, Any]], int | None] | None:
     """Parse ``{"answers": [{"correct": "yes"|"no", ...}], "confidence": n}`` with one entry per reference."""
     start, end = reply.find("{"), reply.rfind("}")
     if start < 0 or end < start:

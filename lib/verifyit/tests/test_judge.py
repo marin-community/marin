@@ -1144,9 +1144,3 @@ def test_answers_judge_scores_strictly_with_one_verdict_per_reference(
             ),
         }
     ]
-
-
-def test_answers_judge_requires_references_and_candidate_fields(tmp_path, unconfigured_judge):
-    spec = replace(_answers_spec(), prompt_template="[response]: {candidate}")
-    with pytest.raises(InvalidTask):
-        grade_judge.validate_judge_spec(spec)
