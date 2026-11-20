@@ -142,10 +142,10 @@ class NamedTrainingLayout:
     def place_state(self, state):
         return hax.shard(state, self.parameter_mapping)
 
-    def loader_mapping(self, batch_name: str) -> ResourceMapping:
+    def loader_mapping(self, _batch_name: str) -> ResourceMapping:
         return self.compute_mapping
 
-    def batch_size(self, config: "TrainerConfig") -> int | None:
+    def microbatch_size(self, config: "TrainerConfig") -> int | None:
         return config.microbatch_size
 
     def accumulate(self, grad_fn, size, batch_name, batch, batch_kwargs):
@@ -163,7 +163,7 @@ class ExplicitTrainingLayout:
 
     The first positional loss argument after the model is a batch pytree whose
     nonscalar arrays all lead with the example dimension. Other loss arguments
-    are shared across microbatches. The first entry of ``batch_spec`` controls
+    are shared across microbatches except the split RNG key. The first entry of ``batch_spec`` controls
     example-axis placement in ``Trainer.data_loader`` and microbatch sizing.
     That loader requires all trailing entries to be ``None``; callers may pass
     manually feature-sharded batches directly to ``Trainer.train_step``.
@@ -210,14 +210,14 @@ class ExplicitTrainingLayout:
             )
         return {batch_name: self.batch_axes or ()}
 
-    def batch_size(self, config: "TrainerConfig") -> int | None:
+    def microbatch_size(self, config: "TrainerConfig") -> int | None:
         if config.per_device_parallelism < 0:
             return None
         entry = self.batch_axes
         axes = () if entry is None else (entry,) if isinstance(entry, str) else entry
         return config.per_device_parallelism * math.prod(self.mesh.shape[axis] for axis in axes)
 
-    def accumulate(self, grad_fn, size, batch_name, batch, batch_kwargs):
+    def accumulate(self, grad_fn, size, _batch_name, batch, _batch_kwargs):
         if len(batch) != 1:
             raise ValueError("Explicit training accepts one positional batch pytree")
         return grad_fn if size is None else microbatched_arrays(grad_fn, size)
@@ -536,7 +536,7 @@ class Trainer:
 
     @property
     def microbatch_size(self) -> int | None:
-        return self.layout.batch_size(self.config)
+        return self.layout.microbatch_size(self.config)
 
     @property
     def TrainBatch(self):
