@@ -263,7 +263,6 @@ async def test_parallel_grades_are_serialized_on_one_machine() -> None:
         await pool.close()
 
 
-# ravwojdyla-agent on #11110: a lease taken inside the engine's deadline expired the third and fourth grade.
 async def test_queued_grades_wait_outside_the_verifier_deadline() -> None:
     factory = CountedFactory(grader_delay=1.0)
     pool, resource = setup(factory)

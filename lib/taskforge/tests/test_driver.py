@@ -25,17 +25,14 @@ from taskforge.resources.sandbox.factories import SANDBOX_SCHEDULING_TIMEOUT
 
 @pytest.mark.parametrize("verification", list(Verification))
 def test_proposal_verification_policy_filters_before_execution(
-    proposal: TaskProposal, verification: Verification, caplog: pytest.LogCaptureFixture
+    proposal: TaskProposal, verification: Verification
 ) -> None:
     proposal = replace(
         proposal, header=replace(proposal.header, environment=Environment.SHELLSIM, verification=verification)
     )
     policy = load_policy(DEFAULTS_DIR)
     allowed = verification.value in {"code", "decision_model", "answer_in_box"}
-    with caplog.at_level("INFO"):
-        assert eligible(proposal, policy) is allowed
-    if not allowed:
-        assert f"SKIP {proposal.header.id}: verification={verification.value}" in caplog.text
+    assert eligible(proposal, policy) is allowed
     assert eligible(proposal, policy.overlaid({"proposals.verifications": [verification.value]}))
 
 

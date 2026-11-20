@@ -94,7 +94,6 @@ def call(name: str, args: object, identity: str) -> Completion:
 
 
 async def test_malformed_report_and_schema_errors_recover_with_replayable_history() -> None:
-    # Pilot j: S/d05.contaminant_transport_fate/09 and T/d15.biomechanics.prosthetic_orthotic_design/10.
     malformed = '{"findings": '
     script = (
         Completion(
@@ -297,7 +296,6 @@ async def test_empty_turns_nudge_until_finish_or_three_consecutive_failures(fail
 
 @pytest.mark.parametrize("recovers", [True, False])
 async def test_reasoning_only_length_retries_unchanged_conversation_and_replays(tmp_path: Path, recovers: bool) -> None:
-    # Pilot o: S/d34.insights.quant_research/06 exhausted the endpoint in reasoning only.
     failed = Completion(
         "",
         finish_reason=FinishReason.LENGTH,
@@ -357,7 +355,6 @@ async def test_candidate_files_without_task_machine_return_feedback(name: str) -
 
 @pytest.mark.parametrize("overflow", ["provider", "prompt", "reply", "tool"])
 async def test_context_exit_counts_retained_turns_and_only_appended_tokens(overflow: str) -> None:
-    # Pilots i/j: T/d08.design.drawings_tolerances/04 and T/d17.procedures.preoperative/25.
     initial = Conversation((Message(Role.ASSISTANT, "earlier"),), ())
     first = Completion(
         "", call("shell", {"command": "task"}, "1").tool_calls, usage=Usage(prompt_tokens=200000, cached_tokens=199000)
@@ -457,7 +454,6 @@ class MissingPathIrisMachine(IrisMachine):
 
 
 async def test_reading_a_missing_path_on_iris_is_tool_feedback(tmp_path: Path) -> None:
-    # Stack pilot: reading a missing /tests/grade.py raised the shell's RuntimeError and ended the workpiece.
     ctx = Context(log=EventLog())
     env = ShellboxEnv(MissingPathIrisMachine(), "image", AsyncExitStack(), str(tmp_path))
     ctx.resource(env, env.fingerprint)
