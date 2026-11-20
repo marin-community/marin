@@ -156,21 +156,21 @@ class Training:
                     **({"additional_evaluations": profiles} if profiles else {}),
                 )
             )
+        if initial_model_uri is not None:
+            callbacks.append(
+                BestCheckpointCallback(
+                    type="best_checkpoint",
+                    initial_model_uri=initial_model_uri,
+                    expected_tasks=expected_tasks,
+                    minimum_scored_tasks=math.ceil(MINIMUM_SCORED_FRACTION * expected_tasks),
+                )
+            )
         if preset.checkpoint_every:
-            assert initial_model_uri is not None
-            callbacks.extend(
-                (
-                    BestCheckpointCallback(
-                        type="best_checkpoint",
-                        initial_model_uri=initial_model_uri,
-                        expected_tasks=expected_tasks,
-                        minimum_scored_tasks=math.ceil(MINIMUM_SCORED_FRACTION * expected_tasks),
-                    ),
-                    HFModelSaveCallback(
-                        type="hf_model_save",
-                        save_steps=((preset.updates // preset.checkpoint_every) + 1) * preset.checkpoint_every,
-                        save_on_train_end=True,
-                    ),
+            callbacks.append(
+                HFModelSaveCallback(
+                    type="hf_model_save",
+                    save_steps=((preset.updates // preset.checkpoint_every) + 1) * preset.checkpoint_every,
+                    save_on_train_end=True,
                 )
             )
         if preset.export_hf and not preset.checkpoint_every:

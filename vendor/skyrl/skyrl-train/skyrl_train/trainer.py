@@ -101,7 +101,7 @@ from marinskyrl.checkpoint_paths import (
     BEST_CHECKPOINT_FILENAME,
     GLOBAL_STEP_PREFIX,
     LATEST_CHECKPOINT_FILE,
-    selected_export_step,
+    selected_export_checkpoint,
 )
 from marinskyrl.process_diagnostics import write_exception_receipt
 from marinskyrl.resource_locator import is_cloud_uri, join_resource_path
@@ -3005,9 +3005,12 @@ class RayPPOTrainer:
             self._handle_hf_export()
 
     def _handle_hf_export(self) -> None:
-        export_step = selected_export_step(
+        selected = selected_export_checkpoint(
             self.cfg.trainer.ckpt_path, self.cfg.trainer.hf_export_checkpoint, self.global_step
         )
+        if selected.initializer_uri is not None:
+            return
+        export_step = selected.step
         checkpoint_path = join_resource_path(self.cfg.trainer.ckpt_path, f"{GLOBAL_STEP_PREFIX}{export_step}")
         trainer_state_path = join_resource_path(checkpoint_path, TRAINER_STATE_FILENAME)
         if not io.exists(trainer_state_path):

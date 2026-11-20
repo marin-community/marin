@@ -31,7 +31,7 @@ from cloud.iris.artifacts import terminal_checkpoint_step, write_json
 from cloud.iris.launch_config import RunMode, SubmissionMode, hugging_face_models, load_launch_config
 from cloud.iris.hf_model_cache import UnsupportedHuggingFaceSnapshot, ensure_hugging_face_model_cache
 from marinskyrl.distillation import TeacherSource, compile_distillation_plan_from_config
-from marinskyrl.checkpoint_paths import policy_export_path, selected_export_step
+from marinskyrl.checkpoint_paths import policy_export_path, selected_export_checkpoint
 from marinskyrl.hf_model import HuggingFaceModelCache, validate_portable_hf_model_files
 from marinskyrl.packed_tasks import select_task_references
 from marinskyrl.speculative_decoding import SpeculatorModelConfig, SpeculatorModelSourceKind
@@ -165,16 +165,18 @@ def _prepare_model_caches(config: DictConfig) -> None:
 
 def _exported_policy(config: DictConfig) -> ExportedPolicy:
     checkpoint_root = str(config.artifacts.checkpoint_root)
-    global_step = selected_export_step(
+    selected = selected_export_checkpoint(
         checkpoint_root, str(config.skyrl.trainer.hf_export_checkpoint), terminal_checkpoint_step(checkpoint_root)
     )
-    policy_uri = policy_export_path(str(config.artifacts.export_root), global_step)
-    root = StoragePath(policy_uri)
-    names = {(directory / name).relative_to(root) for directory, _, files in root.walk() for name in files}
-    validate_portable_hf_model_files(names, policy_uri)
+    policy_uri = selected.initializer_uri
+    if policy_uri is None:
+        policy_uri = policy_export_path(str(config.artifacts.export_root), selected.step)
+        root = StoragePath(policy_uri)
+        names = {(directory / name).relative_to(root) for directory, _, files in root.walk() for name in files}
+        validate_portable_hf_model_files(names, policy_uri)
     return ExportedPolicy(
         policy_export_uri=policy_uri,
-        global_step=global_step,
+        global_step=selected.step,
         tokenizer_uri=config.inputs.model.tokenizer_uri,
         tokenizer_revision=config.inputs.model.tokenizer_revision,
         checkpoint_root=checkpoint_root,

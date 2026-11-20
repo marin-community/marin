@@ -134,9 +134,10 @@ Selections with AI-judged tasks are refused before submission.
 
 `--init NAME@VERSION` on `learning-medium` or `train-long` starts from a published initializer
 or a retained RL HF export. The selected initializer supplies both weights and its tokenizer.
-Training recovery uses the run's native checkpoint lineage. Learning-medium and data-medium
-retain final HF weights under `exports/global_step_<N>/policy`. Train-long exports the latest
-checkpoint by default and records the best eligible evaluation step separately. See
+Training recovery uses the run's native checkpoint lineage. Learning-medium, data-medium and
+train-long publish the checkpoint with the best eligible evaluation score. If step zero wins,
+the terminal receipt points to the initializer's HF checkpoint. A trained winner is converted to
+HF under `exports/global_step_<N>/policy`. See
 [native checkpoint and attempt handling](../references/rl-launching.md) for retention and retries.
 
 `--replicates N` makes 1–5 copies of a gated preset with one seed. `--control --replicates N`
@@ -286,8 +287,8 @@ best checkpoint step, or `none eligible`.
 | FineStore `evaluations` table | One task per attempt, evaluation and step, with task content digest, ordered answers, native rewards, verifier bounds, normalized verifier scores, outcomes and canonical strata. `finestore.rl.run_records.read_evaluations` reads it. |
 | `exports/dumped_evals/<attempt_id>/...` | JSONL answers carrying attempt, step and final-turn identity; named evaluations also have their own export subtree. |
 | Native checkpoint root | Recovery checkpoints in the 14-day TTL bucket. The receipt records their location and lineage; they are separate from durable exports. |
-| `exports/best_checkpoint.json` | The selected native checkpoint step and its evaluation evidence, written when a checkpoint is eligible. |
-| HF export under `exports/` | Model configuration, weight index and shards, and tokenizer files. The completed receipt identifies the HF model for `--init`. |
+| `exports/best_checkpoint.json` | The selected step and its evaluation evidence, written when a checkpoint is eligible. |
+| HF policy | The completed receipt identifies the HF model for `--init`, either the initializer or a converted checkpoint under `exports/`. |
 | Gate artifact `gate_report.json`, `gate_report.md` | Calibrated comparison, invariants and breakdowns for a gated preset. Train-long has evaluation invariants without a calibrated verdict. |
 
 Evaluation summaries include the native answer-weighted overall mean, task-weighted family,

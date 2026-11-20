@@ -320,12 +320,14 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             "2026.11.17.1": "2be6e5e2",
             "2026.11.19.1": "4aa3aed9",
             "2026.11.20.1": "67306e75",
+            "2026.11.20.2": "b3044b9b",
         },
         "data-medium": {
             "2026.11.12.1": "ba638a12",
             "2026.11.17.1": "2be6e5e2",
             "2026.11.19.1": "4aa3aed9",
             "2026.11.20.1": "67306e75",
+            "2026.11.20.2": "b3044b9b",
         },
         "speed-long": {
             "2026.11.11.1": "cd0a5f4e",
@@ -338,6 +340,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             "2026.11.17.1": "b411c765",
             "2026.11.19.1": "e56a62fa",
             "2026.11.20.1": "22473465",
+            "2026.11.20.2": "412d0576",
         },
     }
     configs = assert_revisioned_native_configs(
@@ -378,12 +381,12 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
                 sampling["max_generate_length"],
                 profile["n_samples_per_prompt"] if profile else generator["eval_n_samples_per_prompt"],
             ) == (0, False, 8192, 1)
-        if name in ("learning-medium", "data-medium"):
+        if name in ("learning-medium", "data-medium", "train-long"):
             assert next(row for row in trainer["callbacks"] if row["type"] == "evaluation")["eval_before_train"] is True
-            assert config["run"]["export_hf"] and "hf_model_save" in [row["type"] for row in trainer["callbacks"]]
-        if name == "train-long":
+            assert config["run"]["export_hf"] and trainer["hf_export_checkpoint"] == "best"
             kinds = [row["type"] for row in trainer["callbacks"]]
-            assert kinds.index("evaluation") < kinds.index("best_checkpoint")
+            assert kinds.index("evaluation") < kinds.index("best_checkpoint") < kinds.index("hf_model_save")
+        if name == "train-long":
             assert next(row for row in trainer["callbacks"] if row["type"] == "evaluation")["eval_on_train_end"] is False
 
 

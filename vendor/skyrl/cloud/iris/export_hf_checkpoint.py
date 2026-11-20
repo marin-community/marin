@@ -38,7 +38,7 @@ from pathlib import Path
 from cloud.iris.launch_config import RunMode, SubmissionMode, load_launch_config, validate_launch_config
 from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT
 from cloud.iris.runtime_environment import RuntimeMode, runtime_profile_for_strategy
-from marinskyrl.checkpoint_paths import GLOBAL_STEP_PREFIX, policy_export_path, selected_export_step
+from marinskyrl.checkpoint_paths import GLOBAL_STEP_PREFIX, policy_export_path, selected_export_checkpoint
 from marinskyrl.resource_locator import ModelLocatorError
 from marinskyrl.resource_locator import join_resource_path
 from omegaconf import DictConfig, OmegaConf
@@ -442,12 +442,14 @@ def export_terminal_policy(training_config_path: Path, *, forward_env: tuple[str
 
     training_config = load_launch_config(training_config_path)
     checkpoint_root = str(training_config.artifacts.checkpoint_root)
-    step = selected_export_step(
+    selected = selected_export_checkpoint(
         checkpoint_root,
         str(training_config.skyrl.trainer.hf_export_checkpoint),
         terminal_checkpoint_step(checkpoint_root),
     )
-    checkpoint_path = join_resource_path(checkpoint_root, f"{GLOBAL_STEP_PREFIX}{step}")
+    if selected.initializer_uri is not None:
+        return
+    checkpoint_path = join_resource_path(checkpoint_root, f"{GLOBAL_STEP_PREFIX}{selected.step}")
     request = _read_hf_export_request(checkpoint_path)
     if request is None:
         raise ValueError(f"checkpoint {checkpoint_path} has no hf_export_request.json")

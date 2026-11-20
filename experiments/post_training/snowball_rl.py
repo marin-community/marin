@@ -250,6 +250,10 @@ _ASYNC_P40 = Recipe(
     ),
 )
 
+_EXPORT_BEST = replace(
+    _ASYNC_P40, config=_ASYNC_P40.config.merge(RecipePatch(trainer=sections.Trainer(hf_export_checkpoint="best")))
+)
+
 _GENERATING = Recipe(layout=E8, fixed_reply_tokens=None, config=_DEFAULT_PATCH.merge(_GENERATION_NATIVE_DEFAULTS))
 
 _GAPS = ("aaii-coverage", "no-agentic-tasks", "no-image-sandbox")
@@ -259,6 +263,7 @@ _TASK_SET = EVALUATIONS["eval_lite_100"]
 _BATCH_KEYS = frozenset(BATCH_SETTINGS)
 
 _OWNED_KEYS = frozenset(_MODE_KEYS)
+_BEST_EXPORT_KEYS = _OWNED_KEYS | {"trainer.hf_export_checkpoint"}
 
 _SPEED_KEYS = frozenset(
     {"generator.sampling_params.logprobs", "trainer.training_metrics", "generator.apply_overlong_filtering"}
@@ -284,10 +289,12 @@ _snowball = partial(
 )
 
 _LEARNING_MEDIUM = _snowball(
+    revision="2026.11.20.2",
     held_out_tasks=_DEFAULT_EVAL_LITE,
     export_hf=True,
     name="learning-medium",
-    recipe=_ASYNC_P40,
+    recipe=_EXPORT_BEST,
+    owned_keys=_BEST_EXPORT_KEYS,
     updates=25,
     measured=range(21, 26),
     accepts_init=True,
@@ -377,11 +384,13 @@ _PRESETS = (
         data_settings=frozenset(),
     ),
     _snowball(
+        revision="2026.11.20.2",
         held_out_tasks=_DEFAULT_EVAL_LITE,
         retention=SkyRLRetentionPolicy(resume_checkpoint_count=5),
         export_hf=True,
         name="train-long",
-        recipe=_ASYNC_P40,
+        recipe=_EXPORT_BEST,
+        owned_keys=_BEST_EXPORT_KEYS,
         updates=100,
         measured=range(1, 101),
         tasks_input="optional",

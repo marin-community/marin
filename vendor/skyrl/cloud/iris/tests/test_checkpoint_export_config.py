@@ -29,7 +29,7 @@ from skyrl_train.config.utils import get_default_config
 from skyrl_train.hf_export import read_hf_export_request, write_hf_export_request
 from skyrl_train.trainer import RayPPOTrainer
 from skyrl_train.hf_export_schema import HFExportRequest, HFExportStatus
-from marinskyrl.checkpoint_paths import policy_export_path, selected_export_step
+from marinskyrl.checkpoint_paths import policy_export_path, selected_export_checkpoint
 
 
 def _training_config():
@@ -242,14 +242,14 @@ def test_nested_export_reads_cluster_config_relative_to_parent_launch(tmp_path: 
 
 def test_export_selection_distinguishes_best_saved_step_from_latest(tmp_path: Path) -> None:
     (tmp_path / "best_checkpoint.json").write_text(json.dumps({"step": 15, "model_format": "native"}))
-    assert selected_export_step(str(tmp_path), "best", 20) == 15
-    assert selected_export_step(str(tmp_path), "latest", 20) == 20
+    assert selected_export_checkpoint(str(tmp_path), "best", 20).step == 15
+    assert selected_export_checkpoint(str(tmp_path), "latest", 20).step == 20
 
 
-def test_export_selection_does_not_substitute_training_for_best_initializer(tmp_path: Path) -> None:
+def test_export_selection_requires_the_best_initializer_uri(tmp_path: Path) -> None:
     (tmp_path / "best_checkpoint.json").write_text(json.dumps({"step": 0, "model_format": "hf"}))
-    with pytest.raises(ValueError, match="initial HF model"):
-        selected_export_step(str(tmp_path), "best", 20)
+    with pytest.raises(ValueError, match="initializer HF model URI"):
+        selected_export_checkpoint(str(tmp_path), "best", 20)
 
 
 @pytest.mark.parametrize(("selection", "expected_step"), [("best", 15), ("latest", 20)])
