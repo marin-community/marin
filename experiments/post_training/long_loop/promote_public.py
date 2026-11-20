@@ -23,8 +23,8 @@ from experiments.post_training.long_loop.hf_archive import (
     audit_public_bytes,
     audit_public_fields,
     audit_public_file,
+    is_public_weight_name,
     location_commitment,
-    public_weight_name,
     verify_hf_checkpoint,
 )
 
@@ -54,7 +54,7 @@ def main():
         name = item["path"]
         remote = actual[name]
         assert remote.size == item["size"]
-        if public_weight_name(name):
+        if is_public_weight_name(name):
             assert remote.lfs is not None and remote.lfs.sha256 == item["sha256"]
             header = api.parse_safetensors_file_metadata(SOURCE_REPO, name, revision=SOURCE_REVISION)
             audit_public_fields(name, header.metadata)

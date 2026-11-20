@@ -46,7 +46,7 @@ PRIVATE_CONTENT = re.compile(
 )
 
 
-def public_weight_name(name: str) -> bool:
+def is_public_weight_name(name: str) -> bool:
     return re.fullmatch(r"model(?:-[0-9]{5}-of-[0-9]{5})?\.safetensors", name) is not None
 
 
@@ -78,7 +78,7 @@ def audit_public_fields(name: str, value: object) -> None:
 
 
 def audit_public_file(path: Path, name: str) -> None:
-    if public_weight_name(name):
+    if is_public_weight_name(name):
         with path.open("rb") as stream:
             header_size = struct.unpack("<Q", stream.read(8))[0]
             if header_size > 64 * 1024 * 1024:
@@ -109,7 +109,7 @@ def audit_public_history(api: HfApi, repo_id: str) -> None:
             identity = (name, item.lfs.sha256 if item.lfs is not None else item.blob_id)
             if identity in seen:
                 continue
-            if public_weight_name(name):
+            if is_public_weight_name(name):
                 header = api.parse_safetensors_file_metadata(repo_id, name, revision=commit.commit_id)
                 audit_public_fields(name, header.metadata)
                 audit_public_bytes(
@@ -240,7 +240,7 @@ def upload_checkpoint(config: HfUpload, *, timing_destination: str) -> dict:
     sources = [
         (key, name)
         for key, name in zip(source_files, names, strict=True)
-        if name in PUBLIC_SIDECARS or public_weight_name(name)
+        if name in PUBLIC_SIDECARS or is_public_weight_name(name)
     ]
     if any(name.startswith(".cache/") or name.endswith(".distcp") for _, name in sources):
         raise ValueError("HF export source contains cache or native optimizer payloads")

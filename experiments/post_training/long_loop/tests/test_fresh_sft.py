@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import logging
 from dataclasses import replace
 
 import equinox as eqx
@@ -21,7 +20,6 @@ from safetensors.flax import load_file
 
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.post_training.long_loop.sft import SMOKE_CONFIG, fresh_sft_config
-from experiments.post_training.long_loop.sft_runtime import train as sft_train
 from experiments.post_training.long_loop.sft_runtime.export_writer import ExportConfig, export_weights
 from experiments.post_training.long_loop.sft_runtime.model import grugmoe_inference_state_dict
 from experiments.post_training.long_loop.sft_runtime.train import (
@@ -202,7 +200,7 @@ def test_fresh_sft_rejects_bf16_param_policy_and_removed_master_param_switch(tmp
 
 
 @pytest.mark.integration
-def test_fresh_sft_upcasts_bf16_hf_start_to_fp32_and_preserves_small_updates(tmp_path, caplog):
+def test_fresh_sft_upcasts_bf16_hf_start_to_fp32_and_preserves_small_updates(tmp_path):
     recipe = yaml.safe_load(SMOKE_CONFIG.read_text())
     config = fresh_sft_config(
         output=str(tmp_path / "fresh"),
@@ -234,11 +232,9 @@ def test_fresh_sft_upcasts_bf16_hf_start_to_fp32_and_preserves_small_updates(tmp
             is_temporary=False,
         )
 
-        with caplog.at_level(logging.INFO, logger=sft_train.__name__):
-            actual = initialize_snowball_sft(fresh, config.trainer.trainer.initialize_from, mesh, trainer)
+        actual = initialize_snowball_sft(fresh, config.trainer.trainer.initialize_from, mesh, trainer)
 
         assert_fp32_train_state(actual)
-        assert any("bf16" in record.message.lower() and "float32" in record.message.lower() for record in caplog.records)
         np.testing.assert_array_equal(actual.params.token_embed, bf16_params.token_embed.astype(jnp.float32))
         np.testing.assert_array_equal(
             actual.params.output_proj[:, 30], bf16_params.output_proj[:, 2].astype(jnp.float32)

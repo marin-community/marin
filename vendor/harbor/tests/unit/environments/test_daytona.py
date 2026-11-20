@@ -705,7 +705,7 @@ async def test_declarative_harbor_starts_and_deletes_without_a_snapshot_service(
         session_id="eval-trial",
         trial_paths=TrialPaths(tmp_path / "trial"),
         task_env_config=EnvironmentConfig(cpus=2, memory_mb=4096, storage_mb=10240),
-        provisioning="declarative",
+        image_build="declarative",
         client_factory=lambda: provider,
     )
     async with asyncio.TaskGroup() as service_tasks:

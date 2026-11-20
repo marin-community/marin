@@ -35,6 +35,7 @@ from iris.cluster.client.job_info import get_job_info
 from ray.util.placement_group import placement_group, remove_placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import prefix_join
 from skyrl_train.weight_sync.expert_block.verify_weights import compare_replicas
 
 from experiments.post_training.long_loop.replica_parameter_receipts import parameter_sha256
@@ -143,7 +144,7 @@ def exercise(rank: int, device_index: int, master: str, port: int, args) -> dict
             for row in report["collectives"]
         ) and all(row["passed"] and row["input_hashes"] == row["input_after_hashes"] for row in report["comparisons"])
         name = variant_name(args.launcher, args.visibility, args.buffer)
-        write_json(f"{args.output_prefix}/{name}-rank{rank}.json", report)
+        write_json(prefix_join(args.output_prefix, f"{name}-rank{rank}.json"), report)
         dist.barrier()
         return report
     finally:
@@ -207,7 +208,7 @@ def ray_driver(args) -> None:
             for buffer in ["default", "262144"]:
                 name = variant_name("torchrun", visibility, buffer)
                 for rank in range(WORLD_SIZE):
-                    filesystem, path = filesystem_for(f"{args.output_prefix}/{name}-rank{rank}.json")
+                    filesystem, path = filesystem_for(prefix_join(args.output_prefix, f"{name}-rank{rank}.json"))
                     with filesystem.open(path) as stream:
                         outcomes.append(json.load(stream))
         for launcher in ["torchrun", "ray"]:
@@ -224,7 +225,7 @@ def ray_driver(args) -> None:
                     ):
                         raise RuntimeError("Each variant must report eight ranks on eight distinct physical GPUs")
         write_json(
-            f"{args.output_prefix}/receipt.json",
+            prefix_join(args.output_prefix, "receipt.json"),
             {
                 "completed": True,
                 "passed": all(row["passed"] for row in outcomes),
@@ -290,10 +291,10 @@ def run_ray_control(output_prefix: str, info, derived_ifname: str, driver_module
     for port_name in RayPort:
         os.environ[f"IRIS_PORT_{port_name.value.upper()}"] = "0"
     resolve_ray_ports()
-    rendezvous = f"{output_prefix}/rendezvous"
+    rendezvous = prefix_join(output_prefix, "rendezvous")
     node_args = SimpleNamespace(
         rendezvous_dir=rendezvous,
-        ray_log_dir=f"{output_prefix}/ray-logs",
+        ray_log_dir=prefix_join(output_prefix, "ray-logs"),
         ray_spill_backend=RaySpillBackend.LOCAL,
         ray_spill_dir="/tmp/comparator-ray-spill",
         ray_labels={},

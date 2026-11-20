@@ -278,6 +278,7 @@ def _build_inference_engine_runtime_env(
 
 async def _await_actor_task(actor_task: ray.ObjectRef) -> Any:
     """Await a Ray actor task and cancel the remote work if the caller leaves."""
+    # Ray methods return unrelated wire payloads: generations, text and token IDs.
     try:
         return await actor_task
     except asyncio.CancelledError:

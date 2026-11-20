@@ -72,7 +72,10 @@
         }
       },
       "terminal_bench": {
-        "harbor": {},
+        "harbor": {
+          "daytona_provisioning": "snapshot",
+          "eval_daytona_provisioning": "declarative"
+        },
         "installed_agent": {
           "agent": {
             "name": "pi",

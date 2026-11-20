@@ -17,12 +17,14 @@ from rigging.filesystem.storage_path import prefix_join
 from skyrl_train import objective  # noqa: F401 - populate the runtime policy-loss registry
 from skyrl_train.models.grug_context_parallel import grug_cp_communication, validate_cp_attention
 from skyrl_train.models.grug_moe import GrugMoeConfig, grug_long_layer_flags
+from skyrl_train.trajectory_runners.harbor.configuration import HarborConfigBuilder
 from skyrl_train.utils.utils import validate_cfg, validate_generator_cfg
 
 
 def main(source: Path, destination: Path, model_config: Path | None = None) -> None:
     project = Path(__file__).resolve().parents[3] / "vendor/skyrl"
     config = load_launch_config(source)
+    HarborConfigBuilder(config.skyrl.terminal_bench_config)
     if config.runtime.entrypoint in {
         RL_ENTRYPOINTS[RLEntrypoint.GENERATE],
         RL_ENTRYPOINTS[RLEntrypoint.TERMINAL_BENCH_GENERATE],

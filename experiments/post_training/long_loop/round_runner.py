@@ -37,7 +37,7 @@ from marin.rl.skyrl import ArtifactDataSource, ArtifactHfModel, MegatronGeometry
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.evaluation.micro210 import Micro210ServingProfile, micro210_artifact_step
 from experiments.evaluation.micro210_policy import Micro210Model, micro210_evaluation
@@ -339,8 +339,8 @@ def recovery_round_graph(spec: RecoveryRound, *, through: str, source_revision: 
 def adopted_round_rl(spec: AdoptedRlRound, *, smoke: bool = False) -> ArtifactStep:
     """Adopt a schema-3 HF export or a native RL checkpoint without an SFT stage."""
     model = spec.adopted_model
-    manifest = pinned_json(f"{model.uri}/export-manifest.json", model.export_manifest_sha256)
-    config = pinned_json(f"{model.uri}/config.json", model.config_sha256)
+    manifest = pinned_json(prefix_join(model.uri, "export-manifest.json"), model.export_manifest_sha256)
+    config = pinned_json(prefix_join(model.uri, "config.json"), model.config_sha256)
     if config["grugmoe_artifact_schema_version"] != 3:
         raise ValueError("RL adoption requires a schema-3 HF export")
     if not manifest["request"]["config"]["checkpoint"].endswith(f"/step-{model.checkpoint_step}"):
@@ -402,7 +402,7 @@ def adopted_round_rl(spec: AdoptedRlRound, *, smoke: bool = False) -> ArtifactSt
     def verified_build(context):
         if not context.is_fingerprint:
             for pin in (*rl.train_data.values(), rl.validation_data):
-                fs, key = filesystem_for(f"{pin['uri']}/{pin['file']}")
+                fs, key = filesystem_for(prefix_join(pin["uri"], pin["file"]))
                 with fs.open(key, "rb") as stream:
                     actual = hashlib.file_digest(stream, "sha256").hexdigest()
                 if actual != pin["sha256"]:
@@ -417,8 +417,8 @@ def adopted_round_evaluation(spec: AdoptedHfRound) -> ArtifactStep:
     if spec.evaluation != "frozen-micro210":
         raise ValueError("Adopted evaluation rounds require frozen-micro210")
     model = spec.adopted_model
-    manifest = pinned_json(f"{model.uri}/export-manifest.json", model.export_manifest_sha256)
-    config = pinned_json(f"{model.uri}/config.json", model.config_sha256)
+    manifest = pinned_json(prefix_join(model.uri, "export-manifest.json"), model.export_manifest_sha256)
+    config = pinned_json(prefix_join(model.uri, "config.json"), model.config_sha256)
     if not manifest["request"]["config"]["checkpoint"].endswith(f"/step-{model.checkpoint_step}"):
         raise ValueError("Adopted HF export does not match the requested checkpoint step")
     serving = spec.serving

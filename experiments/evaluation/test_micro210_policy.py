@@ -91,7 +91,7 @@ def test_runtime_harbor_translation_never_drops_unknown_fields(tmp_path, monkeyp
     )
     run = step.build_config(replace(context, is_fingerprint=True))
     with pytest.raises(ValueError, match="Unknown Harbor task settings"):
-        validate_launch(run.skyrl.launch_config_yaml, tmp_path / "preflight")
+        validate_launch(run.skyrl.launch_config_yaml, tmp_path / "preflight", model_config=b"{}")
 
 
 def test_micro210_binding_rejects_modified_protocol_bytes(tmp_path, monkeypatch, policy_reference):
@@ -121,6 +121,7 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     model_dir.mkdir()
     manifest = b'{"files": []}'
     (model_dir / ".marinskyrl-model-manifest.json").write_bytes(manifest)
+    (model_dir / "config.json").write_text("{}")
     inputs = tmp_path / "inputs"
     inputs.mkdir()
     task_bytes = b"pinned-prepared-task-fixture"

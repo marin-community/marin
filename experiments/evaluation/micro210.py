@@ -199,6 +199,7 @@ def micro210_step(model: Micro210Model, *, name: str, version: str, **overrides)
         ArtifactHfModel(model_artifact, model.tokenizer_uri, model.tokenizer_revision, relative_path=""),
         name=name,
         version=version,
+        model_binding=model,
     )
 
 

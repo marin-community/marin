@@ -42,7 +42,7 @@ def test_native_sft_dispatch_preserves_accelerator_platform_and_timeout(monkeypa
 
     monkeypatch.setattr(launcher, "current_client", lambda: SimpleNamespace(submit=submit))
     kwargs = {} if override is None else {"task_timeout_seconds": override}
-    model = HFModel("unused-no-download", **kwargs)
+    model = HFModel("fixture/model@" + "a" * 40, **kwargs)
     pod = TrainLmOnPodConfig(
         train_config=TrainLmConfig(trainer=TrainerConfig(id="dispatch-test")),
         resources=ResourceConfig(device=device),

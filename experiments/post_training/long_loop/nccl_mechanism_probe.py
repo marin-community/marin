@@ -26,6 +26,7 @@ from iris.cluster.client.job_info import get_job_info
 from ray.util.placement_group import placement_group, remove_placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.post_training.long_loop.comparator_differential import run_ray_control, write_json
 from experiments.post_training.long_loop.nccl_runtime_receipts import runtime_receipt
@@ -266,7 +267,7 @@ def exercise(rank: int, local_device: int, master: str, port: int, args) -> dict
             device_id=torch.device("cuda", local_device),
         )
         report["runtime"] = runtime_receipt()
-        write_json(f"{args.output_prefix}/{name}.json", report)
+        write_json(prefix_join(args.output_prefix, f"{name}.json"), report)
         groups = (
             probe_groups(args.nodes * GPUS_PER_NODE, rank)
             if args.suite == "launcher"
@@ -280,7 +281,7 @@ def exercise(rank: int, local_device: int, master: str, port: int, args) -> dict
                 else [16777216]
             ):
                 report["cases"].append(integer_case(rank, label, group, count, device))
-            write_json(f"{args.output_prefix}/{name}.json", report)
+            write_json(prefix_join(args.output_prefix, f"{name}.json"), report)
         for dtype in [torch.float32, torch.bfloat16]:
             for operation in (
                 ["SUM"] if profile_environment(args.profile).get("NCCL_ALGO") == "NVLSTree" else ["SUM", "AVG"]
@@ -288,11 +289,11 @@ def exercise(rank: int, local_device: int, master: str, port: int, args) -> dict
                 report["cases"].append(training_reduction_case(groups[0][1], dtype, device, 64 << 20, operation))
         report["passed"] = all(row["passed"] for row in report["cases"])
         report["completed"] = True
-        write_json(f"{args.output_prefix}/{name}.json", report)
+        write_json(prefix_join(args.output_prefix, f"{name}.json"), report)
         dist.barrier()
         return report
     finally:
-        write_json(f"{args.output_prefix}/{name}.json", report)
+        write_json(prefix_join(args.output_prefix, f"{name}.json"), report)
         if dist.is_initialized():
             dist.destroy_process_group()
         if log_path.exists():
@@ -300,7 +301,7 @@ def exercise(rank: int, local_device: int, master: str, port: int, args) -> dict
             size = len(raw)
             if size > LOG_LIMIT:
                 raw = raw[: LOG_LIMIT // 2] + b"\n[DIAGNOSTIC LOG CLIPPED]\n" + raw[-LOG_LIMIT // 2 :]
-            filesystem, path = filesystem_for(f"{args.output_prefix}/nccl-logs/{name}.log")
+            filesystem, path = filesystem_for(prefix_join(args.output_prefix, f"nccl-logs/{name}.log"))
             with filesystem.open(path, "wb") as stream:
                 stream.write(raw)
             report["nccl_log"] = {
@@ -309,7 +310,7 @@ def exercise(rank: int, local_device: int, master: str, port: int, args) -> dict
                 "clipped": size > LOG_LIMIT,
                 "sha256": hashlib.sha256(raw).hexdigest(),
             }
-            write_json(f"{args.output_prefix}/{name}.json", report)
+            write_json(prefix_join(args.output_prefix, f"{name}.json"), report)
 
 
 class MechanismActor:
@@ -360,7 +361,7 @@ def driver(args) -> None:
                     ray.kill(actor)
         for profile in SUITES[args.suite]:
             for rank in range(args.nodes * GPUS_PER_NODE):
-                filesystem, path = filesystem_for(f"{args.output_prefix}/torchrun-{profile}-rank{rank}.json")
+                filesystem, path = filesystem_for(prefix_join(args.output_prefix, f"torchrun-{profile}-rank{rank}.json"))
                 with filesystem.open(path) as stream:
                     outcomes.append(json.load(stream))
         for launcher in ["ray", "torchrun"]:
@@ -372,7 +373,7 @@ def driver(args) -> None:
                 ):
                     raise RuntimeError("Missing or physically duplicated ranks in differential")
         write_json(
-            f"{args.output_prefix}/receipt.json",
+            prefix_join(args.output_prefix, "receipt.json"),
             {
                 "completed": True,
                 "all_correct": all(r["passed"] for r in outcomes),
@@ -434,11 +435,11 @@ def task(args) -> None:
         outcomes = []
         for profile in SUITES[args.suite]:
             for rank in range(info.num_tasks * GPUS_PER_NODE):
-                filesystem, path = filesystem_for(f"{args.output_prefix}/torchrun-{profile}-rank{rank}.json")
+                filesystem, path = filesystem_for(prefix_join(args.output_prefix, f"torchrun-{profile}-rank{rank}.json"))
                 with filesystem.open(path) as stream:
                     outcomes.append(json.load(stream))
         write_json(
-            f"{args.output_prefix}/receipt.json",
+            prefix_join(args.output_prefix, "receipt.json"),
             {
                 "completed": all(row["completed"] for row in outcomes),
                 "rank_reports": len(outcomes),
@@ -556,11 +557,11 @@ def task_library_ab(args) -> None:
                 if log_path.is_file():
                     raw = log_path.read_bytes()
                     report["nccl_log"] = {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
-                    filesystem, path = filesystem_for(f"{args.output_prefix}/nccl-logs/{stem}.log")
+                    filesystem, path = filesystem_for(prefix_join(args.output_prefix, f"nccl-logs/{stem}.log"))
                     with filesystem.open(path, "wb") as stream:
                         stream.write(raw)
                 report["library_role"] = role
-                write_json(f"{args.output_prefix}/{stem}.json", report)
+                write_json(prefix_join(args.output_prefix, f"{stem}.json"), report)
             if endpoint is not None:
                 ctx.registry.unregister(endpoint)
     name = f"nccl-ab-final-{info.attempt_id}"
@@ -583,7 +584,9 @@ def task_library_ab(args) -> None:
             outcomes = []
             for role, api, profile in variants:
                 for rank in range(info.num_tasks * GPUS_PER_NODE):
-                    filesystem, path = filesystem_for(f"{args.output_prefix}/{api}-{role}-{profile}-rank{rank}.json")
+                    filesystem, path = filesystem_for(
+                        prefix_join(args.output_prefix, f"{api}-{role}-{profile}-rank{rank}.json")
+                    )
                     with filesystem.open(path) as stream:
                         outcomes.append(json.load(stream))
             completed = all(row["completed"] for row in outcomes)
@@ -598,7 +601,7 @@ def task_library_ab(args) -> None:
                 completed and all(not r["passed"] for r in positive) and all(r["passed"] for r in corrected + defaults)
             )
             write_json(
-                f"{args.output_prefix}/receipt.json",
+                prefix_join(args.output_prefix, "receipt.json"),
                 {
                     "completed": completed,
                     "qualification_passed": qualified,

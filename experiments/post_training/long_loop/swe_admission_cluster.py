@@ -160,7 +160,7 @@ def run_shard(
 
 
 def admission_job(name: str, entrypoint: Entrypoint) -> JobRequest:
-    """Construct the actual CPU worker request, including the native Fray profile."""
+    """Reserve a privileged CPU worker for isolated task admission."""
     return JobRequest(
         name=name,
         entrypoint=entrypoint,

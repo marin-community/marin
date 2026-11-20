@@ -56,14 +56,20 @@ NONAGENTIC_ROUTE = "nonagentic"
 
 SOURCE_ROUTES = MappingProxyType({**RELEASE_SOURCE_ROUTES, NEMOTRON_IF_LABEL: NONAGENTIC_ROUTE})
 
-_TRAIN_SOURCE_COUNTS = {}
-for _release in (AGENTIC_RELEASE, NONAGENTIC_RELEASE):
-    _config = _release.config
-    if _config is None:
-        raise ValueError(f"adopted release {_release.name} has no configuration")
-    for _member in _config.members:
-        if _member.source_counts:
-            _TRAIN_SOURCE_COUNTS.update(_member.source_counts)
+
+def train_source_counts() -> MappingProxyType:
+    counts = {}
+    for release in (AGENTIC_RELEASE, NONAGENTIC_RELEASE):
+        config = release.config
+        if config is None:
+            raise ValueError(f"adopted release {release.name} has no configuration")
+        for member in config.members:
+            if member.source_counts:
+                counts.update(member.source_counts)
+    return MappingProxyType(counts)
+
+
+_TRAIN_SOURCE_COUNTS = train_source_counts()
 
 _NONAGENTIC_ROWS = sum(
     count for label, count in _TRAIN_SOURCE_COUNTS.items() if RELEASE_SOURCE_ROUTES[label] == NONAGENTIC_ROUTE

@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import prefix_join
 
 UPSTREAM = "https://github.com/NVIDIA/nccl.git"
 REVISION = "73cf112295c33aee2b895f329f592f2a9b4b0f97"
@@ -109,26 +110,26 @@ def build(args) -> None:
             snapshot = root / f"libnccl-{variant}.so.2"
             shutil.copy2(library, snapshot)
             report["libraries"][variant] = {
-                **publish_file(snapshot, f"{args.output_prefix}/{variant}/libnccl.so.2"),
+                **publish_file(snapshot, prefix_join(args.output_prefix, f"{variant}/libnccl.so.2")),
                 "build_seconds": compile_seconds,
                 "elf_header": elf_header,
                 "elf_dynamic": subprocess.check_output(["readelf", "-d", str(snapshot)], text=True),
-                "build_log_uri": f"{args.output_prefix}/{variant}/build.log",
+                "build_log_uri": prefix_join(args.output_prefix, f"{variant}/build.log"),
             }
         diff = root / "source.patch"
         diff.write_bytes(subprocess.check_output(["git", "diff", "--", "src/enqueue.cc"], cwd=source_root))
-        report["source_patch"] = publish_file(diff, f"{args.output_prefix}/source.patch")
+        report["source_patch"] = publish_file(diff, prefix_join(args.output_prefix, "source.patch"))
         if report["libraries"]["baseline"]["sha256"] == report["libraries"]["patched"]["sha256"]:
             raise ValueError("Baseline and patched NCCL binaries are identical")
         report["status"] = "built;not_qualified"
     finally:
         report["build_logs"] = {
-            log.stem: publish_file(log, f"{args.output_prefix}/{log.stem}/build.log")
+            log.stem: publish_file(log, prefix_join(args.output_prefix, f"{log.stem}/build.log"))
             for log in sorted(root.glob("*.log"))
         }
         receipt = root / "receipt.json"
         receipt.write_text(json.dumps(report, indent=2) + "\n")
-        publish_file(receipt, f"{args.output_prefix}/receipt.json")
+        publish_file(receipt, prefix_join(args.output_prefix, "receipt.json"))
 
 
 def main() -> None:

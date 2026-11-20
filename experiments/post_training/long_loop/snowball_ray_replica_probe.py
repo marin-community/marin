@@ -42,6 +42,7 @@ from iris.cluster.client.job_info import get_job_info
 from marinskyrl.environment_contract import NCCL_BUFFER_SIZE_ENV_VAR
 from omegaconf import OmegaConf
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import prefix_join
 from skyrl_train.utils.utils import initialize_ray
 from skyrl_train.workers.worker import PPORayActorGroup
 
@@ -92,10 +93,10 @@ class RayReplicaProbeWorker(ReplicaProbeWorker):
             "router_replay_installed": self.model.router_replay is not None,
             "weight_extractor_type": type(self.weight_extractor).__name__,
         }
-        write_receipt(f"{self.output_prefix}/full-init-rank{self._rank}.json", report)
+        write_receipt(prefix_join(self.output_prefix, f"full-init-rank{self._rank}.json"), report)
         if self._rank == 0:
             write_receipt(
-                f"{self.output_prefix}/receipt.json",
+                prefix_join(self.output_prefix, "receipt.json"),
                 {
                     "completed": True,
                     "scope": "production PPORayActorGroup and complete policy init_model; no inference or publication",
@@ -123,7 +124,7 @@ def compiled_config(args: argparse.Namespace):
     model.tokenizer_path = compiled.inputs.model.tokenizer_uri
     model.tokenizer_revision = compiled.inputs.model.tokenizer_revision
     cfg.trainer.run_name = args.output_prefix.rstrip("/").split("/")[-2]
-    cfg.trainer.native_telemetry_root = f"{args.output_prefix}/telemetry"
+    cfg.trainer.native_telemetry_root = prefix_join(args.output_prefix, "telemetry")
     cfg.replica_probe = {"output_prefix": args.output_prefix, "config_sha256": args.config_sha256}
     if cfg.trainer.placement.policy_num_nodes != NUM_TASKS:
         raise ValueError("The source policy node count must match the one-rack control")
@@ -150,7 +151,7 @@ def driver(args: argparse.Namespace) -> None:
             actor_env_vars={NCCL_BUFFER_SIZE_ENV_VAR: str(cfg.trainer.policy.nccl_buffer_size_bytes)},
         )
         rows = ray.get(actors.async_init_model(cfg.trainer.policy.model.path, num_training_steps=cfg.trainer.max_steps))
-        write_receipt(f"{args.output_prefix}/actor-identities.json", {"actors": rows})
+        write_receipt(prefix_join(args.output_prefix, "actor-identities.json"), {"actors": rows})
         if sorted(row["rank"] for row in rows) != list(range(WORLD_SIZE)):
             raise RuntimeError("Not all policy ranks completed full initialization")
         if any(row["rank"] != row["distributed_rank"] for row in rows):
@@ -174,10 +175,10 @@ def task(args: argparse.Namespace) -> None:
         os.environ[f"IRIS_PORT_{port.value.upper()}"] = "0"
     resolve_ray_ports()
     derived_ifname = pin_socket_ifname()
-    rendezvous = f"{args.output_prefix}/rendezvous"
+    rendezvous = prefix_join(args.output_prefix, "rendezvous")
     node_args = SimpleNamespace(
         rendezvous_dir=rendezvous,
-        ray_log_dir=f"{args.output_prefix}/ray-logs",
+        ray_log_dir=prefix_join(args.output_prefix, "ray-logs"),
         ray_spill_backend=RaySpillBackend.LOCAL,
         ray_spill_dir="/tmp/skyrl-ray-spill",
         ray_labels={},

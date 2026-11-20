@@ -29,6 +29,7 @@ from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from omegaconf import OmegaConf
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import prefix_join
 from rigging.network import interface_for_ipv4
 from skyrl_train.distributed.megatron.megatron_strategy import MegatronStrategy
 from skyrl_train.distributed.megatron.optimizer import (
@@ -111,7 +112,7 @@ class ReplicaProbeWorker(MegatronPolicyWorkerBase):
             "source_iteration_order": list(local.sources),
             "nonfinite_names": [name for name, value in local.sources.items() if not torch.isfinite(value).all()],
         }
-        write_receipt(f"{self.output_prefix}/{phase}-rank{dist.get_rank()}.json", payload)
+        write_receipt(prefix_join(self.output_prefix, f"{phase}-rank{dist.get_rank()}.json"), payload)
         gathered = [None] * dist.get_world_size() if dist.get_rank() == 0 else None
         dist.gather_object(
             {"rows": rows, "source_order": list(local.sources), "nonfinite_names": payload["nonfinite_names"]},
@@ -128,7 +129,7 @@ class ReplicaProbeWorker(MegatronPolicyWorkerBase):
             )
             self.phase_differences[phase] = differences
             write_receipt(
-                f"{self.output_prefix}/{phase}-differences.json",
+                prefix_join(self.output_prefix, f"{phase}-differences.json"),
                 {
                     "phase": phase,
                     "differences": differences,
@@ -177,16 +178,16 @@ class ReplicaProbeWorker(MegatronPolicyWorkerBase):
                 ),
             }
         )
-        write_receipt(f"{self.output_prefix}/{phase}-comparator-entry-rank{dist.get_rank()}.json", entry)
+        write_receipt(prefix_join(self.output_prefix, f"{phase}-comparator-entry-rank{dist.get_rank()}.json"), entry)
         known = known_group_minmax(groups, next(iter(sender.sources.values())).device)
         write_receipt(
-            f"{self.output_prefix}/{phase}-known-minmax-rank{dist.get_rank()}.json",
+            prefix_join(self.output_prefix, f"{phase}-known-minmax-rank{dist.get_rank()}.json"),
             {"rank": dist.get_rank(), "reports": known},
         )
         started = time.monotonic()
         report = compare_replicas(sender.sources, groups, dist.get_rank(), version)
         write_receipt(
-            f"{self.output_prefix}/{phase}-byte-comparison-rank{dist.get_rank()}.json",
+            prefix_join(self.output_prefix, f"{phase}-byte-comparison-rank{dist.get_rank()}.json"),
             {
                 "comparison": asdict(report),
                 "seconds": time.monotonic() - started,
@@ -194,7 +195,7 @@ class ReplicaProbeWorker(MegatronPolicyWorkerBase):
             },
         )
         write_receipt(
-            f"{self.output_prefix}/{phase}-comparator-exit-rank{dist.get_rank()}.json",
+            prefix_join(self.output_prefix, f"{phase}-comparator-exit-rank{dist.get_rank()}.json"),
             comparator_snapshot(sender.sources, groups),
         )
         failures = torch.tensor(int(report.mismatched_bytes != 0), device="cuda")
@@ -285,7 +286,7 @@ def worker(args: argparse.Namespace) -> None:
     torch.cuda.synchronize()
     optimizer_step_seconds = time.monotonic() - step_started
     write_receipt(
-        f"{args.output_prefix}/optimizer-step-rank{dist.get_rank()}.json",
+        prefix_join(args.output_prefix, f"optimizer-step-rank{dist.get_rank()}.json"),
         {
             "result": asdict(step_result),
             "seconds": optimizer_step_seconds,
@@ -298,7 +299,7 @@ def worker(args: argparse.Namespace) -> None:
     probe.compare_parameter_bytes("post_optimizer_step", version=1)
     if dist.get_rank() == 0:
         write_receipt(
-            f"{args.output_prefix}/receipt.json",
+            prefix_join(args.output_prefix, "receipt.json"),
             {
                 "completed": True,
                 "scope": (

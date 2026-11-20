@@ -188,5 +188,4 @@ def entry_payload(entry: CurriculumEntry) -> dict:
 
 
 def stage_payload(stage: CurriculumStage) -> dict:
-    """The canonical record of one ordered stage: its source label and draw quota."""
     return {"source": stage.label, "quota": stage.quota}

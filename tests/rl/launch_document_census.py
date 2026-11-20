@@ -22,8 +22,10 @@ from experiments.post_training import async_rl, iceball_micro, skyrl_port_smoke,
 from experiments.post_training.cat_count_canary import launcher as canary
 from experiments.post_training.curriculum_rl import launch as curriculum
 from experiments.post_training.inventory import train_quick_loop as inventory
+from experiments.post_training.long_loop.eval_runtime.judge import JudgedEvaluation, run_judged
 from experiments.post_training.mismatch_probe import launch as mismatch
 from experiments.post_training.task_sessions import validation
+from tests.rl.long_loop_census import launch_builders as long_loop_builders
 from tests.rl.micro210_fixture import policy_fixture_reference
 
 VERSION = "2026.10.24"
@@ -78,7 +80,7 @@ def launch_builders(
     artifact_root: Path,
 ) -> dict[str, Callable[[], ArtifactStep[SkyRLRun]]]:
     """Enumerate current public presets and representative document-changing CLI options."""
-    builders = {}
+    builders = long_loop_builders(artifact_root)
     builders["micro210/canonical"] = partial(_micro210_step, artifact_root)
     for scale, policy, arm in product(curriculum.SCALES, curriculum.POLICIES.values(), curriculum.ARMS.values()):
         name = f"curriculum/{scale}/{policy.label}/{arm.name}"
@@ -154,7 +156,9 @@ def _seed_dependency_metadata(step: ArtifactStep[SkyRLRun], artifact_root: Path)
         if issubclass(dependency.artifact_type, SkyRLRun):
             write_artifact(
                 {
-                    "hf_model_uri": str(artifact_root / "policy"),
+                    "hf_model_uri": (
+                        "s3://test/census-policy" if step.run is run_judged else str(artifact_root / "policy")
+                    ),
                     "global_step": 2,
                     "tokenizer_uri": "Qwen/Qwen2.5-0.5B-Instruct",
                     "tokenizer_revision": "pinned",
@@ -186,7 +190,7 @@ def render_launch_census(artifact_root: Path) -> tuple[dict[str, str], dict[str,
                 step = build()
                 _seed_dependency_metadata(step, artifact_root)
                 config = materialized_config(step, str(artifact_root))
-                if isinstance(config, Micro210Run):
+                if isinstance(config, (Micro210Run, JudgedEvaluation)):
                     config = config.skyrl
                 documents[name] = config.launch_config_yaml
             except Exception as error:
