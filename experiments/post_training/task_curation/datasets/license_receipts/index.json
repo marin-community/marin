@@ -285,8 +285,8 @@
     {
       "path": "part-046.json",
       "repo": "open-athena/marin-license-receipts",
-      "revision": "53cdfcaf4c16286892741d48378bd4fdf88c32b8",
-      "sha256": "7edd22e6644c7b00b02741abdc8b13df5b58cfefaec37a82f2a1741dc7fee62a"
+      "revision": "9536f813cbbf8eef100da53bc3a8fbdcf12b10db",
+      "sha256": "763e7d8ef433551307cd6e4ab6b3d8947acac155463f308e12e495ba8c0a3b60"
     }
   ],
   "repo": "open-athena/marin-license-receipts",
