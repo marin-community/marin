@@ -259,6 +259,93 @@ def test_lm_data_config_prior_context_phase_resumes_without_repeating_tokens(tmp
     assert before & _tokens(naive, NEW_SEQ, NEW_BATCH, new_start, new_stop)
 
 
+def _simulated_config(tmp_path: Path, seq_len: int, experiment_budget: int, target_budget: int) -> LmDataConfig:
+    """A cached config that keeps ``experiment_budget / target_budget`` of each source in whole shuffle windows."""
+    stage_step = 4 if seq_len == OLD_SEQ else 8
+    return dataclasses.replace(
+        _cached_config(tmp_path, seq_len, stage_step=stage_step),
+        experiment_budget=experiment_budget,
+        target_budget=target_budget,
+        simulated_epoch_slice="shuffle_windows",
+    )
+
+
+def _windows(config: LmDataConfig, seq_len: int) -> dict[str, list[frozenset[int]]]:
+    """Each source's tokens per shuffle window, in the order a training mixture keyed by 0 reads them."""
+    shuffle_key = jax.random.split(jax.random.PRNGKey(0))[1]
+    windows = {}
+    for name, source in config.train_sets(hax.Axis("position", seq_len), key=shuffle_key).items():
+        dataset = source.as_sync_dataset()
+        tokens = [
+            int(token)
+            for example in dataset.get_batch(list(range(len(dataset))))
+            for token in np.asarray(example.tokens)
+        ]
+        windows[name] = [frozenset(tokens[i : i + WINDOW_TOKENS]) for i in range(0, len(tokens), WINDOW_TOKENS)]
+    return windows
+
+
+def _token_list(config: LmDataConfig, seq_len: int, batch_size: int, start: int, stop: int) -> list[int]:
+    dataset = config.train_set(hax.Axis("position", seq_len), BatchSchedule(batch_size), key=jax.random.PRNGKey(0))
+    batch = dataset.as_sync_dataset().get_batch(list(range(start, stop)))
+    return [int(token) for example in batch for token in np.asarray(example.tokens.array)]
+
+
+@pytest.mark.parametrize(
+    "experiment_budget, target_budget, expected_windows",
+    [
+        # Half of 4096, 3000 and 2048 tokens is 32, 23.4 and 16 windows of 64 tokens.
+        (1, 2, {"a": 32, "b": 23, "c": 16}),
+        # 5/12 is 26.7, 19.5 and 13.3 windows; the 2992 tokens in full blocks of "b" alone would give 19.
+        (5, 12, {"a": 27, "b": 20, "c": 13}),
+    ],
+)
+def test_whole_window_simulated_epoching_keeps_the_same_first_windows_at_every_length(
+    tmp_path, experiment_budget, target_budget, expected_windows
+):
+    kept = {}
+    for seq_len in (OLD_SEQ, NEW_SEQ):
+        full = _windows(_cached_config(tmp_path, seq_len, stage_step=4), seq_len)
+        kept[seq_len] = _windows(_simulated_config(tmp_path, seq_len, experiment_budget, target_budget), seq_len)
+        assert kept[seq_len] == {name: full[name][:count] for name, count in expected_windows.items()}
+    assert kept[OLD_SEQ] == kept[NEW_SEQ]
+
+
+def test_simulated_context_switch_resumes_each_source_at_its_next_kept_window(tmp_path):
+    # By step 800 every source has cycled through its kept windows, and "b" has served more than its whole cache.
+    switch_step, resumed_steps = 800, 32
+    old = _simulated_config(tmp_path, OLD_SEQ, 1, 4)
+    resumed = dataclasses.replace(
+        _simulated_config(tmp_path, NEW_SEQ, 1, 4),
+        prior_context_phases=[
+            ContextPhaseConfig(
+                end_step=switch_step,
+                seq_len=OLD_SEQ,
+                batch_size=OLD_BATCH,
+                train_weights=[(0, WEIGHTS_BEFORE), (4, WEIGHTS_AFTER)],
+                shuffle=old.shuffle,
+            )
+        ],
+    )
+    before = _token_list(old, OLD_SEQ, OLD_BATCH, 0, switch_step * OLD_BATCH)
+    after = _token_list(
+        resumed, NEW_SEQ, NEW_BATCH, switch_step * NEW_BATCH, (switch_step + resumed_steps) * NEW_BATCH
+    )
+    windows = _windows(old, OLD_SEQ)
+
+    for i, name in enumerate(TOKENS):
+        kept = windows[name]
+        served = sum(1 for token in before if token // 10_000 == i)
+        next_window = -(-(served % (len(kept) * WINDOW_TOKENS)) // WINDOW_TOKENS)
+        draws = [token for token in after if token // 10_000 == i]
+        # The draws after the switch stay inside one epoch, so none repeats.
+        assert len(set(draws)) == len(draws) < len(kept) * WINDOW_TOKENS
+        whole = len(draws) // WINDOW_TOKENS
+        following = [kept[(next_window + j) % len(kept)] for j in range(whole + 1)]
+        # The source serves whole kept windows from the one after its read position, and nothing else.
+        assert frozenset().union(*following[:whole]) <= set(draws) <= frozenset().union(*following)
+
+
 def _started_config(tmp_path: Path, start_step: int) -> LmDataConfig:
     base = _cached_config(tmp_path, NEW_SEQ, stage_step=8)
     return dataclasses.replace(base, train_weights=[(0, WEIGHTS_AFTER)], mixture_start_step=start_step)
