@@ -58,6 +58,7 @@ from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact
 from experiments.post_training.task_curation.config import PipelineOptions
+from experiments.post_training.task_curation.consumer_scope import CONSUMER_RUNTIME_COMMIT
 from experiments.post_training.task_curation.exclusion_registry import manual_exclusion_claims
 from experiments.post_training.task_curation.full_content_results import FullContentResultBinding
 from experiments.post_training.task_curation.source_policy import (
@@ -413,6 +414,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
                 info.actor_census_input,
                 info.within_source_dedup.unique_count if info.within_source_dedup else 0,
                 info.consumer_requirements,
+                runtime_commit=CONSUMER_RUNTIME_COMMIT,
             )
         )
         dataset = self.dataset
@@ -683,6 +685,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             self.info.actor_census_input,
             self.info.within_source_dedup.unique_count if self.info.within_source_dedup else 0,
             self.info.consumer_requirements,
+            runtime_commit=CONSUMER_RUNTIME_COMMIT,
         ):
             return SourceStatus.PENDING
         return SourceStatus.AVAILABLE

@@ -28,6 +28,7 @@ from finestore.rl.curation import (
 )
 from finestore.rl.licenses import require_license
 
+from .consumer_evidence import CONSUMER_RUNTIME_COMMIT
 from .licensing import require_unbanned, source_license_ban
 
 MISSING_GRADER_REASON = "No executable grader is declared"
@@ -170,6 +171,7 @@ def require_population_admission(declaration: SourceDeclaration) -> None:
         binding,
         declaration.within_source_dedup.unique_count,
         declaration.consumer_requirements,
+        runtime_commit=CONSUMER_RUNTIME_COMMIT,
     ):
         raise ValueError(f"Consumer admission blocked: {declaration.id}: {', '.join(reasons)}")
     if blocker := population_admission_blocker(

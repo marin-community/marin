@@ -7,6 +7,8 @@ from finestore.rl.curation import ConsumerNeed
 from pydantic import BaseModel, ConfigDict, Field
 from taskcompendium.models import ExecutionRequirements, TaskSpec, judge_spec
 
+CONSUMER_RUNTIME_COMMIT = "b937327803bd3656305b070f2b56c5176c7a6c9d"
+
 
 class ConsumerCapacity(BaseModel):
     """Limits of the configured consumer's sandbox and phase deadlines."""

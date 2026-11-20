@@ -3,6 +3,12 @@
 
 """Consumer scope follows task contracts, independent of global schema alignment."""
 
+import hashlib
+import json
+from pathlib import Path
+
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from finestore.rl.curation import ConsumerNeed
 from taskcompendium.models import (
@@ -20,6 +26,7 @@ from taskcompendium.models import (
 )
 from verifyit.spec import JudgeSpec
 
+from experiments.post_training.task_curation.consumer_audit import audit_source
 from experiments.post_training.task_curation.consumer_scope import ConsumerCapacity, consumer_needs
 
 CAPACITY = ConsumerCapacity(cpus=4, memory_mb=8192, storage_mb=10240, agent_timeout=2400, verifier_timeout=300)
@@ -114,3 +121,51 @@ def test_allocation_selects_scope_only_when_consumer_cannot_satisfy_it(standard_
         update={"execution_requirements": standard_task.execution_requirements.model_copy(update=update)}
     )
     assert consumer_needs(task, CAPACITY) == {ConsumerNeed.EXECUTION}
+
+
+@pytest.mark.parametrize("changed", [False, True])
+def test_frozen_fingerprint_survives_storage_sort_but_rejects_changed_content(tmp_path, standard_task, changed):
+    originals = [
+        standard_task.model_copy(
+            update={"id": identifier, "source": standard_task.source.model_copy(update={"row": f"tasks.parquet:{row}"})}
+        ).model_dump_json()
+        for identifier, row in (("z", 9), ("a", 10))
+    ]
+    expected = hashlib.sha256("".join(originals).encode()).hexdigest()
+    stored = list(reversed(originals))
+    if changed:
+        stored[0] = stored[0].replace("Fix the program.", "Fix the changed program.")
+    specs = tmp_path / "specs"
+    specs.mkdir()
+    pq.write_table(pa.table({"task_spec": stored}), specs / "part-000000.parquet")
+    population = tmp_path / "population.json"
+    population.write_text(json.dumps({"result": {"specs_output_dir": str(specs)}}))
+    census = tmp_path / "census.json"
+    census.write_text(json.dumps({"result": {"input_artifact": str(population)}}))
+    row = {
+        "source_id": "fixture:standard",
+        "input": {
+            "evidence_url": str(census),
+            "measured_tasks": 2,
+            "task_specs_sha256": expected,
+            "dataset_id": "fixture",
+            "dataset_revision": "1",
+        },
+    }
+    config = {
+        "regional_bucket": str(tmp_path),
+        "capacity": CAPACITY.model_dump(),
+        "runtime_commit": "a" * 40,
+        "session": {},
+        "judges": [],
+        "default_judge": "",
+    }
+    runtime = Path(__file__).resolve().parents[4]
+    if changed:
+        with pytest.raises(ValueError, match="Frozen population fingerprint differs"):
+            audit_source(row, runtime, config, str(tmp_path / "receipts"))
+        return
+    result = audit_source(row, runtime, config, str(tmp_path / "receipts"))
+    assert result["task_specs_sha256"] == result["source_order_task_specs_sha256"] == expected
+    assert result["scanned_task_specs_sha256"] != expected
+    assert result["checked_tasks"] == 2 and result["failed_tasks"] == 0

@@ -127,7 +127,8 @@ Consumer failures hold a bespoke source Pending without excluding its tasks.
 `consumer_scope.consumer_needs` classifies each frozen TaskSpec. A required tool
 or provider, custom judge, service binding or distinct verifier allocation selects
 bespoke scope. CPU, memory, disk and deadlines select scope only when they exceed
-the configured consumer limits. Satisfiable non-default allocations are exempt.
+the configured consumer limits. Ordinary actor allocations within those limits
+are exempt; a distinct verifier allocation always selects scope.
 The audit configuration records the capacity and deadline limits explicitly.
 Shared schema drift, including integrity and execution fields unknown to an older
 runtime, is one global runtime-alignment issue. It is reported separately and
@@ -135,12 +136,17 @@ never changes a source's admission status.
 
 The receipt binds the source ID, frozen dataset revision, population digest and
 count, scoped requirement counts, and runtime commit in
-`finestore.rl.curation.CONSUMER_RUNTIME_COMMIT`. The audit reads every frozen
+`experiments.post_training.task_curation.consumer_scope.CONSUMER_RUNTIME_COMMIT`. The audit reads every frozen
 TaskSpec, classifies its needs, and checks the pinned consumer's real loader and
-provider registry. Bespoke failures use `CONSUMER_TOOL_UNREGISTERED`,
+provider registry. Shared loader schema errors are recorded independently, so
+a task can pass its bespoke check while the global runtime alignment is pending.
+Bespoke failures use `CONSUMER_TOOL_UNREGISTERED`,
 `CONSUMER_JUDGE_UNREGISTERED`, `CONSUMER_SERVICE_UNREGISTERED` or
-`CONSUMER_EXECUTION_UNSUPPORTED`. Missing receipts and changed runtime or
-population pins invalidate bespoke admission. Standard sources need no receipt.
+`CONSUMER_EXECUTION_UNSUPPORTED`. Provider requirements use the tool code; over-capacity allocations and deadlines
+use the execution code. Missing receipts and changed runtime or
+population pins invalidate bespoke admission. Only the canonical runtime pin
+qualifies admission; audits of other pins remain historical evidence. Standard
+sources need no receipt.
 
 Run `experiments.post_training.task_curation.consumer_audit` in the population's
 storage region. Supply a frozen input inventory, runtime git archive and JSON
@@ -152,12 +158,14 @@ from the actual `MICRO210_JUDGE` object in the consumer runtime's
 `experiments/evaluation/judge_config.py`; preserve each task's JudgeSpec.
 The archive SHA is checked before extraction. Results contain counts, hashes and
 schema paths without task content. Frozen-stream digest differences are recorded
-separately for provenance investigation.
+separately for provenance investigation. The receipt binds the census population
+fingerprint; the observed Parquet stream digest is a separate diagnostic.
 
 Keep results in regional storage. Stage the receipt metadata below, publish it to
 private `open-athena/marin-rl-data-atlas-registry` through the serialized registry
 publisher with SHA readback, and commit references under
-`datasets/consumer_receipt_refs/`. The source declarations, admission writer and
+`datasets/consumer_receipt_refs/`. The committed reference fixes the registry
+revision and document hash; a mismatch is an error. The source declarations, admission writer and
 served Atlas projection apply the same scope and receipt rule. The app package
 includes immutable scope and receipt metadata for retained declarations; standard
 rows pass through unchanged. This static check does not prove machine startup or

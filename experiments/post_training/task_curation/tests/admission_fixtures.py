@@ -9,7 +9,6 @@ from dataclasses import replace
 
 import pytest
 from finestore.rl.curation import (
-    CONSUMER_RUNTIME_COMMIT,
     ActorCensusInput,
     ConsumerReceipt,
     GradingEnvironmentEvidence,
@@ -19,6 +18,7 @@ from finestore.rl.curation import (
 )
 
 from experiments.post_training.task_curation import registry, retirement
+from experiments.post_training.task_curation.consumer_scope import CONSUMER_RUNTIME_COMMIT
 from experiments.post_training.task_curation.source import RlDataSource
 from experiments.post_training.task_curation.tests.license_fixtures import fixture_license
 

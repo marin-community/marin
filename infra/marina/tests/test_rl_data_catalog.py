@@ -35,6 +35,8 @@ from finestore.rl.curation import (
     AssessmentPopulation,
     CatalogSnapshot,
     Confidence,
+    ConsumerNeed,
+    ConsumerReason,
     ContentEvidenceReference,
     CurationCatalog,
     CurationSummary,
@@ -134,6 +136,7 @@ from infra.marina.apps.rl_data_catalog.release_evidence import (
 )
 from infra.marina.apps.rl_data_catalog.release_gateway import CandidateApi
 from infra.marina.apps.rl_data_catalog.role_projection import ManifestReference
+from infra.marina.apps.rl_data_catalog.server import consumer as consumer_policy
 from infra.marina.apps.rl_data_catalog.server.app import canonical_source_record, create_api, migrate
 from infra.marina.apps.rl_data_catalog.server.curriculum import (
     TASKS_SQL,
@@ -316,6 +319,74 @@ def catalog_identity_map(catalog: CurationCatalog) -> SourceIdentitySurvey:
         groups=[],
         judge=None,
     )
+
+
+def test_retained_rows_gate_bespoke_requirements_from_current_package(
+    catalog_database, catalog_query, tmp_path, monkeypatch
+):
+    root = str(tmp_path / "consumer-refresh")
+    publish_sample(root, "standard", source_id="Marin:standard")
+    publish_sample(root, "bespoke", source_id="Marin:bespoke")
+    catalog = CurationCatalog(root)
+    sources = [*catalog.sources("standard"), *catalog.sources("bespoke")]
+    with DataStore.open(root, writer_id="combined") as store:
+        register_catalog(store)
+        with store.transaction() as transaction:
+            transaction.table(INVENTORY).extend(
+                source.model_copy(
+                    update={
+                        "snapshot_id": "combined",
+                        "declaration": source.declaration.model_copy(update={"consumer_receipt": None}),
+                    }
+                ).model_dump(mode="json")
+                for source in sources
+            )
+            transaction.table(SNAPSHOTS).add(
+                CatalogSnapshot(
+                    snapshot_id="combined",
+                    created_at="2026-11-20T00:00:00Z",
+                    source_count=2,
+                ).model_dump()
+            )
+            transaction.table(CURRENT).add(CurrentCatalog(name="latest", snapshot_id="combined").model_dump())
+    load_catalog(CurationCatalog(root), catalog_query)
+    with catalog_database.begin() as connection:
+        connection.execute(
+            text("UPDATE atlas_sources SET declaration = declaration - 'consumer_requirements' - 'consumer_receipt'")
+        )
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        before = {row["id"]: row for row in client.get("/sources", params={"projection": "table"}).json()["sources"]}
+    receipt = consumer_receipt("Marin:bespoke", actor_census_input(FIXTURE_DATASET, FIXTURE_REVISION, "1", 3))
+    failed = receipt.model_copy(
+        update={
+            "failed_tasks": 3,
+            "failures": {ConsumerReason.TOOL_UNREGISTERED: 3},
+            "requirements": {ConsumerNeed.TOOL_PROVIDER: 3},
+        }
+    )
+    monkeypatch.setattr(
+        consumer_policy,
+        "packaged_consumer_inputs",
+        lambda: {
+            "Marin:bespoke": {
+                "consumer_requirements": [ConsumerNeed.TOOL_PROVIDER.value],
+                "consumer_receipt": failed.model_dump(mode="json"),
+            }
+        },
+    )
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        table = {row["id"]: row for row in client.get("/sources", params={"projection": "table"}).json()["sources"]}
+        compact = {row["id"]: row for row in client.get("/source-statuses").json()["sources"]}
+    assert table["Marin:bespoke"]["status"] == compact["Marin:bespoke"]["status"] == "Pending"
+    assert (
+        table["Marin:bespoke"]["consumer_blockers"]
+        == compact["Marin:bespoke"]["consumer_blockers"]
+        == [ConsumerReason.TOOL_UNREGISTERED.value]
+    )
+    assert table["Marin:bespoke"]["filtration"]["admitted_count"] is None
+    assert table["Marin:bespoke"]["filtration"]["population_count"] == 3
+    assert table["Marin:standard"]["status"] == compact["Marin:standard"]["status"] == "Available"
+    assert table["Marin:standard"]["filtration"] == before["Marin:standard"]["filtration"]
 
 
 def test_status_inventory_matches_source_statuses_without_loading_task_evidence(

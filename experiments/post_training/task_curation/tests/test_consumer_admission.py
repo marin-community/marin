@@ -89,6 +89,7 @@ def test_standard_sources_keep_status_without_a_receipt(qualified_source, status
     )
     assert source.status is SourceStatus.AVAILABLE
     declaration = {**source.declaration.model_dump(mode="json"), "status": status}
+    declaration["consumer_requirements"] = None
     assert consumer_projection(declaration) is declaration
 
 

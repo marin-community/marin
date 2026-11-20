@@ -9,7 +9,7 @@ from typing import Any
 
 from finestore.rl.curation import ActorCensusInput, ConsumerNeed, ConsumerReceipt, consumer_blockers
 
-from .consumer_evidence import CONSUMER_INPUTS
+from .consumer_evidence import CONSUMER_INPUTS, CONSUMER_RUNTIME_COMMIT
 
 
 @cache
@@ -23,7 +23,7 @@ def consumer_projection(declaration: dict[str, Any]) -> dict[str, Any]:
     if declaration["status"] not in {"Available", "Pending"}:
         return declaration
     current = packaged_consumer_inputs().get(declaration["id"], declaration)
-    requirements = tuple(ConsumerNeed(need) for need in current.get("consumer_requirements", ()))
+    requirements = tuple(ConsumerNeed(need) for need in current.get("consumer_requirements") or ())
     if not requirements:
         return declaration
     raw = current.get("consumer_receipt")
@@ -34,13 +34,19 @@ def consumer_projection(declaration: dict[str, Any]) -> dict[str, Any]:
         ActorCensusInput.model_validate(binding) if binding is not None else None,
         (declaration.get("within_source_dedup") or {}).get("unique_count", 0),
         requirements,
+        runtime_commit=CONSUMER_RUNTIME_COMMIT,
     )
+    effective = {
+        **declaration,
+        "consumer_requirements": [need.value for need in requirements],
+        "consumer_receipt": raw,
+    }
     if not reasons:
-        return declaration
+        return effective
     notes = declaration.get("notes", "")
     missing_reasons = [reason.value for reason in reasons if reason.value not in notes]
     return {
-        **declaration,
+        **effective,
         "status": "Pending" if reasons and declaration["status"] == "Available" else declaration["status"],
         "consumer_blockers": [reason.value for reason in reasons],
         "notes": " ".join(

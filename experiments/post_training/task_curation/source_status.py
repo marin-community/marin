@@ -19,6 +19,7 @@ from typing import Any
 
 from finestore.rl.status_taxonomy import REASON_EXPLANATIONS, PendingStage, SourceStatus
 
+from experiments.post_training.task_curation.consumer_scope import CONSUMER_RUNTIME_COMMIT
 from experiments.post_training.task_curation.datasets.daytona_measurements import actor_census_receipts
 from experiments.post_training.task_curation.datasets.grading_measurements import grading_census_receipts
 from experiments.post_training.task_curation.datasets.lexical_measurements import lexical_measurements
@@ -207,7 +208,9 @@ def main() -> None:
         literals = [repr(chunk) if '"' in chunk else json.dumps(chunk) for chunk in chunks]
         value = literals[0] if len(literals) == 1 else "(\n" + "".join(f"    {part}\n" for part in literals) + ")"
         args.consumer_output.write_text(
-            "# Copyright The Marin Authors\n# SPDX-License-Identifier: Apache-2.0\n\n" + f"CONSUMER_INPUTS = {value}\n"
+            "# Copyright The Marin Authors\n# SPDX-License-Identifier: Apache-2.0\n\n"
+            + f"CONSUMER_RUNTIME_COMMIT = {json.dumps(CONSUMER_RUNTIME_COMMIT)}\n"
+            + f"CONSUMER_INPUTS = {value}\n"
         )
     # The release's clean frontend build empties dist/ before the build command runs,
     # so the output's parent directories cannot be assumed to exist.

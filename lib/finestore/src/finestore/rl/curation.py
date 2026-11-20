@@ -799,10 +799,6 @@ class ActorCensusInput(CatalogRecord):
     carry_forward: str | None = None
 
 
-# The runtime selected for Atlas admission. Changing this pin requires new CONSUMER receipts.
-CONSUMER_RUNTIME_COMMIT = "b937327803bd3656305b070f2b56c5176c7a6c9d"
-
-
 class ConsumerNeed(StrEnum):
     TOOL_PROVIDER = "tool_provider"
     CUSTOM_JUDGE = "custom_judge"
@@ -854,13 +850,15 @@ def consumer_blockers(
     binding: ActorCensusInput | None,
     retained_tasks: int,
     requirements: Sequence[ConsumerNeed] = (),
+    *,
+    runtime_commit: str,
 ) -> tuple[ConsumerReason, ...]:
     """Check bespoke consumer needs; standard populations keep their existing admission."""
     if not requirements:
         return ()
     if receipt is None:
         return (ConsumerReason.RECEIPT_MISSING,)
-    if receipt.runtime_commit != CONSUMER_RUNTIME_COMMIT:
+    if receipt.runtime_commit != runtime_commit:
         return (ConsumerReason.RUNTIME_STALE,)
     if (
         binding is None
