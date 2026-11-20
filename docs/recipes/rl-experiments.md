@@ -13,6 +13,7 @@ medium presets making 10–25, and long presets making 20 or more.
 |---|---|---|---|---|
 | `speed-short` | Generation throughput per GPU | 8 H100s, 512 prompts × four answers, 14–17 min and about 2 H100-hours | Separate full EvalLite pass. Gated on throughput and EvalLite family mean. | Screen a vLLM wheel, kernel or engine option before testing the full training loop with `speed-medium`. |
 | `data-short` | Fraction of prompts with both passing and failing answers | 8 H100s, 256 candidate training prompts × four answers, 10–15 min and about 2 H100-hours | Scores the sampled candidate tasks. Gated on mixed-answer fraction. | Screen a new `--tasks` selection before training on it with `data-medium`. |
+| `eval-short` | Published model scores | 8 H100s. The recorded run used 1.1 H100-hours. | Scores the full EvalLite pool without a control comparison. | Evaluate a published checkpoint in a generation-only job. |
 | `speed-medium` | Update time and policy agreement | 40 H100s, 10 updates. Wall time and cost are unmeasured. | Training metrics on updates 2–10. Gated on speed and mismatch. | Check startup, trainer kernels, parallelism, weight synchronization or numerics. Use `learning-medium` to measure quality after a precision change. |
 | `learning-medium` | EvalLite family mean and score gain per GPU-hour | 40 H100s, 25 updates. Wall time and cost are unmeasured. | Full EvalLite at steps 0 and 25. Gated on EvalLite family mean. | Compare objectives, optimizers, sampling, batch shape or initial weights. |
 | `data-medium` | Learning on a candidate training selection | 40 H100s, 25 updates. Wall time and cost are unmeasured. | Full EvalLite at steps 0 and 25. Shares the `learning-medium` gate and controls. | Train on a `--tasks` selection after it passes the short screen. |
@@ -356,7 +357,7 @@ Candidate receipts must match their recorded inputs exactly.
 
 ## Evaluate and publish a checkpoint
 
-Use `experiments.post_training.skyrl_evaluation.evaluate` to score a model in a separate evaluation
+Use `experiments.post_training.skyrl_evaluation.evaluate_model` to score a model in a separate evaluation
 job. Pass a `SkyRLPolicyModel` for an exported RL policy or an `ArtifactHfModel` for an SFT export,
 a serving `ModelConfig`, evaluation definitions, a version, and the accelerator and cluster settings.
 The artifact supplies the model URI, identity, and tokenizer. The serving config supplies the engine
@@ -365,12 +366,12 @@ and generation settings. Use `job_timeout_seconds` to set a deadline for the eva
 `resolve_evaluations` accepts registered suites such as `standard-local` or comma-separated evaluation
 names such as `mmlu-smoke,gsm8k-smoke`. The result gives the evaluation group ID, per-evaluation run IDs,
 records prefix, and result paths. Each run writes a record and an archive with per-question results.
-An RL policy record includes `rl_run` when both the training run ID and attempt ID are available.
+An RL policy record includes `rl_attempt` when both the training run ID and attempt ID are available.
 
 Use Snowball's `eval-short` to score published weights with the same EvalLite protocol as the
 trainer, in a generation-only job. Use trainer evaluation to track policy scores at the run's
-scheduled training steps. `eval-short` runs on one node with eight H100s. It used 1.1 H100-hours
-and scored 0.57 on the active panel in a recorded run. [EvalLite run](https://iris.oa.dev/#/job/%2Fatqamar%2Fusers-ahmad-checkpoints-snowball-rl-eval-short-224fc25b8e-in-169b86d8-2026.11.19.1-coordinator-5dc8b038)
+scheduled training steps. `eval-short` runs the full EvalLite pool on one node with eight H100s.
+A recorded run used 1.1 H100-hours. Its 100-task subset scored 0.57. [EvalLite run](https://iris.oa.dev/#/job/%2Fatqamar%2Fusers-ahmad-checkpoints-snowball-rl-eval-short-224fc25b8e-in-169b86d8-2026.11.19.1-coordinator-5dc8b038)
 
 ```bash
 uv run python -m experiments.post_training.snowball_rl \

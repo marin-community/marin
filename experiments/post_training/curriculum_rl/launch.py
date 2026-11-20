@@ -67,7 +67,7 @@ from experiments.post_training.curriculum_rl.pool import (
     VALIDATION_FILENAME,
     pool_step,
 )
-from experiments.post_training.skyrl_evaluation import evaluate
+from experiments.post_training.skyrl_evaluation import evaluate_model
 
 logger = logging.getLogger(__name__)
 
@@ -677,7 +677,7 @@ def build_arm(
     evaluation_base_name = f"evals/{evaluation_model_name}/{preset.evals}"
     evaluation_version = version or resolve_version(evaluation_base_name, None)
     evaluation_model = evaluation_model_config(policy, preset, evaluation_model_name)
-    evaluation = evaluate(
+    evaluation = evaluate_model(
         SkyRLPolicyModel(rl),
         evaluation_model,
         resolve_evaluations(preset.evals),

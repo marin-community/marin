@@ -415,7 +415,7 @@ SNOWBALL = ModelPresets(
             evaluations=(EVALUATIONS["eval_lite"],),
             guards=(),
             objectives=(),
-            budget="8 H100s, runtime unmeasured",
+            budget="1.1 H100-hours in the recorded EvalLite run",
         ),
     ),
     namespace="snowball-rl",

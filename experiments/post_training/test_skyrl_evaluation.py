@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from evalrecords.records import RunStatus, record_path
+from evalrecords.records import RunStatus, read_record, record_path
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.runner import _record
 from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord
@@ -17,11 +17,11 @@ import experiments.evaluation.launch as launch_module
 import experiments.evaluation.pipeline as pipeline_module
 from experiments.evaluation.evals import resolve_evaluations
 from experiments.post_training.rl_tests.fixtures import write_skyrl_run_record
-from experiments.post_training.skyrl_evaluation import evaluate
+from experiments.post_training.skyrl_evaluation import evaluate_model
 
 
 def evaluate_smoke(source, serving, *, timeout=None):
-    return evaluate(
+    return evaluate_model(
         source,
         serving,
         resolve_evaluations("smoke"),
@@ -104,7 +104,9 @@ def test_evaluate_records_model_and_producing_rl_attempt(tmp_path, monkeypatch, 
 
     assert len(result.run_ids) == 2
     for run_id in result.run_ids:
-        record_json = json.loads(Path(record_path(result.records_prefix, run_id)).read_text())
+        path = Path(record_path(result.records_prefix, run_id))
+        record_json = json.loads(path.read_text())
+        assert "rl_run" not in record_json
         model = record_json["model"]
         assert model["location"] == str(export)
         config = model["config"]
@@ -113,9 +115,14 @@ def test_evaluate_records_model_and_producing_rl_attempt(tmp_path, monkeypatch, 
         assert config["tokenizer"] == (tokenizer or str(export))
         assert config["tokenizer_revision"] == (tokenizer_revision or config["identity"])
         if source_kind == "rl":
-            assert record_json["rl_run"] == ids
+            assert record_json["rl_attempt"] == ids
+            if run_id == result.run_ids[0]:
+                record_json["rl_run"] = record_json.pop("rl_attempt")
+                path.write_text(json.dumps(record_json))
+                attempt = read_record(str(path)).rl_attempt
+                assert attempt is not None and attempt.model_dump() == ids
         else:
-            assert "rl_run" not in record_json
+            assert "rl_attempt" not in record_json
 
     if source_kind == "rl":
         remove_rl_run_ids(producer_receipt)

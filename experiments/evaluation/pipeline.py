@@ -29,7 +29,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from evalrecords.records import RLRunRef, read_record, record_path
+from evalrecords.records import RLAttemptRef, read_record, record_path
 from iris.client.client import iris_ctx
 from iris.rpc import job_pb2
 from marin.evaluation.hardware import default_platform
@@ -69,7 +69,7 @@ class EvalStepConfig:
     federated_cluster: str | None
     version: str
     instances: int = 1
-    rl_run: RLRunRef | None = None
+    rl_attempt: RLAttemptRef | None = None
     job_timeout_seconds: int | None = None
 
 
@@ -107,7 +107,7 @@ def run_eval_pipeline_step(config: EvalStepConfig) -> EvaluationResult:
         federated_cluster=config.federated_cluster,
         priority_band=job_pb2.PRIORITY_BAND_INHERIT,
         version=config.version,
-        rl_run=config.rl_run,
+        rl_attempt=config.rl_attempt,
         cache_key=None if is_mutable_version(config.version) else config.artifact_path,
     )
     submitted = launch_group(
@@ -133,7 +133,7 @@ def eval_step(
     version: str,
     deps: tuple[ArtifactStep, ...] = (),
     resolve_model: Callable[[StepContext], ModelConfig] | None = None,
-    resolve_rl_run: Callable[[StepContext], RLRunRef | None] | None = None,
+    resolve_rl_attempt: Callable[[StepContext], RLAttemptRef | None] | None = None,
     limit: int | None = None,
     max_concurrent: int = DEFAULT_EVAL_CONCURRENCY,
     instances: int = 1,
@@ -173,7 +173,7 @@ def eval_step(
             submission_cluster=ctx.runtime_arg(_SUBMISSION_CLUSTER_RUNTIME_ARG),
             federated_cluster=ctx.runtime_arg(_FEDERATED_CLUSTER_RUNTIME_ARG),
             version=version,
-            rl_run=resolve_rl_run(ctx) if resolve_rl_run is not None else None,
+            rl_attempt=resolve_rl_attempt(ctx) if resolve_rl_attempt is not None else None,
             job_timeout_seconds=ctx.runtime_arg(_JOB_TIMEOUT_RUNTIME_ARG),
         )
 

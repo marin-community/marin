@@ -69,7 +69,7 @@ from zephyr.writers import write_parquet_file
 
 from experiments.evaluation.evals import resolve_evaluations
 from experiments.evaluation.pipeline import EvaluationResult
-from experiments.post_training.skyrl_evaluation import evaluate
+from experiments.post_training.skyrl_evaluation import evaluate_model
 from experiments.sft.launcher import DatasetSpec, LevanterCheckpointModel, SFTSpec, resources_from_accelerator, sft_step
 
 logger = logging.getLogger(__name__)
@@ -459,7 +459,7 @@ def build_workflow(*, version: str | None = None) -> IceballMicroWorkflow:
         ),
         generation=GenerationConfig(max_gen_toks=256),
     )
-    evaluation = evaluate(
+    evaluation = evaluate_model(
         SkyRLPolicyModel(rl),
         evaluation_model,
         resolve_evaluations(ICEBALL_EVALS),

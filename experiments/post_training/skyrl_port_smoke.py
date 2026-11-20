@@ -33,7 +33,7 @@ from experiments.evaluation.pipeline import EvaluationResult
 from experiments.models import qwen2_5_0_5b_instruct
 from experiments.post_training.cat_count_canary.data import TRAIN_FILENAME, VALIDATION_FILENAME, cat_count_data_step
 from experiments.post_training.cat_count_canary.launcher import role_plan, training_config, with_role_plan
-from experiments.post_training.skyrl_evaluation import evaluate
+from experiments.post_training.skyrl_evaluation import evaluate_model
 
 CLUSTER = "cw-rno2a"
 MODEL = "Qwen/Qwen2.5-0.5B-Instruct"
@@ -152,7 +152,7 @@ def build_smoke(version: str) -> Smoke:
         )
 
     resume = replace(resume, build_config=resume_config, deps=(*resume.deps, train))
-    evaluation = evaluate(
+    evaluation = evaluate_model(
         SkyRLPolicyModel(resume),
         ModelConfig(
             name="skyrl-port-smoke",

@@ -5,7 +5,7 @@
 
 from dataclasses import replace
 
-from evalrecords.records import RLRunRef
+from evalrecords.records import RLAttemptRef
 from marin.evaluation.model_config import ModelConfig
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.rl.skyrl import SkyRLModelSource, SkyRLPolicyModel
@@ -14,7 +14,7 @@ from experiments.evaluation.evals import EvaluationDefinition
 from experiments.evaluation.pipeline import EvaluationResult, eval_step
 
 
-def evaluate(
+def evaluate_model(
     model: SkyRLModelSource,
     serving: ModelConfig,
     evals: tuple[EvaluationDefinition, ...],
@@ -42,13 +42,13 @@ def evaluate(
             tokenizer_revision=resolved.tokenizer_revision,
         )
 
-    def resolve_rl_run(ctx: StepContext) -> RLRunRef | None:
+    def resolve_rl_attempt(ctx: StepContext) -> RLAttemptRef | None:
         if not isinstance(model, SkyRLPolicyModel):
             return None
         run = ctx.resolved(model.step)
         if run.run_id is None or run.attempt_id is None:
             return None
-        return RLRunRef(run_id=run.run_id, attempt_id=run.attempt_id)
+        return RLAttemptRef(run_id=run.run_id, attempt_id=run.attempt_id)
 
     return eval_step(
         serving,
@@ -56,7 +56,7 @@ def evaluate(
         version=version,
         deps=model.deps(),
         resolve_model=resolve_model,
-        resolve_rl_run=resolve_rl_run,
+        resolve_rl_attempt=resolve_rl_attempt,
         accelerator=accelerator,
         submission_cluster=submission_cluster,
         federated_cluster=federated_cluster,
