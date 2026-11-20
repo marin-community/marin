@@ -18,6 +18,10 @@ from iris.cluster.config import ControllerVmConfig, IrisClusterConfig, SliceConf
 from iris.cluster.platforms.types import ListedSlice, SliceHandle, StandaloneWorkerHandle
 
 
+class ControllerRestartNotStarted(RuntimeError):
+    """Controller restart failed before changing controller resources."""
+
+
 class ControllerProvider(Protocol):
     """Controller lifecycle + connectivity.
 
@@ -50,7 +54,7 @@ class ControllerProvider(Protocol):
         ...
 
     def restart_controller(self, config: IrisClusterConfig) -> str:
-        """Restart controller in-place without destroying underlying compute."""
+        """Restart in-place; raise ControllerRestartNotStarted if no resources changed."""
         ...
 
     def stop_controller(self, config: IrisClusterConfig) -> None:

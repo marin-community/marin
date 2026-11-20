@@ -34,7 +34,7 @@ from iris.cluster.platforms.gcp.controller_bootstrap import (
     build_controller_bootstrap_script_from_config,
 )
 from iris.cluster.platforms.gcp.ssh import OS_LOGIN_METADATA
-from iris.cluster.platforms.protocols import WorkerInfraProvider
+from iris.cluster.platforms.protocols import ControllerRestartNotStarted, WorkerInfraProvider
 from iris.cluster.platforms.types import (
     Labels,
     RemoteWorkerHandle,
@@ -62,10 +62,6 @@ EARLY_TIMEOUT_SECONDS = 60
 # Backoff parameters for health check polling
 HEALTH_CHECK_BACKOFF_INITIAL = 2.0
 HEALTH_CHECK_BACKOFF_MAX = 10.0
-
-
-class ControllerRestartNotStarted(RuntimeError):
-    """The controller restart failed before changing the VM."""
 
 
 def controller_vm_name(label_prefix: str) -> str:

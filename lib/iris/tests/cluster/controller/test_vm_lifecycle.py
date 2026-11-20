@@ -40,6 +40,7 @@ from iris.cluster.config import (
     SliceConfig,
     VmConfig,
 )
+from iris.cluster.platforms.protocols import ControllerRestartNotStarted
 from iris.cluster.platforms.types import (
     CloudWorkerState,
     CommandResult,
@@ -47,7 +48,6 @@ from iris.cluster.platforms.types import (
     WorkerStatus,
 )
 from iris.cluster.platforms.vm_lifecycle import (
-    ControllerRestartNotStarted,
     restart_controller,
     start_controller,
     stop_controller,
