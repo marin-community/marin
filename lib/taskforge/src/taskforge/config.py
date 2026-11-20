@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Protocol, cast
 
+from taskcompendium.models import TaskResource
+
 from taskforge.harness.protocol import Harness, Tool
 from taskforge.harness.tools.submit import Gate
 from taskforge.model.review import BandRules, Budget, Decision
@@ -18,6 +20,23 @@ from taskforge.policy import Policy
 
 class ReviewRules(Protocol):
     def __call__(self, workpiece: Workpiece, band: BandRules, budget: Budget) -> Decision: ...
+
+
+def no_files(_workpiece: Workpiece, _policy: Policy) -> tuple[TaskResource, ...]:
+    return ()
+
+
+@dataclass(frozen=True, slots=True)
+class WorkspaceHydration:
+    """Files a caller adds to every author workspace, at ``/<path>``; the default adds none.
+
+    ``rendered`` may depend on the workpiece (for example per-proposal reference data) and must be
+    deterministic, because a resumed stage replays the write. Only the author sandbox receives these
+    files: solvers, adversaries and graders see a file only if the author puts it in the task.
+    """
+
+    static: tuple[TaskResource, ...] = ()
+    rendered: Callable[[Workpiece, Policy], tuple[TaskResource, ...]] = no_files
 
 
 type Target = Stage | None | Callable[[Workpiece], Stage | None]
@@ -44,6 +63,7 @@ class TaskforgeConfig:
     budget: Budget
     transitions: Transitions
     initial_stage: Stage = Stage.AUTHOR
+    workspace: WorkspaceHydration = WorkspaceHydration()
 
     def __post_init__(self) -> None:
         # A frozen dataclass does not freeze the mappings it holds; read-only views keep the config immutable.

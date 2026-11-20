@@ -38,6 +38,11 @@ Both arms run the same stages; they differ in one transition table.
   result is written to `.validation/<n>.json` in the workspace. Submit then goes through review
   as in S.
 
+On every author entry, including revision rounds, the workspace holds the proposal, the previous
+submission's `task.json`, `controls.json` and resources, and any validation results. A caller can add
+its own files, such as reference data, with `TaskforgeConfig.workspace` (a `WorkspaceHydration`; the
+default adds none). Only the author sees them; a file reaches solvers or graders only through the task.
+
 ## Running on the cluster
 
 Everything runs as Iris jobs on `cw-rno2a`. The entry point is the launcher, which submits one
