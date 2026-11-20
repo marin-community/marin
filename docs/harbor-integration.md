@@ -98,12 +98,30 @@ Set `environment.type` in the Harbor policy:
 Removed provider names and custom environment import paths fail validation.
 Agent import paths load trusted harness code. Harbor cannot select Shellbox's Docker backend.
 
-Daytona accepts `network_policy` (`mode` and optional `value`), `ttl_minutes` and
-`create_timeout`. Shellbox derives the snapshot from the task image or Dockerfile
-and the task's resource request; snapshot names, automatic snapshots, forced rebuilds
-and policy-level target overrides are not policy settings. Inventory, preflight and
-reclamation use `shellbox-daytona-snapshots`; see the
+Daytona accepts `network_policy` (`mode` and optional `value`), `ttl_minutes`,
+`create_timeout` and `image_build`. In snapshot mode, Shellbox derives the snapshot
+from the task image or Dockerfile and the task's resource request. Snapshot names,
+automatic snapshots, forced rebuilds and policy-level target overrides are not
+policy settings. Inventory, preflight and reclamation use `shellbox-daytona-snapshots`; see the
 [Daytona operations runbook](https://github.com/marin-community/marin/blob/main/.agents/ops/daytona.md#snapshot-preflight-and-reclamation).
+
+`image_build` selects how each sandbox gets its image. The default, `snapshot`, builds each
+distinct task environment once into a named Daytona snapshot and starts sandboxes from it.
+Snapshots persist after the run and count against the account's snapshot quota, so a dataset
+with more distinct environments than the free quota fails with `Snapshot quota exceeded`.
+`declarative` builds the image for every sandbox instead and creates no snapshot; every
+trial repeats the build, including the base-image pull, and `snapshot-specs` rejects the
+policy. Use it only for standalone evals in the Daytona eval account. The RL account rejects
+declarative builds, and SkyRL rollouts and inline validation reject the setting. Select it
+in the eval policy:
+
+```yaml
+environment:
+  type: daytona
+  kwargs:
+    image_build: declarative
+```
+
 Set the target before launching:
 
 ```bash
@@ -266,8 +284,9 @@ require registry verification.
 
 ## Credentials
 
-Daytona catalog entries use `DAYTONA_API_KEY` from the launch environment, then fall
-back to the approved Google Secret Manager version. The launcher resolves declared secret
+Daytona catalog entries use the Daytona eval org: `DAYTONA_EVAL_API_KEY` from the launch
+environment, then the approved Google Secret Manager version. The launcher ignores an
+exported `DAYTONA_API_KEY`. The launcher resolves declared secret
 references before submission. The Harbor subprocess receives backend credentials, HF access
 and storage credentials for result uploads.
 

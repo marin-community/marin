@@ -115,7 +115,7 @@ class RaySnapshotLeaser:
 
 def shared_snapshot_leaser(*, capacity: int, connection: DaytonaConnection) -> RaySnapshotLeaser:
     job = ray.get_runtime_context().get_job_id()
-    prefix = "long-loop-" + hashlib.sha256(str(job).encode()).hexdigest()[:12] + "-"
+    prefix = "skyrl-" + hashlib.sha256(str(job).encode()).hexdigest()[:12] + "-"
     actor = DaytonaSnapshotPool.options(name=prefix + "snapshot-pool", get_if_exists=True).remote(
         capacity, prefix, connection
     )

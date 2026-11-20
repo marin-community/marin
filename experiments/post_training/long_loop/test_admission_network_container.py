@@ -23,7 +23,7 @@ try:
     deadline = time.monotonic() + 60
     while subprocess.run(['docker', 'info'], capture_output=True).returncode:
         assert daemon.poll() is None and time.monotonic() < deadline
-        time.sleep(0.1)
+        time.sleep(0.1)  # Wait for the live Docker daemon to accept requests.
     before = subprocess.check_output(['iptables-save'])
     subprocess.run(['docker', 'pull', 'python:3.12-slim-bookworm'], check=True)
     with contextlib.ExitStack() as stack:
@@ -49,6 +49,7 @@ finally:
 
 
 @pytest.mark.docker
+@pytest.mark.slow
 @pytest.mark.timeout(600)
 def test_simultaneous_controls_keep_network_and_firewall_isolated(tmp_path):
     shutil.copyfile(Path(admission_network.__file__), tmp_path / "admission_network.py")

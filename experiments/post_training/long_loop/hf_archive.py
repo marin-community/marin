@@ -14,12 +14,12 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
 from huggingface_hub import HfApi, hf_hub_download
+from rigging.event_log import durable_event_log
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.secrets import require_secret
 
 from experiments.grug.moe_hero_ep.ops.upload_hf import validate_model_card
-from experiments.post_training.long_loop.timing import durable_event_log
 
 logger = logging.getLogger(__name__)
 UPLOAD_REQUEST = "long-loop-upload-request.json"
@@ -46,7 +46,7 @@ PRIVATE_CONTENT = re.compile(
 )
 
 
-def public_weight_name(name: str) -> bool:
+def is_public_weight_name(name: str) -> bool:
     return re.fullmatch(r"model(?:-[0-9]{5}-of-[0-9]{5})?\.safetensors", name) is not None
 
 
@@ -78,7 +78,7 @@ def audit_public_fields(name: str, value: object) -> None:
 
 
 def audit_public_file(path: Path, name: str) -> None:
-    if public_weight_name(name):
+    if is_public_weight_name(name):
         with path.open("rb") as stream:
             header_size = struct.unpack("<Q", stream.read(8))[0]
             if header_size > 64 * 1024 * 1024:
@@ -109,7 +109,7 @@ def audit_public_history(api: HfApi, repo_id: str) -> None:
             identity = (name, item.lfs.sha256 if item.lfs is not None else item.blob_id)
             if identity in seen:
                 continue
-            if public_weight_name(name):
+            if is_public_weight_name(name):
                 header = api.parse_safetensors_file_metadata(repo_id, name, revision=commit.commit_id)
                 audit_public_fields(name, header.metadata)
                 audit_public_bytes(
@@ -150,12 +150,12 @@ def _local_record(path: Path, name: str) -> dict:
     return {"path": name, "size": path.stat().st_size, "sha256": checksum}
 
 
-def _download_file(source: str, destination: Path, name: str, events: str) -> dict:
+def _download_file(source: str, destination: Path, name: str, events: str, journal_directory: Path) -> dict:
     fs, key = filesystem_for(source)
     before = file_identity(fs.info(key))
     destination.parent.mkdir(parents=True, exist_ok=True)
     event_path = prefix_join(events, hashlib.sha256(name.encode()).hexdigest() + ".jsonl")
-    with durable_event_log(event_path, source, "hf_upload", name) as log:
+    with durable_event_log(event_path, source, "hf_upload", name, local_directory=str(journal_directory)) as log:
         with log.span("source_download_and_sha256"):
             checksum = hashlib.sha256()
             size = 0
@@ -240,16 +240,20 @@ def upload_checkpoint(config: HfUpload, *, timing_destination: str) -> dict:
     sources = [
         (key, name)
         for key, name in zip(source_files, names, strict=True)
-        if name in PUBLIC_SIDECARS or public_weight_name(name)
+        if name in PUBLIC_SIDECARS or is_public_weight_name(name)
     ]
     if any(name.startswith(".cache/") or name.endswith(".distcp") for _, name in sources):
         raise ValueError("HF export source contains cache or native optimizer payloads")
-    with durable_event_log(timing_destination, config.repo_id, "hf_upload", "upload") as log:
+    with durable_event_log(
+        timing_destination, config.repo_id, "hf_upload", "upload", local_directory=str(root.parent)
+    ) as log:
         with log.span("parallel_export_staging"):
             with ThreadPoolExecutor(max_workers=config.workers) as pool:
                 records = list(
                     pool.map(
-                        lambda item: _download_file(fs.unstrip_protocol(item[0]), root / item[1], item[1], events),
+                        lambda item: _download_file(
+                            fs.unstrip_protocol(item[0]), root / item[1], item[1], events, root.parent
+                        ),
                         sources,
                     )
                 )

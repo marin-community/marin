@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from experiments.post_training.long_loop.rl_dataset_admission import (
+    contains_upstream_question,
     exclusion_reasons,
-    matching_question,
     question_anchors,
     repository_ids,
     text_digest,
@@ -27,8 +27,8 @@ def test_repository_and_cross_prefix_identity_exclusion():
 def test_question_match_requires_complete_question_not_only_prefix():
     question = "A cyclist travels twenty miles north before turning east for another ten miles."
     anchors = question_anchors([{"texts": {"question": question}}])
-    assert matching_question("System instructions\n" + question.replace(" ", "  ") + "\nAnswer:", anchors)
-    assert not matching_question(
+    assert contains_upstream_question("System instructions\n" + question.replace(" ", "  ") + "\nAnswer:", anchors)
+    assert not contains_upstream_question(
         "A cyclist travels twenty miles north before turning west for another ten miles.", anchors
     )
     index = {"ids": set(), "repos": set(), "text_sha256": {text_digest(question)}}

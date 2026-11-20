@@ -142,8 +142,11 @@ SNOWBALL_RECIPE = TrainingRecipe(
         expert_tensor_parallel_size=1,
     ),
     host_memory="1800GB",
-    # The Triton MoE kernels; the fused defaults do not cover this expert layout.
-    engine_init_kwargs=MappingProxyType({"moe_backend": "triton"}),
+    # The Triton MoE kernels; the fused defaults do not cover this expert layout. Snowball's chat template
+    # emits Hermes <tool_call> blocks, which vLLM parses only when auto tool choice is enabled.
+    engine_init_kwargs=MappingProxyType(
+        {"moe_backend": "triton", "enable_auto_tool_choice": True, "tool_call_parser": "hermes"}
+    ),
 )
 
 
@@ -243,8 +246,7 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> SkyR
     )
     trainer = sections.Trainer(
         strategy="megatron",
-        # Keep Transformer Engine's attention backend; true forces the flash-attn package
-        # (NVTE_FUSED_ATTN=0).
+        # The Megatron worker selects FlashAttention for BF16 Grug even with this flag false.
         flash_attn=False,
         # One sequence per row; packing changes the micro-step shape.
         use_sample_packing=False,

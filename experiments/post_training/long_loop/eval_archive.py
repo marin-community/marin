@@ -7,8 +7,8 @@ import hashlib
 import json
 from collections import defaultdict
 
+from evalrecords.records import EvalRunRecord, TaskCoverage, write_record
 from finestore.eval import EvalSample, EvaluationStore, Grading, SampleKind
-from marin.evaluation.records import EvalRunRecord, TaskCoverage, write_record
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.post_training.long_loop.archive import digest, write_once

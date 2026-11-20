@@ -29,11 +29,11 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from evalrecords.records import read_record, record_path
 from iris.client.client import iris_ctx
 from iris.rpc import job_pb2
 from marin.evaluation.hardware import default_platform
 from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.records import read_record, record_path
 from marin.execution.artifact import Artifact, is_mutable_version
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.execution.step_runner import StepRunner

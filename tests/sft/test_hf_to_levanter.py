@@ -16,6 +16,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import draccus
+import pytest
 from fray.types import ResourceConfig
 from levanter.adaptor import AdaptorExportConfig
 from levanter.models.lm_model import LmConfig
@@ -166,6 +167,7 @@ def test_lm_config_draccus_round_trip_selects_subclass_by_model_type():
 class _ExportTrainer:
     add_hook = Trainer.add_hook
     run_id = "export-regression"
+    journal = None
     config = SimpleNamespace(checkpointer=None, field_dtype_overrides={})
 
     def __init__(self):
@@ -181,9 +183,12 @@ class _FileConverter:
         (destination / "chat_template.jinja").write_text(chat_template)
 
 
-def test_sft_exports_once_at_the_final_update(tmp_path):
+@pytest.mark.parametrize("save_steps", [None, 4])
+def test_sft_export_policy_survives_config_wire_boundary(tmp_path, save_steps):
     spec = dataclasses.replace(_spec(ConvertedCheckpointModel(conversion=_fake_conversion())), num_train_steps=3)
     config = materialized_config(sft_step(spec, ResourceConfig.with_cpu()), _PREFIX).train_config
+    config = dataclasses.replace(config, hf_save_steps=save_steps)
+    config = draccus.decode(type(config), draccus.encode(config))
     trainer = _ExportTrainer()
     config.adapter.install_export_hooks(
         trainer=trainer,
@@ -197,8 +202,10 @@ def test_sft_exports_once_at_the_final_update(tmp_path):
         info = SimpleNamespace(step=step, next_step=step + 1, eval_model=step)
         trainer.hooks.run_hooks(info)
     trainer.hooks.run_hooks(info, force=True)
-    assert {path.name: (path / "policy.txt").read_text() for path in tmp_path.iterdir()} == {"step-2": "2"}
-    assert (tmp_path / "step-2" / "chat_template.jinja").read_text() == spec.chat_template
+    expected = {} if save_steps is None else {"step-2": "2"}
+    assert {path.name: (path / "policy.txt").read_text() for path in tmp_path.iterdir()} == expected
+    if save_steps is not None:
+        assert (tmp_path / "step-2" / "chat_template.jinja").read_text() == spec.chat_template
 
 
 def test_sft_artifacts_with_the_same_version_do_not_share_tracker_history():

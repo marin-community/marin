@@ -9,10 +9,10 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 import yaml
 from huggingface_hub import hf_hub_download
-from marin.evaluation.model_config import ModelConfig
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.rl.skyrl import (
     ArtifactDataSource,
@@ -28,7 +28,11 @@ from marin.rl.skyrl import (
 )
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rolloutengine.models import TaskRolloutSpec
 
+from experiments.evaluation.judge_config import MICRO210_JUDGE, JudgeConfig
+from experiments.evaluation.micro210 import judge_runtime_config
+from experiments.evaluation.micro210_inputs import task_with_judge
 from experiments.post_training.long_loop.eval_runtime.judge import JudgedEvaluation, run_judged
 from experiments.post_training.long_loop.eval_runtime.repair_release import repaired_table
 from experiments.post_training.long_loop.eval_runtime.selection import selected_rollouts
@@ -47,6 +51,13 @@ def prepare_micro(*, output: str, dataset: str, revision: str, wheels_revision: 
     expanded_path = hf_hub_download(dataset, "data/validation-rollouts.parquet", repo_type="dataset", revision=revision)
     expanded, receipt = selected_rollouts(table, pq.read_table(expanded_path), tasks_per_benchmark)
     prepared = repaired_table(expanded, wheels_revision)
+    rows = []
+    for row in prepared.to_pylist():
+        rollout = TaskRolloutSpec.model_validate_json(row["task_rollout_spec"])
+        task = task_with_judge(rollout.task, MICRO210_JUDGE)
+        rollout = rollout.model_copy(update={"task": task})
+        rows.append({**row, "task_spec": task.model_dump_json(), "task_rollout_spec": rollout.model_dump_json()})
+    prepared = pa.Table.from_pylist(rows, schema=prepared.schema)
     receipt.update(dataset=dataset, revision=revision, wheels_revision=wheels_revision)
     receipt["unique_source_sha256"] = hashlib.sha256(Path(path).read_bytes()).hexdigest()
     receipt["expanded_source_sha256"] = hashlib.sha256(Path(expanded_path).read_bytes()).hexdigest()
@@ -71,8 +82,7 @@ def prepare_micro(*, output: str, dataset: str, revision: str, wheels_revision: 
             for row in prepared.to_pylist()
         ],
     }
-    environment_fs, environment_key = filesystem_for(prefix_join(output, "environment.json"))
-    environment_fs.pipe_file(environment_key, json.dumps(environment, indent=2).encode())
+    (StoragePath(output) / "environment.json").write_bytes(json.dumps(environment, indent=2).encode())
 
 
 def validate_eval_policy(model: ResolvedModelLocator, source_uri: str) -> None:
@@ -123,18 +133,16 @@ def configured_evaluation_step(
     config: dict,
     role_plan: SkyRLRolePlan,
     execution: IrisSkyRLExecution,
-    judge: ModelConfig,
-    judge_gpu_count: int,
+    judge: JudgeConfig,
     seed: int,
     expected_step: int | None,
     gpu_variant: str,
-    capability_origin: str,
     data_relative_path: str,
     ray_timeouts: dict[str, int],
 ) -> ArtifactStep:
     """Bind an explicit evaluation recipe to pinned data and the committed model."""
+    config = judge_runtime_config(config, judge)
     validate_stage_config(config, "evaluation")
-    config = deepcopy(config)
     materialized = deepcopy(config)
     _materialize_role_plan_config(materialized, role_plan)
     if materialized != config:
@@ -181,6 +189,7 @@ def configured_evaluation_step(
         run = replace(run, launch_config_yaml=yaml.safe_dump(launch))
         if not ctx.is_fingerprint:
             validate_replayable_model_reference(model["local_path"], model["uri"], model["identity"])
-        return JudgedEvaluation(run, judge, capability_origin, judge_gpu_count)
+        return JudgedEvaluation(run, judge)
 
-    return replace(step, run=run_judged, build_config=build_config)
+    configured = replace(step, run=run_judged, build_config=build_config)
+    return replace(configured, expected_fingerprint=configured.fingerprint())

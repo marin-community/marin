@@ -6,7 +6,6 @@
 import asyncio
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
-from enum import StrEnum
 from pathlib import Path
 
 from daytona import AsyncDaytona
@@ -34,8 +33,9 @@ from harbor.environments.model_relay import (
 from harbor.models.environment_type import EnvironmentType
 from harbor.models.trial.paths import EnvironmentPaths
 from shellbox.backends.daytona.machine import (
+    DEFAULT_OUTPUT_COLLECTION_TIMEOUT,
     DEFAULT_SANDBOX_TTL_MINUTES,
-    DaytonaDeclarativeMachineFactory,
+    DaytonaImageBuild,
     DaytonaMachine,
     DaytonaMachineFactory,
     DaytonaNetworkPolicy,
@@ -55,13 +55,8 @@ from shellbox.process_session import (
 )
 
 
-class DaytonaProvisioning(StrEnum):
-    SNAPSHOT = "snapshot"
-    DECLARATIVE = "declarative"
-
-
 def task_snapshot_source(docker_image: str | None, environment_dir: Path) -> RegistryImage | DockerfileSource:
-    """Select a Harbor task's snapshot source from its image or environment."""
+    """Select a Harbor task's image source from its image or environment."""
     if docker_image:
         return RegistryImage(docker_image)
     dockerfile = environment_dir / "Dockerfile"
@@ -76,7 +71,7 @@ def machine_spec(task_env_config, environment_dir: Path, env: dict[str, str], *,
     Pure projection from the task's environment config, so measurement code
     can derive snapshot identities from the same inputs production uses.
     Source validation happens once per boundary: environment construction
-    rejects unusable definitions, and snapshot preparation validates what it
+    rejects unusable definitions, and sandbox creation validates what it
     is about to build.
     """
     source = (
@@ -106,7 +101,8 @@ class DaytonaEnvironment(BaseEnvironment):
         network_policy: dict[str, str] | None = None,
         ttl_minutes: int = DEFAULT_SANDBOX_TTL_MINUTES,
         create_timeout: float = 600,
-        provisioning: DaytonaProvisioning = DaytonaProvisioning.SNAPSHOT,
+        image_build: str = DaytonaImageBuild.SNAPSHOT,
+        output_collection_timeout: float = DEFAULT_OUTPUT_COLLECTION_TIMEOUT,
         model_endpoint: str | None = None,
         model_name: str | None = None,
         judge_access: JudgeAccess = JudgeAccess.VERIFIER,
@@ -133,16 +129,13 @@ class DaytonaEnvironment(BaseEnvironment):
             client_factory = (
                 connection.client_factory() if connection is not None else None
             )
-        factory_type = {
-            DaytonaProvisioning.SNAPSHOT: DaytonaMachineFactory,
-            DaytonaProvisioning.DECLARATIVE: DaytonaDeclarativeMachineFactory,
-        }[DaytonaProvisioning(provisioning)]
-        self.factory = factory_type(
+        self.factory = DaytonaMachineFactory(
             client_factory,
             ttl_minutes=ttl_minutes,
             create_timeout=create_timeout,
+            output_collection_timeout=output_collection_timeout,
             network_policy=policy,
-            snapshot_leaser=kwargs.get("host_capabilities", HostCapabilities()).snapshot_leaser,
+            image_build=DaytonaImageBuild(image_build),
         )
         self.model_endpoint, self.model_name = model_endpoint, model_name
         self.judge_access = JudgeAccess(judge_access)
@@ -198,7 +191,11 @@ class DaytonaEnvironment(BaseEnvironment):
         )
 
     def snapshot_request(self) -> SnapshotRequest:
-        """The snapshot that this task's sandbox starts from."""
+        """Return this task's snapshot request in snapshot build mode."""
+        if self.factory.image_build != DaytonaImageBuild.SNAPSHOT:
+            raise ValueError(
+                f"{self.factory.image_build} image builds start sandboxes without a snapshot"
+            )
         return snapshot_request_for_spec(self._machine_spec())
 
     async def start(

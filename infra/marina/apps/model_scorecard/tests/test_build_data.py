@@ -4,7 +4,7 @@
 from urllib.parse import unquote
 
 import pytest
-from marin.evaluation.records import (
+from evalrecords.records import (
     BenchmarkMetadataRef,
     EvalRef,
     EvalRunRecord,

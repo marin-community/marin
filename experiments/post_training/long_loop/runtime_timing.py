@@ -11,14 +11,15 @@ from pathlib import Path
 from uuid import uuid4
 
 from marin.execution.lazy import OUT, ArtifactStep, apply
+from rigging.event_log import Event, EventLog
 from rigging.filesystem.buckets import filesystem_for
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.post_training.long_loop.archive_stage import archive_step
 from experiments.post_training.long_loop.eval_runtime.audit_results import audit, require_evaluation_coverage
 from experiments.post_training.long_loop.eval_runtime.profile import SKIPPED_BENCHMARKS, SMOKE_PATH_COUNT
 from experiments.post_training.long_loop.finalization import terminal_outcome
-from experiments.post_training.long_loop.timing import Event, EventLog, report
+from experiments.post_training.long_loop.timing import report
 
 
 def timed(step: ArtifactStep) -> ArtifactStep:
@@ -49,14 +50,16 @@ def write_report(
     additional_timing: list[dict] | None = None,
     accepted_unscored_attempts: list[dict] | None = None,
     rl_terminal: str | None = None,
+    sft_selection: str | None = None,
 ) -> None:
     events = []
     sources = []
     for stage in stages:
-        fs, prefix = filesystem_for(prefix_join(stage, "timing"))
-        for key in sorted(fs.glob(prefix_join(prefix, "**/*.jsonl"))):
-            events.extend(Event(**json.loads(line)) for line in fs.cat_file(key).decode().splitlines())
-            sources.append(fs.unstrip_protocol(key))
+        for directory, pattern in (("timing", "**/*.jsonl"), ("telemetry", "**/phases.jsonl")):
+            fs, prefix = filesystem_for(prefix_join(stage, directory))
+            for key in sorted(fs.glob(prefix_join(prefix, pattern))):
+                events.extend(Event(**json.loads(line)) for line in fs.cat_file(key).decode().splitlines())
+                sources.append(fs.unstrip_protocol(key))
     for item in additional_timing or []:
         if item["source"] in sources:
             continue
@@ -71,6 +74,12 @@ def write_report(
     text = report([replace(event, run=output) for event in events], synthetic=False)
     text += "\nOriginal stage run IDs: " + ", ".join(original_runs) + ". Raw events retain these IDs.\n"
     text += "\n" + sft_geometry + "\n"
+    if sft_selection is not None:
+        selected = json.loads((StoragePath(sft_selection) / "selected.json").read_text())
+        text += f"\nSFT completed {selected['completed_updates']} updates; selected native step {selected['step']}.\n"
+        if "training_completion" in selected:
+            completion = selected["training_completion"]
+            text += f"SFT stop reason: {completion['stop_reason']}; maximum {completion['maximum_updates']} updates.\n"
     outcome = None
     if rl_terminal is not None:
         outcome = terminal_outcome(rl_terminal)
@@ -123,6 +132,7 @@ def report_step(
     accepted_unscored_attempts: list[dict] | None = None,
     sft_geometry: str = "Plumbing SFT (32k/32 GPU), not target: 15 updates, 125,829,120 packed token positions.",
     rl_terminal: ArtifactStep | None = None,
+    sft_selection: ArtifactStep | None = None,
 ) -> ArtifactStep:
     completed = apply(
         "long-loop/report",
@@ -136,5 +146,6 @@ def report_step(
         additional_timing=additional_timing,
         accepted_unscored_attempts=accepted_unscored_attempts,
         rl_terminal=rl_terminal,
+        sft_selection=sft_selection,
     )
     return archive_step(version, archive_plan, completed) if archive_plan is not None else completed

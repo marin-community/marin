@@ -37,3 +37,18 @@ def test_budget_does_not_count_pre_optimizer_startup(tmp_path, monkeypatch):
     callback.on_log(TrainerState(0, 0, 100, 100), control, logs={}, trainer=trainer)
     assert not control.should_training_stop
     assert not (tmp_path / 'training-budget.json').exists()
+
+
+def test_recovery_restarts_the_learning_clock_after_its_first_new_optimizer_update(tmp_path, monkeypatch):
+    (tmp_path / 'training-budget.json').write_text(json.dumps({'elapsed_seconds': 100000}))
+    trainer = SimpleNamespace(cfg=OmegaConf.create({'trainer': {'export_path': str(tmp_path)}}),
+                              first_optimizer_step_time=1000.0)
+    monkeypatch.setattr('skyrl_train.callbacks.builtin.time.monotonic', lambda: 1002.0)
+    callback = WallTimeBudgetCallback(seconds=100, drain_margin=20, groups_per_step=32)
+    control = TrainerControl()
+    callback.on_train_begin(TrainerState(7, 0, 100, 100), control)
+    callback.on_log(TrainerState(8, 0, 100, 100), control, logs={}, trainer=trainer)
+    report = json.loads((tmp_path / 'training-budget.json').read_text())
+    assert not control.should_training_stop
+    assert report['completed_steps'] == 1
+    assert report['elapsed_seconds'] == 2.0

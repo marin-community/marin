@@ -29,15 +29,11 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
 
+from rigging.filesystem.step_status import STATUS_FAILED, STATUS_SUCCESS
 from rigging.filesystem.storage_path import prefix_join
 
 from marin.execution.artifact import JSONValue, StepRecordIdentity, payload_json, write_step_record
-from marin.execution.step_status import (
-    STATUS_FAILED,
-    STATUS_SUCCESS,
-    StepAlreadyDone,
-    step_lock,
-)
+from marin.execution.step_status import StepAlreadyDone, step_lock
 from marin.execution.sweep_coordination import GangRole, SweepCoordinator, gang_coordinator
 
 logger = logging.getLogger(__name__)

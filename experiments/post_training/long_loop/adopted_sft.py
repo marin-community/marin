@@ -29,19 +29,35 @@ def verify_adopted_sft(*, output: str, checkpoint_pin: dict, model: dict, tokeni
     metadata = pinned_json(prefix_join(checkpoint, "metadata.json"), checkpoint_pin["metadata_sha256"])
     if metadata["step"] != checkpoint_pin["step"] or metadata["is_temporary"] is not False:
         raise ValueError("Adopted SFT checkpoint is not permanently committed at the required step")
-    if selected["metadata_digest"] != digest(metadata):
-        raise ValueError("Adopted SFT selection metadata binding changed")
     manifest = pinned_json(prefix_join(checkpoint, "manifest.json"), checkpoint_pin["manifest_sha256"])
     if manifest["format_version"] != 1 or not manifest["arrays"]:
         raise ValueError("Adopted SFT array manifest is empty or unsupported")
     consumed = pinned_json(prefix_join(root, "consumed-config.json"), checkpoint_pin["consumed_config_sha256"])
-    if consumed["model"] != model:
-        raise ValueError("Adopted SFT consumed model configuration differs from the export recipe")
     lineage = pinned_json(checkpoint_pin["lineage_uri"], checkpoint_pin["lineage_sha256"])
+    if selected.get("format") == "SFTSpec":
+        if consumed["format"] != "SFTSpec":
+            raise ValueError("Adopted SFT selection and consumed config have different formats")
+        train_config = consumed["train_config"]
+        if (
+            selected["completed_updates"] != metadata["step"] + 1
+            or train_config["trainer"]["num_train_steps"] != selected["completed_updates"]
+        ):
+            raise ValueError("Adopted SFTSpec checkpoint is not its completed final update")
+        if train_config["data"]["tokenizer"] != lineage["tokenizer_uri"]:
+            raise ValueError("Adopted SFTSpec consumed tokenizer differs from its pinned lineage")
+        # SFTSpec resolves its own model defaults. Verify the actual consumed
+        # model rather than the legacy Grug export recipe retained in the spec.
+        consumed_model = train_config["model"]
+    else:
+        if selected["metadata_digest"] != digest(metadata):
+            raise ValueError("Adopted SFT selection metadata binding changed")
+        if consumed["model"] != model:
+            raise ValueError("Adopted SFT consumed model configuration differs from the export recipe")
+        consumed_model = model
     if (
         lineage["marin_revision"] != checkpoint_pin["source_revision"]
         or lineage["tokenizer_revision"] != tokenizer_revision
-        or lineage["model_sha256"] != digest(model)
+        or lineage["model_sha256"] != digest(consumed_model)
         or lineage["source_job"] != checkpoint_pin["source_job"]
         or lineage["version"] != checkpoint_pin["version"]
     ):

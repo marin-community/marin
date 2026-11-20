@@ -4,10 +4,11 @@ import json
 import os
 import shlex
 import shutil
+import stat
 import subprocess
-import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -32,18 +33,13 @@ def temp_dir(tmp_path):
     return tmp_path
 
 
-def _local_pi_shell(temp_dir, monkeypatch, pi_script, *, admin_uploads=False):
-    # Preserve guest directory placement when translating paths to the local shell.
-    endpoint_path = temp_dir / Pi._ENDPOINT_ENV_PATH.lstrip("/")
-    extension_path = temp_dir / Pi._CONTEXT_BUDGET_EXTENSION_PATH.lstrip("/")
-    endpoint_path.parent.mkdir(parents=True, exist_ok=True)
-    extension_path.parent.mkdir(parents=True, exist_ok=True)
+def _local_pi_shell(temp_dir, monkeypatch, pi_script):
+    uploads = []
+    file_metadata = {}
     shared_tmp = temp_dir / "tmp"
-    shared_tmp.mkdir(exist_ok=True)
+    shared_tmp.mkdir()
     shared_tmp.chmod(0o1777)
-    root_uploads = temp_dir / "root-uploads.jsonl"
-    monkeypatch.setattr(Pi, "_ENDPOINT_ENV_PATH", str(endpoint_path))
-    monkeypatch.setattr(Pi, "_CONTEXT_BUDGET_EXTENSION_PATH", str(extension_path))
+    monkeypatch.setattr(Pi, "_STAGING_DIR_TEMPLATE", str(shared_tmp / "harbor-pi.XXXXXXXX"))
 
     fake_bin = temp_dir / "fake-bin"
     artifact_dir = temp_dir / "pi-artifacts"
@@ -51,7 +47,11 @@ def _local_pi_shell(temp_dir, monkeypatch, pi_script, *, admin_uploads=False):
         directory.mkdir()
 
     node = shutil.which("node")
+    bash = shutil.which("bash")
+    tee = shutil.which("tee")
     assert node is not None
+    assert bash is not None
+    assert tee is not None
     scripts = {
         fake_bin / "node": f'#!/bin/sh\nexec {shlex.quote(node)} "$@"\n',
         fake_bin / "pi": pi_script,
@@ -60,46 +60,29 @@ def _local_pi_shell(temp_dir, monkeypatch, pi_script, *, admin_uploads=False):
         / "tee": (
             "#!/bin/sh\n"
             'mkdir -p "$HOME/pi-artifacts"\n'
-            'exec /usr/bin/tee "$HOME/pi-artifacts/$(basename "$1")"\n'
+            f'exec {shlex.quote(tee)} "$HOME/pi-artifacts/$(basename "$1")"\n'
         ),
     }
-    if admin_uploads:
-        # Model the remote uploader's root ownership at the filesystem boundary.
-        # The shell, Node provider setup, Pi validator and EXIT trap run for real.
-        scripts[fake_bin / "rm"] = f"""#!{sys.executable}
-import json, pathlib, stat, sys
-uploads = pathlib.Path({str(root_uploads)!r})
-root_owned = set(json.loads(line) for line in uploads.read_text().splitlines()) if uploads.exists() else set()
-status = 0
-for name in sys.argv[1:]:
-    if name.startswith('-'):
-        continue
-    path = pathlib.Path(name)
-    if not path.exists():
-        continue
-    if name in root_owned and path.parent.stat().st_mode & stat.S_ISVTX:
-        print(f"rm: cannot remove '{{name}}': Operation not permitted", file=sys.stderr)
-        status = 1
-    else:
-        path.unlink()
-sys.exit(status)
-"""
     for path, contents in scripts.items():
         path.write_text(contents)
         path.chmod(0o755)
     class LocalShellEnvironment:
         async def upload_file(self, source_path, target_path):
             shutil.copyfile(source_path, target_path)
-            if admin_uploads:
-                with root_uploads.open("a") as stream:
-                    stream.write(json.dumps(str(target_path)) + "\n")
+            uploads.append(Path(target_path))
 
         async def exec(self, command, **kwargs):
+            if kwargs.get("user") != "root":
+                file_metadata.update(
+                    (path.name, (path.stat().st_uid, stat.S_IMODE(path.stat().st_mode)))
+                    for path in uploads
+                    if path.exists()
+                )
             completed = subprocess.run(
-                ["/bin/bash", "-c", command],
+                [bash, "-c", command],
                 capture_output=True,
                 text=True,
-                env={"HOME": str(temp_dir), "PATH": f"{fake_bin}:/usr/bin:/bin"},
+                env={"HOME": str(temp_dir), "PATH": f"{fake_bin}:{os.environ['PATH']}"},
             )
             return SimpleNamespace(
                 return_code=completed.returncode,
@@ -110,35 +93,35 @@ sys.exit(status)
     return SimpleNamespace(
         environment=LocalShellEnvironment(),
         artifact_dir=artifact_dir,
-        endpoint_path=endpoint_path,
-        extension_path=extension_path,
+        uploads=uploads,
+        file_metadata=file_metadata,
     )
 
 
 @pytest.mark.asyncio
-async def test_hosted_nonroot_run_cleans_admin_uploaded_files_without_failing(temp_dir, monkeypatch):
-    shell = _local_pi_shell(
-        temp_dir, monkeypatch,
-        (
-            "#!/bin/sh\n"
-            "printf '%s\\n' "
-            '\'{"type":"message_end","message":{"role":"assistant","stopReason":"stop"}}\'\n'
-        ),
-        admin_uploads=True,
-    )
+async def test_interrupted_staging_keeps_endpoint_capabilities_out_of_logs(temp_dir, monkeypatch):
+    shell = _local_pi_shell(temp_dir, monkeypatch, "#!/bin/sh\nexit 0\n")
+    upload_file = shell.environment.upload_file
+
+    async def interrupted_upload(source_path, target_path):
+        await upload_file(source_path, target_path)
+        if len(shell.uploads) == 2:
+            raise OSError("upload interrupted")
+
+    monkeypatch.setattr(shell.environment, "upload_file", interrupted_upload)
     agent = Pi(
         logs_dir=temp_dir,
         model_name="hosted_vllm/served-model",
-        api_base="https://model.example.test/v1",
+        api_base="https://model.example.test/proxy/t/endpoint-capability-canary/v1",
         api_key="EMPTY",
         thinking_format="chat-template",
     )
-    await agent.run("Complete the task", shell.environment, AgentContext())
-    events = [json.loads(line) for line in (shell.artifact_dir / "pi.txt").read_text().splitlines()]
-    assert events[-1]["message"]["stopReason"] == "stop"
-    assert not shell.endpoint_path.exists()
-    assert not shell.extension_path.exists()
-    assert not (temp_dir / ".pi/agent/models.json").exists()
+    with pytest.raises(OSError, match="upload interrupted"):
+        await agent.run("Complete the task", shell.environment, AgentContext())
+
+    for path in shell.uploads:
+        assert not path.is_relative_to(temp_dir / "logs")
+        assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
 
 
 @pytest.mark.asyncio
@@ -252,6 +235,7 @@ class TestPiAgent:
             Pi(logs_dir=temp_dir, thinking="ultra")
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("http_idle_timeout", [None, 10800])
     @pytest.mark.parametrize(
         ("context_window", "max_tokens", "keep_recent_tokens"),
         [
@@ -261,7 +245,13 @@ class TestPiAgent:
         ],
     )
     async def test_run_scales_compaction_to_model_limits(
-        self, temp_dir, monkeypatch, context_window, max_tokens, keep_recent_tokens
+        self,
+        temp_dir,
+        monkeypatch,
+        context_window,
+        max_tokens,
+        keep_recent_tokens,
+        http_idle_timeout,
     ):
         shell = _local_pi_shell(
             temp_dir,
@@ -275,7 +265,9 @@ class TestPiAgent:
         )
         settings_path = temp_dir / ".pi/agent/settings.json"
         settings_path.parent.mkdir(parents=True)
-        settings_path.write_text(json.dumps({"theme": "dark"}))
+        settings_path.write_text(
+            json.dumps({"theme": "dark", "httpIdleTimeoutMs": 120000})
+        )
         agent = Pi(
             logs_dir=temp_dir,
             model_name="openai/test-model",
@@ -283,6 +275,7 @@ class TestPiAgent:
                 "max_input_tokens": context_window,
                 "max_output_tokens": max_tokens,
             },
+            http_idle_timeout=http_idle_timeout,
         )
 
         await agent.run("Fix the bug", shell.environment, AgentContext())
@@ -290,6 +283,7 @@ class TestPiAgent:
         settings = json.loads(settings_path.read_text())
         assert settings == {
             "theme": "dark",
+            "httpIdleTimeoutMs": 120000 if http_idle_timeout is None else 10800000,
             "compaction": {
                 "enabled": True,
                 "reserveTokens": max_tokens,
@@ -343,8 +337,9 @@ class TestPiAgent:
             )
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("http_idle_timeout", [None, 60])
     async def test_run_without_model_limits_preserves_pi_compaction_settings(
-        self, temp_dir, monkeypatch
+        self, temp_dir, monkeypatch, http_idle_timeout
     ):
         shell = _local_pi_shell(
             temp_dir,
@@ -362,11 +357,18 @@ class TestPiAgent:
             "compaction": {"reserveTokens": 12000, "keepRecentTokens": 18000}
         }
         settings_path.write_text(json.dumps(original_settings))
-        agent = Pi(logs_dir=temp_dir, model_name="openai/test-model")
+        agent = Pi(
+            logs_dir=temp_dir,
+            model_name="openai/test-model",
+            http_idle_timeout=http_idle_timeout,
+        )
 
         await agent.run("Fix the bug", shell.environment, AgentContext())
 
-        assert json.loads(settings_path.read_text()) == original_settings
+        expected = dict(original_settings)
+        if http_idle_timeout is not None:
+            expected["httpIdleTimeoutMs"] = 60000
+        assert json.loads(settings_path.read_text()) == expected
 
 
 @pytest.mark.asyncio
@@ -393,7 +395,8 @@ async def test_hosted_vllm_endpoint_registers_pi_provider(
         thinking_format=thinking_format,
     )
     mock_env = AsyncMock()
-    mock_env.exec.return_value = SimpleNamespace(return_code=0, stdout="", stderr="")
+    staging_dir = temp_dir / "private"
+    mock_env.exec.return_value = SimpleNamespace(return_code=0, stdout=f"{staging_dir}\n", stderr="")
     uploaded_files = {}
 
     async def capture_endpoint(source_path, target_path):
@@ -453,10 +456,9 @@ async def test_hosted_vllm_endpoint_registers_pi_provider(
     assert run_tokens[run_tokens.index("--provider") + 1] == "hosted_vllm"
     assert run_tokens[run_tokens.index("--model") + 1] == served_id
     assert run_call.kwargs["env"] == {}
-    assert uploaded_files[Pi._ENDPOINT_ENV_PATH] == (
+    assert (
         f"export HARBOR_PI_API_BASE={endpoint}\nexport HARBOR_PI_API_KEY=EMPTY\n"
-    )
-    assert Pi._CONTEXT_BUDGET_EXTENSION_PATH in uploaded_files
+    ) in uploaded_files.values()
     assert "host-provider-private-canary" not in json.dumps(uploaded_files)
     assert all(
         endpoint not in call.kwargs["command"] for call in mock_env.exec.call_args_list
@@ -480,14 +482,14 @@ async def test_hosted_vllm_request_budget_uses_exact_server_token_count(
         thinking_format="chat-template",
     )
     environment = AsyncMock()
+    environment.exec.return_value = SimpleNamespace(return_code=0, stdout="", stderr="")
 
     async def copy_extension(source_path, target_path):
         assert target_path == str(extension_path)
         shutil.copyfile(source_path, target_path)
 
     environment.upload_file.side_effect = copy_extension
-    with patch.object(Pi, "_CONTEXT_BUDGET_EXTENSION_PATH", str(extension_path)):
-        await agent._stage_context_budget_extension(environment)
+    await agent._stage_context_budget_extension(environment, extension_path)
 
     payload = {
         "model": "served-model",
@@ -554,14 +556,14 @@ async def test_hosted_vllm_request_budget_truncates_token_dense_tool_output(
         thinking_format="chat-template",
     )
     environment = AsyncMock()
+    environment.exec.return_value = SimpleNamespace(return_code=0, stdout="", stderr="")
 
     async def copy_extension(source_path, target_path):
         assert target_path == str(extension_path)
         shutil.copyfile(source_path, target_path)
 
     environment.upload_file.side_effect = copy_extension
-    with patch.object(Pi, "_CONTEXT_BUDGET_EXTENSION_PATH", str(extension_path)):
-        await agent._stage_context_budget_extension(environment)
+    await agent._stage_context_budget_extension(environment, extension_path)
 
     dense_output = "row,value\n" + "x,1234567890\n" * 4000
     payload = {
@@ -663,7 +665,7 @@ async def test_hosted_vllm_command_classifies_authentication_and_cleans_provider
 
     captured_output = (shell.artifact_dir / "pi.txt").read_text()
     assert endpoint in captured_output
-    assert not shell.endpoint_path.exists()
+    assert not any((temp_dir / "tmp").iterdir())
     assert not (temp_dir / ".pi/agent/models.json").exists()
 
 
@@ -854,6 +856,12 @@ fetch(`${provider.baseUrl}/chat/completions`, {
         {"type": "text", "text": "roundtrip complete"}
     ]
     assert event["message"]["stopReason"] == "stop"
+    assert shell.file_metadata == {
+        "harbor-pi-endpoint.env": (os.getuid(), 0o600),
+        "harbor-pi-context-budget.js": (os.getuid(), 0o600),
+    }
+    assert not any((temp_dir / "tmp").iterdir())
+    assert not (temp_dir / ".pi/agent/models.json").exists()
 
     shutil.copyfile(output_path, temp_dir / "pi.txt")
     context = AgentContext()

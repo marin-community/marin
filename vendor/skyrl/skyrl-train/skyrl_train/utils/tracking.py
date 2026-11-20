@@ -26,6 +26,7 @@ from loguru import logger
 from marinskyrl.resource_locator import join_resource_path
 from skyrl_train.io import io
 from rigging.secrets import require_secret
+from rigging.training_journal import TrainingJournal
 from omegaconf import DictConfig, OmegaConf
 import pprint
 import ray
@@ -33,6 +34,7 @@ from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
 
 _WANDB_STEP_METRIC = "trainer/global_step"
+# Bound SDK uploads too: timing out a Ray get alone leaves the primary finish unbounded.
 _WANDB_LOGGER_SHUTDOWN_TIMEOUT = 30
 
 
@@ -48,6 +50,7 @@ class WandbNodeLogger:
         # Initialize wandb with the same run ID to aggregate system metrics
         run = wandb.init(
             project=project_name,
+            entity=config["trainer"].get("wandb_entity"),
             name=experiment_name,
             id=run_id,
             config=config,
@@ -60,6 +63,8 @@ class WandbNodeLogger:
                 x_primary=False,
                 x_update_finish_state=False,
                 x_label=x_label,
+                finish_timeout=_WANDB_LOGGER_SHUTDOWN_TIMEOUT,
+                finish_timeout_raises=True,
             ),
         )
         self.wandb = run
@@ -72,7 +77,11 @@ class WandbNodeLogger:
 class Tracking:
     supported_backends = ["wandb", "mlflow", "swanlab", "tensorboard", "console"]
 
-    def __init__(self, project_name, experiment_name, backends: Union[str, List[str]] = "console", config=None):
+    def __init__(
+        self, project_name, experiment_name, backends: Union[str, List[str]] = "console", config=None,
+        *, journal: TrainingJournal | None = None,
+    ):
+        self.journal = journal
         if isinstance(backends, str):
             backends = [backends]
         for backend in backends:
@@ -94,6 +103,7 @@ class Tracking:
 
             run = wandb.init(
                 project=project_name,
+                entity=config["trainer"].get("wandb_entity"),
                 name=experiment_name,
                 config=OmegaConf.to_container(config, resolve=True),
                 group=experiment_name,
@@ -103,6 +113,8 @@ class Tracking:
                     mode="shared",  # mainly for multi-node training's systems metrics aggregation
                     x_primary=True,
                     x_label=f"node-{current_node_ip}",
+                    finish_timeout=_WANDB_LOGGER_SHUTDOWN_TIMEOUT,
+                    finish_timeout_raises=True,
                 ),
             )
             run_id = run.id
@@ -200,11 +212,26 @@ class Tracking:
             logger.warning("Ray is not initialized, skipping distributed wandb logging")
 
     def log(self, data, step, commit=True):
+        journal = self.journal
+        if journal is not None:
+            journal.log(data, step=int(step), commit=commit)
         for logger_name, logger_instance in self.logger.items():
-            if logger_name == "wandb":
-                logger_instance.log(data={**data, _WANDB_STEP_METRIC: step}, commit=commit)
-            else:
-                logger_instance.log(data=data, step=step)
+            try:
+                if logger_name == "wandb":
+                    logger_instance.log(data={**data, _WANDB_STEP_METRIC: step}, commit=commit)
+                else:
+                    logger_instance.log(data=data, step=step)
+            except Exception as error:
+                if journal is None:
+                    raise
+                # Producer history is authoritative in durable mode. Retain a
+                # failure metric for the optional provider mirror as well.
+                journal.log(
+                    {"tracker/backend_log_failures": 1, "tracker/backend": logger_name}, step=int(step), commit=True
+                )
+                logger.warning(
+                    "Tracker mirror {} logging failed; native history retained: {}", logger_name, type(error).__name__
+                )
 
     def __enter__(self) -> Self:
         return self
@@ -219,6 +246,9 @@ class Tracking:
 
     def close(self, *, exit_code: int) -> None:
         """Flush tracker backends without changing the workload's result."""
+        journal = self.journal
+        if journal is not None:
+            journal.finish(status="completed" if exit_code == 0 else "failed")
         if self.remote_loggers:
             try:
                 ray.get([actor.close.remote() for actor in self.remote_loggers], timeout=_WANDB_LOGGER_SHUTDOWN_TIMEOUT)
@@ -345,87 +375,3 @@ def _flatten_dict(raw: Dict[str, Any], *, sep: str) -> Dict[str, Any]:
     ans = pd.json_normalize(raw, sep=sep).to_dict(orient="records")[0]
     assert isinstance(ans, dict)
     return ans
-
-
-@dataclasses.dataclass
-class ValidationGenerationsLogger:
-    def log(self, loggers, samples, step):
-        if "wandb" in loggers:
-            self.log_generations_to_wandb(samples, step)
-        if "swanlab" in loggers:
-            self.log_generations_to_swanlab(samples, step)
-        if "mlflow" in loggers:
-            self.log_generations_to_mlflow(samples, step)
-
-    def log_generations_to_wandb(self, samples, step):
-        """Log samples to wandb as a table"""
-        import wandb
-
-        # Create column names for all samples
-        columns = ["step"] + sum(
-            [[f"input_{i + 1}", f"output_{i + 1}", f"score_{i + 1}"] for i in range(len(samples))], []
-        )
-
-        if not hasattr(self, "validation_table"):
-            # Initialize the table on first call
-            self.validation_table = wandb.Table(columns=columns)
-
-        # Create a new table with same columns and existing data
-        # Workaround for https://github.com/wandb/wandb/issues/2981#issuecomment-1997445737
-        new_table = wandb.Table(columns=columns, data=self.validation_table.data)
-
-        # Add new row with all data
-        row_data = []
-        row_data.append(step)
-        for sample in samples:
-            row_data.extend(sample)
-
-        new_table.add_data(*row_data)
-
-        # Update reference and log
-        wandb.log({"val/generations": new_table, _WANDB_STEP_METRIC: step})
-        self.validation_table = new_table
-
-    def log_generations_to_swanlab(self, samples, step):
-        """Log samples to swanlab as text"""
-        import swanlab
-
-        swanlab_text_list = []
-        for i, sample in enumerate(samples):
-            row_text = f"""
-            input: {sample[0]}
-            
-            ---
-            
-            output: {sample[1]}
-            
-            ---
-            
-            score: {sample[2]}
-            """
-            swanlab_text_list.append(swanlab.Text(row_text, caption=f"sample {i + 1}"))
-
-        # Log to swanlab
-        swanlab.log({"val/generations": swanlab_text_list}, step=step)
-
-    def log_generations_to_mlflow(self, samples, step):
-        """Log validation generation to mlflow as artifacts"""
-        # https://mlflow.org/docs/latest/api_reference/python_api/mlflow.html?highlight=log_artifact#mlflow.log_artifact
-
-        import json
-        import tempfile
-
-        import mlflow
-
-        try:
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                validation_gen_step_file = Path(tmp_dir, f"val_step{step}.json")
-                row_data = []
-                for sample in samples:
-                    data = {"input": sample[0], "output": sample[1], "score": sample[2]}
-                    row_data.append(data)
-                with open(validation_gen_step_file, "w") as file:
-                    json.dump(row_data, file)
-                mlflow.log_artifact(validation_gen_step_file)
-        except Exception as e:
-            logger.warning(f"save validation generation file to mlflow failed with error {e}")

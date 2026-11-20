@@ -16,9 +16,9 @@ from taskcompendium.models import TaskSpec
 
 from experiments.post_training.long_loop.rl_dataset_admission import (
     archived_task,
+    contains_upstream_question,
     exclusion_reasons,
     file_digest,
-    matching_question,
     question_anchors,
     task_text,
     write_rows,
@@ -70,7 +70,7 @@ def replace_cohort(previous: Path, release: Path, universes: Path, output: Path)
         with tarfile.open(fileobj=io.BytesIO(row["task_binary"]), mode="r:*") as archive:
             instruction = archive.extractfile("instruction.md").read().decode()
         reasons = exclusion_reasons(identifier, instruction, index, check_repo=False)
-        if matching_question(instruction, anchors):
+        if contains_upstream_question(instruction, anchors):
             reasons.append("exact_upstream_question_substring")
         if split == "train" and identifier in old_holdouts:
             reasons.append("prior_long_loop_validation_identity")

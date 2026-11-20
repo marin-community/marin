@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.models import Source, TaskSpec
 
 RELEASES = {
@@ -33,8 +35,7 @@ def digest(data: bytes) -> str:
 
 
 def file_digest(path: Path) -> str:
-    with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
+    return file_sha256(StoragePath(str(path)))
 
 
 def text_digest(text: str) -> str:
@@ -121,7 +122,7 @@ def exclusion_index(micro_rows: list[dict], policies: list[dict], legacy_heldout
 
 
 def question_anchors(records: list[dict]) -> dict[tuple[str, ...], list[str]]:
-    """Index exact upstream questions by eight-word prefixes for bounded scans."""
+    """Return upstream questions grouped by their shared opening words."""
     anchors = {}
     for record in records:
         for text in record.get("texts", {}).values():
@@ -132,7 +133,7 @@ def question_anchors(records: list[dict]) -> dict[tuple[str, ...], list[str]]:
     return anchors
 
 
-def matching_question(text: str, anchors: dict[tuple[str, ...], list[str]]) -> bool:
+def contains_upstream_question(text: str, anchors: dict[tuple[str, ...], list[str]]) -> bool:
     words = text.split()
     normalized = " ".join(words)
     return any(
@@ -211,7 +212,7 @@ def build(inputs: Path, output: Path, *, seed: int, validation_per_cohort: int) 
                 text = archive.extractfile("instruction.md").read().decode()
             identifier = f"{row['source']}/{row['path']}"
             reasons = exclusion_reasons(identifier, text, index, check_repo=cohort == "swesmith")
-            if matching_question(text, anchors):
+            if contains_upstream_question(text, anchors):
                 reasons.append("exact_upstream_question_substring")
             record = {
                 "cohort": cohort,
@@ -263,7 +264,7 @@ def build(inputs: Path, output: Path, *, seed: int, validation_per_cohort: int) 
         for row in batch.to_pylist():
             task = TaskSpec.model_validate_json(row["task_spec"])
             reasons = exclusion_reasons(task.id, task_text(task), index, check_repo=False)
-            if matching_question(task_text(task), anchors):
+            if contains_upstream_question(task_text(task), anchors):
                 reasons.append("exact_upstream_question_substring")
             evidence.append(
                 {

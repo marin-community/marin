@@ -7,19 +7,25 @@ import copy
 import hashlib
 import json
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 
 import draccus
 from fray.types import GpuConfig, ResourceConfig
+from iris.rpc.proto_display import priority_band_value
 from levanter.data.text.datasets import LmDataConfig
+from levanter.training_budget import TrainingBudgetConfig, read_training_completion
 from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import ArtifactStep, StepContext
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
+from experiments.post_training.long_loop.execution_policy import SFT_CHECKPOINT_INTERVAL
+from experiments.post_training.long_loop.exp3_recipe import exp3_sft_spec
 from experiments.post_training.long_loop.sft import fresh_sft_config, read_json, sft_run
+from experiments.post_training.long_loop.stage_guard import StageGuard, run_guarded_stage
 from experiments.sft.configs.snowball_h100 import SPEC as SNOWBALL_SFT
-from experiments.sft.launcher import DeprecatedSFTSpec, SFTSpec, sft_step
+from experiments.sft.launcher import DeprecatedSFTSpec, HFModel, SFTSpec, levanter_train_request, sft_step
 
 
 @dataclass(frozen=True)
@@ -72,8 +78,12 @@ def legacy_sft_step(
 
 def shared_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
     """Use the checked-in Snowball defaults with the pinned historical sources."""
+    if recipe["profile"] == "snowball_exp3":
+        return exp3_sft_spec(name, version, recipe)
     if recipe["profile"] != "snowball_h100":
         raise ValueError("The long-loop shared SFT adapter requires the snowball_h100 profile")
+    if not recipe.get("wandb_entity") or not recipe.get("wandb_project"):
+        raise ValueError("Long-loop SFT requires explicit W&B entity and project")
     mesh = draccus.decode(MeshConfig, recipe["mesh"])
     resources = draccus.decode(ResourceConfig, recipe["resources"])
     if not isinstance(resources.device, GpuConfig):
@@ -102,6 +112,7 @@ def shared_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
             child["pack"] = recipe["pack"]
     data["block_cross_document_attention"] = bool(recipe["pack"])
     data_config = draccus.decode(LmDataConfig, data)
+    assert isinstance(SNOWBALL_SFT.model, HFModel)
     return replace(
         SNOWBALL_SFT,
         name=name,
@@ -116,34 +127,81 @@ def shared_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
         batch_size=recipe["batch_size"],
         per_device_parallelism=recipe["per_device_parallelism"],
         mesh=mesh,
+        checkpointer=replace(SNOWBALL_SFT.checkpointer, save_interval=SFT_CHECKPOINT_INTERVAL),
         pack=bool(recipe["pack"]),
         wandb_project=recipe["wandb_project"],
+        wandb_entity=recipe["wandb_entity"],
         xla_flags=tuple(recipe["xla_flags"]),
     )
 
 
-def native_sft_step(name: str, version: str, recipe: dict) -> ArtifactStep:
-    spec = shared_sft_spec(name, version, recipe)
+def native_sft_step(
+    name: str, version: str, recipe: dict, *, spec_builder: Callable[[str, str, dict], SFTSpec] = shared_sft_spec
+) -> ArtifactStep:
+    spec = spec_builder(name, version, recipe)
     trained = sft_step(spec, draccus.decode(ResourceConfig, recipe["resources"]))
+    builder = trained.build_config
+
+    def build_config(context):
+        config = builder(context)
+        return replace(
+            config,
+            train_config=replace(
+                config.train_config,
+                trainer=replace(
+                    config.train_config.trainer, native_telemetry_root=prefix_join(context.output_path, "telemetry")
+                ),
+            ),
+        )
+
     run = trained.run
 
     def execute(config):
-        run(config)
-        select_shared_sft(output=config.output_path, completed_updates=spec.num_train_steps)
+        if recipe["profile"] == "snowball_exp3":
+            request = levanter_train_request(
+                config, task_timeout_seconds=recipe["task_timeout_seconds"], priority=priority_band_value("production")
+            )
+            receipt = run_guarded_stage(
+                request, StageGuard(**recipe["stage_guard"]), prefix_join(config.output_path, "guard")
+            )
+            (StoragePath(config.output_path) / "guard-result.json").write_text(json.dumps(receipt, indent=2))
+        else:
+            run(config)
+        budget = config.train_config.trainer.training_budget
+        if budget is None:
+            select_shared_sft(output=config.output_path, completed_updates=spec.num_train_steps)
+        else:
+            select_time_limited_sft(output=config.output_path, maximum_updates=spec.num_train_steps, budget=budget)
 
-    return replace(trained, run=execute)
+    return replace(trained, run=execute, build_config=build_config)
 
 
 def select_shared_sft(*, output: str, completed_updates: int) -> None:
     """Bind native zero-based checkpoint indices to the completed update count."""
+    selection = shared_sft_selection(output=output, completed_updates=completed_updates)
+    (StoragePath(output) / "selected.json").write_text(json.dumps(selection))
+
+
+def shared_sft_selection(*, output: str, completed_updates: int) -> dict:
+    """Return a selection only for a committed native checkpoint."""
     step = completed_updates - 1
     checkpoint = prefix_join(output, f"checkpoints/step-{step}")
     metadata = read_json(prefix_join(checkpoint, "metadata.json"))
     if metadata["step"] != step or metadata["is_temporary"]:
         raise ValueError("Shared SFT did not commit its final native checkpoint")
-    (StoragePath(output) / "selected.json").write_text(
-        json.dumps({"checkpoint": checkpoint, "step": step, "completed_updates": completed_updates, "format": "SFTSpec"})
+    return {"checkpoint": checkpoint, "step": step, "completed_updates": completed_updates, "format": "SFTSpec"}
+
+
+def select_time_limited_sft(*, output: str, maximum_updates: int, budget: TrainingBudgetConfig) -> None:
+    """Select the final committed update recorded by the time-limited trainer."""
+    completion = read_training_completion(
+        telemetry_root=prefix_join(output, "telemetry"),
+        checkpoint_root=prefix_join(output, "checkpoints"),
+        maximum_updates=maximum_updates,
+        budget=budget,
     )
+    selection = shared_sft_selection(output=output, completed_updates=completion["completed_updates"])
+    (StoragePath(output) / "selected.json").write_text(json.dumps({**selection, "training_completion": completion}))
 
 
 def export_shared_sft(*, output: str, trained: str, context_limit: int, source_revision: str) -> None:

@@ -59,7 +59,6 @@ config:
       advantage_batch_normalize: false
       rloo_n_filter_zero_reward_groups: true
       use_entropy_loss: false
-      tis_splice: true
     policy:
       optimizer_config:
         optimizer: AdamW
@@ -231,13 +230,12 @@ config:
   extra_env:
     PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
     VERIFYIT_JUDGE_MODEL: openai/gpt-oss-120b
-    NCCL_NET: Socket
-    NCCL_IB_DISABLE: '1'
-    NCCL_SOCKET_FAMILY: AF_INET
     TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC: '259200'
   terminal_bench:
     harbor:
       environment_type: daytona
+      daytona_image_build: snapshot
+      eval_daytona_image_build: declarative
       daytona_api_key_env: DAYTONA_RL_API_KEY
       eval_daytona_api_key_env: DAYTONA_EVAL_API_KEY
       override_timeout_sec: 1800

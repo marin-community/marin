@@ -3,8 +3,8 @@
 
 import json
 
+from evalrecords.records import EvalRef, EvalRunRecord, HardwareRef, ModelRef, Provenance, RunStatus, read_record
 from finestore.reader import ReadView
-from marin.evaluation.records import EvalRef, EvalRunRecord, HardwareRef, ModelRef, Provenance, RunStatus, read_record
 
 from experiments.post_training.long_loop.eval_archive import publish_evaluation
 

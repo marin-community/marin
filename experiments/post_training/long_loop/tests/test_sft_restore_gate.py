@@ -150,6 +150,7 @@ def test_first_step_restore_gate_reloads_permanent_root_when_permanent_request_q
         assert not (temp / "step-1").exists()
 
 
+@pytest.mark.integration
 def test_smoke_recipe_decodes_final_only_checkpointing(tmp_path):
     recipe = yaml.safe_load(SMOKE_CONFIG.read_text())
     cfg = fresh_sft_config(
@@ -161,6 +162,7 @@ def test_smoke_recipe_decodes_final_only_checkpointing(tmp_path):
     assert cfg.trainer.trainer.checkpointer.keep_last_temporary_checkpoints == 1
 
 
+@pytest.mark.integration
 def test_fresh_sft_config_rejects_restore_gate_without_checkpoint_saving(tmp_path):
     recipe = yaml.safe_load(SMOKE_CONFIG.read_text())
     recipe["first_checkpoint_restore_step"] = 3

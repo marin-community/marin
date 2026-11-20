@@ -40,8 +40,8 @@ provenance:
   canonical_data_sha256: 98b86041b5645f52d81b170386b01890b593a0bf88378da89cb20e22a6f042be
 sections:
   components:
-    path: sft-components.json
+    path: s3://marin-us-east-08a/marin/long-loop/config/2026.11.19/sft-components.json
     sha256: d372def486ced1418d1ad63bd9f50959f463430ecbcd83029d6db12dfe0ad493
   train_weights:
-    path: sft-train_weights.json
+    path: s3://marin-us-east-08a/marin/long-loop/config/2026.11.19/sft-train_weights.json
     sha256: e954bba2b54492ab3af6ff56a735e4dcaea53a6599f61c5480baae9a57d9bdcd

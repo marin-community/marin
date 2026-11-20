@@ -97,6 +97,14 @@ For `supervised` and (raw) `text`, `pack: false` instead selects the continuous-
 layout: documents are concatenated and chunked to the context length rather than being
 kept one per example.
 
+Packed components can set `pack_lookahead_window` next to `pack` on the component.
+The packer selects the first fitting document among that many pending documents,
+starting at the oldest. Skipped documents retain their relative order. A window
+of 1 matches sequential packing when no documents are dropped; lookahead skips
+dropped documents without closing a pack. The option requires packing and can
+produce non-contiguous packs. Over-long documents follow the format's configured
+slice strategy.
+
 #### Processing:
 - Requires a `chat_template`:
   - If not supplied in config, will use `tokenizer.chat_template`
@@ -157,6 +165,13 @@ it is primarily intended to be used with [Direct Cache Construction](../guides/D
 
 `loss_weights` is optional. When provided, it is multiplied by the standard causal mask.
 
+Set component-level `pack: 256` and `pack_lookahead_window: 128` to pack prebuilt
+prediction-weight caches with first-fit lookahead. Packed prebuilt components
+left-slice over-long documents. Prediction weight `i` supervises token `i + 1`;
+packing preserves these weights without another shift. Producers should set each
+document's final weight to zero to avoid cross-document supervision. Chat assistant
+masks retain their existing single next-token shift.
+
 #### Configuration:
 ```yaml
 format:
@@ -190,7 +205,6 @@ config = LmDataConfig(components={"special": component})
 Direct datasets are expected to yield `LmExample` instances that already include any masking/packing behavior.
 
 ---
-
 
 # API
 

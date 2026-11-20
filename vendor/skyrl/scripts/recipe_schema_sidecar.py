@@ -28,7 +28,9 @@ from marinskyrl.speculative_decoding import SpeculativeDecodingMethod
 
 
 def _literal(choices) -> str:
-    return "Literal[" + ", ".join(repr(choice.value if isinstance(choice, Enum) else choice) for choice in choices) + "]"
+    return (
+        "Literal[" + ", ".join(repr(choice.value if isinstance(choice, Enum) else choice) for choice in choices) + "]"
+    )
 
 
 CORRECTION_PRESETS = tuple(
@@ -46,9 +48,9 @@ TYPES = MappingProxyType(
     {
         "terminal_bench": "OpenMap | None",
         "trainer.strategy": 'Literal["megatron"]',
+        "trainer.batch_builder": _literal(runtime_options.BatchBuilder),
         "trainer.hf_export_checkpoint": 'Literal["latest", "best"]',
         "trainer.policy.optimizer_config.lr_decay_steps": "int | None",
-        "trainer.critic.optimizer_config.lr_decay_steps": "int | None",
         "trainer.policy.megatron_config.nccl_max_channels": "int | None",
         "trainer.ref.megatron_config.nccl_max_channels": "int | None",
         "generator.trajectory_reward_shaping.reasoning_span.target": _literal(ReasoningSpanPenaltyTarget),
@@ -58,7 +60,6 @@ TYPES = MappingProxyType(
         "trainer.preflight_gate.on_failure": 'Literal["abort", "warn"]',
         "trainer.logger": "LoggingBackend | tuple[LoggingBackend, ...]",
         "trainer.policy.optimizer_config.scheduler": 'Literal["constant_with_warmup", "cosine"]',
-        "trainer.critic.optimizer_config.scheduler": 'Literal["constant_with_warmup", "cosine"]',
         "trainer.policy.megatron_config.optimizer_checkpoint_sharding_type": OPTIMIZER_CHECKPOINT_SHARDING,
         "trainer.ref.megatron_config.optimizer_checkpoint_sharding_type": OPTIMIZER_CHECKPOINT_SHARDING,
         "trainer.rollout_buffer.max_staleness_steps": "NonNegativeInt",
@@ -87,13 +88,10 @@ TYPES = MappingProxyType(
         "generator.override_existing_update_group": 'Literal["auto", "enable", "disable"]',
         "generator.weight_sync_pause.mode": _literal(WeightSyncPauseMode),
         "generator.r3_transport": _literal(runtime_options.R3Transport),
-        "generator.gdn_backend": _literal(runtime_options.GDNBackend),
         "generator.chat_template": "ChatTemplate | None",
         "generator.chat_template.source": 'Literal["name", "file"]',
         "generator.error_handling.default_error_treatment": _literal(ErrorTreatment),
         "generator.trajectory_retention.phases": 'tuple[Literal["train", "eval"], ...]',
-        "trainer.policy.model.lora.dropout": "Annotated[int | float, Field(ge=0, le=1)]",
-        "trainer.critic.model.lora.dropout": "Annotated[int | float, Field(ge=0, le=1)]",
         "trainer.step_phase_budgets.group_admission": "Annotated[int | float, Field(ge=0)]",
         "trainer.step_phase_budgets.batch_assembly": "Annotated[int | float, Field(ge=0)]",
         "trainer.step_phase_budgets.training_preparation": "Annotated[int | float, Field(ge=0)]",
@@ -105,9 +103,9 @@ TYPES = MappingProxyType(
         "trainer.step_phase_budgets.checkpoint_work": "Annotated[int | float, Field(ge=0)]",
         "trainer.step_phase_budgets.evaluation": "Annotated[int | float, Field(ge=0)]",
         "trainer.step_phase_budgets.unaccounted": "Annotated[int | float, Field(ge=0)]",
+        "trainer.rollout_buffer.max_unusable_groups": "PositiveInt",
         "trainer.train_batch_size": "PositiveInt",
         "trainer.policy_mini_batch_size": "PositiveInt",
-        "trainer.critic_mini_batch_size": "PositiveInt",
         "trainer.micro_train_batch_size_per_gpu": "PositiveInt",
         "trainer.eval_batch_size": "PositiveInt",
         "trainer.update_epochs_per_batch": "PositiveInt",
@@ -137,7 +135,6 @@ TYPES = MappingProxyType(
         "trainer.rollout_buffer.max_in_flight": "PositiveInt | None",
         "trainer.rollout_buffer.object_store_root": "str | None",
         "trainer.policy.megatron_config.expert_tensor_parallel_size": "PositiveInt | None",
-        "trainer.critic.model.path": "str | None",
         "trainer.mismatch_probe.seed": "NonNegativeInt | None",
         "trainer.mismatch_probe.archive_uri": "str | None",
         "trainer.mismatch_probe.reuse_probe": "str | None",
@@ -156,6 +153,7 @@ TYPES = MappingProxyType(
         "generator.sampling_params.stop_token_ids": "tuple[int, ...] | None",
         "generator.eval_sampling_params.stop_token_ids": "tuple[int, ...] | None",
         "data.sampling.kind": _literal(SamplingKind) + " | None",
+        "data.sampling.stages": "tuple[OpenMap, ...]",
         "data.sampling.weighting": _literal(WeightingKind),
         "data.sampling.domain_weights": "NumberMap",
         "data.sampling.seed": "NonNegativeInt | None",
@@ -172,9 +170,6 @@ TYPES = MappingProxyType(
         "trainer.policy.model.source_uri": "str | None",
         "trainer.policy.model.source_identity": "str | None",
         "trainer.policy.model.lora.adapter_path": "str | None",
-        "trainer.policy.model.lora.adapter_revision": "str | None",
-        "trainer.policy.model.lora.exclude_modules": "tuple[str, ...] | None",
-        "trainer.critic.model.lora.exclude_modules": "tuple[str, ...] | None",
         "trainer.policy.megatron_config.torch_profiler_config.ranks": "tuple[int, ...]",
         "trainer.policy.megatron_config.torch_profiler_config.save_path": "str | None",
         "trainer.ref.megatron_config.expert_tensor_parallel_size": "PositiveInt | None",
@@ -188,8 +183,10 @@ TYPES = MappingProxyType(
         "trainer.rope_theta": "int | float | None",
         "generator.trajectory_retention.reward_below": "int | float | None",
         "generator.trajectory_retention.reward_above": "int | float | None",
+        "generator.trajectory_retention.eval_sample_fraction": "Annotated[int | float, Field(ge=0, le=1)] | None",
         "generator.trajectory_retention.max_bytes_per_step": "int | None",
         "generator.trajectory_retention.max_bytes_per_run": "int | None",
+        "generator.trajectory_retention.model_checkpoint_step": "NonNegativeInt | None",
         "trainer.evaluation_runner": _literal(runtime_options.EvaluationRunner),
         "generator.model_loading": _literal(RolloutModelLoading),
         "data.preference_pair_format": _literal(PreferencePairFormat),
@@ -202,7 +199,6 @@ OPEN = frozenset(
         "generator.chat_template_kwargs",
         "generator.engine_init_kwargs",
         "generator.rope_scaling",
-        "trainer.critic.optimizer_config.optimizer_kwargs",
         "trainer.policy.megatron_config.model_config_kwargs",
         "trainer.policy.megatron_config.transformer_config_kwargs",
         "trainer.policy.optimizer_config.optimizer_kwargs",
@@ -274,11 +270,8 @@ NAMES = MappingProxyType(
         "trainer.ref.megatron_config": "RefMegatronConfig",
         "trainer.policy.model": "PolicyModel",
         "trainer.ref.model": "RefModel",
-        "trainer.critic.model": "CriticModel",
         "trainer.policy.optimizer_config": "PolicyOptimizerConfig",
-        "trainer.critic.optimizer_config": "CriticOptimizerConfig",
         "trainer.policy.model.lora": "PolicyLora",
-        "trainer.critic.model.lora": "CriticLora",
         "trainer.policy.megatron_config.ddp_config": "DdpConfig",
         "trainer.ref.megatron_config.ddp_config": "RefDdpConfig",
         "trainer.policy.megatron_config.torch_profiler_config": "TorchProfilerConfig",

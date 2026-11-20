@@ -13,8 +13,10 @@ import tempfile
 import tomllib
 import uuid
 from collections import deque
-from dataclasses import asdict, dataclass, fields
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, fields, replace
 from enum import StrEnum
+from functools import partial
 from pathlib import Path, PurePosixPath
 from typing import Literal, Protocol, cast
 
@@ -34,6 +36,7 @@ from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.execution.remote import sanitize_job_name
+from marin.rl.curriculum import RlCurriculum, entry_payload, stage_payload
 from marin.rollouts.catalog import RolloutRunKind, record_rollout_run, rollout_run_record
 from marin.training.training import LevanterCheckpoint
 
@@ -52,8 +55,13 @@ _COLOCATED_EXPERT_BLOCK_GPU_COUNT = 4
 
 def skyrl_temporary_run_path(output_path: str, *, ttl_days: int) -> str:
     """Return the lifecycle-managed storage path for a SkyRL run."""
-    temporary_root = marin_temp_bucket(ttl_days=ttl_days, source_prefix=output_path)
-    return str(StoragePath(temporary_root) / _TEMPORARY_OUTPUT_PREFIX / StoragePath(output_path).key)
+    temporary_root = StoragePath(marin_temp_bucket(ttl_days=ttl_days, source_prefix=output_path))
+    output = StoragePath(output_path)
+    try:
+        output.relative_to(temporary_root)
+    except ValueError:
+        return str(temporary_root / _TEMPORARY_OUTPUT_PREFIX / output.key)
+    return str(output)
 
 
 @dataclass(frozen=True)
@@ -221,7 +229,7 @@ class SkyRLTopology:
         if plan.reference_num_nodes is not None:
             planned_gpus += plan.reference_num_nodes * plan.policy_num_gpus_per_node
         allocated_gpus = self.num_nodes * self.gpus_per_node
-        # SkyRL derives optional critic, teacher, and draft-trainer claims from the recipe
+        # SkyRL derives teacher and draft-trainer claims from the recipe
         # and validates that the complete role plan exactly consumes this allocation.
         if planned_gpus > allocated_gpus:
             placement = "colocated policy/rollout" if plan.colocate_all else "policy + rollout"
@@ -237,16 +245,22 @@ class SkyRLTopology:
             raise ValueError("SkyRL policy_mini_batch_size must be divisible by micro_train_batch_size_per_gpu")
 
 
+class SkyRLCheckpointStorage(StrEnum):
+    TEMPORARY = "temporary"
+    PERMANENT = "permanent"
+
+
 @dataclass(frozen=True)
 class SkyRLRetentionPolicy:
-    """Temporary storage lifetime and rolling resume depth for one SkyRL run.
+    """Native checkpoint placement, resume depth, and disposable storage lifetime.
 
     When HF export is requested, a successful run produces a durable canonical
-    export from its terminal checkpoint.
+    export from its selected checkpoint.
     """
 
     resume_checkpoint_count: int = 2  # -1 defers checkpoint cleanup to a verified archive post-script.
     temporary_storage_ttl_days: int = SKYRL_TEMPORARY_STORAGE_TTL_DAYS
+    native_checkpoint_storage: SkyRLCheckpointStorage = SkyRLCheckpointStorage.TEMPORARY
 
     def __post_init__(self) -> None:
         if self.resume_checkpoint_count != -1 and not 1 <= self.resume_checkpoint_count <= 10:
@@ -262,6 +276,12 @@ class ResolvedModelLocator:
     local_path: str
     tokenizer_uri: str
     tokenizer_revision: str
+
+
+@dataclass(frozen=True)
+class ResolvedNativeCheckpoint:
+    uri: str
+    identity: str
 
 
 @dataclass(frozen=True)
@@ -435,7 +455,14 @@ type SkyRLDataSource = ArtifactDataSource | TaskTroveDataSource
 
 @dataclass(frozen=True)
 class SkyRLSpec:
-    """Backend-neutral, identity-bearing SkyRL experiment definition."""
+    """Backend-neutral, identity-bearing SkyRL experiment definition.
+
+    ``curriculum`` records the intended task mix: the sampling projection renders into the
+    recipe's ``data.sampling`` subtree at construction (disagreement with declared values is an
+    error), the launch document carries the full curriculum, and the run's artifact record names it.
+    Curricula sample labeled prompt pools, so a curriculum requires ``data.kind=parquet``. The
+    training pool remains a separate input.
+    """
 
     name: str
     version: str
@@ -446,8 +473,12 @@ class SkyRLSpec:
     topology: SkyRLTopology
     retention: SkyRLRetentionPolicy
     seed: int
+    starting_checkpoint: ArtifactStep[Artifact] | None = None
+    curriculum: RlCurriculum | None = None
 
     def __post_init__(self) -> None:
+        if self.curriculum is not None:
+            object.__setattr__(self, "config_yaml", _apply_curriculum(self.config_yaml, self.curriculum))
         _validate_skyrl_recipe(self.config_yaml, self.topology)
 
 
@@ -508,6 +539,37 @@ class SkyRLOutputPaths:
 
 
 _MISSING_CONFIG_VALUE = object()
+
+_FORCED_SOCKET_ENV_VALUES = {
+    "NCCL_NET": {"Socket"},
+    "NCCL_IB_DISABLE": {"1"},
+}
+
+
+def reject_forced_socket_transport(task_env: dict, num_nodes: int) -> None:
+    """Refuse multi-node launches that force NCCL onto socket transport.
+
+    Multi-node jobs run on clusters whose InfiniBand fabric works with the
+    default environment (measured 85-88 GB/s all-reduce cross-node on
+    cw-rno2a and cw-us-east-02a). Forcing `NCCL_NET=Socket` or
+    `NCCL_IB_DISABLE=1` drops cross-node collectives onto TCP sockets,
+    measured at 12-24x lower bandwidth, and a partial override hangs at
+    bootstrap. See the transport audit in #11619.
+    """
+    if num_nodes <= 1:
+        return
+    offenders = [
+        f"{key}={task_env[key]}"
+        for key, forced_values in _FORCED_SOCKET_ENV_VALUES.items()
+        if str(task_env.get(key, "")).strip() in forced_values
+    ]
+    if offenders:
+        raise ValueError(
+            "Multi-node SkyRL launch forces NCCL onto socket transport via extra_env "
+            f"({', '.join(offenders)}). Remove the override so collectives use InfiniBand; "
+            "the two-node probe in experiments/post_training/nccl_transport_probe.py "
+            "verifies the fabric before a run. See marin-community/marin#11619."
+        )
 
 
 def _parsed_config(config_yaml: str) -> dict[str, object]:
@@ -615,9 +677,6 @@ def _validate_skyrl_backend_constraints(
     use_kl_loss = _declared_config_value(config, "trainer.algorithm.use_kl_loss")
     if use_kl_loss is _MISSING_CONFIG_VALUE:
         raise ValueError("SkyRL config must explicitly set trainer.algorithm.use_kl_loss")
-    critic_path = _declared_config_value(config, "trainer.critic.model.path")
-    if critic_path is not _MISSING_CONFIG_VALUE and critic_path:
-        raise ValueError("Marin SkyRL artifact topology does not yet describe a separate critic role")
 
 
 def _validate_skyrl_recipe(
@@ -690,6 +749,7 @@ class SkyRLRunConfig:
     output: SkyRLOutputPaths
     export_hf: bool
     draft_checkpoint_root: str | None
+    curriculum_identity: str | None = None
 
 
 class SkyRLRun(Artifact):
@@ -703,6 +763,8 @@ class SkyRLRun(Artifact):
     draft_checkpoint_root: str | None
     terminal_manifest_uri: str
     iris_job_id: str
+    curriculum: str | None = None
+    """The sampled curriculum's ``name@version:fingerprint`` identity; ``None`` without a curriculum."""
 
 
 class _SkyRLTerminalModel(BaseModel):
@@ -761,10 +823,10 @@ def _launcher_command(config_path: str) -> list[str]:
     return skyrl_cpu_command("marinskyrl", "iris", "launch", "--config", config_path)
 
 
-def _run_launcher(command: list[str]) -> subprocess.CompletedProcess[str]:
+def _run_launcher(command: list[str], *, env_vars: Mapping[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     """Run the launcher, forwarding its live logs and keeping a tail to explain a failure."""
     tail: deque[str] = deque(maxlen=_LAUNCHER_DIAGNOSTIC_LINES)
-    environment = dict(os.environ)
+    environment = {**os.environ, **(env_vars or {})}
     for key in ("PYTHONPATH", "PYTHONHOME", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"):
         environment.pop(key, None)
     with (
@@ -787,14 +849,14 @@ def _run_launcher(command: list[str]) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(command, returncode, response.read(), "".join(tail))
 
 
-def run_skyrl(config: SkyRLRunConfig) -> SkyRLRun:
+def run_skyrl(config: SkyRLRunConfig, *, env_vars: Mapping[str, str]) -> SkyRLRun:
     """Run the nested SkyRL executable and return its validated result."""
     response: _SkyRLLaunchResponse | None = None
     try:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", encoding="utf-8") as launch_file:
             launch_file.write(config.launch_config_yaml)
             launch_file.flush()
-            completed = _run_launcher(_launcher_command(launch_file.name))
+            completed = _run_launcher(_launcher_command(launch_file.name), env_vars=env_vars)
         if not completed.stdout.strip():
             raise RuntimeError(
                 f"MarinSkyRL launcher exited {completed.returncode} without a terminal response:\n"
@@ -832,6 +894,7 @@ def run_skyrl(config: SkyRLRunConfig) -> SkyRLRun:
             draft_checkpoint_root=config.draft_checkpoint_root,
             terminal_manifest_uri=config.output.terminal_manifest_uri,
             iris_job_id=response.iris_job_id,
+            curriculum=config.curriculum_identity,
         )
     except Exception:
         _record_skyrl_run(config, "failed", response)
@@ -869,6 +932,45 @@ def _launch_data_source(source: ResolvedDataSource) -> dict:
     return value
 
 
+_CURRICULUM_DATA_KIND = "parquet"
+"""Curricula sample labeled prompt pools, which only the parquet data kind carries."""
+
+
+def _apply_curriculum(config_yaml: str, curriculum: RlCurriculum) -> str:
+    """Render a curriculum's sampling projection into the recipe, rejecting disagreement.
+
+    The projection's ``data.sampling`` values replace any declared ones; a declared base default
+    (``null`` or an empty container) is not a policy statement and never disagrees. A caller that
+    set a real value must match the curriculum. ``data.kind`` is pinned to ``parquet`` because
+    curricula sample labeled prompt pools."""
+    config = _parsed_config(config_yaml)
+    declared_kind = _declared_config_value(config, "data.kind")
+    if declared_kind is not _MISSING_CONFIG_VALUE and declared_kind != _CURRICULUM_DATA_KIND:
+        raise ValueError(
+            f"a curriculum samples labeled prompt pools and requires data.kind={_CURRICULUM_DATA_KIND}, "
+            f"but the recipe declares {declared_kind!r}"
+        )
+    for key, value in curriculum.sampling_config().items():
+        declared = _declared_config_value(config, f"data.sampling.{key}")
+        if declared not in (_MISSING_CONFIG_VALUE, None, [], {}) and declared != value:
+            raise ValueError(f"recipe data.sampling.{key}={declared!r} disagrees with curriculum {curriculum.identity}")
+        _set_config_value(config, f"data.sampling.{key}", value)
+    _set_config_value(config, "data.kind", _CURRICULUM_DATA_KIND)
+    return yaml.safe_dump(config, sort_keys=False)
+
+
+def _launch_curriculum(curriculum: RlCurriculum) -> dict:
+    """The launch document's curriculum section: identity, projection, and per-source provenance."""
+    return {
+        "identity": curriculum.identity,
+        "mode": curriculum.mode.value,
+        "seed": curriculum.seed,
+        "sampling": curriculum.sampling_config(),
+        "sources": [entry_payload(entry) for entry in curriculum.entries],
+        "stages": [stage_payload(stage) for stage in curriculum.stages],
+    }
+
+
 def _launch_config_yaml(
     spec: SkyRLSpec,
     execution: IrisSkyRLExecution,
@@ -880,9 +982,15 @@ def _launch_config_yaml(
     train_data: tuple[ResolvedDataSource, ...],
     validation_data: tuple[ResolvedDataSource, ...],
     output: SkyRLOutputPaths,
+    starting_checkpoint: ResolvedNativeCheckpoint | None,
 ) -> str:
     recipe = _parsed_config(spec.config_yaml)
     _materialize_role_plan_config(recipe, spec.topology.role_plan)
+    callbacks = _declared_config_value(recipe, "trainer.callbacks")
+    if callbacks is not _MISSING_CONFIG_VALUE and callbacks is not None:
+        for callback in cast(list[dict[str, object]], callbacks):
+            if callback["type"] == "best_checkpoint":
+                callback["initial_model_uri"] = model.uri
     num_nodes = spec.topology.num_nodes
     if execution.role_topology is not None:
         if not is_rack_based(spec.topology.gpu_variant) or spec.topology.gpus_per_node != NVL72_GPUS_PER_NODE:
@@ -905,6 +1013,7 @@ def _launch_config_yaml(
     task_env = recipe.get("extra_env", {})
     if not isinstance(task_env, dict):
         raise ValueError("SkyRL extra_env must be a mapping")
+    reject_forced_socket_transport(task_env, num_nodes)
     launch = {
         "schema_version": 1,
         "run": {
@@ -963,9 +1072,16 @@ def _launch_config_yaml(
             ),
             "train_data": [_launch_data_source(source) for source in train_data],
             "validation_data": [_launch_data_source(source) for source in validation_data],
+            **(
+                {"curriculum": _launch_curriculum(cast(RlCurriculum, spec.curriculum))}
+                if spec.curriculum is not None
+                else {}
+            ),
         },
         "skyrl": recipe,
     }
+    if starting_checkpoint is not None:
+        launch["inputs"]["starting_checkpoint"] = asdict(starting_checkpoint)
     if execution.container_profile is not None:
         launch["iris"]["container_profile"] = job_pb2.ContainerProfile.Name(execution.container_profile)
     return yaml.safe_dump(launch, sort_keys=False)
@@ -985,12 +1101,14 @@ def skyrl_step(
                 *spec.model.deps(),
                 *(dep for source in spec.train_data for dep in source.deps()),
                 *(dep for source in spec.validation_data for dep in source.deps()),
+                *((spec.starting_checkpoint,) if spec.starting_checkpoint is not None else ()),
             )
         )
     )
 
     def build_config(ctx: StepContext) -> SkyRLRunConfig:
-        attempt_id = "<attempt_id>" if ctx.is_fingerprint else uuid.uuid4().hex[:12]
+        # OmegaConf reads an unquoted id such as 104e63883176 as a float; a leading letter keeps it a string.
+        attempt_id = "<attempt_id>" if ctx.is_fingerprint else f"a{uuid.uuid4().hex[:11]}"
         if ctx.is_fingerprint:
             temporary_root = "<temporary_output_path>"
         else:
@@ -999,8 +1117,13 @@ def skyrl_step(
                 ttl_days=spec.retention.temporary_storage_ttl_days,
             )
         attempts_root = prefix_join(temporary_root, "attempts")
+        checkpoint_prefix = (
+            ctx.output_path
+            if spec.retention.native_checkpoint_storage == SkyRLCheckpointStorage.PERMANENT
+            else temporary_root
+        )
         output = SkyRLOutputPaths(
-            checkpoint_root=prefix_join(temporary_root, "checkpoints"),
+            checkpoint_root=prefix_join(checkpoint_prefix, "checkpoints"),
             export_root=prefix_join(ctx.output_path, "exports"),
             attempts_root=attempts_root,
             resolved_config_uri=prefix_join(ctx.output_path, "resolved-launch.yaml"),
@@ -1018,6 +1141,14 @@ def skyrl_step(
         model = spec.model.resolve(ctx)
         train_data = tuple(source.resolve(ctx) for source in spec.train_data)
         validation_data = tuple(source.resolve(ctx) for source in spec.validation_data)
+        starting_checkpoint = (
+            ResolvedNativeCheckpoint(
+                uri=ctx.artifact_path(spec.starting_checkpoint),
+                identity=artifact_identity(spec.starting_checkpoint),
+            )
+            if spec.starting_checkpoint is not None
+            else None
+        )
         execution = (
             _FINGERPRINT_EXECUTION if ctx.is_fingerprint else cast(IrisSkyRLExecution, ctx.runtime_arg(_EXECUTION))
         )
@@ -1032,6 +1163,7 @@ def skyrl_step(
                 train_data=train_data,
                 validation_data=validation_data,
                 output=output,
+                starting_checkpoint=starting_checkpoint,
             ),
             run_id=run_id,
             attempt_id=attempt_id,
@@ -1039,14 +1171,17 @@ def skyrl_step(
             output=output,
             export_hf=export_hf,
             draft_checkpoint_root=draft_checkpoint_root,
+            curriculum_identity=spec.curriculum.identity if spec.curriculum is not None else None,
         )
 
-    return ArtifactStep(
+    step = ArtifactStep(
         name=step_name,
         version=spec.version,
         artifact_type=SkyRLRun,
-        run=run_skyrl,
+        run=partial(run_skyrl, env_vars={}),
         build_config=build_config,
         deps=deps,
         runtime_args={_EXECUTION: execution},
     )
+    # A completed training version must not serve another continuation's cached result.
+    return replace(step, expected_fingerprint=step.fingerprint())

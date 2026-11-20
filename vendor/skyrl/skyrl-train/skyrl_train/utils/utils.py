@@ -1,15 +1,14 @@
-import importlib
 import ipaddress
 import os
 import time
 import sys
 import logging
 import math
-import socket
 
 import ray
 import torch
 from loguru import logger
+from transformers import AutoConfig
 from rigging.secrets import SECRETS_DIR_ENV, require_secret
 from omegaconf import DictConfig, OmegaConf
 from ray.util.placement_group import (
@@ -19,10 +18,9 @@ from ray.util.placement_group import (
     placement_group_table,
 )
 
-from skyrl_train.telemetry import record_event
 from skyrl_train.batch_invariant import BATCH_INVARIANT_NCCL_ENV
 from skyrl_train.config.callbacks import validate_hf_export_config
-from skyrl_train.config.utils import generation_context_limit
+from skyrl_train.config.utils import generation_context_limit, model_expert_count
 from skyrl_train.config.query_bias import resolve_grug_query_bias_update
 from skyrl_train.config.weight_sync_pause import resolve_weight_sync_pause_policy
 from skyrl_train.config.behavior_logprobs import configure_behavior_logprob_sampling
@@ -42,7 +40,7 @@ from skyrl_train.env_vars import (
 from skyrl_train.group_admission import resolve_group_advantage_invariant
 from skyrl_train.trajectory_selection import optimization_samples_per_prompt, trajectory_selector_from_config
 from skyrl_train.dynamic_sampling import resolve_dynamic_sampling_criteria
-from marinskyrl.runtime_options import reference_model_required
+from marinskyrl.runtime_options import reference_model_required, AdvantageEstimator, PolicyLossType
 from marinskyrl.rollout_grading import validate_nemotron_ultra_grading
 from marinskyrl.process_diagnostics import initialize_process_diagnostics
 from marinskyrl.distillation import (
@@ -51,7 +49,7 @@ from marinskyrl.distillation import (
     validate_generation_logprobs,
 )
 from marinskyrl.inference_placement import validate_expert_block_transport
-from marinskyrl.runtime_options import GDNBackend, R3Transport
+from marinskyrl.runtime_options import R3Transport, BatchBuilder, OUTCOME_ADVANTAGE_ESTIMATORS
 
 from .constants import DEFAULT_RAY_PLACEMENT_GROUP_TIMEOUT_SECONDS
 from .algorithm_registry import (
@@ -270,7 +268,6 @@ class Timer:
 
     def __enter__(self):
         self.start_time = time.monotonic()
-        self.started_unix_ms = round(time.time() * 1000)
         if self.log_events:
             logger.opt(depth=1).info(f"Started: '{self.message}'")
         return self
@@ -278,14 +275,6 @@ class Timer:
     def _finish(self, exc_type) -> None:
         duration = time.monotonic() - self.start_time
         self._duration = duration
-        if self.log_events:
-            record_event("native_timer", {
-                "phase": self.message,
-                "started_unix_ms": self.started_unix_ms,
-                "finished_unix_ms": round(time.time() * 1000),
-                "duration_seconds": duration,
-                "succeeded": exc_type is None,
-            })
         if self.log_events:
             log = logger.opt(depth=2).info if exc_type is None else logger.opt(depth=2).error
             outcome = "Finished" if exc_type is None else "Failed"
@@ -297,7 +286,10 @@ class Timer:
         self._finish(exc_type)
 
     async def __aenter__(self):
-        return self.__enter__()
+        self.start_time = time.monotonic()
+        if self.log_events:
+            logger.opt(depth=1).info(f"Started: '{self.message}'")
+        return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         self._finish(exc_type)
@@ -368,6 +360,11 @@ def validate_batch_sizes(cfg: DictConfig):
         f"train_batch_size {cfg.trainer.train_batch_size} should be divisible by policy_mini_batch_size {cfg.trainer.policy_mini_batch_size}"
     )
     optimization_group_size = optimization_samples_per_prompt(cfg)
+    if (
+        cfg.trainer.batch_builder == BatchBuilder.WORKER
+        and cfg.trainer.train_batch_size * optimization_group_size % policy_dp_size
+    ):
+        raise ValueError("trainer.batch_builder=worker does not support rows requiring DP padding")
     policy_mini_batch_size_per_gpu = cfg.trainer.policy_mini_batch_size * optimization_group_size // policy_dp_size
     assert policy_mini_batch_size_per_gpu > 0, (
         f"Invalid policy_mini_batch_size_per_gpu: {policy_mini_batch_size_per_gpu}. "
@@ -415,10 +412,6 @@ def validate_batch_sizes(cfg: DictConfig):
 def validate_megatron_cfg(cfg: DictConfig):
     # not yet supported + tested features
     assert cfg.generator.weight_sync_backend == "nccl", "only nccl is supported for megatron weight sync"
-    assert cfg.trainer.critic.model.path is None, "only GRPO training is currently supported for megatron"
-
-    if cfg.trainer.flash_attn:
-        importlib.import_module("flash_attn")
 
     worker_configs = [(cfg.trainer.policy, "policy"), (cfg.trainer.ref, "ref")]
     for config, worker_type in worker_configs:
@@ -453,12 +446,63 @@ def _iter_config_kwargs(node):
             yield (key,), value
 
 
+_OUTCOME_LOSSES = frozenset(
+    {
+        PolicyLossType.REGULAR,
+        PolicyLossType.DUAL_CLIP,
+        PolicyLossType.GSPO,
+        PolicyLossType.CISPO,
+        PolicyLossType.SAPO,
+        PolicyLossType.IMPORTANCE_SAMPLING,
+        PolicyLossType.BEHAVIOR_CLIP,
+    }
+)
+
+
+def require_worker_batch_config(cfg: DictConfig) -> None:
+    """Reject configuration settings unsupported by policy-worker assembly."""
+    algorithm = cfg.trainer.algorithm
+    shaping = parse_trajectory_reward_shaping_config(cfg.generator.get("trajectory_reward_shaping"))
+    megatron = cfg.trainer.policy.megatron_config
+    expert_tensor_parallel = megatron.get("expert_tensor_parallel_size") or megatron.tensor_model_parallel_size
+    moe_etp = False
+    if expert_tensor_parallel > 1:
+        # Model registration imports utils while initializing the model package.
+        from skyrl_train.models import register_local_models
+
+        register_local_models()
+        model = cfg.trainer.policy.model
+        metadata = AutoConfig.from_pretrained(model.path, trust_remote_code=True, revision=model.get("revision"))
+        moe_etp = model_expert_count(metadata) is not None
+    supported_loss = (
+        algorithm.policy_loss_type in _OUTCOME_LOSSES and algorithm.advantage_estimator in OUTCOME_ADVANTAGE_ESTIMATORS
+    ) or (
+        algorithm.policy_loss_type == PolicyLossType.SFT and algorithm.advantage_estimator == AdvantageEstimator.UNIFORM
+    )
+    restrictions = [
+        ("DPO and reference-model objectives", reference_model_required(algorithm)),
+        ("the configured loss and estimator", not supported_loss),
+        ("colocated placement", cfg.trainer.placement.colocate_all),
+        ("distillation", algorithm.get("distillation") is not None),
+        ("trajectory selection", cfg.trainer.trajectory_selector.type is not None),
+        ("step-wise training", cfg.trainer.step_wise_training),
+        ("advantage batch normalization", algorithm.advantage_batch_normalize),
+        ("loop advantage credit", shaping.enabled and shaping.loop.advantage_penalty_per_token > 0),
+        ("marker-target reasoning penalties", shaping.enabled and shaping.reasoning_span.charges_tokens),
+        ("ETP greater than one", moe_etp),
+        ("dense batch dumping", cfg.trainer.dump_data_batch),
+    ]
+    for reason, unsupported in restrictions:
+        if unsupported:
+            raise ValueError(f"trainer.batch_builder=worker does not support {reason}")
+
+
 def validate_cfg(cfg: DictConfig):
+    if BatchBuilder(cfg.trainer.batch_builder) is BatchBuilder.WORKER:
+        require_worker_batch_config(cfg)
     validate_mismatch_probe_config(cfg)
     if cfg.trainer.strategy != "megatron":
         raise ValueError(f"Unsupported training strategy: {cfg.trainer.strategy}")
-    if cfg.trainer.critic.model.path:
-        raise ValueError("Megatron does not support a critic worker")
     distillation_plan = compile_distillation_plan_from_config(cfg)
     validate_distillation_runtime_support(distillation_plan)
     validate_nemotron_ultra_grading(cfg, distillation_plan)
@@ -507,19 +551,12 @@ def validate_cfg(cfg: DictConfig):
             "trainer.algorithm.group_admission.stall_timeout must be positive when set; got "
             f"{group_admission_stall_timeout}"
         )
-    if cfg.trainer.algorithm.tis_lcs_alert_threshold < 0:
-        raise ValueError(
-            "trainer.algorithm.tis_lcs_alert_threshold must be non-negative; "
-            f"got {cfg.trainer.algorithm.tis_lcs_alert_threshold}"
-        )
     if cfg.trainer.progress.mode not in {"auto", "tqdm", "logging"}:
         raise ValueError(f"trainer.progress.mode must be one of auto, tqdm, logging; got {cfg.trainer.progress.mode!r}")
     if cfg.generator.r3_transport not in set(R3Transport):
         raise ValueError(
             f"generator.r3_transport must be one of by_value, resident, decentral; got {cfg.generator.r3_transport!r}"
         )
-    if cfg.generator.gdn_backend not in set(GDNBackend):
-        raise ValueError(f"generator.gdn_backend must be one of torch, flashqla; got {cfg.generator.gdn_backend!r}")
     available_policy_losses = PolicyLossRegistry.list_available()
     assert available_policy_losses != [], "Policy loss registry is not populated."
     assert cfg.trainer.algorithm.policy_loss_type in available_policy_losses, (
@@ -535,12 +572,6 @@ def validate_cfg(cfg: DictConfig):
         resolve_grug_query_bias_update(cfg.trainer.policy)
     except ValueError as error:
         raise AssertionError(str(error)) from error
-
-    # if advantage estimator is GAE, then critic path should be provided
-    if cfg.trainer.algorithm.advantage_estimator == "gae":
-        assert cfg.trainer.critic.model.path, (
-            "`trainer.critic.model.path` should be provided for PPO training, got `None`"
-        )
 
     assert not (cfg.trainer.algorithm.use_kl_in_reward and cfg.trainer.algorithm.use_kl_loss), (
         "use_kl_in_reward and use_kl_loss should be mutually exclusive"
@@ -1049,7 +1080,6 @@ def prepare_runtime_environment(cfg: DictConfig) -> dict[str, str]:
     # See https://github.com/NVIDIA/Megatron-LM/issues/533#issuecomment-1760193239
     env_vars["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
     if cfg.trainer.flash_attn:
-        # TransformerEngine otherwise overrides the FlashAttention choice on Hopper+.
         env_vars["NVTE_FUSED_ATTN"] = "0"
 
     if cfg.generator.backend == "vllm":
@@ -1093,7 +1123,6 @@ def prepare_runtime_environment(cfg: DictConfig) -> dict[str, str]:
         gpu_counts.extend(
             [
                 placement.policy_num_gpus_per_node,
-                placement.critic_num_gpus_per_node,
                 placement.ref_num_gpus_per_node,
             ]
         )
@@ -1202,7 +1231,7 @@ def configure_ray_worker_logging() -> None:
             except ValueError:
                 level = record.levelno
             message = record.getMessage()
-            if record.exc_info is not None and record.exc_info[1] is not None:
+            if record.exc_info and record.exc_info[1] is not None:
                 message = f"{message}\n{format_exception_text(record.exc_info[1])}"
             logger.opt(depth=6).log(level, message)
 
@@ -1404,11 +1433,3 @@ def get_tcp_url(host: str, port: int) -> str:
         # not a literal IP, probably a hostname
         pass
     return f"tcp://{host}:{port}"
-
-
-def get_free_port():
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(("", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port

@@ -3,6 +3,7 @@
 import asyncio
 import math
 import os
+import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, nullcontext
@@ -14,9 +15,10 @@ from jinja2 import TemplateError
 from daytona import DaytonaError
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
+from rigging.redaction import redact_string
 from shellbox.machine import Backend, Machine, MachineFactory
 from taskcompendium.grading_result import GradingFailure, Outcome
-from taskcompendium.models import NoGrader, ReasoningMarkupPolicy
+from taskcompendium.models import EnvironmentRequirements, NoGrader, ReasoningMarkupPolicy
 from verifyit.modes.grade_judge import JudgeConnection
 from rolloutengine.harness.core import Harness
 from rolloutengine.harness.external import AgentHarness
@@ -61,6 +63,7 @@ from skyrl_train.rollouts.machines import OwnedMachineFactory, TaskMachineError
 from skyrl_train.rollouts.workers import WorkerShard, detached_config
 from skyrl_train.rollouts.finalization import finalize_trajectory_batch, propagate_data_sources
 from skyrl_train.rollout_observability import rollout_phase, rollout_wait
+from skyrl_train.telemetry import record_event
 from skyrl_train.trajectory_runners.trajectory_retention import RetentionSink
 from skyrl_train.trajectory_runners.model_clients import (
     ContextLengthExceededError,
@@ -322,7 +325,11 @@ def _failed_rollout(
         grade = fold_grades([step.transition.grade for step in rollout.steps if step.transition.grade is not None])
     if cleanup_errors := interruption.grade.diagnostics.get("cleanup_errors"):
         grade = replace(grade, diagnostics={**grade.diagnostics, "cleanup_errors": cleanup_errors})
-    logger.warning("Task {} interrupted during {}: {}", task.id, interruption.operation, exception_type)
+    detail = exception_type
+    if isinstance(error, TaskMachineError) and isinstance(error.__cause__, DaytonaError):
+        # Diagnostics carry only allowlisted fields. Provider text can contain credentials, so log it redacted.
+        detail = f"{exception_type} ({type(error.__cause__).__name__}: {redact_string(str(error.__cause__))})"
+    logger.warning("Task {} interrupted during {}: {}", task.id, interruption.operation, detail)
     return replace(
         rollout,
         grade=grade,
@@ -429,18 +436,32 @@ class TaskRolloutWorker:
         if lowered.harness == HARBOR_TRIAL_SESSION:
             if harbor is None or self.installed_agents is None:
                 raise ValueError("Full Harbor trials require Harbor and installed-agent settings")
+            engine_requirements = lowered.task.environment_requirements.model_copy(
+                update={"setup_commands": (), "working_directory": None}
+            )
+            if engine_requirements != EnvironmentRequirements():
+                raise ValueError(
+                    "Declare environment requirements in the Harbor package; "
+                    "TaskSpec overrides support only setup_commands and their working_directory"
+                )
             harnesses[HARBOR_TRIAL_SESSION] = self.installed_agents.original_harness(lowered, session_id, harbor, phase)
+            # The bound Harbor trial retains and executes the original setup.
+            # The recording engine must not provision a second task machine for it.
+            engine_task = lowered.task.model_copy(
+                update={"environment_requirements": engine_requirements}
+            )
             # Harbor owns the phase deadlines and must still run its verifier
             # after an agent timeout. The outer attempt deadline covers the full trial.
             lowered = lowered.model_copy(
                 update={
+                    "task": engine_task,
                     "limits": lowered.limits.model_copy(
                         update={
                             "model_turn_timeout": None,
                             "tool_turn_timeout": None,
                             "total_turn_timeout": None,
                         }
-                    )
+                    ),
                 }
             )
         elif harbor is not None and self.installed_agents is not None:
@@ -631,8 +652,23 @@ class TaskRolloutWorker:
 
     async def run_task(self, task: RolloutTask, writer: RolloutWriter) -> int:
         with self._active_request():
+            started = time.perf_counter()
             rollouts = await self.generate(task.request)
             batch = await self.training_batch(task.request, rollouts)
+            record_event(
+                "task_group_completed",
+                {
+                    "uid": task.prompt["uid"],
+                    "duration_seconds": time.perf_counter() - started,
+                    "response_tokens": sum(len(tokens) for tokens in batch["response_ids"]),
+                    "loss_tokens": sum(sum(mask) for mask in batch["loss_masks"]),
+                    **(batch.get("rollout_metrics") or {}),
+                },
+                attributes={
+                    "source": task.request.metadata[0].data_source or "_unknown",
+                    "step": str(task.lease.policy_step),
+                },
+            )
             return await write_trajectory_batch(task, writer, batch)
 
 
@@ -670,7 +706,6 @@ class TaskRolloutWorkerSpec:
         installed_agents = None
         if self.harbor_config is not None and self.harbor_config.get("installed_agent") is not None:
             # Full Harbor is an optional dependency for installed-agent runs.
-            from harbor.host_capabilities import HostCapabilities
             from shellbox.backends.daytona.connection import DEFAULT_DAYTONA_API_URL, DaytonaConnection
             from skyrl_train.rollouts.agent_runtime import InstalledAgentRuntime, InstalledAgentSettings
             from skyrl_train.rollouts.agent_backend import AgentInferenceBackend
@@ -691,7 +726,6 @@ class TaskRolloutWorkerSpec:
                     inference.model_name, generation_context_limit(runner_config), inference.tokenize, tokenizer
                 ),
                 int(runner_config.sampling_params.max_generate_length),
-                judge=judge,
                 daytona_connection=daytona_connection,
                 eval_daytona_connection=replace(
                     daytona_connection,

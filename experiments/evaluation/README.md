@@ -131,8 +131,9 @@ Agent arguments in the Harbor file override the model's agent arguments. Marin s
 endpoint, served model name, output path, local dataset path, and explicit
 `--limit`. Those values cannot be overridden in the Harbor file.
 
-Daytona runs first use `DAYTONA_API_KEY` from the launch environment, then the
-`DAYTONA_EVAL_API_KEY` secret in the `hai-gcp-models` GCP project.
+Daytona runs use the Daytona eval org only: `DAYTONA_EVAL_API_KEY` from the launch
+environment, then the `DAYTONA_EVAL_API_KEY` secret in the `hai-gcp-models` GCP project.
+An exported `DAYTONA_API_KEY`, such as an RL or data org key, is ignored.
 
 ## Results
 
@@ -144,8 +145,13 @@ Each evaluation has its own generated `run_id` and writes:
 
 The record contains the resolved model and evaluator settings, runtime
 provenance, hardware, status, result path, and Iris job IDs. Harbor also writes
-metrics and coverage there. Curated metric maps remain empty until Evaldash
-derives scores and coverage in its own catalog.
+metrics and coverage there. Curated metric maps remain empty; Evaldash
+derives scores and coverage in its own catalog. When the launcher waits, it
+prints each run's derived coverage and scores. Print them later with:
+
+```bash
+uv run python -m experiments.evaluation.cli scores gs://marin-eval-metadata/evals/<run_id>
+```
 Evaluations in one launch share a `group_id`, which is the launch ID set by
 `--run-id` when supplied. Failure records include available child log tails.
 
@@ -233,8 +239,9 @@ To extend the catalog:
 
 - Add model YAML under `serve/models/<org>/<model>.yaml`; see the
   [model schema](serve/models/README.md).
-- Add benchmark data and supported evaluation configurations under `experiments/evaluation/benchmarks/`
-  and expose their supported protocols through `benchmarks()`. Add suite choices or run overrides in [configs/evalchemy.yaml](configs/evalchemy.yaml); ordinary default selections need no menu entry.
+- Add a curated benchmark by following
+  [Add an evaluation benchmark](../../docs/tutorials/add-evaluation.md). It covers
+  source pins, prompts, scorers, protocols, catalog registration and validation.
 - Add Harbor files under `configs/harbor/` and register them with
   `harbor_definition()`. Add keys to `SUITES` when they belong in a suite.
 
@@ -252,3 +259,33 @@ platform. It checks a temporary copy and leaves the source unchanged.
 `upgrade-format` only after the smoke checks pass. These commands upgrade the
 FineStore format; `backfill-samples` rewrites normalized samples from retained
 source files. Read each command's `--help` before writing to production storage.
+
+## Micro210 judge policy
+
+The default Micro210 policy uses Together serverless `zai-org/GLM-5.3-Flash`
+(FP4) and Secret Manager version `TOGETHER_API_KEY/versions/1`. It allocates
+GPUs only for the candidate model. `JudgeConfig` records temperature 0,
+top-p 0.95, low reasoning effort, request timeouts and retry limits. The task-local
+adapter maps the original choice constraint to Together regex decoding. Verdict
+labels, rubric prompts and the 128/512/2048 token schedule stay the same.
+BixBench keeps its JSON schema, 1024-token cap and 600-second request timeout.
+Its temperature is fixed at 1, matching the old pinned model's generation config.
+
+The policy and prepared tasks have new hashes. Scores from this judge and the
+old MiniMax M3 judge are not directly comparable. A paired re-score of one or
+two existing models can measure the shift; no paired re-score has run.
+Mini/Micro are separate protocols from the full evaluation policy in #10197.
+
+Use `read_micro210_policy(record.policy_reference)` to verify and read an old
+record's specification. `LEGACY_POLICY_REFERENCE` retains the 2026.11.18 pin.
+To rebuild the new task resources from the old prepared table:
+
+```python
+from experiments.evaluation.judge_config import MICRO210_JUDGE
+from experiments.evaluation.micro210_inputs import rebind_judge_inputs
+
+rebind_judge_inputs("old-rollouts.parquet", "new-rollouts.parquet", MICRO210_JUDGE)
+```
+
+Publish rebuilt tasks under a fresh URI and verify their hash before changing
+the canonical policy pin. Mini840 keeps its own frozen task definitions.

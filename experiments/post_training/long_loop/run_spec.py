@@ -12,6 +12,8 @@ from typing import Any
 
 import draccus
 import yaml
+from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.long_loop.execution_policy import bind_stage_timeouts, experimental_controls
 from experiments.post_training.long_loop.stage_config import validate_stage_config
@@ -70,11 +72,12 @@ SCALE_PATHS = {
 
 
 def read_pin(pin: FilePin, directory: Path) -> Any:
-    path = directory / pin.path
-    content = path.read_bytes()
+    path = StoragePath(pin.path if "://" in pin.path else str(directory / pin.path))
+    fs, key = filesystem_for(str(path))
+    content = fs.cat_file(key)
     if hashlib.sha256(content).hexdigest() != pin.sha256:
         raise ValueError(f"Pinned file changed: {path}")
-    return yaml.safe_load(content)
+    return json.loads(content) if pin.path.endswith(".json") else yaml.safe_load(content)
 
 
 def resolve_spec(
@@ -117,6 +120,15 @@ def resolve_spec(
         sft_manifest["data"][field] = read_pin(draccus.decode(FilePin, pin), directory)
     for name in ("sft", "rl", "evaluation", "endpoint", "archive", "initializer", "tokenizer", "execution"):
         result[name] = read_pin(getattr(spec, name), directory)
+    sft_recipe = result["sft"]
+    tracker = sft_recipe if sft_recipe.get("format") == "sft_spec" else sft_recipe["trainer"]["trainer"]["tracker"]
+    entity_key, project_key = (
+        ("wandb_entity", "wandb_project") if sft_recipe.get("format") == "sft_spec" else ("entity", "project")
+    )
+    if not tracker.get(entity_key) or not tracker.get(project_key):
+        raise ValueError("Long-loop SFT requires explicit W&B entity and project")
+    if not result["rl"]["execution"].get("wandb_entity") or not result["rl"]["config"]["trainer"].get("project_name"):
+        raise ValueError("Long-loop RL requires explicit W&B entity and project")
     result["sft_format"] = result["sft"].pop("format", "grug")
     if result["sft_format"] not in {"sft_spec", "grug"}:
         raise ValueError("Unknown SFT configuration format")
@@ -184,7 +196,7 @@ def resolve_spec(
 
 
 def allocation_peaks(resolved: dict) -> dict[str, int]:
-    """Count serialized stage allocations, including the co-hosted eval judge."""
+    """Count serialized stage allocations, without a GPU role for the API judge."""
     execution = resolved["execution"]
     for runtime in (execution["coordinator"], resolved["rl"]["execution"], resolved["evaluation"]["execution"]):
         if runtime["priority"] != "production" or runtime["cluster"] != "cw-rno2a":
@@ -212,7 +224,6 @@ def allocation_peaks(resolved: dict) -> dict[str, int]:
             nodes += (plan["num_inference_engines"] + per_node - 1) // per_node
             nodes += plan["reference_num_nodes"] or 0
         peaks[stage] = nodes * width
-    peaks["evaluation"] += resolved["evaluation"]["judge_gpu_count"]
     peaks = {key: value + coordinator_count for key, value in peaks.items()}
     if max(peaks.values()) > 256:
         raise ValueError(f"Run exceeds the authorized 256 H100 allocation: {peaks}")

@@ -9,7 +9,7 @@ import torch
 
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.group_admission import GroupAdvantageInvariant
-from skyrl_train.rollouts.buffer import RolloutGroup
+from skyrl_train.rollouts.buffer import RolloutGroup, RowFacts
 from skyrl_train.trainer import RayPPOTrainer
 from skyrl_train.trajectory_runners.types import TrajectoryID
 from skyrl_train.training_batch import TrainingInputBatch
@@ -45,7 +45,6 @@ def test_whole_task_rollouts_keep_order_through_padding_dump_and_training(tmp_pa
         actor_infos=[SimpleNamespace(rank=SimpleNamespace(dp_size=6))],
         async_run_ray_method=lambda *args: [],
     )
-    trainer.critic_model = None
     trainer.ref_model = None
     received = []
 
@@ -59,7 +58,7 @@ def test_whole_task_rollouts_keep_order_through_padding_dump_and_training(tmp_pa
         return {"policy_update_steps": 1.0}
 
     monkeypatch.setattr(trainer, "fwd_logprobs_values_reward", forward)
-    monkeypatch.setattr(trainer, "train_critic_and_policy", optimize)
+    monkeypatch.setattr(trainer, "train_policy", optimize)
     groups = [
         RolloutGroup(
             trajectory_batch={
@@ -75,7 +74,7 @@ def test_whole_task_rollouts_keep_order_through_padding_dump_and_training(tmp_pa
         )
         for source in ("swe", "math")
     ]
-    batch = trainer.convert_rollout_groups_to_training_input(groups)
+    batch = trainer.convert_rollout_groups_to_training_input(groups, facts=tuple(RowFacts.from_batch(group.trajectory_batch) for group in groups))
     status = asyncio.run(trainer._run_training(batch))
     order = json.loads((tmp_path / "training_order/step-1.json").read_text())
     assert order["trajectory_ids"] == ["swe_0", "swe_1", "math_0", "math_1", "pad0", "pad1"]

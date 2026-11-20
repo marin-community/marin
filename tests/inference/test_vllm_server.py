@@ -522,6 +522,17 @@ def test_serves_when_startup_succeeds():
         assert environment.model_id == "fake-model"
 
 
+def test_native_launch_forwards_api_key_without_logging_it(tmp_path, caplog):
+    api_key = "synthetic-native-api-key"
+    argv_path = tmp_path / "native-argv.json"
+    caplog.set_level(logging.INFO, logger="marin.inference.vllm_server")
+    with _environment(FakeVllmLauncher("record-args", str(argv_path)), extra_args=["--api-key", api_key]) as environment:
+        _wait_until_ready(environment)
+    argv = json.loads(argv_path.read_text())
+    assert argv[argv.index("--api-key") + 1] == api_key
+    assert api_key not in caplog.text
+
+
 @pytest.mark.parametrize(
     "error",
     [

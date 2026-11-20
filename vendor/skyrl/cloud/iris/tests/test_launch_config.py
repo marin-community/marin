@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 import base64
+import json
 from pathlib import Path
 
 import pytest
 import yaml
 from omegaconf import OmegaConf, open_dict
+from tokenizers import Tokenizer, models
+from transformers import PreTrainedTokenizerFast
 from rolloutengine.models import ModelTurn
 from skyrl_gym.answer_tasks import grade_gsm8k
 from skyrl_gym.task_sessions import AnswerTaskSession
 
 from cloud.iris.tests.launch_config_fixtures import raw_launch_config
-from cloud.iris import training_driver
+from cloud.iris import task_runtime, training_driver
 from cloud.iris.launch_config import LaunchTopology, load_launch_config, validate_launch_config
 from cloud.iris.role_plan import derive_num_nodes, derive_role_plan
 from cloud.iris.rl_config_translation import (
@@ -22,6 +25,7 @@ from cloud.iris.rl_config_translation import (
     materialize_launch_config,
     parse_rl_config,
 )
+from skyrl_train import trainer as trainer_module
 from skyrl_train.callbacks.base import TrainerControl, TrainerState
 from skyrl_train.callbacks.builtin import HFModelSaveCallback, create_default_callbacks
 from skyrl_train.distributed.step_policy import NonfiniteStepPolicy, nonfinite_step_policy
@@ -31,6 +35,42 @@ from marinskyrl.inference_placement import validate_expert_block_transport
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.config.rollout_validation import EntrypointOperation, validate_rollout_launch
 from skyrl_train.inference_engines import placement as inference_placement
+from skyrl_train.inference_engines.ray_wrapped_inference_engine import (
+    _build_inference_engine_runtime_env,
+    should_verify_inference_workers,
+)
+
+
+@pytest.mark.parametrize(
+    "overrides", [{}, {"resume_mode": "from_path"}, {"resume_mode": "none"}, {"resume_path": "other"}]
+)
+def test_starting_checkpoint_requires_automatic_recovery(tmp_path: Path, overrides: dict) -> None:
+    raw = raw_launch_config()
+    checkpoint = {"uri": "s3://seed/checkpoints/global_step_2", "identity": "seed@2026.11.13:abc"}
+    raw["inputs"]["starting_checkpoint"] = checkpoint
+    raw["skyrl"]["trainer"].update(overrides)
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw))
+
+    if overrides:
+        with pytest.raises(ValueError, match="starting_checkpoint"):
+            load_launch_config(path)
+    else:
+        resolved = load_launch_config(path)
+        assert resolved.skyrl.trainer.resume_mode == "latest"
+        assert resolved.skyrl.trainer.resume_path == checkpoint["uri"]
+
+
+@pytest.mark.parametrize("entrypoint", ["generate", "terminal_bench_generate"])
+def test_generation_rejects_starting_checkpoint(tmp_path: Path, entrypoint: str) -> None:
+    raw = raw_launch_config()
+    raw["skyrl"]["entrypoint"] = entrypoint
+    raw["inputs"]["starting_checkpoint"] = {"uri": "s3://seed/global_step_2", "identity": "seed@2:abc"}
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw))
+
+    with pytest.raises(ValueError, match="starting_checkpoint"):
+        load_launch_config(path)
 
 
 @pytest.mark.parametrize(
@@ -186,6 +226,22 @@ def test_colocated_expert_block_rejects_unverified_launch_entrypoint(tmp_path: P
 
     with pytest.raises(ValueError, match="requires the standard training entrypoint"):
         validate_launch_config(config)
+
+
+@pytest.mark.parametrize(
+    ("engine_sleep", "require_verified_placements", "expected"),
+    [(False, False, True), (True, False, False), (True, True, True)],
+)
+def test_worker_verification_handles_generation_and_sleeping_training(
+    engine_sleep: bool, require_verified_placements: bool, expected: bool
+) -> None:
+    assert should_verify_inference_workers(
+        tensor_parallel_size=1,
+        data_parallel_size=16,
+        use_mp_backend=False,
+        inference_engine_enable_sleep=engine_sleep,
+        require_verified_placements=require_verified_placements,
+    ) is expected
 
 
 def test_shared_bundle_reports_reject_duplicate_or_misrouted_receivers(monkeypatch) -> None:
@@ -402,17 +458,6 @@ def test_composed_launch_records_whether_training_runs_ahead_of_its_updates(
     path.write_text(yaml.safe_dump(raw, sort_keys=False))
 
     assert load_launch_config(path).runtime.training_type == expected
-
-
-def test_object_store_uris_in_skyrl_config_reach_the_task_unchanged(tmp_path: Path) -> None:
-    raw = raw_launch_config()
-    raw["skyrl"]["trainer"]["rollout_buffer"] = {"object_store_root": "s3://runs/smoke/rollouts"}
-    path = tmp_path / "launch.yaml"
-    path.write_text(yaml.safe_dump(raw, sort_keys=False))
-
-    config = load_launch_config(path)
-
-    assert config.skyrl.trainer.rollout_buffer.object_store_root == "s3://runs/smoke/rollouts"
 
 
 def test_qwen_smoke_hugging_face_model_input_reaches_the_runner_without_a_model_source(
@@ -699,15 +744,101 @@ def test_source_launch_rejects_conflicting_author_values(tmp_path):
             load_launch_config(path)
 
 
-def test_literal_source_ids_survive_launch_composition(tmp_path: Path) -> None:
+def test_loaded_launch_revision_selects_downloaded_tokenizer_bytes(tmp_path, monkeypatch):
+    revision = "68c46c4b3498877f3ef123c856ecfde50c39f404"
     raw = raw_launch_config()
-    routes = {
-        "https://files.pythonhosted.org/packages/42/21/bb9f6d2f76424f8b516fe83f8026e52e466b0202341bb4ee7a9861e06277/reasoning_gym-0.1.25-py3-none-any.whl": "nonagentic",
-        "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data": "nonagentic",
-        "long-loop-smartie-swesmith": "agentic",
+    raw["inputs"]["model"] = {
+        "uri": "org/policy",
+        "identity": "a" * 40,
+        "local_path": "org/policy",
+        "tokenizer_uri": "org/tokenizer",
+        "tokenizer_revision": revision,
     }
-    raw["skyrl"].setdefault("trainer", {}).setdefault("rollout_buffer", {})["source_routes"] = routes
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw))
-    compiled = load_launch_config(path)
-    assert OmegaConf.to_container(compiled.skyrl.trainer.rollout_buffer.source_routes) == routes
+    config = load_launch_config(path)
+    monkeypatch.setattr(task_runtime.tempfile, "gettempdir", lambda: str(tmp_path / "node"))
+
+    def download(model_id, *, revision, destination, allow_patterns):
+        tokenizer = Tokenizer(models.WordLevel({"[UNK]": 0, model_id: 1, str(revision): 2}, unk_token="[UNK]"))
+        PreTrainedTokenizerFast(tokenizer_object=tokenizer, unk_token="[UNK]").save_pretrained(destination)
+
+    monkeypatch.setattr(task_runtime, "download_hugging_face_snapshot", download)
+    tokenizer = task_runtime.prepare_policy_tokenizer(task_runtime._runtime_namespace(config))
+
+    assert json.loads((Path(tokenizer.local_path) / "tokenizer.json").read_text())["model"]["vocab"] == {
+        "[UNK]": 0,
+        "org/tokenizer": 1,
+        revision: 2,
+    }
+
+
+def test_loaded_launch_policy_revision_reaches_trainer_config(tmp_path, monkeypatch):
+    revision = "b" * 40
+    raw = raw_launch_config()
+    raw["inputs"]["model"] = {
+        "uri": "org/policy",
+        "identity": revision,
+        "local_path": "org/policy",
+        "tokenizer_uri": "org/tokenizer",
+        "tokenizer_revision": "c" * 40,
+    }
+    raw["runtime"]["task_env"] = {"HF_HUB_OFFLINE": "1"}
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    config = load_launch_config(path)
+    monkeypatch.setattr(task_runtime.tempfile, "gettempdir", lambda: str(tmp_path / "node"))
+    trainer_config = task_runtime._write_final_config(
+        config, policy_model=None, policy_tokenizer=None, draft_model=None
+    )
+
+    assert OmegaConf.load(trainer_config).skyrl.trainer.policy.model.revision == revision
+
+
+@pytest.mark.parametrize(
+    ("colocate_all", "colocate_policy_ref"), [(True, False), (False, True), (False, False)]
+)
+def test_resolved_nccl_buffers_override_inherited_small_buffer(
+    tmp_path, monkeypatch, colocate_all, colocate_policy_ref
+):
+    # A stale driver environment must not restore the NVLSTree corruption setting.
+    monkeypatch.setenv("NCCL_BUFFSIZE", "262144")
+    raw = raw_launch_config()
+    raw["skyrl"]["trainer"]["algorithm"]["use_kl_loss"] = True
+    raw["skyrl"]["trainer"]["placement"].update(
+        colocate_all=colocate_all, colocate_policy_ref=colocate_policy_ref
+    )
+    raw["iris"]["allocation"]["num_nodes"] = 1 if colocate_all else 2 if colocate_policy_ref else 3
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    config = load_launch_config(path).skyrl
+    actor_environments = {}
+
+    def record_actor_group(cfg, nodes, gpus, worker, **kwargs):
+        actor_environments[worker] = kwargs["actor_env_vars"]
+        return object()
+
+    # Replace the remote allocation boundary, then run the actual role wiring.
+    monkeypatch.setattr(trainer_module, "PPORayActorGroup", record_actor_group)
+    trainer = trainer_module.RayPPOTrainer.__new__(trainer_module.RayPPOTrainer)
+    trainer.cfg = config
+    trainer.colocate_pg = None
+    monkeypatch.setattr(trainer, "_initialize_model_actors", lambda *_args: None)
+    trainer.build_models("policy", "ref", policy_pg=object())
+    assert actor_environments == {
+        "policy": {"NCCL_BUFFSIZE": "4194304"},
+        "ref": {"NCCL_BUFFSIZE": "4194304"},
+    }
+    runtime_env = _build_inference_engine_runtime_env(
+        nccl_buffer_size_bytes=config.trainer.policy.nccl_buffer_size_bytes
+    )
+    assert runtime_env["env_vars"]["NCCL_BUFFSIZE"] == "4194304"
+
+    # Keep explicit per-role tuning representable for diagnostic controls.
+    raw["skyrl"]["trainer"].setdefault("policy", {})["nccl_buffer_size_bytes"] = 8388608
+    path.write_text(yaml.safe_dump(raw))
+    resolved = load_launch_config(path).skyrl
+    runtime_env = _build_inference_engine_runtime_env(
+        nccl_buffer_size_bytes=resolved.trainer.policy.nccl_buffer_size_bytes
+    )
+    assert runtime_env["env_vars"]["NCCL_BUFFSIZE"] == "8388608"

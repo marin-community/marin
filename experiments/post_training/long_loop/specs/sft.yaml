@@ -14,6 +14,7 @@ serialized_chat:
   - 128007
   - 198
 wandb_project: marin-long-loop
+wandb_entity: marin-community
 model:
   attention_implementation: gpu_fa4_cute
   capacity_factor: 1.0

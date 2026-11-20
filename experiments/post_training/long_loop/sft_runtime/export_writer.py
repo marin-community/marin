@@ -4,6 +4,7 @@
 """Export one pinned native Hero checkpoint as BF16 split-expert HF weights."""
 
 import gc
+import os
 import re
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -17,6 +18,7 @@ import jax.numpy as jnp
 from levanter.compat.hf_checkpoints import DEFAULT_MAX_SHARD_SIZE, _shard_hf_checkpoint
 from levanter.compat.hf_export import HFShardResume, run_on_export_writer, save_hf_shards, write_export_json
 from levanter.grug.sharding import compact_grug_mesh
+from rigging.event_log import durable_event_log
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.grug.moe_hero_ep.ops.export_metadata import split_expert_names
@@ -26,7 +28,6 @@ from experiments.post_training.long_loop.sft_runtime.model import (
     Transformer,
     grugmoe_inference_state_dict,
 )
-from experiments.post_training.long_loop.timing import durable_event_log
 
 MANIFEST_FILENAME = "export-manifest.json"
 REQUEST_FILENAME = "export-request.json"
@@ -89,6 +90,7 @@ def export_weights(
             config.source_revision,
             "sft_export",
             export_id,
+            local_directory=os.environ.get("IRIS_OUTPUT_DIR"),
         ) as timing,
     ):
         with timing.span("checkpoint_restore"):

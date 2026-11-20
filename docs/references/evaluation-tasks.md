@@ -48,6 +48,10 @@ Dataset-specific declarations live beside their recipes. MRCR declares its
 bin/needle label groups there; neither the generic schema nor the selector knows
 MRCR. GraphWalks declares a reference-token output budget and prefix probe using
 generic `ContextPolicy` fields. Reference counts use the run's pinned tokenizer.
+LongBench v2 publishes each prompt in full and middle-truncated to a fixed ladder
+of `o200k_base` token budgets, as ranked chat prompt variants. A `fit_context` run
+sends the largest variant that fits the served context and output budget, so the
+truncation is part of the published corpus and every model receives every item.
 
 Operations distinguish chat generation, raw-text generation, choice likelihood,
 and continuation likelihood. Chat preserves the source conversation without an
@@ -257,8 +261,10 @@ executors receive their resolved roots. Catalog publication remains in the curat
 workflow. Native generation menus publish
 raw and chat variants separately; no runtime task registry is loaded.
 
-Evaldash imports raw FineStore stores, selects one latest finished retry per logical
-trial, and applies these reductions. Its sample browser uses the same trial selection.
+`score_curated_record` in `evalrecords.rollout_results` selects one latest
+finished retry per logical trial and applies these reductions. Evaldash uses it to
+import raw FineStore stores; `experiments.evaluation.cli scores` prints the same
+result for a run. Its sample browser uses the same trial selection.
 The PostgreSQL reconciler checks both the producer record and the raw store version.
 Curation identities and the summary revision participate in dashboard protocol
 comparison when both records carry identities. The canonical curation graph records

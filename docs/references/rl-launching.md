@@ -194,7 +194,7 @@ allocation then disagrees with the derived role plan and is rejected before subm
 
 The preflight requires positive role dimensions, checks batch divisibility, and requires an explicit
 forward microbatch size to equal the training microbatch size. It checks local engine placement,
-rejects unsupported transport settings and separate critic roles, and requires an explicit KL-loss
+rejects unsupported transport settings and requires an explicit KL-loss
 setting. For every launcher, preflight checks policy and reference Megatron parallelism against
 the GPUs assigned to each role. Megatron builds separate dense and expert grids. The role GPU count
 must be divisible by both `TP * PP * CP` and `ETP * EP * PP`, where ETP is expert tensor
@@ -205,9 +205,11 @@ data parallelism.
 ## Artifact and runtime boundaries
 
 Identity-bearing inputs belong in `SkyRLSpec`: model and tokenizer,
-data artifacts, topology, seed, retention, and the rendered config. Cluster routing,
+data artifacts, a starting native checkpoint, topology, seed, retention, and the rendered config. Cluster routing,
 host resources, priority, and retry policy belong in `IrisSkyRLExecution`; changing placement must
-not fork artifact identity.
+not fork artifact identity. A versioned task mix (`RlCurriculum`) also belongs in `SkyRLSpec`; it
+renders the trainer's sampling settings and is named in the run record. See
+[RL curricula](rl-curricula.md).
 
 `IrisSkyRLExecution.container_profile` accepts an `iris.rpc.job_pb2.ContainerProfile` enum for the
 coordinator and trainer jobs. Enum names are serialized at the launch boundary. It defaults to `None`,
@@ -219,6 +221,22 @@ Use artifact dependencies for model and data handoffs. A raw checkpoint path hid
 can point at an incomplete export. Keep resume behavior and terminal export explicit. Use Marin's
 temporary-storage helper for checkpoints and trajectories so paths have a bounded lifetime and do
 not repeat a source bucket prefix.
+
+Shared W&B trackers bound final SDK uploads to 30 seconds per process. The
+training entrypoint first waits up to 30 seconds for remote node loggers, then
+finishes its own uploads using the same SDK deadline. These waits can take up to
+60 seconds, plus other cleanup. Upload timeouts produce warnings and preserve
+the workload's success or original exception. W&B may show the run as Crashed
+or Failed after a primary upload timeout even when training succeeds. Some W&B
+records may remain unuploaded. Other cleanup can still exhaust the existing
+120-second teardown watchdog.
+
+Marin sets the run's export root (`trainer.export_path`) to `<run output>/exports`.
+Set `trainer.dump_data_batch: true` to save diagnostic `TrainingInputBatch`
+pickle files under `<trainer.export_path>/dumped_data/global_step_<step>_training_input.pkl`.
+Local and cloud export paths use the same format. Dumps contain the batch after
+importance-sampling corrections and advantage calculation. Group UIDs and raw
+rewards are removed before dumping.
 
 SkyRL keeps the two most recent recovery checkpoints by default. For an RSI loop
 that needs only the latest recovery point, set
@@ -233,25 +251,123 @@ to false as well. Without export, successful runs retain native recovery checkpo
 in-training evaluation, resolved configuration and terminal result records; `SkyRLRun.hf_model_uri`
 is null. Pipelines that serve the resulting model for downstream evaluation must request export.
 
+Every HF export writes `generation_config.json` through SkyRL's Hugging Face
+model lifecycle utilities. It keeps the explicit fields of the source model's
+generation config and fills in the rest:
+`bos_token_id`, `eos_token_id` as the union of the tokenizer EOS id and the
+end-of-turn tokens the chat template emits (128001 and 128009 for the Llama 3
+header template), and `do_sample: true`, `temperature: 0.6`, `top_p: 0.95`.
+vLLM applies these sampling values to requests that omit them. SkyRL rollouts
+send explicit sampling parameters, and behavior-logprob training sets
+`generation_config: vllm` so the checkpoint's defaults never reach rollouts.
+
+With `SkyRLSpec`, configuration rendering binds the `best_checkpoint` callback's
+`initial_model_uri` to the resolved model input before artifact fingerprinting.
+Standalone recipes must set this URI explicitly.
+
 The `best_checkpoint` callback accepts a `selection_metric` whose values must be
 finite normalized scores in [0, 1], with larger values preferred. Set
 `save_after_fraction` to delay trained-checkpoint selection until that fraction
-of the total steps has elapsed. Step-zero evaluation still records the initial
-model as a candidate without saving weights; if it remains best, load the
+of the total steps has elapsed. With the default one-observation window,
+step-zero evaluation records the initial model as a candidate without saving
+weights; if it remains best, load the
 `model_uri` recorded in `best_checkpoint.json`. Optional `preservation_max_drop`
 entries map metric names to allowed absolute drops from their step-zero values;
 all gates must pass before a candidate can replace the best checkpoint. The
-step-zero evaluation must meet the configured coverage and eligibility checks
-when preservation gates are set; otherwise the callback fails immediately. The
+candidate must attempt `expected_tasks`, score at least `minimum_scored_tasks`,
+and pass `eval/selection_eligible`. With preservation gates, an ineligible
+step-zero evaluation fails immediately. The
 baseline and selection policy are recorded in `best_checkpoint.json` and the
 baseline is restored on resume. Keep metric definitions and the selection policy
 unchanged on resume.
 
-The temporary checkpoint root is derived from the RL artifact name and version.
+For selection over several evaluations, set `ema_window` and
+`evaluation_interval` on `best_checkpoint`. A window of five with interval two
+combines `selection_metric` at the five scheduled optimizer steps ending at the
+current step. The newest observation has weight one; each older observation's
+weight is multiplied by `1 - 2 / (5 + 1)`. Divide the weighted sum by the sum of
+the weights. A missing observation leaves the window ineligible. Preservation
+gates still use the current evaluation. The callback records observation history
+and selection settings; changing the window or interval on resume fails.
+
+For asynchronous mixtures, `trainer.rollout_buffer.consumed_route_quotas` sets
+the number of prompt groups from each route in every consumed batch.
+`source_routes` maps each input's `data_source` to a route. Quotas require
+`batch_policy: full_batch` and must sum to the training batch size in prompt
+groups. Rejected groups are replaced within their route. Generation slots
+rotate between routes so one repeatedly failing route cannot occupy every slot.
+
+The `wall_time_budget` callback stops after a completed update when `seconds`
+have elapsed since this process's first optimizer completion. Startup is
+excluded; subsequent evaluation and checkpoint work counts toward the budget.
+Set `groups_per_step` to the prompt-group batch size. The callback writes
+`training-budget.json` under the export root. Its `drain_margin` records the
+planned allowance in seconds for finalization; it does not enforce a deadline.
+Normal trainer finalization drains work after the stop. A fresh
+process starts a fresh clock, including when it restores a checkpoint.
+
+Native checkpoints default to lifecycle-managed TTL storage derived from the RL artifact name and version.
+Set `SkyRLRetentionPolicy.native_checkpoint_storage` to
+`SkyRLCheckpointStorage.PERMANENT` to write native checkpoints under
+`<artifact_output>/checkpoints`, as the SFT checkpointer does. Attempts, traces and
+Ray logs keep their temporary storage lifetime. The launch document and terminal
+run record use the same checkpoint root, including for native recovery and draft
+checkpoints.
 After runtime changes, use a fresh RL artifact version. Reusing the old
 version with `resume_mode=latest` can load private Torch or distributed state serialized by the old
 runtime. Reuse a version across runtime changes only after establishing checkpoint compatibility or
 selecting a fresh checkpoint root.
+
+### Native checkpoint inputs
+
+Set `SkyRLSpec.starting_checkpoint` to an artifact handle for a completed
+`global_step_N` directory. Give the checkpoint artifact an immutable name and
+version. Give the continuation a new RL artifact version when changing that
+input; reusing an existing run version with a different starting checkpoint fails.
+The launch document records the starting checkpoint's URI and artifact identity
+(`name@version:fingerprint`) under `inputs.starting_checkpoint`; the trainer reads native state directly.
+The input requires `resume_mode=latest`; omit any recipe `trainer.resume_path`.
+Completed immutable SkyRL artifact versions also reject configuration drift instead of
+returning a cached result.
+
+Automatic `resume_mode=latest` first uses the current run's latest checkpoint.
+If that run has no checkpoint marker, it uses the supplied starting checkpoint,
+or starts fresh if none was supplied. Repeat the same continuation command to
+recover its progress. A corrupt marker, missing checkpoint or load error still
+fails; it never silently falls back to older state. A continuation writes to
+its own output root, leaving the starting run's checkpoints unchanged. Without
+`starting_checkpoint`, the trainer's explicit `from_path` and `none` modes remain available.
+
+The initial import starts the configured dataset from the beginning. Leave
+`restore_dataloader_state=true` to recover this run's data position and queued
+rollouts after interruption. Optional `reset_global_step_on_resume` and
+`reset_distillation_token_count_on_resume` apply only to the initial import;
+recovery preserves the counters saved by this run.
+
+Training limits use the absolute trainer step. To apply two more updates from
+`global_step_500`, set `max_steps=502` and enough `epochs` to reach that target.
+A checkpoint already at or beyond the target completes without another update.
+Set `reset_global_step_on_resume=true` to count a new stage from zero instead;
+this leaves the restored optimizer and scheduler state intact.
+
+### Frozen Micro210 evaluation
+
+`python -m experiments.evaluation.micro210` builds the canonical Micro210
+evaluation graph. Supply `--model-uri`, the SHA256 of its
+`.marinskyrl-model-manifest.json` through `--model-manifest-sha256`, a tokenizer
+repository and full commit through `--tokenizer-uri` and `--tokenizer-revision`,
+and the run identity through `--name` and `--version`. The command prints the
+graph by default; `--run` submits it through Iris.
+
+The protocol lives in durable object storage. The code pins its URI, revision,
+SHA256 and byte size, and verifies those bytes before reading the policy.
+The model binding cannot set sampling, task subsets, sandbox resources, harness
+deadlines or the judge. The graph checks the prepared task bytes and model
+manifest before GPU allocation, then writes `canonical-evaluation.json` with the
+protocol hash beside the run outputs. Sandbox resources come from each task.
+The bound tokenizer must map the frozen stop IDs to `<|end_of_text|>` and
+`<|eot_id|>`; an incompatible tokenizer fails before allocation. Retained
+trajectories use the supplied run identity.
 
 ## Pre-launch review
 
@@ -282,3 +398,23 @@ For live submission, monitoring, or recovery, follow the `launch-rl` and `use-ir
 
 For the current curation, training and evaluation recipe, see the
 [quick RL loop](../recipes/quick-rl-loop.md).
+
+### NCCL SIMPLE buffers
+
+Policy and reference roles resolve `nccl_buffer_size_bytes` to 4,194,304 bytes
+(4 MiB) by default. The role runtime environment sets `NCCL_BUFFSIZE` explicitly,
+including inference engines that receive the policy's weight-sync setting. This
+prevents an inherited small-buffer value from replacing the resolved default.
+A `null` value deliberately delegates sizing to the process environment and NCCL
+config files.
+
+NCCL 2.30.7 can return incorrect NVLSTree reductions when its tuned staging payload
+exceeds a SIMPLE FIFO slot. A 256-KiB buffer reproduced this failure through both
+the native C API and ProcessGroupNCCL. A 1-MiB buffer also failed at 512-MiB
+messages; 4-MiB controls passed the tested 16–512-MiB range. See
+[the investigation and source-library A/B](https://github.com/marin-community/marin/issues/11649).
+This mitigation uses the existing library and preserves byte verification. It
+does not establish correctness for every message size or topology. Check resolved
+role settings and the effective `NCCL_BUFFSIZE` in worker INIT logs before scaling
+a new configuration. Reference workers now retain larger buffers, so include that
+memory in colocated-role capacity estimates.

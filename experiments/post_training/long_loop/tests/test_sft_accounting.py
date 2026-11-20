@@ -3,13 +3,14 @@
 
 import hashlib
 import json
+from dataclasses import replace
 
 import draccus
 import jax
 import numpy as np
 import pytest
 from haliax import Axis
-from levanter.data.text.datasets import DatasetComponent, LmDataConfig
+from levanter.data.text.datasets import ConcatDatasetComponent, DatasetComponent, LmDataConfig
 from levanter.data.text.formats import SerializedChatLmDatasetFormat, TextLmDatasetFormat
 from levanter.main.train_lm import TrainLmConfig
 from levanter.store.cache import SerialCacheWriter
@@ -27,7 +28,8 @@ from experiments.post_training.long_loop.sft_accounting import (
 
 
 @pytest.mark.parametrize("pack", [False, True])
-def test_committed_native_samples_and_population_reports_survive_in_archive(tmp_path, pack):
+@pytest.mark.parametrize("concatenated", [False, True])
+def test_committed_native_samples_and_population_reports_survive_in_archive(tmp_path, pack, concatenated):
     tokenizer_path = tmp_path / "tokenizer"
     tokenizer = PreTrainedTokenizerFast(
         tokenizer_object=Tokenizer(models.WordLevel({f"t{i}": i for i in range(128)}, unk_token="t0")),
@@ -45,17 +47,25 @@ def test_committed_native_samples_and_population_reports_survive_in_archive(tmp_
         writer.write_batch([{"input_ids": tokens} for tokens in documents])
     with SerialCacheWriter(str(replay), {"input_ids": np.empty(0, dtype=np.int32)}) as writer:
         writer.write_batch([{"input_ids": np.arange(64, dtype=np.int32)}])
+    chat_component = DatasetComponent(
+        cache_dir=str(chat),
+        flat_cache=True,
+        pack=pack,
+        format=SerializedChatLmDatasetFormat(message_start_id=1, assistant_prefix=(1, 7, 3, 4)),
+    )
+    if concatenated:
+        second = tmp_path / "chat-second"
+        with SerialCacheWriter(str(second), {"input_ids": np.empty(0, dtype=np.int32)}) as writer:
+            writer.write_batch([{"input_ids": tokens} for tokens in reversed(documents)])
+        chat_component = ConcatDatasetComponent(
+            children={"first": chat_component, "second": replace(chat_component, cache_dir=str(second))}
+        )
     data = LmDataConfig(
         tokenizer=str(tokenizer_path),
         cache_dir=str(tmp_path / "unused"),
         auto_build_caches=False,
         components={
-            "sft/chat": DatasetComponent(
-                cache_dir=str(chat),
-                flat_cache=True,
-                pack=pack,
-                format=SerializedChatLmDatasetFormat(message_start_id=1, assistant_prefix=(1, 7, 3, 4)),
-            ),
+            "sft/chat": chat_component,
             "pretrain/text": DatasetComponent(
                 cache_dir=str(replay), flat_cache=True, pack=False, format=TextLmDatasetFormat()
             ),
@@ -68,7 +78,7 @@ def test_committed_native_samples_and_population_reports_survive_in_archive(tmp_
         block_cross_document_attention=pack,
     )
     config = TrainLmConfig(
-        data=data, train_seq_len=16, data_seed=31, trainer=TrainerConfig(seed=17, train_batch_size=2, num_train_steps=8)
+        data=data, train_seq_len=16, data_seed=31, trainer=TrainerConfig(seed=17, train_batch_size=40, num_train_steps=8)
     )
     native = tmp_path / "trained"
     checkpoint = native / "checkpoints/step-7"
@@ -103,24 +113,49 @@ def test_committed_native_samples_and_population_reports_survive_in_archive(tmp_
     rows = [json.loads(line) for line in (output / "realized-samples.jsonl").read_text().splitlines()]
     # Compare the manifest against the real NamedLmDataset boundary consumed by train_lm.
     actual = data.train_set(Axis("position", 16), config.trainer.batch_schedule, key=jax.random.PRNGKey(31))
-    examples = blocking_wait(actual.get_batch(list(range(16))))
+    examples = blocking_wait(actual.get_batch(list(range(320))))
     for row, example in zip(rows, examples, strict=True):
         tokens = np.asarray(example.tokens.array)
         assert row["retained_tokens_sha256"] == hashlib.sha256(tokens[: row["real_tokens"]].tobytes()).hexdigest()
         assert row["loss_tokens"] == int(np.count_nonzero(np.asarray(example.loss_weight.array)))
         if row["is_sft"]:
-            originals = [documents[doc["row"]] for doc in row["documents"]]
+            child_documents = list(reversed(documents)) if row["child"] == "second" else documents
+            originals = [child_documents[doc["row"]] for doc in row["documents"]]
             assert row["original_tokens"] == sum(map(len, originals))
             np.testing.assert_array_equal(tokens[: row["real_tokens"]], np.concatenate([doc[:16] for doc in originals]))
     report = json.loads((output / "realized-truncation-padding.json").read_text())
-    assert report["overall"]["sequences"] == 16
-    assert report["overall"]["positions"] == 256
+    assert report["overall"]["sequences"] == 320
+    assert report["overall"]["positions"] == 5120
     assert report["overall"]["left_truncated_traces"] > 0
     assert report["overall"]["pad_tokens"] > 0
-    assert report["overall"]["real_tokens"] + report["overall"]["pad_tokens"] == 256
+    assert report["overall"]["real_tokens"] + report["overall"]["pad_tokens"] == 5120
     replay = [row for row in rows if not row["is_sft"]]
     assert report["overall"]["replay"]["loss_tokens"] == sum(row["loss_tokens"] for row in replay)
     assert report["overall"]["replay"]["fraction_of_positions"] == len(replay) / len(rows)
+    prefix = tmp_path / "partial-samples.jsonl"
+    prefix.write_bytes(b"".join((output / "realized-samples.jsonl").read_bytes().splitlines(keepends=True)[:37]))
+    resumed = tmp_path / "resumed"
+    resume_pin = {
+        "source": str(prefix),
+        "sha256": hashlib.sha256(prefix.read_bytes()).hexdigest(),
+        "rows": 37,
+        "consumed_config_sha256": hashlib.sha256((native / "consumed-config.json").read_bytes()).hexdigest(),
+        "checkpoint_metadata_sha256": hashlib.sha256((checkpoint / "metadata.json").read_bytes()).hexdigest(),
+    }
+    write_sft_accounting(
+        output=str(resumed),
+        trained=str(native),
+        settings={
+            "pinned_evidence": pins,
+            "measured_step_seconds": 2.0,
+            "timing_source": "tiny CPU fixture",
+            "pack": pack,
+            "resume_samples": resume_pin,
+        },
+    )
+    assert (resumed / "realized-samples.jsonl").read_bytes() == (output / "realized-samples.jsonl").read_bytes()
+    resumed_report = json.loads((resumed / "realized-truncation-padding.json").read_text())
+    assert resumed_report == {**report, "resumed_prefix": resume_pin}
     inputs, receipt = sft_accounting_inputs(str(output))
     archive = tmp_path / "archive"
     seal_archive(str(archive), inputs, {"sft_data_accounting": receipt})

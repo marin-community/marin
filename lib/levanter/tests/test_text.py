@@ -37,7 +37,15 @@ from levanter.tokenizers import load_tokenizer
 from levanter.models.lm_model import LmExample
 from levanter.models.loss import maybe_fused_next_token_loss
 from levanter.schedule import BatchSchedule
-from levanter.store.cache import LEDGER_FILE_NAME, CacheCatalog, write_levanter_cache
+from levanter.store.cache import (
+    LEDGER_FILE_NAME,
+    CacheCatalog,
+    SerialCacheWriter,
+    TreeCache,
+    consolidate_shard_cache_ledgers,
+    write_levanter_cache,
+)
+from levanter.utils.thread_utils import blocking_wait
 
 
 def test_dont_blow_up_without_validation_set():
@@ -355,10 +363,7 @@ def test_prebuilt_cache_with_loss_weights(tmp_path):
 
     component = DatasetComponent(
         source=UrlDatasetSourceConfig(train_urls=[str(data_path)], validation_urls=[]),
-        format=PrebuiltLmDatasetFormat(
-            loss_weights_key="loss_weights",
-            loss_weight_transform=lambda weights: weights * 2.0,
-        ),
+        format=PrebuiltLmDatasetFormat(loss_weights_key="loss_weights"),
         cache_dir=str(tmp_path),
     )
     config = LmDataConfig(
@@ -379,7 +384,7 @@ def test_prebuilt_cache_with_loss_weights(tmp_path):
 
     example = ds[0]
     np.testing.assert_array_equal(np.asarray(example.tokens), np.array(records[0]["input_ids"], dtype=np.int32))
-    expected_loss_weight = np.array([2.0, 1.0, 0.0, 0.0], dtype=np.asarray(example.loss_weight).dtype)
+    expected_loss_weight = np.array([1.0, 0.5, 0.0, 0.0], dtype=np.asarray(example.loss_weight).dtype)
     np.testing.assert_array_equal(np.asarray(example.loss_weight), expected_loss_weight)
 
 
@@ -968,3 +973,105 @@ def test_build_caches_rejects_required_component_missing_from_catalog(tmp_path):
 
     with pytest.raises(KeyError):
         config.build_caches("train")
+
+
+@pytest.mark.parametrize("shards", [1, 2])
+def test_prebuilt_first_fit_packing_preserves_prediction_weights_and_random_access(tmp_path, shards):
+    # Chat, full-token replay, teacher-only relay, then chat. Weights already
+    # index predictions, so neither packing nor the dataset may shift them again.
+    tokens = [np.arange(100 + 10 * i, 100 + 10 * i + n, dtype=np.int32) for i, n in enumerate([6, 3, 4, 7])]
+    weights = [
+        np.asarray(w, dtype=np.float32) for w in ([0, 1, 0, 1, 1, 0], [1, 1, 0], [0, 0, 1, 0], [0, 1, 1, 0, 1, 1, 0])
+    ]
+    exemplar = {"input_ids": np.zeros(0, dtype=np.int32), "loss_weights": np.zeros(0, dtype=np.float32)}
+    records = [{"input_ids": t, "loss_weights": w} for t, w in zip(tokens, weights, strict=True)]
+    paths = []
+    for shard in range(shards):
+        path = str(tmp_path) if shards == 1 else str(tmp_path / f"part-{shard}")
+        with SerialCacheWriter(path, exemplar) as writer:
+            writer.write_batch(records[shard * 4 // shards : (shard + 1) * 4 // shards])
+        paths.append(path)
+    if shards > 1:
+        consolidate_shard_cache_ledgers(paths, str(tmp_path), exemplar)
+    cache = TreeCache.load(str(tmp_path), exemplar)
+    component = DatasetComponent(
+        cache_dir=str(tmp_path),
+        pack=256,
+        pack_lookahead_window=128,
+        format=PrebuiltLmDatasetFormat(loss_weights_key="loss_weights"),
+    )
+    dataset = dataset_for_component(
+        component, hax.Axis("position", 10), cache, eos_id=None, block_cross_document_attention=True
+    )
+    assert blocking_wait(dataset.async_len()) == 3
+    examples = blocking_wait(dataset.get_batch([2, 0, 1, 2]))
+    for example, documents in zip(examples, [(3,), (0, 1), (2,), (3,)], strict=True):
+        padding = 10 - sum(len(tokens[i]) for i in documents)
+        np.testing.assert_array_equal(
+            example.tokens, np.pad(np.concatenate([tokens[i] for i in documents]), (0, padding))
+        )
+        np.testing.assert_array_equal(
+            example.loss_weight, np.pad(np.concatenate([weights[i] for i in documents]), (0, padding))
+        )
+        np.testing.assert_array_equal(
+            example.attn_mask.segment_ids[0],
+            np.pad(np.repeat(documents, [len(tokens[i]) for i in documents]), (0, padding), constant_values=-1),
+        )
+    first = dataset.shuffle(jax.random.PRNGKey(17), perm_type="feistel")
+    second = dataset.shuffle(jax.random.PRNGKey(17), perm_type="feistel")
+    for left, right in zip(
+        blocking_wait(first.get_batch([1, 0])), blocking_wait(second.get_batch([1, 0])), strict=True
+    ):
+        np.testing.assert_array_equal(left.tokens, right.tokens)
+        np.testing.assert_array_equal(left.loss_weight, right.loss_weight)
+
+
+@pytest.mark.parametrize("shuffle", [False, True])
+def test_iid_validation_packs_only_reserved_sources_and_preserves_masks(tmp_path, shuffle):
+    exemplar = {"input_ids": np.zeros(0, dtype=np.int32), "loss_weights": np.zeros(0, dtype=np.float32)}
+    components = {}
+    caches = {}
+    for name, lengths in {"sft/reserved": [6, 4, 3] * 4, "train-only": [12] * 3}.items():
+        path = str(tmp_path / name)
+        with SerialCacheWriter(path, exemplar) as writer:
+            writer.write_batch(
+                [
+                    {
+                        "input_ids": np.arange(100 * i + 1, 100 * i + n + 1, dtype=np.int32),
+                        "loss_weights": np.asarray([j % 2 if j < n - 1 else 0 for j in range(n)], dtype=np.float32),
+                    }
+                    for i, n in enumerate(lengths)
+                ]
+            )
+        caches[name] = writer.result()
+        components[name] = DatasetComponent(
+            cache_dir=path,
+            flat_cache=True,
+            pack=256,
+            pack_lookahead_window=3,
+            format=PrebuiltLmDatasetFormat(loss_weights_key="loss_weights"),
+        )
+    config = LmDataConfig(
+        tokenizer="passthrough",
+        vocab_size=2048,
+        components=components,
+        num_validation_sequences={"sft/reserved": 2},
+        shuffle_before_trainval_split=shuffle,
+    )
+    # The unrelated source is valid at its training context but exceeds the
+    # evaluation context. It has no IID reservation and must not be packed there.
+    train_only = config.build_token_datasets(caches, hax.Axis("position", 16), split="train")["train-only"]
+    assert len(train_only.as_sync_dataset()) == 3
+    Pos = hax.Axis("position", 8)
+    reference = dataset_for_component(
+        components["sft/reserved"], Pos, caches["sft/reserved"], eos_id=None, block_cross_document_attention=False
+    )
+    if shuffle:
+        reference = reference.shuffle(jax.random.PRNGKey(0), perm_type="feistel")
+    length = len(reference.as_sync_dataset())
+    expected = blocking_wait(reference.get_batch([length - 2, length - 1]))
+    actual = config.validation_sets(Pos)["sft/reserved"].as_sync_dataset()
+    assert len(actual) == 2
+    for index, example in enumerate(expected):
+        np.testing.assert_array_equal(actual[index].tokens.array, example.tokens)
+        np.testing.assert_array_equal(actual[index].loss_weight.array, example.loss_weight)

@@ -22,8 +22,10 @@ def _to_jsonable(value: Any):
         return [_to_jsonable(v) for v in value]
     if is_dataclass(value):
         return {field.name: _to_jsonable(getattr(value, field.name)) for field in fields(value)}
-    if isinstance(value, jax.Array):
+    if isinstance(value, jax.Array | np.ndarray):
         return jnp_to_python(value)
+    if isinstance(value, np.ndarray):
+        return value.tolist()
     if isinstance(value, np.integer):
         return int(value)
     if isinstance(value, np.floating):

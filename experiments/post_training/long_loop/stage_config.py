@@ -61,7 +61,6 @@ RL_REQUIRED_FIELDS = (
     "trainer.algorithm.advantage_estimator",
     "trainer.algorithm.loss_reduction",
     "trainer.algorithm.off_policy_correction",
-    "trainer.algorithm.tis_splice",
     "trainer.policy.optimizer_config.lr",
     "trainer.policy.optimizer_config.scheduler",
     "trainer.policy.optimizer_config.weight_decay",

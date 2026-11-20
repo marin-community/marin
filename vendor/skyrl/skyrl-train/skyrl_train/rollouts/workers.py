@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Protocol, TypeVar
 
@@ -17,6 +18,7 @@ from transformers import PreTrainedTokenizerBase
 
 from skyrl_train.rollout_observability import RolloutTimings, current_rollout_observation, measure_rollout
 from skyrl_train.rollouts.buffer import RolloutTask, RolloutWriter
+from skyrl_train.telemetry import WORKER_ROLE, process_telemetry
 from skyrl_train.tokenizer import tokenizer_from_config
 from skyrl_train.trajectory_runners.base import TrajectoryRunner
 from skyrl_train.trajectory_runners.trajectory_retention import RetentionSink
@@ -61,9 +63,8 @@ class RunnerSpec(Protocol):
 class RolloutWorkerResources:
     """Size of a rollout worker pool, how its workers start, and how long a worker may go without completing a request.
 
-    Workers start one at a time, each ``start_interval_seconds`` after the previous one is up, because each imports
-    its runner stack and loads its tokenizer from a shared filesystem, and spacing the starts keeps those page-ins
-    from overlapping each other and the engines' weight loads. An interval of zero starts every worker at once.
+    A positive ``start_interval_seconds`` staggers worker imports and tokenizer loads.
+    Zero starts every worker at once.
     """
 
     num_workers: int
@@ -83,6 +84,15 @@ class RolloutWorkerResources:
             start_interval_seconds=float(workers.start_interval_seconds),
         )
 
+    def validate_node_capacity(self, cpus: float) -> None:
+        """Reject a pool whose workers alone exceed their pinned node's CPU capacity."""
+        required = self.num_workers * self.cpus_per_worker
+        if required > cpus:
+            raise ValueError(
+                f"Rollout workers request {required} CPUs on the driver node; this node has {cpus:g}. "
+                "Reduce trajectory_runner.rollout_workers.num_workers or cpus_per_worker."
+            )
+
 
 class RolloutWorkerStalledError(TimeoutError):
     """A rollout worker completed no request before its progress deadline."""
@@ -96,6 +106,8 @@ class RolloutWorker:
         configure_worker_process()
         configure_ray_worker_logging()
         start_fd_monitor()
+        self._telemetry = ExitStack()
+        self._telemetry.enter_context(process_telemetry(WORKER_ROLE))
         self._executor_threads = executor_threads
         self._runner = spec.build(tokenizer_from_config(spec.config), shard)
         if sink is not None:
@@ -108,7 +120,8 @@ class RolloutWorker:
         await self._runner.startup()
 
     async def shutdown(self) -> None:
-        await self._runner.shutdown()
+        with self._telemetry:
+            await self._runner.shutdown()
 
     async def run(
         self, input_batch: TrajectoryRequestBatch, observe: bool
@@ -174,16 +187,16 @@ class RolloutWorkerPool:
         interval = self._resources.start_interval_seconds
         if interval == 0:
             actors = [self._launch_worker(index) for index in range(count)]
-            await asyncio.gather(*(actor.startup.remote() for actor in actors))
             self._actors = actors
+            await asyncio.gather(*(actor.startup.remote() for actor in actors))
             logger.info("Rollout workers started: count={}", count)
             return
         for index in range(count):
             if index:
                 await asyncio.sleep(interval)
             actor = self._launch_worker(index)
-            await actor.startup.remote()
             self._actors.append(actor)
+            await actor.startup.remote()
             logger.info("Rollout worker {}/{} started", index + 1, count)
 
     def _launch_worker(self, index: int) -> ActorHandle:

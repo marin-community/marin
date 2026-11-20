@@ -16,6 +16,7 @@ from harbor_config.models.trial.config import TaskConfig
 from harbor.agents.factory import AgentFactory
 from harbor.environments.base import BaseEnvironment, SandboxDiskFullError
 from harbor.environments.factory import EnvironmentFactory
+from harbor.environments.setup import run_environment_setup
 from harbor.host_capabilities import HostCapabilities
 from harbor.models.agent.context import AgentContext
 from harbor.models.task.config import (
@@ -47,7 +48,6 @@ from harbor.skills import ResolvedSkill, resolve_skills
 from harbor.tasks.client import TaskClient
 from harbor.trial.artifact_handler import ArtifactHandler
 from harbor.trial.attempt import trial_paths, trial_relative_path
-from harbor.environments.setup import run_environment_setup
 from harbor.trial.errors import (
     AgentDiskFullError,
     AgentSetupTimeoutError,
@@ -427,6 +427,7 @@ class Trial(ABC):
                 timeout_sec=self.task.config.environment.setup.timeout_sec,
                 timeout_error=EnvironmentStartTimeoutError("Public fixture initialization timed out"),
             )
+        await self._emit(TrialEvent.ENVIRONMENT_READY)
         with self.agent_environment.with_default_user(self.task.config.agent.user):
             await self._setup_agent()
         self.result.agent_info = self.agent.to_agent_info()
@@ -764,10 +765,7 @@ class Trial(ABC):
         try:
             await task
         except asyncio.CancelledError as cancellation:
-            # Command cleanup can fail closed while preserving cancellation.
-            # Keep those diagnostics even if a later verifier error supersedes
-            # the phase timeout in the trial's primary exception slot.
-            if getattr(cancellation, "__notes__", ()):
+            if vars(cancellation).get("__notes__"):
                 self.result.secondary_exception_info.append(ExceptionInfo.from_exception(cancellation))
             raise timeout_error from None
         except ArtifactPersistenceError as error:

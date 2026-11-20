@@ -1,4 +1,5 @@
 import asyncio
+from functools import partial
 from types import SimpleNamespace
 
 import pytest
@@ -8,6 +9,12 @@ from shellbox.machine import MachineSpec
 
 from skyrl_train.rollouts.daytona_snapshot_pool import RaySnapshotLeaser
 from skyrl_train.rollouts.snapshot_leases import SnapshotLeasePool
+
+
+async def build_snapshot(identity: str, *, started: asyncio.Event, release: asyncio.Event) -> str:
+    started.set()
+    await release.wait()
+    return identity
 
 
 @pytest.mark.asyncio
@@ -71,10 +78,7 @@ async def test_queued_same_image_reference_protects_snapshot_during_build():
     joined = asyncio.Event()
     deleted = []
 
-    async def build(identity):
-        started.set()
-        await finish.wait()
-        return identity
+    build = partial(build_snapshot, started=started, release=finish)
 
     async def delete(name):
         deleted.append(name)
@@ -105,10 +109,7 @@ async def test_cancelled_build_waiter_does_not_hold_snapshot_capacity():
     waiter_started = asyncio.Event()
     deleted = []
 
-    async def build(identity):
-        build_started.set()
-        await finish_build.wait()
-        return identity
+    build = partial(build_snapshot, started=build_started, release=finish_build)
 
     async def delete(name):
         deleted.append(name)
@@ -142,10 +143,7 @@ async def test_abandoned_build_deletes_only_after_provider_outcome_is_known():
     finish = asyncio.Event()
     deleted = []
 
-    async def build(identity):
-        started.set()
-        await finish.wait()
-        return identity
+    build = partial(build_snapshot, started=started, release=finish)
 
     async def delete(name):
         deleted.append(name)
@@ -172,10 +170,7 @@ async def test_duplicate_acquisition_does_not_release_existing_holder():
     started = asyncio.Event()
     finish = asyncio.Event()
 
-    async def build(identity):
-        started.set()
-        await finish.wait()
-        return identity
+    build = partial(build_snapshot, started=started, release=finish)
 
     async def delete(name):
         pass

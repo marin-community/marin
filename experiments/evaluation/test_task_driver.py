@@ -11,6 +11,8 @@ from types import SimpleNamespace
 import httpx
 import openai
 import pytest
+from evalrecords.records import JudgeIdentity
+from evalrecords.rollout_attempts import ATTEMPTS_TABLE
 from finestore.reader import ReadView
 from fray.local_backend import LocalClient
 from iris.client.client import IrisClient, IrisContext, Job, iris_ctx_scope
@@ -18,13 +20,7 @@ from iris.cluster.client import remote_client
 from iris.cluster.types import ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
 from marin.evaluation import task_worker
-from marin.evaluation.records import JudgeIdentity
-from marin.rollouts.evaluation import (
-    ATTEMPTS_TABLE,
-    EvaluationInfrastructureError,
-    EvaluationRunConfig,
-    ModelIdentity,
-)
+from marin.rollouts.evaluation import EvaluationInfrastructureError, EvaluationRunConfig, ModelIdentity
 from rolloutengine.models import RolloutLimits
 from taskcompendium.convert.answers import exact_answer_task
 from taskcompendium.evaluation.corpus import chat_item
