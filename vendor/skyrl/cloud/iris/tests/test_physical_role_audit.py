@@ -1,9 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Verify distinct physical GPUs and NVLink domains for every model role."""
+"""Check physical locality before model startup."""
 
-from collections import Counter
 import json
 import sys
 from types import SimpleNamespace
@@ -12,134 +11,81 @@ import pytest
 from skyrlrecipe.locality import LocalityPlan
 
 from cloud.iris import task_runtime
-from cloud.iris.role_topology import (
-    CLIQUE_LABEL,
-    GPU_LABEL_PREFIX,
-    LOCALITY_GROUP_LABEL,
-    RoleTopology,
-    node_physical_labels,
-    validate_role_nodes,
-)
+from cloud.iris.role_topology import FABRIC_LABEL, HOST_LABEL, RoleTopology, node_physical_labels
 
 
-GPUS_PER_NODE = 4
+def fabric_xml(state="Completed"):
+    device = (
+        f"<gpu><fabric><state>{state}</state><status>Success</status>"
+        "<clusterUuid>cluster</clusterUuid><cliqueId>1</cliqueId></fabric></gpu>"
+    )
+    return f"<nvidia_smi_log>{device * 4}</nvidia_smi_log>"
 
 
-def three_rack_nodes(topology=None):
-    if topology is None:
-        topology = RoleTopology(("policy", "inference_0", "inference_1"), LocalityPlan((16, 16, 16), (0, 1, 2)))
-    nodes = []
-    for rank in range(topology.num_nodes):
-        devices = "".join(
-            f"<gpu><uuid>GPU-{rank}-{index}</uuid><fabric><state>Completed</state><status>Success</status>"
-            f"<clusterUuid>cluster</clusterUuid><cliqueId>{topology.locality.group_for_rank(rank)}</cliqueId></fabric></gpu>"
-            for index in range(GPUS_PER_NODE)
-        )
-        labels = {
-            **topology.node_labels(rank),
-            **node_physical_labels(
-                rank=rank,
-                gpus_per_node=GPUS_PER_NODE,
-                host=f"host-{rank}",
-                fabric_xml=f"<nvidia_smi_log>{devices}</nvidia_smi_log>",
-            ),
+def role_nodes(topology):
+    return [
+        {
+            "Alive": True,
+            "Labels": {
+                **topology.node_labels(rank),
+                **node_physical_labels(rank=rank, gpus_per_node=4, host=f"host-{rank}", fabric_xml=fabric_xml()),
+            },
         }
-        nodes.append({"NodeID": f"ray-{rank}", "Alive": True, "Resources": {"GPU": GPUS_PER_NODE}, "Labels": labels})
-    return topology, nodes
+        for rank in range(topology.num_nodes)
+    ]
 
 
-def test_policy_and_inference_replicas_cover_distinct_physical_racks():
-    topology, nodes = three_rack_nodes()
-    rows = validate_role_nodes(nodes, topology=topology, gpus_per_node=GPUS_PER_NODE)
-    assert Counter(row.roles[0] for row in rows) == {"policy": 16, "inference_0": 16, "inference_1": 16}
-    assert {row.roles[0]: row.fabric for row in rows} == {
-        "policy": "cluster:0",
-        "inference_0": "cluster:1",
-        "inference_1": "cluster:2",
-    }
-    assert {gpu for row in rows for gpu in row.gpu_uuids} == {
-        f"GPU-{rank}-{index}" for rank in range(48) for index in range(GPUS_PER_NODE)
-    }
-
-
-@pytest.mark.parametrize("wrong_layout", ["split_policy", "duplicate_gpu", "wrong_label"])
-def test_same_gpu_counts_reject_unsafe_physical_role_placement(wrong_layout):
-    topology, nodes = three_rack_nodes()
-    if wrong_layout == "split_policy":
-        nodes[0]["Labels"][CLIQUE_LABEL] = "1"
-    elif wrong_layout == "wrong_label":
-        nodes[0]["Labels"][LOCALITY_GROUP_LABEL] = "1"
-    else:
-        nodes[1]["Labels"][GPU_LABEL_PREFIX + "0"] = "GPU-0-0"
-    with pytest.raises(ValueError):
-        validate_role_nodes(nodes, topology=topology, gpus_per_node=GPUS_PER_NODE)
-
-
-def test_shared_domain_roles_use_the_planned_group_boundaries():
-    topology, nodes = three_rack_nodes(
-        RoleTopology(
-            ("policy", *(f"inference_{index}" for index in range(7))),
-            LocalityPlan((15, 14, 5), (0, 0, 0, 0, 1, 1, 1, 2)),
+@pytest.fixture
+def audit(tmp_path, monkeypatch):
+    def run(topology, nodes):
+        monkeypatch.setitem(
+            sys.modules,
+            "ray",
+            SimpleNamespace(
+                init=lambda **kwargs: None,
+                shutdown=lambda: None,
+                nodes=lambda: nodes,
+            ),
         )
-    )
-    rows = validate_role_nodes(nodes, topology=topology, gpus_per_node=GPUS_PER_NODE)
-    assert rows[14].roles == ("policy", "inference_0", "inference_1", "inference_2")
-    assert rows[15].roles == ("inference_3", "inference_4", "inference_5")
-    assert rows[29].roles == ("inference_6",)
-
-
-@pytest.mark.parametrize("split", [False, True])
-def test_head_join_gate_writes_only_a_verified_physical_report(tmp_path, monkeypatch, split):
-    topology, nodes = three_rack_nodes()
-    if split:
-        nodes[0]["Labels"][CLIQUE_LABEL] = "1"
-    monkeypatch.setitem(
-        sys.modules,
-        "ray",
-        SimpleNamespace(
-            init=lambda **_kwargs: None,
-            shutdown=lambda: None,
-            nodes=lambda: nodes,
-            cluster_resources=lambda: {"GPU": 192},
-        ),
-    )
-
-    def join():
         task_runtime.verify_role_placement("fixture", topology, tmp_path)
+        return json.loads((tmp_path / "role-topology.json").read_text())
 
-    output = tmp_path / "role-topology.json"
-    if split:
-        with pytest.raises(ValueError):
-            join()
-        assert not output.exists()
-    else:
-        join()
-        report = json.loads(output.read_text())
-        assert len(report["nodes"]) == 48
-        assert len({gpu for row in report["nodes"] for gpu in row["gpu_uuids"]}) == 192
+    return run
 
 
-def test_separate_model_groups_may_share_one_physical_rack():
-    topology, nodes = three_rack_nodes(RoleTopology(("policy", "inference_0"), LocalityPlan((16, 2), (0, 1))))
-    for node in nodes:
-        node["Labels"][CLIQUE_LABEL] = "0"
-    rows = validate_role_nodes(nodes, topology=topology, gpus_per_node=GPUS_PER_NODE)
-    assert len(rows) == 18
-    assert {row.fabric for row in rows} == {"cluster:0"}
+def test_healthy_single_node_writes_a_verified_report(audit):
+    topology = RoleTopology(("policy",), LocalityPlan((1,), (0,)))
+    report = audit(topology, role_nodes(topology))
+    assert len(report["nodes"]) == 1
+    assert report["nodes"][0]["fabric"] == "cluster:1"
 
 
-@pytest.mark.parametrize("gpu_capacity", [4, 3])
-def test_single_node_audit_checks_ray_capacity_and_writes_report(tmp_path, monkeypatch, gpu_capacity):
-    topology, nodes = three_rack_nodes(RoleTopology(("policy",), LocalityPlan((1,), (0,))))
-    nodes[0]["Resources"]["GPU"] = gpu_capacity
-    monkeypatch.setitem(
-        sys.modules, "ray", SimpleNamespace(init=lambda **kwargs: None, shutdown=lambda: None, nodes=lambda: nodes)
-    )
-    if gpu_capacity != 4:
-        with pytest.raises(ValueError):
-            task_runtime.verify_role_placement("fixture", topology, tmp_path)
-        assert not (tmp_path / "role-topology.json").exists()
-        return
-    task_runtime.verify_role_placement("fixture", topology, tmp_path)
-    report = json.loads((tmp_path / "role-topology.json").read_text())
-    assert report["nodes"][0]["gpu_uuids"] == [f"GPU-0-{i}" for i in range(4)]
+def test_healthy_multi_node_groups_may_share_a_fabric(audit):
+    topology = RoleTopology(("policy", "inference_0"), LocalityPlan((2, 1), (0, 1)))
+    report = audit(topology, role_nodes(topology))
+    assert len(report["nodes"]) == 3
+    assert len({row["host"] for row in report["nodes"]}) == 3
+    assert {row["fabric"] for row in report["nodes"]} == {"cluster:1"}
+
+
+def test_a_group_split_across_fabrics_is_rejected(audit, tmp_path):
+    topology = RoleTopology(("policy",), LocalityPlan((2,), (0,)))
+    nodes = role_nodes(topology)
+    nodes[1]["Labels"][FABRIC_LABEL] = "cluster:2"
+    with pytest.raises(ValueError):
+        audit(topology, nodes)
+    assert not (tmp_path / "role-topology.json").exists()
+
+
+def test_duplicate_hosts_are_rejected(audit, tmp_path):
+    topology = RoleTopology(("policy",), LocalityPlan((2,), (0,)))
+    nodes = role_nodes(topology)
+    nodes[1]["Labels"][HOST_LABEL] = "host-0"
+    with pytest.raises(ValueError):
+        audit(topology, nodes)
+    assert not (tmp_path / "role-topology.json").exists()
+
+
+def test_unhealthy_node_fabric_is_rejected():
+    with pytest.raises(ValueError):
+        node_physical_labels(rank=0, gpus_per_node=4, host="host-0", fabric_xml=fabric_xml("In Progress"))

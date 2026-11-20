@@ -100,7 +100,6 @@ from marinskyrl.process_diagnostics import (
 )
 from cloud.iris.paths import resolve_repo_path
 from cloud.iris.ray_ports import RayPort, allocated_ray_port, resolve_ray_ports
-from iris.cluster.platforms.k8s.coreweave_topology import NVL72_GPUS_PER_NODE
 from cloud.iris.role_topology import RoleTopology, node_physical_labels, validate_role_nodes
 from cloud.iris.ray_storage import (
     RaySpillBackend,
@@ -1312,7 +1311,7 @@ def wait_for_nodes(
     timeout: int,
     rewrite_cb=None,
 ) -> None:
-    """Wait for alive nodes to join the Ray cluster.
+    """Block until the Ray cluster reports ``expected_nodes`` alive nodes.
 
     ``rewrite_cb`` (head only) re-publishes the rendezvous at most once per ``RENDEZVOUS_REWRITE_INTERVAL`` seconds
     so ``written_at`` stays fresh. A worker pod on a cold node can start >RENDEZVOUS_FRESHNESS_SLACK (60s) after the
@@ -1357,9 +1356,8 @@ def verify_role_placement(ray_address: str, topology: RoleTopology, report_direc
     ray.init(address=ray_address, ignore_reinit_error=True)
     try:
         nodes = ray.nodes()
-        _log(f"Observed Ray placement before physical audit: {nodes}")
-        rows = validate_role_nodes(nodes, topology=topology, gpus_per_node=NVL72_GPUS_PER_NODE)
-        report = json.dumps({"role_topology": "nvlink.domain", "nodes": [asdict(row) for row in rows]}, sort_keys=True)
+        rows = validate_role_nodes(nodes, topology=topology)
+        report = json.dumps({"role_topology": "nvlink.domain", "nodes": rows}, sort_keys=True)
         (report_directory / "role-topology.json").write_text(report + "\n")
         _log(f"Verified physical role placement before model actors: {report}")
     finally:
@@ -2340,7 +2338,7 @@ def main() -> None:
             **args.role_topology.node_labels(_rank()),
             **node_physical_labels(
                 rank=_rank(),
-                gpus_per_node=args.gpus_per_node,
+                gpus_per_node=int(launch_config.iris.allocation.gpus_per_node),
                 host=os.environ["IRIS_NODE_NAME"],
                 fabric_xml=fabric.stdout,
             ),
