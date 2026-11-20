@@ -1092,7 +1092,6 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
         self._policy_steps.forget_unclaimed(live)
 
     def get_served_model_name(self) -> str:
-        """Return the name registered with this engine's OpenAI serving models."""
         return self.served_model_name
 
     def tp_size(self):

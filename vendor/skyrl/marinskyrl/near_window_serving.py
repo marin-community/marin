@@ -5,18 +5,25 @@ import csv
 import hashlib
 import io
 import json
-import os
 import socket
 import subprocess
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
 import ray
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 from rigging.filesystem.storage_path import StoragePath
+
+
+@dataclass(frozen=True)
+class GpuMemory:
+    gpu_uuid: str
+    used_mib: float
+    total_mib: float
+    hostname: str | None = None
 
 
 class CompletionEngine(Protocol):
@@ -42,14 +49,14 @@ class NearWindowProbeSettings:
     receipt_uri: str
 
 
-def node_gpu_memory() -> list[dict]:
+def node_gpu_memory() -> list[GpuMemory]:
     """Read allocated host GPU memory without creating a CUDA context."""
     result = subprocess.run(
         ["nvidia-smi", "--query-gpu=uuid,memory.used,memory.total", "--format=csv,noheader,nounits"],
         capture_output=True, text=True, check=True, timeout=10,
     )
     return [
-        {"hostname": socket.gethostname(), "gpu_uuid": uuid.strip(), "used_mib": float(used), "total_mib": float(total)}
+        GpuMemory(hostname=socket.gethostname(), gpu_uuid=uuid.strip(), used_mib=float(used), total_mib=float(total))
         for uuid, used, total in csv.reader(io.StringIO(result.stdout))
     ]
 
@@ -57,7 +64,7 @@ def node_gpu_memory() -> list[dict]:
 remote_gpu_memory = ray.remote(num_cpus=0)(node_gpu_memory)
 
 
-async def capture_gpu_memory() -> list[dict]:
+async def capture_gpu_memory() -> list[GpuMemory]:
     """Sample every allocated Ray host, including workers outside the driver host."""
     requests = [
         remote_gpu_memory.options(
@@ -82,11 +89,15 @@ def rendered_near_window_prompt(tokenizer: PromptTokenizer, settings: NearWindow
 
 
 async def run_near_window_probe(
-    engines: list[CompletionEngine], tokenizer: PromptTokenizer, settings: dict[str, Any], ready_seconds: float,
-    *, memory_reader: Callable[[], Awaitable[list[dict]]] = capture_gpu_memory,
+    engines: list[CompletionEngine], tokenizer: PromptTokenizer, settings: NearWindowProbeSettings, ready_seconds: float,
+    *, receipt_directory: Path, memory_reader: Callable[[], Awaitable[list[GpuMemory]]] = capture_gpu_memory,
 ) -> dict[str, float]:
-    """Require every rank to serve, then qualify one full rendered prompt and its memory use."""
-    config = NearWindowProbeSettings(**settings)
+    """Serve on every rank and persist one near-window request with memory evidence.
+
+    Returns:
+        Metrics for rendered input tokens, completed output tokens, and ready engines.
+    """
+    config = settings
     if len(engines) != config.engines:
         raise ValueError(f"Expected {config.engines} ready engines, got {len(engines)}")
     tokens = rendered_near_window_prompt(tokenizer, config)
@@ -99,15 +110,17 @@ async def run_near_window_probe(
         "prompt_rendering": "Pinned tokenizer chat template, add_generation_prompt=True; exact rendered IDs sent to completions",
         "memory_samples": [],
     }
+    memory_snapshots: list[list[GpuMemory]] = []
     started = time.monotonic()
     stopped = asyncio.Event()
     served_model_names: list[str] = []
 
     async def memory_sample() -> None:
         gpus = await memory_reader()
-        if len(gpus) != config.engines or len({gpu["gpu_uuid"] for gpu in gpus}) != config.engines:
+        if len(gpus) != config.engines or len({gpu.gpu_uuid for gpu in gpus}) != config.engines:
             raise ValueError("GPU memory evidence does not cover the complete inference group")
-        receipt["memory_samples"].append({"elapsed_seconds": time.monotonic() - started, "gpus": gpus})
+        memory_snapshots.append(gpus)
+        receipt["memory_samples"].append({"elapsed_seconds": time.monotonic() - started, "gpus": [asdict(gpu) for gpu in gpus]})
 
     async def sample_memory() -> None:
         while not stopped.is_set():
@@ -117,7 +130,7 @@ async def run_near_window_probe(
             except TimeoutError:
                 continue
 
-    async def complete(rank: int, prompt: str | list[int], output_tokens: int) -> dict:
+    async def complete(rank: int, prompt: list[int], output_tokens: int) -> dict:
         before = time.monotonic()
         response = await asyncio.wait_for(engines[rank].completion({"json": {
             "model": served_model_names[rank], "prompt": prompt, "max_tokens": output_tokens,
@@ -130,7 +143,7 @@ async def run_near_window_probe(
         usage = response["usage"]
         if usage["completion_tokens"] != output_tokens:
             raise ValueError(f"Serving output differs from its token budget: {usage}")
-        if isinstance(prompt, list) and usage["prompt_tokens"] != len(prompt):
+        if usage["prompt_tokens"] != len(prompt):
             raise ValueError(f"Server prompt usage differs from the rendered input: {usage}")
         return {"rank": rank, "model": response["model"], "usage": usage, "elapsed_seconds": time.monotonic() - before}
 
@@ -140,19 +153,23 @@ async def run_near_window_probe(
             raise ValueError("Inference actors disagree on the registered serving model")
         receipt["served_model_names"] = served_model_names
         await memory_sample()
+        readiness_tokens = tokenizer.apply_chat_template(
+            [{"role": "user", "content": "Explain why one plus one is two."}],
+            tokenize=True, add_generation_prompt=True, return_dict=False,
+        )
         async with asyncio.TaskGroup() as tasks:
             tasks.create_task(sample_memory())
             try:
                 receipt["rank_readiness_requests"] = await asyncio.gather(*(
-                    complete(rank, "Explain why one plus one is two.", 16) for rank in range(len(engines))
+                    complete(rank, readiness_tokens, 16) for rank in range(len(engines))
                 ))
                 receipt["near_window_request"] = await complete(0, tokens, config.max_new_tokens)
             finally:
                 stopped.set()
         await memory_sample()
         receipt["peak_used_mib_by_gpu"] = {
-            uuid: max(gpu["used_mib"] for sample in receipt["memory_samples"] for gpu in sample["gpus"] if gpu["gpu_uuid"] == uuid)
-            for uuid in {gpu["gpu_uuid"] for gpu in receipt["memory_samples"][0]["gpus"]}
+            uuid: max(gpu.used_mib for sample in memory_snapshots for gpu in sample if gpu.gpu_uuid == uuid)
+            for uuid in {gpu.gpu_uuid for gpu in memory_snapshots[0]}
         }
         receipt["result"] = "passed"
     except Exception as error:
@@ -161,7 +178,7 @@ async def run_near_window_probe(
     finally:
         receipt["elapsed_seconds"] = time.monotonic() - started
         contents = json.dumps(receipt, indent=2) + "\n"
-        (Path(os.environ["IRIS_OUTPUT_DIR"]) / "near-window-serving-receipt.json").write_text(contents)
+        (receipt_directory / "near-window-serving-receipt.json").write_text(contents)
         StoragePath(config.receipt_uri).write_bytes(contents.encode())
     return {"serving_probe/input_tokens": len(tokens), "serving_probe/output_tokens": config.max_new_tokens,
             "serving_probe/ready_engines": len(engines)}
