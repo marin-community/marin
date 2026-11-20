@@ -114,7 +114,9 @@ whole engine gang with fresh rendezvous ports, within the existing
 `generator.engine_init_timeout_seconds` deadline.
 
 DP rendezvous ports are bound and held on the engine's target node, excluding
-that node's `/proc/sys/net/ipv4/ip_local_port_range` and Iris's named-port range.
+that node's `/proc/sys/net/ipv4/ip_local_port_range`, kernel-reserved service
+ports, and Iris's default named-port range. Kernel reservations also cover
+deployment-specific named-port ranges published by Iris's worker bootstrap.
 The same reserved RPC and process-group port vector is passed explicitly to
 every rank. Rank zero releases the sockets immediately before vLLM binds them;
 excluding the kernel's ephemeral range prevents outbound connections from

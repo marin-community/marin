@@ -8,28 +8,36 @@ from pathlib import Path
 import pytest
 import ray
 from hydra import compose, initialize_config_dir
+from iris.cluster.worker.port_allocator import DEFAULT_TASK_PORT_RANGE
 
 from skyrl_train.entrypoints.main_base import create_ray_wrapped_inference_engines_from_config
 from skyrl_train.inference_engines import ray_wrapped_inference_engine
-from skyrl_train.inference_engines import utils as engine_settings
+from skyrl_train.inference_engines import utils as engine_ports
 
 
 @pytest.mark.parametrize("ephemeral_range", [(10240, 65535), (14000, 65535), (32768, 60999)])
 def test_concurrent_gangs_keep_rendezvous_ports_out_of_ephemeral_and_named_ranges(tmp_path, monkeypatch, ephemeral_range):
     kernel_range = tmp_path / "ip_local_port_range"
     kernel_range.write_text(f"{ephemeral_range[0]} {ephemeral_range[1]}\n")
-    monkeypatch.setattr(engine_settings, "_EPHEMERAL_PORT_RANGE_PATH", kernel_range)
-    (broker,) = engine_settings._reserve_available_rendezvous_ports(1)
-    sockets = [broker]
+    reserved_ports = tmp_path / "ip_local_reserved_ports"
+    reserved_ports.write_text("10050-10100,10200\n")
+    monkeypatch.setattr(engine_ports, "_EPHEMERAL_PORT_RANGE_PATH", kernel_range)
+    monkeypatch.setattr(engine_ports, "_RESERVED_PORTS_PATH", reserved_ports)
+    task_start, task_stop = DEFAULT_TASK_PORT_RANGE
+    excluded = range(task_start, task_stop)
+    (occupied_socket,) = engine_ports._reserve_available_rendezvous_ports(1, excluded)
+    sockets = [occupied_socket]
     try:
         with ThreadPoolExecutor(max_workers=8) as executor:
-            groups = list(executor.map(engine_settings._reserve_available_rendezvous_ports, [6] * 8))
+            groups = list(executor.map(engine_ports._reserve_available_rendezvous_ports, [6] * 8, [excluded] * 8))
         sockets.extend(listener for group in groups for listener in group)
         ports = [listener.getsockname()[1] for listener in sockets]
         assert len(set(ports)) == len(ports)
         for port in ports:
             assert not ephemeral_range[0] <= port <= ephemeral_range[1]
-            assert not 12000 <= port < 14000
+            assert not task_start <= port < task_stop
+            assert not 10050 <= port <= 10100
+            assert port != 10200
             with socket.socket() as contender, pytest.raises(OSError) as failure:
                 contender.bind(("", port))
             assert failure.value.errno == errno.EADDRINUSE
