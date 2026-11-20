@@ -12,49 +12,71 @@ from taskforge.effects.events import (
     EVENT_TYPES,
     Event,
     Fingerprint,
+    Note,
     ReplayPolicy,
     Resolved,
+    Retrying,
+    ScopeEntered,
+    ScopeExited,
     StageCompleted,
     digest,
     event_digest,
 )
+from taskforge.effects.log import decode
+from taskforge.harness.events import ToolInvoked, ToolReturned
 from taskforge.llm.policy import LLMPolicy
 from taskforge.model.content_hash import json_value
 from taskforge.model.llm import Message, Role
 from taskforge.model.stage import Stage
-from taskforge.resources.env import RunCommand
+from taskforge.resources.env import ReadFile, RunCommand, WriteFile, WriteFiles
+from taskforge.resources.grading import GradeCandidate
 from taskforge.resources.ids import NewId
 from taskforge.resources.inference import InferenceRequest
+from taskforge.resources.rollouts import SolverRollout
+from taskforge.resources.web import WebFetch, WebSearch
 
-KINDS = {
-    "effect.note": "Note",
-    "effect.resolved": "Resolved",
-    "effect.retrying": "Retrying",
-    "env.read_file": "ReadFile",
-    "env.run_command": "RunCommand",
-    "env.write_file": "WriteFile",
-    "env.write_files": "WriteFiles",
-    "grading.grade_candidate": "GradeCandidate",
-    "ids.new_id": "NewId",
-    "inference.request": "InferenceRequest",
-    "rollouts.solver_rollout": "SolverRollout",
-    "scope.entered": "ScopeEntered",
-    "scope.exited": "ScopeExited",
-    "stage.completed": "StageCompleted",
-    "tool.invoked": "ToolInvoked",
-    "tool.returned": "ToolReturned",
-    "web.fetch": "WebFetch",
-    "web.search": "WebSearch",
+KINDS: dict[str, type[Event[object]]] = {
+    "effect.note": Note,
+    "effect.resolved": Resolved,
+    "effect.retrying": Retrying,
+    "env.read_file": ReadFile,
+    "env.run_command": RunCommand,
+    "env.write_file": WriteFile,
+    "env.write_files": WriteFiles,
+    "grading.grade_candidate": GradeCandidate,
+    "ids.new_id": NewId,
+    "inference.request": InferenceRequest,
+    "rollouts.solver_rollout": SolverRollout,
+    "scope.entered": ScopeEntered,
+    "scope.exited": ScopeExited,
+    "stage.completed": StageCompleted,
+    "tool.invoked": ToolInvoked,
+    "tool.returned": ToolReturned,
+    "web.fetch": WebFetch,
+    "web.search": WebSearch,
 }
-"""Recorded journals name events by these kinds; changing one breaks every journal that recorded it."""
+"""Recorded journals name events by these kinds; a class may move or be renamed, but its kind may not change."""
+
+RECORDED = b"""\
+{"event": {"payload": {"name": "author"}, "type": "scope.entered"}, "sequence": 1, "wall_time": 0.0}
+{"event": {"payload": {"msg": "hello"}, "type": "effect.note"}, "sequence": 2, "wall_time": 0.0}
+{"event": {"payload": {"fingerprints": [{"digest": "uuid4-v1", "replay": "cache", "resource": "ids"}], \
+"replayed": false, "request": {"__forge_event__": {"payload": {"key": "author"}, "type": "ids.new_id"}}, \
+"value": "abc"}, "type": "effect.resolved"}, "sequence": 3, "wall_time": 0.0}
+{"event": {"payload": {"config_digest": "config", "exit": "Submitted", "round": 1, "stage": "author", \
+"terminal": null}, "type": "stage.completed"}, "sequence": 4, "wall_time": 0.0}
+"""
+"""Journal lines written by this format, frozen."""
 
 
-def test_recorded_kinds_and_replay_digests_are_pinned() -> None:
+def test_recorded_kinds_decoders_and_replay_digests_are_pinned() -> None:
     assert wiring.install  # importing wiring registers every library event
-    library = {kind: cls.__qualname__ for kind, cls in EVENT_TYPES.items() if cls.__module__.startswith("taskforge.")}
-    assert library == KINDS
+    assert {kind: cls for kind, cls in EVENT_TYPES.items() if cls.__module__.startswith("taskforge.")} == KINDS
+    ids = (Fingerprint("ids", "uuid4-v1", ReplayPolicy.CACHE),)
+    resolved = Resolved(NewId("author"), ids, "abc")
+    stage = StageCompleted(Stage.AUTHOR, "config", "Submitted", 1)
+    assert [record.event for record in decode(RECORDED)] == [ScopeEntered("author"), Note("hello"), resolved, stage]
     request = InferenceRequest((Message(Role.USER, "hi"),), (), LLMPolicy())
-    resolved = Resolved(NewId("author"), (Fingerprint("ids", "uuid4-v1", ReplayPolicy.CACHE),), "abc")
     assert {
         "stage": event_digest(StageCompleted(Stage.AUTHOR, "config", "submitted", 1)),
         "command": event_digest(RunCommand("true", 30.0)),
@@ -80,6 +102,18 @@ def test_event_classes_need_one_unique_kind() -> None:
             kind = "env.run_command"
 
     assert EVENT_TYPES["env.run_command"] is RunCommand
+
+    with pytest.raises(TypeError, match=r"'test\.nested' is declared by both .*First\.Nested and .*Second\.Nested"):
+
+        class First:
+            @dataclass(frozen=True, slots=True)
+            class Nested(Event[None]):
+                kind = "test.nested"
+
+        class Second:
+            @dataclass(frozen=True, slots=True)
+            class Nested(Event[None]):
+                kind = "test.nested"
 
 
 def test_event_digest_distinguishes_content_and_type() -> None:

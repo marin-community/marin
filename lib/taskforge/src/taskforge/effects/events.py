@@ -75,8 +75,9 @@ class Event(Generic[T_co]):
         if not isinstance(kind, str) or not kind:
             raise TypeError(f"{cls.__qualname__} must declare a recorded kind")
         existing = EVENT_TYPES.get(kind)
-        # dataclass(slots=True) re-creates the class, registering its replacement under the same name and kind.
-        if existing is not None and (existing.__module__, existing.__name__) != (cls.__module__, cls.__name__):
+        # dataclass(slots=True) re-creates the class from its namespace, field table included, before naming it.
+        fields = vars(cls).get("__dataclass_fields__")
+        if existing is not None and (fields is None or vars(existing).get("__dataclass_fields__") is not fields):
             raise TypeError(f"Event kind {kind!r} is declared by both {existing.__qualname__} and {cls.__qualname__}")
         EVENT_TYPES[kind] = cls
 
