@@ -1,8 +1,9 @@
 """Assign each model to an Iris group confined to one NVLink domain."""
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
+import xml.etree.ElementTree as ET
 
 from iris.cluster.platforms.k8s.coreweave_topology import NVL72_GPUS_PER_NODE, SCHEDULABLE_RACK_NODES, is_rack_based
 from skyrlrecipe.locality import LocalityPlan, RoleTopologyMode, plan_nvlink_roles
@@ -10,6 +11,9 @@ from skyrlrecipe.locality import LocalityPlan, RoleTopologyMode, plan_nvlink_rol
 from cloud.iris.role_plan import ModelRoleKind, RoleExecution, SkyRLRolePlan
 
 LOCALITY_GROUP_LABEL = "iris.locality_group"
+RANK_LABEL = "iris.task_rank"
+HOST_LABEL = "iris.physical_host"
+FABRIC_LABEL = "iris.nvlink_fabric"
 
 
 @dataclass(frozen=True)
@@ -67,3 +71,50 @@ def derive_role_topology(config: Mapping[str, Any], plan: SkyRLRolePlan) -> Role
         max_nodes_per_domain=SCHEDULABLE_RACK_NODES,
     )
     return RoleTopology(tuple(roles), locality)
+
+
+def node_physical_labels(*, rank: int, gpus_per_node: int, host: str, fabric_xml: str) -> dict[str, str]:
+    """Check the node's allocated GPU count and NVLink fabric health."""
+    devices = ET.fromstring(fabric_xml).findall("gpu")
+    if len(devices) != gpus_per_node:
+        raise ValueError("Physical GPU count disagrees with the allocated node width")
+    fabrics = set()
+    for device in devices:
+        fabric = device.find("fabric")
+        if fabric is None or fabric.findtext("state") != "Completed" or fabric.findtext("status") != "Success":
+            raise ValueError("Every GPU must report a completed, healthy NVLink fabric")
+        identity = (fabric.findtext("clusterUuid") or "", fabric.findtext("cliqueId") or "")
+        if any(not value or value == "N/A" for value in identity):
+            raise ValueError("Missing NVLink fabric identity")
+        fabrics.add(":".join(identity))
+    if len(fabrics) != 1:
+        raise ValueError("A physical node must fit inside one NVLink domain")
+    return {RANK_LABEL: str(rank), HOST_LABEL: host, FABRIC_LABEL: fabrics.pop()}
+
+
+def validate_role_nodes(
+    nodes: Sequence[Mapping[str, Any]], *, topology: RoleTopology
+) -> list[dict[str, Any]]:
+    """Require distinct hosts and one physical NVLink domain per locality group."""
+    alive = [node for node in nodes if node["Alive"]]
+    if len(alive) != topology.num_nodes:
+        raise ValueError(f"Expected exactly {topology.num_nodes} Ray nodes, observed {len(alive)}")
+    ranks = [int(node["Labels"][RANK_LABEL]) for node in alive]
+    if set(ranks) != set(range(topology.num_nodes)):
+        raise ValueError(f"Ray nodes must cover every Iris rank: {ranks}")
+    hosts = [node["Labels"][HOST_LABEL] for node in alive]
+    if len(set(hosts)) != topology.num_nodes:
+        raise ValueError(f"Ray nodes must occupy distinct physical hosts: {hosts}")
+    rows = []
+    fabrics: dict[int, set[str]] = {}
+    for rank, node in zip(ranks, alive, strict=True):
+        labels = node["Labels"]
+        group = topology.locality.group_for_rank(rank)
+        if labels[LOCALITY_GROUP_LABEL] != str(group):
+            raise ValueError(f"Ray locality label disagrees with Iris rank {rank}")
+        fabric = labels[FABRIC_LABEL]
+        fabrics.setdefault(group, set()).add(fabric)
+        rows.append({"rank": rank, "host": labels[HOST_LABEL], "locality_group": group, "fabric": fabric})
+    if any(len(value) != 1 for value in fabrics.values()):
+        raise ValueError(f"Each locality group must fit inside one physical NVLink domain: {fabrics}")
+    return sorted(rows, key=lambda row: row["rank"])
