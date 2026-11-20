@@ -124,8 +124,17 @@ class ProjectionWaivers(BaseModel):
     marina_url: str
     applet_id: str
     expires_when: Literal["preview_refresh_strict_audit_passes"] = "preview_refresh_strict_audit_passes"
-    rule: Literal["stale-or-missing-serving-projection-without-declaration-drift"]
-    reason: Literal["preview projection lag; declaration drift 0; ruling 2026-11-19"]
+    rule: Literal[
+        "stale-or-missing-serving-projection-without-declaration-drift",
+        "post-seal-declaration-missing-served-projection",
+    ]
+    reason: Literal[
+        "preview projection lag; declaration drift 0; ruling 2026-11-19",
+        "source declared after the sealed refresh; served-catalog projection pending; ruling 2026-11-20",
+    ]
+    source_ids: tuple[str, ...] = ()
+    """Ruling 68: the exact declared source IDs the post-seal waiver covers; empty for the
+    ruling-60b preview-lag rule (which waives only non-drifted projection gaps)."""
 
     def active(self, selection: CatalogSelection) -> bool:
         return (
@@ -151,6 +160,32 @@ def apply_projection_waivers(
     """Evaluate the temporary rule against gaps and declaration drift from this audit run."""
     if waivers is None:
         return ProjectionWaiverResult(gaps, [], [])
+    if waivers.rule == "post-seal-declaration-missing-served-projection":
+        # Ruling 68: a source declared after the sealed refresh. The named-source waiver is
+        # independent of declaration drift, so it runs before the selection/drift check.
+        blocking, waived, notes = [], [], []
+        if not waivers.source_ids:
+            raise ValueError("Ruling 68 waiver must name the exact declared source IDs")
+        for gap in gaps:
+            if (
+                gap.projection == "served-catalog"
+                and gap.state == "missing"
+                and gap.source_id in waivers.source_ids
+            ):
+                record = ProjectionWaiver(
+                    source_id=gap.source_id,
+                    projection=gap.projection,
+                    state=gap.state,
+                    reason=waivers.reason,
+                )
+                waived.append(record)
+                notes.append(
+                    f"waived {record.key}/{gap.state}: {record.reason}; "
+                    "expires at the next strict refresh seal (which must include the named sources)"
+                )
+            else:
+                blocking.append(gap)
+        return ProjectionWaiverResult(blocking, waived, notes)
     if selection is None or drift_sources is None:
         raise ValueError("Projection waiver rules require catalog selection and declaration drift evidence")
     if not waivers.active(selection):
