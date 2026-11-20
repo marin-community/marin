@@ -4,7 +4,9 @@
 import dataclasses
 import json
 import math
+from types import SimpleNamespace
 
+import draccus
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -13,11 +15,11 @@ import numpy as np
 import optax
 import pytest
 from jax.sharding import AxisType, Mesh, reshard
-from levanter.data.text.datasets import LmDataConfig
+from levanter.data.text.datasets import DatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.testing.devices import use_test_devices
 
-from experiments.grug.moe_hero_ep import model
+from experiments.grug.moe_hero_ep import model, train
 from experiments.grug.moe_hero_ep.expert_placement import (
     ExpertPlacement,
     balanced_expert_order,
@@ -27,19 +29,25 @@ from experiments.grug.moe_hero_ep.expert_placement import (
 from experiments.grug.moe_hero_ep.launch_hero_sft import (
     SFT_COMPONENT_PREFIX,
     SFT_POOLED_COMPONENT,
+    SFT_TOKENIZER,
+    CatalogMixture,
     SftStore,
+    check_start_placement,
     one_epoch_weight_stages,
     plan_sft_mixture,
     sft_components,
 )
 from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_hero_ep.train import (
+    GrugEvalConfig,
+    HeldOutEvalOnly,
     RouterBiasMode,
     SpecialTokenInit,
     _make_train_step,
     _place_restored_experts,
     initial_state,
     permute_experts,
+    reseed_at_start_step,
     reseed_special_token_columns,
     scale_special_token_updates,
 )
@@ -427,3 +435,101 @@ def test_restore_places_only_the_source_and_trusts_only_a_matching_record(tmp_pa
             _place_restored_experts(state, placement, loaded_checkpoint=other_save)
         with pytest.raises(ValueError, match="this run uses no expert placement"):
             _place_restored_experts(state, None, loaded_checkpoint=placed_save)
+
+
+def _write_data_config(path, cache_catalog: str | None) -> None:
+    data = LmDataConfig(
+        tokenizer=SFT_TOKENIZER,
+        cache_catalog=cache_catalog,
+        components={
+            "sft/a": DatasetComponent(cache_dir="s3://bucket/a/train"),
+            "pretrain/b": DatasetComponent(cache_dir="s3://bucket/b/train"),
+        },
+        train_weights=[(0, {"sft/a": 0.5, "pretrain/b": 0.5})],
+        mixture_block_size=64_000,
+    )
+    path.write_text(json.dumps(draccus.encode(data)))
+
+
+def test_catalog_mixture_trains_the_given_weights_from_the_continued_step(tmp_path):
+    _write_data_config(tmp_path / "data.json", "s3://bucket/cache_catalog.json")
+    (tmp_path / "weights.json").write_text(json.dumps([[0, {"sft/a": 0.95, "pretrain/b": 0.05}]]))
+
+    mixture = CatalogMixture.load(tmp_path / "data.json", tmp_path / "weights.json", num_updates=300)
+    data = mixture.data_config(start_step=400_407)
+
+    assert data.cache_catalog == "s3://bucket/cache_catalog.json"
+    assert [(step, dict(weights)) for step, weights in data.train_weights] == [(0, {"sft/a": 0.95, "pretrain/b": 0.05})]
+    assert data.mixture_start_step == 400_407
+    assert set(data.components) == {"sft/a", "pretrain/b"}
+
+
+def test_catalog_mixture_needs_a_cache_catalog(tmp_path):
+    _write_data_config(tmp_path / "data.json", None)
+    (tmp_path / "weights.json").write_text(json.dumps([[0, {"sft/a": 1.0}]]))
+    with pytest.raises(ValueError, match="names no cache_catalog"):
+        CatalogMixture.load(tmp_path / "data.json", tmp_path / "weights.json", num_updates=300)
+
+
+@pytest.mark.parametrize("reseed", [True, False])
+def test_continued_run_keeps_trained_special_token_columns_when_reseed_is_off(reseed):
+    mesh = _one_device_mesh()
+    state = _trained_state(_tiny_config(), _optimizer(), mesh)
+    special = SpecialTokenInit(
+        token_ids=(5,), anchor_ids=(1,), start_step=int(state.step), lr_multiplier=2.0, reseed=reseed
+    )
+    before = np.asarray(state.params.output_proj)
+    with jax.set_mesh(mesh):
+        after = np.asarray(reseed_at_start_step(state, special, offload_opt_state=False).params.output_proj)
+
+    if reseed:
+        np.testing.assert_array_equal(after[:, 5], before[:, 1])
+    else:
+        np.testing.assert_array_equal(after, before)
+
+
+def test_start_placement_accepts_the_source_or_a_save_recording_the_same_placement(tmp_path):
+    source = str(tmp_path / "source")
+    placement = dataclasses.replace(_placement([[2, 0, 3, 1], [1, 3, 0, 2]]), source_checkpoint=source)
+    other = dataclasses.replace(placement, order=((0, 1, 2, 3), (0, 1, 2, 3)))
+    placed_save = _write_checkpoint_metadata(tmp_path / "placed" / "step-9", placement)
+    unrecorded_save = _write_checkpoint_metadata(tmp_path / "unrecorded" / "step-9", None)
+    other_save = _write_checkpoint_metadata(tmp_path / "other" / "step-9", other)
+
+    check_start_placement(placement, source)
+    check_start_placement(placement, placed_save)
+    for checkpoint in (unrecorded_save, other_save):
+        with pytest.raises(ValueError, match="does not record it"):
+            check_start_placement(placement, checkpoint)
+
+
+def test_eval_only_writes_the_dropless_metrics_of_the_loaded_parameters(tmp_path, monkeypatch):
+    mesh = _one_device_mesh()
+    output = tmp_path / "scores.json"
+    # The writer reads only the run's eval settings.
+    config = SimpleNamespace(
+        eval=GrugEvalConfig(eval_current=False, eval_ema=False, dropless_eval=True),
+        eval_only=HeldOutEvalOnly(output=str(output), weights_checkpoint="s3://bucket/step-400407"),
+    )
+    scored = []
+
+    def fake_eval_model(evaluator, model, prefix):
+        scored.append((evaluator, prefix))
+        return {f"{prefix}/loss": 1.5}
+
+    monkeypatch.setattr(train, "eval_model", fake_eval_model)
+    with jax.set_mesh(mesh):
+        state = initial_state(_tiny_config(), optimizer=optax.identity(), mp=_FP32, key=jax.random.key(0), ema_beta=None)
+        train._write_held_out_scores(
+            state,
+            config,
+            mesh,
+            evaluator=None,
+            dropless_evaluator="dropless",
+            dropless_eval_mesh=train.expert_collapsed_eval_mesh(mesh),
+        )
+
+    assert scored == [("dropless", "eval_dropless")]
+    record = json.loads(output.read_text())
+    assert record["weights_checkpoint"] == "s3://bucket/step-400407"
+    assert record["metrics"] == {"eval_dropless/loss": 1.5}
