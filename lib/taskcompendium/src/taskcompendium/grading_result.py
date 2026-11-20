@@ -66,4 +66,5 @@ def grading_failure_identity(grade: GradeResult) -> ErrorIdentity | None:
         return grade.error_identity
     if grade.status is not Outcome.INFRA_ERROR:
         return None
-    return ErrorIdentity(exception_type=_GRADING_ERROR_TYPES.get(grade.failure, VERIFIER_RUNTIME_ERROR))
+    exception_type = VERIFIER_RUNTIME_ERROR if grade.failure is None else _GRADING_ERROR_TYPES[grade.failure]
+    return ErrorIdentity(exception_type=exception_type)
