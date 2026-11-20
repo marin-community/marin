@@ -182,7 +182,7 @@ def test_account_usage_sums_quota_and_counts_sandboxes_by_state(monkeypatch) -> 
     client = FakeDaytonaClient(sandboxes=sandboxes)
     _install_fakes(monkeypatch, client)
 
-    usage = asyncio.run(account_usage(DaytonaConnection(api_key="x", api_url="u", target="us")))
+    usage = asyncio.run(account_usage(DaytonaConnection(api_key="x")))
 
     assert usage.organization_id == ORG_ID
     assert usage.sandboxes == 6
@@ -198,7 +198,7 @@ def test_account_usage_resolves_the_organization_from_snapshots_without_sandboxe
     client = FakeDaytonaClient(snapshots=[_snapshot(organization_id=ORG_ID)])
     _install_fakes(monkeypatch, client)
 
-    usage = asyncio.run(account_usage(DaytonaConnection(api_key="x", api_url="u", target="us")))
+    usage = asyncio.run(account_usage(DaytonaConnection(api_key="x")))
 
     assert usage.organization_id == ORG_ID
     assert client._api_client.requested_organizations == [ORG_ID]
@@ -208,7 +208,7 @@ def test_account_usage_resolves_the_organization_from_volumes_without_other_rows
     client = FakeDaytonaClient(volumes=[_volume(organization_id=OTHER_ORG_ID)])
     _install_fakes(monkeypatch, client)
 
-    usage = asyncio.run(account_usage(DaytonaConnection(api_key="x", api_url="u", target="us")))
+    usage = asyncio.run(account_usage(DaytonaConnection(api_key="x")))
 
     assert usage.organization_id == OTHER_ORG_ID
 
@@ -218,7 +218,7 @@ def test_account_usage_fails_when_the_inventory_spans_organizations(monkeypatch)
     _install_fakes(monkeypatch, client)
 
     with pytest.raises(RuntimeError):
-        asyncio.run(account_usage(DaytonaConnection(api_key="x", api_url="u", target="us")))
+        asyncio.run(account_usage(DaytonaConnection(api_key="x")))
 
 
 def test_account_usage_fails_when_the_organization_cannot_be_resolved(monkeypatch) -> None:
@@ -226,7 +226,7 @@ def test_account_usage_fails_when_the_organization_cannot_be_resolved(monkeypatc
     _install_fakes(monkeypatch, client)
 
     with pytest.raises(RuntimeError):
-        asyncio.run(account_usage(DaytonaConnection(api_key="x", api_url="u", target="us")))
+        asyncio.run(account_usage(DaytonaConnection(api_key="x")))
 
 
 @pytest.mark.parametrize(
@@ -291,7 +291,6 @@ def test_usage_report_json_omits_concurrency_without_a_profile() -> None:
 def test_usage_cli_prints_the_account_table_and_concurrency(monkeypatch, capsys) -> None:
     client = FakeDaytonaClient(sandboxes=[_sandbox()])
     _install_fakes(monkeypatch, client)
-    monkeypatch.setenv("DAYTONA_TARGET", "us")
     monkeypatch.setenv("DAYTONA_RL_API_KEY", "synthetic-secret-key")
     monkeypatch.setattr(
         sys,
@@ -322,7 +321,6 @@ def test_usage_cli_prints_the_account_table_and_concurrency(monkeypatch, capsys)
 def test_usage_cli_json_emits_the_usage_interchange(monkeypatch, capsys) -> None:
     client = FakeDaytonaClient(sandboxes=[_sandbox()])
     _install_fakes(monkeypatch, client)
-    monkeypatch.setenv("DAYTONA_TARGET", "us")
     monkeypatch.setenv("DAYTONA_RL_API_KEY", "synthetic-secret-key")
     monkeypatch.setattr(sys, "argv", ["shellbox-daytona-usage", "--api-key-env", "DAYTONA_RL_API_KEY", "--json"])
 
@@ -338,7 +336,6 @@ def test_usage_cli_json_emits_the_usage_interchange(monkeypatch, capsys) -> None
 def test_usage_cli_all_reports_each_account_and_skips_missing_keys(monkeypatch, capsys) -> None:
     client = FakeDaytonaClient(sandboxes=[_sandbox()])
     _install_fakes(monkeypatch, client)
-    monkeypatch.setenv("DAYTONA_TARGET", "us")
     monkeypatch.delenv("DAYTONA_API_KEY", raising=False)
     monkeypatch.delenv("DAYTONA_EVAL_API_KEY", raising=False)
     monkeypatch.setenv("DAYTONA_RL_API_KEY", "synthetic-secret-key")
@@ -362,7 +359,6 @@ def test_usage_cli_all_skips_an_account_without_the_target_row(monkeypatch, caps
     ]
     monkeypatch.setattr("shellbox.backends.daytona.usage.OrganizationsApi", FakeOrganizationsApi)
     monkeypatch.setattr(DaytonaConnection, "client_factory", lambda self: lambda: clients.pop(0))
-    monkeypatch.setenv("DAYTONA_TARGET", "us")
     monkeypatch.setenv("DAYTONA_EVAL_API_KEY", "synthetic-secret-key")
     monkeypatch.setenv("DAYTONA_RL_API_KEY", "synthetic-secret-key")
     monkeypatch.setenv("DAYTONA_DATA_API_KEY", "synthetic-secret-key")
@@ -381,7 +377,6 @@ def test_usage_cli_all_skips_an_account_without_the_target_row(monkeypatch, caps
 
 
 def test_usage_cli_rejects_partial_profiles_and_missing_credentials(monkeypatch) -> None:
-    monkeypatch.setenv("DAYTONA_TARGET", "us")
     monkeypatch.delenv("DAYTONA_RL_API_KEY", raising=False)
 
     monkeypatch.setattr(sys, "argv", ["shellbox-daytona-usage", "--api-key-env", "DAYTONA_RL_API_KEY"])
