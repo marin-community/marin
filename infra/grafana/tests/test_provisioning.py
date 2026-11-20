@@ -438,7 +438,7 @@ def test_coreweave_storage_growth_does_not_invent_growth_from_replayed_observati
     assert database.execute(sql).fetchall() == [("US-EAST-02A", "STANDARD", 0.8, 0.8)]
 
 
-def test_coreweave_storage_headroom_uses_latest_zone_and_class_and_daily_slack_route():
+def test_coreweave_storage_headroom_uses_latest_zone_and_class():
     rule = next(rule for rule in _rules() if rule["uid"] == "coreweave-storage-headroom")
     source, threshold = rule["data"]
     sql = next(param["value"] for param in source["model"]["url_options"]["params"] if param["key"] == "sql")
@@ -474,15 +474,20 @@ def test_coreweave_storage_headroom_uses_latest_zone_and_class_and_daily_slack_r
     assert [
         (region, storage_class) for region, storage_class, current, value in result if value > evaluator["params"][0]
     ] == [("US-EAST-02A", "STANDARD")]
-    route = _route_for(rule)
-    assert route["receiver"] == "ops-slack"
-    assert "active_time_intervals" in route
-    assert "mute_time_intervals" not in route
+
+
+def test_coreweave_storage_warning_routes():
     growth = next(rule for rule in _rules() if rule["uid"] == "coreweave-storage-growth")
     growth_route = _route_for(growth)
     assert growth_route["receiver"] == "ops-slack"
-    assert "active_time_intervals" not in growth_route
-    assert "mute_time_intervals" not in growth_route
+    assert not growth_route.get("active_time_intervals")
+    assert not growth_route.get("mute_time_intervals")
+
+    headroom = next(rule for rule in _rules() if rule["uid"] == "coreweave-storage-headroom")
+    headroom_route = _route_for(headroom)
+    assert headroom_route["receiver"] == "ops-slack"
+    assert headroom_route.get("active_time_intervals")
+    assert not headroom_route.get("mute_time_intervals")
 
 
 def test_coreweave_storage_alert_notifies_slack_when_collection_is_missing_for_12_hours():
