@@ -384,6 +384,10 @@ uv run python -m experiments.post_training.long_loop.round_runner \
   --source-revision "$(git rev-parse HEAD)" --validation-output /tmp/mochi-eval
 ```
 
+The policy and prepared-task references use CoreWeave S3 so regional tasks can
+read the pinned bytes. Verify admission from an Iris CPU task in the evaluation
+region as well as locally; Mac GCS credentials do not establish remote access.
+
 Inspect `launch.yaml`, `compiled.yaml`, and the required/allocated GPU counts in
 `graph.json`. Preflight rejects local model rank counts larger than the physical
 allocation. Runtime verifies the API judge's authenticated model catalog before

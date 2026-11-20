@@ -49,7 +49,7 @@ from experiments.post_training.long_loop.launch_validation import validate_befor
 from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 
 PREPARED_INPUTS = (
-    "gs://marin-us-east1/evaluation-policies/micro210/2026.11.20-together/"
+    "s3://marin-us-east-08a/marin/users/benfeuer/evaluation-policies/micro210/2026.11.20-together/"
     "ba099cbc869af0dd1c14f14586557e38a812d6b956442e8b1f406b36cc42c7a0"
 )
 
