@@ -48,7 +48,7 @@ def allocated_seconds(task: TaskStatus, now: Timestamp) -> float:
 
 
 def watchdog_stall(status: JobStatus) -> bool:
-    """Return whether the stage reports a progress-watchdog timeout."""
+    """Return whether a stage reports the watchdog message or timeout exit code 124."""
     signals = [status.error_message, status.status_message]
     for task in status.tasks:
         signals.extend((task.error_message, task.status_message))

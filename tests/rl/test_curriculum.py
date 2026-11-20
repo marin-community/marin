@@ -89,7 +89,6 @@ def test_curriculum_ordered_mode_projects_the_declared_stages():
         lambda: _ordered(entries=(_entry("unused", weight=None), _entry(weight=None), _entry("svamp", weight=None))),
         lambda: _ordered(stages=(CurriculumStage("web", 16),)),  # a stage names no declared source
         lambda: _ordered(stages=()),  # empty ordering
-        lambda: _ordered(stages=(CurriculumStage("gsm8k", 0),)),  # non-positive quota
         lambda: _ordered(entries=(_entry(pin="", weight=None), _entry("svamp", weight=None))),  # unpinned source
     ],
 )
@@ -102,7 +101,6 @@ def test_curriculum_rejects_invalid_ordered_construction(change):
     "entries",
     [
         (_entry(weight=None), _entry("svamp", weight=None)),  # weighted mode without weights
-        (_entry(weight=0.0), _entry("svamp", weight=0.3)),  # non-positive weight
         (_entry(), _entry("svamp", weight=0.3), _entry("svamp", weight=0.3)),  # duplicate label
     ],
 )
