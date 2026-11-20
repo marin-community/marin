@@ -2,6 +2,8 @@
 
 > **Note**: This document contains the technical design and architecture for
 > the inference server.
+> Current bounded Snowball native results and remaining work are recorded in the
+> [2026-11-20 status report](../../../../docs/reports/snowball-inference-status-2026-11-20.md).
 
 ## References
 
@@ -201,8 +203,9 @@ determined by the weight width. Its custom VJP uses separate HIGHEST-precision
 FP32 reference GEMMs. A bounded four-device TPUv4 forward run established
 raw-bit equality for a repeated shared-MLP token at 4, 512 and 1024 rows and
 reduced cached-decode error. Training, prefill and cached decode still differed
-in that fixture. Native custom-VJP qualification and throughput measurements
-remain outstanding; the forward result does not establish full-model parity
+in that fixture. Later four-TPUv4 full-model checks cover all parameter
+gradients and engine throughput in the bounded two-layer fixture; see the status report above. The
+earlier isolated projection result alone does not establish full-model parity
 or distribution-level equality. The opt-in does not change attention, RoPE, KV-cache casts,
 MoE routing, or Splash selection. The scoped tests cover physical training
 projection `[4, 128, 256]` and a true jitted attention decode with four active
@@ -272,9 +275,10 @@ adapter; paged-cache training gradients are not supported or qualified here.
 Other layer/expert counts remain unchanged.
 Focused CPU reference checks cover
 nontrivial cotangents at positions 127, 128, and 255 and all Q/K/V gradients.
-Native TPU gradient qualification, including sharding and full-model
-value-and-grad checks, remains pending and is owned by the parent validation
-stage.
+Native four-TPUv4 full-model value-and-grad checks now pass for the bounded
+two-layer fixture. All 46 parameter-gradient leaves per batch agree with the
+independent high-accuracy reference at the existing tolerances. The status
+report above records the exact configuration and evidence.
 
 Snowball Q/K projection has a separate runtime-only
 `qk_rms_norm_implementation` selector. Its default is the existing native
