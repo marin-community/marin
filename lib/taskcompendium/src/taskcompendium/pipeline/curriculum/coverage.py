@@ -135,7 +135,8 @@ def _sample_groups(
     capability_distance: float,
     confidence_levels: Sequence[tuple[str, float, float]],
 ) -> Iterator[dict]:
-    yield {"kind": "source", "scope_id": row["source_id"], "task": row}
+    identity = {"source_id": row["source_id"], "task_id": row["task_id"]}
+    yield {"kind": "source", "scope_id": row["source_id"], "task": identity}
     levels = confidence_levels or (("", 1 - subject_distance, 1 - capability_distance),)
     for index, (_, subject_similarity, capability_similarity) in enumerate(levels):
         for subject, node in _task_coverage(
@@ -144,7 +145,7 @@ def _sample_groups(
             subject_distance=1 - subject_similarity,
             capability_distance=1 - capability_similarity,
         )["placements"]:
-            yield {"kind": "area", "scope_id": f"{index}/{subject}/{node}", "task": row}
+            yield {"kind": "area", "scope_id": f"{index}/{subject}/{node}", "task": identity}
 
 
 def _sample_tasks(
@@ -225,9 +226,9 @@ def build_curriculum_coverage(
         area_size=area_sample_size,
         sampling_source_ids=sampling_source_ids,
     )
-    samples = context.execute(
+    identities = context.execute(
         Dataset.from_list(list(task_paths))
-        .load_parquet()
+        .load_parquet(columns=["source_id", "task_id", "description_status", "matches"])
         .flat_map(
             partial(
                 _sample_groups,
@@ -244,6 +245,16 @@ def build_curriculum_coverage(
             num_output_shards=context.max_workers,
         )
         .map(lambda row: row["task"])
+        .deduplicate(key=lambda row: (row["source_id"], row["task_id"]), num_output_shards=context.max_workers),
+        name="curriculum-review-sample-identities",
+    )
+    # The union is bounded by source/area sample sizes and taxonomy membership.
+    # Keep full task bodies out of the much larger confidence-membership shuffle.
+    selected = frozenset((row["source_id"], row["task_id"]) for row in identities.results)
+    samples = context.execute(
+        Dataset.from_list(list(task_paths))
+        .load_parquet()
+        .filter(lambda row: (row["source_id"], row["task_id"]) in selected)
         .deduplicate(key=lambda row: (row["source_id"], row["task_id"]), num_output_shards=context.max_workers)
         .write_parquet(
             str(StoragePath(output_root) / "samples/part-{shard:05d}.parquet"), schema=arrow_schema(TaskAlignment)

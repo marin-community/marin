@@ -181,6 +181,11 @@ def test_atlas_counts_full_instances_and_keeps_bounded_overlapping_samples(tmp_p
     tasks.append(
         {**tasks[200], "task_id": "skipped", "description_status": "skipped", "description": "", "matches": None}
     )
+    # Full task bodies must survive identity-only sample selection unchanged.
+    for index, row in enumerate(tasks):
+        row["description"] = f"Task body {index}: " + ("wide task evidence " * 1200)
+        row["task_preview"] = f"Preview {index}"
+    originals = {(row["source_id"], row["task_id"]): row for row in tasks}
     path = tmp_path / "tasks.parquet"
     pq.write_table(pa.Table.from_pylist(tasks), path)
     with ZephyrContext(max_workers=2, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
@@ -208,6 +213,7 @@ def test_atlas_counts_full_instances_and_keeps_bounded_overlapping_samples(tmp_p
     assert statistics["b", "skipped", ""] == 1
     samples = [row for part in data.sample_paths for row in load_parquet(part)]
     assert data.sample_task_count == len(samples) == 321
+    assert all(row == originals[row["source_id"], row["task_id"]] for row in samples)
     assert len({(row["source_id"], row["task_id"]) for row in samples}) == 321
     assert sum(row["source_id"] == "a" for row in samples) == 100
     assert {row["source_id"] for row in samples} == {"a", "b", "c"}
