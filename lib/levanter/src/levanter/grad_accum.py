@@ -38,7 +38,7 @@ def microbatched_arrays(
     and Python leaves, and keyword arguments other than ``key``, are shared.
     Equal-size microbatch losses and ordinary gradients are averaged. Custom
     gradient state uses its own reduction without averaging. Metrics retain
-    their own reductions and the RNG key is split once per microbatch.
+    their own reductions. When a batch is split, each microbatch gets a distinct RNG key.
     """
     if microbatch_size <= 0:
         raise ValueError("microbatch_size must be positive")
