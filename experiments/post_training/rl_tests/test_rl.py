@@ -65,6 +65,12 @@ def printed_status(output):
     return yaml.safe_load(output[marker + 1 if marker >= 0 else 0 :].split("\n# ", 1)[0])
 
 
+def test_preset_table_rejects_duplicate_names():
+    table = snowball_model.SNOWBALL
+    with pytest.raises(ValueError, match="Duplicate preset name 'eval-short'"):
+        replace(table, presets=(*table.presets, table.by_name["eval-short"]))
+
+
 def test_all_presets_plan_with_their_declared_controls(selection, tmp_path):
     table = snowball_model.SNOWBALL
     name, version = "tests/evaluation-init", "2026.11.17"
@@ -82,6 +88,10 @@ def test_all_presets_plan_with_their_declared_controls(selection, tmp_path):
             status = printed_status(result.stdout.partition("\nStepSpec(")[0])
             assert status["inputs"]["model"].partition(":")[0] == initializer
             assert status["updates"] == 0 and status["guards"] == []
+        elif preset.name in ("speed-short", "data-short"):
+            invalid = [*arguments, "--init", initializer]
+            result = CliRunner().invoke(snowball.command(table, argv=tuple(invalid)), invalid)
+            assert result.exit_code == 4 and "does not accept --init" in result.output, result.output
 
     preset = next(preset for preset in table.presets if preset.gated)
     arguments = ["--preset", preset.name, "--version", preset.revision]

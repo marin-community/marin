@@ -527,6 +527,13 @@ class ModelPresets:
     control_pins: Mapping[str, ControlPin]
     needs_completed_default_export: bool = False
 
+    def __post_init__(self) -> None:
+        names: set[str] = set()
+        for preset in self.presets:
+            if preset.name in names:
+                raise ValueError(f"Duplicate preset name {preset.name!r} for {self.model}")
+            names.add(preset.name)
+
     @property
     def by_name(self) -> Mapping[str, Preset]:
         return {preset.name: preset for preset in self.presets}

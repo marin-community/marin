@@ -60,11 +60,12 @@ from levanter.models.snowball import (
     SnowballConfig,
     SnowballLMHeadModel,
     SnowballMoEMLP,
+    SnowballTransformer,
     _activation_spec,
     validate_single_name_config,
 )
 from levanter.optim.config import AdamConfig
-from levanter.testing.devices import use_test_devices
+from levanter.testing.devices import use_cpu_devices, use_test_devices
 from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.trainer import TrainerConfig
 from levanter.trainer_state import TrainerState
@@ -1127,3 +1128,85 @@ def test_snowball_capacity_preserves_imbalanced_outputs_and_gradients():
             np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
         assert not np.allclose(dropped[0], reference[0], rtol=1e-5, atol=1e-5)
         assert not np.allclose(dropped[2], reference[2], rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.multidevice
+def test_snowball_init_preserves_weights_and_shardings_with_sharded_temporaries():
+    with use_cpu_devices(8), jax.threefry_partitionable(True):
+        # Omit `replica_dcn` so Pembed_vocab/Plm_head also exercise absent-axis dropping.
+        sharded_mesh = Mesh(
+            np.asarray(jax.devices()).reshape(2, 1, 2, 2),
+            ("data", "context", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 4,
+        )
+        replicated_mesh = Mesh(
+            np.asarray(jax.devices()[:1]).reshape(1, 1, 1, 1),
+            ("data", "context", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 4,
+        )
+        cfg = SnowballConfig(
+            vocab_size=1024,
+            hidden_dim=128,
+            intermediate_dim=32,
+            shared_expert_intermediate_dim=128,
+            num_experts=4,
+            num_experts_per_token=2,
+            num_layers=1,
+            num_heads=4,
+            num_kv_heads=2,
+            head_dim=32,
+            max_seq_len=32,
+            sliding_window=8,
+            initializer_std=0.02,
+            attention_implementation="reference",
+            moe_implementation="ring",
+        )
+        fsdp = ("data", "context")
+        key = jax.random.key(7)
+
+        with jax.set_mesh(sharded_mesh):
+            initialized = jax.jit(lambda k: SnowballTransformer.init(cfg, key=k)).lower(key).compile()
+            actual = initialized(key)
+        with jax.set_mesh(replicated_mesh):
+            replicated = jax.jit(lambda k: SnowballTransformer.init(cfg, key=k)).lower(key).compile()
+            expected = replicated(key)
+
+        block = actual.blocks[0]
+        expected_block = expected.blocks[0]
+        # Representative weights (embedding, attention, expert) match replicated init bit-for-bit
+        # without coupling the test to the internal key-split order of SnowballTransformer.init.
+        for name, weight, replicated_weight in (
+            ("token_embed", actual.token_embed, expected.token_embed),
+            ("w_q", block.attn.w_q, expected_block.attn.w_q),
+            ("e_gate", block.mlp.expert_mlp.w_gate, expected_block.mlp.expert_mlp.w_gate),
+        ):
+            np.testing.assert_array_equal(np.asarray(weight), np.asarray(replicated_weight), err_msg=name)
+
+        expected_shardings = (
+            ("token_embed", actual.token_embed, P("model", "data")),
+            ("output_proj", actual.output_proj, P("data", "model")),
+            ("embed_gn.w_down", actual.embed_gated_norm.w_down, P(None, None)),
+            ("embed_gn.w_up", actual.embed_gated_norm.w_up, P(None, None)),
+            ("final_gn.w_down", actual.final_gated_norm.w_down, P(None, None)),
+            ("final_gn.w_up", actual.final_gated_norm.w_up, P(None, None)),
+            ("attn_gn.w_down", block.attn_gated_norm.w_down, P(None, None)),
+            ("attn_gn.w_up", block.attn_gated_norm.w_up, P(None, None)),
+            ("mlp_gn.w_down", block.mlp_gated_norm.w_down, P(None, None)),
+            ("mlp_gn.w_up", block.mlp_gated_norm.w_up, P(None, None)),
+            ("w_q", block.attn.w_q, P(fsdp, "model")),
+            ("w_k", block.attn.w_k, P(fsdp, "model")),
+            ("w_v", block.attn.w_v, P(fsdp, "model")),
+            ("w_o", block.attn.w_o, P("model", fsdp)),
+            ("router", block.mlp.router, P(None, None)),
+            ("e_gate", block.mlp.expert_mlp.w_gate, P("expert", fsdp, "model")),
+            ("e_up", block.mlp.expert_mlp.w_up, P("expert", fsdp, "model")),
+            ("e_down", block.mlp.expert_mlp.w_down, P("expert", "model", fsdp)),
+            ("s_gate", block.shared.w_gate, P(fsdp, "model")),
+            ("s_up", block.shared.w_up, P(fsdp, "model")),
+            ("s_down", block.shared.w_down, P("model", fsdp)),
+        )
+        for name, weight, spec in expected_shardings:
+            want = NamedSharding(sharded_mesh, spec)
+            assert weight.sharding == want, (name, weight.sharding, want)
+
+        assert initialized.memory_analysis().temp_size_in_bytes < replicated.memory_analysis().temp_size_in_bytes / 3

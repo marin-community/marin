@@ -100,13 +100,15 @@ nav:
       - Writing Style:
           - House Style: dev-guide/writing-style/index.md
           - Public Communication Conventions: dev-guide/writing-style/conventions.md
-          - Prose Review: dev-guide/writing-style/ai-writing-donts.md
+          - Drafting: dev-guide/writing-style/drafting.md
+          - Prose Review: dev-guide/writing-style/review-prose.md
           - Pull Requests and Commits: dev-guide/writing-style/pull-requests.md
           - Issues: dev-guide/writing-style/issues.md
           - Reference Docs: dev-guide/writing-style/reference-docs.md
           - Tutorials: dev-guide/writing-style/tutorials.md
           - Reports: dev-guide/writing-style/reports.md
           - Blog Posts: dev-guide/writing-style/blog-posts.md
+          - Blog Exemplars: dev-guide/writing-style/blog-exemplars.md
           - Discord: dev-guide/writing-style/discord.md
       - Tutorial Guidelines: dev-guide/tutorial-guidelines.md
       - Internal Onboarding: dev-guide/guidelines-internal.md
