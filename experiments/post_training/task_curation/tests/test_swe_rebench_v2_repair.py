@@ -439,7 +439,7 @@ def test_native_solution_archive_rewrites_the_solve_workdir_to_testbed():
         body = b"instruction body"
         archive.addfile(member("instruction.md", body), io.BytesIO(body))
     solve_body = (
-        b"#!/bin/bash\nset -euo pipefail\n\nWORKDIR=/spectree\n\ncd \"$WORKDIR\"\n"
+        b'#!/bin/bash\nset -euo pipefail\n\nWORKDIR=/spectree\n\ncd "$WORKDIR"\n'
         b"git apply /solution/gold.patch\nls /sympy2 /x/spectree\n"
     )
     solution_blob = io.BytesIO()
