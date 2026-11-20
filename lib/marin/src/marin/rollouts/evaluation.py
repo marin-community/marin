@@ -560,6 +560,8 @@ async def run_evaluation(
     evidence commit together. Infrastructure failures remain retryable on a later invocation with the
     same run identity and seed. Summaries belong to the consumer of these raw results.
     """
+    if config.source_rows is not None and len(datasets) != 1:
+        raise ValueError("Explicit source row locators require a single corpus")
     if (config.judge is None) != (judge_connection is None):
         raise ValueError("A judge requires both an explicit connection and a recorded judge identity")
     if config.judge is not None:

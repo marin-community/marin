@@ -360,7 +360,7 @@ class JudgeIdentity(BaseModel):
 
 
 class EvaluationOverrides(BaseModel):
-    """Run policy supplied by a suite or campaign."""
+    """Run policy supplied by a suite or campaign. Explicit source rows address one corpus."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 

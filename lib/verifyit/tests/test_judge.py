@@ -1131,14 +1131,16 @@ def test_research_rubric_preserves_points_and_pass(tmp_path, fake_judge, reply, 
         assert result.detail["judge_request"] == fake_judge.requests[0]
 
 
-def test_empty_research_final_counts_in_both_metrics(tmp_path, unconfigured_judge):
+@pytest.mark.parametrize("response", [None, " "], ids=["missing-file", "blank-answer"])
+def test_empty_research_final_counts_in_both_metrics(tmp_path, unconfigured_judge, response):
     spec = JudgeSpec(
         rubric="frontierscience_research",
         references=("item rubric",),
         prompt_template="{reference}\n{candidate}",
         empty_output=EmptyOutputPolicy.GRADE,
     )
-    result = grade_judge.grade(spec, tmp_path, _workspace(tmp_path, " "))
+    workspace = tmp_path if response is None else _workspace(tmp_path, response)
+    result = grade_judge.grade(spec, tmp_path, workspace)
     assert result.status is Status.SCORED
     assert result.detail["metrics"] == {"pass_rate": 0.0, "rubric_points": 0.0}
 

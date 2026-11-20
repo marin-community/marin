@@ -174,8 +174,14 @@ def grade(
     context = _context(spec, tests_dir)
     candidate = read_output(spec, workspace)
     if candidate is None:
-        return scored(0.0, reason="no_output")
+        return _no_output(spec)
     return grade_judge_candidate(spec, candidate, context=context, runtime=runtime)
+
+
+def _no_output(spec: JudgeSpec) -> Reward:
+    if spec.rubric == RUBRIC_FRONTIERSCIENCE:
+        return scored(0.0, reason="no_output", metrics={"pass_rate": 0.0, "rubric_points": 0.0})
+    return scored(0.0, reason="no_output")
 
 
 def _validate_spec(spec: JudgeSpec) -> _ValidatedJudgeSpec:
@@ -311,10 +317,8 @@ def grade_judge_candidate(
     if not isinstance(candidate, str):
         raise InvalidTask("judge candidate must be text")
     candidate = _answer_text(candidate, spec.strip_candidate_reasoning_blocks, strip_outer=False)
-    if spec.rubric == RUBRIC_FRONTIERSCIENCE and not candidate.strip():
-        return scored(0.0, reason="no_output", metrics={"pass_rate": 0.0, "rubric_points": 0.0})
-    if policy is EmptyOutputPolicy.ZERO and not candidate.strip():
-        return scored(0.0, reason="no_output")
+    if not candidate.strip() and (spec.rubric == RUBRIC_FRONTIERSCIENCE or policy is EmptyOutputPolicy.ZERO):
+        return _no_output(spec)
     context = context[:CONTEXT_LIMIT]
     failed = [
         constraint.name for constraint, check in validated.checks if not _passes(check, candidate, constraint.params)
