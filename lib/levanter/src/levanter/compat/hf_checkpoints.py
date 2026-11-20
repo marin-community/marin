@@ -66,6 +66,7 @@ from levanter.compat.hf_generation_config import (
 from levanter.field_dtype_overrides import FieldDtypes, cast_with_field_dtypes, sorted_field_dtypes
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.tokenizers import MarinTokenizer
+from levanter.tokenizers import load_tokenizer as load_marin_tokenizer
 from levanter.utils.cloud_utils import temp_dir_before_upload
 from levanter.utils.byte_budget import HostByteBudget
 from levanter.utils.hf_utils import HfTokenizer
@@ -1107,8 +1108,9 @@ class HFCheckpointConverter(Generic[LevConfig]):
         architecture code being present (using trust_remote_code=True). "Code" here means anything not stored in LFS.
         If None, will save code for models that aren't in the HF repo.
         :param generation_config: explicit generation settings. Otherwise, preserves fields from
-        the pinned reference checkpoint's generation config, when present. With a tokenizer, the
-        export adds inferred turn stops.
+        the pinned reference checkpoint's generation config, when present and when the exported
+        tokenizer gives every token of the reference checkpoint's tokenizer the same id. With a
+        tokenizer, the export adds inferred turn stops.
         :param generation_config_defaults: caller policy for generation fields missing from the explicit or
         preserved generation config.
         :param chat_template: if given, overrides the tokenizer's chat template in the exported checkpoint
@@ -1232,6 +1234,11 @@ class HFCheckpointConverter(Generic[LevConfig]):
             )
 
         def save_metadata() -> None:
+            # Read the reference before writing: an export into the reference's own directory replaces its tokenizer.
+            preserved_generation_config = generation_config
+            if preserved_generation_config is None:
+                preserved_generation_config = self._load_reference_generation_config()
+
             with temp_dir_before_upload(path, process_should_upload=True, sync_on_exit=False) as local_path:
                 if path != local_path:
                     logger.info(f"Saving metadata to {path} via temp path {local_path}")
@@ -1255,9 +1262,6 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 with open(os.path.join(local_path, "config.json"), "w") as f:
                     json.dump(dict_config, f)
 
-                preserved_generation_config = generation_config
-                if preserved_generation_config is None:
-                    preserved_generation_config = self._load_reference_generation_config()
                 if self.tokenizer is None:
                     if preserved_generation_config is None:
                         logger.warning(
@@ -1295,6 +1299,13 @@ class HFCheckpointConverter(Generic[LevConfig]):
         logger.info(f"Finished saving HF-compatible checkpoint to {path}")
 
     def _load_reference_generation_config(self) -> GenerationConfigDict | None:
+        """Return the reference checkpoint's generation config, if it has one that applies to the exported tokenizer.
+
+        The config's token ids index the reference checkpoint's tokenizer, so with an exported tokenizer it is kept
+        only when that tokenizer gives every reference token the same id: the reference tokenizer itself, or one padded
+        or extended from it. A Qwen3 model trained with the Llama 3 tokenizer, or a reference that ships no
+        ``tokenizer.json``, gets ``None``, and the export derives its settings from the exported tokenizer.
+        """
         if self.reference_checkpoint is None:
             return None
         repo, revision = self._get_ref(self.reference_checkpoint)
@@ -1314,7 +1325,22 @@ class HFCheckpointConverter(Generic[LevConfig]):
         config = json.loads(contents)
         if not isinstance(config, dict):
             raise ValueError(f"Reference generation config must be a JSON object: {self.reference_checkpoint}")
-        return config
+        if self.tokenizer is None:
+            return config
+        try:
+            reference_tokenizer = load_marin_tokenizer(repo if revision is None else f"{repo}@{revision}")
+        except FileNotFoundError:
+            logger.info(
+                "Not preserving the generation config of %s: it has no tokenizer.json", self.reference_checkpoint
+            )
+            return None
+        if reference_tokenizer.get_vocab().items() <= self.tokenizer.get_vocab().items():
+            return config
+        logger.info(
+            "Not preserving the generation config of %s: the exported tokenizer gives its tokens other ids",
+            self.reference_checkpoint,
+        )
+        return None
 
     def _save_code_local(self, path):
         if self.reference_checkpoint is None:
