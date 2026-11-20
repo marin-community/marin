@@ -27,7 +27,9 @@ async def test_preservation_gates_reject_ineligible_step_zero_evaluation(tmp_pat
         }
     )
     callback = create_callbacks_from_config(config)[0]
-    trainer = SimpleNamespace(cfg=SimpleNamespace(trainer=SimpleNamespace(ckpt_path=str(tmp_path))))
+    trainer = SimpleNamespace(
+        cfg=SimpleNamespace(trainer=SimpleNamespace(ckpt_path=str(tmp_path), export_path=str(tmp_path / "exports")))
+    )
 
     with pytest.raises(ValueError, match="eligible step-zero evaluation"):
         await callback.on_evaluate_async(
@@ -53,7 +55,8 @@ async def test_delayed_best_selection_preserves_baseline_gates_after_resume(tmp_
         (tmp_path / f"weights-{current_step}").write_text("checkpoint")
 
     trainer = SimpleNamespace(
-        cfg=SimpleNamespace(trainer=SimpleNamespace(ckpt_path=str(tmp_path))), save_checkpoints=save_checkpoints
+        cfg=SimpleNamespace(trainer=SimpleNamespace(ckpt_path=str(tmp_path), export_path=str(tmp_path / "exports"))),
+        save_checkpoints=save_checkpoints,
     )
     parameters = dict(
         initial_model_uri="base-model",
@@ -66,7 +69,7 @@ async def test_delayed_best_selection_preserves_baseline_gates_after_resume(tmp_
     config = OmegaConf.create({"trainer": {"callbacks": [{"type": "best_checkpoint", **parameters}]}})
     callback = create_callbacks_from_config(config)[0]
 
-    async def evaluate(step, identity, preservation):
+    async def evaluate(step, identity, preservation, *, attempted=40):
         nonlocal current_step
         current_step = step
         return await callback.on_evaluate_async(
@@ -74,7 +77,7 @@ async def test_delayed_best_selection_preserves_baseline_gates_after_resume(tmp_
             TrainerControl(),
             trainer=trainer,
             metrics={
-                "eval/all/num_attempted": 40,
+                "eval/all/num_attempted": attempted,
                 "eval/all/num_scored": 40,
                 "identity": identity,
                 "preservation": preservation,
@@ -85,6 +88,8 @@ async def test_delayed_best_selection_preserves_baseline_gates_after_resume(tmp_
     await evaluate(5, 1.0, 0.9)
     assert saved_steps == []
     await evaluate(10, 0.5, 0.9)
+    assert saved_steps == [10]
+    await evaluate(12, 0.99, 0.9, attempted=41)
     assert saved_steps == [10]
     callback = create_callbacks_from_config(config)[0]
     await evaluate(15, 0.8, 0.85)
@@ -98,3 +103,5 @@ async def test_delayed_best_selection_preserves_baseline_gates_after_resume(tmp_
     assert selected["accuracy"] == 0.7
     assert selected["preservation_baseline"] == {"preservation": 0.9}
     assert selected["model_format"] == "native"
+    (tmp_path / "best_checkpoint.json").unlink()
+    assert json.loads((tmp_path / "exports/best_checkpoint.json").read_text()) == selected
