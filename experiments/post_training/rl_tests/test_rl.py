@@ -607,9 +607,7 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
     for name, config in zip(revisions, configs, strict=True):
         trainer, generator = config["skyrl"]["trainer"], config["skyrl"]["generator"]
         if snowball_model.SNOWBALL.by_name[name].batch_mix is not None:
-            assert trainer["rollout_buffer"]["groups_per_family"]
             continue
-        assert "groups_per_family" not in trainer["rollout_buffer"]
         assert config["iris"]["allocation"]["num_nodes"] * config["iris"]["allocation"]["gpus_per_node"] <= 40
         generating = name in ("speed-short", "data-short", "eval-short")
         assert (

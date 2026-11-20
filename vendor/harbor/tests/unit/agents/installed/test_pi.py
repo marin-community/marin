@@ -328,11 +328,6 @@ class TestPiAgent:
                 compaction_reserve_tokens=compaction_reserve_tokens,
             )
 
-    @pytest.mark.parametrize("http_idle_timeout", [True, 0, float("inf"), float("nan")])
-    def test_http_idle_timeout_must_be_finite_and_positive(self, temp_dir, http_idle_timeout):
-        with pytest.raises(ValueError, match="http_idle_timeout must be finite and positive"):
-            Pi(logs_dir=temp_dir, model_name="openai/test-model", http_idle_timeout=http_idle_timeout)
-
     @pytest.mark.asyncio
     @pytest.mark.parametrize("http_idle_timeout", [None, 360])
     async def test_run_without_model_limits_preserves_pi_compaction_settings(

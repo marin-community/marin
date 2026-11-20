@@ -1099,9 +1099,12 @@ def test_first_train_submission_validates_recipe_and_resolved_reload(tmp_path):
     assert OmegaConf.to_container(load_launch_config(resolved), resolve=True) == OmegaConf.to_container(
         loaded, resolve=True
     )
-    raw["skyrl"]["trainer"].setdefault("rollout_buffer", {})["groups_per_family"] = {}
+    rollout_buffer = raw["skyrl"]["trainer"].setdefault("rollout_buffer", {})
+    rollout_buffer["groups_per_family"] = {}
     path.write_text(yaml.safe_dump(raw))
-    assert load_launch_config(path) == loaded
+    with pytest.raises(ValueError, match="groups_per_family"):
+        load_launch_config(path)
+    del rollout_buffer["groups_per_family"]
 
     del raw["skyrl"]["context_budget"]
     path.write_text(yaml.safe_dump(raw))
