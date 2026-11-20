@@ -310,7 +310,9 @@ StepRunner builds missing registered normalization dependencies and checks the
 other completed preparation artifacts pinned by the plan.
 
 `SftRegistrationPlan` pins the input and training file manifests, completed stage
-records, eval manifests, tokenizer files and chat template. Each file manifest
+records, content manifests for chat, normalized text and decontamination shards,
+eval manifests, tokenizer files and chat template. Stage manifests bind the exact
+file list, byte digests and measured row count. Each file manifest
 contains `files` (URI/SHA-256 references) and the total `rows` count across those files. The
 filtering artifact records the variant `input` (`DatasetVariantInput`),
 `input_rows`, the number of removed rows in `filtered_rows`
@@ -324,10 +326,13 @@ template arguments with the original normalized chats, checks the measured
 decontamination marks, rejects duplicate token-and-mask pairs, and checks tokens
 and assistant masks from the pinned tokenizer/template. All required stages
 must have successful StepRunner status and belong to the preparation's lineage.
-Every removed normalized conversation must be eval-contaminated or have the
+Downloaded row counts are checked against the files. The receipt records rows
+removed during chat normalization separately in `normalization_filtered_rows`.
+Every conversation removed after chat normalization must be eval-contaminated or have the
 same token sequence and mask as a retained conversation.
 The eval policy uses the required Artificial Analysis (AA), lm-eval, Uncheatable and Atlas-reference
 manifests; the SFT Bloom and marks must use the same five-word policy.
+A retry accepts an identical existing receipt and preserves its completion time.
 Success writes `<printed output>/receipt.json` as `finestore.sft.SftPreparationReceipt`; a failed
 check writes no receipt. Run the check in the region of the bucket holding the source and prepared training data.
 

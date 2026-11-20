@@ -7,14 +7,14 @@ import argparse
 import hashlib
 from functools import partial
 
-from finestore.sft import SftEvidenceReference, SftPreparationReceipt, SftStage
+from finestore.sft import DatasetVariantInput, SftEvidenceReference, SftPreparationReceipt, SftStage
 from marin.datakit.sft_registration import (
     SftEvalRequirement,
     SftRegistrationPlan,
     qualification_implementation_sha256,
     qualify_sft_variant,
 )
-from marin.datakit.sft_sources import all_sft_sources
+from marin.datakit.sft_sources import DatakitChatSource, all_sft_sources
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from rigging.filesystem.cluster_config import marin_prefix
@@ -77,11 +77,31 @@ def _register(plan: SftRegistrationPlan, output_path: str) -> SftPreparationRece
     return qualify_sft_variant(plan, prefix_join(output_path, "receipt.json"))
 
 
+def registered_download(source: DatakitChatSource, identity: DatasetVariantInput) -> StepSpec:
+    pending = [source.chat_normalized]
+    downloads = {}
+    seen = set()
+    while pending:
+        step = pending.pop()
+        if step.output_path in seen:
+            continue
+        seen.add(step.output_path)
+        if (step.hash_attrs.get("hf_dataset_id"), step.hash_attrs.get("revision")) == (
+            identity.repository,
+            identity.revision,
+        ):
+            downloads[step.output_path] = step
+        pending.extend(step.deps)
+    if len(downloads) != 1:
+        raise ValueError("SFT source must have one download for the selected repository and revision")
+    return next(iter(downloads.values()))
+
+
 def registration_step(plan: SftRegistrationPlan, *, output_prefix: str | None = None) -> StepSpec:
     """Add qualification after the registered full-source normalization graph."""
     source = all_sft_sources()[plan.registry_source]
     expected = {
-        SftStage.DOWNLOAD: source.chat_steps[0],
+        SftStage.DOWNLOAD: registered_download(source, plan.input),
         SftStage.CHAT: source.chat_normalized,
         SftStage.RENDER: source.rendered,
         SftStage.NORMALIZE: source.normalized,

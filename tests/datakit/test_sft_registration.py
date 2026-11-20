@@ -212,6 +212,13 @@ def registration(tmp_path):
         registry_source="fixture",
         input_manifest=input_manifest,
         stages=stages,
+        stage_files={
+            stage: json_file(
+                tmp_path / f"{stage.name}-files.json",
+                {"files": [pin(paths[stage] / "outputs/main/part-000.parquet").model_dump()], "rows": 2},
+            )
+            for stage in [SftStage.CHAT, SftStage.NORMALIZE, SftStage.DECONTAM]
+        },
         evals=evals,
         output_manifest=output,
         tokenizer=tokenizer_manifest,
@@ -232,6 +239,7 @@ def test_registration_writes_only_content_bound_complete_receipt(registration):
         loaded.input_tokens,
         loaded.supervised_tokens,
     ) == (2, 1, 1, 2, 1)
+    assert qualify_sft_variant(plan, str(root / "receipt.json")) == loaded
     loaded.require_input(plan.input)
     with pytest.raises(ValueError, match="selected dataset variant"):
         loaded.require_input(plan.input.model_copy(update={"task_specs_sha256": "c" * 64}))
@@ -248,6 +256,8 @@ def test_registration_writes_only_content_bound_complete_receipt(registration):
         "unmeasured_row",
         "contaminated_row",
         "dropped_clean",
+        "overwritten_marks",
+        "wrong_population",
     ],
 )
 def test_incomplete_or_changed_preparation_never_writes_receipt(registration, defect):
@@ -260,11 +270,21 @@ def test_incomplete_or_changed_preparation_never_writes_receipt(registration, de
         plan = plan.model_copy(update={"evals": {k: v for k, v in plan.evals.items() if k != "uncheatable"}})
     elif defect == "changed_content":
         Path(json.loads(Path(plan.input_manifest.uri).read_text())["files"][0]["uri"]).write_bytes(b"changed input")
-    elif defect == "contaminated_row":
+    elif defect == "wrong_population":
+        input_value = json.loads(Path(plan.input_manifest.uri).read_text())
+        input_value["rows"] = 9
+        reference = json_file(Path(plan.input_manifest.uri), input_value)
+        plan = plan.model_copy(
+            update={
+                "input_manifest": reference,
+                "input": plan.input.model_copy(update={"data_sha256": reference.sha256}),
+            }
+        )
+    elif defect in {"contaminated_row", "overwritten_marks"}:
         path = root / "decontam/outputs/main/part-000.parquet"
         rows = pq.read_table(path).to_pylist()
         for row in rows:
-            row["contaminated"] = True
+            row["contaminated"] = defect == "contaminated_row"
         parquet(path, rows)
     elif defect == "dropped_clean":
         path = root / "decontam/outputs/main/part-000.parquet"
@@ -286,6 +306,13 @@ def test_incomplete_or_changed_preparation_never_writes_receipt(registration, de
         record["result"]["output_manifest"] = output.model_dump()
         stages[SftStage.FILTER] = json_file(Path(stages[SftStage.FILTER].uri), record)
         plan = plan.model_copy(update={"output_manifest": output, "stages": stages})
+    if defect in {"contaminated_row", "dropped_clean"}:
+        stage_files = dict(plan.stage_files)
+        stage_files[SftStage.DECONTAM] = json_file(
+            root / "new-marks-manifest.json",
+            {"files": [pin(root / "decontam/outputs/main/part-000.parquet").model_dump()], "rows": 2},
+        )
+        plan = plan.model_copy(update={"stage_files": stage_files})
     with pytest.raises(ValueError):
         qualify_sft_variant(plan, str(root / "receipt.json"))
     assert not (root / "receipt.json").exists()

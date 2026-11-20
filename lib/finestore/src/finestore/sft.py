@@ -60,6 +60,8 @@ class SftPreparationReceipt(SftRecord):
     input_rows: int = Field(gt=0)
     training_rows: int = Field(gt=0)
     filtered_rows: int = Field(ge=0)
+    normalization_filtered_rows: int = Field(ge=0)
+    stage_files: dict[SftStage, SftEvidenceReference]
     input_tokens: int = Field(gt=0)
     supervised_tokens: int = Field(gt=0)
     training_sha256: Sha256
@@ -71,8 +73,10 @@ class SftPreparationReceipt(SftRecord):
             raise ValueError("SFT registration requires every completed Datakit stage")
         if set(self.eval_manifests) != REQUIRED_SFT_EVAL_FAMILIES:
             raise ValueError("SFT registration requires core, Uncheatable and Atlas reference coverage")
-        if self.training_rows + self.filtered_rows != self.input_rows:
+        if self.training_rows + self.filtered_rows + self.normalization_filtered_rows != self.input_rows:
             raise ValueError("SFT registration must account for the complete input population")
+        if set(self.stage_files) != {SftStage.CHAT, SftStage.NORMALIZE, SftStage.DECONTAM}:
+            raise ValueError("SFT registration requires pinned chat, text and decontamination files")
         if self.supervised_tokens > self.input_tokens:
             raise ValueError("SFT supervision exceeds the tokenized population")
         return self

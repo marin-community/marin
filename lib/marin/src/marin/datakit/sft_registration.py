@@ -71,6 +71,7 @@ class EncodedChat:
 @dataclass(frozen=True)
 class TrainingSummary:
     rows: int
+    chat_rows: int
     input_tokens: int
     supervised_tokens: int
     sha256: str
@@ -91,6 +92,7 @@ class SftRegistrationPlan(SftRecord):
     registry_source: str
     input_manifest: SftEvidenceReference
     stages: dict[SftStage, SftEvidenceReference]
+    stage_files: dict[SftStage, SftEvidenceReference]
     evals: dict[str, SftEvalRequirement]
     output_manifest: SftEvidenceReference
     tokenizer: SftEvidenceReference
@@ -130,11 +132,23 @@ def _rows(files: tuple[SftEvidenceReference, ...]) -> Iterator[dict[str, Any]]:
         yield from _parquet_rows([StoragePath(reference.uri)])
 
 
-def _artifact_rows(
-    record: ArtifactRecord, schema: type[ChatSourceData] | type[NormalizedData] | type[DeconAttributes]
+def _stage_rows(
+    plan: SftRegistrationPlan,
+    stage: SftStage,
+    record: ArtifactRecord,
+    schema: type[ChatSourceData] | type[NormalizedData] | type[DeconAttributes],
 ) -> Iterator[dict[str, Any]]:
     value = schema.model_validate(record.result, context={ARTIFACT_LOAD_CONTEXT_KEY: True})
-    yield from _parquet_rows(sorted((StoragePath(value.main_output_dir) / "*.parquet").glob(), key=str))
+    manifest = SftFileManifest.model_validate_json(read_pinned(plan.stage_files[stage]))
+    actual = {str(path) for path in (StoragePath(value.main_output_dir) / "*.parquet").glob()}
+    if actual != {str(StoragePath(ref.uri)) for ref in manifest.files}:
+        raise ValueError("SFT stage files do not match its pinned complete manifest")
+    count = 0
+    for row in _rows(manifest.files):
+        count += 1
+        yield row
+    if count != manifest.rows:
+        raise ValueError("SFT stage manifest row count differs from its files")
 
 
 def _chat_digest(row: dict[str, Any]) -> str:
@@ -228,8 +242,10 @@ def _load_completed_stages(plan: SftRegistrationPlan) -> tuple[SftFileManifest, 
     if plan.input_manifest.sha256 != plan.input.data_sha256:
         raise ValueError("SFT input manifest does not match the dataset variant")
     inputs = SftFileManifest.model_validate_json(read_pinned(plan.input_manifest))
-    for reference in inputs.files:
-        _verify_file(reference)
+    if sum(1 for _ in _rows(inputs.files)) != inputs.rows:
+        raise ValueError("SFT input manifest row count differs from its files")
+    if set(plan.stage_files) != {SftStage.CHAT, SftStage.NORMALIZE, SftStage.DECONTAM}:
+        raise ValueError("SFT preparation requires content-pinned stage manifests")
     records = {stage: ArtifactRecord.model_validate_json(read_pinned(ref)) for stage, ref in plan.stages.items()}
     for stage, record in records.items():
         if plan.stages[stage].uri != str(StoragePath(record.output_path) / ".artifact.json"):
@@ -296,11 +312,14 @@ def _audit_training(
             db.execute("CREATE TABLE text (id TEXT PRIMARY KEY, chat_id TEXT NOT NULL)")
             db.execute("CREATE TABLE marks (id TEXT PRIMARY KEY, contaminated INTEGER NOT NULL)")
             db.execute("CREATE TABLE selected (id TEXT PRIMARY KEY, encoding_sha TEXT UNIQUE NOT NULL)")
-            for row in _artifact_rows(records[SftStage.CHAT], ChatSourceData):
+            for row in _stage_rows(plan, SftStage.CHAT, records[SftStage.CHAT], ChatSourceData):
                 db.execute("INSERT INTO chat VALUES (?,?)", (row["id"], _chat_digest(row)))
-            for row in _artifact_rows(records[SftStage.NORMALIZE], NormalizedData):
+            chat_rows = db.execute("SELECT COUNT(*) FROM chat").fetchone()[0]
+            if chat_rows > inputs.rows:
+                raise ValueError("SFT chat population exceeds the downloaded input population")
+            for row in _stage_rows(plan, SftStage.NORMALIZE, records[SftStage.NORMALIZE], NormalizedData):
                 db.execute("INSERT INTO text VALUES (?,?)", (row["id"], row["source_id"]))
-            for row in _artifact_rows(records[SftStage.DECONTAM], DeconAttributes):
+            for row in _stage_rows(plan, SftStage.DECONTAM, records[SftStage.DECONTAM], DeconAttributes):
                 if not isinstance(row["contaminated"], bool):
                     raise ValueError("SFT decontamination contains an unmeasured row")
                 db.execute("INSERT INTO marks VALUES (?,?)", (row["id"], bool(row["contaminated"])))
@@ -328,7 +347,7 @@ def _audit_training(
                 count += 1
                 tokens += len(encoded.input_ids)
                 supervised += int(encoded.assistant_masks.sum())
-            for row in _artifact_rows(records[SftStage.CHAT], ChatSourceData):
+            for row in _stage_rows(plan, SftStage.CHAT, records[SftStage.CHAT], ChatSourceData):
                 if db.execute("SELECT 1 FROM selected WHERE id=?", (row["id"],)).fetchone():
                     continue
                 contaminated = db.execute(
@@ -342,10 +361,10 @@ def _audit_training(
             if (
                 count != output.rows
                 or filtering.input_rows != inputs.rows
-                or filtering.filtered_rows != inputs.rows - count
+                or filtering.filtered_rows != chat_rows - count
             ):
                 raise ValueError("SFT preparation does not reconcile its complete population")
-    return TrainingSummary(count, tokens, supervised, training_digest.hexdigest())
+    return TrainingSummary(count, chat_rows, tokens, supervised, training_digest.hexdigest())
 
 
 def qualify_sft_variant(plan: SftRegistrationPlan, output_path: str) -> SftPreparationReceipt:
@@ -374,7 +393,9 @@ def qualify_sft_variant(plan: SftRegistrationPlan, output_path: str) -> SftPrepa
         chat_template_sha256=plan.chat_template.sha256,
         input_rows=inputs.rows,
         training_rows=training.rows,
-        filtered_rows=inputs.rows - training.rows,
+        filtered_rows=training.chat_rows - training.rows,
+        normalization_filtered_rows=inputs.rows - training.chat_rows,
+        stage_files=plan.stage_files,
         input_tokens=training.input_tokens,
         supervised_tokens=training.supervised_tokens,
         training_sha256=training.sha256,
@@ -382,7 +403,10 @@ def qualify_sft_variant(plan: SftRegistrationPlan, output_path: str) -> SftPrepa
     )
     destination_path = StoragePath(output_path)
     if destination_path.exists():
-        raise FileExistsError(output_path)
+        previous = SftPreparationReceipt.model_validate_json(destination_path.read_bytes())
+        if previous.model_dump(exclude={"completed_at"}) != receipt.model_dump(exclude={"completed_at"}):
+            raise ValueError("Existing SFT receipt belongs to different preparation evidence")
+        return previous
     destination_path.parent.mkdirs()
     with destination_path.open("wt") as destination:
         destination.write(receipt.model_dump_json(indent=2) + "\n")
