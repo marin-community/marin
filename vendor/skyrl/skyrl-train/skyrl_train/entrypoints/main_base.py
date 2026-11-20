@@ -683,7 +683,10 @@ class BasePPOExp:
             if distillation_runtime is not None:
                 trainer.configure_distillation(distillation_runtime)
         except BaseException:
-            asyncio.run(trainer.shutdown())
+            try:
+                asyncio.run(trainer.shutdown())
+            finally:
+                trainer.finish_shutdown()
             raise
         return trainer
 
@@ -734,6 +737,8 @@ class BasePPOExp:
                         asyncio.run(trainer.shutdown())
                     except Exception as e:
                         logger.warning(f"Error shutting down trainer: {e}")
+                    finally:
+                        trainer.finish_shutdown()
 
 
 @ray.remote(num_cpus=1, max_retries=0)
