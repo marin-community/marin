@@ -13,6 +13,7 @@ import click
 from marin.external_dependencies import VLLM_FORK_REQUIREMENT
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
+    LMCACHE_RAM_GIB_FLAG,
     LevanterEngineConfig,
     ServedModelConfig,
     VllmEngineConfig,
@@ -32,6 +33,7 @@ _LOCAL_VLLM_OPTIONS = {
     "vllm_version": "--vllm-version",
     "vllm_release": "--vllm-release",
     "session_router": "--session-router",
+    "lmcache_ram_gib": LMCACHE_RAM_GIB_FLAG,
     "data_parallel_size": "--data-parallel-size",
     "max_num_batched_tokens": "--max-num-batched-tokens",
     "vllm_args": "--vllm-arg",
@@ -67,6 +69,12 @@ def main() -> None:
     help="Published vLLM GPU release manifest for this deployment.",
 )
 @click.option("--session-router", is_flag=True, help="Route stable X-Session-ID values to native DP ranks.")
+@click.option(
+    LMCACHE_RAM_GIB_FLAG,
+    type=click.FloatRange(min=0, min_open=True),
+    default=None,
+    help="GiB for one task-local RAM cache shared by its vLLM workers; disabled when omitted.",
+)
 @click.option("--data-parallel-size", type=click.IntRange(min=1), default=None, help="Native DP ranks (default: 1).")
 @click.option("--tokenizer", default=None)
 @click.option("--host", default="127.0.0.1")
@@ -95,6 +103,7 @@ def local(
     vllm_version: str,
     vllm_release: Path | None,
     session_router: bool,
+    lmcache_ram_gib: float | None,
     data_parallel_size: int | None,
     tokenizer: str | None,
     host: str,
@@ -146,6 +155,7 @@ def local(
             version=vllm_version,
             release=load_vllm_gpu_release(vllm_release),
             router=VllmRouterConfig() if session_router else None,
+            lmcache_ram_gib=lmcache_ram_gib,
             startup_timeout_seconds=startup_timeout,
             max_num_batched_tokens=max_num_batched_tokens,
             extra_args=(
