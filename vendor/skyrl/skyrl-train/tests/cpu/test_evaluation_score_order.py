@@ -11,6 +11,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from omegaconf import OmegaConf
+from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import AutoTokenizer
 from rolloutengine.models import ModelTurn
 from taskcompendium.grading_result import GradeResult, Outcome
@@ -22,6 +23,8 @@ from skyrl_train.config.utils import get_default_config
 from skyrl_train.dataset.tasks import write_tasks
 from skyrl_train.entrypoints.main_base import BasePPOExp
 from skyrl_train.entrypoints.terminal_bench import TerminalBenchExp
+from skyrl_train.evaluate import _collect_evaluation_rollouts, _WholeTrajectoryAccumulator
+from skyrl_train.evaluation_pool import EvaluationPool
 from skyrl_train.evaluation_profiles import resolve_evaluation_profiles
 from skyrl_train.rollouts.task_projections import StepTaskProjection, WholeTaskProjection
 from skyrl_train.rollouts.training_record import TrainingRollout, TrainingStep, TrainingTransition
@@ -191,6 +194,37 @@ def test_evaluation_mean_survives_cancellation_and_completion_order(per_token):
         means.add(mean)
         assert passed == 1.0
     assert means == ({3.0} if per_token else {0.75})
+
+
+@pytest.mark.asyncio
+async def test_evaluation_collector_keeps_task_id_and_scoring_metadata():
+    config = get_default_config()
+    task = text_task("validation-task")
+    row = task_input(lowered_task(task), metric_class="script", data_source="validation")
+    loader = StatefulDataLoader([{"input": row}], collate_fn=list)
+    projection = WholeTaskProjection(config.generator, SimpleNamespace(eos_token_id=2))
+    response = TrainingRollout(
+        task_id="validation-task",
+        messages=(),
+        prompt_token_ids=(1,),
+        response_token_ids=(2,),
+        loss_mask=(1,),
+        logprobs=(-0.1,),
+        grade=GradeResult(Outcome.GRADED, 1.0),
+        stop_reason="stop",
+    )
+
+    async def run(request):
+        return projection.project([response], request)
+
+    async with EvaluationPool(concurrency=1) as pool:
+        rollouts = await _collect_evaluation_rollouts(
+            loader, SimpleNamespace(run=run), config, 0, None, _WholeTrajectoryAccumulator([], []), pool
+        )
+
+    assert rollouts.batch["task_ids"] == ["validation-task"]
+    assert rollouts.env_classes == ["script"]
+    assert rollouts.data_sources == ["validation"]
 
 
 def test_task_timings_survive_projection_concatenation_and_row_selection():
