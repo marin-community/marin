@@ -93,7 +93,7 @@ def contract_projection(declaration: dict[str, Any], receipts: list[dict]) -> di
         derived_workspace_graded=summary["workspace_graded_count"] == count,
         derived_contract_receipt={
             "uri": receipt["evidence_url"],
-            "input": receipt["input"],
+            "input": {key: receipt["input"][key] for key in INPUT_FIELDS},
             "scanned_task_specs_sha256": receipt["scanned_task_specs_sha256"],
         },
     )

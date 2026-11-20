@@ -32,7 +32,7 @@ def test_changed_population_drops_derived_profile(changed: str | None) -> None:
     source = {"id": "Marin:source", "actor_census_input": binding}
     receipt = {
         "source_id": source["id"],
-        "input": dict(binding),
+        "input": {**binding, "unexpected_prompt": "private input prompt"},
         "evidence_url": "https://example.org/receipt",
         "scanned_task_specs_sha256": "d",
         "summary": {
@@ -57,6 +57,7 @@ def test_changed_population_drops_derived_profile(changed: str | None) -> None:
         assert projected["grader_type_counts"] == {"script": 1, "llm-judge": 2}
         assert projected["derived_agentic"] is False and projected["derived_turns"] == "single-turn"
         assert projected["derived_contract_receipt"]["uri"] == receipt["evidence_url"]
+        assert projected["derived_contract_receipt"]["input"] == binding
         withheld = private_declaration_projection(
             {
                 **projected,
