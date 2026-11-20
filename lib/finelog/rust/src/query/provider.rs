@@ -38,7 +38,7 @@ use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::datasource::MemTable;
 use datafusion::execution::object_store::ObjectStoreUrl;
-use datafusion::logical_expr::utils::conjunction;
+use datafusion::logical_expr::utils::{conjunction, split_conjunction};
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use datafusion::physical_plan::ExecutionPlan;
@@ -402,12 +402,29 @@ impl NamespaceProvider {
 
     /// A pruning predicate over the segments' integer bounds, or `None` when
     /// `filters` cannot rule out any segment.
+    ///
+    /// Only conjuncts that read Int64 columns alone reach DataFusion. Its
+    /// rewrite of a prefix `LIKE` compares the column's bounds with `Utf8`
+    /// literals, which fails to evaluate against this schema's `Utf8View`
+    /// columns, and no string column has integer bounds to prune by.
     fn int_bounds_predicate(
         &self,
         state: &dyn Session,
         filters: &[Expr],
     ) -> DFResult<Option<PruningPredicate>> {
-        let Some(filter) = conjunction(filters.iter().cloned()) else {
+        let reads_only_int64_columns = |conjunct: &&Expr| {
+            conjunct.column_refs().into_iter().all(|column| {
+                self.schema
+                    .field_with_name(&column.name)
+                    .is_ok_and(|field| *field.data_type() == DataType::Int64)
+            })
+        };
+        let int_conjuncts = filters
+            .iter()
+            .flat_map(split_conjunction)
+            .filter(reads_only_int64_columns)
+            .cloned();
+        let Some(filter) = conjunction(int_conjuncts) else {
             return Ok(None);
         };
         let df_schema = DFSchema::try_from(Arc::clone(&self.schema))?;
