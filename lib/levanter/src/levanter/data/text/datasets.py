@@ -31,7 +31,7 @@ from levanter.data.mixture import (
     StopStrategy,
     rescale_mixture_schedule_for_batch_schedule,
 )
-from levanter.data.packing import GreedyPrepackedDataset, LookaheadPrepackedDataset
+from levanter.data.packing import GreedyPrepackedDataset
 from levanter.data.passthrough_tokenizer import PassthroughTokenizer
 from levanter.data.sharded_datasource import (
     ShardedDataSource,
@@ -339,8 +339,9 @@ class DatasetComponent(DatasetComponentBase):
     cache_dir: str | None = None
     format: LmDatasetFormatBase = field(default_factory=TextLmDatasetFormat)
     pack: bool | int | None = None
-    packing_lookahead: int | None = None
-    """Bounded document lookahead; when set, packing rejects oversized documents."""
+    pack_lookahead_window: int | None = None
+    """Opt-in bounded first-fit lookahead for the packer, in documents. ``None`` (default)
+    keeps the sequential packer; see [pack_documents][levanter.data.packing.pack_documents]."""
     tags: list[str] | None = None
     split: str = "validation"
     flat_cache: bool = False
@@ -427,23 +428,6 @@ def _resolve_pack_config(
     return int(pack), packed_slice_strategy
 
 
-def _prepacked_cache(
-    cache: TreeCache[T],
-    max_length: int,
-    *,
-    max_segments: int,
-    slice_strategy: Literal["left", "right", "raise", "drop"],
-    lookahead: int | None,
-) -> GreedyPrepackedDataset[T] | LookaheadPrepackedDataset[T]:
-    if lookahead is not None:
-        return LookaheadPrepackedDataset(
-            cache.jagged_array_tree(), max_length, max_segments_per_example=max_segments, lookahead=lookahead
-        )
-    return GreedyPrepackedDataset(
-        cache.jagged_array_tree(), max_length, max_segments_per_example=max_segments, slice_strategy=slice_strategy
-    )
-
-
 class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
     """Packed version of token dataset using GreedyPrepackedDataset."""
 
@@ -456,15 +440,15 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
         loss_weights_key: str | None = None,
         block_cross_document_attention: bool = True,
         input_ids_key: str = "input_ids",
-        packing_lookahead: int | None = None,
+        lookahead_window: int | None = None,
         loss_weight_transform: Callable[[np.ndarray], np.ndarray] | None = None,
     ):
-        self.packed = _prepacked_cache(
-            cache,
+        self.packed = GreedyPrepackedDataset(
+            cache.jagged_array_tree(),
             Pos.size,
-            max_segments=max_segments_per_example,
+            max_segments_per_example=max_segments_per_example,
             slice_strategy=slice_strategy,
-            lookahead=packing_lookahead,
+            lookahead_window=lookahead_window,
         )
         self.Pos = Pos
         self.block_cross_document_attention = block_cross_document_attention
@@ -523,14 +507,14 @@ class ChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, ProcessedChatDict]
         slice_strategy: Literal["left", "right", "raise", "drop"] = "left",
         mask_user_turns: bool = True,
         block_cross_document_attention: bool = True,
-        packing_lookahead: int | None = None,
+        lookahead_window: int | None = None,
     ):
-        self.packed = _prepacked_cache(
-            cache,
+        self.packed = GreedyPrepackedDataset(
+            cache.jagged_array_tree(),
             Pos.size,
-            max_segments=max_segments_per_example,
+            max_segments_per_example=max_segments_per_example,
             slice_strategy=slice_strategy,
-            lookahead=packing_lookahead,
+            lookahead_window=lookahead_window,
         )
         self.Pos = Pos
         self.block_cross_document_attention = block_cross_document_attention
@@ -573,7 +557,7 @@ def dataset_for_component(
     block_cross_document_attention: bool,
 ) -> AsyncDataset[GrugLmExample]:
     pack = _effective_pack(component)
-    if component.packing_lookahead is not None and not pack:
+    if component.pack_lookahead_window is not None and not pack:
         raise ValueError("Document lookahead requires explicit packing")
     fmt = component.format
     if isinstance(fmt, SerializedChatLmDatasetFormat):
@@ -584,7 +568,7 @@ def dataset_for_component(
             max_segments_per_example=max_segments,
             slice_strategy=slice_strategy,
             block_cross_document_attention=block_cross_document_attention,
-            packing_lookahead=component.packing_lookahead,
+            lookahead_window=component.pack_lookahead_window,
         )
         return dataset.map(
             functools.partial(
@@ -600,7 +584,7 @@ def dataset_for_component(
                 max_segments_per_example=max_segments,
                 slice_strategy=slice_strategy,
                 block_cross_document_attention=block_cross_document_attention,
-                packing_lookahead=component.packing_lookahead,
+                lookahead_window=component.pack_lookahead_window,
             )
         return CausalLmDataset(
             TokenSeqDataset(cache, Pos.size),
@@ -618,7 +602,7 @@ def dataset_for_component(
             slice_strategy=slice_strategy,
             mask_user_turns=fmt.mask_user_turns,
             block_cross_document_attention=block_cross_document_attention,
-            packing_lookahead=component.packing_lookahead,
+            lookahead_window=component.pack_lookahead_window,
         )  # type: ignore
     elif isinstance(fmt, PrebuiltLmDatasetFormat):
         if pack:
@@ -632,7 +616,7 @@ def dataset_for_component(
                 loss_weights_key=fmt.loss_weights_key,
                 loss_weight_transform=fmt.loss_weight_transform,
                 block_cross_document_attention=block_cross_document_attention,
-                packing_lookahead=component.packing_lookahead,
+                lookahead_window=component.pack_lookahead_window,
             )
         return PrebuiltLmDataset(
             cache,

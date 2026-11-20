@@ -554,6 +554,13 @@ a 20-hour execution deadline. The trainer reserves time for the final native/HF
 checkpoint and records the actual completed count. Source must be clean and
 pinned to the submitted commit.
 
+Future Exp3 recipes use the mainline first-fit packer from #11379 through
+`pack_lookahead_window: 128` with `pack: 256`. This changes the recipe's pack
+membership from the former largest-fitting-document policy. Packed prebuilt
+caches now left-slice over-long documents as singleton packs; the former packer
+rejected them. Rebuild accounting and use a new artifact version for this recipe;
+already submitted runs retain their pinned packer and recipe.
+
 Future production recipes save rolling native SFT checkpoints every two hours,
 retaining three resume checkpoints. Finalization forces a permanent checkpoint
 even when the last periodic save was recent. The trainer drains the write and

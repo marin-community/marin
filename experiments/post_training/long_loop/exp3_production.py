@@ -239,7 +239,7 @@ def production_sft_recipe(release: DataRelease) -> dict:
         "source_loss_metadata": release.artifacts["source_loss.json"].uri,
         "source_loss_metadata_sha256": release.artifacts["source_loss.json"].sha256,
         "packing_cap": GEOMETRY.packing_cap,
-        "packing_lookahead": GEOMETRY.lookahead,
+        "pack_lookahead_window": GEOMETRY.lookahead,
         "weight_decay": 0.1,
         "data_seed": GEOMETRY.seed,
         "tensorstore_cache_bytes": 100_000_000,

@@ -207,7 +207,7 @@ def initializer_recipe(*, prepared: str, output: str, artifact_version: str, pol
             hashlib.sha256((StoragePath(prepared) / "source-loss.json").read_bytes()).hexdigest()
         ),
         "packing_cap": 256,
-        "packing_lookahead": 128,
+        "pack_lookahead_window": 128,
         "trainer": draccus.encode(
             replace(
                 tiny.trainer,

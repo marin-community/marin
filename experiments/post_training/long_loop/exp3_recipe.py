@@ -116,13 +116,13 @@ def exp3_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
         draccus.decode(LmDataConfig, recipe["data"]),
         metadata,
         packing_cap=recipe["packing_cap"],
-        lookahead=recipe["packing_lookahead"],
+        lookahead=recipe["pack_lookahead_window"],
     )
     evaluation_data = prepared_supervision_data(
         draccus.decode(LmDataConfig, recipe["evaluation_data"]),
         metadata,
         packing_cap=recipe["packing_cap"],
-        lookahead=recipe["packing_lookahead"],
+        lookahead=recipe["pack_lookahead_window"],
     )
     trainer = draccus.decode(TrainerConfig, recipe["trainer"])
     if trainer.training_budget is not None:
