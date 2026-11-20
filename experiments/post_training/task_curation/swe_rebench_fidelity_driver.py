@@ -359,10 +359,7 @@ class OutcomeLedger:
         # on each preemption (the wave-v11 churn stop lost ~3,700 graded rows this way).
         StoragePath(self._uri).write_text(
             json.dumps(
-                {
-                    "|".join(key): {"rewards": {"reward": reward}}
-                    for key, reward in sorted(self._rewards.items())
-                },
+                {"|".join(key): {"rewards": {"reward": reward}} for key, reward in sorted(self._rewards.items())},
                 indent=1,
                 sort_keys=True,
             )
