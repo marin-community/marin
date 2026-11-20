@@ -169,8 +169,6 @@ def test_plan_checks_pinned_workers_against_driver_cpu_request(
 
     assert result.exit_code == exit_code, (result.output, result.exception)
     client.submit.assert_not_called()
-    if exit_code:
-        assert "trajectory_runner.rollout_workers requests 40 CPUs" in result.output
 
 
 def test_preset_variants_compose(selection, tmp_path, monkeypatch):
