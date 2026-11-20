@@ -262,30 +262,11 @@ source files. Read each command's `--help` before writing to production storage.
 
 ## Micro210 judge policy
 
-The default Micro210 policy uses Together serverless `zai-org/GLM-5.3-Flash`
-(FP4) and Secret Manager version `TOGETHER_API_KEY/versions/1`. It allocates
-GPUs only for the candidate model. `JudgeConfig` records temperature 0,
-top-p 0.95, low reasoning effort, request timeouts and retry limits. The task-local
-adapter maps the original choice constraint to Together regex decoding. Verdict
-labels, rubric prompts and the 128/512/2048 token schedule stay the same.
-BixBench keeps its JSON schema, 1024-token cap and 600-second request timeout.
-Its temperature is fixed at 1, matching the old pinned model's generation config.
+Micro210 uses a [Together serverless judge](judge_config.py) and a
+[content-pinned policy](micro210_policy.py). Scores are not directly comparable
+to the 2026.11.18 MiniMax policy; see [#11818](https://github.com/marin-community/marin/pull/11818)
+for the proposed paired re-score.
 
-The policy and prepared tasks have new hashes. Scores from this judge and the
-old MiniMax M3 judge are not directly comparable. A paired re-score of one or
-two existing models can measure the shift; no paired re-score has run.
-Mini/Micro are separate protocols from the full evaluation policy in #10197.
-
-Use `read_micro210_policy(record.policy_reference)` to verify and read an old
-record's specification. `LEGACY_POLICY_REFERENCE` retains the 2026.11.18 pin.
-To rebuild the new task resources from the old prepared table:
-
-```python
-from experiments.evaluation.judge_config import MICRO210_JUDGE
-from experiments.evaluation.micro210_inputs import rebind_judge_inputs
-
-rebind_judge_inputs("old-rollouts.parquet", "new-rollouts.parquet", MICRO210_JUDGE)
-```
-
-Publish rebuilt tasks under a fresh URI and verify their hash before changing
-the canonical policy pin. Mini840 keeps its own frozen task definitions.
+To read a past run's policy, pass the `policy_reference` from its
+`canonical-evaluation.json` to `read_micro210_policy` in the policy module.
+Mini840 keeps its existing judge policy.
