@@ -4,13 +4,15 @@ from datetime import datetime, timezone
 from pathlib import PurePosixPath
 from typing import Protocol
 
-from upath import UPath
-
 from harbor.models.trial.config import TrialConfig
 from harbor.models.trial.paths import TrialPaths
 from harbor.models.trial.result import AgentInfo, ExceptionInfo, TrialResult
 from harbor.trial.errors import TrialTimeoutError
-from harbor.utils.artifact_writer import ArtifactPersistenceError, get_artifact_writer
+from harbor.utils.artifact_writer import (
+    ArtifactPersistenceError,
+    get_artifact_writer,
+    write_required,
+)
 
 
 class _ResultSource(Protocol):
@@ -33,12 +35,6 @@ def trial_relative_path(trial_config: TrialConfig, attempt: int | None = None) -
     if attempt is not None:
         path = path / "attempts" / f"{attempt:03d}"
     return path.as_posix()
-
-
-async def _write_text(path: UPath, text: str, description: str) -> None:
-    writer = get_artifact_writer()
-    future = await writer.submit_required(path, lambda: text, description=description)
-    await writer.await_write(future)
 
 
 def _artifact_persistence_error(
@@ -79,17 +75,17 @@ async def persist_selected_result(
     try:
         async with asyncio.TaskGroup() as task_group:
             task_group.create_task(
-                _write_text(
+                write_required(
                     logical_paths.result_path,
-                    result_json,
-                    "selected trial result.json",
+                    lambda: result_json,
+                    description="selected trial result.json",
                 )
             )
             task_group.create_task(
-                _write_text(
+                write_required(
                     attempt_paths.result_path,
-                    result_json,
-                    "selected trial attempt result.json",
+                    lambda: result_json,
+                    description="selected trial attempt result.json",
                 )
             )
     except ExceptionGroup as error:
