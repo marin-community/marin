@@ -1137,6 +1137,7 @@ def test_refusals_use_exit_four(selection, arguments, capsys, tmp_path, request)
         assert "use the preset's declared owned keys" in result.output
 
 
+@pytest.mark.timeout(300)  # The CLI cases each compose a native launch in the frozen CPU environment.
 def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations(
     recorded_runs, preset_table, tmp_path, monkeypatch
 ):
