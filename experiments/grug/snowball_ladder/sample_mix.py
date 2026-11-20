@@ -92,13 +92,15 @@ READ_BATCH_DOCS = 2_000
 # Expected output tokens per item, summed over caches. Bounds the file count of the copied caches.
 PART_TOKENS = 500_000_000
 SELECT_THREADS = 16
+# Threads for listing cell ledgers and reading item sidecars, both small metadata reads.
+LIST_THREADS = 32
 
 
 @dataclass(frozen=True)
 class OutputCache:
     name: str
     target_tokens: int
-    # Cell (or group) name -> weight; normalized against the cells that exist.
+    # Cell (or group) name -> weight; normalized to sum to 1 over cells. Every named cell must exist.
     weights: dict[str, float]
 
 
@@ -259,7 +261,7 @@ def plan_recipe(
         raise ValueError(f"--target names unknown caches {sorted(unknown)}")
 
     cells = recipe_cells(recipe)
-    with ThreadPoolExecutor(32) as pool:
+    with ThreadPoolExecutor(LIST_THREADS) as pool:
         listed = dict(zip(cells, pool.map(lambda c: _cell_shards(store, c), cells), strict=True))
     cell_tokens = {cell: tokens for cell, (tokens, _) in listed.items()}
     cell_weights = {c.name: resolve_cell_weights(c.weights, recipe.groups, cell_tokens) for c in caches}
@@ -450,7 +452,7 @@ def _load_sidecars(out: str, count: int) -> list[dict]:
     missing = [p for p in paths if not StoragePath(p).exists()]
     if missing:
         raise FileNotFoundError(f"{len(missing)} of {count} items not done, e.g. {missing[0]}")
-    with ThreadPoolExecutor(32) as pool:
+    with ThreadPoolExecutor(LIST_THREADS) as pool:
         return list(pool.map(lambda p: json.loads(StoragePath(p).read_text()), paths))
 
 

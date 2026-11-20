@@ -71,6 +71,8 @@ def _docs(rng, n):
     ]
 
 
+# Each sampled item runs in a spawned process that re-imports JAX; the test takes 30-35 s on an M-series laptop.
+@pytest.mark.timeout(180)
 def test_end_to_end_on_a_small_store(tmp_path):
     rng = np.random.default_rng(0)
     store = str(tmp_path / "store")
