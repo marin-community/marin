@@ -403,6 +403,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             "2026.11.19.1": "8144570a",
             "2026.11.20.1": "fad362ca",
             "2026.11.20.3": "85b0359d",
+            "2026.11.20.4": "6230565f",
         },
     }
     configs = assert_revisioned_native_configs(
