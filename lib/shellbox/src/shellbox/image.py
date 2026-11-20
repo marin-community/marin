@@ -147,6 +147,11 @@ def process_image_cache(directory: Path, authfile: Path | None, policy: Path | N
     return ImageCache(directory.resolve(), authfile=authfile, policy=policy)
 
 
+def image_cache_path(directory: Path, manifest_digest: str) -> Path:
+    """Return the cache directory named by a SHA-256 image manifest digest."""
+    return directory / manifest_digest.replace(":", "-")
+
+
 def _run(*args: str) -> None:
     result = subprocess.run(args, capture_output=True, text=True)
     if result.returncode:
@@ -188,7 +193,7 @@ def prepare_image(
         if match is not None:
             pinned_digest = match[1]
     if pinned_digest is not None and policy is None:
-        destination = cache / pinned_digest.replace(":", "-")
+        destination = image_cache_path(cache, pinned_digest)
         if destination.exists():
             _manifest_digest(destination, expected=pinned_digest)
             return PreparedImage(destination, pinned_digest, source)
@@ -222,7 +227,7 @@ def prepare_image(
         if isinstance(source, RegistryImage):
             _run(*skopeo_args, source_ref, f"oci:{layout}:{OCI_TAG}")
         digest = _manifest_digest(layout)
-        destination = cache / digest.replace(":", "-")
+        destination = image_cache_path(cache, digest)
         if not destination.exists():
             try:
                 layout.rename(destination)

@@ -449,6 +449,16 @@ selects the required backend without a dataset-specific override; a different
 backend fails validation before machine or model startup. Keep the actor network
 denied and qualify its pinned image and persistent tool state on that backend.
 
+For an authenticated registry that a worker cannot reach, configure a regional
+OCI mirror under `environment.task_sessions.local`. Set `region` to the worker
+region and `image_mirrors` to a list of `{image: <original-reference>@sha256:<digest>,
+uri: s3://<regional-bucket>/<oci-layout>}` records. Prepare each mirror with its
+original manifest and blobs; do not convert the image or change the task's
+registry reference. LOCAL workers verify every blob before they publish the
+image atomically into Shellbox's content-addressed cache. A mirror from another
+region fails before transfer. Later tasks reuse the verified cache without
+registry credentials in the guest.
+
 The SkyRL default verifier floor is 1,800 seconds, defined by
 `environment.task_sessions.task_spec.minimum_verifier_timeout`. The common
 dataset loader applies the greater of that floor, the stored runtime limit and
