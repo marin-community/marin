@@ -216,19 +216,21 @@ def log_model_flops(flops_per_example: float, flops_summary: dict[str, float]) -
     )
 
 
-class StepDurations(logging.Handler):
-    """Collects the per-step durations the training loop logs through the JSON tracker (process 0 only)."""
+class MetricByStep(logging.Handler):
+    """Collects one metric per step from what the training loop logs through the JSON tracker (process 0 only)."""
 
-    def __init__(self) -> None:
+    def __init__(self, metric: str, first_step: int = 0) -> None:
         super().__init__()
+        self.metric = metric
+        self.first_step = first_step
         self.by_step: dict[int, float] = {}
 
     def emit(self, record: logging.LogRecord) -> None:
         event = json.loads(record.getMessage())
-        duration = event.get("metrics", {}).get("throughput/duration") if event.get("event") == "log" else None
+        value = event.get("metrics", {}).get(self.metric) if event.get("event") == "log" else None
         # Keyed by step: the loop logs the last step a second time when it re-runs its hooks after training.
-        if duration is not None and event["step"] >= FIRST_TIMED_STEP:
-            self.by_step[event["step"]] = duration
+        if value is not None and event["step"] >= self.first_step:
+            self.by_step[event["step"]] = value
 
 
 def main() -> None:
@@ -357,7 +359,7 @@ def main() -> None:
         flops_per_example,
     )
     log_model_flops(flops_per_example, flops_summary)
-    step_durations = StepDurations()
+    step_durations = MetricByStep("throughput/duration", first_step=FIRST_TIMED_STEP)
     tracker_log = logging.getLogger(JsonLoggerConfig.logger_name)
     tracker_log.addHandler(step_durations)
     try:

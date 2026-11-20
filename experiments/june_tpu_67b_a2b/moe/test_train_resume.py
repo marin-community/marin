@@ -10,7 +10,6 @@ non-finite must stop the run before that state is checkpointed.
 """
 
 import dataclasses
-import json
 import logging
 from pathlib import Path
 
@@ -29,7 +28,7 @@ from levanter.trainer import TrainerConfig
 
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig
 from experiments.june_tpu_67b_a2b.moe.optimizer import GrugMoeMuonHConfig
-from experiments.june_tpu_67b_a2b.moe.synthetic_benchmark import synthetic_examples
+from experiments.june_tpu_67b_a2b.moe.synthetic_benchmark import MetricByStep, synthetic_examples
 from experiments.june_tpu_67b_a2b.moe.train import GrugRunConfig, GrugTrainerConfig, _run_grug_local, initial_state
 
 TOTAL_STEPS = 6
@@ -65,24 +64,10 @@ OPTIMIZER = GrugMoeMuonHConfig(
 )
 
 
-class LossesByStep(logging.Handler):
-    """Collects the per-step training loss the loop logs through the JSON tracker."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.by_step: dict[int, float] = {}
-
-    def emit(self, record: logging.LogRecord) -> None:
-        event = json.loads(record.getMessage())
-        loss = event.get("metrics", {}).get("train/loss") if event.get("event") == "log" else None
-        if loss is not None:
-            self.by_step[event["step"]] = loss
-
-
 def _run(
     checkpoint_dir: Path,
     num_train_steps: int,
-    losses: LossesByStep,
+    losses: MetricByStep,
     optimizer: GrugMoeMuonHConfig = OPTIMIZER,
 ) -> None:
     examples = synthetic_examples(TOTAL_STEPS * BATCH_SIZE, MODEL.max_seq_len, MODEL.vocab_size)
@@ -136,12 +121,12 @@ def _final_state(checkpoint_dir: Path):
 
 
 def test_resume_from_checkpoint_is_bitwise_identical(tmp_path):
-    straight_losses = LossesByStep()
+    straight_losses = MetricByStep("train/loss")
     _run(tmp_path / "straight", TOTAL_STEPS, straight_losses)
 
-    before_stop = LossesByStep()
+    before_stop = MetricByStep("train/loss")
     _run(tmp_path / "resumed", STOP_STEP, before_stop)
-    after_stop = LossesByStep()
+    after_stop = MetricByStep("train/loss")
     _run(tmp_path / "resumed", TOTAL_STEPS, after_stop)
 
     assert sorted(straight_losses.by_step) == list(range(TOTAL_STEPS))
@@ -161,7 +146,7 @@ def test_resume_from_checkpoint_is_bitwise_identical(tmp_path):
 
 def test_nonfinite_update_stops_the_run_before_its_checkpoint(tmp_path):
     # The loss is computed before the update, so it stays finite while the infinite learning rate breaks the params.
-    losses = LossesByStep()
+    losses = MetricByStep("train/loss")
     with pytest.raises(FloatingPointError, match="Non-finite Grug update at step 1"):
         _run(tmp_path, TOTAL_STEPS, losses, optimizer=dataclasses.replace(OPTIMIZER, learning_rate=float("inf")))
     assert not list(tmp_path.glob("step-*"))
