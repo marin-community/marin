@@ -650,6 +650,15 @@ class RepeatAggregate(BaseModel):
     source_coverage: TaskCoverage | None = None
 
 
+class RLAttemptRef(BaseModel):
+    """The RL attempt that produced the evaluated model."""
+
+    model_config = ConfigDict(frozen=True)
+
+    run_id: str
+    attempt_id: str
+
+
 class EvalRunRecord(BaseModel):
     """The full account of one eval run, serialized to ``record.json``.
 
@@ -679,6 +688,7 @@ class EvalRunRecord(BaseModel):
     """A free-text note on why the launch was run (``--description``), e.g. ``Trying out a new sweep
     after fixing RL``. Shared by every record in a group and surfaced on the launch in the dashboard."""
     model: ModelRef
+    rl_attempt: RLAttemptRef | None = Field(default=None, exclude_if=lambda value: value is None)
     judge: HostedJudgeRef | None = None
     evaluation: EvalRef = Field(alias="eval")
     hardware: HardwareRef

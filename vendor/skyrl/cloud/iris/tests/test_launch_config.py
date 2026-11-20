@@ -319,6 +319,7 @@ def test_launch_preserves_harbor_dataset_relative_paths(tmp_path):
             "cohorts": [{"name": "bfcl_parity", "reward_key": "reward", "job": {"tasks": [task]}}],
             "timeout": 600,
             "minimum_coverage": 0.9,
+            "minimum_native_coverage": 0.99,
         }
     ]
     path = tmp_path / "launch.yaml"
@@ -975,12 +976,22 @@ def test_composed_launch_rejects_tis_selectors(tmp_path: Path, key: str, value) 
         ),
         ({"algorithm.dynamic_sampling.max_mean_reward": 0.9}, "requires dynamic_sampling.type=filter"),
         ({"algorithm.dynamic_sampling.max_mean_reward": 0.9, "algorithm.dynamic_sampling.type": "filter"}, None),
+        (
+            {"rollout_buffer.groups_per_family": {"math": 8}, "rollout_buffer.batch_policy": "rolling"},
+            "requires batch_policy=full_batch",
+        ),
+        ({"rollout_buffer.groups_per_family": {"math": 7}}, "sums to 7, expected train_batch_size=8"),
+        (
+            {"rollout_buffer.groups_per_family": {"math": 8}, "data.sampling.kind": "domain-weighted"},
+            r"requires data\.sampling\.kind to be null",
+        ),
     ],
 )
 def test_launch_validates_correction_and_selection_contract(tmp_path: Path, overrides: dict, error: str | None):
     raw = OmegaConf.create(raw_launch_config())
     for key, value in overrides.items():
-        OmegaConf.update(raw.skyrl.trainer, key, value, force_add=True)
+        path = key if key.startswith("data.") else f"trainer.{key}"
+        OmegaConf.update(raw.skyrl, path, value, force_add=True)
     if overrides.get("placement.colocate_all") is False:
         raw.iris.allocation.num_nodes = 2
     if overrides.get("algorithm.batch_invariant"):
@@ -1007,6 +1018,48 @@ def test_source_launch_preserves_nested_open_mappings(tmp_path):
     }
 
 
+@pytest.mark.parametrize(
+    ("remaining_families", "error"),
+    [
+        (["code"] * 7, "requires 8 rows for family 'code', found 7"),
+        (["code"] * 8 + ["other"], r"names .* but training rows have families .*'other'"),
+        (["code"] * 8, None),
+    ],
+    ids=["insufficient", "unlisted-family", "valid-pool"],
+)
+def test_launch_preflights_groups_per_family(tmp_path, remaining_families, error):
+    data_path = tmp_path / "tasks.parquet"
+    pq.write_table(pa.table({"family": ["math"] * 8 + remaining_families}), data_path)
+    raw = raw_launch_config()
+    raw["inputs"]["data_kind"] = "parquet"
+    raw["inputs"]["train_data"] = [
+        {"kind": "directory", "uri": str(tmp_path), "identity": "fixture", "local_path": str(tmp_path),
+         "relative_path": "tasks.parquet"}
+    ]
+    raw["skyrl"]["data"] = {"kind": "parquet"}
+    trainer = raw["skyrl"]["trainer"]
+    trainer["rollout_buffer"] = {
+        "groups_per_family": {"math": 4, "code": 4},
+        "max_staleness_steps": 1,
+    }
+    trainer["placement"]["colocate_all"] = False
+    trainer["algorithm"]["off_policy_correction"] = "none"
+    raw["iris"]["allocation"]["num_nodes"] = 2
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw))
+
+    if error:
+        with pytest.raises(ValueError, match=rf"trainer\.rollout_buffer\.groups_per_family {error}"):
+            load_launch_config(path)
+        return
+
+    resolved = load_launch_config(path)
+    assert resolved.skyrl.trainer.rollout_buffer.groups_per_family == {"math": 4, "code": 4}
+    OmegaConf.save(resolved, path)
+    data_path.unlink()
+    assert load_launch_config(path) == resolved
+
+
 def test_first_train_submission_validates_recipe_and_resolved_reload(tmp_path):
     raw = raw_launch_config()
     raw["runtime"]["entrypoint"] = ""
@@ -1018,6 +1071,13 @@ def test_first_train_submission_validates_recipe_and_resolved_reload(tmp_path):
     assert OmegaConf.to_container(load_launch_config(resolved), resolve=True) == OmegaConf.to_container(
         loaded, resolve=True
     )
+    rollout_buffer = raw["skyrl"]["trainer"].setdefault("rollout_buffer", {})
+    rollout_buffer["groups_per_family"] = {}
+    path.write_text(yaml.safe_dump(raw))
+    with pytest.raises(ValueError, match="groups_per_family"):
+        load_launch_config(path)
+    del rollout_buffer["groups_per_family"]
+
     del raw["skyrl"]["context_budget"]
     path.write_text(yaml.safe_dump(raw))
     with pytest.raises(ValueError, match="context_budget"):

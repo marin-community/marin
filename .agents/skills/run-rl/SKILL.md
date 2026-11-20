@@ -12,7 +12,7 @@ Use `use-iris` for job inspection and `use-fsutil` for object-store reads.
 Map requests for a short loop, quick loop or long loop to the corresponding presets.
 
 - **Short loop** (also called **quick loop**) uses gated presets to compare one change against control runs. Use `speed-*`, `data-*` or `learning-medium`.
-- **Long loop** uses ungated training to build a model and retain its best eligible checkpoint. Use `train-long`.
+- **Long loop** uses ungated training to build a model and retain its best eligible checkpoint. Use `train-long` for EvalLite or `train-long-harbor` to add the Harbor cohorts.
 
 ## Plan and submit
 
@@ -35,8 +35,9 @@ Map requests for a short loop, quick loop or long loop to the corresponding pres
    `--version dev` satisfies the launcher; step versions use each preset's `revision`.
    Use the same plan and inputs to read status for a saved run.
 4. Before submission, tell the person the preset, estimated budget and replicate count. Submit
-   train-long or multiple 40-H100 replicates only when the person asked. Set `WANDB_API_KEY`.
+   either train-long preset or multiple 40-H100 replicates only when the person asked. Set `WANDB_API_KEY`.
    `WANDB_ENTITY` chooses the team, defaulting to `marin-community`.
+   For `train-long-harbor`, check the recipe's [Daytona requirements](../../../docs/recipes/rl-experiments.md#harbor-evaluation).
 5. Pass `--issue ISSUE_NUMBER` if the experimenter supplied an issue number. If the context leaves
    tracking undecided, ask whether to open a new issue, use an existing one, or run without an issue.
    Replace `--plan` with `--run` to submit and add `--wait` for the final report.
@@ -47,7 +48,7 @@ Map requests for a short loop, quick loop or long loop to the corresponding pres
    for retries and pinned controls.
    Use `--marina-url ORIGIN` when publication targets a local Marina stack.
    Repeat the original `--run --wait` invocation with the same source and inputs to resume
-   train-long from its latest retained checkpoint.
+   either train-long preset from its latest retained checkpoint.
 
 Follow the recipe's [input and flag contracts](../../../docs/recipes/rl-experiments.md#change-one-input),
 [comparison rules](../../../docs/recipes/rl-experiments.md#compare-with-controls) and
