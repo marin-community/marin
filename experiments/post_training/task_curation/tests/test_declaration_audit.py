@@ -53,6 +53,66 @@ def test_a_receipt_at_the_declared_pin_binds():
     assert notes == []
 
 
+SEALED_RELEASE = release(repo="open-athena/sealed-repair-cohort", revision="3" * 40)
+
+
+def sealed_layer(**overrides) -> CanonicalLayer:
+    """A layer whose declared pin is the licensed upstream and whose selected pin is the sealed publication."""
+    base = dict(
+        source_ids=frozenset({"Test:sealed-repair-cohort"}),
+        declared={"Test:sealed-repair-cohort": pin("Test:sealed-repair-cohort", "open-thoughts/TaskTrove", "4" * 40)},
+        selected={"Test:sealed-repair-cohort": SEALED_RELEASE},
+        retired=frozenset(),
+        archived_releases={},
+        admitted_census_converters={"Test:sealed-repair-cohort": "2026.11.19.1"},
+    )
+    base.update(overrides)
+    return CanonicalLayer(**base)
+
+
+def sealed_pin(version="2026.11.19.1"):
+    return DeclaredPin(
+        source_id="Test:sealed-repair-cohort",
+        dataset_id="open-athena/sealed-repair-cohort",
+        dataset_revision="3" * 40,
+        converter_version=version,
+    )
+
+
+@pytest.mark.parametrize("family", ["census receipts", "within-source dedup"])
+def test_an_admitted_repair_cohorts_selected_population_pin_binds(family):
+    """The sealed cohort's receipts measure its published population (ruling 66)."""
+    findings, notes = audit_families(
+        {family: {"Test:sealed-repair-cohort": sealed_pin()}},
+        layer=sealed_layer(),
+        releases={},
+    )
+    assert findings == []
+    assert notes == []
+
+
+@pytest.mark.parametrize("family", ["census receipts", "within-source dedup"])
+def test_a_selected_pin_without_an_admitted_receipt_stays_a_finding(family):
+    findings, _ = audit_families(
+        {family: {"Test:sealed-repair-cohort": sealed_pin()}},
+        layer=sealed_layer(admitted_census_converters={}),
+        releases={},
+    )
+    assert len(findings) == 1
+    assert "Test:sealed-repair-cohort" in findings[0]
+
+
+@pytest.mark.parametrize("family", ["census receipts", "within-source dedup"])
+def test_a_census_converter_mismatch_against_the_admission_stays_a_finding(family):
+    findings, _ = audit_families(
+        {family: {"Test:sealed-repair-cohort": sealed_pin(version="2026.11.20.1")}},
+        layer=sealed_layer(),
+        releases={},
+    )
+    assert len(findings) == 1
+    assert "2026.11.20.1" in findings[0]
+
+
 def test_a_drifted_retained_binding_reports_a_gap_not_a_family_finding(monkeypatch):
     """A retained release whose conversion pin drifts is a waivable gap, never a crash."""
     monkeypatch.setattr(sources_module, "RETAINED_BINDING_DRIFTS", {"Test:drifted-source": "3" * 40})

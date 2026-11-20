@@ -17,7 +17,7 @@ receipts are the drift this gate exists to stop.
 import argparse
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from experiments.post_training.task_curation.ensure_current_projections import (
@@ -75,6 +75,7 @@ class CanonicalLayer:
     archived_releases: dict[str, ReleasePin]
     pending: frozenset[str] = frozenset()
     superseded_by_filtration: frozenset[str] = frozenset()
+    admitted_census_converters: dict[str, str] = field(default_factory=dict)
 
     def acknowledges(self, source_id: str) -> bool:
         return source_id in self.source_ids or source_id in self.retired
@@ -113,10 +114,19 @@ def audit_families(
             if family in {"census receipts", "within-source dedup"}:
                 expected = layer.declared.get(source_id)
                 selected = layer.selected.get(source_id)
+                # A sealed repair cohort's census and dedup receipts measure its published
+                # sealed population while its raw declaration pins the licensed upstream
+                # (ruling 66). The selected pin counts as declared only for a source whose
+                # oracle-admitted release exists and whose receipt records the same census
+                # converter identity as that admission; every other selected-pin match
+                # stays a finding.
+                admitted_converter = layer.admitted_census_converters.get(source_id)
                 measured_selected = (
                     selected is not None
                     and selected.repo == pin.dataset_id
                     and selected.revision == pin.dataset_revision
+                    and admitted_converter is not None
+                    and admitted_converter == pin.converter_version
                 )
                 if expected is None or not (expected.matches(pin) or measured_selected):
                     observed = (
@@ -283,6 +293,10 @@ def canonical_layer() -> tuple[CanonicalLayer, dict[str, dict[str, DeclaredPin]]
     # A retained release whose source then went through oracle filtration is the filtration
     # input: the filtered or admitted release supersedes it as the selection.
     superseded_by_filtration = frozenset(oracle_release_receipts()) | frozenset(oracle_admitted_release_receipts())
+    admitted_census_converters = {
+        source_id: receipt.actor.input.converter_version
+        for source_id, receipt in oracle_admitted_release_receipts().items()
+    }
 
     census_rows = {
         source_id: DeclaredPin(
@@ -334,6 +348,7 @@ def canonical_layer() -> tuple[CanonicalLayer, dict[str, dict[str, DeclaredPin]]
         archived_releases=archived_releases,
         pending=frozenset(pending_ids),
         superseded_by_filtration=superseded_by_filtration,
+        admitted_census_converters=admitted_census_converters,
     )
     families = {
         "census receipts": census_rows,
