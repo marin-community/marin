@@ -3,8 +3,8 @@
 
 """LEXam four-choice multiple-choice questions from Swiss law exams, with the authors' prompt and extraction.
 
-The population is the 619 English questions of LEXam's ``mcq_4_choices`` test split (Fan et al., 2025,
-arXiv:2505.12864); its 1,036 German questions are excluded. The dataset is CC-BY-4.0 and the reference
+LEXam's ``mcq_4_choices`` test split (Fan et al., 2025, arXiv:2505.12864) is published as two benchmarks:
+its 619 English questions and its 1,036 German questions. The dataset is CC-BY-4.0 and the reference
 code (LEXam-Benchmark/LEXam) is Apache-2.0.
 
 Sampling keeps each served model's defaults and token budget. The reference decodes non-reasoning
@@ -21,23 +21,26 @@ from taskcompendium.evaluation.spec import (
     TrialPolicy,
 )
 from taskcompendium.importers.evalchemy.grader import scorer_revision
-from taskcompendium.importers.evalchemy.lexam import convert_lexam_mcq, is_english, lexam_mcq_item
+from taskcompendium.importers.evalchemy.lexam import convert_lexam_mcq, is_english, is_german, lexam_mcq_item
 from taskcompendium.pipeline.inputs import SourceFormat
 
 from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmarks
 from experiments.evaluation.benchmarks.environments import BASIC_GRADER
+from experiments.evaluation.preparation import EvaluationCorpusRecipe
 from experiments.evaluation.prompt_compilation import evaluation_source
-from experiments.post_training.task_curation.pipeline import HfSource
+from experiments.post_training.task_curation.pipeline import HfSource, RowSelector
+from experiments.post_training.task_curation.source import RlDataSource
 
 LEXAM_REVISION = "31e57ae395f92ed7284a4c28d278c55da892b898"
 LEXAM_MCQ_4_FILE = "mcq_4_choices/test-00000-of-00001.parquet"
 LEXAM_MCQ_4_EN_POPULATION = 619
+LEXAM_MCQ_4_DE_POPULATION = 1036
 VERSION = "2026.11.20"
 
 
-def benchmarks() -> list[EvaluationBenchmark]:
+def _lexam_mcq_4(name: str, select: RowSelector, population: int) -> RlDataSource[EvaluationCorpusRecipe]:
     protocol = EvaluationProtocol(
-        benchmark="lexam-mcq-4-en",
+        benchmark=name,
         version=VERSION,
         operation=OperationKind.CHAT_GENERATION,
         sampling=Sampling(
@@ -52,16 +55,16 @@ def benchmarks() -> list[EvaluationBenchmark]:
         metrics=(Metrics.ACCURACY,),
         primary_metric="accuracy",
         summary=SummaryKind.MEAN,
-        expected_population=LEXAM_MCQ_4_EN_POPULATION,
+        expected_population=population,
     )
-    source = evaluation_source(
-        name="lexam-mcq-4-en",
+    return evaluation_source(
+        name=name,
         source=HfSource(
             "LEXam-Benchmark/LEXam",
             LEXAM_REVISION,
             (LEXAM_MCQ_4_FILE,),
             SourceFormat.PARQUET,
-            select=is_english,
+            select=select,
         ),
         convert=convert_lexam_mcq,
         version=VERSION + "-" + scorer_revision("lexam_mcq"),
@@ -69,4 +72,11 @@ def benchmarks() -> list[EvaluationBenchmark]:
         item_builder=lexam_mcq_item,
         grader=BASIC_GRADER,
     )
-    return fixed_benchmarks([source], "chat")
+
+
+def benchmarks() -> list[EvaluationBenchmark]:
+    sources = [
+        _lexam_mcq_4("lexam-mcq-4-en", is_english, LEXAM_MCQ_4_EN_POPULATION),
+        _lexam_mcq_4("lexam-mcq-4-de", is_german, LEXAM_MCQ_4_DE_POPULATION),
+    ]
+    return fixed_benchmarks(sources, "chat")

@@ -1,12 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""LEXam publication keeps English rows, renders the authors' prompt and binds gold letters."""
+"""LEXam publication keeps one language's rows, renders the authors' prompt and binds gold letters."""
 
 import json
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 from fray.local_backend import LocalClient
 from taskcompendium.evaluation.corpus import evaluation_cases
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
@@ -35,8 +36,15 @@ def _row(index: int, language: str, gold: int) -> dict:
     }
 
 
-def test_publication_renders_english_lexam_prompts(tmp_path):
-    [source] = evaluation_benchmarks()["lexam-mcq-4-en"].resolve()
+@pytest.mark.parametrize(
+    ("benchmark", "first_question", "expected"),
+    [
+        ("lexam-mcq-4-en", "Frage 0?", [{"expected": "C"}, {"expected": "A"}]),
+        ("lexam-mcq-4-de", "Frage 1?", [{"expected": "B"}]),
+    ],
+)
+def test_publication_renders_lexam_prompts_for_one_language(tmp_path, benchmark, first_question, expected):
+    [source] = evaluation_benchmarks()[benchmark].resolve()
     dataset = source.config
     rows = [_row(0, "en", 2), _row(1, "de", 1), _row(2, "en", 0)]
     source_root = tmp_path / "source"
@@ -47,7 +55,7 @@ def test_publication_renders_english_lexam_prompts(tmp_path):
         command_semantics=CommandSemantics.LINUX_PROCESS, docker_image="fixture@sha256:" + "0" * 64
     )
     recipe = source_recipe(dataset.recipe, {}, environment)
-    protocol = dataset.protocol.model_copy(update={"expected_population": 2})
+    protocol = dataset.protocol.model_copy(update={"expected_population": len(expected)})
     output = tmp_path / "output"
     client = LocalClient()
     try:
@@ -59,9 +67,9 @@ def test_publication_renders_english_lexam_prompts(tmp_path):
     [event] = cases[0].task.context.events
     assert event.role == "user"
     assert event.content.startswith("You are an expert in Strafrecht and address legal issues")
-    assert event.content.endswith("Question:\n Frage 0?\nA. eins\nB. zwei\nC. drei\nD. vier\n\nAnswer:")
+    assert event.content.endswith(f"Question:\n {first_question}\nA. eins\nB. zwei\nC. drei\nD. vier\n\nAnswer:")
     configs = [
         json.loads(resource_bytes(next(r for r in case.task.resources.verifier if r.path == "config.json")))
         for case in cases
     ]
-    assert configs == [{"expected": "C"}, {"expected": "A"}]
+    assert configs == expected

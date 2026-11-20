@@ -73,6 +73,10 @@ def is_english(row: dict[str, Any], _context: ConversionContext) -> bool:
     return row["language"] == "en"
 
 
+def is_german(row: dict[str, Any], _context: ConversionContext) -> bool:
+    return row["language"] == "de"
+
+
 def lexam_mcq_item(task: TaskSpec) -> EvaluationItem:
     """Grade only the final answer."""
     return chat_item(task, response_selection="final_only")
