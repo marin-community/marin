@@ -521,7 +521,10 @@ def validate_levanter_cfg(cfg: DictConfig) -> None:
         ),
         ("reference-model-free objectives", reference_model_required(cfg.trainer.algorithm)),
         ("no router replay", moe_router_replay_requested(cfg)),
-        ("no LoRA", cfg.trainer.policy.model.lora.rank != 0),
+        (
+            "no LoRA",
+            cfg.trainer.policy.model.lora.rank != 0 or cfg.trainer.policy.model.lora.adapter_path is not None,
+        ),
         ("sequence_parallel_size=1", cfg.trainer.policy.sequence_parallel_size != 1),
         ("policy scoring temperature=1", cfg.generator.sampling_params.temperature != 1.0),
     ]
