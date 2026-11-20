@@ -8,6 +8,8 @@ import types
 
 import pytest
 import tomlkit
+
+from experiments.post_training.task_curation.datasets.swe_rebench_v2.upstream import task_files
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.datasets.swe_rebench_v2 import groups
@@ -214,8 +216,6 @@ def test_verifier_and_setup_do_not_rely_on_image_default_cwd(tmp_path):
     """Dropping the Dockerfile WORKDIR cannot change grading: the verifier and the setup must
     run from task.toml environment.workdir by their own explicit cds, never the image's
     default cwd."""
-    from experiments.post_training.task_curation.datasets.swe_rebench_v2.upstream import task_files
-
     template = task_files._shell_template("test.sh")
     assert 'cd "$WORKDIR"' in template  # the grading cds into the workdir explicitly
 
