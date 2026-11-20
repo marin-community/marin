@@ -716,7 +716,7 @@ async def test_unconfirmed_teardown_retries_outside_include_list(
     )
     queue = TrialQueue(
         n_concurrent=1,
-        retry_config=RetryConfig(
+        retry_config=RetrySettings(
             max_retries=3,
             include_exceptions={"APIConnectionError"},
             min_wait_sec=0,
