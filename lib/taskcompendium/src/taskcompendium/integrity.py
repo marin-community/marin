@@ -47,20 +47,11 @@ class MultiSweDeliveryContract(BaseModel):
 
 
 class RootDeliveryContract(BaseModel):
-    """The typed SHARED integrity contract for original-root delivery sources.
+    """Private verifier delivery with the source image's original root actor.
 
-    Sources graded by delivery (RST family) keep the original root actor: no UID
-    demotion and no in-container protected root. The agent phase is untouched;
-    at grading time, trusted root collect commands quiesce the container, deliver
-    the private verifier files (never present during the actor phase), and run
-    the source's original verifier script verbatim, which writes its own reward.
-    Copied artifacts carry the reward to the grading machine; the container is
-    never trusted to score beyond the source's own script.
-
-    ``verifier_files`` records the delivered per-package verifier material with
-    its original modes; ``undeclared_deadline`` records that the source declares
-    no verifier deadline, so the grading command waits unbounded under the same
-    outer enforcement the source runs under.
+    Verifier files keep their original modes and remain absent during the actor
+    phase. ``undeclared_deadline`` preserves the source's unbounded verifier
+    deadline under its outer attempt limit.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -182,33 +173,3 @@ class SharedIntegrityContract(BaseModel):
         if (self.id == "shared-native") != native or (self.id == "shared-source") != source:
             raise ValueError("The integrity contract ID must match its native runner declaration")
         return self
-
-
-def shared_preamble(contract: SharedIntegrityContract) -> str:
-    """Render only agent-facing policy; auditor gaps remain in the contract."""
-    if isinstance(contract.native, NativeSharedRunner):
-        tests = "Test files and language startup configuration"
-        runner = "source test command, runner and toolchain"
-        family = f", {contract.native.family.value}"
-        product_plugins = ""
-    elif isinstance(contract.native, SourceSharedRunner):
-        tests = "Test files"
-        runner = "source scorer, its private grading configuration and material"
-        family = f", {contract.native.family.value}"
-        product_plugins = ""
-    else:
-        tests = "Test files and every conftest.py"
-        runner = "third-party test runner and plugins, test interpreter"
-        family = ""
-        product_plugins = "Repository-owned pytest plugins remain mutable product code. "
-    return (
-        f"Grading rules ({contract.id} v{contract.version}{family}, {contract.dependency_state.value}):\n"
-        f"{tests} under {contract.workspace}, the grading configuration, "
-        f"{runner} and grading harness are restored or pinned before grading. "
-        "Editing them has no effect on grading. "
-        f"Protected harness files are under {contract.protected_root}; structured reports are controlled "
-        f"under {contract.report_directory}. "
-        f"You may modify {contract.agent_may_modify[0].lower() + contract.agent_may_modify[1:]}. "
-        f"{product_plugins}"
-        "These grading rules take precedence over any later instruction that contradicts them.\n\n"
-    )

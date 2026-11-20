@@ -27,7 +27,6 @@ class ShellHarnessSettings(BaseModel):
     """Per-task Shellbox settings serialized in the harness identifier."""
 
     command_timeout: float | None
-    retrieval_service: str | None = None
     shell_tool: ShellToolConfig
 
 
@@ -43,12 +42,10 @@ def rollout_spec(
     harness = settings.pop("task_session")
     shell_tool = settings.pop("shell_tool", {})
     command_timeout = settings.pop("command_timeout", None)
-    retrieval_service = settings.pop("retrieval_service", None)
     trace = TraceMode(settings.pop("trace", TraceMode.EXACT_TOKENS))
     if harness == SHELLBOX_HARNESS:
         shell_settings = ShellHarnessSettings(
             command_timeout=command_timeout,
-            retrieval_service=retrieval_service,
             shell_tool=ShellToolConfig.model_validate(shell_tool),
         )
         harness += ":" + json.dumps(shell_settings.model_dump(), sort_keys=True, separators=(",", ":"))
@@ -65,8 +62,8 @@ def rollout_spec(
 def rollout_limits(task: TaskSpec, limits: RolloutLimits, *, minimum_verifier_timeout: float | None) -> RolloutLimits:
     """Set phase budgets and allow both phases and cleanup to finish within the attempt.
 
-    An unbounded actor phase leaves the attempt unbounded. Finite actor and verifier
-    budgets extend a finite attempt deadline when their combined budget needs more time.
+    Finite actor and verifier budgets extend an existing attempt deadline when their
+    combined budget needs more time. Without a separate actor limit, preserve the attempt bound.
     """
     declared = task.execution_requirements
     actor = limits.total_turn_timeout
@@ -79,8 +76,8 @@ def rollout_limits(task: TaskSpec, limits: RolloutLimits, *, minimum_verifier_ti
     ]
     timeout = max(deadlines, default=None)
     attempt = limits.attempt_timeout
-    if attempt is not None and timeout is not None:
-        attempt = None if actor is None else max(attempt, actor + timeout + limits.cleanup_timeout)
+    if attempt is not None and timeout is not None and actor is not None:
+        attempt = max(attempt, actor + timeout + limits.cleanup_timeout)
     return limits.model_copy(
         update={"total_turn_timeout": actor, "verifier_timeout": timeout, "attempt_timeout": attempt}
     )
@@ -103,25 +100,20 @@ TOOL_PROVIDERS: Mapping[str, ToolProvider] = MappingProxyType(
         FETCH_ACTION_INTERFACE: FetchProvider(),
         NEMOTRON_PYTHON_INTERFACE: NemotronPythonProvider(),
         BROWSECOMP_ACTION_INTERFACE: BrowseCompProvider(command_timeout=300),
-        OPENRESEARCHER_ACTION_INTERFACE: OpenResearcherServiceProvider(endpoint=None),
     }
 )
 """Host tools every Shellbox harness serves, by action interface."""
 
 
-def shell_harness(name: str) -> ShellHarness:
+def shell_harness(name: str, *, retrieval_service: str | None = None) -> ShellHarness:
     """Restore the shell configuration encoded in a task's harness name."""
     if not name.startswith(_SHELLBOX_PREFIX):
         raise ValueError(f"Not a Shellbox harness: {name!r}")
     settings = ShellHarnessSettings.model_validate_json(name[len(_SHELLBOX_PREFIX) :])
-    return ShellHarness(
-        command_timeout=settings.command_timeout,
-        shell_tool=settings.shell_tool,
-        tools={
-            **TOOL_PROVIDERS,
-            OPENRESEARCHER_ACTION_INTERFACE: OpenResearcherServiceProvider(settings.retrieval_service),
-        },
-    )
+    tools = dict(TOOL_PROVIDERS)
+    if retrieval_service is not None:
+        tools[OPENRESEARCHER_ACTION_INTERFACE] = OpenResearcherServiceProvider(retrieval_service)
+    return ShellHarness(command_timeout=settings.command_timeout, shell_tool=settings.shell_tool, tools=tools)
 
 
 def is_shell_harness(name: str) -> bool:

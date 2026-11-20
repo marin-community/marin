@@ -363,10 +363,12 @@ class TaskRolloutWorker:
         shutdown_timeout: float,
         installed_agents: InstalledAgentWorker | None = None,
         judge_connection: JudgeConnection | None = None,
+        retrieval_service: str | None = None,
     ):
         self.trajectory_runner_cfg = trajectory_runner_cfg
         self.model_client = model_client
         self.judge_connection = judge_connection
+        self.retrieval_service = retrieval_service
         self.factories = {name: OwnedMachineFactory(factory, name) for name, factory in factories.items()}
         self.active_requests: set[asyncio.Task] = set()
         self.closing = False
@@ -419,13 +421,16 @@ class TaskRolloutWorker:
         self, lowered: TaskRolloutSpec, harbor: HarborTaskSettings | None, session_id: str, phase: str
     ) -> tuple[TaskRolloutSpec, Mapping[str, Harness]]:
         harnesses = episode_harnesses(lowered, self.sessions)
-        if lowered.harness == ASSISTANT_PREFIX_HARNESS and lowered.task.reasoning_markup == ReasoningMarkupPolicy.REJECT:
+        if (
+            lowered.harness == ASSISTANT_PREFIX_HARNESS
+            and lowered.task.reasoning_markup == ReasoningMarkupPolicy.REJECT
+        ):
             # The assistant-prefix transport records no reasoning violation, so rejection would never fire.
             raise ValueError("Assistant-prefix tasks cannot reject malformed reasoning spans")
         if lowered.harness == ASSISTANT_PREFIX_HARNESS:
             harnesses[lowered.harness] = AssistantPrefixHarness()
         elif is_shell_harness(lowered.harness):
-            harnesses[lowered.harness] = shell_harness(lowered.harness)
+            harnesses[lowered.harness] = shell_harness(lowered.harness, retrieval_service=self.retrieval_service)
         if lowered.harness == HARBOR_TRIAL_SESSION:
             if harbor is None or self.installed_agents is None:
                 raise ValueError("Full Harbor trials require Harbor and installed-agent settings")
@@ -440,9 +445,7 @@ class TaskRolloutWorker:
             harnesses[HARBOR_TRIAL_SESSION] = self.installed_agents.original_harness(lowered, session_id, harbor, phase)
             # The bound Harbor trial retains and executes the original setup.
             # The recording engine must not provision a second task machine for it.
-            engine_task = lowered.task.model_copy(
-                update={"environment_requirements": engine_requirements}
-            )
+            engine_task = lowered.task.model_copy(update={"environment_requirements": engine_requirements})
             # Harbor owns the phase deadlines and must still run its verifier
             # after an agent timeout. The outer attempt deadline covers the full trial.
             lowered = lowered.model_copy(
@@ -734,4 +737,5 @@ class TaskRolloutWorkerSpec:
             shutdown_timeout=float(self.config.trajectory_runner.shutdown_timeout),
             installed_agents=installed_agents,
             judge_connection=judge,
+            retrieval_service=self.config.environment.task_sessions.get("retrieval_service"),
         )
