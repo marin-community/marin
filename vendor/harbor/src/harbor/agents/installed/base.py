@@ -1,4 +1,8 @@
 import functools
+import json
+from uuid import uuid4
+
+from rigging.redaction import redact_string
 import shlex
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -345,6 +349,13 @@ class BaseInstalledAgent(BaseAgent, ABC):
             return text[:max_len] + " ... [truncated]"
         return text
 
+    def _redact_output(self, text: str | None) -> str:
+        value = text or ""
+        for secret in self._protected_values:
+            if secret:
+                value = value.replace(secret, "<redacted>")
+        return redact_string(value)
+
     async def _exec(
         self,
         environment: BaseEnvironment,
@@ -367,10 +378,10 @@ class BaseInstalledAgent(BaseAgent, ABC):
         )
 
         self.logger.debug(
-            f"Running command: {command}",
+            f"Running command: {self._redact_output(command)}",
             extra={
                 "user": str(user),
-                "env": merged_env or {},
+                "env_keys": sorted(merged_env or {}),
             },
         )
 
@@ -382,18 +393,27 @@ class BaseInstalledAgent(BaseAgent, ABC):
             timeout_sec=timeout_sec,
         )
         if result.return_code != 0:
+            diagnostics = {
+                key: self._redact_output(value)
+                for key, value in {"command": command, "stdout": result.stdout, "stderr": result.stderr}.items()
+            }
+            failure_dir = self.logs_dir / "command-failures"
+            failure_dir.mkdir(parents=True, exist_ok=True)
+            failure_path = failure_dir / f"{uuid4().hex}.json"
+            failure_path.write_text(json.dumps({"return_code": result.return_code, **diagnostics}))
             self.logger.debug(
                 "Command failed",
                 extra={
                     "return_code": result.return_code,
-                    "stdout": self._truncate_output(result.stdout),
-                    "stderr": self._truncate_output(result.stderr),
+                    "stdout": self._truncate_output(self._redact_output(result.stdout)),
+                    "stderr": self._truncate_output(self._redact_output(result.stderr)),
                 },
             )
             message = (
-                f"Command failed (exit {result.return_code}): {command}\n"
-                f"stdout: {self._truncate_output(result.stdout)}\n"
-                f"stderr: {self._truncate_output(result.stderr)}"
+                f"Command failed (exit {result.return_code}): {diagnostics['command']}\n"
+                f"stdout tail: {diagnostics['stdout'][-2000:]}\n"
+                f"stderr tail: {diagnostics['stderr'][-2000:]}\n"
+                f"Full redacted output: {failure_path}"
             )
             # A return code of 128 + N (N in 1..64) is the shell's convention for
             # "terminated by signal N" — distinct from an ordinary non-zero exit.
@@ -411,8 +431,8 @@ class BaseInstalledAgent(BaseAgent, ABC):
         self.logger.debug(
             "Command outputs captured",
             extra={
-                "stdout": self._truncate_output(result.stdout),
-                "stderr": self._truncate_output(result.stderr),
+                "stdout": self._truncate_output(self._redact_output(result.stdout)),
+                "stderr": self._truncate_output(self._redact_output(result.stderr)),
             },
         )
         return result
