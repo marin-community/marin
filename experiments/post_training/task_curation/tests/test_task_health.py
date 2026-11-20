@@ -157,6 +157,8 @@ def test_extract_records_each_attempts_grade_phase_and_output_tails(tmp_path):
             "engine/task-setup/0.stderr": "E: Unable to locate package libfixture\n",
         },
     )
+    (store / "partial").mkdir()
+    (store / "partial" / "upload-incomplete").touch()
     output = StoragePath(str(tmp_path / "health"))
 
     path = extract_attempts(StoragePath(str(run_output)), "fixture-run@2026.11.20.1", output)
@@ -272,7 +274,8 @@ def test_skip_lists_tasks_and_environments_that_fail_setup_or_verification(tmp_p
     }
 
     fixed = harbor_task("shared-1", SHARED_IMAGE, "pip install -e . pytest")
-    release = write_tasks(tmp_path / "release.parquet", [fixed, tasks["repeated"]])
+    untagged = tasks["repeated"].model_copy(update={"tags": ("harbor",)})
+    release = write_tasks(tmp_path / "release.parquet", [fixed, untagged])
     publish(tmp_path / "skip-after-release", release)
     after_release = pq.read_table(tmp_path / "skip-after-release" / SKIP_FILENAME)
     assert set(after_release["task_id"].to_pylist()) == {"repeated", "shared-2", "shared-untried"}

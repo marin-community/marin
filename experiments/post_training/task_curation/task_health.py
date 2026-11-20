@@ -36,7 +36,12 @@ from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.rl_compose import SELECTION_ROOT, artifact_prefix
 from experiments.post_training.task_curation import CANONICAL_ARTIFACT_ROOT
-from experiments.post_training.task_curation.selection import SELECTION_PREFIX, TASK_SPEC_COLUMN, TRAIN_FILENAME
+from experiments.post_training.task_curation.selection import (
+    SELECTION_PREFIX,
+    TASK_SPEC_COLUMN,
+    TRAIN_FILENAME,
+    with_agentic_tag,
+)
 
 MIN_FAILED_ATTEMPTS = 2
 MIN_FAILED_TASKS_PER_ENVIRONMENT = 2
@@ -145,9 +150,11 @@ def _phase(result: dict | None, receipt: dict | None) -> Phase:
     return next((phase for phase, record in starts if record and record.get("started_at")), Phase.NONE)
 
 
-def _attempt_row(attempt: StoragePath, reward_key: str) -> dict:
+def _attempt_row(attempt: StoragePath, reward_key: str) -> dict | None:
     """Read one attempt in the layout SkyRL's installed-agent runtime and Harbor's trial paths write."""
-    identity = json.loads((attempt / "identity.json").read_text())
+    identity = _json(attempt / "identity.json")
+    if identity is None:
+        return None
     trial, setup = attempt / "trials" / identity["attempt_id"], attempt / "engine" / "task-setup"
     result, receipt = _json(trial / "result.json"), _json(setup / "receipt.json")
     task_toml = _text(attempt / "task" / "task.toml")
@@ -214,7 +221,11 @@ def extract_attempts(run_output: StoragePath, run: str, output: StoragePath) -> 
     with ThreadPoolExecutor(READ_THREADS) as pool:
         rows = list(pool.map(lambda attempt: _attempt_row(attempt, reward_key), attempts))
     table = pa.Table.from_pylist(
-        [{**row, "run": run, "selection": selection, "task_digest": digests.get(row["task_id"])} for row in rows],
+        [
+            {**row, "run": run, "selection": selection, "task_digest": digests.get(row["task_id"])}
+            for row in rows
+            if row is not None
+        ],
         schema=ATTEMPT_SCHEMA,
     )
     _publish_once(output, {ATTEMPTS_FILENAME: _parquet(table)})
@@ -255,12 +266,18 @@ def publish_skip_list(
         for environment, count in environments.items()
         if environment[0] is not None and count >= MIN_FAILED_TASKS_PER_ENVIRONMENT
     }
-    released = {task.id: digest for digest, (task, _) in _tasks(data[str(release)]).items()} if release else {}
+    released = {task.id: task for task, _ in _tasks(data[str(release)]).values()} if release else {}
     listed = []
     for digest, (task, raw) in tasks.items():
         unit = "task" if digest in broken else "environment" if _environment(task) in broken_environments else None
-        if unit is None or released.get(task.id, digest) != digest:
+        if unit is None:
             continue
+        replacement = released.get(task.id)
+        if replacement is not None:
+            if "agentic" in task.tags:
+                replacement = with_agentic_tag(replacement)
+            if canonical_sha256(replacement.model_dump(mode="json")) != digest:
+                continue
         failed = failures.get(digest, [])
         lines = Counter(row["error"].partition("\n")[0] for row in failed if row["error"])
         listed.append(

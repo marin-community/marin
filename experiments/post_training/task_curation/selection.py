@@ -285,6 +285,7 @@ class Candidate:
 class SourceCounts:
     input: int = 0
     heldout_overlap: int = 0
+    excluded: int = 0
     duplicate: int = 0
     eligible: int = 0
     selected: int = 0
@@ -442,7 +443,7 @@ def _admitted_records(source: SelectionInput) -> Iterator[tuple[TaskSpec, str]]:
             yield TaskSpec.model_validate_json(task_json), task_json
 
 
-def _check_release_admission(source: ReleasedSource, released: set[tuple[str, str]]) -> None:
+def _release_admission_attempts(source: ReleasedSource) -> list[dict[str, Any]]:
     admission = source.admission
     if admission is None:
         raise ValueError(f"Released source requires admission evidence: {source.uri}")
@@ -466,6 +467,12 @@ def _check_release_admission(source: ReleasedSource, released: set[tuple[str, st
     # The digest identifies the released Parquet independently of where it is stored.
     if not any(pin.get("sha256") == source.sha256 for pin in recipe.get("released", ())):
         raise ValueError(f"Probe selection {identity} does not pin released source {source.uri}")
+    return attempts
+
+
+def _check_release_admission(
+    source: ReleasedSource, released: set[tuple[str, str]], attempts: list[dict[str, Any]]
+) -> None:
     observed = set()
     graded = set()
     for attempt in attempts:
@@ -482,21 +489,23 @@ def _check_release_admission(source: ReleasedSource, released: set[tuple[str, st
         )
 
 
-def _released_records(source: ReleasedSource) -> Iterator[tuple[TaskSpec, str]]:
+def with_agentic_tag(task: TaskSpec) -> TaskSpec:
+    """Use the agentic tag that selection adds to published rows from an agentic source."""
+    return task if "agentic" in task.tags else task.model_copy(update={"tags": (*task.tags, "agentic")})
+
+
+def _released_records(source: ReleasedSource, attempts: list[dict[str, Any]]) -> Iterator[tuple[TaskSpec, str]]:
     with StoragePath(source.uri).open("rb") as stream:
         if hashlib.file_digest(stream, "sha256").hexdigest() != source.sha256:
             raise ValueError(f"Released source SHA-256 mismatch: {source.uri}")
     released = set()
     for task in _panel_source_tasks(source, {}):
-        tagged = "agentic" in task.tags
-        if tagged and not source.agentic:
+        if "agentic" in task.tags and not source.agentic:
             raise ValueError(f"Released task {task.id} contradicts the source's agentic declaration")
-        published = task
-        if source.agentic and not tagged:
-            published = task.model_copy(update={"tags": (*task.tags, "agentic")})
+        published = with_agentic_tag(task) if source.agentic else task
         released.add((published.id, canonical_sha256(published.model_dump(mode="json"))))
         yield task, published.model_dump_json()
-    _check_release_admission(source, released)
+    _check_release_admission(source, released, attempts)
 
 
 def _grader_environments(sources: tuple[SelectionInput, ...]) -> dict[str, EnvironmentRequirements]:
@@ -560,10 +569,12 @@ def write_training(
     config: SelectionConfig, heldout: tuple[TaskSpec, ...], exclusions: tuple[TaskSpec, ...], destination: Path
 ) -> dict[str, SourceCounts]:
     """Sample admitted training tasks after excluding panel overlaps and duplicates."""
-    excluded_keys = {key for task in (*heldout, *exclusions) for key in _panel_keys(task).exclusion}
+    heldout_keys = {key for task in heldout for key in _panel_keys(task).exclusion}
+    excluded_keys = {key for task in exclusions for key in _panel_keys(task).exclusion}
     selected_ids: set[str] = set()
     selected_contracts: set[str] = set()
     releases = {source.uri: source for source in config.recipe.released}
+    attempts = {uri: _release_admission_attempts(source) for uri, source in releases.items()}
     inputs = (*config.sources, *(SelectionInput(uri, source.family, uri) for uri, source in releases.items()))
     counts = {source.source_id: SourceCounts() for source in inputs}
     families = {source.source_id: source.family for source in inputs}
@@ -573,7 +584,11 @@ def write_training(
         seen_contracts: set[str] = set()
         for source in sources:
             release = releases.get(source.source_id)
-            rows = _released_records(release) if release is not None else _admitted_records(source)
+            rows = (
+                _released_records(release, attempts[source.source_id])
+                if release is not None
+                else _admitted_records(source)
+            )
             for task, task_json in rows:
                 source_counts = counts[source.source_id]
                 source_counts.input += 1
@@ -582,8 +597,12 @@ def write_training(
                     raise ValueError(f"Training selection does not admit {grader} graders: {task.id}")
                 if grader == GraderKind.HARNESS and "harbor" not in task.tags:
                     raise ValueError(f"Training task with a harness grader requires the harbor tag: {task.id}")
-                if not excluded_keys.isdisjoint(_panel_keys(task).exclusion):
+                exclusion = _panel_keys(task).exclusion
+                if not heldout_keys.isdisjoint(exclusion):
                     source_counts.heldout_overlap += 1
+                    continue
+                if not excluded_keys.isdisjoint(exclusion):
+                    source_counts.excluded += 1
                     continue
                 contract = deduplication_key(task)
                 if (

@@ -262,6 +262,7 @@ def test_selection_filters_full_heldout_and_duplicates_before_sampling(tmp_path,
         "fixture:first": {
             "input": 24,
             "heldout_overlap": 22,
+            "excluded": 0,
             "duplicate": 0,
             "eligible": 2,
             "selected": sum(task.id != "training-c" for task in tasks),
@@ -269,6 +270,7 @@ def test_selection_filters_full_heldout_and_duplicates_before_sampling(tmp_path,
         "fixture:second": {
             "input": 2,
             "heldout_overlap": 0,
+            "excluded": 0,
             "duplicate": 1,
             "eligible": 1,
             "selected": sum(task.id == "training-c" for task in tasks),
@@ -505,7 +507,8 @@ def test_selection_mixes_released_and_curated_tasks(tmp_path, monkeypatch):
         "input": 3,
         "selected": 1,
         "eligible": 1,
-        "heldout_overlap": 1,
+        "heldout_overlap": 0,
+        "excluded": 1,
         "duplicate": 1,
     }
     rows = pq.read_table(root / TRAIN_FILENAME).to_pylist()
@@ -530,7 +533,8 @@ def test_selection_mixes_released_and_curated_tasks(tmp_path, monkeypatch):
         ("harness-without-tag", "harness grader requires the harbor tag"),
     ],
 )
-def test_selection_refuses_invalid_released_tasks(tmp_path, fault, message):
+def test_selection_refuses_invalid_released_tasks(tmp_path, monkeypatch, fault, message):
+    monkeypatch.setattr(selection_module, "CANONICAL_ARTIFACT_ROOT", str(tmp_path))
     task = source_task("agent-task")
     if fault == "schema":
         task = task.model_copy(update={"schema_version": "0.27"})
@@ -541,6 +545,7 @@ def test_selection_refuses_invalid_released_tasks(tmp_path, fault, message):
     release = released_training(tmp_path / "release.parquet", task)
     update = {"digest": {"sha256": "0" * 64}, "count": {"rows": 2}, "tag": {"agentic": False}}
     release = release.model_copy(update=update.get(fault, {}))
+    release = release.model_copy(update={"admission": released_probe(tmp_path, release, (task,), graded=1)})
     settings = released_recipe(
         release,
         admitted_graders=LOCAL_GRADERS | {GraderKind.HARNESS} if fault == "harness-without-tag" else LOCAL_GRADERS,
@@ -735,7 +740,7 @@ def test_full_cli_appends_selection_and_saved_corpus_can_reselect(tmp_path, monk
     assert len(tasks) == 1
     assert tasks[0].context.events[-1].content == "Two plus three?"
     summary = json.loads((output / "summary.json").read_text())
-    assert summary["source_counts"][source.info.id]["heldout_overlap"] == 1
+    assert summary["source_counts"][source.info.id]["excluded"] == 1
     heldout_ids = {json.loads(row["lowered_task_spec"])["task"]["id"] for row in heldout_rows()}
     assert {task.id for task in read_tasks(output / FULL_VALIDATION_FILENAME)} == heldout_ids
     input_file.unlink()
