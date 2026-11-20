@@ -30,6 +30,7 @@ from experiments.evaluation.micro210_policy import (
     read_micro210_policy,
 )
 from tests.rl.micro210_fixture import policy_fixture_reference
+from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 
 
 @pytest.fixture(autouse=True)
@@ -220,7 +221,7 @@ def test_rl_policy_evaluation_binds_the_selected_export_once_the_run_completes(t
     export = rl_output / "export" / "global_step_7"
     export.mkdir(parents=True)
     manifest = b'{"files": ["model.safetensors"]}'
-    (export / ".marinskyrl-model-manifest.json").write_bytes(manifest)
+    (export / MODEL_MANIFEST_FILENAME).write_bytes(manifest)
     rl_run = ArtifactStep.adopt("tests/rl-run", "2026.11.20.1", str(rl_output), kind=SkyRLRun)
     step = micro210_policy_step(rl_run)
     assert rl_run in step.deps

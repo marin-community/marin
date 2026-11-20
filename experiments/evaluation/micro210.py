@@ -56,8 +56,8 @@ PREPARED_INPUTS = f"hf://datasets/{PREPARED_REPO}@{PREPARED_COMMIT}"
 PREPARED_INPUTS_VERSION = "2026.11.20.1"
 
 STOP_TOKEN_CONTENT = {128001: "<|end_of_text|>", 128009: "<|eot_id|>"}
-# Plan-time and fingerprint stand-in for a model resolved at build; the SkyRL config names the real source.
-_UNEXPORTED_POLICY = Micro210Model("<skyrl-policy>", MODEL_IDENTITY_PREFIX + "0" * 64, "<skyrl-tokenizer>", "0" * 40)
+# Plan-time stand-in for the model binding; each step binds its real model when it builds.
+_PLACEHOLDER_MODEL = Micro210Model("<skyrl-policy>", MODEL_IDENTITY_PREFIX + "0" * 64, "<skyrl-tokenizer>", "0" * 40)
 
 
 @dataclass(frozen=True)
@@ -76,14 +76,19 @@ def judge_runtime_config(config: dict, judge: JudgeConfig) -> dict:
     return config
 
 
+def export_identity(uri: str) -> str:
+    """Identify an HF export by the sha256 of its model manifest."""
+    manifest = (StoragePath(uri) / MODEL_MANIFEST_FILENAME).read_bytes()
+    return MODEL_IDENTITY_PREFIX + hashlib.sha256(manifest).hexdigest()
+
+
 def validate_inputs(evaluation: Micro210Evaluation, inputs: str) -> None:
     """Reject changed prepared tasks or export metadata before GPU allocation."""
     protocol = evaluation.policy()
     table = (StoragePath(inputs) / protocol["evaluation"]["data_relative_path"]).read_bytes()
     if hashlib.sha256(table).hexdigest() != protocol["prepared_rollouts_sha256"]:
         raise ValueError("Canonical Micro210 prepared task bytes changed")
-    manifest = (StoragePath(evaluation.model.uri) / MODEL_MANIFEST_FILENAME).read_bytes()
-    if MODEL_IDENTITY_PREFIX + hashlib.sha256(manifest).hexdigest() != evaluation.model.identity:
+    if export_identity(evaluation.model.uri) != evaluation.model.identity:
         raise ValueError("Micro210 model export manifest differs from the model binding")
     tokenizer = AutoTokenizer.from_pretrained(
         evaluation.model.tokenizer_uri, revision=evaluation.model.tokenizer_revision, trust_remote_code=False
@@ -122,11 +127,9 @@ def micro210_policy_step(run: ArtifactStep[SkyRLRun]) -> ArtifactStep[SkyRLRun]:
 
     def exported(context: StepContext) -> Micro210Model:
         if context.is_fingerprint:
-            return _UNEXPORTED_POLICY
+            return _PLACEHOLDER_MODEL
         policy = resolve_skyrl_policy(context, run)
-        manifest = (StoragePath(policy.uri) / MODEL_MANIFEST_FILENAME).read_bytes()
-        identity = MODEL_IDENTITY_PREFIX + hashlib.sha256(manifest).hexdigest()
-        return Micro210Model(policy.uri, identity, policy.tokenizer_uri, policy.tokenizer_revision)
+        return Micro210Model(policy.uri, export_identity(policy.uri), policy.tokenizer_uri, policy.tokenizer_revision)
 
     name = f"evaluation/micro210/{run.name}"
     return _micro210_step(SkyRLPolicyModel(run), exported, name=name, version=run.version)
@@ -139,7 +142,7 @@ def _micro210_step(
     name: str,
     version: str,
 ) -> ArtifactStep[SkyRLRun]:
-    binding = micro210_evaluation(_UNEXPORTED_POLICY, run_id=f"{name}@{version}", output_uri="<resolved-at-build>")
+    binding = micro210_evaluation(_PLACEHOLDER_MODEL, run_id=f"{name}@{version}", output_uri="<resolved-at-build>")
     frozen = binding.policy()
     evaluation_policy = frozen["evaluation"]
     inputs = ArtifactStep.adopt(
