@@ -255,7 +255,7 @@ class SkyRLRetentionPolicy:
     """Native checkpoint placement, resume depth, and disposable storage lifetime.
 
     When HF export is requested, a successful run produces a durable canonical
-    export from its terminal checkpoint.
+    export from its selected checkpoint.
     """
 
     resume_checkpoint_count: int = 2  # -1 defers checkpoint cleanup to a verified archive post-script.

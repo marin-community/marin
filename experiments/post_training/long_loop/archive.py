@@ -103,11 +103,7 @@ def assert_final_sft_checkpoint(output: str, final_sft: dict) -> dict:
 
 
 def assert_best_rl_checkpoint(output: str, inventory: dict) -> dict:
-    """R1: after archival, the best and final RL checkpoints exist in full at permanent paths.
-
-    Native SkyRL checkpoints commit `trainer_state.pt` plus their payload tree;
-    the assertion checks both are present and the paths are not scratch storage.
-    """
+    """Check committed trainer state and a nonempty native payload at permanent best/final paths."""
     checked = {}
     for role in ("selected", "final"):
         uri = inventory.get(role)

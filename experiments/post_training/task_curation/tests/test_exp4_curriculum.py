@@ -42,7 +42,7 @@ def largest_remainder_quotas(total: int, weights: dict[str, float]) -> dict[str,
     """The vendored ``weighted_quotas`` apportionment, replicated for this test.
 
     The marin test environment does not import the vendored trainer (torch), so
-    this computes the same largest-integer apportionment the sampler performs:
+    this computes the same largest-remainder apportionment the sampler performs:
     per-source floors of ``total * weight`` with the remainder seats going to the
     largest fractional parts, ties rotating by window index.
     """
@@ -64,7 +64,6 @@ def largest_remainder_quotas(total: int, weights: dict[str, float]) -> dict[str,
 
 
 def test_the_sampler_apportions_every_window_to_22_agentic_groups():
-    """The realized window the PR body and module docstring state: 22/42 routes."""
     quotas = largest_remainder_quotas(64, exp4_rl_curriculum().weights())
     assert quotas == {
         AGENTIC_TRAIN_SOURCE: 22,
