@@ -606,11 +606,11 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: "{{ $labels.region }}: CoreWeave storage quota exceeded"
+          summary: "{{ $labels.region }} / {{ $labels.storage_class }}: CoreWeave storage quota exceeded"
           runbook_url: https://github.com/marin-community/marin/blob/main/scripts/ops/storage/README.md
         data:
           - refId: A
-            relativeTimeRange: { from: 129600, to: 0 }
+            relativeTimeRange: { from: 302400, to: 0 }
             datasourceUid: finelog-marin
             model:
               refId: A
@@ -624,38 +624,73 @@ groups:
                 method: GET
                 params:
                   - key: sql
-                    value: >-
-                      WITH latest_collection AS (
-                        SELECT MAX(collected_at) AS collected_at
+                    value: &coreweave-storage-pressure-sql >-
+                      WITH ranked AS (
+                        SELECT *, ROW_NUMBER() OVER (
+                          PARTITION BY collected_at, metric, zone, bucket, storage_class
+                          ORDER BY seq DESC
+                        ) AS sample_rank
                         FROM "storage.usage"
                         WHERE provider = 'coreweave'
-                      ), latest AS (
-                        SELECT metric, zone, storage_class, value_bytes
-                        FROM "storage.usage" AS samples
-                        JOIN latest_collection
-                          ON samples.collected_at = latest_collection.collected_at
-                        WHERE provider = 'coreweave'
                           AND metric IN ('used_bytes', 'quota_bytes')
-                      ), usage AS (
-                        SELECT zone, storage_class, SUM(value_bytes) AS usage_bytes
+                          AND collected_at >= CURRENT_TIMESTAMP - INTERVAL '84 hours'
+                          AND collected_at <= CURRENT_TIMESTAMP
+                      ), snapshots AS (
+                        SELECT collected_at, zone, storage_class,
+                               SUM(value_bytes) FILTER (WHERE metric = 'used_bytes') AS usage_bytes,
+                               MAX(value_bytes) FILTER (WHERE metric = 'quota_bytes') AS quota_bytes,
+                               MIN(observed_at) FILTER (WHERE metric = 'used_bytes') AS observed_at
+                        FROM ranked WHERE sample_rank = 1
+                        GROUP BY collected_at, zone, storage_class
+                      ), observations AS (
+                        SELECT *, ROW_NUMBER() OVER (
+                          PARTITION BY zone, storage_class, observed_at ORDER BY collected_at DESC
+                        ) AS observation_rank
+                        FROM snapshots
+                      ), history AS (
+                        SELECT * FROM observations
+                        WHERE observation_rank = 1 AND usage_bytes IS NOT NULL
+                      ), latest AS (
+                        SELECT *, ROW_NUMBER() OVER (
+                          PARTITION BY zone, storage_class ORDER BY collected_at DESC
+                        ) AS collection_rank
+                        FROM history
+                      ), trends AS (
+                        SELECT latest.zone, latest.storage_class, latest.usage_bytes, latest.quota_bytes,
+                               latest.observed_at,
+                               CASE WHEN COUNT(*) FILTER (
+                                 WHERE history.observed_at >= latest.observed_at - INTERVAL '24 hours'
+                               ) >= 3 AND latest.observed_at - MIN(history.observed_at) FILTER (
+                                 WHERE history.observed_at >= latest.observed_at - INTERVAL '24 hours'
+                               ) >= INTERVAL '8 hours'
+                               THEN REGR_SLOPE(history.usage_bytes, EXTRACT(EPOCH FROM history.observed_at)) FILTER (
+                                 WHERE history.observed_at >= latest.observed_at - INTERVAL '24 hours'
+                               ) ELSE 0 END AS short_rate,
+                               CASE WHEN COUNT(*) >= 6
+                                 AND latest.observed_at - MIN(history.observed_at) >= INTERVAL '24 hours'
+                               THEN REGR_SLOPE(history.usage_bytes, EXTRACT(EPOCH FROM history.observed_at))
+                               ELSE 0 END AS daily_rate
                         FROM latest
-                        WHERE metric = 'used_bytes'
-                        GROUP BY zone, storage_class
-                      ), quota AS (
-                        SELECT zone, storage_class, MAX(value_bytes) AS quota_bytes
-                        FROM latest
-                        WHERE metric = 'quota_bytes'
-                        GROUP BY zone, storage_class
+                        JOIN history ON history.zone = latest.zone
+                          AND history.storage_class = latest.storage_class
+                          AND history.observed_at >= latest.observed_at - INTERVAL '72 hours'
+                          AND history.observed_at <= latest.observed_at
+                        WHERE latest.collection_rank = 1 AND latest.quota_bytes > 0
+                          AND latest.collected_at >= CURRENT_TIMESTAMP - INTERVAL '12 hours'
+                          AND latest.observed_at >= CURRENT_TIMESTAMP - INTERVAL '12 hours'
+                        GROUP BY latest.zone, latest.storage_class, latest.usage_bytes,
+                                 latest.quota_bytes, latest.observed_at
                       )
-                      SELECT usage.zone AS region,
-                             usage.usage_bytes / NULLIF(quota.quota_bytes, 0) AS value
-                      FROM usage
-                      JOIN quota
-                        ON quota.zone = usage.zone
-                       AND quota.storage_class = usage.storage_class
+                      SELECT zone AS region, storage_class,
+                             usage_bytes / quota_bytes AS current_value,
+                             (usage_bytes + GREATEST(0, short_rate, daily_rate) * (86400 +
+                               GREATEST(0, EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) - EXTRACT(EPOCH FROM observed_at))
+                             )) / quota_bytes AS value
+                      FROM trends
               columns:
                 - { selector: region, text: region, type: string }
-                - { selector: value, text: value, type: number }
+                - { selector: storage_class, text: storage_class, type: string }
+                - { selector: current_value, text: value, type: number }
           - refId: C
             datasourceUid: __expr__
             model:
@@ -689,7 +724,7 @@ groups:
         data:
           - &coreweave-storage-pressure-query
             refId: A
-            relativeTimeRange: { from: 97200, to: 0 }
+            relativeTimeRange: { from: 302400, to: 0 }
             datasourceUid: finelog-marin
             model:
               refId: A
@@ -703,65 +738,7 @@ groups:
                 method: GET
                 params:
                   - key: sql
-                    value: >-
-                      WITH ranked AS (
-                        SELECT *, ROW_NUMBER() OVER (
-                          PARTITION BY collected_at, metric, zone, bucket, storage_class
-                          ORDER BY seq DESC
-                        ) AS sample_rank
-                        FROM "storage.usage"
-                        WHERE provider = 'coreweave'
-                          AND metric IN ('used_bytes', 'quota_bytes')
-                          AND collected_at >= CURRENT_TIMESTAMP - INTERVAL '27 hours'
-                          AND collected_at <= CURRENT_TIMESTAMP
-                      ), snapshots AS (
-                        SELECT collected_at, zone, storage_class,
-                               SUM(value_bytes) FILTER (WHERE metric = 'used_bytes') AS usage_bytes,
-                               MAX(value_bytes) FILTER (WHERE metric = 'quota_bytes') AS quota_bytes,
-                               MIN(observed_at) FILTER (WHERE metric = 'used_bytes') AS observed_at
-                        FROM ranked WHERE sample_rank = 1
-                        GROUP BY collected_at, zone, storage_class
-                      ), observations AS (
-                        SELECT *, ROW_NUMBER() OVER (
-                          PARTITION BY zone, storage_class, observed_at ORDER BY collected_at DESC
-                        ) AS observation_rank
-                        FROM snapshots
-                      ), history AS (
-                        SELECT * FROM observations
-                        WHERE observation_rank = 1 AND usage_bytes IS NOT NULL
-                      ), latest AS (
-                        SELECT *, ROW_NUMBER() OVER (
-                          PARTITION BY zone, storage_class ORDER BY collected_at DESC
-                        ) AS collection_rank
-                        FROM history
-                      ), trends AS (
-                        SELECT latest.zone, latest.storage_class, latest.usage_bytes, latest.quota_bytes,
-                               CASE WHEN COUNT(*) FILTER (
-                                 WHERE history.observed_at >= latest.observed_at - INTERVAL '6 hours'
-                               ) >= 4 AND latest.observed_at - MIN(history.observed_at) FILTER (
-                                 WHERE history.observed_at >= latest.observed_at - INTERVAL '6 hours'
-                               ) >= INTERVAL '3 hours'
-                               THEN REGR_SLOPE(history.usage_bytes, EXTRACT(EPOCH FROM history.observed_at)) FILTER (
-                                 WHERE history.observed_at >= latest.observed_at - INTERVAL '6 hours'
-                               ) ELSE 0 END AS short_rate,
-                               CASE WHEN COUNT(*) >= 12
-                                 AND latest.observed_at - MIN(history.observed_at) >= INTERVAL '18 hours'
-                               THEN REGR_SLOPE(history.usage_bytes, EXTRACT(EPOCH FROM history.observed_at))
-                               ELSE 0 END AS daily_rate
-                        FROM latest
-                        JOIN history ON history.zone = latest.zone
-                          AND history.storage_class = latest.storage_class
-                          AND history.observed_at >= latest.observed_at - INTERVAL '24 hours'
-                          AND history.observed_at <= latest.observed_at
-                        WHERE latest.collection_rank = 1 AND latest.quota_bytes > 0
-                          AND latest.collected_at >= CURRENT_TIMESTAMP - INTERVAL '3 hours'
-                          AND latest.observed_at >= CURRENT_TIMESTAMP - INTERVAL '3 hours'
-                        GROUP BY latest.zone, latest.storage_class, latest.usage_bytes,
-                                 latest.quota_bytes, latest.observed_at
-                      )
-                      SELECT zone AS region, storage_class,
-                             (usage_bytes + GREATEST(0, short_rate, daily_rate) * 86400) / quota_bytes AS value
-                      FROM trends
+                    value: *coreweave-storage-pressure-sql
               columns:
                 - { selector: region, text: region, type: string }
                 - { selector: storage_class, text: storage_class, type: string }
@@ -790,9 +767,9 @@ groups:
           description: >-
             Projected quota use in 24 hours is {{ humanizePercentage $values.A.Value }}
             if recent growth continues. The projection uses the faster positive
-            linear trend over 6 or 24 hours and the current live quota. Review
+            linear trend over 24 or 72 hours and the current live quota. Review
             growth and arrange cleanup or move new writes while people are available.
-            Hourly telemetry and changing write rates limit forecast accuracy.
+            Collection gaps and changing write rates limit forecast accuracy.
           runbook_url: https://github.com/marin-community/marin/blob/main/scripts/ops/storage/README.md#coreweave-storage-telemetry
           __dashboardUid__: marin-storage
           __panelId__: "2"
@@ -818,11 +795,11 @@ groups:
           severity: warning
           notification: slack
         annotations:
-          summary: "CoreWeave storage telemetry has not been collected in 3 hours"
+          summary: "CoreWeave storage telemetry has not been collected in 12 hours"
           runbook_url: https://github.com/marin-community/marin/blob/main/scripts/ops/storage/README.md
         data:
           - refId: A
-            relativeTimeRange: { from: 10800, to: 0 }
+            relativeTimeRange: { from: 43200, to: 0 }
             datasourceUid: finelog-marin
             model:
               refId: A
@@ -844,7 +821,7 @@ groups:
                       )
                       SELECT 1 AS value
                       FROM latest
-                      WHERE latest_collected_at < CURRENT_TIMESTAMP - INTERVAL '3 hours'
+                      WHERE latest_collected_at < CURRENT_TIMESTAMP - INTERVAL '12 hours'
               columns:
                 - { selector: value, text: value, type: number }
           - refId: C

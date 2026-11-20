@@ -38,7 +38,6 @@ EXPRESSION_UID = "__expr__"
 # Grafana's built-in fan-out datasource: the panel's targets each name a real one.
 MIXED_DATASOURCE = "-- Mixed --"
 VALID_SEVERITIES = {"critical", "warning"}
-STORAGE_QUOTA_EXCEEDED_FRACTION = 1.0
 
 
 def _stitched_dashboards() -> dict[str, dict]:
@@ -192,6 +191,8 @@ class _FakeFinelog:
             return pa.table(
                 {
                     "region": ["US-EAST-02A"],
+                    "storage_class": ["STANDARD"],
+                    "current_value": [0.81],
                     "value": [0.81],
                 }
             )
@@ -300,109 +301,83 @@ def test_warning_alerts_remain_visible_without_notifications():
     ]
 
 
-def test_coreweave_storage_capacity_pages_critical_ops():
-    (rule,) = [rule for rule in _rules() if rule["uid"] == "coreweave-storage-capacity"]
+def test_coreweave_storage_capacity_deduplicates_retries_before_paging():
+    rule = next(rule for rule in _rules() if rule["uid"] == "coreweave-storage-capacity")
     source, threshold = rule["data"]
     sql = next(param["value"] for param in source["model"]["url_options"]["params"] if param["key"] == "sql")
-
-    assert rule["for"] == "5m"
-    assert rule["noDataState"] == "OK"
-    assert rule["labels"] == {"severity": "critical"}
-    assert source["datasourceUid"] == "finelog-marin"
-    assert {column["selector"] for column in source["model"]["columns"]} == {"region", "value"}
-    assert threshold["model"]["conditions"][0]["evaluator"] == {
-        "type": "gt",
-        "params": [STORAGE_QUOTA_EXCEEDED_FRACTION],
-    }
-
-    (policy,) = _load(ALERTING / "policies.yaml")["policies"]
-    routes = policy["routes"]
-    route = next(route for route in routes if route["object_matchers"] == [["severity", "=", "critical"]])
-    assert route["receiver"] == "ops-critical"
-    assert "mute_time_intervals" not in route
-
+    sql = sql.replace("CURRENT_TIMESTAMP", "TIMESTAMP '2026-11-20 12:00:00+00:00'")
     database = _storage_usage_database()
     database.executemany(
         'INSERT INTO "storage.usage" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [
-            (
-                "coreweave",
-                "used_bytes",
-                "US-EAST-02A",
-                "bucket",
-                "STANDARD",
-                120.0,
-                "2026-08-27 11:00:00+00",
-                "2026-08-26 10:00:00+00",
-                1,
-            ),
-            (
-                "coreweave",
-                "quota_bytes",
-                "US-EAST-02A",
-                None,
-                "STANDARD",
-                100.0,
-                "2026-08-27 11:00:00+00",
-                "2026-08-26 10:00:00+00",
-                2,
-            ),
-            (
-                "coreweave",
-                "used_bytes",
-                "US-EAST-02A",
-                "deleted-bucket",
-                "STANDARD",
-                70.0,
-                "2026-08-27 11:00:00+00",
-                "2026-08-26 10:00:00+00",
-                5,
-            ),
-            (
-                "coreweave",
-                "used_bytes",
-                "US-EAST-02A",
-                "bucket",
-                "STANDARD",
-                80.0,
-                "2026-08-26 09:00:00+00",
-                "2026-08-27 11:00:00+00",
-                3,
-            ),
-            (
-                "coreweave",
-                "quota_bytes",
-                "US-EAST-02A",
-                None,
-                "STANDARD",
-                100.0,
-                "2026-08-26 09:00:00+00",
-                "2026-08-27 11:00:00+00",
-                4,
-            ),
+            ("coreweave", metric, zone, bucket, "STANDARD", value, timestamp, timestamp, seq)
+            for timestamp, zone, buckets, quota in [
+                ("2026-11-20 00:00:00+00", "US-EAST-02A", {"deleted": 0}, 100),
+                ("2026-11-20 08:00:00+00", "US-EAST-02A", {"bucket": 40}, 100),
+                ("2026-11-20 12:00:00+00", "US-EAST-02A", {"bucket": 60}, 100),
+                ("2026-11-20 12:00:00+00", "US-EAST-08A", {"bucket": 120}, 100),
+            ]
+            for metric, bucket, value in [
+                *[("used_bytes", bucket, value) for bucket, value in buckets.items()],
+                ("quota_bytes", None, quota),
+            ]
+            for seq in (1, 2)
         ],
     )
-    assert database.execute(sql).fetchall() == [("US-EAST-02A", 0.8)]
+
+    result = database.execute(sql).fetch_arrow_table().to_pylist()
+    assert next(row["value"] for row in result if row["region"] == "US-EAST-02A") > 1
+    (numeric_column,) = [column for column in source["model"]["columns"] if column["type"] == "number"]
+    evaluator = threshold["model"]["conditions"][0]["evaluator"]
+    assert evaluator["type"] == "gt"
+    assert sorted((row["region"], row[numeric_column["selector"]]) for row in result) == [
+        ("US-EAST-02A", 0.6),
+        ("US-EAST-08A", 1.2),
+    ]
+    assert [row["region"] for row in result if row[numeric_column["selector"]] > evaluator["params"][0]] == [
+        "US-EAST-08A"
+    ]
+    route = _route_for(rule)
+    assert route["receiver"] == "ops-critical"
+    assert "mute_time_intervals" not in route
 
 
 @pytest.mark.parametrize(
-    ("hourly_usage", "quota", "age_hours", "source_lag_hours", "projected_fraction"),
+    ("usage", "hours_before_latest", "quota", "age_hours", "source_lag_hours", "projected_fraction"),
     [
-        pytest.param([20, 30, 40, 50, 60, 70, 80], 100, 0, 0, 3.2, id="rapid-growth"),
-        pytest.param([20, 21, 22, 23, 24, 25, 26], 100, 0, 0, 0.5, id="ample-headroom"),
-        pytest.param([60, 61, 62, 63, 64, 65, 66], 100, 0, 0, 0.9, id="projected-headroom-low"),
-        pytest.param([80, 80, 80, 80, 80, 80, 80], 100, 0, 0, 0.8, id="flat"),
-        pytest.param([80, 70, 60, 50, 40, 30, 20], 100, 0, 0, 0.2, id="shrinking"),
-        pytest.param([20, 30, 40], 100, 0, 0, 0.4, id="insufficient-history"),
-        pytest.param([20, 30, 40, 50, 60, 70, 80], 100, 4, 0, None, id="stale"),
-        pytest.param([20, 30, 40, 50, 60, 70, 80], 100, 0, 4, None, id="stale-source"),
-        pytest.param([20, 30, 40, 50, 60, 70, 80], 400, 0, 0, 0.8, id="quota-increased"),
-        pytest.param([20] * 18 + [20, 30, 40, 50, 60, 70, 80], 100, 0, 0, 3.2, id="recent-acceleration"),
-        pytest.param(list(range(60, 85, 2)) + [84] * 12, 100, 0, 0, 1.08, id="long-trend"),
+        pytest.param([20, 40, 60, 80], [12, 8, 4, 0], 100, 0, 0, 2.0, id="rapid-growth"),
+        pytest.param([20, 21, 22, 23], [12, 8, 4, 0], 100, 0, 0, 0.29, id="ample-headroom"),
+        pytest.param([50, 55, 60, 65], [12, 8, 4, 0], 100, 0, 0, 0.95, id="projected-headroom-low"),
+        pytest.param([80] * 4, [12, 8, 4, 0], 100, 0, 0, 0.8, id="flat"),
+        pytest.param([80, 60, 40, 20], [12, 8, 4, 0], 100, 0, 0, 0.2, id="shrinking"),
+        pytest.param([20, 30], [4, 0], 100, 0, 0, 0.3, id="insufficient-history"),
+        pytest.param([20, 40, 60, 80], [12, 8, 4, 0], 100, 13, 0, None, id="stale"),
+        pytest.param([20, 40, 60, 80], [12, 8, 4, 0], 100, 0, 13, None, id="stale-source"),
+        pytest.param([20, 40, 60, 80], [12, 8, 4, 0], 400, 0, 0, 0.5, id="quota-increased"),
+        pytest.param(
+            [20] * 12 + [20, 30, 40, 50, 60, 70, 80],
+            list(range(72, -1, -4)),
+            100,
+            0,
+            0,
+            1.4,
+            id="recent-acceleration",
+        ),
+        pytest.param(
+            list(range(80, 99, 2)) + [98] * 9,
+            list(range(72, -1, -4)),
+            100,
+            0,
+            0,
+            1.04,
+            id="long-trend",
+        ),
+        pytest.param([20, 40, 80], [15, 10, 0], 100, 0, 0, 1.76, id="observed-irregular-cadence"),
+        pytest.param([20, 40, 80], [15, 10, 0], 100, 8, 0, 2.08, id="forecast-includes-sample-age"),
     ],
 )
 def test_coreweave_storage_growth_projects_recent_trends(
-    hourly_usage, quota, age_hours, source_lag_hours, projected_fraction
+    usage, hours_before_latest, quota, age_hours, source_lag_hours, projected_fraction
 ):
     rule = next(rule for rule in _rules() if rule["uid"] == "coreweave-storage-growth")
     source, threshold = rule["data"]
@@ -411,12 +386,12 @@ def test_coreweave_storage_growth_projects_recent_trends(
     sql = sql.replace("CURRENT_TIMESTAMP", "TIMESTAMP '2026-11-20 12:00:00+00:00'")
     database = _storage_usage_database()
     rows = []
-    for hours_ago, usage in enumerate(reversed(hourly_usage)):
+    for hours_ago, sample_usage in zip(hours_before_latest, usage, strict=True):
         timestamp = now - timedelta(hours=hours_ago + age_hours)
         observed_at = timestamp - timedelta(hours=source_lag_hours)
         for metric, bucket, value in [
-            ("used_bytes", "bucket-a", usage * 0.4),
-            ("used_bytes", "bucket-b", usage * 0.6),
+            ("used_bytes", "bucket-a", sample_usage * 0.4),
+            ("used_bytes", "bucket-b", sample_usage * 0.6),
             ("quota_bytes", None, quota if hours_ago == 0 else 100),
         ]:
             # A retried collection supersedes the earlier rows, including its quota.
@@ -431,8 +406,9 @@ def test_coreweave_storage_growth_projects_recent_trends(
     if projected_fraction is None:
         assert result == []
     else:
-        ((region, storage_class, value),) = result
+        ((region, storage_class, current_value, value),) = result
         assert (region, storage_class) == ("US-EAST-02A", "STANDARD")
+        assert current_value == pytest.approx(usage[-1] / quota)
         assert value == pytest.approx(projected_fraction)
         evaluator = threshold["model"]["conditions"][0]["evaluator"]
         assert evaluator["type"] == "gt"
@@ -440,10 +416,6 @@ def test_coreweave_storage_growth_projects_recent_trends(
         headroom = next(rule for rule in _rules() if rule["uid"] == "coreweave-storage-headroom")
         daily_threshold = headroom["data"][1]["model"]["conditions"][0]["evaluator"]
         assert (value > daily_threshold["params"][0]) == (projected_fraction > 0.8)
-    route = _route_for(rule)
-    assert route["receiver"] == "ops-slack"
-    assert "active_time_intervals" not in route
-    assert "mute_time_intervals" not in route
 
 
 def test_coreweave_storage_growth_does_not_invent_growth_from_replayed_observations():
@@ -463,7 +435,7 @@ def test_coreweave_storage_growth_does_not_invent_growth_from_replayed_observati
         ],
     )
 
-    assert database.execute(sql).fetchall() == [("US-EAST-02A", "STANDARD", 0.8)]
+    assert database.execute(sql).fetchall() == [("US-EAST-02A", "STANDARD", 0.8, 0.8)]
 
 
 def test_coreweave_storage_headroom_uses_latest_zone_and_class_and_daily_slack_route():
@@ -481,7 +453,7 @@ def test_coreweave_storage_headroom_uses_latest_zone_and_class_and_daily_slack_r
                 ("2026-11-20 11:00:00+00", "US-EAST-02A", "STANDARD", {"a": 40, "b": 50}, 100),
                 ("2026-11-20 12:00:00+00", "US-EAST-08A", "STANDARD", {"c": 70}, 100),
                 ("2026-11-20 11:00:00+00", "US-EAST-02A", "INFREQUENT", {"d": 30}, 100),
-                ("2026-11-20 08:00:00+00", "US-WEST-04A", "STANDARD", {"stale": 90}, 100),
+                ("2026-11-19 20:00:00+00", "US-WEST-04A", "STANDARD", {"stale": 90}, 100),
             ]
             for metric, bucket, value in [
                 *[("used_bytes", bucket, value) for bucket, value in buckets.items()],
@@ -495,25 +467,25 @@ def test_coreweave_storage_headroom_uses_latest_zone_and_class_and_daily_slack_r
     evaluator = threshold["model"]["conditions"][0]["evaluator"]
     assert evaluator["type"] == "gt"
     assert sorted(result) == [
-        ("US-EAST-02A", "INFREQUENT", 0.3),
-        ("US-EAST-02A", "STANDARD", 0.9),
-        ("US-EAST-08A", "STANDARD", 0.7),
+        ("US-EAST-02A", "INFREQUENT", 0.3, 0.3),
+        ("US-EAST-02A", "STANDARD", 0.9, 0.9),
+        ("US-EAST-08A", "STANDARD", 0.7, 0.7),
     ]
-    assert [(region, storage_class) for region, storage_class, value in result if value > evaluator["params"][0]] == [
-        ("US-EAST-02A", "STANDARD")
-    ]
+    assert [
+        (region, storage_class) for region, storage_class, current, value in result if value > evaluator["params"][0]
+    ] == [("US-EAST-02A", "STANDARD")]
     route = _route_for(rule)
     assert route["receiver"] == "ops-slack"
-    assert route["repeat_interval"] == "23h"
+    assert "active_time_intervals" in route
     assert "mute_time_intervals" not in route
-    intervals = {timing["name"]: timing for timing in _load(ALERTING / "mute-timings.yaml")["muteTimes"]}
-    (active_interval,) = route["active_time_intervals"]
-    assert intervals[active_interval]["time_intervals"] == [
-        {"times": [{"start_time": "15:00", "end_time": "16:00"}], "location": "America/Los_Angeles"}
-    ]
+    growth = next(rule for rule in _rules() if rule["uid"] == "coreweave-storage-growth")
+    growth_route = _route_for(growth)
+    assert growth_route["receiver"] == "ops-slack"
+    assert "active_time_intervals" not in growth_route
+    assert "mute_time_intervals" not in growth_route
 
 
-def test_coreweave_storage_alert_notifies_slack_when_collection_is_missing_for_3_hours():
+def test_coreweave_storage_alert_notifies_slack_when_collection_is_missing_for_12_hours():
     (rule,) = [rule for rule in _rules() if rule["uid"] == "coreweave-storage-telemetry-stale"]
     source, threshold = rule["data"]
     sql = next(param["value"] for param in source["model"]["url_options"]["params"] if param["key"] == "sql")
@@ -527,7 +499,7 @@ def test_coreweave_storage_alert_notifies_slack_when_collection_is_missing_for_3
     sql = sql.replace("CURRENT_TIMESTAMP", "TIMESTAMP '2026-08-27 12:00:00+00:00'")
     for collected_at, expected in [
         ("2026-08-27 10:00:00+00", []),
-        ("2026-08-27 08:00:00+00", [(1,)]),
+        ("2026-08-26 23:00:00+00", [(1,)]),
     ]:
         database = _storage_usage_database()
         database.execute(

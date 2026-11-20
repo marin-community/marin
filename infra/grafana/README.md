@@ -612,7 +612,11 @@ The CoreWeave storage-telemetry freshness and growth warnings and `TrainingRunHe
 carry the explicit `notification=slack` exception, so they announce in Slack
 and open a session on the default `operator` channel.
 `CoreWeaveStorageQuotaPredicted` projects 24 hours ahead using the faster
-positive 6-hour or 24-hour usage trend against the live zone quota.
+positive 24-hour or 72-hour usage trend against the live zone quota. These
+windows tolerate the observed 4–10-hour collection gaps; the projection
+includes the latest sample's age. The critical quota page reads measured
+usage from the same deduplicated query, and the telemetry warning fires
+after twelve hours without a collection.
 `CoreWeaveStorageHeadroomLow` uses `notification=storage-daily` to warn above
 80% current or projected quota use in `#marin-alerts` during the daily 15:00–16:00
 `America/Los_Angeles` window. Its 23-hour repeat interval permits a reminder
