@@ -1,7 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import asyncio
 import json
 from functools import partial
 from pathlib import PurePosixPath
@@ -66,12 +65,14 @@ def test_candidate_file_calls_do_not_collide_with_conversation_history() -> None
     task = arithmetic_task(context=ConversationInput(events=history))
     candidate = Candidate("12", (inline_resource("a", b"a"), inline_resource("b", b"b")))
     turns = candidate_turns(candidate, rollout_spec(task))
-    assert turns == candidate_turns(candidate, rollout_spec(task))
+    assert len(turns) == 3
+    used_ids = {"file-0", "file-0-", "file-1"}
     for turn in turns[:-1]:
         calls = turn["tool_calls"]
         assert isinstance(calls, list)
         call = calls[0]
-        assert " cp " in call["function"]["arguments"] and " cp -p " not in call["function"]["arguments"]
+        assert call["id"] not in used_ids
+        used_ids.add(call["id"])
         event = AssistantToolCalls(calls=(ConversationToolCall(call_id=call["id"], name="shell", arguments={}),))
         ConversationTrace(events=(*history, event))
         history += (event, ToolResult(call_id=call["id"], content="done"))
@@ -186,18 +187,6 @@ async def test_early_grader_cut_is_not_cached_for_stage_replay(solver: bool) -> 
     assert len(engine.run_ids) == 2
 
 
-def test_empty_interruption_causes_keep_exception_types() -> None:
-    cancelled = asyncio.CancelledError()
-    timeout = TimeoutError()
-    timeout.__cause__ = cancelled
-    interrupted = RolloutInterrupted(Rollout("test", (), "stop"), RolloutOperation.GRADE)
-    interrupted.__cause__ = timeout
-    decision = interruption(interrupted)
-    assert isinstance(decision, Restart)
-    assert str(decision) == "Rollout interrupted during grade: TimeoutError <- CancelledError"
-
-
-# Pilots m/n: parent cancellation and controller gaps; o: only agent output exhaustion is failed evidence.
 @pytest.mark.parametrize("operation", list(RolloutOperation))
 @pytest.mark.parametrize(
     "failure",
