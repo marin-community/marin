@@ -178,7 +178,6 @@ def require_review_serving_root(target_cluster: str | None) -> str:
     return target_cluster
 
 
-
 @dataclass(frozen=True)
 class LocalJudgeEndpoint:
     """Own maintained Iris inference from a model YAML matching the tier's pin.
@@ -197,7 +196,6 @@ class LocalJudgeEndpoint:
     worker_setup_scripts: tuple[str, ...] = ()
     worker_timeout: Duration | None = None
     job_ids: list[str] = field(default_factory=list, repr=False, compare=False)
-
 
     @property
     def identity(self) -> dict[str, Any]:
