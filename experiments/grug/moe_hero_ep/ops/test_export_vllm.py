@@ -20,7 +20,8 @@ from levanter.checkpoint import save_checkpoint
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.testing.tokenizer import llama3_style_chat_tokenizer
 from marin.execution.artifact import read_record
-from marin.execution.lazy import StepContext, materialized_config
+from marin.execution.lazy import materialized_config
+from marin.rl.skyrl import skyrl_cpu_command
 from rigging.filesystem.storage_path import StoragePath
 from safetensors.numpy import load_file
 
@@ -28,7 +29,6 @@ import experiments.grug.moe_hero_ep.ops.export_cpu as cpu_export
 import experiments.grug.moe_hero_ep.ops.export_vllm as hero_export
 import experiments.grug.moe_hero_ep.sft_recipe as sft_recipe
 from experiments.grug.moe_hero_ep import launch_hero_sft
-from experiments.grug.moe_hero_ep.expert_placement import ExpertPlacement
 from experiments.grug.moe_hero_ep.model import GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY, GrugModelConfig, Transformer
 from experiments.grug.moe_hero_ep.ops import upload_hf
 from experiments.grug.moe_hero_ep.ops.export_vllm import ExportConfig, export
@@ -194,11 +194,11 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
     initializer = tmp_path / "pretraining" / "step-16"
     initializer.mkdir(parents=True)
     initializer_metadata = initializer / "metadata.json"
-    initializer_metadata.write_text(json.dumps({"step": 16, "is_temporary": False}))
-    placement_file = Path(launch_hero_sft.__file__).with_name("hero_sft_expert_placement_step393491.json")
-    placement = dataclasses.replace(
-        ExpertPlacement.from_json(placement_file.read_text()), source_checkpoint=str(initializer)
-    )
+    initial = {"step": 16, "is_temporary": False}
+    initializer_metadata.write_text(json.dumps(initial))
+    placement = MOCHI_SPEC.expert_placement
+    assert placement is not None
+    placement = dataclasses.replace(placement, source_checkpoint=str(initializer))
     monkeypatch.setattr(launch_hero_sft, "special_token_init", lambda _: None)
     monkeypatch.setattr(sft_recipe, "configure_coreweave_s3", lambda: None)
     recipe = dataclasses.replace(
@@ -209,18 +209,15 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
         eval_every=0,
         expert_placement=placement,
     )
-    resources = dataclasses.replace(
-        launch_hero_sft.sft_resources(recipe.dp_racks),
-        regions=("US-EAST-08A",),
-        target_cluster="cw-us-east-08a",
-    )
+    allocation = launch_hero_sft.sft_resources(recipe.dp_racks)
+    resources = dataclasses.replace(MIXTURE_262K_176NODE.resources, replicas=allocation.replicas)
     preset = dataclasses.replace(MIXTURE_262K_176NODE, recipe=recipe, resources=resources)
     with pytest.raises(ValueError, match="GB200 allocation derived from dp_racks"):
         dataclasses.replace(preset, resources=dataclasses.replace(resources, replicas=1)).model()
-    initializer_metadata.write_text(json.dumps({"step": 16, "is_temporary": True}))
+    initializer_metadata.write_text(json.dumps({**initial, "is_temporary": True}))
     with pytest.raises(ValueError, match="temporary checkpoint"):
         preset.model()
-    initializer_metadata.write_text(json.dumps({"step": 16, "is_temporary": False}))
+    initializer_metadata.write_text(json.dumps(initial))
     model = preset.model()
     [trained] = model.step.deps
     training = materialized_config(trained, str(tmp_path))
@@ -229,6 +226,9 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
     checkpoints = Path(trained.path()) / f"expert-placement-{placement.fingerprint}" / "checkpoints"
     native, _ = native_fixture(str(checkpoints / "step-17"), master=True)
     native_fixture(str(checkpoints / "step-18"), master=True, step=18)
+    newer_metadata = checkpoints / "step-18" / "metadata.json"
+    newer_permanent = json.loads(newer_metadata.read_text())
+    newer_metadata.write_text(json.dumps({**newer_permanent, "is_temporary": True}))
     tokenizer_source = tmp_path / "tokenizer-snapshot"
     tokenizer = llama3_style_chat_tokenizer()
     tokenizer.add_tokens([f"token-{i}" for i in range(len(tokenizer), native.model.vocab_size)])
@@ -240,13 +240,9 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
         shutil.copytree(tokenizer_source, local_dir, dirs_exist_ok=True)
 
     monkeypatch.setattr(upload_hf, "snapshot_download", download_tokenizer)
-    newer_metadata = checkpoints / "step-18" / "metadata.json"
-    newer_permanent = json.loads(newer_metadata.read_text())
-    newer_metadata.write_text(json.dumps({**newer_permanent, "is_temporary": True}))
     monkeypatch.setattr(sft_recipe, "HERO_MODEL_CONFIG", native.model)
     output = Path(model.step.path())
-    ctx = StepContext.for_run(str(output), str(tmp_path), deps=model.step.deps)
-    config = model.step.build_config(ctx)
+    config = materialized_config(model.step, str(tmp_path))
     local_export = dataclasses.replace(model.step, run=lambda args: sft_recipe._export_final_sft(**args)).lower()
     assert local_export.fn is not None
     local_export.fn(str(output))
@@ -258,10 +254,10 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
     assert record.config["tokenizer_uri"] == "marin-community/marin-tokenizer-tools"
     assert record.config["tokenizer_revision"] == MOCHI_SPEC.tokenizer_revision
     hf = output / model.relative_path
-    assert (hf / "export-manifest.json").is_file()
-    completed = (hf / "export-manifest.json").read_bytes()
+    manifest = hf / "export-manifest.json"
+    completed = manifest.read_bytes()
     sft_recipe._export_final_sft(**config)
-    assert (hf / "export-manifest.json").read_bytes() == completed
+    assert manifest.read_bytes() == completed
     with pytest.raises(FileExistsError, match="differs from the selected checkpoint"):
         sft_recipe._export_final_sft(**{**config, "source_revision": "0" * 40})
     newer_metadata.write_text(json.dumps(newer_permanent))
@@ -271,13 +267,7 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
     assert not (wrong_export / "hf" / "export-manifest.json").exists()
     skyrl = Path(__file__).resolve().parents[4] / "vendor" / "skyrl"
     subprocess.run(
-        [
-            "uv",
-            "run",
-            "--frozen",
-            "--extra",
-            "cpu",
-            "--no-dev",
+        skyrl_cpu_command(
             "python",
             "-c",
             """
@@ -311,7 +301,7 @@ assert layout == GRUG_SPLIT_EXPERT_SCHEMA_VERSION
             str(hf),
             str(tmp_path / "staged"),
             str(tokenizer_source),
-        ],
+        ),
         cwd=skyrl,
         env=os.environ | {"PYTHONPATH": "skyrl-train:skyrl-gym"},
         check=True,
