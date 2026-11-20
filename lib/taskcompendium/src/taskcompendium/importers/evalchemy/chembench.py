@@ -57,8 +57,12 @@ def strip_markup(prompt: str) -> str:
     return prompt
 
 
+def option_letters(count: int) -> list[str]:
+    return [chr(ord("A") + index) for index in range(count)]
+
+
 def multiple_choice_prompt(question: str, options: list[str]) -> str:
-    letters = [chr(ord("A") + index) for index in range(len(options))]
+    letters = option_letters(len(options))
     answers = "\n".join(f"{letter}. {option}" for letter, option in zip(letters, options, strict=True))
     return strip_markup(MULTIPLE_CHOICE_TEMPLATE.format(question=question, answers=answers, cot=""))
 
@@ -79,7 +83,7 @@ def convert_chembench(row: RawRow, context: ConversionContext) -> TaskSpec:
     if MULTIPLE_CHOICE_METRIC in row.data["metrics"]:
         target_scores = json.loads(example["target_scores"])
         options = list(target_scores)
-        letters = [chr(ord("A") + index) for index in range(len(options))]
+        letters = option_letters(len(options))
         correct = [letter for letter, score in zip(letters, target_scores.values(), strict=True) if score == 1]
         if not correct:
             raise ValueError(f"ChemBench row {row.source.row} has no correct option")
