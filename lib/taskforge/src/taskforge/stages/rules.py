@@ -28,6 +28,8 @@ from taskforge.model.review import (
 from taskforge.model.workpiece import Workpiece
 from taskforge.stages.classify import CAUSE_DECISIONS
 
+NO_CONTROLS = "The task has no controls: add controls that test its grader"
+
 
 def passed(grade: GradeResult) -> bool:
     if grade.status is Outcome.SUBMISSION_FAILURE:
@@ -78,8 +80,8 @@ def assess(result: ValidationResult, band: BandRules) -> Decision:
     if result.lowering_error is not None:
         decision = Modify if result.lowering_cause is Cause.INVALID_TASK else Incomplete
         return decision((f"Lowering failed: {result.lowering_error}",))
-    if not result.solver or not result.controls:
-        return Incomplete(("Required solver or control evidence is absent",))
+    if not result.solver:
+        return Incomplete(("Required solver evidence is absent",))
     trials = (*result.solver, *result.controls, *(f for a in result.adversary for f in a.findings))
     causes = Counter(
         t.cause or (Cause.NO_GRADE if t.grade is None else None)
@@ -101,7 +103,9 @@ def assess(result: ValidationResult, band: BandRules) -> Decision:
         return Incomplete(unavailable)
     if causes[Cause.BUDGET_EXHAUSTED]:
         return Reject(RejectKind.BUDGET, ("An explicitly configured trial budget was exhausted",))
-    findings = tuple(
+    # The submit gate requires a control, so only a task from another source arrives without one.
+    findings: tuple[str, ...] = () if result.controls else (NO_CONTROLS,)
+    findings += tuple(
         f"Control {control.index} violates its expected reward" for control in result.controls if not control.met
     )
     findings += tuple(

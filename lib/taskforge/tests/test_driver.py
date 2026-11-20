@@ -62,6 +62,16 @@ def test_manifest_selects_ranks_and_path_list_preserves_output_identity(tmp_path
         inputs(str(manifest))
 
 
+def test_prefix_lists_proposals_and_source_tasks_under_distinct_identities(tmp_path: Path) -> None:
+    run = tmp_path / "swe-rebench"
+    run.mkdir()
+    for name in ("slot-1.proposal.json", "astropy-1.task.json", "notes.json"):
+        (run / name).write_text("{}")
+    paths = inputs(str(run))
+    assert [Path(path).name for path in paths] == ["astropy-1.task.json", "slot-1.proposal.json"]
+    assert [str(proposal_key(path)) for path in paths] == ["swe-rebench/astropy-1", "swe-rebench/1"]
+
+
 def test_empty_prefix_fails_instead_of_reporting_a_successful_empty_run(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="No proposal"):
         inputs(str(tmp_path))

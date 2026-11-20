@@ -48,6 +48,8 @@ from taskforge.stages.classify import grade_cause, grader_infra_unavailable, tri
 from taskforge.stages.exits import Validated
 from taskforge.stages.summary import task_manifest
 
+NO_PROPOSAL = "None: the task came from another source without one."
+
 
 async def control_result(ctx: Context, spec: TaskRolloutSpec, index: int, control: Control) -> ControlResult:
     grade = await ctx.emit(GradeCandidate(spec, control.candidate))
@@ -161,7 +163,7 @@ async def run_adversary(
                         Role.USER,
                         config.policy.prompt("adversary.user").render(
                             task=task_manifest(spec.task),
-                            proposal=render(workpiece.proposal),
+                            proposal=NO_PROPOSAL if workpiece.proposal is None else render(workpiece.proposal),
                             name=name,
                             workdir=config.policy.setting("author.workdir", str),
                         ),

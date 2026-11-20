@@ -12,7 +12,7 @@ import os
 import subprocess
 import sys
 import traceback
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
@@ -22,6 +22,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import prefix_join
 from rigging.log_setup import configure_logging
 from rigging.secrets import get_secret, list_secret_names, require_secret
+from taskcompendium.models import TaskSpec
 
 from taskforge.checkpoint import CheckpointSink
 from taskforge.coordinator import reasons, run_workpiece
@@ -30,7 +31,8 @@ from taskforge.effects.issues import Hold, LogFailure, Restart, Transient
 from taskforge.effects.log import EventLog, JsonlSink, Status, fold
 from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal
 from taskforge.model.review import Incomplete
-from taskforge.model.workpiece import WORKPIECE, Terminal, Workpiece
+from taskforge.model.stage import Stage
+from taskforge.model.workpiece import WORKPIECE, Submission, Terminal, Workpiece
 from taskforge.policy import Policy, load_policy, parse_overlay
 from taskforge.report import report
 from taskforge.stages.classify import replayable_grade
@@ -43,9 +45,16 @@ class SampleEntry:
     proposal: str
 
 
+PROPOSAL_SUFFIX = ".proposal.json"
+TASK_SUFFIX = ".task.json"
+"""A ``TaskSpec`` JSON written by another source, repaired without a proposal."""
+SOURCE_TASK_NOTES = "source task"
+
+
 def proposal_key(path: str) -> PurePosixPath:
     file = PurePosixPath(urlsplit(path).path)
-    return PurePosixPath(file.parent.name, file.name.removesuffix(".proposal.json").removeprefix("slot-"))
+    name = file.name.removesuffix(PROPOSAL_SUFFIX).removesuffix(TASK_SUFFIX).removeprefix("slot-")
+    return PurePosixPath(file.parent.name, name)
 
 
 def proposal_bucket(path: str, buckets: int) -> int:
@@ -54,7 +63,7 @@ def proposal_bucket(path: str, buckets: int) -> int:
 
 def inputs(source: str, ranks: tuple[int, ...] = ()) -> tuple[str, ...]:
     fs, prefix = url_to_fs(source)
-    if source.endswith(".proposal.json"):
+    if source.endswith((PROPOSAL_SUFFIX, TASK_SUFFIX)):
         paths = (source,)
     elif source.endswith(".json"):
         with open_url(source, "rt") as stream:
@@ -66,11 +75,14 @@ def inputs(source: str, ranks: tuple[int, ...] = ()) -> tuple[str, ...]:
         with open_url(source, "rt") as stream:
             paths = tuple(line.strip() for line in stream if line.strip())
     else:
-        paths = tuple(fs.unstrip_protocol(path) for path in sorted(fs.glob(prefix_join(prefix, "*.proposal.json"))))
+        found = (
+            path for suffix in (PROPOSAL_SUFFIX, TASK_SUFFIX) for path in fs.glob(prefix_join(prefix, f"*{suffix}"))
+        )
+        paths = tuple(fs.unstrip_protocol(path) for path in sorted(found))
     if ranks and not source.endswith("sample.json"):
         raise ValueError("Rank selection requires sample.json")
     if not paths:
-        raise ValueError(f"No proposal files at {source}")
+        raise ValueError(f"No proposal or task files at {source}")
     if len({proposal_key(path) for path in paths}) != len(paths):
         raise ValueError("Proposal inputs have duplicate output identities")
     return paths
@@ -125,12 +137,31 @@ def eligible(proposal: TaskProposal, policy: Policy) -> bool:
     return True
 
 
+def seed(path: str, policy: Policy) -> Workpiece | None:
+    """The new workpiece for an input file, or ``None`` when the policy skips its proposal.
+
+    A ``TASK_SUFFIX`` file holds a task from another source: the workpiece starts from it as the
+    submission, with no proposal and no controls.
+    """
+    with open_url(path, "rt") as source:
+        text = source.read()
+    if path.endswith(TASK_SUFFIX):
+        task = TaskSpec.model_validate_json(text)
+        return Workpiece(task.id, submission=Submission(task, (), SOURCE_TASK_NOTES))
+    proposal = TASK_PROPOSAL.validate_json(text)
+    return Workpiece(proposal.header.id, proposal) if eligible(proposal, policy) else None
+
+
+def first_stage(seed: Workpiece) -> Stage:
+    """Validate a task from another source before any author revises it; author a proposal."""
+    return Stage.AUTHOR if seed.proposal is not None else Stage.VALIDATE
+
+
 async def one(args: argparse.Namespace) -> None:
     configure_coreweave_s3()
-    with open_url(args.proposals, "rt") as source:
-        proposal = TASK_PROPOSAL.validate_json(source.read())
     _, policy = run_policy(args.policy)
-    if not eligible(proposal, policy):
+    initial = seed(args.proposals, policy)
+    if initial is None:
         return
     identity = proposal_key(args.proposals)
     if identity.is_absolute() or ".." in identity.parts:
@@ -139,7 +170,7 @@ async def one(args: argparse.Namespace) -> None:
     workdir.mkdir(parents=True, exist_ok=True)
     destination = prefix_join(args.output, str(identity))
     sink = JsonlSink(str(workdir / "events.jsonl"))
-    wp = Workpiece(proposal.header.id, proposal)
+    wp = initial
     log: EventLog | None = None
     skipped = False
     try:
@@ -160,18 +191,19 @@ async def one(args: argparse.Namespace) -> None:
                 policy.setting("provider.pool", str),
             )
             async with runtime(policy, args.arm, source, get_secret("PARALLEL_API_KEY") or "") as (config, resources):
-                wp = await run_workpiece(proposal, config, resources, log, install=install)
+                config = replace(config, initial_stage=first_stage(initial))
+                wp = await run_workpiece(initial, config, resources, log, install=install)
     except* (Hold, Restart, Transient, LogFailure) as error:
         wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete(reasons(error))))
         if log is not None:
             await log.record(StageCompleted(None, "", "Held", wp.round, Terminal.HELD))
-        logging.warning("Taskforge workpiece %s held: %s", proposal.header.id, reasons(error))
+        logging.warning("Taskforge workpiece %s held: %s", initial.id, reasons(error))
     except* Exception as error:
         detail = traceback.format_exc()
         wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete((f"bug: {detail}",))))
         if log is not None:
             await log.record(StageCompleted(None, "", "bug", wp.round, Terminal.HELD))
-        logging.exception("Taskforge workpiece %s failed", proposal.header.id)
+        logging.exception("Taskforge workpiece %s failed", initial.id)
         if len(error.exceptions) == 1:
             raise error.exceptions[0] from None
         raise
@@ -207,9 +239,7 @@ async def run(args: argparse.Namespace) -> None:
                 if path is None:
                     exhausted = True
                     break
-                with open_url(path, "rt") as source:
-                    proposal = TASK_PROPOSAL.validate_json(source.read())
-                if not eligible(proposal, policy):
+                if seed(path, policy) is None:
                     skipped += 1
                     continue
                 command = [sys.executable, "-u", "-m", "taskforge.driver", "one", "--proposals", path]
@@ -249,7 +279,9 @@ def main() -> None:
     summary.add_argument("--since-hours", type=float)
     for name in ("run", "one"):
         command = commands.add_parser(name)
-        command.add_argument("--proposals", required=True)
+        command.add_argument(
+            "--proposals", required=True, help=f"{PROPOSAL_SUFFIX} proposals and {TASK_SUFFIX} source tasks"
+        )
         command.add_argument("--arm", choices=("S", "T"), required=True)
         command.add_argument("--output", required=True)
         command.add_argument("--policy", required=True)

@@ -47,7 +47,7 @@ class Terminal(StrEnum):
 
 class WorkpieceChanges(TypedDict, total=False):
     id: str
-    proposal: TaskProposal
+    proposal: TaskProposal | None
     round: int
     session: Conversation | None
     submission: Submission | None
@@ -60,8 +60,14 @@ class WorkpieceChanges(TypedDict, total=False):
 
 @dataclass(frozen=True, slots=True)
 class Workpiece:
+    """A task in progress, started from a proposal or from an existing task in ``submission``.
+
+    A workpiece without a proposal repairs a task another source wrote: it starts at validation, and
+    review's findings open its author sessions.
+    """
+
     id: str
-    proposal: TaskProposal
+    proposal: TaskProposal | None = None
     round: int = 0
     session: Conversation | None = None
     submission: Submission | None = None
@@ -70,6 +76,10 @@ class Workpiece:
     terminal: Terminal | None = None
     too_easy_baseline: Submission | None = None
     accepted_with: BandOutcome | None = None
+
+    def __post_init__(self) -> None:
+        if self.proposal is None and self.submission is None:
+            raise ValueError(f"Workpiece {self.id} needs a proposal or an existing task")
 
     def with_(self, **changes: Unpack[WorkpieceChanges]) -> "Workpiece":
         return replace(self, **changes)

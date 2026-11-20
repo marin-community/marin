@@ -16,7 +16,7 @@ from taskforge.lowering import host_requirements, lowering_settings, requirement
 from taskforge.model.controls import CONTROL, CONTROLS
 from taskforge.model.llm import Message, Role
 from taskforge.model.proposal import render
-from taskforge.model.review import VALIDATION_RESULT
+from taskforge.model.review import VALIDATION_RESULT, Modify
 from taskforge.model.stage import Exit
 from taskforge.model.workpiece import Conversation, Workpiece
 from taskforge.policy import GRADER_BASE_IMAGE, Policy
@@ -88,6 +88,20 @@ def install_env(ctx: Context, env: Env) -> None:
     ctx.handle(WriteFiles, partial(write_files, notify=ctx.emit), uses=(env,))
 
 
+def opening_prompt(workpiece: Workpiece, policy: Policy) -> str:
+    """The first user message of a new author session: the proposal to build, or review's findings to repair.
+
+    A workpiece without a proposal holds a task from another source and reaches the author only through a
+    review ``Modify``.
+    """
+    if workpiece.proposal is not None:
+        return policy.prompt("author.user").render(proposal=render(workpiece.proposal))
+    decision = workpiece.decisions[-1] if workpiece.decisions else None
+    if not isinstance(decision, Modify):
+        raise ValueError(f"Workpiece {workpiece.id} has no proposal, so its author session needs review's findings")
+    return policy.prompt("author.repair").render(kind="review", detail="\n".join(decision.findings))
+
+
 async def author(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, resources: Resources) -> Exit:
     policy = config.policy
     workdir = PurePosixPath(policy.setting("author.workdir", str))
@@ -118,19 +132,17 @@ async def author(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, re
                         (workdir / "controls.json", CONTROLS.dump_json(submission.controls)),
                     )
                 )
-            proposal = render(workpiece.proposal)
             writes.extend(
                 (validation_path(str(workdir), index), VALIDATION_RESULT.dump_json(evidence))
                 for index, evidence in enumerate(workpiece.evidence)
             )
-            writes.append((workdir / "proposal.json", proposal.encode()))
+            proposal = None if workpiece.proposal is None else render(workpiece.proposal)
+            if proposal is not None:
+                writes.append((workdir / "proposal.json", proposal.encode()))
             await ctx.emit(WriteFiles(tuple(writes)))
             tools = config.tools["author"]
             session = workpiece.session or Conversation(
-                (
-                    Message(Role.SYSTEM, system_prompt(policy)),
-                    Message(Role.USER, policy.prompt("author.user").render(proposal=proposal)),
-                ),
+                (Message(Role.SYSTEM, system_prompt(policy)), Message(Role.USER, opening_prompt(workpiece, policy))),
                 tuple(tool.schema for tool in tools.values()),
             )
             return await config.author.run(ctx, session, resources.inference_for("author"), tools)

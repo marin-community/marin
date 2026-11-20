@@ -12,7 +12,6 @@ from taskforge.effects.events import StageCompleted
 from taskforge.effects.issues import Hold, Restart, Transient, describe_exception
 from taskforge.effects.log import EventLog
 from taskforge.model.content_hash import digest
-from taskforge.model.proposal import TaskProposal
 from taskforge.model.review import Incomplete
 from taskforge.model.stage import Exit, Stage
 from taskforge.model.workpiece import Terminal, Workpiece
@@ -39,15 +38,16 @@ STAGE_REPLAY_ATTEMPTS = 3
 
 
 async def run_workpiece(
-    proposal: TaskProposal,
+    seed: Workpiece,
     config: TaskforgeConfig,
     resources: Resources,
     log: EventLog,
     *,
     install: Callable[[Context, Resources], None],
 ) -> Workpiece:
+    """Run ``seed``, a new workpiece holding a proposal or an existing task, from ``config.initial_stage``."""
     ctx = Context(log=log)
-    wp = Workpiece(proposal.header.id, proposal)
+    wp = seed
     stage = config.initial_stage
     config_digest = digest(config.policy)
     interrupted = False

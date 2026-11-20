@@ -38,10 +38,21 @@ Both arms run the same stages; they differ in one transition table.
   result is written to `.validation/<n>.json` in the workspace. Submit then goes through review
   as in S.
 
-On every author entry, including revision rounds, the workspace holds the proposal, the previous
+On every author entry, including revision rounds, the workspace holds the proposal (if there is one), the previous
 submission's `task.json`, `controls.json` and resources, and any validation results. A caller can add
 its own files, such as reference data, with `TaskforgeConfig.workspace` (a `WorkspaceHydration`; the
 default adds none). Only the author sees them; a file reaches solvers or graders only through the task.
+
+## Repairing tasks from another source
+
+A workpiece starts from a proposal or from an existing `TaskSpec` written elsewhere (the conversion
+into a `TaskSpec` happens outside Taskforge). A source task has no proposal and no controls. It
+starts at **validate** rather than author, so its first round measures the task as the source wrote
+it. Review then decides as for any task, and a source task without controls always gets *modify*,
+since controls are how review checks the grader. On *modify*, a new author session opens with the
+`author.repair` prompt and the review findings. The workspace is seeded with the task, its
+resources and the validation evidence; there is no `proposal.json`. Later rounds run as in the
+chosen arm, with the same budgets, band and solver trials as generation.
 
 ## Running on the cluster
 
@@ -71,6 +82,10 @@ command line; the driver reads them from Iris secret files.
   proposals, ranked; wave 1 is ranks 0–31). Each entry points at a proposal JSON whose header
   carries `environment` (`reasoning`, `shellsim`, `container`). The driver skips environments not
   in `proposals.environments` (default: reasoning and shellsim) and prints `SKIP <id>: environment=container`.
+- **Source tasks**: a `*.task.json` file holding a `TaskSpec` JSON object, in place of a proposal
+  file. `--proposals` accepts either kind of file, as well as a manifest or a prefix that lists them. A source task
+  keeps its file name, without the suffix, as its output identity, and the proposal filters
+  (`proposals.environments`, `proposals.verifications`) do not apply to it.
 - **Policy overlay**: a JSON object of `key: value` pairs layered over
   `src/taskforge/policy/defaults/policy.json`, stored on S3. The pilots use
   `{"adversary.roster": ["adversary"]}` because the default roster is empty.

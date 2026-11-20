@@ -66,12 +66,18 @@ def decided(wp: Workpiece, result: Decided, *, budget: Budget, policy: Policy) -
         case Modify(findings):
             previous = wp.session
             if previous is None:
-                raise ValueError("Cannot revise without an author session")
-            system = tuple(message for message in previous.messages if message.role == "system")
-            prompt = policy.prompt("author.revision").render(kind="review", detail="\n".join(findings))
+                if wp.proposal is not None:
+                    raise ValueError("Cannot revise without an author session")
+                # A task from another source has had no author yet; the author stage opens one from these findings.
+                session = None
+            else:
+                system = tuple(message for message in previous.messages if message.role == "system")
+                key = "author.revision" if wp.proposal is not None else "author.repair"
+                prompt = policy.prompt(key).render(kind="review", detail="\n".join(findings))
+                session = Conversation((*system, Message(Role.USER, prompt)), previous.tool_schemas)
             return wp.with_(
                 round=wp.round + 1,
-                session=Conversation((*system, Message(Role.USER, prompt)), previous.tool_schemas),
+                session=session,
                 too_easy_baseline=(
                     wp.submission if decision.placement is BandOutcome.TOO_EASY else wp.too_easy_baseline
                 ),

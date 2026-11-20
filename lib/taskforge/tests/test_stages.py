@@ -128,13 +128,14 @@ async def test_author_hydrates_revision_and_preserves_saved_session(workpiece: W
         == submission.controls
     )
     assert isinstance(bundle.envs, Environments)
+    assert workpiece.proposal is not None
     assert bundle.envs.created[0].files[PurePosixPath("/workspace/proposal.json")] == render(workpiece.proposal).encode()
     assert bundle.envs.created[0].closed
 
 
 async def test_author_workspace_holds_caller_files_on_fresh_and_revision_entries(workpiece: Workpiece) -> None:
     def proposal_id(entry: Workpiece, policy: Policy) -> tuple[TaskResource, ...]:
-        return (inline_resource("workspace/reference/id.txt", entry.proposal.header.id.encode()),)
+        return (inline_resource("workspace/reference/id.txt", entry.id.encode()),)
 
     hydration = WorkspaceHydration((inline_resource("workspace/reference/static.txt", b"static"),), proposal_id)
     setup = replace(config(), workspace=hydration)
@@ -146,7 +147,7 @@ async def test_author_workspace_holds_caller_files_on_fresh_and_revision_entries
         assert isinstance(bundle.envs, Environments)
         files = bundle.envs.created[0].files
         assert files[PurePosixPath("/workspace/reference/static.txt")] == b"static"
-        assert files[PurePosixPath("/workspace/reference/id.txt")] == workpiece.proposal.header.id.encode()
+        assert files[PurePosixPath("/workspace/reference/id.txt")] == workpiece.id.encode()
 
 
 async def test_author_new_session_and_failed_harness_close_environment(workpiece: Workpiece) -> None:
@@ -159,6 +160,7 @@ async def test_author_new_session_and_failed_harness_close_environment(workpiece
     await ctx.drain()
     assert harness.session is not None
     assert harness.client is author_client
+    assert workpiece.proposal is not None
     assert harness.session.messages[-1].content == config(harness).policy.prompt("author.user").render(
         proposal=render(workpiece.proposal)
     )
