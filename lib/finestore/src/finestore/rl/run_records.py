@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 from rigging.filesystem.storage_path import prefix_join
 
 from finestore.layout import OnConflict
@@ -42,8 +42,8 @@ class LaunchState(StrEnum):
 class ExportedPolicy(BaseModel):
     policy_export_uri: str
     global_step: int
-    tokenizer_uri: str
-    tokenizer_revision: str
+    tokenizer_uri: str | None
+    tokenizer_revision: str | None
     checkpoint_root: str
     terminal_manifest_uri: str
 
@@ -144,12 +144,21 @@ class EvaluationTaskRow(BaseModel):
     task_id: str
     data_source: str | None
     strata: TaskStrata
-    agentic: bool | None
+    task_digest: str | None = None
     score: float | None
     outcome: str
     error_type: str | None
     answers: list[EvaluationAnswerRow]
     model: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def read_legacy_agentic(cls, value: Any) -> Any:
+        if isinstance(value, dict) and isinstance(value.get("agentic"), bool):
+            strata = value.get("strata", {})
+            if isinstance(strata, dict) and strata.get("agentic") is None:
+                return {**value, "strata": {**strata, "agentic": value["agentic"]}}
+        return value
 
 
 _TABLES: dict[str, tuple[type[BaseModel], tuple[str, ...]]] = {

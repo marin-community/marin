@@ -28,11 +28,6 @@ def load_documents(source: Path, output: Path) -> None:
             path.write_text(yaml, encoding="utf-8")
             try:
                 config = launch_config.load_launch_config(path)
-                if (
-                    case == "inventory/train"
-                    and config.runtime.entrypoint != RL_ENTRYPOINTS[RLEntrypoint.TASKCOMPENDIUM]
-                ):
-                    raise ValueError("inventory training must resolve to the taskcompendium entrypoint")
                 if case == "native/generation":
                     assert config.runtime.entrypoint == RL_ENTRYPOINTS[RLEntrypoint.GENERATE]
                     assert callable(import_module(config.runtime.entrypoint).run)

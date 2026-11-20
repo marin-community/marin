@@ -18,7 +18,7 @@ from iris.cluster.types import JobName
 from omegaconf import OmegaConf
 from safetensors.numpy import save
 
-from cloud.iris import hf_model_cache, task_runtime
+from cloud.iris import export_hf_checkpoint, hf_model_cache, task_runtime
 from cloud.iris.artifacts import CHECKPOINT_MARKER_FILENAME
 from cloud.iris.task_runtime import prepare_draft_model
 from marinskyrl.speculative_decoding import SpeculatorModelConfig
@@ -29,7 +29,8 @@ from cloud.iris.tests.model_snapshot_fixtures import memory_model_snapshot
 from cloud.iris.iris_backend import supervise_iris_job
 from iris.resources.state import JobState
 from rigging.timing import Timestamp
-from marinskyrl.checkpoint_paths import policy_export_path
+from marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME, HF_EXPORT_REQUEST_FILENAME, policy_export_path
+from skyrl_train.trainer import RayPPOTrainer
 
 
 @dataclass
@@ -170,21 +171,26 @@ class LocalLaunchBackend:
 
 
 @pytest.mark.parametrize(
-    "export_hf,outcome",
+    "export_hf,outcome,own_tokenizer",
     [
-        (None, LaunchOutcome("/user/training", "succeeded", 0)),
-        (True, LaunchOutcome("/user/training", "succeeded", 0)),
-        (None, LaunchOutcome("/user/training", "failed", 1)),
+        (None, LaunchOutcome("/user/training", "succeeded", 0), False),
+        (True, LaunchOutcome("/user/training", "succeeded", 0), False),
+        (True, LaunchOutcome("/user/training", "succeeded", 0), True),
+        (None, LaunchOutcome("/user/training", "failed", 1), False),
     ],
-    ids=["default-native", "explicit-hf", "failed-native"],
+    ids=["default-native", "explicit-hf", "embedded-tokenizer-hf", "failed-native"],
 )
-def test_launch_persists_attempt_result_and_exports_only_on_opt_in(tmp_path: Path, export_hf: bool | None, outcome):
+def test_launch_persists_attempt_result_and_exports_only_on_opt_in(
+    tmp_path: Path, export_hf: bool | None, outcome, own_tokenizer: bool
+):
     path = _config_path(tmp_path)
     config = yaml.safe_load(path.read_text())
     if export_hf is None:
         config["run"].pop("export_hf")
     else:
         config["run"]["export_hf"] = export_hf
+    if own_tokenizer:
+        config["inputs"]["model"].update(tokenizer_uri=None, tokenizer_revision=None)
     config["skyrl"]["trainer"].update(max_steps=3, eval_interval=3, ckpt_interval=3)
     path.write_text(yaml.safe_dump(config))
     backend = LocalLaunchBackend(outcome=outcome)
@@ -213,10 +219,55 @@ def test_launch_persists_attempt_result_and_exports_only_on_opt_in(tmp_path: Pat
         assert backend.export_jobs == [str(tmp_path / "exports/global_step_3/policy")]
         assert result.model is not None and result.model.global_step == 3
         assert terminal["result"]["model"]["policy_export_uri"] == backend.export_jobs[0]
+        for key in ("tokenizer_uri", "tokenizer_revision"):
+            assert terminal["result"]["model"][key] == config["inputs"]["model"][key]
     else:
         assert backend.export_jobs == []
         assert result.model is None and terminal["result"]["model"] is None
         assert not (tmp_path / "exports/global_step_3").exists()
+
+
+@pytest.mark.parametrize("initializer_wins", [True, False], ids=["step-zero", "none-eligible"])
+def test_launch_publishes_the_selected_best_policy(tmp_path: Path, initializer_wins: bool):
+    path = _config_path(tmp_path)
+    config = yaml.safe_load(path.read_text())
+    initializer_uri = config["inputs"]["model"]["uri"]
+    config["skyrl"]["trainer"].update(max_steps=3, eval_interval=3, ckpt_interval=3, hf_export_checkpoint="best")
+    path.write_text(yaml.safe_dump(config))
+    checkpoint_root = tmp_path / "checkpoints"
+    checkpoint = checkpoint_root / "global_step_3"
+
+    class BestCheckpointBackend(LocalLaunchBackend):
+        def launch(self, config_path: Path) -> LaunchOutcome:
+            outcome = super().launch(config_path)
+            checkpoint.mkdir()
+            (checkpoint / "trainer_state.pt").write_bytes(b"complete")
+            if initializer_wins:
+                (checkpoint_root / BEST_CHECKPOINT_FILENAME).write_text(
+                    json.dumps({"step": 0, "model_format": "hf", "model_uri": initializer_uri})
+                )
+            trainer = RayPPOTrainer.__new__(RayPPOTrainer)
+            trainer.cfg = OmegaConf.load(config_path).skyrl
+            trainer.global_step = 3
+            trainer.all_timings = {}
+            trainer.handle_hf_export()
+            return outcome
+
+        def export_terminal_policy(self, config_path: Path) -> None:
+            export_hf_checkpoint.export_terminal_policy(config_path)
+
+    result = execute_launch(path, backend=BestCheckpointBackend())
+
+    assert result.state is LaunchState.SUCCEEDED, result.failure
+    terminal_model = json.loads((tmp_path / "terminal.json").read_text())["result"]["model"]
+    if initializer_wins:
+        assert result.model is not None and result.model.global_step == 0
+        assert (terminal_model["global_step"], terminal_model["policy_export_uri"]) == (0, initializer_uri)
+        assert terminal_model["tokenizer_uri"] == config["inputs"]["model"]["tokenizer_uri"]
+    else:
+        assert terminal_model is result.model is None
+    assert not list(checkpoint_root.glob(f"global_step_*/{HF_EXPORT_REQUEST_FILENAME}"))
+    assert not list((tmp_path / "exports").glob("global_step_*"))
 
 
 def _hub_config_path(tmp_path: Path, *, submission: str = "detach") -> Path:
@@ -351,7 +402,7 @@ def test_hub_models_are_not_downloaded_on_a_local_launcher(tmp_path, monkeypatch
         set_job_info(previous)
 
 
-@pytest.mark.parametrize("tokenizer_uri", ["org/policy", ""])
+@pytest.mark.parametrize("tokenizer_uri", ["org/policy", "", None])
 def test_policy_without_a_separate_tokenizer_rejects_model_only_mirrors(tmp_path, monkeypatch, tokenizer_uri):
     path = _hub_config_path(tmp_path)
     config = yaml.safe_load(path.read_text())

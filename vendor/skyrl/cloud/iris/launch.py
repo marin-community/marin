@@ -31,7 +31,7 @@ from cloud.iris.artifacts import terminal_checkpoint_step, write_json
 from cloud.iris.launch_config import RunMode, SubmissionMode, hugging_face_models, load_launch_config
 from cloud.iris.hf_model_cache import UnsupportedHuggingFaceSnapshot, ensure_hugging_face_model_cache
 from marinskyrl.distillation import TeacherSource, compile_distillation_plan_from_config
-from marinskyrl.checkpoint_paths import policy_export_path, selected_export_step
+from marinskyrl.checkpoint_paths import policy_export_path, selected_export_checkpoint
 from marinskyrl.hf_model import HuggingFaceModelCache, validate_portable_hf_model_files
 from marinskyrl.packed_tasks import select_task_references
 from marinskyrl.speculative_decoding import SpeculatorModelConfig, SpeculatorModelSourceKind
@@ -163,20 +163,24 @@ def _prepare_model_caches(config: DictConfig) -> None:
     config.inputs.hugging_face_models = caches
 
 
-def _exported_policy(config: DictConfig) -> ExportedPolicy:
+def _exported_policy(config: DictConfig) -> ExportedPolicy | None:
     checkpoint_root = str(config.artifacts.checkpoint_root)
-    global_step = selected_export_step(
+    selected = selected_export_checkpoint(
         checkpoint_root, str(config.skyrl.trainer.hf_export_checkpoint), terminal_checkpoint_step(checkpoint_root)
     )
-    policy_uri = policy_export_path(str(config.artifacts.export_root), global_step)
-    root = StoragePath(policy_uri)
-    names = {(directory / name).relative_to(root) for directory, _, files in root.walk() for name in files}
-    validate_portable_hf_model_files(names, policy_uri)
+    if selected is None:
+        return None
+    policy_uri = selected.initializer_uri
+    if policy_uri is None:
+        policy_uri = policy_export_path(str(config.artifacts.export_root), selected.step)
+        root = StoragePath(policy_uri)
+        names = {(directory / name).relative_to(root) for directory, _, files in root.walk() for name in files}
+        validate_portable_hf_model_files(names, policy_uri)
     return ExportedPolicy(
         policy_export_uri=policy_uri,
-        global_step=global_step,
-        tokenizer_uri=str(config.inputs.model.tokenizer_uri),
-        tokenizer_revision=str(config.inputs.model.tokenizer_revision),
+        global_step=selected.step,
+        tokenizer_uri=config.inputs.model.tokenizer_uri,
+        tokenizer_revision=config.inputs.model.tokenizer_revision,
         checkpoint_root=checkpoint_root,
         terminal_manifest_uri=str(config.artifacts.terminal_manifest_uri),
     )
@@ -230,7 +234,9 @@ def _write_attempt_receipt(config: DictConfig, result: LaunchResult) -> LaunchRe
     return receipt
 
 
-def execute_launch(config_path: Path, *, backend: LaunchBackend | None = None) -> LaunchResult:
+def execute_launch(
+    config_path: Path, *, backend: LaunchBackend | None = None, forward_env: tuple[str, ...] = ()
+) -> LaunchResult:
     """Execute the lifecycle declared by one resolved launch config."""
     config = _prepare_config(load_launch_config(config_path))
     previous_path = StoragePath(str(config.artifacts.resolved_config_uri))
@@ -248,7 +254,7 @@ def execute_launch(config_path: Path, *, backend: LaunchBackend | None = None) -
         # outside the CPU-only config validation and launcher import boundary.
         from cloud.iris.iris_backend import IrisBackend  # noqa: PLC0415
 
-        active_backend: LaunchBackend = IrisBackend()
+        active_backend: LaunchBackend = IrisBackend(forward_env=forward_env)
     else:
         active_backend = backend
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", encoding="utf-8") as resolved_file:
@@ -317,13 +323,14 @@ def create_parser() -> argparse.ArgumentParser:
     iris_commands = iris.add_subparsers(dest="action", required=True)
     launch = iris_commands.add_parser("launch")
     launch.add_argument("--config", required=True, type=Path)
+    launch.add_argument("--forward-env", action="append", default=[], metavar="NAME")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = create_parser().parse_args(argv)
     with contextlib.redirect_stdout(sys.stderr):
-        result = execute_launch(args.config)
+        result = execute_launch(args.config, forward_env=tuple(args.forward_env))
     json.dump(result.model_dump(mode="json"), sys.stdout, sort_keys=True)
     sys.stdout.write("\n")
     return 0 if result.state in {LaunchState.PREPARED, LaunchState.SUBMITTED, LaunchState.SUCCEEDED} else 1

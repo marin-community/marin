@@ -74,7 +74,7 @@ from skyrl_train.closure_training import (
 )
 from skyrl_train.ftpo import select_ftpo_candidates
 from skyrl_train.distillation_adapters import collate_student_selected_rollout
-from skyrl_train.trajectory_runners.trajectory_reward_shaping import parse_trajectory_reward_shaping_config
+from skyrl_train.config.reward_shaping import parse_trajectory_reward_shaping_config
 from skyrl_train.distributed.dispatch import (
     ActorInfo,
     MeshRank,
@@ -101,7 +101,7 @@ from marinskyrl.checkpoint_paths import (
     BEST_CHECKPOINT_FILENAME,
     GLOBAL_STEP_PREFIX,
     LATEST_CHECKPOINT_FILE,
-    selected_export_step,
+    selected_export_checkpoint,
 )
 from marinskyrl.process_diagnostics import write_exception_receipt
 from marinskyrl.resource_locator import is_cloud_uri, join_resource_path
@@ -116,12 +116,8 @@ from skyrl_train.utils.trainer_utils import (
     ResumeMode,
     build_eval_dataloader,
 )
-from skyrl_train.utils.utils import (
-    configure_ray_worker_logging,
-    moe_router_replay_requested,
-    policy_per_gpu_bundles_enabled,
-    policy_force_cvd_mask_enabled,
-)
+from skyrl_train.utils.utils import configure_ray_worker_logging, policy_per_gpu_bundles_enabled, policy_force_cvd_mask_enabled
+from skyrl_train.config.driver_validation import moe_router_replay_requested
 
 from skyrl_train.config.objective_spec import rollout_logprobs_required
 from skyrl_train.utils.algorithm_registry import PolicyLossRegistry
@@ -3005,9 +3001,12 @@ class RayPPOTrainer:
             self._handle_hf_export()
 
     def _handle_hf_export(self) -> None:
-        export_step = selected_export_step(
+        selected = selected_export_checkpoint(
             self.cfg.trainer.ckpt_path, self.cfg.trainer.hf_export_checkpoint, self.global_step
         )
+        if selected is None or selected.initializer_uri is not None:
+            return
+        export_step = selected.step
         checkpoint_path = join_resource_path(self.cfg.trainer.ckpt_path, f"{GLOBAL_STEP_PREFIX}{export_step}")
         trainer_state_path = join_resource_path(checkpoint_path, TRAINER_STATE_FILENAME)
         if not io.exists(trainer_state_path):

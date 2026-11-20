@@ -15,10 +15,11 @@ from unittest.mock import MagicMock
 import click
 import pytest
 from click.testing import CliRunner
-from iris.client.client import IrisClient
+from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
+from iris.cluster.client.job_info import JobInfo, set_job_info
 from iris.cluster.types import JobName
 from marin.execution.artifact import Artifact
-from marin.execution.lazy import ArtifactStep
+from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.rl.cli import _coordinator_request, rl_build_options
 from marin.rl.skyrl import IrisSkyRLExecution
 from rigging.timing import Duration
@@ -51,12 +52,11 @@ def _execution() -> IrisSkyRLExecution:
     )
 
 
-def test_coordinator_request_replays_the_experiment_main() -> None:
+def test_coordinator_request_replays_the_experiment_main(tmp_path, monkeypatch) -> None:
     cluster_config, request = _coordinator_request(
         [_step(_execution())],
         "experiments.test_rl",
-        ("--version", "2026.09.21", "--run"),
-        3,
+        ("--version", "2026.09.21", "--run", "--max-concurrent", "3"),
         Path("/workspace/marin"),
         {"DAYTONA_API_KEY": "secret"},
     )
@@ -80,10 +80,44 @@ def test_coordinator_request_replays_the_experiment_main() -> None:
         "3",
     ]
 
+    def native(output):
+        Path(output).mkdir(parents=True, exist_ok=True)
+        Path(output, "result.txt").write_text("completed")
+        return Artifact(path=output)
+
+    step = apply("tests/direct-in-job", native, version="2026.09.21", output=OUT)
+    step = dataclasses.replace(step, runtime_args={"skyrl_execution": _execution()})
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    monkeypatch.delenv("MARIN_RL_COORDINATOR_GRAPH", raising=False)
+    monkeypatch.setattr(
+        "marin.rl.cli.open_iris_client", lambda **kwargs: pytest.fail("Direct job submitted a coordinator")
+    )
+
+    @click.command()
+    @rl_build_options
+    def direct():
+        return [step]
+
+    info = JobInfo(task_id=JobName.from_wire("/test-user/manual-rl/0"))
+    set_job_info(info)
+    try:
+        with iris_ctx_scope(IrisContext.from_job_info(info)):
+            result = CliRunner().invoke(direct, ["--version", "2026.09.21", "--run"])
+        assert result.exit_code == 0, (result.output, result.exception)
+        assert Path(step.path(str(tmp_path)), "result.txt").read_text() == "completed"
+    finally:
+        set_job_info(None)
+
 
 def test_coordinator_request_requires_a_skyrl_step() -> None:
     with pytest.raises(ValueError, match="did not construct a SkyRL artifact step"):
-        _coordinator_request([_step()], "experiments.test_rl", ("--run",), 8, Path("/workspace/marin"), {})
+        _coordinator_request(
+            [_step()],
+            "experiments.test_rl",
+            ("--run",),
+            Path("/workspace/marin"),
+            {},
+        )
 
 
 @pytest.mark.parametrize("missing_name", [None, "JUDGE_KEY", "EVAL_KEY"])
@@ -149,8 +183,16 @@ def test_rl_entrypoint_can_spawn_workers(tmp_path: Path) -> None:
         textwrap.dedent(
             """\
         import multiprocessing
+        import sys
         import click
         from marin.rl.cli import rl_build_options
+        from experiments.post_training import rl
+
+        assert "experiments.post_training.snowball_rl" not in sys.modules
+        from experiments.post_training import snowball_rl
+
+        assert "marin.processing.embeddings.harrier" not in sys.modules
+        assert "levanter" not in sys.modules
 
         @click.command()
         @rl_build_options

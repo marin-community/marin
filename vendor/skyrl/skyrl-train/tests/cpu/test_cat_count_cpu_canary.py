@@ -13,6 +13,7 @@ from multiprocessing.context import ForkServerContext
 from finestore.rl.run_records import read_attempts, read_evaluations
 from marinskyrl.environment_contract import RUN_MODEL_ENV
 import fsspec
+import pyarrow.parquet as pq
 import pytest
 import rolloutengine
 import skyrl_gym
@@ -516,6 +517,8 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
         }
         lowered = source_row_task(row, 0, source_name="cat-count", environment_configs=environment_configs)
         spec = lowered.task.model_copy(update={"id": identifier})
+        if n == 7:
+            spec = spec.model_copy(update={"tags": ("agentic",)})
         if n in (7, 1):
             spec = spec.model_copy(
                 update={
@@ -540,7 +543,7 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
     write_tasks(path, [*reversed(tasks), tasks[0], overlong.model_copy(update={"task": spec})])
     write_selection_panel(
         path.parent, [row.task for row in tasks] + [spec], "cat-count", "canary-1",
-        lambda task: {"family": "verifier" if task.id.endswith(("7", "1")) else "counts", "source": "cat-count"},
+        lambda task: {"family": "verifier" if task.id.endswith(("7", "1")) else "counts", "source": "cat-count", "agentic": task.id.endswith("7")},
     )
     cfg.data.val_data = [str(path)]
     cfg.generator.num_inference_engines = 2
@@ -601,6 +604,11 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
     task_rows = read_evaluations(str(root / "exports"), attempt_id=attempt_id, step=-1, evaluation="eval/")
     assert {row.task_id for row in task_rows} == expected.keys()
     assert {row.model for row in task_rows} == {"cat-count-model"}
+    panel_rows = pq.read_table(path.parent / "task_manifest.parquet").to_pylist()
+    assert {row.task_id: row.task_digest for row in task_rows} == {
+        value["task_id"]: value["task_digest"] for value in panel_rows if value["task_id"] in expected
+    }
+    assert {row.task_id for row in task_rows if row.strata.agentic} == {"stable-cat-count-7"}
     assert {row.task_id: len(row.answers) for row in task_rows} == {
         task_id: 4 if task_id.endswith("7") else 2 for task_id in expected
     }
