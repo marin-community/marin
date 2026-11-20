@@ -18,6 +18,7 @@ from experiments.evaluation.benchmarks.environments import (
     ALIAS_GRADER,
     BASIC_GRADER,
     INSTRUCTION_ENVIRONMENTS,
+    LIVECODEBENCH_GRADER,
     MATH_GRADER,
     MATH_JUDGE_GRADER,
     PYTHON_GRADER,
@@ -42,6 +43,7 @@ def declared_environments() -> dict[str, Environment]:
             MATH_GRADER,
             MATH_JUDGE_GRADER,
             PYTHON_GRADER,
+            LIVECODEBENCH_GRADER,
             *INSTRUCTION_ENVIRONMENTS,
         )
     }

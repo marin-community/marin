@@ -41,6 +41,7 @@ from marin.inference.backend import OPENAI_API_SUFFIX, ModelSpec
 from marin.inference.broker import InferenceBroker
 from marin.inference.chat_template_protocol import protocol_for_chat_template
 from marin.inference.config import (
+    VLLM_DATA_PARALLEL_SIZE_FLAGS,
     BrokerConfig,
     EffectiveServing,
     IrisConfig,
@@ -49,6 +50,7 @@ from marin.inference.config import (
     RemoteInferenceConfig,
     ServedModelConfig,
     VllmEngineConfig,
+    uses_native_vllm_group,
 )
 from marin.inference.dashboard_server import (
     BackgroundServer,
@@ -268,7 +270,8 @@ def _resolved_model(model: ServedModelConfig, iris: IrisConfig) -> tuple[ServedM
     num_chips = iris.worker_resources.device.chip_count()
     if isinstance(iris.worker_resources.device, TpuConfig):
         num_chips *= iris.worker_resources.device.vm_count()
-    tensor_parallel_size = model.tensor_parallel_size
+    geometry = iris.serving_geometry
+    tensor_parallel_size = geometry.tensor_parallel_size if geometry is not None else model.tensor_parallel_size
     if tensor_parallel_size is None and isinstance(iris.worker_resources.device, TpuConfig):
         if iris.worker_resources.device.vm_count() > 1:
             tensor_parallel_size = num_chips
@@ -321,6 +324,13 @@ def _prepared_local_inference(
 ) -> Iterator[LocalInferenceSession]:
     resolved_model, num_chips = _resolved_model(model, iris)
     resolved_engine = _resolved_engine(engine, iris)
+    geometry = iris.serving_geometry
+    if geometry is not None and isinstance(resolved_engine, VllmEngineConfig):
+        # Supply geometry defaults before native arguments so existing overrides win.
+        resolved_engine = replace(
+            resolved_engine,
+            extra_args=("--data-parallel-size", str(geometry.data_parallel_size), *resolved_engine.extra_args),
+        )
     with _staged_model(resolved_model) as prepared_model:
         with local_inference(prepared_model, resolved_engine, num_chips=num_chips) as session:
             yield session
@@ -328,7 +338,7 @@ def _prepared_local_inference(
 
 @contextlib.contextmanager
 def _staged_model(model: ServedModelConfig) -> Iterator[ServedModelConfig]:
-    """Stage remote weights on worker-local disk when the serving config requires it."""
+    """Yield a local copy for remote STAGE_LOCAL weights; delete it on exit. Otherwise keep the model unchanged."""
     source = StoragePath(model.weights)
     if model.object_store_load_mode is ObjectStoreLoadMode.STREAM or not source.is_remote:
         yield model
@@ -391,7 +401,7 @@ def _effective_serving(
     geometry = iris.serving_geometry
     parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
     parser.add_argument("--tensor-parallel-size", type=int, default=tensor_parallel_size)
-    parser.add_argument("--data-parallel-size", type=int, default=geometry.data_parallel_size if geometry else 1)
+    parser.add_argument(*VLLM_DATA_PARALLEL_SIZE_FLAGS, type=int, default=geometry.data_parallel_size if geometry else 1)
     parser.add_argument("--max-model-len", default=model.max_model_len)
     options, _ = parser.parse_known_args(engine.extra_args if isinstance(engine, VllmEngineConfig) else ())
     context = options.max_model_len
@@ -452,6 +462,7 @@ def _register_dashboard(
     backend_name: str,
     streaming: bool,
     chat_template_content: str | None,
+    worker_metrics_url: str | None = None,
 ) -> Iterator[None]:
     job_info = get_job_info()
     if job_info is None:
@@ -477,6 +488,7 @@ def _register_dashboard(
         model_id=model.endpoint.model,
         info=info,
         request_timeout_seconds=service.controller_proxy_timeout_seconds,
+        worker_metrics_url=worker_metrics_url,
         web_search=parallel_web_search_from_secret(),
         feedback_prefix=model_feedback_prefix(),
     )
@@ -525,9 +537,8 @@ def run_iris_service(service: IrisServiceConfig) -> None:
     if isinstance(device, TpuConfig) and device.vm_count() > 1:
         _run_tpu_service(service)
         return
-    geometry = service.iris.serving_geometry
-    if geometry is not None and geometry.task_count > 1:
-        _run_pipeline_service(service)
+    if uses_native_vllm_group(service.iris.serving_geometry):
+        _run_native_gpu_service(service)
         return
     broker = _broker_config(service.instances, service.broker)
     if broker is None:
@@ -540,6 +551,7 @@ def run_iris_service(service: IrisServiceConfig) -> None:
                 backend_name=local_session.backend_name,
                 streaming=True,
                 chat_template_content=local_session.chat_template_content,
+                worker_metrics_url=local_session.metrics_url,
             ):
                 _block_until_timeout(local_session.check_alive, service.timeout_hours)
         return
@@ -581,6 +593,7 @@ def _vllm_model_spec(model: ServedModelConfig, num_chips: int, tensor_parallel_s
 
 @contextlib.contextmanager
 def _ready_vllm_dashboard(service, model, environment, *, tensor_parallel_size, backend_name):
+    """Wait for vLLM and its router, then publish the serving endpoint."""
     environment.wait_until_ready()
     running_model = RunningModel(
         endpoint=OpenAIEndpoint(base_url=environment.server_url, model=model.model_id),
@@ -593,6 +606,7 @@ def _ready_vllm_dashboard(service, model, environment, *, tensor_parallel_size, 
         backend_name=backend_name,
         streaming=True,
         chat_template_content=_model_tool_chat_template(model),
+        worker_metrics_url=environment.metrics_url,
     ):
         yield
 
@@ -642,7 +656,7 @@ def _run_tpu_service(service: IrisServiceConfig) -> None:
         notify_iris_vllm_stopped(gang.identity)
 
 
-def _run_pipeline_service(service: IrisServiceConfig) -> None:
+def _run_native_gpu_service(service: IrisServiceConfig) -> None:
     from marin.inference.vllm_backend import VllmBackend  # noqa: PLC0415
 
     geometry = service.iris.serving_geometry
@@ -651,11 +665,7 @@ def _run_pipeline_service(service: IrisServiceConfig) -> None:
     model, num_chips = _resolved_model(service.model, service.iris)
     spec = _vllm_model_spec(model, num_chips, None)
     backend = VllmBackend(cast(VllmEngineConfig, _resolved_engine(service.engine, service.iris)))
-    with iris_vllm_launch(
-        pipeline_parallel_size=geometry.pipeline_parallel_size,
-        tensor_parallel_size=geometry.tensor_parallel_size,
-        data_parallel_size=geometry.data_parallel_size,
-    ) as launch:
+    with iris_vllm_launch(geometry) as launch:
         with backend.start(spec, extra_args=launch.extra_cli_args, subprocess_env=launch.subprocess_env) as environment:
             if launch.is_leader:
                 with iris_vllm_followers(launch):
@@ -735,26 +745,24 @@ def _wait_for_serving[T](jobs: tuple[JobHandle, ...], timeout_seconds: float, re
         time.sleep(_ENDPOINT_READY_POLL_SECONDS)
 
 
-@contextlib.contextmanager
-def remote_inference(
-    config: RemoteInferenceConfig,
-) -> Iterator[RemoteInferenceSession]:
-    """Start inference on Iris and optionally expose its link URL."""
+@dataclass(frozen=True)
+class PreparedInference:
+    """A remote inference config after ``prepare_inference``: its Hugging Face revisions are pinned."""
 
-    if get_job_info() is None:
-        raise RuntimeError("remote_inference must run inside an Iris job")
-    config = _prepared_inference_config(config)
-    resolved_broker = _broker_config(config.instances, config.broker)
-    if resolved_broker is None:
-        with _start_direct_inference(config) as session:
-            yield session
-        return
-    with _start_brokered_inference(config, resolved_broker) as session:
-        yield session
+    config: RemoteInferenceConfig
 
 
-def _prepared_inference_config(config: RemoteInferenceConfig) -> RemoteInferenceConfig:
-    """Mirror uncached Hugging Face weights from CPU jobs before any accelerator job starts."""
+def prepare_inference(config: RemoteInferenceConfig) -> PreparedInference:
+    """Pin Hugging Face revisions and mirror uncached weights from CPU jobs; submit no accelerator job.
+
+    The CPU mirror runs only where its cache matches the serving placement (see ``prepare_hf_models``).
+
+    Prepare every model a caller will serve before serving any of them, so accelerators are not
+    reserved while another model downloads.
+
+    Raises:
+        RemoteInferenceStartupError: with phase PREPARATION when a revision, submission or prepare job fails.
+    """
     environment = create_environment(
         setup_scripts=[default_setup_script(packages=["marin-core"])],
         env_vars=dict(config.iris.worker_environment.env_vars),
@@ -767,7 +775,33 @@ def _prepared_inference_config(config: RemoteInferenceConfig) -> RemoteInference
         )
     except ModelPreparationError as exc:
         raise RemoteInferenceStartupError(str(exc), jobs=exc.jobs, phase=InferenceStartupPhase.PREPARATION) from exc
-    return replace(config, model=model, engine=engine)
+    return PreparedInference(replace(config, model=model, engine=engine))
+
+
+@contextlib.contextmanager
+def serve_inference(prepared: PreparedInference) -> Iterator[RemoteInferenceSession]:
+    """Start accelerator inference on Iris for a prepared config and optionally expose its link URL."""
+    if get_job_info() is None:
+        raise RuntimeError("serve_inference must run inside an Iris job")
+    config = prepared.config
+    resolved_broker = _broker_config(config.instances, config.broker)
+    if resolved_broker is None:
+        with _start_direct_inference(config) as session:
+            yield session
+        return
+    with _start_brokered_inference(config, resolved_broker) as session:
+        yield session
+
+
+@contextlib.contextmanager
+def remote_inference(config: RemoteInferenceConfig) -> Iterator[RemoteInferenceSession]:
+    """Prepare and serve one model.
+
+    Callers serving several models prepare them all first instead. Preparing an already-cached model is
+    a cache check, so this is also the call for a model whose weights a caller prepared earlier.
+    """
+    with serve_inference(prepare_inference(config)) as session:
+        yield session
 
 
 @contextlib.contextmanager
