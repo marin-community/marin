@@ -7,8 +7,7 @@ abandon. Every effect (model call, shell command, file read, grade) is recorded 
 so a crashed workpiece resumes by replay: model calls come back from the log, commands are
 re-executed on a fresh machine.
 
-Design: `agent-docs/forge-implementation-plan-20261105.md` in the `openathena` checkout. This
-file covers how to run it.
+This file covers how to run it.
 
 ## Layout
 
@@ -49,12 +48,12 @@ workpieces in flight, one shellbox Iris sandbox per machine.
 
 Export these in the same shell as the launch (never commit or print them):
 
-| variable | source | used for |
-|---|---|---|
-| `CW_KEY_ID`, `CW_KEY_SECRET` | your personal CoreWeave key (`CW_STORAGE_KEY_ID/SECRET` in `~/openathena/.env`) | reading proposals, publishing outputs |
-| `GLM_API_KEY` | the **high-pool** GLM token (`GLM_API_TOKEN=` in `glm-infer/glm_api_token.txt`), not the bulk token | author, solver and adversary model calls through the relay |
-| `GLM_RELAY_JOB` | the Iris relay job that tunnels to the model routers, e.g. `/muchanem/glm53-relay-rno2a-g-20261027T0414Z` | endpoint resolution; one relay serves both `glm-5.3` and `deepseek-v4.1-flash` |
-| `PARALLEL_API_KEY` | `TASKFORGE_PARALLEL_KEY` in `~/openathena/.env` | the author's web tools (optional) |
+| variable | used for |
+|---|---|
+| `CW_KEY_ID`, `CW_KEY_SECRET` | your personal CoreWeave object-storage key: reading proposals, publishing outputs |
+| `GLM_API_KEY` | the interactive-tier model token: author, solver and adversary model calls through the relay |
+| `GLM_RELAY_JOB` | the Iris relay job that tunnels to the model routers: endpoint resolution; one relay serves both `glm-5.3` and `deepseek-v4.1-flash` |
+| `PARALLEL_API_KEY` | the author's web tools (optional) |
 
 `GLM_BASE_URL` may replace `GLM_RELAY_JOB` for a direct endpoint; set exactly one. The launcher
 passes the four keys as `--secret NAME env:NAME`, so their values stay off the `iris job run`
@@ -79,7 +78,7 @@ From the repository root (`uv` needs the workspace `pyproject.toml`):
 
 ```bash
 export CW_KEY_ID=... CW_KEY_SECRET=... GLM_API_KEY=... PARALLEL_API_KEY=...
-export GLM_RELAY_JOB=/muchanem/glm53-relay-rno2a-g-20261027T0414Z
+export GLM_RELAY_JOB=/<user>/<relay-job>
 ROOT=s3://marin-us-east-02a/marin/forge/pilot-<date>
 uv run --frozen fsutil cp policy.json $ROOT/policy.json
 for arm in S T; do
@@ -101,7 +100,7 @@ bucket span without changing the other drivers, output paths, or resume behavior
 Keep `--buckets 4096` fixed across relaunches. The launcher passes `--max-retries 3`,
 `--sync-package marin-taskforge`, pins the build-parallelism variables to `--cpu`, and leaves jobs
 preemptible; a preempted driver resumes from its published checkpoints. Job names are
-`/muchanem/<prefix>-<driver-index>`.
+`/<user>/<prefix>-<driver-index>`.
 
 The driver prints every policy value it resolves next to the declared one (`POLICY key
 declared=… resolved=…`) and the model each role uses (`MODEL role=author model=… endpoint=…`).
@@ -113,11 +112,11 @@ Read those lines first when a run looks wrong.
 the sandbox child jobs, so watch drivers by name:
 
 ```bash
-uv run --frozen iris --cluster=marin job describe /muchanem/forge-pilot-<date>-s-0 | grep '^State:'
-uv run --frozen iris --cluster=marin job logs /muchanem/forge-pilot-<date>-s-0 --max-lines 400
+uv run --frozen iris --cluster=marin job describe /<user>/forge-pilot-<date>-s-0 | grep '^State:'
+uv run --frozen iris --cluster=marin job logs /<user>/forge-pilot-<date>-s-0 --max-lines 400
 ```
 
-Sandboxes are child jobs named `/muchanem/<driver>/shellbox-<id>`; `job describe` on one shows
+Sandboxes are child jobs named `/<user>/<driver>/shellbox-<id>`; `job describe` on one shows
 why it died (`OOMKilled`, preempted, did not start).
 
 ### Outputs
