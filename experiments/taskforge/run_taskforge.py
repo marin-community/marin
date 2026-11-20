@@ -12,6 +12,9 @@ import argparse
 import os
 import subprocess
 
+SECRETS = ("CW_KEY_ID", "CW_KEY_SECRET", "GLM_API_KEY", "PARALLEL_API_KEY")
+"""Read by the driver with rigging.secrets.get_secret; PARALLEL_API_KEY is optional."""
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -33,10 +36,11 @@ def main() -> None:
     endpoint = tuple(key for key in ("GLM_RELAY_JOB", "GLM_BASE_URL") if os.environ.get(key))
     if len(endpoint) != 1:
         raise ValueError("Set exactly one of GLM_RELAY_JOB and GLM_BASE_URL")
-    keys = ("CW_KEY_ID", "CW_KEY_SECRET", "GLM_API_KEY", *endpoint)
-    credentials = [item for key in keys for item in ("-e", key, os.environ[key])]
-    if "PARALLEL_API_KEY" in os.environ:
-        credentials += ["-e", "PARALLEL_API_KEY", os.environ["PARALLEL_API_KEY"]]
+    if missing := [key for key in SECRETS[:3] if not os.environ.get(key)]:
+        raise ValueError(f"Export {', '.join(missing)}")
+    # By reference only: Iris delivers them as secret files and records this argv in MARIN_PROVENANCE.
+    credentials = [item for key in SECRETS if os.environ.get(key) for item in ("--secret", key, f"env:{key}")]
+    credentials += ["-e", endpoint[0], os.environ[endpoint[0]]]
     options = {
         "target-cluster": args.target_cluster,
         "cpu": str(args.cpu),

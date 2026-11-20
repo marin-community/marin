@@ -70,6 +70,25 @@ def test_empty_prefix_fails_instead_of_reporting_a_successful_empty_run(tmp_path
         inputs(str(tmp_path))
 
 
+def test_launcher_passes_secrets_by_reference_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    values = {key: f"value-of-{key}-0123456789" for key in run_taskforge.SECRETS}
+    for key, value in {**values, "GLM_RELAY_JOB": "/me/relay"}.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.delenv("GLM_BASE_URL", raising=False)
+    commands: list[list[str]] = []
+    monkeypatch.setattr(run_taskforge.subprocess, "run", lambda command, **_: commands.append(command))
+    argv = ["launcher", "--arm", "S", "--drivers", "2", "--concurrency", "4", "--cpu", "8"]
+    argv += [item for name in ("proposals", "output", "policy", "job-prefix") for item in (f"--{name}", "test")]
+    monkeypatch.setattr(sys, "argv", argv)
+    run_taskforge.main()
+    assert len(commands) == 2
+    for command in commands:
+        assert not [arg for arg in command for value in values.values() if value in arg]
+        secrets = {command[i + 1]: command[i + 2] for i, arg in enumerate(command) if arg == "--secret"}
+        assert secrets == {key: f"env:{key}" for key in values}
+        assert command[command.index("GLM_RELAY_JOB") + 1] == "/me/relay"
+
+
 @pytest.mark.parametrize("drivers,span", [(7, None), (32, "24:32"), (64, "48:64")])
 def test_launcher_bucket_coverage(monkeypatch: pytest.MonkeyPatch, drivers: int, span: str | None) -> None:
     for key in ("CW_KEY_ID", "CW_KEY_SECRET", "GLM_API_KEY", "GLM_BASE_URL"):

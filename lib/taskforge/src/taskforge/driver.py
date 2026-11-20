@@ -21,6 +21,7 @@ from rigging.filesystem.factory import open_url, url_to_fs
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import prefix_join
 from rigging.log_setup import configure_logging
+from rigging.secrets import get_secret, list_secret_names, require_secret
 
 from taskforge.checkpoint import CheckpointSink
 from taskforge.coordinator import reasons, run_workpiece
@@ -154,11 +155,11 @@ async def one(args: argparse.Namespace) -> None:
             source = endpoint_source(
                 os.environ.get("GLM_BASE_URL"),
                 os.environ.get("GLM_RELAY_JOB"),
-                os.environ["GLM_API_KEY"],
+                require_secret("GLM_API_KEY"),
                 policy.setting("author.model", str),
                 policy.setting("provider.pool", str),
             )
-            async with runtime(policy, args.arm, source, os.environ.get("PARALLEL_API_KEY", "")) as (config, resources):
+            async with runtime(policy, args.arm, source, get_secret("PARALLEL_API_KEY") or "") as (config, resources):
                 wp = await run_workpiece(proposal, config, resources, log, install=install)
     except* (Hold, Restart, Transient, LogFailure) as error:
         wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete(reasons(error))))
@@ -187,6 +188,7 @@ async def one(args: argparse.Namespace) -> None:
 
 async def run(args: argparse.Namespace) -> None:
     configure_coreweave_s3()
+    logging.info("Secret files (names only): %s", ", ".join(list_secret_names()) or "none")
     start, end = args.bucket_range or (0, args.buckets)
     if args.concurrency < 1 or not 0 <= start < end <= args.buckets:
         raise ValueError("Concurrency must be positive and bucket range nonempty within buckets")

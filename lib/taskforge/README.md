@@ -56,7 +56,9 @@ Export these in the same shell as the launch (never commit or print them):
 | `GLM_RELAY_JOB` | the Iris relay job that tunnels to the model routers, e.g. `/muchanem/glm53-relay-rno2a-g-20261027T0414Z` | endpoint resolution; one relay serves both `glm-5.3` and `deepseek-v4.1-flash` |
 | `PARALLEL_API_KEY` | `TASKFORGE_PARALLEL_KEY` in `~/openathena/.env` | the author's web tools (optional) |
 
-`GLM_BASE_URL` may replace `GLM_RELAY_JOB` for a direct endpoint; set exactly one.
+`GLM_BASE_URL` may replace `GLM_RELAY_JOB` for a direct endpoint; set exactly one. The launcher
+passes the four keys as `--secret NAME env:NAME`, so their values stay off the `iris job run`
+command line; the driver reads them from Iris secret files.
 
 ### Inputs
 
