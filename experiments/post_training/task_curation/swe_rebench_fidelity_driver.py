@@ -53,12 +53,14 @@ from taskcompendium.integrity import SharedDependencyState
 
 from experiments.post_training.task_curation.datasets.swe_rebench_v2 import groups
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert import (
+    WORKSPACE,
     dockerfile,
     family_config,
     row_base,
     setup_command,
     swe_rebench_profile,
     task_toml,
+    to_workspace,
 )
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.upstream import task_files
 
@@ -210,7 +212,7 @@ def row_variant_files(row: dict, variant: str, base_image: str) -> dict[str, byt
         setup = setup_command(flat, base, group)
         files = {
             "task.toml": task_toml(flat, base, group, setup).encode(),
-            "environment/Dockerfile": dockerfile(group, flat["workdir"], base_image).encode(),
+            "environment/Dockerfile": dockerfile(group, base_image).encode(),
         }
         for name, content in upstream_files.items():
             if name == "task.toml":
@@ -223,7 +225,14 @@ def row_variant_files(row: dict, variant: str, base_image: str) -> dict[str, byt
     for key, value in GATE_RESOURCES.items():
         environment[key] = value
     files["task.toml"] = tomlkit.dumps(task_document).encode()
-    files["tests/config.json"] = json.dumps(family_config(flat), indent=1, ensure_ascii=False).encode() + b"\n"
+    config = family_config(flat)
+    if variant == "upstream":
+        # The upstream digest image bakes the row's repo at its own workdir: the upstream
+        # variant keeps the row's original paths (the /testbed rewrite belongs to the
+        # condensed consolidation; ruling 2026-11-20).
+        config["workdir"] = flat["workdir"]
+        config["test_cmd"] = flat["test_cmd"]
+    files["tests/config.json"] = json.dumps(config, indent=1, ensure_ascii=False).encode() + b"\n"
     harden_shared_source(files, profile=swe_rebench_profile(), dependency_state=SharedDependencyState.AGENT_MUTABLE)
     # The declared image: the row's own digest for the upstream variant, the group's shared
     # base for the condensed variant (both pull directly on Daytona; the Dockerfile remains
@@ -232,7 +241,7 @@ def row_variant_files(row: dict, variant: str, base_image: str) -> dict[str, byt
     declared = row["image_name"] if variant == "upstream" else base_image
     if variant == "upstream":
         files["_provision_interpreter"] = b"1"
-    adapt_for_daytona(files, flat["workdir"], declared)
+    adapt_for_daytona(files, flat["workdir"] if variant == "upstream" else WORKSPACE, declared)
     files.pop("_provision_interpreter", None)
     # The trial must pull the declared image directly (the probe proves Daytona resolves the
     # internal ghcr package); a Dockerfile in the package would make the trial machinery build
@@ -633,17 +642,17 @@ async def diagnose_condensed(row: dict, base_image: str, output_uri: str, ledger
             client,
             sandbox_id,
             "apply gold patch",
-            "cd {workdir} && git apply --verbose /solution/gold.patch || "
+            f"cd {WORKSPACE} && git apply --verbose /solution/gold.patch || "
             "git apply --verbose --ignore-space-change --ignore-whitespace /solution/gold.patch || "
             "patch --batch --fuzz=5 -p1 -i /solution/gold.patch || "
-            "git apply --verbose --reject --ignore-whitespace /solution/gold.patch".format(workdir=flat["workdir"]),
+            "git apply --verbose --reject --ignore-whitespace /solution/gold.patch",
         )
         restore = "\n".join(
             f"if git ls-files --error-unmatch {shlex.quote(f)} >/dev/null 2>&1; "
             f"then git restore {shlex.quote(f)} 2>/dev/null; else rm -f {shlex.quote(f)}; fi"
             for f in flat["test_files"]
         )
-        await run(client, sandbox_id, "restore test files", f"cd {shlex.quote(flat['workdir'])}\n{restore}")
+        await run(client, sandbox_id, "restore test files", f"cd {WORKSPACE}\n{restore}")
         await run(
             client,
             sandbox_id,
@@ -654,11 +663,10 @@ async def diagnose_condensed(row: dict, base_image: str, output_uri: str, ledger
             client,
             sandbox_id,
             "apply test patch",
-            "cd {workdir} && git apply --verbose /tmp/test.patch || "
-            "patch --batch --fuzz=5 -p1 -i /tmp/test.patch".format(workdir=shlex.quote(flat["workdir"])),
+            f"cd {WORKSPACE} && git apply --verbose /tmp/test.patch || " "patch --batch --fuzz=5 -p1 -i /tmp/test.patch",
         )
         test_cmd = "cd {workdir} && timeout -k 10 1800 bash -lc {cmd}".format(
-            workdir=shlex.quote(flat["workdir"]), cmd=shlex.quote(flat["test_cmd"])
+            workdir=WORKSPACE, cmd=shlex.quote(to_workspace(flat["test_cmd"], flat["workdir"]))
         )
         response = await run(client, sandbox_id, "grading test_cmd", test_cmd, timeout=1900)
         StoragePath(f"{output_uri}/diagnose-{row['instance_id']}.txt").write_text("\n".join(log) + "\n")

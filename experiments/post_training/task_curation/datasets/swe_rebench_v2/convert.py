@@ -26,6 +26,7 @@ upstream ``test.sh``/``grade.py`` bytes remain the sole selection authority (rew
 import base64
 import hashlib
 import json
+import re
 import shlex
 from dataclasses import replace
 from enum import StrEnum
@@ -45,7 +46,7 @@ from experiments.post_training.task_curation.datasets.swe_rebench_v2 import grou
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.upstream import task_files
 
 HERE = Path(__file__).parent
-VERSION = "2026.11.20.1"
+VERSION = "2026.11.20.2"
 
 IMAGE_BINDINGS_INPUT = "base_images"
 IMAGE_BINDINGS_FILENAME = "base-image-bindings.json"
@@ -87,6 +88,30 @@ def admission_receipt_labels(instance_id: str | None, receipts) -> dict[str, str
         "swe_rebench_admission_receipt": receipt.value,
         "swe_rebench_admission_receipt_evidence": json.dumps(evidence, sort_keys=True),
     }
+
+
+# Ruling 2026-11-20 (the 10-snapshot consolidation): every task uses ONE uniform workspace,
+# the SWE-bench/SWE-smith convention. The shared-source image layer's workspace mkdir line is
+# then constant, each group's build context collapses to one, and the declared Daytona snapshot
+# identities collapse to the ten base images. A row's original per-repo path is rewritten to
+# WORKSPACE wherever the spec wires it (the clone, the runtime cwd, the contract config, and
+# the install/test commands); rows fail their oracle under /testbed as typed exclusions.
+WORKSPACE = "/testbed"
+
+
+def to_workspace(text: str, workdir: str) -> str:
+    """Rewrite a row's per-repo workspace path to the uniform /testbed workspace.
+
+    Path-token boundaries keep sibling names (/sympy2, /sympy-bench) and nested paths
+    (/x/sympy) intact while rewriting exact occurrences (/sympy, /sympy/tests).
+    """
+    if not workdir or workdir == WORKSPACE:
+        return text
+    return re.sub(
+        rf"(?<![0-9A-Za-z_/-]){re.escape(workdir)}(?![0-9A-Za-z_-])",
+        WORKSPACE,
+        text,
+    )
 
 
 # The upstream per-task image build (combine.Dockerfile.j2) ran exactly this block as a Docker
@@ -162,15 +187,16 @@ def setup_command(flat: dict, base: str, group: groups.Group) -> str:
     """The declared task-start setup: the upstream clone block, toolchain select, installs.
 
     Order mirrors the upstream image build: toolchain selection and environment preparation
-    (no checkout dependency), then the clone block (which ends inside the workdir), then the
-    row's install commands verbatim with their upstream `( ... ) || true` wrappers.
+    (no checkout dependency), then the clone block (which ends inside the workspace), then the
+    row's install commands verbatim with their upstream `( ... ) || true` wrappers. The row's
+    per-repo workspace path is rewritten to the uniform /testbed workspace everywhere it
+    appears (the clone destination and any absolute path inside an install command).
 
     The setup is IDEMPOTENT: a Daytona sandbox whose name is deterministic can be REUSED with
     a previous trial's state (a crashed trial skips its own cleanup), so the environment
     preparation removes the previous state before recreating it — the declared contract
-    (workdir at base_commit with the toolchain and deps) is achieved identically either way.
+    (workspace at base_commit with the toolchain and deps) is achieved identically either way.
     """
-    workdir = shlex.quote(flat["workdir"])
     prepare = []
     if group.toolchain == "conda":
         # The base pre-creates the declared python envs; clone the row's declared env into
@@ -197,31 +223,35 @@ def setup_command(flat: dict, base: str, group: groups.Group) -> str:
         prepare.append(f"ln -sfn /opt/toolchains/jdk-{shlex.quote(_jdk_version(base))} /opt/java/current")
     prepared = "".join(line + "\n" for line in prepare)
     clone = CLONE_BLOCK.format(
-        workdir=workdir,
+        workdir=WORKSPACE,
         repo=shlex.quote(flat["repo"]),
         base_commit=shlex.quote(flat["base_commit"]),
     )
     # Idempotency guard: a reused sandbox may hold the previous trial's checkout (and the
     # exec's working directory may even be inside it), so move to a stable directory before
-    # clearing the workdir; the clone then requires an empty destination it now has.
+    # clearing the workspace; the clone then requires an empty destination it now has.
     clone = clone.replace(
-        f"mkdir -p {workdir}\n",
-        f"cd / && rm -rf {workdir} && mkdir -p {workdir}\n",
+        f"mkdir -p {WORKSPACE}\n",
+        f"cd / && rm -rf {WORKSPACE} && mkdir -p {WORKSPACE}\n",
         1,
     )
     activate = ""
     if group.toolchain == "conda":
         activate = "source /opt/conda/etc/profile.d/conda.sh && conda activate testbed\n"
-    installs = "".join(f"( {command} ) || true\n" for command in flat["install"])
+    installs = "".join(f"( {to_workspace(command, flat['workdir'])} ) || true\n" for command in flat["install"])
     return prepared + clone + activate + installs
 
 
 def family_config(flat: dict) -> dict:
-    """The tests/config.json the contract reads, keeping the upstream grader's keys verbatim."""
+    """The tests/config.json the contract reads, keeping the upstream grader's keys verbatim.
+
+    The workspace is the uniform /testbed and the test command's absolute references to the
+    row's per-repo path are rewritten to it (ruling 2026-11-20, the 10-snapshot consolidation).
+    """
     return {
-        "workdir": flat["workdir"],
+        "workdir": WORKSPACE,
         "base_commit": flat["base_commit"],
-        "test_cmd": flat["test_cmd"],
+        "test_cmd": to_workspace(flat["test_cmd"], flat["workdir"]),
         "test_files": list(flat["test_files"]),
         "log_parser": flat["log_parser"],
         "language": flat["language"],
@@ -260,7 +290,7 @@ def task_toml(flat: dict, base: str, group: groups.Group, setup: str) -> str:
             "storage_mb": STORAGE_MB,
             "build_timeout_sec": BUILD_TIMEOUT_SEC,
             "allow_internet": True,
-            "workdir": flat["workdir"],
+            "workdir": WORKSPACE,
             "setup": {"command": setup, "timeout_sec": SETUP_TIMEOUT_SEC},
         },
     }
@@ -270,14 +300,12 @@ def task_toml(flat: dict, base: str, group: groups.Group, setup: str) -> str:
     return tomlkit.dumps(config)
 
 
-def dockerfile(group: groups.Group, workdir: str, image: str) -> str:
+def dockerfile(group: groups.Group, image: str) -> str:
     """The shared base Dockerfile: byte-identical within a group (one snapshot identity).
 
     No WORKDIR line: the image's default cwd must not be part of the snapshot identity, and
-    the runtime cwd comes from the task's environment.workdir. The per-repo ``workdir``
-    argument is retained in the signature for call-site clarity but is deliberately unused.
+    the runtime cwd comes from the task's uniform /testbed workspace.
     """
-    del workdir
     return f"FROM {image}\n"
 
 
@@ -325,7 +353,7 @@ def convert_row(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRej
     setup = setup_command(flat, base, group)
     files: dict[str, bytes] = {
         "task.toml": task_toml(flat, base, group, setup).encode(),
-        "environment/Dockerfile": dockerfile(group, flat["workdir"], image).encode(),
+        "environment/Dockerfile": dockerfile(group, image).encode(),
     }
     for name, content in upstream_files.items():
         if name == "task.toml":

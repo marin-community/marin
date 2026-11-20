@@ -4,6 +4,7 @@
 """SWE-rebench V2.1 repair conversion: declared bases, task-start setup, family config."""
 
 import json
+import re
 import types
 
 import pytest
@@ -19,6 +20,7 @@ from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert imp
     row_base,
     setup_command,
     task_toml,
+    to_workspace,
 )
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.upstream import task_files
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.upstream.task_files import grader_source
@@ -102,8 +104,8 @@ def test_python_setup_clones_declared_env_and_runs_installs_in_checkout():
     assert create.startswith("conda env remove -n testbed")
     # Unlabeled (v1-python) rows build on python 3.9 upstream (spectree 3.9.21, clique 3.9.20).
     assert "conda create -n testbed --clone py39" in setup.splitlines()[1]
-    assert "cd / && rm -rf /spectree && mkdir -p /spectree" in setup
-    assert "git clone -o origin https://github.com/0b01001001/spectree /spectree" in setup
+    assert "cd / && rm -rf /testbed && mkdir -p /testbed" in setup
+    assert "git clone -o origin https://github.com/0b01001001/spectree /testbed" in setup
     assert "git reset --hard a091fab020ac26548250c907bae0855273a98778" in setup
     assert "git remote remove origin" in setup
     assert "conda activate testbed" in setup
@@ -171,7 +173,9 @@ def test_family_config_keeps_upstream_grader_keys_verbatim():
     # The shared-source machinery reads test_ids; the upstream grade.py reads the verbatim split.
     assert config["test_ids"] == config["FAIL_TO_PASS"] + config["PASS_TO_PASS"]
     assert config["FAIL_TO_PASS"] == ["tests/test_utils.py::test_a"]
-    assert config["workdir"] == "/spectree" and config["base_commit"].startswith("a091fab")
+    assert config["workdir"] == "/testbed" and config["base_commit"].startswith("a091fab")
+    # The row's per-repo path is rewritten inside the test command too.
+    assert config["test_cmd"] == "cd /testbed && conda activate testbed || conda activate base; pytest"
     assert config["log_parser"] == "parse_log_pytest" and config["language"] == "python"
     assert set(config) == {
         "workdir",
@@ -198,7 +202,7 @@ def test_task_toml_carries_upstream_declarations_and_condensed_environment():
     assert document["environment"]["memory_mb"] == 24576
     assert document["environment"]["storage_mb"] == 32768
     assert document["environment"]["allow_internet"] is True
-    assert document["environment"]["workdir"] == "/spectree"
+    assert document["environment"]["workdir"] == "/testbed"
     assert "conda create -n testbed" in document["environment"]["setup"]["command"]
     assert "docker_image" not in document["environment"]
 
@@ -206,7 +210,7 @@ def test_task_toml_carries_upstream_declarations_and_condensed_environment():
 def test_dockerfile_is_group_shared():
     """The per-task Dockerfile differs only by the pinned group image, keeping one snapshot identity."""
     group = groups.GROUPS["python"]
-    assert dockerfile(group, "/spectree", "ghcr.io/marin-community/rl-data-swe-rebench-v2@sha256:" + "0" * 64) == (
+    assert dockerfile(group, "ghcr.io/marin-community/rl-data-swe-rebench-v2@sha256:" + "0" * 64) == (
         "FROM ghcr.io/marin-community/rl-data-swe-rebench-v2@sha256:" + "0" * 64 + "\n"
     )
 
@@ -220,13 +224,13 @@ def test_verifier_and_setup_do_not_rely_on_image_default_cwd(tmp_path):
 
     flat = _flatten(PYTHON_ROW)
     setup = setup_command(flat, "v1-python", groups.GROUP_BY_BASE["v1-python"])
-    # the setup's workdir steps are explicit: the clone guard cds to /, then into the workdir
-    assert "cd / && rm -rf /spectree && mkdir -p /spectree" in setup
-    assert "cd /spectree" in setup
+    # the setup's workspace steps are explicit: the clone guard cds to /, then into the workspace
+    assert "cd / && rm -rf /testbed && mkdir -p /testbed" in setup
+    assert "cd /testbed" in setup
     # the Dockerfile carries no WORKDIR: the group's one snapshot identity
     group = groups.GROUPS["python"]
     image = "ghcr.io/marin-community/rl-data-swe-rebench-v2@sha256:" + "0" * 64
-    assert "WORKDIR" not in dockerfile(group, "/spectree", image)
+    assert "WORKDIR" not in dockerfile(group, image)
 
 
 def test_admission_receipt_labels_carry_upstream_image_defect(tmp_path):
@@ -286,3 +290,72 @@ def test_grader_scores_empty_ids_with_empty_log_as_unscorable():
     report = module.grade(with_ids, parsed_log)
     assert report["unscorable"] is False
     assert report["resolved"] is True
+
+
+def test_every_task_uses_the_uniform_testbed_workspace():
+    """Ruling 2026-11-20 (the 10-snapshot consolidation): every converted task's workdir is the
+    uniform /testbed and no spec wiring references the row's per-repo absolute path — the
+    shared-source image layer's workspace line is then constant and the declared Daytona
+    snapshot identities collapse to the ten base images."""
+    grader_keys = {
+        "FAIL_TO_PASS": ["tests/test_utils.py::test_a"],
+        "PASS_TO_PASS": ["tests/test_utils.py::test_b"],
+        "test_files": ["tests/common.py"],
+        "test_patch": "diff --git a/tests/common.py",
+    }
+    rows = [
+        PYTHON_ROW,
+        {
+            **PYTHON_ROW,
+            **grader_keys,
+            "language": "go",
+            "repo": "0xPolygonHermez/zkevm-node",
+            "workdir": "/zkevm-node",
+            "install_config": {
+                "base_image_name": "go_1.19.13",
+                "install": ["go build ./..."],
+                "log_parser": "parse_log_go",
+                "test_cmd": "cd /zkevm-node && go test ./...",
+            },
+        },
+        {
+            **PYTHON_ROW,
+            **grader_keys,
+            "repo": "tobymao/sqlglot",
+            "workdir": "/sqlglot",
+            "install_config": {
+                "base_image_name": "python_base_310",
+                "install": ["pip install -e /sqlglot"],
+                "log_parser": "parse_log_pytest",
+                "test_cmd": "pytest /sqlglot/tests",
+            },
+        },
+    ]
+    for row in (
+        {**candidate, **grader_keys, "tags": ["swe-rebench", "swe-rebench-v2.1"], "quality_flags": [], "env": []}
+        for candidate in rows
+    ):
+        flat = _flatten(row)
+        old = flat["workdir"]
+        base = row_base(row)
+        group = groups.GROUP_BY_BASE[base]
+        setup = setup_command(flat, base, group)
+        config = family_config(flat)
+        document = tomlkit.parse(task_toml(flat, base, group, setup))
+        assert document["environment"]["workdir"] == "/testbed"
+        assert config["workdir"] == "/testbed"
+        assert f"git clone -o origin https://github.com/{row['repo']} /testbed" in setup
+        # no spec wiring references the row's per-repo absolute path (path-token check: the
+        # clone URL legitimately carries the repo name, which may equal the old workdir name)
+        pattern = rf"(?<![0-9A-Za-z_/-]){re.escape(old)}(?![0-9A-Za-z_-])"
+        assert re.search(pattern, setup) is None
+        assert re.search(pattern, json.dumps(config)) is None
+        assert re.search(pattern, tomlkit.dumps(document)) is None
+
+
+def test_workspace_rewrites_respect_path_boundaries():
+    """Sibling names and nested paths survive; exact occurrences rewrite to /testbed."""
+    assert to_workspace("cd /sympy && pytest /sympy/tests", "/sympy") == "cd /testbed && pytest /testbed/tests"
+    assert to_workspace("ls /sympy2 /sympy-bench", "/sympy") == "ls /sympy2 /sympy-bench"
+    assert to_workspace("ls /x/sympy", "/sympy") == "ls /x/sympy"
+    assert to_workspace("cd /testbed", "/testbed") == "cd /testbed"

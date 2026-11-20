@@ -35,6 +35,7 @@ from taskcompendium.integrity import SharedDependencyState
 
 from experiments.post_training.task_curation.datasets.swe_rebench_v2 import groups
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert import (
+    WORKSPACE,
     dockerfile,
     family_config,
     row_base,
@@ -83,7 +84,7 @@ def row_variant_files(row: dict, variant: str, base_image: str | None) -> dict[s
         setup = setup_command(flat, base, group)
         files = {
             "task.toml": task_toml(flat, base, group, setup).encode(),
-            "environment/Dockerfile": dockerfile(group, flat["workdir"], base_image).encode(),
+            "environment/Dockerfile": dockerfile(group, base_image).encode(),
         }
         for name, content in upstream_files.items():
             if name == "task.toml":
@@ -91,7 +92,14 @@ def row_variant_files(row: dict, variant: str, base_image: str | None) -> dict[s
             files[name] = content.encode()
     else:
         raise ValueError(f"Unknown variant {variant!r}")
-    files["tests/config.json"] = json.dumps(family_config(flat), indent=1, ensure_ascii=False).encode() + b"\n"
+    config = family_config(flat)
+    if variant == "upstream":
+        # The upstream digest image bakes the row's repo at its own workdir: the upstream
+        # variant keeps the row's original paths (the /testbed rewrite belongs to the
+        # condensed consolidation; ruling 2026-11-20).
+        config["workdir"] = flat["workdir"]
+        config["test_cmd"] = flat["test_cmd"]
+    files["tests/config.json"] = json.dumps(config, indent=1, ensure_ascii=False).encode() + b"\n"
     harden_shared_source(files, profile=profile, dependency_state=SharedDependencyState.AGENT_MUTABLE)
     return files
 
@@ -101,7 +109,7 @@ def write_package(root: Path, name: str, files: dict[str, bytes], row: dict, var
     if package.exists():
         raise FileExistsError(package)
     package.mkdir(parents=True)
-    workdir = row["workdir"]
+    workdir = row["workdir"] if variant == "upstream" else WORKSPACE
     adapt_for_local(files, workdir, image)
     for relative, content in sorted(files.items()):
         target = package / relative
