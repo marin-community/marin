@@ -26,7 +26,7 @@ def main() -> None:
     solver = parser.parse_args().solver
     directory = Path(__file__).parent
     protocol = "evalchemy"
-    excluded = {59}
+    excluded = {50}
     if solver == "qwen":
         model = load_model_config(directory / "Qwen-Qwen3.6-35B-A3B.yaml")
     else:
@@ -49,7 +49,6 @@ def main() -> None:
             ),
         )
         protocol = "remaining-context"
-        excluded.add(50)
     remaining = int(os.environ["FRONTIERSCIENCE_DEADLINE"]) - int(time.time())
     if remaining <= 0:
         raise TimeoutError("FrontierScience pilot deadline has passed")
