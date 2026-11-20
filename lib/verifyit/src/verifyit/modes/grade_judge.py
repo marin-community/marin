@@ -33,7 +33,6 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, TypeVar, cast
 
-import httpx
 import openai
 from openai.types.chat import ChatCompletion, ChatCompletionMessageParam
 
@@ -676,6 +675,9 @@ def _client(spec: JudgeSpec, connection: JudgeConnection | None) -> tuple[openai
     # Local OpenAI-compatible servers ignore the key, but the client insists on a non-empty one.
     options: dict[str, Any] = {"max_retries": 0} if spec.rubric == RUBRIC_LABELS else {}
     if connection is not None and connection.transport is not None:
+        # Only an in-process host transport needs httpx; staged grader runtimes need not ship it.
+        import httpx  # noqa: PLC0415
+
         options["http_client"] = httpx.Client(transport=connection.transport)
     return (
         openai.OpenAI(
