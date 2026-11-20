@@ -107,9 +107,9 @@ from marinskyrl.resource_locator import is_cloud_uri, join_resource_path
 from marinskyrl.speculative_decoding import SpeculativeDecodingConfig, runai_model_uri
 from skyrl_train.checkpoint_listing import (
     ROLLOUT_STATE_FILENAME,
+    best_checkpoint_step,
     cleanup_old_checkpoints,
     extract_step_from_path,
-    native_best_checkpoint_step,
     periodic_checkpoint_steps,
 )
 from skyrl_train.utils.trainer_utils import (
@@ -3010,7 +3010,7 @@ class RayPPOTrainer:
 
         checkpoint_root = self.cfg.trainer.ckpt_path
         protected_steps = protected_hf_export_steps(checkpoint_root)
-        if (best_step := native_best_checkpoint_step(checkpoint_root)) is not None:
+        if best_step := best_checkpoint_step(checkpoint_root):
             protected_steps.add(best_step)
         protected_steps.update(
             periodic_checkpoint_steps(checkpoint_root, self.cfg.trainer.get("checkpoint_keep_every"), self._last_saved_step)

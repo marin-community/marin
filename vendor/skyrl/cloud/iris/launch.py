@@ -38,7 +38,7 @@ from marinskyrl.speculative_decoding import SpeculatorModelConfig, SpeculatorMod
 from marinskyrl.task_sources import TaskTroveParquetSource, TaskTroveSelectionSnapshot, data_source, data_source_dict
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import launch_provenance
-from skyrl_train.checkpoint_listing import cleanup_old_checkpoints, native_best_checkpoint_step, periodic_checkpoint_steps
+from skyrl_train.checkpoint_listing import best_checkpoint_step, cleanup_old_checkpoints, periodic_checkpoint_steps
 from skyrl_train.io import io as checkpoint_io
 
 
@@ -190,12 +190,17 @@ def _retain_terminal_checkpoints(config: DictConfig) -> None:
         return
     root = str(config.artifacts.checkpoint_root)
     latest = terminal_checkpoint_step(root)
-    best = native_best_checkpoint_step(root) if selection == "best" else None
-    kept = periodic_checkpoint_steps(root, trainer.get("checkpoint_keep_every"), latest) | {best or latest}
-    newest = max(kept)
-    if newest != latest:
+    best = best_checkpoint_step(root) if selection == "best" else None
+    selected = latest if best is None else best
+    kept = periodic_checkpoint_steps(root, trainer.get("checkpoint_keep_every"), latest)
+    if selected > 0:
+        kept.add(selected)
+    marker = str(StoragePath(root) / LATEST_CHECKPOINT_FILE)
+    if not kept:
+        checkpoint_io.remove(marker)
+    elif (newest := max(kept)) != latest:
         # Publish a retained checkpoint before deleting the former marker target.
-        checkpoint_io.write_bytes_atomic(str(StoragePath(root) / LATEST_CHECKPOINT_FILE), str(newest).encode())
+        checkpoint_io.write_bytes_atomic(marker, str(newest).encode())
     cleanup_old_checkpoints(root, 0, kept)
 
 

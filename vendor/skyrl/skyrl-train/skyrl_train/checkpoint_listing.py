@@ -49,13 +49,11 @@ def list_checkpoint_dirs(checkpoint_base_path: str) -> list[str]:
         return []
 
 
-def native_best_checkpoint_step(checkpoint_root: str) -> int | None:
+def best_checkpoint_step(checkpoint_root: str) -> int | None:
     best_path = os.path.join(checkpoint_root, BEST_CHECKPOINT_FILENAME)
     if io.exists(best_path):
         with io.open_file(best_path, "r") as stream:
-            best = json.load(stream)
-        if best["model_format"] == "native":
-            return int(best["step"])
+            return int(json.load(stream)["step"])
     return None
 
 

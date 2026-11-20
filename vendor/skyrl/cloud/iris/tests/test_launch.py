@@ -237,12 +237,22 @@ def test_launch_persists_attempt_result_and_exports_only_on_opt_in(
         ("best", None, "native", True, "succeeded", None, {1}),
         ("best", 2, "native", False, "succeeded", None, {1, 2}),
         ("best", 1, "native", False, "succeeded", 2, {1, 3}),
-        ("best", None, "hf", False, "succeeded", None, {3}),
+        ("best", None, "hf", False, "succeeded", None, set()),
+        ("best", 2, "hf", False, "succeeded", None, {2}),
         ("best", None, None, False, "succeeded", None, {3}),
         ("latest", 2, None, False, "succeeded", None, {2, 3}),
         ("best", None, "native", False, "failed", None, {1, 2, 3, 4}),
     ],
-    ids=["best-after-export", "periodic-newer-than-best", "missing-rollout", "hf-initializer", "no-winner", "latest", "failed"],
+    ids=[
+        "best-after-export",
+        "periodic-newer-than-best",
+        "missing-rollout",
+        "hf-initializer",
+        "hf-with-periodic",
+        "no-winner",
+        "latest",
+        "failed",
+    ],
 )
 def test_launch_retains_checkpoints_only_after_success(
     tmp_path, retention, keep_every, best_format, export_hf, job_state, missing_rollout_step, kept
@@ -274,7 +284,11 @@ def test_launch_retains_checkpoints_only_after_success(
 
     assert result.state.value == job_state
     assert {path.name for path in root.glob("global_step_*")} == {f"global_step_{step}" for step in kept}
-    assert int((root / CHECKPOINT_MARKER_FILENAME).read_text()) == (3 if job_state == "failed" else max(kept))
+    marker = root / CHECKPOINT_MARKER_FILENAME
+    if kept:
+        assert int(marker.read_text()) == (3 if job_state == "failed" else max(kept))
+    else:
+        assert not marker.exists()
     if export_hf:
         assert result.model is not None and result.model.global_step == 1
 
