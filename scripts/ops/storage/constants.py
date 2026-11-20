@@ -73,16 +73,3 @@ def human_bytes(num_bytes: int) -> str:
             return f"{value:.2f} {unit}"
         value /= 1024.0
     return f"{num_bytes} B"
-
-
-def continent_for_region(region: str) -> str:
-    return "EUROPE" if region.startswith("eu-") else "US"
-
-
-def region_from_bucket(bucket: str) -> str:
-    return bucket.removeprefix("marin-") if bucket.startswith("marin-") else bucket
-
-
-def plan_rows() -> list[dict[str, str]]:
-    """One row per bucket with region and location."""
-    return [{"region": region_from_bucket(b), "bucket": b, "location": BUCKET_LOCATIONS[b]} for b in MARIN_BUCKETS]

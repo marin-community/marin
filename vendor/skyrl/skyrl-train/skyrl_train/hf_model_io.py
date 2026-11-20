@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import time
-from contextlib import contextmanager
+from collections.abc import Callable, Iterable
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from loguru import logger
 from marinskyrl.hf_model import (
@@ -24,11 +26,71 @@ from marinskyrl.model_manifest import (
     write_local_model_manifest,
 )
 from marinskyrl.resource_locator import join_resource_path
+from safetensors.torch import save_file
+from torch import Tensor, contiguous_format
 from transformers.utils import cached_file
 
 from skyrl_train.io import io
 
 HF_WEIGHT_FILENAME = "model.safetensors"
+
+
+def save_megatron_hf_model(
+    bridge,
+    model,
+    output_dir: str,
+    *,
+    rank_zero: bool,
+    local_state_source_type: type,
+    save_configs: Callable[[str], None],
+) -> None:
+    """Export a Megatron model and publish its completed HF files on rank zero."""
+    source = getattr(getattr(bridge.hf_pretrained, "state", None), "source", None)
+    use_bridge_writer = isinstance(source, local_state_source_type) and bool(source.key_to_filename_map)
+    weights = None if use_bridge_writer else bridge.export_hf_weights(model, cpu=True)
+    if rank_zero:
+        model_dir = local_hf_model_dir(output_dir)
+    elif weights is None:
+        # Bridge's save is collective even when only rank zero publishes.
+        model_dir = TemporaryDirectory() if io.is_cloud_path(output_dir) else nullcontext(output_dir)
+    else:
+        for _ in weights:
+            pass
+        return
+
+    with model_dir as work_dir:
+        if weights is None:
+            bridge.save_hf_weights(model, work_dir)
+        else:
+            write_hf_weight_shards(weights, work_dir)
+        if rank_zero:
+            save_configs(work_dir)
+
+
+def write_hf_weight_shards(
+    weights: Iterable[tuple[str, Tensor]], output_dir: str, *, shard_size_bytes: int = 5_000_000_000
+) -> None:
+    """Write a stream of CPU weights as Safetensors shards for the export finalizer."""
+    directory = Path(output_dir)
+    shard = {}
+    size = 0
+    shard_number = 1
+
+    def flush():
+        nonlocal size, shard_number
+        save_file(shard, directory / f"model-{shard_number:05d}.safetensors", metadata={"format": "pt"})
+        shard.clear()
+        size = 0
+        shard_number += 1
+
+    for name, tensor in weights:
+        tensor_bytes = tensor.numel() * tensor.element_size()
+        if shard and size + tensor_bytes > shard_size_bytes:
+            flush()
+        shard[name] = tensor.clone(memory_format=contiguous_format)
+        size += tensor_bytes
+    if shard:
+        flush()
 
 
 def write_export_generation_config(

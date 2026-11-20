@@ -1,4 +1,5 @@
 import hashlib
+import os
 from fnmatch import fnmatchcase
 from pathlib import Path
 from types import SimpleNamespace
@@ -130,11 +131,12 @@ def _plan(tmp_path: Path, step: int = 12) -> CheckpointExportPlan:
     )
 
 
-def test_checkpoint_exporter_converts_only_the_policy_model(tmp_path):
+def test_checkpoint_exporter_converts_only_the_policy_model(tmp_path, monkeypatch):
     plan = _plan(tmp_path)
     workers = FakePolicyExportWorkers()
     tokenizer = object()
 
+    monkeypatch.setattr("skyrl_train.hf_publisher.HfApi", lambda: pytest.fail("conversion contacted the Hub"))
     result = CheckpointExporter(plan, workers, tokenizer).run()
 
     assert result.step == 12
@@ -289,3 +291,4 @@ def test_hf_publisher_checks_visibility_and_uploaded_files(
     if upload_mode is HFUploadMode.ALL:
         snapshots.append(expected | {f"checkpoints/step_12/{path}": data for path, data in expected.items()})
     assert list(api.commits.values()) == snapshots
+    assert os.environ["HF_HUB_OFFLINE"] == "1"
