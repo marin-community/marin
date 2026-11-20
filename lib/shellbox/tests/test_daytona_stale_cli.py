@@ -118,6 +118,7 @@ def test_cli_dry_run_and_rechecked_delete_preserve_active_ids_and_append_ledger(
 
 
 def test_cli_ledger_without_delete_rejects_run_and_preserves_ledger(monkeypatch, tmp_path):
+    monkeypatch.delenv("TEST_DAYTONA_KEY", raising=False)
     ledger = tmp_path / "ledger.jsonl"
     previous = '{"outcome": "previous run"}\n'
     ledger.write_text(previous)

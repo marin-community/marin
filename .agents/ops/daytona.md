@@ -102,9 +102,9 @@ uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-stale \
 `DAYTONA_DATA_API_KEY`. Use `--api-key-env DAYTONA_RL_API_KEY` to select one account.
 Deletion rechecks activity by exact ID, then waits for provider confirmation.
 Requests are sequential with a one-second pause between sandboxes per account.
-The ledger appends and flushes each request and outcome, including skips and
-errors. Errors produce a nonzero exit status; the remaining IDs and accounts
-still run.
+The ledger appends and flushes candidate requests and outcomes, including
+skips on recheck and errors. Errors produce a nonzero exit status; the
+remaining IDs and accounts still run.
 Activity can change between the final check and deletion; use the command
 when that brief race is acceptable for the selected workload. The idle rule
 uses provider timestamps. Whether Daytona updates activity timestamps while
