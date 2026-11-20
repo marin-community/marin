@@ -31,6 +31,7 @@ import resource
 import shlex
 import threading
 import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -80,16 +81,18 @@ VERIFIER_DEADLINE_SEC = 2400.0
 
 
 def trial_environment() -> dict:
-    """The declared trial executor: Daytona EVAL with declarative provisioning.
+    """The declared trial executor: Daytona with declarative provisioning.
 
-    The kwargs are exactly the ingest lane's proven shape; nothing else (the Daytona target
-    comes from the job's DAYTONA_TARGET environment). The connection fields themselves travel
-    through the process environment the Trial machinery snapshots.
+    The org follows ruling 71 (2026-11-20): the EVAL org is reserved for priority evals, so
+    swe-repair trials run on the DATA org — the secret named by DAYTONA_KEY_SECRET, default
+    DAYTONA_DATA_API_KEY. The kwargs are exactly the ingest lane's proven shape; nothing else
+    (the Daytona target comes from the job's DAYTONA_TARGET environment). The connection
+    fields themselves travel through the process environment the Trial machinery snapshots.
     """
 
-    key = get_secret("DAYTONA_EVAL_API_KEY")
+    key = get_secret(os.environ.get("DAYTONA_KEY_SECRET", "DAYTONA_DATA_API_KEY"))
     if key is None:
-        raise ValueError("Daytona trials require the DAYTONA_EVAL_API_KEY secret")
+        raise ValueError("Daytona trials require the org's Daytona API key secret")
     os.environ["DAYTONA_API_KEY"] = key
     os.environ.setdefault("DAYTONA_TARGET", "us")
     # The connection validator requires all three explicitly; log presence only, never values.
@@ -388,15 +391,18 @@ class OutcomeLedger:
 TRANSIENT_RETRY_DELAYS_SEC = (60.0, 300.0)
 
 
-def transient_daytona_error(error: BaseException) -> bool:
+def transient_daytona_text(text: str) -> bool:
     """Classify the retryable Daytona infrastructure failures."""
-    text = f"{type(error).__name__}: {error}"
     return (
         "Daytona environment is not running" in text
         or "Total CPU limit exceeded" in text
         or "DaytonaConnectionError" in text
         or "DaytonaTimeoutError" in text
     )
+
+
+def transient_daytona_error(error: BaseException) -> bool:
+    return transient_daytona_text(f"{type(error).__name__}: {error}")
 
 
 def trial(
@@ -439,6 +445,14 @@ def trial(
             if not transient_daytona_error(error) or retry_index == len(TRANSIENT_RETRY_DELAYS_SEC):
                 raise
             last_error = error
+            continue
+        # The machinery embeds provider failures in the summary instead of raising: a
+        # transient Daytona failure recorded as reward=None must retry like a raised one.
+        embedded = summary.get("exception") or {}
+        embedded_text = f"{embedded.get('exception_type')}: {embedded.get('exception_message')}"
+        if transient_daytona_text(embedded_text) and retry_index < len(TRANSIENT_RETRY_DELAYS_SEC):
+            last_error = RuntimeError(embedded_text)
+            summary = None
             continue
         break
     assert summary is not None  # the loop exits only through the break or the re-raise
@@ -744,6 +758,42 @@ def wave_row(root: Path, row: dict, image: str, ledger: OutcomeLedger) -> dict:
     return summaries
 
 
+CHURN_WINDOW = 50
+CHURN_THRESHOLD = 0.2
+
+
+class QuotaInfraStop(RuntimeError):
+    """The typed fail-fast stop: the rolling trial churn exceeded the threshold."""
+
+
+class ChurnMonitor:
+    """The rolling reward=None/infra-error share over the last CHURN_WINDOW completions.
+
+    Ruling 2026-11-20 (the wave-v9 churn): when more than about 20% of the trials in the
+    rolling window end with reward=None or an infra error, the driver stops submitting,
+    logs a typed QUOTA/INFRA stop, and exits non-zero so the watchdog catches saturation
+    within minutes instead of hours.
+    """
+
+    def __init__(self, window: int = CHURN_WINDOW, threshold: float = CHURN_THRESHOLD):
+        self._window = window
+        self._threshold = threshold
+        self._outcomes: deque[bool] = deque()
+        self._failed = 0
+
+    def record(self, failed: bool) -> None:
+        self._outcomes.append(failed)
+        self._failed += failed
+        if len(self._outcomes) > self._window:
+            self._failed -= self._outcomes.popleft()
+
+    def tripped(self) -> bool:
+        return len(self._outcomes) >= self._window and self._failed / len(self._outcomes) > self._threshold
+
+    def describe(self) -> str:
+        return f"{self._failed}/{len(self._outcomes)} of the last {len(self._outcomes)} trials ended reward=None/infra"
+
+
 def run_wave(
     root: Path,
     rows_by_id: dict[str, dict],
@@ -791,6 +841,7 @@ def run_wave(
             # completed futures (with their full summaries) until run end was the wave2-full
             # OOM at 375 workers. The ledger holds the sealed per-row evidence on disk.
 
+            churn = ChurnMonitor()
             for future in as_completed(future_to_row):
                 group_id, instance_id = future_to_row.pop(future)
                 counts.setdefault(group_id, {"done": 0, "valid": 0, "invalid": 0})
@@ -800,9 +851,17 @@ def run_wave(
                     LOGGER.error("wave row %s failed: %s", instance_id, error)
                     counts[group_id]["invalid"] += 1
                     invalid.append({"task_id": instance_id, "group": group_id, "error": str(error)[:400]})
+                    churn.record(True)
+                    if churn.tripped():
+                        raise QuotaInfraStop(f"QUOTA/INFRA STOP: {churn.describe()}; submissions stopped") from error
                     continue
                 nop = (summaries["nop"].get("rewards") or {}).get("reward")
                 oracle = (summaries["oracle"].get("rewards") or {}).get("reward")
+                churn.record(nop is None or oracle is None)
+                if churn.tripped():
+                    for pending in future_to_row:
+                        pending.cancel()
+                    raise QuotaInfraStop(f"QUOTA/INFRA STOP: {churn.describe()}; submissions stopped")
                 counts[group_id]["done"] += 1
                 if nop == 0.0 and oracle == 1.0:
                     counts[group_id]["valid"] += 1

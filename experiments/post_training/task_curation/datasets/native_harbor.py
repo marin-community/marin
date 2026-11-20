@@ -34,6 +34,7 @@ from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, RawRow
 from taskcompendium.runtime.resources import inline_resource
 
+from experiments.post_training.task_curation.datasets.swe_rebench_v2.workspace import WORKSPACE, to_workspace
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import unpack_task_binary
 
 VERSION = "2026.11.13.2"
@@ -41,11 +42,18 @@ HUB_READ_CONCURRENCY = 16
 
 
 def unpack_native(row: dict, context: ConversionContext) -> dict:
-    """Join separately shipped solution files without exposing them to the actor."""
+    """Join separately shipped solution files without exposing them to the actor.
+
+    The upstream solution archive was built for the row's own per-repo workspace: the solve
+    script hard-codes `WORKDIR=<workdir>`. Ruling 2026-11-20 moves every task to the uniform
+    /testbed workspace, so the solution members' text is rewritten with the same path-token
+    boundaries the converter applies elsewhere (siblings and nested paths survive).
+    """
     data = unpack_task_binary(row, context)
     solution = row.get("solution_binary")
     if not solution:
         return data
+    workdir = (row.get("workdir") or "").strip()
     with tarfile.open(fileobj=io.BytesIO(solution), mode="r:*") as archive:
         for member in archive:
             name = member.name.removeprefix("./")
@@ -59,6 +67,12 @@ def unpack_native(row: dict, context: ConversionContext) -> dict:
             if not member.isfile():
                 raise ValueError(f"Unsupported solution archive member: {name}")
             content = archive.extractfile(member).read()
+            if workdir and workdir != WORKSPACE:
+                text = content.decode(errors="replace")
+                rewritten = to_workspace(text, workdir)
+                if rewritten != text:
+                    data.setdefault("rewritten_solution_members", []).append(name)
+                content = rewritten.encode()
             encoded = base64.b64encode(content).decode()
             if name in data["files"] and data["files"][name] != encoded:
                 raise ValueError(f"Conflicting native solution member: {name}")

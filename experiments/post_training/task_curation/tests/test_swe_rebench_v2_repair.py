@@ -27,6 +27,7 @@ from experiments.post_training.task_curation.datasets.swe_rebench_v2.upstream.ta
 from experiments.post_training.task_curation.swe_rebench_fidelity_driver import (
     TRANSIENT_RETRY_DELAYS_SEC,
     transient_daytona_error,
+    transient_daytona_text,
 )
 
 PYTHON_ROW = {
@@ -380,3 +381,90 @@ def test_transient_daytona_classification_retries_infra_and_never_grading():
     assert not transient_daytona_error(AssertionError("assert 0.0 == 1.0"))
     assert not transient_daytona_error(ValueError("Unexpected hardened setup command shape"))
     assert not transient_daytona_error(RuntimeError("UnsupportedMachineSpec: missing environment/Dockerfile"))
+    # The machinery embeds provider failures in the summary instead of raising: the embedded
+    # form classifies the same way (the wave-v9 churn recorded 8,000 reward=None summaries).
+    assert transient_daytona_text(
+        "DaytonaValidationError: Failed to create sandbox: Total CPU limit exceeded. Maximum allowed: 2500."
+    )
+    assert transient_daytona_text("RuntimeError: Daytona environment is not running")
+    assert not transient_daytona_text("ValueError: Unexpected hardened setup command shape")
+
+
+def test_churn_monitor_trips_at_twenty_percent_and_stays_quiet_below():
+    """Ruling 2026-11-20 (the wave-v9 churn): more than about 20% of the trials in the
+    rolling window ending reward=None/infra trips the typed QUOTA/INFRA stop."""
+    from experiments.post_training.task_curation.swe_rebench_fidelity_driver import (
+        CHURN_THRESHOLD,
+        CHURN_WINDOW,
+        ChurnMonitor,
+    )
+
+    assert CHURN_WINDOW == 50 and CHURN_THRESHOLD == 0.2
+    monitor = ChurnMonitor()
+    for _ in range(CHURN_WINDOW):
+        monitor.record(False)
+    assert not monitor.tripped()
+    # 10 failures in 50 (exactly 20%) does not trip; the 11th (22%) does, and the window
+    # sliding back under 20% clears it
+    for _ in range(10):
+        monitor.record(True)
+    assert not monitor.tripped()
+    monitor.record(True)
+    assert monitor.tripped()
+    assert "11/50" in monitor.describe()
+    # the 11 failures sit at the window's back: 39 clean records only push them forward;
+    # the 40th slides the first one out and the monitor clears
+    for _ in range(39):
+        monitor.record(False)
+    assert monitor.tripped()
+    monitor.record(False)
+    assert not monitor.tripped()
+
+
+def test_native_solution_archive_rewrites_the_solve_workdir_to_testbed():
+    """Ruling 2026-11-20: the upstream solution archive hard-codes `WORKDIR=<workdir>` in the
+    solve script; the conversion rewrites the solution members to the uniform /testbed
+    workspace with the same path-token boundaries, so the oracle's gold-patch delivery runs
+    in the consolidated workspace."""
+    import base64
+    import io
+    import tarfile
+    from experiments.post_training.task_curation.datasets.native_harbor import unpack_native
+
+    def member(name: str, payload: bytes, mode: int = 0o644) -> tarfile.TarInfo:
+        info = tarfile.TarInfo(name)
+        info.size = len(payload)
+        info.mode = mode
+        return info
+
+    task_blob = io.BytesIO()
+    with tarfile.open(fileobj=task_blob, mode="w") as archive:
+        body = b"instruction body"
+        archive.addfile(member("instruction.md", body), io.BytesIO(body))
+    solve_body = (
+        b"#!/bin/bash\nset -euo pipefail\n\nWORKDIR=/spectree\n\ncd \"$WORKDIR\"\n"
+        b"git apply /solution/gold.patch\nls /sympy2 /x/spectree\n"
+    )
+    solution_blob = io.BytesIO()
+    with tarfile.open(fileobj=solution_blob, mode="w") as archive:
+        archive.addfile(member("solution/solve.sh", solve_body, mode=0o755), io.BytesIO(solve_body))
+
+    row = {
+        "path": "tasks/spectree-64.tar.gz",
+        "task_binary": task_blob.getvalue(),
+        "solution_binary": solution_blob.getvalue(),
+        "workdir": "/spectree",
+    }
+    data = unpack_native(row, context=None)
+    rewritten = base64.b64decode(data["files"]["solution/solve.sh"]).decode()
+    assert "WORKDIR=/testbed" in rewritten
+    assert 'cd "$WORKDIR"' in rewritten
+    # siblings and nested paths survive the token boundaries
+    assert "/sympy2" in rewritten and "/x/spectree" in rewritten
+    assert "/spectree" not in rewritten.replace("/x/spectree", "")
+    assert data["rewritten_solution_members"] == ["solution/solve.sh"]
+    # a row already at the uniform workspace leaves the archive untouched
+    same = unpack_native({**row, "workdir": "/testbed"}, context=None)
+    untouched = base64.b64decode(same["files"]["solution/solve.sh"]).decode()
+    assert "WORKDIR=/spectree" in untouched
+    assert "rewritten_solution_members" not in same

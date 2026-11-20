@@ -26,7 +26,6 @@ upstream ``test.sh``/``grade.py`` bytes remain the sole selection authority (rew
 import base64
 import hashlib
 import json
-import re
 import shlex
 from dataclasses import replace
 from enum import StrEnum
@@ -44,6 +43,10 @@ from taskcompendium.pipeline.models import ImportRejection, RawRow
 from experiments.post_training.task_curation.datasets.native_harbor import native_task
 from experiments.post_training.task_curation.datasets.swe_rebench_v2 import groups
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.upstream import task_files
+from experiments.post_training.task_curation.datasets.swe_rebench_v2.workspace import (
+    WORKSPACE,
+    to_workspace,
+)
 
 HERE = Path(__file__).parent
 VERSION = "2026.11.20.2"
@@ -88,30 +91,6 @@ def admission_receipt_labels(instance_id: str | None, receipts) -> dict[str, str
         "swe_rebench_admission_receipt": receipt.value,
         "swe_rebench_admission_receipt_evidence": json.dumps(evidence, sort_keys=True),
     }
-
-
-# Ruling 2026-11-20 (the 10-snapshot consolidation): every task uses ONE uniform workspace,
-# the SWE-bench/SWE-smith convention. The shared-source image layer's workspace mkdir line is
-# then constant, each group's build context collapses to one, and the declared Daytona snapshot
-# identities collapse to the ten base images. A row's original per-repo path is rewritten to
-# WORKSPACE wherever the spec wires it (the clone, the runtime cwd, the contract config, and
-# the install/test commands); rows fail their oracle under /testbed as typed exclusions.
-WORKSPACE = "/testbed"
-
-
-def to_workspace(text: str, workdir: str) -> str:
-    """Rewrite a row's per-repo workspace path to the uniform /testbed workspace.
-
-    Path-token boundaries keep sibling names (/sympy2, /sympy-bench) and nested paths
-    (/x/sympy) intact while rewriting exact occurrences (/sympy, /sympy/tests).
-    """
-    if not workdir or workdir == WORKSPACE:
-        return text
-    return re.sub(
-        rf"(?<![0-9A-Za-z_/-]){re.escape(workdir)}(?![0-9A-Za-z_-])",
-        WORKSPACE,
-        text,
-    )
 
 
 # The upstream per-task image build (combine.Dockerfile.j2) ran exactly this block as a Docker
