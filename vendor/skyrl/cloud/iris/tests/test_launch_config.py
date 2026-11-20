@@ -45,12 +45,14 @@ from skyrl_train.utils.tracking import Tracking
 from skyrl_train.config.rollout_validation import EntrypointOperation, validate_rollout_launch
 from skyrl_train.inference_engines import placement as inference_placement
 from skyrl_train.inference_engines.ray_wrapped_inference_engine import (
+    MODEL_METADATA_PATH_KEY,
     _build_inference_engine_runtime_env,
     should_verify_inference_workers,
 )
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
 from skyrl_train.trajectory_runners.model_clients import DirectModelClient
+from skyrl_train.entrypoints.main_base import create_ray_wrapped_inference_engines_from_config
 
 
 @pytest.mark.parametrize(
@@ -1130,7 +1132,6 @@ async def test_declared_serving_alias_survives_composition_and_streamed_cache_re
     )
     final = OmegaConf.load(final_path).skyrl
     assert final.trainer.policy.model.path == cache_path
-    assert final.generator.model_loading == "stream"
     submitted_models = []
 
     class Engine:
@@ -1150,7 +1151,24 @@ async def test_declared_serving_alias_survives_composition_and_streamed_cache_re
 
     backend = Tokenizer(models.WordLevel({"[UNK]": 0, "hello": 1, "answer": 2}, unk_token="[UNK]"))
     tokenizer = PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="[UNK]")
-    client = DirectModelClient(InferenceEngineClient([Engine()], tokenizer, final))
+    engines = [Engine()]
+    if local_engines:
+        allocations = []
+
+        def allocate_engines(**kwargs):
+            allocations.append(kwargs)
+            return engines
+
+        monkeypatch.setattr(
+            "skyrl_train.inference_engines.ray_wrapped_inference_engine.create_ray_wrapped_inference_engines",
+            allocate_engines,
+        )
+        engines = create_ray_wrapped_inference_engines_from_config(final, None)
+        [allocation] = allocations
+        assert allocation["pretrain"] == "s3://models/qwen"
+        assert allocation["engine_init_kwargs"]["load_format"] == "runai_streamer"
+        assert allocation["engine_init_kwargs"][MODEL_METADATA_PATH_KEY] == cache_path
+    client = DirectModelClient(InferenceEngineClient(engines, tokenizer, final))
     output = await client.generate(
         {"prompts": [[{"role": "user", "content": "hello"}]], "chat_completion_params": [{}]}
     )

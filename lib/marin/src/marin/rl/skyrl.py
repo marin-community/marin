@@ -1036,13 +1036,12 @@ def _launch_config_yaml(
     generator = cast(dict[str, object], recipe["generator"])
     if generator["backend"] == "vllm" and generator["run_engines_locally"]:
         engine_kwargs = cast(dict[str, object], generator.setdefault("engine_init_kwargs", {}))
-        declared_name = engine_kwargs.get("served_model_name", LOCAL_VLLM_SERVED_MODEL_NAME)
+        declared_name = engine_kwargs.setdefault("served_model_name", LOCAL_VLLM_SERVED_MODEL_NAME)
         if declared_name != LOCAL_VLLM_SERVED_MODEL_NAME:
             raise ValueError(
                 f"generator.engine_init_kwargs.served_model_name must be {LOCAL_VLLM_SERVED_MODEL_NAME!r} "
                 "for local vLLM engines"
             )
-        engine_kwargs["served_model_name"] = LOCAL_VLLM_SERVED_MODEL_NAME
     for callback in recipe.get("trainer", {}).get("callbacks") or []:
         if callback["type"] == _BEST_CHECKPOINT_CALLBACK:
             callback["initial_model_uri"] = model.uri

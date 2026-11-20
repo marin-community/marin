@@ -24,6 +24,7 @@ from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, materialized_config, run
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.skyrl import (
+    LOCAL_VLLM_SERVED_MODEL_NAME,
     ArtifactHfModel,
     ResolvedModelLocator,
     SkyRLPolicyModel,
@@ -496,6 +497,13 @@ def comparison_config(launch: dict, recorded: RecordedLaunch | None = None) -> d
         if value not in aliases:
             raise InvalidComparison(f"native model binding differs from declared inputs: {path}")
         set_path(config, path, "<model-staging>")
+    generator = config["skyrl"]["generator"]
+    if generator["backend"] == "vllm" and generator["run_engines_locally"]:
+        replace_alias(
+            "skyrl.generator.engine_init_kwargs.served_model_name",
+            [LOCAL_VLLM_SERVED_MODEL_NAME, *[uri.rstrip("/").rsplit("/", 1)[-1] for uri in aliases]],
+            "<served-model-name>",
+        )
     for field in ("checkpoint_root", "export_root", "attempts_root", "resolved_config_uri", "terminal_manifest_uri"):
         config["artifacts"][field] = f"<output:{field}>"
     for path, field, suffix in (
