@@ -354,8 +354,6 @@ def build_sft_run(
     """
     if dp_racks <= 0:
         raise ValueError(f"dp_racks must be positive, got {dp_racks}")
-    if stop_after_steps is not None and stop_after_steps <= 0:
-        raise ValueError(f"stop_after_steps must be positive, got {stop_after_steps}")
     if muon_lr <= 0 or adam_lr <= 0:
         raise ValueError("learning rates must be positive")
     if expert_placement is not None and not expert_placement.permutes(initialize_from):

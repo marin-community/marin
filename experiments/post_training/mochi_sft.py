@@ -17,7 +17,6 @@ from fray.types import ResourceConfig
 from marin.execution.lazy import ArtifactStep, lower
 from marin.execution.step_runner import StepRunner
 from marin.rl.skyrl import ArtifactHfModel
-from rigging.filesystem.storage_path import StoragePath
 
 from experiments.grug.moe_hero_ep import launch_hero_sft
 from experiments.grug.moe_hero_ep.expert_placement import ExpertPlacement
@@ -38,15 +37,13 @@ MOCHI_SPEC = MochiSFT(
     router_bias_mode=RouterBiasMode.FROZEN,
     capacity_factor=1.625,
     eval_every=500,
-    periodic_checkpoints=True,
+    checkpoints="periodic",
     expert_placement=ExpertPlacement.from_json(
         Path(launch_hero_sft.__file__).with_name("hero_sft_expert_placement_step393491.json").read_text()
     ),
     version="2026.11.10",
     source_revision="406dff47f217637ceca499b266989588cb0df5ab",
-    export_resources=ResourceConfig.with_cpu(
-        cpu=64, ram="256g", disk="512g", regions=("US-EAST-08A",), target_cluster="cw-us-east-08a"
-    ),
+    export_resources=ResourceConfig.with_cpu(cpu=64, ram="256g", disk="512g", regions=("US-EAST-08A",)),
     # The pinned Hub tokenizer, config, and chat template match the training copy at S3 version 2026.09.18 by SHA-256.
     tokenizer_uri="marin-community/marin-tokenizer-tools",
     tokenizer_revision="3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09",
@@ -58,21 +55,19 @@ def _preset(recipe: MochiSFT) -> SFTPreset[MochiSFT]:
     return SFTPreset(
         f"mixture-262k-{resources.replicas}node",
         recipe,
-        replace(resources, regions=("US-EAST-08A",), target_cluster="cw-us-east-08a"),
+        replace(resources, regions=("US-EAST-08A",)),
+    )
+
+
+def _short_preset(racks: int) -> SFTPreset[MochiSFT]:
+    return _preset(
+        replace(MOCHI_SPEC, run_id=f"mochi-sft-{racks}-rack", dp_racks=racks, stop_after_steps=3, checkpoints="none")
     )
 
 
 MIXTURE_262K_176NODE = _preset(MOCHI_SPEC)
-MIXTURE_262K_16NODE = _preset(
-    replace(
-        MOCHI_SPEC, run_id="mochi-sft-mixture-262k-16node", dp_racks=1, stop_after_steps=3, periodic_checkpoints=False
-    )
-)
-MIXTURE_262K_48NODE = _preset(
-    replace(
-        MOCHI_SPEC, run_id="mochi-sft-mixture-262k-48node", dp_racks=3, stop_after_steps=3, periodic_checkpoints=False
-    )
-)
+MIXTURE_262K_16NODE = _short_preset(1)
+MIXTURE_262K_48NODE = _short_preset(3)
 MOCHI_SFT = (MIXTURE_262K_176NODE, MIXTURE_262K_16NODE, MIXTURE_262K_48NODE)
 _BY_NAME = {preset.name: preset for preset in MOCHI_SFT}
 
@@ -80,13 +75,16 @@ _BY_NAME = {preset.name: preset for preset in MOCHI_SFT}
 def build_run(
     preset: SFTPreset[MochiSFT], *, steps: int | None, export: bool, prefix: str | None
 ) -> ArtifactStep | ArtifactHfModel:
-    if prefix is not None and not StoragePath(prefix).rooted:
-        raise ValueError("--prefix must be a storage URI or an absolute directory")
-    stop = preset.recipe.stop_after_steps if steps is None else steps
-    length = f"{stop}-steps" if stop is not None else "full"
-    suffix = "-export" if export else ""
-    recipe = replace(preset.recipe, stop_after_steps=stop, run_id=f"mochi-sft-{preset.name}-{length}{suffix}")
-    training = recipe.training_step(preset.resources, checkpoints="final" if export else "none", prefix=prefix)
+    recipe = preset.recipe
+    if recipe.checkpoints != "periodic" or steps is not None or prefix is not None:
+        recipe = replace(
+            recipe,
+            stop_after_steps=recipe.stop_after_steps if steps is None else steps,
+            checkpoints="final" if export else "none",
+        )
+        if prefix is None:
+            prefix = recipe.scratch_prefix()
+    training = recipe.training_step(preset.resources, prefix=prefix)
     return recipe.export_model(training) if export else training
 
 

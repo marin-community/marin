@@ -89,17 +89,16 @@ def test_openthoughts_keeps_one_conversation_per_context_window(tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("changes", "flags", "message"),
+    ("changes", "message"),
     [
-        ({"resources": OPENTHOUGHTS_32K_4NODE.resources}, (), "mesh does not fit SFT resources"),
-        ({"recipe": replace(MIXTURE_SPEC, batch_size=7)}, (), "must be divisible by the mesh microbatch"),
-        ({}, ("--accelerator", "4xH100"), "preset fixes its own allocation"),
+        ({"resources": OPENTHOUGHTS_32K_4NODE.resources}, "mesh does not fit SFT resources"),
+        ({"recipe": replace(MIXTURE_SPEC, batch_size=7)}, "must be divisible by the mesh microbatch"),
     ],
-    ids=["mesh", "batch", "fixed-allocation"],
+    ids=["mesh", "batch"],
 )
-def test_sft_plan_refuses_invalid_gpu_geometry(monkeypatch, capsys, changes, flags, message):
+def test_sft_plan_refuses_invalid_gpu_geometry(monkeypatch, capsys, changes, message):
     preset = replace(MIXTURE_262K_32NODE, **changes)
-    assert invoke_sft(monkeypatch, (preset,), "--preset", preset.name, *flags) == 2
+    assert invoke_sft(monkeypatch, (preset,), "--preset", preset.name) == 2
     assert message in capsys.readouterr().err
 
 

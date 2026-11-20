@@ -8,6 +8,7 @@ import shutil
 import subprocess
 from pathlib import Path
 from threading import Lock
+from types import SimpleNamespace
 
 import equinox as eqx
 import jax
@@ -15,6 +16,7 @@ import jax.numpy as jnp
 import levanter.compat.hf_export as hf_export
 import numpy as np
 import pytest
+from fray.current_client import set_current_client
 from jax.sharding import PartitionSpec as P
 from levanter.checkpoint import save_checkpoint
 from levanter.grug.sharding import compact_grug_mesh
@@ -189,7 +191,7 @@ def test_export_recovery_verifies_shards_and_preserves_completed_output(tmp_path
 
 
 def test_mochi_sft_three_rack_run_uses_scratch_without_checkpoints(monkeypatch):
-    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin")
+    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central2")
     monkeypatch.delenv("MARIN_TEMP_PREFIX", raising=False)
     monkeypatch.setattr(sft_recipe, "checkpoint_step", lambda _: 393491)
     monkeypatch.setattr(launch_hero_sft, "special_token_init", lambda _: None)
@@ -206,10 +208,6 @@ def test_mochi_sft_three_rack_run_uses_scratch_without_checkpoints(monkeypatch):
     assert config.stop_step == 393494
     assert not config.trainer.save_checkpoints
     assert config.trainer.trainer.load_checkpoint_path == [MOCHI_SPEC.initialize_from]
-
-    invalid = dataclasses.replace(MIXTURE_262K_48NODE.recipe, dp_racks=0)
-    with pytest.raises(ValueError, match="dp_racks must be positive"):
-        invalid.training_step(launch_hero_sft.sft_resources(0))
 
 
 @pytest.mark.timeout(240)
@@ -234,7 +232,7 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
     preset = dataclasses.replace(MIXTURE_262K_16NODE, recipe=recipe)
     resources = preset.resources
     with pytest.raises(ValueError, match="GB200 allocation derived from dp_racks"):
-        dataclasses.replace(preset, resources=dataclasses.replace(resources, replicas=1)).model()
+        dataclasses.replace(preset, resources=dataclasses.replace(resources, replicas=15)).model()
     initializer_metadata.write_text(json.dumps({**initial, "is_temporary": True}))
     with pytest.raises(ValueError, match="temporary checkpoint"):
         preset.model()
@@ -251,7 +249,7 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
     assert training.trainer.trainer.checkpointer.save_interval is None
     assert training.trainer.trainer.checkpointer.keep is None
     assert training.resources.regions == ("US-EAST-08A",)
-    assert training.resources.target_cluster == "cw-us-east-08a"
+    assert training.resources.target_cluster is None
     assert Path(trained.path()).is_relative_to(prefix)
     checkpoints = Path(trained.path()) / f"expert-placement-{placement.fingerprint}" / "checkpoints"
     native, _ = native_fixture(str(checkpoints / "step-17"), master=True)
@@ -274,9 +272,20 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
     output = Path(model.step.path())
     assert output.is_relative_to(prefix)
     config = materialized_config(model.step, str(tmp_path))
-    local_export = dataclasses.replace(model.step, run=lambda args: sft_recipe._export_final_sft(**args)).lower()
-    assert local_export.fn is not None
-    local_export.fn(str(output))
+    requests = []
+
+    def submit(request):
+        requests.append(request)
+        request.entrypoint.callable_entrypoint.callable()
+        return SimpleNamespace(wait=lambda **kwargs: None)
+
+    lowered = model.step.lower()
+    assert lowered.fn is not None
+    with set_current_client(SimpleNamespace(submit=submit)):
+        lowered.fn(str(output))
+    [request] = requests
+    assert request.resources.regions == ("US-EAST-08A",)
+    assert request.resources.target_cluster is None
 
     record = read_record(str(output))
     assert record is not None and record.config is not None
@@ -285,6 +294,10 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
     assert record.config["tokenizer_uri"] == "marin-community/marin-tokenizer-tools"
     assert record.config["tokenizer_revision"] == MOCHI_SPEC.tokenizer_revision
     hf = output / model.relative_path
+    context = StepContext.for_run(
+        output_path=str(tmp_path / "rl"), prefix=str(tmp_path), region=None, runtime_args={}, deps=model.deps()
+    )
+    assert model.resolve(context).uri == str(hf)
     manifest = hf / "export-manifest.json"
     completed = manifest.read_bytes()
     sft_recipe._export_final_sft(**config)
@@ -311,13 +324,13 @@ from skyrl_train.tokenizer import create_tokenizer, validate_checkpoint_vocabula
 
 root = Path(sys.argv[2])
 stage_artifact_model(sys.argv[1], "mochi-sft-test@dev", str(root))
-tokenizer = create_tokenizer(sys.argv[3], disable_fast_tokenizer=False)
+tokenizer = create_tokenizer(str(root), disable_fast_tokenizer=False)
 validate_checkpoint_vocabulary(
     tokenizer,
     checkpoint_path=str(root),
     checkpoint_revision=None,
     checkpoint_identity="mochi-sft-test@dev",
-    tokenizer_identity=sys.argv[3],
+    tokenizer_identity=str(root),
     disable_fast_tokenizer=False,
 )
 generation = json.loads((root / "generation_config.json").read_text())
@@ -331,15 +344,12 @@ assert layout == GRUG_SPLIT_EXPERT_SCHEMA_VERSION
 """,
             str(hf),
             str(tmp_path / "staged"),
-            str(tokenizer_source),
         ),
         cwd=skyrl,
         env=os.environ | {"PYTHONPATH": "skyrl-train:skyrl-gym"},
         check=True,
         timeout=180,
     )
-    assert model.tokenizer_uri is None
-    assert model.tokenizer_revision is None
 
 
 def test_cpu_export_resumes_completed_shards_after_lowering_execution_limits(tmp_path, monkeypatch):

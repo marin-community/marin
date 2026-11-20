@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Export the final permanent Mochi SFT checkpoint for policy initialization."""
+"""Build Mochi SFT training and export its final checkpoint for policy initialization."""
 
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -14,6 +14,7 @@ from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply
 from marin.execution.remote import remote
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.skyrl import ArtifactHfModel
+from marin.training.run_environment import add_run_env_variables
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -48,27 +49,35 @@ class MochiSFT:
     export_resources: ResourceConfig
     tokenizer_uri: str
     tokenizer_revision: str
+    checkpoints: Literal["periodic", "final", "none"]
     stop_after_steps: int | None = None
     eval_every: int = 0
     expert_placement: ExpertPlacement | None = None
-    periodic_checkpoints: bool = False
 
     def trained(self, resources: ResourceConfig) -> ArtifactHfModel:
-        checkpoints = "periodic" if self.periodic_checkpoints else "final"
-        return self.export_model(self.training_step(resources, checkpoints=checkpoints))
+        recipe = replace(self, checkpoints="final") if self.checkpoints == "none" else self
+        prefix = None if self.checkpoints == "periodic" else self.scratch_prefix()
+        return recipe.export_model(recipe.training_step(resources, prefix=prefix))
+
+    def scratch_prefix(self) -> str:
+        return marin_temp_bucket(3, source_prefix=self.initialize_from)
 
     def training_step(
         self,
         resources: ResourceConfig,
         *,
-        checkpoints: Literal["periodic", "final", "none"] = "none",
         prefix: str | None = None,
     ) -> ArtifactStep[HeroThroughputResult]:
         allocation = sft_resources(self.dp_racks)
         if resources != replace(allocation, regions=resources.regions, target_cluster=resources.target_cluster):
             raise ValueError("Mochi SFT resources must match the GB200 allocation derived from dp_racks")
+        run_id = self.run_id
+        if prefix is not None:
+            length = f"{self.stop_after_steps}-steps" if self.stop_after_steps is not None else "full"
+            suffix = "-export" if self.checkpoints == "final" else ""
+            run_id = f"{run_id}-{length}{suffix}"
         step = build_sft_run(
-            run_id=self.run_id,
+            run_id=run_id,
             initialize_from=self.initialize_from,
             start_step=checkpoint_step(self.initialize_from),
             muon_lr=self.muon_lr,
@@ -83,15 +92,18 @@ class MochiSFT:
             expert_placement=self.expert_placement,
             version=self.version,
             resources=resources,
-            checkpoints=checkpoints,
+            checkpoints=self.checkpoints,
         )
-        if checkpoints == "periodic":
+        if prefix is None:
             return step
-        return replace(step, name=user_owned_name(f"grug/{self.run_id}"), output_prefix=prefix or marin_temp_bucket(3))
+        return replace(step, name=user_owned_name(f"grug/{run_id}"), output_path_prefix=prefix)
 
     def export_model(self, step: ArtifactStep[HeroThroughputResult]) -> ArtifactHfModel:
         training = step.build_config(StepContext.for_fingerprint(step.runtime_args.keys(), step.deps))
         relative_path = "hf"
+        source_revision = self.source_revision
+        if step.output_path_prefix is not None:
+            source_revision = add_run_env_variables({}).get("GIT_COMMIT", source_revision)
         export_step = apply(
             f"{step.name}-hf",
             remote(_export_final_sft, resources=self.export_resources, env_vars={"TMPDIR": "/cache"}),
@@ -101,12 +113,14 @@ class MochiSFT:
             expected_step=training.stop_step,
             placement=self.expert_placement,
             capacity_factor=self.capacity_factor,
-            source_revision=self.source_revision,
+            source_revision=source_revision,
             relative_path=relative_path,
             tokenizer_uri=self.tokenizer_uri,
             tokenizer_revision=self.tokenizer_revision,
         )
-        return ArtifactHfModel(step=replace(export_step, output_prefix=step.output_prefix), relative_path=relative_path)
+        return ArtifactHfModel(
+            step=replace(export_step, output_path_prefix=step.output_path_prefix), relative_path=relative_path
+        )
 
 
 def _export_final_sft(
