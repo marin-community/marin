@@ -1,13 +1,16 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Log parsers and test-name matching shared by the standalone Harbor graders.
 # task_files.grader_source() copies the definitions that a parser needs into tests/grade.py.
 from __future__ import annotations
 
-from bisect import bisect_left
-from enum import Enum
 import contextlib
 import fnmatch
 import re
 import xml.etree.ElementTree as ET
+from bisect import bisect_left
+from enum import Enum
 
 
 class TestStatus(str, Enum):
@@ -24,9 +27,7 @@ def ansi_escape(text: str) -> str:
     """
     Remove ANSI escape sequences from text
     """
-    return re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|[()][A-Z0-9])").sub(
-        "", text
-    )
+    return re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|[()][A-Z0-9])").sub("", text)
 
 
 def parse_log_maven(log: str) -> ParsedTestLog:
@@ -82,9 +83,7 @@ def _mvn_summary_class(line: str) -> str | None:
     return None
 
 
-def _mvn_status_from_summary_counts(
-    tests_run: int, failures: int, errors: int, skipped: int
-) -> TestStatus:
+def _mvn_status_from_summary_counts(tests_run: int, failures: int, errors: int, skipped: int) -> TestStatus:
     if failures == 0 and errors == 0:
         if tests_run > skipped or skipped == 0:
             return TestStatus.PASSED
@@ -106,9 +105,7 @@ def _record_mvn_gradle_test_status(
         results.setdefault(current_gradle_class, status)
 
 
-def _record_mvn_failure(
-    results: ParsedTestLog, line: str, match: re.Match[str]
-) -> None:
+def _record_mvn_failure(results: ParsedTestLog, line: str, match: re.Match[str]) -> None:
     clazz = match.group("class")
     method = match.group("method")
     test_id = f"{clazz}.{method}"
@@ -133,9 +130,7 @@ def _record_mvn_summary(
             results.setdefault(result_name, status)
 
 
-def _nested_statuses(
-    names: list[str], results: ParsedTestLog, parent: str
-) -> set[TestStatus]:
+def _nested_statuses(names: list[str], results: ParsedTestLog, parent: str) -> set[TestStatus]:
     prefix = f"{parent}$"
     statuses: set[TestStatus] = set()
     index = bisect_left(names, prefix)
@@ -168,9 +163,7 @@ def parse_java_mvn(log: str) -> ParsedTestLog:
     )
     running_re = re.compile(r"^(?:\[INFO\]\s+)?Running\s+([A-Za-z0-9_$.]+)$")
     gradle_class_re = re.compile(r"^([A-Za-z0-9_$.]+(?:Test|Tests|IT|ITCase))$")
-    gradle_test_status_re = re.compile(
-        r"^Test\s+(.+?)\s+(PASSED|FAILED)(?:\s+\(\d+(?:\.\d+)?\s*m?s\))?$"
-    )
+    gradle_test_status_re = re.compile(r"^Test\s+(.+?)\s+(PASSED|FAILED)(?:\s+\(\d+(?:\.\d+)?\s*m?s\))?$")
     summary_re = re.compile(
         r"Tests run:\s*(\d+),\s*Failures:\s*(\d+),\s*Errors:\s*(\d+),"
         r"\s*Skipped:\s*(\d+)"
@@ -285,9 +278,7 @@ def parse_log_junit(log: str) -> ParsedTestLog:
 def parse_java_mvn_v2(log: str) -> ParsedTestLog:
     """Parse Maven Surefire / Failsafe style logs and extract module status."""
     results: ParsedTestLog = {}
-    line_re = re.compile(
-        r"^\[INFO\]\s+(?P<name>.+?)\s+\.\.+\s+(?P<status>SUCCESS|FAILURE|SKIPPED)(?:\s|\[|$)"
-    )
+    line_re = re.compile(r"^\[INFO\]\s+(?P<name>.+?)\s+\.\.+\s+(?P<status>SUCCESS|FAILURE|SKIPPED)(?:\s|\[|$)")
     summary_re = re.compile(
         r"Tests run:\s*(\d+),\s*Failures:\s*(\d+),\s*Errors:\s*(\d+),"
         r"\s*Skipped:\s*(\d+)"
@@ -414,9 +405,7 @@ def parse_log_cargo(log: str) -> ParsedTestLog:
         line = ANSI_RE.sub("", raw_line).strip()
         build_failure = CARGO_BUILD_FAILURE_RE.match(line)
         if build_failure:
-            test_status_map[f"{build_failure.group('crate')}::<build>"] = (
-                TestStatus.ERROR
-            )
+            test_status_map[f"{build_failure.group('crate')}::<build>"] = TestStatus.ERROR
             continue
         pending_outcome = _pending_outcome(line)
         if pending_outcome is not None and pending_test_names:
@@ -556,12 +545,7 @@ def _dart_test_start(event: dict[str, Any]) -> tuple[int, str] | None:
         return None
     test_id = test_info.get("id")
     test_name = test_info.get("name")
-    if (
-        type(test_id) is int
-        and isinstance(test_name, str)
-        and test_name
-        and not test_name.startswith("loading ")
-    ):
+    if type(test_id) is int and isinstance(test_name, str) and test_name and not test_name.startswith("loading "):
         return test_id, test_name
     return None
 
@@ -618,12 +602,8 @@ def parse_log_dart(log: str) -> ParsedTestLog:
 def parse_log_dart_v3(log: str) -> ParsedTestLog:
     """Parse Dart/Flutter test output with ``[E]`` markers."""
     results: ParsedTestLog = {}
-    test_line_re = re.compile(
-        r"^\d+:\d+\s+\+\d+(?:\s+-\d+)?:\s+(/[^:]+\.dart):\s+(.+?)(?:\s+\[E\])?$"
-    )
-    loading_error_re = re.compile(
-        r"^\d+:\d+\s+\+\d+\s+-\d+:\s+loading\s+(/[^:]+\.dart)\s+\[E\]$"
-    )
+    test_line_re = re.compile(r"^\d+:\d+\s+\+\d+(?:\s+-\d+)?:\s+(/[^:]+\.dart):\s+(.+?)(?:\s+\[E\])?$")
+    loading_error_re = re.compile(r"^\d+:\d+\s+\+\d+\s+-\d+:\s+loading\s+(/[^:]+\.dart)\s+\[E\]$")
 
     for raw in log.splitlines():
         line = raw.strip()
@@ -660,9 +640,7 @@ def parse_log_elixir(log: str) -> ParsedTestLog:
 
     # Regexes
     skipped_re = re.compile(r"^\*\s+test\s+(.*?)\s+\(skipped\)\s+\[L#\d+\]$")
-    passed_timed_re = re.compile(
-        r"^\*\s+test\s+(.*?)\s+\([0-9]+(?:\.[0-9]+)?ms\)\s+\[L#\d+\]$"
-    )
+    passed_timed_re = re.compile(r"^\*\s+test\s+(.*?)\s+\([0-9]+(?:\.[0-9]+)?ms\)\s+\[L#\d+\]$")
     passed_basic_re = re.compile(r"^\*\s+test\s+(.*?)\s+\[L#\d+\]$")
     failure_header_re = re.compile(r"^\d+\)\s+test\s+(.*?)\s+\([^)]+\)$")
 
@@ -765,22 +743,16 @@ def parse_log_gotest(log: str) -> ParsedTestLog:
 JAVA_OPTIONS_RE = re.compile(r"\s*Picked up _JAVA_OPTIONS:.*")
 
 
-GRADLE_CUSTOM_STATUS_RE = re.compile(
-    r"^(.+)\s+(PASSED|FAILED)(?:$|\s|[a-z]|[^A-Za-z0-9_])"
-)
+GRADLE_CUSTOM_STATUS_RE = re.compile(r"^(.+)\s+(PASSED|FAILED)(?:$|\s|[a-z]|[^A-Za-z0-9_])")
 
 
-GRADLE_CUSTOM_PARTIAL_STATUS_RE = re.compile(
-    r"^(.+?)\s+(P|PA|PAS|PASS|PASSE|F|FA|FAI|FAIL|FAILE)$"
-)
+GRADLE_CUSTOM_PARTIAL_STATUS_RE = re.compile(r"^(.+?)\s+(P|PA|PAS|PASS|PASSE|F|FA|FAI|FAIL|FAILE)$")
 
 
 GRADLE_BUILD_SUMMARY_RE = re.compile(r"^BUILD (SUCCESSFUL|FAILED)(?:$|\s)")
 
 
-def _record_gradle_custom_status(
-    test_status_map: ParsedTestLog, test_name: str, status: str
-) -> bool:
+def _record_gradle_custom_status(test_status_map: ParsedTestLog, test_name: str, status: str) -> bool:
     if status == "PASSED":
         test_status_map[test_name] = TestStatus.PASSED
         return True
@@ -790,9 +762,7 @@ def _record_gradle_custom_status(
     return False
 
 
-def _record_gradle_custom_status_line(
-    test_status_map: ParsedTestLog, line: str
-) -> bool:
+def _record_gradle_custom_status_line(test_status_map: ParsedTestLog, line: str) -> bool:
     if not (match := GRADLE_CUSTOM_STATUS_RE.match(line)):
         return False
     test_name, status = match.groups()
@@ -808,9 +778,7 @@ def _consume_gradle_custom_status_prefix(
         return None, False
 
     pending_name, status_prefix = pending_status_prefix
-    consumed = _record_gradle_custom_status(
-        test_status_map, pending_name, f"{status_prefix}{line}"
-    )
+    consumed = _record_gradle_custom_status(test_status_map, pending_name, f"{status_prefix}{line}")
     return None, consumed
 
 
@@ -824,9 +792,7 @@ def _consume_gradle_custom_test_name(
     return None, True
 
 
-def _gradle_custom_status_prefix(
-    line: str, had_java_options: bool
-) -> tuple[str, str] | None:
+def _gradle_custom_status_prefix(line: str, had_java_options: bool) -> tuple[str, str] | None:
     if not had_java_options:
         return None
     if partial_match := GRADLE_CUSTOM_PARTIAL_STATUS_RE.match(line):
@@ -856,9 +822,7 @@ def parse_log_gradle_custom(log: str) -> ParsedTestLog:
             continue
 
         if pending_name_prefix is not None:
-            _record_gradle_custom_status_line(
-                test_status_map, f"{pending_name_prefix}{line}"
-            )
+            _record_gradle_custom_status_line(test_status_map, f"{pending_name_prefix}{line}")
             pending_name_prefix = None
 
         pending_status_prefix, consumed = _consume_gradle_custom_status_prefix(
@@ -867,9 +831,7 @@ def parse_log_gradle_custom(log: str) -> ParsedTestLog:
         if consumed:
             continue
 
-        pending_test_name, consumed = _consume_gradle_custom_test_name(
-            test_status_map, pending_test_name, line
-        )
+        pending_test_name, consumed = _consume_gradle_custom_test_name(test_status_map, pending_test_name, line)
         if consumed:
             continue
 
@@ -877,9 +839,7 @@ def parse_log_gradle_custom(log: str) -> ParsedTestLog:
             pending_test_name = None
             continue
 
-        if pending_status_prefix := _gradle_custom_status_prefix(
-            line, had_java_options
-        ):
+        if pending_status_prefix := _gradle_custom_status_prefix(line, had_java_options):
             continue
 
         if had_java_options:
@@ -1080,9 +1040,7 @@ def parse_log_js_3(log: str) -> ParsedTestLog:
     results: ParsedTestLog = {}
     stack: list[str] = []
 
-    tap_line_re = re.compile(
-        r"^(?P<status>not ok|ok)\s+\d+\s+-\s+(?P<name>.*?)(?:\s+#.*)?$"
-    )
+    tap_line_re = re.compile(r"^(?P<status>not ok|ok)\s+\d+\s+-\s+(?P<name>.*?)(?:\s+#.*)?$")
 
     for raw in log.splitlines():
         line = raw.strip()
@@ -1110,18 +1068,14 @@ def parse_log_js_3(log: str) -> ParsedTestLog:
         name = _strip_js_duration_suffix(name.strip())
         if not name:
             continue
-        skip_marker = any(
-            token in raw_name.lower() for token in ("# skip", "# skipped", "# todo")
-        )
+        skip_marker = any(token in raw_name.lower() for token in ("# skip", "# skipped", "# todo"))
 
         full_name = " :: ".join((*stack, name)) if stack else name
 
         if skip_marker:
             results[full_name] = TestStatus.SKIPPED
         else:
-            status_value = (
-                TestStatus.PASSED if status_word == "ok" else TestStatus.FAILED
-            )
+            status_value = TestStatus.PASSED if status_word == "ok" else TestStatus.FAILED
             if status_value == TestStatus.FAILED or full_name not in results:
                 results[full_name] = status_value
 
@@ -1133,9 +1087,7 @@ def parse_log_js_3(log: str) -> ParsedTestLog:
 
 def _strip_js_4_tag(payload: str) -> str:
     payload = payload.strip()
-    if (payload.startswith("[") and "]: " in payload) or (
-        payload.startswith("[") and "]:" in payload
-    ):
+    if (payload.startswith("[") and "]: " in payload) or (payload.startswith("[") and "]:" in payload):
         payload = payload.split("]:", 1)[1].strip()
     if payload.startswith(":"):
         payload = payload[1:].strip()
@@ -1194,9 +1146,7 @@ def parse_log_js_4(log: str) -> ParsedTestLog:
     skip_markers = ("(skipped)", "[skip]", "[skipped]", "[pending]", "[todo]")
 
     status_symbols = pass_symbols + fail_symbols + skip_symbols
-    status_re = re.compile(
-        r"(?:^|\s)([" + re.escape("".join(status_symbols)) + r"])(?:\s+)(.+)$"
-    )
+    status_re = re.compile(r"(?:^|\s)([" + re.escape("".join(status_symbols)) + r"])(?:\s+)(.+)$")
 
     for raw in log.splitlines():
         line = raw.strip()
@@ -1238,9 +1188,7 @@ def _julia_header_columns(header: str) -> list[tuple[str, int]] | None:
     return columns or None
 
 
-def _julia_row_status(
-    raw: str, columns: list[tuple[str, int]] | None
-) -> TestStatus | None:
+def _julia_row_status(raw: str, columns: list[tuple[str, int]] | None) -> TestStatus | None:
     if not columns or "|" not in raw:
         return None
     bar = raw.index("|")
@@ -1262,7 +1210,7 @@ def _julia_row_status(
     return TestStatus.PASSED
 
 
-def parse_log_julia(log: str) -> ParsedTestLog:  # noqa: PLR0912, PLR0915
+def parse_log_julia(log: str) -> ParsedTestLog:
     """Parse Julia Test output and return {test_name: status}.
 
     Parses the test summary table that appears at the end of Julia test runs.
@@ -1384,7 +1332,7 @@ def parse_log_julia(log: str) -> ParsedTestLog:  # noqa: PLR0912, PLR0915
     return results
 
 
-def parse_log_lein(log: str) -> ParsedTestLog:  # noqa: PLR0912
+def parse_log_lein(log: str) -> ParsedTestLog:
     """Parse Leiningen (Clojure) test output into {test_namespace: status}."""
     results: ParsedTestLog = {}
     current_namespace: str | None = None
@@ -1445,9 +1393,7 @@ def parse_log_ocaml(log: str) -> ParsedTestLog:
         "SKIPPED": TestStatus.SKIPPED,
         "TODO": TestStatus.SKIPPED,
     }
-    entry_re = re.compile(
-        r"^\s*\[(?P<status>[A-Z]+)\]\s+(?P<suite>.*?)\s+(?P<index>\d+)\s+(?P<name>.+)$"
-    )
+    entry_re = re.compile(r"^\s*\[(?P<status>[A-Z]+)\]\s+(?P<suite>.*?)\s+(?P<index>\d+)\s+(?P<name>.+)$")
 
     for raw in log.splitlines():
         line = raw.rstrip()
@@ -1509,9 +1455,7 @@ class _OcamlDuneLogParser:
         if current is None:
             self.results[name] = status
             return
-        if OCAML_STATUS_PRECEDENCE.get(status, -1) >= OCAML_STATUS_PRECEDENCE.get(
-            current, -1
-        ):
+        if OCAML_STATUS_PRECEDENCE.get(status, -1) >= OCAML_STATUS_PRECEDENCE.get(current, -1):
             self.results[name] = status
 
     def handle_line(self, raw_line: str) -> None:
@@ -1552,7 +1496,7 @@ def parse_log_ocaml_v2(log: str) -> ParsedTestLog:
     return parser.finalize()
 
 
-def parse_log_php_v1(log: str) -> ParsedTestLog:  # noqa: PLR0912
+def parse_log_php_v1(log: str) -> ParsedTestLog:
     """Parse PHPUnit style test execution logs."""
     results: ParsedTestLog = {}
     cross_mark = chr(0x2A2F)
@@ -1569,9 +1513,7 @@ def parse_log_php_v1(log: str) -> ParsedTestLog:  # noqa: PLR0912
         rf"^\s*(?:{cross_mark}|x)\s+(?P<name>.+?)\s{{2,}}\d+\.?\d*s\b.*$",
         re.IGNORECASE,
     )
-    fail_line_no_timing_re = re.compile(
-        rf"^\s*(?:{cross_mark}|x)\s+(?P<name>.+?)\s*$", re.IGNORECASE
-    )
+    fail_line_no_timing_re = re.compile(rf"^\s*(?:{cross_mark}|x)\s+(?P<name>.+?)\s*$", re.IGNORECASE)
     suite_fail_re = re.compile(r"^\s*FAIL(?:ED)?\s+(?P<name>\S.+)$", re.IGNORECASE)
     skipped_line_re = re.compile(r"^\s*-\s+(?P<name>.+?)\s{2,}\d+\.?\d*s\b.*$")
     skipped_line_no_timing_re = re.compile(r"^\s*-\s+(?P<name>.+?)\s*$")
@@ -1668,9 +1610,7 @@ def _parse_pytest_status_line(line: str) -> tuple[str, TestStatus] | None:
     for status in TestStatus:
         status_value = status.value
         if line.startswith(status_value):
-            normalized = (
-                line.replace(" - ", " ") if status is TestStatus.FAILED else line
-            )
+            normalized = line.replace(" - ", " ") if status is TestStatus.FAILED else line
             test_case = normalized.split()
             if len(test_case) > 1:
                 return test_case[1], status
@@ -1687,11 +1627,7 @@ def _parse_pytest_status_line(line: str) -> tuple[str, TestStatus] | None:
 
 def _pytest_node_id(classname: str, name: str) -> str | None:
     parts = classname.split(".")
-    module_indexes = [
-        index
-        for index, part in enumerate(parts)
-        if part.startswith("test_") or part.endswith("_test")
-    ]
+    module_indexes = [index for index, part in enumerate(parts) if part.startswith("test_") or part.endswith("_test")]
     if not module_indexes:
         return None
     module_index = module_indexes[-1]
@@ -1828,12 +1764,8 @@ def parse_log_scala_v2(log: str) -> ParsedTestLog:
     ansi_escape = re.compile(r"\x1b\[[0-9;]*m|\[(?:[0-9]{1,2}m)")
     passed_re = re.compile(r"^\s*\+\s+(.*?)\s+[\d.]+[mμn]?s\s*$")
     failed_re = re.compile(r"^\s*x\s+(.*?)\s+[\d.]+[mμn]?s\s*$")
-    passed_color_re = re.compile(
-        r"^\s*\+\s+\[0m\[32m(.*?)\[0m\s+\[90m[\d.]+[mμn]?s\[0m\s*$"
-    )
-    failed_color_re = re.compile(
-        r"^\s*x\s+\[0m\[31m(.*?)\[0m\s+\[90m[\d.]+[mμn]?s\[0m\s*$"
-    )
+    passed_color_re = re.compile(r"^\s*\+\s+\[0m\[32m(.*?)\[0m\s+\[90m[\d.]+[mμn]?s\[0m\s*$")
+    failed_color_re = re.compile(r"^\s*x\s+\[0m\[31m(.*?)\[0m\s+\[90m[\d.]+[mμn]?s\[0m\s*$")
 
     for raw in log.splitlines():
         line = raw.strip()
@@ -1880,13 +1812,9 @@ def parse_log_scala_v3(log: str) -> ParsedTestLog:
         if line.startswith("[info] -"):
             if match := test_line_re.match(line):
                 test_name = re.sub(r"\s*\(\d+\s+\w+\)$", "", match.group(1).strip())
-                full_test_name = (
-                    f"{current_suite}: {test_name}" if current_suite else test_name
-                )
+                full_test_name = f"{current_suite}: {test_name}" if current_suite else test_name
                 if status_token := match.group(2):
-                    results[full_test_name] = status_map.get(
-                        status_token.upper(), TestStatus.ERROR
-                    )
+                    results[full_test_name] = status_map.get(status_token.upper(), TestStatus.ERROR)
                 else:
                     results.setdefault(full_test_name, TestStatus.PASSED)
         elif match := suite_line_re.match(line):
@@ -1915,9 +1843,7 @@ def parse_log_swift(log: str) -> ParsedTestLog:
     """Parse Swift XCTest output."""
     results: ParsedTestLog = {}
     record_start_re = re.compile(r"(?=Test (?:Case|Suite) ')")
-    test_result_re = re.compile(
-        r"Test Case '([^']+)'\s+(passed|failed)\s+\([0-9.]+\s+seconds\)\s*"
-    )
+    test_result_re = re.compile(r"Test Case '([^']+)'\s+(passed|failed)\s+\([0-9.]+\s+seconds\)\s*")
 
     for raw in log.splitlines():
         line = raw.strip()
@@ -2034,13 +1960,9 @@ def _names_failed_on_any_line(test_log: str, parse_fn: TestParser) -> set[str]:
             continue
         try:
             parsed_line = parse_fn(line)
-        except Exception:  # noqa: BLE001
+        except Exception:
             continue
-        failed.update(
-            name
-            for name, status in parsed_line.items()
-            if status in (TestStatus.FAILED, TestStatus.ERROR)
-        )
+        failed.update(name for name, status in parsed_line.items() if status in (TestStatus.FAILED, TestStatus.ERROR))
     return failed
 
 
@@ -2059,14 +1981,10 @@ BUILD_SUMMARY_PLACEHOLDER_RE = re.compile(r"^\d+ modules transformed\.$")
 SERVER_START_PLACEHOLDER_RE = re.compile(r"^=== \([^)]*\) Starting server\b")
 
 
-JAVA_CLASS_SELECTOR_RE = re.compile(
-    r"^(?:[A-Za-z_$][\w$]*\.)*[A-Z_$][\w$]*(?:Test|Tests|IT|ITCase)$"
-)
+JAVA_CLASS_SELECTOR_RE = re.compile(r"^(?:[A-Za-z_$][\w$]*\.)*[A-Z_$][\w$]*(?:Test|Tests|IT|ITCase)$")
 
 
-JAVA_CLASS_GLOB_SELECTOR_RE = re.compile(
-    r"^(?:[A-Za-z_$][\w$]*\.)*[A-Z_$*][\w$*]*(?:Test|Tests|IT|ITCase)$"
-)
+JAVA_CLASS_GLOB_SELECTOR_RE = re.compile(r"^(?:[A-Za-z_$][\w$]*\.)*[A-Z_$*][\w$*]*(?:Test|Tests|IT|ITCase)$")
 
 
 TEST_NAME_NORMALIZERS = (
@@ -2107,9 +2025,7 @@ TEST_NAME_NORMALIZERS = (
         "<date>",
     ),
     (
-        re.compile(
-            r"(?<=\[)(?:\d{10}\.\d+|\d{2}-\d{2}-\d{4}|\d{2}:\d{2}:\d{2})(?=\]|-)"
-        ),
+        re.compile(r"(?<=\[)(?:\d{10}\.\d+|\d{2}-\d{2}-\d{4}|\d{2}:\d{2}:\d{2})(?=\]|-)"),
         "<param>",
     ),
     (re.compile(r"\b(Compiled in )\d+(?:\.\d+)?s\b"), r"\1<duration>s"),
@@ -2147,9 +2063,7 @@ def _is_placeholder_test_name(name: str) -> bool:
         or SERVER_START_PLACEHOLDER_RE.search(name)
     ):
         return True
-    return MAVEN_SELECTOR_PLACEHOLDER_RE.fullmatch(
-        name
-    ) is not None and not _is_java_class_glob_selector(name)
+    return MAVEN_SELECTOR_PLACEHOLDER_RE.fullmatch(name) is not None and not _is_java_class_glob_selector(name)
 
 
 def _normalized_passed_names(names: set[str]) -> set[str]:
@@ -2169,10 +2083,7 @@ def _split_java_class_selectors(name: str) -> list[str] | None:
     if "," not in name or "(" in name or any(char.isspace() for char in name):
         return None
     parts = [part.strip() for part in name.split(",") if part.strip()]
-    if len(parts) < 2 or not all(
-        _is_java_class_selector(part) or _is_java_class_glob_selector(part)
-        for part in parts
-    ):
+    if len(parts) < 2 or not all(_is_java_class_selector(part) or _is_java_class_glob_selector(part) for part in parts):
         return None
     return parts
 
@@ -2209,9 +2120,7 @@ def _java_method_selector_aliases(name: str) -> set[str]:
     aliases = {f"{class_name} {method_name}", f"{class_name} {method_name}()"}
     if _is_java_class_selector(class_name):
         simple_class = class_name.rsplit(".", 1)[-1]
-        aliases.update(
-            {f"{simple_class} {method_name}", f"{simple_class} {method_name}()"}
-        )
+        aliases.update({f"{simple_class} {method_name}", f"{simple_class} {method_name}()"})
     return aliases
 
 
@@ -2228,16 +2137,12 @@ def _expected_selector_satisfied(actual_passed: set[str], expected_name: str) ->
 
 def _expected_name_satisfied(actual_passed: set[str], expected_name: str) -> bool:
     selector_parts = _split_java_class_selectors(expected_name) or [expected_name]
-    return all(
-        _expected_selector_satisfied(actual_passed, selector)
-        for selector in selector_parts
-    )
+    return all(_expected_selector_satisfied(actual_passed, selector) for selector in selector_parts)
 
 
 def normalized_passed_subset(actual: TestResults, expected: TestResults) -> bool:
     actual_passed = _actual_passed_aliases(_normalized_passed_names(actual["PASSED"]))
     expected_passed = _normalized_passed_names(expected["PASSED"])
     return bool(expected_passed) and all(
-        _expected_name_satisfied(actual_passed, expected_name)
-        for expected_name in expected_passed
+        _expected_name_satisfied(actual_passed, expected_name) for expected_name in expected_passed
     )

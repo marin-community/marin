@@ -152,7 +152,24 @@ def get_changed_files() -> list[pathlib.Path]:
     files.update(get_staged_files())
     files.update(get_unstaged_files())
     files.update(get_branch_files())
-    return [f for f in files if f.exists()]
+    return [f for f in files if f.exists() and not _in_vendored_tree(f)]
+
+
+# Vendored byte-faithful harness trees: their source repos are pinned by a PROVENANCE file in
+# the tree, the files keep their upstream form, and the graded bytes are verified by the
+# owning module's behavior tests instead of the repo lint.
+VENDORED_TREES = (
+    pathlib.Path("vendor"),
+    pathlib.Path("experiments/post_training/task_curation/datasets/swe_rebench_v2/upstream"),
+)
+
+
+def _in_vendored_tree(file_path: pathlib.Path) -> bool:
+    try:
+        relative = file_path.resolve().relative_to(ROOT_DIR.resolve())
+    except ValueError:
+        return False
+    return any(relative == tree or tree in relative.parents for tree in VENDORED_TREES)
 
 
 def get_all_files() -> list[pathlib.Path]:

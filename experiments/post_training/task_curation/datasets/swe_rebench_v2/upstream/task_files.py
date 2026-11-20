@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Render a SWE-rebench-V2.1 dataset row into the files of its Harbor task.
 
 The rendered files are byte-identical to the tasks published on the Harbor Hub,
@@ -85,7 +88,8 @@ def _shell_template(name: str) -> str:
 
 def test_sh(row: dict) -> str:
     return (
-        _shell_template("test.sh").replace("@@WORKDIR@@", row["workdir"])
+        _shell_template("test.sh")
+        .replace("@@WORKDIR@@", row["workdir"])
         .replace("@@TEST_FILES@@", " ".join(shlex.quote(f) for f in row["test_files"]))
         .replace("@@TEST_ENV@@", "".join(f"export {e['name']}={e['value']}\n" for e in row.get("test_env") or []))
         .replace("@@TEST_CMD@@", row["test_cmd"])

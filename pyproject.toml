@@ -382,7 +382,7 @@ target-version = "py312"
 # Most of `scripts/**` is excluded until cleaned up, but `scripts/ci/**` and
 # `scripts/cost_manager/**` hold scripts invoked directly by `.github/workflows`
 # and stay under ruff.
-extend-exclude = ["scripts/", "vendor/skyrl/", "vendor/harbor/"]
+extend-exclude = ["scripts/", "vendor/skyrl/", "vendor/harbor/", "experiments/post_training/task_curation/datasets/swe_rebench_v2/upstream/"]
 extend-include = ["scripts/ci/**/*.py", "scripts/cost_manager/**/*.py"]
 
 [tool.ruff.lint]
@@ -570,6 +570,9 @@ project-excludes = [
     "lib/taskcompendium/src/taskcompendium/importers/evalchemy/scorers/ifbench/**",
     "vendor/skyrl/**",
     "vendor/harbor/**",
+    # Vendored byte-faithful upstream harness (PROVENANCE.md pins its source); the
+    # instantiated tests/grade.py remains checked via the converter's behavior tests.
+    "experiments/post_training/task_curation/datasets/swe_rebench_v2/upstream/**",
     "scripts/debug/**",
     "scripts/ferries/**",
     "scripts/gpu_eval/**",
