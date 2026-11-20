@@ -7,7 +7,7 @@ from pathlib import Path
 from uuid import UUID
 
 import pytest
-from finestore.rl.rl_progress import RunSummary
+from finestore.rl.rl_progress import AttemptSummary
 
 APPLET_ID = tomllib.loads((Path(__file__).parents[1] / "apps/rl_progress/applet.toml").read_text())["applet_id"]
 
@@ -70,7 +70,7 @@ def progress_record() -> dict:
             ],
             "invariants": [{"name": "planned_updates", "value": 25, "limit": 25, "holds": True, "replicate": 0}],
             "verdict": "pass",
-            "label": "improves",
+            "effect": "improves",
             "reason": None,
             "attempt_ids": ["native-first"],
             "replicates": 1,
@@ -79,4 +79,4 @@ def progress_record() -> dict:
         "evidence": [],
     }
 
-    return RunSummary.model_validate_json(json.dumps(record), strict=True).model_dump(mode="json")
+    return AttemptSummary.model_validate_json(json.dumps(record), strict=True).model_dump(mode="json")

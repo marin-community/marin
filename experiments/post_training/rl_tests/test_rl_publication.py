@@ -11,7 +11,7 @@ from urllib.parse import parse_qs, urlparse
 import click
 import pytest
 from click.testing import CliRunner
-from finestore.rl.rl_progress import RunSummary
+from finestore.rl.rl_progress import AttemptSummary
 from finestore.rl.run_records import (
     AttemptRecord,
     CheckpointReference,
@@ -32,12 +32,12 @@ from marin.rl.skyrl_records import read_skyrl_metrics, read_stored_skyrl_attempt
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training import rl as runner
+from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import rl_presets as presets
 from experiments.post_training import rl_publication as publication
-from experiments.post_training import rl_recipe as recipe
 from experiments.post_training import snowball_rl as snowball_model
-from experiments.post_training.rl_scoring import GATE_INPUTS_FILENAME, GateInputs
+from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs
 from experiments.post_training.rl_tests.fixtures import (
     append_metrics,
     copy_evaluations,
@@ -98,7 +98,7 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
         tokenizer_revision=preset.model.tokenizer_revision,
         iris_job_id="/tests/initializer",
     )
-    inputs = GateInputs(
+    inputs = RunInputs(
         preset_name=name,
         settings=("trainer.policy.optimizer_config.lr=2e-06", "trainer.policy.optimizer_config.weight_decay=0.01")
         + ((f"trainer.max_steps={expected_updates}",) if name == "train-long" else ()),
@@ -174,14 +174,14 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
                 str(source),
                 preset,
                 table=table,
-                receipt=read_stored_skyrl_attempts(str(source))[1]["native-attempt"],
+                attempt=read_stored_skyrl_attempts(str(source))[1]["native-attempt"],
             )
         return
     row = publication.build_record(
         str(source),
         table.by_name["data-medium"],
         table=table,
-        receipt=read_stored_skyrl_attempts(str(source))[1]["native-attempt"],
+        attempt=read_stored_skyrl_attempts(str(source))[1]["native-attempt"],
     ).model_dump(mode="json")
     assert row["artifact_uri"] == str(source) and row["attempt_id"] == "native-attempt"
     assert row["iris_job_id"] == "/tests/native-run"
@@ -249,7 +249,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     def saved_gate(requirements=()):
         report = run(
             gate.gate_step(
-                preset, handles, table=table, inputs=GateInputs(preset_name=preset.name, requirements=requirements)
+                preset, handles, table=table, inputs=RunInputs(preset_name=preset.name, requirements=requirements)
             )
         )[0]
         return report, str(report.path)
@@ -301,14 +301,14 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     monkeypatch.setattr("marina.client.marina_request", wrong_returned_key)
     with pytest.raises(RuntimeError, match="different returned identity"):
         publication.publish_result(
-            RunSummary.model_validate_json(json.dumps(rows["native-0"]), strict=True), "http://localhost"
+            AttemptSummary.model_validate_json(json.dumps(rows["native-0"]), strict=True), "http://localhost"
         )
     monkeypatch.setattr("marina.client.marina_request", request)
-    expected = report.model_dump(mode="json", include={"verdict", "label", "reason", "invariants"}) | {
+    expected = report.model_dump(mode="json", include={"verdict", "effect", "reason", "invariants"}) | {
         "comparisons": [
             row.model_dump(mode="json")
             for row in report.comparisons
-            if row.role in ("objective", "constraint", "requirement")
+            if row.role in ("objective", "guard", "requirement")
         ],
         "attempt_ids": ["native-0", "native-1"],
         "replicates": 2,
@@ -316,8 +316,8 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     assert rows["native-0"]["gate_result"] == rows["native-1"]["gate_result"] == expected
     assert {(item["metric"], item["role"]) for item in rows["native-0"]["gate_result"]["comparisons"]} == {
         ("eval_lite/family_mean", "objective"),
-        ("eval_lite/family_mean/gain_per_h100_hour", "objective"),
-        ("policy/entropy", "constraint"),
+        ("eval_lite/family_mean/gain_per_gpu_hour", "objective"),
+        ("policy/entropy", "guard"),
         (relative_key, "requirement"),
     }
 
@@ -333,9 +333,9 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
                         "publish",
                         "--preset",
                         preset.name,
-                        "--url",
+                        "--marina-url",
                         "http://localhost",
-                        "--output",
+                        "--run-output",
                         str(sources[index]),
                         "--attempt",
                         f"native-{index}",
@@ -507,7 +507,16 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     before = stored()
     command = CliRunner().invoke(
         publication.command(table),
-        ["--preset", preset.name, "--url", "http://localhost", "--output", str(sources[0]), "--attempt", "native-0"],
+        [
+            "--preset",
+            preset.name,
+            "--marina-url",
+            "http://localhost",
+            "--run-output",
+            str(sources[0]),
+            "--attempt",
+            "native-0",
+        ],
     )
     assert command.exit_code == 0, (command.output, command.exception)
     assert json.loads(command.output)["served_records"] == [[receipt["config"]["run"]["id"], "native-0"]]
@@ -516,8 +525,10 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     assert after["native-0"]["evaluations"] == before["native-0"]["evaluations"]
     assert after["native-0"]["gate_result"] == before["native-0"]["gate_result"]
     for root in controls:
-        (root / GATE_INPUTS_FILENAME).unlink()
-    command = CliRunner().invoke(publication.command(table), ["--preset", "data-medium", "--url", "http://localhost"])
+        (root / RUN_INPUTS_FILENAME).unlink()
+    command = CliRunner().invoke(
+        publication.command(table), ["--preset", "data-medium", "--marina-url", "http://localhost"]
+    )
     assert command.exit_code == 0, (command.output, command.exception)
     assert json.loads(command.output)["unserved_records"] == []
     served_controls = [
@@ -525,7 +536,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         for row in client.get(f"/a/{publication.APPLET_ID}/api/runs").json()["runs"]
         if row["attempt_id"].startswith("pinned-")
     ]
-    assert len(served_controls) == pin.runs
+    assert len(served_controls) == pin.replicates
     assert all(
         row["series"] == row["label"] == "learning-medium" and row["gate_result"] is None for row in served_controls
     )

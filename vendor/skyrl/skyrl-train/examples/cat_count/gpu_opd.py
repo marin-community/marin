@@ -22,7 +22,7 @@ from omegaconf import DictConfig, OmegaConf
 from skyrlrecipe import ContextBudget, SkyRLRecipe, sections
 from skyrlrecipe.declared import (
     EvaluationCallback,
-    EvaluationSampling,
+    EvaluationProfile,
     Teacher,
     TeacherEndpoint,
     TeacherModel,
@@ -226,7 +226,7 @@ def opd_config(args: argparse.Namespace) -> DictConfig:
                     eval_steps=EVAL_INTERVAL,
                     eval_before_train=True,
                     additional_evaluations={
-                        "sampled": EvaluationSampling(
+                        "sampled": EvaluationProfile(
                             sampling_params=EvalSamplingParams(temperature=1.0),
                             n_samples_per_prompt=SAMPLED_EVAL_SAMPLES,
                         )

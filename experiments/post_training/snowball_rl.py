@@ -20,11 +20,12 @@ from marin.rl.skyrl import (
 )
 from marin.training.training import LevanterCheckpoint
 from skyrlrecipe import ContextBudget, RecipePatch, sections
-from skyrlrecipe.declared import EvaluationSampling
+from skyrlrecipe.declared import EvaluationProfile
 from skyrlrecipe.documents import set_path
 from skyrlrecipe.sampling import EvalSamplingParams
 
 from experiments.post_training import rl
+from experiments.post_training.rl_compose import BATCH_SETTINGS
 from experiments.post_training.rl_presets import (
     UPDATE_SECONDS_METRIC,
     ControlPin,
@@ -38,7 +39,6 @@ from experiments.post_training.rl_presets import (
     Training,
     WindowStatistic,
 )
-from experiments.post_training.rl_recipe import BATCH_SETTINGS
 from experiments.post_training.task_curation.selection import (
     FULL_VALIDATION_FILENAME,
     TRAIN_FILENAME,
@@ -155,19 +155,19 @@ _MODE_KEYS = (
     "trainer.algorithm.off_policy_correction",
 )
 
-_HELD_OUT_SAMPLING = EvaluationSampling(
+_HELD_OUT_SAMPLING = EvaluationProfile(
     n_samples_per_prompt=1,
     sampling_params=EvalSamplingParams(
         temperature=0.0, top_p=1.0, logprobs=None, ignore_eos=False, max_generate_length=EVAL_REPLY_TOKENS
     ),
 )
 
-_THROUGHPUT_SAMPLING = EvaluationSampling(
+_THROUGHPUT_SAMPLING = EvaluationProfile(
     n_samples_per_prompt=4,
     sampling_params=EvalSamplingParams(temperature=1.0, top_p=1.0, logprobs=None, ignore_eos=True),
 )
 
-_SCREENING_SAMPLING = EvaluationSampling(
+_SCREENING_SAMPLING = EvaluationProfile(
     n_samples_per_prompt=4,
     sampling_params=EvalSamplingParams(temperature=1.0, top_p=1.0, logprobs=None, ignore_eos=False),
 )
@@ -304,13 +304,13 @@ _LEARNING_MEDIUM = _snowball(
     measured=range(21, 26),
     accepts_init=True,
     publishes=True,
-    controls="learning-medium",
+    control_preset="learning-medium",
     data_settings=frozenset({"shuffle", "sampling"}),
     evaluations=(replace(EVALUATIONS["eval_lite"], at_start=True),),
     guards=(Metric("eval_lite/family_mean", True),),
     objectives=(
         Metric("eval_lite/family_mean", True),
-        Metric("eval_lite/family_mean/gain_per_h100_hour", True, WindowStatistic.GAIN_PER_GPU_HOUR),
+        Metric("eval_lite/family_mean/gain_per_gpu_hour", True, WindowStatistic.GAIN_PER_GPU_HOUR),
     ),
     budget="asynchronous runtime unmeasured",
 )
@@ -322,7 +322,7 @@ _PRESETS = (
         recipe=replace(_GENERATING, fixed_reply_tokens=4096),
         updates=0,
         measured=range(1),
-        controls="speed-short",
+        control_preset="speed-short",
         owned_keys=_OWNED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
         evaluations=(EVALUATIONS["speed_512x4"], EVALUATIONS["eval_lite"]),
         guards=(Metric("generate/tokens_per_second_per_gpu", True), Metric("eval_lite/family_mean", True)),
@@ -337,7 +337,7 @@ _PRESETS = (
         measured=range(1),
         tasks_input="required",
         accepts_settings=False,
-        controls="data-short",
+        control_preset="data-short",
         owned_keys=_OWNED_KEYS | _BATCH_KEYS,
         evaluations=(EVALUATIONS["screen_256x4"],),
         guards=(Metric("screen_256x4/mixed_fraction", True),),
@@ -358,7 +358,7 @@ _PRESETS = (
         ),
         updates=10,
         measured=range(2, 11),
-        controls="speed-medium",
+        control_preset="speed-medium",
         owned_keys=_OWNED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
         guards=_SPEED_GUARDS,
         objectives=_SPEED_OBJECTIVES,
@@ -371,7 +371,7 @@ _PRESETS = (
         recipe=_ASYNC_P40,
         updates=20,
         measured=range(3, 21),
-        controls="speed-long",
+        control_preset="speed-long",
         owned_keys=_OWNED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
         guards=_SPEED_GUARDS,
         objectives=_SPEED_OBJECTIVES,
@@ -385,7 +385,7 @@ _PRESETS = (
         tasks_input="required",
         accepts_settings=False,
         accepts_init=False,
-        controls=_LEARNING_MEDIUM.name,
+        control_preset=_LEARNING_MEDIUM.name,
         data_settings=frozenset(),
     ),
     _snowball(
@@ -410,7 +410,7 @@ SNOWBALL = ModelPresets(
     model="snowball",
     presets=_PRESETS,
     namespace="snowball-rl",
-    controls={
+    control_pins={
         name: ControlPin(name, "648b5687f0", "2026.11.06.1", count)
         for name, count in (
             ("speed-short", 5),

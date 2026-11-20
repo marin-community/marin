@@ -41,7 +41,7 @@ from skyrlrecipe.declared import (
     DatabaseRegistrationCallback,
     EvaluationCallback,
     EvaluationMinimum,
-    EvaluationSampling,
+    EvaluationProfile,
     HFModelSaveCallback,
     InferenceStatsCallback,
 )
@@ -304,7 +304,7 @@ def training_config(
             eval_steps=trainer.eval_interval,
             eval_before_train=eval_before_train,
             additional_evaluations={
-                "sampled": EvaluationSampling(
+                "sampled": EvaluationProfile(
                     sampling_params=EvalSamplingParams(temperature=1.0),
                     n_samples_per_prompt=SAMPLED_EVAL_SAMPLES,
                 )

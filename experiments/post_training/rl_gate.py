@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compare stored RL runs with the selected model table's pinned controls."""
+"""Compare stored RL runs with the selected preset table's pinned controls."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from functools import lru_cache
 from pathlib import Path
 
 import click
-from finestore.rl.rl_progress import Change, Comparison, ComparisonRole, Invariant, Label, Verdict
+from finestore.rl.rl_progress import Change, Comparison, ComparisonRole, Effect, Invariant, Verdict
 from marin.execution.artifact import Artifact, read_artifact
 from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, materialized_config, run
@@ -43,22 +43,19 @@ from scipy.stats import t
 from skyrlrecipe.documents import MISSING, get_path, set_path
 from tabulate import tabulate
 
+from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_presets as presets
-from experiments.post_training import rl_recipe as recipe
 from experiments.post_training.rl_command import EXIT_CODES, RLCommand
-from experiments.post_training.rl_presets import ControlPin, ModelPresets
-from experiments.post_training.rl_scoring import (
-    AAII_WEIGHTS,
-    GateInputs,
+from experiments.post_training.rl_measurements import (
     InvalidComparison,
-    RunData,
-    load_run,
-    parse_requirement,
-    read_gate_inputs,
+    RunInputs,
+    RunMeasurements,
+    read_measurements,
     read_recorded_launch,
-    with_objectives,
-    with_requirements,
+    read_run_inputs,
 )
+from experiments.post_training.rl_presets import ControlPin, ModelPresets
+from experiments.post_training.rl_scoring import AAII_WEIGHTS
 
 GATE_REVISION = "2026.11.13"
 GATE_REPORT_FILENAME = "gate_report.json"
@@ -66,6 +63,56 @@ GATE_MARKDOWN_FILENAME = "gate_report.md"
 
 
 REPORTED_PREFIXES = ("async/", "consumed/", "generate/", "loss/", "policy/", "reward/", "startup/", "timing/", "vllm/")
+
+
+@dataclass(frozen=True)
+class Requirement:
+    key: str
+    higher_is_better: bool
+    bound: float | None
+
+
+def parse_requirement(text: str) -> Requirement:
+    match = re.fullmatch(r"([^<>=\s]+)(<=|>=)(control|[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)", text)
+    if match is None:
+        raise click.BadParameter(f"expected KEY<=NUMBER, KEY>=NUMBER, KEY<=control or KEY>=control: {text}")
+    key, operator, value = match.groups()
+    bound = None if value == "control" else float(value)
+    if bound is not None and not math.isfinite(bound):
+        raise click.BadParameter(f"requirement bound must be finite: {text}")
+    return Requirement(key, operator == ">=", bound)
+
+
+def with_objectives(candidate: RunMeasurements, preset: presets.Preset) -> RunMeasurements:
+    values = dict(candidate.values)
+    for metric in preset.objectives:
+        if metric.window == presets.WindowStatistic.GAIN_PER_GPU_HOUR:
+            gain = values.get(re.sub(r"_per_[^/]+_hour$", "", metric.key))
+            if gain is not None and candidate.gpu_hours:
+                values[metric.key] = gain / candidate.gpu_hours
+    return replace(candidate, values=values)
+
+
+def with_requirements(candidate: RunMeasurements, requirements: Sequence[str]) -> RunMeasurements:
+    invariants = list(candidate.invariants)
+    values = candidate.values
+    for text in requirements:
+        requirement = parse_requirement(text)
+        value = values.get(requirement.key)
+        if value is None or not math.isfinite(value):
+            raise InvalidComparison(f"missing or non-finite requirement metric: {requirement.key}")
+        if requirement.bound is not None:
+            holds = value >= requirement.bound if requirement.higher_is_better else value <= requirement.bound
+            invariants.append(
+                Invariant(
+                    name=f"require/{requirement.key}",
+                    value=value,
+                    limit=requirement.bound,
+                    comparator=">=" if requirement.higher_is_better else "<=",
+                    holds=holds,
+                )
+            )
+    return replace(candidate, invariants=tuple(invariants))
 
 
 def validate_requirements(
@@ -78,21 +125,19 @@ def validate_requirements(
         raise click.BadParameter("--require needs a gated candidate preset, without --control")
     keys = [parse_requirement(text).key for text in requirements]
     pin = control_pin(preset, table=table)
-    reference = with_objectives(load_run(control_path(preset, pin, 0, table=table), preset), preset)
+    reference = with_objectives(read_measurements(control_path(preset, pin, 0, table=table), preset), preset)
     missing = [key for key in keys if key not in reference.values]
     if missing:
         raise click.BadParameter(f"requirement metrics that the gate does not compute for control r0: {missing}")
 
 
-def validate_candidate(
-    preset: presets.Preset, inputs: GateInputs, *, table: ModelPresets, control: bool = False
-) -> dict:
+def validate_candidate(preset: presets.Preset, inputs: RunInputs, *, table: ModelPresets, control: bool = False) -> dict:
     """Return the composed candidate after checking gated controls against current defaults."""
     defaults, candidate = _current_configs(preset, inputs)
     if control or not preset.gated:
         return candidate
     pin = control_pin(preset, table=table)
-    for index in range(pin.runs):
+    for index in range(pin.replicates):
         path = control_path(preset, pin, index, table=table)
         receipt = read_stored_skyrl_attempt(path)
         if receipt is None:
@@ -102,29 +147,12 @@ def validate_candidate(
     return candidate
 
 
-def gate_inputs(
-    preset_name: str,
-    settings: Sequence[str] = (),
-    tasks: str | None = None,
-    init: presets.StoredInitializer | None = None,
-    requirements: Sequence[str] = (),
-) -> GateInputs:
-    values = recipe.override_document(tuple(settings))
-    return GateInputs(
-        preset_name=preset_name,
-        settings=tuple(f"{key}={json.dumps(value, sort_keys=True)}" for key, value in sorted(values.items())),
-        tasks=tasks.removeprefix(recipe.SELECTION_PREFIX + "/") if tasks else None,
-        init=init,
-        requirements=tuple(dict.fromkeys(requirements)),
-    )
-
-
-class RunMetadata(GateInputs):
+class RunMetadata(RunInputs):
     tree: str | None = None
     base_commit: str | None = None
     dirty: bool | None = None
     replicates: int
-    eval_lite: str | None = None
+    held_out_tasks: str | None = None
     engines: tuple[dict, ...] = ()
     attempt_ids: tuple[str, ...] = ()
     config_changes: tuple[str, ...] = ()
@@ -133,16 +161,16 @@ class RunMetadata(GateInputs):
 class ControlMetadata(BaseModel):
     commit: str
     revision: str
-    runs: int
+    replicates: int
     gate_revision: str = GATE_REVISION
     engines: tuple[dict, ...] = ()
-    eval_lite: str | None = None
+    held_out_tasks: str | None = None
 
 
 class GateReport(Artifact):
     preset: str
     verdict: Verdict
-    label: Label | None
+    effect: Effect | None
     reason: str | None
     run: RunMetadata
     control: ControlMetadata
@@ -228,24 +256,24 @@ def _comparison(
     )
 
 
-def _verdict(invariants: Sequence[Invariant], comparisons: Sequence[Comparison]) -> tuple[Verdict, Label]:
+def _verdict(invariants: Sequence[Invariant], comparisons: Sequence[Comparison]) -> tuple[Verdict, Effect]:
     verdict = (
         Verdict.FAIL
         if any(not row.holds for row in invariants) or any(row.passes is False for row in comparisons)
         else Verdict.PASS
     )
-    relevant = [row for row in comparisons if row.role in (ComparisonRole.OBJECTIVE, ComparisonRole.CONSTRAINT)]
+    relevant = [row for row in comparisons if row.role in (ComparisonRole.OBJECTIVE, ComparisonRole.GUARD)]
     better = any(row.change == Change.BETTER for row in relevant)
     worse = any(row.change == Change.WORSE for row in relevant)
-    label = (
-        Label.TRADE_OFF
+    effect = (
+        Effect.TRADE_OFF
         if better and worse
-        else Label.IMPROVES if better else Label.REGRESSION if worse else Label.NO_CHANGE
+        else Effect.IMPROVES if better else Effect.REGRESSION if worse else Effect.NO_CHANGE
     )
-    return verdict, label
+    return verdict, effect
 
 
-def _check_control(run: RunData, pin: ControlPin) -> None:
+def _check_control(run: RunMeasurements, pin: ControlPin) -> None:
     if run.provenance["base_commit"] != pin.commit or run.provenance["dirty"]:
         raise InvalidComparison(f"control does not match its pin: {run.path}")
     if any(not row.holds for row in run.invariants):
@@ -254,8 +282,8 @@ def _check_control(run: RunData, pin: ControlPin) -> None:
 
 def _compare(
     preset: presets.Preset,
-    runs: Sequence[RunData],
-    controls: Sequence[RunData],
+    runs: Sequence[RunMeasurements],
+    controls: Sequence[RunMeasurements],
     requirements: Sequence[str] = (),
 ) -> list[Comparison]:
     noise = calibrate([run.values for run in controls])
@@ -266,7 +294,7 @@ def _compare(
     declarations = [
         (
             metric,
-            ComparisonRole.OBJECTIVE if metric.key in objectives else ComparisonRole.CONSTRAINT,
+            ComparisonRole.OBJECTIVE if metric.key in objectives else ComparisonRole.GUARD,
             len(preset.guards),
             True,
         )
@@ -337,7 +365,11 @@ def _render_markdown(report: GateReport) -> str:
             (ComparisonRole.OBJECTIVE,),
             {"metric", "control", "run", "delta_percent", "noise_percent", "passes", "change"},
         ),
-        ("Constraints", (ComparisonRole.CONSTRAINT, ComparisonRole.REQUIREMENT), {"metric", "control", "run", "passes"}),
+        (
+            "Guards and requirements",
+            (ComparisonRole.GUARD, ComparisonRole.REQUIREMENT),
+            {"metric", "control", "run", "passes"},
+        ),
         ("Invariants", (), None),
         ("Reported", (ComparisonRole.REPORTED,), {"metric", "control", "run", "delta", "change"}),
         ("Breakdown", (ComparisonRole.SLICE,), {"metric", "tasks", "control", "control_min", "control_max", "run"}),
@@ -345,7 +377,7 @@ def _render_markdown(report: GateReport) -> str:
     for title, roles, columns in tables:
         rows = [row.model_dump(include=columns) for row in (report.rows(*roles) if roles else report.invariants)]
         lines += ["", f"## {title}", "", tabulate(rows, "keys", "github", floatfmt=".8g", missingval="unavailable")]
-    lines += ["", f"Result: {report.verdict}" + (f" ({report.label})" if report.label else "")]
+    lines += ["", f"Result: {report.verdict}" + (f" ({report.effect})" if report.effect else "")]
     if report.reason:
         lines += ["", report.reason]
     for title, value in (("Run", report.run), ("Control", report.control)):
@@ -484,12 +516,12 @@ def comparison_config(launch: dict, recorded: RecordedLaunch | None = None) -> d
 
 
 def _current_configs(
-    preset: presets.Preset, inputs: GateInputs, *, model: ResolvedModelLocator | None = None
+    preset: presets.Preset, inputs: RunInputs, *, model: ResolvedModelLocator | None = None
 ) -> tuple[dict, dict]:
     with tempfile.TemporaryDirectory(prefix="rl-current-config-") as directory:
         root = Path(directory)
         paths = []
-        for index, candidate in enumerate((GateInputs(preset_name=preset.name), inputs)):
+        for index, candidate in enumerate((RunInputs(preset_name=preset.name), inputs)):
             try:
                 spec = recipe.run_spec(
                     preset,
@@ -578,7 +610,7 @@ def _changed_config_keys(left: dict[str, object], right: dict[str, object]) -> s
     }
 
 
-def _setting_keys(inputs: GateInputs, keys: set[str]) -> set[str]:
+def _setting_keys(inputs: RunInputs, keys: set[str]) -> set[str]:
     values = recipe.override_document(inputs.settings)
     allowed = set()
     for key in keys:
@@ -645,14 +677,14 @@ def _write_gate(
     run_paths: tuple[str, ...],
     control_paths: tuple[str, ...],
     control_pin: ControlPin,
-    inputs: GateInputs,
+    inputs: RunInputs,
     output: str,
 ) -> GateReport:
     preset_name = preset.name
     metadata = RunMetadata(**inputs.model_dump(), replicates=len(run_paths))
-    control = ControlMetadata(commit=control_pin.commit, revision=control_pin.revision, runs=len(control_paths))
+    control = ControlMetadata(commit=control_pin.commit, revision=control_pin.revision, replicates=len(control_paths))
     invariants, comparisons = [], []
-    verdict, label, reason = Verdict.INVALID, None, None
+    verdict, effect, reason = Verdict.INVALID, None, None
     try:
         if control_pin.revision != preset.revision:
             raise _pin_error(preset, control_pin)
@@ -661,14 +693,14 @@ def _write_gate(
             update={"attempt_ids": tuple(receipt.attempt_id for receipt in receipts if receipt)}
         )
         runs = [
-            with_requirements(with_objectives(load_run(path, preset, inputs), preset), inputs.requirements)
+            with_requirements(with_objectives(read_measurements(path, preset, inputs), preset), inputs.requirements)
             for path in run_paths
         ]
         if runs:
             provenance_fields = {"tree": "tree_hash", "base_commit": "base_commit", "dirty": "dirty"}
             metadata = metadata.model_copy(
                 update={
-                    "eval_lite": runs[0].eval_lite,
+                    "held_out_tasks": runs[0].held_out_tasks,
                     "engines": tuple(run.engine for run in runs),
                     "attempt_ids": tuple(run.attempt_id for run in runs),
                     **{field: runs[0].provenance[key] for field, key in provenance_fields.items()},
@@ -679,11 +711,11 @@ def _write_gate(
             for index, candidate in enumerate(runs)
             for row in candidate.invariants
         ]
-        controls = [with_objectives(load_run(path, preset), preset) for path in control_paths]
+        controls = [with_objectives(read_measurements(path, preset), preset) for path in control_paths]
         if not runs or not controls:
             raise InvalidComparison("comparison needs recorded runs and control replicates")
         control = control.model_copy(
-            update={"eval_lite": controls[0].eval_lite, "engines": tuple(run.engine for run in controls)}
+            update={"held_out_tasks": controls[0].held_out_tasks, "engines": tuple(run.engine for run in controls)}
         )
         for candidate in controls:
             _check_control(candidate, control_pin)
@@ -707,13 +739,13 @@ def _write_gate(
         for candidate in controls:
             _check_control_config(candidate.config, current_config, candidate.recorded, preset=preset)
         comparisons = _compare(preset, runs, controls, inputs.requirements)
-        verdict, label = _verdict(invariants, comparisons)
+        verdict, effect = _verdict(invariants, comparisons)
     except (InvalidComparison, SkyRLReceiptLookupError, FileNotFoundError) as error:
         reason = str(error)
     report = GateReport(
         preset=preset_name,
         verdict=verdict,
-        label=label,
+        effect=effect,
         reason=reason,
         run=metadata,
         control=control,
@@ -739,17 +771,17 @@ def control_name(preset: str, commit: str, replicate: int, *, table: ModelPreset
 
 
 def _pin_error(preset: presets.Preset, pin: ControlPin | None) -> InvalidComparison:
-    name, replicas = (pin.preset, pin.runs) if pin else (preset.controls, 4)
+    name, replicas = (pin.preset, pin.replicates) if pin else (preset.control_preset, 4)
     return InvalidComparison(
-        f"no control pin for {preset.name} at {preset.revision}; "
+        f"no control pin for {preset.name} with preset revision {preset.revision}; "
         f"recorded control revision={pin.revision if pin else None}; "
         f"collect current controls with --preset {name} "
-        f"--version {preset.revision} --control --replicates {replicas} --run"
+        f"--version dev --control --replicates {replicas} --run"
     )
 
 
 def control_pin(preset: presets.Preset, *, table: ModelPresets, check_revision: bool = True) -> ControlPin:
-    pin = table.controls.get(preset.controls)
+    pin = table.control_pins.get(preset.control_preset)
     if pin is None or (check_revision and pin.revision != preset.revision):
         raise _pin_error(preset, pin)
     return pin
@@ -765,7 +797,7 @@ def _gate_artifact(
     name: str,
     preset: presets.Preset,
     candidates: tuple[str, ...],
-    inputs: GateInputs,
+    inputs: RunInputs,
     leave_out: int | None = None,
     *,
     table: ModelPresets,
@@ -781,7 +813,7 @@ def _gate_artifact(
             f"{control_name(pin.preset, pin.commit, index, table=table)}@{pin.revision}",
             control_path(preset, pin, index, table=table),
         )
-        for index in range(pin.runs)
+        for index in range(pin.replicates)
         if index != leave_out
     )
     name += "-req-" + fingerprint_hash(canonical_json(inputs.requirements)) if inputs.requirements else ""
@@ -837,7 +869,7 @@ def _gate_with_evidence(step: ArtifactStep[GateReport]) -> ArtifactStep[GateRepo
 
 
 def gate_step(
-    preset: presets.Preset, runs: tuple[ArtifactStep[SkyRLRun], ...], *, table: ModelPresets, inputs: GateInputs
+    preset: presets.Preset, runs: tuple[ArtifactStep[SkyRLRun], ...], *, table: ModelPresets, inputs: RunInputs
 ) -> ArtifactStep[GateReport]:
     pin = control_pin(preset, table=table, check_revision=False)
     name = runs[0].name.rsplit("-r", 1)[0] + f"/gate-n{len(runs)}-{pin.commit}"
@@ -859,14 +891,14 @@ def command(table: ModelPresets) -> click.Command:
         "--candidate",
         "candidate_name",
         metavar="NAME[@VERSION]",
-        help="Saved run to re-score, by the name and version the status block prints for it; VERSION defaults "
+        help="Saved run to compare, by the name and version the status block prints for it; VERSION defaults "
         "to the preset's revision. Give this or --leave-out.",
     )
     @click.option(
         "--leave-out",
         "leave_out",
         metavar="rN",
-        help="Score control replicate N against the remaining controls. Each replicate should PASS; use it "
+        help="Compare control replicate N against the remaining controls. Each replicate should PASS; use it "
         "after pinning new controls. Give this or --candidate.",
     )
     @click.option(
@@ -888,17 +920,17 @@ def command(table: ModelPresets) -> click.Command:
         pin = control_pin(preset, table=table)
         index = None
         if leave_out is not None:
-            if not re.fullmatch(r"r\d+", leave_out) or int(leave_out[1:]) >= pin.runs:
-                raise click.BadParameter(f"choose r0 through r{pin.runs - 1}", param_hint="--leave-out")
+            if not re.fullmatch(r"r\d+", leave_out) or int(leave_out[1:]) >= pin.replicates:
+                raise click.BadParameter(f"choose r0 through r{pin.replicates - 1}", param_hint="--leave-out")
             index = int(leave_out[1:])
             candidate_name = control_name(pin.preset, pin.commit, index, table=table)
         name, separator, version = candidate_name.partition("@")
         source = recipe.run_path(preset.recipe.layout.cluster, name, version if separator else preset.revision)
         namespace = user_owned_name(
-            f"checkpoints/{table.namespace}/rescore/"
+            f"checkpoints/{table.namespace}/compare/"
             f"{preset_name}-{fingerprint_hash(canonical_json((source, pin, index)))}"
         )
-        recorded = GateInputs(preset_name=pin.preset) if index is not None else read_gate_inputs(source)
+        recorded = RunInputs(preset_name=pin.preset) if index is not None else read_run_inputs(source)
         if index is None and recorded.preset_name != preset_name:
             raise InvalidComparison(f"recorded preset is {recorded.preset_name}, not {preset_name}")
         inputs = recorded.model_copy(

@@ -14,7 +14,7 @@ import click
 import pyarrow as pa
 import pyarrow.parquet as pq
 import yaml
-from finestore.rl.strata import MembershipState, SelectionTaskRow, read_selection_strata
+from finestore.rl.strata import MembershipState, SelectionTaskRow, read_selection_manifest
 from finestore.schema import arrow_schema
 from iris.rpc import job_pb2
 from marin.execution.artifact import Artifact, is_mutable_version, read_record, result_type_name
@@ -38,7 +38,7 @@ from rigging.config_discovery import find_project_root
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from skyrlrecipe import RecipePatch, SkyRLRecipe, sections
-from skyrlrecipe.declared import EvaluationSampling
+from skyrlrecipe.declared import EvaluationProfile
 from skyrlrecipe.documents import MISSING, get_path, merge_mappings, set_path
 from skyrlrecipe.settings import parse_setting as typed_setting_value
 from taskcompendium.identity import canonical_sha256
@@ -127,14 +127,14 @@ def _write_sample(selection: str, filename: str, count: int, seed: int, output: 
     fs.makedirs(str(PurePosixPath(key).parent), exist_ok=True)
     with fs.open(key, "wb") as stream:
         pq.write_table(pa.Table.from_pylist(rows, schema=schema), stream)
-    panel = read_selection_strata(selection)
-    if panel is not None:
+    manifest = read_selection_manifest(selection)
+    if manifest is not None:
         annotations = []
         for row in rows:
             document = json.loads(row[TASK_SPEC_COLUMN])
             task_id = document["id"]
-            annotation = panel.tasks.get(task_id) or SelectionTaskRow(
-                task_id=task_id, **panel.identity(task_id).strata.model_dump()
+            annotation = manifest.tasks.get(task_id) or SelectionTaskRow(
+                task_id=task_id, **manifest.identity(task_id).strata.model_dump()
             )
             annotations.append(
                 annotation.model_copy(
@@ -149,7 +149,7 @@ def _write_sample(selection: str, filename: str, count: int, seed: int, output: 
                 ),
                 stream,
             )
-        definition = panel.definition.model_copy(
+        definition = manifest.definition.model_copy(
             update={
                 "task_files": (f"{filename}.parquet",),
                 "active_files": (f"{filename}.parquet",),
@@ -418,10 +418,10 @@ def run_spec(
             ).merge(workload.evaluation_patch(answer_count))
         else:
             evaluation_data.append((evaluation.name, sources))
-            profiles[evaluation.name] = EvaluationSampling(
+            profiles[evaluation.name] = EvaluationProfile(
                 sampling_params=sampling,
                 n_samples_per_prompt=evaluation.answers,
-                schedule=workload.named_schedule,
+                schedule=workload.additional_schedule,
             )
     config = config.merge(
         RecipePatch(
