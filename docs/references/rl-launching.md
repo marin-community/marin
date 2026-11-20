@@ -73,8 +73,8 @@ Use Mochi's `train-medium-agentic` for two mixed-workload training updates with 
 checkpointing. Pass a versioned selection containing both task families with `--tasks NAME@VERSION`.
 
 The Snowball and Mochi preset commands use `--resume NAME@VERSION` to start from
-the latest committed native checkpoint of a finished run. Use a checkpointing
-preset and an immutable version. If the source checkpoint advances between
+the newest retained recovery checkpoint of a finished run. Use a checkpointing
+preset and an immutable version. If the source checkpoint changes between
 submission and coordinator startup, the command refuses the launch and shows
 both step numbers. The source checkpoint stays in temporary storage for the
 retention period recorded by its run.
@@ -294,11 +294,12 @@ Marin translates this policy to `trainer.max_ckpts_to_keep`; standalone SkyRL
 recipes can set that field directly. Cleanup runs after the replacement checkpoint
 has uploaded and its latest-checkpoint marker has been published. Pending HF
 exports and the selected best native checkpoint remain protected beyond this
-rolling window. HF export is opt-in: `skyrl_step(..., export_hf=True)` requests a durable terminal
-model and a separate export job. The structured launch config defaults `run.export_hf`
-to false as well. Without export, successful runs retain native recovery checkpoints,
-in-training evaluation, resolved configuration and terminal result records; `SkyRLRun.hf_model_uri`
-is null. Pipelines that serve the resulting model for downstream evaluation must request export.
+rolling window. On success, waiting preset launches apply `checkpoints` and `keep_every` after
+writing the terminal receipt. Detached launches keep the trainer's rolling window. HF export is
+opt-in. `skyrl_step(..., export_hf=True)` requests a durable terminal model and a separate export
+job. With `run.export_hf: false`, `SkyRLRun.hf_model_uri` is null. Successful runs still write
+evaluation, resolved configuration, and terminal result records. Pipelines that serve the
+resulting model for downstream evaluation must request export.
 
 Every HF export writes `generation_config.json` through SkyRL's Hugging Face
 model lifecycle utilities. It keeps the explicit fields of the source model's

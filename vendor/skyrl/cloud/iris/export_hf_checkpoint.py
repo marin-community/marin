@@ -461,7 +461,7 @@ def export_terminal_policy(
     checkpoint_path = join_resource_path(checkpoint_root, f"{GLOBAL_STEP_PREFIX}{selected.step}")
     request = _read_hf_export_request(checkpoint_path)
     if request is None and recover_best and (StoragePath(checkpoint_path) / TRAINER_STATE_FILENAME).exists():
-        request = _training_export_request(training_config, step)
+        request = _training_export_request(training_config, selected.step)
     if request is None:
         raise ValueError(f"checkpoint {checkpoint_path} has no hf_export_request.json")
     if request.status is HFExportStatus.COMPLETE:

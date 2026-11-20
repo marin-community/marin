@@ -274,14 +274,16 @@ _snowball = partial(
 )
 
 _LEARNING_MEDIUM = _snowball(
-    revision="2026.11.20.2",
+    revision="2026.11.20.3",
     held_out_tasks=_DEFAULT_EVAL_LITE,
+    checkpoints="best",
     export="best",
     name="learning-medium",
     recipe=_ASYNC_P40,
     owned_keys=_BEST_EXPORT_KEYS,
     updates=25,
     measured=range(21, 26),
+    checkpoint_every=26,
     accepts_init=True,
     publishes=True,
     controls="learning-medium",
@@ -297,9 +299,10 @@ _LEARNING_MEDIUM = _snowball(
 
 
 _TRAIN_LONG = _snowball(
-    revision="2026.11.20.2",
+    revision="2026.11.20.3",
     held_out_tasks=_DEFAULT_EVAL_LITE,
     retention=SkyRLRetentionPolicy(resume_checkpoint_count=5),
+    checkpoints="best",
     export="best",
     name="train-long",
     recipe=_ASYNC_P40,
@@ -345,7 +348,6 @@ _CAMPAIGN_PATCH = RecipePatch(
             )
         ),
         ref=sections.Ref(megatron_config=sections.RefMegatronConfig(transformer_config_kwargs={"cp_comm_type": "a2a"})),
-        algorithm=sections.Algorithm(tis_splice=True),
     ),
     generator=sections.Generator(
         max_num_seqs=64,
@@ -370,6 +372,7 @@ _TRAIN_LONG_AGENTIC = agentic(
     replace(
         _TRAIN_LONG.with_updates(10_000),
         data_settings=frozenset({"shuffle"}),
+        checkpoints="best",
         export="best",
         evaluations=(replace(_TASK_SET, every=2),),
         checkpoint_every=2,
@@ -404,6 +407,7 @@ _PRESETS = (
     _snowball(
         held_out_tasks=_DEFAULT_EVAL_LITE,
         name="speed-short",
+        checkpoints="none",
         recipe=replace(_GENERATING, fixed_reply_tokens=4096),
         updates=0,
         measured=range(1),
@@ -417,6 +421,7 @@ _PRESETS = (
     _snowball(
         held_out_tasks=_DEFAULT_EVAL_LITE,
         name="data-short",
+        checkpoints="none",
         recipe=_GENERATING,
         updates=0,
         measured=range(1),
@@ -432,6 +437,7 @@ _PRESETS = (
     _snowball(
         evaluations=(),
         name="speed-medium",
+        checkpoints="none",
         recipe=replace(
             _ASYNC_P40,
             fixed_reply_tokens=4096,
@@ -453,6 +459,7 @@ _PRESETS = (
     _snowball(
         evaluations=(),
         name="speed-long",
+        checkpoints="none",
         recipe=_ASYNC_P40,
         updates=20,
         measured=range(3, 21),
@@ -479,7 +486,6 @@ _PRESETS = (
     replace(
         _TRAIN_LONG,
         name="train-long-harbor",
-        revision="2026.11.20.2",
         harbor=HARBOR_EVALUATION,
         gaps=(*_TRAIN_LONG.gaps, "harbor-on-daytona"),
     ),

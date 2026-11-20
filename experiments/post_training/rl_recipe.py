@@ -86,6 +86,8 @@ _DERIVED_RECIPE_KEYS = frozenset(
         "trainer.placement",
         "trainer.callbacks",
         "trainer.ckpt_interval",
+        "trainer.checkpoint_retention",
+        "trainer.checkpoint_keep_every",
         "trainer.hf_save_interval",
         "trainer.hf_export_checkpoint",
         "trainer.rollout_buffer.groups_per_family",
@@ -263,7 +265,7 @@ def published_model(value: str, *, preset: Preset) -> SkyRLModelSource:
 
 
 def published_checkpoint(value: str, *, preset: Preset) -> presets.StoredResume:
-    """Pin a finished run's latest committed native checkpoint and its starting model."""
+    """Pin the newest retained recovery checkpoint and starting model from a finished run."""
     name, separator, version = value.rpartition("@")
     if not name or not separator or is_mutable_version(version):
         raise click.BadParameter("use NAME@VERSION with an immutable run version")
@@ -380,6 +382,10 @@ def _training_config(
         policy=sections.Policy(megatron_config=sections.PolicyMegatronConfig(**geometry)),
         ref=sections.Ref(megatron_config=sections.RefMegatronConfig(**geometry)),
     )
+    if preset.checkpoints != "none":
+        trainer = trainer.replace(checkpoint_retention=preset.checkpoints)
+    if preset.keep_every is not None:
+        trainer = trainer.replace(checkpoint_keep_every=preset.keep_every)
     if preset.export == "best":
         trainer = trainer.replace(hf_export_checkpoint="best")
     if recipe.training_plan is not None:
@@ -476,8 +482,6 @@ def run_spec(
         if inherited_model is not None
         else model.step.path(artifact_prefix(preset.recipe.layout.cluster))
     )
-    if preset.export != "best" and not (preset.checkpoint_every and preset.evaluations):
-        initial_model_uri = None
     validation_data = ()
     evaluation_data = []
     profiles = {}
@@ -524,7 +528,7 @@ def run_spec(
                     chosen[0] if chosen else None,
                     profiles,
                     expected_tasks,
-                    initial_model_uri,
+                    initial_model_uri if preset.checkpoints == "best" else None,
                 ),
             )
         )

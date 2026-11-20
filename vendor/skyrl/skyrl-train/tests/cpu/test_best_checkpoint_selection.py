@@ -4,13 +4,41 @@ from types import SimpleNamespace
 
 import pytest
 from omegaconf import OmegaConf
+from marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME
 
 from skyrl_train.callbacks.base import CallbackHandler, TrainerControl, TrainerState
 from skyrl_train.callbacks.builtin import create_callbacks_from_config
+from skyrl_train.checkpoint_listing import ROLLOUT_STATE_FILENAME
+from skyrl_train.hf_export_schema import TRAINER_STATE_FILENAME
 from skyrl_train.rollouts.context import TrainingContextState
 from skyrl_train.rollouts.loader import PromptLoaderState
 from skyrl_train.trainer import RayPPOTrainer
 from skyrl_train.utils.trainer_utils import ResumeMode
+
+
+def test_rolling_cleanup_keeps_best_periodic_and_recent_checkpoints(tmp_path, monkeypatch):
+    for step in range(1, 7):
+        checkpoint = tmp_path / f"global_step_{step}"
+        checkpoint.mkdir()
+        (checkpoint / TRAINER_STATE_FILENAME).touch()
+        (checkpoint / ROLLOUT_STATE_FILENAME).touch()
+    (tmp_path / BEST_CHECKPOINT_FILENAME).write_text(json.dumps({"step": 1, "model_format": "native"}))
+    trainer = RayPPOTrainer.__new__(RayPPOTrainer)
+    trainer.cfg = OmegaConf.create(
+        {"trainer": {"ckpt_path": str(tmp_path), "max_ckpts_to_keep": 2, "checkpoint_keep_every": 2}}
+    )
+    trainer._node_ids = ["worker"]
+    monkeypatch.setattr("skyrl_train.trainer.run_on_each_node", lambda *_args: None)
+
+    trainer._cleanup_old_checkpoints(6)
+
+    assert {path.name for path in tmp_path.glob("global_step_*")} == {
+        "global_step_1",
+        "global_step_2",
+        "global_step_4",
+        "global_step_5",
+        "global_step_6",
+    }
 
 
 @pytest.mark.asyncio

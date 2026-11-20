@@ -25,12 +25,12 @@ Mochi’s medium presets run two updates and its long presets run up to 10,000 u
 
 | Mochi preset | When to use it | Layout | Checkpoints and export |
 | --- | --- | --- | --- |
-| `train-medium` | Short one-turn training check. | 15 nodes × 4 GB200s, one rack | Native checkpoint, HF export disabled. |
-| `train-medium-agentic` | Short mixed run with tool-using and one-turn tasks. | 15 nodes × 4 GB200s, one rack | Native checkpoint, HF export disabled. |
-| `train-long` | One-turn training with held-out evaluation. | 15 nodes × 4 GB200s, one rack | Rolling native recovery and an HF export of the best eligible checkpoint. |
-| `train-long-3rack` | One-turn training with dedicated racks for training and inference. | 48 nodes × 4 GB200s, three racks | Rolling native recovery and an HF export of the best eligible checkpoint. |
-| `train-long-agentic` | Mixed training and held-out evaluation with a single-rack allocation. | 15 nodes × 4 GB200s, one rack | Rolling native recovery and an HF export of the best eligible checkpoint. |
-| `train-long-agentic-3rack` | Mixed training and held-out evaluation across three racks. | 48 nodes × 4 GB200s, three racks | Rolling native recovery and an HF export of the best eligible checkpoint. |
+| `train-medium` | Short one-turn training check. | 15 nodes × 4 GB200s, one rack | Newest recovery checkpoint, HF export disabled. |
+| `train-medium-agentic` | Short mixed run with tool-using and one-turn tasks. | 15 nodes × 4 GB200s, one rack | Newest recovery checkpoint, HF export disabled. |
+| `train-long` | One-turn training with held-out evaluation. | 15 nodes × 4 GB200s, one rack | Best eligible policy. |
+| `train-long-3rack` | One-turn training with dedicated racks for training and inference. | 48 nodes × 4 GB200s, three racks | Best eligible policy. |
+| `train-long-agentic` | Mixed training and held-out evaluation with a single-rack allocation. | 15 nodes × 4 GB200s, one rack | Best eligible policy. |
+| `train-long-agentic-3rack` | Mixed training and held-out evaluation across three racks. | 48 nodes × 4 GB200s, three racks | Best eligible policy. |
 
 - A reduced one-turn run used about 83.4 GB200-hours for two updates. [One-turn run](https://iris.oa.dev/#/job/%2Fatqamar%2Fusers-ahmad-checkpoints-mochi-rl-train-medium-ccd0098764-in-f77b2799-2026.11.19.1-coordinator-5caf5432)
 - A three-update mixed run used 95.5 GB200-hours. [Mixed run](https://iris.oa.dev/#/job/%2Fatqamar%2Fusers-ahmad-checkpoints-mochi-rl-train-medium-agentic-42fe33329d-in-03b184b7-2026.11.19.1-coordinator-c7f0249f)
@@ -41,11 +41,18 @@ took 16 to 26 minutes on the single-rack layout. [Short mixed save](https://iris
 
 | Snowball preset | When to use it | Layout | Checkpoints and export |
 | --- | --- | --- | --- |
-| `train-medium-agentic` | Ten updates with held-out evaluation on one inference engine. | 11 nodes × 8 H100s | Rolling native recovery and an HF export of the best eligible checkpoint. |
-| `train-long-agentic` | Up to 10,000 updates with held-out evaluation on 22 inference engines. | 32 nodes × 8 H100s | Rolling native recovery and an HF export of the best eligible checkpoint. |
+| `train-medium-agentic` | Ten updates with held-out evaluation on one inference engine. | 11 nodes × 8 H100s | Best eligible policy. |
+| `train-long-agentic` | Up to 10,000 updates with held-out evaluation on 22 inference engines. | 32 nodes × 8 H100s | Best eligible policy. |
+
+When a trained step has the best eligible score, a successful waiting run keeps that native
+checkpoint and returns its HF export. When step zero wins, the result points to the starting HF
+model and trained checkpoints stay only if `keep_every` or an outstanding export protects them.
+Detached launches use the trainer’s rolling checkpoint window.
 
 A five-node smoke used 12.7 H100-hours for one update with the v3 selection and a custom layout.
 [Snowball smoke](https://iris.oa.dev/#/job/%2Fatqamar%2Fusers-ahmad-checkpoints-snowball-rl-train-medium-agentic-0b68f259dc-in-3f9941b9-2026.11.19.1-coordinator-7982cea2)
+
+Snowball’s agentic presets use context parallelism 5 for a 102,400-token window because smaller layouts with context parallelism 1 ran out of memory during policy backpropagation with a 32,768-token window.
 
 ### Task selection and native resume
 
@@ -53,9 +60,9 @@ Pass `--tasks users/ahmad/snowball-100k-agentic@2026.11.19.2` for a mixed preset
 selection contains the admitted SWE v4 agent tasks and the one-turn training rows. Both task
 families must be present, and training rows must be disjoint from the held-out evaluation.
 
-Use `--resume NAME@VERSION` on a checkpointing preset to restore the latest committed native
+Use `--resume NAME@VERSION` on a checkpointing preset to restore the newest retained recovery
 checkpoint and its original model identity from a finished run. The source needs an immutable
-version and a checkpoint still present in storage. `--init` starts from published
+version and a retained native checkpoint. `--init` starts from published
 model weights and is mutually exclusive with `--resume`. Set `SOURCE_RUN` to a finished Mochi
 run’s artifact name and version, as printed in its plan under `runs` as `name` and `version`.
 

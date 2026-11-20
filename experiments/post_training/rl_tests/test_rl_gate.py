@@ -326,6 +326,21 @@ def test_current_generation_counters_compare_with_stored_controls(recorded_runs,
     assert any(row["name"] == "eval_lite/grader_error_fraction" and not row["holds"] for row in report["invariants"])
 
 
+def test_best_checkpoint_selection_requires_held_out_grading(recorded_runs, preset_table):
+    preset = snowball_model.SNOWBALL.by_name["train-long"]
+    evaluation = replace(preset.evaluations[0], every=2)
+    for retention in ("latest", "best"):
+        candidate = replace(
+            preset.with_updates(2), checkpoints=retention, export="none", checkpoint_every=2, evaluations=(evaluation,)
+        )
+        preset_table(candidate)
+        root = recorded_runs(candidate.name, f"users/test/checkpoint-grading-{retention}")
+        facts = {fact.name for fact in scoring.load_run(str(root), candidate).invariants}
+        assert f"{evaluation.name}/batch_finished" in facts
+        for check in ("scored_fraction", "grader_error_fraction"):
+            assert (f"{evaluation.name}/{check}" in facts) == (retention == "best")
+
+
 def test_named_evaluation_protocol_uses_its_recorded_request(recorded_runs):
     root = recorded_runs("speed-short", "users/test/recorded-named")
     launch = json.loads((root / "terminal.json").read_text())["config"]

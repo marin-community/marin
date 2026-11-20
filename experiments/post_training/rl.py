@@ -298,7 +298,7 @@ def _status(
             result.state.value if result else status_path.read_text().strip() if status_path.exists() else "not built"
         )
         best = {}
-        if preset.checkpoint_every and launch is not None:
+        if preset.checkpoints == "best" and launch is not None:
             best_path = StoragePath(launch.export_root) / "best_checkpoint.json"
             best["best_checkpoint_step"] = (
                 json.loads(best_path.read_text())["step"] if best_path.exists() else "none eligible"

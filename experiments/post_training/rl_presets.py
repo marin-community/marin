@@ -196,7 +196,8 @@ class Training:
                 count = len(cohort["job"]["tasks"])
                 expected_tasks += count
                 minimum_scored_tasks += math.ceil(preset.harbor.minimum_coverage * count)
-        if initial_model_uri is not None:
+        if preset.checkpoints == "best":
+            assert initial_model_uri is not None
             callbacks.append(
                 BestCheckpointCallback(
                     type="best_checkpoint",
@@ -205,12 +206,8 @@ class Training:
                     minimum_scored_tasks=minimum_scored_tasks,
                 )
             )
+        every = preset.checkpoint_every
         if preset.export != "none":
-            every = preset.checkpoint_every
-            if every is None:
-                callbacks.append(
-                    CheckpointCallback(type="checkpoint", save_steps=preset.updates + 1, save_on_train_end=True)
-                )
             callbacks.append(
                 HFModelSaveCallback(
                     type="hf_model_save",
@@ -359,6 +356,8 @@ class Preset:
     publishes: bool = False
     controls: str | None = None
     checkpoint_every: int | None = None
+    checkpoints: Literal["none", "latest", "best"] = "best"
+    keep_every: int | None = None
     owned_keys: frozenset[str] = frozenset()
     data_settings: frozenset[str] = frozenset()
     tasks: str
@@ -384,14 +383,24 @@ class Preset:
             raise ValueError("gated presets require guards")
         if self.held_out is not None and not self.held_out_tasks:
             raise ValueError("held-out evaluations require a held-out task selection")
-        if self.checkpoint_every is not None and self.checkpoint_every <= 0:
+        cadence = self.checkpoint_every
+        if cadence is not None and cadence <= 0:
             raise ValueError("checkpoint_every must be positive")
-        if self.export == "best" and (self.checkpoint_every is None or not self.evaluations):
-            raise ValueError("best export requires checkpointing and an evaluation")
-        if self.export == "best" and self.evaluations[0].every:
-            assert self.checkpoint_every is not None
-            if self.evaluations[0].every % self.checkpoint_every:
-                raise ValueError("scheduled evaluations for best export must fall on checkpoint steps")
+        if self.keep_every is not None and self.keep_every <= 0:
+            raise ValueError("keep_every must be positive")
+        if self.export not in ("none", self.checkpoints):
+            raise ValueError("export must be none or match checkpoints")
+        if self.checkpoints == "none":
+            if cadence is not None or self.keep_every is not None:
+                raise ValueError('checkpoints="none" requires checkpoint_every and keep_every to be unset')
+        elif cadence is None:
+            raise ValueError(f'checkpoints="{self.checkpoints}" requires checkpoint_every')
+        elif self.checkpoints == "best":
+            if not self.evaluations:
+                raise ValueError('checkpoints="best" requires an evaluation')
+            every = self.evaluations[0].every
+            if every and every % cadence:
+                raise ValueError('scheduled evaluations for checkpoints="best" must fall on checkpoint steps')
         validate_agentic_recipe(self.recipe.config)
         for evaluation in self.evaluations[1:]:
             if evaluation.every is not None or evaluation.at_start:
