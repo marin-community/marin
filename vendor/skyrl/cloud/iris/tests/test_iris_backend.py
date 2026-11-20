@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from types import SimpleNamespace
 
 import pytest
 from iris.client.client import IrisContext, iris_ctx_scope
@@ -13,7 +14,9 @@ from omegaconf import OmegaConf
 
 from cloud.iris import launch
 from cloud.iris.export_hf_checkpoint import ExportJobSpec, checkpoint_export_launch_config
+from cloud.iris.iris_backend import BundledLaunchConfig, build_config_task_command
 from cloud.iris.launch_config import load_launch_config
+from cloud.iris.ray_storage import RaySpillBackend
 from cloud.iris.tests.launch_config_fixtures import raw_launch_config
 from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT
 from skyrl_train.hf_export_schema import HFExportRequest
@@ -151,8 +154,6 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
 
 def test_task_shell_runs_the_interconnect_gate():
     """Multi-node task shells run the NCCL transport gate before the controller."""
-    from cloud.iris.iris_backend import build_config_task_command
-
     args = SimpleNamespace(
         config=OmegaConf.create({"skyrl": {"trainer": {"debug_mode": "off"}}}),
         launch_config_bundle=BundledLaunchConfig("/app/launch.yaml", "e30="),
