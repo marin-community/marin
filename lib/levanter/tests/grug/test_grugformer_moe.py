@@ -58,11 +58,64 @@ from levanter.grug.grug_moe import (
     _expert_granular_a2a_params,
     moe_mlp,
 )
+from levanter.testing.devices import use_cpu_devices
 from levanter.utils.activation import ActivationFunctionEnum
 
 
 _BF16_MOE_RELATIVE_TOLERANCE = 0.02
 _FP32_MOE_RELATIVE_TOLERANCE = 1e-4
+
+
+@pytest.mark.multidevice
+def test_stacked_expert_initialization_preserves_weights_with_sharded_temporaries():
+    with use_cpu_devices(8), jax_config.threefry_partitionable(True):
+        mesh = Mesh(
+            np.asarray(jax.devices()).reshape(2, 2, 2, 1),
+            ("data", "context", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 4,
+        )
+        pspecs = MoEExpertMlpPspecs(expert=("expert", "context"))
+
+        def initialize(key):
+            return jax.vmap(
+                lambda layer_key: MoEExpertMlp.init(
+                    num_experts=16,
+                    hidden_dim=128,
+                    intermediate_dim=128,
+                    initializer_std=0.02,
+                    key=layer_key,
+                    implementation="ring",
+                    pspecs=pspecs,
+                )
+            )(jax.random.split(key, 4))
+
+        def replicated_reference(key):
+            def layer_weights(layer_key):
+                gate_key, up_key, down_key = jax.random.split(layer_key, 3)
+                return tuple(
+                    jax.sharding.reshard(0.02 * jax.random.truncated_normal(k, -3, 3, (16, 128, 128)), spec)
+                    for k, spec in (
+                        (gate_key, pspecs.w_gate_up),
+                        (up_key, pspecs.w_gate_up),
+                        (down_key, pspecs.w_down),
+                    )
+                )
+
+            return jax.vmap(layer_weights)(jax.random.split(key, 4))
+
+        with jax.set_mesh(mesh):
+            key = jax.random.key(7)
+            initialized = jax.jit(initialize).lower(key).compile()
+            reference = jax.jit(replicated_reference).lower(key).compile()
+            actual = initialized(key)
+            expected = reference(key)
+            for weight, previous_weight in zip((actual.w_gate, actual.w_up, actual.w_down), expected, strict=True):
+                np.testing.assert_array_equal(weight, previous_weight)
+            # The regression replicated all layers' RNG buffers on every chip even though
+            # the returned parameters were partitioned. Compare compiler allocation sizes.
+            assert (
+                initialized.memory_analysis().temp_size_in_bytes < reference.memory_analysis().temp_size_in_bytes / 4
+            )
 
 
 def _make_dense_mesh() -> Mesh:

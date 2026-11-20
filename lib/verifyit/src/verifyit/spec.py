@@ -12,14 +12,13 @@ or missing fields; ``render_spec`` writes it back. Paths in a spec (``schema``, 
 
 import dataclasses
 import json
-import tomllib
 from dataclasses import dataclass, field, fields
-from enum import StrEnum
-from typing import Any
+from typing import Any, get_origin
 
 import tomli_w
 
 from verifyit.closure_scoring import ClosureFormat
+from verifyit.compat import StrEnum, tomllib
 from verifyit.json_comparison import JsonValue, NumericTypePolicy
 from verifyit.json_objects import unique_object
 
@@ -91,6 +90,17 @@ class EmptyOutputPolicy(StrEnum):
     GRADE = "grade"
 
 
+class McqExtraction(StrEnum):
+    """How an MCQ grader finds the chosen option in the output.
+
+    ``ANSWER_LINE`` reads the last ``Answer: X`` line or a bare letter. ``SUPERGPQA_REFERENCE``
+    reproduces the SuperGPQA runner's zero-shot extraction, including its option-text fallback.
+    """
+
+    ANSWER_LINE = "answer_line"
+    SUPERGPQA_REFERENCE = "supergpqa_reference"
+
+
 @dataclass(frozen=True)
 class FunctionCall:
     """A function name and decoded JSON argument object, without a harness call ID."""
@@ -137,6 +147,9 @@ class McqSpec:
     options: int = 4
     output: str = DEFAULT_OUTPUT
     empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
+    extraction: McqExtraction = field(default=McqExtraction.ANSWER_LINE, kw_only=True)
+    # The text of each option, in letter order; the SuperGPQA extraction maps matched option text to its letter.
+    option_texts: tuple[str, ...] = field(default=(), kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -490,7 +503,19 @@ def _coerce(name: str, annotation: Any, value: Any) -> Any:
         return tuple(value)
     if annotation == tuple[Constraint, ...]:
         return tuple(Constraint(name=c["name"], params=dict(c.get("params", {}))) for c in value)
-    if isinstance(annotation, type) and issubclass(annotation, StrEnum):
+    if annotation == dict[str, float]:
+        if not isinstance(value, dict):
+            raise ValueError(f"field {name!r} expects a table of numbers")
+        return {key: _coerced_float(name, item) for key, item in value.items()}
+    if annotation == dict[str, dict[str, float]]:
+        if not isinstance(value, dict) or any(not isinstance(inner, dict) for inner in value.values()):
+            raise ValueError(f"field {name!r} expects a table of number tables")
+        return {
+            key: {inner_key: _coerced_float(name, item) for inner_key, item in inner.items()}
+            for key, inner in value.items()
+        }
+    # typing.get_origin excludes parameterized generics: on 3.10 they still report as ``type``.
+    if get_origin(annotation) is None and isinstance(annotation, type) and issubclass(annotation, StrEnum):
         return annotation(value)
     if annotation is float and type(value) is int:
         try:
@@ -508,9 +533,18 @@ def _coerce(name: str, annotation: Any, value: Any) -> Any:
             raise ValueError(f"field {name!r} is outside the float range") from error
     if annotation is int and type(value) is not int:
         raise ValueError(f"field {name!r} expects an integer")
-    if isinstance(annotation, type) and not isinstance(value, annotation):
+    if get_origin(annotation) is None and isinstance(annotation, type) and not isinstance(value, annotation):
         raise ValueError(f"field {name!r} expects {annotation.__name__}, got {type(value).__name__}")
     return value
+
+
+def _coerced_float(name: str, value: Any) -> float:
+    if type(value) not in (int, float):
+        raise ValueError(f"field {name!r} expects a number")
+    try:
+        return float(value)
+    except OverflowError as error:
+        raise ValueError(f"field {name!r} is outside the float range") from error
 
 
 def spec_from_table(table: dict[str, Any]) -> Spec:

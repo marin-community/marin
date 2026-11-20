@@ -53,6 +53,20 @@ def score(scorer: str, config: dict[str, Any], response: str) -> Reward:
         assert isinstance(judge, JudgeSpec)
         verdict = grade_judge_candidate(judge, answer)
         return Reward(verdict.reward, verdict.status, {**verdict.detail, "extracted": answer, "method": "llm_judge"})
+    if scorer == "facts_grounding":
+        from verifyit.modes.grade_judge import judge_reply
+
+        from .facts_grounding import grade_facts_grounding
+
+        judge = parse_spec(Path("/tests/judge.toml").read_text())
+        assert isinstance(judge, JudgeSpec)
+        return grade_facts_grounding(
+            config["full_prompt"],
+            judge.question,
+            judge.references[0],
+            response,
+            lambda messages: judge_reply(judge, messages),
+        )
     if scorer in {"gpqa", "mmlu_pro"}:
         from .choices import grade_gpqa_answer, grade_mmlu_answer
 
