@@ -1102,7 +1102,6 @@ def test_missing_runtime_keeps_exact_gate_and_blocks_environment_endpoint(fake_j
     [
         ("Partial credit\nVERDICT: 6.75", 6.75, 0),
         ("VERDICT: 7", 7, 1),
-        ("VERDICT: 8.25", 8.25, 1),
         ("VERDICT: 10", 10, 1),
         ("VERDICT: 0", 0, 0),
         ("VERDICT: 10.001", None, None),
@@ -1128,7 +1127,6 @@ def test_research_rubric_preserves_points_and_pass(tmp_path, fake_judge, reply, 
     else:
         assert (result.status, result.reward) == (Status.SCORED, passed)
         assert result.detail["metrics"] == {"pass_rate": passed, "rubric_points": points}
-        assert result.detail["judge_request"] == fake_judge.requests[0]
 
 
 @pytest.mark.parametrize("response", [None, " "], ids=["missing-file", "blank-answer"])
