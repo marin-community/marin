@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from lib.taskforge.tests.effect_fakes import Answer, Choices, FlakySink, PausedSink, Query, Timed
+from lib.taskforge.tests.effect_fakes import Answer, Choices, FlakySink, PausedSink, Query, Timed, local_records
 
 from taskforge.effects.events import (
     Event,
@@ -22,7 +22,7 @@ from taskforge.effects.events import (
     event_digest,
 )
 from taskforge.effects.issues import LogFailure
-from taskforge.effects.log import EventLog, JsonlSink, Missing, Record, Status, fold
+from taskforge.effects.log import EventLog, JsonlSink, Missing, Record, Status, decode, fold
 from taskforge.llm.policy import LLMPolicy
 from taskforge.model.llm import Completion, Message, Role
 from taskforge.model.stage import Stage
@@ -42,21 +42,21 @@ async def test_jsonl_reload_in_new_process_preserves_typed_results_and_replay_ke
     await log.record(event)
     await log.record(Retrying(event, 1, "busy"))
     await log.record(Resolved(event, (fingerprint,), answer))
-    loaded = await sink.read()
+    loaded = local_records(sink)
     assert loaded == log.records
     resumed = EventLog(replay_from=loaded)
     assert resumed.lookup(Query({"a": "first", "z": "last"}), (fingerprint,)) == answer
     script = """
 import asyncio, importlib.util, sys
 from taskforge.effects.events import Fingerprint, ReplayPolicy
-from taskforge.effects.log import EventLog, JsonlSink
+from taskforge.effects.log import EventLog, decode
 spec = importlib.util.spec_from_file_location(sys.argv[2], sys.argv[3])
 assert spec is not None and spec.loader is not None
 fake = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = fake
 spec.loader.exec_module(fake)
 async def main():
-    log = EventLog(replay_from=await JsonlSink(sys.argv[1]).read())
+    log = EventLog(replay_from=decode(open(sys.argv[1], 'rb').read()))
     value = log.lookup(fake.Query({"a":"first", "z":"last"}), (Fingerprint("fake", "digest", ReplayPolicy.CACHE),))
     assert isinstance(value, fake.Answer)
     assert value.data == bytes([0, 255])
@@ -79,7 +79,7 @@ async def test_replay_preserves_float_keys_after_numeric_coercion(tmp_path: Path
     sink = JsonlSink(str(tmp_path / "numbers.jsonl"))
     log = EventLog(sink=sink)
     await log.record(Resolved(Timed(5), (), 3))
-    reloaded = EventLog(replay_from=await sink.read())
+    reloaded = EventLog(replay_from=local_records(sink))
     assert reloaded.lookup(Timed(5.0), ()) == 3.0
 
 
@@ -89,7 +89,7 @@ async def test_non_replayable_result_is_recorded_but_not_served_from_cache(tmp_p
     resolved = Resolved(Timed(5), (), 3.0)
     await log.record(resolved)
     assert isinstance(log.lookup(Timed(5), ()), Missing)
-    assert [record.event for record in await sink.read()] == [resolved]
+    assert [record.event for record in local_records(sink)] == [resolved]
 
 
 async def test_frozen_set_payloads_roundtrip_with_stable_replay_keys(tmp_path: Path) -> None:
@@ -97,7 +97,7 @@ async def test_frozen_set_payloads_roundtrip_with_stable_replay_keys(tmp_path: P
     log = EventLog(sink=sink)
     event = Choices(frozenset({"second", "first"}))
     await log.record(Resolved(event, (), frozenset({"chosen"})))
-    resumed = EventLog(replay_from=await sink.read())
+    resumed = EventLog(replay_from=local_records(sink))
     assert resumed.lookup(Choices(frozenset({"first", "second"})), ()) == frozenset({"chosen"})
 
 
@@ -116,9 +116,9 @@ async def test_local_sink_appends_without_rewriting_prefix_and_retries_torn_tail
     assert path.read_bytes().startswith(prefix)
     with path.open("ab") as output:
         output.write(b'{"sequence":3,"wall_time":')
-    assert await sink.read() == (first, second)
+    assert local_records(sink) == (first, second)
     await sink.write((second, third))
-    assert await sink.read() == (first, second, third)
+    assert local_records(sink) == (first, second, third)
 
 
 async def test_log_retries_only_unwritten_records_and_retains_failed_batch() -> None:
@@ -136,7 +136,7 @@ async def test_unknown_recorded_kind_fails_closed_naming_it(tmp_path: Path) -> N
     await JsonlSink(str(path)).write((Record(1, 1.0, Note("known")),))
     path.write_text(path.read_text().replace('"effect.note"', '"taskforge.effects.events.Note"'))
     with pytest.raises(LogFailure, match=r"Unknown event kind 'taskforge\.effects\.events\.Note'"):
-        await JsonlSink(str(path)).read()
+        decode(path.read_bytes())
 
 
 async def test_records_queued_during_upload_coalesce_into_one_incremental_batch() -> None:
@@ -168,7 +168,7 @@ async def test_unencodable_event_does_not_poison_later_persistence(tmp_path: Pat
     with pytest.raises(LogFailure):
         await log.record(Invalid(object()))
     await log.record(Note("after"))
-    assert tuple(record.event for record in await sink.read()) == (Note("before"), Note("after"))
+    assert tuple(record.event for record in local_records(sink)) == (Note("before"), Note("after"))
     assert tuple(record.sequence for record in log.records) == (1, 2)
 
 
@@ -181,10 +181,10 @@ async def test_conversation_logs_each_turn_once_and_replays_chained_requests(tmp
     for request in (first, second):
         await log.record(request)
         await log.record(Resolved(request, (), Completion("reply")))
-    content = sink.read_bytes().decode()
+    content = Path(sink.path).read_text()
     assert content.count(prefix) == 1
     assert content.count("follow-up") == 1
-    resumed = EventLog(replay_from=await JsonlSink(sink.path).read())
+    resumed = EventLog(replay_from=local_records(sink))
     assert resumed.lookup(second, ()) == Completion("reply")
     assert [r.event for r in resumed.records if isinstance(r.event, Resolved)][-1].request == second
 
@@ -196,7 +196,7 @@ async def test_nonfinite_event_values_roundtrip_and_replay(tmp_path: Path, numbe
     request = Timed(number)
     await log.record(request)
     await log.record(Resolved(request, (), number))
-    loaded = await sink.read()
+    loaded = local_records(sink)
     resumed = EventLog(replay_from=loaded)
     value = resumed.lookup(Timed(number), ())
     assert isinstance(value, float)

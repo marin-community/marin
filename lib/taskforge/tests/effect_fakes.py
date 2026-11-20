@@ -4,10 +4,11 @@
 import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import override
 
 from taskforge.effects.events import Event
-from taskforge.effects.log import Record, Sink
+from taskforge.effects.log import JsonlSink, Record, Sink, decode
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,3 +65,9 @@ class PausedSink(Sink):
         self.started.set()
         await self.release.wait()
         self.batches += (tuple(records),)
+
+
+def local_records(sink: JsonlSink) -> tuple[Record, ...]:
+    """The complete lines of a local stream; a torn last line is not part of it."""
+    content = Path(sink.path).read_bytes()
+    return decode(content[: content.rfind(b"\n") + 1])

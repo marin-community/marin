@@ -4,6 +4,7 @@
 import asyncio
 import json
 import shutil
+import sys
 from argparse import Namespace
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -13,6 +14,7 @@ from types import SimpleNamespace
 from typing import cast, override
 
 import pytest
+from lib.taskforge.tests.effect_fakes import local_records
 from lib.taskforge.tests.resource_doubles import FakeCommand, FakeEnv, FakeInference, FakeWeb
 from lib.taskforge.tests.stage_fakes import CandidateEngine, SolverEngine, solver_model
 from rolloutengine.engine import RolloutEngine
@@ -22,13 +24,13 @@ from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import EnvironmentRequirements
 
 from taskforge import checkpoint, driver
-from taskforge.checkpoint import HEAD, CheckpointSink, Published, read_published
+from taskforge.checkpoint import HEAD, HEAD_JSON, CheckpointSink, Head, Journal, read_journal
 from taskforge.config import TaskforgeConfig
 from taskforge.coordinator import advance, run_workpiece
 from taskforge.effects.context import Context
 from taskforge.effects.events import StageCompleted
 from taskforge.effects.issues import Hold, LogFailure, Restart, Superseded, Transient
-from taskforge.effects.log import EventLog, JsonlSink, fold
+from taskforge.effects.log import EventLog, JsonlSink, Record, Status, decode, fold
 from taskforge.harness.protocol import Harness, Stopped, StopReason, Tool
 from taskforge.llm.glm_client import EndpointSource
 from taskforge.model.controls import CONTROL, Candidate, Control, ControlKind, RewardBand
@@ -60,14 +62,18 @@ from taskforge.stages.exits import Decided
 from taskforge.wiring import build_config, install
 
 
-def published(destination: Path) -> Published:
-    journal = read_published(str(destination))
+def published(destination: Path) -> Journal:
+    journal = read_journal(str(destination))
     assert journal is not None
     return journal
 
 
+def history(destination: Path) -> tuple[Record, ...]:
+    return decode(published(destination).events())
+
+
 def published_workpiece(destination: Path) -> Workpiece:
-    workpiece = published(destination).head.workpiece
+    workpiece = published(destination).workpiece()
     assert workpiece is not None
     return workpiece
 
@@ -163,7 +169,7 @@ async def test_crash_resume_replays_commands_without_repeating_inference(proposa
     assert isinstance(broken.inference, FakeInference)
     assert len(broken.inference.requests) == 2
     resumed = resources(Envs(), script()[2:])
-    log = EventLog(replay_from=await sink.read(), sink=sink)
+    log = EventLog(replay_from=local_records(sink), sink=sink)
     wp = await run_workpiece(proposal, config(), resumed, log, install=install)
     assert wp.terminal == Terminal.ACCEPTED
     assert isinstance(resumed.inference, FakeInference)
@@ -314,7 +320,7 @@ async def test_driver_persists_programming_failure_then_reraises(
     assert result.terminal == Terminal.HELD
     assert "bug:" in str(result.decisions[-1]) and "Traceback" in str(result.decisions[-1])
     assert published(destination).head.status.terminal is Terminal.HELD
-    assert published(destination).events
+    assert published(destination).events()
 
     # An Iris retry has a fresh local directory, but must not rerun this held workpiece.
     head = (destination / HEAD).read_bytes()
@@ -497,49 +503,149 @@ async def test_environment_startup_transient_replays_stage_or_holds_without_bug(
         assert "bug:" not in str(result.decisions[-1])
 
 
-@pytest.mark.parametrize("found", ["format 1", "format 3"])
+def tree(destination: Path) -> dict[Path, bytes]:
+    return {path: path.read_bytes() for path in destination.rglob("*") if path.is_file()}
+
+
+@asynccontextmanager
+async def unexpected_runtime(*_: object) -> AsyncIterator[None]:
+    pytest.fail("A journal that cannot be resumed must not start the runtime")
+    yield
+
+
+@pytest.mark.parametrize(
+    "artefact, found",
+    [
+        ("events.jsonl", "format 1"),
+        ("events.jsonl.parts/000000000001.jsonl", "format 1"),
+        ("status.json", "format 1"),
+        ("workpiece.json", "format 1"),
+        (HEAD, "format 3"),
+    ],
+)
 async def test_driver_fails_closed_on_another_journal_format_without_touching_it(
-    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, found: str
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, artefact: str, found: str
 ) -> None:
+    """Format 1 wrote parts and sidecars before its consolidated stream; any one of them marks the root."""
     destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
-    destination.mkdir(parents=True)
-    if found == "format 1":
-        (destination / "events.jsonl").write_text('{"sequence": 1}\n')
-    else:
-        (destination / HEAD).write_text(json.dumps({"format": 3, "writer": "newer"}))
-    before = {path: path.read_bytes() for path in destination.rglob("*")}
-
-    @asynccontextmanager
-    async def unexpected(*_: object) -> AsyncIterator[None]:
-        pytest.fail("A journal in another format must not start the runtime")
-        yield
-
-    monkeypatch.setattr(driver, "runtime", unexpected)
+    (destination / artefact).parent.mkdir(parents=True)
+    (destination / artefact).write_text(json.dumps({"format": 3, "sequence": 1}) + "\n")
+    before = tree(destination)
+    monkeypatch.setattr(driver, "runtime", unexpected_runtime)
     with pytest.raises(LogFailure, match=f"journal {found}"):
         await driver.one(driver_args)
-    assert {path: path.read_bytes() for path in destination.rglob("*")} == before
+    assert tree(destination) == before
 
 
-async def test_second_driver_on_a_live_root_supersedes_the_first_which_publishes_nothing(
+async def test_drivers_sharing_a_work_directory_publish_only_their_own_history(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A relaunch racing a not-yet-dead driver takes the head; the old driver stops and cannot publish."""
-    monkeypatch.setattr(checkpoint, "CHECKPOINT_EVENTS", 1)
-    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
-    takeover = asyncio.Event()
+    """A fresh root starts from its own empty history, whatever another run left in the shared work directory."""
+    built = [resources(Envs(), script()), resources(Envs(), script())]
+    attempts = iter(built)
 
-    class TakenOver(FakeInference):
+    @asynccontextmanager
+    async def fake_runtime(
+        policy: Policy, _source: EndpointSource, _key: str
+    ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
+        yield build_config(policy, {}), next(attempts)
+
+    monkeypatch.setattr(driver, "runtime", fake_runtime)
+    identity = driver.proposal_key(driver_args.proposals)
+    await driver.one(driver_args)
+    first = history(Path(driver_args.output) / identity)
+    driver_args.output += "-second"
+    await driver.one(driver_args)
+    second = history(Path(driver_args.output) / identity)
+    assert published_workpiece(Path(driver_args.output) / identity).terminal is Terminal.ACCEPTED
+    assert [record.event for record in second] == [record.event for record in first]
+    assert [record.sequence for record in second] == list(range(1, len(first) + 1))
+    assert isinstance(built[1].inference, FakeInference) and len(built[1].inference.requests) == len(script())
+
+
+def corrupt(line: bytes, corruption: str, sequence: int) -> bytes:
+    row = json.loads(line)
+    if corruption == "torn tail":
+        return line.rstrip(b"\n")
+    if corruption == "unknown kind":
+        row["event"]["type"] = "test.unknown"
+    else:
+        row["sequence"] = sequence + 1
+    return json.dumps(row, sort_keys=True).encode() + b"\n"
+
+
+@pytest.mark.parametrize("corruption", ["unknown kind", "bad sequence", "torn tail"])
+async def test_resume_decodes_published_history_before_claiming_and_leaves_it_untouched(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, corruption: str
+) -> None:
+    class Unavailable(SolverEngine):
         @override
-        async def complete(self, request: InferenceRequest) -> Completion:
-            if len(self.requests) == 2:
-                journal = published(destination)
-                await CheckpointSink(
-                    JsonlSink(str(Path(driver_args.work_dir) / "relaunch.jsonl")), str(destination)
-                ).claim(journal)
-                takeover.set()
-            return await super().complete(request)
+        async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
+            return GradedRollout(Rollout(run_id or "trial", (), "stop"), GradeResult(Outcome.UNAVAILABLE, None))
 
-    first = replace(resources(Envs(), ()), inference=TakenOver(script()))
+    held = resources(Envs(), script())
+    held = replace(held, rollouts=replace(held.rollouts, engine=Unavailable(2)))
+
+    @asynccontextmanager
+    async def fake_runtime(
+        policy: Policy, _source: EndpointSource, _key: str
+    ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
+        yield build_config(policy, {}), held
+
+    monkeypatch.setattr(driver, "runtime", fake_runtime)
+    await driver.one(driver_args)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    head = json.loads((destination / HEAD).read_bytes())
+    assert head["status"]["terminal"] == Terminal.HELD and head["workpiece"] is not None
+    lines = b"".join((destination / "chunks" / name).read_bytes() for name in head["chunks"]).splitlines(True)
+    events = b"".join((*lines[:-1], corrupt(lines[-1], corruption, len(lines))))
+    (destination / "chunks" / "rewritten.jsonl").write_bytes(events)
+    (destination / HEAD).write_text(json.dumps({**head, "chunks": ["rewritten.jsonl"], "size": len(events)}))
+    before = tree(destination)
+    monkeypatch.setattr(driver, "runtime", unexpected_runtime)
+    driver_args.resume_held = True
+    driver_args.work_dir += "-resume"
+    with pytest.raises(LogFailure):
+        await driver.one(driver_args)
+    assert tree(destination) == before
+
+
+class TakenOverWhileBlocked(FakeInference):
+    """On the third call another writer takes the root; the call then blocks like a long model call."""
+
+    def __init__(self, completions: Sequence[Completion], destination: Path, workdir: Path) -> None:
+        super().__init__(completions)
+        self.destination, self.workdir = destination, workdir
+        self.successor: CheckpointSink | None = None
+        self.history: tuple[Record, ...] = ()
+        self.cancelled = False
+
+    @override
+    async def complete(self, request: InferenceRequest) -> Completion:
+        if len(self.requests) == 2:
+            (stale,) = self.workdir.glob("*.jsonl")
+            while published(self.destination).head.size < stale.stat().st_size:
+                await asyncio.sleep(0.01)  # Take over only once the old writer has nothing pending.
+            self.successor = CheckpointSink(self.workdir, str(self.destination))
+            self.history = await self.successor.claim(published(self.destination))
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.cancelled = True
+                raise
+        return await super().complete(request)
+
+
+async def test_a_writer_blocked_with_nothing_pending_stops_within_a_tick_of_a_takeover(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A relaunch sharing the work directory takes the head; the idle old driver is cancelled and publishes nothing."""
+    monkeypatch.setattr(checkpoint, "CHECKPOINT_EVENTS", 1)
+    monkeypatch.setattr(checkpoint, "CHECKPOINT_SECONDS", 0.01)
+    identity = driver.proposal_key(driver_args.proposals)
+    destination = Path(driver_args.output) / identity
+    inference = TakenOverWhileBlocked(script(), destination, Path(driver_args.work_dir) / identity)
+    first = replace(resources(Envs(), ()), inference=inference)
 
     @asynccontextmanager
     async def fake_runtime(
@@ -550,11 +656,67 @@ async def test_second_driver_on_a_live_root_supersedes_the_first_which_publishes
     monkeypatch.setattr(driver, "runtime", fake_runtime)
     with pytest.raises(ExceptionGroup) as raised:
         await driver.one(driver_args)
-    assert raised.group_contains(Superseded)
-    assert takeover.is_set()
+    assert raised.group_contains(Superseded) and inference.cancelled
     journal = published(destination)
-    assert journal.head.status.terminal is None and journal.head.workpiece is None
-    assert isinstance(first.inference, FakeInference) and len(first.inference.requests) < len(script())
+    assert inference.successor is not None and journal.head.writer == inference.successor.writer
+    assert (journal.head.status, journal.head.workpiece) == (Status(), None)
+    # The successor's private stream is exactly the committed history, and it resumes from all of it.
+    assert Path(inference.successor.local.path).read_bytes() == journal.events()
+    assert inference.history == decode(journal.events())
+
+
+async def test_parent_summary_separates_superseded_and_corrupt_children_from_good_work(
+    driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(checkpoint, "CHECKPOINT_EVENTS", 1)
+    monkeypatch.setattr(checkpoint, "CHECKPOINT_SECONDS", 0.01)
+    proposals = tmp_path / "proposals"
+    proposals.mkdir()
+    paths = {name: proposals / f"{name}.proposal.json" for name in ("corrupt", "good", "superseded")}
+    for path in paths.values():
+        path.write_bytes(Path(driver_args.proposals).read_bytes())
+    driver_args.proposals, driver_args.concurrency = str(proposals), 1
+    roots = {name: Path(driver_args.output) / driver.proposal_key(str(path)) for name, path in paths.items()}
+    (roots["corrupt"] / "chunks").mkdir(parents=True)
+    (roots["corrupt"] / "chunks" / "torn.jsonl").write_bytes(b'{"sequence": 1')
+    head = Head(2, "earlier", ("torn.jsonl",), 14, Status(), None, 0.0)
+    (roots["corrupt"] / HEAD).write_bytes(HEAD_JSON.dump_json(head))
+    corrupt = tree(roots["corrupt"])
+    workdir = Path(driver_args.work_dir) / driver.proposal_key(str(paths["superseded"]))
+    taken = replace(resources(Envs(), ()), inference=TakenOverWhileBlocked(script(), roots["superseded"], workdir))
+    built = iter((resources(Envs(), script()), taken))
+
+    @asynccontextmanager
+    async def fake_runtime(
+        policy: Policy, _source: EndpointSource, _key: str
+    ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
+        yield build_config(policy, {}), next(built)
+
+    def child(command: list[str]) -> SimpleNamespace:
+        """Run the child's real entry point in this process, so its exit code is the one ``main`` chooses."""
+
+        def wait() -> int:
+            monkeypatch.setattr(sys, "argv", command[3:])
+            try:
+                driver.main()
+            except SystemExit as error:
+                return cast(int, error.code)
+            return 0
+
+        return SimpleNamespace(wait=wait, poll=lambda: 0)
+
+    monkeypatch.setattr(driver, "runtime", fake_runtime)
+    monkeypatch.setattr(driver.subprocess, "Popen", child)
+    with pytest.raises(RuntimeError, match="1 workpieces failed") as raised:
+        await driver.run(driver_args)
+    assert str(paths["corrupt"]) in str(raised.value) and str(paths["superseded"]) not in str(raised.value)
+    out = capsys.readouterr().out
+    assert "failed=1 skipped=0 superseded=1 needs_migration=0 corrupt=1" in out
+    lines = {line.split(" proposal=")[0]: line for line in out.splitlines() if line.startswith("OUTCOME")}
+    assert f"{paths['corrupt']}: move this root aside" in lines[f"OUTCOME corrupt exit={driver.CORRUPT}"]
+    assert f"{paths['superseded']}: another writer owns" in lines[f"OUTCOME superseded exit={driver.SUPERSEDED}"]
+    assert published_workpiece(roots["good"]).terminal is Terminal.ACCEPTED
+    assert tree(roots["corrupt"]) == corrupt
 
 
 class ScriptedAuthor(Harness):

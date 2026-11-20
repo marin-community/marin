@@ -8,6 +8,7 @@ import os
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, fields
+from itertools import islice
 from pathlib import Path
 from typing import Any, Protocol, cast, override
 
@@ -108,10 +109,11 @@ def decode(data: bytes, first_seen: dict[str, int] | None = None) -> tuple[Recor
         decoded = []
         for line in data.splitlines():
             row = json.loads(line)
-            previous = set(known)
+            before = len(known)
             event = _decode(row["event"], known)
             if first_seen is not None:
-                first_seen.update({key: row["sequence"] for key in known.keys() - previous})
+                # Digests first decoded in this row are the newest insertions; earlier ones are never revisited.
+                first_seen.update((key, row["sequence"]) for key in islice(reversed(known), len(known) - before))
             decoded.append(Record(row["sequence"], row["wall_time"], event))
     except (TypeError, ValueError, KeyError) as error:
         raise LogFailure("Cannot decode the event stream") from error
@@ -122,7 +124,10 @@ def decode(data: bytes, first_seen: dict[str, int] | None = None) -> tuple[Recor
 
 @dataclass(frozen=True, slots=True)
 class JsonlSink(Sink):
-    """The local single-writer stream: fsynced appends that tolerate a torn tail and retried batches."""
+    """The local single-writer stream: fsynced appends that tolerate a torn tail and retried batches.
+
+    A driver never reads it back: a writer starts it from the published stream and publishes from it.
+    """
 
     path: str
     _known: dict[str, int] = field(default_factory=dict, init=False, repr=False, compare=False)
@@ -179,17 +184,12 @@ class JsonlSink(Sink):
             output.flush()
             os.fsync(output.fileno())
 
-    def read_bytes(self) -> bytes:
-        """The complete lines of the stream; a torn last line is not part of it."""
-        content = Path(self.path).read_bytes()
-        return content[: content.rfind(b"\n") + 1]
-
-    async def read(self) -> tuple[Record, ...]:
-        try:
-            data = await asyncio.to_thread(self.read_bytes)
-        except OSError as error:
-            raise LogFailure("Cannot read the event stream") from error
-        return decode(data, self._known)
+    def start(self, data: bytes) -> tuple[Record, ...]:
+        """Begin this new stream as exactly ``data``, a complete published stream, and return its records."""
+        records = decode(data, self._known)
+        Path(self.path).parent.mkdir(parents=True, exist_ok=True)
+        Path(self.path).write_bytes(data)
+        return records
 
 
 class EventLog:

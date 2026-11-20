@@ -44,6 +44,17 @@ class Superseded(LogFailure):
     """
 
 
+class UnsupportedFormat(LogFailure):
+    """The root holds another journal format; leave it untouched for a migration, then rerun the proposal."""
+
+
+class CorruptJournal(LogFailure):
+    """The committed journal does not decode; resuming would misread or drop history, so nothing is claimed.
+
+    Relaunching fails the same way; an operator moves the root aside and reruns the proposal.
+    """
+
+
 class ContextExceeded(Exception):
     """The provider rejected the conversation because its context window is full.
 

@@ -12,7 +12,7 @@ from taskcompendium.grading_result import GradeResult, Outcome
 
 from taskforge.checkpoint import CheckpointSink
 from taskforge.effects.events import Event, Resolved, ScopeEntered, ScopeExited, StageCompleted
-from taskforge.effects.log import JsonlSink, Record, Status
+from taskforge.effects.log import Record, Status
 from taskforge.llm.policy import LLMPolicy
 from taskforge.lowering import lower_with_settings, lowering_settings
 from taskforge.model.llm import Completion, Usage
@@ -85,7 +85,7 @@ async def test_report_reads_journals_counts_usage_once_and_uses_decision_time(
         decisions = (Abandon(reasons),) if terminal is Terminal.ABANDONED else (Incomplete(reasons),)
         data = events if name == "accepted" else [(0, StageCompleted(Stage.REVIEW, "", "Done", terminal=terminal))]
         records = tuple(Record(i, 1000000 - age + offset, event) for i, (offset, event) in enumerate(data, 1))
-        sink = CheckpointSink(JsonlSink(str(tmp_path / f"{name}.jsonl")), str(directory))
+        sink = CheckpointSink(tmp_path / "work", str(directory))
         await sink.claim(None)
         await sink.local.write(records[:1])
         await asyncio.to_thread(sink._publish, Status(), None)
@@ -110,3 +110,15 @@ async def test_report_reads_journals_counts_usage_once_and_uses_decision_time(
 async def test_report_empty_root_fails_closed(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="No workpiece"):
         await report(str(tmp_path))
+
+
+async def test_report_names_format_1_roots_and_counts_a_claimed_empty_root_as_running(tmp_path: Path) -> None:
+    for name, artefact in (("old", "status.json"), ("parts", "events.jsonl.parts/000000000001.jsonl")):
+        (tmp_path / name / artefact).parent.mkdir(parents=True)
+        (tmp_path / name / artefact).write_text("{}")
+    with pytest.raises(ValueError, match=f"2 journal format 1 roots .*{tmp_path / 'old'}, {tmp_path / 'parts'}"):
+        await report(str(tmp_path))
+    await CheckpointSink(tmp_path / "work", str(tmp_path / "claimed")).claim(None)
+    lines = await report(str(tmp_path), 1)
+    assert f"skipped journal_format=1 count=2 roots={tmp_path / 'old'}, {tmp_path / 'parts'}" in lines
+    assert "workpieces=1 since_hours=1" in lines and "terminal=running count=1" in lines

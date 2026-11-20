@@ -4,6 +4,7 @@
 from functools import partial
 from pathlib import Path, PurePosixPath
 
+from lib.taskforge.tests.effect_fakes import local_records
 from lib.taskforge.tests.resource_doubles import FakeCommand, FakeEnv, FakeInference
 from rolloutengine.models import GradedRollout, Rollout
 from rolloutengine.test_support import arithmetic_task, rollout_spec
@@ -54,7 +55,7 @@ async def test_reload_reexecutes_environment_but_reuses_inference_and_ids(tmp_pa
 
     replay_env = FakeEnv("image", script)
     replay_client = FakeInference(())
-    replay = Context(log=EventLog(replay_from=await sink.read()))
+    replay = Context(log=EventLog(replay_from=local_records(sink)))
     configure(replay, replay_env, replay_client, Ids(lambda: "new"))
     await replay.emit(WriteFile(path, b"\xff\x00"))
     assert (await replay.emit(event)).content == "answer"
@@ -80,5 +81,5 @@ async def test_jsonl_round_trips_resource_results_and_binary_payloads(tmp_path: 
     )
     sink = JsonlSink(str(tmp_path / "results.jsonl"))
     await sink.write(tuple(Record(index, 0.0, event) for index, event in enumerate(events, 1)))
-    restored = await sink.read()
+    restored = local_records(sink)
     assert tuple(record.event for record in restored) == events

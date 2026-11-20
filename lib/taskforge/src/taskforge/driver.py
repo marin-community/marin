@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 import traceback
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
@@ -23,11 +24,11 @@ from rigging.filesystem.storage_path import prefix_join
 from rigging.log_setup import configure_logging
 from rigging.secrets import get_secret, list_secret_names, require_secret
 
-from taskforge.checkpoint import CheckpointSink, read_published
+from taskforge.checkpoint import CheckpointSink, read_journal
 from taskforge.coordinator import reasons, run_workpiece
 from taskforge.effects.events import StageCompleted
-from taskforge.effects.issues import Hold, LogFailure, Restart, Superseded, Transient
-from taskforge.effects.log import EventLog, JsonlSink, fold
+from taskforge.effects.issues import CorruptJournal, Hold, LogFailure, Restart, Superseded, Transient, UnsupportedFormat
+from taskforge.effects.log import EventLog, fold
 from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal
 from taskforge.model.review import Incomplete
 from taskforge.model.workpiece import Terminal, Workpiece
@@ -36,6 +37,14 @@ from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.report import report
 from taskforge.stages.classify import replayable_grade
 from taskforge.wiring import endpoint_source, install, runtime
+
+SUPERSEDED, NEEDS_MIGRATION, CORRUPT = 3, 4, 5
+OUTCOMES = {
+    SUPERSEDED: ("superseded", "another writer owns this root now; nothing to do"),
+    NEEDS_MIGRATION: ("needs_migration", "migrate this root to journal format 2, then rerun the proposal"),
+    CORRUPT: ("corrupt", "move this root aside, then rerun the proposal; relaunching the shard fails it again"),
+}
+"""Exit codes by which a ``one`` child says why it published nothing, with what an operator does about it."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,21 +111,16 @@ async def one(args: argparse.Namespace) -> None:
     identity = proposal_key(args.proposals)
     if identity.is_absolute() or ".." in identity.parts:
         raise ValueError("Proposal id must be a relative path without '..'")
-    workdir = Path(args.work_dir) / identity
-    workdir.mkdir(parents=True, exist_ok=True)
     destination = prefix_join(args.output, str(identity))
-    sink = JsonlSink(str(workdir / "events.jsonl"))
-    # An unreadable or older journal raises here, before anything is claimed or published.
-    published = await asyncio.to_thread(read_published, destination)
-    if published is not None:
-        terminal = published.head.status.terminal
-        if published.head.status.finished or (terminal is Terminal.HELD and not args.resume_held):
+    # Another journal format or undecodable history raises before anything is claimed or published.
+    journal = await asyncio.to_thread(read_journal, destination)
+    if journal is not None:
+        terminal = journal.head.status.terminal
+        if journal.head.status.finished or (terminal is Terminal.HELD and not args.resume_held):
             logging.info("SKIP %s: published terminal=%s", identity, terminal)
             return
-        (workdir / "events.jsonl").write_bytes(published.events)
-    checkpoints = CheckpointSink(sink, destination)
-    await checkpoints.claim(published)
-    previous = await sink.read() if Path(sink.path).exists() else ()
+    checkpoints = CheckpointSink(Path(args.work_dir) / identity, destination)
+    previous = await checkpoints.claim(journal)
     log = EventLog(sink=checkpoints, replay_from=previous, replayable=replayable_grade)
     wp = Workpiece(proposal.header.id, proposal)
     try:
@@ -159,7 +163,7 @@ async def run(args: argparse.Namespace) -> None:
         path for path in inputs(args.proposals, args.ranks) if start <= proposal_bucket(path, args.buckets) < end
     )
     active: dict[asyncio.Task[int], tuple[str, subprocess.Popen[bytes]]] = {}
-    failures: list[str] = []
+    failures: list[tuple[str, int]] = []
     _, policy = run_policy(args.policy)
     skipped = completed = submitted = 0
     try:
@@ -192,15 +196,33 @@ async def run(args: argparse.Namespace) -> None:
                     path, _ = active.pop(task)
                     completed += 1
                     if task.result() != 0:
-                        failures.append(path)
+                        failures.append((path, task.result()))
     finally:
         for _, process in active.values():
             if process.poll() is None:
                 process.terminate()
         await asyncio.gather(*active, return_exceptions=True)
-    print(f"SUMMARY submitted={submitted} completed={completed} failed={len(failures)} skipped={skipped}", flush=True)
-    if failures:
-        raise RuntimeError(f"{len(failures)} workpieces failed: {failures}")
+    labels = Counter[str]()
+    for path, code in failures:
+        label, action = OUTCOMES.get(code, ("failed", "see its log"))
+        labels[label] += 1
+        print(f"OUTCOME {label} exit={code} proposal={path}: {action}", flush=True)
+    failed = [path for path, code in failures if code != SUPERSEDED]
+    print(
+        f"SUMMARY submitted={submitted} completed={completed} failed={len(failed)} skipped={skipped} "
+        f"superseded={labels['superseded']} needs_migration={labels['needs_migration']} corrupt={labels['corrupt']}",
+        flush=True,
+    )
+    if failed:
+        raise RuntimeError(f"{len(failed)} workpieces failed: {failed}")
+
+
+def exit_code(error: Exception) -> int | None:
+    group = error if isinstance(error, ExceptionGroup) else ExceptionGroup("one", [error])
+    for code, issue in ((SUPERSEDED, Superseded), (NEEDS_MIGRATION, UnsupportedFormat), (CORRUPT, CorruptJournal)):
+        if group.subgroup(issue) is not None:
+            return code
+    return None
 
 
 def main() -> None:
@@ -226,8 +248,16 @@ def main() -> None:
     if args.command == "report":
         configure_coreweave_s3()
         print("\n".join(asyncio.run(report(args.output_root, args.since_hours))))
+    elif args.command == "run":
+        asyncio.run(run(args))
     else:
-        asyncio.run(run(args) if args.command == "run" else one(args))
+        try:
+            asyncio.run(one(args))
+        except Exception as error:
+            if (code := exit_code(error)) is None:
+                raise
+            logging.exception("Taskforge workpiece published nothing: %s", OUTCOMES[code][0])
+            sys.exit(code)
 
 
 if __name__ == "__main__":
