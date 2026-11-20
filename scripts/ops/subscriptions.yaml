@@ -1,0 +1,9 @@
+subscriptions:
+  - source: job-watchdog
+    min_severity: warning
+  - source: mac-resource-watch
+    min_severity: info
+  - source: difficulty-reconciler
+    min_severity: warning
+  - source: ops-feed-smoke
+    min_severity: info

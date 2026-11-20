@@ -12,9 +12,13 @@ spawns no maintenance task, so its RAM buffer never flushes to a readable
 segment and reads come back empty. A disk-backed store serves reads.
 """
 
+import json
+from datetime import UTC, datetime
+
 import pytest
 from finelog.client import LogClient
 from finelog.embedded import is_available, require_embedded_server
+from finelog.ops_feed import PAGE_SIZE, Event, Severity, Subscription, ack, emit, import_alerts, poll
 from finelog.rpc import logging_pb2
 
 
@@ -99,5 +103,107 @@ def test_cursors_bracket_a_window_around_a_named_row(embedded_server):
         assert fetch(cursor=seqs[2], until_cursor=seqs[6], max_lines=100) == ["line 3", "line 4", "line 5"]
         # An unset upper bound reads to the end: seq starts at 1, so 0 excludes nothing.
         assert len(fetch(until_cursor=0, max_lines=100)) == 20
+    finally:
+        client.close()
+
+
+def test_ops_feed_replay_filter_and_reader_positions(embedded_server, tmp_path):
+    client = LogClient.connect(embedded_server.address)
+    state = tmp_path / "reader.sqlite"
+    subscriptions = [Subscription("watchdog", Severity.WARNING)]
+    try:
+        first = emit("watchdog", "failure", Severity.ERROR, "job:opaque", {}, dedup_key="one", client=client)
+        emit("watchdog", "failure", Severity.ERROR, "job:opaque", {}, dedup_key="one", client=client)
+        emit("watchdog", "progress", Severity.INFO, "job:opaque", {}, client=client)
+        emit("other", "failure", Severity.CRITICAL, "job:opaque", {}, client=client)
+        assert [e.event_id for e in poll(client, subscriptions, "coordinator", state=state)] == [first]
+        # Reload the database through a new connection; filtered rows advance too.
+        assert poll(client, [Subscription("*", Severity.INFO)], "coordinator", state=state) == []
+        emit("watchdog", "failure", Severity.ERROR, "job:opaque", {}, dedup_key="one", client=client)
+        second = emit("watchdog", "failure", Severity.ERROR, "job:opaque", {}, dedup_key="two", client=client)
+        assert [e.event_id for e in poll(client, subscriptions, "coordinator", state=state)] == [second]
+        assert len(poll(client, subscriptions, "independent", state=state)) == 2
+    finally:
+        client.close()
+
+
+def test_ops_feed_ack_closes_subject_kind_and_later_event_reopens(embedded_server, tmp_path):
+    client = LogClient.connect(embedded_server.address)
+    subscriptions = [Subscription("*", Severity.INFO)]
+    state = tmp_path / "reader.sqlite"
+    try:
+        first = emit("watchdog", "failure", Severity.ERROR, "job:opaque", {}, dedup_key="one", client=client)
+        emit("watchdog", "failure", Severity.WARNING, "job:opaque", {}, dedup_key="two", client=client)
+        other_kind = emit("watchdog", "stalled", Severity.WARNING, "job:opaque", {}, client=client)
+        other_source = emit("other", "failure", Severity.WARNING, "job:opaque", {}, client=client)
+        ack(client, first)
+        # A delayed at-least-once replay of the acknowledged ID stays closed.
+        emit("watchdog", "failure", Severity.ERROR, "job:opaque", {}, dedup_key="one", client=client)
+        emit("watchdog", "failure", Severity.WARNING, "job:opaque", {}, dedup_key="two", client=client)
+        reopened = emit("watchdog", "failure", Severity.ERROR, "job:opaque", {}, client=client)
+        assert {e.event_id for e in poll(client, subscriptions, "fresh", state=state)} == {
+            other_kind,
+            other_source,
+            reopened,
+        }
+    finally:
+        client.close()
+
+
+def test_ops_feed_filtered_page_advances_to_next_page(embedded_server, tmp_path):
+    client = LogClient.connect(embedded_server.address)
+    state = tmp_path / "reader.sqlite"
+    subscriptions = [Subscription("watchdog", Severity.ERROR)]
+    try:
+        table = client.get_table("ops.events", Event)
+        table.write(
+            [Event(str(i), datetime.now(UTC), "watchdog", "progress", "info", "opaque", "{}") for i in range(PAGE_SIZE)]
+        )
+        assert table.flush(timeout=5) == "succeeded"
+        last = emit("watchdog", "failure", Severity.ERROR, "opaque", {}, client=client)
+        assert poll(client, subscriptions, "reader", state=state) == []
+        assert [e.event_id for e in poll(client, subscriptions, "reader", state=state)] == [last]
+        assert poll(client, subscriptions, "reader", state=state) == []
+    finally:
+        client.close()
+
+
+@pytest.mark.parametrize("source", ["job-watchdog", "mac-resource-watch"])
+def test_ops_feed_mac_import_replay_rotation_and_partial_write(embedded_server, tmp_path, source):
+    client = LogClient.connect(embedded_server.address)
+    path = tmp_path / "alerts.jsonl"
+    state = tmp_path / "state.sqlite"
+    if source == "job-watchdog":
+        record = {
+            "entry": "private-owner",
+            "kind": "JOB_FAILED",
+            "severity": "critical",
+            "state": "failed",
+            "time_utc": "2026-11-20T10:00:00+00:00",
+            "message": "private@example.com",
+            "evidence": "secret",
+        }
+    else:
+        record = {
+            "metric": "ram",
+            "kind": "enter",
+            "value": 1.0,
+            "threshold": 2.0,
+            "direction": "below",
+            "ts": 1795168800,
+            "top_processes": [{"command": "private@example.com", "worktree": "secret"}],
+        }
+    line = json.dumps(record) + "\n"
+    try:
+        path.write_text(line + '{"partial":')
+        assert import_alerts(client, source, path, destination="test", state=state) == 1
+        # Replacing a rolling file with the same retained record must not replay it.
+        path.write_text(line)
+        assert import_alerts(client, source, path, destination="test", state=state) == 0
+        events = poll(client, [Subscription("*", Severity.INFO)], "reader", state=state)
+        assert len(events) == 1
+        assert "private" not in events[0].payload_json + events[0].subject
+        assert "secret" not in events[0].payload_json
+        assert events[0].source == source
     finally:
         client.close()
