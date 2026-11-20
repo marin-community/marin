@@ -194,9 +194,13 @@ use `TPUOffloadConnector` for TPU-native host-RAM prefix caching.
 For large checkpoints with multi-process TPU DP (such as Snowball 67B on `v5p-8`), raise `--memory`
 (for example `--memory 400g`, as the `64g` default can OOM when multiple DP ranks stream weights
 concurrently) and `--wait-timeout` (for example `--wait-timeout 3600`, since it also bounds in-job
-startup during multi-rank XLA compilation). Minted capability URLs
-(`https://iris.oa.dev/proxy/t/<token>/serve.<name>/...`) forward `X-Session-ID` from off-cluster
-clients including CoreWeave pods; on allowlist-enforced CoreWeave clusters, pass
+startup during multi-rank XLA compilation). When launching directly from a `gs://` or `s3://` URI
+with `--data-parallel-size > 1`, multiple vLLM `ApiServer` processes can race while rewriting
+`tokenizer.json` in vLLM's shared `model_streamer` cache directory; pass an HF repo ID instead (so
+weights stream from the GCS cache while the tokenizer loads from the locked HF cache) or pass
+`--vllm-arg=--tokenizer=<HF repo>` (with `--vllm-arg=--tokenizer-revision=<sha>`). Minted capability
+URLs (`https://iris.oa.dev/proxy/t/<token>/serve.<name>/...`) forward `X-Session-ID` from
+off-cluster clients including CoreWeave pods; on allowlist-enforced CoreWeave clusters, pass
 `--egress-allow iris.oa.dev:443`.
 
 `--vllm-release` reads `marin-vllm-gpu-manifest.json` from a [published release](https://github.com/marin-community/vllm/releases).
