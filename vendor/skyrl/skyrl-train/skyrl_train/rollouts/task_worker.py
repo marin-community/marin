@@ -15,6 +15,7 @@ from daytona import DaytonaConnectionError, DaytonaError
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 from rigging.redaction import redact_string
+from rigging.timing import ExponentialBackoff
 from shellbox.machine import Backend, Machine, MachineFactory
 from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import EnvironmentRequirements, NoGrader, ReasoningMarkupPolicy
@@ -109,6 +110,7 @@ DAYTONA_DIAGNOSTIC_CALLS = frozenset(
     }
 )
 # A connection lost while the task machine starts leaves nothing the model has seen, so the rollout restarts.
+# Harbor tasks restart under their own retry policy instead.
 MACHINE_START_RETRIES = 2
 DAYTONA_RATE_LIMIT_HEADERS = frozenset(
     f"{prefix}-{throttler}"
@@ -224,13 +226,12 @@ async def _model_turn(
     )
 
 
-def _lost_machine_start(interruption: GradedRolloutInterrupted) -> bool:
+def _lost_machine_start(interruption: GradedRolloutInterrupted) -> DaytonaConnectionError | None:
+    """Return the connection error that stopped the task machine from starting, or none."""
     error = interruption.__cause__
-    return (
-        interruption.operation == RolloutOperation.START
-        and isinstance(error, TaskMachineError)
-        and isinstance(error.__cause__, DaytonaConnectionError)
-    )
+    if interruption.operation != RolloutOperation.START or not isinstance(error, TaskMachineError):
+        return None
+    return error.__cause__ if isinstance(error.__cause__, DaytonaConnectionError) else None
 
 
 def _failed_rollout(
@@ -544,20 +545,26 @@ class TaskRolloutWorker:
             engine = engines[index]
             harbor_slots = nullcontext() if harbor is None else self.harbor_task_slots
             retries = 0
-            start_retries = 0
+            # Resets arrive in bursts when a batch starts many machines, so the restarts spread out.
+            start_backoff = ExponentialBackoff(initial=1, maximum=30, factor=2, jitter=0.5)
             while True:
                 try:
                     async with harbor_slots, self.task_slots:
                         result = training_rollout(await engine.run_task(lowered, model, run_id=session_id), lowered)
                 except GradedRolloutInterrupted as interruption:
-                    if _lost_machine_start(interruption) and start_retries < MACHINE_START_RETRIES:
-                        start_retries += 1
+                    lost_start = _lost_machine_start(interruption)
+                    if harbor is None and lost_start is not None and retries < MACHINE_START_RETRIES:
+                        retries += 1
+                        delay = start_backoff.next_interval()
                         logger.warning(
-                            "Task {} restart {} after losing its machine at start: {}",
+                            "Task {} restart {} after {:.1f} seconds; it lost its machine at start: {}",
                             task.id,
-                            start_retries,
-                            redact_string(str(interruption.__cause__.__cause__)),
+                            retries,
+                            delay,
+                            redact_string(str(lost_start)),
                         )
+                        with rollout_wait("retry_backoff"):
+                            await self.retry_wait(delay)
                         continue
                     result = _failed_rollout(interruption, lowered)
                 if task.reasoning_markup == ReasoningMarkupPolicy.REJECT:
@@ -574,6 +581,8 @@ class TaskRolloutWorker:
                         result, grade=skipped_grade(task.grader.reason, diagnostics=result.grade.diagnostics)
                     )
                 if harbor is None:
+                    if retries:
+                        result = replace(result, metrics={**result.metrics, "rollout_retries": float(retries)})
                     return result
                 result = harbor_grading_failure(result)
                 delay = harbor.retry_delay(result.failure, retries)

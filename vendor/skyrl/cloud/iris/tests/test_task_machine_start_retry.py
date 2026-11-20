@@ -7,6 +7,7 @@ from daytona import DaytonaConnectionError
 from omegaconf import OmegaConf
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, ExecutionRequirements, MachineSpec
+from skyrl_train.rollouts.harbor_tasks import HarborTaskSettings
 from skyrl_train.rollouts.task_projections import WholeTaskProjection
 from skyrl_train.rollouts.task_worker import MACHINE_START_RETRIES, TaskRolloutWorker
 from skyrl_train.trajectory_runners.types import TaskRequestBatch, TokenProvenance
@@ -50,13 +51,13 @@ class ResettingFactory:
         return await ShellSimMachineFactory().create(spec)
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("failures", "recovers"),
-    [(MACHINE_START_RETRIES, True), (MACHINE_START_RETRIES + 1, False)],
-    ids=["recovers", "gives-up"],
-)
-async def test_lost_connection_at_machine_start_restarts_the_rollout(failures, recovers):
+async def rollout(factory: ResettingFactory, *, harbor: HarborTaskSettings | None = None):
+    """Run one shell task and return its result with the waits between restarts."""
+    waits = []
+
+    async def wait(delay):
+        waits.append(delay)
+
     config = OmegaConf.create(
         {
             "backend": "vllm",
@@ -73,13 +74,16 @@ async def test_lost_connection_at_machine_start_restarts_the_rollout(failures, r
             },
         }
     )
-    factory = ResettingFactory(failures)
-    task = text_task().model_copy(update={"environment_requirements": SHELL_ENVIRONMENT})
+    task = text_task().model_copy(
+        update={"environment_requirements": SHELL_ENVIRONMENT, "tags": () if harbor is None else ("harbor",)}
+    )
     worker = TaskRolloutWorker(
         config,
         WholeTaskProjection(config, WorkerTokenizer()),
         ReplyClient(),
         {"shellsim": factory},
+        harbor=harbor,
+        retry_wait=wait,
         shutdown_timeout=5,
     )
     try:
@@ -88,5 +92,30 @@ async def test_lost_connection_at_machine_start_restarts_the_rollout(failures, r
         )
     finally:
         await worker.shutdown()
-    assert factory.creations == min(failures + 1, MACHINE_START_RETRIES + 1)
+    return result, waits
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failures", "recovers"),
+    [(MACHINE_START_RETRIES, True), (MACHINE_START_RETRIES + 1, False)],
+    ids=["recovers", "gives-up"],
+)
+async def test_lost_connection_at_machine_start_restarts_the_rollout(failures, recovers):
+    factory = ResettingFactory(failures)
+    result, waits = await rollout(factory)
+    assert factory.creations == MACHINE_START_RETRIES + 1
     assert (result.failure is None) == recovers
+    # Each restart waits first, because the resets arrive in bursts.
+    assert len(waits) == MACHINE_START_RETRIES and all(wait > 0 for wait in waits)
+    assert result.metrics["rollout_retries"] == MACHINE_START_RETRIES
+
+
+@pytest.mark.asyncio
+async def test_harbor_task_restarts_only_under_its_own_retry_policy():
+    factory = ResettingFactory(failures=1)
+    harbor = HarborTaskSettings.from_config(OmegaConf.create({"harbor": {"max_retries": 0}}))
+    result, waits = await rollout(factory, harbor=harbor)
+    assert factory.creations == 1
+    assert waits == []
+    assert result.failure.exception_type == "TaskMachineError"
