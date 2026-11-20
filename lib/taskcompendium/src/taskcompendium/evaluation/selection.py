@@ -350,8 +350,11 @@ def select_cases(
                     status=(
                         SelectionStatus.EXCLUDED if rank is None or record is not None else SelectionStatus.UNINSPECTED
                     ),
-                    reason=("row_filter" if allowed is not None and row.source_row not in allowed else "group_filter")
-                    if rank is None else "source_limit",
+                    reason=(
+                        ("row_filter" if allowed is not None and row.source_row not in allowed else "group_filter")
+                        if rank is None
+                        else "source_limit"
+                    ),
                     rank=rank if policy.order is not CohortOrder.SOURCE else None,
                     context_window=context_window,
                     max_tokens=record.max_tokens if record is not None else None,

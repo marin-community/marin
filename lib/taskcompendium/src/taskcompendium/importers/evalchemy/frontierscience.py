@@ -72,7 +72,7 @@ def convert_research(row: RawRow, _context: ConversionContext) -> TaskSpec:
 
 
 def frontierscience_item(task: TaskSpec) -> EvaluationItem:
-    """Select the visible response and reduce scores by the source subject."""
+    """Select the visible response and record its source subject for reporting."""
     return chat_item(task, response_selection="final_only").model_copy(
         update={"groups": {"subject": source_evidence(task)["subject"]}}
     )

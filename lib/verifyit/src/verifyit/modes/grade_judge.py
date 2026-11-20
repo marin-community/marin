@@ -529,7 +529,14 @@ def _label_completion(
         choice = _completion_choice(response)
         if choice.finish_reason == "length":
             return _LabelCompletion(
-                choice.message.content or "", True, response.model, response.id, choice.finish_reason, attempts, request, usage
+                choice.message.content or "",
+                True,
+                response.model,
+                response.id,
+                choice.finish_reason,
+                attempts,
+                request,
+                usage,
             )
         return _LabelCompletion(
             _completed_text(choice), False, response.model, response.id, choice.finish_reason, attempts, request, usage

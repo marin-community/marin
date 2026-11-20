@@ -167,8 +167,8 @@ class GenerationConfig:
 
     ``max_gen_toks`` caps generation for curated evaluations, Evalchemy and Harbor.
     ``extra_gen_kwargs`` supply model-specific sampling options to curated evaluations and Evalchemy.
-    ``chat_template_kwargs`` are render-time template arguments forwarded on the Evalchemy chat
-    route. An Evalchemy launch file overrides these per
+    ``chat_template_kwargs`` are render-time template arguments for curated and Evalchemy chat
+    evaluations. An Evalchemy launch file overrides these per
     key. ``thinking_off_template_kwargs`` translates a benchmark's ``enable_thinking=false`` into
     the model's lowest supported reasoning setting when its template cannot disable reasoning.
     """
