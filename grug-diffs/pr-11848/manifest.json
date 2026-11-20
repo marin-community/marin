@@ -1,0 +1,22 @@
+{
+  "added_variants": [
+    "snowball_ladder"
+  ],
+  "base_sha": "b0966097558336114c2d846b0b0468187e6e9b7c",
+  "head_sha": "60726a9f0331e1608a31eead803dd8fa8e65ca17",
+  "report_count": 1,
+  "reports": [
+    {
+      "closest_variant": "snowball_synthetic",
+      "distance_score": 1150,
+      "report_relpath": "snowball_ladder/index.html",
+      "status_counts": {
+        "added": 2,
+        "changed": 1,
+        "removed": 2,
+        "unchanged": 1
+      },
+      "variant": "snowball_ladder"
+    }
+  ]
+}
