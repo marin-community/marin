@@ -8,7 +8,7 @@ from dataclasses import asdict
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from finestore.rl.licenses import LicenseReceipt, require_license
+from finestore.rl.licenses import LicenseReceipt
 from huggingface_hub import hf_hub_download
 from iris.cluster.client.job_info import get_job_info
 from rigging.filesystem.storage_path import StoragePath
@@ -21,7 +21,7 @@ from experiments.post_training.task_curation.datasets.facet.images import (
     pinned_json,
     upload_verified,
 )
-from infra.marina.apps.rl_data_catalog.server.licensing import require_unbanned
+from experiments.post_training.task_curation.license_publication import require_publication_license
 
 DATASET = "FWeindel/validated-tasks"
 TASK_REVISION = "317659ac88c8b706d318020c5fc3813a931fb6ec"
@@ -62,8 +62,7 @@ def preserve_image(config: ImageConfig) -> PreservedImage:
     for folder in EXPECTED_TASKS:
         source_id = DATASET.replace("/", ":", 1) + "/" + folder
         receipt = LicenseReceipt.model_validate(licenses[source_id])
-        require_license(receipt, source_id, DATASET, TASK_REVISION, "train")
-        require_unbanned(source_id, DATASET, receipt)
+        require_publication_license(receipt, source_id, DATASET, TASK_REVISION, "train")
     item = image_files(pinned_json(config.index_uri, config.index_sha256))[config.bundle_id]
     if (item["path"], item["sha256"], item["bytes"]) != (config.filename, config.sif_sha256, config.sif_bytes):
         raise ValueError("Endless step differs from its frozen bundle binding")
