@@ -643,11 +643,12 @@ type SkyRLDataSource = ArtifactDataSource | TaskTroveDataSource
 class SkyRLSpec:
     """Backend-neutral, identity-bearing SkyRL experiment definition.
 
-    ``curriculum`` records the intended task mix: the sampling projection renders into the
-    recipe's ``data.sampling`` subtree at construction (disagreement with declared values is an
-    error), the launch document carries the full curriculum, and the run's artifact record names it.
-    Curricula sample labeled prompt pools, so a curriculum requires ``data.kind=parquet``. The
-    training pool remains a separate input.
+    ``curriculum`` records the task mix the run trains on. Each entry pins a training pool by the
+    same artifact identity the spec's ``train_data`` carries, and construction rejects a curriculum
+    whose entries name pools the run does not train on. The input recipe stays unchanged; the
+    curriculum's sampling projection combines with it when the launch config is built, the launch
+    document carries the full curriculum, and the run's artifact record names it. Curricula sample
+    labeled prompt pools, so a curriculum requires ``data.kind=parquet``.
     """
 
     name: str
@@ -665,9 +666,9 @@ class SkyRLSpec:
     curriculum: RlCurriculum | None = None
 
     def __post_init__(self) -> None:
-        if self.curriculum is not None:
-            object.__setattr__(self, "config_yaml", _apply_curriculum(self.config_yaml, self.curriculum))
         _validate_skyrl_recipe(self.config_yaml, self.topology)
+        if self.curriculum is not None:
+            _validate_curriculum_train_data(self.train_data, self.curriculum, self.config_yaml)
         if not self.evaluation_data:
             return
         names = [name for name, _ in self.evaluation_data]
@@ -1035,13 +1036,25 @@ _CURRICULUM_DATA_KIND = "parquet"
 """Curricula sample labeled prompt pools, which only the parquet data kind carries."""
 
 
-def _apply_curriculum(config_yaml: str, curriculum: RlCurriculum) -> str:
-    """Render a curriculum's sampling projection into the recipe, rejecting disagreement.
+def _curriculum_train_data_identities(train_data: tuple[SkyRLDataSource, ...]) -> dict[str, str]:
+    """The ``{pool step name: artifact identity}`` map of the data the run trains on."""
+    pools: dict[str, str] = {}
+    for source in train_data:
+        step = source.step
+        previous = pools.setdefault(step.name, artifact_identity(step))
+        if previous != artifact_identity(step):
+            raise ValueError(f"two training pools share the step name {step.name!r}")
+    return pools
 
-    The projection's ``data.sampling`` values replace any declared ones; a declared base default
-    (``null`` or an empty container) is not a policy statement and never disagrees. A caller that
-    set a real value must match the curriculum. ``data.kind`` is pinned to ``parquet`` because
-    curricula sample labeled prompt pools."""
+
+def _validate_curriculum_train_data(
+    train_data: tuple[SkyRLDataSource, ...], curriculum: RlCurriculum, config_yaml: str
+) -> None:
+    """Reject a curriculum whose entries name pools the run does not train on, or pin others.
+
+    The curriculum is the mix record and ``train_data`` is the data the trainer reads; this check
+    keeps them one declaration. A recipe that declares a non-parquet ``data.kind`` is rejected too,
+    because curricula sample labeled prompt pools."""
     config = _parsed_config(config_yaml)
     declared_kind = _declared_config_value(config, "data.kind")
     if declared_kind is not _MISSING_CONFIG_VALUE and declared_kind != _CURRICULUM_DATA_KIND:
@@ -1049,13 +1062,31 @@ def _apply_curriculum(config_yaml: str, curriculum: RlCurriculum) -> str:
             f"a curriculum samples labeled prompt pools and requires data.kind={_CURRICULUM_DATA_KIND}, "
             f"but the recipe declares {declared_kind!r}"
         )
+    pools = _curriculum_train_data_identities(train_data)
+    for entry in curriculum.entries:
+        pool_identity = pools.get(entry.label)
+        if pool_identity is None:
+            raise ValueError(
+                f"curriculum {curriculum.identity} samples pool {entry.label!r}, which the run does not "
+                f"train on (pools: {sorted(pools)})"
+            )
+        if entry.identity != pool_identity:
+            raise ValueError(
+                f"curriculum {curriculum.identity} entry {entry.label!r} pins {entry.identity}, "
+                f"but the run trains on {pool_identity}"
+            )
+
+
+def _apply_curriculum(config: dict, curriculum: RlCurriculum) -> dict:
+    """Render a curriculum's sampling projection into the launch recipe copy.
+
+    Called when the launch config is built, never on the input recipe: the projection's
+    ``data.sampling`` values replace any declared ones, and ``data.kind`` is pinned to ``parquet``
+    because curricula sample labeled prompt pools."""
     for key, value in curriculum.sampling_config().items():
-        declared = _declared_config_value(config, f"data.sampling.{key}")
-        if declared not in (_MISSING_CONFIG_VALUE, None, [], {}) and declared != value:
-            raise ValueError(f"recipe data.sampling.{key}={declared!r} disagrees with curriculum {curriculum.identity}")
         _set_config_value(config, f"data.sampling.{key}", value)
     _set_config_value(config, "data.kind", _CURRICULUM_DATA_KIND)
-    return yaml.safe_dump(config, sort_keys=False)
+    return config
 
 
 def _launch_curriculum(curriculum: RlCurriculum) -> dict:
@@ -1086,6 +1117,10 @@ def _launch_config_yaml(
     starting_checkpoint: ResolvedNativeCheckpoint | None,
 ) -> str:
     recipe = _parsed_config(spec.config_yaml)
+    if spec.curriculum is not None:
+        # The curriculum is the authority over the sampling settings; the input recipe keeps its
+        # declared values and the launch document carries the projection.
+        recipe = _apply_curriculum(recipe, spec.curriculum)
     recipe["entrypoint"] = spec.topology.role_plan.entrypoint
     _materialize_role_plan_config(recipe, spec.topology.role_plan)
     for callback in recipe.get("trainer", {}).get("callbacks") or []:

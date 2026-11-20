@@ -1,75 +1,52 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bind catalog sources into versioned RL curricula.
+"""Bind training pools into versioned RL curricula.
 
-The catalog (:func:`~experiments.post_training.task_curation.sources.runnable_sources`) owns which
-sources exist and what pins them; this module owns the policy binding: which of them a curriculum
-samples, at what weights or in what stage order. The experiment that launches the run declares
-weights, as with SFT mixture weights.
+The pool steps a run trains on pin their source records through the artifact graph; this module
+owns the policy binding: which of them a curriculum samples, at what weights or in what stage
+order. ``weighted_curriculum`` is the RL analog of :func:`marin.experiment.data.mixture` — the
+caller maps pool steps to weights, and the curriculum's entries pin the same pools by artifact
+identity, so the mix record and the training data cannot drift apart.
 """
 
 from collections.abc import Mapping, Sequence
 
-from marin.rl.curriculum import CurriculumEntry, CurriculumStage, RlCurriculum, SamplingMode, SourcePin
+from marin.execution.lazy import ArtifactStep, artifact_identity
+from marin.rl.curriculum import CurriculumEntry, CurriculumStage, RlCurriculum, SamplingMode
 
-from experiments.post_training.task_curation.source import RlDataSource
-from experiments.post_training.task_curation.sources import runnable_sources
-
-
-def _recipe_identity(pipeline: object) -> str:
-    """The ``module.qualname`` identity of a source's curation pipeline callable."""
-    qualname = getattr(pipeline, "__qualname__", None)
-    if qualname is not None:
-        return f"{getattr(pipeline, '__module__', '')}.{qualname}"
-    kind = type(pipeline)
-    return f"{kind.__module__}.{kind.__qualname__}"
+from experiments.post_training.task_curation.campaign import CampaignArtifact
 
 
-def _entry(label: str, source: RlDataSource, weight: float | None) -> CurriculumEntry:
-    dataset = source.dataset
-    if dataset is None:
-        raise ValueError(f"source {label} has no pinned dataset; curricula record pinned sources only")
-    if source.pipeline is None:
-        raise ValueError(f"source {label} has no curation pipeline; curricula record runnable sources only")
-    return CurriculumEntry(
-        label=label,
-        source=label,
-        version=source.version,
-        pin=SourcePin(name=dataset.name, revision=dataset.revision, url=dataset.url),
-        recipe=_recipe_identity(source.pipeline),
-        weight=weight,
-    )
-
-
-def _resolved(name: str, catalog: Mapping[str, RlDataSource]) -> RlDataSource:
-    source = catalog.get(name)
-    if source is None:
-        raise ValueError(f"unknown RL source {name!r}; the catalog knows: {sorted(catalog)}")
-    return source
+def _entry(label: str, pool: ArtifactStep[CampaignArtifact], weight: float | None) -> CurriculumEntry:
+    return CurriculumEntry(label=label, identity=artifact_identity(pool), weight=weight)
 
 
 def weighted_curriculum(
     name: str,
     version: str,
     *,
-    weights: Mapping[str, float],
-    seed: int = 0,
-    catalog: Mapping[str, RlDataSource] | None = None,
+    train: Mapping[ArtifactStep[CampaignArtifact], float],
+    seed: int,
 ) -> RlCurriculum:
-    """Build a weight-random curriculum over named catalog sources.
+    """Build a weight-random curriculum over the pool steps the run trains on.
 
-    ``weights`` maps a source's catalog name to its mixture weight. Every named source must exist
-    in the catalog (default: :func:`runnable_sources`) and carry a pinned dataset; the source's
-    current version, pin, and pipeline identity are recorded at build time.
+    ``train`` maps each pool step to its mixture weight, as ``mixture()`` maps dataset handles.
+    The pool step's artifact identity pins the source records behind it; two steps sharing a
+    name are rejected because the label is the trainer's sampling key.
     """
-    sources = runnable_sources() if catalog is None else catalog
-    entries = tuple(_entry(label, _resolved(label, sources), weight) for label, weight in weights.items())
+    pools: dict[str, ArtifactStep[CampaignArtifact]] = {}
+    entries = []
+    for pool, weight in train.items():
+        previous = pools.setdefault(pool.name, pool)
+        if previous is not pool:
+            raise ValueError(f"curriculum {name}@{version} maps two pools to the label {pool.name!r}")
+        entries.append(_entry(pool.name, pool, weight))
     return RlCurriculum(
         name=name,
         version=version,
         mode=SamplingMode.WEIGHTED,
-        entries=entries,
+        entries=tuple(entries),
         stages=(),
         seed=seed,
     )
@@ -79,32 +56,40 @@ def ordered_curriculum(
     name: str,
     version: str,
     *,
-    stages: Sequence[str],
-    quotas: Mapping[str, int | None] | None = None,
-    seed: int = 0,
-    catalog: Mapping[str, RlDataSource] | None = None,
+    stages: Sequence[CurriculumStage],
+    pools: Mapping[str, ArtifactStep[CampaignArtifact]],
+    seed: int,
 ) -> RlCurriculum:
-    """Build an ordered curriculum over named catalog sources.
+    """Build an ordered curriculum over stage objects and the pools they visit.
 
-    ``stages`` lists source names in the order the trainer consumes them; ``quotas`` bounds each
-    stage visit in prompts (an absent quota draws the source pool's row count). Every
-    named source must exist in the catalog (default: :func:`runnable_sources`) and carry a pinned
-    dataset; the source's current version, pin, and pipeline identity are recorded at build time.
+    ``stages`` declares the schedule in the order the trainer consumes it, each stage carrying its
+    own draw quota (``None`` draws the pool's row count). ``pools`` maps each stage's label to the
+    pool step the run trains on; every stage label must resolve, and every pool must be visited.
     """
-    sources = runnable_sources() if catalog is None else catalog
     if not stages:
         raise ValueError(f"ordered curriculum {name}@{version} needs a non-empty stage order")
-    quota_map = quotas or {}
-    stray = sorted(set(quota_map) - set(stages))
+    entries = []
+    seen: set[str] = set()
+    for stage in stages:
+        if stage.label in seen:
+            continue
+        seen.add(stage.label)
+        pool = pools.get(stage.label)
+        if pool is None:
+            raise ValueError(
+                f"ordered curriculum {name}@{version} stage {stage.label!r} has no pool; "
+                f"the schedule knows: {sorted(pools)}"
+            )
+        entries.append(_entry(stage.label, pool, None))
+    visited = {stage.label for stage in stages}
+    stray = sorted(set(pools) - visited)
     if stray:
-        raise ValueError(f"ordered curriculum {name}@{version} sets quotas for sources no stage samples: {stray}")
-    entries = tuple(_entry(label, _resolved(label, sources), None) for label in dict.fromkeys(stages))
-    declared = tuple(CurriculumStage(label=label, quota=quota_map.get(label)) for label in stages)
+        raise ValueError(f"ordered curriculum {name}@{version} declares pools no stage visits: {stray}")
     return RlCurriculum(
         name=name,
         version=version,
         mode=SamplingMode.ORDERED,
-        entries=entries,
-        stages=declared,
+        entries=tuple(entries),
+        stages=tuple(stages),
         seed=seed,
     )
