@@ -71,7 +71,6 @@
       "validate_rollout_logprob_sampling": true
     },
     "sampling_params": {
-      "max_generate_length": 16384,
       "repetition_penalty": 1.0,
       "temperature": 0.7,
       "top_p": 1.0,
