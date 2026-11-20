@@ -100,7 +100,8 @@ async def author(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, re
     try:
         async with ctx.scope("author"):
             install_env(ctx, env)
-            writes: list[tuple[PurePosixPath, bytes]] = []
+            files = (*config.workspace.static, *config.workspace.rendered(workpiece, policy))
+            writes = [(PurePosixPath("/", file.path), resource_bytes(file)) for file in files]
             submission = workpiece.submission
             if submission is not None:
                 writes.extend(
