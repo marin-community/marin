@@ -4,7 +4,9 @@
 """Build Mochi SFT training and export its final checkpoint for policy initialization."""
 
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
 from subprocess import CalledProcessError
 from tempfile import TemporaryDirectory
@@ -29,7 +31,13 @@ from experiments.grug.moe_hero_ep.launch_hero_sft import (
     permanent_checkpoint_dir,
     sft_resources,
 )
-from experiments.grug.moe_hero_ep.ops.export_cpu import CpuExportConfig, export
+from experiments.grug.moe_hero_ep.ops.export_cpu import (
+    DEFAULT_READ_HOST_BUDGET_BYTES,
+    DEFAULT_WRITE_HOST_BUDGET_BYTES,
+    CpuExportConfig,
+    export,
+    full_expert_bank_read_bytes,
+)
 from experiments.grug.moe_hero_ep.ops.upload_hf import write_tokenizer_metadata
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
 from experiments.grug.moe_hero_ep.train import RouterBiasMode
@@ -109,9 +117,19 @@ class MochiSFT:
                 source_revision = os.environ.get("GIT_COMMIT") or get_git_commit()
             except (CalledProcessError, OSError) as error:
                 raise ValueError("Set GIT_COMMIT to the source revision when exporting a new Mochi SFT run") from error
+        export_fn: Callable[..., None] = _export_final_sft
+        export_resources = self.export_resources
+        if self.stop_after_steps is not None:
+            gib = 1024**3
+            reservation_increment = 64 * gib
+            cache_bytes = full_expert_bank_read_bytes(HERO_MODEL_CONFIG)
+            read_budget = (cache_bytes + reservation_increment - 1) // reservation_increment * reservation_increment
+            host_bytes = read_budget + DEFAULT_WRITE_HOST_BUDGET_BYTES + 32 * gib
+            export_resources = replace(export_resources, cpu=32, ram=f"{host_bytes // gib}GiB")
+            export_fn = partial(_export_final_sft, read_host_budget_bytes=read_budget)
         export_step = apply(
             f"{step.name}-hf",
-            remote(_export_final_sft, resources=self.export_resources, env_vars={"TMPDIR": "/cache"}),
+            remote(export_fn, resources=export_resources, env_vars={"TMPDIR": "/cache"}),
             version=step.version,
             output=OUT,
             trained=step,
@@ -139,6 +157,7 @@ def _export_final_sft(
     relative_path: str,
     tokenizer_uri: str,
     tokenizer_revision: str,
+    read_host_budget_bytes: int = DEFAULT_READ_HOST_BUDGET_BYTES,
 ) -> None:
     configure_coreweave_s3()
     directory = permanent_checkpoint_dir(trained, None, placement)
@@ -152,7 +171,9 @@ def _export_final_sft(
         raise ValueError(f"Mochi SFT expected final step {expected_step}, found newest permanent step {final.step}")
     model = with_transport_remat_mode(replace(HERO_MODEL_CONFIG, capacity_factor=capacity_factor))
     destination = StoragePath(output) / relative_path
-    config = CpuExportConfig(final.path, digest(final.metadata), model, str(destination), source_revision)
+    config = CpuExportConfig(
+        final.path, digest(final.metadata), model, str(destination), source_revision, read_host_budget_bytes
+    )
     with TemporaryDirectory() as directory:
         metadata = Path(directory)
         write_tokenizer_metadata(metadata, repo_id=tokenizer_uri, revision=tokenizer_revision)

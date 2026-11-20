@@ -212,7 +212,10 @@ def test_mochi_sft_three_rack_run_uses_scratch_without_checkpoints(monkeypatch):
 
 
 @pytest.mark.timeout(240)
-def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "preset,racks", [(MIXTURE_262K_16NODE, 1), (MIXTURE_262K_48NODE, 3)], ids=["one-rack", "three-rack"]
+)
+def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monkeypatch, preset, racks):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     initializer = tmp_path / "pretraining" / "step-16"
     initializer.mkdir(parents=True)
@@ -225,12 +228,12 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
     monkeypatch.setattr(launch_hero_sft, "special_token_init", lambda _: None)
     monkeypatch.setattr(sft_recipe, "configure_coreweave_s3", lambda: None)
     recipe = dataclasses.replace(
-        MIXTURE_262K_16NODE.recipe,
+        preset.recipe,
         initialize_from=str(initializer),
         eval_every=0,
         expert_placement=placement,
     )
-    preset = dataclasses.replace(MIXTURE_262K_16NODE, recipe=recipe)
+    preset = dataclasses.replace(preset, recipe=recipe)
     resources = preset.resources
     with pytest.raises(ValueError, match="GB200 allocation derived from dp_racks"):
         dataclasses.replace(preset, resources=dataclasses.replace(resources, replicas=15)).model()
@@ -242,9 +245,9 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
     trained = build_training(preset, steps=1, export=True, prefix=str(prefix))
     model = recipe.export_model(trained)
     training = materialized_config(trained, str(tmp_path))
-    assert training.resources.replicas == 16
+    assert training.resources.replicas == 16 * racks
     assert training.resources.device.count == 4
-    assert training.trainer.replica_axis_size == 1
+    assert training.trainer.replica_axis_size == racks
     assert training.trainer.save_checkpoints
     assert training.trainer.trainer.checkpointer.save_interval is None
     assert training.trainer.trainer.checkpointer.keep is None
@@ -286,6 +289,8 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
     [request] = requests
     [constraint] = convert_constraints(request.resources)
     assert is_any_region_marker(constraint)
+    assert request.resources.cpu == 32
+    assert request.resources.ram == "448GiB"
 
     record = read_record(str(output))
     assert record is not None and record.config is not None
@@ -300,6 +305,7 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
     assert model.resolve(context).uri == str(hf)
     manifest = hf / "export-manifest.json"
     completed = manifest.read_bytes()
+    assert json.loads(completed)["execution"]["read_host_budget_bytes"] == 384 * 1024**3
     sft_recipe._export_final_sft(**config)
     assert manifest.read_bytes() == completed
     with pytest.raises(FileExistsError, match="differs from the selected checkpoint"):
