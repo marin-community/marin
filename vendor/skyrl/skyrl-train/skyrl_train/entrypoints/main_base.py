@@ -300,7 +300,6 @@ class BasePPOExp:
         self.evaluation_profiles = resolve_evaluation_profiles(cfg)
         self.sessions = {} if sessions is None else dict(sessions)
         self._configure_log_level()
-        self._validate_rollout_worker_capacity()
         self.tokenizer = self.get_tokenizer()
         model = cfg.trainer.policy.model
         validate_checkpoint_vocabulary(
@@ -319,16 +318,6 @@ class BasePPOExp:
         # disaggregated case the policy (and optional colocated reference)
         # claims GPU slots before inference engines use the remainder.
         self.policy_pg = self.get_policy_pg()
-
-    def _validate_rollout_worker_capacity(self) -> None:
-        """Check the driver's node before loading model actors for its rollout pool."""
-        if not inference_engines_required(self.cfg):
-            return
-        from skyrl_train.rollouts.workers import RolloutWorkerResources  # noqa: PLC0415
-
-        local_id = ray.get_runtime_context().get_node_id()
-        node = next(node for node in ray.nodes() if node["Alive"] and node["NodeID"] == local_id)
-        RolloutWorkerResources.from_config(self.cfg).validate_node_capacity(node["Resources"].get("CPU", 0))
 
     def create_inference_engine_client(
         self, *, operation: EntrypointOperation = EntrypointOperation.TRAIN
