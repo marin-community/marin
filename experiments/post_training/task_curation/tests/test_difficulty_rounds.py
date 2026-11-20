@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 
 import pytest
-from finestore.rl.difficulty import Solver
+from finestore.rl.difficulty import DifficultyGap, Solver, difficulty_gap_reason
 from taskcompendium.evaluation.corpus import file_sha256
 
 from experiments.post_training.task_curation import difficulty_rounds as dr
@@ -170,7 +170,7 @@ def _observation_row(source_id: str, measurement_id: str, pinned: bool) -> dict:
         "converter_version": "c",
         "solver": "small",
         "status": "measured" if pinned else "not_measured",
-        "reason": None if pinned else "test fixture: no qualified measurement for this source/model",
+        "reason": None if pinned else difficulty_gap_reason(DifficultyGap.NO_QUALIFIED_MEASUREMENT_RECORDED),
         "sample": None,
         "sample_receipt": None,
         "model": None,
@@ -340,3 +340,21 @@ def test_iris_job_exists_ignores_terminal_attempts(monkeypatch):
     live = listing.replace("failed", "running")
     monkeypatch.setattr(dr.subprocess, "run", lambda *a, **k: type("R", (), {"stdout": live, "returncode": 0})())
     assert dr.iris_job_exists("marin", "atlas-difficulty-small-20261117-v18") is True
+
+
+def test_launch_command_declares_the_daytona_credentials() -> None:
+    """The trials worker resolves the Daytona connection from the job environment;
+    the submit argv must declare every credential name (large-v22-relay lost 17
+    hours of serving to a spec that dropped them)."""
+    command = dr.build_launch_command(sample_plan())
+    dr.require_credential_declarations(command)
+
+
+def test_launch_refuses_a_command_missing_a_credential_declaration() -> None:
+    command = dr.build_launch_command(sample_plan())
+    target_index = command.index("DAYTONA_TARGET")
+    # Drop the DAYTONA_TARGET declaration pair the way a hand-built submit did.
+    del command[target_index : target_index + 2]
+    assert "DAYTONA_TARGET" not in dr.declared_environment_names(command)
+    with pytest.raises(dr.RoundsError, match="DAYTONA_TARGET"):
+        dr.require_credential_declarations(command)

@@ -232,6 +232,36 @@ def launch_environment() -> dict[str, str]:
     return environment
 
 
+CREDENTIAL_ENV_DECLARATIONS = ("DAYTONA_API_KEY", "DAYTONA_API_URL", "DAYTONA_TARGET")
+"""The env names the campaign's Daytona connection resolves from the job environment."""
+
+
+def declared_environment_names(command: list[str]) -> set[str]:
+    """The env and secret names one iris submit argv declares."""
+    names: set[str] = set()
+    for index, token in enumerate(command):
+        if token in ("-e", "--secret") and index + 1 < len(command):
+            names.add(command[index + 1])
+    return names
+
+
+def require_credential_declarations(command: list[str]) -> None:
+    """Refuse a submit whose argv does not declare the Daytona credential env.
+
+    The trials worker resolves the Daytona connection from the job's own
+    environment, so a spec that drops one declaration surfaces only at the
+    first Daytona trial (large-v22-relay spent 17 hours of serving before its
+    env gap raised). Never print the command: the resolved argv carries the
+    key inline.
+    """
+    missing = [name for name in CREDENTIAL_ENV_DECLARATIONS if name not in declared_environment_names(command)]
+    if missing:
+        raise RoundsError(
+            "The submit command does not declare the Daytona credential environment "
+            f"({', '.join(missing)}); refusing to submit"
+        )
+
+
 TERMINAL_IRIS_STATES = ("succeeded", "failed", "cancelled", "killed")
 
 
@@ -339,6 +369,8 @@ def launch_round(plan: LaunchPlan, *, dry_run: bool = False) -> dict[str, Any]:
                 "will not contain that branch's later fixes",
                 revision[:12],
             )
+    dry_command = build_launch_command(plan)
+    require_credential_declarations(dry_command)
     state = {
         "job_id": f"/benfeuer/{plan.job_name}",
         "root_cluster": ROOT_CLUSTER,
@@ -352,18 +384,19 @@ def launch_round(plan: LaunchPlan, *, dry_run: bool = False) -> dict[str, Any]:
         "submitted_at_utc": datetime.datetime.now(datetime.UTC).isoformat(),
         # The recorded command uses the env: placeholder; the executed argv carries the
         # resolved Daytona key inline and is never logged.
-        "resubmit_command": shlex.join(build_launch_command(plan)),
+        "resubmit_command": shlex.join(dry_command),
         "source_ids": list(plan.source_ids),
     }
     if dry_run:
         state["dry_run"] = True
-        LOGGER.info("dry run; command:\n%s", shlex.join(build_launch_command(plan)))
+        LOGGER.info("dry run; command:\n%s", state["resubmit_command"])
         return state
     log_path = Path(f"{plan.job_name}-submit.log")
     if log_path.exists():
         raise RoundsError(f"submit log already exists: {log_path}")
     environment = launch_environment()
     command = build_launch_command(plan, daytona_key=environment[DAYTONA_KEY_ENV])
+    require_credential_declarations(command)
     with log_path.open("x") as stream:
         subprocess.run(command, env=environment, stdout=stream, stderr=subprocess.STDOUT, check=True)
     LOGGER.info("submitted %s -> %s (log: %s)", state["job_id"], plan.output_root, log_path)

@@ -275,6 +275,29 @@ def campaign_judge_tier(prepared: list[PreparedSource]) -> JudgeTier | None:
     return queue_judge_tier(judged_models)
 
 
+def require_daytona_connection_environment(daytona_api_key: str | None) -> None:
+    """Fail unless the coordinator environment carries the full Daytona connection.
+
+    Harbor resolves the connection from DAYTONA_API_KEY, DAYTONA_API_URL and
+    DAYTONA_TARGET in the worker's own environment; only the API url defaults,
+    so a job spec that drops one name surfaces at the first Daytona trial
+    instead of at submit.
+    """
+    missing = [
+        name
+        for name, value in (
+            ("DAYTONA_API_KEY or DAYTONA_RL_API_KEY", daytona_api_key),
+            ("DAYTONA_API_URL", os.environ.get("DAYTONA_API_URL")),
+            ("DAYTONA_TARGET", os.environ.get("DAYTONA_TARGET")),
+        )
+        if not value
+    ]
+    if missing:
+        raise ValueError(
+            "Daytona tasks require the connection environment on the campaign: " f"missing {', '.join(missing)}"
+        )
+
+
 def run_trial_worker(
     prepared_path: Path,
     config_path: Path,
@@ -459,14 +482,13 @@ def main() -> None:
     has_daytona = any(task.backend == "daytona" and task.reason is None for source in prepared for task in source.tasks)
     daytona_api_key = None
     if has_daytona:
-        # Harbor reads the Daytona connection from DAYTONA_API_KEY. The
-        # launcher environment carries the account's key directly, or the
-        # dedicated RL measurement key under its documented name.
+        # Harbor resolves the Daytona connection from these names at the first
+        # Daytona trial creation (only the API url defaults), so a missing one
+        # kills the campaign hours into the run (large-v22-relay spent 17 hours
+        # of serving before its first Daytona trial raised). Require all three
+        # up front and name what is missing.
         daytona_api_key = os.environ.get("DAYTONA_API_KEY") or os.environ.get("DAYTONA_RL_API_KEY")
-        if not daytona_api_key:
-            raise ValueError(
-                "Daytona tasks require DAYTONA_API_KEY or DAYTONA_RL_API_KEY in the coordinator environment"
-            )
+        require_daytona_connection_environment(daytona_api_key)
     with solver_endpoint(args.solver, settings, priority_band_value(args.priority)) as (
         endpoint,
         api_model,

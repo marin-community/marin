@@ -307,3 +307,31 @@ def test_hosted_endpoint_liveness_fails_fast_and_sends_the_hosted_model(monkeypa
     except RuntimeError as error:
         assert "liveness" in str(error) and "hosted.fixture" in str(error)
     assert sent["model"] == difficulty_campaign.TOGETHER_MODEL
+
+
+def test_campaign_refuses_daytona_sources_without_the_connection_environment(monkeypatch):
+    """The Daytona connection resolves from the worker's own environment at the
+    first Daytona trial (only the API url defaults), so the campaign requires
+    every name up front instead of dying hours into the run (large-v22-relay)."""
+    monkeypatch.setattr(difficulty_campaign.os, "environ", {"DAYTONA_API_KEY": "fixture-key"})
+    with pytest.raises(ValueError, match="DAYTONA_API_URL, DAYTONA_TARGET"):
+        difficulty_campaign.require_daytona_connection_environment("fixture-key")
+
+    monkeypatch.setattr(
+        difficulty_campaign.os,
+        "environ",
+        {"DAYTONA_API_URL": "https://app.daytona.io/api", "DAYTONA_TARGET": "us"},
+    )
+    with pytest.raises(ValueError, match="DAYTONA_API_KEY or DAYTONA_RL_API_KEY"):
+        difficulty_campaign.require_daytona_connection_environment(None)
+
+    monkeypatch.setattr(
+        difficulty_campaign.os,
+        "environ",
+        {
+            "DAYTONA_API_KEY": "fixture-key",
+            "DAYTONA_API_URL": "https://app.daytona.io/api",
+            "DAYTONA_TARGET": "us",
+        },
+    )
+    difficulty_campaign.require_daytona_connection_environment("fixture-key")
