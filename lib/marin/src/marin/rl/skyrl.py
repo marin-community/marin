@@ -60,6 +60,7 @@ _TRAJECTORIES_SUBDIR = "trajectories"
 _LAUNCHER_DIAGNOSTIC_LINES = 20
 SKYRL_TEMPORARY_STORAGE_TTL_DAYS = 14
 _BEST_CHECKPOINT_CALLBACK = "best_checkpoint"
+_INITIAL_MODEL_URI = "initial_model_uri"
 SKYRL_PROJECT = Path("vendor/skyrl")
 # The SkyRL runtime is packaged separately, so its matching limit is checked there too.
 _COLOCATED_EXPERT_BLOCK_GPU_COUNT = 4
@@ -1014,6 +1015,13 @@ def _launch_data_source(source: ResolvedDataSource) -> dict:
     return value
 
 
+def validate_skyrl_model_binding(recipe: dict) -> None:
+    """Reject authored baseline URIs before binding the adopted model."""
+    for callback in recipe.get("trainer", {}).get("callbacks") or []:
+        if callback["type"] == _BEST_CHECKPOINT_CALLBACK and _INITIAL_MODEL_URI in callback:
+            raise ValueError("best_checkpoint.initial_model_uri must be omitted; it is set from the adopted model")
+
+
 def _launch_config_yaml(
     spec: SkyRLSpec,
     execution: IrisSkyRLExecution,
@@ -1032,9 +1040,10 @@ def _launch_config_yaml(
     recipe = _parsed_config(spec.config_yaml)
     recipe["entrypoint"] = spec.topology.role_plan.entrypoint
     _materialize_role_plan_config(recipe, spec.topology.role_plan)
+    validate_skyrl_model_binding(recipe)
     for callback in recipe.get("trainer", {}).get("callbacks") or []:
         if callback["type"] == _BEST_CHECKPOINT_CALLBACK:
-            callback["initial_model_uri"] = model.uri
+            callback[_INITIAL_MODEL_URI] = model.uri
     num_nodes = spec.topology.num_nodes
     if execution.role_topology is not None:
         if not is_rack_based(spec.topology.gpu_variant) or spec.topology.gpus_per_node != NVL72_GPUS_PER_NODE:

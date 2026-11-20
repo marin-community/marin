@@ -267,6 +267,10 @@ vLLM applies these sampling values to requests that omit them. SkyRL rollouts
 send explicit sampling parameters, and behavior-logprob training sets
 `generation_config: vllm` so the checkpoint's defaults never reach rollouts.
 
+Marin sets `best_checkpoint.initial_model_uri` from the adopted model's resolved
+checkpoint URI. Omit this field from recipes and presets; an explicit value
+raises `ValueError`.
+
 The `best_checkpoint` callback accepts a `selection_metric` whose values must be
 finite normalized scores in [0, 1], with larger values preferred. Set
 `save_after_fraction` to delay trained-checkpoint selection until that fraction

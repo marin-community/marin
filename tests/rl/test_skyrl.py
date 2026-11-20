@@ -757,7 +757,7 @@ def test_skyrl_step_routes_disposable_state_to_ttl_storage(
         lambda _output_path, *, ttl_days: f"s3://temp/ttl={ttl_days}d/skyrl/users/alice/run",
     )
     recipe = yaml.safe_load(_spec().config_yaml)
-    recipe["trainer"]["callbacks"] = [{"type": "best_checkpoint", "initial_model_uri": "wrong-model"}]
+    recipe["trainer"]["callbacks"] = [{"type": "best_checkpoint"}]
     spec = dataclasses.replace(
         _spec(), name="users/alice/tests/iceball-rl", version="dev", config_yaml=yaml.safe_dump(recipe)
     )
@@ -1475,3 +1475,39 @@ def test_reject_forced_socket_transport_allows_non_forcing_env() -> None:
     reject_forced_socket_transport({"NCCL_SOCKET_FAMILY": "AF_INET"}, num_nodes=32)
     reject_forced_socket_transport({"NCCL_NET": "Socket"}, num_nodes=1)
     reject_forced_socket_transport({}, num_nodes=32)
+
+
+def test_best_checkpoint_builder_fills_the_resolved_checkpoint_uri() -> None:
+    spec = _spec()
+    recipe = yaml.safe_load(spec.config_yaml)
+    recipe["trainer"]["callbacks"] = [{"type": "best_checkpoint"}]
+    step = skyrl_step(dataclasses.replace(spec, config_yaml=yaml.safe_dump(recipe)), _execution())
+    step.lower()
+    config = materialized_config(step, prefix="s3://marin-us-east-08a")
+    callback = yaml.safe_load(config.launch_config_yaml)["skyrl"]["trainer"]["callbacks"][0]
+    assert callback["initial_model_uri"] == "s3://test/iceball-sft/hf/global_step-32"
+
+
+@pytest.mark.parametrize("initial_model_uri", ["s3://test/iceball-sft/hf/global_step-32", "s3://other/baseline"])
+def test_best_checkpoint_rejects_an_explicit_initial_model_uri(initial_model_uri: str) -> None:
+    spec = _spec()
+    recipe = yaml.safe_load(spec.config_yaml)
+    recipe["trainer"]["callbacks"] = [{"type": "best_checkpoint", "initial_model_uri": initial_model_uri}]
+    with pytest.raises(ValueError, match=r"best_checkpoint.initial_model_uri must be omitted"):
+        skyrl_step(dataclasses.replace(spec, config_yaml=yaml.safe_dump(recipe)), _execution())
+
+
+def test_best_checkpoint_fingerprint_changes_with_model_version() -> None:
+    spec = _spec()
+    recipe = yaml.safe_load(spec.config_yaml)
+    recipe["trainer"]["callbacks"] = [{"type": "best_checkpoint"}]
+    fingerprints = []
+    for version in ("2026.11.16.1", "2026.11.16.2"):
+        model = dataclasses.replace(
+            spec.model,
+            step=ArtifactStep.adopt("tests/model", version, "s3://test/model", kind=LevanterCheckpoint),
+        )
+        step = skyrl_step(dataclasses.replace(spec, config_yaml=yaml.safe_dump(recipe), model=model), _execution())
+        step.lower()
+        fingerprints.append(step.fingerprint())
+    assert fingerprints[0] != fingerprints[1]

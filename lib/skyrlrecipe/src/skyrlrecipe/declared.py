@@ -104,7 +104,7 @@ class CheckpointCallback(Section):
 
 class BestCheckpointCallback(Section):
     type: Literal["best_checkpoint"]
-    initial_model_uri: str
+    initial_model_uri: str = unset_field()
     expected_tasks: int
     minimum_scored_tasks: int
     selection_metric: str = unset_field()

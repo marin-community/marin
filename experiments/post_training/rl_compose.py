@@ -32,6 +32,7 @@ from marin.rl.skyrl import (
     SkyRLSpec,
     SkyRLTopology,
     skyrl_step,
+    validate_skyrl_model_binding,
 )
 from marin.rl.skyrl_records import RESOLVED_LAUNCH_FILENAME
 from rigging.config_discovery import find_project_root
@@ -366,6 +367,7 @@ def run_spec(
     config = _training_config(preset, settings)
     explicit = override_document(settings)
     authored = config.to_skyrl()
+    validate_skyrl_model_binding(authored)
     batch_changes = {
         field: value for key, field in BATCH_SETTINGS.items() if (value := get_path(authored, key)) is not MISSING
     }
@@ -385,8 +387,6 @@ def run_spec(
     workload = preset.recipe.layout.workload
     preset = preset.with_updates(config.trainer.max_steps)
     model = preset.model if init is None else init
-    selects_best = preset.checkpoint_every or (preset.export_hf and config.trainer.hf_export_checkpoint == "best")
-    initial_model_uri = model.step.path(artifact_prefix(preset.recipe.layout.cluster)) if selects_best else None
     validation_data = ()
     evaluation_data = []
     profiles = {}
@@ -433,7 +433,8 @@ def run_spec(
                     chosen[0] if chosen else None,
                     profiles,
                     expected_tasks,
-                    initial_model_uri,
+                    bool(preset.checkpoint_every)
+                    or (preset.export_hf and config.trainer.hf_export_checkpoint == "best"),
                 ),
             )
         )
