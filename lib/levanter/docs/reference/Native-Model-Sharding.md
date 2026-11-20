@@ -20,4 +20,5 @@ Sequence and layer axes are replicated.
 Column and row projections gather the FSDP dimension when they use the
 weight. The token lookup instead gathers from storage. This lets the
 transpose accumulate repeated token IDs without first replicating the
-embedding across FSDP. See [Levanter layers](Layers.md) for the module conventions.
+embedding across FSDP. See [Levanter layers](Layers.md) for the module
+conventions and [Native Llama](Native-Llama.md) for configuration and loading.

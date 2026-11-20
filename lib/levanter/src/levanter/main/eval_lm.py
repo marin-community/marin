@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Optional
 
 import jax
@@ -19,12 +19,12 @@ import levanter.config
 import levanter.tracker
 from levanter.compat.hf_checkpoints import RepoRef
 from levanter.data.loader import DataLoader
-from levanter.data.text.datasets import LmDataConfig
+from levanter.data.text.datasets import LmDataConfig, NamedLmDataset
 from levanter.eval import LossFnOutput, TaggedEvaluator, eval_model
 from levanter.model_loading import load_hf_checkpoint, load_levanter_checkpoint
 from levanter.models.loss import next_token_ids
 from levanter.models.llama import LlamaConfig
-from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
+from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, ModelPlacement, split_activations
 from levanter.trainer import TrainerConfig
 from levanter.utils.tree_utils import inference_mode
 
@@ -50,6 +50,15 @@ class EvalLmConfig:
 
 
 def main(config: EvalLmConfig):
+    explicit = config.model.owns_parameter_placement
+    if explicit:
+        if config.trainer.quantization is not None:
+            raise ValueError("llama_native evaluation does not yet support quantization")
+        if config.log_entropy or config.log_top2_gap:
+            raise ValueError("llama_native optional logits analyses are not yet supported")
+        config = replace(
+            config, trainer=replace(config.trainer, use_explicit_mesh_axes=config.model.requires_explicit_mesh_axes)
+        )
     levanter.trainer.initialize(config)
     tokenizer = config.data.the_tokenizer
 
@@ -59,7 +68,7 @@ def main(config: EvalLmConfig):
     if config.eval_on_train:
         datasets_dict = config.data.train_sets(Pos, key=jax.random.PRNGKey(0))
         # need tagged eval sets for the evaluator
-        datasets = [(ds, [name]) for name, ds in datasets_dict.items()]
+        datasets = [(NamedLmDataset(ds, Pos), [name]) for name, ds in datasets_dict.items()]
     else:
         datasets = config.data.tagged_eval_sets(Pos)
 
@@ -74,6 +83,9 @@ def main(config: EvalLmConfig):
 
     compute_axis_mapping = config.trainer.compute_axis_mapping
     parameter_axis_mapping = config.trainer.parameter_axis_mapping
+    placement = ModelPlacement(parameter_axis_mapping, compute_axis_mapping, config.trainer.batch_axis_name)
+    if explicit:
+        compute_axis_mapping = placement.evaluation_mapping(config.trainer.device_mesh)
 
     if config.checkpoint_path is None and config.hf_checkpoint is None:
         raise ValueError("Must specify either checkpoint_path or hf_checkpoint")
@@ -134,6 +146,7 @@ def main(config: EvalLmConfig):
                 Vocab=Vocab,
                 axis_mapping=parameter_axis_mapping,
                 key=key,
+                placement=placement,
             )
         elif config.hf_checkpoint is not None:
             model = load_hf_checkpoint(
@@ -142,6 +155,7 @@ def main(config: EvalLmConfig):
                 axis_mapping=parameter_axis_mapping,
                 tokenizer=tokenizer,
                 compute_dtype=mp.compute_dtype,
+                placement=placement,
             )
         else:
             assert False, "Should not get here"
