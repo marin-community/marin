@@ -676,7 +676,7 @@ def _client(spec: JudgeSpec, connection: JudgeConnection | None) -> tuple[openai
     options: dict[str, Any] = {"max_retries": 0} if spec.rubric == RUBRIC_LABELS else {}
     if connection is not None and connection.transport is not None:
         # Only an in-process host transport needs httpx; staged grader runtimes need not ship it.
-        import httpx
+        import httpx  # noqa: PLC0415
 
         options["http_client"] = httpx.Client(transport=connection.transport)
     return (
