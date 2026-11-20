@@ -87,3 +87,9 @@ def test_progress_line_reports_share_done_and_time_left() -> None:
     line = progress_line(progress, rate=2**30)
 
     assert line == ("progress: 20.0 TB / 80.0 TB (25.0%), 246512/985945 files, 500/2000 shards, 1.0 GB/s, ETA 17h04m")
+
+
+def test_progress_line_for_a_source_of_only_empty_files_counts_files_and_shards() -> None:
+    progress = Progress(done_bytes=0, total_bytes=0, done_files=3, total_files=10, done_shards=1, total_shards=4)
+
+    assert progress_line(progress, rate=0) == "progress: 0 B / 0 B, 3/10 files, 1/4 shards"

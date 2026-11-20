@@ -361,10 +361,11 @@ class Progress:
 def progress_line(progress: Progress, rate: float) -> str:
     """One line of copy progress; *rate* is verified bytes per second during this run."""
     p = progress
+    # A source of only empty files has no bytes to take a share of.
+    share = f" ({100 * p.done_bytes / p.total_bytes:.1f}%)" if p.total_bytes else ""
     line = (
-        f"progress: {format_size(p.done_bytes)} / {format_size(p.total_bytes)} "
-        f"({100 * p.done_bytes / p.total_bytes:.1f}%), {p.done_files}/{p.total_files} files, "
-        f"{p.done_shards}/{p.total_shards} shards"
+        f"progress: {format_size(p.done_bytes)} / {format_size(p.total_bytes)}{share}, "
+        f"{p.done_files}/{p.total_files} files, {p.done_shards}/{p.total_shards} shards"
     )
     if rate <= 0:
         return line
@@ -391,9 +392,15 @@ def _progress_reports(shards: Sequence[CopyShard], pending: Sequence[CopyShard],
 
     def report() -> None:
         while not stop.wait(PROGRESS_INTERVAL):
+            try:
+                records = list_objects(records_url)
+            except Exception as error:
+                # One failed listing must not end progress reports for the rest of a long copy.
+                _report(f"progress report skipped: listing {records_url} failed: {error!r}")
+                continue
             written = {
                 path.removesuffix(SHARD_RECORD_SUFFIX)
-                for path, entry in list_objects(records_url).items()
+                for path, entry in records.items()
                 if entry["LastModified"] >= started_at
             }
             copied = [shard for shard_id, shard in pending_by_id.items() if shard_id in written]

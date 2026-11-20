@@ -82,7 +82,8 @@ class VerifiedObject:
     Attributes:
         sha256: SHA-256 of the bytes read from the source.
         destination_identity: ``etag=...`` when the destination reports an ETag, otherwise another
-            provider checksum as ``<field>=...``, otherwise ``sha256=...`` of the copied bytes.
+            provider checksum or version ID as ``<field>=...``, otherwise ``sha256=...`` of the
+            copied bytes.
     """
 
     sha256: str
