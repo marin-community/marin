@@ -18,7 +18,8 @@ trials:
   batch: X0252
   date: '2026-11-20'
   comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0252
-  wandb: []
+  wandb:
+  - belay-X0252-seed0
   settings:
     muonc_anneal_decay: '0.25'
     muonc_anneal_adamc: '12.5'
