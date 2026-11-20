@@ -110,22 +110,3 @@ OPENCODE_TOOLS_CHAT_TEMPLATE: str = r"""{%- if tools %}
     {{- '<|im_start|>assistant\n<think>\n' }}
 {%- endif %}
 """
-
-
-def opencode_chat_lm_format(
-    *,
-    messages_field: str = "messages",
-    chat_template_kwargs_field: str = "chat_template_kwargs",
-    pack: bool = True,
-    mask_user_turns: bool = True,
-):
-    """Build the Levanter dataset format for opencode SFT."""
-    from levanter.data.text.formats import ChatLmDatasetFormat
-
-    return ChatLmDatasetFormat(
-        messages_field=messages_field,
-        chat_template=OPENCODE_TOOLS_CHAT_TEMPLATE,
-        chat_template_kwargs=chat_template_kwargs_field,
-        mask_user_turns=mask_user_turns,
-        pack=pack,
-    )

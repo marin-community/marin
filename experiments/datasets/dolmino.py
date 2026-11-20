@@ -52,28 +52,5 @@ def dolmino_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Artifact
     }
 
 
-def dolmino_dataset(name: str, tokenizer: str = llama3_tokenizer) -> ArtifactStep[TokenizedCache]:
-    """The :class:`Dataset` handle for a single named Dolmino split."""
-    assert name in DOLMINO_DATASETS, f"Split {name} not found in DOLMINO_DATASETS"
-    return dolmino_datasets(tokenizer=tokenizer)[f"dolmino/{name}"]
-
-
-def dolmino_math_dataset(tokenizer: str = llama3_tokenizer) -> ArtifactStep[TokenizedCache]:
-    """Combined math-only :class:`Dataset` handle (all ``math/*`` splits merged)."""
-    math_paths = [
-        f"{_DOLMINO_BASE}/{split}/{pattern}"
-        for split, files in DOLMINO_DATASETS.items()
-        if "math" in split
-        for pattern in files
-    ]
-    return tokenized(
-        "dolmino/all_math",
-        tokenizer=tokenizer,
-        paths=math_paths,
-        pin="tokenized/dolmino/all_math-9d507c" if tokenizer == llama3_tokenizer else None,
-        version="2026.06.28",
-    )
-
-
 if __name__ == "__main__":
     dataset_main(dolmino_datasets())

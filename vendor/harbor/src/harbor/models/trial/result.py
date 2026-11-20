@@ -98,6 +98,10 @@ class TrialResult(BaseModel):
     verifier: TimingInfo | None = None
     step_results: list[StepResult] | None = None
 
+    @property
+    def has_verifier_rewards(self) -> bool:
+        return self.verifier_result is not None and bool(self.verifier_result.rewards)
+
     @field_validator("trial_relpath")
     @classmethod
     def _validate_trial_relpath(cls, value: str | None) -> str | None:

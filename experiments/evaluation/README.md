@@ -29,7 +29,8 @@ Choose exactly one model source:
 - `--model-config <path>`: a YAML or JSON file with the same schema.
 
 Pass a suite name or comma-separated evaluation keys to `--evals`. Suites are
-`smoke`, `core`, `nlp`, `chat`, `math`, `code`, and `agentic`.
+`smoke`, `core`, `nlp`, `chat`, `math`, `code`, `econevals`, `econevals-o3`, `econevals-sampled`,
+`econevals-sampled-o3`, and `agentic`.
 [configs/evalchemy.yaml](configs/evalchemy.yaml) declares curated suite choices and run overrides. The benchmark catalog supplies ordinary defaults.
 
 Use `--evaluation-config` for a suite or campaign document. Repeat it to combine their named benchmark selections; `--evals` selects entries from the combined documents, or all entries run when omitted. Repeat `--harbor-config` to add Harbor jobs. With no selection, the launcher uses `smoke`.
