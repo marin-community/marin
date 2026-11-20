@@ -121,7 +121,8 @@ workers go to `s3://marin-us-east-02a/marin/model-feedback/`, and reports from
 GCP workers go to `gs://marin-eval-metadata/model-feedback/`, one object per
 report under a `YYYY-MM-DD/` folder. The button appears only for
 `marin-serve iris` jobs. Each serving process accepts up to 256 reports of at
-most 1 MiB each.
+most 1 MiB each. Saved reports appear in EvalDash's Playground Reports tab after
+its next ingest pass, within about ten minutes.
 
 ## Custom Python tools
 
