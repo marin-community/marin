@@ -214,7 +214,10 @@ def render_report(
         if chosen is None:
             raise ValueError(f"No recommendation trial {recommendation!r} in this campaign")
         if not accepted(chosen):
-            raise ValueError("Recommendation requires a valid Confirm window, unchanged gang and passed required checks")
+            raise ValueError(
+                "Recommendation requires a successful GPU job, complete allocation cost, "
+                "a valid Confirm window, unchanged gang and passed required checks"
+            )
         if reference and (not accepted(reference) or comparison_controls(chosen) != comparison_controls(reference)):
             raise ValueError(
                 "A baseline comparison requires a qualified baseline " "with matched model and workload controls"
@@ -251,20 +254,26 @@ def report_campaign(campaign_uri: str, recommendation: str | None = None, baseli
             continue
         results.append(unmeasured_result(plan, "unrecorded"))
     results.sort(key=lambda row: row["trial_id"])
-    if recommendation is None and baseline is None:
+    if recommendation is None:
         try:
             decision = read_record(prefix_join(campaign_uri, "decision.json"))
         except FileNotFoundError:
             pass
         else:
-            recommendation, baseline = decision["recommended_trial"], decision["baseline_trial"]
+            recommendation = decision["recommended_trial"]
+            if baseline is None:
+                baseline = decision["baseline_trial"]
     report = render_report(results, campaign_uri, recommendation, baseline)
     if recommendation:
         selected = next(row for row in results if row["trial_id"] == recommendation)
-        profile = selected["manifest"]["series"]["profile"]
+        series = selected["manifest"]["series"]
+        profile = series["profile"]
         runtime = prefix_join(selected["trial_uri"], "runtime.json")
         write_record(runtime, selected["manifest"]["vllm_release"])
-        profile = profile | {"vllm": profile["vllm"] | {"release": None, "manifest": runtime}}
+        profile = profile | {
+            "session_concurrency": series["concurrency"],
+            "vllm": profile["vllm"] | {"release": None, "manifest": runtime},
+        }
         policies = [check for check in selected["measurement"]["checks"] if check.get("kind") == "numerical"]
         provisional = any(check.get("provisional") for check in policies)
         prefix = "# Numerical qualification uses a provisional policy. See decision.json.\n" if provisional else ""

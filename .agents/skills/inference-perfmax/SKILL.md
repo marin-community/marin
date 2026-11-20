@@ -65,13 +65,17 @@ bend. Use the full pinned corpus at every stage. Override measured seconds,
 warmup or effective load with `--duration`, `--warmup-requests-per-lane` or
 `--concurrency`; inspect requested and effective settings in the plan. A shorter
 Confirm cannot qualify. Probe and Screen cannot produce accepted recommendations.
-There is no AgentX ladder score. Reuse evidence only when its identities,
-controls and coverage match; partial checks remain incomplete.
+There is no AgentX ladder score. Use matching evidence to choose experiments;
+partial checks remain incomplete. This runner reruns the full endpoint checker
+for every trial. Earlier passes do not replace those checks.
 
-Use the session's resource board and [use-iris](../use-iris/SKILL.md) before GPU work. Stay within the agreed
+Coordinate shared GPU capacity through your team's process and read
+[use-iris](../use-iris/SKILL.md) before GPU work. Stay within the agreed
 concurrent ceilings across trials and retries. Let the runner's CPU coordinator
 prepare uncached data before GPU allocation. Release idle resources and count setup, compilation, warmup, drain
 and failed allocations. Prioritize GPU efficiency over elapsed time.
+Keep `run` attached to track allocation cost. Detached runs may lose required
+timestamps after Pod cleanup; incomplete cost blocks recommendations.
 
 ## Measure and return the result
 
@@ -99,10 +103,10 @@ Report stage, native/protocol validity, numerical outcomes, latency, request
 errors, evidence links and total allocated GPU cost separately. One window has
 no measured repeatability. Default to one run; repeat promising Confirm trials
 when noise could change the decision. One valid Confirm may be recommended with
-repeatability labeled unmeasured. Native multi-run reuses the server and
-skips additional warmup after the first by default; use separate runner trials
-to preserve fresh servers. Reuse native confidence tools where compatible and
-keep their uncertainty limits visible.
+repeatability labeled unmeasured. Use separate runner trials for fresh servers
+and compare their rows. The runner does not expose native multi-run or confidence
+aggregation. Native multi-run reuses the server and skips additional warmup
+after the first by default.
 
 The terminal report and `summary.md` must match. Select a valid Confirm point
 with complete required checks explicitly to write `recommended.yaml` with its settings and

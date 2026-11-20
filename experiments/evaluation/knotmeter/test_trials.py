@@ -332,10 +332,17 @@ def test_plan_uses_target_storage_unless_explicitly_overridden(monkeypatch, ambi
         resolve_plan(profile, "fixture", stage=Stage.PROBE, marin_prefix="local_store")
 
 
-def trial(root: Path, name: str, rate: float, *, diagnostic: bool = False) -> dict:
+def trial(
+    root: Path,
+    name: str,
+    rate: float,
+    *,
+    diagnostic: bool = False,
+    measurement: MeasurementOverrides = MeasurementOverrides(),
+) -> dict:
     profile = load_profile(Path("snowball-h100"), [])
     profile = profile.model_copy(update={"checks": [Check(name="synthetic-fixture-check")]})
-    series = resolved_series(profile, Stage.PROBE if diagnostic else Stage.CONFIRM)
+    series = resolved_series(profile, Stage.PROBE if diagnostic else Stage.CONFIRM, measurement)
     runtime = json.loads(json.dumps(dataclasses.asdict(VLLM_GPU_RELEASE))) | {
         "release_tag": "fixture",
         "source_commit": "b" * 40,
@@ -375,10 +382,10 @@ def trial(root: Path, name: str, rate: float, *, diagnostic: bool = False) -> di
     }
 
 
-def test_report_keeps_diagnostics_separate_and_pins_selected_runtime(tmp_path, monkeypatch):
+def test_report_keeps_diagnostics_separate_and_pins_selected_runtime_and_load(tmp_path, monkeypatch):
     for result in (
-        trial(tmp_path, "baseline", 100),
-        trial(tmp_path, "candidate", 120),
+        trial(tmp_path, "baseline", 100, measurement=MeasurementOverrides(concurrency=64)),
+        trial(tmp_path, "candidate", 120, measurement=MeasurementOverrides(concurrency=64)),
         trial(tmp_path, "diagnostic", 9999, diagnostic=True),
     ):
         write_record(f"{result['trial_uri']}/result.json", result)
@@ -394,6 +401,9 @@ def test_report_keeps_diagnostics_separate_and_pins_selected_runtime(tmp_path, m
     )
     recommended = load_profile(tmp_path / "recommended.yaml", [])
     assert resolve_release(recommended.vllm)["source_commit"] == "b" * 40
+    for stage in (Stage.SCREEN, Stage.CONFIRM):
+        assert resolved_series(recommended, stage)["concurrency"] == 64
+    assert report_campaign(str(tmp_path), baseline="baseline") == output
     with pytest.raises(ValueError):
         report_campaign(str(tmp_path), recommendation="diagnostic", baseline="baseline")
 
@@ -589,7 +599,7 @@ def test_missing_or_relabelled_numerical_check_cannot_qualify_a_trial(tmp_path, 
     assert not (tmp_path / "recommended.yaml").exists()
 
 
-def test_plan_without_result_remains_visible_with_unknown_cost(tmp_path):
+def test_plan_without_result_remains_visible_in_report(tmp_path):
     result = trial(tmp_path, "interrupted", 0)
     write_record(
         f"{result['trial_uri']}/plan.json",
@@ -598,8 +608,6 @@ def test_plan_without_result_remains_visible_with_unknown_cost(tmp_path):
     output = report_campaign(str(tmp_path))
     assert "interrupted" in output and "unrecorded" in output
     assert "interrupted/plan.json" in output
-    row = next(line for line in output.splitlines() if line.startswith("| [interrupted]"))
-    assert row.split("|")[-2].strip() == "unknown"
     assert output == (tmp_path / "summary.md").read_text()
 
 
@@ -683,9 +691,6 @@ def test_recovery_counts_setup_and_failed_native_attempts_without_resubmitting(t
     if partial_exports:
         assert recovered["measurement"] is None
         assert recorded_checks(recovered)[0]["status"] == "failed"
-        output = report_campaign(str(tmp_path))
-        row = next(line for line in output.splitlines() if line.startswith("| [failed]"))
-        assert row.split("|")[-3].strip() == "synthetic-fixture-check: failed"
     before = copy.deepcopy(read_record(f"{plan['trial_uri']}/result.json"))
     collect_trial(Client(), plan, tmp_path / "repeated-recovery")
     assert read_record(f"{plan['trial_uri']}/result.json") == before

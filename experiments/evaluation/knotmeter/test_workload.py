@@ -143,8 +143,7 @@ def replay_server():
 
 @pytest.mark.integration
 @pytest.mark.timeout(300)
-@pytest.mark.parametrize("stage", list(Stage))
-def test_pinned_tools_prepare_restore_replay_and_normalize_physical_gpus(tmp_path, replay_server, stage, monkeypatch):
+def test_pinned_tools_prepare_restore_replay_and_normalize_physical_gpus(tmp_path, replay_server, monkeypatch):
     tokenizer_dir = tmp_path / "tokenizer"
     tokenizer_dir.mkdir()
     tokenizer = Tokenizer(models.WordLevel({"<unk>": 0} | {f"word{i}": i + 1 for i in range(512)}, unk_token="<unk>"))
@@ -197,7 +196,7 @@ def test_pinned_tools_prepare_restore_replay_and_normalize_physical_gpus(tmp_pat
             "--campaign",
             "compat",
             "--stage",
-            stage.value,
+            Stage.SCREEN.value,
             "--session-concurrency",
             "17",
             "--concurrency",

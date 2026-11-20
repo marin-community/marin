@@ -131,8 +131,10 @@ rejected submission. A completed diagnostic can exit zero with failed numerical
 checks; inspect validity and check states before selecting a recommendation.
 Capture records contain only timing and identity fields. If a pod expires, a retained scheduling
 time plus Iris's terminal observation gives a conservative end time. Missing
-timestamps remain unknown. `--no-wait` returns after submission; detached runs
-may lack complete allocation timings. Interrupting the local wait leaves Iris running.
+timestamps remain unknown. Keep `run` attached for complete allocation tracking.
+`--no-wait` returns after submission; detached runs may lose required timestamps
+after Pod cleanup. Incomplete cost blocks recommendations. `status` reports current
+state and does not continue allocation tracking. Interrupting the local wait leaves Iris running.
 Cost is allocated GPU-hours: physical GPUs times allocated seconds, divided by
 3,600, summed across hosts and attempts. It includes failed attempts.
 
@@ -147,6 +149,8 @@ Recover from the original source revision recorded in `plan.json`. Recovery
 collects terminal work and never submits GPUs. After coordinator loss, inspect
 its `/serve` child and cancel or wait for it before recovery. Check provider
 cleanup before retrying.
+CPU coordinator preemption can stop the GPU child. Recovery retains that failed
+trial's evidence and cost; it does not resume its measurement window.
 The report prints the same Markdown saved as `summary.md`, including all attempts'
 GPU cost. Trials without a result remain visible with unknown cost. Interrupted
 partial exports retain attempt costs without qualifying a measurement.
@@ -158,6 +162,7 @@ passed checks and complete cost. Every physical host must retain the same Iris
 attempt ID throughout profiling. The command writes `recommended.yaml` with a
 frozen runtime. Add `--baseline TRIAL_ID` to show changes within a comparison
 group; diagnostics with different controls remain separate rows.
+Supplying only `--baseline` preserves the recorded recommendation.
 A comparison fixes checkpoint, tokenizer, workload, AgentX protocol, GPU type,
 prepared data and numerical criteria. Each full policy identity and applicability
 remains in the check artifacts. Separate BF16 and FP8 policies can compare when

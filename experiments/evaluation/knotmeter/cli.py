@@ -313,7 +313,7 @@ def main() -> None:
                 job = submit_coordinator(client, plan)
                 print(
                     f"Iris job: {job.job_id}\nTrial: {plan['trial_uri']}\n"
-                    "Reattach: uv run python -m experiments.evaluation.knotmeter.cli status "
+                    "Status: uv run python -m experiments.evaluation.knotmeter.cli status "
                     f"--trial-uri {plan['trial_uri']}\n"
                     "Cancel: uv run python -m experiments.evaluation.knotmeter.cli cancel "
                     f"--trial-uri {plan['trial_uri']}",
