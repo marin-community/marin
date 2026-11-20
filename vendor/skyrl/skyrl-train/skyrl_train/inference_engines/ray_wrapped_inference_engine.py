@@ -413,6 +413,10 @@ class RayWrappedInferenceEngine(InferenceEngineInterface):
         finally:
             ray.cancel(gen)
 
+    async def get_served_model_name(self) -> str:
+        """Read the live actor's registered OpenAI serving model name."""
+        return await self.inference_engine_actor.get_served_model_name.remote()
+
     async def completion(self, request_payload: Dict[str, Any]) -> Dict[str, Any]:
         actor_task = await _submit_actor_task(self.inference_engine_actor.completion, request_payload)
         return await _await_actor_task(actor_task)

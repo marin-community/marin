@@ -20,6 +20,8 @@ from rigging.filesystem.storage_path import StoragePath
 
 
 class CompletionEngine(Protocol):
+    async def get_served_model_name(self) -> str: ...
+
     async def completion(self, request_payload: dict[str, Any]) -> dict[str, Any]: ...
 
 
@@ -33,7 +35,6 @@ class NearWindowProbeSettings:
     minimum_prompt_tokens: int
     max_new_tokens: int
     context_tokens: int
-    served_model_name: str
     temperature: float
     top_p: float
     request_timeout: float
@@ -100,6 +101,7 @@ async def run_near_window_probe(
     }
     started = time.monotonic()
     stopped = asyncio.Event()
+    served_model_names: list[str] = []
 
     async def memory_sample() -> None:
         gpus = await memory_reader()
@@ -118,19 +120,25 @@ async def run_near_window_probe(
     async def complete(rank: int, prompt: str | list[int], output_tokens: int) -> dict:
         before = time.monotonic()
         response = await asyncio.wait_for(engines[rank].completion({"json": {
-            "model": config.served_model_name, "prompt": prompt, "max_tokens": output_tokens,
+            "model": served_model_names[rank], "prompt": prompt, "max_tokens": output_tokens,
             "temperature": config.temperature, "top_p": config.top_p, "ignore_eos": True, "stream": False,
         }, "headers": {"Content-Type": "application/json"}}), timeout=config.request_timeout)
         if response.get("error") or not response.get("choices"):
             raise RuntimeError(f"Serving request on rank {rank} failed: {response}")
+        if response["model"] != served_model_names[rank]:
+            raise ValueError("Completion model differs from the actor's registered serving name")
         usage = response["usage"]
         if usage["completion_tokens"] != output_tokens:
             raise ValueError(f"Serving output differs from its token budget: {usage}")
         if isinstance(prompt, list) and usage["prompt_tokens"] != len(prompt):
             raise ValueError(f"Server prompt usage differs from the rendered input: {usage}")
-        return {"rank": rank, "usage": usage, "elapsed_seconds": time.monotonic() - before}
+        return {"rank": rank, "model": response["model"], "usage": usage, "elapsed_seconds": time.monotonic() - before}
 
     try:
+        served_model_names = await asyncio.gather(*(engine.get_served_model_name() for engine in engines))
+        if len(set(served_model_names)) != 1 or not served_model_names[0]:
+            raise ValueError("Inference actors disagree on the registered serving model")
+        receipt["served_model_names"] = served_model_names
         await memory_sample()
         async with asyncio.TaskGroup() as tasks:
             tasks.create_task(sample_memory())
