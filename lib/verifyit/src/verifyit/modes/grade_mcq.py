@@ -12,10 +12,10 @@ import re
 import string
 from collections.abc import Sequence
 from dataclasses import dataclass
-from enum import StrEnum
 from pathlib import Path
 
 from verifyit.adapters.completion import final_text
+from verifyit.compat import StrEnum
 from verifyit.grade import InvalidTask, Reward, empty_output_policy, read_output, scored
 from verifyit.spec import McqExtraction, McqSpec
 from verifyit.supergpqa_extraction import SUPERGPQA_LETTERS, supergpqa_reference_answer

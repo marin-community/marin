@@ -148,3 +148,21 @@ def test_output_modes_materialize_and_render_explicit_empty_policy(mode, fields)
 def test_embedded_private_json_rejects_duplicate_keys(text):
     with pytest.raises(ValueError):
         parse_spec(text)
+
+
+def test_judge_label_tables_coerce_numbers():
+    spec = parse_spec('mode = "judge"\nlabel_scores = { yes = 1, no = 0 }\nlabel_metrics = { yes = { score = 2 } }\n')
+    assert spec.label_scores == {"yes": 1.0, "no": 0.0}
+    assert spec.label_metrics == {"yes": {"score": 2.0}}
+    assert all(type(score) is float for score in spec.label_scores.values())
+    assert all(type(metric) is float for table in spec.label_metrics.values() for metric in table.values())
+    assert parse_spec(render_spec(spec)) == spec
+
+
+def test_judge_label_tables_reject_non_numbers():
+    with pytest.raises(ValueError, match="expects a table of numbers"):
+        parse_spec('mode = "judge"\nlabel_scores = "yes"\n')
+    with pytest.raises(ValueError, match="expects a number"):
+        parse_spec('mode = "judge"\nlabel_scores = { yes = "1" }\n')
+    with pytest.raises(ValueError, match="expects a table of number tables"):
+        parse_spec('mode = "judge"\nlabel_metrics = { yes = 2 }\n')
