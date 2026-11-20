@@ -112,7 +112,13 @@ def audit_families(
                 continue
             if family in {"census receipts", "within-source dedup"}:
                 expected = layer.declared.get(source_id)
-                if expected is None or not expected.matches(pin):
+                selected = layer.selected.get(source_id)
+                measured_selected = (
+                    selected is not None
+                    and selected.repo == pin.dataset_id
+                    and selected.revision == pin.dataset_revision
+                )
+                if expected is None or not (expected.matches(pin) or measured_selected):
                     observed = (
                         f"{expected.dataset_id}@{expected.dataset_revision} ({expected.converter_version})"
                         if expected is not None
