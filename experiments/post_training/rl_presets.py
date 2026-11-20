@@ -33,6 +33,7 @@ from skyrlrecipe.declared import (
     EvaluationCallback,
     EvaluationProfile,
     HarborEvaluationCallback,
+    HarborEvaluationCohort,
     HFModelSaveCallback,
 )
 
@@ -58,7 +59,7 @@ def harbor_evaluation(path: Path) -> HarborEvaluationCallback:
             }
             for task_path in cohort["paths"]
         ]
-        cohorts.append({"name": cohort["name"], "job": job, "reward_key": "reward"})
+        cohorts.append(HarborEvaluationCohort(name=cohort["name"], job=job, reward_key="reward"))
     return HarborEvaluationCallback(
         type="harbor_evaluation",
         cohorts=tuple(cohorts),
@@ -190,7 +191,7 @@ class Training:
         if preset.harbor is not None:
             callbacks.append(preset.harbor)
             for cohort in preset.harbor.cohorts:
-                count = len(cohort["job"]["tasks"])
+                count = len(cohort.job["tasks"])
                 expected_tasks += count
                 minimum_scored_tasks += math.ceil(preset.harbor.minimum_coverage * count)
         if initial_model_uri is not None:

@@ -392,6 +392,7 @@ class HarborEvaluationCallback(TrainerCallback):
         attempted = metrics["eval/all/num_attempted"]
         scored = metrics["eval/all/num_scored"]
         reward_sum = metrics["eval/all/avg_verifier_score"] * scored if scored else 0.0
+        # The counts cover the primary evaluation until Harbor results are added below.
         metrics["eval/selection_eligible"] = float(scored >= self.minimum_primary_coverage * attempted)
         for cohort in self.cohorts:
             name = cohort["name"]
