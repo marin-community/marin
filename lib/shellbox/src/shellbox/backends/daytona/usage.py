@@ -7,7 +7,7 @@ import math
 from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import NotRequired, TypedDict
 
 from daytona import AsyncDaytona, AsyncSandbox
 from daytona_api_client_async import SandboxState
@@ -18,7 +18,51 @@ REQUEST_TIMEOUT_SECONDS = 30.0
 DEFAULT_HEADROOM = 0.2
 GB_TO_GIB = 10**9 / 2**30
 CHARGED_STATES = frozenset((SandboxState.STARTED, SandboxState.STARTING, SandboxState.CREATING))
-QUOTA_SOURCE = "DAYTONA-QUOTAS.md, account owner, 2026-11-19"
+
+
+class CapacityReport(TypedDict):
+    quota: float
+    used: float
+    remaining: float
+    available: float
+
+
+class LimitsReport(TypedDict):
+    cpu: int
+    memory_gb: int
+    disk_gb: int
+    per_sandbox: dict[str, int]
+
+
+class SandboxCounts(TypedDict):
+    total: int
+    started: int
+    charged: int
+    by_state: dict[str, int]
+
+
+class ConcurrencyReport(TypedDict):
+    profile: dict[str, int]
+    by_resource: dict[str, int]
+    exceeds_per_sandbox_maximum: list[str]
+    limit: int
+
+
+class UsageReport(TypedDict):
+    organization_id: str | None
+    observed_at: str
+    usage_source: str
+    org_limits: LimitsReport
+    headroom_fraction: float
+    charged_states: list[str]
+    resources: dict[str, CapacityReport]
+    sandboxes: SandboxCounts
+    max_concurrency: NotRequired[ConcurrencyReport]
+
+
+def validate_headroom(headroom: float) -> None:
+    if not 0 <= headroom < 1:
+        raise ValueError("Headroom must be in [0, 1)")
 
 
 @dataclass(frozen=True)
@@ -70,10 +114,6 @@ class AccountUsage:
     observed_at: str
 
 
-def account_resource_capacities(usage: AccountUsage) -> dict[str, ResourceCapacity]:
-    return {"cpu": usage.cpu, "memory_gib": usage.memory_gib, "disk_gib": usage.disk_gib}
-
-
 async def _inventory_sandboxes(client: AsyncDaytona) -> list[AsyncSandbox]:
     """Read every sandbox across all SDK result pages and account regions."""
     sandboxes = []
@@ -110,25 +150,28 @@ async def account_usage_from_client(client: AsyncDaytona, limits: OrganizationLi
 
 
 async def account_usage(connection: DaytonaConnection, limits: OrganizationLimits) -> AccountUsage:
-    """Read the explicitly selected account's complete sandbox inventory."""
+    """Aggregate allocations from the selected account's full sandbox inventory."""
     async with connection.client_factory()() as client:
         return await account_usage_from_client(client, limits)
 
 
 def usage_report(
     usage: AccountUsage, profile: SandboxProfile | None = None, *, headroom: float = DEFAULT_HEADROOM
-) -> dict[str, Any]:
+) -> UsageReport:
     """Return inventory usage and additional capacity below a total-quota reserve."""
-    if not math.isfinite(headroom) or not 0 <= headroom < 1:
-        raise ValueError("Headroom must be in [0, 1)")
-    resources = account_resource_capacities(usage)
+    validate_headroom(headroom)
+    resources = {"cpu": usage.cpu, "memory_gib": usage.memory_gib, "disk_gib": usage.disk_gib}
     states = dict(usage.sandbox_states)
-    report: dict[str, Any] = {
+    report: UsageReport = {
         "organization_id": usage.organization_id,
         "observed_at": usage.observed_at,
         "usage_source": "sandbox_inventory",
-        "quota_source": QUOTA_SOURCE,
-        "org_limits": asdict(usage.limits),
+        "org_limits": {
+            "cpu": usage.limits.cpu,
+            "memory_gb": usage.limits.memory_gb,
+            "disk_gb": usage.limits.disk_gb,
+            "per_sandbox": asdict(usage.limits.per_sandbox),
+        },
         "headroom_fraction": headroom,
         "charged_states": sorted(state.value for state in CHARGED_STATES),
         "resources": {
