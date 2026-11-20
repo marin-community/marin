@@ -9,7 +9,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from shellbox.image import OCI_TAG, PreparedImage, oci_image, prepared_image_config
+from shellbox.image import OCI_TAG, PreparedImage, prepare_oci_image, prepared_image_config
 
 
 @dataclass(frozen=True)
@@ -47,7 +47,7 @@ def prepare_local_image(image: PreparedImage, directory: Path, *, umoci: Path) -
     if not PurePosixPath(workdir).is_absolute() or "\0" in workdir:
         raise ValueError("OCI working directory must be absolute")
     with tempfile.TemporaryDirectory(prefix="unpack-image-", dir=directory.parent) as temporary:
-        unpack = oci_image(image, Path(temporary) / "oci")
+        unpack = prepare_oci_image(image, Path(temporary) / "oci")
         try:
             subprocess.run(
                 [str(umoci), "unpack", "--rootless", "--image", f"{unpack.layout}:{OCI_TAG}", str(directory)],

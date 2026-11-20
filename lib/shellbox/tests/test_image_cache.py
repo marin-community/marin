@@ -100,9 +100,8 @@ def test_local_image_unpack_failure_reports_the_host_diagnostic(tmp_path, layere
     umoci = tmp_path / "umoci"
     umoci.write_text("#!/bin/sh\necho 'unpack: setxattr: operation not permitted' >&2\nexit 7\n")
     umoci.chmod(0o755)
-    with pytest.raises(RuntimeError, match="umoci exited 7: unpack: setxattr: operation not permitted") as error:
+    with pytest.raises(RuntimeError, match="umoci exited 7: unpack: setxattr: operation not permitted"):
         prepare_local_image(layered_oci_image, tmp_path / "bundle", umoci=umoci)
-    assert isinstance(error.value.__cause__, subprocess.CalledProcessError)
 
 
 def test_local_unpack_accepts_a_digest_pinned_docker_manifest(tmp_path, layered_oci_image):

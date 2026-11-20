@@ -14,18 +14,21 @@ import uuid
 from dataclasses import dataclass, replace
 from functools import cache
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 OCI_TAG = "image"
 OCI_MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json"
 DOCKER_MANIFEST_MEDIA_TYPE = "application/vnd.docker.distribution.manifest.v2+json"
 
-DOCKER_LAYER_MEDIA_TYPES = {
-    "application/vnd.docker.image.rootfs.diff.tar.gzip": "application/vnd.oci.image.layer.v1.tar+gzip",
-    "application/vnd.docker.image.rootfs.foreign.diff.tar.gzip": (
-        "application/vnd.oci.image.layer.nondistributable.v1.tar+gzip"
-    ),
-}
+DOCKER_LAYER_MEDIA_TYPES = MappingProxyType(
+    {
+        "application/vnd.docker.image.rootfs.diff.tar.gzip": "application/vnd.oci.image.layer.v1.tar+gzip",
+        "application/vnd.docker.image.rootfs.foreign.diff.tar.gzip": (
+            "application/vnd.oci.image.layer.nondistributable.v1.tar+gzip"
+        ),
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -93,7 +96,7 @@ def prepared_image_workdir(image: PreparedImage) -> str:
     return config.get("config", {}).get("WorkingDir") or "/"
 
 
-def oci_image(image: PreparedImage, directory: Path) -> PreparedImage:
+def prepare_oci_image(image: PreparedImage, directory: Path) -> PreparedImage:
     """Convert a Docker manifest to OCI for unpacking, preserving config and layer bytes.
 
     The caller owns the conversion directory. The source layout and its pinned
