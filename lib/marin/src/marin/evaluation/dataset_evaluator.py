@@ -73,6 +73,7 @@ def runtime_config(
         thinking_off_template_kwargs=dict(model.generation.thinking_off_template_kwargs),
         concurrency=settings.concurrency,
         source_limit=settings.source_limit,
+        source_rows=settings.source_rows,
         seed=settings.seed,
         judge=settings.judge,
         task_evidence=settings.task_evidence,

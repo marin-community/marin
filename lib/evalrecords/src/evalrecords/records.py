@@ -360,10 +360,11 @@ class JudgeIdentity(BaseModel):
 
 
 class EvaluationOverrides(BaseModel):
-    """Run policy supplied by a suite or campaign."""
+    """Run policy supplied by a suite or campaign. Explicit source rows address one corpus."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    source_rows: tuple[str, ...] | None = Field(default=None, min_length=1, exclude_if=lambda value: value is None)
     limit: int | None = Field(default=None, gt=0)
     max_tokens: int | None = Field(default=None, gt=0)
     seed: int | None = None
@@ -436,6 +437,7 @@ class CuratedSettings(BaseModel):
 
     max_tokens: int | None = Field(default=None, gt=0)
     source_limit: int | None = Field(default=None, gt=0)
+    source_rows: tuple[str, ...] | None = Field(default=None, min_length=1, exclude_if=lambda value: value is None)
     seed: int | None = None
     judge: JudgeIdentity | None = None
     concurrency: int = Field(default=DEFAULT_EVALUATION_CONCURRENCY, gt=0)

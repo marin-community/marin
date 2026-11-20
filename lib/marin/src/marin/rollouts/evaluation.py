@@ -111,6 +111,7 @@ class EvaluationRunConfig(RunModel):
     concurrency: int = Field(default=DEFAULT_EVALUATION_CONCURRENCY, gt=0)
     limits: RolloutLimits
     source_limit: int | None = Field(default=None, gt=0)
+    source_rows: tuple[str, ...] | None = Field(default=None, min_length=1, exclude_if=lambda value: value is None)
     seed: int | None = None
     task_machine: MachineRuntimeSpec | None = None
     verifier_machine: MachineRuntimeSpec | None = None
@@ -559,6 +560,8 @@ async def run_evaluation(
     evidence commit together. Infrastructure failures remain retryable on a later invocation with the
     same run identity and seed. Summaries belong to the consumer of these raw results.
     """
+    if config.source_rows is not None and len(datasets) != 1:
+        raise ValueError("Explicit source row locators require a single corpus")
     if (config.judge is None) != (judge_connection is None):
         raise ValueError("A judge requires both an explicit connection and a recorded judge identity")
     if config.judge is not None:
@@ -636,6 +639,7 @@ async def run_evaluation(
                     context_window=config.model.context_window,
                     max_tokens=config.max_tokens,
                     limit=config.source_limit,
+                    source_rows=config.source_rows,
                     tokenizer=tokenizer,
                     chat_template_kwargs=(
                         protocol.sampling.chat_template_kwargs if protocol.sampling is not None else None

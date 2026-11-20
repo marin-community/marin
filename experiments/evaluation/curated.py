@@ -141,6 +141,7 @@ def settings_for(
         concurrency=model.evaluation_num_concurrent or DEFAULT_EVALUATION_CONCURRENCY,
         max_tokens=run.max_tokens,
         source_limit=limit if limit is not None else run.limit,
+        source_rows=run.source_rows,
         seed=explicit_seed if explicit_seed is not None else default_seed,
         judge=run.judge,
         task_evidence=task_evidence,

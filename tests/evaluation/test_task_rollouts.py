@@ -162,6 +162,16 @@ async def test_unexpected_model_error_is_saved_and_propagates(tmp_path, publishe
 
 
 @pytest.mark.asyncio
+async def test_row_selection_rejects_ambiguous_corpora_before_inference(tmp_path, published_corpora, run_config):
+    async def model(_request):
+        pytest.fail("Ambiguous row selection reached inference")
+
+    config = run_config.model_copy(update={"source_rows": ("rows.jsonl:0",)})
+    with pytest.raises(ValueError, match="single corpus"):
+        await run_evaluation(published_corpora, str(tmp_path / "results"), config, model, machine_factories={})
+
+
+@pytest.mark.asyncio
 async def test_driver_resume_rejects_a_different_model_or_selection(tmp_path, published_corpora, run_config):
     async def model(_request):
         return ModelTurn({"role": "assistant", "content": "red"}, (), (), None, "stop", usage=TokenUsage(3, 1))

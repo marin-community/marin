@@ -267,6 +267,7 @@ def select_cases(
     limit: int | None,
     tokenizer: EvaluationTokenizer | None,
     chat_template_kwargs: Mapping[str, bool | str] | None = None,
+    source_rows: tuple[str, ...] | None = None,
 ) -> Iterator[SelectionDecision]:
     """Yield a full source-order ledger with task-group ordering and the declared limit stage."""
     corpus = EvaluationCorpus(root)
@@ -284,6 +285,11 @@ def select_cases(
     rows = corpus.rows()
     policy = protocol.cohort
     ordered = _candidate_rows(rows, policy, context_window)
+    allowed = None if source_rows is None else set(source_rows)
+    if allowed is not None:
+        if not allowed or len(allowed) != len(source_rows or ()) or allowed.difference(row.source_row for row in rows):
+            raise ValueError("Explicit source row selection must contain unique, known locators")
+        ordered = [row for row in ordered if row.source_row in allowed]
     ranks = {row.source_row: rank for rank, row in enumerate(ordered)}
     candidates = ordered[:limit] if policy.limit_stage is LimitStage.CANDIDATES and limit is not None else ordered
     decisions: dict[str, Selection] = {}
@@ -344,7 +350,11 @@ def select_cases(
                     status=(
                         SelectionStatus.EXCLUDED if rank is None or record is not None else SelectionStatus.UNINSPECTED
                     ),
-                    reason="group_filter" if rank is None else "source_limit",
+                    reason=(
+                        ("row_filter" if allowed is not None and row.source_row not in allowed else "group_filter")
+                        if rank is None
+                        else "source_limit"
+                    ),
                     rank=rank if policy.order is not CohortOrder.SOURCE else None,
                     context_window=context_window,
                     max_tokens=record.max_tokens if record is not None else None,
