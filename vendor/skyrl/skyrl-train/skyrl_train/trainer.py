@@ -230,6 +230,9 @@ def batch_summary(plan: BatchPlan) -> BatchSummary:
     )
 
 
+EVALUATION_TIMER_KEY = "eval"
+
+
 class RayPPOTrainer:
     """The rollout-buffer training loop.
 
@@ -663,7 +666,7 @@ class RayPPOTrainer:
                 and self.eval_dataset is not None
                 and self._last_evaluated_step != self.global_step
             ):
-                await self._evaluate_and_log(final_state, Timer("eval", self.all_timings), commit=True)
+                await self._evaluate_and_log(final_state, Timer(EVALUATION_TIMER_KEY, self.all_timings), commit=True)
                 self._control.should_evaluate = False
         finally:
             if self.colocate_all:
@@ -775,7 +778,7 @@ class RayPPOTrainer:
         if self._control.should_evaluate and self.eval_dataset is not None:
             if step_wall is not None:
                 step_wall.start("evaluation")
-            await self._evaluate_and_log(state, Timer("eval", self.all_timings), commit=False)
+            await self._evaluate_and_log(state, Timer(EVALUATION_TIMER_KEY, self.all_timings), commit=False)
             self._control.should_evaluate = False
 
         if self._control.should_save_hf_model:
