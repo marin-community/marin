@@ -397,8 +397,12 @@ def test_post_seal_waiver_covers_only_named_sources_served_catalog_missing_gaps(
     exact ID, covering ONLY its served-catalog/missing projection finding."""
     source = declaration()
     gaps = [
-        ProjectionGap(source_id=source.source_id, projection="served-catalog", state="missing", last_computed_revision=None),
-        ProjectionGap(source_id=source.source_id, projection="derived-contract", state="stale-pin", last_computed_revision="9" * 40),
+        ProjectionGap(
+            source_id=source.source_id, projection="served-catalog", state="missing", last_computed_revision=None
+        ),
+        ProjectionGap(
+            source_id=source.source_id, projection="derived-contract", state="stale-pin", last_computed_revision="9" * 40
+        ),
     ]
     result = apply_projection_waivers(gaps, post_seal_waiver(source.source_id), None, None)
     assert [gap for gap in result.blocking] == [gaps[1]]
@@ -411,7 +415,9 @@ def test_post_seal_waiver_rejects_unnamed_sources():
     declared = declaration()
     other_id = "Test:other-source"
     gaps = [
-        ProjectionGap(source_id=declared.source_id, projection="served-catalog", state="missing", last_computed_revision=None),
+        ProjectionGap(
+            source_id=declared.source_id, projection="served-catalog", state="missing", last_computed_revision=None
+        ),
         ProjectionGap(source_id=other_id, projection="served-catalog", state="missing", last_computed_revision=None),
     ]
     result = apply_projection_waivers(gaps, post_seal_waiver(declared.source_id), None, None)
@@ -423,13 +429,19 @@ def test_post_seal_waiver_rejects_other_finding_classes():
     """Ruling 68: no other finding class may be waived — a stale-pin gap for the named
     source stays blocking."""
     source = declaration()
-    gaps = [ProjectionGap(source_id=source.source_id, projection="served-catalog", state="stale-pin", last_computed_revision="9" * 40)]
+    gaps = [
+        ProjectionGap(
+            source_id=source.source_id, projection="served-catalog", state="stale-pin", last_computed_revision="9" * 40
+        )
+    ]
     result = apply_projection_waivers(gaps, post_seal_waiver(source.source_id), None, None)
     assert len(result.blocking) == 1 and not result.waived
 
 
 def test_post_seal_waiver_without_named_source_ids_is_rejected():
     """Ruling 68: the waiver must name the exact source IDs; an empty list is refused."""
-    gaps = [ProjectionGap(source_id="Test:source", projection="served-catalog", state="missing", last_computed_revision=None)]
+    gaps = [
+        ProjectionGap(source_id="Test:source", projection="served-catalog", state="missing", last_computed_revision=None)
+    ]
     with pytest.raises(ValueError, match="must name the exact declared source IDs"):
         apply_projection_waivers(gaps, post_seal_waiver(), None, None)
