@@ -13,6 +13,7 @@ from multiprocessing.context import ForkServerContext
 from finestore.rl.run_records import read_attempts, read_evaluations
 from marinskyrl.environment_contract import RUN_MODEL_ENV
 import fsspec
+import pyarrow.parquet as pq
 import pytest
 import rolloutengine
 import skyrl_gym
@@ -618,6 +619,7 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
     task_rows = read_evaluations(str(root / "exports"), attempt_id=attempt_id, step=-1, evaluation="eval/")
     assert {row.task_id for row in task_rows} == expected.keys()
     assert {row.model for row in task_rows} == {"cat-count-model"}
+    panel_rows = pq.read_table(path.parent / "task_manifest.parquet").to_pylist()
     assert {row.task_id: row.task_digest for row in task_rows} == {
         value["task_id"]: value["task_digest"] for value in panel_rows if value["task_id"] in expected
     }
