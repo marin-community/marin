@@ -10,10 +10,13 @@ from types import SimpleNamespace
 
 import google.cloud
 import pytest
+from click.testing import CliRunner
+from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from finelog.client import LogClient
 from finelog.embedded import is_available as finelog_native_available
 from finelog.embedded import require_embedded_server
+from iris.cli.job import run
 from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.bundle import BundleStore
 from iris.cluster.client.remote_client import RemoteClusterClient
@@ -21,8 +24,8 @@ from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.types import JobName
-from iris.rpc import controller_pb2, job_pb2
-from iris.testing.controller import MockController, make_controller_state, make_job_request
+from iris.rpc import controller_pb2
+from iris.testing.controller import MockController, make_controller_state
 from rigging.secrets import resolve_secret_spec
 from rigging.server_auth import VerifiedIdentity, identity_scope
 
@@ -81,23 +84,6 @@ def test_controller_can_delegate_child_profile_through_iris_client(tmp_path, mon
         )
         parent = JobName.root("fixture", controller.CONTROLLER_JOB_PREFIX + "generation")
 
-        def scheduler_submit(command, *, check, env):
-            request = make_job_request(str(parent), priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE)
-            if not default_parent and "--container-profile" in command:
-                request.container_profile = job_pb2.ContainerProfile.Value(
-                    command[command.index("--container-profile") + 1]
-                )
-            with identity_scope(VerifiedIdentity(user_id="fixture", role="admin")):
-                service.launch_job(request, None)
-
-        monkeypatch.setattr(controller, "list_iris_jobs", lambda: [])
-        monkeypatch.setattr(
-            controller, "load_credentials", lambda profile: SimpleNamespace(edge_refresh_token="fixture")
-        )
-        with monkeypatch.context() as submission:
-            submission.setattr(controller.subprocess, "run", scheduler_submit)
-            controller.launch_controller("ledger", "applet", False, frozenset(), "generation", 800)
-
         # Replace only RPC transport; keep both production client layers and controller authorization.
         class Transport:
             def list_jobs(self, request):
@@ -114,17 +100,45 @@ def test_controller_can_delegate_child_profile_through_iris_client(tmp_path, mon
         remote._client = Transport()
         client = IrisClient(remote)
         stack.callback(client.shutdown)
+        monkeypatch.setattr(IrisClient, "remote", lambda *args, **kwargs: client)
+        monkeypatch.setattr("iris.cli.job.resolve_secret_spec", lambda source: SimpleNamespace(value="fixture"))
+
+        def scheduler_submit(command, *, check, env):
+            args = command[command.index("job") + 2 :]
+            # This controller is local; the production peer transport is outside this authorization test.
+            index = args.index("--target-cluster=cw-rno2a")
+            del args[index]
+            if default_parent:
+                index = args.index("--container-profile")
+                del args[index : index + 2]
+            with identity_scope(VerifiedIdentity(user_id="fixture", role="admin")):
+                result = CliRunner().invoke(
+                    run,
+                    ["--user", "fixture", *args],
+                    obj={"controller_url": "http://unused", "config": None, "credentials": None},
+                    env=env,
+                )
+            assert result.exit_code == 0, result.output + repr(result.exception)
+
+        monkeypatch.setattr(controller, "list_iris_jobs", lambda: [])
+        monkeypatch.setattr(
+            controller, "load_credentials", lambda profile: SimpleNamespace(edge_refresh_token="fixture")
+        )
+        monkeypatch.setattr(controller, "subprocess", SimpleNamespace(run=scheduler_submit))
+        controller.launch_controller("ledger", "applet", False, frozenset(), "generation", 800)
         backend = IrisBackend(client, parent, str(tmp_path / "ledger"))
         action = RebuildEnvironmentArtifact("s3://fixture/artifact", (), ())
+        manifest = "s3://fixture/manifest.json"
         identity = VerifiedIdentity(user_id="fixture", role="task", job_id=str(parent))
         with identity_scope(identity), iris_ctx_scope(IrisContext(job_id=parent, client=client)):
             if default_parent:
-                with pytest.raises(ConnectError, match="set_container_profile not allowed for role task"):
-                    backend.submit(action, "s3://fixture/manifest.json")
+                with pytest.raises(ConnectError) as denied:
+                    backend.submit(action, manifest)
+                assert denied.value.code == Code.PERMISSION_DENIED
             else:
-                child = backend.submit(action, "s3://fixture/manifest.json")
+                child = backend.submit(action, manifest)
                 assert child.startswith(str(parent) + "/difficulty-reconcile-")
-                assert backend.submit(action, "s3://fixture/manifest.json") == child
+                assert backend.submit(action, manifest) == child
             children = service.list_jobs(
                 controller_pb2.Controller.ListJobsRequest(
                     query=controller_pb2.Controller.JobQuery(job_id_prefix=str(parent) + "/")
