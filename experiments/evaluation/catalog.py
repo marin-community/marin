@@ -9,6 +9,7 @@ from functools import cache, partial
 from experiments.evaluation.benchmark import EvaluationBenchmark, ProtocolVariant
 from experiments.evaluation.benchmarks import (
     biomedical,
+    chembench,
     code,
     commonsense,
     financebench,
@@ -51,6 +52,7 @@ def evaluation_benchmarks() -> dict[str, EvaluationBenchmark]:
             code,
             commonsense,
             biomedical,
+            chembench,
             instruction_following,
             jee,
             math,
