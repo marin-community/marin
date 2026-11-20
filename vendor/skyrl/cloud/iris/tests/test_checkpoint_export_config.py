@@ -9,7 +9,7 @@ from unittest.mock import patch
 import pytest
 import numpy as np
 from safetensors.numpy import save
-from omegaconf import OmegaConf
+from omegaconf import OmegaConf, open_dict
 
 from cloud.iris import export_hf_checkpoint, launch
 from cloud.iris.artifacts import CHECKPOINT_MARKER_FILENAME
@@ -110,8 +110,15 @@ def test_checkpoint_export_config_carries_request_fields_as_data(tmp_path: Path,
         inference_engine_expert_parallel_size=4,
         engine_init_kwargs={"kernel_config": {"moe_backend": "triton"}},
     )
+    raw["skyrl"]["trainer"].update(RecipePatch(trainer=Trainer(hf_hub_repo_id="org/model")).to_skyrl()["trainer"])
     path = tmp_path / "training.yaml"
     OmegaConf.save(OmegaConf.create(raw), path)
+    if private:
+        with patch.object(export_hf_checkpoint, "validate_launch_config", wraps=validate_launch_config) as validate:
+            export_hf_checkpoint.validate_checkpoint_export(load_launch_config(path))
+        export = validate.call_args.args[0].skyrl.checkpoint_export
+        assert export.hf_hub_repo_id == "org/model"
+        assert export.hf_hub_private is True
     parser = export_hf_checkpoint.argument_parser()
     args = [
         "--launch-config", str(path), "--ckpt_path", "s3://run/checkpoints", "--step", "7",
@@ -136,22 +143,6 @@ def test_checkpoint_export_config_carries_request_fields_as_data(tmp_path: Path,
     assert config.skyrl.checkpoint_export.checkpoint_path == request.checkpoint_path
     assert config.skyrl.checkpoint_export.export_root == request.export_path
     assert config.skyrl.checkpoint_export.hf_hub_private is private
-
-
-def test_checkpoint_export_request_uses_private_trainer_default(tmp_path: Path) -> None:
-    raw = raw_launch_config()
-    recipe = RecipePatch(trainer=Trainer(hf_hub_repo_id="org/model"))
-    raw["skyrl"]["trainer"].update(recipe.to_skyrl()["trainer"])
-    path = tmp_path / "training.yaml"
-    OmegaConf.save(OmegaConf.create(raw), path)
-    training = load_launch_config(path)
-
-    with patch.object(export_hf_checkpoint, "checkpoint_export_launch_config", wraps=checkpoint_export_launch_config) as derive:
-        export_hf_checkpoint.validate_checkpoint_export(training)
-
-    request = derive.call_args.args[1]
-    assert request.hf_hub_repo_id == "org/model"
-    assert request.hf_hub_private is True
 
 
 def test_checkpoint_export_config_preserves_saved_policy_geometry_on_whole_nodes() -> None:
@@ -287,7 +278,8 @@ def test_trainer_records_export_request_for_selected_checkpoint(tmp_path: Path, 
     config.trainer.export_path = str(tmp_path / "exports")
     config.trainer.hf_export_checkpoint = selection
     config.trainer.export_hf_artifact = True
-    OmegaConf.update(config.trainer, "hf_hub_repo_id", "org/model", force_add=True)
+    with open_dict(config.trainer):
+        config.trainer.merge_with(RecipePatch(trainer=Trainer(hf_hub_repo_id="org/model")).to_skyrl()["trainer"])
     config.trainer.policy.model.path = "org/policy"
     root = Path(config.trainer.ckpt_path)
     for step in (15, 20):

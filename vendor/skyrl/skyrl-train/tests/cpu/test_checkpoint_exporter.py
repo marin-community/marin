@@ -14,7 +14,6 @@ from marinskyrl.model_manifest import MODEL_MANIFEST_FILENAME, write_local_model
 from skyrl_train.checkpoint_exporter import CheckpointExportPlan, CheckpointExporter, RayPolicyExportWorkers, hub_publisher
 from skyrl_train.hf_export_schema import HFUploadMode
 from skyrl_train.hf_model_io import verify_hf_model_export
-from skyrl_train.hf_publisher import HuggingFacePublisher
 
 
 class FakePolicyExportWorkers:
@@ -76,7 +75,8 @@ class FakeHubApi:
         self.corrupt = corrupt
         self.commits = {}
 
-    def create_repo(self, *, private, **_kwargs):
+    def create_repo(self, *, private, **request):
+        assert request == {"repo_id": "org/model", "repo_type": "model", "exist_ok": True}
         if self.private is None:
             self.private = private
 
@@ -237,22 +237,28 @@ def test_ray_policy_export_workers_loads_model_state_without_training_state():
 
 
 @pytest.mark.parametrize(
-    ("visibility", "requested", "corrupt", "error"),
+    ("visibility", "requested", "corrupt", "oversize", "error"),
     [
-        (None, None, None, None),
-        (None, False, None, None),
-        (False, None, None, "visibility differs"),
-        (True, False, None, "visibility differs"),
-        (True, None, "config.json", "differs from the model manifest"),
-        (True, None, "checkpoints/step_12/model.safetensors", "differs from the model manifest"),
+        (None, None, None, False, None),
+        (None, False, None, False, None),
+        (False, None, None, False, "visibility differs"),
+        (True, False, None, False, "visibility differs"),
+        (True, None, "config.json", False, "differs from the model manifest"),
+        (True, None, "checkpoints/step_12/model.safetensors", False, "differs from the model manifest"),
+        (None, None, None, True, "lacks LFS SHA-256 metadata: tokenizer.json"),
     ],
 )
-def test_hf_publisher_checks_visibility_and_uploaded_files(tmp_path, monkeypatch, visibility, requested, corrupt, error):
+def test_hf_publisher_checks_visibility_and_uploaded_files(
+    tmp_path, monkeypatch, visibility, requested, corrupt, oversize, error
+):
     export_path = tmp_path / "exports" / "global_step_12" / "policy"
     export_path.mkdir(parents=True)
     save_file({"weight": torch.tensor([0.0])}, export_path / "model.safetensors")
     for filename in ("config.json", "tokenizer_config.json", "tokenizer.json"):
         (export_path / filename).write_text("{}")
+    if oversize:
+        with (export_path / "tokenizer.json").open("r+b") as tokenizer:
+            tokenizer.truncate(64 * 2**20 + 1)
     manifest = write_local_model_manifest(export_path)
     (export_path / "worker.log").write_text("worker log")
     api = FakeHubApi(tmp_path / "downloads", visibility, corrupt)
@@ -267,7 +273,9 @@ def test_hf_publisher_checks_visibility_and_uploaded_files(tmp_path, monkeypatch
     if error:
         with pytest.raises(ValueError, match=error):
             publisher.publish(str(export_path), step=12)
-        if corrupt is None:
+        if oversize:
+            assert not (api.root / "commit-0" / "tokenizer.json").exists()
+        elif corrupt is None:
             assert not api.commits
             assert api.private is visibility
         return
@@ -281,20 +289,3 @@ def test_hf_publisher_checks_visibility_and_uploaded_files(tmp_path, monkeypatch
     assert first == expected
     assert last == {**expected, **{f"checkpoints/step_12/{path}": data for path, data in expected.items()}}
     assert os.environ["HF_HUB_OFFLINE"] == "1"
-
-
-def test_hf_publisher_refuses_large_file_without_lfs_metadata(tmp_path):
-    export_path = tmp_path / "policy"
-    export_path.mkdir()
-    save_file({"weight": torch.tensor([0.0])}, export_path / "model.safetensors")
-    for filename in ("config.json", "tokenizer_config.json"):
-        (export_path / filename).write_text("{}")
-    with (export_path / "tokenizer.json").open("wb") as tokenizer:
-        tokenizer.truncate(64 * 2**20 + 1)
-    write_local_model_manifest(export_path)
-    api = FakeHubApi(tmp_path / "downloads", private=None, corrupt=None)
-    publisher = HuggingFacePublisher(repo_id="org/model", private=True, api=api)
-
-    with pytest.raises(ValueError, match="lacks LFS SHA-256 metadata: tokenizer.json"):
-        publisher.publish(str(export_path), step=12)
-    assert not (api.root / "commit-0" / "tokenizer.json").exists()

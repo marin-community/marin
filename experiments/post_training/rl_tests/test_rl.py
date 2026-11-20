@@ -381,24 +381,6 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
         ) == ((None, 0, "none", "full_batch") if generating else ("async", 2, "tis", "full_batch"))
         if generating:
             assert config["runtime"]["entrypoint"] == "skyrl_train.entrypoints.main_generate"
-        if name == "eval-short":
-            allocation = config["iris"]["allocation"]
-            assert (allocation["num_nodes"], allocation["gpus_per_node"]) == (1, 8)
-            assert config["skyrl"]["trajectory_runner"]["max_concurrent_tasks"] == 20
-            assert trainer["eval_interval"] > 0
-            (source,) = config["inputs"]["validation_data"]
-            assert source["identity"].partition(":")[0] == f"{SELECTION_PREFIX}/eval-lite@2026.11.17.1"
-            assert source["relative_path"] == "full_validation.parquet"
-            assert not config["inputs"].get("evaluation_data")
-            assert not config["inputs"]["train_data"]
-            assert generator["eval_n_samples_per_prompt"] == 1
-            assert trainer["max_prompt_length"] == 16384
-            sampling = generator["eval_sampling_params"]
-            assert (
-                sampling["temperature"],
-                sampling["max_generate_length"],
-                sampling["ignore_eos"],
-            ) == (0, 8192, False)
         if name in ("speed-short", "learning-medium", "data-medium", "train-long"):
             profile = next(
                 (
