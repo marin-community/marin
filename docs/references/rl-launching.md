@@ -369,3 +369,36 @@ does not establish correctness for every message size or topology. Check resolve
 role settings and the effective `NCCL_BUFFSIZE` in worker INIT logs before scaling
 a new configuration. Reference workers now retain larger buffers, so include that
 memory in colocated-role capacity estimates.
+
+## Run-owned retrieval
+
+Tasks with `openresearcher-bm25:v1` use one private BM25 service per RL run.
+The run coordinator owns `marin.rl.retrieval_service.retrieval_service` until
+all rollouts and checks that call retrieval finish. Build a
+`RetrievalServiceLaunch` with explicit CPU, RAM, disk, concurrency, startup
+timeout and lifetime. Set the lifetime longer than that entire interval. Leave
+`target_cluster` unset so the child inherits the run cluster. The launcher
+passes the parent's CoreWeave storage keys as file-delivered secrets. Supply
+any other required credentials explicitly in the child environment.
+
+Stage the pinned index in the run's regional S3 bucket. The service verifies
+the manifest and every file before loading OpenResearcher's BM25 searcher and
+tokenizer once. It uses the pinned OpenResearcher image's Python interpreter
+for its packages. Private endpoint registration waits for health to match the
+task provider's complete `initial_state`, including corpus, implementation,
+tokenizer and index-manifest revisions. A cross-region index fails before
+staging starts.
+
+Pass the yielded endpoint as `retrieval_service` in the SkyRL shellbox session
+settings. Keep that context open for every retrieval caller. Exiting the
+context terminates the service child. A failed service request fails the
+rollout; it does not fall back to another corpus or search implementation.
+
+Set `network_access: service_only` on the task's provider requirement in
+`environment_requirements.tool_providers`, and select a network-denied actor
+machine. Shellbox carries `search` and `get_document` over its managed process
+channel; the actor needs no external network route. The relay splits large
+documents into bounded frames and assembles the complete JSON tool result.
+Search keeps OpenResearcher's top-five results and snippet policy. The index
+stays on the CPU service and does not occupy the actor disk. Each task keeps
+its declared JudgeSpec, including its model and request controls.

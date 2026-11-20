@@ -372,14 +372,27 @@ def test_checklist_truncated_criterion_keeps_partial_diagnostics_without_score(t
     assert [attempt["completion_tokens"] for attempt in reward.detail["criteria"][1]["attempts"]] == [1024, 2048]
 
 
-def test_checklist_shows_the_context_file_to_the_judge(tmp_path, fake_judge):
-    context = "é" * (grade_judge.CONTEXT_LIMIT - 4) + "TAIL" + "excluded"
+def test_checklist_shows_the_configured_context_limit_to_the_judge(tmp_path, fake_judge):
+    limit = 120000
+    context = "é" * (limit - 4) + "TAIL" + "excluded"
     (tmp_path / "conversation.txt").write_text(context)
-    fake_judge.replies = ["SCORE: 1"]
-    spec = JudgeSpec(rubric="checklist", criteria=(CRITERIA[0],), context="conversation.txt")
-    grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "1. 2. 3."))
-    assert context[: grade_judge.CONTEXT_LIMIT] in fake_judge.prompts[0]
+    fake_judge.replies = ["malformed", "malformed", "SCORE: 1"]
+    spec = JudgeSpec(
+        rubric="checklist",
+        criteria=(CRITERIA[0],),
+        context="conversation.txt",
+        context_char_limit=limit,
+        temperature=0.7,
+        parse_attempts=3,
+        chat_template_kwargs={"enable_thinking": "false"},
+    )
+    reward = grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "1. 2. 3."))
+    assert reward.reward == 1.0
+    assert context[:limit] in fake_judge.prompts[0]
     assert "excluded" not in fake_judge.prompts[0]
+    assert len(fake_judge.requests) == 3
+    assert all(request["temperature"] == 0.7 for request in fake_judge.requests)
+    assert all(request["chat_template_kwargs"] == spec.chat_template_kwargs for request in fake_judge.requests)
 
 
 def test_missing_context_file_is_an_invalid_task(tmp_path, fake_judge):
@@ -911,6 +924,8 @@ def test_responses_whole_labels_preserve_source_request_and_reject_prose(tmp_pat
     }
     spec = _label_spec(
         api="responses",
+        temperature=None,
+        parse_attempts=1,
         label_scan="whole",
         label_case="upper",
         strip_reasoning_blocks=False,
@@ -1135,3 +1150,10 @@ def test_judge_reply_never_returns_an_incomplete_or_refused_reply(fake_judge, fa
     spec = JudgeSpec(references=("document",), exact_gate=False)
     with pytest.raises(GradingInfraError):
         grade_judge.judge_reply(spec, [{"role": "user", "content": "Check this."}])
+
+
+def test_label_judge_uses_declared_parse_attempts(fake_judge):
+    fake_judge.replies = ["malformed", "[[A=B]]"]
+    reward = grade_judge.grade_judge_candidate(_label_spec(parse_attempts=2), "different answer")
+    assert reward.reward == 1.0
+    assert len(fake_judge.requests) == 2
