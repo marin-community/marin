@@ -323,6 +323,121 @@ class FailedDeletion(LocalDaytona):
         raise self.failure
 
 
+@pytest.fixture
+def lifecycle_client():
+    client = LocalDaytona()
+
+    async def prepared(command, **kwargs):
+        return SimpleNamespace(exit_code=0, result="/work\n")
+
+    client.sandbox.process.exec = prepared
+    return client
+
+
+@pytest.mark.parametrize("image_build", list(DaytonaImageBuild))
+@pytest.mark.parametrize("auto_stop_interval", [None, 9])
+def test_daytona_creation_sets_orphan_cleanup_and_caller_labels(lifecycle_client, image_build, auto_stop_interval):
+    async def scenario():
+        labels = {"owner": "agent-eval", "lane": "eval", "job": "swe-rebench"}
+        options = {} if auto_stop_interval is None else {"auto_stop_interval": auto_stop_interval}
+        factory = DaytonaMachineFactory(
+            lambda: lifecycle_client, image_build=image_build, ttl_minutes=75, labels=labels, **options
+        )
+        labels["job"] = "another-job"
+        machine = await factory.create(MachineSpec(source=RegistryImage("fixture:latest")))
+        try:
+            params = lifecycle_client.params
+            assert params.auto_stop_interval == (30 if auto_stop_interval is None else 9)
+            assert params.auto_delete_interval == 0
+            assert params.ttl_minutes == 75
+            assert params.labels == {"owner": "agent-eval", "lane": "eval", "job": "swe-rebench"}
+        finally:
+            await machine.close()
+        assert lifecycle_client.deleted and lifecycle_client.closed
+
+    asyncio.run(scenario())
+
+
+def test_daytona_open_machine_renews_activity_after_provider_failure_and_stops_before_deletion(
+    lifecycle_client, monkeypatch
+):
+    async def scenario():
+        ticks = asyncio.Queue()
+        events = []
+        refreshing = asyncio.Event()
+
+        async def wait(interval):
+            tick = asyncio.get_running_loop().create_future()
+            await ticks.put((interval, tick))
+            await tick
+
+        async def refresh_activity(*, request_timeout):
+            events.append("refresh")
+            if events.count("refresh") == 1:
+                raise DaytonaError("temporary gateway failure", status_code=502)
+            if events.count("refresh") == 2:
+                return
+            refreshing.set()
+            try:
+                await asyncio.Future()
+            finally:
+                events.append("refresh stopped")
+
+        delete = lifecycle_client.delete
+
+        async def delete_after_renewal_stops(sandbox):
+            events.append("delete")
+            await delete(sandbox)
+
+        lifecycle_client.sandbox.refresh_activity = refresh_activity
+        lifecycle_client.delete = delete_after_renewal_stops
+        monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", wait)
+        machine = await DaytonaMachineFactory(lambda: lifecycle_client, auto_stop_interval=9).create(
+            MachineSpec(source=RegistryImage("fixture:latest"))
+        )
+        try:
+            for _ in range(3):
+                interval, tick = await ticks.get()
+                assert interval == 180
+                tick.set_result(None)
+            await refreshing.wait()
+        finally:
+            await machine.close()
+        assert events == ["refresh", "refresh", "refresh", "refresh stopped", "delete"]
+        assert lifecycle_client.deleted and lifecycle_client.closed
+
+    asyncio.run(scenario())
+
+
+def test_daytona_failed_setup_cancels_activity_renewal(lifecycle_client, monkeypatch):
+    async def scenario():
+        sleeping = asyncio.Event()
+        stopped = asyncio.Event()
+
+        async def wait(interval):
+            sleeping.set()
+            try:
+                await asyncio.Future()
+            finally:
+                stopped.set()
+
+        async def failed_setup(command, **kwargs):
+            await sleeping.wait()
+            raise DaytonaError("setup failed", status_code=500)
+
+        lifecycle_client.sandbox.process.exec = failed_setup
+        monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", wait)
+        with pytest.raises(DaytonaError, match="setup failed"):
+            await DaytonaMachineFactory(lambda: lifecycle_client).create(
+                MachineSpec(source=RegistryImage("fixture:latest"))
+            )
+        assert stopped.is_set()
+        assert lifecycle_client.deleted and lifecycle_client.closed
+        assert lifecycle_client.params.labels == {"owner": "shellbox"}
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("error_type", [RuntimeError, asyncio.CancelledError])
 def test_daytona_failed_creation_deletes_an_accepted_sandbox(error_type):
     class AcceptedThenFailed(LocalDaytona):
