@@ -662,6 +662,8 @@ Snowball parity profiles are `snowball-one-rack` (32 + 8 GPUs) and
 `snowball-three-rack` (64 + two 64-GPU engines). Snowball uses PP2 because its
 26 layers cannot use Mochi's PP12 or PP16. The profiles request physical NVLink
 domains at production priority. Compilation and piecewise CUDA graphs stay on.
+Both Snowball profiles select the InfiniBand ports `ibp0:1` through `ibp3:1`
+explicitly and use a 4-MiB NCCL buffer on mixed InfiniBand/RoCE hosts.
 
 NVL72 coordinators use `mochi-<profile>-<version>` for RL and
 `mochi-<evaluation-name>-<version>` for policy evaluation. Iris adds the submitting

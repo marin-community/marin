@@ -194,6 +194,14 @@ SNOWBALL_ONE_RACK = replace(
         inference_engine_expert_parallel_size=8,
     ),
     megatron=replace(MEGATRON, pipeline_model_parallel_size=2),
+    patch=RecipePatch(
+        extra_env={
+            "NCCL_BUFFSIZE": str(sections.Policy().nccl_buffer_size_bytes),
+            "NCCL_NET": "IB",
+            "NCCL_IB_DISABLE": "0",
+            "NCCL_IB_HCA": SNOWBALL_INFINIBAND_PORTS,
+        }
+    ),
 )
 SNOWBALL_THREE_RACK = replace(
     PROFILES["three-rack"],

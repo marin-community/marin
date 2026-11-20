@@ -66,9 +66,10 @@ def test_normal_run_binds_distinct_training_and_heldout_data(run_spec, tmp_path)
     assert launch["inputs"]["validation_data"][0]["local_path"] != launch["inputs"]["train_data"][0]["local_path"]
 
 
-def test_snowball_three_rack_uses_ib_ports_on_mixed_link_hosts(run_spec, tmp_path):
+@pytest.mark.parametrize("profile", ["snowball-one-rack", "snowball-three-rack"])
+def test_snowball_profiles_use_ib_ports_on_mixed_link_hosts(run_spec, tmp_path, profile):
     output = tmp_path / "launch.yaml"
-    spec = replace(run_spec, profile="snowball-three-rack")
+    spec = replace(run_spec, profile=profile)
     with build_context(BuildContext(versions=VersionCodex(default="2026.11.18.62"))):
         run_from_spec(spec, smoke=True, config_output=output)
     environment = yaml.safe_load(output.read_text())["skyrl"]["extra_env"]
