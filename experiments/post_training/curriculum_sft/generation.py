@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import pyarrow as pa
+import verifyit.latex_percent  # noqa: F401
 from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext

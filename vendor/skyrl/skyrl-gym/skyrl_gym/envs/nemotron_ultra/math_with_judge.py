@@ -17,6 +17,7 @@ from sympy import exp, simplify
 from skyrl_gym.envs.nemotron_ultra.answer_extraction import final_answer_text, final_verdict, last_boxed_answer
 from skyrl_gym.envs.nemotron_ultra.judge import DEFAULT_JUDGE_MAX_TOKENS, IncompleteJudgeResponse
 
+import verifyit.latex_percent  # noqa: F401
 from math_verify import grader, parse
 from math_verify.errors import TimeoutException
 from math_verify.metric import math_metric

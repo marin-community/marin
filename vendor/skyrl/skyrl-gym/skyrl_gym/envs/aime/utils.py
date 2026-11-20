@@ -14,6 +14,7 @@
 # Adapted from https://github.com/EleutherAI/lm-evaluation-harness/blob/main/lm_eval/tasks/hendrycks_math/utils.py
 # https://github.com/volcengine/verl/blob/1a62568f801ba35ac1f5387e27232a2df7eac488/verl/utils/reward_score/math_dapo.py
 
+import verifyit.latex_percent  # noqa: F401
 from math_verify import parse
 from sympy import Basic, MatrixBase, Set, Tuple
 from verifyit.adapters.skyrl import grade_aime_extracted
