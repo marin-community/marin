@@ -23,10 +23,16 @@ def main() -> None:
     parser.add_argument("--job-name", default="swe-repair-swe-rebench-convert")
     args = parser.parse_args()
 
-    script = "experiments/post_training/task_curation/datasets/swe_rebench_v2/run_intake_conversion.sh"
+    script_url = (
+        f"https://raw.githubusercontent.com/marin-community/marin/{args.revision}/"
+        "experiments/post_training/task_curation/datasets/swe_rebench_v2/run_intake_conversion.sh"
+    )
+    # The bootstrap fetches ONLY the landed script over HTTP; the script itself downloads and
+    # verifies the archive (mkdir -p, -L, retries, listing check, tree confirmation). No tar
+    # pipeline in the job command.
     command = (
-        f"curl -fsSL {REPO}/{args.revision}.tar.gz | tar xz -C /workspace && "
-        f"bash /workspace/marin-{args.revision}/{script} "
+        f"mkdir -p /workspace && curl -fsSL {script_url} -o /workspace/run_intake_conversion.sh && "
+        f"bash /workspace/run_intake_conversion.sh "
         f"{args.revision} {args.output_root} {args.license_uri}"
     )
     argv = [
