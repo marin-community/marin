@@ -30,7 +30,7 @@ async def run_serving_probe(
             started = time.monotonic()
             response = await asyncio.wait_for(
                 engines[rank].completion({"json": {
-                    "model": "model",
+                    "model": settings["served_model_name"],
                     "prompt": f"Write a Python function that sums a list of integers. Example {index}:\n",
                     "max_tokens": settings["max_new_tokens"],
                     "temperature": 0,

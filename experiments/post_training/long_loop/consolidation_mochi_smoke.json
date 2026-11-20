@@ -65,17 +65,28 @@
           "vllm::grug_moe_short_conv"
         ]
       },
-      "enable_return_routed_experts": true
+      "enable_return_routed_experts": true,
+      "generation_config": "vllm",
+      "logprobs_mode": "processed_logprobs",
+      "validate_rollout_logprob_sampling": true
     },
     "sampling_params": {
+      "max_generate_length": 16384,
+      "repetition_penalty": 1.0,
       "temperature": 0.7,
       "top_p": 1.0,
+      "min_p": 0.0,
+      "top_k": -1,
       "logprobs": 0,
+      "stop": null,
       "stop_token_ids": [
         128001,
         128009
       ],
-      "skip_special_tokens": false
+      "skip_special_tokens": false,
+      "presence_penalty": 0.0,
+      "frequency_penalty": 0.0,
+      "min_tokens": 0
     },
     "eval_sampling_params": {
       "temperature": 0.7,
@@ -125,5 +136,6 @@
     "request_window_tokens": 65536,
     "max_new_tokens_per_turn": 16384,
     "max_turns": 128
-  }
+  },
+  "compiled_source_sha256": "750b745e948175579a22b2f502a4f709be113c4e5696819149ca16fa7a02c8bb"
 }

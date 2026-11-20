@@ -78,10 +78,10 @@ def evaluation_from_spec(spec: NVL72EvaluationSpec, config_output: Path) -> Arti
         inference_engine_pipeline_parallel_size=1,
         inference_engine_data_parallel_size=12,
         inference_engine_expert_parallel_size=12,
-        train_batch_size=1,
-        policy_mini_batch_size=1,
+        train_batch_size=32,
+        policy_mini_batch_size=32,
         micro_train_batch_size_per_gpu=1,
-        n_samples_per_prompt=1,
+        n_samples_per_prompt=8,
     )
     model_config = json.loads((StoragePath(spec.model_uri) / "config.json").read_bytes())
     if (
@@ -108,6 +108,7 @@ def evaluation_from_spec(spec: NVL72EvaluationSpec, config_output: Path) -> Arti
     config["generator"]["engine_init_timeout_seconds"] = 1800
     config["generator"]["engine_init_kwargs"]["marin_engine_serving_probe"] = {
         "engines": 12,
+        "served_model_name": "adopted-sft",
         "measured_requests": 48,
         "concurrency": 12,
         "max_new_tokens": 256,
@@ -126,7 +127,7 @@ def evaluation_from_spec(spec: NVL72EvaluationSpec, config_output: Path) -> Arti
     name = user_owned_name(spec.name)
     version = resolve_version(name, None)
     model = ArtifactHfModel(
-        ArtifactStep.adopt(f"{name}/model", spec.input_version, source=spec.model_uri, kind=LevanterCheckpoint),
+        ArtifactStep.adopt(f"{name}/adopted-sft", spec.input_version, source=spec.model_uri, kind=LevanterCheckpoint),
         tokenizer_uri=spec.tokenizer_uri,
         tokenizer_revision=spec.tokenizer_revision,
         relative_path="",
