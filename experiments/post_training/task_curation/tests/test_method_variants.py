@@ -20,24 +20,36 @@ def test_registered_conversion_reads_its_own_parent_and_output_receipt(tmp_path)
     source = tmp_path / "source.parquet"
     pq.write_table(pa.table({"prompt": ["Question"], "response": ["Answer"]}), source)
     manifest = tmp_path / "manifest.json"
-    manifest.write_text(
-        json.dumps({"files": [{"uri": str(source), "sha256": hashlib.sha256(source.read_bytes()).hexdigest()}], "rows": 1})
-    )
+    file_reference = {"uri": str(source), "sha256": hashlib.sha256(source.read_bytes()).hexdigest()}
+    manifest.write_text(json.dumps({"files": [file_reference], "rows": 1}))
     parent = DatasetVariantInput(
-        source_id="Fixture:source", variant_id="rl", repository="fixture/parent", revision="a" * 40,
+        source_id="Fixture:source",
+        variant_id="rl",
+        repository="fixture/parent",
+        revision="a" * 40,
         data_sha256=hashlib.sha256(manifest.read_bytes()).hexdigest(),
     )
     receipt = convert_chat_variant(
-        ConversionPlan(parent=parent, parent_manifest=SftEvidenceReference(uri=str(manifest), sha256=parent.data_sha256),
-                       variant_id="chat", repository="fixture/child", revision="b" * 40, prompt_field="prompt",
-                       response_field="response", implementation_revision="c" * 40),
+        ConversionPlan(
+            parent=parent,
+            parent_manifest=SftEvidenceReference(uri=str(manifest), sha256=parent.data_sha256),
+            variant_id="chat",
+            repository="fixture/child",
+            revision="b" * 40,
+            prompt_field="prompt",
+            response_field="response",
+            implementation_revision="c" * 40,
+        ),
         str(tmp_path / "child"),
     )
     path = tmp_path / "child" / "conversion-receipt.json"
     child = DatasetVariant(
         input=VariantIdentity.model_validate(receipt.output.model_dump()),
-        conversion=ConversionLineage(parent=parent, output=receipt.output,
-            receipt=SftEvidenceReference(uri=str(path), sha256=hashlib.sha256(path.read_bytes()).hexdigest())),
+        conversion=ConversionLineage(
+            parent=parent,
+            output=receipt.output,
+            receipt=SftEvidenceReference(uri=str(path), sha256=hashlib.sha256(path.read_bytes()).hexdigest()),
+        ),
     )
     registry = tmp_path / "variants.json"
     registry.write_text(json.dumps({parent.source_id: [child.model_dump(mode="json")]}))
