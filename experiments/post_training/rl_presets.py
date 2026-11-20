@@ -236,7 +236,7 @@ class Generation:
         evaluation: Evaluation | None,
         profiles: dict[str, EvaluationProfile],
         expected_tasks: int,
-        selects_best: bool,
+        _selects_best: bool,
     ) -> tuple[Callback, ...]:
         return (EvaluationCallback(type="evaluation", additional_evaluations=profiles),) if profiles else ()
 

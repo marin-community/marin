@@ -1502,12 +1502,17 @@ def test_best_checkpoint_fingerprint_changes_with_model_version() -> None:
     recipe = yaml.safe_load(spec.config_yaml)
     recipe["trainer"]["callbacks"] = [{"type": "best_checkpoint"}]
     fingerprints = []
-    for version in ("2026.11.16.1", "2026.11.16.2"):
+    for version, uri in (
+        ("2026.11.16.1", "s3://test/model"),
+        ("2026.11.16.2", "s3://test/model"),
+        ("2026.11.16.1", "s3://another-bucket/model"),
+    ):
         model = dataclasses.replace(
             spec.model,
-            step=ArtifactStep.adopt("tests/model", version, "s3://test/model", kind=LevanterCheckpoint),
+            step=ArtifactStep.adopt("tests/model", version, uri, kind=LevanterCheckpoint),
         )
         step = skyrl_step(dataclasses.replace(spec, config_yaml=yaml.safe_dump(recipe), model=model), _execution())
         step.lower()
         fingerprints.append(step.fingerprint())
     assert fingerprints[0] != fingerprints[1]
+    assert fingerprints[0] == fingerprints[2]

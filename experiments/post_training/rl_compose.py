@@ -32,6 +32,7 @@ from marin.rl.skyrl import (
     SkyRLSpec,
     SkyRLTopology,
     skyrl_step,
+    validate_skyrl_model_binding,
 )
 from marin.rl.skyrl_records import RESOLVED_LAUNCH_FILENAME
 from rigging.config_discovery import find_project_root
@@ -366,9 +367,7 @@ def run_spec(
     config = _training_config(preset, settings)
     explicit = override_document(settings)
     authored = config.to_skyrl()
-    for callback in authored.get("trainer", {}).get("callbacks") or []:
-        if callback["type"] == "best_checkpoint" and "initial_model_uri" in callback:
-            raise ValueError("best_checkpoint.initial_model_uri must be omitted; it is set from the adopted model")
+    validate_skyrl_model_binding(authored)
     batch_changes = {
         field: value for key, field in BATCH_SETTINGS.items() if (value := get_path(authored, key)) is not MISSING
     }
@@ -434,7 +433,7 @@ def run_spec(
                     chosen[0] if chosen else None,
                     profiles,
                     expected_tasks,
-                    selects_best=bool(preset.checkpoint_every)
+                    bool(preset.checkpoint_every)
                     or (preset.export_hf and config.trainer.hf_export_checkpoint == "best"),
                 ),
             )
