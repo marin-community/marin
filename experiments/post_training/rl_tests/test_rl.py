@@ -82,6 +82,27 @@ def test_all_presets_plan_with_their_declared_controls(selection):
     assert "--control --replicates" in result.output
 
 
+def test_generation_presets_accept_init_only_for_eval_short(selection, tmp_path):
+    table = snowball_model.SNOWBALL
+    name, version = "tests/evaluation-init", "2026.11.17"
+    root = tmp_path / name / version
+    write_published_artifact(tmp_path, name, version, Artifact, source=str(root))
+    for preset_name in ("eval-short", "speed-short", "data-short"):
+        preset = table.by_name[preset_name]
+        arguments = ["--preset", preset_name, "--version", preset.revision, "--init", f"{name}@{version}", "--plan"]
+        if preset.tasks_input == "required":
+            arguments += ["--tasks", SELECTION_IDENTITY]
+        result = CliRunner().invoke(snowball.command(table, argv=tuple(arguments)), arguments)
+        if preset_name == "eval-short":
+            assert result.exit_code == 0, (result.output, result.exception)
+            status = printed_status(result.stdout.partition("\nStepSpec(")[0])
+            assert status["inputs"]["model"].partition(":")[0] == f"{name}@{version}"
+            assert status["updates"] == 0
+            assert status["guards"] == []
+        else:
+            assert result.exit_code == 4 and "does not accept --init" in result.output, result.output
+
+
 @pytest.mark.parametrize(
     ("mode", "recipe_settings", "override", "reason"),
     [
@@ -364,6 +385,11 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             "2026.11.20.2": "412d0576",
             "2026.11.20.3": "e54674f6",
         },
+        "eval-short": {
+            "2026.11.19.1": "8144570a",
+            "2026.11.20.1": "fad362ca",
+            "2026.11.20.3": "85b0359d",
+        },
     }
     configs = assert_revisioned_native_configs(
         snowball_model.SNOWBALL, revisions, tmp_path=tmp_path, monkeypatch=monkeypatch
@@ -371,7 +397,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
     for name, config in zip(revisions, configs, strict=True):
         trainer, generator = config["skyrl"]["trainer"], config["skyrl"]["generator"]
         assert config["iris"]["allocation"]["num_nodes"] * config["iris"]["allocation"]["gpus_per_node"] <= 40
-        generating = name in ("speed-short", "data-short")
+        generating = name in ("speed-short", "data-short", "eval-short")
         assert (
             config["runtime"]["training_type"],
             trainer["rollout_buffer"]["max_staleness_steps"],
@@ -828,6 +854,7 @@ def test_control_refuses_actual_untracked_source_before_execution(selection, tmp
         ("python-init-conflict",),
         ("python-init-compare",),
         ("--set", "trainer.dump_eval_results=false"),
+        ("--set", "trainer.hf_hub_repo_id=org/model"),
         ("--set", 'trainer={"algorithm":{"off_policy_correction":"none"}}'),
         ("--set", "trainer.policy.optimizer_config.lr=wrong"),
         ("--require", "typo>=0"),
@@ -869,6 +896,8 @@ def test_refusals_use_exit_four(selection, arguments, capsys, tmp_path, request)
         assert "does not compute" in result.output
     if "trainer.dump_eval_results=false" in arguments:
         assert "owned" in result.output
+    if "trainer.hf_hub_repo_id=org/model" in arguments:
+        assert "use the preset's declared owned keys" in result.output
 
 
 def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations(

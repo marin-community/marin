@@ -43,7 +43,8 @@ def pinned_model(model: ModelConfig) -> ModelConfig:
         revision = api.model_info(model.location, revision=revision).sha
     tokenizer = model.tokenizer or model.location
     tokenizer_revision = (
-        model.effective_tokenizer_revision or model.identity or tokenizer
+        model.effective_tokenizer_revision
+        or canonical_sha256({"tokenizer": tokenizer, "model_identity": model.identity})
         if "://" in tokenizer or Path(tokenizer).is_dir()
         else api.model_info(tokenizer, revision=model.effective_tokenizer_revision).sha
     )
