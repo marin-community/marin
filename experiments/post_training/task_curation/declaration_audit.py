@@ -425,6 +425,7 @@ def main() -> None:
     )
     if atlas_catalog_selection() != selection:
         raise ValueError("Catalog selection changed during declaration audit; retry")
+    from experiments.post_training.task_curation.sample_qc_binding import SAMPLE_BINDING_DRIFTS  # noqa: PLC0415
     from experiments.post_training.task_curation.sources import RETAINED_BINDING_DRIFTS  # noqa: PLC0415
 
     # A retained release whose conversion pin drifted from the configured declaration is
@@ -438,6 +439,15 @@ def main() -> None:
             last_computed_revision=pinned_revision,
         )
         for source_id, pinned_revision in sorted(RETAINED_BINDING_DRIFTS.items())
+    )
+    projection_findings.extend(
+        ProjectionGap(
+            source_id=source_id,
+            projection="served-catalog",
+            state="stale-pin",
+            last_computed_revision=pinned_revision,
+        )
+        for source_id, pinned_revision in sorted(SAMPLE_BINDING_DRIFTS.items())
     )
     waiver_result = apply_projection_waivers(
         projection_findings,

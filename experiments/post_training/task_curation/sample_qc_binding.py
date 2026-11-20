@@ -20,6 +20,11 @@ from experiments.post_training.task_curation.source import CatalogConfig, RlData
 from infra.marina.apps.rl_data_catalog.server.quality import SAMPLE_MAX_MISSING_FRACTION
 from infra.marina.apps.rl_data_catalog.server.source_identity import SourceId
 
+SAMPLE_BINDING_DRIFTS: dict[str, str] = {}
+"""The sample content panels whose source's census went pending at its pin, recorded by
+the population build for the declaration audit (ruling 2026-11-19): the audit reports
+each as a waivable served-catalog gap instead of crashing the build."""
+
 
 def sample_matches_lineage(
     receipt: "SampleQCReceipt",
@@ -143,7 +148,13 @@ def bind_sample_result[ConfigT: CatalogConfig](
     panel = receipt.review.panel
     dataset, actor = source.dataset, source.info.actor_census_input
     if dataset is None or actor is None:
-        raise ValueError(f"Sample Result belongs to another current population: {source.info.id}")
+        # The census went pending at this source's pin (ruling 2026-11-19): keep the
+        # configured declaration without the sample evidence and record the drift, so
+        # the audit reports a waivable served-catalog gap instead of crashing the
+        # population build.
+        SAMPLE_BINDING_DRIFTS[source.info.id] = panel.dataset_revision
+        note = "Sample content panel pending: the census is unbound at this pin."
+        return replace(source, info=replace(source.info, notes=f"{source.info.notes} {note}".strip()))
     full_match = (
         source.info.id,
         dataset.name,

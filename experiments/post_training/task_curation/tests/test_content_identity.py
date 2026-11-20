@@ -15,6 +15,7 @@ from marin.execution.artifact import ArtifactRecord, result_type_name, write_rec
 from pydantic import ValidationError
 from taskcompendium.pipeline.models import IntendedUse
 
+from experiments.post_training.task_curation import sample_qc_binding as sample_qc_binding_module
 from experiments.post_training.task_curation.content_identity import (
     ContentIdentityReceipt,
     PopulationDigest,
@@ -323,3 +324,20 @@ def test_pointer_loader_reads_the_pinned_document(tmp_path, reserialized_pair):
     document.write_text(json.dumps({SOURCE_ID: receipt.model_dump(mode="json")}) + "\n")
     loaded = read_content_identity_receipts(document, load_json=lambda path: json.loads(path.read_text()))
     assert loaded[SOURCE_ID] == receipt
+
+
+def test_census_unbound_sample_binding_records_a_pending_drift(monkeypatch, reserialized_pair, tmp_path):
+    """Ruling 2026-11-19: an unbound census keeps the panel pending instead of crashing."""
+    original, reissued = reserialized_pair
+    source = declared_source(reissued, tmp_path)
+    pending = replace(source, info=replace(source.info, actor_census_input=None))
+    receipt = panel_receipt(original.task_specs_sha256)
+    monkeypatch.setattr(sample_qc_binding_module, "SAMPLE_BINDING_DRIFTS", {})
+    bound = bind_sample_result(pending, receipt)
+    assert "Sample content panel pending" in bound.info.notes
+    assert bound.info.quality_result is None
+    assert sample_qc_binding_module.SAMPLE_BINDING_DRIFTS[SOURCE_ID] == receipt.review.panel.dataset_revision
+    # The bound-census mismatch path still refuses a panel it cannot reconcile.
+    bound_source = declared_source(reissued, tmp_path)
+    with pytest.raises(ValueError, match="another current population"):
+        bind_sample_result(bound_source, receipt)
