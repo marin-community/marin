@@ -91,7 +91,6 @@ COORDINATOR_RESOURCES = ResourceSpec(cpu=4, memory="16GB", disk="5GB")
 RECORD_READ_THREADS = 64
 PROGRESS_INTERVAL = 60
 DIRECTORY_TYPE = "directory"
-SUPPORTED_STORES = frozenset({StoreType.COREWEAVE})
 STATUS_SUFFIX = ".copy-status"
 SHARD_RECORDS = "shards"
 SHARD_RECORD_SUFFIX = ".json"
@@ -140,7 +139,7 @@ def storage_prefix(url: str) -> str:
     if parsed.scheme != "s3":
         raise click.BadParameter(f"{url}: only s3:// CoreWeave URLs are supported")
     spec = data_buckets().get(parsed.bucket)
-    if spec is None or spec.store not in SUPPORTED_STORES:
+    if spec is None or spec.store != StoreType.COREWEAVE:
         raise click.BadParameter(f"{url}: bucket {parsed.bucket} is not a declared CoreWeave bucket")
     if not parsed.key:
         raise click.BadParameter(f"{url}: copying a whole bucket is not supported; name a prefix")
@@ -171,8 +170,12 @@ def status_url(destination_url: str) -> str:
     return destination_url + STATUS_SUFFIX
 
 
+def shard_records_url(destination_url: str) -> str:
+    return f"{status_url(destination_url)}/{SHARD_RECORDS}"
+
+
 def shard_record_url(destination_url: str, shard_id: str) -> str:
-    return f"{status_url(destination_url)}/{SHARD_RECORDS}/{shard_id}{SHARD_RECORD_SUFFIX}"
+    return f"{shard_records_url(destination_url)}/{shard_id}{SHARD_RECORD_SUFFIX}"
 
 
 def list_objects(url: str) -> dict[str, dict[str, Any]]:
@@ -213,7 +216,7 @@ def pack_shards(files: Sequence[SourceFile], target_bytes: int, max_files: int) 
     """Group files, in key order, into shards of about *target_bytes*, then split any over *max_files*.
 
     Splitting after byte packing leaves every shard under the cap exactly as byte packing forms it,
-    so its ID, and a record written before the cap existed, still match.
+    so its ID, and any record of it, does not depend on *max_files*.
     """
     by_bytes: list[list[SourceFile]] = []
     current: list[SourceFile] = []
@@ -231,7 +234,7 @@ def pack_shards(files: Sequence[SourceFile], target_bytes: int, max_files: int) 
 
 def recorded_shard_ids(destination_url: str) -> set[str]:
     """IDs of the shards whose record exists below the destination's status prefix."""
-    records = list_objects(f"{status_url(destination_url)}/{SHARD_RECORDS}")
+    records = list_objects(shard_records_url(destination_url))
     return {path.removesuffix(SHARD_RECORD_SUFFIX) for path in records if path.endswith(SHARD_RECORD_SUFFIX)}
 
 
@@ -381,7 +384,7 @@ def _progress_reports(shards: Sequence[CopyShard], pending: Sequence[CopyShard],
     total_files = sum(len(shard.files) for shard in shards)
     earlier_bytes = total_bytes - _shard_bytes(pending)
     earlier_files = total_files - sum(len(shard.files) for shard in pending)
-    records_url = f"{status_url(destination_url)}/{SHARD_RECORDS}"
+    records_url = shard_records_url(destination_url)
     started_at = datetime.now(UTC)
     started = time.monotonic()
     stop = threading.Event()
