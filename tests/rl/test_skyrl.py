@@ -820,6 +820,25 @@ def test_run_skyrl_returns_explicit_hf_export(monkeypatch: pytest.MonkeyPatch) -
     assert catalog_rows[0].job_id == "01KTEST"
 
 
+def test_lowered_skyrl_step_reaches_launcher_with_scoped_environment(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_TEMP_PREFIX", str(tmp_path / "temporary"))
+    step = skyrl_step(_spec(), _execution())
+
+    class LaunchBoundaryReached(Exception):
+        pass
+
+    def launcher(command, *, env_vars):
+        launch = yaml.safe_load(Path(command[-1]).read_text())
+        assert env_vars == {}
+        assert launch["inputs"]["model"]["uri"] == "s3://test/iceball-sft/hf/global_step-32"
+        assert launch["skyrl"]["trainer"]["max_steps"] == 8
+        raise LaunchBoundaryReached
+
+    monkeypatch.setattr("marin.rl.skyrl._run_launcher", launcher)
+    with pytest.raises(LaunchBoundaryReached):
+        step.lower().fn(str(tmp_path / "output"))
+
+
 def test_run_skyrl_succeeds_without_hf_export(monkeypatch: pytest.MonkeyPatch) -> None:
     step = skyrl_step(_spec(), _execution())
     config = step.build_config(
