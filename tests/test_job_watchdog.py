@@ -600,6 +600,7 @@ def test_filtered_log_probe_keeps_escalations_visible_after_newer_progress(monke
                         "cluster": "cl",
                         "job": "/u/controller",
                         "log_contains": "DIFFICULTY_ESCALATION",
+                        "log_window_minutes": 17,
                         "failure_pattern": "DIFFICULTY_ESCALATION",
                     },
                 }
@@ -612,6 +613,8 @@ def test_filtered_log_probe_keeps_escalations_visible_after_newer_progress(monke
             return "/u/controller  running  2026-11-20T10:00:00+00:00"
         # Simulate Finelog applying its SQL content predicate before LIMIT 1.
         filtered = "contains(data, 'DIFFICULTY_ESCALATION')" in command[-1]
+        if filtered:
+            assert f"epoch_ms > {int(now.timestamp() * 1000) - 17 * 60 * 1000}" in command[-1]
         return json.dumps(
             {
                 "key": "/u/controller/0:0",

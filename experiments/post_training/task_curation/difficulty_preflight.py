@@ -89,7 +89,7 @@ def preflight_batch(
     stage_root: Path | None = None,
     probe_hosted: bool = False,
 ) -> dict:
-    """Verify endpoint liveness, frozen task contracts and the staged judge route."""
+    """Check frozen contracts, optionally staging tasks and probing the hosted route."""
     configure_coreweave_s3()
     if probe_hosted:
         try:

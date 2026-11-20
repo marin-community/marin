@@ -3,11 +3,13 @@
 
 """Pure, bounded remediation plans with stable evidence-based identities."""
 
+import json
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, replace
 from typing import Protocol
 
 from finestore.rl.difficulty import Solver
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.difficulty.ledger import digest
 from experiments.post_training.task_curation.difficulty.state import CellState, CellStatus, Gap, GapReason, LedgerRow
@@ -96,19 +98,27 @@ def action_id(action: Action) -> str:
     return digest(action_payload(action))
 
 
-def action_gpu_hours(action: Action) -> float:
+def load_action(uri: str) -> Action:
+    """Read a manifest and reject bytes that do not match its content identity."""
+    path = StoragePath(uri)
+    payload = json.loads(path.read_text())
+    if path.name != digest(payload) + ".json":
+        raise ValueError("Action manifest changed after planning")
+    return action_from_payload(payload)
+
+
+def action_gpu_hour_reservation(action: Action) -> float:
     if isinstance(action, AttemptBatch):
         return action.max_gpu_hours
     return MAX_GPU_HOURS_PER_JOB if isinstance(action, QualifyJudgeRoute) else 0.0
 
 
 def action_cells(action: Action) -> tuple[tuple[str, Solver], ...]:
-    payload = action_payload(action)
     if isinstance(action, AttemptBatch):
         return tuple((source.source_id, action.solver) for source in action.sources)
-    if "source" in payload:
-        return ((payload["source"]["source_id"], Solver(payload["solver"])),)
-    return tuple((source_id, Solver(solver)) for source_id, solver in payload["cells"])
+    if isinstance(action, (BuildSnapshot, BuildTaskSpecFactory, RetryAfter, Escalate)):
+        return ((action.source.source_id, action.solver),)
+    return action.cells
 
 
 def selected_source(cell: CellState) -> SourceAttempts:

@@ -15,13 +15,23 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.difficulty.audit import audit_captured_runs, launch_import
-from experiments.post_training.task_curation.difficulty.catalog import DEFAULT_APPLET, served_catalog
+from experiments.post_training.task_curation.difficulty.catalog import (
+    DEFAULT_APPLET,
+    available_artifact_uris,
+    served_catalog,
+)
 from experiments.post_training.task_curation.difficulty.controller import launch_controller, run_controller
 from experiments.post_training.task_curation.difficulty.importer import catalog_sources, import_runs
-from experiments.post_training.task_curation.difficulty.ledger import DEFAULT_LEDGER, LEDGER_VERSION, digest, read_rows
+from experiments.post_training.task_curation.difficulty.ledger import (
+    DEFAULT_LEDGER,
+    IMPORTS_DIRECTORY,
+    LEDGER_VERSION,
+    digest,
+    read_rows,
+)
 from experiments.post_training.task_curation.difficulty.planner import action_id, plan
 from experiments.post_training.task_curation.difficulty.report import cells_for_catalog, plan_report, status_report
-from experiments.post_training.task_curation.difficulty.state import CoveragePolicy, GapReason
+from experiments.post_training.task_curation.difficulty.state import CoveragePolicy
 from experiments.post_training.task_curation.difficulty_report import discover_run_roots
 
 
@@ -102,16 +112,10 @@ def main() -> None:
     policy = CoveragePolicy()
     cells = cells_for_catalog(rows, catalog, policy)
     # Planning snapshots current existence. The remediation functions remain pure.
-    artifacts = {
-        gap.artifact_uri
-        for cell in cells
-        for gap in cell.gaps
-        if gap.reason == GapReason.ENVIRONMENT_ARTIFACT_MISSING and gap.artifact_uri
-    }
-    available = frozenset(uri for uri in artifacts if StoragePath(uri).exists())
+    available = available_artifact_uris(cells)
     actions = plan(cells, rows, frozenset(args.provider_available), available)
     if args.command == "reconcile":
-        if not (StoragePath(args.ledger) / LEDGER_VERSION / "imports" / "*.json").glob():
+        if not (StoragePath(args.ledger) / LEDGER_VERSION / IMPORTS_DIRECTORY / "*.json").glob():
             raise ValueError("Initial backfill is unsealed; finish import before reconcile")
         if not actions:
             print(json.dumps({"submitted": [], "state": "no_new_evidence"}))

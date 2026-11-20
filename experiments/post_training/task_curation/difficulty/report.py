@@ -13,7 +13,7 @@ from finestore.rl.difficulty import Solver
 from experiments.post_training.task_curation.difficulty.planner import (
     Action,
     action_cells,
-    action_gpu_hours,
+    action_gpu_hour_reservation,
     action_id,
     action_payload,
 )
@@ -91,6 +91,6 @@ def status_report(
 def plan_report(actions: Sequence[Action]) -> dict:
     return {
         "summary": dict(Counter(type(action).__name__ for action in actions)),
-        "max_gpu_hours": sum(action_gpu_hours(action) for action in actions),
+        "max_gpu_hours": sum(action_gpu_hour_reservation(action) for action in actions),
         "actions": [{"action_id": action_id(action), **action_payload(action)} for action in actions],
     }

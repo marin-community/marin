@@ -13,11 +13,10 @@ from finestore.rl.difficulty import Solver
 from iris.client.client import iris_ctx
 from rigging.auth import MARIN_DESKTOP_OAUTH_CLIENT, IapRefreshTokenProvider
 from rigging.credential_store import load_credentials
-from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import require_secret
 
 from experiments.post_training.task_curation.difficulty.capacity import available_provider_solvers
-from experiments.post_training.task_curation.difficulty.catalog import served_catalog
+from experiments.post_training.task_curation.difficulty.catalog import available_artifact_uris, served_catalog
 from experiments.post_training.task_curation.difficulty.executor import EscalationLog, collect_finished, reconcile_once
 from experiments.post_training.task_curation.difficulty.iris_backend import IrisBackend
 from experiments.post_training.task_curation.difficulty.launch import cpu_job_command
@@ -28,6 +27,8 @@ from experiments.post_training.task_curation.difficulty_report import list_iris_
 
 LOGGER = logging.getLogger(__name__)
 CONTROLLER_INTERVAL = 60
+CONTROLLER_JOB_PREFIX = "atlas-difficulty-reconciler-controller-"
+REFRESH_TOKEN_ENV = "DIFFICULTY_MARINA_REFRESH"
 
 
 def run_controller(
@@ -46,13 +47,7 @@ def run_controller(
         catalog = served_catalog(applet_id, token_provider=provider)
         rows = read_rows(ledger)
         cells = cells_for_catalog(rows, catalog, policy)
-        artifacts = {
-            gap.artifact_uri
-            for cell in cells
-            for gap in cell.gaps
-            if gap.reason == GapReason.ENVIRONMENT_ARTIFACT_MISSING and gap.artifact_uri
-        }
-        available = frozenset(uri for uri in artifacts if StoragePath(uri).exists())
+        available = available_artifact_uris(cells)
         waiting = any(gap.reason == GapReason.PROVIDER_CAPACITY_WAIT for cell in cells for gap in cell.gaps)
         capacity = providers or (available_provider_solvers(ledger) if waiting else frozenset())
         result = reconcile_once(ledger, catalog, policy, backend, notifications, capacity, available, budget_gpu_hours)
@@ -70,15 +65,15 @@ def launch_controller(
 ) -> None:
     """Submit one CPU parent; its inherited client owns every remediation child."""
     for job in list_iris_jobs():
-        if "atlas-difficulty-reconciler-controller-" in job.job_id and job.active:
+        if CONTROLLER_JOB_PREFIX in job.job_id and job.active:
             print(json.dumps({"controller_job": job.job_id, "state": job.state}))
             return
     record = load_credentials("marin")
     if record is None or not record.edge_refresh_token:
         raise ValueError("Controller needs a refreshable Marina login; run iris login")
-    environment = {**os.environ, "DIFFICULTY_MARINA_REFRESH": record.edge_refresh_token}
-    command = cpu_job_command("atlas-difficulty-reconciler-controller-" + generation[:16])
-    command.extend(["--secret", "MARINA_IAP_REFRESH_TOKEN", "env:DIFFICULTY_MARINA_REFRESH"])
+    environment = {**os.environ, REFRESH_TOKEN_ENV: record.edge_refresh_token}
+    command = cpu_job_command(CONTROLLER_JOB_PREFIX + generation[:16])
+    command.extend(["--secret", "MARINA_IAP_REFRESH_TOKEN", "env:" + REFRESH_TOKEN_ENV])
     for name in ("CW_KEY_ID", "CW_KEY_SECRET", "HF_TOKEN", "GLM_BULK_TOKEN", "TOGETHER_API_KEY"):
         command.extend(["--secret", name, "env:" + name])
     command.extend(

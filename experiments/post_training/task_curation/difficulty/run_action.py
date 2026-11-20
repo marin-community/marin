@@ -13,8 +13,8 @@ from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.task_curation.difficulty.ledger import LEDGER_VERSION, digest
-from experiments.post_training.task_curation.difficulty.planner import AttemptBatch, action_from_payload
+from experiments.post_training.task_curation.difficulty.ledger import LEDGER_VERSION, RESULTS_DIRECTORY
+from experiments.post_training.task_curation.difficulty.planner import AttemptBatch, action_id, load_action
 from experiments.post_training.task_curation.difficulty.remediate import repair_action
 
 
@@ -24,12 +24,8 @@ def main() -> None:
     parser.add_argument("--ledger", required=True)
     args = parser.parse_args()
     configure_coreweave_s3()
-    manifest = StoragePath(args.manifest)
-    payload = json.loads(manifest.read_text())
-    key = digest(payload)
-    if manifest.name != key + ".json":
-        raise ValueError("Action manifest changed after planning")
-    action = action_from_payload(payload)
+    action = load_action(args.manifest)
+    key = action_id(action)
     with tempfile.TemporaryDirectory(prefix="difficulty-action-") as directory:
         local = Path(directory)
         if isinstance(action, AttemptBatch):
@@ -71,7 +67,7 @@ def main() -> None:
             result = {"status": "completed", "run_root": output}
         else:
             result = repair_action(action, local)
-    target = StoragePath(args.ledger) / LEDGER_VERSION / "results" / f"{key}.json"
+    target = StoragePath(args.ledger) / LEDGER_VERSION / RESULTS_DIRECTORY / f"{key}.json"
     target.parent.mkdirs()
     if target.exists():
         raise FileExistsError(target)

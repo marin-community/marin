@@ -25,7 +25,7 @@ from experiments.post_training.task_curation.difficulty.accounting import GpuAcc
 from experiments.post_training.task_curation.difficulty.importer import population_revision, receipt_row
 from experiments.post_training.task_curation.difficulty.ledger import append_rows, digest
 from experiments.post_training.task_curation.difficulty.legacy import legacy_gaps
-from experiments.post_training.task_curation.difficulty.planner import AttemptBatch, action_from_payload, action_id
+from experiments.post_training.task_curation.difficulty.planner import AttemptBatch, action_id, load_action
 from experiments.post_training.task_curation.difficulty.state import Gap, GapReason, LedgerRow, Outcome
 from experiments.post_training.task_curation.difficulty_config import CandidateRun
 from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence
@@ -162,10 +162,7 @@ def main() -> None:
     configure_coreweave_s3()
     config = CandidateRun.model_validate_json(Path(args.config).read_text())
     sources = [PreparedSource.model_validate(row) for row in json.loads(Path(args.sources).read_text())]
-    action = json.loads(StoragePath(args.action_manifest).read_text())
-    if StoragePath(args.action_manifest).name != digest(action) + ".json":
-        raise ValueError("Action manifest changed after planning")
-    action = action_from_payload(action)
+    action = load_action(args.action_manifest)
     if not isinstance(action, AttemptBatch) or action.solver != config.solver:
         raise ValueError("Worker does not match its action")
     if args.local_root.exists() or StoragePath(args.output_root).exists():

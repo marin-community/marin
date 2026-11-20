@@ -11,11 +11,21 @@ from datetime import UTC, datetime
 from typing import Protocol
 
 from finestore.rl.difficulty import Solver
+from iris.resources.state import JobState, is_job_finished
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.difficulty.budget import GpuBudget, campaign_budget
-from experiments.post_training.task_curation.difficulty.ledger import LEDGER_VERSION, append_rows, digest, read_rows
+from experiments.post_training.task_curation.difficulty.ledger import (
+    ACTIONS_DIRECTORY,
+    ESCALATIONS_DIRECTORY,
+    IMPORTS_DIRECTORY,
+    LEDGER_VERSION,
+    RESULTS_DIRECTORY,
+    append_rows,
+    digest,
+    read_rows,
+)
 from experiments.post_training.task_curation.difficulty.planner import (
     Action,
     AttemptBatch,
@@ -27,7 +37,7 @@ from experiments.post_training.task_curation.difficulty.planner import (
     RetryAfter,
     action_cells,
     action_from_payload,
-    action_gpu_hours,
+    action_gpu_hour_reservation,
     action_id,
     action_payload,
     plan,
@@ -50,13 +60,13 @@ LOGGER = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class Job:
     job_id: str
-    state: str
+    state: JobState
     solver: Solver | None
     slots: int = 1
 
     @property
     def active(self) -> bool:
-        return self.state not in {"succeeded", "failed", "cancelled", "killed", "worker_failed", "unschedulable"}
+        return not is_job_finished(self.state)
 
 
 class JobBackend(Protocol):
@@ -74,7 +84,7 @@ class EscalationLog:
 
     def write(self, key: str, message: str) -> None:
         """Publish a deduplicated escalation and its watchdog log event."""
-        target = StoragePath(self.root) / LEDGER_VERSION / "escalations" / f"{key}.json"
+        target = StoragePath(self.root) / LEDGER_VERSION / ESCALATIONS_DIRECTORY / f"{key}.json"
         payload = {"action_id": key, "message": message}
         target.parent.mkdirs()
         if not target.exists():
@@ -156,10 +166,10 @@ def execute_plan(
         if slots + required_slots > CONCURRENT_JOB_CAP:
             deferred.append(key)
             continue
-        reservation = action_gpu_hours(action)
+        reservation = action_gpu_hour_reservation(action)
         if budget and reservation and spent + reserved + reservation > budget.limit_gpu_hours:
             budget_key = digest([budget.started_at, budget.limit_gpu_hours, "budget-exhausted"])
-            if not (StoragePath(ledger) / LEDGER_VERSION / "escalations" / f"{budget_key}.json").exists():
+            if not (StoragePath(ledger) / LEDGER_VERSION / ESCALATIONS_DIRECTORY / f"{budget_key}.json").exists():
                 notifications.write(
                     budget_key,
                     f"Difficulty GPU budget exhausted: recorded {spent:.6f} + in-flight {reserved:.6f} "
@@ -168,7 +178,7 @@ def execute_plan(
                 )
             deferred.append(key)
             continue
-        manifest = StoragePath(ledger) / LEDGER_VERSION / "actions" / f"{key}.json"
+        manifest = StoragePath(ledger) / LEDGER_VERSION / ACTIONS_DIRECTORY / f"{key}.json"
         payload = json.dumps(action_payload(action), sort_keys=True) + "\n"
         manifest.parent.mkdirs()
         if manifest.exists() and manifest.read_text() != payload:
@@ -204,7 +214,7 @@ def reconcile_once(
     budget_limit_gpu_hours: float,
 ) -> dict:
     """Take one consistent evidence snapshot, execute its plan, then release the lease."""
-    if not (StoragePath(ledger) / LEDGER_VERSION / "imports" / "*.json").glob():
+    if not (StoragePath(ledger) / LEDGER_VERSION / IMPORTS_DIRECTORY / "*.json").glob():
         raise ValueError("Initial backfill is unsealed; finish import before reconcile")
     lease = create_lock(str(StoragePath(ledger) / LEDGER_VERSION / "reconcile.lock"))
     if not lease.try_acquire():
@@ -251,13 +261,13 @@ def collect_finished(
                 job_id=row.job_id,
             )
         )
-        target = StoragePath(ledger) / LEDGER_VERSION / "results" / f"{row.action_id}.json"
-        if job.state == "succeeded":
+        target = StoragePath(ledger) / LEDGER_VERSION / RESULTS_DIRECTORY / f"{row.action_id}.json"
+        if job.state == JobState.SUCCEEDED:
             result = json.loads(target.read_text())
             if result["status"] == "completed":
                 continue
             if result["status"] == "ready":
-                manifest = StoragePath(ledger) / LEDGER_VERSION / "actions" / f"{row.action_id}.json"
+                manifest = StoragePath(ledger) / LEDGER_VERSION / ACTIONS_DIRECTORY / f"{row.action_id}.json"
                 action = action_from_payload(json.loads(manifest.read_text()))
                 repaired = repaired_gap(action)
                 additions.append(

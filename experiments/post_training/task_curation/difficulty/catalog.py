@@ -3,11 +3,14 @@
 
 """Resolve frozen task panels against the current served source declarations."""
 
+from collections.abc import Sequence
+
 from marina.client import DEFAULT_MARINA_URL, applet_query
 from rigging.auth import TokenProvider
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.difficulty.importer import catalog_sources, population_revision
-from experiments.post_training.task_curation.difficulty.state import CatalogSource
+from experiments.post_training.task_curation.difficulty.state import CatalogSource, CellState, GapReason
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 DEFAULT_APPLET = "c9742a15-fb46-4d56-bc88-aa916351ebd3"
@@ -21,6 +24,16 @@ DEFAULT_QUEUES = (
         "5b2f937f100b2d73fb2fbc92eb9d14d9e0533dfef46272500a58eb69061e0a01",
     ),
 )
+
+
+def available_artifact_uris(cells: Sequence[CellState]) -> frozenset[str]:
+    artifacts = {
+        gap.artifact_uri
+        for cell in cells
+        for gap in cell.gaps
+        if gap.reason == GapReason.ENVIRONMENT_ARTIFACT_MISSING and gap.artifact_uri
+    }
+    return frozenset(uri for uri in artifacts if StoragePath(uri).exists())
 
 
 def served_catalog(

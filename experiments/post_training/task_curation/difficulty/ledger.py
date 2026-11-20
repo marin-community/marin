@@ -11,13 +11,15 @@ from finestore.rl.difficulty import Solver
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.difficulty.state import ArtifactKind, Gap, GapReason, LedgerRow, Outcome
+from infra.marina.apps.rl_data_catalog.release_evidence import json_sha256
 
 LEDGER_VERSION = "v1"
+ACTIONS_DIRECTORY = "actions"
+IMPORTS_DIRECTORY = "imports"
+RESULTS_DIRECTORY = "results"
+ESCALATIONS_DIRECTORY = "escalations"
 DEFAULT_LEDGER = "s3://marin-us-east-02a/marin/rl-data/atlas/difficulty-ledger"
-
-
-def digest(value: object) -> str:
-    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+digest = json_sha256
 
 
 def append_rows(root: str, rows: list[LedgerRow]) -> str | None:

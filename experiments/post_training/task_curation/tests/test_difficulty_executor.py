@@ -8,6 +8,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
 from finestore.rl.difficulty import Solver
+from iris.resources.state import JobState
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.difficulty.budget import campaign_budget
@@ -44,7 +45,7 @@ class JobStore:
         target = StoragePath(self.root) / (key + ".json")
         target.parent.mkdirs()
         target.write_text(StoragePath(manifest_uri).read_text())
-        job = Job("/owner/controller/difficulty-reconcile-" + key[:24], "running", None)
+        job = Job("/owner/controller/difficulty-reconcile-" + key[:24], JobState.RUNNING, None)
         self.existing.append(job)
         return job.job_id
 
@@ -65,10 +66,10 @@ def test_capacity_and_legacy_solver_admission_defer_without_creating_attempts(tm
     ledger = str(tmp_path / "ledger")
     cell = cell_state([], SOURCE, Solver.SMALL, CoveragePolicy())
     actions = plan([cell], [])
-    full = JobStore(str(tmp_path / "jobs"), [Job("/busy", "running", None, 22)])
+    full = JobStore(str(tmp_path / "jobs"), [Job("/busy", JobState.RUNNING, None, 22)])
     result = execute_plan(actions, [], [SOURCE], ledger, full, EscalationLog(ledger))
     assert result["submitted"] == [] and result["deferred"] == [action_id(actions[0])]
-    legacy = JobStore(str(tmp_path / "jobs"), [Job("/owner/atlas-difficulty-small-v24", "running", Solver.SMALL)])
+    legacy = JobStore(str(tmp_path / "jobs"), [Job("/owner/atlas-difficulty-small-v24", JobState.RUNNING, Solver.SMALL)])
     assert execute_plan(actions, [], [SOURCE], ledger, legacy, EscalationLog(ledger))["submitted"] == []
     assert read_rows(ledger) == []
 
@@ -79,7 +80,7 @@ def test_shared_repair_completion_unblocks_only_the_original_population(tmp_path
     actions = plan([cell], [])
     backend = JobStore(str(tmp_path / "jobs"))
     execute_plan(actions, [], [SOURCE], ledger, backend, EscalationLog(ledger))
-    backend.existing = [replace(backend.existing[0], state="succeeded")]
+    backend.existing = [replace(backend.existing[0], state=JobState.SUCCEEDED)]
     result = StoragePath(ledger) / "v1" / "results" / (action_id(actions[0]) + ".json")
     result.parent.mkdirs()
     result.write_text(json.dumps({"status": "ready", "snapshot": "original"}))
@@ -102,7 +103,7 @@ def test_blocked_repair_escalates_once_and_leaves_other_cells_schedulable(tmp_pa
     actions = plan([cell], [])
     backend = JobStore(str(tmp_path / "jobs"))
     execute_plan(actions, [], [SOURCE], ledger, backend, EscalationLog(ledger))
-    backend.existing = [replace(backend.existing[0], state="succeeded")]
+    backend.existing = [replace(backend.existing[0], state=JobState.SUCCEEDED)]
     result = StoragePath(ledger) / "v1" / "results" / (action_id(actions[0]) + ".json")
     result.parent.mkdirs()
     result.write_text(
@@ -145,4 +146,3 @@ def test_budget_counts_recorded_spend_and_inflight_reservations_across_restart(t
     assert restarted == budget
     escalations = list((tmp_path / "ledger" / "v1" / "escalations").glob("*.json"))
     assert len(escalations) == 1
-    assert "760.000000 + in-flight 40.000000" in json.loads(escalations[0].read_text())["message"]

@@ -15,7 +15,13 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 
-from experiments.post_training.task_curation.difficulty.ledger import LEDGER_VERSION, append_rows, digest, read_rows
+from experiments.post_training.task_curation.difficulty.ledger import (
+    IMPORTS_DIRECTORY,
+    LEDGER_VERSION,
+    append_rows,
+    digest,
+    read_rows,
+)
 from experiments.post_training.task_curation.difficulty.legacy import LegacyReasonError, legacy_gaps
 from experiments.post_training.task_curation.difficulty.state import CatalogSource, Gap, GapReason, LedgerRow, Outcome
 
@@ -52,6 +58,8 @@ def optional_json(path: StoragePath) -> dict | None:
 
 def receipt_row(reference: dict, sample: dict, solver: Solver, run: str, recorded_at: str) -> LedgerRow:
     path = StoragePath(reference["uri"])
+    # Bucket routing binds each receipt's signing region; StoragePath.open uses
+    # the ambient S3 backend instead of this per-bucket configuration.
     filesystem, key = filesystem_for(str(path))
     payload = filesystem.cat_file(key)
     if hashlib.sha256(payload).hexdigest() != reference["sha256"]:
@@ -203,7 +211,7 @@ def import_run(run: str, ledger: str) -> dict:
 
 
 def import_runs(roots: list[str], ledger: str, refresh_roots: frozenset[str] = frozenset()) -> list[dict]:
-    """Import selected roots and every linked ancestor, once per invocation."""
+    """Import roots and linked ancestors, reusing validated partitions unless refreshed."""
     optional_json.cache_clear()
     reports = []
     seen = set()
@@ -211,7 +219,7 @@ def import_runs(roots: list[str], ledger: str, refresh_roots: frozenset[str] = f
     failures = []
     completed = {row.run_id for row in read_rows(ledger)}
     while remaining:
-        root = remaining.pop(0).rstrip("/")
+        root = str(StoragePath(remaining.pop(0)))
         if root in seen:
             continue
         seen.add(root)
@@ -229,7 +237,7 @@ def import_runs(roots: list[str], ledger: str, refresh_roots: frozenset[str] = f
     if failures:
         raise LegacyReasonError("Complete reason audit failed:\n" + "\n".join(failures))
     receipt = {"roots": sorted(seen), "reports": reports}
-    target = StoragePath(ledger) / LEDGER_VERSION / "imports" / f"{digest(receipt)}.json"
+    target = StoragePath(ledger) / LEDGER_VERSION / IMPORTS_DIRECTORY / f"{digest(receipt)}.json"
     target.parent.mkdirs()
     if not target.exists():
         target.write_text(json.dumps(receipt, sort_keys=True) + "\n")

@@ -10,8 +10,8 @@ from datetime import UTC, datetime
 
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.task_curation.difficulty.ledger import LEDGER_VERSION
-from experiments.post_training.task_curation.difficulty.planner import action_from_payload, action_gpu_hours
+from experiments.post_training.task_curation.difficulty.ledger import ACTIONS_DIRECTORY, LEDGER_VERSION
+from experiments.post_training.task_curation.difficulty.planner import action_from_payload, action_gpu_hour_reservation
 from experiments.post_training.task_curation.difficulty.state import LedgerRow, Outcome
 
 
@@ -28,8 +28,8 @@ class GpuBudget:
         active = {row.action_id for row in rows if row.outcome == Outcome.SUBMITTED and row.action_id not in ended}
         total = 0.0
         for key in active:
-            manifest = StoragePath(ledger) / LEDGER_VERSION / "actions" / f"{key}.json"
-            total += action_gpu_hours(action_from_payload(json.loads(manifest.read_text())))
+            manifest = StoragePath(ledger) / LEDGER_VERSION / ACTIONS_DIRECTORY / f"{key}.json"
+            total += action_gpu_hour_reservation(action_from_payload(json.loads(manifest.read_text())))
         return total
 
 

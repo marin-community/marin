@@ -10,13 +10,14 @@ from dataclasses import dataclass
 from finestore.rl.difficulty import Solver
 from iris.client.client import IrisClient
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
+from iris.resources.state import JobState
 from iris.rpc import job_pb2
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration
 
 from experiments.post_training.task_curation.difficulty.executor import Job, action_job_slots
 from experiments.post_training.task_curation.difficulty.launch import DAYTONA_API_URL, DAYTONA_TARGET, JOB_TIMEOUT
-from experiments.post_training.task_curation.difficulty.ledger import LEDGER_VERSION
+from experiments.post_training.task_curation.difficulty.ledger import ACTIONS_DIRECTORY, LEDGER_VERSION
 from experiments.post_training.task_curation.difficulty.planner import (
     MAX_GPU_HOURS_PER_JOB,
     Action,
@@ -47,7 +48,7 @@ class IrisBackend:
             wire = str(status.job_id)
             match = re.search(r"atlas-difficulty-(small|large|hosted|snowball)-", wire)
             solver = Solver(match.group(1)) if match else None
-            job = Job(wire, status.state.value, solver)
+            job = Job(wire, status.state, solver)
             if "/" + JOB_COMPONENT in wire and job.active:
                 base, component = wire.split("/" + JOB_COMPONENT, 1)
                 group = base + "/" + JOB_COMPONENT + component.split("/", 1)[0]
@@ -56,11 +57,11 @@ class IrisBackend:
                 jobs.append(job)
         for root, group in grouped.items():
             prefix = root.rsplit("/", 1)[-1].removeprefix(JOB_COMPONENT)
-            matches = (StoragePath(self.ledger) / LEDGER_VERSION / "actions" / (prefix + "*.json")).glob()
+            matches = (StoragePath(self.ledger) / LEDGER_VERSION / ACTIONS_DIRECTORY / (prefix + "*.json")).glob()
             if len(matches) != 1:
                 raise ValueError(f"Active job has no unique action manifest: {root}")
             action = action_from_payload(json.loads(matches[0].read_text()))
-            jobs.append(Job(root, "running", None, max(action_job_slots(action), len(group))))
+            jobs.append(Job(root, JobState.RUNNING, None, max(action_job_slots(action), len(group))))
         return jobs
 
     def submit(self, action: Action, manifest_uri: str) -> str:

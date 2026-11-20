@@ -221,7 +221,7 @@ class FleetSnapshot:
     iris: dict[tuple[str, str], IrisJobView] = dataclasses.field(default_factory=dict)
     logs: dict[str, LogLine] = dataclasses.field(default_factory=dict)
     kueue: dict[str, list[dict[str, Any]]] = dataclasses.field(default_factory=dict)
-    filtered_logs: dict[str, dict[str, LogLine]] = dataclasses.field(default_factory=dict)
+    filtered_logs: dict[tuple[str, int], dict[str, LogLine]] = dataclasses.field(default_factory=dict)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -974,18 +974,22 @@ def collect_fleet_snapshot(registry: Registry, now: datetime) -> FleetSnapshot:
             # previous signatures, so stall clocks are not reset by a hub hiccup.
             logger.warning("finelog batch query failed; keeping previous log state: %s", e)
     filters = {
-        entry.probe.log_contains
+        (entry.probe.log_contains, entry.probe.log_window_minutes)
         for entry in registry.entries
         if isinstance(entry.probe, LogRegexProbe) and entry.probe.log_contains
     }
-    for text in sorted(filters):
+    for text, window in sorted(filters):
         patterns = [
             _log_pattern_for(IrisJobRef(entry.probe.cluster, entry.probe.job, entry.probe.job_is_prefix))
             for entry in registry.entries
-            if isinstance(entry.probe, LogRegexProbe) and entry.probe.log_contains == text
+            if isinstance(entry.probe, LogRegexProbe)
+            and entry.probe.log_contains == text
+            and entry.probe.log_window_minutes == window
         ]
         try:
-            snapshot.filtered_logs[text] = newest_finelog_lines(sorted(set(patterns)), now, contains=text)
+            snapshot.filtered_logs[(text, window)] = newest_finelog_lines(
+                sorted(set(patterns)), now, window_minutes=window, contains=text
+            )
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
             logger.warning("finelog filtered query failed for %r: %s", text, error)
     return snapshot
@@ -1093,10 +1097,11 @@ def snapshot_probe_runner(snapshot: FleetSnapshot):
         if isinstance(entry.probe, JsonFieldProbe):
             return probe_json_field(entry.probe, lifecycle)
         if isinstance(entry.probe, LogRegexProbe):
-            if entry.probe.log_contains and entry.probe.log_contains not in snapshot.filtered_logs:
+            filter_key = (entry.probe.log_contains, entry.probe.log_window_minutes)
+            if entry.probe.log_contains and filter_key not in snapshot.filtered_logs:
                 raise ProbeError(f"Finelog query for {entry.probe.log_contains!r} failed")
             log_snapshot = (
-                dataclasses.replace(snapshot, logs=snapshot.filtered_logs[entry.probe.log_contains])
+                dataclasses.replace(snapshot, logs=snapshot.filtered_logs[filter_key])
                 if entry.probe.log_contains
                 else snapshot
             )
