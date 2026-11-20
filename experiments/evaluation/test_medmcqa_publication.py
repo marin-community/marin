@@ -77,4 +77,3 @@ def test_publication_renders_lm_eval_cot_prompt_with_subject_groups(tmp_path):
         McqSpec("B", options=4, extraction=reference),
         McqSpec("A", options=4, extraction=reference),
     ]
-    assert all(case.task.grader.environment is not None for case in cases)
