@@ -83,15 +83,16 @@ def test_the_special_token_a_turn_stopped_at_is_removed_from_the_reply(terminato
     [
         ([PLAN, END_OF_TURN], "stop", "plan"),
         ([THINK_START, PLAN, THINK_END, CALL, END_OF_TURN], "stop", "call"),
-        ([PLAN, END_OF_TURN], "length", "plan"),
-        ([THINK_START, PLAN, THINK_END, CALL, END_OF_TURN], "length", "call"),
+        ([PLAN, END_OF_TURN], "length", "plan<|eot_id|>"),
+        ([THINK_START, PLAN, THINK_END, CALL, END_OF_TURN], "length", "call<|eot_id|>"),
         ([CALL, TOOL_CALL_END], "length", "call<|tool_call_end|>"),
     ],
     ids=["plain", "reasoning", "length-stop", "reasoning-length-stop", "cut-off-delimiter"],
 )
-def test_explicit_special_token_retention_excludes_only_the_turn_terminator(response_ids, finish_reason, expected):
-    # A terminator sampled as the last budgeted token still ended the turn, so it leaves the text even when
-    # the stop reason is a length stop.
+def test_explicit_special_token_retention_excludes_only_an_ended_turns_terminator(
+    response_ids, finish_reason, expected
+):
+    # A length stop did not end its turn, so its text keeps every sampled token.
     output = _generate(response_ids, finish_reason, sampling_params={"skip_special_tokens": False})
 
     assert output["responses"] == [expected]
@@ -199,8 +200,11 @@ async def test_tool_call_history_renders_without_reply_terminators(agent_transpo
     ]
 
 
-@pytest.mark.parametrize("finish_reason", ["stop", "length"])
-def test_completion_reply_excludes_the_turn_terminator(finish_reason):
+@pytest.mark.parametrize(
+    "finish_reason,expected",
+    [("stop", "<think>plan</think>call"), ("length", "<think>plan</think>call<|eot_id|>")],
+)
+def test_completion_reply_excludes_the_terminator_of_an_ended_turn(finish_reason, expected):
     response_ids = [THINK_START, PLAN, THINK_END, CALL, END_OF_TURN]
 
     class Client(_InferenceClient):
@@ -215,5 +219,5 @@ def test_completion_reply_excludes_the_turn_terminator(finish_reason):
     request = InferenceEngineInput(prompt_token_ids=[[PLAN]], sampling_params={"skip_special_tokens": False})
     output = asyncio.run(client.generate(request))
 
-    assert output["responses"] == ["<think>plan</think>call"]
+    assert output["responses"] == [expected]
     assert output["response_ids"] == [response_ids]
