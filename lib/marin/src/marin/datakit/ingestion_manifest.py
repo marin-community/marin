@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Typed source manifests for small ingestion registries and sidecar metadata."""
+"""Typed source manifests for ingestion registries."""
 
 import hashlib
 import json
