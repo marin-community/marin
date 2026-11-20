@@ -17,6 +17,7 @@ import yaml
 from finestore.rl.strata import MembershipState, SelectionTaskRow, read_selection_manifest
 from finestore.schema import arrow_schema
 from iris.rpc import job_pb2
+from marin.evaluation.eval_env import DAYTONA_TARGET_ENV
 from marin.execution.artifact import Artifact, is_mutable_version, read_record, result_type_name
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, apply
@@ -469,7 +470,7 @@ def run_step(
     layout = preset.recipe.layout
     required_env = ("WANDB_API_KEY", "WANDB_ENTITY") if wandb_entity else ("WANDB_API_KEY",)
     if preset.harbor is not None:
-        required_env += (preset.harbor.daytona_api_key_env, "DAYTONA_TARGET")
+        required_env += (preset.harbor.daytona_api_key_env, DAYTONA_TARGET_ENV)
     return skyrl_step(
         spec,
         IrisSkyRLExecution(
