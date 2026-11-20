@@ -112,15 +112,17 @@ def _declare() -> RlDataSource[CurationRecipe]:
                 ),
                 # The staged conversion inputs: the digest-pinned base-image bindings and the
                 # admission receipts (the upstream_image_defect labels), pinned by sha256.
+                # They are committed reference configs fetched over HTTP by the UrlSource
+                # staging (the pipeline's staging cannot read object storage).
                 inputs={
                     IMAGE_BINDINGS_INPUT: UrlSource(
-                        url="s3://marin-us-east-02a/marin/rl-data/atlas/swe-repair/2026.11.17.1/base-image-bindings.json",
+                        url="https://raw.githubusercontent.com/marin-community/marin/ee4060cc88229599542313b0f42049827b4962ab/experiments/post_training/task_curation/datasets/swe_rebench_v2/inputs/base-image-bindings.json",
                         sha256="b37ecc45b4a9e932619e7eb5d3c7e985bbe3a5f9fe7a5e6e64ad929afccc0c0d",
                         filename="base-image-bindings.json",
                         format=SourceFormat.JSON,
                     ),
                     ADMISSION_RECEIPTS_INPUT: UrlSource(
-                        url="s3://marin-us-east-02a/marin/rl-data/atlas/swe-repair/2026.11.17.1/admission-receipts.json",
+                        url="https://raw.githubusercontent.com/marin-community/marin/ee4060cc88229599542313b0f42049827b4962ab/experiments/post_training/task_curation/datasets/swe_rebench_v2/inputs/admission-receipts.json",
                         sha256="2d465e3e55f1b9046e151074884be05de4b2b7a9239765a89c0c4372a3836183",
                         filename="admission-receipts.json",
                         format=SourceFormat.JSON,

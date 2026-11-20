@@ -1,0 +1,59 @@
+{
+ "package": "ghcr.io/marin-community/rl-data-swe-rebench-v2",
+ "visibility": "internal",
+ "dataset": "ibragim-bad/SWE-rebench-V2.1",
+ "revision": "26c0145ded93168b0d5d095420155901ad2d5a2f",
+ "build_jobs": [
+  "swe-repair-swe-rebench-v2-bases-v1",
+  "swe-repair-swe-rebench-v2-bases-v11",
+  "swe-repair-swe-rebench-v2-bases-v12",
+  "swe-repair-swe-rebench-v2-bases-v2",
+  "swe-repair-swe-rebench-v2-bases-v3",
+  "swe-repair-swe-rebench-v2-bases-v4",
+  "swe-repair-swe-rebench-v2-bases-v5",
+  "swe-repair-swe-rebench-v2-bases-v9",
+  "swe-repair-swe-rebench-v2-bases-v13",
+  "swe-repair-swe-rebench-v2-bases-v17",
+  "swe-repair-swe-rebench-v2-bases-v19",
+  "swe-repair-swe-rebench-v2-bases-v20",
+  "swe-repair-swe-rebench-v2-bases-v21"
+ ],
+ "dockerfile_pins": {
+  "rust": "rust:1.84@sha256:738ae99a3d75623f41e6882566b4ef37e38a9840244a47efd4a0ca22e9628b88",
+  "jvm": "maven:3.9-eclipse-temurin-21-jammy@sha256:7f8422bd81f19b9035007a75e2f82272b09af64db08848d7d4e93302466e8b6f",
+  "php": "php:8.3.16@sha256:1625981bdf50872f0cf79f30aeb3095a5b13b112983dc82e2cb1f963eecadd74",
+  "julia": "julia:1.10-bookworm@sha256:46a7e2f54218c89aaadbe6cbcdbb2e68ced31f118247f6a1366d4a07a75b3ec2",
+  "elixir": "elixir:1.16@sha256:6d37f5a4a7c7412f66428445412c2cc5e38d5d3c6fb30fabbbba51fa0fab60bc",
+  "swift": "swift:5.10-jammy@sha256:ffc42e399ad0cad324f68d58f65e4d5f2c22eb9df73c4dfa249e898d497254b3",
+  "minor": "ubuntu:22.04@sha256:9abcaffc92a5279fff3a6a41635c0800ea33e528425fb389658806476e7defde"
+ },
+ "disclosed_normalizations": [
+  "stale dpkg statoverride entries (owner/group no longer resolving) dropped before apt install",
+  "apt runs with --force-confdef/--force-confold (media-types conffile prompt aborted non-interactive builds)",
+  "interpreter provisioning: python3 >= 3.9 installed + build-time guard on every base",
+  "node base: the upstream Chrome-for-testing layer is dropped (its dl.google.com apt source fails in-region and the tolerated-failure layer was the common factor in kaniko builds that lost apt-installed binaries); node rows whose tests require Chrome will fail their oracle honestly and go to the typed exclusion list",
+  "python base: pytest preinstalled in py310/py37 conda envs (the upstream python base recipe preinstalls pytest; without it the grading test_cmd dies with exit 127 pytest-not-found)",
+  "php base: composer 2.8.4 preinstalled (the php rows run composer install + vendor/bin/phpunit; without composer the grading dies exit 127)",
+  "jvm base: clojure CLI installed from the pinned github release (brew-install 1.11.4.1474) with a hard presence guard \u2014 the cli.clojure.org script exits 0 without installing in-region",
+  "minor base: bare opam root (config+repos, no compiler switch) \u2014 the ocaml rows create their own switches at setup (opam switch create <name> <version>, compilers build from source with the base gcc)",
+  "python base: v1-python rows run a conda testbed on python 3.9 (read from spectree@be06b21a 3.9.21 and clique@fbc9e2ab 3.9.20) with the upstream recipe set pinned (pytest 8.3.4 + 8 plugins, mock 5.1.0, responses 0.25.3, requests-mock 1.12.1, freezegun 1.5.1, hypothesis 6.123.1, trustme 1.2.0, coverage 7.6.9); python_base_310 rows run pytest 9.0.2 + coverage 7.13.4 (read from django-migration-linter@6e86ff38); python_base_37 rows run pytest 7.4.4 + the last py37-compatible plugin set (disclosed reconstruction from websockets@5ffbd660 which ships pytest 7.4.4 only); testbed/bin is FIRST on PATH so the unactivated grading test_cmd resolves bare pytest/pip into the row's cloned env",
+  "jvm base: Leiningen 2.11.2 (pinned script + self-install; upstream lein rows ship /usr/local/bin/lein per amperity-lein-monolith@62f2719e)",
+  "minor base: zlib1g-dev + libpcre3-dev + libssl-dev added (nginx rows build modules needing zlib/pcre; verified apt-installed locally and in the pushed digest)",
+  "minor base: libclang-19-dev from apt.llvm.org jammy llvm-toolchain-jammy-19 (the upstream dart image ships libclang-19.1.7.so; the repo serves the same 19.1.7 point release) \u2014 dart ffigen rows link libclang at setup",
+  "node base: unzip added (the @actions/tool-cache row tests invoke unzip; the v20 node build lost the apt binaries to the known flaky kaniko snapshot loss and is rebuilt as bases-v21 with content verification before use)",
+  "php base: ext-zip (libzip-dev + docker-php-ext-install zip) and phar.readonly=0 ini \u2014 both read from the upstream image properties evidenced by the diag-v21 captures",
+  "jvm base: LANG=C.UTF-8 + LANGUAGE=en_US:en (the upstream jvm image env, read from swerebenchv2/1c-syntax-bsl-language-server@99eea044; without it the JVM sun.jnu.encoding degrades to ASCII and the BSL rows Cyrillic-filename tests fail en masse)"
+ ],
+ "images": {
+  "python": "ghcr.io/marin-community/rl-data-swe-rebench-v2@sha256:1f112d4b64c60429c0a4ec5f4133f27c831445abc3743296ae66ff181964b364",
+  "go": "ghcr.io/marin-community/rl-data-swe-rebench-v2@sha256:8c9be5b316d9c82d3f40de3fcf1ea07b0f10b8cb990ec819d59a3972f0be36ad",
+  "node": "ghcr.io/marin-community/rl-data-swe-rebench-v2@sha256:892470b7c8fab50822cec825ea9e64dec19197e2cd3288afbdc480cb3201facf",
+  "rust": "ghcr.io/marin-community/rl-data-swe-rebench-v2@sha256:e59b51ce9213fc28dc3a3213b208061ac3e4e73b8fb187247a2864da5fdaefcb",
+  "jvm": "ghcr.io/marin-community/rl-data-swe-rebench-v2@sha256:85282cf21ed3df48bfa5aeef0de280f9a806ffe2e78952a9bfc307dad8644f77",
+  "php": "ghcr.io/marin-community/rl-data-swe-rebench-v2@sha256:128c9ca712be59697a74b702053c0c87a93c5239ae47f253f2e52efd23d259b4",
+  "julia": "ghcr.io/marin-community/rl-data-swe-rebench-v2@sha256:b833a9de1e8ea41daeef9fafb4ea502d7e37b1fdcedc11683d342ea8423e2c91",
+  "elixir": "ghcr.io/marin-community/rl-data-swe-rebench-v2@sha256:abc15c05a46ab76869f6bfce90211462028d4f20ab3e63655738e4a4e1c9cc93",
+  "swift": "ghcr.io/marin-community/rl-data-swe-rebench-v2@sha256:af0dc514b7b50fb22567586a1b1f9fda29aa54c98ffb2ab20dab24ff47504148",
+  "minor": "ghcr.io/marin-community/rl-data-swe-rebench-v2@sha256:848569ed10df7a7e924bfb700cec2dfede6660adafb07cad60ad4be2283e27ab"
+ }
+}

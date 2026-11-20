@@ -28,21 +28,9 @@ STAGER=experiments.post_training.task_curation.datasets.swe_rebench_v2.stage_int
 uv run --frozen --with-editable ./lib/taskcompendium[pipeline] python -m "$STAGER" \
   --uri "$LICENSE_URI" --output "$WORKDIR/license-receipts.json"
 
-# The recipe's UrlSource staging cannot fetch object storage (the pipeline stages over
-# HTTP); the driver's --auxiliary override supplies the same pinned files from local dirs.
-uv run --frozen --with-editable ./lib/taskcompendium[pipeline] python -m "$STAGER" \
-  --uri s3://marin-us-east-02a/marin/rl-data/atlas/swe-repair/2026.11.17.1/base-image-bindings.json \
-  --output "$WORKDIR/staged/base_images/base-image-bindings.json"
-uv run --frozen --with-editable ./lib/taskcompendium[pipeline] python -m "$STAGER" \
-  --uri s3://marin-us-east-02a/marin/rl-data/atlas/swe-repair/2026.11.17.1/admission-receipts.json \
-  --output "$WORKDIR/staged/admission_receipts/admission-receipts.json"
-
 uv run --frozen --with-editable ./lib/taskcompendium[pipeline] python -m \
   experiments.post_training.task_curation.driver \
   --source "$SOURCE_NAME" --mode quick \
   --license-receipts "$WORKDIR/license-receipts.json" \
-  --input base_images "$WORKDIR/staged/base_images" \
-  --input admission_receipts "$WORKDIR/staged/admission_receipts" \
-  --cache-dir "$WORKDIR/cache" \
   --output-root "$OUTPUT_ROOT" \
   --max-workers 16 --run

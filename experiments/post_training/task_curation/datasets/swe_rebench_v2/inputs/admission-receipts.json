@@ -1,0 +1,146 @@
+{
+ "analysis-dev__diktat-1229": {
+  "receipt": "upstream_image_defect",
+  "group": "jvm",
+  "evidence": {
+   "upstream_nop_reward": 0.0,
+   "condensed_nop_reward": 0.0,
+   "upstream_oracle_reward": 0.0,
+   "condensed_oracle_reward": 1.0,
+   "upstream_oracle_evidence": "t>(RandomAccessFile.java:259)\n\tat java.base/java.io.RandomAccessFile.<init>(RandomAccessFile.java:214)\n\tat org.gradle.wrapper.ExclusiveFileAccessManager.access(ExclusiveFileAccessManager.java:53)\n\tat org.gradle.wrapper.Install.createDist(Install.java:48)\n\tat org.gradle.wrapper.WrapperExecutor.execute(WrapperExecutor.java:107)\n\tat org.gradle.wrapper.GradleWrapperMain.main(GradleWrapperMain.java:63)",
+   "ruling": "coordinator 2026-11-18: the task spec environment is the RL data; NoP 0/0 both sides + condensed oracle passing + upstream image oracle failing admits the row under upstream_image_defect"
+  }
+ },
+ "ariga__atlas-3327": {
+  "receipt": "upstream_image_defect",
+  "group": "go",
+  "evidence": {
+   "upstream_nop_reward": 0.0,
+   "condensed_nop_reward": 0.0,
+   "upstream_oracle_reward": 0.0,
+   "condensed_oracle_reward": 1.0,
+   "upstream_oracle_evidence": "",
+   "ruling": "coordinator 2026-11-18: the task spec environment is the RL data; NoP 0/0 both sides + condensed oracle passing + upstream image oracle failing admits the row under upstream_image_defect"
+  }
+ },
+ "crossplane__provider-aws-1161": {
+  "receipt": "upstream_image_defect",
+  "group": "go",
+  "evidence": {
+   "upstream_nop_reward": 0.0,
+   "condensed_nop_reward": 0.0,
+   "upstream_oracle_reward": 0.0,
+   "condensed_oracle_reward": 1.0,
+   "upstream_oracle_evidence": "",
+   "ruling": "coordinator 2026-11-18: the task spec environment is the RL data; NoP 0/0 both sides + condensed oracle passing + upstream image oracle failing admits the row under upstream_image_defect"
+  }
+ },
+ "asynkron__protoactor-dotnet-1909": {
+  "receipt": "upstream_image_defect",
+  "group": "minor",
+  "evidence": {
+   "upstream_nop_reward": 0.0,
+   "condensed_nop_reward": 0.0,
+   "upstream_oracle_reward": 0.0,
+   "condensed_oracle_reward": 1.0,
+   "upstream_oracle_evidence": "oto.Actor.Tests/Proto.Actor.Tests.csproj]\n/usr/share/dotnet/sdk/8.0.416/NuGet.targets(745,5): error :   Access to the path '/workspace/.dotnet/.nuget/NuGet/NuGet.Config' is denied. [/protoactor-dotnet/tests/Proto.Actor.Tests/Proto.Actor.Tests.csproj]\n/usr/share/dotnet/sdk/8.0.416/NuGet.targets(745,5): error :   Permission denied [/protoactor-dotnet/tests/Proto.Actor.Tests/Proto.Actor.Tests.csproj]",
+   "ruling": "coordinator 2026-11-18: the task spec environment is the RL data; NoP 0/0 both sides + condensed oracle passing + upstream image oracle failing admits the row under upstream_image_defect"
+  }
+ },
+ "btcpayserver__btcpayserver-5538": {
+  "receipt": "upstream_image_defect",
+  "group": "minor",
+  "evidence": {
+   "upstream_nop_reward": 0.0,
+   "condensed_nop_reward": 0.0,
+   "upstream_oracle_reward": 0.0,
+   "condensed_oracle_reward": 1.0,
+   "upstream_oracle_evidence": "/btcpayserver/BTCPayServer.Tests/BTCPayServer.Tests.csproj]\n/usr/share/dotnet/sdk/8.0.416/NuGet.targets(745,5): error :   Access to the path '/workspace/.dotnet/.nuget/NuGet/NuGet.Config' is denied. [/btcpayserver/BTCPayServer.Tests/BTCPayServer.Tests.csproj]\n/usr/share/dotnet/sdk/8.0.416/NuGet.targets(745,5): error :   Permission denied [/btcpayserver/BTCPayServer.Tests/BTCPayServer.Tests.csproj]",
+   "ruling": "coordinator 2026-11-18: the task spec environment is the RL data; NoP 0/0 both sides + condensed oracle passing + upstream image oracle failing admits the row under upstream_image_defect"
+  }
+ },
+ "dapr__dotnet-sdk-1173": {
+  "receipt": "upstream_image_defect",
+  "group": "minor",
+  "evidence": {
+   "upstream_nop_reward": 0.0,
+   "condensed_nop_reward": 0.0,
+   "upstream_oracle_reward": 0.0,
+   "condensed_oracle_reward": 1.0,
+   "upstream_oracle_evidence": ". [/dotnet-sdk/test/Dapr.Client.Test/Dapr.Client.Test.csproj]\n/usr/share/dotnet/sdk/8.0.416/NuGet.targets(745,5): error :   Access to the path '/workspace/.dotnet/.nuget/NuGet/NuGet.Config' is denied. [/dotnet-sdk/test/Dapr.Client.Test/Dapr.Client.Test.csproj]\n/usr/share/dotnet/sdk/8.0.416/NuGet.targets(745,5): error :   Permission denied [/dotnet-sdk/test/Dapr.Client.Test/Dapr.Client.Test.csproj]",
+   "ruling": "coordinator 2026-11-18: the task spec environment is the RL data; NoP 0/0 both sides + condensed oracle passing + upstream image oracle failing admits the row under upstream_image_defect"
+  }
+ },
+ "alecstrong__sql-psi-365": {
+  "receipt": "upstream_image_defect",
+  "group": "jvm",
+  "evidence": {
+   "upstream_nop_reward": 0.0,
+   "condensed_nop_reward": 0.0,
+   "upstream_oracle_reward": 0.0,
+   "condensed_oracle_reward": 1.0,
+   "upstream_oracle_evidence": "t>(RandomAccessFile.java:259)\n\tat java.base/java.io.RandomAccessFile.<init>(RandomAccessFile.java:214)\n\tat org.gradle.wrapper.ExclusiveFileAccessManager.access(ExclusiveFileAccessManager.java:53)\n\tat org.gradle.wrapper.Install.createDist(Install.java:62)\n\tat org.gradle.wrapper.WrapperExecutor.execute(WrapperExecutor.java:107)\n\tat org.gradle.wrapper.GradleWrapperMain.main(GradleWrapperMain.java:63)",
+   "ruling": "coordinator 2026-11-18: the task spec environment is the RL data; NoP 0/0 both sides + condensed oracle passing + upstream image oracle failing admits the row under upstream_image_defect"
+  }
+ },
+ "alecstrong__sql-psi-392": {
+  "receipt": "upstream_image_defect",
+  "group": "jvm",
+  "evidence": {
+   "upstream_nop_reward": 0.0,
+   "condensed_nop_reward": 0.0,
+   "upstream_oracle_reward": 0.0,
+   "condensed_oracle_reward": 1.0,
+   "upstream_oracle_evidence": "94\nUNRESOLVED\ngradle/wrapper/dists/gradle-7.4.2-bin/48ivgl02cpt2ed3fh9dbalvx8/gradle-7.4.2-bin.zip.lck\n\tat org.gradle.wrapper.ExclusiveFileAccessManager.access(ExclusiveFileAccessManager.java:43)\n\tat org.gradle.wrapper.Install.createDist(Install.java:62)\n\tat org.gradle.wrapper.WrapperExecutor.execute(WrapperExecutor.java:107)\n\tat org.gradle.wrapper.GradleWrapperMain.main(GradleWrapperMain.java:63)",
+   "ruling": "coordinator 2026-11-18: the task spec environment is the RL data; NoP 0/0 both sides + condensed oracle passing + upstream image oracle failing admits the row under upstream_image_defect"
+  }
+ },
+ "aallam__openai-kotlin-127": {
+  "receipt": "upstream_image_defect",
+  "group": "jvm",
+  "evidence": {
+   "upstream_nop_reward": 0.0,
+   "condensed_nop_reward": 0.0,
+   "upstream_oracle_reward": 0.0,
+   "condensed_oracle_reward": 1.0,
+   "upstream_oracle_evidence": "3)\n\tat org.gradle.wrapper.ExclusiveFileAccessManager.access(ExclusiveFileAccessManager.java:53)\n\tat org.gradle.wrapper.Install.createDist(Install.java:63)\n\tat org.gradle.wrapper.WrapperExecutor.execute(WrapperExecutor.java:107)\n\tat org.gradle.wrapper.GradleWrapperMain.main(GradleWrapperMain.java:63)",
+   "ruling": "coordinator 2026-11-18: the task spec environment is the RL data; NoP 0/0 both sides + condensed oracle passing + upstream image oracle failing admits the row under upstream_image_defect"
+  }
+ },
+ "ajalt__clikt-574": {
+  "receipt": "upstream_image_defect",
+  "group": "jvm",
+  "evidence": {
+   "upstream_nop_reward": 0.0,
+   "condensed_nop_reward": 0.0,
+   "upstream_oracle_reward": 0.0,
+   "condensed_oracle_reward": 1.0,
+   "upstream_oracle_evidence": "test_cmd exit code: 1\nparser=parse_log_gradlew_v1 parsed={'FAILED': 0, 'PASSED': 0, 'SKIPPED': 0, 'ERROR': 0}\nF2P 0/390 P2P 0/0\nUNRESOLVED\n/.gradle/wrapper/dists/gradle-8.10-bin/deqhafrv1ntovfmgh0nh3npr9/gradle-8.10-bin.zip.lck\n\tat org.gradle.wrapper.GradleWrapperMain.main(SourceFile:65)",
+   "ruling": "coordinator 2026-11-18: the task spec environment is the RL data; NoP 0/0 both sides + condensed oracle passing + upstream image oracle failing admits the row under upstream_image_defect"
+  }
+ },
+ "ajalt__mordant-28": {
+  "receipt": "upstream_image_defect",
+  "group": "jvm",
+  "evidence": {
+   "upstream_nop_reward": 0.0,
+   "condensed_nop_reward": 0.0,
+   "upstream_oracle_reward": 0.0,
+   "condensed_oracle_reward": 1.0,
+   "upstream_oracle_evidence": "ck\n\tat org.gradle.wrapper.ExclusiveFileAccessManager.access(ExclusiveFileAccessManager.java:43)\n\tat org.gradle.wrapper.Install.createDist(Install.java:48)\n\tat org.gradle.wrapper.WrapperExecutor.execute(WrapperExecutor.java:107)\n\tat org.gradle.wrapper.GradleWrapperMain.main(GradleWrapperMain.java:63)",
+   "ruling": "coordinator 2026-11-18: the task spec environment is the RL data; NoP 0/0 both sides + condensed oracle passing + upstream image oracle failing admits the row under upstream_image_defect"
+  }
+ },
+ "andregasser__bigbone-533": {
+  "receipt": "upstream_image_defect",
+  "group": "jvm",
+  "evidence": {
+   "upstream_nop_reward": 0.0,
+   "condensed_nop_reward": 0.0,
+   "upstream_oracle_reward": 0.0,
+   "condensed_oracle_reward": 1.0,
+   "upstream_oracle_evidence": "e.open0(Native Method)\n\tat java.base/java.io.RandomAccessFile.open(RandomAccessFile.java:356)\n\tat java.base/java.io.RandomAccessFile.<init>(RandomAccessFile.java:273)\n\tat java.base/java.io.RandomAccessFile.<init>(RandomAccessFile.java:223)\n\tat org.gradle.wrapper.GradleWrapperMain.main(SourceFile:67)",
+   "ruling": "coordinator 2026-11-18: the task spec environment is the RL data; NoP 0/0 both sides + condensed oracle passing + upstream image oracle failing admits the row under upstream_image_defect"
+  }
+ }
+}
