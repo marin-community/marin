@@ -223,8 +223,9 @@ with stock vLLM 0.25.1 / PyTorch 2.11; use the validated Marin release below. Se
 
 The integration uses the upstream external `LMCacheMPConnector` with one local RAM server per task.
 It passes `--disable-hybrid-kv-cache-manager`; hybrid or sliding-window models can therefore need
-more GPU KV memory. Cache data lasts for the task's lifetime. The cache starts before vLLM and stops
-after its workers. Session routing is optional and uses the existing `--session-router` flag.
+more GPU KV memory. The pool exists for the task's lifetime; upstream LMCache manages entry
+retention and LRU eviction. The cache starts before vLLM and stops after its workers.
+Session routing is optional and uses the existing `--session-router` flag.
 
 These examples use BF16 Snowball with TP1 and expert parallelism. Expert parallelism distributes
 expert weights across the DP ranks; Snowball's 20 attention heads and 5 KV heads stay local.

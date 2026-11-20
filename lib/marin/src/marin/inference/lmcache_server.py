@@ -19,7 +19,7 @@ import requests
 from rigging.timing import Duration, ExponentialBackoff
 from rigging.tunnel import terminate_process_group
 
-from marin.inference.vllm_router import available_port
+from marin.inference.vllm_router import available_ports
 from marin.inference.vllm_server import _LogPump, _native_logs_tail
 
 logger = logging.getLogger(__name__)
@@ -87,11 +87,10 @@ def lmcache_server(
     *,
     environment: dict[str, str],
     startup_timeout_seconds: float,
+    excluded_ports: Sequence[int] = (),
 ) -> Iterator[RunningLmcache]:
     """Start RAM storage before yielding; callers stop vLLM before leaving."""
-    port = available_port(_HOST)
-    http_port = available_port(_HOST)
-    metrics_port = available_port(_HOST)
+    port, http_port, metrics_port = available_ports(_HOST, 3, exclude=excluded_ports)
     log_dir = Path(tempfile.mkdtemp(prefix="marin_lmcache_"))
     argv = [
         *python_command,

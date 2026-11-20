@@ -4,12 +4,14 @@
 """Exercise task-local cache lifetimes through the serving subprocess boundary."""
 
 import contextlib
+import errno
 import json
 import os
 import signal
+import socket
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import psutil
@@ -19,8 +21,9 @@ from iris.client.context_state import reset_context, set_context
 from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
 from iris.cluster.types import JobName
 from marin.inference.backend import ModelSpec
-from marin.inference.config import VllmCompilationCacheMode, VllmEngineConfig
+from marin.inference.config import VllmCompilationCacheMode, VllmEngineConfig, VllmRouterConfig
 from marin.inference.vllm_backend import VllmBackend
+from marin.inference.vllm_router import available_port
 from rigging.timing import Duration, ExponentialBackoff
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="Serving uses POSIX process groups")
@@ -243,15 +246,45 @@ def test_cache_death_is_reported_and_releases_vllm(cache_processes):
     assert all(not _live(row.pid) for row in rows)
 
 
-def test_colocated_backends_keep_separate_cache_servers_alive(cache_processes):
+@pytest.mark.parametrize("reuse_closed_ports", [False, True])
+def test_colocated_backends_keep_separate_cache_servers_alive(cache_processes, monkeypatch, reuse_closed_ports):
+    if reuse_closed_ports:
+        # Reproduce bind(0) reusing a recently closed port. Keep real sockets,
+        # so the fake cache, vLLM and router still have to bind and serve HTTP.
+        recent_ports = []
+
+        class ReusingSocket(socket.socket):
+            def bind(self, address):
+                if address[1] != 0:
+                    return super().bind(address)
+                for port in recent_ports:
+                    try:
+                        super().bind((address[0], port))
+                    except OSError as error:
+                        if error.errno != errno.EADDRINUSE:
+                            raise
+                    else:
+                        return None
+                super().bind(address)
+                recent_ports.append(self.getsockname()[1])
+                return None
+
+        monkeypatch.setattr(socket, "socket", ReusingSocket)
+
+    def backend():
+        config = _backend().config
+        if reuse_closed_ports:
+            config = replace(config, router=VllmRouterConfig())
+        return VllmBackend(config, port=available_port("127.0.0.1"))
+
     previous = get_job_info()
     context_token = set_context(None)
     try:
         set_job_info(JobInfo(task_id=JobName.from_wire("/test/cache-first/0")))
-        with _backend().start(_spec()) as first:
+        with backend().start(_spec()) as first:
             first.wait_until_ready(poll_interval_seconds=0.01)
             set_job_info(JobInfo(task_id=JobName.from_wire("/test/cache-second/0")))
-            with _backend().start(_spec()) as second:
+            with backend().start(_spec()) as second:
                 second.wait_until_ready(poll_interval_seconds=0.01)
                 first.check_alive()
                 second.check_alive()

@@ -21,7 +21,7 @@ from marin.inference.config import (
 )
 from marin.inference.lmcache_server import LMCACHE_KV_TRANSFER_FLAG, LMCACHE_REQUIREMENT, lmcache_server
 from marin.inference.model_preparation import read_tool_chat_template
-from marin.inference.vllm_router import available_port
+from marin.inference.vllm_router import available_ports
 from marin.inference.vllm_server import (
     IsolatedCudaVllm,
     IsolatedTpuVllm,
@@ -136,7 +136,12 @@ class VllmBackend:
     ) -> Iterator[VllmEnvironment]:
         """Yield a VllmEnvironment; call ``wait_until_ready()`` before using its endpoint."""
         chat_template_content = _resolved_chat_template(spec)
-        resolved_port = available_port(self.host) if self.port is None or self.config.router is not None else self.port
+        configured_ports = () if self.port is None else (self.port,)
+        resolved_port = (
+            available_ports(self.host, 1, exclude=configured_ports)[0]
+            if self.port is None or self.config.router is not None
+            else self.port
+        )
         model = self._model_config(spec)
         runtime_launcher = vllm_launcher(self.config)
         launcher = _with_subprocess_env(
@@ -164,6 +169,7 @@ class VllmBackend:
                         self.config.lmcache_ram_gib,
                         environment={**os.environ, **launcher.env()},
                         startup_timeout_seconds=self.config.startup_timeout_seconds,
+                        excluded_ports=(resolved_port, *configured_ports),
                     )
                 )
                 serve_args.extend(cache.vllm_args)
