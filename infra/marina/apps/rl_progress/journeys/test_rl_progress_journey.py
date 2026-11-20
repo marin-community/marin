@@ -41,7 +41,7 @@ def test_stored_attempts_keep_links_breakdowns_and_refresh(journey: Journey) -> 
         "gate_result": None,
         "started_at": "2026-11-03T00:00:00Z",
         "completed_at": "2026-11-03T01:00:00Z",
-        "failed_facts": ["eval_lite_100@25/scored_fraction"],
+        "failed_facts": ["eval_lite_100@25/task_coverage"],
     }
     second.pop("issue")
     publish(second)
@@ -81,7 +81,7 @@ def test_stored_attempts_keep_links_breakdowns_and_refresh(journey: Journey) -> 
     }"""
     )
     assert dismissed_hash == ""
-    expect(dialog).to_contain_text("eval_lite_100@25/scored_fraction")
+    expect(dialog).to_contain_text("eval_lite_100@25/task_coverage")
     expect(dialog.get_by_role("link", name="Experiment #")).to_have_count(0)
     journey.page.mouse.click(5, 5)
     expect(dialog).not_to_be_visible()

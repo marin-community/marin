@@ -9,7 +9,7 @@ from typing import Any
 
 from marinskyrl.resource_locator import join_resource_path
 from omegaconf import DictConfig, OmegaConf
-from skyrlrecipe.declared import EvaluationSampling as EvaluationProfile
+from skyrlrecipe.declared import EvaluationProfile
 
 
 DEFAULT_EVALUATION_STEPS = 5
@@ -119,7 +119,7 @@ def validate_evaluation_schedule(
                 )
 
 
-def named_evaluation_metrics(metrics: Mapping[str, float], name: str) -> dict[str, float]:
+def additional_evaluation_metrics(metrics: Mapping[str, float], name: str) -> dict[str, float]:
     return {f"eval/{name}/{key.removeprefix('eval/')}": value for key, value in metrics.items()}
 
 

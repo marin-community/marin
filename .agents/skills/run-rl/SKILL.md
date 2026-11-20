@@ -9,6 +9,11 @@ Use `experiments/post_training/snowball_rl.py`. The [recipe](../../../docs/recip
 owns the preset table, flag contracts, measurement windows, saved files and comparison math.
 Use `use-iris` for job inspection and `use-fsutil` for object-store reads.
 
+Map requests for a short loop, quick loop or long loop to the corresponding presets.
+
+- **Short loop** (also called **quick loop**) compares one change against control runs. Use `speed-*`, `data-*`, `learning-medium` or `data-medium`.
+- **Long loop** trains a model and keeps its best checkpoint. Use `train-long` or `train-long-harbor` where available.
+
 ## Plan and submit
 
 1. Choose the preset from the recipe's [choice table](../../../docs/recipes/rl-experiments.md#which-experiment-to-run).
@@ -16,7 +21,7 @@ Use `use-iris` for job inspection and `use-fsutil` for object-store reads.
 2. Track or stage new source under `experiments/`, `lib/` and `vendor/`. The source tree hash enters
    the run name. Custom tasks follow the
    [selection handoff](../../../docs/references/task-curation.md#train-on-a-snowball-selection).
-   They need an immutable recipe, the same development holdout, the full EvalLite in
+   They need an immutable recipe, the same development panel, the full EvalLite in
    `exclusions`, and no AI-judged tasks.
 3. A default plan uses the declared control pin. Gated execution and planning with `--require`
    need a pin at the preset's current revision. Controls are collected after merge. `--control`
@@ -41,7 +46,7 @@ Use `use-iris` for job inspection and `use-fsutil` for object-store reads.
    Record the finishing status's `rl_progress_url` with the verdict; the launcher publishes using
    the caller's Marina login. Follow the recipe's [publication procedure](../../../docs/recipes/rl-experiments.md#dashboard-publication)
    for retries and pinned controls.
-   Use `--url ORIGIN` when publication targets a local Marina stack.
+   Use `--marina-url ORIGIN` when publication targets a local Marina stack.
    Repeat the original `--run --wait` invocation with the same source and inputs to resume
    either train-long preset from its latest retained checkpoint.
 
@@ -66,7 +71,7 @@ presets that measure the same change.
 ## Inspect saved answers
 
 Read existing answers before launching another run. Controls are named by preset, `commit`
-and revision in `snowball_rl.SNOWBALL.controls`; use their configured output paths. Candidate status
+and revision in `snowball_rl.SNOWBALL.control_pins`; use their configured output paths. Candidate status
 prints its output. Read the configured export root from the native resolved launch to locate answers.
 [EvalLite evaluations](../../../docs/recipes/rl-experiments.md#tasks-and-evaluation) are greedy; data-short
 evaluates sampled candidate training tasks. Each native JSONL row carries
@@ -75,7 +80,7 @@ its TaskSpec ID, prompt, output, tokens and verification.
 ## Read and record the result
 
 Read the recipe's [report contract](../../../docs/recipes/rl-experiments.md#compare-with-controls):
-the verdict, label, reason and report path, followed by the Markdown tables. Inspect the reason for INVALID.
+the verdict, effect, reason and report path, followed by the Markdown tables. Inspect the reason for INVALID.
 
 Confirm the native receipt records success and the Iris job finished before reporting success.
 For a linked issue, post one comment per result after the person's posting approval. Use these fields
@@ -85,7 +90,7 @@ in order:
 - **Run / attempt** — IDs, Iris and Grafana links.
 - **W&B** — exact run link.
 - **Marina** — attempt link.
-- **Verdict and key metrics** — verdict, objectives, constraints and report path.
+- **Verdict and key metrics** — verdict, objectives, guards and report path.
 - **Cost** — elapsed time and measured GPU-hours, or label the estimate.
 
 ## Never

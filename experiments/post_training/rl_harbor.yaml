@@ -1,4 +1,4 @@
-# Pinned benchmark populations sampled proportionally by normalized subcategory.
+# Each Harbor cohort is a pinned sample of one benchmark, stratified by subcategory.
 # BFCL tag; SWE repository; TBLite category (casefold, underscore to hyphen).
 # Selection salt: rl-harbor-subcategories-20261117-v1.
 timeout: 10800

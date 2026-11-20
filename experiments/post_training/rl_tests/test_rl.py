@@ -33,8 +33,8 @@ from rigging.provenance import Provenance
 from skyrlrecipe.documents import set_path
 
 from experiments.post_training import rl as snowball
+from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
-from experiments.post_training import rl_recipe as recipe
 from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.rl_tests.fixtures import (
     SELECTION_IDENTITY,
@@ -75,7 +75,7 @@ def test_all_presets_plan_with_their_declared_controls(selection):
     arguments = ["--preset", preset.name, "--version", preset.revision]
     if preset.tasks_input == "required":
         arguments += ["--tasks", SELECTION_IDENTITY]
-    unpinned = replace(table, controls={})
+    unpinned = replace(table, control_pins={})
     result = CliRunner().invoke(snowball.command(unpinned, argv=tuple(arguments)), arguments)
     assert result.exit_code == 4 and "no control pin" in result.output, (result.output, result.exception)
     assert "--control --replicates" in result.output
@@ -136,7 +136,7 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
 
     with monkeypatch.context() as planning:
         planning.setattr(skyrl_api, "discover_hf_checkpoints", reject_export_read)
-        planned = snowball.build_run(train, init=own_model, table=snowball_model.SNOWBALL)
+        planned = snowball.build_experiment(train, init=own_model, table=snowball_model.SNOWBALL)
         assert producer in planned.runs[0].deps
         planned.runs[0].lower()
         cloud_model = replace(own_model, step=replace(producer, override_path="s3://marin-test/computed-init"))
@@ -156,7 +156,7 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
     assert best["initial_model_uri"] == document["inputs"]["model"]["uri"]
     monkeypatch.setenv("WANDB_ENTITY", "test-team")
     learning = snowball_model.SNOWBALL.by_name["learning-medium"]
-    changed = snowball.build_run(
+    changed = snowball.build_experiment(
         learning,
         settings=(
             "trainer.train_batch_size=64",
@@ -198,18 +198,18 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
     revisioned = replace(snowball_model.SNOWBALL.by_name["speed-short"], revision="2026.11.12.2")
     steps = (
         changed,
-        snowball.build_run(promoted, table=snowball_model.SNOWBALL).runs[0],
-        snowball.build_run(
+        snowball.build_experiment(promoted, table=snowball_model.SNOWBALL).runs[0],
+        snowball.build_experiment(
             learning,
             init=ArtifactHfModel(initializer, "tests/own-tokenizer", "tokenizer-revision"),
             table=snowball_model.SNOWBALL,
         ).runs[0],
-        snowball.build_run(
+        snowball.build_experiment(
             snowball_model.SNOWBALL.by_name["train-long"],
             settings=("trainer.max_steps=2", "context_budget.request_window_tokens=32768"),
             table=snowball_model.SNOWBALL,
         ).runs[0],
-        snowball.build_run(revisioned, control=True, table=snowball_model.SNOWBALL).runs[0],
+        snowball.build_experiment(revisioned, control=True, table=snowball_model.SNOWBALL).runs[0],
     )
     paths = []
     for index, step in enumerate(steps):
@@ -251,13 +251,13 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
     content["grader_kind_counts"]["train"]["remote_judge"] = 1
     summary.write_text(json.dumps(content))
     with pytest.raises(click.BadParameter, match="AI-judge"):
-        snowball.build_run(learning, table=snowball_model.SNOWBALL)
+        snowball.build_experiment(learning, table=snowball_model.SNOWBALL)
 
 
 def test_harbor_coverage_controls_best_checkpoint(selection, tmp_path):
     paths = []
     for index, settings in enumerate(((), ("context_budget.serving_window_tokens=28672",))):
-        step = snowball.build_run(
+        step = snowball.build_experiment(
             snowball_model.SNOWBALL.by_name["train-long-harbor"], table=snowball_model.SNOWBALL, settings=settings
         ).runs[0]
         path = tmp_path / f"harbor-{index}.yaml"
@@ -457,7 +457,7 @@ def test_published_init_binds_export_tokenizer(
     table = snowball_model.SNOWBALL
     preset = table.by_name["learning-medium"]
     model = recipe.published_model("tests/checkpoint@2026.11.10", preset=preset)
-    step = snowball.build_run(preset, init=model, table=table).runs[0]
+    step = snowball.build_experiment(preset, init=model, table=table).runs[0]
     launch_model = yaml.safe_load(materialized_config(step, str(tmp_path)).launch_config_yaml)["inputs"]["model"]
     assert (launch_model["uri"], launch_model["tokenizer_uri"], launch_model["tokenizer_revision"]) == (
         uri + "/hf",
@@ -580,23 +580,23 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     learning = snowball_model.SNOWBALL.by_name["learning-medium"]
     data = snowball_model.SNOWBALL.by_name["data-short"]
     with pytest.raises(click.BadParameter, match="accepts no --set"):
-        snowball.build_run(
+        snowball.build_experiment(
             replace(learning, accepts_settings=False),
             settings=("trainer.policy.optimizer_config.lr=2e-6",),
             table=snowball_model.SNOWBALL,
         )
 
     def run(preset=learning, *settings, **kwargs):
-        return snowball.build_run(preset, settings=settings, **kwargs, table=snowball_model.SNOWBALL).runs[0]
+        return snowball.build_experiment(preset, settings=settings, **kwargs, table=snowball_model.SNOWBALL).runs[0]
 
     def name(preset=learning, *settings, **kwargs):
         return run(preset, *settings, **kwargs).name
 
     assert name(learning, "generator.engine_init_kwargs.probe={}") != name()
-    repeated = snowball.build_run(learning, replicates=3, table=snowball_model.SNOWBALL)
-    assert [step.name for step in snowball.build_run(learning, replicates=2, table=snowball_model.SNOWBALL).runs] == [
-        step.name for step in repeated.runs[:2]
-    ]
+    repeated = snowball.build_experiment(learning, replicates=3, table=snowball_model.SNOWBALL)
+    assert [
+        step.name for step in snowball.build_experiment(learning, replicates=2, table=snowball_model.SNOWBALL).runs
+    ] == [step.name for step in repeated.runs[:2]]
     assert len({step.name for step in repeated.runs}) == 3
     initializer = ArtifactStep.adopt("tests/initializer", "2026.10.26", selection.path(), kind=LevanterCheckpoint)
     task_set_name = snowball_model.DEFAULT_EVAL_LITE_NAME
@@ -628,8 +628,8 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
         learning, "trainer.policy.optimizer_config.lr=0.000002"
     )
     controls(recorded_runs, "learning-medium")
-    first = snowball.build_run(learning, requirements=("eval_lite/mean>=0",), table=snowball_model.SNOWBALL)
-    second = snowball.build_run(learning, requirements=("eval_lite/mean>=0.1",), table=snowball_model.SNOWBALL)
+    first = snowball.build_experiment(learning, requirements=("eval_lite/mean>=0",), table=snowball_model.SNOWBALL)
+    second = snowball.build_experiment(learning, requirements=("eval_lite/mean>=0.1",), table=snowball_model.SNOWBALL)
     assert first.runs[0].name == second.runs[0].name == name()
     assert first.gate.name != second.gate.name
     original_name = name()
@@ -646,30 +646,30 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     heldout = summary["recipe"]["heldout"]
     summary["recipe"]["heldout"] = [{"version": "different-development-input"}]
     summary_path.write_text(json.dumps(summary))
-    with pytest.raises(click.BadParameter, match="different heldout"):
-        snowball.build_run(data, tasks=selection, table=snowball_model.SNOWBALL)
+    with pytest.raises(click.BadParameter, match="different development panel"):
+        snowball.build_experiment(data, tasks=selection, table=snowball_model.SNOWBALL)
     summary["recipe"]["heldout"] = heldout
     summary_path.write_text(json.dumps(summary))
     for current in (data, snowball_model.SNOWBALL.by_name["data-medium"]):
         selected = replace(current, held_out_tasks=f"{task_set_name}@2026.11.05")
         with pytest.raises(click.BadParameter, match="full held-out selection"):
-            snowball.build_run(selected, tasks=selection, table=snowball_model.SNOWBALL)
+            snowball.build_experiment(selected, tasks=selection, table=snowball_model.SNOWBALL)
         summary["recipe"]["exclusions"] = [
             {"uri": str(new_task_set / FULL_VALIDATION_FILENAME), "version": "2026.11.05"}
         ]
         summary_path.write_text(json.dumps(summary))
-        assert snowball.build_run(selected, tasks=selection, table=snowball_model.SNOWBALL).gate is not None
+        assert snowball.build_experiment(selected, tasks=selection, table=snowball_model.SNOWBALL).gate is not None
         summary["recipe"]["exclusions"] = original_exclusions
         summary_path.write_text(json.dumps(summary))
     summary["recipe"]["exclusions"] = []
     summary_path.write_text(json.dumps(summary))
     for tasks in (recipe.selection_artifact(snowball_model.SNOWBALL.by_name["learning-medium"].tasks), selection):
         with pytest.raises(click.BadParameter, match="full held-out selection"):
-            snowball.build_run(data, tasks=tasks, table=snowball_model.SNOWBALL)
+            snowball.build_experiment(data, tasks=tasks, table=snowball_model.SNOWBALL)
     with pytest.raises(ValueError, match="held-out evaluations require a held-out task selection"):
         replace(learning, held_out_tasks=None)
     training_only = replace(snowball_model.SNOWBALL.by_name["speed-medium"], tasks_input="required")
-    assert snowball.build_run(training_only, tasks=selection, table=snowball_model.SNOWBALL).runs
+    assert snowball.build_experiment(training_only, tasks=selection, table=snowball_model.SNOWBALL).runs
 
 
 @pytest.mark.parametrize(
@@ -722,7 +722,7 @@ def test_submission_exit_codes_and_publication_retries(
     roots = controls(recorded_runs, preset.name) if preset.gated else []
     replicas = 2 if case in {"partial-retry", "mixed-native-failed", "control-missing-receipt"} else 1
     control = case == "control-missing-receipt"
-    built = snowball.build_run(
+    built = snowball.build_experiment(
         preset,
         table=snowball_model.SNOWBALL,
         control=control,
@@ -982,7 +982,9 @@ def test_control_refuses_actual_untracked_source_before_execution(selection, tmp
             Provenance, "capture", lambda *args, **kwargs: Provenance("tree", "commit", True, "branch", "test")
         )
     with pytest.raises(click.BadParameter, match="stage source" if fault == "untracked" else "clean checkout"):
-        snowball.build_run(snowball_model.SNOWBALL.by_name["speed-medium"], control=True, table=snowball_model.SNOWBALL)
+        snowball.build_experiment(
+            snowball_model.SNOWBALL.by_name["speed-medium"], control=True, table=snowball_model.SNOWBALL
+        )
 
 
 @pytest.mark.parametrize(
@@ -990,7 +992,7 @@ def test_control_refuses_actual_untracked_source_before_execution(selection, tmp
     [
         ("--wait",),
         ("python-init-conflict",),
-        ("python-init-rescore",),
+        ("python-init-compare",),
         ("--set", "trainer.dump_eval_results=false"),
         ("--set", 'trainer={"algorithm":{"off_policy_correction":"none"}}'),
         ("--set", "trainer.policy.optimizer_config.lr=wrong"),
@@ -998,9 +1000,9 @@ def test_control_refuses_actual_untracked_source_before_execution(selection, tmp
     ],
 )
 def test_refusals_use_exit_four(selection, arguments, capsys, tmp_path, request):
-    if arguments == ("python-init-rescore",):
+    if arguments == ("python-init-compare",):
         assert (
-            snowball.main(snowball_model.SNOWBALL, argv=["rescore"], init=snowball_model.SNOWBALL.presets[0].model) == 4
+            snowball.main(snowball_model.SNOWBALL, argv=["compare"], init=snowball_model.SNOWBALL.presets[0].model) == 4
         )
         assert "Python init" in capsys.readouterr().err
         return
@@ -1052,7 +1054,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     monkeypatch.setenv("UNRELATED_SECRET", "must-not-forward")
     monkeypatch.delenv("IRIS_TASK_ID", raising=False)
     fake_s3(monkeypatch, "marin-test/models/python-init")
-    built = snowball.build_run(
+    built = snowball.build_experiment(
         preset, table=table, init=initializer, forward_env=("HF_TEST_KEY",), settings=("trainer.max_steps=12",)
     )
     source = recorded_runs(preset.name, built.runs[0].name, fingerprint=built.runs[0].fingerprint(), inputs=built.inputs)
@@ -1111,7 +1113,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         preset.revision,
         "--run",
         "--wait",
-        "--url",
+        "--marina-url",
         "http://127.0.0.1:55777",
         "--max-concurrent",
         "3",
@@ -1155,7 +1157,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         dependency = ""
         if policy_forward is not None:
             dependency = (
-                f"producer=rl.build_run(snowball_rl.SNOWBALL.by_name['train-long'],table=snowball_rl.SNOWBALL,"
+                f"producer=rl.build_experiment(snowball_rl.SNOWBALL.by_name['train-long'],table=snowball_rl.SNOWBALL,"
                 f"settings=('trainer.max_steps=2',),forward_env={policy_forward!r}).runs[0]\n"
                 f"result=SkyRLRun.raw_load({str(source)!r}).model_copy(update={{'hf_model_uri':'s3://marin-test/models/python-init'}})\n"
                 "directory=Path(producer.path());directory.mkdir(parents=True,exist_ok=True)\n"
@@ -1236,7 +1238,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     facts = {
         fact["name"]: fact for row in printed_status(result.output)["runs"] for fact in row["evaluation_invariants"]
     }
-    assert not facts[f"{preset.evaluations[0].name}/step-10/batch_finished"]["holds"]
+    assert not facts[f"{preset.evaluations[0].name}/step-10/answers_complete"]["holds"]
     replace_evaluations(source, evaluations)
     mode, coordinator_module = "failed-native", "first_model_entry"
     module("first_model_entry")

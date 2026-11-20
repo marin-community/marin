@@ -78,7 +78,7 @@ class SequenceRule(Section):
 EvaluationSchedule = Literal["every_evaluation", "final"]
 
 
-class EvaluationSampling(Section):
+class EvaluationProfile(Section):
     sampling_params: EvalSamplingParams | None = None
     n_samples_per_prompt: PositiveInt | None = None
     data_files: Annotated[tuple[Annotated[str, Field(min_length=1)], ...], Field(min_length=1)] | None = None
@@ -122,7 +122,7 @@ class EvaluationCallback(Section):
     eval_steps: int = unset_field()
     eval_on_train_end: bool = unset_field()
     eval_before_train: bool = unset_field()
-    additional_evaluations: SectionMap[EvaluationSampling] | None = unset_field()
+    additional_evaluations: SectionMap[EvaluationProfile] | None = unset_field()
     metric_groups: Annotated[Mapping[str, tuple[str, ...]], AfterValidator(FrozenMap), PlainSerializer(thaw)] | None = (
         unset_field()
     )

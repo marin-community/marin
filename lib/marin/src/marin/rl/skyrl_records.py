@@ -30,7 +30,7 @@ class RecordedSource(BaseModel):
     relative_path: str
 
 
-class RecordedEvaluation(BaseModel):
+class RecordedEvaluationProfile(BaseModel):
     model_config = ConfigDict(extra="ignore", strict=True)
     sampling_params: dict[str, Any]
     n_samples_per_prompt: int
@@ -40,7 +40,7 @@ class RecordedEvaluation(BaseModel):
 class RecordedCallback(BaseModel):
     model_config = ConfigDict(extra="ignore", strict=True)
     type: str
-    additional_evaluations: dict[str, RecordedEvaluation] | None = None
+    additional_evaluations: dict[str, RecordedEvaluationProfile] | None = None
 
 
 class RecordedEngine(BaseModel):

@@ -7,7 +7,7 @@ import json
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
-from finestore.rl.rl_progress import RunSummary
+from finestore.rl.rl_progress import AttemptSummary
 from pydantic import ValidationError
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -51,7 +51,7 @@ def create_api(services):
     def publish(record: dict[str, Any]) -> dict:
         try:
             encoded = json.dumps(record, allow_nan=False)
-            summary = RunSummary.model_validate_json(encoded, strict=True)
+            summary = AttemptSummary.model_validate_json(encoded, strict=True)
         except ValidationError as error:
             raise HTTPException(
                 422, detail=error.errors(include_input=False, include_context=False, include_url=False)
@@ -73,13 +73,13 @@ def create_api(services):
                         except ValueError:
                             repaired[field] = None
                 try:
-                    summary = RunSummary.model_validate_json(json.dumps(repaired, allow_nan=False), strict=True)
+                    summary = AttemptSummary.model_validate_json(json.dumps(repaired, allow_nan=False), strict=True)
                 except ValidationError as error:
                     invalid = {item["loc"][0] for item in error.errors() if item["loc"]}
                     for field in _RETAINED_FIELDS:
                         if field in invalid and incoming[field] is None:
                             repaired[field] = None
-                    summary = RunSummary.model_validate_json(json.dumps(repaired, allow_nan=False), strict=True)
+                    summary = AttemptSummary.model_validate_json(json.dumps(repaired, allow_nan=False), strict=True)
                 normalized = summary.model_dump(mode="json")
                 if normalized != stored:
                     connection.execute(
@@ -114,7 +114,7 @@ def create_api(services):
                     if isinstance(record, dict) and record.get("issue") == "opted_out":
                         record = {**record, "issue": None}
                     encoded = json.dumps(record, allow_nan=False)
-                    summary = RunSummary.model_validate_json(encoded, strict=True)
+                    summary = AttemptSummary.model_validate_json(encoded, strict=True)
                     if (summary.run_id, summary.attempt_id) != (row["run_id"], row["attempt_id"]):
                         raise ValueError("Stored key disagrees with the record identity")
                 except (ValidationError, ValueError) as error:
