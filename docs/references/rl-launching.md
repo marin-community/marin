@@ -369,67 +369,27 @@ The bound tokenizer must map the frozen stop IDs to `<|end_of_text|>` and
 `<|eot_id|>`; an incompatible tokenizer fails before allocation. Retained
 trajectories use the supplied run identity.
 
-Mochi HF model exports use the adopted rounds in
-`experiments/post_training/long_loop/rounds/mochi-{base,sft}-eval.yaml` through
-`experiments.post_training.long_loop.round_runner`. This path binds the
-DP16/EP16 serving allocation and inherits `PROFILES["three-rack"]` from
-`experiments/post_training/long_loop/nvl72.py`: InfiniBand transport,
-`NCCL_IB_HCA=ibp` (an HCA name prefix), and a 262144-byte inference NCCL buffer.
-`experiments.evaluation.micro210` does not select this serving profile.
+Mochi exports use the adopted round in
+`experiments/post_training/long_loop/rounds/mochi-sft-eval.yaml` through
+`experiments.post_training.long_loop.round_runner`. Its serving section declares
+InfiniBand transport, `NCCL_IB_HCA=ibp`, and a 4-MiB NCCL buffer. The historical
+256-KiB qualification predates the NVLSTree corruption finding in #11649.
 
-From a clean checkout, preflight an adopted round with:
+Preflight the exact command from a clean checkout before adding `--run`:
 
 ```bash
 uv run python -m experiments.post_training.long_loop.round_runner \
-  --round experiments/post_training/long_loop/rounds/mochi-base-eval.yaml \
-  --through eval --version 2026.11.20.2 \
+  --round experiments/post_training/long_loop/rounds/mochi-sft-eval.yaml \
+  --through eval --version <fresh-version> \
   --source-revision "$(git rev-parse HEAD)" --validation-output /tmp/mochi-eval
 ```
 
-Check `/tmp/mochi-eval/*/launch.yaml` and `compiled.yaml` before adding `--run`
-to that command. For SFT, use its round path and the version declared there.
-
-These rounds retain the frozen TP8 MiniMax judge on one H100x8 host in
-`cw-rno2a`; GB200 rollouts stay in `cw-us-east-08a`. The preflight constructs
-the judge with the runtime's inference builder and records its allocation
-alongside each rollout role's required and allocated GPU counts. A four-GPU
-judge fails this preflight because the frozen TP8 configuration requires eight
-GPU ranks.
-
-Launch `experiments.evaluation.micro210_judge --round <the-SFT-round>` in a
-separate production-priority Iris CPU root pinned to `cw-rno2a`. For the checked-in
-rounds:
-
-```bash
-uv run python -m experiments.evaluation.micro210_judge \
-  --round experiments/post_training/long_loop/rounds/mochi-sft-eval.yaml \
-  --source-revision "$(git rev-parse HEAD)"
-
-uv run iris --config lib/iris/config/cw-rno2a.yaml job run \
-  --no-wait \
-  --enable-extra-resources --cpu 4 --memory 16GB --disk 64GB \
-  --timeout 259200 --priority production --job-name mochi-micro210-judge-20261120-3 \
-  -e MARIN_PREFIX s3://marin-rno2a/marin/evaluation/mochi-micro210 \
-  -e MARIN_TEMP_PREFIX s3://marin-rno2a/tmp \
-  -- python -m experiments.evaluation.micro210_judge \
-  --round experiments/post_training/long_loop/rounds/mochi-sft-eval.yaml \
-  --source-revision "$(git rev-parse HEAD)" --run
-```
-
-The judge root uses the
-existing inference API to prepare weights on regional CPU jobs and start the
-unchanged H100x8 judge. Once ready, it publishes the private endpoint receipt
-named by `serving.judge_endpoint_receipt` in the round and stays alive to own the
-judge service. The base and SFT evaluation roots wait for that receipt, verify
-the policy and judge hashes and actual TP,
-then connect through the existing judge relay. Keep the judge root alive until
-both evaluations finish, then cancel its exact owned root ID. Judge children
-carry the configured physical region, with no cluster routing pin: a regional
-controller cannot federate a child back to itself. The judge preflight records
-this wire constraint, and the root checks its worker region before serving.
-If a failed service never published its receipt, a replacement can use that
-still-missing receipt path so existing evaluations keep waiting. Otherwise use
-a fresh receipt path and round version.
+Inspect `launch.yaml`, `compiled.yaml`, and the required/allocated GPU counts in
+`graph.json`. Preflight rejects local model rank counts larger than the physical
+allocation. Runtime verifies the API judge's authenticated model catalog before
+allocating rollout GPUs. Historical gate-2 evaluations using the earlier frozen
+MiniMax policy are preserved at `benfeuer/mochi-micro210-gate2-frozen`;
+its commit `da0663fbea` includes the self-hosted judge launch and receipt checks.
 
 ## Pre-launch review
 

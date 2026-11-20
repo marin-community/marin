@@ -16,7 +16,7 @@ import numpy as np
 from haliax import Axis
 from levanter.data.dataset import MappedAsyncDataset, PermutationDataset, SlicedAsyncDataset
 from levanter.data.mixture import ConcatDataset, MixtureDataset
-from levanter.data.packing import LookaheadPrepackedDataset, pack_documents
+from levanter.data.packing import pack_documents
 from levanter.data.text.datasets import CausalLmDataset, PackedTokenDataset, TokenSeqDataset, _resolve_pack_config
 from levanter.main.train_lm import TrainLmConfig
 from levanter.utils.thread_utils import blocking_wait
@@ -64,16 +64,12 @@ async def sample_origin(
         )
     if isinstance(dataset, PackedTokenDataset):
         packed = dataset.packed
-        if isinstance(packed, LookaheadPrepackedDataset):
-            if loss_mode is None:
-                raise ValueError("Lookahead accounting requires an explicit source loss mode")
-            rows = packed.document_indices[index]
-            lengths = packed.document_lengths
-        else:
-            if packed.slice_strategy != "left":
-                raise ValueError("SFT accounting requires the explicit left-slice view")
-            rows = packed._pack_indices[index]
-            lengths = packed._lengths["input_ids"]
+        if packed.lookahead_window is not None and loss_mode is None:
+            raise ValueError("Lookahead accounting requires an explicit source loss mode")
+        if packed.slice_strategy != "left":
+            raise ValueError("SFT accounting requires the explicit left-slice view")
+        rows = packed._pack_indices[index]
+        lengths = packed._lengths["input_ids"]
         documents = tuple(
             DocumentOrigin(
                 int(row),

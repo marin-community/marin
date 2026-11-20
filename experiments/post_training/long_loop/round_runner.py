@@ -39,7 +39,7 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from experiments.evaluation.micro210 import Micro210RemoteJudge, Micro210ServingProfile, micro210_artifact_step
+from experiments.evaluation.micro210 import Micro210ServingProfile, micro210_artifact_step
 from experiments.evaluation.micro210_policy import Micro210Model, micro210_evaluation
 from experiments.post_training.long_loop.__main__ import validate_graph
 from experiments.post_training.long_loop.adopted_sft import pinned_json
@@ -141,7 +141,6 @@ class RoundServing:
     cuda_allocator_config: str
     nccl_env: dict
     nccl_buffer_size_bytes: int
-    remote_judge: Micro210RemoteJudge
 
 
 @dataclass(frozen=True)
@@ -442,7 +441,6 @@ def adopted_round_evaluation(spec: AdoptedHfRound) -> ArtifactStep:
         version=spec.version,
         model_binding=binding,
         model_manifest_filename="export-manifest.json",
-        remote_judge=serving.remote_judge,
         serving_profile=Micro210ServingProfile(
             gpu_variant=serving.gpu_variant,
             role_plan=roles,
@@ -450,8 +448,8 @@ def adopted_round_evaluation(spec: AdoptedHfRound) -> ArtifactStep:
             generator=serving.generator,
             engine_init_kwargs=serving.engine_init_kwargs,
             cuda_allocator_config=serving.cuda_allocator_config,
-            nccl_buffer_size_bytes=serving.nccl_buffer_size_bytes,
             nccl_env=serving.nccl_env,
+            nccl_buffer_size_bytes=serving.nccl_buffer_size_bytes,
         ),
     )
 

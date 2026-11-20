@@ -97,6 +97,14 @@ For `supervised` and (raw) `text`, `pack: false` instead selects the continuous-
 layout: documents are concatenated and chunked to the context length rather than being
 kept one per example.
 
+Packed components can set `pack_lookahead_window` next to `pack` on the component.
+The packer selects the first fitting document among that many pending documents,
+starting at the oldest. Skipped documents retain their relative order. A window
+of 1 matches sequential packing when no documents are dropped; lookahead skips
+dropped documents without closing a pack. The option requires packing and can
+produce non-contiguous packs. Over-long documents follow the format's configured
+slice strategy.
+
 #### Processing:
 - Requires a `chat_template`:
   - If not supplied in config, will use `tokenizer.chat_template`
@@ -157,6 +165,13 @@ it is primarily intended to be used with [Direct Cache Construction](../guides/D
 
 `loss_weights` is optional. When provided, it is multiplied by the standard causal mask.
 
+Set component-level `pack: 256` and `pack_lookahead_window: 128` to pack prebuilt
+prediction-weight caches with first-fit lookahead. Packed prebuilt components
+left-slice over-long documents. Prediction weight `i` supervises token `i + 1`;
+packing preserves these weights without another shift. Producers should set each
+document's final weight to zero to avoid cross-document supervision. Chat assistant
+masks retain their existing single next-token shift.
+
 #### Configuration:
 ```yaml
 format:
@@ -190,37 +205,6 @@ config = LmDataConfig(components={"special": component})
 Direct datasets are expected to yield `LmExample` instances that already include any masking/packing behavior.
 
 ---
-
-
-## Bounded lookahead packing
-
-Prebuilt caches carry final prediction-indexed loss weights. Apply any weight
-transforms while producing the cache; declarative dataset configuration does not
-accept executable Python callables.
-
-Cache-backed components can fill gaps with later documents by setting
-`packing_lookahead` alongside an explicit document cap:
-
-```yaml
-format:
-  type: prebuilt
-  loss_weights_key: loss_weights
-pack: 256
-packing_lookahead: 128
-```
-
-Each pack starts with the oldest pending document, then selects the largest
-fitting document from a bounded window. Ties and document order within a pack
-follow source order. Every document appears once, and the configured sequence
-shuffle and seed still apply after packing. Oversized documents raise an error;
-lookahead never silently truncates or drops them.
-
-Token and mask fields must have equal lengths for every document. Prebuilt
-`loss_weights` index predictions: weight `i` supervises prediction of token
-`i + 1`. Packing carries these weights without another shift. Producers should
-set each document's final weight to zero, so one document never supervises the
-first token of another. Token-position assistant masks in chat caches retain
-their existing single next-token shift.
 
 # API
 

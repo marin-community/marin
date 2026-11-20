@@ -10,7 +10,6 @@ from pathlib import Path
 
 import draccus
 import yaml
-from marin.evaluation.model_config import ModelConfig
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext, materialized_config
@@ -30,6 +29,8 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 
+from experiments.evaluation.judge_config import JudgeConfig
+from experiments.evaluation.micro210 import PREPARED_INPUTS, judge_runtime_config
 from experiments.post_training.long_loop.eval_runtime.judge import JudgedEvaluation, run_judged
 from experiments.post_training.long_loop.nvl72 import EXECUTION, SEED
 
@@ -73,11 +74,13 @@ def evaluation_from_spec(spec: NVL72EvaluationSpec, config_output: Path) -> Arti
     model_config = json.loads((StoragePath(spec.model_uri) / "config.json").read_bytes())
     if model_config["num_experts"] % 12 or spec.context_tokens > model_config["max_position_embeddings"]:
         raise ValueError("The model does not support EP12 or the selected context")
+    if spec.data_uri != PREPARED_INPUTS:
+        raise ValueError("NVL72 evaluation requires the current Micro210 judge-bound prepared inputs")
     data = StoragePath(spec.data_uri) / "rollouts.parquet"
     if file_sha256(data) != spec.data_sha256:
         raise ValueError("Pinned micro evaluation data differs from its SHA-256")
     recipe = yaml.safe_load(RECIPE.read_text())
-    config = recipe["config"]
+    config = judge_runtime_config(recipe["config"], draccus.decode(JudgeConfig, recipe["judge"]))
     plan = SkyRLRolePlan(
         colocate_all=True,
         policy_num_nodes=3,
@@ -141,12 +144,7 @@ def evaluation_from_spec(spec: NVL72EvaluationSpec, config_output: Path) -> Arti
         ),
         export_hf=False,
     )
-    judge = draccus.decode(ModelConfig, recipe["judge"])
-    judge = replace(
-        judge,
-        resource_hint=replace(judge.resource_hint, gpu={"GB200": 4}),
-        serve=replace(judge.serve, tensor_parallel_size=4, pipeline_parallel_size=1),
-    )
+    judge = draccus.decode(JudgeConfig, recipe["judge"])
     original = step.build_config
 
     def build_config(ctx: StepContext) -> JudgedEvaluation:
@@ -157,7 +155,7 @@ def evaluation_from_spec(spec: NVL72EvaluationSpec, config_output: Path) -> Arti
             model_path=locator["uri"], model_source_identity=locator["identity"], model_checkpoint_step=spec.model_step
         )
         run = replace(run, launch_config_yaml=yaml.safe_dump(launch))
-        return JudgedEvaluation(run, judge, "https://iris.oa.dev", 4, "GB200", "cw-us-east-08a")
+        return JudgedEvaluation(run, judge)
 
     step = replace(step, build_config=build_config, run=run_judged)
     step = replace(step, expected_fingerprint=step.fingerprint())

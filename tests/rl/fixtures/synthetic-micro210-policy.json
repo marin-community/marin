@@ -3,17 +3,27 @@
   "evaluation": {
     "seed": 20261030,
     "data_relative_path": "rollouts.parquet",
-    "capability_origin": "https://iris.test",
     "gpu_variant": "H100",
-    "judge_gpu_count": 1,
     "judge": {
-      "name": "fixture-judge",
-      "location": "test/judge",
-      "resource_hint": {
-        "cpu": 1,
-        "memory": "1g",
-        "disk": "1g"
-      }
+      "provider": "together_serverless",
+      "model": "zai-org/GLM-5.3-Flash",
+      "base_url": "https://api.together.ai/v1",
+      "temperature": 0.0,
+      "top_p": 0.95,
+      "reasoning_effort": "low",
+      "token_budgets": [
+        128,
+        512,
+        2048
+      ],
+      "request_timeout": 300.0,
+      "transport_budget": 1800.0,
+      "transport_attempts": 6,
+      "bixbench_max_tokens": 1024,
+      "bixbench_request_timeout": 600.0,
+      "bixbench_transport_attempts": 3,
+      "credential": "gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/1",
+      "bixbench_temperature": 1.0
     },
     "ray_timeouts": {
       "cluster_join_timeout": 60
@@ -79,11 +89,26 @@
         },
         "installed_agent": {
           "agent": {
-            "name": "pi",
             "kwargs": {
+              "compaction_reserve_tokens": 16384,
+              "mcp_adapter_version": "7.0.0",
+              "model_info": {
+                "max_input_tokens": 65536,
+                "max_output_tokens": 16384
+              },
+              "thinking": "high",
+              "thinking_format": "chat-template",
               "version": "0.87.0"
-            }
-          }
+            },
+            "name": "pi",
+            "override_setup_timeout_sec": 360
+          },
+          "cleanup_timeout": 60,
+          "run_timeout": 1800,
+          "service_shutdown_timeout": 60,
+          "service_startup_timeout": 60,
+          "setup_timeout": 360,
+          "trial_reward_key": "reward"
         }
       },
       "extra_env": {},
@@ -95,7 +120,7 @@
       "environment": {
         "task_sessions": {
           "remote_judge": {
-            "base_url": "runtime://fixture-judge"
+            "api_key_env": "JUDGE_API_KEY"
           }
         }
       }

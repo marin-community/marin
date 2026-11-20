@@ -3,17 +3,24 @@
 
 import hashlib
 import json
-from contextlib import contextmanager
 from dataclasses import replace
 from types import SimpleNamespace
 
+import httpx
 import pytest
 import yaml
-from marin.execution.lazy import StepContext, lower
+from marin.execution.artifact import read_record
+from marin.execution.lazy import ArtifactStep, StepContext, lower, run
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.evaluation.micro210 import micro210_step, run_micro210
-from experiments.evaluation.micro210_policy import Micro210Model, micro210_evaluation, runtime_policy_config
+from experiments.evaluation.judge_config import MICRO210_JUDGE
+from experiments.evaluation.micro210 import micro210_step, run_micro210, validate_judge_availability
+from experiments.evaluation.micro210_policy import (
+    POLICY_VERSION,
+    Micro210Model,
+    micro210_evaluation,
+    runtime_policy_config,
+)
 from experiments.post_training.long_loop.launch_validation import validate_launch
 from tests.rl.micro210_fixture import policy_fixture_reference
 
@@ -139,8 +146,6 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     monkeypatch.setenv("MARIN_TEMP_PREFIX", str(tmp_path / "temporary"))
     monkeypatch.setenv("TOGETHER_API_KEY", "unused-ambient-key")
     monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
-    counterpart_key = tmp_path / "counterpart-key"
-    counterpart_key.write_text("test-counterpart-key")
     token_content = {128001: "<|end_of_text|>", 128009: "<|eot_id|>"}
     monkeypatch.setattr(
         "experiments.evaluation.micro210.AutoTokenizer.from_pretrained",
@@ -160,23 +165,26 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
             deps=step.deps,
         )
     )
-    config = replace(config, counterpart_api_key=(f"file:{counterpart_key}",))
     submitted = []
 
-    @contextmanager
-    def serve_judge(_config):
-        submitted.append("judge")
-        yield SimpleNamespace(
-            model=SimpleNamespace(endpoint=SimpleNamespace(base_url="http://judge.test/v1", api_key="test"))
-        )
+    def resolve_key(spec):
+        assert spec == ("gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/1",)
+        return SimpleNamespace(value="test-together-key")
+
+    monkeypatch.setattr("experiments.evaluation.micro210.resolve_secret_spec", resolve_key)
 
     def submit_evaluation(skyrl, *, env_vars):
-        assert env_vars == {"JUDGE_API_KEY": "test", "OPENAI_API_KEY": "test-counterpart-key"}
+        assert env_vars == {"JUDGE_API_KEY": "test-together-key", "OPENAI_API_KEY": "test-together-key"}
         submitted.append(yaml.safe_load(skyrl.launch_config_yaml))
         return None
 
-    monkeypatch.setattr("experiments.evaluation.micro210.remote_inference", serve_judge)
     monkeypatch.setattr("experiments.evaluation.micro210.run_skyrl", submit_evaluation)
+    monkeypatch.setattr(
+        "experiments.evaluation.micro210.httpx.get",
+        lambda url, **kwargs: httpx.Response(
+            200, json=[{"id": protocol["evaluation"]["judge"]["model"]}], request=httpx.Request("GET", url)
+        ),
+    )
     run_micro210(config)
     record = json.loads((output / "canonical-evaluation.json").read_text())
     assert record["canonical_spec_sha256"] == hashlib.sha256(raw).hexdigest()
@@ -184,13 +192,21 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
         "terminal_bench.harbor.daytona_provisioning": "terminal_bench.harbor.daytona_image_build",
         "terminal_bench.harbor.eval_daytona_provisioning": "terminal_bench.harbor.eval_daytona_image_build",
     }
-    assert submitted[1]["skyrl"]["terminal_bench"]["harbor"]["eval_daytona_image_build"] == "declarative"
+    assert submitted[0]["skyrl"]["terminal_bench"]["harbor"]["eval_daytona_image_build"] == "declarative"
     assert (
-        submitted[1]["skyrl"]["generator"]["eval_sampling_params"]
+        submitted[0]["skyrl"]["generator"]["eval_sampling_params"]
         == protocol["evaluation"]["config"]["generator"]["eval_sampling_params"]
     )
-    assert "eval_override_storage_mb" not in submitted[1]["skyrl"]["terminal_bench"]["harbor"]
-    assert submitted[1]["skyrl"]["generator"]["trajectory_retention"]["run_id"] == "test/micro210@2026.11.18"
+    assert "eval_override_storage_mb" not in submitted[0]["skyrl"]["terminal_bench"]["harbor"]
+    assert submitted[0]["skyrl"]["generator"]["trajectory_retention"]["run_id"] == "test/micro210@2026.11.18"
+    submitted.clear()
+    monkeypatch.setattr(
+        "experiments.evaluation.micro210.httpx.get",
+        lambda url, **kwargs: httpx.Response(503, request=httpx.Request("GET", url)),
+    )
+    with pytest.raises(ValueError, match="unreachable before rollout allocation"):
+        run_micro210(config)
+    assert submitted == []
     altered = yaml.safe_load(config.skyrl.launch_config_yaml)
     altered["skyrl"]["terminal_bench"]["harbor"]["eval_override_storage_mb"] = 131072
     submitted.clear()
@@ -213,3 +229,49 @@ def test_canonical_evaluation_graph_lowers_with_its_final_run_binding():
     step = micro210_step(model, name="fixture/final-eval", version="2026.11.18.72")
     plan = lower(step)
     assert "fixture/final-eval@2026.11.18.72" in plan.fingerprint_payload
+
+
+def test_new_prepared_inputs_do_not_reuse_old_policy_provenance(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    old_inputs = tmp_path / "old-inputs"
+    new_inputs = tmp_path / "new-inputs"
+    old_inputs.mkdir()
+    new_inputs.mkdir()
+    run(
+        ArtifactStep.adopt(
+            "evaluation/micro210/prepared", "2026.11.18", str(old_inputs), config={"sha256": "old-task-digest"}
+        )
+    )
+    monkeypatch.setattr("experiments.evaluation.micro210.PREPARED_INPUTS", str(new_inputs))
+    step = micro210_step(
+        Micro210Model("s3://fixture/model", "sha256:" + "a" * 64, "fixture/tokenizer", "b" * 40),
+        name="fixture/new-policy",
+        version="2026.11.20",
+    )
+    prepared = next(dep for dep in step.deps if dep.name == "evaluation/micro210/prepared")
+    run(prepared)
+    old_record = read_record(str(tmp_path / "evaluation/micro210/prepared/2026.11.18"))
+    new_record = read_record(str(tmp_path / "evaluation/micro210/prepared" / POLICY_VERSION))
+    assert old_record.source == str(old_inputs)
+    assert old_record.config == {"sha256": "old-task-digest"}
+    assert new_record.source == str(new_inputs)
+    assert new_record.config == {"sha256": "fixture-tasks"}
+
+
+@pytest.mark.parametrize("failure", [None, "unreachable", "model"])
+def test_api_judge_availability_rejects_unreachable_or_missing_model(monkeypatch, failure):
+    def models(url, **kwargs):
+        assert url == MICRO210_JUDGE.base_url + "/models"
+        assert kwargs["headers"] == {"Authorization": "Bearer fixture-key"}
+        return httpx.Response(
+            503 if failure == "unreachable" else 200,
+            json=[{"id": "wrong-model" if failure == "model" else MICRO210_JUDGE.model}],
+            request=httpx.Request("GET", url),
+        )
+
+    monkeypatch.setattr("experiments.evaluation.micro210.httpx.get", models)
+    if failure:
+        with pytest.raises(ValueError, match="unreachable" if failure == "unreachable" else "does not serve"):
+            validate_judge_availability(MICRO210_JUDGE, "fixture-key")
+        return
+    validate_judge_availability(MICRO210_JUDGE, "fixture-key")

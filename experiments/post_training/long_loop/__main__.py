@@ -12,10 +12,8 @@ from pathlib import Path
 import click
 import draccus
 import yaml
-from fray.iris_backend import convert_constraints, resolve_coscheduling
 from huggingface_hub import hf_hub_download
 from iris.cluster.client.job_info import get_job_info
-from iris.cluster.constraints import cluster_directive
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import graph_handles
@@ -26,7 +24,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.secrets import require_secret
 
-from experiments.evaluation.micro210 import Micro210Run, micro210_judge_inference
+from experiments.evaluation.micro210 import Micro210Run
 from experiments.post_training.long_loop.eval_runtime.judge import JudgedEvaluation
 from experiments.post_training.long_loop.launch_validation import validate_launch
 from experiments.post_training.long_loop.nvl72 import PROFILES, NVL72RunSpec, run_from_spec, validate_model_geometry
@@ -58,17 +56,6 @@ def validate_graph(
                 "stage": step.name,
                 "status": "strictly composed; future checkpoint identity unresolved",
                 **validate_launch(launch.launch_config_yaml, directory / digest, model_config=model_config),
-            }
-        if isinstance(config, Micro210Run):
-            judge = micro210_judge_inference(config)
-            resources = judge.iris.worker_resources
-            coscheduling = resolve_coscheduling(resources, resources.replicas)
-            row["judge"] = {
-                "geometry": asdict(judge.iris.serving_geometry) if judge.iris.serving_geometry else None,
-                "resources": asdict(resources),
-                "coscheduling": coscheduling.group_by if coscheduling else None,
-                "root_cluster": config.remote_judge.target_cluster if config.remote_judge else None,
-                "child_cluster_pin": cluster_directive(convert_constraints(resources)),
             }
         rows.append(row)
     directory.mkdir(parents=True, exist_ok=True)

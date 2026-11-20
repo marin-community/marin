@@ -59,7 +59,11 @@ def released_task(serialized: str) -> TaskSpec:
     if task["grader"]["kind"] == "script":
         task["grader"].update(empty_output="zero", judge=None)
     converted = TaskSpec.model_validate(task)
-    return with_pi_runtime(converted, path_scope=PiPathScope.IMAGE) if "harbor" in converted.tags else converted
+    return (
+        with_pi_runtime(converted, path_scope=PiPathScope.IMAGE, judge_model="MiniMaxAI/MiniMax-M3-MXFP8")
+        if "harbor" in converted.tags
+        else converted
+    )
 
 
 def released_rollout(row: dict) -> TaskRolloutSpec:

@@ -7,14 +7,15 @@ import hashlib
 import json
 from functools import partial
 from pathlib import Path
+from unittest.mock import patch
 
 import draccus
 import yaml
-from marin.evaluation.model_config import ModelConfig
 from marin.execution.lazy import ArtifactStep
 from marin.rl.skyrl import ArtifactDataSource, ArtifactHfModel, SkyRLRolePlan
 from marin.training.training import LevanterCheckpoint
 
+from experiments.evaluation.judge_config import JudgeConfig
 from experiments.post_training.long_loop import evaluation, rl
 from experiments.post_training.long_loop.nvl72 import NVL72RunSpec, run_from_spec
 from experiments.post_training.long_loop.nvl72_evaluation import NVL72EvaluationSpec, evaluation_from_spec
@@ -55,12 +56,10 @@ def configured_evaluation(root: Path):
         config=recipe["config"],
         role_plan=draccus.decode(SkyRLRolePlan, recipe["role_plan"]),
         execution=stage_execution(recipe["execution"], coordinator),
-        judge=draccus.decode(ModelConfig, recipe["judge"]),
-        judge_gpu_count=recipe["judge_gpu_count"],
+        judge=draccus.decode(JudgeConfig, recipe["judge"]),
         seed=recipe["seed"],
         expected_step=2,
         gpu_variant=recipe["gpu_variant"],
-        capability_origin=recipe["capability_origin"],
         data_relative_path=recipe["data_relative_path"],
         ray_timeouts=recipe["ray_timeouts"],
     )
@@ -114,7 +113,8 @@ def nvl72_evaluation(root: Path):
         context_tokens=65536,
         max_new_tokens=16384,
     )
-    return evaluation_from_spec(spec, root / "nvl72-eval.yaml")
+    with patch("experiments.post_training.long_loop.nvl72_evaluation.PREPARED_INPUTS", str(root)):
+        return evaluation_from_spec(spec, root / "nvl72-eval.yaml")
 
 
 def launch_builders(root: Path):

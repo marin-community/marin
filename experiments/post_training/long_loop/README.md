@@ -554,6 +554,13 @@ a 20-hour execution deadline. The trainer reserves time for the final native/HF
 checkpoint and records the actual completed count. Source must be clean and
 pinned to the submitted commit.
 
+Future Exp3 recipes use the mainline first-fit packer from #11379 through
+`pack_lookahead_window: 128` with `pack: 256`. This changes the recipe's pack
+membership from the former largest-fitting-document policy. Packed prebuilt
+caches now left-slice over-long documents as singleton packs; the former packer
+rejected them. Rebuild accounting and use a new artifact version for this recipe;
+already submitted runs retain their pinned packer and recipe.
+
 Future production recipes save rolling native SFT checkpoints every two hours,
 retaining three resume checkpoints. Finalization forces a permanent checkpoint
 even when the last periodic save was recent. The trainer drains the write and
@@ -704,31 +711,19 @@ binds each pool to an NVLink domain. Keep the same context, sampling, task
 selection and judge pins when comparing two policies. The result has no RL
 checkpoint or synthetic training-completion marker.
 
-### Frozen Mochi Micro210 evaluation
+### Mochi Micro210 evaluation admission
 
-`rounds/mochi-base-eval.yaml` and `rounds/mochi-sft-eval.yaml` bind the pinned
-exports to the frozen Micro210 policy. Run the exact `round_runner --through eval`
-command without `--run` before submission. Preflight lowers the judge and every
-rollout role, rejecting a GPU allocation smaller than its model parallelism.
-The YAML declares IB transport and a 4-MiB NCCL buffer explicitly; the historical
-256-KiB serving qualification predates the NVLSTree corruption finding in #11649.
-Compilation and PIECEWISE CUDA graphs remain enabled.
+The adopted Mochi evaluation declares its three IB transport variables and
+4-MiB NCCL buffer explicitly. The historical 256-KiB serving qualification
+predates the NVLSTree corruption finding in #11649. Compilation and PIECEWISE
+CUDA graphs remain enabled. Exact CPU preflight checks each local model role's
+TP × PP × DP rank count against its physical GPU allocation. API judge
+credentials and live model availability are checked before rollout allocation.
 
-The separate `micro210_judge` root runs directly on `cw-rno2a` with one H100x8
-host, preserving the frozen judge's TP8. Its children inherit regional placement
-without a federation cluster pin. Preflight it with `python -m
-experiments.evaluation.micro210_judge --round <round.yaml> --source-revision
-<clean-commit>`; add `--run` only inside the regional Iris root. Give every new
-service a fresh receipt path. The root publishes an endpoint receipt and appends
-`endpoint.json.terminal.json` when it exits, preserving both artifacts.
-Consumers verify policy and judge identity, reject terminated services, and
-check the live `/models` endpoint before allocating rollout GPUs.
-
-Both evaluations share the judge and should start together. The judge and each
-evaluation have the requested three-day task limit; the judge's limit begins
-at service submission, so it is not a guarantee of three further days after an
-evaluation waits for readiness. Monitor terminal events and use a fresh judge
-and round identity after any service failure or expiry.
+The gate-2 base/SFT evaluations using the earlier frozen MiniMax policy are
+preserved at `benfeuer/mochi-micro210-gate2-frozen` (commit `da0663fbea`). That
+source includes the self-hosted TP8 judge receipt and terminal checks; current
+rounds use the versioned API judge policy.
 
 ### Fresh Exp3 RL after the Socket failure
 

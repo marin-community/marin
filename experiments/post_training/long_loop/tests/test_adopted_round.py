@@ -8,20 +8,12 @@ import hashlib
 import json
 from pathlib import Path
 
-import httpx
 import pytest
 import yaml
 from marin.execution.lazy import StepContext, lower
 from marin.experiment.cli import graph_handles
-from marin.inference.types import OpenAIEndpoint
 
-from experiments.evaluation.micro210 import (
-    Micro210JudgeEndpoint,
-    micro210_judge_endpoint,
-    micro210_judge_inference,
-    micro210_judge_sha256,
-    serving_config,
-)
+from experiments.evaluation.micro210 import serving_config
 from experiments.post_training.long_loop.__main__ import validate_graph
 from experiments.post_training.long_loop.round_runner import adopted_round_evaluation, load_round
 from tests.rl.micro210_fixture import policy_fixture_reference
@@ -31,16 +23,7 @@ ROUND_PATH = Path(__file__).parents[1] / "rounds" / "mochi-sft-eval.yaml"
 
 @pytest.fixture
 def adopted_round(tmp_path, monkeypatch):
-    reference = policy_fixture_reference()
-    policy = json.loads(Path(reference.uri).read_bytes())
-    policy["evaluation"]["judge"]["serve"] = {"tensor_parallel_size": 8, "auto_overrides": False}
-    raw = json.dumps(policy).encode()
-    protocol = tmp_path / "policy.json"
-    protocol.write_bytes(raw)
-    monkeypatch.setattr(
-        "experiments.evaluation.micro210_policy.POLICY_REFERENCE",
-        dataclasses.replace(reference, uri=str(protocol), sha256=hashlib.sha256(raw).hexdigest(), byte_size=len(raw)),
-    )
+    monkeypatch.setattr("experiments.evaluation.micro210_policy.POLICY_REFERENCE", policy_fixture_reference())
     monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
     monkeypatch.setenv("MARIN_TEMP_PREFIX", str(tmp_path / "temporary"))
     model = tmp_path / "model"
@@ -94,7 +77,10 @@ def test_adopted_round_lowers_to_eval_with_pinned_model_and_standard_ep_placemen
     for field in ("sampling_params", "eval_sampling_params"):
         assert config["generator"][field] == frozen["config"]["generator"][field]
     assert config["context_budget"] == frozen["config"]["context_budget"]
-    assert config["terminal_bench"]["installed_agent"] == frozen["config"]["terminal_bench"]["installed_agent"]
+    assert config["terminal_bench"]["installed_agent"] == {
+        **frozen["config"]["terminal_bench"]["installed_agent"],
+        "judge_model": frozen["judge"]["model"],
+    }
     protocol = json.loads(Path(policy_fixture_reference().uri).read_text())
     data = next(step for step in stages if step.name == "evaluation/micro210/prepared")
     assert data.adopt_config["sha256"] == protocol["prepared_rollouts_sha256"]
@@ -107,86 +93,6 @@ def test_changed_adopted_metadata_is_rejected_before_building_a_gpu_job(adopted_
         adopted_round_evaluation(adopted_round)
 
 
-@pytest.mark.parametrize("judge_gpus", [4, 8])
-def test_exact_graph_preflight_validates_judge_and_rollout_device_counts(adopted_round, tmp_path, judge_gpus):
-    spec = dataclasses.replace(
-        adopted_round,
-        serving=dataclasses.replace(
-            adopted_round.serving,
-            remote_judge=dataclasses.replace(adopted_round.serving.remote_judge, gpu_count=judge_gpus),
-        ),
-    )
-    terminal = adopted_round_evaluation(spec)
-    output = tmp_path / "preflight"
-    if judge_gpus == 4:
-        with pytest.raises(ValueError, match="requiring 8 GPUs, but selected H100x4"):
-            validate_graph(terminal, output, str(tmp_path))
-        return
-    validate_graph(terminal, output, str(tmp_path))
-    row = json.loads((output / "graph.json").read_bytes())[-1]
-    assert row["judge"]["root_cluster"] == "cw-rno2a"
-    assert row["judge"]["resources"]["target_cluster"] is None
-    assert row["judge"]["resources"]["regions"] == ["RNO2A"]
-    assert row["judge"]["child_cluster_pin"] is None
-    assert {role["role"]: (role["required_gpus"], role["allocated_gpus"]) for role in row["role_geometry"]} == {
-        "policy": (16, 16),
-        "rollout": (16, 16),
-    }
-
-
-@pytest.mark.parametrize("failure", [None, "identity", "terminated", "unreachable", "model"])
-def test_remote_judge_receipt_preserves_frozen_identity(adopted_round, tmp_path, monkeypatch, failure):
-    receipt = tmp_path / "judge.json"
-    spec = dataclasses.replace(
-        adopted_round,
-        serving=dataclasses.replace(
-            adopted_round.serving,
-            remote_judge=dataclasses.replace(adopted_round.serving.remote_judge, endpoint_receipt=str(receipt)),
-        ),
-    )
-    terminal = adopted_round_evaluation(spec)
-    context = StepContext.for_run(
-        str(tmp_path / "evaluation"), str(tmp_path), runtime_args=terminal.runtime_args, deps=terminal.deps
-    )
-    run = terminal.build_config(context)
-    inference = micro210_judge_inference(run)
-    endpoint = Micro210JudgeEndpoint(
-        run.evaluation.record().canonical_spec_sha256,
-        micro210_judge_sha256(run),
-        8,
-        OpenAIEndpoint("https://judge.invalid/v1", inference.model.api_model),
-        ("/fixture/judge/worker",),
-    )
-    if failure == "identity":
-        endpoint = dataclasses.replace(endpoint, judge_sha256="0" * 64)
-    receipt.write_text(json.dumps(dataclasses.asdict(endpoint)))
-    if failure == "terminated":
-        Path(str(receipt) + ".terminal.json").write_text('{"terminated": true}')
-
-    def models(url, **kwargs):
-        assert url == endpoint.endpoint.url("models")
-        return httpx.Response(
-            503 if failure == "unreachable" else 200,
-            json={"data": [{"id": "wrong-model" if failure == "model" else inference.model.api_model}]},
-            request=httpx.Request("GET", url),
-        )
-
-    monkeypatch.setattr("experiments.evaluation.micro210.httpx.get", models)
-    if failure:
-        message = {
-            "identity": "differs from the frozen judge",
-            "terminated": "has terminated",
-            "unreachable": "unreachable before rollout allocation",
-            "model": "does not serve the frozen model",
-        }[failure]
-        with pytest.raises(ValueError, match=message):
-            with micro210_judge_endpoint(run, inference):
-                pytest.fail("An invalid judge must never be connected")
-        return
-    with micro210_judge_endpoint(run, inference) as connected:
-        assert connected == endpoint.endpoint
-
-
 def test_serving_profile_cannot_change_frozen_sampling(adopted_round, tmp_path):
     terminal = adopted_round_evaluation(adopted_round)
     context = StepContext.for_run(
@@ -197,3 +103,15 @@ def test_serving_profile_cannot_change_frozen_sampling(adopted_round, tmp_path):
     frozen = json.loads(Path(policy_fixture_reference().uri).read_text())
     with pytest.raises(ValueError, match=r"protocol fields.*eval_sampling_params"):
         serving_config(frozen, profile)
+
+
+def test_exact_graph_preflight_records_all_local_allocations(adopted_round, tmp_path):
+    roles = {**adopted_round.serving.role_plan, "colocate_all": False, "policy_num_nodes": 1}
+    spec = dataclasses.replace(adopted_round, serving=dataclasses.replace(adopted_round.serving, role_plan=roles))
+    output = tmp_path / "preflight"
+    validate_graph(adopted_round_evaluation(spec), output, str(tmp_path))
+    row = json.loads((output / "graph.json").read_bytes())[-1]
+    assert {role["role"]: (role["required_gpus"], role["allocated_gpus"]) for role in row["role_geometry"]} == {
+        "policy": (4, 4),
+        "rollout": (16, 16),
+    }

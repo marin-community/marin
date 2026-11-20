@@ -5,25 +5,15 @@
 
 import hashlib
 import json
-from collections.abc import Iterator
-from contextlib import contextmanager
+from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
-from pathlib import Path
 
 import click
 import draccus
 import httpx
 import yaml
-from iris.cluster.config import load_config
-from iris.rpc.proto_display import priority_band_value
-from marin.evaluation.hardware import AcceleratorChoice, Platform, serving_geometry
-from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.serving_config import inference_config_for_model
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.inference.config import RemoteInferenceConfig
-from marin.inference.iris import remote_inference
-from marin.inference.types import OpenAIEndpoint
 from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
     ArtifactDataSource,
@@ -43,12 +33,13 @@ from marin.rl.skyrl import (
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
-from rigging.secrets import SecretSpec, resolve_secret_spec
-from rigging.timing import Duration, ExponentialBackoff
+from rigging.secrets import resolve_secret_spec
 from transformers import AutoTokenizer
 
+from experiments.evaluation.judge_config import JudgeConfig
 from experiments.evaluation.micro210_policy import (
     MODEL_IDENTITY_PREFIX,
+    POLICY_VERSION,
     Micro210Evaluation,
     Micro210Model,
     micro210_evaluation,
@@ -58,8 +49,10 @@ from experiments.post_training.long_loop.launch_validation import validate_befor
 from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 
 PREPARED_INPUTS = (
-    "s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp3/" "documents/mochi-exp3-final-eval-inputs/2026.11.18.61"
+    "gs://marin-us-east1/evaluation-policies/micro210/2026.11.20-together/"
+    "ba099cbc869af0dd1c14f14586557e38a812d6b956442e8b1f406b36cc42c7a0"
 )
+
 STOP_TOKEN_CONTENT = {128001: "<|end_of_text|>", 128009: "<|eot_id|>"}
 SERVING_GENERATOR_FIELDS = {
     "max_num_seqs",
@@ -83,19 +76,8 @@ class Micro210ServingProfile:
     generator: dict
     engine_init_kwargs: dict
     cuda_allocator_config: str
-    nccl_buffer_size_bytes: int
     nccl_env: dict[str, str]
-
-
-@dataclass(frozen=True)
-class Micro210RemoteJudge:
-    """Placement and receipt owned by a separate regional judge root."""
-
-    gpu_count: int
-    gpu_variant: str
-    target_cluster: str
-    endpoint_receipt: str
-    priority: str
+    nccl_buffer_size_bytes: int
 
 
 def serving_config(frozen: dict, profile: Micro210ServingProfile) -> dict:
@@ -130,19 +112,17 @@ class Micro210Run:
     skyrl: SkyRLRunConfig
     evaluation: Micro210Evaluation
     canonical_launch_sha256: str
-    counterpart_api_key: SecretSpec
     serving_profile: Micro210ServingProfile | None = None
     model_manifest_filename: str = MODEL_MANIFEST_FILENAME
-    remote_judge: Micro210RemoteJudge | None = None
 
 
-@dataclass(frozen=True)
-class Micro210JudgeEndpoint:
-    canonical_spec_sha256: str
-    judge_sha256: str
-    tensor_parallel_size: int
-    endpoint: OpenAIEndpoint
-    jobs: tuple[str, ...]
+def judge_runtime_config(config: dict, judge: JudgeConfig) -> dict:
+    """Bind all runtime judge routes from the typed policy without changing other settings."""
+    config = deepcopy(config)
+    config["environment"]["task_sessions"]["remote_judge"].update(base_url=judge.base_url, api_key_env="JUDGE_API_KEY")
+    config["extra_env"]["JUDGE_BASE_URL"] = judge.base_url
+    config["terminal_bench"]["installed_agent"]["judge_model"] = judge.model
+    return config
 
 
 def validate_inputs(
@@ -166,107 +146,26 @@ def validate_inputs(
                 raise ValueError(f"Canonical Micro210 tokenizer has incompatible stop token ID: {token_id}")
 
 
-def micro210_judge_inference(config: Micro210Run) -> RemoteInferenceConfig:
-    """Lower the frozen judge for both CPU preflight and runtime allocation."""
-    policy = config.evaluation.policy()["evaluation"]
-    judge = draccus.decode(ModelConfig, policy["judge"])
-    gpu_variant = policy["gpu_variant"]
-    judge_gpu_count = policy["judge_gpu_count"]
-    if config.remote_judge:
-        gpu_variant = config.remote_judge.gpu_variant
-        judge_gpu_count = config.remote_judge.gpu_count
-        judge = replace(judge, resource_hint=replace(judge.resource_hint, gpu={gpu_variant: judge_gpu_count}))
-    accelerator = AcceleratorChoice(
-        platform=Platform.GPU,
-        gpu_type=gpu_variant,
-        gpu_count=judge_gpu_count,
-        target_cluster=None,
-    )
-    serving_geometry(judge.serve, accelerator)
-    priority = config.remote_judge.priority if config.remote_judge else policy["execution"]["priority"]
-    inference = inference_config_for_model(
-        judge,
-        accelerator,
-        env_vars={},
-        priority=priority_band_value(priority),
-        capability_origin=policy["capability_origin"],
-        api_model=judge.location,
-    )
-    if config.remote_judge:
-        cluster = load_config(
-            Path(__file__).resolve().parents[2] / "lib/iris/config" / f"{config.remote_judge.target_cluster}.yaml"
-        )
-        if cluster.platform.coreweave is None:
-            raise ValueError("The Mochi judge requires a regional CoreWeave controller")
-        inference = replace(
-            inference,
-            iris=replace(
-                inference.iris,
-                worker_resources=replace(
-                    inference.iris.worker_resources, regions=[cluster.platform.coreweave.region], target_cluster=None
-                ),
-            ),
-        )
-    return inference
-
-
-def micro210_judge_sha256(config: Micro210Run) -> str:
-    return hashlib.sha256(
-        json.dumps(config.evaluation.policy()["evaluation"]["judge"], sort_keys=True).encode()
-    ).hexdigest()
-
-
-@contextmanager
-def micro210_judge_endpoint(config: Micro210Run, inference: RemoteInferenceConfig) -> Iterator[OpenAIEndpoint]:
-    """Use the co-hosted judge or a receipt verified against the frozen judge."""
-    if config.remote_judge is None:
-        with remote_inference(inference) as served:
-            yield served.model.endpoint
-        return
-    receipt = StoragePath(config.remote_judge.endpoint_receipt)
-    terminal = StoragePath(config.remote_judge.endpoint_receipt + ".terminal.json")
-
-    def receipt_ready() -> bool:
-        if terminal.exists():
-            raise ValueError("Remote Micro210 judge has terminated; use a fresh round identity")
-        return receipt.exists()
-
-    ExponentialBackoff(initial=1, maximum=30).wait_until_or_raise(
-        receipt_ready,
-        Duration.from_seconds(config.evaluation.policy()["evaluation"]["execution"]["job_timeout_seconds"]),
-        "Remote Micro210 judge did not publish its endpoint receipt",
-    )
-    endpoint = draccus.decode(Micro210JudgeEndpoint, json.loads(receipt.read_bytes()))
-    if (
-        endpoint.canonical_spec_sha256 != config.evaluation.record().canonical_spec_sha256
-        or endpoint.judge_sha256 != micro210_judge_sha256(config)
-        or endpoint.tensor_parallel_size != inference.model.tensor_parallel_size
-        or endpoint.endpoint.model != inference.model.api_model
-    ):
-        raise ValueError("Remote Micro210 judge receipt differs from the frozen judge")
+def validate_judge_availability(judge: JudgeConfig, api_key: str) -> None:
+    """Reject an unavailable API judge before allocating rollout GPUs."""
     try:
         response = httpx.get(
-            endpoint.endpoint.url("models"),
-            headers={"Authorization": f"Bearer {endpoint.endpoint.api_key or 'EMPTY'}"},
+            f"{judge.base_url.rstrip('/')}/models",
+            headers={"Authorization": f"Bearer {api_key}"},
             timeout=30,
         )
         response.raise_for_status()
     except httpx.HTTPError:
-        # The receipt contains a capability URL; never include it in an error.
-        raise ValueError("Remote Micro210 judge is unreachable before rollout allocation") from None
-    if endpoint.endpoint.model not in {model["id"] for model in response.json()["data"]}:
-        raise ValueError("Remote Micro210 judge does not serve the frozen model")
-    receipt_ready()
-    yield endpoint.endpoint
+        raise ValueError("Micro210 API judge is unreachable before rollout allocation") from None
+    if judge.model not in {model["id"] for model in response.json()}:
+        raise ValueError("Micro210 API endpoint does not serve the frozen judge model")
 
 
 def run_micro210(config: Micro210Run) -> SkyRLRun:
-    counterpart_api_key = resolve_secret_spec(config.counterpart_api_key).value
     if hashlib.sha256(config.skyrl.launch_config_yaml.encode()).hexdigest() != config.canonical_launch_sha256:
         raise ValueError("Canonical Micro210 refuses modified field: launch_config_yaml")
     validate_inputs(config.evaluation, PREPARED_INPUTS, model_manifest_filename=config.model_manifest_filename)
     validate_before_allocation(config.skyrl.launch_config_yaml)
-    inference = micro210_judge_inference(config)
     (StoragePath(config.evaluation.output_uri) / "canonical-evaluation.json").write_text(
         json.dumps(
             {
@@ -276,7 +175,6 @@ def run_micro210(config: Micro210Run) -> SkyRLRun:
                     {
                         "serving_profile": asdict(config.serving_profile),
                         "model_manifest_filename": config.model_manifest_filename,
-                        "remote_judge": asdict(config.remote_judge) if config.remote_judge else None,
                     }
                     if config.serving_profile
                     else {}
@@ -285,18 +183,11 @@ def run_micro210(config: Micro210Run) -> SkyRLRun:
             indent=2,
         )
     )
-    launch = yaml.safe_load(config.skyrl.launch_config_yaml)
-    with micro210_judge_endpoint(config, inference) as endpoint:
-        launch["skyrl"]["environment"]["task_sessions"]["remote_judge"]["base_url"] = endpoint.base_url
-        for section in (launch["skyrl"]["extra_env"], launch["runtime"]["task_env"]):
-            section["JUDGE_BASE_URL"] = endpoint.base_url
-        return run_skyrl(
-            replace(config.skyrl, launch_config_yaml=yaml.safe_dump(launch)),
-            env_vars={
-                "JUDGE_API_KEY": endpoint.api_key or "EMPTY",
-                "OPENAI_API_KEY": counterpart_api_key,
-            },
-        )
+    policy = config.evaluation.policy()["evaluation"]
+    judge = draccus.decode(JudgeConfig, policy["judge"])
+    api_key = resolve_secret_spec((judge.credential,)).value
+    validate_judge_availability(judge, api_key)
+    return run_skyrl(config.skyrl, env_vars={"JUDGE_API_KEY": api_key, "OPENAI_API_KEY": api_key})
 
 
 def micro210_step(model: Micro210Model, *, name: str, version: str, **overrides) -> ArtifactStep[SkyRLRun]:
@@ -322,7 +213,6 @@ def micro210_artifact_step(
     serving_profile: Micro210ServingProfile | None = None,
     model_binding: Micro210Model | None = None,
     model_manifest_filename: str = MODEL_MANIFEST_FILENAME,
-    remote_judge: Micro210RemoteJudge | None = None,
 ) -> ArtifactStep[SkyRLRun]:
     """Bind a future committed model to the same frozen evaluator as a static export."""
     fingerprint_model = Micro210Model(
@@ -336,7 +226,7 @@ def micro210_artifact_step(
     policy = frozen["evaluation"]
     inputs = ArtifactStep.adopt(
         "evaluation/micro210/prepared",
-        "2026.11.18",
+        POLICY_VERSION,
         PREPARED_INPUTS,
         config={"sha256": frozen["prepared_rollouts_sha256"]},
     )
@@ -352,6 +242,7 @@ def micro210_artifact_step(
         execution = serving_profile.execution
         gpu_variant = serving_profile.gpu_variant
         config = serving_config(frozen, serving_profile)
+    config = judge_runtime_config(config, draccus.decode(JudgeConfig, policy["judge"]))
     step = skyrl_step(
         SkyRLSpec(
             name=name,
@@ -393,10 +284,8 @@ def micro210_artifact_step(
             replace(run, launch_config_yaml=rendered),
             replace(binding, model=bound_model, output_uri=context.output_path),
             hashlib.sha256(rendered.encode()).hexdigest(),
-            ("env:TOGETHER_API_KEY",),
             serving_profile,
             model_manifest_filename,
-            remote_judge,
         )
 
     configured = replace(step, run=run_micro210, build_config=build, expected_fingerprint=None)
