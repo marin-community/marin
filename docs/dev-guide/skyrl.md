@@ -14,7 +14,9 @@ The launcher clears the parent's Python environment selection. SkyRL installs
 Marin libraries and Harbor as editable dependencies from this checkout, using
 the paths in `vendor/skyrl/pyproject.toml`. Marin calls SkyRL through the executable.
 See [launching RL experiments](../references/rl-launching.md)
-for the artifact entry point, launch document, and resource configuration.
+for the artifact entry point, launch document, and resource configuration, and
+[Serving Numerical Parity](../references/serving-parity.md) for SkyRL, Megatron,
+and vLLM numerical-parity knobs (router replay, batch invariance, and FP32 LM heads).
 
 The Marin CLI uses SkyRL's `cpu` extra. Set `environment.task_sessions.local: {}`
 to enable the local task backend, which probes Linux bubblewrap before task

@@ -4,7 +4,7 @@ The [Snowball SFT recipe](https://github.com/marin-community/marin/blob/main/exp
 
 This is a 32,768-token, ten-step starting recipe on 32 H100s. A prior [Snowball training run](https://github.com/marin-community/marin/pull/9144) demonstrated the 67B model on 32 learner H100s at 4,096 tokens. That run used GRPO; this longer SFT recipe has not completed an end-to-end accelerator run. Do not assume the model's 262K position limit is a validated training length.
 
-The mesh splits each sequence over four H100s and shards experts across the other eight mesh ranks. Attention keeps local queries and gathers the full keys and values. Large weight and optimizer leaves are sharded over both axes. The recipe keeps conversations separate (`pack=False`) because Snowball does not yet consume Levanter's packed-document attention mask. Its scan layers are checkpointed during reverse mode to bound activation memory.
+The mesh splits each sequence over four H100s and shards experts across the other eight mesh ranks. Attention keeps local queries and gathers the full keys and values. Large weight and optimizer leaves are sharded over both axes. Snowball supports Levanter's packed-document attention mask; this recipe keeps conversations separate (`pack=False`). Its scan layers are checkpointed during reverse mode to bound activation memory.
 
 ## Prepare
 
@@ -61,3 +61,38 @@ SPEC = replace(
 ```
 
 Here `keep` retains a permanent checkpoint every 1,000 steps in addition to the final save; use `keep=None` for final-only retention. `keep_last_temporary_checkpoints` bounds complete rolling recovery checkpoints after a successful save. Native checkpoints contain full training state and can be much larger than HF exports, so size the permanent cadence explicitly. The generic `marin.experiment.train.train_lm` builder also defaults to rolling recovery checkpoints and a final-only permanent save.
+
+## Match the served vLLM forward
+
+By default, Levanter's Snowball forward differs numerically from the forward that vLLM serves; small per-operation differences compound and change expert routing on H100 ([issue 10698](https://github.com/marin-community/marin/issues/10698)). Default `moe_capacity_factor=1.0` can also drop routed assignments in any expert-parallel run, SFT included.
+
+For the full table of Levanter, SkyRL/Megatron, and vLLM parity knobs (including measured effects, costs, backend limits, and evidence boundaries), see [Serving Numerical Parity](../references/serving-parity.md).
+
+To opt in to the Snowball serving-parity settings available on `main` without changing the default recipe, use or adapt `VLLM_PARITY_SPEC` from [experiments/sft/configs/snowball_h100.py](https://github.com/marin-community/marin/blob/main/experiments/sft/configs/snowball_h100.py):
+
+```python
+from dataclasses import replace
+
+from levanter.models.snowball import SnowballConfig
+
+from experiments.sft.configs.snowball_h100 import SPEC
+from experiments.sft.launcher import HFModel
+
+assert isinstance(SPEC.model, HFModel)
+SPEC = replace(
+    SPEC,
+    model=replace(
+        SPEC.model,
+        model=SnowballConfig(
+            moe_capacity_factor=8.0,  # match the mesh's expert-axis size
+            router_dot_fp32=True,
+            fp32_activations=True,
+        ),
+    ),
+    field_dtype_overrides={"router_bias": "float32"},
+)
+```
+
+Once [PR 10686](https://github.com/marin-community/marin/pull/10686) merges, also set `router_combine_fp32=True` on `SnowballConfig(...)`. Leave `attention_implementation="torch_order"` ([PR 10688](https://github.com/marin-community/marin/pull/10688)) off outside short-context diagnostics. Note that `field_dtype_overrides={"router_bias": "float32"}` also exports `router_bias` in FP32, and recipes using `hf_to_levanter` (such as [curriculum SFT and self-distillation](https://github.com/marin-community/marin/blob/main/experiments/post_training/curriculum_sft/trial.py)) must pass `compute_dtype=None` so conversion does not round `router_bias` to BF16 before training.
+
+These settings move Levanter toward the served vLLM forward; agreement with Snowball's original TPU pretraining forward and downstream SFT quality have not been measured. See [Serving Numerical Parity](../references/serving-parity.md#evidence-boundaries-and-limits) for full scope and limits.
