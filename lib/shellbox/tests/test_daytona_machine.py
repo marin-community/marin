@@ -41,6 +41,7 @@ from daytona_api_client_async import SnapshotState
 from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.backends.daytona.machine import (
     PROVIDER_DIAGNOSTIC_CHAR_LIMIT,
+    DaytonaCommandError,
     DaytonaImageBuild,
     DaytonaMachine,
     DaytonaMachineFactory,
@@ -498,7 +499,7 @@ def test_daytona_output_collection_uses_its_own_deadline(collection_timeout: flo
                 result = await machine.run(command)
                 assert (result.stdout, result.stderr) == (b"out", b"err")
             else:
-                with pytest.raises(RuntimeError, match="Cannot collect Daytona command output"):
+                with pytest.raises(DaytonaCommandError, match="Cannot collect Daytona command output"):
                     await machine.run(command)
         finally:
             await machine.close()
@@ -525,7 +526,7 @@ def test_daytona_output_capture_preserves_provider_startup_failure(tmp_path: Pat
             client.sandbox, MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path)), AsyncExitStack()
         )
         try:
-            with pytest.raises(RuntimeError, match="Failed to measure command output") as caught:
+            with pytest.raises(DaytonaCommandError, match="Failed to measure command output") as caught:
                 await machine.run(Command(("printf", "not executed")))
             note = next(note for note in caught.value.__notes__ if note.startswith("Daytona exec response: "))
             response = json.loads(note.removeprefix("Daytona exec response: "))
@@ -919,7 +920,7 @@ def test_daytona_file_cleanup_failure_closes_machine_and_preserves_primary_error
         machine = await DaytonaMachineFactory(lambda: client).create(
             MachineSpec(RegistryImage("ubuntu:24.04"), workdir="")
         )
-        error_type = OSError if primary_failure else RuntimeError
+        error_type = OSError if primary_failure else DaytonaCommandError
         with pytest.raises(error_type) as caught:
             await machine.run(Command(("printf", "candidate-fail")))
         if primary_failure:

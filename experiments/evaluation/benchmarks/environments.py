@@ -14,6 +14,7 @@ MATH_GRADER = Environment(
     requirements=("tomli-w==1.2.0", "math-verify==0.9.0", "sympy==1.13.3", "antlr4-python3-runtime==4.11.0")
 )
 MATH_JUDGE_GRADER = Environment(requirements=(*MATH_GRADER.requirements, "openai==2.24.0"))
+JUDGE_GRADER = Environment(requirements=(*BASIC_GRADER.requirements, "openai==2.24.0"))
 
 NLTK_DATA_REVISION = "550b6625bcef1f2abff2ff770a5a0d272c9c6b2a"
 NLTK_DATA_ROOT = "/srv/nltk_data"

@@ -17,9 +17,9 @@ import tempfile
 import time
 from collections import Counter
 from dataclasses import dataclass, replace
-from enum import StrEnum
 from pathlib import Path
 
+from verifyit.compat import StrEnum
 from verifyit.execution.command import run_command
 from verifyit.file_ops.read import read_text
 from verifyit.file_ops.restore import restore

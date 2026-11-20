@@ -25,6 +25,9 @@ job:
     - PhaseCancellationError
     - TimeoutError
     - DaytonaConflictError
+    - DaytonaConnectionError
+    - DaytonaTimeoutError
+    - DaytonaCommandError
     max_retries: 1
   trial_attempt_timeout_sec: 1800
   verifier:

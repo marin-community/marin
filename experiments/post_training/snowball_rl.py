@@ -140,7 +140,13 @@ _DEFAULT_PATCH = RecipePatch(
         sampling_params=sections.SamplingParams(temperature=1.0, top_p=1.0, logprobs=0),
     ),
     trajectory_runner=sections.TrajectoryRunner(max_concurrent_tasks=1024),
-    extra_env={"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"},
+    extra_env={
+        "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+        # The privileged profile below exposes the front-end Ethernet NIC's RoCE functions
+        # (mlx5_*) beside the InfiniBand rails. NCCL routes some channels over them, which fails
+        # with IBV_WC_RETRY_EXC_ERR(12). Pin NCCL to the rails (ibp0-ibp7).
+        "NCCL_IB_HCA": "ibp",
+    },
 )
 
 _MODE_KEYS = (
@@ -277,7 +283,7 @@ _SPEED_GUARDS = (
 
 _snowball = partial(
     Preset,
-    revision="2026.11.20.1",
+    revision="2026.11.20.3",
     tasks=_DEFAULT_TASKS,
     model=_DEFAULT_MODEL,
     seed=SEED,
@@ -289,7 +295,6 @@ _snowball = partial(
 )
 
 _LEARNING_MEDIUM = _snowball(
-    revision="2026.11.20.2",
     held_out_tasks=_DEFAULT_EVAL_LITE,
     export_hf=True,
     name="learning-medium",
@@ -312,7 +317,6 @@ _LEARNING_MEDIUM = _snowball(
 
 
 _TRAIN_LONG = _snowball(
-    revision="2026.11.20.2",
     held_out_tasks=_DEFAULT_EVAL_LITE,
     retention=SkyRLRetentionPolicy(resume_checkpoint_count=5),
     export_hf=True,
@@ -406,7 +410,7 @@ _PRESETS = (
     replace(
         _TRAIN_LONG,
         name="train-long-harbor",
-        revision="2026.11.20.2",
+        revision="2026.11.20.4",
         harbor=harbor_evaluation(Path(__file__).with_name("rl_harbor.yaml")),
         gaps=(*_TRAIN_LONG.gaps, "harbor-on-daytona"),
     ),
