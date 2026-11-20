@@ -340,6 +340,9 @@ class OutcomeLedger:
             if isinstance(reward, float):
                 self._rewards[key] = reward
             if self._handle is None:
+                # The fresh pod's output directory may not exist yet (the earlier wave
+                # instance died exactly here); create it before the first append.
+                self._local_sidecar.parent.mkdir(parents=True, exist_ok=True)
                 self._handle = self._local_sidecar.open("a", encoding="utf-8")
             self._handle.write(json.dumps({"|".join(key): outcome}, separators=(",", ":")) + "\n")
             self._handle.flush()
@@ -350,6 +353,21 @@ class OutcomeLedger:
     def _checkpoint_locked(self) -> None:
         if self._handle is not None:
             self._handle.flush()
+        # The canonical dict file carries the MERGED rewards (every prior pod's durable
+        # verdicts plus this pod's). A fresh pod starts with an empty local sidecar, so
+        # checkpointing the pod-local sidecar alone would erase every prior pod's history
+        # on each preemption (the wave-v11 churn stop lost ~3,700 graded rows this way).
+        StoragePath(self._uri).write_text(
+            json.dumps(
+                {
+                    "|".join(key): {"rewards": {"reward": reward}}
+                    for key, reward in sorted(self._rewards.items())
+                },
+                indent=1,
+                sort_keys=True,
+            )
+            + "\n"
+        )
         StoragePath(self._sidecar).write_text(self._local_sidecar.read_text())
         self._records_since_checkpoint = 0
 

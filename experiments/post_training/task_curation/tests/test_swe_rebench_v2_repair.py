@@ -487,3 +487,28 @@ def test_declared_shape_tag_matches_the_measured_derived_contract():
     )
     with pytest.raises(ValueError, match="multi-turn"):
         bind_derived_contract_tags(stale, receipt)
+
+
+def test_outcome_ledger_checkpoint_preserves_cross_pod_history(tmp_path):
+    """The wave ledger's checkpoint must write the MERGED canonical: a fresh pod starts
+    with an empty local sidecar, so checkpointing pod-local content alone erases every
+    prior pod's durable rewards on each preemption (the wave-v11 churn stop lost
+    ~3,700 graded rows this way)."""
+    from experiments.post_training.task_curation.swe_rebench_fidelity_driver import OutcomeLedger
+
+    uri = tmp_path / "wave-outcomes.json"
+    first = OutcomeLedger(str(uri), local_dir=tmp_path / "pod1")
+    first.record(("task-a", "condensed", "nop"), {"rewards": {"reward": 0.0}})
+    first.record(("task-a", "condensed", "oracle"), {"rewards": {"reward": 1.0}})
+    first.close()
+    # the second pod: the fresh local sidecar, the durable rewards replayed from s3
+    second = OutcomeLedger(str(uri), local_dir=tmp_path / "pod2")
+    assert second.completed(("task-a", "condensed", "nop")) and second.completed(("task-a", "condensed", "oracle"))
+    second.record(("task-b", "condensed", "nop"), {"rewards": {"reward": 0.0}})
+    second._checkpoint_locked()
+    # the canonical now carries BOTH pods' rewards; a third pod resumes everything
+    third = OutcomeLedger(str(uri), local_dir=tmp_path / "pod3")
+    assert third.completed(("task-a", "condensed", "nop"))
+    assert third.completed(("task-a", "condensed", "oracle"))
+    assert third.completed(("task-b", "condensed", "nop"))
+    assert third.reward(("task-a", "condensed", "oracle")) == {"reward": 1.0}
