@@ -29,7 +29,7 @@ from levanter.callbacks.labeled_eval import LabeledLmEvalConfig, add_labeled_lm_
 from levanter.adaptor import AdaptorConfig, AdaptorExportConfig, NoAdaptorConfig
 from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics_hook_if_enabled
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint, resolve_checkpoint
-from levanter.compat.hf_checkpoints import HFCompatConfig, build_generation_config
+from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig, build_generation_config
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text.datasets import LmDataConfig
 from levanter.eval_harness import LmEvalHarnessConfig
@@ -194,6 +194,19 @@ def _load_lm_model_from_configured_source(
     return model
 
 
+def _native_local_export_converter(
+    model: HFCompatConfig,
+    converter: HFCheckpointConverter,
+    path: str,
+    initialize_from_hf: bool | str,
+) -> HFCheckpointConverter:
+    if StoragePath(path).is_remote:
+        raise ValueError("llama_native HF export requires a local save path")
+    # Validate the resolved architecture before training starts.
+    model.to_hf_config(converter.Vocab.size)
+    return converter if initialize_from_hf else converter.without_reference_checkpoint()
+
+
 def main(config: TrainLmConfig):
     explicit = config.model.owns_parameter_placement
     explicit_layout = None
@@ -212,8 +225,6 @@ def main(config: TrainLmConfig):
             )
         ):
             raise ValueError("llama_native supports local full-model HF export without uploads or adapters")
-        if config.hf_save_path is not None and StoragePath(config.hf_save_path).is_remote:
-            raise ValueError("llama_native HF export requires a local save path")
         if config.log_entropy or config.eval_harness is not None:
             raise ValueError("llama_native optional entropy/harness callbacks are not yet supported")
         config = dataclasses.replace(
@@ -261,9 +272,9 @@ def main(config: TrainLmConfig):
         converter = context.converter
         if config.hf_save_path is not None:
             assert isinstance(config.model, HFCompatConfig) and converter is not None
-            config.model.validate_hf_export()
-            if not config.initialize_from_hf:
-                converter = converter.without_reference_checkpoint()
+            converter = _native_local_export_converter(
+                config.model, converter, config.hf_save_path, config.initialize_from_hf
+            )
     elif config.initialize_from_hf:
         assert isinstance(config.model, HFCompatConfig)
         converter = config.model.hf_checkpoint_converter()
