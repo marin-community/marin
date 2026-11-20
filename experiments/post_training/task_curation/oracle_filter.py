@@ -563,7 +563,9 @@ def filter_cohort(
                 raise ValueError(f"Duplicate or unknown source-verifier exception: {task_id}")
             source_errors[task_id] = SourceVerifierError.model_validate(record["receipt"])
     roots = archive_roots or {}
-    trials = collect_trials(jobs, additional_inputs=additional_trial_inputs, recollection=recollection, archive_roots=roots)
+    trials = collect_trials(
+        jobs, additional_inputs=additional_trial_inputs, recollection=recollection, archive_roots=roots
+    )
     controls = {}
     if executability_runs is not None:
         for line in executability_runs.read_text().splitlines():
