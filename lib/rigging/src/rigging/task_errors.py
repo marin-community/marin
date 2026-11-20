@@ -200,9 +200,11 @@ class RetrySettings(BaseModel):
             VERIFIER_OUTPUT_PARSE_ERROR,
         }
     )
-    wait_multiplier: float = 1.0
-    min_wait_sec: float = 1.0
-    max_wait_sec: float = 60.0
+    include_categories: set[ErrorCategory] | None = None
+    exclude_categories: set[ErrorCategory] = Field(default_factory=set)
+    wait_multiplier: float = Field(default=1.0, ge=1, allow_inf_nan=False)
+    min_wait_sec: float = Field(default=1.0, ge=0, allow_inf_nan=False)
+    max_wait_sec: float = Field(default=60.0, ge=0, allow_inf_nan=False)
 
 
 class RetryDisposition(StrEnum):
@@ -292,3 +294,38 @@ def exception_identity(error: BaseException, *, operation: str | None = None) ->
         retry_disposition=disposition,
         provider_status_code=status_code,
     )
+
+
+_TASK_RETRYABLE_ERROR_TYPES = _RESUME_RETRYABLE_ERROR_TYPES | {"EnvironmentStartTimeoutError", "AgentSetupTimeoutError"}
+
+
+def retry_delay(failure: ErrorIdentity | None, settings: RetrySettings, retries: int) -> float | None:
+    """Return the shared retry delay, or None for a terminal attempt.
+
+    Exclusions match the outer name, cause name, or category and always win.
+    Permanent failures cannot be selected for retry. Unknown failures require
+    an explicit name or category inclusion; transient failures need no inclusion.
+    """
+    if failure is None or retries >= settings.max_retries:
+        return None
+    names = {failure.exception_type, failure.cause_type} - {None}
+    category = failure.category
+    if names.intersection(settings.exclude_exceptions or ()) or category in settings.exclude_categories:
+        return None
+    disposition = failure.retry_disposition
+    if disposition is RetryDisposition.PERMANENT:
+        return None
+    if (
+        disposition is RetryDisposition.UNKNOWN
+        and failure.cause_type is None
+        and failure.provider_status_code is None
+        and names.intersection(_TASK_RETRYABLE_ERROR_TYPES)
+    ):
+        disposition = RetryDisposition.TRANSIENT
+    selected = bool(names.intersection(settings.include_exceptions or ())) or category in (
+        settings.include_categories or ()
+    )
+    filtered = settings.include_exceptions is not None or settings.include_categories is not None
+    if (filtered and not selected) or (disposition is RetryDisposition.UNKNOWN and not selected):
+        return None
+    return min(settings.min_wait_sec * settings.wait_multiplier**retries, settings.max_wait_sec)

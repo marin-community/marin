@@ -38,7 +38,6 @@ terminal_bench:
     override_storage_mb: 4096
     env_network_policy:
       mode: unrestricted
-    max_retries: 3
     n_concurrent_trials: 512
     enable_reward_shaping: false
     enable_error_classification: true
@@ -46,6 +45,9 @@ terminal_bench:
 environment:
   env_class: nemotron_ultra
   task_sessions:
+    retry:
+      max_retries: 3
+      wait_multiplier: 2.0
     nemotron_ultra:
       grading: skip
 

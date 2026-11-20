@@ -69,7 +69,34 @@ provider status, and retry disposition. Native Harbor exception records extend
 this identity with message and traceback details. TaskCompendium grades preserve
 the identity when a trial supplies one.
 
-Passthrough treatment prevents retrying a result with usable verifier output.
+Configure task retries at `environment.task_sessions.retry`. The settings apply
+across Harbor and other task kinds. The base budget is zero retries; the
+`terminal_bench` preset explicitly selects two retries with a multiplier of two.
+For example:
+
+```yaml
+environment:
+  task_sessions:
+    retry:
+      max_retries: 3
+      min_wait_sec: 1
+      max_wait_sec: 60
+      wait_multiplier: 2
+      include_categories: [infrastructure]
+      exclude_exceptions: [AgentTimeoutError, VerifierTimeoutError]
+```
+
+`rigging.task_errors.retry_delay` makes the decision for both the task worker
+and native Harbor's trial queue. Filters match the error name, cause name, or
+category; exclusions win. Permanent failures stop even when included. Unknown
+failures need an explicit inclusion. The budget counts retries after the first
+attempt, and backoff is capped at `max_wait_sec`.
+
+Machine startup connection loss can retry with a fresh machine before any model
+turn. A machine failure during a model command or grading is terminal because
+replaying may duplicate work. SkyRL also keeps passthrough results terminal so
+that retries do not discard usable verifier output. Training treatment is
+applied independently after the retry decision.
 
 ## Run records
 

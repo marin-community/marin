@@ -5,7 +5,14 @@ from http import HTTPStatus
 
 import httpx
 import pytest
-from rigging.task_errors import ErrorIdentity, RetryDisposition, exception_identity
+from rigging.task_errors import (
+    ErrorCategory,
+    ErrorIdentity,
+    RetryDisposition,
+    RetrySettings,
+    exception_identity,
+    retry_delay,
+)
 
 
 class ProviderFailure(RuntimeError):
@@ -63,3 +70,33 @@ def test_transport_identity_distinguishes_connection_and_request_failures(error,
     wrapped = RuntimeError("task machine failed")
     wrapped.__cause__ = error
     assert exception_identity(wrapped).retry_disposition is expected
+
+
+def test_retry_budget_backoff_and_cause_filter_survive_serialization():
+    policy = RetrySettings(
+        max_retries=3, min_wait_sec=2, wait_multiplier=2, max_wait_sec=5, include_exceptions={"ConnectionError"}
+    )
+    policy = RetrySettings.model_validate_json(policy.model_dump_json())
+    failure = ErrorIdentity(
+        exception_type="TaskMachineError", cause_type="ConnectionError", retry_disposition=RetryDisposition.TRANSIENT
+    )
+    assert [retry_delay(failure, policy, attempt) for attempt in range(4)] == [2, 4, 5, None]
+    excluded = policy.model_copy(update={"exclude_categories": {ErrorCategory.INFRASTRUCTURE}})
+    assert retry_delay(failure, excluded, 0) is None
+    permanent = failure.model_copy(update={"retry_disposition": RetryDisposition.PERMANENT})
+    assert retry_delay(permanent, policy, 0) is None
+
+
+def test_unknown_failure_requires_explicit_category_or_name_inclusion():
+    failure = ErrorIdentity(exception_type="NewVerifierError")
+    policy = RetrySettings(max_retries=1)
+    assert retry_delay(failure, policy, 0) is None
+    selected = policy.model_copy(update={"include_categories": {ErrorCategory.UNKNOWN}})
+    assert retry_delay(failure, selected, 0) == 1
+    excluded = selected.model_copy(update={"exclude_exceptions": {"NewVerifierError"}})
+    assert retry_delay(failure, excluded, 0) is None
+
+
+def test_a_known_wrapper_does_not_override_an_unknown_provider_status():
+    failure = ErrorIdentity(exception_type="DaytonaConnectionError", provider_status_code=409)
+    assert retry_delay(failure, RetrySettings(max_retries=1), 0) is None

@@ -696,8 +696,9 @@ async def test_attempt_failure_returns_terminal_result_and_does_not_cancel_batch
 
 
 @pytest.mark.unit
-async def test_unconfirmed_teardown_retries_outside_include_list(
-    tmp_path: Path, monkeypatch
+@pytest.mark.parametrize("selected", [True, False])
+async def test_unconfirmed_teardown_obeys_shared_exception_selection(
+    tmp_path: Path, monkeypatch, selected
 ) -> None:
     async def lose_sandbox(trial: FakeTrial) -> None:
         raise PhaseCancellationError("Trial phase failed while stopping its commands")
@@ -718,7 +719,7 @@ async def test_unconfirmed_teardown_retries_outside_include_list(
         n_concurrent=1,
         retry_config=RetrySettings(
             max_retries=3,
-            include_exceptions={"APIConnectionError"},
+            include_exceptions={"PhaseCancellationError"} if selected else {"APIConnectionError"},
             min_wait_sec=0,
             max_wait_sec=0,
         ),
@@ -726,12 +727,12 @@ async def test_unconfirmed_teardown_retries_outside_include_list(
 
     result = await queue.submit(config)
 
-    assert result.exception_info.exception_type == "AgentTimeoutError"
-    selected = TrialResult.model_validate_json(
+    assert result.exception_info.exception_type == ("AgentTimeoutError" if selected else "PhaseCancellationError")
+    persisted = TrialResult.model_validate_json(
         (tmp_path / "trials" / "lost" / "result.json").read_text()
     )
-    assert selected.trial_relpath == "lost/attempts/001"
-    assert selected.completion is not None
+    assert persisted.trial_relpath == ("lost/attempts/001" if selected else "lost/attempts/000")
+    assert (persisted.completion is not None) == selected
 
 
 @pytest.mark.unit

@@ -11,7 +11,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 from uuid import uuid4
 
-from rigging.task_errors import RetryDisposition, exception_identity
+from rigging.task_errors import RetryDisposition, RetrySettings, exception_identity, retry_delay
 from jinja2 import TemplateError
 from daytona import DaytonaError
 from loguru import logger
@@ -85,7 +85,8 @@ from skyrl_train.rollouts.training_record import (
     training_rollout,
     rollout_with_verifier_failure,
 )
-from skyrl_train.task_error_handling import ErrorHandlingConfig
+from skyrl_train.task_error_handling import ErrorHandlingConfig, classify_exception_type
+from skyrl_train.error_treatment import ErrorTreatment
 from skyrl_train.trajectory_runners.types import (
     RESPONSE_POLICY_STEPS_KEY,
     ROUTED_EXPERTS_KEY,
@@ -314,6 +315,12 @@ def _failed_rollout(
         # The engine may attempt verification after a model failure. The verifier
         # timeout determines whether pass-through can retain a scored rollout.
         exception_type = "VerifierTimeoutError"
+    if isinstance(error, TaskMachineError) and interruption.operation not in {
+        RolloutOperation.START,
+        RolloutOperation.PREPARE,
+    }:
+        # Replaying after a model command or grading may duplicate completed work.
+        failure = failure.model_copy(update={"retry_disposition": RetryDisposition.PERMANENT})
     rollout = training_rollout(GradedRollout(interruption.rollout, interruption.grade), lowered)
     if (
         interruption.operation == RolloutOperation.ADVANCE
@@ -354,6 +361,7 @@ def _failed_rollout(
                 or (failure.exception_type if exception_type != failure.exception_type else None),
                 "retry_disposition": failure.retry_disposition
                 if exception_type == failure.exception_type
+                or exception_type in {"EnvironmentStartTimeoutError", "AgentSetupTimeoutError", "TrialTimeoutError"}
                 else RetryDisposition.UNKNOWN,
             }
         ),
@@ -388,6 +396,7 @@ class TaskRolloutWorker:
         sessions: Mapping[str, EpisodeFactory] | None = None,
         *,
         shutdown_timeout: float,
+        retry: RetrySettings | None = None,
         installed_agents: InstalledAgentWorker | None = None,
         judge_connection: JudgeConnection | None = None,
     ):
@@ -401,6 +410,7 @@ class TaskRolloutWorker:
         self.chat_template_kwargs = dict(trajectory_runner_cfg.get("chat_template_kwargs", {}))
         self.harbor = harbor
         self.installed_agents = installed_agents
+        self.retry = RetrySettings() if retry is None else retry
         self.retry_wait = retry_wait
         self.group_graders = group_graders
         self.task_slots = asyncio.Semaphore(concurrent_tasks) if concurrent_tasks is not None else nullcontext()
@@ -579,10 +589,13 @@ class TaskRolloutWorker:
                     result = replace(
                         result, grade=skipped_grade(task.grader.reason, diagnostics=result.grade.diagnostics)
                     )
-                if harbor is None:
-                    return result
                 result = rollout_with_verifier_failure(result)
-                delay = harbor.retry_delay(result.failure, retries)
+                treatment = (
+                    classify_exception_type(result.failure.exception_type, policies[index]) if result.failure else None
+                )
+                delay = (
+                    None if treatment is ErrorTreatment.PASSTHROUGH else retry_delay(result.failure, self.retry, retries)
+                )
                 if delay is None:
                     return replace(result, metrics={**result.metrics, "rollout_retries": float(retries)})
                 logger.info("Task {} retry {} after {} seconds", task.id, retries + 1, delay)
@@ -754,6 +767,9 @@ class TaskRolloutWorkerSpec:
             client,
             factories,
             max_verifier_workers=int(self.config.environment.task_sessions.max_verifier_workers),
+            retry=RetrySettings.model_validate(
+                OmegaConf.to_container(self.config.environment.task_sessions.retry, resolve=True)
+            ),
             harbor=harbor,
             concurrent_tasks=int(self.config.trajectory_runner.max_concurrent_tasks),
             concurrent_harbor_tasks=None if harbor is None else max(1, harbor.concurrent_trials // shard.count),

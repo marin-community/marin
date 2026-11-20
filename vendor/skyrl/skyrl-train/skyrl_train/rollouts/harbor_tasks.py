@@ -6,7 +6,6 @@ import os
 
 from daytona import AsyncDaytona, DaytonaConfig
 from omegaconf import DictConfig
-from rigging.task_errors import ErrorIdentity, RetrySettings
 from shellbox.backends.daytona.machine import DaytonaMachineFactory, DaytonaNetworkMode, DaytonaNetworkPolicy
 from shellbox.machine import Backend, MachineFactory
 from taskcompendium.models import NoGrader
@@ -29,8 +28,7 @@ from skyrl_train.trajectory_runners.harbor.identity_aware_reward import (
 from skyrl_train.trajectory_runners.harbor.truncation_penalty import apply_truncation_penalty, detect_turn_truncation
 from skyrl_train.trajectory_runners.types import RESPONSE_SPAN_TAGS_KEY, TrajectoryRequestBatch
 from skyrl_train.metric_names import IDENTITY_AWARE_REWARD_METRIC_PREFIX
-from skyrl_train.error_treatment import ErrorTreatment
-from skyrl_train.task_error_handling import ErrorHandlingConfig, classify_exception_type
+from skyrl_train.task_error_handling import ErrorHandlingConfig
 from skyrl_train.utils.pbs_shaping import compute_pbs_token_shaping
 from skyrl_train.utils.span_tagger import tag_generated_tokens
 from skyrl_train.utils.reward_shaping import (
@@ -57,7 +55,6 @@ class HarborTaskSettings:
     concurrent_trials: int
     error_handling: ErrorHandlingConfig
     reward_shaping: dict
-    retry: RetrySettings
     attempt_timeout: float | None
 
     @classmethod
@@ -76,22 +73,8 @@ class HarborTaskSettings:
             concurrent_trials(config.get("harbor", {})),
             builder.get_error_handling_config(),
             builder.get_reward_shaping_config(),
-            builder.build_retry_config(),
             trial.get("trial_attempt_timeout_sec"),
         )
-
-    def retry_delay(self, failure: ErrorIdentity | None, retries: int) -> float | None:
-        """Return the backoff delay, or keep a terminal result without another attempt."""
-        if failure is None or retries >= self.retry.max_retries:
-            return None
-        name = failure.exception_type
-        if name in (self.retry.exclude_exceptions or ()):
-            return None
-        if self.retry.include_exceptions and name not in self.retry.include_exceptions:
-            return None
-        if classify_exception_type(name, self.error_handling) is ErrorTreatment.PASSTHROUGH:
-            return None
-        return min(self.retry.min_wait_sec * self.retry.wait_multiplier**retries, self.retry.max_wait_sec)
 
     def grader_override(self) -> NoGrader | None:
         return NoGrader(reason="Harbor verification is disabled") if self.verifier.disable else None

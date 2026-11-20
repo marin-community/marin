@@ -1,11 +1,10 @@
 """Training treatment for terminal task failures."""
 
-from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from loguru import logger
-from rigging.task_errors import ErrorCategory, error_category, errors_by_category, known_error_types
+from rigging.task_errors import ErrorCategory, error_category, errors_by_category
 
 from skyrl_train.error_treatment import ErrorTreatment
 
@@ -56,26 +55,6 @@ class ErrorHandlingConfig:
 
 
 DEFAULT_ERROR_HANDLING_CONFIG = ErrorHandlingConfig()
-
-
-def retry_excluded_exception_types(
-    configured_exclusions: Iterable[str] | None,
-    error_handling: ErrorHandlingConfig,
-) -> frozenset[str]:
-    """Return retry exclusions with every pass-through classification made terminal."""
-    classification_candidates = set(known_error_types())
-    if error_handling.default_error_treatment is not ErrorTreatment.PASSTHROUGH:
-        classification_candidates.difference_update(errors_by_category(ErrorCategory.UNKNOWN))
-    classification_candidates.update(error_handling.passthrough_exceptions)
-    classification_candidates.update(error_handling.mask_exceptions)
-    classification_candidates.update(error_handling.zero_exceptions)
-
-    passthrough_exceptions = {
-        exception_type
-        for exception_type in classification_candidates
-        if classify_exception_type(exception_type, error_handling) is ErrorTreatment.PASSTHROUGH
-    }
-    return frozenset(configured_exclusions or ()) | passthrough_exceptions
 
 
 _CATEGORY_TREATMENTS = {

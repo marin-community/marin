@@ -11,6 +11,7 @@ import pytest
 from harbor.models.trial.result import ExceptionInfo
 from fastapi.testclient import TestClient
 from omegaconf import OmegaConf
+from rigging.task_errors import RetrySettings
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.step import StepHarness
 from rolloutengine.models import ContextWindowExceeded, ModelTurn, Prompt, Transition
@@ -32,60 +33,12 @@ from taskcompendium.models import NoGrader
 from taskcompendium.grader import verifyit_package
 from verifyit.spec import NumericSpec
 from tests.cpu.task_specs import lowered_task, task_input, text_task
+from cloud.iris.tests.task_worker_fixtures import ScriptedClient, WorkerTokenizer, sampled_reply
 
 
 class Decoder:
     def decode(self, token_ids):
         return "12"
-
-
-class WorkerTokenizer:
-    eos_token_id = 99
-
-    def decode(self, token_ids, **kwargs):
-        return "Working"
-
-
-@pytest.fixture
-def worker_config():
-    return OmegaConf.create(
-        {
-            "backend": "vllm",
-            "max_input_length": 3,
-            "max_model_len": 128,
-            "apply_overlong_filtering": False,
-            "sampling_params": {
-                "max_generate_length": 8,
-                "temperature": 1.0,
-                "top_p": 1.0,
-                "top_k": -1,
-                "min_p": 0,
-                "logprobs": 0,
-            },
-        }
-    )
-
-
-def sampled_reply(content="Working"):
-    return {
-        "token_provenance": TokenProvenance.ENGINE,
-        "assistant_messages": [{"role": "assistant", "content": content}],
-        "prompt_ids": [[1, 2]],
-        "response_ids": [[3]],
-        "response_logprobs": [[-0.1]],
-        "stop_reasons": ["stop"],
-    }
-
-
-class ScriptedClient:
-    def __init__(self, replies):
-        self.replies = iter(replies)
-
-    async def generate(self, _request):
-        reply = next(self.replies)
-        if isinstance(reply, Exception):
-            raise reply
-        return reply
 
 
 class HarborTrials:
@@ -130,7 +83,7 @@ class HarborTrials:
 @pytest.fixture
 def open_worker(worker_config):
     @asynccontextmanager
-    async def create(installed_agents, replies, *, harbor):
+    async def create(installed_agents, replies, *, harbor, retry=None):
         worker = TaskRolloutWorker(
             worker_config,
             WholeTaskProjection(worker_config, WorkerTokenizer()),
@@ -138,6 +91,7 @@ def open_worker(worker_config):
             {},
             harbor=HarborTaskSettings.from_config(OmegaConf.create({"harbor": harbor})),
             installed_agents=installed_agents,
+            retry=RetrySettings() if retry is None else retry,
             shutdown_timeout=5,
         )
         try:
@@ -272,7 +226,7 @@ async def test_harbor_trial_preserves_work_and_error_policy_after_generation_sto
         trajectory_ids=(TrajectoryID("harbor", 0),),
     )
     async with open_worker(
-        trials, replies, harbor={"max_retries": 0, "enable_error_classification": True}
+        trials, replies, harbor={"enable_error_classification": True}
     ) as worker:
         (result,) = await worker.generate(request)
         batch = await worker.training_batch(request, [result])
@@ -339,7 +293,7 @@ async def test_native_worker_recovers_without_spending_a_turn(open_worker, sampl
     request = TaskRequestBatch(
         rows=(task_input(lowered_task(task, max_turns=2 if sample_first else 1)),),
     )
-    async with open_worker(InstalledAgents(), replies, harbor={"max_retries": 0}) as worker:
+    async with open_worker(InstalledAgents(), replies, harbor={}) as worker:
         (result,) = await worker.generate(request)
         batch = await worker.training_batch(request, [result])
     assert result.failure is None
@@ -355,7 +309,7 @@ async def test_harbor_worker_keeps_the_original_first_request_serving_error(open
     task = text_task().model_copy(update={"tags": ("harbor",)})
     request = TaskRequestBatch(rows=(task_input(lowered_task(task, "harbor_trial")),))
     async with open_worker(
-        HarborTrials(), [ContextLengthExceededError("context_overflow", "fixture", 400)], harbor={"max_retries": 0}
+        HarborTrials(), [ContextLengthExceededError("context_overflow", "fixture", 400)], harbor={}
     ) as worker:
         (result,) = await worker.generate(request)
     assert result.response_token_ids == ()
@@ -374,7 +328,7 @@ async def test_harbor_worker_resets_recovery_state_before_retrying(open_worker):
         GenerationBudgetExceededError([1, 2, 3, 4]),
     ]
     async with open_worker(
-        HarborTrials(), replies, harbor={"max_retries": 1, "min_wait_sec": 0, "max_wait_sec": 0}
+        HarborTrials(), replies, harbor={}, retry=RetrySettings(max_retries=1, min_wait_sec=0, max_wait_sec=0)
     ) as worker:
         (result,) = await worker.generate(request)
     assert result.response_token_ids == ()
