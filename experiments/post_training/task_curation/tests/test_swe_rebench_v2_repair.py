@@ -37,8 +37,10 @@ from experiments.post_training.task_curation.swe_rebench_fidelity_driver import 
     TRANSIENT_RETRY_DELAYS_SEC,
     ChurnMonitor,
     OutcomeLedger,
+    fail_closed_reward,
     transient_daytona_error,
     transient_daytona_text,
+    verifier_timeout_text,
 )
 
 PYTHON_ROW = {
@@ -519,13 +521,6 @@ def test_verifier_timeout_fails_closed_and_never_feeds_the_churn_window():
     did not pass (the row is not admitted), a NoP timeout counts as NoP not passing - never
     reward=None, never a pass, and never a churn signal. EnvironmentStartTimeoutError stays
     in the churn window (that is infra)."""
-    from experiments.post_training.task_curation.swe_rebench_fidelity_driver import (
-        ChurnMonitor,
-        fail_closed_reward,
-        transient_daytona_error,
-        verifier_timeout_text,
-    )
-
     assert verifier_timeout_text("Verifier execution timed out after 2400.0 seconds")
     assert verifier_timeout_text("harbor.trial.errors.VerifierTimeoutError: deadline")
     assert not verifier_timeout_text("EnvironmentStartTimeoutError: Public fixture initialization timed out")
