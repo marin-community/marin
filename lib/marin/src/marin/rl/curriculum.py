@@ -4,15 +4,16 @@
 """Versioned RL curricula: which task sources a run trains on, at what weights, in what order.
 
 A curriculum is the RL analog of :func:`marin.experiment.data.mixture`: the experiment states the
-policy — which sources, at what weights or in what order — and the trainer executes it. The object
-records each source's pinned dataset identity and recipe, a sampling mode, and the seed. The mode is
-either ``weighted`` (weight-random draws that compose every training window into the exact weighted
-mixture, the vendored trainer's ``weighted_quotas`` behavior) or ``ordered`` (a deterministic stage
-sequence the trainer consumes in order).
+policy — which pools, at what weights or in what order — and the trainer executes it. Each entry
+names the pool artifact the run trains on by its artifact identity, so the record and the training
+data share one provenance chain and cannot drift apart. The mode is either ``weighted``
+(weight-random draws that compose every training window into the exact weighted mixture, the
+vendored trainer's ``weighted_quotas`` behavior) or ``ordered`` (a deterministic stage sequence the
+trainer consumes in order).
 
-The fingerprint covers the source pins, the weights, the stage order and quotas, and the seed.
-An RL run's launch document records the intended curriculum, and the run's artifact record names
-it. The training pool remains a separate input. See ``docs/references/rl-curricula.md``.
+The fingerprint covers the pool identities, the weights, the stage order and quotas, and the seed.
+An RL run's launch document records the resolved sampling projection and the full curriculum, and
+the run's artifact record names it. See ``docs/references/rl-curricula.md``.
 """
 
 import math
@@ -34,27 +35,13 @@ class SamplingMode(StrEnum):
 
 
 @dataclass(frozen=True)
-class SourcePin:
-    """A source's pinned upstream dataset identity."""
-
-    name: str
-    revision: str | None
-    url: str
-
-
-@dataclass(frozen=True)
 class CurriculumEntry:
-    """One source population a curriculum samples, with its pinned provenance and weight."""
+    """One pool population a curriculum samples, with its artifact identity and weight."""
 
     label: str
     """The sampling key the trainer resolves rows by (a ``teacher_route`` value)."""
-    source: str
-    """The catalog invocation name (a ``runnable_sources()`` key)."""
-    version: str
-    """The source recipe's version."""
-    pin: SourcePin
-    recipe: str
-    """The curation pipeline identity as ``module.qualname``."""
+    identity: str
+    """The pool artifact's ``name@version:fingerprint`` identity — the same pinned record the run trains on."""
     weight: float | None = None
     """The weighted-mode mixture weight; ``None`` in ordered mode."""
 
@@ -91,14 +78,8 @@ class RlCurriculum:
         if len(set(labels)) != len(labels):
             raise ValueError(f"curriculum {self.name}@{self.version} has duplicate source labels: {labels}")
         for entry in self.entries:
-            if not entry.source:
-                raise ValueError(f"curriculum {self.name}@{self.version} entry {entry.label!r} has no source")
-            if not entry.version:
-                raise ValueError(f"source {entry.source}@? has no version")
-            if not entry.pin.name or not entry.pin.url:
-                raise ValueError(f"source {entry.source}@{entry.version} is not pinned: name and url are required")
-            if not entry.recipe:
-                raise ValueError(f"source {entry.source}@{entry.version} has no recipe identity")
+            if not entry.identity:
+                raise ValueError(f"curriculum {self.name}@{self.version} entry {entry.label!r} has no pool identity")
             if self.mode is SamplingMode.WEIGHTED:
                 if entry.weight is None or not math.isfinite(entry.weight) or entry.weight <= 0:
                     raise ValueError(
@@ -156,11 +137,18 @@ class RlCurriculum:
         return f"{self.name}@{self.version}:{self.fingerprint}"
 
     def weights(self) -> dict[str, float]:
-        """The weighted-mode mixture as ``{label: weight}``, the trainer's ``domain_weights``."""
+        """The weighted-mode mixture as ``{label: weight}``, the trainer's ``domain_weights``.
+
+        Canonical (sorted) order: the trainer breaks remainder ties and seeds shuffles from this
+        mapping's order, so two declarations of the same mixture must sample identically.
+        """
         if self.mode is not SamplingMode.WEIGHTED:
             raise ValueError(f"{self.identity} is an ordered curriculum and carries no weights")
         # __post_init__ leaves no None weight in weighted mode.
-        return cast(dict[str, float], {entry.label: entry.weight for entry in self.entries})
+        return cast(
+            dict[str, float],
+            {entry.label: entry.weight for entry in sorted(self.entries, key=lambda entry: entry.label)},
+        )
 
     def sampling_config(self) -> dict:
         """The ``data.sampling`` recipe subtree this curriculum renders to."""
@@ -174,15 +162,8 @@ class RlCurriculum:
 
 
 def entry_payload(entry: CurriculumEntry) -> dict:
-    """The canonical record of one source entry: identity, pin, recipe identity, and weight."""
-    return {
-        "label": entry.label,
-        "source": entry.source,
-        "version": entry.version,
-        "pin": {"name": entry.pin.name, "revision": entry.pin.revision, "url": entry.pin.url},
-        "recipe": entry.recipe,
-        "weight": entry.weight,
-    }
+    """The canonical record of one pool entry: its sampling label, pool identity, and weight."""
+    return {"label": entry.label, "identity": entry.identity, "weight": entry.weight}
 
 
 def stage_payload(stage: CurriculumStage) -> dict:

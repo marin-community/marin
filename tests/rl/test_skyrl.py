@@ -41,7 +41,7 @@ from marin.execution.artifact import (
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity, materialized_config
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_status import StatusFile
-from marin.rl.curriculum import CurriculumEntry, CurriculumStage, RlCurriculum, SamplingMode, SourcePin
+from marin.rl.curriculum import CurriculumEntry, CurriculumStage, RlCurriculum, SamplingMode
 from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
@@ -51,6 +51,7 @@ from marin.rl.skyrl import (
     SkyRLPolicyModel,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
+    SkyRLRun,
     SkyRLSpec,
     SkyRLTopology,
     TaskTroveDataSource,
@@ -1464,26 +1465,25 @@ def test_ttl_run_path_preserves_a_run_already_under_the_temporary_root(monkeypat
     assert skyrl_temporary_run_path(temporary, ttl_days=14) == temporary
     sibling = skyrl_temporary_run_path("s3://regional/tmp/ttl=14d-other/run", ttl_days=14)
     assert sibling == "s3://regional/tmp/ttl=14d/skyrl/tmp/ttl=14d-other/run"
-def _curriculum(mode: SamplingMode) -> RlCurriculum:
-    entries = (
+def _pool(name: str) -> ArtifactStep[Artifact]:
+    return ArtifactStep.adopt(name, "2026.08.01", f"s3://test/{name}")
+
+
+def _curriculum(mode: SamplingMode, pools: tuple[str, ...] = ("tests/iceball-gsm8k", "tests/iceball-svamp")):
+    weights = {"tests/iceball-gsm8k": 0.7, "tests/iceball-svamp": 0.3}
+    entries = tuple(
         CurriculumEntry(
-            label="gsm8k",
-            source="gsm8k",
-            version="1",
-            pin=SourcePin(name="openai/gsm8k", revision="e53f048", url="https://huggingface.co/datasets/openai/gsm8k"),
-            recipe="experiments.post_training.task_curation.pipeline.process_rows",
-            weight=0.7 if mode is SamplingMode.WEIGHTED else None,
-        ),
-        CurriculumEntry(
-            label="svamp",
-            source="svamp",
-            version="1",
-            pin=SourcePin(name="ChilleD/SVAMP", revision="5e0bf1e", url="https://huggingface.co/datasets/ChilleD/SVAMP"),
-            recipe="experiments.post_training.task_curation.pipeline.process_rows",
-            weight=0.3 if mode is SamplingMode.WEIGHTED else None,
-        ),
+            label=pool,
+            identity=artifact_identity(_pool(pool)),
+            weight=weights[pool] if mode is SamplingMode.WEIGHTED else None,
+        )
+        for pool in pools
     )
-    stages = () if mode is SamplingMode.WEIGHTED else (CurriculumStage("gsm8k", 4096), CurriculumStage("svamp"))
+    stages = (
+        ()
+        if mode is SamplingMode.WEIGHTED
+        else tuple(CurriculumStage(pool, 4096 if index == 0 else None) for index, pool in enumerate(pools))
+    )
     return RlCurriculum(
         name="users/tester/curricula/math-mix",
         version="2026.11.18",
@@ -1495,59 +1495,61 @@ def _curriculum(mode: SamplingMode) -> RlCurriculum:
 
 
 def _spec_with_curriculum(mode: SamplingMode) -> SkyRLSpec:
-    return dataclasses.replace(_spec(), curriculum=_curriculum(mode))
+    pools = (_pool("tests/iceball-gsm8k"), _pool("tests/iceball-svamp"))
+    train_data = tuple(ArtifactDataSource(pool, relative_path="train.parquet") for pool in pools)
+    return dataclasses.replace(_spec(), train_data=train_data, curriculum=_curriculum(mode))
 
 
 @pytest.mark.parametrize("mode", [SamplingMode.WEIGHTED, SamplingMode.ORDERED], ids=["weighted", "ordered"])
-def test_skyrl_spec_renders_the_curriculum_into_the_recipe_and_launch_document(mode) -> None:
+def test_skyrl_spec_keeps_the_recipe_and_renders_the_curriculum_into_the_launch_document(mode) -> None:
+    declared = _spec().config_yaml
     spec = _spec_with_curriculum(mode)
-    recipe = yaml.safe_load(spec.config_yaml)
-    assert recipe["data"]["kind"] == "parquet"
-    assert recipe["data"]["sampling"]["seed"] == 17
+    assert spec.config_yaml == declared  # the input recipe stays unchanged
 
     step = skyrl_step(spec, _execution())
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
     launch = yaml.safe_load(config.launch_config_yaml)
+    recipe = launch["skyrl"]
     recorded = launch["inputs"]["curriculum"]
     assert recorded["identity"] == spec.curriculum.identity
     assert config.curriculum_identity == spec.curriculum.identity
     assert recorded["mode"] == mode.value
-    assert [source["source"] for source in recorded["sources"]] == ["gsm8k", "svamp"]
-    assert recorded["sources"][0]["pin"] == {
-        "name": "openai/gsm8k",
-        "revision": "e53f048",
-        "url": "https://huggingface.co/datasets/openai/gsm8k",
-    }
+    assert [source["label"] for source in recorded["sources"]] == ["tests/iceball-gsm8k", "tests/iceball-svamp"]
+    assert recorded["sources"][0]["identity"] == artifact_identity(_pool("tests/iceball-gsm8k"))
+    assert recipe["data"]["kind"] == "parquet"
     if mode is SamplingMode.WEIGHTED:
         assert recipe["data"]["sampling"]["kind"] == "domain-weighted"
-        assert recipe["data"]["sampling"]["domain_weights"] == {"gsm8k": 0.7, "svamp": 0.3}
-        assert recorded["sampling"]["domain_weights"] == {"gsm8k": 0.7, "svamp": 0.3}
+        assert recipe["data"]["sampling"]["domain_weights"] == {
+            "tests/iceball-gsm8k": 0.7,
+            "tests/iceball-svamp": 0.3,
+        }
+        assert recorded["sampling"]["domain_weights"] == recipe["data"]["sampling"]["domain_weights"]
         assert recorded["stages"] == []
     else:
         assert recipe["data"]["sampling"]["kind"] == "ordered"
         assert recipe["data"]["sampling"]["stages"] == [
-            {"source": "gsm8k", "quota": 4096},
-            {"source": "svamp", "quota": None},
+            {"source": "tests/iceball-gsm8k", "quota": 4096},
+            {"source": "tests/iceball-svamp", "quota": None},
         ]
-        assert recorded["stages"] == [{"source": "gsm8k", "quota": 4096}, {"source": "svamp", "quota": None}]
+        assert recorded["stages"] == recipe["data"]["sampling"]["stages"]
 
 
-def test_skyrl_spec_rejects_a_recipe_that_disagrees_with_its_curriculum() -> None:
-    recipe = yaml.safe_load(_config_yaml())
-    recipe["data"] = {"sampling": {"kind": "naive"}}
-    with pytest.raises(ValueError, match="disagrees with curriculum"):
-        dataclasses.replace(_spec(), config_yaml=yaml.safe_dump(recipe), curriculum=_curriculum(SamplingMode.WEIGHTED))
+def test_skyrl_spec_rejects_a_curriculum_that_names_a_pool_the_run_does_not_train_on() -> None:
+    pools = (_pool("tests/iceball-gsm8k"),)
+    train_data = (ArtifactDataSource(pools[0], relative_path="train.parquet"),)
+    with pytest.raises(ValueError, match="does not train on"):
+        dataclasses.replace(
+            _spec(), train_data=train_data, curriculum=_curriculum(SamplingMode.WEIGHTED, pools=("tests/iceball-svamp",))
+        )
 
 
-def test_skyrl_spec_accepts_recipe_sampling_defaults_with_a_curriculum() -> None:
-    # A typed-section recipe always emits the sampling base defaults (kind null, empty maps);
-    # those are not policy statements, so a curriculum overrides them without disagreement.
-    recipe = yaml.safe_load(_config_yaml())
-    recipe["data"] = {"kind": "parquet", "sampling": {"kind": None, "domain_weights": {}}}
-    spec = dataclasses.replace(
-        _spec(), config_yaml=yaml.safe_dump(recipe), curriculum=_curriculum(SamplingMode.WEIGHTED)
+def test_skyrl_spec_rejects_a_curriculum_whose_entry_pins_another_pool() -> None:
+    mismatched = dataclasses.replace(
+        _curriculum(SamplingMode.WEIGHTED),
+        entries=(CurriculumEntry(label="tests/iceball-gsm8k", identity="pools/other@1:bbbb", weight=1.0),),
     )
-    assert yaml.safe_load(spec.config_yaml)["data"]["sampling"]["kind"] == "domain-weighted"
+    with pytest.raises(ValueError, match="pins pools/other@1:bbbb"):
+        dataclasses.replace(_spec(), curriculum=mismatched)
 
 
 def test_skyrl_spec_rejects_task_kind_with_a_curriculum() -> None:

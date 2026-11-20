@@ -93,6 +93,49 @@ def test_ordered_stages_reject_quota_larger_than_a_window_unique_visit():
         OrderedStages(dataset, [{"source": "math", "quota": 3}, {"source": "swe", "quota": 2}], seed=1, window_size=4)
 
 
+def test_ordered_stages_reject_when_a_window_spans_repeated_stage_cycles():
+    """A window wider than one stage cycle visits a label more often than one pass counts.
+
+    Routes a×4 and b×4 with stages a:3, b:2 and a 10-draw window pass construction only when the
+    demand bound counts repeated cycles: the window draws a a a b b a a a b b, so `a` needs 6
+    unique rows from a 4-row pool. The old per-stage bound admitted this and `_take` then spun
+    forever on the fifth `a`."""
+    dataset = _route_dataset(["a"] * 4 + ["b"] * 4)
+    with pytest.raises(ValueError, match="cannot supply a window-unique stage visit"):
+        OrderedStages(dataset, [{"source": "a", "quota": 3}, {"source": "b", "quota": 2}], seed=1, window_size=10)
+
+
+def test_ordered_stages_reject_a_quota_less_stage_smaller_than_the_window():
+    dataset = _route_dataset(["a"] * 2)
+    with pytest.raises(ValueError, match="cannot supply a window-unique stage visit"):
+        OrderedStages(dataset, [{"source": "a"}], seed=1, window_size=4)
+
+
+def test_ordered_stage_take_raises_when_no_window_unique_row_remains():
+    """A pool that passes the demand bound but races a window still fails loudly, never spins."""
+    dataset = _route_dataset(["a"] * 4 + ["b"] * 4)
+    order = OrderedStages(dataset, [{"source": "a", "quota": 2}, {"source": "b", "quota": 2}], seed=1, window_size=8)
+    # Force a window that exhausts `a`'s unique rows faster than the declared visits expect.
+    order.window = list(range(4))  # all four `a` rows already in the window
+    order.window_position = 4
+    order.stage_index = 0
+    order.stage_draws = 0
+    with pytest.raises(RuntimeError, match="no window-unique row left"):
+        order._take("a")
+
+
+def test_each_quota_less_stage_visit_is_one_exact_pool_pass():
+    """A quota-less visit reshuffles on entry, so it covers its pool exactly once."""
+    dataset = _route_dataset(["a"] * 4 + ["b"] * 4)
+    pools = {"a": {0, 1, 2, 3}, "b": {4, 5, 6, 7}}
+    for seed in range(50):
+        order = OrderedStages(dataset, [{"source": "a"}, {"source": "b"}, {"source": "a"}], seed=seed, window_size=2)
+        rows = [order.next_index() for _ in range(3 * 4)]
+        visits = [rows[i * 4 : (i + 1) * 4] for i in range(3)]
+        expected = [pools["a"], pools["b"], pools["a"]]
+        assert all(set(visit) == want for visit, want in zip(visits, expected)), seed
+
+
 def test_weighted_quotas_rotates_the_remainder_across_windows():
     """The remainder lands on the highest-fraction route, ties rotating with the batch index."""
     assert weighted_quotas(10, {"a": 1.0, "b": 2.0}, 0) == {"a": 3, "b": 7}

@@ -1,96 +1,93 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The catalog binding for RL curricula."""
-
-from pathlib import Path
+"""The pool binding for RL curricula."""
 
 import pytest
+from marin.execution.lazy import ArtifactStep, artifact_identity
+from marin.rl.curriculum import CurriculumStage
 
 from experiments.post_training.task_curation.curriculum import ordered_curriculum, weighted_curriculum
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
-from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
-
-_DUMMY_INPUT = Path("/unused/numbers.txt")
+from experiments.post_training.task_curation.campaign import CampaignArtifact
 
 
-def _catalog() -> dict[str, RlDataSource]:
-    return {
-        "numbers": number_source(_DUMMY_INPUT, "numbers"),
-        "letters": number_source(_DUMMY_INPUT, "letters"),
-    }
+def _pool(name: str) -> ArtifactStep[CampaignArtifact]:
+    return ArtifactStep.adopt(f"pools/{name}", "2026.11.18", f"s3://test/pools/{name}", kind=CampaignArtifact)
 
 
-def test_weighted_curriculum_records_pinned_source_identities():
+def test_weighted_curriculum_pins_the_pools_the_run_trains_on():
+    numbers, letters = _pool("numbers"), _pool("letters")
     curriculum = weighted_curriculum(
         "users/tester/curricula/numbers-mix",
         "2026.11.18",
-        weights={"numbers": 0.6, "letters": 0.4},
+        train={numbers: 0.6, letters: 0.4},
         seed=17,
-        catalog=_catalog(),
     )
     assert curriculum.fingerprint
-    assert {entry.label for entry in curriculum.entries} == {"numbers", "letters"}
-    entry = curriculum.entries[0]
-    assert entry.source in ("numbers", "letters")
-    assert entry.version == "1"
-    assert (entry.pin.name, entry.pin.revision, entry.pin.url) == (
-        "local-numbers",
-        "pinned",
-        "https://example.org/numbers",
-    )
-    assert entry.recipe.endswith("numbers_pipeline.numbers_pipeline")
+    assert {entry.label for entry in curriculum.entries} == {"pools/numbers", "pools/letters"}
+    identities = {numbers.name: artifact_identity(numbers), letters.name: artifact_identity(letters)}
+    for entry in curriculum.entries:
+        assert entry.identity == identities[entry.label]
     assert curriculum.identity.startswith("users/tester/curricula/numbers-mix@2026.11.18:")
+    assert curriculum.weights() == {"pools/letters": 0.4, "pools/numbers": 0.6}
 
 
-def test_ordered_curriculum_declares_the_stage_sequence():
+def test_ordered_curriculum_takes_stage_objects():
     curriculum = ordered_curriculum(
         "users/tester/curricula/numbers-ladder",
         "2026.11.18",
-        stages=("numbers", "letters", "numbers"),
-        quotas={"numbers": 8},
+        stages=(
+            CurriculumStage("pools/numbers", 8),
+            CurriculumStage("pools/letters"),
+            CurriculumStage("pools/numbers", 8),
+        ),
+        pools={"pools/numbers": _pool("numbers"), "pools/letters": _pool("letters")},
         seed=3,
-        catalog=_catalog(),
     )
-    assert {entry.label for entry in curriculum.entries} == {"numbers", "letters"}
+    assert {entry.label for entry in curriculum.entries} == {"pools/numbers", "pools/letters"}
     assert curriculum.sampling_config() == {
         "kind": "ordered",
         "stages": [
-            {"source": "numbers", "quota": 8},
-            {"source": "letters", "quota": None},
-            {"source": "numbers", "quota": 8},
+            {"source": "pools/numbers", "quota": 8},
+            {"source": "pools/letters", "quota": None},
+            {"source": "pools/numbers", "quota": 8},
         ],
         "seed": 3,
     }
 
 
-def test_curriculum_rejects_unknown_source():
-    with pytest.raises(ValueError, match="unknown RL source 'ghost'"):
+def test_curriculum_rejects_two_pools_sharing_a_label():
+    with pytest.raises(ValueError, match="two pools"):
         weighted_curriculum(
             "users/tester/curricula/broken",
             "2026.11.18",
-            weights={"ghost": 1.0},
-            catalog=_catalog(),
+            train={_pool("numbers"): 0.5, _pool("numbers"): 0.5},
+            seed=1,
         )
 
 
-def test_curriculum_rejects_unpinned_source():
-    catalog = {**_catalog(), "inventory": RlDataSource(info=SourceInfo(id="fixture:inventory", title="x", origin="f"))}
-    with pytest.raises(ValueError, match="no pinned dataset"):
+def test_ordered_curriculum_rejects_a_stage_without_a_pool():
+    with pytest.raises(ValueError, match="has no pool"):
         ordered_curriculum(
-            "users/tester/curricula/unpinned",
+            "users/tester/curricula/unstaged",
             "2026.11.18",
-            stages=("inventory",),
-            catalog=catalog,
+            stages=(CurriculumStage("ghost"),),
+            pools={"numbers": _pool("numbers")},
+            seed=1,
         )
 
 
-def test_ordered_curriculum_rejects_quotas_for_unstaged_sources():
-    with pytest.raises(ValueError, match="no stage samples"):
+def test_ordered_curriculum_rejects_pools_no_stage_visits():
+    with pytest.raises(ValueError, match="no stage visits"):
         ordered_curriculum(
-            "users/tester/curricula/stray-quota",
+            "users/tester/curricula/stray-pool",
             "2026.11.18",
-            stages=("numbers",),
-            quotas={"letters": 4},
-            catalog=_catalog(),
+            stages=(CurriculumStage("numbers"),),
+            pools={"numbers": _pool("numbers"), "letters": _pool("letters")},
+            seed=1,
         )
+
+
+def test_curriculum_seed_is_explicit():
+    with pytest.raises(TypeError):
+        weighted_curriculum("users/tester/curricula/no-seed", "2026.11.18", train={_pool("numbers"): 1.0})  # type: ignore[call-arg]

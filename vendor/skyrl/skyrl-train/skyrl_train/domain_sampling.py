@@ -161,12 +161,27 @@ class OrderedStages:
         unknown = {label for label, _ in declared} - set(pools)
         if unknown:
             raise ValueError(f"Ordered stages name routes the dataset does not have: {sorted(unknown)}")
-        # The most rows one label can be asked for inside a single window is the sum over that
-        # label's stage visits, each bounded by its quota and the window width (an unbounded visit
-        # by the pool itself and the window width). The pool must supply that many unique rows.
-        demand: dict[str, int] = defaultdict(int)
-        for label, quota in declared:
-            demand[label] += min(quota, window_size) if quota is not None else min(len(pools[label]), window_size)
+        # The most rows one label can be asked for inside a single window is the maximum count of
+        # that label's draws over any ``window_size``-wide stretch of the cyclic stage sequence. A
+        # window can span repeated stage cycles, so one visit per declared stage undercounts. Walk
+        # one full period of the deterministic visit sequence plus a window of wrap-around and take
+        # the sliding-window maximum per label; the pool must supply that many unique rows.
+        visit_lengths = [quota if quota is not None else len(pools[label]) for label, quota in declared]
+        period_sequence = [label for (label, _), length in zip(declared, visit_lengths) for _ in range(length)]
+        period = sum(visit_lengths)
+        draws_needed = period + window_size - 1
+        repeats = -(-draws_needed // period)
+        extended = (period_sequence * repeats)[:draws_needed]
+        counts: dict[str, int] = defaultdict(int)
+        for label in extended[:window_size]:
+            counts[label] += 1
+        demand = dict(counts)
+        for offset in range(1, period):
+            counts[extended[offset - 1]] -= 1
+            counts[extended[offset + window_size - 1]] += 1
+            for label, count in counts.items():
+                if count > demand.get(label, 0):
+                    demand[label] = count
         underfilled = {label: wanted for label, wanted in demand.items() if wanted > len(pools[label])}
         if underfilled:
             raise ValueError(f"Ordered stage pools cannot supply a window-unique stage visit: {underfilled}")
@@ -190,6 +205,11 @@ class OrderedStages:
             self.stage_index = (self.stage_index + 1) % len(self.stages)
             self.stage_draws = 0
             label, quota = self.stages[self.stage_index]
+            if quota is None:
+                # A quota-less stage visit is one exact pass over the pool: reshuffle on entry so
+                # the visit covers every row once, whatever an earlier visit left on the cursor.
+                self.rng.shuffle(self.pools[label])
+                self.cursors[label] = 0
         row = self._take(label)
         self.window.append(row)
         self.window_position += 1
@@ -200,18 +220,22 @@ class OrderedStages:
         return {}
 
     def _take(self, label: str) -> int:
-        """The next window-unique row from a label's pool, cycling and reshuffling with the seed."""
+        """The next window-unique row from a label's pool, advancing the pool order.
+
+        The cursor never reshuffles mid-visit: a quota-less visit consumes one shuffled pool order
+        from its entry, so it covers the pool exactly once."""
         pool = self.pools[label]
-        while True:
-            cursor = self.cursors[label]
+        start = self.cursors[label] % len(pool)
+        for offset in range(len(pool)):
+            cursor = (start + offset) % len(pool)
             row = pool[cursor]
-            cursor += 1
-            if cursor == len(pool):
-                self.rng.shuffle(pool)
-                cursor = 0
-            self.cursors[label] = cursor
             if row not in self.window:
+                self.cursors[label] = (cursor + 1) % len(pool)
                 return row
+        raise RuntimeError(
+            f"route {label!r} has no window-unique row left: its pool of {len(pool)} rows cannot supply "
+            f"the declared stage visits within a {self.window_size}-draw window"
+        )
 
     def state_dict(self) -> dict[str, Any]:
         return {
