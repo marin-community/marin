@@ -1,7 +1,8 @@
 const $ = (id) => document.getElementById(id);
 const ns = 'http://www.w3.org/2000/svg';
-const colors = { A: '#286451', B: '#a06534', C: '#526bb2', D: '#9a5079' };
+const colors = ['#286451', '#526bb2', '#a06534', '#9a5079', '#16768c'];
 let runs = [];
+let hardwareColors = new Map();
 
 function element(tag, text, attrs = {}) {
   const node = document.createElement(tag);
@@ -18,12 +19,43 @@ function svg(tag, attrs = {}, text) {
 const identity = (run) => JSON.stringify([run.run_id, run.attempt_id]);
 const fixed = (run) => run.run_id.includes('snowball-inventory-batch-fixed');
 const arm = (run) => run.label.match(/\b([A-D]\d+)\b/)?.[1] ?? run.label;
-const color = (run) => colors[arm(run)[0]] ?? '#6d6a60';
+const hardwareLabel = (run) => run.hardware ? `${run.hardware.count} × ${run.hardware.gpu}` : 'Not recorded';
+const color = (run) => hardwareColors.get(hardwareLabel(run)) ?? '#6d6a60';
 const formatNumber = (value, digits = 4) => Number.isFinite(value) ? value.toFixed(digits) : '—';
 const hours = (run) => run.elapsed_seconds / 3600;
+const timingLabel = (scope) => ({
+  trainer_elapsed_excluding_eval: 'Trainer setup to shutdown, excluding evaluation',
+  coordinator_wall_minus_validation: 'Coordinator wall time minus validation',
+  coordinator_submission_to_terminal: 'Coordinator submission to completion',
+  checkpoint_lineage_native_jobs: 'Native job time across checkpoint lineage',
+  loop_launcher_to_terminal: 'Loop launch to completion',
+})[scope] ?? scope;
 const day = (date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(date));
-function visibleRuns() {
-  return runs.filter((run) => $('campaign').value === 'all' || fixed(run) === ($('campaign').value === 'fixed'));
+function runsInPreset() {
+  return runs.filter((run) => run.preset === $('preset').value);
+}
+const presetLabel = (preset) => ({ 'quick-rl': 'Quick RL', unspecified: 'Unspecified preset' })[preset] ?? preset;
+
+function fillHardware() {
+  const select = $('hardware');
+  const current = select.value;
+  const labels = [...new Set(runsInPreset().map(hardwareLabel))].sort();
+  select.replaceChildren(new Option('All hardware', ''), ...labels.map((label) => new Option(label, label)));
+  select.value = labels.includes(current) ? current : '';
+  select.disabled = labels.length === 0;
+  hardwareColors = new Map(labels.filter((label) => label !== 'Not recorded').map((label, index) => [label, colors[index % colors.length]]));
+}
+function fillPresets(catalog) {
+  const select = $('preset');
+  const current = select.value;
+  const counts = new Map();
+  for (const run of runs) counts.set(run.preset, (counts.get(run.preset) ?? 0) + 1);
+  const presets = [...new Set([...catalog, ...counts.keys()])];
+  select.replaceChildren(...presets.map((preset) => new Option(`${presetLabel(preset)} · ${counts.get(preset) ?? 0}`, preset)));
+  select.value = presets.includes(current)
+    ? current
+    : (presets.find((preset) => counts.has(preset)) ?? presets[0]);
+  fillHardware();
 }
 function route(run) { return '#run=' + encodeURIComponent(identity(run)); }
 function graderPage(run) {
@@ -67,11 +99,15 @@ function chart(id, rows, xValue, yValue, xLabel, yLabel, { dateAxis = false, lab
   const frontier = new Set(eligible.filter((a) => !eligible.some((b) => a.comparison_key === b.comparison_key && hours(b) <= hours(a) && b.final.reward >= a.final.reward && (hours(b) < hours(a) || b.final.reward > a.final.reward))).map(identity));
   for (const point of points) {
     const { run, phase } = point;
-    const link = svg('a', { href: graderPage(run), class: 'dot', tabindex: '0', 'aria-label': `View ${run.label}: ${yLabel.toLowerCase()} ${formatNumber(point.y)}${phase === 'baseline' ? ' (baseline)' : ''}, ${formatNumber(hours(run), 2)} elapsed hours` });
-    link.append(svg('title', {}, `${run.label}\n${yLabel}${phase === 'baseline' ? ' (baseline)' : ''}: ${formatNumber(point.y)}\n${run.partial_coverage ? 'Incomplete evaluation; excluded' : run.provisional ? 'Provisional; unranked' : 'Complete evaluation'}\nClick for this run’s grader stats`));
-    link.append(svg('circle', { cx: px(point.x), cy: py(point.y), r: phase === 'baseline' ? 5 : 6, fill: phase === 'baseline' || run.partial_coverage ? 'var(--panel)' : color(run), stroke: color(run), 'stroke-width': id === 'pareto' && frontier.has(identity(run)) ? 4 : 2, 'stroke-dasharray': run.partial_coverage ? '2 2' : 'none' }));
+    const link = svg('a', { href: graderPage(run), class: 'dot', tabindex: '0', 'aria-label': `View ${run.label}, hardware ${hardwareLabel(run)}, ${yLabel.toLowerCase()} ${formatNumber(point.y)}${phase === 'baseline' ? ' (baseline)' : ''}, ${formatNumber(hours(run), 2)} elapsed hours` });
+    link.append(svg('title', {}, `${run.label}\nHardware: ${hardwareLabel(run)}\n${yLabel}${phase === 'baseline' ? ' (baseline)' : ''}: ${formatNumber(point.y)}\n${timingLabel(run.timing_scope)}\n${run.partial_coverage ? 'Incomplete evaluation; excluded' : run.provisional ? 'Provisional; unranked' : 'Complete evaluation'}\nClick for this run’s grader stats`));
+    const cx = px(point.x), cy = py(point.y);
+    if (id === 'pareto' && frontier.has(identity(run))) {
+      link.append(svg('circle', { cx, cy, r: 10, fill: 'var(--panel)', stroke: color(run), class: 'frontier-ring' }));
+    }
+    link.append(svg('circle', { cx, cy, r: 5, fill: phase === 'baseline' || run.partial_coverage ? 'var(--panel)' : color(run), stroke: color(run), 'stroke-width': 2, 'stroke-dasharray': run.partial_coverage ? '2 2' : 'none' }));
     root.append(link);
-    if (labelDots && phase === 'final') root.append(svg('text', { x: px(point.x) + 10, y: py(point.y) - 10, class: 'dot-label' }, arm(run)));
+    if (labelDots && phase === 'final') root.append(svg('text', { x: cx + 13, y: cy - 10, class: 'dot-label' }, arm(run)));
   }
   host.append(root);
 }
@@ -95,12 +131,13 @@ function showDetails(run) {
   body.append(links);
   const fields = element('dl', null, { class: 'detail-grid' });
   const facts = [
-    ['Campaign', fixed(run) ? 'Fixed runtime' : 'Earlier runtime'], ['Run ID', run.run_id], ['Attempt ID', run.attempt_id],
+    ['Preset', presetLabel(run.preset)], ['Base model', run.model_label], ['Eval set', run.eval_set_label], ['Hardware', hardwareLabel(run)],
+    ['Run ID', run.run_id], ['Attempt ID', run.attempt_id],
     ['Status', `${run.status} · ${run.optimizer_steps} optimizer updates`],
     ['Reward', `${formatNumber(run.baseline?.reward)} → ${formatNumber(run.final?.reward)}`],
     ['Coverage', `Baseline ${run.baseline?.scored ?? 0}/${run.baseline?.attempted ?? 0}; final ${run.final?.scored ?? 0}/${run.final?.attempted ?? 0}`],
     ['Elapsed', `${formatNumber(hours(run), 2)} hours (${formatNumber(run.elapsed_seconds, 1)} seconds)`],
-    ['Timing scope', run.timing_scope], ['Submission date', run.run_date], ['Started', run.started_at], ['Completed', run.completed_at],
+    ['Timing scope', timingLabel(run.timing_scope)], ['Submission date', run.run_date], ['Started', run.started_at], ['Completed', run.completed_at],
     ['Source', run.source_revision], ['Training data', run.data_identity], ['Initializer', run.initializer_identity],
     ['Evaluation', `${run.evaluation.name} · ${run.evaluation.version}`], ['Task set', run.evaluation.task_set_sha256],
     ['Evaluation protocol', run.evaluation.protocol_sha256 ?? 'Unknown · unranked'], ['Artifact location', run.artifact_uri],
@@ -119,21 +156,30 @@ function followHash() {
 }
 
 function render() {
-  const selected = visibleRuns();
+  const hardware = $('hardware').value;
+  const selected = runsInPreset().filter((run) => !hardware || hardwareLabel(run) === hardware);
+  $('no-runs').hidden = selected.length > 0;
+  $('preset-runs').hidden = selected.length === 0;
+  if (!selected.length) {
+    $('count').textContent = '';
+    $('attempts').replaceChildren();
+    return;
+  }
   $('count').textContent = `${selected.length} attempts · ${selected.filter((run) => run.pareto_eligible).length} eligible for frontier ranking`;
   chart('pareto', selected, hours, (run) => run.final?.reward, 'Elapsed hours', 'Final reward', { labelDots: true });
   chart('reward', selected, (run) => Date.parse(run.run_date ?? run.started_at), (run) => run.final?.reward, 'Run date (Los Angeles)', 'Reward', { dateAxis: true, baseline: true });
   chart('duration', selected, (run) => Date.parse(run.run_date ?? run.started_at), hours, 'Run date (Los Angeles)', 'Elapsed hours', { dateAxis: true });
   chart('gain', selected.filter((run) => !run.partial_coverage), (run) => Date.parse(run.run_date ?? run.started_at), (run) => run.gain_per_hour, 'Run date (Los Angeles)', 'Reward gain / hour', { dateAxis: true });
-  $('frontier-note').textContent = selected.some((run) => run.pareto_eligible) ? 'Rings mark the frontier within each verified comparison group.' : 'These points are descriptive. No verified frontier is drawn because the runtime evaluation protocol is not recorded.';
-  $('legend').replaceChildren(...[...new Set(selected.map(arm))].map((name) => {
-    const item = element('span'); item.append(element('i', null, { class: 'swatch', style: `background:${colors[name[0]]}` }), document.createTextNode(name)); return item;
+  $('frontier-note').textContent = selected.some((run) => run.pareto_eligible) ? 'Rings mark the frontier within each matching evaluation protocol, timing definition, and hardware configuration.' : 'These points are descriptive. A verified evaluation protocol and timing definition are required for frontier ranking.';
+  const hardwareRuns = new Map(selected.map((run) => [hardwareLabel(run), run]));
+  $('legend').replaceChildren(...[...hardwareRuns.values()].map((run) => {
+    const item = element('span'); item.append(element('i', null, { class: 'swatch', style: `background:${color(run)}` }), document.createTextNode(hardwareLabel(run))); return item;
   }));
   $('attempts').replaceChildren(...[...selected].sort((a, b) => Date.parse(b.run_date) - Date.parse(a.run_date)).map((run) => {
     const tr = element('tr');
     const name = element('td');
     name.append(element('a', run.label, { href: graderPage(run) }));
-    tr.append(name, element('td', `${formatNumber(run.baseline?.reward)} → ${formatNumber(run.final?.reward)}`), element('td', `${formatNumber(hours(run), 2)} h`), element('td', run.optimizer_steps ?? '—'), element('td', `${run.baseline?.scored ?? 0}/${run.baseline?.attempted ?? 0} → ${run.final?.scored ?? 0}/${run.final?.attempted ?? 0}`), element('td', run.partial_coverage ? 'Incomplete · excluded' : run.provisional ? 'Provisional · unranked' : 'Complete'));
+    tr.append(name, element('td', run.model_label), element('td', run.eval_set_label), element('td', hardwareLabel(run)), element('td', `${formatNumber(run.baseline?.reward)} → ${formatNumber(run.final?.reward)}`), element('td', `${formatNumber(hours(run), 2)} h`), element('td', run.optimizer_steps ?? '—'), element('td', `${run.baseline?.scored ?? 0}/${run.baseline?.attempted ?? 0} → ${run.final?.scored ?? 0}/${run.final?.attempted ?? 0}`), element('td', run.partial_coverage ? 'Incomplete · excluded' : run.provisional ? 'Provisional · unranked' : 'Complete'));
     return tr;
   }));
 }
@@ -143,13 +189,14 @@ async function refresh() {
     const response = await fetch('./api/runs');
     if (!response.ok) throw new Error(`Could not load runs (${response.status}).`);
     const data = await response.json(); runs = data.runs;
-    if (!runs.some(fixed)) $('campaign').value = 'all';
+    fillPresets(data.presets);
     render(); followHash();
   } catch (error) { $('error').textContent = error.message; $('error').hidden = false; }
   finally { $('refresh').disabled = false; }
 }
 $('refresh').onclick = refresh;
-$('campaign').onchange = render;
+$('preset').onchange = () => { fillHardware(); render(); };
+$('hardware').onchange = render;
 $('close-detail').onclick = () => $('run-detail').close();
 $('run-detail').addEventListener('click', (event) => {
   const dialog = $('run-detail');

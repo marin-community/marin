@@ -688,6 +688,7 @@ class BasePPOExp:
         # See agent_logs/2026-05-29_skyrl_uvloop_integration_and_robustness_research.md
         asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
 
+        started = time.monotonic()
         with self.get_tracker() as tracker:
             trainer = None
             try:
@@ -700,6 +701,11 @@ class BasePPOExp:
                         asyncio.run(trainer.shutdown())
                     except Exception as e:
                         logger.warning(f"Error shutting down trainer: {e}")
+
+        elapsed_excluding_eval = time.monotonic() - started - trainer.evaluation_wall_time
+        logger.info("Training run completed: elapsed_excluding_eval_seconds={:.3f}", elapsed_excluding_eval)
+        if self.cfg.trainer.get("dump_grader_report", False):
+            trainer.write_completion_timing(elapsed_excluding_eval)
 
 
 @ray.remote(num_cpus=1, max_retries=0)

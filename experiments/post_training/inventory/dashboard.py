@@ -17,17 +17,19 @@ from rigging.provenance import Provenance
 from rigging.telemetry.serialization import json_bytes
 
 DASHBOARD_INBOX = "rl-data/quick-loop-dashboard/v1"
+PRESET = "quick-rl"
 logger = logging.getLogger(__name__)
 
 
 def run_dashboard_attempt(
-    config: SkyRLRunConfig, *, run: Callable[[SkyRLRunConfig], Artifact | None]
+    config: SkyRLRunConfig, *, run: Callable[[SkyRLRunConfig], Artifact | None], base_model: str
 ) -> Artifact | None:
     """Run the training step after a best-effort registration with the dashboard."""
     info = get_job_info()
     if info is not None:
         launch = yaml.safe_load(config.launch_config_yaml)
         provenance = Provenance.capture()
+        allocation = launch["iris"]["allocation"]
         entry = {
             "run_id": config.run_id,
             "attempt_id": config.attempt_id,
@@ -38,6 +40,12 @@ def run_dashboard_attempt(
             "data_identity": launch["inputs"]["train_data"][0]["identity"],
             "validation_identity": launch["inputs"]["validation_data"][0]["identity"],
             "initializer_identity": config.model.identity,
+            "preset": PRESET,
+            "base_model": base_model,
+            "hardware": {
+                "gpu": allocation["gpu_variant"],
+                "count": allocation["num_nodes"] * allocation["gpus_per_node"],
+            },
         }
         identity = hashlib.sha256(json_bytes([config.run_id, config.attempt_id])).hexdigest()
         path = StoragePath(marin_prefix()) / DASHBOARD_INBOX / f"{identity}.json"

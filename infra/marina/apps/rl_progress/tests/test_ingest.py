@@ -36,6 +36,9 @@ def test_terminal_quick_loop_record_uses_coordinator_time_and_preserves_grader_s
         "data_identity": "training",
         "validation_identity": "validation",
         "initializer_identity": "checkpoint",
+        "preset": "quick-rl",
+        "base_model": "model",
+        "hardware": {"gpu": "H100", "count": 40},
     }
     write(
         "terminal.json",
@@ -72,8 +75,27 @@ def test_terminal_quick_loop_record_uses_coordinator_time_and_preserves_grader_s
     assert result["timing_scope"] == "coordinator_wall_minus_validation"
     assert result["validation_seconds"] == {"baseline": 8.0, "final": 12.0}
     assert result["grader_report"] == report
+    assert result["base_model"] == "model"
+    assert result["preset"] == "quick-rl"
+    assert result["hardware"] == {"gpu": "H100", "count": 40}
     assert result["final"]["reward"] == 0.75
     assert comparison_fields(result)["pareto_eligible"] is True
+
+    timed_report = report | {"timing": {"elapsed_excluding_eval_seconds": 61.5}}
+    write(report_path, timed_report)
+    timed_result = ingest.terminal_record(entry, coordinator)
+    assert timed_result["elapsed_seconds"] == 61.5
+    assert timed_result["timing_scope"] == "trainer_elapsed_excluding_eval"
+    timed_comparison = comparison_fields(timed_result)
+    assert timed_comparison["comparison_key"] != comparison_fields(result)["comparison_key"]
+    assert timed_comparison["pareto_eligible"] is True
+
+    timed_report.pop("evaluation_duration_seconds")
+    write(report_path, timed_report)
+    assert comparison_fields(ingest.terminal_record(entry, coordinator)) == timed_comparison
+
+    write(report_path, report | {"timing": {"elapsed_excluding_eval_seconds": -1}})
+    assert ingest.terminal_record(entry, coordinator)["elapsed_seconds"] == 90.0
 
     other_attempt_id = "a45678901234"
     stale_attempt = ingest.terminal_record(entry | {"attempt_id": other_attempt_id}, coordinator)

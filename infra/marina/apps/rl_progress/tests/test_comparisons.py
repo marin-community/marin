@@ -8,7 +8,7 @@ import json
 
 import pytest
 
-from infra.marina.apps.rl_progress.server.app import comparison_fields
+from infra.marina.apps.rl_progress.server.app import SNOWBALL_INITIALIZER_ALIASES, comparison_fields, run_metadata
 
 
 def test_partial_baseline_is_not_a_trusted_gain_and_names_do_not_change_cohort():
@@ -29,6 +29,22 @@ def test_partial_baseline_is_not_a_trusted_gain_and_names_do_not_change_cohort()
     assert partial["partial_coverage"] is True
     assert partial["trusted_gain_eligible"] is False
     assert partial["comparison_key"] == complete["comparison_key"]
+    assert (
+        comparison_fields(run | {"hardware": {"gpu": "H100", "count": 40}})["comparison_key"]
+        != comparison_fields(run | {"hardware": {"gpu": "H200", "count": 40}})["comparison_key"]
+    )
+
+
+def test_legacy_preset_comes_from_the_recorded_series():
+    first, second = sorted(SNOWBALL_INITIALIZER_ALIASES)
+    earlier = {"initializer_identity": first, "evaluation": {"name": "Snowball fixed five-family development panel"}}
+    fixed = {"initializer_identity": second, "evaluation": {"name": "snowball-fixed-100-development"}}
+    heldout = fixed | {"evaluation": {"name": "test_panel", "task_count": 1500}, "series": "learning-medium"}
+
+    assert run_metadata(earlier) == run_metadata(fixed)
+    assert run_metadata(fixed)["preset"] == "unspecified"
+    assert run_metadata(heldout)["preset"] == "learning-medium"
+    assert run_metadata(heldout | {"preset": "data-medium"})["preset"] == "data-medium"
 
 
 def test_changed_membership_cannot_become_rankable_under_an_old_digest():

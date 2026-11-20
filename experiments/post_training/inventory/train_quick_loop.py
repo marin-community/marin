@@ -219,7 +219,7 @@ def build_run(
         ),
         export_hf=export_hf,
     )
-    return replace(training, run=partial(run_dashboard_attempt, run=training.run))
+    return replace(training, run=partial(run_dashboard_attempt, run=training.run, base_model=MODEL_ID))
 
 
 @click.command(help=__doc__)

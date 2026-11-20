@@ -128,9 +128,21 @@ def terminal_record(entry: dict, job: job_pb2.JobStatus) -> dict:
         baseline.duration + final.duration if baseline.duration is not None and final.duration is not None else None
     )
     adjusted = wall - validation if validation is not None and wall > validation else None
+    trainer_elapsed = (grader_report or {}).get("timing", {}).get("elapsed_excluding_eval_seconds")
+    if type(trainer_elapsed) in (int, float) and math.isfinite(trainer_elapsed) and trainer_elapsed > 0:
+        elapsed = trainer_elapsed
+        timing_scope = "trainer_elapsed_excluding_eval"
+    elif adjusted is not None:
+        elapsed = adjusted
+        timing_scope = "coordinator_wall_minus_validation"
+    else:
+        elapsed = wall
+        timing_scope = "coordinator_submission_to_terminal"
     common = (
         baseline.identity
-        if adjusted is not None and baseline.identity == final.identity and entry["source_revision"] != "unknown"
+        if timing_scope != "coordinator_submission_to_terminal"
+        and baseline.identity == final.identity
+        and entry["source_revision"] != "unknown"
         else None
     )
     return {
@@ -143,10 +155,8 @@ def terminal_record(entry: dict, job: job_pb2.JobStatus) -> dict:
         "date_basis": "submission_acknowledged",
         "started_at": Timestamp(job.started_at.epoch_ms or submitted).as_formatted_date(),
         "completed_at": Timestamp(finished).as_formatted_date(),
-        "elapsed_seconds": adjusted if adjusted is not None else wall,
-        "timing_scope": (
-            "coordinator_wall_minus_validation" if adjusted is not None else "coordinator_submission_to_terminal"
-        ),
+        "elapsed_seconds": elapsed,
+        "timing_scope": timing_scope,
         "coordinator_wall_seconds": wall,
         "validation_seconds": {"baseline": baseline.duration, "final": final.duration},
         "status": "succeeded" if succeeded else "failed",
@@ -154,6 +164,9 @@ def terminal_record(entry: dict, job: job_pb2.JobStatus) -> dict:
         "source_revision": entry["source_revision"],
         "data_identity": entry["data_identity"],
         "initializer_identity": entry["initializer_identity"],
+        "preset": entry.get("preset") or "quick-rl",
+        "base_model": entry.get("base_model"),
+        "hardware": entry.get("hardware"),
         "evaluation": {
             "name": "quick-rl-validation",
             "version": entry["validation_identity"],
@@ -178,7 +191,11 @@ def terminal_record(entry: dict, job: job_pb2.JobStatus) -> dict:
         "grader_report": grader_report,
         "evidence": [
             *(["The coordinator did not produce a successful terminal attempt."] if not succeeded else []),
-            *(["Validation timings are incomplete. Elapsed time includes validation."] if adjusted is None else []),
+            *(
+                ["Trainer and validation timings are incomplete. Elapsed time includes validation."]
+                if timing_scope == "coordinator_submission_to_terminal"
+                else []
+            ),
         ],
     }
 

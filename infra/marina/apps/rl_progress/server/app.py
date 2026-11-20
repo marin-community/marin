@@ -15,6 +15,54 @@ from sqlalchemy.engine import Connection
 
 from .ingest import sync_attempts
 
+SNOWBALL_MODEL = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
+SNOWBALL_INITIALIZER_ALIASES = {
+    f"{SNOWBALL_MODEL}@fe666478454e79fe6027a0bab0388d9abd68f51a",
+    "models/snowball-datakit-sft-fe666478454e79fe6027a0bab0388d9abd68f51a@2026.09.21:ead0f35f",
+}
+HISTORICAL_DEVELOPMENT_PANELS = {
+    "Snowball fixed five-family development panel",
+    "snowball-fixed-100-development",
+    "snowball-fixed-development",
+}
+PRESETS = (
+    "quick-rl",
+    "speed-short",
+    "data-short",
+    "speed-medium",
+    "speed-long",
+    "learning-medium",
+    "data-medium",
+    "learning-long",
+    "data-long",
+    "train-long",
+)
+
+
+def run_metadata(run: dict) -> dict[str, str]:
+    """Resolve display labels and use the recorded series for historical presets."""
+    initializer = run.get("initializer_identity")
+    base_model = run.get("base_model") or (
+        SNOWBALL_MODEL if initializer in SNOWBALL_INITIALIZER_ALIASES else initializer
+    )
+    model_label = "Grug-67B-A2B Datakit SFT" if base_model == SNOWBALL_MODEL else base_model or "Unknown base model"
+    evaluation = run["evaluation"]
+    name = evaluation.get("name")
+    version = evaluation.get("version")
+    if name in HISTORICAL_DEVELOPMENT_PANELS:
+        eval_label = "Snowball development · 100 tasks"
+    elif name == "test_panel":
+        count = evaluation.get("task_count")
+        eval_label = f"Snowball held-out test · {count:,} tasks" if count is not None else "Snowball held-out test"
+    elif name == "quick-rl-validation":
+        selection = version.partition("@")[2].partition(":")[0] if version else ""
+        eval_label = f"Quick RL validation · {selection}" if selection else "Quick RL validation"
+    else:
+        eval_label = name or "Unknown eval set"
+    series = run.get("series")
+    preset = run.get("preset") or (series if isinstance(series, str) and series in PRESETS else "unspecified")
+    return {"preset": preset, "model_label": model_label, "eval_set_label": eval_label}
+
 
 def migrate(connection: Connection) -> None:
     """Create the run table for new installations and local previews."""
@@ -50,8 +98,10 @@ def comparison_fields(run: dict) -> dict:
         expected = len(evaluation["task_ids"])
     key = None
     if evaluation.get("task_set_sha256") and evaluation.get("protocol_sha256") and run.get("timing_scope"):
-        identity = {name: evaluation[name] for name in ("task_set_sha256", "protocol_sha256")}
+        identity: dict[str, object] = {name: evaluation[name] for name in ("task_set_sha256", "protocol_sha256")}
         identity["timing_scope"] = run["timing_scope"]
+        if run.get("hardware"):
+            identity["hardware"] = run["hardware"]
         key = hashlib.sha256(json_bytes(identity)).hexdigest()
 
     def complete(result):
@@ -94,10 +144,10 @@ def create_api(services):
                 for field in ("run_date", "started_at", "completed_at"):
                     if run.get(field):
                         run[field] = datetime.fromisoformat(run[field]).isoformat().replace("+00:00", "Z")
-                records.append(run | comparison_fields(run))
+                records.append(run | comparison_fields(run) | run_metadata(run))
                 imported_at = row["imported_at"]
                 updated_at = imported_at if updated_at is None else max(updated_at, imported_at)
-        return {"runs": records, "updated_at": updated_at}
+        return {"runs": records, "presets": PRESETS, "updated_at": updated_at}
 
     @api.post("/sync")
     def sync():

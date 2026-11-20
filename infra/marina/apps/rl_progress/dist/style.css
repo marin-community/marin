@@ -4,3 +4,7 @@
 .grader-table td:nth-child(2){min-width:220px;overflow-wrap:anywhere}
 .grader-table td:nth-child(7),.grader-table td:nth-child(8){min-width:145px}
 .grader-table td:last-child{padding-right:0}
+.toolbar{align-items:flex-end;flex-wrap:wrap}
+.toolbar label{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;min-width:0;max-width:100%;color:var(--muted)}
+.toolbar select{margin-left:0;min-width:0;max-width:100%;color:var(--ink)}
+.toolbar #count{color:var(--muted);font-size:13px}

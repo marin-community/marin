@@ -32,6 +32,12 @@ comparison fields. A runtime evaluation protocol hash is distinct from a declare
 source protocol; absent runtime identity remains null. Names do not define a
 comparison group. Use `wandb_url` for an exact W&B run link when recorded.
 
+The overview groups runs by the recorded preset. New Quick RL records store
+the preset, model ID, eval selection identity, and requested GPU type and count.
+The picker also shows the historical Snowball presets. Historical rows with
+a recognized series use it as their preset. GPU type and count narrow the
+view and distinguish frontiers within it.
+
 ## Validate and release
 
 From the repository root:
@@ -43,7 +49,7 @@ uv run marina validate infra/marina/apps/rl_progress
 uv run marina release infra/marina/apps/rl_progress --local --json
 ```
 
-Check campaign filtering, each graph's point links, cold-loaded run hash links,
+Check preset and hardware filtering, graph point links, cold-loaded run hash links,
 coverage exclusions, and the detail dialog's scrolling body, close control, Escape,
 and backdrop dismissal. Stop the local stack with Ctrl-C.
 
@@ -64,9 +70,12 @@ and looks up coordinator timestamps through its existing VPC connection to Iris.
 It imports terminal attempts by their native keys. A repeated import leaves
 the existing snapshot intact. A failed import remains eligible on the next tick.
 
-The frontier uses coordinator wall time minus both evaluation durations.
-Runs with incomplete timings or mismatched evaluation identities stay unranked.
-Historical rows retain their original timing and evaluation groups.
+The dashboard prefers the trainer's `elapsed_excluding_eval_seconds` from the
+attempt report in CoreWeave. It falls back to coordinator wall time minus both
+validation durations, then to unadjusted coordinator wall time. The timing
+definition is part of the frontier comparison key. Runs with only unadjusted
+wall time or mismatched evaluation identities stay unranked. Historical rows
+retain their original timing and evaluation groups.
 
 Run names and chart points open a separate grader page for the selected native
 attempt. The page uses the imported grader report, including per-environment
