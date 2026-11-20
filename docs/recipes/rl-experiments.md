@@ -348,3 +348,37 @@ names only. A layout's coordinator deadline can be changed with `dataclasses.rep
 A control can omit a configuration key when its current value equals the native SkyRL schema
 default. An omitted key whose current value differs from that default makes the control stale.
 Candidate receipts must match their recorded inputs exactly.
+
+## Evaluate and publish a checkpoint
+
+Use `experiments.post_training.skyrl_evaluation.evaluate` to score a model in a separate evaluation
+job. Pass a `SkyRLPolicyModel` for an exported RL policy or an `ArtifactHfModel` for an SFT export,
+a serving `ModelConfig`, evaluation definitions, a version, and the accelerator and cluster settings.
+The artifact supplies the model URI, identity, and tokenizer. The serving config supplies the engine
+and generation settings. Use `job_timeout_seconds` to set a deadline for the evaluation job.
+
+`resolve_evaluations` accepts registered suites such as `standard-local` or comma-separated evaluation
+names such as `mmlu-smoke,gsm8k-smoke`. The result gives the evaluation group ID, per-evaluation run IDs,
+records prefix, and result paths. Each run writes a record and an archive with per-question results.
+An RL policy record includes `rl_run` when both the training run ID and attempt ID are available.
+
+Use Snowball's `eval-short` to score published weights with the same EvalLite protocol as the
+trainer, in a generation-only job. Use trainer evaluation to track policy scores at the run's
+scheduled training steps. `eval-short` runs on one node with eight H100s. It used 1.1 H100-hours
+and scored 0.57 on the active panel in a recorded run. [EvalLite run](https://iris.oa.dev/#/job/%2Fatqamar%2Fusers-ahmad-checkpoints-snowball-rl-eval-short-224fc25b8e-in-169b86d8-2026.11.19.1-coordinator-5dc8b038)
+
+```bash
+uv run python -m experiments.post_training.snowball_rl \
+  --preset eval-short --init "$MODEL" --version dev --plan
+```
+
+Set `MODEL` to a published `NAME@VERSION`. Replace `--plan` with `--run` to submit.
+
+To publish a checkpoint export, enable export and set `trainer.hf_hub_repo_id` in the training recipe.
+Gated Snowball presets fix that setting. For a manual checkpoint export use `--hf-hub-repo-id` on
+`cloud.iris.export_hf_checkpoint`. Uploads default to private. Select public visibility with
+`trainer.hf_hub_private: false` or `--no-hf-hub-private` on a manual export. The publisher checks
+the repository's visibility before uploading. It uploads `.marinskyrl-model-manifest.json` and the
+files it lists, then checks each file's size and SHA-256 at the upload commit. Files larger than 64 MiB require LFS
+digest metadata. With `hf_upload_mode: all`, the step archive receives the same checks as the
+repository root.
