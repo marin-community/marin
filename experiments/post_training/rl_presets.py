@@ -196,8 +196,7 @@ class Training:
                 count = len(cohort["job"]["tasks"])
                 expected_tasks += count
                 minimum_scored_tasks += math.ceil(preset.harbor.minimum_coverage * count)
-        if preset.checkpoint_every and evaluation is not None:
-            assert initial_model_uri is not None
+        if initial_model_uri is not None:
             callbacks.append(
                 BestCheckpointCallback(
                     type="best_checkpoint",

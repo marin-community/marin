@@ -476,6 +476,8 @@ def run_spec(
         if inherited_model is not None
         else model.step.path(artifact_prefix(preset.recipe.layout.cluster))
     )
+    if preset.export != "best" and not (preset.checkpoint_every and preset.evaluations):
+        initial_model_uri = None
     validation_data = ()
     evaluation_data = []
     profiles = {}
@@ -522,7 +524,7 @@ def run_spec(
                     chosen[0] if chosen else None,
                     profiles,
                     expected_tasks,
-                    initial_model_uri if preset.checkpoint_every else None,
+                    initial_model_uri,
                 ),
             )
         )

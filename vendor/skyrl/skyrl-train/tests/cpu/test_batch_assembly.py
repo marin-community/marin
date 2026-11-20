@@ -275,7 +275,7 @@ def test_dp_slices_with_fields_and_longest_rows_on_other_ranks_match_driver(dp_s
     )
     whole = assemble_slice(whole_plan, range(len(uids)), normalized, pad_token_id=0, algorithm=algorithm)
     # This oracle sums the full token-width reward tensors through the public estimator.
-    whole["advantages"], whole["returns"] = compute_advantages_and_returns(
+    whole["advantages"], _ = compute_advantages_and_returns(
         token_level_rewards=whole["rewards"],
         response_mask=whole["response_mask"],
         index=uids,

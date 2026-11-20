@@ -126,7 +126,7 @@ def plan_worker_batch(
         ),
         num_experts=num_experts,
     )
-    metrics = rollout_metrics(facts, tis_lcs_alert_threshold=float(cfg.trainer.algorithm.tis_lcs_alert_threshold))
+    metrics = rollout_metrics(facts)
     metrics.update(reward_metrics(facts, plan.uids, n_samples_per_prompt=cfg.generator.n_samples_per_prompt))
     metrics.update(
         rollout_staleness_metrics(staleness, global_step=global_step, max_staleness_steps=max_staleness_steps)
@@ -335,7 +335,6 @@ def install_plan_advantages(
             group_advantage_invariant=invariant,
         )
         batch["advantages"] = advantages[rows.start : rows.stop] * batch["response_mask"]
-        batch["returns"] = batch["advantages"]
     else:
-        batch["advantages"], batch["returns"] = batch_advantages(batch, algorithm, invariant=invariant)
+        batch["advantages"], _ = batch_advantages(batch, algorithm, invariant=invariant)
     return scores

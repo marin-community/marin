@@ -71,7 +71,6 @@ def trainer_factory(tmp_path, monkeypatch):
         trainer.resume_mode = ResumeMode(mode)
         trainer.colocate_all = True
         trainer.policy_model = LocalPolicyGroup(trainer.cfg)
-        trainer.critic_model = None
         trainer._domain_balancer = None
         trainer._restored_rollout_state = None
         trainer.distillation_scored_tokens_total = 0

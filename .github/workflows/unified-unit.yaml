@@ -579,7 +579,8 @@ jobs:
             skyrl-train/tests/cpu/test_best_checkpoint_selection.py \
             skyrl-train/tests/cpu/test_grug_log_scaling.py \
             skyrl-train/tests/cpu/test_reference_likelihood.py \
-            skyrl-train/tests/cpu/test_batch_assembly.py
+            skyrl-train/tests/cpu/test_batch_assembly.py \
+            skyrl-train/tests/cpu/test_prompt_quarantine.py
 
   unit_tests:
     name: unit-tests

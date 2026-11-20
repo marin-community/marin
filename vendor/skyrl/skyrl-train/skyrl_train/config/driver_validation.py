@@ -232,12 +232,6 @@ def validate_cfg(cfg: DictConfig, *, check_runtime_resources: bool = True):
     except ValueError as error:
         raise AssertionError(str(error)) from error
 
-    # if advantage estimator is GAE, then critic path should be provided
-    if cfg.trainer.algorithm.advantage_estimator == "gae":
-        assert cfg.trainer.critic.model.path, (
-            "`trainer.critic.model.path` should be provided for PPO training, got `None`"
-        )
-
     assert not (cfg.trainer.algorithm.use_kl_in_reward and cfg.trainer.algorithm.use_kl_loss), (
         "use_kl_in_reward and use_kl_loss should be mutually exclusive"
     )
