@@ -19,7 +19,7 @@ from taskcompendium.browsecomp import browsecomp_tools
 from taskcompendium.models import FunctionDefinition, ProviderRequirement
 from taskcompendium.openresearcher import openresearcher_state
 
-from rolloutengine.harness.browsecomp import INVALID_ARGUMENTS, retrieval_output
+from rolloutengine.harness.browsecomp import INVALID_ARGUMENTS, retrieval_output, valid_retrieval_call
 from rolloutengine.harness.shell import ToolCallResult, ToolContext
 
 RETRIEVAL_RELAY_PORT = 8789
@@ -68,12 +68,7 @@ class RetrievalServiceSession:
         return HttpResponse(response.status_code, response.content)
 
     async def call(self, name: str, arguments: dict[str, JsonValue]) -> ToolCallResult:
-        parameter = "query" if name == "search" else "docid"
-        if (
-            name not in {"search", "get_document"}
-            or set(arguments) != {parameter}
-            or not isinstance(arguments[parameter], str)
-        ):
+        if not valid_retrieval_call(name, arguments, {"search", "get_document"}):
             return ToolCallResult(INVALID_ARGUMENTS)
         # The tool call owns pump failures, so they reach the engine's normal rollout error boundary.
         async with asyncio.TaskGroup() as group:
@@ -114,19 +109,17 @@ class RetrievalServiceSession:
 
 @dataclass(frozen=True)
 class OpenResearcherServiceProvider:
-    endpoint: str | None
+    endpoint: str
 
     def tools(self, requirement: ProviderRequirement) -> tuple[FunctionDefinition, ...]:
         state = openresearcher_state(requirement)
         if requirement.network_access != "service_only":
             raise ValueError("Retrieval service requires a service-only task network contract")
-        if self.endpoint is None:
-            raise ValueError("OpenResearcher requires a run-owned retrieval service")
         return browsecomp_tools(state)
 
     async def open(self, context: ToolContext) -> RetrievalServiceSession:
         self.tools(context.requirement)
-        if context.machine is None or self.endpoint is None:
+        if context.machine is None:
             raise ValueError("Retrieval relay requires its thin actor machine and a service endpoint")
         cleanup = AsyncExitStack()
         try:

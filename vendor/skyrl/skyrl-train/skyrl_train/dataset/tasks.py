@@ -20,6 +20,7 @@ from skyrl_gym.rollout_specs import is_shell_harness, rollout_limits, rollout_sp
 from skyrl_train.config.rollout_validation import FAMILY_COLUMN
 from skyrl_gym.source_task import session_parameters, source_task
 from taskcompendium.identity import canonical_sha256
+from taskcompendium.integrity import SharedIntegrityContract
 from taskcompendium.models import (
     EnvironmentRequirements,
     NoGrader,
@@ -260,8 +261,12 @@ def _canonical_task_prompt(row: dict, _index: int, *, environment_configs: Mappi
     if task.source.dataset in config["max_turns_by_dataset"]:
         session["max_turns"] = config["max_turns_by_dataset"][task.source.dataset]
     machine = config["task_machine_by_dataset"].get(task.source.dataset)
-    if machine is None and task.environment_requirements.required_backend is not None:
-        machine = {**config["required_actor"], "backend": task.environment_requirements.required_backend.value}
+    if machine is None and task_machine_reason(task) is not None:
+        machine = dict(config["required_actor"])
+        if task.environment_requirements.required_backend is not None:
+            machine["backend"] = task.environment_requirements.required_backend.value
+        if isinstance(task.integrity_contract, SharedIntegrityContract):
+            machine["user"] = str(task.integrity_contract.agent_uid)
     task_machine = (
         MachineRuntimeSpec.model_validate(machine)
         if machine is not None and task_machine_reason(task) is not None

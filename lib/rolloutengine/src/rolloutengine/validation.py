@@ -6,6 +6,7 @@
 from collections.abc import Mapping
 
 from shellbox.machine import MachineFactory, NetworkPolicy
+from taskcompendium.integrity import SharedIntegrityContract
 from taskcompendium.models import (
     CONVERSATION_ANSWERS,
     EXECUTION_RESOURCE_FIELDS,
@@ -54,6 +55,9 @@ def task_machine_reason(task: TaskSpec) -> str | None:
 def validate_spec(spec: TaskRolloutSpec, machine_factories: Mapping[str, MachineFactory]) -> None:
     """Check the machine selections against the task's environments, resources, and grader."""
     task = spec.task
+    if isinstance(task.integrity_contract, SharedIntegrityContract):
+        if spec.task_machine is None or spec.task_machine.user != str(task.integrity_contract.agent_uid):
+            raise ValueError("SHARED task actor user must match the integrity contract agent_uid")
     if any(
         requirement.network_access == "service_only"
         for requirement in task.environment_requirements.tool_providers.values()

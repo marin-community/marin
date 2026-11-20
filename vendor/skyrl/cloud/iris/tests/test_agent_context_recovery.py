@@ -27,6 +27,7 @@ from skyrl_gym.verification import VerificationStatus
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import NoGrader
 from taskcompendium.grader import verifyit_package
+from taskcompendium.openresearcher import OPENRESEARCHER_ACTION_INTERFACE
 from verifyit.spec import NumericSpec
 from tests.cpu.task_specs import lowered_task, task_input, text_task
 
@@ -130,14 +131,15 @@ class HarborTrials:
 @pytest.fixture
 def open_worker(worker_config):
     @asynccontextmanager
-    async def create(installed_agents, replies, *, harbor):
+    async def create(installed_agents, replies, *, harbor, retrieval_service=None):
         worker = TaskRolloutWorker(
             worker_config,
             WholeTaskProjection(worker_config, WorkerTokenizer()),
             ScriptedClient(replies),
             {},
-            harbor=HarborTaskSettings.from_config(OmegaConf.create({"harbor": harbor})),
+            harbor=None if harbor is None else HarborTaskSettings.from_config(OmegaConf.create({"harbor": harbor})),
             installed_agents=installed_agents,
+            retrieval_service=retrieval_service,
             shutdown_timeout=5,
         )
         try:
@@ -248,7 +250,12 @@ async def test_native_step_harness_keeps_length_stopped_rollout():
         ("reserialized", None),
     ],
     ids=[
-        "sampled-turn", "first-request", "agent-error-policy", "turn-budget", "token-budget", "model-failure",
+        "sampled-turn",
+        "first-request",
+        "agent-error-policy",
+        "turn-budget",
+        "token-budget",
+        "model-failure",
         "reserialized",
     ],
 )
@@ -270,17 +277,19 @@ async def test_harbor_trial_preserves_work_and_error_policy_after_generation_sto
     task = text_task().model_copy(update={"tags": ("harbor",), "grader": NoGrader(reason="Harbor grades the trial")})
     # Each request costs three tokens; the third would reach the cumulative budget of nine.
     request = TaskRequestBatch(
-        rows=(task_input(lowered_task(
-            task,
-            "harbor_trial",
-            max_turns=1 if stop == "max_turns" else 8,
-            max_total_tokens=9 if stop == "budget_reached" else None,
-        )),),
+        rows=(
+            task_input(
+                lowered_task(
+                    task,
+                    "harbor_trial",
+                    max_turns=1 if stop == "max_turns" else 8,
+                    max_total_tokens=9 if stop == "budget_reached" else None,
+                )
+            ),
+        ),
         trajectory_ids=(TrajectoryID("harbor", 0),),
     )
-    async with open_worker(
-        trials, replies, harbor={"max_retries": 0, "enable_error_classification": True}
-    ) as worker:
+    async with open_worker(trials, replies, harbor={"max_retries": 0, "enable_error_classification": True}) as worker:
         (result,) = await worker.generate(request)
         batch = await worker.training_batch(request, [result])
     responses = trials.responses
@@ -394,3 +403,16 @@ async def test_harbor_worker_resets_recovery_state_before_retrying(open_worker):
     assert result.stop_reason == "length"
     assert result.failure is None
     assert result.metrics["rollout_retries"] == 1
+
+
+@pytest.mark.asyncio
+async def test_one_stored_harness_binds_to_each_runs_retrieval_service(open_worker):
+    stored = lowered_task(text_task())
+    frozen = stored.model_dump_json()
+    for endpoint in ("http://first-run:8788", "http://second-run:8788"):
+        async with open_worker(None, [], harbor=None, retrieval_service=endpoint) as worker:
+            configured, harnesses = worker._configured_task_and_harnesses(stored, None, "binding", "train")
+            provider = harnesses[stored.harness].tools[OPENRESEARCHER_ACTION_INTERFACE]
+            assert provider.endpoint == endpoint
+            assert configured.model_dump_json() == frozen
+            assert endpoint not in frozen

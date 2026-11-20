@@ -427,8 +427,8 @@ task provider's complete `initial_state`, including corpus, implementation,
 tokenizer and index-manifest revisions. A cross-region index fails before
 staging starts.
 
-Pass the yielded endpoint as `retrieval_service` in the SkyRL shellbox session
-settings. Keep that context open for every retrieval caller. Exiting the
+Pass the yielded endpoint as `environment.task_sessions.retrieval_service` in
+the SkyRL worker configuration. Keep that context open for every retrieval caller. Exiting the
 context terminates the service child. A failed service request fails the
 rollout; it does not fall back to another corpus or search implementation.
 
@@ -448,6 +448,10 @@ Shellbox bubblewrap machine on the Iris worker. Enable
 selects the required backend without a dataset-specific override; a different
 backend fails validation before machine or model startup. Keep the actor network
 denied and qualify its pinned image and persistent tool state on that backend.
+Canonical tasks that need an actor use `task_spec.required_actor`, whose default
+backend is Daytona. A typed backend requirement overrides that placement. A
+SHARED integrity contract selects its agent UID; validation rejects a conflicting
+explicit actor identity.
 
 For an authenticated registry that a worker cannot reach, configure a regional
 OCI mirror under `environment.task_sessions.local`. Set `region` to the worker

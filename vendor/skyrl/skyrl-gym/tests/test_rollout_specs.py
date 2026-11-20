@@ -1,7 +1,7 @@
 """Canonical task requirements reach the selected actor and verifier machines."""
 
 from rolloutengine.machines import _machine_spec
-from rolloutengine.models import MachineRuntimeSpec
+from rolloutengine.models import MachineRuntimeSpec, RolloutLimits
 from shellbox.machine import NetworkPolicy
 import pytest
 from skyrl_gym.rollout_specs import rollout_limits, rollout_spec
@@ -12,6 +12,7 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     ExecutionRequirements,
     PlainText,
+    NoGrader,
     ScriptGrader,
     Source,
     TaskSpec,
@@ -120,3 +121,29 @@ def test_verifier_floor_preserves_declared_deadlines_and_extends_attempt_budget(
     assert limits.verifier_timeout == expected
     assert limits.attempt_timeout == 600 + expected + 60
     assert lowered.task == task
+
+
+def test_verifier_floor_keeps_a_finite_attempt_without_a_separate_actor_limit():
+    task = TaskSpec(
+        id="harbor-deadline",
+        source=Source(dataset="fixture", revision="1", row="0", importer_revision="1"),
+        context=ConversationInput(events=(TextMessage(role="user", content="Fix the project."),)),
+        environment_requirements=EnvironmentRequirements(),
+        answer_type=AnswerType.TEXT,
+        answer_format=PlainText(),
+        grader=NoGrader(reason="Harbor owns trial grading"),
+    )
+    limits = RolloutLimits(
+        max_turns=4,
+        max_total_tokens=None,
+        model_turn_timeout=None,
+        tool_turn_timeout=None,
+        total_turn_timeout=None,
+        attempt_timeout=5400,
+        verifier_timeout=None,
+        cleanup_timeout=60,
+    )
+    updated = rollout_limits(task, limits, minimum_verifier_timeout=1800)
+    assert updated.attempt_timeout == 5400
+    assert updated.total_turn_timeout is None
+    assert updated.verifier_timeout == 1800

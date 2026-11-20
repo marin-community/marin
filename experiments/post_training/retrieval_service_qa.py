@@ -73,7 +73,7 @@ class QualificationResult(BaseModel):
     passed: bool
 
 
-async def concurrent_search(endpoint: str, config: QualificationConfig) -> float:
+async def concurrent_search_elapsed(endpoint: str, config: QualificationConfig) -> float:
     """Return elapsed time for the declared concurrent source-contract search batch."""
     body = {"name": "search", "arguments": {"query": QA_SEARCH_QUERY}, "state": config.state.model_dump(mode="json")}
     async with httpx.AsyncClient(timeout=300, trust_env=False) as client:
@@ -163,7 +163,7 @@ def qualify(config: QualificationConfig) -> QualificationResult:
     started = time.monotonic()
     with retrieval_service(launch) as endpoint:
         ready_elapsed = time.monotonic() - started
-        concurrent_elapsed = asyncio.run(concurrent_search(endpoint, config))
+        concurrent_elapsed = asyncio.run(concurrent_search_elapsed(endpoint, config))
         documents = asyncio.run(actor_retrieval(endpoint, config))
         return QualificationResult(
             ready_elapsed=ready_elapsed,

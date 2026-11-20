@@ -4,6 +4,7 @@
 """Run offline retrieval inside the task's declared actor machine."""
 
 import json
+from collections.abc import Collection
 from dataclasses import dataclass
 
 from pydantic import BaseModel, JsonValue
@@ -15,6 +16,11 @@ from rolloutengine.harness.shell import ToolCallResult, ToolContext
 
 BROWSECOMP_OUTPUT_LIMIT = 16 * 1024 * 1024
 INVALID_ARGUMENTS = json.dumps({"error": "Invalid offline search tool or arguments"})
+
+
+def valid_retrieval_call(name: str, arguments: dict[str, JsonValue], tools: Collection[str]) -> bool:
+    parameter = "query" if name == "search" else "docid"
+    return name in tools and set(arguments) == {parameter} and isinstance(arguments.get(parameter), str)
 
 
 def retrieval_output(result: Result) -> bytes:
@@ -35,9 +41,7 @@ class OfflineSearchSession:
 
     def request_command(self, name: str, arguments: dict[str, JsonValue]) -> Command | None:
         """Build a supported call, or return None for an unknown tool or invalid arguments."""
-        parameter = "query" if name == "search" else "docid"
-        allowed = {tool.name for tool in self.tools}
-        if name not in allowed or set(arguments) != {parameter} or not isinstance(arguments.get(parameter), str):
+        if not valid_retrieval_call(name, arguments, {tool.name for tool in self.tools}):
             return None
         return Command(
             argv=("python3", "-m", BROWSECOMP_MODULE),

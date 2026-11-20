@@ -2,6 +2,7 @@
 local: null # Explicitly enable with {} on Linux hosts with working bubblewrap.
 max_verifier_workers: 32 # verifier threads in each rollout worker
 remote_judge: null # Set base_url and api_key_env to grade judge tasks on the rollout host.
+retrieval_service: null # Per-run BM25 endpoint bound after the service becomes ready.
 daytona: null # Set api_key_env and ttl_minutes for tasks with the daytona backend.
 
 session:
@@ -36,6 +37,7 @@ task_spec:
     command_timeout: 30
     shell_tool: {}
   required_actor:
+    backend: daytona
     cpus: 1
     memory_mb: 8192
     storage_mb: null
