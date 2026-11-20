@@ -245,6 +245,12 @@ def build() -> ArtifactStep[LevanterCheckpoint]:
             mode=wandb_mode,
             name=None,
             replicate_path=ctx.output_path,
+            # The canary trains for ~1-2 minutes, so the "upload tail" the default
+            # 120 s + 60 s finish/teardown bounds may drop is the whole run. The canary
+            # runs on a single host, so the multi-slice shutdown barrier those bounds
+            # protect does not apply; wait longer for a stalled upload to recover.
+            background_finish_timeout=600.0,
+            service_teardown_timeout=300.0,
         )
 
     def build_config(ctx: StepContext) -> GrugMoeLaunchConfig:

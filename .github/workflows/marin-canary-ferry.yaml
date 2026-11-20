@@ -153,6 +153,7 @@ jobs:
         # all marin-* regions, and us-central1 keeps the hit rate high.
         env:
           MARIN_PREFIX: gs://marin-us-central1
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
         run: .venv/bin/python scripts/ci/validate_canary_metrics.py
 
       - name: Summarize TPU canary profile

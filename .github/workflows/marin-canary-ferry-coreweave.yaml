@@ -200,6 +200,7 @@ jobs:
         env:
           CW_KEY_ID: ${{ secrets.CW_ACCESS_KEY_ID }}
           CW_KEY_SECRET: ${{ secrets.CW_SECRET_ACCESS_KEY }}
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
 
       - name: Summarize GPU canary profile
         continue-on-error: true

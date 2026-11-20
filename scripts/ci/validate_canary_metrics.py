@@ -18,8 +18,10 @@ import json
 import operator
 import os
 import sys
+import time
 from collections.abc import Callable
 
+import wandb
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
@@ -93,6 +95,46 @@ def print_report(results: list[tuple[str, float | None, float, bool]]) -> None:
     print()
 
 
+# W&B ingests history a little after the job exits; give it this long to catch up.
+WANDB_HISTORY_WAIT_SECONDS = 180
+WANDB_POLL_SECONDS = 15
+
+
+def check_wandb_history(min_steps: float) -> str | None:
+    """Return an error if the canary's W&B run did not receive its training history.
+
+    The S3 summary above is written by the trainer itself, so it passes even when the
+    wandb-core upload stalls and Levanter's bounded finish/teardown drops the run's
+    whole history. Downstream consumers (MFU tracking, profile summaries) read W&B,
+    so a run that is empty there is a lost data point and must fail loudly.
+
+    Skipped (returns None) unless RUN_ID and WANDB_API_KEY are set, i.e. outside CI.
+    """
+    run_id = os.environ.get("RUN_ID")
+    if not run_id or not os.environ.get("WANDB_API_KEY"):
+        return None
+
+    path = f"{os.environ.get('WANDB_ENTITY', 'marin-community')}/{os.environ.get('WANDB_PROJECT', 'marin')}/{run_id}"
+    api = wandb.Api(timeout=60)
+    deadline = time.monotonic() + WANDB_HISTORY_WAIT_SECONDS
+    while True:
+        try:
+            run = api.run(path)
+        except Exception as e:  # wandb raises CommError or ValueError for a missing run
+            return f"Could not read W&B run {path}: {e}"
+        last_step = run.lastHistoryStep if run.lastHistoryStep is not None else -1
+        if last_step >= min_steps and run.state not in ("crashed", "failed"):
+            print(f"W&B run {path}: state={run.state}, last history step {last_step}")
+            return None
+        if time.monotonic() >= deadline:
+            return (
+                f"W&B run {path} has state={run.state} and last history step {last_step} "
+                f"(need >= {min_steps:g}); the trainer's W&B upload was lost."
+            )
+        time.sleep(WANDB_POLL_SECONDS)
+        api.flush()
+
+
 def main():
     # The GPU lane's output lives on CoreWeave object storage; this configures
     # s3:// access from CW_KEY_* when they are present (no-op on the GCS lane).
@@ -107,6 +149,11 @@ def main():
 
     if any(not passed for _, _, _, passed in results):
         print("FAILED: One or more metrics breached thresholds.")
+        sys.exit(1)
+
+    wandb_error = check_wandb_history(_env_float("CANARY_MIN_STEPS", 200))
+    if wandb_error is not None:
+        print(f"FAILED: {wandb_error}")
         sys.exit(1)
     print("PASSED: All metrics within thresholds.")
 
