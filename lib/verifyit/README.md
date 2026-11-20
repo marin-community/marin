@@ -114,8 +114,7 @@ execution, dispatch, and dependency pins; installing this package does not enabl
 Verifyit's own attribution category, which determines whether an incomplete attempt can be scored.
 
 `json_comparison.json_values_equal` compares decoded JSON values with strict types and an optional
-float tolerance. `modes.grade_nl2bash` compares shell-output records as a multiset, preserving
-repeated records and rejecting unexpected errors.
+float tolerance.
 
 `structure_closure` classifies partial JSON, delimited JSON, paired markers, and required code
 fences. `closure_scoring` compares a completed outer region with a known reference and reports

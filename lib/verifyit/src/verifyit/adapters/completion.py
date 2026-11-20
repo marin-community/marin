@@ -3,13 +3,11 @@
 
 """Normalize provider completion fields before benchmark-specific extraction."""
 
-import re
 from dataclasses import dataclass
 
 from verifyit.compat import StrEnum
 
 REASONING_END_MARKERS = ("</think>", "<|end_think|>")
-BOX_START = re.compile(r"\\(?:boxed|fbox)\s*\{")
 END_OF_TURN = (
     "<|im_end|>",
     "<|eot_id|>",
@@ -55,10 +53,3 @@ def answer_text(completion: Completion) -> str:
     if completion.status != CompletionStatus.COMPLETED:
         return ""
     return final_text(completion.reasoning)
-
-
-def math_answer_text(completion: Completion) -> str:
-    """Read final content or a completed reasoning-only answer containing a box."""
-    if not completion.content and not BOX_START.search(completion.reasoning):
-        return ""
-    return answer_text(completion)
