@@ -22,7 +22,8 @@ from experiments.post_training.task_curation.tests.prebuilt_fixtures import preb
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 
-def test_two_shard_inventory_checks_native_contracts_and_rejects_changed_resume_panel(tmp_path):
+@pytest.mark.parametrize("evidence_kind", ["actor", "population"])
+def test_two_shard_inventory_checks_native_contracts_and_rejects_changed_resume_panel(tmp_path, evidence_kind):
     source = number_source(tmp_path / "input")
     task = TaskSpec.model_validate(json.loads(prebuilt_task("typed")["lowered_task_spec"])["task"])
     native = task.model_copy(
@@ -111,6 +112,14 @@ def test_two_shard_inventory_checks_native_contracts_and_rejects_changed_resume_
         receipt_from_census(actor.model_dump(mode="json"), None),
     )
     declaration = source.declaration
+    if evidence_kind == "population":
+        declaration = declaration.model_copy(
+            update={
+                "actor_census_input": declaration.actor_census_input.model_copy(
+                    update={"evidence_url": str(Path(population.path) / ".artifact.json")}
+                )
+            }
+        )
     result = inventory_source(declaration, str(tmp_path / "first"), None)
     assert result.retained_tasks == 2 and result.sample_size == 2
     assert result.scanned_task_specs_sha256 == population.task_specs_sha256

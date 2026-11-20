@@ -21,7 +21,7 @@ from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.oracle_filter import has_oracle_solution
 from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
 
-from experiments.post_training.task_curation.lexical_artifacts import ActorCensus, SourceTextPopulation
+from experiments.post_training.task_curation.lexical_artifacts import population_for_census
 from experiments.post_training.task_curation.sample_qc_artifacts import SAMPLE_SEED, SAMPLE_SIZE, SampleInventory
 
 LOGGER = logging.getLogger(__name__)
@@ -36,8 +36,7 @@ def inventory_source(declaration: SourceDeclaration, output_root: str, resume_ro
     binding = declaration.actor_census_input
     if binding is None:
         raise ValueError(f"Current source lacks its exact input census: {declaration.id}")
-    actor = ActorCensus.raw_load(str(StoragePath(binding.evidence_url).parent))
-    population = SourceTextPopulation.raw_load(actor.input_artifact)
+    population = population_for_census(binding.evidence_url, declaration.id)
     expected = (declaration.id, declaration.dataset_id, declaration.dataset_revision, declaration.pipeline.version)
     actual = (population.source_id, population.dataset_id, population.dataset_revision, population.source_version)
     if actual != expected or (

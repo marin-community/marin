@@ -22,7 +22,6 @@ from pathlib import Path
 from typing import Any, Literal
 
 from finestore.rl.curation import ActorCensusInput
-from marin.execution.artifact import read_record
 from marina.client import applet_query
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -33,7 +32,7 @@ from experiments.post_training.task_curation.derived_contract_census import (
     DerivedContractCensusInput,
     DerivedContractReceipt,
 )
-from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
+from experiments.post_training.task_curation.lexical_artifacts import population_for_census
 from infra.marina.apps.rl_data_catalog.server.contract_selection import INPUT_FIELDS, select_contract_receipts
 from infra.marina.apps.rl_data_catalog.server.schema import PROJECTION_REFRESH_SEAL_SQL
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
@@ -391,10 +390,6 @@ def served_pin_map(served_pins: list[DeclarationPin]) -> dict[str, DeclarationPi
     return {canonical_source_id(pin.source_id): pin for pin in served_pins}
 
 
-def _load_population(population_path: str):
-    return SourceTextPopulation.raw_load(population_path)
-
-
 def census_input_rows(declarations: list[DeclarationPin], sources: dict[str, Any]) -> tuple[list[dict], list[str]]:
     """Build the derived-contract census inputs over each measured source's bound population.
 
@@ -414,9 +409,7 @@ def census_input_rows(declarations: list[DeclarationPin], sources: dict[str, Any
             continue
         source = sources[declaration.source_id]
         binding = source.info.actor_census_input
-        actor_artifact = str(binding.evidence_url).removesuffix("/.artifact.json")
-        record = read_record(actor_artifact)
-        population = _load_population(record.result["input_artifact"])
+        population = population_for_census(binding.evidence_url, declaration.source_id)
         row = {"population": population.model_dump(mode="json"), "input": binding.model_dump(mode="json")}
         try:
             DerivedContractCensusInput.model_validate(row)
