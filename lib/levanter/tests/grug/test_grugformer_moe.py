@@ -1021,6 +1021,13 @@ def _top_k_adversarial_rows(rows: int, width: int, seed: int) -> jax.Array:
     return jnp.asarray(values)
 
 
+def _lax_top_k_indices_on_cpu(values: jax.Array, k: int) -> np.ndarray:
+    # The kernel ranks +0 above -0, as XLA's CPU top-k does. On MI355X, jax.lax.top_k treats -0 and +0 as equal
+    # for inputs of 24,576 elements or more, so the reference runs on CPU.
+    cpu_values = jax.device_put(values, jax.devices("cpu")[0])
+    return np.asarray(jax.jit(lambda v: jax.lax.top_k(v, k)[1])(cpu_values))
+
+
 # Widths cover one tile, exact or padded, and three tiles, exact (384) or padded (37). k = 37 runs the
 # steps in a loop rather than unrolled.
 _TOP_K_CASES = [
@@ -1055,8 +1062,7 @@ def test_top_k_indices_run_inside_a_checking_shard_map_on_gpu():
             )
         )(jax.sharding.reshard(values, P("data", None)))
 
-    expected = jax.jit(lambda v: jax.lax.top_k(v, 9)[1])(values)
-    np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
+    np.testing.assert_array_equal(np.asarray(actual), _lax_top_k_indices_on_cpu(values, 9))
 
 
 @pytest.mark.parametrize(("rows", "width", "k"), _TOP_K_CASES)
@@ -1066,8 +1072,7 @@ def test_top_k_indices_match_lax_top_k_on_gpu(rows, width, k):
 
     actual = jax.jit(lambda v: top_k_indices(v, k))(values)
 
-    expected = jax.jit(lambda v: jax.lax.top_k(v, k)[1])(values)
-    np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
+    np.testing.assert_array_equal(np.asarray(actual), _lax_top_k_indices_on_cpu(values, k))
 
 
 def test_moe_mlp_sonic_matches_jax_gather_reference_on_gpu():
