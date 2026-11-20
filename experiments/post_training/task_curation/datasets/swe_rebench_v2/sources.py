@@ -3,6 +3,10 @@
 
 """The repaired agentic SWE-rebench V2 source, built from the author's V2.1 release."""
 
+from pathlib import Path
+
+from experiments.post_training.task_curation.registry import read_registry_json
+from experiments.post_training.task_curation.within_source_binding import read_dedup_receipts
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import IntendedUse
 
@@ -28,6 +32,24 @@ UPSTREAM_FILES = tuple(f"data/train-{i:05d}-of-00006.parquet" for i in range(6))
 
 
 def sources() -> list[RlDataSource[CurationRecipe]]:
+    """The repaired source declarations, registered only once their within-source dedup
+    census receipt exists in the atlas registry (the binding in ``sources.all_sources``
+    requires a measured receipt for every configured source). Until the census lands the
+    declaration is absent from the catalog and the landing stays green."""
+    registry_path = Path(__file__).parents[2] / "datasets" / "within_source_dedup.json"
+
+    def _receipt_present(source: RlDataSource[CurationRecipe]) -> bool:
+        try:
+            receipts = read_dedup_receipts(registry_path, load_json=read_registry_json)
+        except Exception:
+            return False
+        return source.info.id in receipts
+
+    declared = [_declare()]
+    return [source for source in declared if _receipt_present(source)]
+
+
+def _declare() -> RlDataSource[CurationRecipe]:
     return [
         RlDataSource(
             info=SourceInfo(
