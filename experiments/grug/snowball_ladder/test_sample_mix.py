@@ -71,6 +71,8 @@ def _docs(rng, n):
     ]
 
 
+# Each item samples in a freshly spawned process that re-imports this module, about 10s apiece.
+@pytest.mark.timeout(180)
 def test_end_to_end_on_a_small_store(tmp_path):
     rng = np.random.default_rng(0)
     store = str(tmp_path / "store")
