@@ -83,8 +83,6 @@
         128009
       ],
       "skip_special_tokens": false,
-      "presence_penalty": 0.0,
-      "frequency_penalty": 0.0,
       "min_tokens": 0
     },
     "eval_sampling_params": {

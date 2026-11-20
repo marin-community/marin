@@ -109,6 +109,8 @@ def evaluation_from_spec(spec: NVL72EvaluationSpec, config_output: Path) -> Arti
     config["generator"]["engine_init_kwargs"]["marin_engine_serving_probe"] = {
         "engines": 12,
         "served_model_name": "adopted-sft",
+        "temperature": profile["generator"]["sampling_params"]["temperature"],
+        "top_p": profile["generator"]["sampling_params"]["top_p"],
         "measured_requests": 48,
         "concurrency": 12,
         "max_new_tokens": 256,
