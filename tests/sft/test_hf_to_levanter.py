@@ -22,9 +22,12 @@ from levanter.models.lm_model import LmConfig
 from levanter.optim.config import AdamConfig
 from levanter.trainer import Trainer, TrainerHooks
 from marin.execution.lazy import ArtifactStep, materialized_config
+from marin.experiment import checkpoints as checkpoints_mod
 from marin.experiment.checkpoints import (
     HfToLevanterCheckpoint,
     HfToLevanterConfig,
+    hf_to_levanter,
+    run_hf_to_levanter,
 )
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import LevanterCheckpoint
@@ -161,6 +164,23 @@ def test_lm_config_draccus_round_trip_selects_subclass_by_model_type():
     )
     decoded = draccus.decode(LmConfig.get_choice_class(config.model_type), config.model_config_json)
     assert decoded == arch
+
+
+def test_hf_to_levanter_none_compute_dtype_preserves_stored_hf_dtypes(monkeypatch):
+    """Passing compute_dtype=None forwards dtype=None so stored HF dtypes (e.g. FP32 router_bias) survive."""
+    monkeypatch.setattr(checkpoints_mod, "resolve_lm_config", lambda *_args: _tiny_arch())
+    captured = []
+    monkeypatch.setattr(checkpoints_mod, "import_hf_to_levanter", captured.append)
+
+    default_conv = hf_to_levanter("org/model", model_type="llama", hf_revision="deadbeef", version="2026.11.19")
+    preserved_conv = hf_to_levanter(
+        "org/model", model_type="llama", hf_revision="deadbeef", version="2026.11.19", compute_dtype=None
+    )
+    run_hf_to_levanter(materialized_config(default_conv.step, _PREFIX))
+    run_hf_to_levanter(materialized_config(preserved_conv.step, _PREFIX))
+
+    assert [cfg.dtype for cfg in captured] == ["bfloat16", None]
+    assert preserved_conv.step.fingerprint() != default_conv.step.fingerprint()
 
 
 class _ExportTrainer:

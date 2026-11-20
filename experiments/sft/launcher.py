@@ -84,6 +84,7 @@ from levanter.data.text.datasets import DatasetComponent, LmDataConfig, UrlDatas
 from levanter.data.text.formats import ChatLmDatasetFormat
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.lm_model import LmConfig
+from levanter.models.qwen import Qwen3Config
 from levanter.optim.config import OptimizerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import DEFAULT_JAX_CONFIG, TrainerConfig
@@ -208,9 +209,10 @@ def _levanter_train_config(
     """Assemble the identity-bearing ``TrainLmConfig`` for a Levanter-backend SFT run.
 
     ``model_config`` is the concrete ``LmConfig`` the pytree is built from. With
-    ``use_hf_model_config`` (the HF/prepared paths) its fields are re-derived from the checkpoint, so
-    only its class matters; native init (``initialize_model_from_checkpoint_path``) does not re-derive
-    it, so it must be the architecture the checkpoint was saved with.
+    ``use_hf_model_config`` (the HF/prepared paths), the checkpoint supplies the architecture and
+    ``model_config`` supplies supported runtime settings; native init
+    (``initialize_model_from_checkpoint_path``) does not re-derive it, so it must be the
+    architecture the checkpoint was saved with.
     """
     return TrainLmConfig(
         data=data_config,
@@ -305,14 +307,14 @@ class HFModel:
     local directory holding an HF snapshot. A Hub ref is copied to the regional prefix by a CPU
     download step (:func:`experiments.models.download_model`) that becomes a dependency, so the
     accelerator task loads weights from the bucket rather than the Hub. A path is loaded in place.
-    ``tokenizer_path`` defaults to the loaded checkpoint. ``model_type`` is the Levanter
-    model-registry key; ``use_hf_model_config`` re-derives the arch from the checkpoint, so it only has
-    to match the architecture (Delphi and the Qwen3 smoke are both ``qwen3``).
+    ``tokenizer_path`` defaults to the loaded checkpoint. ``model`` is the Levanter
+    :class:`LmConfig` class and any runtime settings preserved across ``use_hf_model_config``
+    reloads (Delphi and the Qwen3 smoke use the default :class:`Qwen3Config`).
     """
 
     model_ref: str  # pinned Hub ref, or a bucket/local HF snapshot dir
     tokenizer_path: str | None = None  # defaults to the loaded checkpoint
-    model_type: str = "qwen3"
+    model: LmConfig = field(default_factory=Qwen3Config)
     eos_token_ids: Sequence[int] = LLAMA3_CHAT_EOS_TOKEN_IDS
     # Built once: ArtifactStep compares by identity, so init_deps and build_train_config must share it.
     _mirror: ArtifactStep[LevanterCheckpoint] | None = field(init=False, repr=False, compare=False)
@@ -350,8 +352,7 @@ class HFModel:
             data_config,
             resources,
             num_train_steps,
-            # use_hf_model_config re-derives the arch from the checkpoint, so only the class matters.
-            model_config=LmConfig.get_choice_class(self.model_type)(),
+            model_config=self.model,
             initialize_from_hf=self._checkpoint_path(ctx),
             initialize_model_from_checkpoint_path=None,
             use_hf_model_config=True,
@@ -370,7 +371,7 @@ class PreparedModel:
     """
 
     step: ArtifactStep[Artifact]
-    model_type: str = "qwen3"
+    model: LmConfig = field(default_factory=Qwen3Config)
     eos_token_ids: Sequence[int] = LLAMA3_CHAT_EOS_TOKEN_IDS
 
     def tokenizer_cache_key(self) -> str:
@@ -402,8 +403,7 @@ class PreparedModel:
             data_config,
             resources,
             num_train_steps,
-            # use_hf_model_config re-derives the arch from the prepared checkpoint, so only the class matters.
-            model_config=LmConfig.get_choice_class(self.model_type)(),
+            model_config=self.model,
             initialize_from_hf=prepared_path,
             initialize_model_from_checkpoint_path=None,
             use_hf_model_config=True,
@@ -571,6 +571,7 @@ class SFTSpec:
     num_train_steps: int | None = None
     num_train_epochs: int | None = None
     hf_save_dtype: str | None = None
+    field_dtype_overrides: Mapping[str, str] = field(default_factory=dict)
     wandb_project: str = "marin-sft-launcher"
     checkpointer: CheckpointerConfig = field(
         default_factory=lambda: CheckpointerConfig(
@@ -715,6 +716,7 @@ def _trainer(
         steps_per_eval=500,
         jax_config=jax_config,
         mp=jmp.get_policy(_MARIN_PRECISION),
+        field_dtype_overrides={name: jnp.dtype(dtype) for name, dtype in spec.field_dtype_overrides.items()},
         per_device_parallelism=-1,  # auto microbatch; raise on OOM (math-equivalent)
         use_explicit_mesh_axes=use_explicit_mesh_axes,
         mesh=spec.mesh if spec.mesh is not None else MeshConfig(),
