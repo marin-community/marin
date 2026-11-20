@@ -39,7 +39,10 @@ POLICY_DIGEST = "8f7ef8170fbef2880214cbf03f70d80cffa3114276e024389617777bf07f53e
 POLICY_VERSION = "2026.11.20"
 POLICY_REVISION = f"{POLICY_VERSION}-together"
 POLICY_REFERENCE = Micro210PolicyReference(
-    uri=("gs://marin-us-east1/evaluation-policies/micro210/" f"{POLICY_REVISION}/{POLICY_DIGEST}/policy.json"),
+    uri=(
+        "s3://marin-us-east-08a/marin/users/benfeuer/evaluation-policies/micro210/"
+        f"{POLICY_REVISION}/{POLICY_DIGEST}/policy.json"
+    ),
     revision=POLICY_REVISION,
     sha256=POLICY_DIGEST,
     byte_size=121292,
