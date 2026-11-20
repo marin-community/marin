@@ -7,6 +7,8 @@
   "source_ids": [
     "SWE-rebench:ibragim-bad/SWE-rebench-V2.1@repaired-20261119",
     "TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2@repaired-20261118",
-    "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2@repaired-20261118"
+    "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2@repaired-20261118",
+    "FWeindel:validated-tasks/fineenvs_v2",
+    "FWeindel:validated-tasks/fineenvs_v3"
   ]
 }
