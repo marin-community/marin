@@ -1,5 +1,7 @@
 from collections.abc import Collection
 from dataclasses import dataclass
+from pathlib import Path
+import errno
 from typing import Dict, Any, Optional, Union
 import random
 import hashlib
@@ -12,6 +14,7 @@ from typing import Tuple
 import ray
 from ray.actor import ActorHandle
 from ray.util.placement_group import PlacementGroupSchedulingStrategy
+from iris.cluster.worker.port_allocator import DEFAULT_TASK_PORT_RANGE
 
 VLLM_DATA_PARALLEL_MASTER_PORT_COUNT = 5
 
@@ -193,26 +196,9 @@ def aggregate_completion_usage_info(
     return usage_info
 
 
-_RENDEZVOUS_PORT_START = 20_000
-_RENDEZVOUS_PORT_STOP = 30_000
-
-
-def _find_available_rendezvous_port(excluded_ports: Collection[int] = ()) -> int:
-    """Choose a listener port outside Linux's default ephemeral client range."""
-
-    excluded = set(excluded_ports)
-    candidates = list(range(_RENDEZVOUS_PORT_START, _RENDEZVOUS_PORT_STOP))
-    random.shuffle(candidates)
-    for port in candidates:
-        if port in excluded:
-            continue
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            try:
-                sock.bind(("", port))
-            except OSError:
-                continue
-        return port
-    raise RuntimeError(f"No free rendezvous port in [{_RENDEZVOUS_PORT_START}, {_RENDEZVOUS_PORT_STOP})")
+_RENDEZVOUS_PORT_START = 10_002  # Iris controller and worker RPC use 10000/10001.
+_TCP_PORT_STOP = 65_536
+_EPHEMERAL_PORT_RANGE_PATH = Path("/proc/sys/net/ipv4/ip_local_port_range")
 
 
 def get_pg_bundle_node_ips(placement_group, pg_indices: Collection[int]) -> List[str]:
@@ -236,20 +222,46 @@ def get_pg_bundle_node_ips(placement_group, pg_indices: Collection[int]) -> List
 
 
 def _reserve_available_rendezvous_ports(port_count: int, excluded_ports: Collection[int] = ()) -> list[socket.socket]:
+    """Hold listeners outside the node's ephemeral and Iris named-port ranges.
+
+    The kernel must not assign an outgoing connection one of these ports during
+    the handoff to vLLM. Iris can widen its ephemeral range below Linux's default
+    floor, so a fixed 20000–29999 pool is unsafe. Bind each candidate once and
+    keep that same socket; other inference gangs cannot reserve it concurrently.
+    """
+    ephemeral_start, ephemeral_end = map(int, _EPHEMERAL_PORT_RANGE_PATH.read_text().split())
+    task_start, task_stop = DEFAULT_TASK_PORT_RANGE
+    excluded = set(excluded_ports)
+    candidates = [
+        port
+        for port in range(_RENDEZVOUS_PORT_START, _TCP_PORT_STOP)
+        if not ephemeral_start <= port <= ephemeral_end
+        and not task_start <= port < task_stop
+        and port not in excluded
+    ]
+    random.shuffle(candidates)
     sockets: list[socket.socket] = []
-    unavailable_ports = set(excluded_ports)
     try:
-        for _ in range(port_count):
-            port = _find_available_rendezvous_port(unavailable_ports)
+        for port in candidates:
             reserved = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            reserved.bind(("", port))
+            try:
+                reserved.bind(("", port))
+            except OSError as error:
+                reserved.close()
+                if error.errno != errno.EADDRINUSE:
+                    raise
+                continue
             sockets.append(reserved)
-            unavailable_ports.add(port)
+            if len(sockets) == port_count:
+                return sockets
+        raise RuntimeError(
+            f"Cannot reserve {port_count} rendezvous ports outside ephemeral range "
+            f"{ephemeral_start}–{ephemeral_end} and Iris named-port range {task_start}–{task_stop - 1}"
+        )
     except Exception:
         for reserved in sockets:
             reserved.close()
         raise
-    return sockets
 
 
 @ray.remote(num_cpus=0, num_gpus=0)

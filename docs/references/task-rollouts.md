@@ -125,6 +125,16 @@ For these trials, the Harbor task package defines the image, environment variabl
 and agent user. TaskSpec may add `setup_commands` and their setup-only
 `working_directory`; other TaskSpec machine-environment overrides are rejected.
 
+SkyRL's Harbor settings select Daytona image builds with `daytona_provisioning`
+(`snapshot` or `declarative`). `eval_daytona_provisioning` selects evaluation's
+mode separately; when omitted, evaluation uses the training setting. Both
+Shellbox tasks and original Harbor trials use that phase's mode. Declarative
+builds create no persistent snapshot and require an account that permits them.
+
+Installed-agent `judge_model` selects the model exposed to original Harbor tasks
+that declare model access. The worker passes its explicit remote-judge connection
+to the host relay; provider credentials stay on the host.
+
 ## Harnesses
 
 A harness is the agent loop of a task: what the model sees, which tools run, and when the attempt ends.

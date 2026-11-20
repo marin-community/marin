@@ -708,6 +708,7 @@ class TaskRolloutWorkerSpec:
                     daytona_connection,
                     api_key=os.environ.get(daytona_options.get("eval_api_key_env") or "DAYTONA_API_KEY"),
                 ),
+                judge=judge,
             )
         factories = task_machine_factories(self.config.environment.task_sessions)
         if harbor is not None:
