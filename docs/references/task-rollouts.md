@@ -138,10 +138,13 @@ SkyRL's Harbor settings select Daytona image builds with `daytona_provisioning`
 mode separately; when omitted, evaluation uses the training setting. Both
 Shellbox tasks and original Harbor trials use that phase's mode. Declarative
 builds create no persistent snapshot and require an account that permits them.
+Evaluation provisioning overrides also apply when both phases share credentials.
 
 Installed-agent `judge_model` selects the model exposed to original Harbor tasks
 that declare model access. The worker passes its explicit remote-judge connection
 to the host relay; provider credentials stay on the host.
+Task-environment model callers receive runtime relay access; tasks that declare
+model access only for verification retain verifier-only access.
 
 ## Harnesses
 
