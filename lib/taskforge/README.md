@@ -127,7 +127,8 @@ Each workpiece publishes to `<output>/<capability>/<slot>/`:
 The event stream is the head's `chunks`, concatenated in order, each read from `chunks/<name>`. A
 reader checks every chunk and workpiece against the digest in its name and fails with
 `CorruptJournal`, naming the path, when one is missing or altered or the head is malformed,
-including a terminal `status` with a null `workpiece`. A finished root is recognised from the head
+including a negative `size`, a chunk or workpiece name that is not a SHA-256 with its suffix, and a
+terminal `status` with a null `workpiece`. A finished root is recognised from the head
 alone, with one GET. Chunks and workpieces that no head names (a writer that lost the head, or one
 that died before its swap) stay behind; nothing collects them.
 
@@ -145,9 +146,11 @@ access, a bad key or signature, a missing bucket) or a local filesystem refusal 
 path, no space). Every other storage error, including resets, short reads, timeouts, throttling and
 any 5xx, is transient: a checkpoint's lines stay pending and are resent from the head's size on the
 next timer tick, and the final publication and the history reads on resume retry for several
-minutes. Each publication attempt rereads the head, so an applied swap whose acknowledgment was lost
-is recognised rather than repeated, and chunks and workpieces are created only if absent, so a
-repeated creation with the same bytes succeeds. A refusal, or final retries running out, stops the
+minutes. After any inconclusive conditional write (412, 409, or a transient error) the writer reads
+the target instead of trusting the error: its own bytes mean the write applied; a target still absent,
+or a head still at the version this writer observed, means it did not, and it is retried against that
+same version; other bytes under a content name are `CorruptJournal`, and a head naming another writer
+is `Superseded`. The claim at start retries the same way before any model call. A refusal, or final retries running out, stops the
 writer with `PublicationFailed`: the process fails, the head keeps its last checkpoint, and a relaunch
 replays that history and re-executes the effects after it. A collision found while publishing is
 `CorruptJournal`. Neither publishes a hold.

@@ -3,15 +3,25 @@
 
 import asyncio
 import errno
+import hashlib
 import json
 import re
 import subprocess
 import sys
 import threading
+from collections import Counter
+from collections.abc import Callable
+from functools import partial
+from io import BytesIO
 from pathlib import Path
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
+from urllib.parse import urlsplit
 
+import botocore.config
+import botocore.session
 import pytest
+from botocore.awsrequest import AWSPreparedRequest, AWSResponse
 from botocore.exceptions import (
     ClientError,
     ConnectionClosedError,
@@ -19,12 +29,12 @@ from botocore.exceptions import (
     IncompleteReadError,
 )
 from lib.taskforge.tests.effect_fakes import local_records
-from rigging.filesystem.conditional_object import ConditionalObject, VersionedBytes
+from rigging.filesystem.conditional_object import ConditionalObject, S3ConditionalObject, VersionedBytes
 from rigging.timing import ExponentialBackoff
 from s3fs.errors import translate_boto_error
 
 from taskforge import checkpoint
-from taskforge.checkpoint import HEAD, CheckpointSink, Journal, is_transient_storage_error, read_journal
+from taskforge.checkpoint import HEAD, HEAD_JSON, CheckpointSink, Journal, is_transient_storage_error, read_journal
 from taskforge.effects.events import Note, StageCompleted
 from taskforge.effects.issues import CorruptJournal, PublicationFailed, Superseded
 from taskforge.effects.log import EventLog, Status, decode
@@ -280,6 +290,94 @@ async def test_ambiguous_head_acknowledgement_is_reconciled_without_overlap(tmp_
     assert decode(published.events()) == log.records
 
 
+class S3Server:
+    """S3 conditional GET and PUT behind a real botocore client; only the HTTP exchange is replaced.
+
+    The chosen PUT either applies and loses its acknowledgement, so the SDK resends it, or answers a retryable 409.
+    """
+
+    def __init__(self, fault: str, chosen: Callable[[str, int], bool]) -> None:
+        self.objects: dict[str, bytes] = {}
+        self.fault, self.chosen, self.puts, self.fired = fault, chosen, Counter[str](), False
+
+    @staticmethod
+    def reply(status: int, body: bytes = b"", **headers: str) -> AWSResponse:
+        raw: Any = SimpleNamespace(stream=lambda **_: iter([body]), read=BytesIO(body).read)
+        sent: Any = {"Content-Length": str(len(body)), **headers}
+        return AWSResponse("https://bucket.s3.test", status, sent, raw)
+
+    def error(self, code: str, status: int) -> AWSResponse:
+        return self.reply(status, f"<Error><Code>{code}</Code><Message>{code}</Message></Error>".encode())
+
+    def __call__(self, request: AWSPreparedRequest, **_: object) -> AWSResponse:
+        key = urlsplit(request.url).path
+        headers = {name: cast(bytes, value).decode() for name, value in request.headers.items()}
+        current = self.objects.get(key)
+        etag = None if current is None else f'"{hashlib.md5(current).hexdigest()}"'
+        if request.method == "GET":
+            return self.error("NoSuchKey", 404) if current is None else self.reply(200, current, ETag=str(etag))
+        if headers.get("If-None-Match") == "*" and current is not None:
+            return self.error("PreconditionFailed", 412)
+        if (expected := headers.get("If-Match")) is not None and expected != etag:
+            return self.error("PreconditionFailed", 412)
+        self.puts[key] += 1
+        chosen = self.chosen(key, self.puts[key]) and not self.fired
+        if chosen and self.fault == "conflict":
+            self.fired = True
+            return self.error("ConditionalRequestConflict", 409)
+        data = request.body if isinstance(request.body, bytes) else cast(BytesIO, request.body).read()
+        if "aws-chunked" in headers.get("Content-Encoding", ""):  # One chunk, then the checksum trailer.
+            size, data = data.split(b"\r\n", 1)
+            data = data[: int(size, 16)]
+        self.objects[key] = data
+        if chosen and self.fault == "ack-lost":
+            self.fired = True
+            raise ConnectionClosedError(endpoint_url=request.url)
+        return self.reply(200, ETag=f'"{hashlib.md5(data).hexdigest()}"')
+
+
+def is_head(key: str, n: int, nth: int) -> bool:
+    return key.endswith(HEAD) and n == nth
+
+
+@pytest.mark.parametrize(
+    ("fault", "chosen"),
+    [
+        ("ack-lost", partial(is_head, nth=1)),
+        ("ack-lost", partial(is_head, nth=2)),
+        ("conflict", lambda key, _n: "/chunks/" in key),
+        ("conflict", partial(is_head, nth=2)),
+    ],
+    ids=["412-after-applied-claim", "412-after-applied-checkpoint", "409-on-first-chunk", "409-on-head-swap"],
+)
+async def test_an_inconclusive_conditional_put_through_the_sdk_keeps_the_sole_writer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str, chosen: Callable[[str, int], bool]
+) -> None:
+    server = S3Server(fault, chosen)
+    client = botocore.session.get_session().create_client(
+        "s3",
+        region_name="us-east-1",
+        endpoint_url="https://s3.test",
+        config=botocore.config.Config(s3={"addressing_style": "virtual"}),
+        aws_access_key_id="k",
+        aws_secret_access_key="s",
+    )
+    client.meta.events.register("before-send.s3", cast(Any, server))
+    monkeypatch.setattr(S3ConditionalObject, "_client", staticmethod(lambda _endpoint: client))
+    monkeypatch.setattr(checkpoint, "FINAL_BACKOFF", ExponentialBackoff(initial=0.001, maximum=0.001, jitter=0.0))
+    sink = CheckpointSink(tmp_path / "work", "s3://bucket/root")
+    sink.claim(None)
+    log = EventLog(sink=sink)
+    await log.record(Note("first"))
+    await sink._upload(Status(), None)
+    if fault == "conflict":  # The checkpoint deferred to the timer; this is its tick.
+        await sink._upload(Status(), None)
+    assert server.fired and sink.stopped is None
+    head = HEAD_JSON.validate_json(server.objects["/root/" + HEAD])
+    assert head.writer == sink.writer and head.size == Path(sink.local.path).stat().st_size
+    assert b"".join(server.objects[f"/root/chunks/{name}"] for name in head.chunks) == Path(sink.local.path).read_bytes()
+
+
 async def test_a_late_chunk_put_cannot_overwrite_committed_history(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -469,6 +567,8 @@ async def test_a_history_read_retries_a_storage_hiccup_and_not_a_refusal(
         (s3_error("NoSuchBucket", 404), False),
         (translate_boto_error(s3_error("AccessDenied", 403)), False),
         (PermissionError(errno.EACCES, "Permission denied"), False),
+        (PermissionError(errno.EACCES, "Permission denied", "chunks/SlowDown.jsonl"), False),
+        (translate_boto_error(s3_error("RequestTimeTooSkewed", 403)), True),
         (OSError(errno.ENOSPC, "No space left on device"), False),
         (ValueError("not a storage error"), False),
     ],

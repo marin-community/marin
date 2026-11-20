@@ -21,7 +21,7 @@ from botocore.exceptions import ClientError, IncompleteReadError
 from lib.taskforge.tests.effect_fakes import local_records
 from lib.taskforge.tests.resource_doubles import FakeCommand, FakeEnv, FakeInference, FakeWeb
 from lib.taskforge.tests.stage_fakes import CandidateEngine, SolverEngine, solver_model
-from rigging.filesystem.conditional_object import LocalConditionalObject, VersionedBytes
+from rigging.filesystem.conditional_object import ConditionalWriteError, LocalConditionalObject, VersionedBytes
 from rigging.timing import ExponentialBackoff
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.models import GradedRollout, Model, Rollout, TaskRolloutSpec
@@ -882,6 +882,71 @@ async def test_a_transient_error_in_final_publication_retries_without_repeating_
     driver_args.work_dir = str(Path(driver_args.work_dir).parent / "relaunch")
     await driver.one(driver_args)
     assert executions(first) == (len(script()), 2) and executions(relaunch) == (0, 0)
+
+
+@pytest.mark.parametrize(
+    ("fault", "applied"),
+    [("claim", True), ("checkpoint", True), ("first chunk", False), ("final head", False)],
+    ids=["412-after-applied-claim", "412-after-applied-checkpoint", "409-on-first-chunk", "409-on-final-head"],
+)
+async def test_an_inconclusive_conditional_write_is_decided_by_reading_the_target(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, fault: str, applied: bool
+) -> None:
+    """One conditional write fails as a 412 that follows the SDK resending an applied write whose acknowledgement was
+    lost, or as a retryable 409 that left the target as it was. The sole writer finishes and repeats no paid work."""
+    monkeypatch.setattr(checkpoint, "CHECKPOINT_EVENTS", 1)
+    instant_final_retries(monkeypatch)
+    write, heads, chunks, fired = LocalConditionalObject.write, [], [], []
+
+    def inconclusive(target: LocalConditionalObject, data: bytes, *, expected_version: str | None) -> str:
+        is_head = target.path.endswith(HEAD)
+        (heads if is_head else chunks).append(data)
+        chosen = {
+            "claim": is_head and len(heads) == 1,
+            "checkpoint": is_head and len(heads) == 2,
+            "first chunk": PurePosixPath(target.path).parent.name == "chunks" and len(chunks) == 1,
+            "final head": is_head and HEAD_JSON.validate_json(data).status.terminal is not None,
+        }[fault]
+        if not chosen or fired:
+            return write(target, data, expected_version=expected_version)
+        fired.append(fault)
+        if applied:
+            write(target, data, expected_version=expected_version)
+        raise ConditionalWriteError(f"conditional write failed for {target.path}")
+
+    monkeypatch.setattr(LocalConditionalObject, "write", inconclusive)
+    first, relaunch = resources(Envs(), script()), resources(Envs(), script())
+    serve(monkeypatch, first, relaunch)
+    await driver.one(driver_args)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    assert fired == [fault]
+    assert published_workpiece(destination).terminal is Terminal.ACCEPTED
+    assert [record.sequence for record in history(destination)] == list(range(1, len(history(destination)) + 1))
+    driver_args.work_dir = str(Path(driver_args.work_dir).parent / "relaunch")
+    await driver.one(driver_args)
+    assert executions(first) == (len(script()), 2) and executions(relaunch) == (0, 0)
+
+
+@pytest.mark.parametrize("change", [{"workpiece": ""}, {"size": -1}], ids=["empty workpiece", "negative size"])
+async def test_a_malformed_terminal_head_is_corrupt_from_one_head_read(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, change: dict[str, object]
+) -> None:
+    serve(monkeypatch, resources(Envs(), script()))
+    await driver.one(driver_args)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    (destination / HEAD).write_text(json.dumps({**json.loads((destination / HEAD).read_text()), **change}))
+    before, read, reads = tree(destination), LocalConditionalObject.read, []
+
+    def counted(target: LocalConditionalObject) -> VersionedBytes | None:
+        reads.append(target.path)
+        return read(target)
+
+    monkeypatch.setattr(LocalConditionalObject, "read", counted)
+    monkeypatch.setattr(driver, "runtime", unexpected_runtime)
+    with pytest.raises(LogFailure) as raised:
+        await driver.one(driver_args)
+    assert driver.exit_code(raised.value) == driver.CORRUPT
+    assert reads == [str(destination / HEAD)] and tree(destination) == before
 
 
 async def test_a_final_publication_that_keeps_failing_exits_and_a_relaunch_resumes_from_the_last_checkpoint(

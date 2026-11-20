@@ -3,10 +3,8 @@
 
 """Publish a workpiece's journal (format 2; its layout is in the README) under one fenced writer.
 
-Chunks and workpieces are immutable objects named by the SHA-256 of their bytes, created only if absent and checked
-against their names when read. Each is written before the compare-and-swap of the head that names it. A writer claims
-the head on the version it observed and advances it the same way, so of two writers starting from one head at most
-one proceeds, and a writer that lost the head extends nothing.
+Immutable chunks and workpieces, named by their SHA-256, precede the head that names them. The head is claimed and
+advanced only by compare-and-swap on the version this writer observed, so of two writers at most one proceeds.
 """
 
 import asyncio
@@ -21,12 +19,12 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path, PurePosixPath
-from typing import override
+from typing import Annotated, override
 
-from pydantic import TypeAdapter
-from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
+from pydantic import Field, TypeAdapter
+from rigging.filesystem.conditional_object import ConditionalObject, ConditionalWriteError, conditional_object
 from rigging.filesystem.factory import open_url, url_to_fs
-from rigging.filesystem.s3_errors import OBJECT_STORE_ERRORS, is_transient_s3_error, storage_error_status
+from rigging.filesystem.s3_errors import OBJECT_STORE_ERRORS, is_transient_s3_error_code, storage_error_status
 from rigging.filesystem.storage_path import prefix_join
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
@@ -64,24 +62,42 @@ REFUSED_PATHS = (PermissionError, FileNotFoundError, FileExistsError, IsADirecto
 
 
 def is_transient_storage_error(error: BaseException) -> bool:
-    """Whether a journal storage call that raised ``error`` may be retried.
+    """Whether a storage call that raised ``error`` may be retried: every storage error but an explicit refusal.
 
-    A storage hiccup must never cost paid model work; only an explicit refusal stops the writer. A refusal is an HTTP
-    4xx answer other than 408 and 429 (denied access, a bad key or signature, a missing bucket), found on the error or
-    on the SDK error it translates, or a local filesystem error naming one (permission, a missing path, no space, a
-    read-only filesystem). Every other storage error is transient: resets, short reads, timeouts, throttling, any 5xx,
-    SDK transport errors this rule has never seen, and whatever rigging's S3 classifier retries. An error outside the
-    storage families is no storage error.
+    In order: a retryable S3 code on the error or the SDK error it translates; a local refusal; any 4xx but 408/429.
     """
     if not isinstance(error, OBJECT_STORE_ERRORS):
         return False
-    if is_transient_s3_error(error):
-        return True
-    if (status := storage_error_status(error)) is not None:
-        return status in RETRIED_REFUSALS or not 400 <= status < 500
-    if isinstance(error, OSError):
-        return not isinstance(error, REFUSED_PATHS) and error.errno not in REFUSED_ERRNOS
-    return True
+    for cause in (error, error.__cause__):
+        if isinstance(response := getattr(cause, "response", None), dict):
+            if is_transient_s3_error_code(response.get("Error", {}).get("Code")):
+                return True
+    if isinstance(error, REFUSED_PATHS) or (isinstance(error, OSError) and error.errno in REFUSED_ERRNOS):
+        return False
+    status = storage_error_status(error)
+    return status is None or status in RETRIED_REFUSALS or not 400 <= status < 500
+
+
+def _write(
+    target: ConditionalObject, data: bytes, expected: str | None, other: Callable[[bytes], LogFailure | None]
+) -> None:
+    """Write ``data`` over version ``expected`` (None: create); decide an inconclusive answer by reading the target.
+
+    Its own bytes there mean the write applied; the fence still holding means it did not, and a retryable error says
+    so; ``other`` judges anyone else's bytes, and bytes it does not judge are retried. A failed read raises its error.
+    """
+    try:
+        target.write(data, expected_version=expected)
+    except (ConditionalWriteError, *OBJECT_STORE_ERRORS) as error:
+        if not isinstance(error, ConditionalWriteError) and not is_transient_storage_error(error):
+            raise
+        current = target.read()
+        if current is not None and current.data == data:
+            return
+        if current is not None and current.version != expected and (failure := other(current.data)) is not None:
+            raise failure from error
+        # Not chained: the answer that left the fence holding is no refusal, whatever status it carries.
+        raise OSError(errno.EAGAIN, f"{target.path} is still at version {expected} after {error!r}") from None
 
 
 def _retried[T](call: Callable[[], T], operation: str, attempts: int) -> T:
@@ -94,10 +110,10 @@ def _retried[T](call: Callable[[], T], operation: str, attempts: int) -> T:
 class Head:
     format: int
     writer: str
-    chunks: tuple[str, ...]
-    size: int
+    chunks: tuple[Annotated[str, Field(pattern=r"^[0-9a-f]{64}\.jsonl$")], ...]
+    size: Annotated[int, Field(ge=0)]
     status: Status
-    workpiece: str | None
+    workpiece: Annotated[str, Field(pattern=r"^[0-9a-f]{64}\.json$")] | None
     published_at: float
 
 
@@ -107,12 +123,9 @@ HEAD_JSON = TypeAdapter(Head)
 def _put(directory: str, suffix: str, data: bytes) -> str:
     """Create ``data`` under its content name in ``directory`` unless it is there already; return the name."""
     name = hashlib.sha256(data).hexdigest() + suffix
-    target = conditional_object(prefix_join(directory, name))
-    try:
-        target.write(data, expected_version=None)
-    except ConditionalWriteError:
-        if (existing := target.read()) is None or existing.data != data:
-            raise CorruptJournal(f"{target.path} holds bytes other than those its name digests") from None
+    path = prefix_join(directory, name)
+    corrupt = CorruptJournal(f"{path} holds bytes its name does not digest")
+    _write(conditional_object(path), data, None, lambda _: corrupt)
     return name
 
 
@@ -200,16 +213,17 @@ class CheckpointSink(Sink):
         self.pending = 0
         self.deferred = False  # After a transient failure the timer retries, not every later event.
         self.lock = asyncio.Lock()
-        self.timer: asyncio.Task[None] | None = None
         self.owner: asyncio.Task[object] | None = None
         self.stopped: LogFailure | None = None
         """Why this writer publishes nothing more: supersession, corruption or a storage refusal."""
 
     def _swap(self, head: Head, expected: str | None) -> None:
-        try:
-            self.head.write(HEAD_JSON.dump_json(head), expected_version=expected)
-        except ConditionalWriteError as error:
-            raise Superseded(f"Another writer advanced {self.destination}/{HEAD}; writer {self.writer} stops") from error
+        def successor(found: bytes) -> Superseded | None:
+            if (writer := HEAD_JSON.validate_json(found).writer) != self.writer:
+                return Superseded(f"Writer {writer} advanced {self.destination}/{HEAD}; writer {self.writer} stops")
+            return None
+
+        _write(self.head, HEAD_JSON.dump_json(head), expected, successor)
 
     def claim(self, journal: Journal | None) -> tuple[Record, ...]:
         """Own the head ``journal`` was read at and return its history, decoded before anything is claimed."""
@@ -220,7 +234,8 @@ class CheckpointSink(Sink):
             raise CorruptJournal(f"{self.destination}: {error}") from error
         chunks, size = (journal.head.chunks, journal.head.size) if journal else ((), 0)
         head = Head(JOURNAL_FORMAT, self.writer, chunks, size, Status(), None, time.time())
-        self._swap(head, journal.version if journal else None)
+        expected = journal.version if journal else None
+        _retried(partial(self._swap, head, expected), f"claim of {self.destination}", FINAL_ATTEMPTS)
         return records
 
     def _publish(self, status: Status, workpiece: Workpiece | None) -> None:
@@ -262,11 +277,8 @@ class CheckpointSink(Sink):
                 await self._upload(Status(), None)
 
     async def _upload(self, status: Status, workpiece: Workpiece | None) -> None:
-        """Publish the new lines (finally with status and workpiece) under the lock, fenced against the head.
-
-        A transient error leaves a checkpoint's lines pending for the timer; the final publication retries itself,
-        each attempt rereading the head, so a storage hiccup never discards finished work.
-        """
+        """Publish the new lines (finally with status and workpiece) under the lock; after a transient error a
+        checkpoint leaves them pending for the timer and the final publication retries, rereading the head."""
         if self.stopped is not None:
             raise self.stopped
         publish = asyncio.to_thread(
@@ -309,13 +321,10 @@ class CheckpointSink(Sink):
 
     @asynccontextmanager
     async def running(self) -> AsyncIterator[None]:
-        """Run the timer; every tick reads the head, so a writer that lost it, idle or not, cancels this block.
-
-        The block then raises why the writer stopped; remote effects already completed stay done.
-        """
+        """Run the timer, whose every tick reads the head; a writer that lost it is cancelled and raises why."""
         stop = asyncio.Event()
         self.owner = asyncio.current_task()
-        self.timer = asyncio.create_task(self._periodic(stop))
+        timer = asyncio.create_task(self._periodic(stop))
         failure: Exception | None = None
         try:
             yield
@@ -325,7 +334,7 @@ class CheckpointSink(Sink):
         finally:
             owner, self.owner = self.owner, None
             stop.set()
-            await self.timer
+            await timer
             if self.stopped is not None:
                 if owner is not None and owner.cancelling():
                     owner.uncancel()
