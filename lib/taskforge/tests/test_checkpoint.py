@@ -7,6 +7,7 @@ import threading
 from pathlib import Path
 
 import pytest
+from botocore.exceptions import HTTPClientError
 
 from taskforge import checkpoint
 from taskforge.checkpoint import CheckpointSink
@@ -91,11 +92,12 @@ async def test_checkpoints_upload_only_new_bytes_and_recover_without_final_snaps
     assert await JsonlSink(str(destination / "events.jsonl")).read() == log.records
 
 
-async def test_failed_timer_upload_keeps_logging_and_republishes_from_the_same_offset(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("by_count", [False, True])
+async def test_failed_upload_keeps_logging_and_republishes_from_the_same_offset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, by_count: bool
 ) -> None:
-    monkeypatch.setattr(checkpoint, "CHECKPOINT_EVENTS", 100)
-    monkeypatch.setattr(checkpoint, "CHECKPOINT_SECONDS", 0.01)
+    monkeypatch.setattr(checkpoint, "CHECKPOINT_EVENTS", 1 if by_count else 100)
+    monkeypatch.setattr(checkpoint, "CHECKPOINT_SECONDS", 3600 if by_count else 0.01)
     destination = tmp_path / "published"
     local = JsonlSink(str(tmp_path / "events.jsonl"))
     sink = CheckpointSink(local, str(destination), b"{}")
@@ -105,7 +107,8 @@ async def test_failed_timer_upload_keeps_logging_and_republishes_from_the_same_o
     def reset_once(events: bytes) -> None:
         if not failed.is_set():
             failed.set()
-            raise ConnectionResetError("connection reset by peer")
+            # s3fs retries HTTPClientError, which is not an OSError.
+            raise HTTPClientError(error="connection reset by peer") if by_count else ConnectionResetError("reset")
         publish(events)
         published.set()
 

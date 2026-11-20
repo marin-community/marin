@@ -34,7 +34,6 @@ async def test_retry_telemetry_preserves_wire_and_completion_values(transport_re
     )
     completion = provider_completion(() if transport_retry else attempts)
     backend = Backend((ModelRequestRejected(503, "private", ()), completion) if transport_retry else (completion,))
-    # Pilot j: S/d05.contaminant_transport_fate/09 and T/d15.biomechanics.prosthetic_orthotic_design/10.
     broken = '{"findings": '
     event = request()
     event = replace(
