@@ -8,6 +8,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from marin.execution.lazy import ArtifactStep, run
 from marin.rl.skyrl_records import RESOLVED_LAUNCH_FILENAME
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.grading_result import GradingFailure, Outcome
@@ -25,6 +26,7 @@ from taskcompendium.models import (
 )
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
+from experiments.post_training.task_curation import task_health
 from experiments.post_training.task_curation.selection import (
     SELECTION_PREFIX,
     TASK_SPEC_COLUMN,
@@ -119,7 +121,7 @@ def write_attempt(
         path.write_text(text)
 
 
-def test_extract_records_each_attempts_grade_phase_and_output_tails(tmp_path):
+def test_extract_records_each_attempts_grade_phase_and_output_tails(tmp_path, monkeypatch):
     task = harbor_task("swe:1")
     selection = write_tasks(tmp_path / "selection" / TRAIN_FILENAME, [task]).parent
     store = tmp_path / "attempts/trajectories/installed-agents"
@@ -159,9 +161,14 @@ def test_extract_records_each_attempts_grade_phase_and_output_tails(tmp_path):
     )
     (store / "partial").mkdir()
     (store / "partial" / "upload-incomplete").touch()
-    output = StoragePath(str(tmp_path / "health"))
+    health_root = tmp_path / "health"
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "run-artifacts"))
+    monkeypatch.setattr(task_health, "TASK_HEALTH_ROOT", str(health_root))
 
-    path = extract_attempts(StoragePath(str(run_output)), "fixture-run@2026.11.20.1", output)
+    artifact = ArtifactStep.adopt("fixture-run", "2026.11.20.1", str(run_output))
+    run(task_health.task_health_step(artifact))
+    output = StoragePath(str(health_root / "attempts/fixture-run/2026.11.20.1"))
+    path = output / task_health.ATTEMPTS_FILENAME
 
     rows = {row["attempt_id"]: row for row in pq.read_table(str(path)).to_pylist()}
     assert {attempt: (row["outcome"], row["grading_failure"], row["phase"]) for attempt, row in rows.items()} == {
