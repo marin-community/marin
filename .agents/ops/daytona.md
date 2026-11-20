@@ -174,7 +174,7 @@ An empty inventory reports zero usage and a null organization ID, without
 querying snapshots or volumes. Duplicate IDs, mixed organizations or missing
 active allocations fail the reading instead of reporting free capacity.
 
-Inventory is an estimate at read time, not a capacity reservation. Re-read it
+Inventory estimates capacity at read time. It reserves no capacity. Re-read it
 before and during submissions, include the entire simultaneous batch, and
 back off when it does not fit. Keep lane admission locks and pending-create
 reservations: this read-only command does not coordinate concurrent submitters
