@@ -13,7 +13,8 @@ correct letters. A numeric answer is the first number inside the first tag, corr
 error is below 1% of the target's magnitude, or zero. The source uses ``0.01 * target``, which no answer
 satisfies for a negative target. Its LLM extraction fallback, number-word parsing and refusal retry are
 omitted, so a response without an answer tag scores zero. ``convert_to_number``'s pint parsing is
-replaced by arithmetic for the forms ``NUMBER_PATTERN`` matches: ``N^E``, ``N x B^E`` and ``eE``.
+replaced by arithmetic for the forms ``NUMBER_PATTERN`` matches: ``N^E``, ``N x B^E`` and ``eE``. The
+source's pattern matches the literal text ``\\u00d7``; this one matches the U+00D7 multiplication sign.
 """
 
 import math
@@ -30,7 +31,7 @@ MULTIPLE_CHOICE_ANSWER = re.compile(
 NUMERIC_ANSWER = re.compile(r"\[ANSWER\][\s\n]*(.*?)[\s\n]*\[/?ANSWER\]")
 NUMBER_PATTERN = re.compile(
     r"(?<!\w)([+-]?[0-9]*\.?[0-9]+\s?)?([\^]([-+]?[0-9]+))?(?:(?:[eE]|exp|EXP)[-+]?[0-9]+)?"
-    r"(?:([*x]|\\times|\\u00d7)\s?[0-9]+[\^]([-+]?[0-9]+|{([-+]?[0-9]+)}))?(?!\w)"
+    r"(?:([*x\u00d7]|\\times)\s?[0-9]+[\^]([-+]?[0-9]+|{([-+]?[0-9]+)}))?(?!\w)"
 )
 POWER_FORM = re.compile(r"([+-]?)([0-9]*\.?[0-9]+)\s?(?:\^([-+]?[0-9]+))?(?:\*\s?([0-9]+)\^([-+]?[0-9]+))?")
 BARE_EXPONENT = re.compile(r"e[0-9]+")
@@ -47,7 +48,7 @@ def multiple_choice_letters(text: str, letters: list[str]) -> list[str] | None:
 
 def number_value(token: str) -> float | None:
     """Evaluate a ``NUMBER_PATTERN`` match as the source's float-then-pint conversion does."""
-    text = token.replace("x", "*").replace("\\times", "*").replace("\\u00d7", "*")
+    text = token.replace("x", "*").replace("\u00d7", "*").replace("\\times", "*")
     try:
         return float(text)
     except ValueError:

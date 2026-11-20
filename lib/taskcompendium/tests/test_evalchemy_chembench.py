@@ -70,6 +70,7 @@ def test_multiple_choice_requires_the_exact_letter_set(response, reward, extract
         (1500.0, "[ANSWER]1500[/ANSWER]", 1, 1500.0),
         (1500.0, "[ANSWER] 1.5 x 10^3 [/ANSWER]", 1, 1500.0),
         (1500.0, "[ANSWER]1.5 \\times 10^3[/ANSWER]", 1, 1500.0),
+        (1500.0, "[ANSWER]1.5 \u00d7 10^3[/ANSWER]", 1, 1500.0),
         (1500.0, "[ANSWER]1.5e3[/ANSWER]", 1, 1500.0),
         (1500.0, "[ANSWER]\n1510\n[/ANSWER]", 1, 1510.0),
         (1500.0, "[ANSWER]1515[/ANSWER]", 0, 1515.0),

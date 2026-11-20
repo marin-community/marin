@@ -57,7 +57,7 @@ def benchmarks() -> list[EvaluationBenchmark]:
             top_k=None,
             max_tokens=None,
             stop=(),
-            chat_template_kwargs={},
+            chat_template_kwargs={"enable_thinking": True},
         ),
         trials=TrialPolicy(count=1, seed=None),
         metrics=(Metrics.ACCURACY,),
