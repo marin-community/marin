@@ -23,9 +23,14 @@ from tokenizers import Tokenizer, models
 from transformers import PreTrainedTokenizerFast
 
 from experiments.evaluation.judge_config import MICRO210_JUDGE
-from experiments.evaluation.micro210 import ServingProfileName, micro210_step, run_micro210, validate_judge_availability
+from experiments.evaluation.micro210 import (
+    PREPARED_INPUTS_VERSION,
+    ServingProfileName,
+    micro210_step,
+    run_micro210,
+    validate_judge_availability,
+)
 from experiments.evaluation.micro210_policy import (
-    POLICY_VERSION,
     Micro210Model,
     micro210_evaluation,
     runtime_policy_config,
@@ -260,7 +265,12 @@ def test_canonical_evaluation_graph_lowers_with_its_final_run_binding(profile):
     assert "fixture/final-eval@2026.11.18.72" in plan.fingerprint_payload
 
 
-def test_new_prepared_inputs_do_not_reuse_old_policy_provenance(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "previous_version,previous_digest", [("2026.11.18", "old-task-digest"), ("2026.11.20", "fixture-tasks")]
+)
+def test_new_prepared_inputs_do_not_reuse_old_policy_provenance(
+    tmp_path, monkeypatch, previous_version, previous_digest
+):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     old_inputs = tmp_path / "old-inputs"
     new_inputs = tmp_path / "new-inputs"
@@ -268,7 +278,7 @@ def test_new_prepared_inputs_do_not_reuse_old_policy_provenance(tmp_path, monkey
     new_inputs.mkdir()
     run(
         ArtifactStep.adopt(
-            "evaluation/micro210/prepared", "2026.11.18", str(old_inputs), config={"sha256": "old-task-digest"}
+            "evaluation/micro210/prepared", previous_version, str(old_inputs), config={"sha256": previous_digest}
         )
     )
     monkeypatch.setattr("experiments.evaluation.micro210.PREPARED_INPUTS", str(new_inputs))
@@ -279,10 +289,10 @@ def test_new_prepared_inputs_do_not_reuse_old_policy_provenance(tmp_path, monkey
     )
     prepared = next(dep for dep in step.deps if dep.name == "evaluation/micro210/prepared")
     run(prepared)
-    old_record = read_record(str(tmp_path / "evaluation/micro210/prepared/2026.11.18"))
-    new_record = read_record(str(tmp_path / "evaluation/micro210/prepared" / POLICY_VERSION))
+    old_record = read_record(str(tmp_path / "evaluation/micro210/prepared" / previous_version))
+    new_record = read_record(str(tmp_path / "evaluation/micro210/prepared" / PREPARED_INPUTS_VERSION))
     assert old_record.source == str(old_inputs)
-    assert old_record.config == {"sha256": "old-task-digest"}
+    assert old_record.config == {"sha256": previous_digest}
     assert new_record.source == str(new_inputs)
     assert new_record.config == {"sha256": "fixture-tasks"}
 
