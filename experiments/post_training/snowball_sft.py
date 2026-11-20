@@ -15,7 +15,7 @@ from levanter.optim.config import AdamConfig
 from levanter.utils.mesh import MeshConfig
 from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.execution.lazy import OUT, apply
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.sft.launcher import DatasetSpec, HFModel, PreparedData, SFTPreset, SFTSpec, main
 
@@ -87,8 +87,9 @@ MIXTURE_RESOURCES = replace(
     regions=("US-EAST-02A",),
     target_cluster="cw-us-east-02a",
 )
-_DATA_BUCKET = "s3://marin-us-east-02a/"
-MIXTURE_TOKENIZER = f"{_DATA_BUCKET}marin/grug_sft/tokenizer/2026.09.18"
+_DATA_BUCKET = "s3://marin-us-east-02a"
+_TOKENIZER_KEY = "marin/grug_sft/tokenizer/2026.09.18"
+MIXTURE_TOKENIZER = prefix_join(_DATA_BUCKET, _TOKENIZER_KEY)
 MIXTURE_SEQ_LEN = 262_144
 MIXTURE_BATCH_SIZE = 256
 
@@ -119,7 +120,7 @@ def _publish_data_manifest(*, output: str, sha256: str, bucket: str = _DATA_BUCK
     if hashlib.sha256(contents).hexdigest() != sha256:
         raise ValueError(f"{_MIXTURE_NAME} data manifest does not match its SHA-256 pin")
     # A regional copy keeps every object path and changes only the bucket.
-    contents = contents.replace(_DATA_BUCKET.encode(), bucket.encode())
+    contents = contents.replace(f"{_DATA_BUCKET}/".encode(), f"{bucket}/".encode())
     directory = StoragePath(output)
     directory.mkdirs()
     (directory / _MANIFEST).write_bytes(contents)
@@ -150,9 +151,9 @@ MIXTURE_SPEC = replace(
 MIXTURE_262K_32NODE = SFTPreset(_MIXTURE_NAME, MIXTURE_SPEC, MIXTURE_RESOURCES)
 
 # The same mixture on cw-rno2a, reading a copy of its caches and tokenizer in that region's bucket.
-_RNO_BUCKET = "s3://marin-us-east-08a/"
+_RNO_BUCKET = "s3://marin-us-east-08a"
 _RNO_NAME = f"{_MIXTURE_NAME}-rno2a"
-_RNO_TOKENIZER = MIXTURE_TOKENIZER.replace(_DATA_BUCKET, _RNO_BUCKET)
+_RNO_TOKENIZER = prefix_join(_RNO_BUCKET, _TOKENIZER_KEY)
 _RNO_DATA = apply(
     f"documents/snowball/{_RNO_NAME}",
     _publish_data_manifest,
