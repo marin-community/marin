@@ -26,6 +26,35 @@ pin `marin_revision` to the clean code commit; Iris bundles those explicit input
 Use a relative or cluster-local validation output path for a remote run.
 A printed blocked plan is not a successful dry-run or permission to launch.
 
+## Exp5 preparation hold
+
+Exp5 setup reuses qualified V7, whose four science components already derive
+from the sealed accepted/repaired science release. It preserves Exp4's SWE
+bug-fix pool, adds the pinned Atlas IFBench training release and base HARDMath,
+and reserves five percent for OpenResearcher. The research source requires a
+newer task schema and the `openresearcher-bm25:v1` provider; it is excluded from
+the prepared pool. `exp5.py` refuses `--run` before resolving any artifacts.
+
+The intended shares total one. The static preparation graph records the
+prepared 0.95 and reserved 0.05 separately. Its sampler weights remain absolute;
+a training sampler would normalize the prepared subset, so this graph must not
+be submitted. The launch hold also preserves the user's Exp4 evaluation review.
+
+```bash
+uv run python -m experiments.post_training.long_loop.exp5 \
+  --round experiments/post_training/long_loop/rounds/exp5-setup.yaml \
+  --source-revision "$(git rev-parse HEAD)" \
+  --version 2026.11.20.85 --through archive \
+  --validation-output /tmp/long-loop-exp5-setup
+```
+
+The regional CPU data producer is `experiments.post_training.long_loop.exp5_data`
+at version `2026.11.20.1`. Its manifest pins the unchanged Exp4 input, IFBench
+and HARDMath files and records all source counts. It processes all 702 raw
+HARDMath rows with the base converter, retaining 684 tasks and preserving the
+18 invalid-reference rejection receipts. It applies no difficulty filter and
+does not select the RHS variant.
+
 ## Exp3 smoke and recipe capture
 
 Production entrypoints refuse both tracked and untracked source changes. Commit
