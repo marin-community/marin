@@ -29,7 +29,8 @@ from cloud.iris.tests.model_snapshot_fixtures import memory_model_snapshot
 from cloud.iris.iris_backend import supervise_iris_job
 from iris.resources.state import JobState
 from rigging.timing import Timestamp
-from marinskyrl.checkpoint_paths import policy_export_path
+from marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME, policy_export_path, selected_export_step
+from skyrl_train.hf_export_schema import TRAINER_STATE_FILENAME
 
 
 @dataclass
@@ -150,7 +151,7 @@ class LocalLaunchBackend:
         resolved.parent.mkdir(parents=True, exist_ok=True)
         resolved.write_bytes(config_path.read_bytes())
         checkpoint_root = Path(artifacts["checkpoint_root"])
-        checkpoint_root.mkdir(parents=True)
+        checkpoint_root.mkdir(parents=True, exist_ok=True)
         (checkpoint_root / CHECKPOINT_MARKER_FILENAME).write_text("3\n")
         status = SimpleNamespace(
             state=JobState(self.outcome.job_state),
@@ -161,7 +162,10 @@ class LocalLaunchBackend:
 
     def export_terminal_policy(self, config_path: Path) -> None:
         config = yaml.safe_load(config_path.read_text())
-        output = policy_export_path(config["artifacts"]["export_root"], 3)
+        checkpoint_root = config["artifacts"]["checkpoint_root"]
+        assert (Path(checkpoint_root) / CHECKPOINT_MARKER_FILENAME).read_text().strip() == "3"
+        step = selected_export_step(checkpoint_root, config["skyrl"]["trainer"]["hf_export_checkpoint"], 3)
+        output = policy_export_path(config["artifacts"]["export_root"], step)
         self.export_jobs.append(output)
         root = Path(output)
         root.mkdir(parents=True)
@@ -224,6 +228,49 @@ def test_launch_persists_attempt_result_and_exports_only_on_opt_in(
         assert backend.export_jobs == []
         assert result.model is None and terminal["result"]["model"] is None
         assert not (tmp_path / "exports/global_step_3").exists()
+
+
+@pytest.mark.parametrize(
+    ("retention", "keep_every", "best_format", "export_hf", "job_state", "kept"),
+    [
+        ("best", None, "native", True, "succeeded", {1}),
+        ("best", 2, "native", False, "succeeded", {1, 2}),
+        ("best", None, "hf", False, "succeeded", {3}),
+        ("best", None, None, False, "succeeded", {3}),
+        ("latest", 2, None, False, "succeeded", {2, 3}),
+        ("best", None, "native", False, "failed", {1, 2, 3}),
+    ],
+    ids=["best-after-export", "periodic-newer-than-best", "hf-initializer", "no-winner", "latest", "failed"],
+)
+def test_launch_retains_checkpoints_only_after_success(tmp_path, retention, keep_every, best_format, export_hf, job_state, kept):
+    path = _config_path(tmp_path)
+    config = yaml.safe_load(path.read_text())
+    config["run"]["export_hf"] = export_hf
+    config["skyrl"]["trainer"].update(
+        max_steps=3, eval_interval=3, ckpt_interval=3, checkpoint_retention=retention, checkpoint_keep_every=keep_every
+    )
+    if export_hf:
+        config["skyrl"]["trainer"]["hf_export_checkpoint"] = "best"
+    path.write_text(yaml.safe_dump(config))
+
+    root = tmp_path / "checkpoints"
+    for step in (1, 2, 3):
+        checkpoint = root / f"global_step_{step}"
+        checkpoint.mkdir(parents=True)
+        (checkpoint / TRAINER_STATE_FILENAME).touch()
+    if best_format is not None:
+        (root / BEST_CHECKPOINT_FILENAME).write_text(
+            json.dumps({"step": 1 if best_format == "native" else 0, "model_format": best_format})
+        )
+
+    backend = LocalLaunchBackend(outcome=LaunchOutcome("/user/training", job_state, int(job_state == "failed")))
+    result = execute_launch(path, backend=backend)
+
+    assert result.state.value == job_state
+    assert {path.name for path in root.glob("global_step_*")} == {f"global_step_{step}" for step in kept}
+    assert int((root / CHECKPOINT_MARKER_FILENAME).read_text()) == max(kept)
+    if export_hf:
+        assert result.model is not None and result.model.global_step == 1
 
 
 def _hub_config_path(tmp_path: Path, *, submission: str = "detach") -> Path:

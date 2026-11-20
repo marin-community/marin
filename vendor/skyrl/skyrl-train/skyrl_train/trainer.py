@@ -98,7 +98,6 @@ from skyrl_train.group_admission import (
     assert_training_groups_eligible,
 )
 from marinskyrl.checkpoint_paths import (
-    BEST_CHECKPOINT_FILENAME,
     GLOBAL_STEP_PREFIX,
     LATEST_CHECKPOINT_FILE,
     selected_export_step,
@@ -106,10 +105,14 @@ from marinskyrl.checkpoint_paths import (
 from marinskyrl.process_diagnostics import write_exception_receipt
 from marinskyrl.resource_locator import is_cloud_uri, join_resource_path
 from marinskyrl.speculative_decoding import SpeculativeDecodingConfig, runai_model_uri
-from skyrl_train.checkpoint_listing import extract_step_from_path
+from skyrl_train.checkpoint_listing import (
+    cleanup_old_checkpoints,
+    extract_step_from_path,
+    native_best_checkpoint_step,
+    periodic_checkpoint_steps,
+)
 from skyrl_train.utils.trainer_utils import (
     async_step_metrics,
-    cleanup_old_checkpoints,
     run_on_each_node,
     get_node_ids,
     validate_consistency_for_latest_checkpoint,
@@ -3004,13 +3007,11 @@ class RayPPOTrainer:
         if max_ckpts < 0:
             return
 
-        protected_steps = protected_hf_export_steps(self.cfg.trainer.ckpt_path)
-        best_path = join_resource_path(self.cfg.trainer.ckpt_path, BEST_CHECKPOINT_FILENAME)
-        if io.exists(best_path):
-            with io.open_file(best_path, "r") as stream:
-                best = json.load(stream)
-            if best["model_format"] == "native":
-                protected_steps.add(best["step"])
+        checkpoint_root = self.cfg.trainer.ckpt_path
+        protected_steps = protected_hf_export_steps(checkpoint_root)
+        if (best_step := native_best_checkpoint_step(checkpoint_root)) is not None:
+            protected_steps.add(best_step)
+        protected_steps.update(periodic_checkpoint_steps(checkpoint_root, self.cfg.trainer.get("checkpoint_keep_every")))
 
         if not self._node_ids:
             self._node_ids = get_node_ids(self.policy_model, self.critic_model, self.ref_model)
@@ -3018,7 +3019,7 @@ class RayPPOTrainer:
             run_on_each_node(
                 self._node_ids,
                 cleanup_old_checkpoints,
-                self.cfg.trainer.ckpt_path,
+                checkpoint_root,
                 max_ckpts,
                 protected_steps,
             )
@@ -3032,7 +3033,7 @@ class RayPPOTrainer:
 
         # Driver-side cleanup. For a shared ckpt_path (GPFS, S3) this alone
         # suffices; the per-node fan-out above only matters for node-local dirs.
-        cleanup_old_checkpoints(self.cfg.trainer.ckpt_path, max_ckpts, protected_steps)
+        cleanup_old_checkpoints(checkpoint_root, max_ckpts, protected_steps)
 
     def load_checkpoints(self) -> Tuple[int, str]:
         """

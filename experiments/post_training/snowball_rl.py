@@ -279,6 +279,8 @@ _snowball = partial(
 
 _LEARNING_MEDIUM = _snowball(
     held_out_tasks=_DEFAULT_EVAL_LITE,
+    revision="2026.11.20.1",
+    checkpoints="latest",
     export="latest",
     name="learning-medium",
     recipe=_ASYNC_P40,
@@ -300,8 +302,10 @@ _LEARNING_MEDIUM = _snowball(
 
 _TRAIN_LONG = _snowball(
     held_out_tasks=_DEFAULT_EVAL_LITE,
+    revision="2026.11.20.1",
     retention=SkyRLRetentionPolicy(resume_checkpoint_count=5),
-    export="latest",
+    checkpoints="best",
+    export="best",
     name="train-long",
     recipe=_ASYNC_P40,
     updates=100,
@@ -404,6 +408,7 @@ _PRESETS = (
     _snowball(
         held_out_tasks=_DEFAULT_EVAL_LITE,
         name="speed-short",
+        checkpoints="none",
         recipe=replace(_GENERATING, fixed_reply_tokens=4096),
         updates=0,
         measured=range(1),
@@ -417,6 +422,7 @@ _PRESETS = (
     _snowball(
         held_out_tasks=_DEFAULT_EVAL_LITE,
         name="data-short",
+        checkpoints="none",
         recipe=_GENERATING,
         updates=0,
         measured=range(1),
@@ -432,6 +438,7 @@ _PRESETS = (
     _snowball(
         evaluations=(),
         name="speed-medium",
+        checkpoints="none",
         recipe=replace(
             _ASYNC_P40,
             fixed_reply_tokens=4096,
@@ -453,6 +460,7 @@ _PRESETS = (
     _snowball(
         evaluations=(),
         name="speed-long",
+        checkpoints="none",
         recipe=_ASYNC_P40,
         updates=20,
         measured=range(3, 21),
@@ -479,7 +487,6 @@ _PRESETS = (
     replace(
         _TRAIN_LONG,
         name="train-long-harbor",
-        revision="2026.11.19.1",
         harbor=HARBOR_EVALUATION,
         gaps=(*_TRAIN_LONG.gaps, "harbor-on-daytona"),
     ),

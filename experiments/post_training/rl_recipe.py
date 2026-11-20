@@ -86,6 +86,8 @@ _DERIVED_RECIPE_KEYS = frozenset(
         "trainer.placement",
         "trainer.callbacks",
         "trainer.ckpt_interval",
+        "trainer.checkpoint_retention",
+        "trainer.checkpoint_keep_every",
         "trainer.hf_save_interval",
         "trainer.hf_export_checkpoint",
         "trainer.rollout_buffer.groups_per_family",
@@ -380,6 +382,10 @@ def _training_config(
         policy=sections.Policy(megatron_config=sections.PolicyMegatronConfig(**geometry)),
         ref=sections.Ref(megatron_config=sections.RefMegatronConfig(**geometry)),
     )
+    if preset.checkpoints != "none":
+        trainer = trainer.replace(checkpoint_retention=preset.checkpoints)
+    if preset.keep_every is not None:
+        trainer = trainer.replace(checkpoint_keep_every=preset.keep_every)
     if preset.export == "best":
         trainer = trainer.replace(hf_export_checkpoint="best")
     if recipe.training_plan is not None:
@@ -522,7 +528,7 @@ def run_spec(
                     chosen[0] if chosen else None,
                     profiles,
                     expected_tasks,
-                    initial_model_uri if preset.checkpoint_every else None,
+                    initial_model_uri if preset.checkpoints == "best" else None,
                 ),
             )
         )

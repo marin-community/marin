@@ -245,7 +245,7 @@ _AGENTIC_LIMITS = agentic_limits(
 
 _TRAIN_LONG = Preset(
     name="train-long",
-    revision="2026.11.19.1",
+    revision="2026.11.20.1",
     recipe=Recipe(layout=ONE_RACK, fixed_reply_tokens=None, config=_ONE_TURN),
     updates=10_000,
     measured=range(1, 10_001),
@@ -255,6 +255,7 @@ _TRAIN_LONG = Preset(
     publishes=False,
     controls=None,
     checkpoint_every=2,
+    checkpoints="best",
     owned_keys=frozenset({"generator.run_engines_locally"}),
     data_settings=frozenset({"shuffle"}),
     tasks="snowball-100k@2026.11.19.1",
@@ -276,6 +277,7 @@ _TRAIN_MEDIUM = replace(
     _TRAIN_LONG.with_updates(2),
     name="train-medium",
     evaluations=(),
+    checkpoints="latest",
     export="none",
 )
 

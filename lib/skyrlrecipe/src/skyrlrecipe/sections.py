@@ -610,6 +610,8 @@ class Trainer(Section):
     reset_global_step_on_resume: bool = field(False)
     callbacks: tuple[Callback, ...] | None = field(None)
     ckpt_interval: int = field(5)
+    checkpoint_retention: Literal["latest", "best"] | None = field(None)
+    checkpoint_keep_every: PositiveInt | None = field(None)
     hf_save_interval: int = field(-1)
     """A positive interval also exports intermediate checkpoints, and pruning keeps each one until its export
     completes. -1 exports only the terminal checkpoint."""

@@ -31,13 +31,15 @@ from cloud.iris.artifacts import terminal_checkpoint_step, write_json
 from cloud.iris.launch_config import RunMode, SubmissionMode, hugging_face_models, load_launch_config
 from cloud.iris.hf_model_cache import UnsupportedHuggingFaceSnapshot, ensure_hugging_face_model_cache
 from marinskyrl.distillation import TeacherSource, compile_distillation_plan_from_config
-from marinskyrl.checkpoint_paths import policy_export_path, selected_export_step
+from marinskyrl.checkpoint_paths import LATEST_CHECKPOINT_FILE, policy_export_path, selected_export_step
 from marinskyrl.hf_model import HuggingFaceModelCache, validate_portable_hf_model_files
 from marinskyrl.packed_tasks import select_task_references
 from marinskyrl.speculative_decoding import SpeculatorModelConfig, SpeculatorModelSourceKind
 from marinskyrl.task_sources import TaskTroveParquetSource, TaskTroveSelectionSnapshot, data_source, data_source_dict
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import launch_provenance
+from skyrl_train.checkpoint_listing import cleanup_old_checkpoints, native_best_checkpoint_step, periodic_checkpoint_steps
+from skyrl_train.io import io as checkpoint_io
 
 
 @dataclass(frozen=True)
@@ -182,6 +184,21 @@ def _exported_policy(config: DictConfig) -> ExportedPolicy:
     )
 
 
+def _retain_terminal_checkpoints(config: DictConfig) -> None:
+    trainer = config.skyrl.trainer
+    if (selection := trainer.get("checkpoint_retention")) is None:
+        return
+    root = str(config.artifacts.checkpoint_root)
+    latest = terminal_checkpoint_step(root)
+    best = native_best_checkpoint_step(root) if selection == "best" else None
+    kept = periodic_checkpoint_steps(root, trainer.get("checkpoint_keep_every")) | {best or latest}
+    newest = max(kept)
+    if newest != latest:
+        # Publish a retained checkpoint before deleting the former marker target.
+        checkpoint_io.write_bytes_atomic(str(StoragePath(root) / LATEST_CHECKPOINT_FILE), str(newest).encode())
+    cleanup_old_checkpoints(root, 0, kept)
+
+
 def _result(
     config: DictConfig,
     state: LaunchState,
@@ -306,6 +323,7 @@ def execute_launch(
             outcome,
             f"Successful Iris job did not persist resolved config: {config.artifacts.resolved_config_uri}",
         )
+    _retain_terminal_checkpoints(config)
     result = _result(config, LaunchState.SUCCEEDED, outcome=outcome, model=model)
     receipt = _write_attempt_receipt(config, result)
     write_json(terminal_receipt_uri, receipt.model_dump(mode="json"))

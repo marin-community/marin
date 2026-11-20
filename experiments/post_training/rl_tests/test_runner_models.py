@@ -59,25 +59,73 @@ def test_mochi_default_matches_production_sft_export(mochi_sft_preset):
         assert model.relative_path == produced.relative_path and model.tokenizer_uri is None
 
 
+def test_checkpoint_retention_composes_with_the_save_and_evaluation_callbacks(selection, tmp_path):
+    template = MOCHI.by_name["train-long"]
+    cases = (
+        ("none", None, "none", ["evaluation"]),
+        ("latest", 4, "none", ["checkpoint", "evaluation"]),
+        ("best", None, "best", ["checkpoint", "evaluation", "best_checkpoint", "hf_model_save"]),
+    )
+    paths = []
+    for mode, keep_every, export, _ in cases:
+        preset = replace(
+            template,
+            checkpoints=mode,
+            checkpoint_every=None if mode == "none" else 2,
+            keep_every=keep_every,
+            export=export,
+        )
+        spec = rl_recipe.run_spec(preset, name=f"retention-{mode}", model_name=MOCHI.model)
+        launch = materialized_config(rl_recipe.run_step(preset, spec), str(tmp_path)).launch_config_yaml
+        path = tmp_path / f"{mode}.yaml"
+        path.write_text(launch)
+        paths.append(str(path))
+
+    for (mode, keep_every, export, callbacks), config in zip(cases, rl_gate.compose_configs(paths), strict=True):
+        trainer = config["skyrl"]["trainer"]
+        assert trainer.get("checkpoint_retention", "none") == mode
+        assert trainer.get("checkpoint_keep_every") == keep_every
+        assert trainer["ckpt_interval"] == 0
+        assert trainer["max_ckpts_to_keep"] == 2
+        assert [callback["type"] for callback in trainer["callbacks"]] == callbacks
+        assert config["run"]["export_hf"] == (export == "best")
+        assert trainer["hf_export_checkpoint"] == ("best" if export == "best" else "latest")
+        if mode != "none":
+            assert trainer["callbacks"][0]["save_steps"] == 2
+
+
+@pytest.mark.parametrize(
+    ("changes", "error"),
+    [
+        ({"checkpoints": "latest"}, "export must be none or match checkpoints"),
+        ({"export": "none", "evaluations": ()}, "requires an evaluation"),
+    ],
+    ids=["export-mismatch", "best-without-evaluation"],
+)
+def test_checkpoint_retention_refuses_incompatible_presets(changes, error):
+    with pytest.raises(ValueError, match=error):
+        replace(MOCHI.by_name["train-long"], **changes)
+
+
 @pytest.mark.parametrize(
     ("table", "revisions"),
     [
         (
             "mochi",
             {
-                "train-medium": {"2026.11.19.1": "8b5a970e"},
-                "train-long": {"2026.11.19.1": "db854d78"},
-                "train-long-3rack": {"2026.11.19.1": "a0e17c94"},
-                "train-medium-agentic": {"2026.11.19.1": "3f203da5"},
-                "train-long-agentic": {"2026.11.19.1": "bef4849f"},
-                "train-long-agentic-3rack": {"2026.11.19.1": "87a6ba8f"},
+                "train-medium": {"2026.11.19.1": "8b5a970e", "2026.11.20.1": "1205c021"},
+                "train-long": {"2026.11.19.1": "db854d78", "2026.11.20.1": "af2ae9df"},
+                "train-long-3rack": {"2026.11.19.1": "a0e17c94", "2026.11.20.1": "d85ba279"},
+                "train-medium-agentic": {"2026.11.19.1": "3f203da5", "2026.11.20.1": "5165c274"},
+                "train-long-agentic": {"2026.11.19.1": "bef4849f", "2026.11.20.1": "cd4c1681"},
+                "train-long-agentic-3rack": {"2026.11.19.1": "87a6ba8f", "2026.11.20.1": "296cb808"},
             },
         ),
         (
             "snowball",
             {
-                "train-medium-agentic": {"2026.11.19.1": "756f58ef"},
-                "train-long-agentic": {"2026.11.19.1": "72ec851f"},
+                "train-medium-agentic": {"2026.11.19.1": "756f58ef", "2026.11.20.1": "da9f348c"},
+                "train-long-agentic": {"2026.11.19.1": "72ec851f", "2026.11.20.1": "fb463a0d"},
             },
         ),
     ],
@@ -145,7 +193,7 @@ def test_snowball_plan_derives_route_capture_and_refuses_explicit_disable(select
         ("mix", {"agentic": Fraction(1, 4), "nonagentic": Fraction(1, 4)}, "sum to 1"),
         ("mix", {"agentic": Fraction(1, 3), "nonagentic": Fraction(2, 3)}, "whole number of groups"),
         ("mix", {"agentic": Fraction(1, 2), "math": Fraction(1, 2)}, "training selection has"),
-        ("checkpoint", None, "best export requires checkpointing"),
+        ("checkpoint", None, "fall on checkpoint steps"),
         ("evaluation", 3, "fall on checkpoint steps"),
         ("prefix", None, "storage prefix"),
         ("gated", None, "already built"),
