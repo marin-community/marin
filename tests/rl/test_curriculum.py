@@ -42,9 +42,7 @@ def _ordered(
 def test_curriculum_fingerprint_follows_the_declared_mix():
     """Pool identities, seed, and stage order affect the fingerprint; curriculum version does not."""
     base = _ordered()
-    bumped_pool = _ordered(
-        entries=(_entry(identity="pools/gsm8k@2:bbbb", weight=None), _entry("svamp", weight=None))
-    )
+    bumped_pool = _ordered(entries=(_entry(identity="pools/gsm8k@2:bbbb", weight=None), _entry("svamp", weight=None)))
     assert base.fingerprint != bumped_pool.fingerprint
     assert base.fingerprint != _ordered(seed=18).fingerprint
     assert base.fingerprint != _ordered(stages=(CurriculumStage("svamp"), CurriculumStage("gsm8k", 4096))).fingerprint
