@@ -10,7 +10,6 @@ from taskcompendium.evaluation.spec import (
     MetricKind,
     Metrics,
     OperationKind,
-    OutputBudget,
     OutputFit,
     Sampling,
     SummaryKind,
@@ -37,8 +36,7 @@ from experiments.evaluation.prompt_compilation import evaluation_source
 from experiments.post_training.task_curation.pipeline import HfSource, UrlSource
 from experiments.post_training.task_curation.source import RlDataSource
 
-VERSION = "2026.11.18"
-MAX_TOKENS = 16384
+VERSION = "2026.11.20"
 
 
 def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
@@ -47,14 +45,15 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
         version=VERSION,
         operation=OperationKind.CHAT_GENERATION,
         sampling=Sampling(
-            temperature=0.7,
-            top_p=0.95,
+            # Use the served model's decoding settings for routine evaluation.
+            temperature=None,
+            top_p=None,
             top_k=None,
             stop=(),
-            max_tokens=MAX_TOKENS,
-            chat_template_kwargs={"enable_thinking": True},
+            max_tokens=None,
+            chat_template_kwargs={},
         ),
-        trials=TrialPolicy(count=1, seed=42),
+        trials=TrialPolicy(count=1, seed=None),
         metrics=(
             Metric(name=MACRO_METRIC, kind=MetricKind.CONTINUOUS, higher_is_better=True),
             Metrics.ACCURACY,
@@ -66,7 +65,6 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
         context_policy=ContextPolicy(
             output_fit=OutputFit.REQUIRE,
             context_reserve=0,
-            output_budget=OutputBudget(minimum=MAX_TOKENS, reserve=0, multiplier=1),
         ),
     )
     return [

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""GenomeQA publication preserves its fixed generation budget in native selection."""
+"""GenomeQA publication preserves the configured generation budget in native selection."""
 
 import json
 from dataclasses import replace
@@ -25,7 +25,7 @@ class ByteTokenizer:
         return list(json.dumps(conversation).encode())
 
 
-def test_published_genomeqa_excludes_reduced_budget_without_truncating_prompt(tmp_path):
+def test_published_genomeqa_requires_room_for_run_budget(tmp_path):
     dataset = sources()[0].config
     source = tmp_path / "source"
     source.mkdir()
@@ -61,9 +61,9 @@ def test_published_genomeqa_excludes_reduced_budget_without_truncating_prompt(tm
     finally:
         client.shutdown()
     for cap, context_window, reason in [
-        (8192, 32768, "output_cap"),
+        (8192, 32768, None),
         (16384, 16400, "context_window"),
-        (16384, 32768, None),
+        (24576, 32768, None),
     ]:
         [decision] = list(
             select_cases(
@@ -78,7 +78,7 @@ def test_published_genomeqa_excludes_reduced_budget_without_truncating_prompt(tm
         )
         assert decision.record.reason == reason
         if reason is None:
-            assert decision.record.max_tokens == 16384
+            assert decision.record.max_tokens == cap
             assert decision.case.task.context.events[-1].content.startswith("Question:\nSynthetic DNA: AcgT\n")
             assert decision.case.item.groups["cell"] == "6_motif/binary"
         else:
