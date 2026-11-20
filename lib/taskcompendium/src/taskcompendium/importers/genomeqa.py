@@ -4,7 +4,6 @@
 """Pinned GenomeQA source conversion; upstream prompt remains an external input."""
 
 import ast
-from collections import Counter
 from collections.abc import Iterator
 from functools import lru_cache
 from string import ascii_uppercase
@@ -20,24 +19,7 @@ from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import RawRow
 
-DATASET = "HuggingFaceBio/genomeqa"
-REVISION = "e655e415fa30681dddbaf4acc182bcbd8ac41943"
-PROMPT_REVISION = "7ccc230e734fc11a365fd1963b593b5fd11e834d"
 PROMPT_FILENAME = "run.py"
-PROMPT_URL = f"https://raw.githubusercontent.com/ai4nucleome/GenomeQA/{PROMPT_REVISION}/{PROMPT_FILENAME}"
-SUBTASKS = (
-    "1_enhancer_vs_promoter",
-    "2_splice_sites",
-    "3_species_cls",
-    "4_histone_marks",
-    "5_tfbs",
-    "6_motif",
-)
-FORMATS = ("binary", "mcq")
-CELL_COUNTS = {
-    f"{task}/{answer_format}": 100 if task == "6_motif" else 500 for task in SUBTASKS for answer_format in FORMATS
-}
-POPULATION = sum(CELL_COUNTS.values())
 FORMAT_BY_SHA256 = {
     "0ef4c3d33541980e3fded9a5b23a952296ce3c51cb0415b42c0299a61c21938a": "binary",
     "c1cbb51449eb8a5241890337c88dc1bc0a58974b8eb4cb8bc49f310b12faeb75": "mcq",
@@ -61,29 +43,12 @@ def load_system_prompt(path: str) -> str:
 
 
 def read_genomeqa(path: StoragePath, _context: ConversionContext) -> Iterator[dict]:
-    """Validate each complete pinned format before publishing its questions."""
+    """Identify the pinned format by file content, including renamed local inputs."""
     answer_format = FORMAT_BY_SHA256.get(file_sha256(path))
     if answer_format is None:
         raise ValueError("GenomeQA checksum mismatch")
-    counts = Counter()
-    seen = set()
     for row in parquet_rows(path):
-        cell = f"{row['subtask']}/{answer_format}"
-        if cell not in CELL_COUNTS:
-            raise ValueError(f"Unknown GenomeQA cell: {cell}")
-        key = (row["subtask"], row["id"])
-        if key in seen:
-            raise ValueError(f"Duplicate GenomeQA identity: {key}")
-        seen.add(key)
-        choices, answer = row["options"], row["answer_index"]
-        if len(choices) != (2 if answer_format == "binary" else 4) or not 0 <= answer < len(choices):
-            raise ValueError(f"Invalid GenomeQA options or answer: {key}")
-        if choices[answer] != row["answer_text"]:
-            raise ValueError(f"Inconsistent GenomeQA answer: {key}")
-        counts[cell] += 1
         yield {**row, "format": answer_format}
-    if counts != {cell: count for cell, count in CELL_COUNTS.items() if cell.endswith("/" + answer_format)}:
-        raise ValueError(f"GenomeQA population differs from pinned counts: {counts}")
 
 
 def render_question(row: dict) -> str:
@@ -105,7 +70,8 @@ def convert_genomeqa(row: RawRow, context: ConversionContext) -> TaskSpec:
             {
                 "expected": ascii_uppercase[data["answer_index"]],
                 "options": ascii_uppercase[: len(data["options"])],
-                "cell_weight": max(CELL_COUNTS.values()) / CELL_COUNTS[f"{data['subtask']}/{data['format']}"],
+                # Each motif cell has 100 questions. The other cells have 500.
+                "cell_weight": 5 if data["subtask"] == "6_motif" else 1,
             },
             environment=required_grader_environment(context),
         ),

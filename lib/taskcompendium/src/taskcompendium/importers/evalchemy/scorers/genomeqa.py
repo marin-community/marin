@@ -13,8 +13,8 @@ def grade_genomeqa(expected: str, options: str, cell_weight: float, response: st
     # The upstream prompt puts a choice after the last heading, sometimes as a bare letter.
     selected = response.rsplit("### Answer", 1)[-1].strip()
     declarations = answer_letters(selected)
-    candidate = declarations[-1] if declarations else selected
-    answer = candidate.upper() if candidate.isascii() and len(candidate) == 1 and candidate.upper() in options else ""
+    candidate = (declarations[-1] if declarations else selected).upper()
+    answer = candidate if candidate in tuple(options) else ""
     correct = float(answer == expected)
     return scored(
         correct,

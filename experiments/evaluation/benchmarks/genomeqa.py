@@ -18,12 +18,7 @@ from taskcompendium.evaluation.spec import (
 from taskcompendium.importers.evalchemy.grader import scorer_revision
 from taskcompendium.importers.evalchemy.scorers.genomeqa import MACRO_METRIC
 from taskcompendium.importers.genomeqa import (
-    DATASET,
-    FORMATS,
-    POPULATION,
     PROMPT_FILENAME,
-    PROMPT_URL,
-    REVISION,
     convert_genomeqa,
     genomeqa_item,
     read_genomeqa,
@@ -35,7 +30,8 @@ from experiments.evaluation.benchmarks.environments import BASIC_GRADER
 from experiments.evaluation.prompt_compilation import evaluation_source
 from experiments.post_training.task_curation.pipeline import HfSource, UrlSource
 
-VERSION = "2026.11.20"
+VERSION = "2026.11.20.1"
+PROMPT_URL = "https://raw.githubusercontent.com/ai4nucleome/GenomeQA/7ccc230e734fc11a365fd1963b593b5fd11e834d/run.py"
 
 
 def benchmarks() -> list[EvaluationBenchmark]:
@@ -43,15 +39,7 @@ def benchmarks() -> list[EvaluationBenchmark]:
         benchmark="genomeqa",
         version=VERSION,
         operation=OperationKind.CHAT_GENERATION,
-        sampling=Sampling(
-            # Use the served model's decoding settings for routine evaluation.
-            temperature=None,
-            top_p=None,
-            top_k=None,
-            stop=(),
-            max_tokens=None,
-            chat_template_kwargs={},
-        ),
+        sampling=Sampling(temperature=None, top_p=None, top_k=None, stop=(), max_tokens=None, chat_template_kwargs={}),
         trials=TrialPolicy(count=1, seed=None),
         metrics=(
             Metric(name=MACRO_METRIC, kind=MetricKind.CONTINUOUS, higher_is_better=True),
@@ -60,18 +48,15 @@ def benchmarks() -> list[EvaluationBenchmark]:
         ),
         primary_metric=MACRO_METRIC,
         summary=SummaryKind.WEIGHTED_MEAN,
-        expected_population=POPULATION,
-        context_policy=ContextPolicy(
-            output_fit=OutputFit.REQUIRE,
-            context_reserve=0,
-        ),
+        expected_population=5200,
+        context_policy=ContextPolicy(output_fit=OutputFit.REQUIRE, context_reserve=0),
     )
     source = evaluation_source(
         name="genomeqa",
         source=HfSource(
-            DATASET,
-            REVISION,
-            tuple(f"{answer_format}/train-00000-of-00001.parquet" for answer_format in FORMATS),
+            "HuggingFaceBio/genomeqa",
+            "e655e415fa30681dddbaf4acc182bcbd8ac41943",
+            ("binary/train-00000-of-00001.parquet", "mcq/train-00000-of-00001.parquet"),
             SourceFormat.PARQUET,
             read=read_genomeqa,
         ),
