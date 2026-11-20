@@ -21,7 +21,7 @@ from taskcompendium.evaluation.spec import (
     SummaryKind,
     TrialPolicy,
 )
-from taskcompendium.importers.evalchemy.grader import scorer_revision
+from taskcompendium.importers.evalchemy.fewshot_grader import scorer_revision
 from taskcompendium.importers.evaluation_harness import (
     HarnessTemplate,
     choice_item,
