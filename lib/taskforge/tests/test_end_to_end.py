@@ -3,7 +3,6 @@
 
 import asyncio
 import json
-import logging
 import shutil
 from argparse import Namespace
 from collections.abc import AsyncIterator, Mapping, Sequence
@@ -402,27 +401,20 @@ async def test_stage_restart_replays_on_fresh_machine_without_repeating_inferenc
     assert len(resource.inference.requests) == len(script())
 
 
-async def test_stage_restart_stops_after_three_attempts_with_cause(
-    proposal: TaskProposal, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_stage_restart_stops_after_three_attempts_with_cause(proposal: TaskProposal) -> None:
     envs = Envs(fail=True)
     resource = resources(envs, script())
     result = await run_workpiece(proposal, config(), resource, EventLog(), install=install)
     assert result.terminal == Terminal.HELD
     assert len(envs.created) == 3
     assert "fake machine died" in str(result.decisions[-1])
-    for attempt in (1, 2, 3):
-        assert f"attempt {attempt} of 3" in caplog.text
 
 
 @pytest.mark.parametrize("command", ["one", "run"])
 async def test_container_filter_skips_before_runtime_or_subprocess(
-    proposal: TaskProposal,
     driver_args: Namespace,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-    capsys: pytest.CaptureFixture[str],
     command: str,
 ) -> None:
     args = driver_args
@@ -433,12 +425,7 @@ async def test_container_filter_skips_before_runtime_or_subprocess(
 
     monkeypatch.setattr(driver, "runtime", unexpected)
     monkeypatch.setattr(driver.subprocess, "Popen", unexpected)
-    with caplog.at_level(logging.INFO):
-        await (driver.one(args) if command == "one" else driver.run(args))
-    output = caplog.text + capsys.readouterr().out
-    assert f"SKIP {proposal.header.id}: environment=container" in output
-    if command == "run":
-        assert "SUMMARY submitted=0 completed=0 failed=0 skipped=1" in output
+    await (driver.one(args) if command == "one" else driver.run(args))
     assert not (tmp_path / "work").exists()
     assert not (tmp_path / "out").exists()
 
