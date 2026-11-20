@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Type
 
 from iris.cluster.endpoints import TELEMETRY_ENDPOINT_PATH
+from iris.runtime.telemetry import FinelogRuntime
 from iris.runtime.telemetry import resolve as resolve_telemetry
 from loguru import logger
 from shellbox.backends.daytona.machine import DaytonaImageBuild
@@ -308,6 +309,22 @@ class BestCheckpointCallback(TrainerCallback):
         return control
 
 
+async def _harbor_telemetry_config(runtime: FinelogRuntime | None) -> dict[str, str] | None:
+    if runtime is None:
+        return None
+    try:
+        endpoint = await asyncio.to_thread(runtime.resolver, runtime.endpoint)
+    except Exception as error:
+        logger.warning("Harbor telemetry endpoint lookup failed ({})", type(error).__name__)
+        return None
+    return {
+        "endpoint": endpoint.rstrip("/") + TELEMETRY_ENDPOINT_PATH,
+        "root_run_uid": runtime.attributes["run_id"],
+        "execution_uid": runtime.attributes["execution_uid"],
+        "serving_job_id": runtime.attributes["job_id"],
+    }
+
+
 @register_callback("harbor_evaluation")
 class HarborEvaluationCallback(TrainerCallback):
     """Evaluate frozen policy weights through Harbor before checkpoint selection."""
@@ -332,41 +349,40 @@ class HarborEvaluationCallback(TrainerCallback):
         self.minimum_primary_coverage = minimum_native_coverage
         self.daytona_api_key_env = daytona_api_key_env
 
+    def _evaluation_cohorts(
+        self, step: int, export_path: str, *, model_name: str, api_base: str
+    ) -> list[dict]:
+        cohorts = deepcopy(self.cohorts)
+        for cohort in cohorts:
+            job = cohort["job"]
+            job["job_name"] = f"step-{step}-{cohort['name']}"
+            job["jobs_dir"] = join_resource_path(export_path, "inline_harbor")
+            for agent in job["agents"]:
+                agent["model_name"] = f"openai/{export_path}/step-{step}"
+                agent["model_alias"] = f"openai/{model_name}"
+                agent.setdefault("kwargs", {})["api_base"] = api_base
+        return cohorts
+
     async def collect_evaluation(self, state, *, trainer, pool):
         started_at = time.perf_counter()
         client = trainer.inference_engine_client
         if not client.enable_http_endpoint:
             raise ValueError("Harbor validation requires generator.enable_http_endpoint")
-        cohorts = deepcopy(self.cohorts)
         runtime = resolve_telemetry(run_id=trainer.cfg.get("runtime", {}).get("run_id"))
-        for cohort in cohorts:
-            job = cohort["job"]
-            job["job_name"] = f"step-{state.global_step}-{cohort['name']}"
-            job["jobs_dir"] = join_resource_path(trainer.cfg.trainer.export_path, "inline_harbor")
-            for agent in job["agents"]:
-                agent["model_name"] = f"openai/{trainer.cfg.trainer.export_path}/step-{state.global_step}"
-                agent["model_alias"] = f"openai/{client.model_name}"
-                agent.setdefault("kwargs", {})[
-                    "api_base"
-                ] = f"http://{client.http_endpoint_host}:{client.http_endpoint_port}/v1"
+        cohorts = self._evaluation_cohorts(
+            state.global_step,
+            trainer.cfg.trainer.export_path,
+            model_name=client.model_name,
+            api_base=f"http://{client.http_endpoint_host}:{client.http_endpoint_port}/v1",
+        )
         environment = os.environ.copy()
         environment["DAYTONA_API_KEY"] = environment[self.daytona_api_key_env]
         environment["OPENAI_API_KEY"] = "unused-local-inference"
         async with asyncio.timeout(self.timeout):
-            if runtime is not None:
-                try:
-                    endpoint = await asyncio.to_thread(runtime.resolver, runtime.endpoint)
-                except Exception as error:
-                    logger.warning("Harbor telemetry endpoint lookup failed ({})", type(error).__name__)
-                else:
-                    telemetry = {
-                        "endpoint": endpoint.rstrip("/") + TELEMETRY_ENDPOINT_PATH,
-                        "root_run_uid": runtime.attributes["run_id"],
-                        "execution_uid": runtime.attributes["execution_uid"],
-                        "serving_job_id": runtime.attributes["job_id"],
-                    }
-                    for cohort in cohorts:
-                        cohort["job"]["telemetry"] = telemetry
+            telemetry = await _harbor_telemetry_config(runtime)
+            if telemetry is not None:
+                for cohort in cohorts:
+                    cohort["job"]["telemetry"] = telemetry
             results = await collect_harbor(cohorts, pool, environment)
         metrics = {f"eval/harbor/{name}/{key}": value for name, result in results.items() for key, value in result.items()}
         metrics["eval/harbor/wall_seconds"] = time.perf_counter() - started_at

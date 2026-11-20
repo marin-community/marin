@@ -357,8 +357,7 @@ class TrialQueue:
         else:
             publish_task.cancel()
             self._observe_task(publish_task)
-            verifier = result.verifier_result
-            if not persisted.is_set() and verifier is not None and verifier.rewards:
+            if not persisted.is_set() and result.has_verifier_rewards:
                 raise ArtifactPersistenceError("Timed-out trial result did not finish persisting")
         return result
 
@@ -441,8 +440,7 @@ class TrialQueue:
             with bind_attempt(attempt_context):
                 result = await self._run_admitted_attempt(trial_config, attempt)
 
-            verifier = result.verifier_result
-            if result.exception_info is None or (verifier is not None and verifier.rewards):
+            if result.exception_info is None or result.has_verifier_rewards:
                 break
             if not self._should_retry_exception(result.exception_info.exception_type):
                 break
