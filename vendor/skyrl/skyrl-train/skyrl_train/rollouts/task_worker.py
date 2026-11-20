@@ -563,8 +563,7 @@ class TaskRolloutWorker:
                             delay,
                             redact_string(str(lost_start)),
                         )
-                        with rollout_wait("retry_backoff"):
-                            await self.retry_wait(delay)
+                        await self._wait_before_retry(delay)
                         continue
                     result = _failed_rollout(interruption, lowered)
                 if task.reasoning_markup == ReasoningMarkupPolicy.REJECT:
@@ -580,17 +579,16 @@ class TaskRolloutWorker:
                     result = replace(
                         result, grade=skipped_grade(task.grader.reason, diagnostics=result.grade.diagnostics)
                     )
-                if harbor is None:
-                    if retries:
-                        result = replace(result, metrics={**result.metrics, "rollout_retries": float(retries)})
-                    return result
-                result = harbor_grading_failure(result)
-                delay = harbor.retry_delay(result.failure, retries)
+                delay = None
+                if harbor is not None:
+                    result = harbor_grading_failure(result)
+                    delay = harbor.retry_delay(result.failure, retries)
                 if delay is None:
+                    if harbor is None and not retries:
+                        return result
                     return replace(result, metrics={**result.metrics, "rollout_retries": float(retries)})
                 logger.info("Task {} retry {} after {} seconds", task.id, retries + 1, delay)
-                with rollout_wait("retry_backoff"):
-                    await self.retry_wait(delay)
+                await self._wait_before_retry(delay)
                 retries += 1
 
         with rollout_phase("collect"):
@@ -618,6 +616,10 @@ class TaskRolloutWorker:
                     harbor_tasks=[harbor is not None for harbor in harbor_settings],
                 )
         return rollouts
+
+    async def _wait_before_retry(self, delay: float) -> None:
+        with rollout_wait("retry_backoff"):
+            await self.retry_wait(delay)
 
     async def run(self, input_batch: TaskRequestBatch) -> TrajectoryBatch:
         with self._active_request():
