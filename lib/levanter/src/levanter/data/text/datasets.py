@@ -589,6 +589,8 @@ def dataset_for_component(
             lookahead_window=component.pack_lookahead_window,
         )  # type: ignore
     elif isinstance(fmt, PrebuiltLmDatasetFormat):
+        if component.pack_lookahead_window is not None:
+            raise ValueError("pack_lookahead_window is not supported for prebuilt datasets.")
         return PrebuiltLmDataset(
             cache,
             Pos,

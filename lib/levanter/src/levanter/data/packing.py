@@ -228,13 +228,13 @@ def pack_documents(
             next one would exceed capacity, then a new pack starts. When a positive integer,
             when the next in-order document does not fit, the pack instead takes the first
             document among up to ``lookahead_window`` documents starting at that one that
-            does fit (so ``lookahead_window=1`` is equivalent to the sequential packer);
+            does fit (``lookahead_window=1`` is equivalent to sequential packing when no
+            documents are dropped; lookahead skips dropped documents without closing a pack);
             skipped documents stay pending and keep their relative order. This trades a
             bounded amount of document reordering for substantially less padding. With a
             lookahead, packs may not be contiguous, so the return value is a list of lists
             of document indices (in pack order) instead of a list of ``range`` objects.
 
-    Returns:
     Returns:
         A list of packs. Without a lookahead, each pack is a ``range`` of document indices.
         With a lookahead, each pack is a list of document indices, in pack order. Either
@@ -363,8 +363,9 @@ def _pack_documents_lookahead(
     frontier document, then repeatedly takes the first fitting document among up to
     ``lookahead_window`` documents starting at the frontier (raw cumulative token sums from
     the pack start, as in the sequential packer, and every leaf must fit). Because the scan
-    starts at the frontier, ``lookahead_window=1`` is exactly the sequential packer's
-    behavior, and ``lookahead_window=w`` looks at up to ``w - 1`` documents beyond it.
+    starts at the frontier, ``lookahead_window=1`` matches sequential packing when no
+    documents are dropped, and ``lookahead_window=w`` looks at up to ``w - 1`` documents
+    beyond it. Dropped documents are removed before packing, so they do not close a pack.
     Documents skipped by the scan stay pending and keep their relative order, so reordering
     stays local. Over-long documents (exceeding capacity in any leaf) become singleton
     packs -- the slice itself is applied at read time, exactly as for the sequential packer.
@@ -399,8 +400,6 @@ def _pack_documents_lookahead(
         over_long = any(lens[l][head] > allowed[l] for l in range(n_leaves))
         if not over_long:
             while max_segments_per_example is None or len(members) < max_segments_per_example:
-                # take the first fitting document among up to lookahead_window documents
-                # starting at the frontier
                 taken = -1
                 for index, doc in enumerate(pending):
                     fits = all(
@@ -510,9 +509,7 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
                     "Consider using slice_strategy='left', 'right', or 'drop', or increasing max_length."
                 )
             if self.slice_strategy == "right":
-                # slice from the right
                 return doc_end - allowed, doc_end
-            # left
             return doc_start, doc_start + allowed
         return doc_start, doc_end
 
@@ -558,8 +555,7 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
                         futures.append(store.data[spans[0][0] : spans[-1][1]].read())
                         group_sizes.append(1)
                     else:
-                        # Lookahead packs: read each document's (possibly sliced) token span
-                        # separately and concatenate.
+                        # Non-contiguous packs need separate reads, concatenated below.
                         for doc_start, doc_end in spans:
                             futures.append(store.data[doc_start:doc_end].read())
                         group_sizes.append(len(spans))
