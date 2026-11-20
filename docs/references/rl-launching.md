@@ -306,7 +306,13 @@ planned allowance in seconds for finalization; it does not enforce a deadline.
 Normal trainer finalization drains work after the stop. A fresh
 process starts a fresh clock, including when it restores a checkpoint.
 
-The temporary checkpoint root is derived from the RL artifact name and version.
+Native checkpoints default to lifecycle-managed TTL storage derived from the RL artifact name and version.
+Set `SkyRLRetentionPolicy.native_checkpoint_storage` to
+`SkyRLCheckpointStorage.PERMANENT` to write native checkpoints under
+`<artifact_output>/checkpoints`, as the SFT checkpointer does. Attempts, traces and
+Ray logs keep their temporary storage lifetime. The launch document and terminal
+run record use the same checkpoint root, including for native recovery and draft
+checkpoints.
 After runtime changes, use a fresh RL artifact version. Reusing the old
 version with `resume_mode=latest` can load private Torch or distributed state serialized by the old
 runtime. Reuse a version across runtime changes only after establishing checkpoint compatibility or

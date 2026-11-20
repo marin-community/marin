@@ -758,8 +758,14 @@ the last five eligible observations during warmup and saves every improved best
 immediately. `complete_window` requires all 120 scores and five consecutive
 scheduled evaluations; with the two-update cadence, selection can begin at update
 ten. Missing evaluations invalidate that window.
-The choice is pending a user decision; the shipped rounds use `covered`.
+The shipped rounds use `covered`.
 Completed selection history survives same-version recovery.
+
+Long-loop RL writes native checkpoints under the permanent artifact output at
+`<output_path>/checkpoints`. The protected best and final native checkpoint stay
+there through archival. Attempts, traces and Ray logs keep their TTL storage
+lifetime. Adopt an existing checkpoint through `rl.native_checkpoint` to start a
+new output version; the storage policy does not move existing checkpoint data.
 
 For a proposed two-update smoke, make an explicit new round with `rl.max_steps: 2`,
 a fresh version and `rl.execution.job_timeout_seconds: 7200`, then add `--smoke`.

@@ -22,6 +22,7 @@ from marin.rl.skyrl import (
     ArtifactHfModel,
     IrisSkyRLExecution,
     MegatronGeometry,
+    SkyRLCheckpointStorage,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
     SkyRLRun,
@@ -88,7 +89,11 @@ EXECUTION = IrisSkyRLExecution(
     container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
     role_topology=RoleTopologyMode.NVLINK_DOMAIN,
 )
-RETENTION = SkyRLRetentionPolicy(resume_checkpoint_count=-1, temporary_storage_ttl_days=14)
+RETENTION = SkyRLRetentionPolicy(
+    resume_checkpoint_count=-1,
+    temporary_storage_ttl_days=14,
+    native_checkpoint_storage=SkyRLCheckpointStorage.PERMANENT,
+)
 
 
 @dataclass(frozen=True)
@@ -451,7 +456,7 @@ def profile_run(
                 selected.execution.coordinator_timeout_hours, job_timeout_hours + COORDINATOR_QUEUE_ALLOWANCE_HOURS
             ),
         ),
-        retention=SkyRLRetentionPolicy(resume_checkpoint_count=checkpoint_count, temporary_storage_ttl_days=ttl_days),
+        retention=replace(RETENTION, resume_checkpoint_count=checkpoint_count, temporary_storage_ttl_days=ttl_days),
     )
     if config_output is not None:
         config_output.write_text(materialized_config(step, marin_prefix()).launch_config_yaml)

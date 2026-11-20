@@ -10,6 +10,7 @@ import draccus
 import yaml
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.rl.skyrl import ArtifactDataSource, ArtifactHfModel, SkyRLRolePlan
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.long_loop import rl
 from experiments.post_training.long_loop.spec_pipeline import runtime_execution, stage_execution
@@ -41,6 +42,8 @@ def test_real_builder_binds_selected_model_and_attempt_trace_paths(monkeypatch):
     context = StepContext.for_run(step.path(), "s3://test/output", runtime_args=step.runtime_args, deps=step.deps)
     built = step.build_config(replace(context, is_fingerprint=True))
     document = yaml.safe_load(built.launch_config_yaml)
+    assert built.output.checkpoint_root == str(StoragePath(context.output_path) / "checkpoints")
+    assert document["artifacts"]["checkpoint_root"] == built.output.checkpoint_root
     config = document["skyrl"]
     selection = next(c for c in config["trainer"]["callbacks"] if c["type"] == "best_checkpoint")
     assert selection["initial_model_uri"] == document["inputs"]["model"]["uri"]

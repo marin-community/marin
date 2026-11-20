@@ -11,6 +11,8 @@ import yaml
 from marin.execution.lazy import StepContext
 from marin.experiment.cli import graph_handles
 
+from experiments.post_training.long_loop.archive import assert_best_rl_checkpoint
+from experiments.post_training.long_loop.launch_validation import validate_launch
 from experiments.post_training.long_loop.round_runner import adopted_round_rl, load_round
 
 ROUND_DIR = Path(__file__).parents[1] / "rounds"
@@ -35,11 +37,8 @@ def round_inputs(tmp_path, monkeypatch):
     return model, data
 
 
-@pytest.mark.parametrize("profile,gpus", [("one-rack", 60), ("three-rack", 192)])
-@pytest.mark.parametrize("resume", [False, True])
-def test_round_adopts_sft_or_native_rl_without_sft_and_keeps_absolute_steps(
-    round_inputs, tmp_path, profile, gpus, resume
-):
+@pytest.fixture
+def local_round(round_inputs, profile):
     model, data = round_inputs
     spec = load_round(ROUND_DIR / f"mochi-{profile}.yaml")
     pins = {
@@ -55,7 +54,7 @@ def test_round_adopts_sft_or_native_rl_without_sft_and_keeps_absolute_steps(
         "file": "validation.parquet",
         "sha256": hashlib.sha256((data / "validation.parquet").read_bytes()).hexdigest(),
     }
-    spec = dataclasses.replace(
+    return dataclasses.replace(
         spec,
         adopted_model=dataclasses.replace(
             spec.adopted_model,
@@ -68,8 +67,19 @@ def test_round_adopts_sft_or_native_rl_without_sft_and_keeps_absolute_steps(
             train_data={"mixed": train},
             validation_data=validation,
             max_steps=15,
-            native_checkpoint=str(tmp_path / "global_step_13") if resume else None,
         ),
+    )
+
+
+@pytest.mark.parametrize("profile,gpus", [("one-rack", 60), ("three-rack", 192)])
+@pytest.mark.parametrize("resume", [False, True])
+def test_round_adopts_sft_or_native_rl_without_sft_and_keeps_absolute_steps(
+    round_inputs, local_round, tmp_path, gpus, resume
+):
+    _, data = round_inputs
+    spec = dataclasses.replace(
+        local_round,
+        rl=dataclasses.replace(local_round.rl, native_checkpoint=str(tmp_path / "global_step_13") if resume else None),
     )
     terminal = adopted_round_rl(spec)
     stages = graph_handles([terminal])
@@ -93,3 +103,31 @@ def test_round_adopts_sft_or_native_rl_without_sft_and_keeps_absolute_steps(
     (data / "train.parquet").write_bytes(b"changed after adoption")
     with pytest.raises(ValueError, match="Round data changed"):
         terminal.build_config(context)
+
+
+@pytest.mark.parametrize("profile", ["one-rack", "three-rack"])
+def test_round_best_and_final_native_checkpoints_use_permanent_storage(local_round, tmp_path, monkeypatch):
+    monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
+    terminal = adopted_round_rl(local_round)
+    output = tmp_path / "permanent" / "round"
+    context = StepContext.for_run(
+        str(output), str(output.parent), deps=terminal.deps, runtime_args=terminal.runtime_args
+    )
+    config = terminal.build_config(context)
+    launch = yaml.safe_load(config.launch_config_yaml)
+    assert config.output.checkpoint_root == str(output / "checkpoints")
+    assert launch["artifacts"]["checkpoint_root"] == config.output.checkpoint_root
+    assert str(tmp_path / "temporary") in config.output.attempts_root
+
+    validate_launch(config.launch_config_yaml, tmp_path / "composed", model_config=b"{}")
+    compiled = yaml.safe_load((tmp_path / "composed" / "compiled.yaml").read_text())
+    checkpoint_root = Path(compiled["skyrl"]["trainer"]["ckpt_path"])
+    inventory = {"selected": str(checkpoint_root / "global_step_14"), "final": str(checkpoint_root / "global_step_15")}
+    for uri in inventory.values():
+        path = Path(uri)
+        (path / "policy").mkdir(parents=True)
+        (path / "trainer_state.pt").write_bytes(b"native optimizer state fixture")
+        (path / "policy" / "weights.distcp").write_bytes(b"native policy fixture")
+    receipt = assert_best_rl_checkpoint(str(tmp_path / "archive"), inventory)
+    assert receipt["selected"]["uri"] == str(output / "checkpoints" / "global_step_14")
+    assert receipt["final"]["uri"] == str(output / "checkpoints" / "global_step_15")
