@@ -13,6 +13,7 @@ from taskcompendium.runtime.shell import resolve_shell_tool
 from skyrl_train.inference_engines.base import ConversationType
 from skyrl_train.rollouts.group_grader import GroupGraderSpec
 
+
 @dataclass(frozen=True)
 class TrajectoryMetadata:
     uid: str
@@ -20,6 +21,8 @@ class TrajectoryMetadata:
     data_source: str | None = None
     teacher_route: str | None = None
     metric_tags: tuple[str, ...] = ()
+    task_id: str | None = None
+    env_id: str | None = None
 
 
 @dataclass(frozen=True)

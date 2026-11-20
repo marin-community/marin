@@ -123,24 +123,30 @@ Local graders require the privileged container profile; image graders and host j
 
 ### Grader report
 
-`exports/grader_reports/<attempt_id>/grader_report.json` groups rollouts by environment class and task source.
+`exports/grader_reports/<attempt_id>/grader_report.json` saves success rates
+by benchmark environment in `evaluation` and `training`, and by canonical task
+ID in `evaluation_tasks` and `training_tasks`. Benchmark IDs come from task
+metadata, the NeMo Gym blend component, or the task's source dataset.
 The evaluation section includes step 0 and the final evaluation step.
 The training section holds a cumulative snapshot for each trainer attempt and
 includes completed groups the optimizer discards. Training snapshots update
 when a rollout batch fills and during trainer shutdown.
 
-Each row includes attempts, verifier coverage, and success rate among verified
-responses. Verification failures have their own counts by reason, including
+Both breakdowns include attempts, verifier coverage, and success rate among
+verified responses. With zero verified responses, the success rate is null.
+The benchmark rows also count verification failures by reason, including
 timeouts, execution errors, and missing or invalid rewards. Rollout failures
 outside grading are counted by execution stage. Grading latency includes output
 capture and grader setup and execution. The count, mean, p95, and max use only
 rollouts that entered this phase. For an individual eval response, check
-`verification.diagnostics` in the per-dataset JSONL.
+`task_id`, `env_id`, and `verification.diagnostics` in the per-dataset JSONL.
 
 The [RL iteration progress dashboard](https://applets.marina.oa.dev/a/6c971887-1e22-45b1-9dcb-dd775829df57/)
 imports terminal attempts automatically from object storage. Select a run or chart
-point to open its grader stats. When SkyRL logs `elapsed_excluding_eval_seconds`,
-the launcher saves it beside the grader report as `trainer_timing.json`. The
+point to open its grader stats. Expand **Individual tasks** under an evaluation
+or training section to see task success rates. When SkyRL logs
+`elapsed_excluding_eval_seconds`, the launcher saves it beside the grader report
+as `trainer_timing.json`. The
 dashboard prefers that value and falls back to Iris coordinator wall time, with
 validation subtracted when both validation durations are available. Imports run
 every ten minutes.

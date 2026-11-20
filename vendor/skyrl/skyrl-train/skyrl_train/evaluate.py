@@ -12,6 +12,7 @@ from dataclasses import dataclass, replace
 from skyrl_train.utils import Timer
 from skyrl_train.evaluation_pool import EvaluationPool
 from skyrl_train.grader_reporting import GraderStats, write_grader_report
+from skyrl_train.task_inputs import TrajectoryMetadata
 from skyrl_train.io import io
 from marinskyrl.resource_locator import join_resource_path
 
@@ -49,16 +50,14 @@ from transformers import AutoTokenizer
 @dataclass
 class _EvaluationRollouts:
     batch: TrajectoryBatch
-    env_classes: List[str]
-    data_sources: List[str | None]
+    metadata: List[TrajectoryMetadata]
     uids: List[str]
     example_prompt: ConversationType
     example_batch: TrajectoryBatch
 
 
 class _EvaluationAccumulator(Protocol):
-    env_classes: List[str]
-    data_sources: List[str | None]
+    metadata: List[TrajectoryMetadata]
     uids: List[str]
 
     def record(self, request: TrajectoryRequestBatch, batch: TrajectoryBatch, uids: List[str]) -> None: ...
@@ -72,21 +71,18 @@ def evaluation_dump_dir(export_path: str, global_step: int | None) -> str:
 
 @dataclass
 class _WholeTrajectoryAccumulator:
-    env_classes: List[str]
-    data_sources: List[str | None]
+    metadata: List[TrajectoryMetadata]
     uids: List[str]
 
     def record(self, request: TrajectoryRequestBatch, batch: TrajectoryBatch, uids: List[str]) -> None:
         validate_trajectory_batch(len(request.metadata), batch)
-        self.env_classes.extend(row.metric_class for row in request.metadata)
-        self.data_sources.extend(row.data_source for row in request.metadata)
+        self.metadata.extend(request.metadata)
         self.uids.extend(uids)
 
 
 @dataclass
 class _StepWiseAccumulator:
-    env_classes: List[str]
-    data_sources: List[str | None]
+    metadata: List[TrajectoryMetadata]
     uids: List[str]
 
     def record(self, request: TrajectoryRequestBatch, batch: TrajectoryBatch, uids: List[str]) -> None:
@@ -96,15 +92,13 @@ class _StepWiseAccumulator:
         if trajectory_ids is None or output_ids is None:
             raise ValueError("step-wise evaluation requires trajectory IDs")
         inputs_by_id = {
-            trajectory_id.instance_id: (row.metric_class, row.data_source)
+            trajectory_id.instance_id: row
             for trajectory_id, row in zip(trajectory_ids, request.metadata, strict=True)
         }
         for trajectory_id in output_ids:
             if trajectory_id.instance_id not in inputs_by_id:
                 raise ValueError(f"Trajectory ID {trajectory_id.instance_id} not found in input")
-            env_class, data_source = inputs_by_id[trajectory_id.instance_id]
-            self.env_classes.append(env_class)
-            self.data_sources.append(data_source)
+            self.metadata.append(inputs_by_id[trajectory_id.instance_id])
             self.uids.append(trajectory_id.instance_id)
 
 
@@ -168,8 +162,7 @@ async def _collect_evaluation_rollouts(
         raise RuntimeError("evaluation did not return every selected row and repetition")
     return _EvaluationRollouts(
         batch=concatenate_trajectory_batches(trajectory_batches),
-        env_classes=accumulator.env_classes,
-        data_sources=accumulator.data_sources,
+        metadata=accumulator.metadata,
         uids=accumulator.uids,
         example_prompt=last_request.public_prompts[0],
         example_batch=last_batch,
@@ -224,12 +217,12 @@ def _dump_eval_results(
     global_step: int | None,
     tokenizer: AutoTokenizer,
     rollouts: _EvaluationRollouts,
-    data_sources: List[str | None],
     metrics: Dict[str, float],
 ) -> None:
     if cfg.trainer.get("dump_grader_report", False):
         stats = GraderStats()
-        stats.add(rollouts.batch, zip(rollouts.env_classes, data_sources, strict=True))
+        stats.add(rollouts.batch, rollouts.metadata)
+        summary = stats.summary()
         key = "eval_only" if global_step is None else str(global_step)
         report_dir = str(cfg.trainer.grader_report_dir)
         metadata = {
@@ -244,7 +237,15 @@ def _dump_eval_results(
             "scored": metrics.get("eval/all/num_scored"),
             "reward": metrics.get("eval/all/avg_verifier_score"),
         }
-        write_grader_report(report_dir, key, {"evaluation": stats.summary(), "evaluation_metadata": metadata})
+        write_grader_report(
+            report_dir,
+            key,
+            {
+                "evaluation": summary["environments"],
+                "evaluation_tasks": summary["tasks"],
+                "evaluation_metadata": metadata,
+            },
+        )
     if not cfg.trainer.dump_eval_results:
         return
     with Timer("dump_eval_results"):
@@ -254,8 +255,7 @@ def _dump_eval_results(
             data_save_dir,
             tokenizer,
             rollouts.batch,
-            data_sources,
-            rollouts.env_classes,
+            rollouts.metadata,
             metrics,
             rollouts.uids,
         )
@@ -291,7 +291,7 @@ async def evaluate(
     owns_sink = trajectory_sink is None
     active_sink = trajectory_sink or make_trajectory_sink(cfg.generator, tokenizer)
     try:
-        accumulator = _WholeTrajectoryAccumulator([], [], [])
+        accumulator = _WholeTrajectoryAccumulator([], [])
         session = (
             nullcontext(evaluation_pool)
             if evaluation_pool is not None
@@ -302,7 +302,7 @@ async def evaluate(
                 eval_dataloader, trajectory_runner, cfg, global_step, val_set_name, accumulator, pool
             )
         concatenated_batch = rollouts.batch
-        concat_data_sources = rollouts.data_sources
+        concat_data_sources = [row.data_source for row in rollouts.metadata]
         vis = tokenizer.decode(rollouts.example_batch["response_ids"][0])
         log_example(
             logger,
@@ -317,7 +317,7 @@ async def evaluate(
             concat_data_sources,
             cfg.generator.eval_n_samples_per_prompt,
         )
-        _dump_eval_results(cfg, global_step, tokenizer, rollouts, concat_data_sources, eval_metrics)
+        _dump_eval_results(cfg, global_step, tokenizer, rollouts, eval_metrics)
 
         return eval_metrics
     finally:
@@ -354,7 +354,7 @@ async def evaluate_step_wise(
     Returns:
         Dict[str, float]: evaluation metrics
     """
-    accumulator = _StepWiseAccumulator([], [], [])
+    accumulator = _StepWiseAccumulator([], [])
     session = (
         nullcontext(evaluation_pool)
         if evaluation_pool is not None
@@ -365,7 +365,6 @@ async def evaluate_step_wise(
             eval_dataloader, trajectory_runner, cfg, global_step, val_set_name, accumulator, pool
         )
     concatenated_batch = rollouts.batch
-    concat_data_sources = rollouts.data_sources
     vis = tokenizer.decode(rollouts.example_batch["response_ids"][0])
     logger.info(f"Eval output example: {vis}")
 
@@ -380,7 +379,7 @@ async def evaluate_step_wise(
             ]
     uids_last_step = [uid for uid, is_last_step in zip(rollouts.uids, is_last_step_mask) if is_last_step]
     data_sources_last_step = [
-        data_source for data_source, is_last_step in zip(concat_data_sources, is_last_step_mask) if is_last_step
+        row.data_source for row, is_last_step in zip(rollouts.metadata, is_last_step_mask, strict=True) if is_last_step
     ]
 
     eval_metrics = _calculate_eval_metrics(
@@ -389,6 +388,6 @@ async def evaluate_step_wise(
         data_sources_last_step,
         cfg.generator.eval_n_samples_per_prompt,
     )
-    _dump_eval_results(cfg, global_step, tokenizer, rollouts, concat_data_sources, eval_metrics)
+    _dump_eval_results(cfg, global_step, tokenizer, rollouts, eval_metrics)
 
     return eval_metrics
