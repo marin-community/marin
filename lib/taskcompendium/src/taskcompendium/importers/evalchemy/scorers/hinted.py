@@ -12,12 +12,12 @@ import re
 
 from verifyit.grade import Reward, scored
 
-_STRICT = re.compile(r"####\s*(-?[$0-9.,]+)")
+_FIRST_HASH_NUMBER = re.compile(r"####\s*(-?[$0-9.,]+)")
 
 
 def first_hash_answer(completion: str) -> str | None:
     """The normalized number after the first ``####``, or None without one."""
-    match = _STRICT.search(completion)
+    match = _FIRST_HASH_NUMBER.search(completion)
     if match is None:
         return None
     return match.group(1).replace("$", "").replace(",", "").strip().rstrip(".")

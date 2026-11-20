@@ -149,13 +149,19 @@ def test_minerva_exemplar_references_hold_no_final_answer():
         assert exemplar.answer not in exemplar.reference
 
 
+# A 4096-token context with 1024 tokens reserved for output, as the MATH-500 protocols configure.
+PROMPT_BUDGET = 3072
+
+
 def math_document(problem: str, solution: str, answer: str, unique_id: str) -> dict:
     return {"problem": problem, "solution": solution, "answer": answer, "subject": "Algebra", "unique_id": unique_id}
 
 
 def test_unhinted_math_matches_the_plain_minerva_prompt():
     document = math_document("Solve $x+1=3$.", "We get $x=\\boxed{2}$.", "2", "test/algebra/1.json")
-    [row] = math_rows([document], HintMethod.NONE, count_tokens=len, source_row_prefix="math500")
+    [row] = math_rows(
+        [document], HintMethod.NONE, count_tokens=len, prompt_token_budget=PROMPT_BUDGET, source_row_prefix="math500"
+    )
     template = minerva_template()
     examples = template.fewshot.examples
     assert examples is not None
@@ -172,7 +178,15 @@ def test_math_drops_trailing_shots_when_the_full_hint_leaves_no_output_room():
         # Each Minerva demonstration counts as 1000 tokens; the long hint alone is 600 words.
         return 1000 * text.count("Problem:\n") + len(text.split()) // 5
 
-    rows = list(math_rows([short, long], HintMethod.MASKING, count_tokens=count_tokens, source_row_prefix="m"))
+    rows = list(
+        math_rows(
+            [short, long],
+            HintMethod.MASKING,
+            count_tokens=count_tokens,
+            prompt_token_budget=PROMPT_BUDGET,
+            source_row_prefix="m",
+        )
+    )
     for row in rows:
         shots_of.setdefault(row["problem_id"], set()).add((row["num_fewshot"], row["dropped_shots"]))
         assert row["prompt"].count("Problem:\n") == row["num_fewshot"] + 1

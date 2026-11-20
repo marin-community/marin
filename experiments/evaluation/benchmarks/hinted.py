@@ -34,8 +34,8 @@ from taskcompendium.importers.evalchemy.hinted import (
     GSM8K_HINTED_POPULATION,
     GSM8K_SHOTS,
     HINT_LEVELS,
-    MATH_HINTED_MAX_TOKENS,
     MINERVA_SHOTS,
+    TOKENIZER_INPUT,
     HintMethod,
     convert_hinted,
     hinted_item,
@@ -69,6 +69,10 @@ MARIN_TOKENIZER = UrlSource(
 GSM8K_STOPS = ("Question:", "</s>", "<|im_end|>")
 MINERVA_STOPS = ("Problem:",)
 GSM8K_MAX_TOKENS = 512
+MATH_MAX_TOKENS = 1024
+# The Delphi and hero-ladder checkpoints these evals target serve a 4096-token context; a MATH prompt must
+# leave room for the output budget.
+TARGET_CONTEXT_WINDOW = 4096
 HINTED_TEMPERATURE = 0.4
 HINTED_TOP_K = 1000
 # vLLM reads -1 as "no top-k"; the paper's unhinted runs disable top-k.
@@ -177,10 +181,11 @@ def math500_sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                     read_hinted_math,
                     method=method,
                     tokenizer_file=MARIN_TOKENIZER.filename,
+                    prompt_token_budget=TARGET_CONTEXT_WINDOW - MATH_MAX_TOKENS,
                     source_row_prefix=f"{MATH500_SOURCE.repo}@{MATH500_SOURCE.revision[:8]}",
                 ),
             ),
-            inputs={"tokenizer": MARIN_TOKENIZER},
+            inputs={TOKENIZER_INPUT: MARIN_TOKENIZER},
             scorer="minerva_math",
             grader=MATH_GRADER,
             protocol=hinted_protocol(
@@ -191,7 +196,7 @@ def math500_sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                 shots=MINERVA_SHOTS,
                 problems=MATH500_POPULATION,
                 stop=MINERVA_STOPS,
-                max_tokens=MATH_HINTED_MAX_TOKENS,
+                max_tokens=MATH_MAX_TOKENS,
             ),
         )
         for method, trials in MATH500_TRIALS.items()

@@ -36,6 +36,7 @@ from taskcompendium.convert.answers import source_evidence
 from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.evaluation.spec import EvaluationItem
 from taskcompendium.importers.evalchemy.grader import source_package
+from taskcompendium.importers.evalchemy.math import minerva_demonstration, minerva_prompt
 from taskcompendium.importers.evaluation_harness import (
     HarnessTemplate,
     compile_generation_documents,
@@ -52,9 +53,9 @@ REDACTION = "<mask>"
 GSM8K_HINTED_POPULATION = 256
 GSM8K_SHOTS = 5
 MINERVA_SHOTS = 4
-# Delphi checkpoints have a 4096-token context; a MATH prompt must leave the protocol's output budget.
-HINTED_CONTEXT_WINDOW = 4096
-MATH_HINTED_MAX_TOKENS = 1024
+MINERVA_PROFILE = "minerva_math"
+TOKENIZER_INPUT = "tokenizer"
+"""Recipe input name holding the tokenizer that sizes MATH prompts."""
 _WORD = re.compile(r"\S+")
 _NUMERIC_ANSWER = re.compile(r"-?\$?[\d,]*\.?\d+")
 _FINAL_ANSWER_LINE = "\nFinal Answer:"
@@ -341,16 +342,13 @@ def minerva_block(problem: str, hint: str, solution: str | None) -> str:
 
 
 def minerva_plain_prompt(document: Document, exemplars: Sequence[Document]) -> str:
-    demonstrations = "".join(
-        "Problem:\n" + example["problem"] + "\n\nSolution: " + example["solution"] + "\n\n" for example in exemplars
-    )
-    return demonstrations + "Problem:\n" + document["problem"] + "\n\nSolution:"
+    return "".join(minerva_demonstration(example) for example in exemplars) + minerva_prompt(document)
 
 
 def minerva_exemplars() -> list[HintedExample]:
     """The four pinned Minerva demonstrations, answered by their 'Final Answer' line."""
     examples = []
-    for index, example in enumerate(pinned_prompts()["minerva_math"]):
+    for index, example in enumerate(pinned_prompts()[MINERVA_PROFILE]):
         final = example["solution"].rsplit("The final answer is ", 1)[1].split(". I hope it is correct.")[0]
         examples.append(minerva_example(example, f"minerva:{index}", final.strip().strip("$")))
     return examples
@@ -361,16 +359,17 @@ def math_rows(
     method: HintMethod,
     *,
     count_tokens: Callable[[str], int],
+    prompt_token_budget: int,
     source_row_prefix: str,
 ) -> Iterator[dict[str, Any]]:
-    """Yield Minerva prompts, dropping trailing shots for problems whose H=1 prompt leaves no output room.
+    """Yield Minerva prompts, dropping trailing shots for problems whose H=1 prompt exceeds the budget.
 
     The shot count is fixed per problem from the longer of its H=1 truncation and masking prompts,
     so every hint method and level of a problem shares one prompt structure; H=0 uses the plain prompt.
     """
-    exemplar_documents = pinned_prompts()["minerva_math"]
+    exemplar_documents = pinned_prompts()[MINERVA_PROFILE]
     exemplars = minerva_exemplars()
-    budget = HINTED_CONTEXT_WINDOW - MATH_HINTED_MAX_TOKENS
+    budget = prompt_token_budget
     for document in documents:
         problem_id = document["unique_id"]
         target = minerva_example(document, problem_id, document["answer"])
@@ -388,7 +387,7 @@ def math_rows(
             shots -= 1
         base = {
             "document": document,
-            "profile": "minerva_math",
+            "profile": MINERVA_PROFILE,
             "subject": document["subject"],
             "num_fewshot": shots,
             "dropped_shots": MINERVA_SHOTS - shots,
@@ -411,15 +410,22 @@ def read_hinted_math(
     *,
     method: HintMethod,
     tokenizer_file: str,
+    prompt_token_budget: int,
     source_row_prefix: str,
 ) -> Iterator[dict[str, Any]]:
     # The tokenizer is a curation dependency; the pinned file is a recipe input.
     from tokenizers import Tokenizer  # noqa: PLC0415
 
-    tokenizer = Tokenizer.from_str((context.inputs["tokenizer"] / tokenizer_file).read_text())
+    tokenizer = Tokenizer.from_str((context.inputs[TOKENIZER_INPUT] / tokenizer_file).read_text())
 
     def count_tokens(text: str) -> int:
         return len(tokenizer.encode(text).ids)
 
     documents = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
-    yield from math_rows(documents, method, count_tokens=count_tokens, source_row_prefix=source_row_prefix)
+    yield from math_rows(
+        documents,
+        method,
+        count_tokens=count_tokens,
+        prompt_token_budget=prompt_token_budget,
+        source_row_prefix=source_row_prefix,
+    )
