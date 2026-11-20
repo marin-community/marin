@@ -110,7 +110,7 @@ def test_checkpoint_export_config_carries_request_fields_as_data(tmp_path: Path,
     path = tmp_path / "training.yaml"
     OmegaConf.save(OmegaConf.create(raw), path)
     training = load_launch_config(path)
-    request = _request()
+    request = replace(_request(), hf_hub_repo_id="org/output", hf_hub_private=True, hf_hub_revision="release")
     config = checkpoint_export_launch_config(training, request, _spec(request))
     topology = validate_launch_config(config)
     assert (topology.num_nodes, topology.gpus_per_node) == (request.num_nodes, request.gpus_per_node)
@@ -122,8 +122,11 @@ def test_checkpoint_export_config_carries_request_fields_as_data(tmp_path: Path,
     assert config.iris.allocation.gpu_variant == "H100"
     assert config.skyrl.trainer.placement.policy_num_nodes == 1
     assert config.skyrl.trainer.placement.policy_num_gpus_per_node == 4
-    assert config.skyrl.checkpoint_export.checkpoint_path == request.checkpoint_path
-    assert config.skyrl.checkpoint_export.export_root == request.export_path
+    assert OmegaConf.to_container(config.skyrl.checkpoint_export) == {
+        "step": request.step,
+        "checkpoint_path": request.checkpoint_path,
+        "export_root": request.export_path,
+    }
 
 
 def test_checkpoint_export_config_preserves_saved_policy_geometry_on_whole_nodes() -> None:
