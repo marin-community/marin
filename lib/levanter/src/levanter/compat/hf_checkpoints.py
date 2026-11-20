@@ -298,6 +298,27 @@ class HFCompatConfig(LmConfig["LmWithHfSerializationMixin"]):
         define this as a @cached_property on your config class."""
         pass
 
+    def hf_checkpoint_converter_for_source(
+        self,
+        ref: RepoRef | str | None,
+        tokenizer: MarinTokenizer | PreTrainedTokenizerBase,
+        *,
+        check_tokenizer: bool = False,
+    ) -> "HFCheckpointConverter":
+        """Bind the converter to the source and tokenizer chosen by the caller."""
+        converter = self.hf_checkpoint_converter()
+        if check_tokenizer:
+            converter.warn_if_tokenizer_mismatch(tokenizer)
+        return converter.replaced(reference_checkpoint=ref, tokenizer=tokenizer)
+
+    def hf_checkpoint_vocab(self, hf_config: HfConfig, tokenizer_vocab: Axis) -> Axis:
+        """Resolve the source vocabulary axis before building a model template."""
+        return tokenizer_vocab.resize(hf_config.vocab_size)
+
+    def with_hf_architecture(self, converter: "HFCheckpointConverter") -> "HFCompatConfig":
+        """Read architecture from the converter's reference checkpoint."""
+        return converter.config_from_hf_config(converter.default_hf_config)
+
 
 MConfig = TypeVar("MConfig", bound=HFCompatConfig)
 
@@ -936,6 +957,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         axis_mapping: Optional[ResourceMapping] = None,
         resize_vocab_to_match_tokenizer: bool = False,
         dtype: Optional[jnp.dtype] = None,
+        model_template: ModelWithHfSerializationMixin | None = None,
     ) -> ModelWithHfSerializationMixin:
         """
         Loads a levanter model from a huggingface checkpoint.
@@ -947,16 +969,22 @@ class HFCheckpointConverter(Generic[LevConfig]):
             resize_vocab_to_match_tokenizer: If True, resize the model's vocab to match the tokenizer's vocab size.
                 Defaults to False because some models (e.g., Qwen) intentionally pad their embedding matrices
                 beyond the tokenizer vocab size for hardware efficiency (e.g., divisibility by 4).
+            model_template: Optional abstract model with the checkpoint vocabulary and target parameter shardings.
         """
 
         hf_config = self.hf_config_from_hf_checkpoint(ref)
         if config is None:
             config = self.config_from_hf_config(hf_config)
         lm_model_cls = config.model_type
+        template_type = lm_model_cls if model_template is None else type(model_template)
+        model_init = functools.partial(template_type.init, config=config, key=PRNGKey(0))
 
         # Vocab: first we have to resize the vocab as loaded from the checkpoint
         tokenizer_Vocab = self.Vocab
-        Vocab = tokenizer_Vocab.resize(hf_config.vocab_size)
+        Vocab = config.hf_checkpoint_vocab(hf_config, tokenizer_Vocab)
+
+        if model_template is not None and model_template.Vocab.size != Vocab.size:
+            raise ValueError("HF model template must use the checkpoint vocabulary size")
 
         # TODO: in an ideal world, we would only load the part of the array we needed, but
         # AFAICT neither torch state dicts nor safetensors support this.
@@ -975,9 +1003,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
             # However, this might miss some buffers that don't get persisted in the state dict
             # (e.g. pytorch buffers with persistent=false), so we have to reinitialize them. We then init the model
             # again, this time keeping only the (missing) buffers, and then combine the two models.
-            lev_model = _patch_missing_buffers_for_deser(
-                lev_model, lm_model_cls, Vocab, config, PRNGKey(0), axis_mapping
-            )
+            lev_model = _patch_missing_buffers_for_deser(lev_model, template, model_init, Vocab, axis_mapping)
 
             if Vocab.size != tokenizer_Vocab.size:
                 logger.info(
@@ -998,8 +1024,9 @@ class HFCheckpointConverter(Generic[LevConfig]):
         load_from_state_dict = haliax.named_jit(
             load_from_state_dict, axis_resources=axis_mapping, out_axis_resources=axis_mapping, donate_args=(True,)
         )
-        lev_model = eqx.filter_eval_shape(lm_model_cls.init, Vocab, config, key=PRNGKey(0))
-        lev_model = load_from_state_dict(lev_model, state_dict)
+        if model_template is None:
+            model_template = eqx.filter_eval_shape(model_init, Vocab)
+        lev_model = load_from_state_dict(model_template, state_dict)
 
         return lev_model
 
@@ -1595,7 +1622,7 @@ def _convert_to_jnp(v, dtype):
         return arr
 
 
-def _patch_missing_buffers_for_deser(lev_model, lm_model_cls, Vocab, config, key, axis_mapping):
+def _patch_missing_buffers_for_deser(lev_model, template, model_init, Vocab, axis_mapping):
     """
     State dict serialization doesn't always save buffers, so when we initialize a model from a state dict, we might
     need to re-initialize the buffers. We do this by rerunning the constructor, but only save the buffers.
@@ -1611,15 +1638,16 @@ def _patch_missing_buffers_for_deser(lev_model, lm_model_cls, Vocab, config, key
     # arrays. We're relying on jit to do all the work in eliminating the unnecessary computation/memory
     @haliax.named_jit(axis_resources=axis_mapping)
     def _init_buffers():
-        new_model = lm_model_cls.init(Vocab, config, key=key)
+        new_model = model_init(Vocab)
 
-        def select_if_missing(missing_leaf, new_value):
-            if isinstance(missing_leaf, jax.ShapeDtypeStruct):
-                return new_value
-            else:
+        def select_if_missing(missing_leaf, new_value, template_leaf):
+            if not isinstance(missing_leaf, jax.ShapeDtypeStruct):
                 return None
+            if isinstance(template_leaf, jax.ShapeDtypeStruct) and template_leaf.sharding is not None:
+                return jax.device_put(new_value, template_leaf.sharding)
+            return new_value
 
-        return jax.tree.map(select_if_missing, dtype_structs, new_model, is_leaf=lambda x: x is None)
+        return jax.tree.map(select_if_missing, dtype_structs, new_model, template, is_leaf=lambda x: x is None)
 
     new_buffers = _init_buffers()
 
