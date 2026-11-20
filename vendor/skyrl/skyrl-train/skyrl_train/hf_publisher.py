@@ -12,11 +12,9 @@ from huggingface_hub import HfApi, RepoFile
 from marinskyrl.hf_model import hugging_face_hub_online
 from marinskyrl.hugging_face_retry import call_with_hugging_face_retry
 from marinskyrl.model_manifest import MODEL_MANIFEST_FILENAME, ModelManifest, ModelManifestFile, sha256_file
+from marinskyrl.resource_locator import join_resource_path
 from skyrl_train.hf_export_schema import DEFAULT_HF_HUB_REVISION, DEFAULT_HF_UPLOAD_MODE, HFUploadMode
 from skyrl_train.io import io
-
-
-_MAX_GIT_VERIFICATION_BYTES = 64 * 2**20
 
 
 @dataclass(frozen=True)
@@ -27,12 +25,14 @@ class HuggingFacePublisher:
     private: bool
     revision: str = DEFAULT_HF_HUB_REVISION
     upload_mode: HFUploadMode = DEFAULT_HF_UPLOAD_MODE
-    api: HfApi | None = None
 
     def publish(self, export_path: str, step: int) -> None:
         if not io.exists(export_path):
             raise FileNotFoundError(f"HF export not found: {export_path}")
-        api = self.api or HfApi()
+        manifest_path = join_resource_path(export_path, MODEL_MANIFEST_FILENAME)
+        if not io.exists(manifest_path):
+            raise ValueError(f"Hugging Face publication requires a model manifest: {manifest_path}")
+        api = HfApi()
         with hugging_face_hub_online():
             call_with_hugging_face_retry(
                 lambda: api.create_repo(
@@ -98,8 +98,6 @@ class HuggingFacePublisher:
     def _sha256(self, api: HfApi, file: RepoFile, revision: str) -> str:
         if file.lfs is not None:
             return file.lfs.sha256
-        if file.size > _MAX_GIT_VERIFICATION_BYTES:
-            raise ValueError(f"Hugging Face file over 64 MiB lacks LFS SHA-256 metadata: {file.path}")
         downloaded = call_with_hugging_face_retry(
             lambda: api.hf_hub_download(self.repo_id, file.path, repo_type="model", revision=revision),
             operation=f"read Hugging Face file {self.repo_id}@{revision}:{file.path}",

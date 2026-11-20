@@ -23,7 +23,6 @@ def evaluate_model(
     accelerator: str | None,
     submission_cluster: str,
     federated_cluster: str | None,
-    job_timeout_seconds: int | None = None,
 ) -> ArtifactStep[EvaluationResult]:
     """Evaluate a trained model with serving settings and replace its location with the resolved export."""
     if any(
@@ -60,5 +59,4 @@ def evaluate_model(
         accelerator=accelerator,
         submission_cluster=submission_cluster,
         federated_cluster=federated_cluster,
-        job_timeout_seconds=job_timeout_seconds,
     )

@@ -404,24 +404,22 @@ _PRESETS = (
         data_settings=frozenset({"shuffle", "sampling"}),
         evaluations=(replace(_TASK_SET, every=10, at_start=True),),
     ),
+    _snowball(
+        held_out_tasks=_DEFAULT_EVAL_LITE,
+        name="eval-short",
+        recipe=_GENERATING,
+        updates=0,
+        measured=range(1),
+        accepts_init=True,
+        owned_keys=_OWNED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
+        evaluations=(EVALUATIONS["eval_lite"],),
+        budget="8 min; 1.1 H100-h",
+    ),
 )
 
 SNOWBALL = ModelPresets(
     model="snowball",
-    presets=(
-        *_PRESETS,
-        replace(
-            next(preset for preset in _PRESETS if preset.name == "speed-short"),
-            name="eval-short",
-            recipe=_GENERATING,
-            accepts_init=True,
-            control_preset=None,
-            evaluations=(EVALUATIONS["eval_lite"],),
-            guards=(),
-            objectives=(),
-            budget="1.1 H100-hours in the recorded EvalLite run",
-        ),
-    ),
+    presets=_PRESETS,
     namespace="snowball-rl",
     control_pins={
         name: ControlPin(name, "648b5687f0", "2026.11.06.1", count)

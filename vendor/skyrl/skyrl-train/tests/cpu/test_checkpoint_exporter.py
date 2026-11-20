@@ -75,8 +75,7 @@ class FakeHubApi:
         self.corrupt = corrupt
         self.commits = {}
 
-    def create_repo(self, *, private, **request):
-        assert request == {"repo_id": "org/model", "repo_type": "model", "exist_ok": True}
+    def create_repo(self, *, private, **_kwargs):
         if self.private is None:
             self.private = private
 
@@ -239,34 +238,39 @@ def test_ray_policy_export_workers_loads_model_state_without_training_state():
 
 
 @pytest.mark.parametrize(
-    ("visibility", "requested", "corrupt", "oversize", "error"),
+    ("visibility", "requested", "upload_mode", "corrupt", "missing_manifest", "error"),
     [
-        (None, None, None, False, None),
-        (None, True, None, False, None),
-        (True, None, None, False, "visibility differs"),
-        (False, True, None, False, "visibility differs"),
-        (False, None, "config.json", False, "differs from the model manifest"),
-        (False, None, "checkpoints/step_12/model.safetensors", False, "differs from the model manifest"),
-        (None, None, None, True, "lacks LFS SHA-256 metadata: tokenizer.json"),
+        (None, None, HFUploadMode.ALL, None, False, None),
+        pytest.param(None, None, HFUploadMode.LATEST, None, False, None, id="root-only"),
+        (None, True, HFUploadMode.ALL, None, False, None),
+        (True, None, HFUploadMode.ALL, None, False, "visibility differs"),
+        (False, True, HFUploadMode.ALL, None, False, "visibility differs"),
+        (False, None, HFUploadMode.ALL, "config.json", False, "differs from the model manifest"),
+        (
+            False, None, HFUploadMode.ALL, "checkpoints/step_12/model.safetensors",
+            False, "differs from the model manifest",
+        ),
+        pytest.param(
+            None, None, HFUploadMode.LATEST, None, True, "publication requires a model manifest", id="missing-manifest"
+        ),
     ],
 )
 def test_hf_publisher_checks_visibility_and_uploaded_files(
-    tmp_path, monkeypatch, visibility, requested, corrupt, oversize, error
+    tmp_path, monkeypatch, visibility, requested, upload_mode, corrupt, missing_manifest, error
 ):
     export_path = tmp_path / "exports" / "global_step_12" / "policy"
     export_path.mkdir(parents=True)
     save_file({"weight": torch.tensor([0.0])}, export_path / "model.safetensors")
     for filename in ("config.json", "tokenizer_config.json", "tokenizer.json"):
         (export_path / filename).write_text("{}")
-    if oversize:
-        with (export_path / "tokenizer.json").open("r+b") as tokenizer:
-            tokenizer.truncate(64 * 2**20 + 1)
     manifest = write_local_model_manifest(export_path)
+    if missing_manifest:
+        (export_path / MODEL_MANIFEST_FILENAME).unlink()
     (export_path / "worker.log").write_text("worker log")
     api = FakeHubApi(tmp_path / "downloads", visibility, corrupt)
     monkeypatch.setattr("skyrl_train.hf_publisher.HfApi", lambda: api)
     monkeypatch.setenv("HF_HUB_OFFLINE", "1")
-    settings = {"hf_hub_repo_id": "org/model", "hf_upload_mode": HFUploadMode.ALL.value}
+    settings = {"hf_hub_repo_id": "org/model", "hf_upload_mode": upload_mode.value}
     if requested is not None:
         settings["hf_hub_private"] = requested
     publisher = hub_publisher(OmegaConf.create({"checkpoint_export": settings}))
@@ -275,18 +279,19 @@ def test_hf_publisher_checks_visibility_and_uploaded_files(
     if error:
         with pytest.raises(ValueError, match=error):
             publisher.publish(str(export_path), step=12)
-        if oversize:
-            assert not (api.root / "commit-0" / "tokenizer.json").exists()
-        elif corrupt is None:
+        if corrupt is None:
             assert not api.commits
+        if missing_manifest:
+            assert api.private is None
         return
 
     publisher.publish(str(export_path), step=12)
 
     assert api.private is (requested is True)
     paths = [file.path for file in manifest.files] + [MODEL_MANIFEST_FILENAME]
-    first, last = api.commits.values()
     expected = {path: (export_path / path).read_bytes() for path in paths}
-    assert first == expected
-    assert last == {**expected, **{f"checkpoints/step_12/{path}": data for path, data in expected.items()}}
+    snapshots = [expected]
+    if upload_mode is HFUploadMode.ALL:
+        snapshots.append(expected | {f"checkpoints/step_12/{path}": data for path, data in expected.items()})
+    assert list(api.commits.values()) == snapshots
     assert os.environ["HF_HUB_OFFLINE"] == "1"

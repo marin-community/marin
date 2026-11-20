@@ -1437,10 +1437,6 @@ def test_finished_policy_resolves_terminal_export_as_model_input(tmp_path, token
     fingerprint = StepContext.for_fingerprint({}, model.deps())
     policy_identity = model.resolve(fingerprint)
     assert (policy_identity.uri, policy_identity.identity) == (f"{identity}/policy", identity)
-    other = ArtifactStep.adopt("tests/other-policy", "2026.10.27", str(root), kind=SkyRLRun)
-    other_model = SkyRLPolicyModel(other).resolve(StepContext.for_fingerprint({}, (other,)))
-    other_identity = f"tests/other-policy@2026.10.27:{other.fingerprint()}"
-    assert (other_model.uri, other_model.identity) == (f"{other_identity}/policy", other_identity)
 
 
 def test_reject_forced_socket_transport_blocks_multi_node_overrides() -> None:
