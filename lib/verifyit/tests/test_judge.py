@@ -372,7 +372,7 @@ def test_checklist_truncated_criterion_keeps_partial_diagnostics_without_score(t
     assert [attempt["completion_tokens"] for attempt in reward.detail["criteria"][1]["attempts"]] == [1024, 2048]
 
 
-def test_checklist_shows_the_configured_context_limit_to_the_judge(tmp_path, fake_judge):
+def test_checklist_truncates_context_and_preserves_controls_across_retries(tmp_path, fake_judge):
     limit = 120000
     context = "é" * (limit - 4) + "TAIL" + "excluded"
     (tmp_path / "conversation.txt").write_text(context)

@@ -408,7 +408,7 @@ async def test_harbor_worker_resets_recovery_state_before_retrying(open_worker):
 
 
 @pytest.mark.asyncio
-async def test_one_stored_task_uses_each_runs_retrieval_service(open_worker, monkeypatch):
+async def test_one_stored_task_checks_each_runs_retrieval_service_health(open_worker, monkeypatch):
     state = OpenResearcherState(
         implementation_revision="a" * 40,
         corpus_revision="8367703babe6e080899a48782f365c284c32b668",

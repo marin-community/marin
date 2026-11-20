@@ -45,7 +45,7 @@ class RetrievalServiceConfig:
 
 
 def stage_index(config: RetrievalServiceConfig) -> None:
-    """Copy missing regional index files, then verify every byte before service readiness."""
+    """Copy missing regional index files and verify each manifest entry before readiness."""
     if not config.index_uri.startswith("s3://"):
         raise ValueError("Retrieval index must be staged in the run regional bucket")
     source = StoragePath(config.index_uri)

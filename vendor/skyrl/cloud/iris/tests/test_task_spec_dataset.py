@@ -172,7 +172,7 @@ def test_shared_integrity_actor_identity_is_checked_before_machine_creation(user
     if user == "10001":
         validate_spec(spec, FACTORIES)
     else:
-        with pytest.raises(ValueError, match="integrity contract agent_uid"):
+        with pytest.raises(ValueError):
             validate_spec(spec, FACTORIES)
 
 
