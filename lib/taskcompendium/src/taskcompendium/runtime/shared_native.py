@@ -249,8 +249,8 @@ def bootstrap(input_path: Path) -> None:
             "startup_roots": [str(p) for p in startup_roots],
         },
     )
-    common.write_json(root / "dependency-baseline.json", common.inventory(dependencies))
-    common.write_json(root / "startup-baseline.json", startup_inventory(contract, startup_roots))
+    common.write_json(root / common.DEPENDENCY_BASELINE, common.inventory(dependencies))
+    common.write_json(root / common.STARTUP_BASELINE, startup_inventory(contract, startup_roots))
     for item in (root, *root.rglob("*")):
         if item.is_symlink():
             continue
@@ -287,13 +287,13 @@ def prepare_grading(contract: dict) -> dict:
     common.write_json(
         reports / contract["audit_probes"][0],
         common.inventory_diff(
-            json.loads((root / "dependency-baseline.json").read_text()), common.inventory(runtime["dependencies"])
+            json.loads((root / common.DEPENDENCY_BASELINE).read_text()), common.inventory(runtime["dependencies"])
         ),
     )
     common.write_json(
         reports / contract["audit_probes"][1],
         common.inventory_diff(
-            json.loads((root / "startup-baseline.json").read_text()),
+            json.loads((root / common.STARTUP_BASELINE).read_text()),
             startup_inventory(contract, [Path(p) for p in runtime["startup_roots"]]),
         ),
     )

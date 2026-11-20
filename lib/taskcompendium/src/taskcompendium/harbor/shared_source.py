@@ -44,9 +44,11 @@ from taskcompendium.integrity import (
     BOOTSTRAP_CONTROLLER,
     BOOTSTRAP_DIRECTORY,
     BOOTSTRAP_TIMEOUT,
+    CONTROLLER_CONTEXT,
     DEPENDENCY_AUDIT_PROBES,
     PRIVATE_CONTEXT,
     PRIVATE_DIRECTORY,
+    SHARED_CONTROLLER_CONTEXT,
     SharedDependencyState,
     SharedIntegrityContract,
     SharedSourceFamily,
@@ -260,9 +262,9 @@ def source_image_layer(contract: SharedIntegrityContract) -> str:
         # (e.g. a repository cloned at task start on a shared base image) - the
         # bootstrap hands the cloned tree to the agent afterwards.
         + f"RUN mkdir -p {contract.workspace} && chown -R {agent}:{agent} {contract.workspace}\n"
-        f"COPY taskcompendium-shared/control.py {BOOTSTRAP_CONTROLLER}\n"
-        f"COPY taskcompendium-shared/shared_pytest.py {BOOTSTRAP_DIRECTORY}/shared_pytest.py\n"
-        f"RUN chmod -R go-w {BOOTSTRAP_DIRECTORY}\n" + shared_private_image_layer(contract)
+        f"COPY {CONTROLLER_CONTEXT.removeprefix('environment/')} {BOOTSTRAP_CONTROLLER}\n"
+        f"COPY {SHARED_CONTROLLER_CONTEXT.removeprefix('environment/')} {BOOTSTRAP_DIRECTORY}/shared_pytest.py\n"
+        f"RUN chmod -R go-w {BOOTSTRAP_DIRECTORY}\n" + shared_private_image_layer()
     )
 
 
@@ -380,8 +382,8 @@ def harden_shared_source(
     if instruction.startswith("## Environment Setup (complete these steps first)\n\n```bash\n"):
         raise ValueError("Source family declares its setup inside the instruction, unsupported here")
     files["instruction.md"] = shared_task_instruction(instruction, contract).encode()
-    files["environment/taskcompendium-shared/control.py"] = Path(shared_source.__file__).read_bytes()
-    files["environment/taskcompendium-shared/shared_pytest.py"] = Path(shared_pytest.__file__).read_bytes()
+    files[CONTROLLER_CONTEXT] = Path(shared_source.__file__).read_bytes()
+    files[SHARED_CONTROLLER_CONTEXT] = Path(shared_pytest.__file__).read_bytes()
     files["environment/Dockerfile"] += source_image_layer(contract).encode()
     return contract
 

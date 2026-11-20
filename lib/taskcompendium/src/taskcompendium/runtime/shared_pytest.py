@@ -23,17 +23,22 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+DEPENDENCY_BASELINE = "dependency-baseline.json"
+STARTUP_BASELINE = "startup-baseline.json"
+
 REPORT_FILES = ("verdict.json", "reward.txt", "reward.json", "test_output.log")
 
-SOURCE_DIRECTORY_EXCLUSIONS = {
-    ".git",
-    ".tox",
-    ".cache",
-    "__pycache__",
-    "node_modules",
-    "build",
-    "dist",
-}
+SOURCE_DIRECTORY_EXCLUSIONS = frozenset(
+    {
+        ".git",
+        ".tox",
+        ".cache",
+        "__pycache__",
+        "node_modules",
+        "build",
+        "dist",
+    }
+)
 PACKAGE_CENSUS_EXCLUDED = SOURCE_DIRECTORY_EXCLUSIONS | {"tests", "test", "docs"}
 
 

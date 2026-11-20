@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Any, TypeVar, cast
+from typing import Any, Literal, TypedDict, TypeVar, cast
 
 import openai
 from openai.types.chat import ChatCompletion, ChatCompletionMessageParam
@@ -71,6 +71,16 @@ MODEL_ENV = "VERIFYIT_JUDGE_MODEL"
 REASONING_LIMIT = 400
 RETRYABLE_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 _TransportResult = TypeVar("_TransportResult")
+
+
+class _TransportAttempt(TypedDict, total=False):
+    attempt: int
+    outcome: Literal["failed", "succeeded"]
+    status: int | None
+    reason: str
+    body: str | None
+    retry_delay: float
+
 
 REFERENCE_PROMPT = """You are an impartial grader for open-ended short-answer questions. Compare the \
 candidate response with the reference answer(s) below. Judge the substantive answer only: ignore \
@@ -141,7 +151,7 @@ class _ScoreResult:
 @dataclass(frozen=True)
 class _ChatResult:
     response: ChatCompletion
-    transport_attempts: tuple[dict[str, Any], ...]
+    transport_attempts: tuple[_TransportAttempt, ...]
     request: dict[str, Any]
 
 
@@ -152,7 +162,7 @@ class _LabelCompletion:
     response_model: str | None
     response_id: str | None
     finish_reason: str | None
-    transport_attempts: tuple[dict[str, Any], ...] = ()
+    transport_attempts: tuple[_TransportAttempt, ...] = ()
     request: dict[str, Any] = field(default_factory=dict)
     prompt_tokens: int | None = None
     usage: dict[str, Any] | None = None
@@ -472,7 +482,7 @@ def _judge_transport(
     spec: JudgeSpec,
     call: Callable[[float], _TransportResult],
     request: dict[str, Any],
-) -> tuple[_TransportResult, tuple[dict[str, Any], ...]]:
+) -> tuple[_TransportResult, tuple[_TransportAttempt, ...]]:
     """Retry only transient provider failures; semantic label parsing happens afterward.
 
     The source uses capped exponential full jitter and a Retry-After minimum.
@@ -480,7 +490,7 @@ def _judge_transport(
     Only response bodies, statuses and retry reasons enter evidence, never headers.
     """
     deadline = time.monotonic() + max(spec.transport_budget, spec.request_timeout)
-    attempts: list[dict[str, Any]] = []
+    attempts: list[_TransportAttempt] = []
     for index in range(spec.transport_attempts):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -496,7 +506,7 @@ def _judge_transport(
                 if isinstance(error, openai.APITimeoutError)
                 else "connection" if status is None else f"http_{status}"
             )
-            record: dict[str, Any] = {
+            record: _TransportAttempt = {
                 "attempt": index + 1,
                 "outcome": "failed",
                 "status": status,

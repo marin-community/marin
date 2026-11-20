@@ -130,7 +130,15 @@ def test_shared_config_preserves_source_initialization_and_replaces_root_home(tm
     )
     environment = config["environment"]
     subprocess.run(["/bin/bash", "-c", environment["setup"]["command"]], env=environment["env"].unwrap(), check=True)
-    assert output.read_text().splitlines() == [f"source:{AGENT_HOME}", "bootstrap"]
+    assert output.read_text().splitlines() == ["source:/root", "bootstrap"]
+    actor = subprocess.run(
+        ["/bin/bash", "-c", 'printf "%s" "$HOME"'],
+        env=environment["env"].unwrap(),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert actor.stdout == AGENT_HOME
 
 
 @pytest.mark.docker
@@ -152,6 +160,7 @@ def test_built_image_keeps_private_reference_unreadable_without_initialization(t
             target.write_bytes(content)
     built = subprocess.run(["docker", "build", "--quiet", str(tmp_path)], check=True, capture_output=True, text=True)
     image = built.stdout.strip()
+    actor_user = str(tomlkit.parse(files["task.toml"].decode())["agent"]["user"])
     paths = [f"{PRIVATE_DIRECTORY}/{Path(name).name}" for name in files if name.startswith(PRIVATE_CONTEXT + "/")]
     try:
         root_probe = "import pathlib,sys,json;assert all(pathlib.Path(p).read_bytes() for p in json.loads(sys.argv[1]))"
@@ -170,7 +179,19 @@ def test_built_image_keeps_private_reference_unreadable_without_initialization(t
             "    raise AssertionError('actor read private image input')\n"
         )
         result = subprocess.run(
-            ["docker", "run", "--rm", image, "python", "-I", "-c", actor_probe, json.dumps(paths)],
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--user",
+                actor_user,
+                image,
+                "python",
+                "-I",
+                "-c",
+                actor_probe,
+                json.dumps(paths),
+            ],
             capture_output=True,
             text=True,
         )

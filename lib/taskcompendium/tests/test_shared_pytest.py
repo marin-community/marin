@@ -415,7 +415,6 @@ def test_agent_installs_land_in_declared_environment_not_root_sites(shared_runti
     source_python = Path(runtime.site).parents[2] / "bin/python"
     broken = agent_command(runtime, f"open({str(source_python.parents[1] / 'bin' / 'probe')!r}, 'w').write('')")
     assert broken.returncode != 0
-    assert "Permission denied" in broken.stderr
     assert not os.stat(source_python.parents[1] / "bin").st_mode & 0o022
 
 

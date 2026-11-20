@@ -23,9 +23,11 @@ from taskcompendium.integrity import (
     BOOTSTRAP_CONTROLLER,
     BOOTSTRAP_DIRECTORY,
     BOOTSTRAP_TIMEOUT,
+    CONTROLLER_CONTEXT,
     DEPENDENCY_AUDIT_PROBES,
     PRIVATE_CONTEXT,
     PRIVATE_DIRECTORY,
+    SHARED_CONTROLLER_CONTEXT,
     SharedDependencyState,
     SharedIntegrityContract,
     shared_preamble,
@@ -73,8 +75,12 @@ def apply_shared_task_config(
         raise ValueError("Reference mode cannot reorder an existing source initialization command")
     if source_setup_policy is SourceSetupPolicy.PREPEND and existing is not None:
         setup_command = "set -euo pipefail\n" + str(existing["command"]) + "\n" + setup_command
-    environment["setup"] = {"command": setup_command, "timeout_sec": setup_timeout}
     source_environment = dict(environment.get("env", {}))
+    source_home = str(source_environment.get("HOME") or "/root")
+    environment["setup"] = {
+        "command": f"export HOME={shlex.quote(source_home)}\n" + setup_command,
+        "timeout_sec": setup_timeout,
+    }
     if source_environment.get("HOME") in {None, "/root"}:
         source_environment["HOME"] = AGENT_HOME
     if actor_path is not None:
@@ -235,9 +241,9 @@ def harden_shared_swe(
     )
     files["task.toml"] = tomlkit.dumps(config).encode()
     files["instruction.md"] = shared_task_instruction(instruction, contract).encode()
-    files["environment/taskcompendium-shared/control.py"] = source
+    files[CONTROLLER_CONTEXT] = source
     if native:
-        files["environment/taskcompendium-shared/shared_pytest.py"] = Path(shared_pytest.__file__).read_bytes()
+        files[SHARED_CONTROLLER_CONTEXT] = Path(shared_pytest.__file__).read_bytes()
     files["environment/Dockerfile"] += shared_image_layer(contract).encode()
     files["tests/test.sh"] = shared_grader_script(contract)
     return contract
@@ -256,13 +262,13 @@ def shared_user_layer(contract: SharedIntegrityContract) -> str:
     )
 
 
-def shared_private_image_layer(contract: SharedIntegrityContract) -> str:
+def shared_private_image_layer() -> str:
     """Keep bootstrap inputs private even for runners that ignore the setup hook."""
     return (
         f"COPY taskcompendium-shared-private/ {PRIVATE_DIRECTORY}/\n"
         f"RUN chown -R 0:0 {PRIVATE_DIRECTORY} && chmod 700 {PRIVATE_DIRECTORY} && "
         f"chmod 600 {PRIVATE_DIRECTORY}/*\n"
-        f"USER {contract.agent_uid}:{contract.agent_uid}\n"
+        "USER 0:0\n"
     )
 
 
@@ -271,11 +277,15 @@ def shared_image_layer(contract: SharedIntegrityContract) -> str:
     native = contract.native is not None
     return (
         shared_user_layer(contract)
-        + f"COPY taskcompendium-shared/control.py {BOOTSTRAP_CONTROLLER}\n"
-        + (f"COPY taskcompendium-shared/shared_pytest.py {BOOTSTRAP_DIRECTORY}/shared_pytest.py\n" if native else "")
+        + f"COPY {CONTROLLER_CONTEXT.removeprefix('environment/')} {BOOTSTRAP_CONTROLLER}\n"
+        + (
+            f"COPY {SHARED_CONTROLLER_CONTEXT.removeprefix('environment/')} {BOOTSTRAP_DIRECTORY}/shared_pytest.py\n"
+            if native
+            else ""
+        )
         + 'RUN verifyit_path="$(readlink -f "$(command -v verifyit)")"; '
         'python_path="$(head -n 1 "$verifyit_path" | cut -c 3-)"; '
         f'ln -s "$python_path" {BOOTSTRAP_DIRECTORY}/python; '
         f'ln -s "$verifyit_path" {BOOTSTRAP_DIRECTORY}/verifyit\n'
-        f"RUN chmod -R go-w {BOOTSTRAP_DIRECTORY}\n" + shared_private_image_layer(contract)
+        f"RUN chmod -R go-w {BOOTSTRAP_DIRECTORY}\n" + shared_private_image_layer()
     )

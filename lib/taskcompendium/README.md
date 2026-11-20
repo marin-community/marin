@@ -39,8 +39,8 @@ Harbor runs the declared initialization command before actor access. The source
 adapter authorizes Git access to the declared workspace during that setup,
 because its build layer has already assigned the workspace to the actor UID.
 Use a Harbor build with task schema 1.3 support. Private bootstrap inputs are stored in a
-root-only image directory, and the image defaults to the actor UID. A runner
-that ignores initialization cannot read those inputs as the actor. Different
+root-only image directory. Harbor applies the declared actor UID before actor
+commands. A runner that ignores initialization cannot read those inputs as the actor. Different
 private inputs produce different image contexts; generated images must stay private.
 
 Bootstrap saves private verifier files and a trusted test reference in a
