@@ -21,6 +21,8 @@ from typing import Any, Protocol, runtime_checkable
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
+ADD_TESTS_DIR_ERROR = "AddTestsDirError"
+DOWNLOAD_VERIFIER_DIR_ERROR = "DownloadVerifierDirError"
 AGENT_TIMEOUT_ERROR = "AgentTimeoutError"
 VERIFIER_TIMEOUT_ERROR = "VerifierTimeoutError"
 REWARD_FILE_NOT_FOUND_ERROR = "RewardFileNotFoundError"
@@ -119,12 +121,12 @@ _ERROR_CATEGORIES: Mapping[str, ErrorCategory] = MappingProxyType(
         TMUX_SESSION_ENDED_ERROR: ErrorCategory.INFRASTRUCTURE,
         TAU3_RUNTIME_INFRASTRUCTURE_ERROR: ErrorCategory.INFRASTRUCTURE,
         # --- Verifier infrastructure ---
-        "DownloadVerifierDirError": ErrorCategory.INFRASTRUCTURE,
+        DOWNLOAD_VERIFIER_DIR_ERROR: ErrorCategory.INFRASTRUCTURE,
         REWARD_FILE_NOT_FOUND_ERROR: ErrorCategory.INFRASTRUCTURE,
         REWARD_FILE_EMPTY_ERROR: ErrorCategory.INFRASTRUCTURE,
         VERIFIER_RUNTIME_ERROR: ErrorCategory.INFRASTRUCTURE,
         VERIFIER_OUTPUT_PARSE_ERROR: ErrorCategory.INFRASTRUCTURE,
-        "AddTestsDirError": ErrorCategory.INFRASTRUCTURE,
+        ADD_TESTS_DIR_ERROR: ErrorCategory.INFRASTRUCTURE,
         # --- Agent-attributable failures (reward zero) ---
         AGENT_TIMEOUT_ERROR: ErrorCategory.AGENT,
         "AgentDiskFullError": ErrorCategory.AGENT,
@@ -208,19 +210,24 @@ def known_error_types() -> frozenset[str]:
     return frozenset(_ERROR_CATEGORIES)
 
 
+DEFAULT_RETRY_EXCLUSIONS = frozenset(
+    {
+        AGENT_TIMEOUT_ERROR,
+        VERIFIER_TIMEOUT_ERROR,
+        REWARD_FILE_NOT_FOUND_ERROR,
+        REWARD_FILE_EMPTY_ERROR,
+        VERIFIER_OUTPUT_PARSE_ERROR,
+    }
+)
+
+
 class RetrySettings(BaseModel):
     """Retry budget and name filters shared by task execution paths."""
 
     max_retries: int = Field(default=0, ge=0)
     include_exceptions: set[str] | None = Field(default=None, description="No name inclusion filter when None")
     exclude_exceptions: set[str] | None = Field(
-        default_factory=lambda: {
-            AGENT_TIMEOUT_ERROR,
-            VERIFIER_TIMEOUT_ERROR,
-            REWARD_FILE_NOT_FOUND_ERROR,
-            REWARD_FILE_EMPTY_ERROR,
-            VERIFIER_OUTPUT_PARSE_ERROR,
-        },
+        default_factory=lambda: set(DEFAULT_RETRY_EXCLUSIONS),
         description="Excluded names take precedence over included names",
     )
     include_categories: set[ErrorCategory] | None = None

@@ -36,6 +36,7 @@ from experiments.post_training import rl as snowball
 from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import snowball_rl as snowball_model
+from experiments.post_training.mochi_rl import MOCHI
 from experiments.post_training.rl_tests.fixtures import (
     SELECTION_IDENTITY,
     append_metrics,
@@ -64,14 +65,33 @@ def printed_status(output):
     return yaml.safe_load(output[marker + 1 if marker >= 0 else 0 :].split("\n# ", 1)[0])
 
 
-def test_all_presets_plan_with_their_declared_controls(selection):
+def test_preset_table_rejects_duplicate_names():
     table = snowball_model.SNOWBALL
+    with pytest.raises(ValueError, match="Duplicate preset name 'eval-short'"):
+        replace(table, presets=(*table.presets, table.by_name["eval-short"]))
+
+
+def test_all_presets_plan_with_their_declared_controls(selection, tmp_path):
+    table = snowball_model.SNOWBALL
+    name, version = "tests/evaluation-init", "2026.11.17"
+    initializer = f"{name}@{version}"
+    write_published_artifact(tmp_path, name, version, Artifact, source=str(tmp_path / name / version))
     for preset in table.presets:
         arguments = ["--preset", preset.name, "--version", preset.revision, "--plan"]
         if preset.tasks_input == "required":
             arguments += ["--tasks", SELECTION_IDENTITY]
+        if preset.name == "eval-short":
+            arguments += ["--init", initializer]
         result = CliRunner().invoke(snowball.command(table, argv=tuple(arguments)), arguments)
         assert result.exit_code == 0, (preset.name, result.output, result.exception)
+        if preset.name == "eval-short":
+            status = printed_status(result.stdout.partition("\nStepSpec(")[0])
+            assert status["inputs"]["model"].partition(":")[0] == initializer
+            assert status["updates"] == 0 and status["guards"] == []
+        elif preset.name in ("speed-short", "data-short"):
+            invalid = [*arguments, "--init", initializer]
+            result = CliRunner().invoke(snowball.command(table, argv=tuple(invalid)), invalid)
+            assert result.exit_code == 4 and "does not accept --init" in result.output, result.output
 
     preset = next(preset for preset in table.presets if preset.gated)
     arguments = ["--preset", preset.name, "--version", preset.revision]
@@ -81,27 +101,6 @@ def test_all_presets_plan_with_their_declared_controls(selection):
     result = CliRunner().invoke(snowball.command(unpinned, argv=tuple(arguments)), arguments)
     assert result.exit_code == 4 and "no control pin" in result.output, (result.output, result.exception)
     assert "--control --replicates" in result.output
-
-
-def test_generation_presets_accept_init_only_for_eval_short(selection, tmp_path):
-    table = snowball_model.SNOWBALL
-    name, version = "tests/evaluation-init", "2026.11.17"
-    root = tmp_path / name / version
-    write_published_artifact(tmp_path, name, version, Artifact, source=str(root))
-    for preset_name in ("eval-short", "speed-short", "data-short"):
-        preset = table.by_name[preset_name]
-        arguments = ["--preset", preset_name, "--version", preset.revision, "--init", f"{name}@{version}", "--plan"]
-        if preset.tasks_input == "required":
-            arguments += ["--tasks", SELECTION_IDENTITY]
-        result = CliRunner().invoke(snowball.command(table, argv=tuple(arguments)), arguments)
-        if preset_name == "eval-short":
-            assert result.exit_code == 0, (result.output, result.exception)
-            status = printed_status(result.stdout.partition("\nStepSpec(")[0])
-            assert status["inputs"]["model"].partition(":")[0] == f"{name}@{version}"
-            assert status["updates"] == 0
-            assert status["guards"] == []
-        else:
-            assert result.exit_code == 4 and "does not accept --init" in result.output, result.output
 
 
 @pytest.mark.parametrize(
@@ -174,6 +173,10 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
     config = yaml.safe_load(materialized_config(sft_run, str(tmp_path)).launch_config_yaml)
     assert config["inputs"]["model"]["uri"] == f"{init.step.path(str(tmp_path))}/hf/step-9"
 
+    dev_sft = replace(OPENTHOUGHTS_32K_4NODE, recipe=replace(OPENTHOUGHTS_32K_4NODE.recipe, version="dev"))
+    with pytest.raises(click.BadParameter, match="the initializer requires an immutable artifact version"):
+        snowball.build_experiment(train, init=dev_sft.model(), table=snowball_model.SNOWBALL)
+
     def reject_export_read(*args, **kwargs):
         raise AssertionError("planning read an unbuilt export")
 
@@ -182,7 +185,7 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
         planned = snowball.build_experiment(train, init=own_model, table=snowball_model.SNOWBALL)
         assert producer in planned.runs[0].deps
         planned.runs[0].lower()
-        cloud_model = replace(own_model, step=replace(producer, override_path="s3://marin-test/computed-init"))
+        cloud_model = replace(own_model, step=replace(producer, override_path="s3://fixture-models/computed-init"))
         assert (
             snowball.main(
                 snowball_model.SNOWBALL, argv=["--preset", train.name, "--version", train.revision], init=cloud_model
@@ -500,7 +503,50 @@ def test_published_init_binds_export_tokenizer(
     )
 
 
-def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatch):
+@pytest.mark.parametrize("model", ("snowball", "mochi"))
+def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, request):
+    if model == "mochi":
+        revisions = {
+            "train-medium": {
+                "2026.11.19.1": "8b5a970e",
+                "2026.11.20.2": "15b0f019",
+                "2026.11.20.4": "08ba7390",
+                "2026.11.20.8": "5acba3d6",
+            },
+            "train-long": {"2026.11.20.4": "e105d46c", "2026.11.20.8": "58a8c866"},
+            "train-long-3rack": {"2026.11.20.4": "9734d621", "2026.11.20.8": "33f8b528"},
+            "train-medium-agentic": {"2026.11.19.1": "3f203da5", "2026.11.20.4": "1617b1d3", "2026.11.20.8": "86aebda3"},
+            "train-long-agentic": {"2026.11.20.6": "a3e2befe", "2026.11.20.7": "e1245985", "2026.11.20.8": "d605dbf9"},
+            "train-long-agentic-3rack": {
+                "2026.11.20.6": "b8f3bba7",
+                "2026.11.20.7": "d540f763",
+                "2026.11.20.8": "6c800725",
+            },
+        }
+        with monkeypatch.context() as local:
+            local.delenv("MARIN_PREFIX", raising=False)
+            local.delenv("MARIN_TEMP_PREFIX", raising=False)
+            local.setattr(recipe, "artifact_prefix", lambda _cluster: "s3://marin-us-east-08a/marin")
+            for preset in MOCHI.presets:
+                assert recipe.run_prefix(preset).rstrip("/") == "s3://marin-us-east-08a/tmp/ttl=3d"
+        produced = request.getfixturevalue("mochi_sft_presets")["periodic"].model()
+        for preset in MOCHI.presets:
+            model, prefix = preset.model, recipe.artifact_prefix(preset.recipe.layout.cluster)
+            assert (model.step.name, model.step.version, model.step.path(prefix)) == (
+                produced.step.name,
+                produced.step.version,
+                produced.step.path(prefix),
+            )
+            assert model.relative_path == produced.relative_path and model.tokenizer_uri is None
+        configs = assert_revisioned_native_configs(
+            MOCHI,
+            revisions,
+            tmp_path=tmp_path,
+            monkeypatch=monkeypatch,
+            mixed_tasks=request.getfixturevalue("selection"),
+        )
+        _assert_mochi_preset_documents(revisions, configs)
+        return
     revisions = {
         "speed-short": {
             "2026.11.13.1": "96e0d088",
@@ -508,8 +554,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             "2026.11.19.1": "371233d9",
             "2026.11.20.1": "8f532da2",
             "2026.11.20.3": "dc52613e",
-            "2026.11.20.4": "b63f9f76",
-            "2026.11.20.7": "9bab85ef",
+            "2026.11.20.8": "00119d64",
         },
         "data-short": {
             "2026.11.13.1": "7d9a590f",
@@ -517,8 +562,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             "2026.11.19.1": "cb07d91c",
             "2026.11.20.1": "a379319d",
             "2026.11.20.3": "d4749482",
-            "2026.11.20.4": "92dc9404",
-            "2026.11.20.7": "0ad7e1de",
+            "2026.11.20.8": "76dca2fb",
         },
         "speed-medium": {
             "2026.11.12.1": "e75349ff",
@@ -526,8 +570,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             "2026.11.19.1": "f8281b9d",
             "2026.11.20.1": "8b7e47c8",
             "2026.11.20.3": "dbc38bdf",
-            "2026.11.20.4": "ed50475d",
-            "2026.11.20.7": "ed50475d",
+            "2026.11.20.8": "ed50475d",
         },
         "learning-medium": {
             "2026.11.12.1": "ba638a12",
@@ -535,9 +578,9 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             "2026.11.19.1": "4aa3aed9",
             "2026.11.20.1": "67306e75",
             "2026.11.20.2": "b3044b9b",
-            "2026.11.20.3": "4411fd8b",
-            "2026.11.20.4": "3e93b666",
-            "2026.11.20.7": "3e93b666",
+            "2026.11.20.3": "ce8666ce",
+            "2026.11.20.4": "36e0cfd0",
+            "2026.11.20.8": "39a87700",
         },
         "data-medium": {
             "2026.11.12.1": "ba638a12",
@@ -545,9 +588,9 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             "2026.11.19.1": "4aa3aed9",
             "2026.11.20.1": "67306e75",
             "2026.11.20.2": "b3044b9b",
-            "2026.11.20.3": "4411fd8b",
-            "2026.11.20.4": "3e93b666",
-            "2026.11.20.7": "3e93b666",
+            "2026.11.20.3": "ce8666ce",
+            "2026.11.20.4": "36e0cfd0",
+            "2026.11.20.8": "39a87700",
         },
         "speed-long": {
             "2026.11.11.1": "cd0a5f4e",
@@ -555,8 +598,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             "2026.11.19.1": "9edc7b70",
             "2026.11.20.1": "3d1fe22d",
             "2026.11.20.3": "87feb546",
-            "2026.11.20.4": "fafdb7f1",
-            "2026.11.20.7": "fafdb7f1",
+            "2026.11.20.8": "fafdb7f1",
         },
         "train-long": {
             "2026.11.11.1": "4945b701",
@@ -564,27 +606,42 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             "2026.11.19.1": "e56a62fa",
             "2026.11.20.1": "22473465",
             "2026.11.20.2": "412d0576",
-            "2026.11.20.3": "e54674f6",
-            "2026.11.20.4": "aa9d679d",
-            "2026.11.20.7": "aa9d679d",
+            "2026.11.20.3": "40c0256e",
+            "2026.11.20.4": "7826cc5a",
+            "2026.11.20.8": "984f3cfb",
         },
         "train-long-harbor": {
+            "2026.11.20.5": "e1f1635a",
             "2026.11.20.6": "76baa3fb",
-            "2026.11.20.7": "7977f209",
+            "2026.11.20.7": "9ceb90cb",
+            "2026.11.20.8": "605c5c37",
         },
+        "train-medium-agentic": {
+            "2026.11.19.1": "756f58ef",
+            "2026.11.20.1": "b557a4f0",
+            "2026.11.20.4": "f76d6b51",
+            "2026.11.20.5": "aa36f9de",
+            "2026.11.20.8": "4dba0215",
+        },
+        "train-long-agentic": {"2026.11.20.4": "7123c960", "2026.11.20.5": "0043357f", "2026.11.20.8": "e4d758ba"},
         "eval-short": {
             "2026.11.19.1": "8144570a",
             "2026.11.20.1": "fad362ca",
             "2026.11.20.3": "85b0359d",
-            "2026.11.20.4": "4b439968",
-            "2026.11.20.7": "4b439968",
+            "2026.11.20.8": "4b439968",
         },
     }
     configs = assert_revisioned_native_configs(
-        snowball_model.SNOWBALL, revisions, tmp_path=tmp_path, monkeypatch=monkeypatch
+        snowball_model.SNOWBALL,
+        revisions,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        mixed_tasks=request.getfixturevalue("selection"),
     )
     for name, config in zip(revisions, configs, strict=True):
         trainer, generator = config["skyrl"]["trainer"], config["skyrl"]["generator"]
+        if snowball_model.SNOWBALL.by_name[name].batch_mix is not None:
+            continue
         assert config["iris"]["allocation"]["num_nodes"] * config["iris"]["allocation"]["gpus_per_node"] <= 40
         generating = name in ("speed-short", "data-short", "eval-short")
         assert (
@@ -623,6 +680,26 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             assert kinds.index("evaluation") < kinds.index("best_checkpoint") < kinds.index("hf_model_save")
         if name == "train-long":
             assert next(row for row in trainer["callbacks"] if row["type"] == "evaluation")["eval_on_train_end"] is False
+
+
+def _assert_mochi_preset_documents(revisions, configs):
+    documents = dict(zip(revisions, configs, strict=True))
+    for preset in MOCHI.presets:
+        document = documents[preset.name]
+        assert not document["run"]["export_hf"]
+        assert not any(
+            callback["type"] in {"checkpoint", "best_checkpoint", "hf_model_save"}
+            for callback in document["skyrl"]["trainer"]["callbacks"]
+        )
+        if preset.evaluations:
+            (validation,) = document["inputs"]["validation_data"]
+            assert validation["relative_path"] == "validation.parquet"
+
+    docs = (recipe.REPO_ROOT / "docs/dev-guide/skyrl.md").read_text()
+    fragment = docs.split("## Mochi inference on GB200", 1)[1].split("```yaml", 1)[1].split("```", 1)[0]
+    served = gate._config_values(documents["train-long-3rack"]["skyrl"])
+    for path, value in gate._config_values(yaml.safe_load(fragment)).items():
+        assert served[path] == value, path
 
 
 def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, tmp_path, recorded_runs):
@@ -1089,11 +1166,17 @@ def test_refusals_use_exit_four(selection, arguments, capsys, tmp_path, request)
         assert "use the preset's declared owned keys" in result.output
 
 
+@pytest.mark.timeout(300)  # The CLI cases each compose a native launch in the frozen CPU environment.
 def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations(
     recorded_runs, preset_table, tmp_path, monkeypatch
 ):
     preset = snowball_model.SNOWBALL.by_name["train-long"]
-    preset = replace(preset, recipe=replace(preset.recipe, layout=replace(preset.recipe.layout, host_disk="3TB")))
+    preset = replace(
+        preset,
+        checkpoints="best",
+        export="best",
+        recipe=replace(preset.recipe, layout=replace(preset.recipe.layout, host_disk="3TB")),
+    )
     table = preset_table(preset)
     initializer = ArtifactHfModel(
         ArtifactStep.adopt("tests/python-init", "2026.11.17", "s3://marin-test/models/python-init", kind=Artifact),
@@ -1195,7 +1278,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
             info = JobInfo(task_id=JobName.from_wire("/test-user/train-coordinator/0"))
             with iris_ctx_scope(IrisContext.from_job_info(info)), pytest.raises(SystemExit) as completed:
                 runpy.run_module(coordinator_module, run_name="__main__", alter_sys=True)
-            assert completed.value.code == (0 if mode == "valid" else 4)
+            assert completed.value.code == {"valid": 0, "failed-following": 3}.get(mode, 4)
         set_job_info(None)
         return SimpleNamespace(job_id=job)
 
@@ -1209,7 +1292,9 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     raw_load = SkyRLRun.raw_load
     monkeypatch.setattr(SkyRLRun, "raw_load", lambda path: raw_load(str(policy_path) if path == policy_uri else path))
 
-    def module(name, *, entry_module=None, use_init=True, forward_env=("HF_TEST_KEY",), policy_forward=None):
+    def module(
+        name, *, entry_module=None, use_init=True, forward_env=("HF_TEST_KEY",), policy_forward=None, following="None"
+    ):
         path = tmp_path / (name + ".py")
         dependency = ""
         if policy_forward is not None:
@@ -1224,14 +1309,20 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
                 f"init=SkyRLPolicyModel(replace(producer,override_path={policy_uri!r}))\n"
             )
         path.write_text(
-            "from dataclasses import replace\nfrom pathlib import Path\nfrom marin.execution.lazy import ArtifactStep\n"
+            "from dataclasses import replace\nfrom pathlib import Path\n"
+            "from marin.execution.lazy import ArtifactStep, apply\n"
             "from marin.execution.artifact import Artifact,ArtifactRecord,RECORD_FILENAME,result_type_name\n"
             "from marin.rl.skyrl import ArtifactHfModel,SkyRLRun,SkyRLPolicyModel\n"
             "from experiments.post_training import rl, snowball_rl\n"
             "step=ArtifactStep.adopt('tests/python-init','2026.11.17','s3://marin-test/models/python-init',kind=Artifact)\n"
             "init=ArtifactHfModel(step,'tests/python-tokenizer','python-tokenizer-revision',relative_path='')\n"
+            "def fail_following():\n    raise RuntimeError('following stage failed')\n"
             + dependency
-            + f"raise SystemExit(rl.main(snowball_rl.SNOWBALL,init={'init' if use_init else 'None'},"
+            + f"following={following}\n"
+            "table=snowball_rl.SNOWBALL\n"
+            "if following is not None:\n"
+            "    table=replace(table,presets=tuple(replace(preset,then=following) for preset in table.presets))\n"
+            + f"raise SystemExit(rl.main(table,init={'init' if use_init else 'None'},"
             f"forward_env={forward_env!r},entry_module={entry_module!r}))\n"
         )
         spec = importlib.util.spec_from_file_location(name, path)
@@ -1284,6 +1375,12 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         )
         assert "test-initializer-credential" not in result.output and len(native_calls) == 1
 
+    mode, coordinator_module = "failed-following", "first_model_entry"
+    module(coordinator_module, following="lambda _: apply('tests/following', fail_following, version='2026.11.20.1')")
+    result = CliRunner().invoke(entry)
+    assert result.exit_code == 3 and "post_run_error:" in result.output, (result.output, result.exception)
+    assert "RL has a committed result" in result.output
+
     evaluations = read_evaluations(str(source / "exports"), attempt_id="recorded-attempt", evaluation="eval/")
     replace_evaluations(
         source,
@@ -1321,6 +1418,25 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     assert "best_checkpoint_step: none eligible" in resumed.output
 
     replace_evaluations(source, evaluations)
+
+    live_preset = replace(preset, checkpoints="none", checkpoint_every=None, export="none")
+    live = snowball.build_experiment(
+        live_preset, table=table, init=initializer, forward_env=("HF_TEST_KEY",), settings=("trainer.max_steps=12",)
+    )
+    assert live.runs[0].name != built.runs[0].name
+    with monkeypatch.context() as live_record:
+        live_record.setattr(snowball_model, "SNOWBALL", replace(table, presets=(live_preset,)))
+        recorded_runs(preset.name, live.runs[0].name, fingerprint=live.runs[0].fingerprint(), inputs=live.inputs)
+    live_args = [*planning_args, "--checkpoints", "none", "--checkpoint-every", "0", "--export", "none"]
+    result = CliRunner().invoke(
+        snowball.command(table, argv=tuple(live_args), init=initializer, forward_env=("HF_TEST_KEY",)), live_args
+    )
+    assert result.exit_code == 1, (result.output, result.exception)
+    facts = {
+        fact["name"]: fact for row in printed_status(result.output)["runs"] for fact in row["evaluation_invariants"]
+    }
+    assert not facts[f"{preset.evaluations[0].name}/step-10/answers_complete"]["holds"]
+
     mode, coordinator_module = "failed-native", "first_model_entry"
     module("first_model_entry")
     with edit_receipt(source) as receipt:

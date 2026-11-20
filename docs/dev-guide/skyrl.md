@@ -100,6 +100,8 @@ the identity when a trial supplies one.
 Configure task retries at `environment.task_sessions.retry`. The settings apply
 across Harbor and other task kinds. The base budget is zero retries; the
 `terminal_bench` preset explicitly selects two retries with a multiplier of two.
+Mixed-task Snowball and Mochi recipes select one retry with their verifier
+exclusions for every task kind.
 For example:
 
 ```yaml

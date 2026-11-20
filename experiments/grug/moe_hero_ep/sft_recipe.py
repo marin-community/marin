@@ -42,6 +42,7 @@ from experiments.grug.moe_hero_ep.ops.export_cpu import (
 from experiments.grug.moe_hero_ep.ops.upload_hf import write_tokenizer_metadata
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
 from experiments.grug.moe_hero_ep.train import RouterBiasMode
+from experiments.sft.launcher import sft_child_resources
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -68,11 +69,19 @@ class MochiSFT:
     expert_placement: ExpertPlacement | None = None
 
     def trained(
-        self, resources: ResourceConfig, *, steps: int | None = None, prefix: str | None = None
+        self,
+        resources: ResourceConfig,
+        *,
+        steps: int | None = None,
+        prefix: str | None = None,
+        coordinator_cluster: str | None = None,
+        coordinator_prefix: str | None = None,
     ) -> ArtifactHfModel:
+        if steps is not None or self.stop_after_steps is not None or self.checkpoints != "periodic":
+            prefix = prefix or coordinator_prefix
         recipe, prefix = self._run_recipe(steps=steps, export=True, prefix=prefix)
-        training = recipe._training_artifact(resources, prefix=prefix)
-        return recipe.export_model(training, prefix=prefix)
+        training = recipe._training_artifact(sft_child_resources(resources, coordinator_cluster), prefix=prefix)
+        return recipe.export_model(training, prefix=prefix, coordinator_cluster=coordinator_cluster)
 
     def train_artifact(
         self, resources: ResourceConfig, *, steps: int | None = None, prefix: str | None = None
@@ -126,7 +135,13 @@ class MochiSFT:
             return step
         return replace(step, name=user_owned_name(f"grug/{run_id}"), output_path_prefix=prefix)
 
-    def export_model(self, step: ArtifactStep[HeroThroughputResult], *, prefix: str | None) -> ArtifactHfModel:
+    def export_model(
+        self,
+        step: ArtifactStep[HeroThroughputResult],
+        *,
+        prefix: str | None,
+        coordinator_cluster: str | None = None,
+    ) -> ArtifactHfModel:
         expected_step = step.build_config(StepContext.for_fingerprint(step.runtime_args.keys(), step.deps)).stop_step
         relative_path = "hf"
         source_revision = self.source_revision
@@ -137,6 +152,8 @@ class MochiSFT:
                 source_revision = os.environ.get("GIT_COMMIT") or get_git_commit()
             except (CalledProcessError, OSError) as error:
                 raise ValueError("Set GIT_COMMIT to the source revision when exporting a new Mochi SFT run") from error
+            if not source_revision:
+                raise ValueError("A final Mochi SFT export requires the submission's source revision")
             # A final-only checkpoint can store a whole expert bank in one native chunk.
             gib = 1024**3
             reservation_increment = 64 * gib
@@ -147,7 +164,11 @@ class MochiSFT:
             export_fn = partial(_export_final_sft, read_host_budget_bytes=read_budget)
         export_step = apply(
             f"{step.name}-hf",
-            remote(export_fn, resources=export_resources, env_vars={"TMPDIR": "/cache"}),
+            remote(
+                export_fn,
+                resources=sft_child_resources(export_resources, coordinator_cluster),
+                env_vars={"TMPDIR": "/cache"},
+            ),
             version=step.version,
             output=OUT,
             trained=step,
