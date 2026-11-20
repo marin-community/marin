@@ -59,6 +59,7 @@ def test_sft_refuses_incompatible_grug_settings(overrides, error):
 
 def test_openthoughts_keeps_one_conversation_per_context_window(tmp_path):
     training = materialized_config(OPENTHOUGHTS_32K_4NODE.model().step, str(tmp_path)).train_config
+    assert training.data.tokenizer == training.initialize_from_hf
     [component] = training.data.components.values()
     conversations = [
         {"input_ids": np.arange(10, 22, dtype=np.int32), "assistant_masks": np.arange(12) >= 2},
@@ -107,7 +108,7 @@ def test_sft_plan_refuses_an_invalid_gpu_mesh_or_batch(monkeypatch, capsys, chan
 def test_prepared_data_requires_matching_tokenizers_and_fixed_steps(tmp_path, scenario, error):
     artifact = ArtifactStep.adopt(name="mixture", version="2026.11.19", source=str(tmp_path), kind=Artifact)
     model = OPENTHOUGHTS_SPEC.model
-    source = PreparedData(artifact, "mix.json", HF_MODEL)
+    source = PreparedData(artifact, "mix.json", model.tokenizer_cache_key())
     if scenario == "resolved":
         weights = ArtifactStep.adopt(
             name="weights", version="2026.11.19", source=str(tmp_path / "weights"), kind=Artifact
