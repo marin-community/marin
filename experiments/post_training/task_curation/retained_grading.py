@@ -48,6 +48,7 @@ class RetainedGradingLegacyReceipt(BaseModel):
     scanned_task_specs_sha256: str
     evidence: GradingEnvironmentEvidence
     task_evidence_uri: str
+    unassessable_reasons: dict[str, int] = Field(default_factory=dict)
 
 
 RetainedGrading = RetainedGradingReceipt | RetainedGradingLegacyReceipt
