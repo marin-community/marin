@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 from rigging.filesystem.storage_path import StoragePath
 
+POLICY_ROOT = StoragePath("s3://marin-us-east-08a/marin/users/benfeuer/evaluation-policies/micro210")
 MODEL_IDENTITY_PREFIX = "sha256:"
 LEGACY_POLICY_DIGEST = "e0faa32c68994e8bf01d0ab7177893aa9c29f8c4309b9183de5c3dfcb6fa67aa"
 LEGACY_POLICY_REVISION = "2026.11.18"
@@ -53,10 +54,7 @@ class Micro210PolicyReference:
 
 # Human-readable copy (sha256: e0faa32c68994e8bf01d0ab7177893aa9c29f8c4309b9183de5c3dfcb6fa67aa): https://gist.github.com/penfever/b9b7be780c14969634e897621454deef/0b5add0ef2843418eaded61258a91f51f3b1b69a
 LEGACY_POLICY_REFERENCE = Micro210PolicyReference(
-    uri=(
-        "s3://marin-us-east-08a/marin/users/benfeuer/evaluation-policies/micro210/"
-        f"{LEGACY_POLICY_REVISION}/{LEGACY_POLICY_DIGEST}/policy.json"
-    ),
+    uri=str(POLICY_ROOT / LEGACY_POLICY_REVISION / LEGACY_POLICY_DIGEST / "policy.json"),
     revision=LEGACY_POLICY_REVISION,
     sha256=LEGACY_POLICY_DIGEST,
     byte_size=122243,
@@ -67,10 +65,7 @@ POLICY_DIGEST = "8f7ef8170fbef2880214cbf03f70d80cffa3114276e024389617777bf07f53e
 POLICY_VERSION = "2026.11.20"
 POLICY_REVISION = f"{POLICY_VERSION}-together"
 POLICY_REFERENCE = Micro210PolicyReference(
-    uri=(
-        "s3://marin-us-east-08a/marin/users/benfeuer/evaluation-policies/micro210/"
-        f"{POLICY_REVISION}/{POLICY_DIGEST}/policy.json"
-    ),
+    uri=str(POLICY_ROOT / POLICY_REVISION / POLICY_DIGEST / "policy.json"),
     revision=POLICY_REVISION,
     sha256=POLICY_DIGEST,
     byte_size=121292,
