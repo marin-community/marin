@@ -24,6 +24,10 @@ from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert imp
 )
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.upstream import task_files
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.upstream.task_files import grader_source
+from experiments.post_training.task_curation.swe_rebench_fidelity_driver import (
+    TRANSIENT_RETRY_DELAYS_SEC,
+    transient_daytona_error,
+)
 
 PYTHON_ROW = {
     "instance_id": "0b01001001__spectree-64",
@@ -365,11 +369,6 @@ def test_transient_daytona_classification_retries_infra_and_never_grading():
     """The wave resume survives the org CPU-limit saturation and reaped sandboxes: the
     infrastructure failures classify as retryable; grading verdicts and config errors do
     not (ruling 2026-11-20: the wave1-full post-mortem)."""
-    from experiments.post_training.task_curation.swe_rebench_fidelity_driver import (
-        TRANSIENT_RETRY_DELAYS_SEC,
-        transient_daytona_error,
-    )
-
     assert TRANSIENT_RETRY_DELAYS_SEC == (60.0, 300.0)
     assert transient_daytona_error(RuntimeError("Daytona environment is not running"))
     assert transient_daytona_error(
