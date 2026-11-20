@@ -18,9 +18,9 @@ set the callback's `daytona_api_key_env: DAYTONA_EVAL_API_KEY` and
 forward it through both the coordinator and task launcher. Do not globally
 replace the RL credential: training containers remain in the RL account.
 `DaytonaValidationError: declarative builds are not allowed` is an account/build
-permission failure, not a model failure or a zero reward. Inline validation builds
-images into snapshots; the Harbor evaluation callback rejects
-`image_build: declarative`, which only standalone eval launches may set.
+permission failure, not a model failure or a zero reward. Inline validation accepts
+`image_build: snapshot` and `image_build: declarative`. Select declarative mode for
+per-sandbox image builds in the eval account.
 
 The keys live in Google Secret Manager in project `hai-gcp-models`:
 `DAYTONA_RL_API_KEY` for training and `DAYTONA_EVAL_API_KEY` for validation.
@@ -70,6 +70,23 @@ private secret files into launch records or source control. The legacy
 OpenThoughts-Agent Jupiter launcher also uses `DC_AGENT_SECRET_ENV` to identify
 its private secrets file. That is a launcher-specific setting, not an Iris
 requirement. See the source Jupiter runbook below for that workflow.
+
+## Pi HTTP idle timeout
+
+Pi's HTTP idle timeout is separate from Harbor task and agent deadlines and
+provider execution deadlines. For a prepared policy that already selects Pi,
+pass the optional `http_idle_timeout` agent kwarg in seconds:
+
+```bash
+uv run --isolated --project vendor/harbor --frozen --extra runtime \
+  harbor run --config prepared-policy.yaml \
+  --agent-kwarg http_idle_timeout=360
+```
+
+Harbor writes Pi's existing `httpIdleTimeoutMs` setting in milliseconds and
+preserves other settings, including compaction. Omit the kwarg to keep the
+image's setting; the pinned Pi 0.87.0 defaults to five minutes. This override
+does not extend Harbor or provider execution deadlines.
 
 ## Snapshot preflight and reclamation
 
