@@ -246,7 +246,12 @@ def create_ray_wrapped_inference_engines_from_config(
             )
             engine_kwargs["enforce_eager"] = False
 
-    if stream_policy_model and rollout_model_path.startswith("s3://") and cfg.generator.backend == "vllm":
+    # Coordinated DP ranks must restart together after an actor fails during
+    # rendezvous, including when their checkpoint is staged on local disk.
+    if cfg.generator.backend == "vllm" and (
+        (stream_policy_model and rollout_model_path.startswith("s3://"))
+        or cfg.generator.inference_engine_data_parallel_size > 1
+    ):
         retry = cfg.trainer.model_load_retry
 
         def create_engines(remaining_timeout_seconds: float):

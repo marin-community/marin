@@ -7,7 +7,12 @@ import os
 from daytona import AsyncDaytona, DaytonaConfig
 from omegaconf import DictConfig
 from rigging.task_errors import RetrySettings
-from shellbox.backends.daytona.machine import DaytonaMachineFactory, DaytonaNetworkMode, DaytonaNetworkPolicy
+from shellbox.backends.daytona.machine import (
+    DaytonaImageBuild,
+    DaytonaMachineFactory,
+    DaytonaNetworkMode,
+    DaytonaNetworkPolicy,
+)
 from shellbox.machine import Backend, MachineFactory
 from taskcompendium.models import NoGrader
 from rolloutengine.models import MachineRuntimeSpec, RolloutFailure, TaskRolloutSpec
@@ -97,6 +102,13 @@ class HarborTaskSettings:
     def grader_override(self) -> NoGrader | None:
         return NoGrader(reason="Harbor verification is disabled") if self.verifier.disable else None
 
+    def daytona_image_build(self, phase: str) -> DaytonaImageBuild:
+        """Resolve the phase's sandbox image build mode."""
+        mode = self.environment.kwargs.get("image_build", DaytonaImageBuild.SNAPSHOT)
+        if phase == "eval":
+            mode = self.environment.kwargs.get("eval_image_build", mode)
+        return DaytonaImageBuild(mode)
+
     def machine_factory(self, *, phase: str = "train") -> MachineFactory:
         match self.environment.type:
             case EnvironmentType.DAYTONA:
@@ -110,6 +122,7 @@ class HarborTaskSettings:
                     client_factory = partial(AsyncDaytona, DaytonaConfig(api_key=api_key))
                 return DaytonaMachineFactory(
                     client_factory=client_factory,
+                    image_build=self.daytona_image_build(phase),
                     ttl_minutes=self.environment.kwargs.get("ttl_minutes", 360),
                     network_policy=None
                     if policy is None

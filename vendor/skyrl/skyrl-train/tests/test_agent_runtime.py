@@ -81,8 +81,11 @@ def harbor_package(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("phase", ["train", "eval"])
+@pytest.mark.parametrize(
+    ("provisioning", "eval_provisioning"), [(None, None), ("declarative", None), ("snapshot", "declarative")]
+)
 async def test_original_trial_uses_captured_phase_connection_at_provider_startup(
-    tmp_path, monkeypatch, phase, harbor_package
+    tmp_path, monkeypatch, phase, provisioning, eval_provisioning, harbor_package
 ):
     package = harbor_package
     task = harbor_trial_task(package, source=Source(dataset="fixture", revision="1", row="0", importer_revision="1"))
@@ -113,8 +116,15 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
         128,
         daytona_connection=connections["train"],
         eval_daytona_connection=connections["eval"],
+        judge=None,
     )
-    harbor = HarborTaskSettings.from_config(OmegaConf.create({}))
+    harbor_config = {}
+    if provisioning is not None:
+        harbor_config["daytona_provisioning"] = provisioning
+    if eval_provisioning is not None:
+        harbor_config["eval_daytona_provisioning"] = eval_provisioning
+    harbor = HarborTaskSettings.from_config(OmegaConf.create({"harbor": harbor_config}))
+    declarative = (eval_provisioning if phase == "eval" and eval_provisioning else provisioning) == "declarative"
     worker = TaskRolloutWorker(
         OmegaConf.create({}),
         WholeTaskProjection(OmegaConf.create({}), UnusedDecoder()),
@@ -131,6 +141,7 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
     # Replace only SDK allocation and external endpoint registration. Harbor still
     # constructs the real agent, environment and trial, and owns failure cleanup.
     attempted = []
+    allocations = []
 
     class UnavailableDaytona:
         def __init__(self, config):
@@ -138,10 +149,19 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
 
         async def __aenter__(self):
             attempted.append(self.config)
-            raise ProviderUnavailable("fixture provider unavailable")
+            if not declarative:
+                raise ProviderUnavailable("fixture provider unavailable")
+            return self
 
         async def __aexit__(self, *args):
             pass
+
+        async def create(self, params, *, timeout):
+            allocations.append(params)
+            raise ProviderUnavailable("fixture allocation unavailable")
+
+        async def get(self, name):
+            raise daytona.DaytonaNotFoundError("fixture sandbox absent")
 
     class LocalEndpoint:
         async def api_base(self, *, required_lifetime):
@@ -168,6 +188,9 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
         selected.api_url,
         selected.target,
     )
+    if declarative:
+        assert len(allocations) == 1
+        assert isinstance(allocations[0], daytona.CreateSandboxFromImageParams)
     attempts = list((tmp_path / "attempts").iterdir())
     assert len(attempts) == 1
     assert (attempts[0] / "identity.json").is_file()

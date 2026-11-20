@@ -13,8 +13,9 @@ from harbor.agents.factory import AgentFactory
 from harbor.agents.installed.base import BaseInstalledAgent
 from harbor.literal.native_api import NativeAPILimits
 from harbor.literal.proxy import RecordProxy
-from harbor.models.task.config import EnvironmentConfig
-from harbor.host_capabilities import HostCapabilities
+from harbor.models.task.config import EnvironmentConfig, TaskConfig as PackageTaskConfig
+from harbor.host_capabilities import HostCapabilities, model_api_url, task_model_environment
+from harbor.utils.env import protected_environment_values
 from harbor.models.trial.config import AgentConfig, EnvironmentConfig as TrialEnvironmentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.result import TrialResult
 from harbor.trial.trial import Trial
@@ -29,6 +30,8 @@ from rolloutengine.models import ModelTurn, Prompt
 from rolloutengine.models import TaskRolloutSpec
 from shellbox.machine import Machine, NetworkPolicy
 from taskcompendium.submission import conversation_messages
+from taskcompendium.runtime.resources import resource_bytes
+from verifyit.modes.grade_judge import JudgeConnection
 
 from skyrl_train.inference_engines.inference_engine_client_http_endpoint import create_app, set_global_state
 from skyrl_train.io import io
@@ -64,6 +67,7 @@ class InstalledAgentSettings(BaseModel):
     service_shutdown_timeout: float
     task_bindings: dict[str, HarborTaskBinding] = Field(default_factory=dict)
     trial_reward_key: str = "reward"
+    judge_model: str | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -85,8 +89,10 @@ class InstalledAgentRuntime:
         *,
         daytona_connection: DaytonaConnection,
         eval_daytona_connection: DaytonaConnection,
+        judge: JudgeConnection | None,
     ):
         self.settings = settings
+        self.judge = judge
         self.backend = backend
         self.daytona_connection = daytona_connection
         self.eval_daytona_connection = eval_daytona_connection
@@ -158,10 +164,32 @@ class InstalledAgentRuntime:
         kwargs = dict(settings.environment.kwargs)
         kwargs.pop("api_key_env", None)
         kwargs.pop("eval_api_key_env", None)
+        kwargs.pop("eval_image_build", None)
+        kwargs["image_build"] = settings.daytona_image_build(phase).value
         connection = self.eval_daytona_connection if phase == "eval" else self.daytona_connection
+        authentication = {}
+        protected = self.protected_values
+        package_config = PackageTaskConfig.model_validate_toml(
+            resource_bytes(
+                next(resource for resource in lowered.task.resources.verifier if resource.path == "task.toml")
+            ).decode()
+        )
+        verifier_environment = dict(package_config.verifier.env)
+        binding = self.settings.task_bindings.get(lowered.task.id)
+        if binding is not None and binding.verifier_environment is not None:
+            verifier_environment.update(binding.verifier_environment)
+        if (
+            (model_api_url(verifier_environment) is not None or model_api_url(package_config.environment.env) is not None)
+            and self.judge is not None
+            and self.settings.judge_model is not None
+        ):
+            kwargs.update(model_endpoint=self.judge.base_url, model_name=self.settings.judge_model)
+            authentication[self.judge.base_url] = self.judge.api_key
+            protected = protected | protected_environment_values({"OPENAI_API_KEY": self.judge.api_key})
         host_capabilities = HostCapabilities(
             daytona=connection,
-            protected_values=self.protected_values,
+            model_authentication=authentication,
+            protected_values=protected,
         )
         environment = TrialEnvironmentConfig.model_validate({**settings.environment.model_dump(), "kwargs": kwargs})
         agent = self.settings.agent.model_copy(
@@ -233,7 +261,17 @@ class InstalledAgentRuntime:
                         "environment": environment,
                     }
                 )
-                trial = await Trial.create(trial_config, host_capabilities=host_capabilities, guest_environment={})
+                trial = await Trial.create(
+                    trial_config,
+                    host_capabilities=host_capabilities,
+                    guest_environment=(
+                        task_model_environment(self.settings.judge_model)
+                        if self.judge is not None
+                        and self.settings.judge_model is not None
+                        and config.environment.kwargs.get("model_endpoint") is not None
+                        else {}
+                    ),
+                )
                 result = await run_harbor_trial(
                     trial,
                     self.backend,
