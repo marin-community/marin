@@ -51,7 +51,7 @@ The pinned Ray release has no Intel macOS wheel.
 
 ## Task errors
 
-[rigging.task_errors](../../lib/rigging/src/rigging/task_errors.py) owns the
+[rigging.task_errors](https://github.com/marin-community/marin/blob/main/lib/rigging/src/rigging/task_errors.py) owns the
 shared exception categories and `RetrySettings` type.
 Import these directly; the Harbor taxonomy module and SkyRL snapshot are removed.
 SkyRL maps categories to training treatment in `skyrl_train.task_error_handling`:
