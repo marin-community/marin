@@ -19,6 +19,7 @@ import tempfile
 import textwrap
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import equinox as eqx
 import haliax as hax
@@ -48,6 +49,7 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.layers.attention import AttentionMask
 from levanter.main.export_hf_to_lm import ImportHfConfig, main as import_hf
 from levanter.main.train_lm import TrainLmConfig, main, preserve_hf_runtime_settings
+from levanter.metrics import ReductionType
 from levanter.models.lm_model import LmConfig, LmExample
 from levanter.models.snowball import (
     GRUG_MOE_ARCHITECTURE,
@@ -332,6 +334,53 @@ def test_snowball_moe_capacity_is_a_runtime_setting():
     assert "moe_capacity_factor" not in hf and "capacity_factor" not in hf
     reloaded = SnowballConfig.from_hf_config(cfg.to_hf_config(cfg.vocab_size))
     assert preserve_hf_runtime_settings(reloaded, cfg).moe_capacity_factor == 4.0
+
+
+def test_snowball_training_reports_capacity_drops():
+    cfg = _tiny_config(num_layers=2, num_experts_per_token=1, moe_implementation="ring")
+    with use_test_devices(2) as devices:
+        mesh = Mesh(
+            np.asarray(devices).reshape(1, 1, 2, 1, 1),
+            ("replica_dcn", "data", "expert", "context", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
+        )
+        with jax.set_mesh(mesh):
+            model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(3))
+            biases = tuple(jnp.arange(cfg.num_experts, dtype=jnp.float32) * 100 for _ in range(cfg.num_layers))
+            model = eqx.tree_at(
+                lambda m: tuple(block.mlp.router_bias for block in m.transformer.blocks), model, biases
+            )
+            axes = (Axis("batch", 2), Axis("position", 8))
+            tokens = hax.named(jnp.arange(16, dtype=jnp.int32).reshape(2, 8), axes)
+            example = LmExample(tokens, hax.ones(axes))
+            loss_kwargs = dict(reduction=None, logsumexp_weight=1e-4, logit_soft_cap=2.0)
+            loss, metrics = hax.named_jit(lambda m, e: m.next_token_loss_and_metrics(e, **loss_kwargs))(model, example)
+            plain = hax.named_jit(lambda m, e: m.compute_next_token_loss(e, **loss_kwargs))(model, example)
+            np.testing.assert_allclose(loss.array, plain.array, rtol=1e-6)
+            # All assignments target the same shard. It has half of the configured capacity.
+            metric = metrics["moe/dropped_assignment_fraction"]
+            assert metric.reduction is ReductionType.MEAN
+            assert float(metric) == 0.5
+
+
+def test_snowball_drop_fraction_supports_large_batches():
+    # The 32-node SFT batch has 6,979,321,856 possible assignments across the layers.
+    config = _tiny_config(num_layers=26, num_experts_per_token=4)
+    tokens = SimpleNamespace(array=jax.ShapeDtypeStruct((256, 262_144), jnp.int32))
+    example = SimpleNamespace(tokens=tokens, attn_mask=None)
+
+    @jax.jit
+    def fraction(dropped):
+        # Stub the activation and loss helpers to isolate the large-batch metric.
+        model = SimpleNamespace(
+            config=config,
+            _activations=lambda *args, **kwargs: (None, None, SimpleNamespace(dropped=dropped)),
+            _loss_from_activations=lambda *args, **kwargs: jnp.float32(0),
+        )
+        _, metrics = SnowballLMHeadModel.next_token_loss_and_metrics(model, example)
+        return metrics["moe/dropped_assignment_fraction"]
+
+    assert float(fraction(jnp.array([1_744_830_464, 1_744_830_464], dtype=jnp.int32))) == 0.5
 
 
 def test_hf_reload_keeps_router_combine_fp32():
@@ -932,6 +981,7 @@ def test_hf_config_reload_keeps_fp32_router_settings(tmp_path):
         )
         metrics = json.loads((tmp_path / "eval_results.json").read_text())
         assert math.isfinite(metrics["train/loss"])
+        assert 0.0 <= metrics["train/moe/dropped_assignment_fraction"] <= 1.0
         assert math.isfinite(metrics["eval/loss"])
 
 

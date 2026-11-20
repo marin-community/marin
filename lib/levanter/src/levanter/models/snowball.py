@@ -59,7 +59,8 @@ from levanter.grug.sharding import (
     unshard,
 )
 from levanter.layers.attention import AttentionMask as LmHeadAttentionMask
-from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.metrics import Metric, ReductionType
+from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.logging import silence_transformer_nag
 
@@ -593,7 +594,7 @@ class MoeForwardOutput(NamedTuple):
     """One MoE-bearing forward's output with its optional observers.
 
     ``routes`` is set when the caller asked for the selected expert ids. ``counts``
-    is set when the caller passed ``token_valid`` and the dispatch counted drops.
+    is set when the caller passed ``token_valid`` or enabled capacity reporting.
     """
 
     output: Array
@@ -650,7 +651,12 @@ class SnowballMoEMLP(eqx.Module):
         return result.output, result.routes
 
     def _forward(
-        self, x: Float[Array, "B S D"], return_routes: bool, token_valid: Array | None = None
+        self,
+        x: Float[Array, "B S D"],
+        return_routes: bool,
+        token_valid: Array | None = None,
+        *,
+        collect_counts: bool = False,
     ) -> MoeForwardOutput:
         b, s, _ = x.shape
         x_flat = jnp.reshape(x, (b * s, x.shape[-1]), out_sharding=_token_spec())
@@ -675,16 +681,17 @@ class SnowballMoEMLP(eqx.Module):
         combine_weights = combine_weights_f if self.cfg.router_combine_fp32 else combine_weights_f.astype(x.dtype)
 
         valid_flat = None if token_valid is None else reshard(token_valid.reshape(b * s), P(_token_spec()[0]))
+        report_capacity_overflow = token_valid is not None or collect_counts
         result = self.expert_mlp(
             x_flat,
             selected_experts.astype(jnp.int32),
             combine_weights,
             mesh=get_abstract_mesh(),
             token_valid=valid_flat,
-            report_capacity_overflow=token_valid is not None,
+            report_capacity_overflow=report_capacity_overflow,
         )
         counts = None
-        if token_valid is not None:
+        if report_capacity_overflow:
             routed_flat, counts = cast(tuple[Array, MoeDispatchCounts], result)
         else:
             routed_flat = cast(Array, result)
@@ -758,6 +765,8 @@ class SnowballBlock(eqx.Module):
         use_long: Bool[Array, ""],
         return_routes: bool,
         token_valid: Array | None = None,
+        *,
+        collect_counts: bool = False,
     ) -> MoeForwardOutput:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         # ``lax.cond`` keeps a uniform per-layer body so the transformer can scan the layers:
@@ -771,7 +780,7 @@ class SnowballBlock(eqx.Module):
         )
         x = x + attn_out
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-        routed = self.mlp._forward(mlp_in, return_routes, token_valid)
+        routed = self.mlp._forward(mlp_in, return_routes, token_valid, collect_counts=collect_counts)
         return MoeForwardOutput(x + (routed.output + self.shared(mlp_in)), routed.routes, routed.counts)
 
 
@@ -821,18 +830,8 @@ class SnowballTransformer(eqx.Module):
             config=cfg,
         )
 
-    @named_call
     def __call__(self, token_ids: Int[Array, "B S"], mask: Optional[AttentionMask] = None) -> Float[Array, "B S D"]:
         return self._forward(token_ids, mask, return_routes=False).output
-
-    def with_routes(
-        self, token_ids: Int[Array, "B S"], mask: Optional[AttentionMask] = None
-    ) -> tuple[Float[Array, "B S D"], Int[Array, "L B S K"]]:
-        """The final hidden state [B, S, D] and every layer's selected expert ids [L, B, S, K], collected from the
-        forward as run (an observer: routing is not recomputed or changed)."""
-        result = self._forward(token_ids, mask, return_routes=True)
-        assert result.routes is not None
-        return result.output, result.routes
 
     def with_stats(
         self, token_ids: Array, token_valid: Array, mask: AttentionMask | None = None
@@ -843,12 +842,15 @@ class SnowballTransformer(eqx.Module):
         stats = MoeForwardStats(result.routes, result.counts.sender_dropped, result.counts.receiver_dropped)
         return result.output, stats
 
+    @named_call(name="SnowballTransformer")
     def _forward(
         self,
         token_ids: Int[Array, "B S"],
         mask: Optional[AttentionMask],
         return_routes: bool,
         token_valid: Array | None = None,
+        *,
+        collect_counts: bool = False,
     ) -> MoeForwardOutput:
         cfg = self.config
         if mask is None:
@@ -873,8 +875,10 @@ class SnowballTransformer(eqx.Module):
 
         def _scan_layer(carry: Float[Array, "B S D"], layer_and_flag):
             layer, use_long = layer_and_flag
-            if token_valid is not None:
-                result = layer._forward(carry, short_mask, long_mask, use_long, return_routes, token_valid)
+            if token_valid is not None or collect_counts:
+                result = layer._forward(
+                    carry, short_mask, long_mask, use_long, return_routes, token_valid, collect_counts=collect_counts
+                )
                 return result.output, (result.routes, result.counts)
             if return_routes:
                 hidden, routes = layer.forward(carry, short_mask, long_mask, use_long, return_routes=True)
@@ -926,7 +930,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         self, input_ids: NamedArray, attn_mask: LmHeadAttentionMask | NamedArray | None = None
     ) -> tuple[NamedArray, Array]:
         """The activations and every layer's selected expert ids ``[L, B, S, K]`` from this forward (an observer)."""
-        hidden, routes = self._activations(input_ids, return_routes=True, attn_mask=attn_mask)
+        hidden, routes, _ = self._activations(input_ids, return_routes=True, attn_mask=attn_mask)
         assert routes is not None
         return hidden, routes
 
@@ -988,7 +992,9 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         input_ids: NamedArray,
         return_routes: bool,
         attn_mask: LmHeadAttentionMask | NamedArray | None,
-    ) -> tuple[NamedArray, Array | None]:
+        *,
+        collect_counts: bool = False,
+    ) -> tuple[NamedArray, Array | None, MoeDispatchCounts | None]:
         Pos = input_ids.resolve_axis(self.Pos.name)
         raw = input_ids.array
         lead = raw.shape[:-1]
@@ -997,12 +1003,24 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         tokens = reshard(raw.reshape(b, s), P(_BATCH_AXES, _context_axis()))
         # [B, S, D], and [L, B, S, K] with return_routes
         mask = self._attention_mask(input_ids, attn_mask)
-        hidden, routes = (
-            self.transformer.with_routes(tokens, mask) if return_routes else (self.transformer(tokens, mask), None)
+        result = self.transformer._forward(tokens, mask, return_routes, collect_counts=collect_counts)
+        hidden = (
+            result.output.reshape(*lead, s, self.Embed.size) if lead else result.output.reshape(s, self.Embed.size)
         )
-        hidden = hidden.reshape(*lead, s, self.Embed.size) if lead else hidden.reshape(s, self.Embed.size)
         out_axes = (*input_ids.axes, self.Embed) if lead else (Pos, self.Embed)
-        return hax.named(hidden, out_axes), routes
+        return hax.named(hidden, out_axes), result.routes, result.counts
+
+    def next_token_loss_and_metrics(self, example: LmExample, *, key=None, **kwargs):
+        """Return loss and the dropped assignment fraction over all positions, including padding."""
+        activations, _, counts = self._activations(example.tokens, False, example.attn_mask, collect_counts=True)
+        assert counts is not None
+        loss = self._loss_from_activations(example, activations, **kwargs)
+        assignments = example.tokens.array.size * self.config.num_experts_per_token * self.config.num_layers
+        return loss, {
+            "moe/dropped_assignment_fraction": Metric.from_value(
+                counts.dropped.sum(dtype=jnp.float32) / float(assignments), ReductionType.MEAN
+            )
+        }
 
     def get_lm_head(self) -> NamedArray:
         return hax.named(reshard(self.transformer.output_proj, P(None, "model")), (self.Embed, self.Vocab))
