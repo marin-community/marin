@@ -51,7 +51,7 @@ logger = logging.getLogger(__name__)
 BF16_BYTES = 2
 EXPERT_PATH = "/expert_mlp/"
 DEFAULT_READ_HOST_BUDGET_BYTES = 96 * 1024**3
-DEFAULT_WRITE_HOST_BUDGET_BYTES = 32 * 1024**3
+DEFAULT_EXPORT_HOST_BUDGET_BYTES = 32 * 1024**3
 
 
 @dataclass(frozen=True)
@@ -62,7 +62,7 @@ class CpuExportConfig:
     destination: str
     source_revision: str
     read_host_budget_bytes: int = DEFAULT_READ_HOST_BUDGET_BYTES
-    export_host_budget_bytes: int = DEFAULT_WRITE_HOST_BUDGET_BYTES
+    export_host_budget_bytes: int = DEFAULT_EXPORT_HOST_BUDGET_BYTES
     max_concurrent_shards: int = 2
     request_concurrency: int = 16
 

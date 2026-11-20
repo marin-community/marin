@@ -370,6 +370,7 @@ def test_snowball_drop_fraction_supports_large_batches():
 
     @jax.jit
     def fraction(dropped):
+        # Stub the activation and loss helpers to isolate the large-batch metric.
         model = SimpleNamespace(
             config=config,
             _activations=lambda *args, **kwargs: (None, None, SimpleNamespace(dropped=dropped)),

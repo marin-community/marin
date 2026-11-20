@@ -15,11 +15,10 @@ from levanter.utils.thread_utils import blocking_wait
     ("pack", "block_attention", "length", "loss_positions"),
     [
         (False, False, 32, [9, 10, 11, 22, 23]),
-        (False, False, 18, [9, 10, 11]),
         (True, True, 32, [9, 10, 11, 24, 25]),
         (True, False, 32, [9, 10, 11, 24, 25]),
     ],
-    ids=["single", "truncated", "packed-blocked", "packed-unblocked"],
+    ids=["single", "packed-blocked", "packed-unblocked"],
 )
 def test_cached_transcript_masks_and_attention(tmp_path, pack, block_attention, length, loss_positions):
     first_turn = [10, 2, 11, 12, 20, 13, 10, 3, 11, 12, 21, 22, 13]

@@ -1,30 +1,24 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run the production Mochi SFT recipe at eleven, three, or one rack.
-
-The production launch in comment 6771184334 pins step 393491, 11 racks, both
-learning rates, clipping, replay share, expert placement, evaluation cadence, and
-capacity factor. The launcher's frozen router bias and full mixture schedule
-produce the permanent step 400407 reported in comment 6841382920.
-"""
+"""Run the production Mochi SFT recipe at eleven, three, or one rack."""
 
 from dataclasses import replace
 from pathlib import Path
 
 import click
 from fray.types import ANY_REGION, ResourceConfig
-from marin.execution.lazy import ArtifactStep, lower
+from marin.execution.lazy import lower
 from marin.execution.step_runner import StepRunner
 
 from experiments.grug.moe_hero_ep import launch_hero_sft
 from experiments.grug.moe_hero_ep.expert_placement import ExpertPlacement
-from experiments.grug.moe_hero_ep.hero_recipe import HeroThroughputResult
 from experiments.grug.moe_hero_ep.sft_recipe import MochiSFT
 from experiments.grug.moe_hero_ep.train import RouterBiasMode
 from experiments.sft.launcher import SFTPreset
 
-MOCHI_SPEC = MochiSFT(
+# This reproduces the eleven-rack `hero-sft-fullab-step393k-v2` run through step 400407.
+MOCHI_SFT = MochiSFT(
     run_id="hero-sft-fullab-step393k-v2",
     initialize_from=(
         "s3://marin-us-east-02a/marin/grug/hero-lce-log65536sq-step390k/2026.08.19.2/checkpoints/step-393491"
@@ -35,7 +29,7 @@ MOCHI_SPEC = MochiSFT(
     replay_fraction=0.2035,
     dp_racks=11,
     router_bias_mode=RouterBiasMode.FROZEN,
-    capacity_factor=1.625,
+    capacity_factor=launch_hero_sft.SFT_CAPACITY_FACTOR,
     eval_every=500,
     checkpoints="periodic",
     expert_placement=ExpertPlacement.from_json(
@@ -52,7 +46,7 @@ MOCHI_SPEC = MochiSFT(
 
 def _preset(recipe: MochiSFT) -> SFTPreset[MochiSFT]:
     resources = launch_hero_sft.sft_resources(recipe.dp_racks)
-    # The coordinator selects the peer. Its children use that peer's workers directly.
+    # The coordinator selects the Iris cluster where its child jobs run.
     return SFTPreset(
         f"mixture-262k-{resources.replicas}node",
         recipe,
@@ -62,30 +56,15 @@ def _preset(recipe: MochiSFT) -> SFTPreset[MochiSFT]:
 
 def _short_preset(racks: int) -> SFTPreset[MochiSFT]:
     return _preset(
-        replace(MOCHI_SPEC, run_id=f"mochi-sft-{racks}-rack", dp_racks=racks, stop_after_steps=3, checkpoints="none")
+        replace(MOCHI_SFT, run_id=f"mochi-sft-{racks}-rack", dp_racks=racks, stop_after_steps=3, checkpoints="none")
     )
 
 
-MIXTURE_262K_176NODE = _preset(MOCHI_SPEC)
+MIXTURE_262K_176NODE = _preset(MOCHI_SFT)
 MIXTURE_262K_16NODE = _short_preset(1)
 MIXTURE_262K_48NODE = _short_preset(3)
-MOCHI_SFT = (MIXTURE_262K_176NODE, MIXTURE_262K_16NODE, MIXTURE_262K_48NODE)
-_BY_NAME = {preset.name: preset for preset in MOCHI_SFT}
-
-
-def build_training(
-    preset: SFTPreset[MochiSFT], *, steps: int | None, export: bool, prefix: str | None
-) -> ArtifactStep[HeroThroughputResult]:
-    recipe = preset.recipe
-    if steps is not None or recipe.stop_after_steps is not None:
-        recipe = replace(
-            recipe,
-            stop_after_steps=recipe.stop_after_steps if steps is None else steps,
-            checkpoints="final" if export else "none",
-        )
-        if prefix is None:
-            prefix = recipe.scratch_prefix()
-    return recipe.training_step(preset.resources, prefix=prefix)
+MOCHI_SFT_PRESETS = (MIXTURE_262K_176NODE, MIXTURE_262K_16NODE, MIXTURE_262K_48NODE)
+_BY_NAME = {preset.name: preset for preset in MOCHI_SFT_PRESETS}
 
 
 @click.command()
@@ -97,8 +76,10 @@ def build_training(
 def main(preset: str, steps: int | None, export: bool, prefix: str | None, run: bool) -> None:
     chosen = _BY_NAME[preset]
     try:
-        training = build_training(chosen, steps=steps, export=export, prefix=prefix)
-        terminal = chosen.recipe.export_model(training).step if export else training
+        if export:
+            terminal = chosen.recipe.trained(chosen.resources, steps=steps, prefix=prefix).step
+        else:
+            terminal = chosen.recipe.train_artifact(chosen.resources, steps=steps, prefix=prefix)
     except ValueError as error:
         raise click.UsageError(str(error)) from error
     StepRunner().run([lower(terminal)], dry_run=not run)

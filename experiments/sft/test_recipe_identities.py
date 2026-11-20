@@ -11,7 +11,7 @@ from marin.execution.lazy import StepContext
 from experiments.grug.moe_hero_ep import launch_hero_sft
 from experiments.post_training.curriculum_sft import math_trial, trial
 from experiments.post_training.iceball_micro import build_workflow
-from experiments.post_training.mochi_sft import MIXTURE_262K_176NODE, build_training
+from experiments.post_training.mochi_sft import MIXTURE_262K_176NODE
 from experiments.post_training.snowball_sft import MIXTURE_262K_32NODE, OPENTHOUGHTS_32K_4NODE, OPENTHOUGHTS_SPEC
 from experiments.sft.configs import delphi_1e22
 from experiments.sft.launcher import resources_from_accelerator, sft_step
@@ -36,9 +36,8 @@ def test_sft_recipe_identities(monkeypatch):
     tokenizer = SimpleNamespace(encode=lambda text, *, add_special_tokens: anchors[text])
     monkeypatch.setattr(launch_hero_sft, "load_tokenizer", lambda _: tokenizer)
     production = MIXTURE_262K_176NODE
-    training = build_training(production, steps=None, export=True, prefix=None)
-    mochi_export = production.recipe.export_model(training).step
-    relocated = build_training(production, steps=None, export=False, prefix="/tmp/mochi-production")
+    mochi_export = production.model().step
+    relocated = production.recipe.train_artifact(production.resources, prefix="/tmp/mochi-production")
     config = relocated.build_config(StepContext.for_fingerprint(relocated.runtime_args.keys(), relocated.deps))
     assert config.stop_step == 400407
     assert config.trainer.save_checkpoints

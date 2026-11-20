@@ -30,18 +30,3 @@ data:
     sft/pooled: 8
   shuffle_before_trainval_split: true
   prior_context_phases: []
-files:
-- uri: s3://marin-us-east-02a/marin/grug-sft/sft-pipe-repro/full-mixture/2026.10.24.2/cache_catalog.json
-  sha256: 6071134b35409d7464474271344c947b8882cc1a83e6166ccf93ad8d88eeffa9
-provenance:
-  source: sft-pipe-repro production 20261027c
-  full_weight_schedule: true
-  release_source_composition: 10-05; reproduction replay substitutions retained
-  canonical_data_sha256: 98b86041b5645f52d81b170386b01890b593a0bf88378da89cb20e22a6f042be
-sections:
-  components:
-    path: sft-components.json
-    sha256: d372def486ced1418d1ad63bd9f50959f463430ecbcd83029d6db12dfe0ad493
-  train_weights:
-    path: sft-train_weights.json
-    sha256: e954bba2b54492ab3af6ff56a735e4dcaea53a6599f61c5480baae9a57d9bdcd

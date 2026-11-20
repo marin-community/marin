@@ -73,6 +73,7 @@ from experiments.grug.moe_hero_ep.launch_scaling_ladder import (
     RESUME_CHECKPOINT_TTL_DAYS,
     RESUME_SAVE_INTERVAL,
 )
+from experiments.grug.moe_hero_ep.model import GrugModelConfig
 from experiments.grug.moe_hero_ep.train import (
     GrugEvalConfig,
     GrugRunConfig,
@@ -312,6 +313,8 @@ def checkpoint_step(checkpoint: str) -> int:
 
 
 def sft_resources(dp_racks: int) -> ResourceConfig:
+    if dp_racks <= 0:
+        raise ValueError(f"dp_racks must be positive, got {dp_racks}")
     return ResourceConfig.with_gpu(
         "GB200",
         count=HERO_GPUS_PER_NODE,
@@ -320,6 +323,10 @@ def sft_resources(dp_racks: int) -> ResourceConfig:
         disk=HERO_NODE_DISK,
         replicas=HERO_EP_NODES * dp_racks,
     )
+
+
+def sft_model_config(capacity_factor: float) -> GrugModelConfig:
+    return with_transport_remat_mode(dataclasses.replace(HERO_MODEL_CONFIG, capacity_factor=capacity_factor))
 
 
 def build_sft_run(
@@ -352,15 +359,14 @@ def build_sft_run(
     expert capacity; with a frozen bias, SFT data overflows the hero's 1.5. ``expert_placement`` renumbers the
     routed experts of ``initialize_from`` so each capacity block carries a similar load.
     """
-    if dp_racks <= 0:
-        raise ValueError(f"dp_racks must be positive, got {dp_racks}")
+    allocation = sft_resources(dp_racks)
     if muon_lr <= 0 or adam_lr <= 0:
         raise ValueError("learning rates must be positive")
     if expert_placement is not None and not expert_placement.permutes(initialize_from):
         raise ValueError(f"the expert placement permutes {expert_placement.source_checkpoint}, not {initialize_from}")
     if capacity_factor <= 0:
         raise ValueError(f"capacity_factor must be positive, got {capacity_factor}")
-    model = with_transport_remat_mode(dataclasses.replace(HERO_MODEL_CONFIG, capacity_factor=capacity_factor))
+    model = sft_model_config(capacity_factor)
     context_axis_size = HERO_CONTEXT_AXIS_SIZE
     expert_axis_size = hero_expert_axis_size(context_axis_size)
     if expert_placement is not None:
@@ -416,7 +422,7 @@ def build_sft_run(
         special_tokens=special_token_init(start_step),
         expert_placement=expert_placement,
     )
-    train_resources = sft_resources(dp_racks) if resources is None else resources
+    train_resources = allocation if resources is None else resources
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
     validation = validation_datasets() if eval_every > 0 else []
@@ -438,8 +444,8 @@ def build_sft_run(
     def build_config(ctx: StepContext) -> GrugRunConfig:
         # A placed run keeps its checkpoints under its placement's fingerprint, so a relaunch with another
         # placement, or none, starts again from the source checkpoint; the trainer would refuse to resume them.
-        permanent_path = permanent_checkpoint_dir(ctx.output_path, checkpoint_root, expert_placement)
-        root = str(StoragePath(permanent_path).parent)
+        root = _sft_checkpoint_root(ctx.output_path, checkpoint_root, expert_placement)
+        permanent_path = prefix_join(root, "checkpoints")
         if checkpoints != "periodic":
             temporary_path = None
             resume_paths = [permanent_path] if checkpoints == "final" else []
@@ -554,10 +560,12 @@ def _placement_path(base: str, placement: ExpertPlacement) -> str:
 
 def permanent_checkpoint_dir(output: str, checkpoint_root: str | None, placement: ExpertPlacement | None) -> str:
     """Return the directory shared by training and export for permanent checkpoints."""
+    return prefix_join(_sft_checkpoint_root(output, checkpoint_root, placement), "checkpoints")
+
+
+def _sft_checkpoint_root(output: str, checkpoint_root: str | None, placement: ExpertPlacement | None) -> str:
     root = output if checkpoint_root is None else checkpoint_root
-    if placement is not None:
-        root = _placement_path(root, placement)
-    return prefix_join(root, "checkpoints")
+    return _placement_path(root, placement) if placement is not None else root
 
 
 def _grad_norm(value: str) -> float | None:
