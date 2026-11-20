@@ -8,6 +8,11 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
+PROTECTED_ROOT = "/opt/taskcompendium-shared"
+AGENT_HOME = "/home/taskcompendium-agent"
+BOOTSTRAP_TIMEOUT = 1800.0
+DEPENDENCY_AUDIT_PROBES = ("dependencies-diff.json", "startup-hooks-diff.json")
+
 
 class SharedDependencyState(StrEnum):
     AGENT_MUTABLE = "agent_mutable"
@@ -85,12 +90,12 @@ class SharedIntegrityContract(BaseModel):
     version: Literal[2] = 2
     dependency_state: SharedDependencyState
     workspace: str = "/testbed"
-    protected_root: str = "/opt/taskcompendium-shared"
-    reference_directory: str = "/opt/taskcompendium-shared/reference"
-    runner_directory: str = "/opt/taskcompendium-shared/runner"
-    interpreter: str = "/opt/taskcompendium-shared/python/bin/python"
-    harness: str = "/opt/taskcompendium-shared/control.py"
-    pytest_config: str = "/opt/taskcompendium-shared/pytest.ini"
+    protected_root: str = PROTECTED_ROOT
+    reference_directory: str = f"{PROTECTED_ROOT}/reference"
+    runner_directory: str = f"{PROTECTED_ROOT}/runner"
+    interpreter: str = f"{PROTECTED_ROOT}/python/bin/python"
+    harness: str = f"{PROTECTED_ROOT}/control.py"
+    pytest_config: str = f"{PROTECTED_ROOT}/pytest.ini"
     report_directory: str = "/logs/verifier"
     agent_uid: int = 10001
     grader_uid: int = 10002

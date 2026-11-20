@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Trusted initialization of an immutable C83 reference without source setup.
+"""Trusted initialization of an immutable captured reference without source setup.
 
 This standalone guest program uses only the standard library. It never derives
 grading references from the final actor's workspace or dependency installation.
@@ -61,10 +61,13 @@ def resolve_source_interpreter(runtime: dict, control_python: Path) -> Path:
     sites = [Path(site) for site in runtime["sites"]]
     probe = "import sysconfig;print(sysconfig.get_path('purelib'))"
 
+    failures: list[str] = []
+
     def owns(python: Path) -> bool:
         try:
             purelib = subprocess.check_output([str(python), "-I", "-c", probe], text=True, timeout=60).strip()
-        except (OSError, subprocess.SubprocessError):
+        except (OSError, subprocess.SubprocessError) as error:
+            failures.append(f"{python}: {error}")
             return False
         return Path(purelib) in sites
 
@@ -73,7 +76,7 @@ def resolve_source_interpreter(runtime: dict, control_python: Path) -> Path:
     candidate = sites[0].parents[2] / "bin/python"
     if candidate.is_file() and owns(candidate):
         return candidate
-    raise ValueError("The captured baseline sites do not identify the source interpreter")
+    raise ValueError(f"The captured baseline sites do not identify the source interpreter; probes: {failures}")
 
 
 def materialize_actor_environment(actor: dict, interpreter: Path, source_sites: list[str]) -> list[str]:

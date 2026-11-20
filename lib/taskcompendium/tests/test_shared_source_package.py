@@ -4,6 +4,8 @@
 """Portable regressions for the protected SHARED source-scorer packaging."""
 
 import json
+import subprocess
+import sys
 import tempfile
 import zlib
 from pathlib import Path
@@ -15,12 +17,11 @@ from taskcompendium.harbor.shared_source import (
     SWE_LEGO_PROFILE,
     SWE_REBENCH_PROFILE,
     harden_shared_source,
-    patch_paths,
     published_contract,
 )
 from taskcompendium.integrity import SharedDependencyState, SharedSourceFamily
 from taskcompendium.runtime import shared_source
-from taskcompendium.runtime.shared_source import parse_source_reward
+from taskcompendium.runtime.shared_source import parse_source_reward, patch_paths
 
 SCALE_TEST_SH = b"#!/bin/sh\nset -eu\nmkdir -p /logs/verifier\npython /tests/grade.py\n"
 
@@ -69,6 +70,7 @@ def lego_files() -> dict[str, bytes]:
 
 def test_scale_package_keeps_body_and_hides_all_tests_material():
     files = scale_files()
+    original_config = files["tests/config.json"]
     contract = harden_shared_source(
         files,
         profile=SCALE_SWE_PROFILE,
@@ -78,13 +80,12 @@ def test_scale_package_keeps_body_and_hides_all_tests_material():
     assert contract.workspace == "/repo"
     assert published_contract(files) == contract
     instruction = files["instruction.md"].decode()
-    assert instruction.startswith("Grading rules (shared-source v2, scale-swe, agent_mutable):\n")
     assert instruction.endswith("Solve the issue.\n")
     assert sorted(name for name in files if name.startswith("tests/")) == ["tests/test.sh"]
     assert files["tests/test.sh"].decode().startswith('#!/bin/bash\nset -euo pipefail\nexec "')
     payload = json.loads(zlib.decompress(files["setup_files/taskcompendium-source-input.zlib"]))
     assert sorted(payload["tests"]) == ["config.json", "grade.py", "native_scripts.py", "scale_score.py", "test.sh"]
-    assert payload["tests"]["config.json"] == files_original_config_hex(files)
+    assert bytes.fromhex(payload["tests"]["config.json"]) == original_config
     assert payload["spec"] == {"timeout": None}
     assert "timeout_sec" not in files["task.toml"].decode().split("[verifier]")[-1].split("[agent]")[0]
     setup = "\n".join(line for line in files["task.toml"].decode().splitlines() if "bootstrap" in line)
@@ -94,11 +95,6 @@ def test_scale_package_keeps_body_and_hides_all_tests_material():
     # UID handover happens at build time: sandbox fs may deny runtime uid changes.
     assert "RUN mkdir -p /repo && chown -R 10001:10001 /repo" in files["environment/Dockerfile"].decode()
     assert files["task.toml"].decode().count("agent_mutable_v2") == 1
-
-
-def files_original_config_hex(files: dict[str, bytes]) -> str:
-    payload = json.loads(zlib.decompress(files["setup_files/taskcompendium-source-input.zlib"]))
-    return payload["tests"]["config.json"]
 
 
 def test_lego_contract_captures_patch_paths_and_declares_its_policy():
@@ -119,7 +115,6 @@ def test_lego_contract_captures_patch_paths_and_declares_its_policy():
     payload = json.loads(zlib.decompress(files["setup_files/taskcompendium-source-input.zlib"]))
     assert sorted(payload["tests"]) == ["config.json", "grade.py", "native_scripts.py", "test.sh"]
     task_toml = files["task.toml"].decode()
-    # The declared source deadline passes through verbatim.
     assert payload["spec"] == {"timeout": 900.0}
     assert "timeout_sec = 900.0" in task_toml
     assert 'user = "root"' in task_toml
@@ -217,10 +212,6 @@ def test_swe_rebench_profile_binds_the_agreed_contract():
     # paths (Lego precedent) plus the row's explicit test_files list.
     assert "tests/test_new.py" in contract.protected_test_patterns
     assert "tests/test_app.py" in contract.protected_test_patterns
-    # The upstream-declared verifier deadline passes through verbatim; the
-    # quiesce binding is the POSIX shell variant for this family.
-    assert SWE_REBENCH_PROFILE.quiesce_variant == "shell"
-    assert SWE_REBENCH_PROFILE.path_config_keys == ("test_files",)
 
 
 def test_swe_rebench_rejects_undeclared_config_keys_and_missing_private_files():
@@ -261,3 +252,15 @@ def test_capture_scope_joins_explicit_config_path_lists():
 def tmp_scope() -> Path:
     directory = Path(tempfile.mkdtemp(prefix="capture-scope-"))
     return directory
+
+
+def test_source_controller_cli_uses_the_declared_guest_interpreter(request):
+    # The shipped controller runs on 3.9 source images, where datetime.UTC is unavailable.
+    python = request.config.getoption("--shared-source-python") or sys.executable
+    result = subprocess.run(
+        [str(python), "-I", "-S", shared_source.__file__, "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr

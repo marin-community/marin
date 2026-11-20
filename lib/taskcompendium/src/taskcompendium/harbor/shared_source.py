@@ -34,12 +34,16 @@ from tomlkit.items import Table
 
 from taskcompendium.harbor.shared_package import shared_task_instruction
 from taskcompendium.integrity import (
+    AGENT_HOME,
+    BOOTSTRAP_TIMEOUT,
+    DEPENDENCY_AUDIT_PROBES,
     SharedDependencyState,
     SharedIntegrityContract,
     SharedSourceFamily,
     SourceSharedRunner,
 )
 from taskcompendium.runtime import shared_pytest, shared_source
+from taskcompendium.runtime.shared_source import patch_paths
 
 BOOTSTRAP = "/opt/taskcompendium-shared-bootstrap/control.py"
 BOOTSTRAP_DIRECTORY = "/opt/taskcompendium-shared-bootstrap"
@@ -73,10 +77,7 @@ class SourceGraderProfile:
     ``path_config_keys`` names private config entries holding explicit
     workspace-relative path lists that join the capture scope when they exist
     (a source that enumerates its trusted test files instead of following
-    capture patterns). ``quiesce_variant`` records which quiesce helper the
-    conversion must emit for the family's collect commands: ``python`` for
-    images that ship a guest python3, ``shell`` (the POSIX variant) for
-    families whose bases may ship no guest interpreter at all.
+    capture patterns).
     """
 
     family: SharedSourceFamily
@@ -88,7 +89,6 @@ class SourceGraderProfile:
     dependency_paths: tuple[str, ...]
     removal_policy: str
     path_config_keys: tuple[str, ...] = ()
-    quiesce_variant: str = "python"
 
 
 SCALE_SWE_PROFILE = SourceGraderProfile(
@@ -149,7 +149,6 @@ SWE_REBENCH_PROFILE = SourceGraderProfile(
         "security policy)."
     ),
     path_config_keys=("test_files",),
-    quiesce_variant="shell",
 )
 
 PROFILES = {
@@ -157,23 +156,6 @@ PROFILES = {
     SharedSourceFamily.SWE_LEGO: SWE_LEGO_PROFILE,
     SharedSourceFamily.SWE_REBENCH: SWE_REBENCH_PROFILE,
 }
-
-
-def patch_paths(diff: str) -> list[str]:
-    """Workspace-relative paths a unified diff touches, in first-seen order."""
-    selected: list[str] = []
-    seen: set[str] = set()
-    for line in diff.splitlines():
-        if not line.startswith(("--- ", "+++ ")):
-            continue
-        path = line[4:].partition("\t")[0].strip('"')
-        if path == "/dev/null":
-            continue
-        path = PurePosixPath(path.removeprefix("a/").removeprefix("b/")).as_posix()
-        if path not in seen:
-            seen.add(path)
-            selected.append(path)
-    return selected
 
 
 def source_contract(
@@ -218,7 +200,7 @@ def source_contract(
         dependency_state=dependency_state,
         workspace=workspace,
         protected_test_patterns=protected_test_patterns,
-        audit_probes=("dependencies-diff.json", "startup-hooks-diff.json"),
+        audit_probes=DEPENDENCY_AUDIT_PROBES,
         known_open_gaps=(
             "Agent-installed pytest plugins and imports in the shared interpreter environments",
             "Candidate-produced test-output injection",
@@ -265,7 +247,7 @@ def source_image_layer(contract: SharedIntegrityContract) -> str:
         f"useradd --create-home --uid {agent} --user-group taskcompendium-agent\n"
         f"RUN getent passwd {grader} >/dev/null || "
         f"useradd --create-home --uid {grader} --user-group taskcompendium-grade\n"
-        f"RUN mkdir -p /home/taskcompendium-agent && chown {agent}:{agent} /home/taskcompendium-agent\n"
+        f"RUN mkdir -p {AGENT_HOME} && chown {agent}:{agent} {AGENT_HOME}\n"
         # UID handover at build time: the build daemon has the full capability
         # set, so workspace files whose owner the sandbox fs refuses to change
         # at runtime are converted here (image files are agent-owned before the
@@ -280,7 +262,7 @@ def source_image_layer(contract: SharedIntegrityContract) -> str:
     )
 
 
-def source_bootstrap_command(setup: str) -> str:
+def source_bootstrap_command(setup: str, workspace: str) -> str:
     """Run the source setup, then unpack and bootstrap the protected controller.
 
     Python resolution happens here, with the task environment's PATH, because the
@@ -296,6 +278,7 @@ def source_bootstrap_command(setup: str) -> str:
     probe = "import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)"
     lines = [
         "set -euo pipefail",
+        f"git config --global --add safe.directory {shlex.quote(workspace)}",
         setup,
         'control_python=""',
         'for control_dir in $(printf "%s\n" "$PATH" | tr ":" " "); do',
@@ -379,11 +362,11 @@ def harden_shared_source(
     environment = cast(Table, task_config.setdefault("environment", tomlkit.table()))
     setup_table = cast(Table, environment.setdefault("setup", tomlkit.table()))
     source_setup = str(setup_table.get("command", ""))
-    setup_table["command"] = source_bootstrap_command(source_setup)
-    setup_table["timeout_sec"] = 1800.0
+    setup_table["command"] = source_bootstrap_command(source_setup, contract.workspace)
+    setup_table["timeout_sec"] = BOOTSTRAP_TIMEOUT
     source_environment = dict(environment.get("env", {}))
-    if source_environment.get("HOME") in {None, "/root", "/home/taskcompendium-agent"}:
-        source_environment.setdefault("HOME", "/home/taskcompendium-agent")
+    if source_environment.get("HOME") in {None, "/root", AGENT_HOME}:
+        source_environment.setdefault("HOME", AGENT_HOME)
     environment["env"] = source_environment
     agent = cast(Table, task_config.setdefault("agent", tomlkit.table()))
     verifier = cast(Table, task_config.setdefault("verifier", tomlkit.table()))

@@ -570,11 +570,21 @@ def shim() -> None:
 
 
 @pytest.fixture()
-def source_image(shim, request):
-    family = request.param
+def source_image(shim, request, monkeypatch):
+    preowned = request.param == "scale-preowned"
+    family = "scale" if preowned else request.param
     cleanup()
     base = build_repo()
     files, profile = package_files(family, base)
+    if preowned:
+        config = tomlkit.parse(files["task.toml"].decode())
+        config["environment"]["setup"] = {
+            "command": f"git -C /testbed reset --hard {base} && printf prepared > /testbed/public-ready.txt",
+            "timeout_sec": 120.0,
+        }
+        files["task.toml"] = tomlkit.dumps(config).encode()
+        subprocess.run(["chown", "-R", f"{AGENT_UID}:{AGENT_UID}", str(WORKSPACE)], check=True)
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(BOOTSTRAP / "source.gitconfig"))
     harden_shared_source(files, profile=profile, dependency_state=SharedDependencyState.AGENT_MUTABLE)
     stage_and_bootstrap(files)
     yield SourceTask(family=family, files=files, base_commit=base)
@@ -706,8 +716,6 @@ def test_nested_parent_symlink_cannot_redirect_restore(source_image):
     result = run_as_agent(program)
     assert result.returncode == 0, result.stderr
     assert run_grade(source_image.files)["reward"] == 0.0
-    # The captured nested file was restored inside the workspace, and the
-    # protected root the symlink pointed at is byte-identical afterwards.
     assert not (WORKSPACE / "pkg").is_symlink()
     assert (WORKSPACE / "pkg/conftest.py").read_text() == "NESTED_CONFTEST = 'base'\n"
     assert protected_tree_hash() == before
@@ -764,12 +772,20 @@ def test_agent_cannot_read_protected_material_or_forge_verdicts(source_image):
 def test_background_writer_cannot_fake_a_pass(source_image):
     REPORTS.mkdir(parents=True, exist_ok=True)
     REPORTS.chmod(0o777)
+    child_code = (
+        "from pathlib import Path\n"
+        "reward = Path('/logs/verifier/reward.txt')\n"
+        "reward.write_text('1\\n')\n"
+        "print('ready', flush=True)\n"
+        "while True:\n"
+        "    reward.write_text('1\\n')\n"
+    )
     program = (
-        "import pathlib, subprocess, sys, time\n"
-        "code = 'import pathlib,time\\nwhile True:\\n"
-        ' p=pathlib.Path("/logs/verifier/reward.txt")\\n p.write_text("1\\\\n")\\n time.sleep(0.05)\\n\'\n'
-        "subprocess.Popen([sys.executable, '-c', code], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
-        "time.sleep(0.5)\n"
+        "import subprocess, sys\n"
+        "child = subprocess.Popen("
+        f"[sys.executable, '-c', {child_code!r}], "
+        "stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)\n"
+        "assert child.stdout.readline().strip() == 'ready'\n"
     )
     result = run_as_agent(program)
     assert result.returncode == 0, result.stderr
@@ -862,3 +878,15 @@ def contract_workspace_of(files: dict[str, bytes]) -> str:
     """Read the workspace the hardened contract published for this package."""
     payload = json.loads(zlib.decompress(files["setup_files/taskcompendium-source-input.zlib"]))
     return payload["contract"]["workspace"]
+
+
+@pytest.mark.parametrize("source_image", ["scale-preowned"], indirect=True)
+def test_source_git_setup_runs_after_build_time_uid_handover(source_image):
+    assert (WORKSPACE / "public-ready.txt").read_text() == "prepared"
+    result = run_as_agent(
+        "import subprocess\n"
+        "head = subprocess.check_output(['git', '-C', '/testbed', 'rev-parse', 'HEAD'], text=True).strip()\n"
+        f"assert head == {source_image.base_commit!r}\n"
+    )
+    assert result.returncode == 0, result.stderr
+    assert run_grade(source_image.files)["reward"] == 0.0
