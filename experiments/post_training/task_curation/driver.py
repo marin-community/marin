@@ -151,10 +151,11 @@ def _image_factory(backend: Backend | None, controller_url: str | None) -> Machi
 def _publish_campaign(report_path: str, selected: dict[str, RlDataSource], catalog_root: str) -> None:
     path = StoragePath(report_path)
     report = json.loads(path.read_text())
-    # Selected recipes may supply declarations absent from the default inventory.
-    sources = {**all_sources(), **{source.info.id: source for source in selected.values()}}
+    # Snapshot merging preserves earlier sources without selecting unrelated current pins.
     publish_catalog(
-        catalog_root, report["run_id"], (source for source in sources.values() if source.catalog_declaration is not None)
+        catalog_root,
+        report["run_id"],
+        (source for source in selected.values() if source.catalog_declaration is not None),
     )
 
 

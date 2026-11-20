@@ -37,6 +37,7 @@ from finestore.rl.status_taxonomy import DataRestriction
 from finestore.store import DataStore
 from rigging.filesystem.distributed_lock import LeaseLostError, LocalFileLease
 
+from experiments.post_training.task_curation import driver
 from experiments.post_training.task_curation.catalog_identity import canonical_assessment
 from experiments.post_training.task_curation.catalog_snapshot import (
     publish_catalog as publish_censused_catalog,
@@ -154,6 +155,38 @@ def record_attempt(root, source, run_id, started_at, key, status=AssessmentStatu
 def selected_sources(root):
     catalog = CurationCatalog(root)
     return {row.id: row for row in catalog.sources(catalog.current().snapshot_id)}
+
+
+@pytest.mark.parametrize("selected_has_license", [True, False])
+def test_campaign_publication_preserves_foreign_snapshot_without_selecting_its_unlicensed_pin(
+    tmp_path, monkeypatch, selected_has_license
+):
+    root = str(tmp_path / "catalog")
+    foreign = with_admission_census(number_source(tmp_path / "foreign", "foreign"))
+    record_attempt(root, foreign, "prior", "2026-10-16T10:00:00Z", "foreign-key")
+    publish_catalog(root, "prior", [foreign])
+    prior = selected_sources(root)[foreign.info.id]
+    unlicensed_foreign = replace(foreign, info=replace(foreign.info, license_receipt=None))
+    selected = with_admission_census(number_source(tmp_path / "selected", "selected"))
+    if not selected_has_license:
+        selected = replace(selected, info=replace(selected.info, license_receipt=None))
+    record_attempt(root, selected, "current", "2026-10-16T11:00:00Z", "selected-key")
+    report = tmp_path / "report.json"
+    report.write_text(json.dumps({"run_id": "current"}))
+    monkeypatch.setattr(driver, "all_sources", lambda: {foreign.info.id: unlicensed_foreign})
+
+    if not selected_has_license:
+        with pytest.raises(ValueError, match=f"License evidence is missing: {selected.info.id}"):
+            driver._publish_campaign(str(report), {selected.name: selected}, root)
+        assert CurationCatalog(root).current().snapshot_id == "prior"
+        return
+
+    driver._publish_campaign(str(report), {selected.name: selected}, root)
+    rows = selected_sources(root)
+    assert set(rows) == {foreign.info.id, selected.info.id}
+    assert rows[foreign.info.id].declaration == prior.declaration
+    assert rows[foreign.info.id].assessment_key == "foreign-key"
+    assert rows[selected.info.id].assessment_key == "selected-key"
 
 
 def test_disjoint_campaigns_accumulate_even_with_an_older_inventory(tmp_path):

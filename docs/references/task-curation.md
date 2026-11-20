@@ -1244,6 +1244,8 @@ directories and infer the latest version.
 By default, each campaign has a FineStore catalog beside its report. Production FULL
 campaigns use `--publish-catalog s3://marin-us-east-02a/marin/rl-data/catalog/production`
 to accumulate results across versioned report directories, with assessment enabled.
+Campaign publication selects only the run's sources and preserves prior sources in
+the catalog snapshot. A full inventory refresh is a separate operation.
 `--cache-dir` selects local execution and a local artifact root, so shared
 publication rejects it; local and SAMPLE runs keep separate catalogs. Remote runs
 reuse completed artifacts under `--artifact-root` and model requests under
