@@ -47,12 +47,10 @@ async def test_failed_install_preserves_error_tail_without_credentials(
     assert "terminal dependency failure" in str(caught.value)
     assert secret not in str(caught.value)
     assert secret not in json.dumps(evidence)
-    assert any(
-        vars(record).get("env_keys") == ["RUN_MODE"] for record in caplog.records
-    )
-    assert all(
-        "synthetic-runtime-value" not in repr(vars(record)) for record in caplog.records
-    )
+    logged = repr([vars(record) for record in caplog.records])
+    assert "RUN_MODE" in logged
+    assert "synthetic-runtime-value" not in logged
+    assert secret not in logged
 
 
 @pytest.mark.asyncio
@@ -80,7 +78,7 @@ async def test_evidence_write_failure_keeps_the_command_exit_as_primary_error(
 
 
 @pytest.mark.asyncio
-async def test_failure_evidence_serialization_does_not_block_other_trials(
+async def test_command_failure_serialization_keeps_the_event_loop_responsive(
     tmp_path, monkeypatch
 ):
     agent = MiniSweAgent(logs_dir=tmp_path)

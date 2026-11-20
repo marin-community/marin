@@ -8,6 +8,7 @@ from typing import Any, ClassVar, Literal
 from uuid import uuid4
 
 from rigging.redaction import redact_string
+from upath import UPath
 
 from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment, ExecResult
@@ -31,6 +32,18 @@ class CommandFailureEvidence:
     command: str
     stdout: str
     stderr: str
+
+
+async def _write_command_failure(
+    destination: Path | UPath, evidence: CommandFailureEvidence
+) -> None:
+    writer = get_artifact_writer()
+    pending = await writer.submit_required(
+        destination,
+        lambda: json.dumps(asdict(evidence)),
+        description="redacted installed-agent command failure",
+    )
+    await writer.await_write(pending)
 
 
 SERVER_TIMEOUT_GRACE = 15.0
@@ -361,7 +374,7 @@ class BaseInstalledAgent(BaseAgent, ABC):
             return text[:max_len] + " ... [truncated]"
         return text
 
-    def _redact_output(self, text: str | None) -> str:
+    def _redact_diagnostic_text(self, text: str | None) -> str:
         value = text or ""
         for secret in self._protected_values:
             if secret:
@@ -390,7 +403,7 @@ class BaseInstalledAgent(BaseAgent, ABC):
         )
 
         self.logger.debug(
-            f"Running command: {self._redact_output(command)}",
+            f"Running command: {self._redact_diagnostic_text(command)}",
             extra={
                 "user": str(user),
                 "env_keys": sorted(merged_env or {}),
@@ -407,21 +420,15 @@ class BaseInstalledAgent(BaseAgent, ABC):
         if result.return_code != 0:
             diagnostics = CommandFailureEvidence(
                 return_code=result.return_code,
-                command=self._redact_output(command),
-                stdout=self._redact_output(result.stdout),
-                stderr=self._redact_output(result.stderr),
+                command=self._redact_diagnostic_text(command),
+                stdout=self._redact_diagnostic_text(result.stdout),
+                stderr=self._redact_diagnostic_text(result.stderr),
             )
             failure_dir = self.logs_dir / "command-failures"
             failure_path = failure_dir / f"{uuid4().hex}.json"
             evidence_error = None
             try:
-                writer = get_artifact_writer()
-                pending = await writer.submit_required(
-                    failure_path,
-                    lambda: json.dumps(asdict(diagnostics)),
-                    description="redacted installed-agent command failure",
-                )
-                await writer.await_write(pending)
+                await _write_command_failure(failure_path, diagnostics)
             except OSError as error:
                 evidence_error = error
             self.logger.debug(
@@ -439,7 +446,7 @@ class BaseInstalledAgent(BaseAgent, ABC):
                 f"Full redacted output: {failure_path}"
             )
             if evidence_error is not None:
-                message += f"\nEvidence publication failed: {self._redact_output(str(evidence_error))}"
+                message += f"\nEvidence publication failed: {self._redact_diagnostic_text(str(evidence_error))}"
             # A return code of 128 + N (N in 1..64) is the shell's convention for
             # "terminated by signal N" — distinct from an ordinary non-zero exit.
             # Classify it so a signal kill (e.g. the agent's own kill -HUP hitting
@@ -456,8 +463,8 @@ class BaseInstalledAgent(BaseAgent, ABC):
         self.logger.debug(
             "Command outputs captured",
             extra={
-                "stdout": self._truncate_output(self._redact_output(result.stdout)),
-                "stderr": self._truncate_output(self._redact_output(result.stderr)),
+                "stdout": self._truncate_output(self._redact_diagnostic_text(result.stdout)),
+                "stderr": self._truncate_output(self._redact_diagnostic_text(result.stderr)),
             },
         )
         return result
