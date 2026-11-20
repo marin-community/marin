@@ -23,7 +23,6 @@ from marin.rl.skyrl import (
     SkyRLSpec,
     SkyRLTopology,
     _materialize_role_plan_config,
-    run_skyrl,
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
@@ -116,7 +115,7 @@ def evaluation_from_spec(spec: NVL72EvaluationSpec, config_output: Path) -> Arti
         "max_new_tokens": 256,
         "request_timeout": 600,
         "receipt_uri": (
-            "s3://marin-us-east-08a/marin/users/benfeuer/mochi-bringup/consolidation-serving/20261120-117/serving-receipt.json"
+            "s3://marin-us-east-08a/marin/users/benfeuer/mochi-bringup/consolidation-serving/20261120-118/serving-receipt.json"
         ),
     }
     for role in ("policy", "ref"):
@@ -175,7 +174,7 @@ def evaluation_from_spec(spec: NVL72EvaluationSpec, config_output: Path) -> Arti
         run = replace(run, launch_config_yaml=yaml.safe_dump(launch))
         return run
 
-    step = replace(step, build_config=build_config, run=run_skyrl)
+    step = replace(step, build_config=build_config)
     step = replace(step, expected_fingerprint=step.fingerprint())
     config_output.write_text(materialized_config(step, spec.output_prefix).launch_config_yaml)
     return step

@@ -4,16 +4,19 @@
 import hashlib
 import json
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 import yaml
 from marin.execution.build_context import BuildContext, VersionCodex, build_context
+from marin.rl import skyrl
 
 from experiments.post_training.long_loop.nvl72_evaluation import NVL72EvaluationSpec, evaluation_from_spec
 
 
 def test_adopted_evaluation_has_no_training_input_and_rejects_changed_data(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "outputs"))
+    monkeypatch.setenv("MARIN_TEMP_PREFIX", str(tmp_path / "temporary"))
     model = tmp_path / "model"
     model.mkdir()
     manifest = json.dumps({"request": {"config": {"checkpoint": "fixture/step-400407"}}}).encode()
@@ -54,6 +57,22 @@ def test_adopted_evaluation_has_no_training_input_and_rejects_changed_data(tmp_p
     lowered = step.lower()
     assert lowered.name == step.name
     assert step.runtime_args["skyrl_execution"].coordinator_name == "mochi-mochi-evaluation-2026.11.17.9"
+
+    class LaunchBoundaryReached(Exception):
+        pass
+
+    def launcher(command, *, env_vars):
+        assert env_vars == {}
+        assert command[-5:-1] == ["marinskyrl", "iris", "launch", "--config"]
+        forwarded = yaml.safe_load(Path(command[-1]).read_text())
+        assert forwarded["skyrl"]["entrypoint"] == "generate"
+        assert forwarded["inputs"]["model"]["uri"] == str(model)
+        raise LaunchBoundaryReached
+
+    with monkeypatch.context() as patch:
+        patch.setattr(skyrl, "_run_launcher", launcher)
+        with pytest.raises(LaunchBoundaryReached):
+            lowered.fn(step.path(str(tmp_path / "outputs")))
     with pytest.raises(ValueError, match="checkpoint step"):
         evaluation_from_spec(replace(spec, model_step=393491), output)
     (data / "rollouts.parquet").write_bytes(b"changed input")
