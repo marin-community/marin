@@ -45,7 +45,7 @@ from experiments.post_training.task_curation.datasets.swe_rebench_v2 import grou
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.upstream import task_files
 
 HERE = Path(__file__).parent
-VERSION = "2026.11.17.1"
+VERSION = "2026.11.20.1"
 
 IMAGE_BINDINGS_INPUT = "base_images"
 IMAGE_BINDINGS_FILENAME = "base-image-bindings.json"
@@ -271,8 +271,14 @@ def task_toml(flat: dict, base: str, group: groups.Group, setup: str) -> str:
 
 
 def dockerfile(group: groups.Group, workdir: str, image: str) -> str:
-    """The shared base Dockerfile: byte-identical within a group (one snapshot identity)."""
-    return f"FROM {image}\nWORKDIR {workdir}\n"
+    """The shared base Dockerfile: byte-identical within a group (one snapshot identity).
+
+    No WORKDIR line: the image's default cwd must not be part of the snapshot identity, and
+    the runtime cwd comes from the task's environment.workdir. The per-repo ``workdir``
+    argument is retained in the signature for call-site clarity but is deliberately unused.
+    """
+    del workdir
+    return f"FROM {image}\n"
 
 
 def base_image(bindings_path: Path, group_id: str) -> str:

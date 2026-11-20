@@ -61,6 +61,7 @@ def _declare() -> RlDataSource[CurationRecipe]:
                 origin=SourceOrigin.SWE_REBENCH,
                 upstream_dataset=UPSTREAM_DATASET,
                 upstream_name=UPSTREAM_DATASET,
+                variant="repaired-20261119",
                 build_path="SWE-rebench V2.1 Marin repair",
                 family="swe-repo",
                 tags=(

@@ -206,8 +206,28 @@ def test_dockerfile_is_group_shared():
     """The per-task Dockerfile differs only by the pinned group image, keeping one snapshot identity."""
     group = groups.GROUPS["python"]
     assert dockerfile(group, "/spectree", "ghcr.io/marin-community/rl-data-swe-rebench-v2@sha256:" + "0" * 64) == (
-        "FROM ghcr.io/marin-community/rl-data-swe-rebench-v2@sha256:" + "0" * 64 + "\nWORKDIR /spectree\n"
+        "FROM ghcr.io/marin-community/rl-data-swe-rebench-v2@sha256:" + "0" * 64 + "\n"
     )
+
+
+def test_verifier_and_setup_do_not_rely_on_image_default_cwd(tmp_path):
+    """Dropping the Dockerfile WORKDIR cannot change grading: the verifier and the setup must
+    run from task.toml environment.workdir by their own explicit cds, never the image's
+    default cwd."""
+    from experiments.post_training.task_curation.datasets.swe_rebench_v2.upstream import task_files
+
+    template = task_files._shell_template("test.sh")
+    assert 'cd "$WORKDIR"' in template  # the grading cds into the workdir explicitly
+
+    flat = _flatten(PYTHON_ROW)
+    setup = setup_command(flat, "v1-python", groups.GROUP_BY_BASE["v1-python"])
+    # the setup's workdir steps are explicit: the clone guard cds to /, then into the workdir
+    assert "cd / && rm -rf /spectree && mkdir -p /spectree" in setup
+    assert "cd /spectree" in setup
+    # the Dockerfile carries no WORKDIR: the group's one snapshot identity
+    group = groups.GROUPS["python"]
+    image = "ghcr.io/marin-community/rl-data-swe-rebench-v2@sha256:" + "0" * 64
+    assert "WORKDIR" not in dockerfile(group, "/spectree", image)
 
 
 def test_admission_receipt_labels_carry_upstream_image_defect(tmp_path):

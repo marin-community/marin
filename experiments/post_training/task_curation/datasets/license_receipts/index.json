@@ -281,6 +281,12 @@
       "repo": "open-athena/marin-license-receipts",
       "revision": "e501d2e0faffcd2ef03004e85839d886a81862d6",
       "sha256": "8f1d18485718300ee07fcb3654c78c715ab048a2a647bac72dbeaff17399a06d"
+    },
+    {
+      "path": "part-046.json",
+      "repo": "open-athena/marin-license-receipts",
+      "revision": "53cdfcaf4c16286892741d48378bd4fdf88c32b8",
+      "sha256": "7edd22e6644c7b00b02741abdc8b13df5b58cfefaec37a82f2a1741dc7fee62a"
     }
   ],
   "repo": "open-athena/marin-license-receipts",
