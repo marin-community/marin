@@ -3,6 +3,7 @@
 import asyncio
 from contextlib import contextmanager
 from dataclasses import replace
+from hashlib import sha256
 from pathlib import Path
 import subprocess
 import tempfile
@@ -14,6 +15,7 @@ from connectrpc.errors import ConnectError
 from fsspec.asyn import AsyncFileSystem
 from fsspec.implementations.local import LocalFileSystem
 from fsspec.implementations.memory import MemoryFileSystem
+from huggingface_hub import RepoFile
 import numpy as np
 import pytest
 from safetensors.numpy import save_file
@@ -90,6 +92,9 @@ def export_run(tmp_path, monkeypatch):
         def create_repo(self, **kwargs):
             assert kwargs["private"] is True
 
+        def model_info(self, _repo_id):
+            return SimpleNamespace(private=True)
+
         def upload_folder(self, **kwargs):
             if failures:
                 failures.pop()
@@ -97,7 +102,23 @@ def export_run(tmp_path, monkeypatch):
             assert kwargs["revision"] == "release"
             assert (Path(kwargs["folder_path"]) / "model.safetensors").is_file()
             assert Path(kwargs["folder_path"]).is_relative_to(staging)
-            uploads.append(kwargs["path_in_repo"])
+            self.root = Path(kwargs["folder_path"])
+            self.destination = kwargs["path_in_repo"]
+            uploads.append(self.destination)
+            self.commit = f"commit-{len(uploads)}"
+            return SimpleNamespace(oid=self.commit)
+
+        def get_paths_info(self, _repo_id, paths, *, revision, **_kwargs):
+            assert revision == self.commit
+            for path in paths:
+                relative_path = Path(path).relative_to(self.destination)
+                content = (self.root / relative_path).read_bytes()
+                yield RepoFile(
+                    path=path,
+                    size=len(content),
+                    oid="blob",
+                    lfs={"size": len(content), "oid": sha256(content).hexdigest(), "pointerSize": 128},
+                )
 
     monkeypatch.setattr("skyrl_train.hf_publisher.HfApi", Hub)
 
@@ -229,12 +250,19 @@ def test_gpu_job_without_a_complete_export_never_submits_upload(export_run, monk
     assert read_hf_export_request(run.spec.request.checkpoint_path).status is HFExportStatus.PENDING
 
 
-def test_completed_object_store_export_needs_no_job(export_run):
+@pytest.mark.parametrize(
+    ("completed", "expected_events"),
+    [(False, ["gpu", "gpu-finished"]), (True, [])],
+    ids=["fresh", "completed"],
+)
+def test_object_store_export_without_hub_repo_never_submits_publication(export_run, completed, expected_events):
     run = export_run
-    run.save()
+    if completed:
+        run.save()
     spec = replace(run.spec, request=replace(run.spec.request, hf_hub_repo_id=None))
     export_hf_checkpoint.submit_requested_export(spec, ["convert"])
-    assert run.events == []
+    assert run.events == expected_events
+    assert run.submissions == []
     assert read_hf_export_request(spec.request.checkpoint_path).status is HFExportStatus.COMPLETE
 
 
