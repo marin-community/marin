@@ -31,7 +31,7 @@ from taskcompendium.models import (
 from taskcompendium.runtime.shell import resolve_shell_tool
 from transformers import PreTrainedTokenizerBase
 
-from skyrl_train.dataset.dataset import PromptDataset, _prompt_token_count
+from skyrl_train.dataset.dataset import PromptDataset, _prompt_token_count, dataset_num_proc
 from skyrl_train.inference_engines.chat_template import assistant_prefix_token_ids
 from skyrl_train.dataset.harbor_import import HARBOR_TRIAL_SESSION
 from skyrl_train.rollouts.group_grader import task_group_grader
@@ -59,13 +59,19 @@ class TaskDataset(PromptDataset):
     """Render public conversation fields and retain private lowered tasks for workers."""
 
     def prepare_dataset(self, dataset):
-        return dataset.map(_stored_task_prompt, num_proc=self.num_workers).with_transform(_restore_task_prompts)
+        return dataset.map(
+            _stored_task_prompt, num_proc=dataset_num_proc(len(dataset), self.num_workers)
+        ).with_transform(_restore_task_prompts)
 
     @staticmethod
     def prompt_token_count(
         tokenizer: PreTrainedTokenizerBase, row: dict, prompt_key: str, *, chat_template_kwargs: dict | None = None
     ) -> int:
         return task_prompt_token_count(tokenizer, row, prompt_key, chat_template_kwargs=chat_template_kwargs)
+
+    def label(self, index: int) -> str:
+        """The task id, which unlike the default row-number uid survives prompt-length filtering."""
+        return TaskRolloutSpec.model_validate_json(self.dataframe[index][TASK_ROLLOUT_COLUMN]).task.id
 
     def collate_fn(self, rows) -> list[dict]:
         inputs = []
@@ -284,6 +290,6 @@ class SourceTaskDataset(TaskDataset):
             mapper,
             with_indices=True,
             remove_columns=dataset.column_names,
-            num_proc=self.num_workers,
+            num_proc=dataset_num_proc(len(dataset), self.num_workers),
             keep_in_memory=True,
         )

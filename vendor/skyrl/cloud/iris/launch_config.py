@@ -22,6 +22,7 @@ from cloud.iris.rl_config_translation import (
     training_type_for_entrypoint,
 )
 from cloud.iris.role_plan import derive_num_nodes, derive_policy_export_role_plan, derive_role_plan
+from cloud.iris.role_topology import RoleTopology, derive_role_topology
 from cloud.iris.runtime_environment import RuntimeMode, runtime_profile_for_strategy
 from marinskyrl.distillation import (
     TeacherModelSpec,
@@ -85,6 +86,14 @@ class LaunchModelLocator:
 
 
 @dataclass
+class NativeCheckpointLocator:
+    """Completed native state read by the trainer without staging a model export."""
+
+    uri: str = MISSING
+    identity: str = MISSING
+
+
+@dataclass
 class IrisAllocationConfig:
     """Explicit whole-node resources checked against SkyRL placement."""
 
@@ -103,6 +112,7 @@ class LaunchTopology:
     num_nodes: int
     gpus_per_node: int
     gpu_variant: str
+    role_topology: RoleTopology | None = None
 
 
 @dataclass
@@ -120,6 +130,8 @@ class IrisConfig:
     target_cluster: str | None = None
     parent_cluster_config: str | None = None
     container_profile: str | None = None
+    # OmegaConf serializes enum names; launch documents use enum values.
+    role_topology: str | None = None
 
 
 @dataclass
@@ -150,13 +162,14 @@ class ArtifactsConfig:
 
 @dataclass
 class InputsConfig:
-    """Immutable model and data locators resolved by Marin."""
+    """Immutable model, data and starting-checkpoint locators resolved by Marin."""
 
     model: LaunchModelLocator = field(default_factory=LaunchModelLocator)
     hugging_face_models: list[HuggingFaceModelCache] = field(default_factory=list)
     data_kind: str = MISSING
     train_data: list[dict[str, Any]] = field(default_factory=list)
     validation_data: list[dict[str, Any]] = field(default_factory=list)
+    starting_checkpoint: NativeCheckpointLocator | None = None
 
 
 @dataclass
@@ -182,7 +195,8 @@ def compose_launch_config(raw: Mapping[str, Any] | DictConfig) -> DictConfig:
 
 def _is_source_recipe(config: DictConfig) -> bool:
     return (
-        config.run.mode == RunMode.TRAIN and not config.runtime.entrypoint
+        config.run.mode == RunMode.TRAIN
+        and not config.runtime.entrypoint
         or "context_budget" in config.skyrl
         or "config_groups" in config.skyrl
     )
@@ -192,6 +206,11 @@ def _compose_source_recipe(config: DictConfig) -> DictConfig:
     raw_skyrl = OmegaConf.to_container(config.skyrl, resolve=False)
     if not isinstance(raw_skyrl, dict):
         raise TypeError("skyrl must be a mapping")
+    if config.inputs.starting_checkpoint is not None:
+        trainer = raw_skyrl.setdefault("trainer", {})
+        if trainer.get("resume_path"):
+            raise ValueError("inputs.starting_checkpoint replaces trainer.resume_path; omit trainer.resume_path")
+        trainer["resume_path"] = str(config.inputs.starting_checkpoint.uri)
     model_uri = str(config.inputs.model.uri)
     model_identity = str(config.inputs.model.identity)
     model_is_cloud = is_cloud_uri(model_uri)
@@ -290,8 +309,8 @@ def _validate_inputs(inputs: dict[str, Any]) -> None:
             data_source(value)
 
 
-def validate_iris_allocation(config: dict[str, Any]) -> IrisAllocationConfig:
-    """Validate explicit Iris resources against the launch mode's active roles."""
+def derive_launch_topology(config: dict[str, Any]) -> LaunchTopology:
+    """Derive placement from one role plan and check the requested allocation."""
     skyrl = config["skyrl"]
     if not isinstance(skyrl, dict):
         raise TypeError("skyrl must be a mapping")
@@ -299,7 +318,8 @@ def validate_iris_allocation(config: dict[str, Any]) -> IrisAllocationConfig:
     plan = derive_policy_export_role_plan(skyrl) if checkpoint_export else derive_role_plan(skyrl)
     allocation = config["iris"]["allocation"]
     policy = plan.claim("policy")
-    expected_nodes = derive_num_nodes(plan)
+    role_topology = derive_role_topology(config, plan)
+    expected_nodes = role_topology.num_nodes if role_topology is not None else derive_num_nodes(plan)
     if allocation["num_nodes"] != expected_nodes:
         raise ValueError(
             f"iris.allocation.num_nodes={allocation['num_nodes']} does not match SkyRL role plan's "
@@ -315,7 +335,13 @@ def validate_iris_allocation(config: dict[str, Any]) -> IrisAllocationConfig:
             f"iris.allocation.gpus_per_node={allocation['gpus_per_node']} does not match SkyRL policy "
             f"placement ({policy.gpus_per_node})"
         )
-    return IrisAllocationConfig(**allocation)
+    validated = IrisAllocationConfig(**allocation)
+    return LaunchTopology(
+        num_nodes=validated.num_nodes,
+        gpus_per_node=validated.gpus_per_node,
+        gpu_variant=validated.gpu_variant,
+        role_topology=role_topology,
+    )
 
 
 def validate_launch_config(config: DictConfig) -> LaunchTopology:
@@ -343,7 +369,7 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
         RaySpillBackend(ray["spill_backend"]),
         ray["spill_dir"],
     )
-    allocation = validate_iris_allocation(raw)
+    topology = derive_launch_topology(raw)
     skyrl = raw["skyrl"]
     run = raw["run"]
     if run["mode"] == RunMode.TRAIN:
@@ -352,6 +378,17 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
     runtime = raw["runtime"]
     entrypoint = runtime["entrypoint"]
     registered_rl_entrypoint_module(entrypoint)
+    checkpoint = raw["inputs"]["starting_checkpoint"]
+    if checkpoint is not None:
+        if entrypoint in (RL_ENTRYPOINTS[RLEntrypoint.GENERATE], RL_ENTRYPOINTS[RLEntrypoint.TERMINAL_BENCH_GENERATE]):
+            raise ValueError(
+                "Generation cannot restore inputs.starting_checkpoint; inputs.model requires a Hugging Face model."
+            )
+        trainer = skyrl["trainer"]
+        if trainer["resume_mode"] != "latest":
+            raise ValueError("inputs.starting_checkpoint requires trainer.resume_mode=latest for automatic recovery")
+        if trainer["resume_path"] != checkpoint["uri"]:
+            raise ValueError("trainer.resume_path must match inputs.starting_checkpoint.uri")
     if (
         skyrl.get("generator", {}).get("weight_sync_transport") == WeightSyncTransport.EXPERT_BLOCK
         and skyrl.get("trainer", {}).get("placement", {}).get("colocate_all")
@@ -374,8 +411,4 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
     trainer_seed = skyrl.get("trainer", {}).get("seed")
     if trainer_seed != run["seed"]:
         raise ValueError(f"run.seed={run['seed']} does not match skyrl.trainer.seed={trainer_seed!r}")
-    return LaunchTopology(
-        num_nodes=allocation.num_nodes,
-        gpus_per_node=allocation.gpus_per_node,
-        gpu_variant=allocation.gpu_variant,
-    )
+    return topology

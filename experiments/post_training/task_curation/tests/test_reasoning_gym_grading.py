@@ -76,6 +76,12 @@ def test_generated_grade_fails_rather_than_scoring_when_generate_cannot_import(m
     assert result.diagnostics is not None and result.diagnostics["exit_code"] != 0
 
 
+def test_generated_prime_factorization_prose_scores_zero(machines):
+    task, _ = generated_task("prime_factorization", 0)
+    result = grade(task, reply("I need to find the prime factorization of 835."), machines, GRADING_MEMORY_MB)
+    assert (result.status, result.reward) == (Outcome.GRADED, 0.0), result
+
+
 def test_tasktrove_archive_grader_scores_with_the_images_reasoning_gym(machines):
     pipeline = RECIPES["tasktrove-reasoning-gym"]
     row = {"path": "reasoning-gym-d9f956ecd029.tar.gz", "task_binary": TASKTROVE_ARCHIVE.read_bytes()}

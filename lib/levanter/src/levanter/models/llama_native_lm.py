@@ -5,7 +5,6 @@
 
 import dataclasses
 import math
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional, cast
 
@@ -18,7 +17,7 @@ from haliax.jax_utils import maybe_rng_split
 from haliax.nn.scan import ScanCheckpointPolicy as NamedScanCheckpointPolicy
 from haliax.partitioning import round_axis_for_partitioning
 from haliax.state_dict import ModuleWithStateDictSerialization
-from jax.sharding import AbstractMesh, AxisType, Mesh, PartitionSpec as P, auto_axes, get_abstract_mesh, reshard
+from jax.sharding import AbstractMesh, AxisType, Mesh, PartitionSpec as P, get_abstract_mesh, reshard
 from jaxtyping import PRNGKeyArray
 from transformers import PreTrainedTokenizerBase
 from transformers import PretrainedConfig as HfConfig
@@ -28,10 +27,7 @@ from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.compat.hf_config import hf_rope_config
 from levanter.data.text.examples import grug_attention_mask_from_named
 from levanter.grug.attention import AttentionMask as RawAttentionMask
-from levanter.inference.page_table import PageBatchInfo, PageTableSpec
-from levanter.kernels.pallas.autotune_utils import named_sharding_of
-from levanter.layers.attention import AttentionBackend, AttentionMask, ragged_paged_attention
-from levanter.layers.kv_cache import KvPageCache, ListCache
+from levanter.layers.attention import AttentionBackend, AttentionMask
 from levanter.layers.scan_checkpoint import ScanCheckpointPolicy
 from levanter.layers.rotary import (
     DefaultRotaryEmbeddingsConfig,
@@ -49,46 +45,6 @@ from levanter.utils.activation import ActivationFunctionEnum
 _LEVANTER_MODEL_METADATA_KEY = "levanter_model"
 _NATIVE_CHECKPOINT_VERSION = 1
 _NATIVE_MODEL_TYPE = "llama_native"
-
-
-def _paged_attention(
-    q: jax.Array,
-    k: jax.Array,
-    v: jax.Array,
-    cache: KvPageCache,
-    batch_info: PageBatchInfo,
-    *,
-    model_axis: str | None,
-    sm_scale: float,
-) -> tuple[jax.Array, KvPageCache]:
-    # Named cache/reference math uses Auto axes; return to the native explicit
-    # layout at this shared infrastructure boundary, including donated pages.
-    def attend(query, keys, values, pages, info):
-        query = hax.named(query, ("position", "kv_head", "q_heads_per_group", "head_size"))
-        cache = KvPageCache(hax.named(pages, ("page", "slot", "kv_head", "head_size")))
-        with hax.axis_mapping({} if model_axis is None else {"kv_head": model_axis}, merge=False):
-            cache = cache.update(
-                info,
-                hax.named(keys, ("position", "kv_head", "head_size")),
-                hax.named(values, ("position", "kv_head", "head_size")),
-            )
-            output = ragged_paged_attention(
-                query,
-                cache.kv_pages,
-                info.seq_lens,
-                info.page_indices,
-                info.cu_q_lens,
-                info.num_seqs,
-                sm_scale=sm_scale,
-            )
-        return output.array, cache.kv_pages.array
-
-    # pyrefly: ignore[bad-assignment]  # auto_axes decorator overload erases the callable signature.
-    wrapped: Callable[..., tuple[jax.Array, jax.Array]] = auto_axes(
-        attend, out_sharding=(named_sharding_of(q), named_sharding_of(cache.kv_pages.array))
-    )
-    output, pages = wrapped(q, k, v, cache.kv_pages.array, batch_info)
-    return output, dataclasses.replace(cache, kv_pages=hax.named(pages, cache.kv_pages.axes))
 
 
 def _native_llama_sharding(placement: ModelPlacement) -> NativeLlamaSharding:
@@ -543,77 +499,6 @@ class NativeLlamaLmHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Nativ
         # The shared CE kernel partitions examples and requires a complete head
         # on each participant. Storage remains FSDP/tensor-parallel.
         return hax.named(reshard(self.native.get_lm_head(), P(None, None)), (self.Vocab, self.Embed))
-
-    def initial_cache(self, spec: PageTableSpec, *, dtype) -> ListCache[KvPageCache]:
-        """Allocate per-layer paged KV storage, replicated except for TP heads."""
-        model_axis = self.native.sharding.model_axis
-        model_size = 1 if model_axis is None else get_abstract_mesh().shape[model_axis]
-        if self.native.config.num_kv_heads % model_size:
-            raise ValueError("Paged native Llama requires KV heads divisible by tensor parallel size")
-        caches = []
-        with hax.axis_mapping({} if model_axis is None else {"kv_head": model_axis}, merge=False):
-            for _ in range(self.native.config.num_layers):
-                cache = KvPageCache.init(
-                    spec,
-                    Axis("kv_head", self.native.config.num_kv_heads),
-                    Axis("head_size", self.native.config.actual_head_dim),
-                    dtype=dtype,
-                )
-                pages = reshard(cache.kv_pages.array, P(None, None, model_axis, None))
-                caches.append(dataclasses.replace(cache, kv_pages=hax.named(pages, cache.kv_pages.axes)))
-        return ListCache(caches)
-
-    def decode(
-        self,
-        input_ids: NamedArray,
-        kv_cache: ListCache[KvPageCache],
-        batch_info: PageBatchInfo,
-        pos_ids: NamedArray,
-        *,
-        key=None,
-    ) -> tuple[NamedArray, ListCache[KvPageCache]]:
-        """Run packed causal prefill or decode using the existing paged engine.
-
-        The packed stream and page table are replicated over data axes; weights
-        retain FSDP storage and attention/cache heads retain tensor parallelism.
-        Positions are absolute within each sequence. Only the valid prefix in
-        ``batch_info`` updates cache; trailing padded logits are not sampled.
-        """
-        # Paged decode shares the public key callback, but this route has no stochastic operation.
-        del key
-        if input_ids.ndim != 1 or input_ids.axes[0].name != self.Pos.name or pos_ids.axes != input_ids.axes:
-            raise ValueError("Paged native Llama expects matching flat position token/position arrays")
-        if len(kv_cache) != self.native.config.num_layers:
-            raise ValueError("Paged native Llama requires one cache per decoder layer")
-        layout = dataclasses.replace(self.native.sharding, batch_axes=())
-        tokens = reshard(input_ids.array[None], layout.tokens)
-        positions = reshard(pos_ids.array[None], layout.tokens)
-        hidden = self.native.embed_tokens(tokens, sharding=layout)
-        config = self.native.config
-        count = input_ids.axes[0].size
-        caches = []
-        for index in range(config.num_layers):
-            layer = self.native.layers.get_layer(index)
-            q, k, v = layer.self_attn.project_qkv(layer.input_layernorm(hidden), positions, sharding=layout)
-            q = q.reshape(count, config.num_kv_heads, config.num_heads // config.num_kv_heads, config.actual_head_dim)
-            k = k.reshape(count, config.num_kv_heads, config.actual_head_dim)
-            v = v.reshape(count, config.num_kv_heads, config.actual_head_dim)
-            output, cache = _paged_attention(
-                q,
-                k,
-                v,
-                kv_cache[index],
-                batch_info,
-                model_axis=layout.model_axis,
-                sm_scale=1 / math.sqrt(config.actual_head_dim),
-            )
-            output = output.reshape(1, count, config.num_heads, config.actual_head_dim)
-            attn = layer.self_attn.project_output(output, dtype=hidden.dtype, sharding=layout)
-            hidden = layer.finish_attention(hidden, attn, sharding=layout)
-            caches.append(cache)
-        logits = self.native.unembed(self.native.norm(hidden), sharding=layout)
-        logits = logits.reshape(count, self.Vocab.size)
-        return hax.named(logits, (input_ids.axes[0], self.Vocab)), ListCache(caches)
 
     def compute_next_token_loss(
         self,

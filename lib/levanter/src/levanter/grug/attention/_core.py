@@ -323,6 +323,11 @@ def _tpu_splash_attention(
     v: Float[Array, "B K Hkv D"],
     mask: AttentionMask | jax.Array | None,
 ) -> Float[Array, "B Q Hq D"]:
+    if isinstance(mask, AttentionMask) and mask.fa4_bounds is not None:
+        raise NotImplementedError(
+            "TPU Splash attention does not support fa4_bounds; select a static sliding_window mask."
+        )
+
     # On TPU, keep Splash's backward query scale from folding into the BF16 RoPE multiply.
     # Changing the rounding order gave ~0.34% relative L2 query gradient error on v4-16.
     # See https://github.com/dlwh/marin/pull/67 for the paired comparison.
@@ -406,6 +411,15 @@ def _tpu_splash_attention(
 
         if mask.segment_ids is not None:
             q_segment_ids, kv_segment_ids = mask.segment_ids
+            # Each query shard needs its local document IDs; KV stays gathered with K/V.
+            q_seg_axes = (
+                PartitionSpec(q_pspec[0], q_pspec[2]) if q_segment_ids.ndim == 2 else PartitionSpec(q_pspec[2])
+            )
+            kv_seg_axes = (
+                PartitionSpec(k_pspec[0], k_pspec[2]) if kv_segment_ids.ndim == 2 else PartitionSpec(k_pspec[2])
+            )
+            q_segment_ids = reshard(q_segment_ids, NamedSharding(mesh, q_seg_axes))
+            kv_segment_ids = reshard(kv_segment_ids, NamedSharding(mesh, kv_seg_axes))
             q_seg_sharding = _named_sharding_of(q_segment_ids, label="segment_ids.q")
             kv_seg_sharding = _named_sharding_of(kv_segment_ids, label="segment_ids.kv")
             segment_id_lowering = lower_splash_segment_ids(

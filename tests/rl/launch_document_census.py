@@ -7,6 +7,7 @@ from functools import partial
 from itertools import product
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from marin.execution.artifact import write_artifact
 from marin.execution.build_context import BuildContext, VersionCodex, build_context
@@ -15,14 +16,26 @@ from marin.rl.skyrl import SkyRLRun
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.evaluation.micro210 import Micro210Run, micro210_step
+from experiments.evaluation.micro210_policy import Micro210Model
 from experiments.post_training import async_rl, iceball_micro, skyrl_port_smoke, snowball_online_eagle
 from experiments.post_training.cat_count_canary import launcher as canary
 from experiments.post_training.curriculum_rl import launch as curriculum
 from experiments.post_training.inventory import train_quick_loop as inventory
 from experiments.post_training.mismatch_probe import launch as mismatch
 from experiments.post_training.task_sessions import validation
+from tests.rl.micro210_fixture import policy_fixture_reference
 
 VERSION = "2026.10.24"
+
+
+def _micro210_step(artifact_root):
+    with patch("experiments.evaluation.micro210_policy.POLICY_REFERENCE", policy_fixture_reference()):
+        return micro210_step(
+            Micro210Model(str(artifact_root / "policy"), "sha256:" + "a" * 64, "test/tokenizer", "b" * 40),
+            name="micro210/census",
+            version=VERSION,
+        )
 
 
 def _curriculum_step(scale, policy, arm) -> ArtifactStep[SkyRLRun]:
@@ -66,6 +79,7 @@ def launch_builders(
 ) -> dict[str, Callable[[], ArtifactStep[SkyRLRun]]]:
     """Enumerate current public presets and representative document-changing CLI options."""
     builders = {}
+    builders["micro210/canonical"] = partial(_micro210_step, artifact_root)
     for scale, policy, arm in product(curriculum.SCALES, curriculum.POLICIES.values(), curriculum.ARMS.values()):
         name = f"curriculum/{scale}/{policy.label}/{arm.name}"
         if (policy is curriculum.SNOWBALL_POLICY) != scale.startswith("snowball-"):
@@ -172,6 +186,8 @@ def render_launch_census(artifact_root: Path) -> tuple[dict[str, str], dict[str,
                 step = build()
                 _seed_dependency_metadata(step, artifact_root)
                 config = materialized_config(step, str(artifact_root))
+                if isinstance(config, Micro210Run):
+                    config = config.skyrl
                 documents[name] = config.launch_config_yaml
             except Exception as error:
                 failures[name] = f"{type(error).__name__}: {error}"

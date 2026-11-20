@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 from marin.external_dependencies import TPU_INFERENCE_FORK_REQUIREMENT, VLLM_FORK_REQUIREMENT, VLLM_GPU_RELEASE
+from marin.inference.vllm_release import load_vllm_gpu_release
 from rigging.config_discovery import find_project_root
 
 
@@ -79,7 +80,8 @@ def test_gpu_release_pin_matches_its_descriptor():
     assert generated == pinned
 
 
-def test_render_gpu_release_toml_reencodes_the_wheel_url_and_round_trips(tmp_path):
+@pytest.mark.parametrize("profile_format", ["toml", "manifest"])
+def test_release_loaders_preserve_published_wheel_identity(tmp_path, profile_format):
     update_external = _update_external()
     rendered = update_external.render_gpu_release_toml(_promoted_manifest())
 
@@ -88,14 +90,28 @@ def test_render_gpu_release_toml_reencodes_the_wheel_url_and_round_trips(tmp_pat
     assert "%2Bmarin.abcdef012345-" in rendered
     assert "+marin.abcdef012345-" not in rendered
 
-    path = tmp_path / "gpu.toml"
-    path.write_text(rendered)
-    release = update_external.load_vllm_gpu_release(path)
+    path = tmp_path / f"gpu.{profile_format}"
+    if profile_format == "toml":
+        path.write_text(rendered)
+        release = update_external.load_vllm_gpu_release(path)
+    else:
+        path.write_text(json.dumps(_promoted_manifest()))
+        release = load_vllm_gpu_release(path)
+    assert release is not None
     assert release.release_tag == "marin-vllm-gpu-20260101-abcdef012345"
     assert release.source_commit == "a" * 40
     assert release.torch_backend == "cu130"
     assert release.torch_version == "2.11.0+cu130"
     assert [wheel.architecture for wheel in release.wheels] == ["x86_64"]
+
+
+def test_runtime_release_profile_rejects_mislabeled_wheels(tmp_path):
+    payload = _promoted_manifest()
+    payload["distribution"]["version"] = "0.0.0+wrong"
+    path = tmp_path / "gpu.json"
+    path.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="version"):
+        load_vllm_gpu_release(path)
 
 
 @pytest.mark.parametrize(
@@ -104,21 +120,23 @@ def test_render_gpu_release_toml_reencodes_the_wheel_url_and_round_trips(tmp_pat
         lambda m: m["release"].__setitem__("status", "candidate"),
         lambda m: m["validation"].__setitem__("status", "pending"),
         lambda m: m["release"].__setitem__("repository", "someone-else/vllm"),
+        lambda m: m["abi"].update(cuda_variant="cu133", torch_version="2.14.1+cu133"),
     ],
-    ids=["unpromoted", "unvalidated", "foreign-repository"],
+    ids=["unpromoted", "unvalidated", "foreign-repository", "unsupported-cuda"],
 )
-def test_render_gpu_release_toml_refuses_an_unpromoted_manifest(mutation):
+def test_release_loaders_refuse_an_unusable_manifest(tmp_path, mutation):
     update_external = _update_external()
     manifest = _promoted_manifest()
     mutation(manifest)
     with pytest.raises(ValueError):
         update_external.render_gpu_release_toml(manifest)
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError):
+        load_vllm_gpu_release(path)
 
 
 def test_promote_gpu_release_keeps_the_pin_when_the_rendered_wheel_fails_validation(tmp_path, monkeypatch):
-    # A manifest can clear the render-time status/repository gate yet still carry a wheel
-    # invariant (here a malformed SHA-256) that only the loader rejects. The existing pin
-    # must survive that failure rather than be overwritten with an invalid descriptor.
     update_external = _update_external()
     pin = tmp_path / "gpu.toml"
     original = 'release_tag = "keep-me"\n'

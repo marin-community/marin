@@ -48,6 +48,7 @@ from iris.testing.k8s import (
     make_batch,
     make_pod,
     make_run_req,
+    observe_pod_update,
     pod_config,
     populate_node,
     populate_pod,
@@ -57,6 +58,34 @@ from rigging.timing import Duration
 # ---------------------------------------------------------------------------
 # sync(): tasks_to_run
 # ---------------------------------------------------------------------------
+
+
+def test_kueue_assigned_topology_is_exposed_without_unrelated_selectors():
+    update = observe_pod_update(
+        {
+            "metadata": {"annotations": {"kueue.x-k8s.io/podset-required-topology": "ds.coreweave.com/nvlink.domain"}},
+            "spec": {
+                "nodeName": "host-8",
+                "nodeSelector": {
+                    "kubernetes.io/hostname": "host-8",
+                    "node.kubernetes.io/instance-type": "gb200-4x",
+                },
+            },
+            "status": {"phase": "Running"},
+        },
+        node={
+            "metadata": {
+                "name": "host-8",
+                "labels": {
+                    "ds.coreweave.com/nvlink.domain": "rack-b",
+                    "kubernetes.io/hostname": "host-8",
+                    "node.kubernetes.io/instance-type": "gb200-4x",
+                },
+            },
+        },
+    )
+    assert update.topology == {"ds.coreweave.com/nvlink.domain": "rack-b", "kubernetes.io/hostname": "host-8"}
+    assert update.node_name == "host-8"
 
 
 def test_sync_applies_pods_for_tasks_to_run(provider, k8s):

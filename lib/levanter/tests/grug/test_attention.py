@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import functools
 import math
 
 import haliax as hax
@@ -8,7 +9,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from jax.sharding import AbstractMesh, AxisType, NamedSharding, use_abstract_mesh
+from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel
+from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
 
 from levanter.grug.attention import (
@@ -19,6 +21,8 @@ from levanter.grug.attention import (
     reference_attention,
     token_validity_from_attention_mask,
 )
+
+from levanter.testing.devices import use_cpu_devices
 
 
 from levanter.layers.attention import AttentionMask as NamedAttentionMask
@@ -70,6 +74,16 @@ def test_reference_attention_applies_the_window_in_fa4_bounds():
     expected = reference_attention(q, k, v, windowed, logits_dtype=jnp.float32)
 
     np.testing.assert_allclose(actual, expected, atol=2e-5, rtol=2e-5)
+
+
+def test_splash_rejects_per_layer_fa4_bounds_at_trace_time():
+    q, k, v = _make_qkv(batch=1, q_len=256, k_len=256, q_heads=2, kv_heads=1)
+    local_mask = AttentionMask.causal(sliding_window=128)
+    lower_bounds, valid = fa4_cute_segment_bounds(local_mask, batch_size=1, seq_len=256, sliding_window=128)
+    layer_mask = AttentionMask.causal().with_fa4_bounds(lower_bounds, valid)
+
+    with pytest.raises(NotImplementedError, match="fa4_bounds"):
+        jax.jit(lambda q, k, v: attention(q, k, v, layer_mask, implementation="tpu_splash"))(q, k, v)
 
 
 @pytest.mark.tpu
@@ -140,6 +154,34 @@ def test_splash_head_sharding_partitions_sparse_mask_metadata():
     # mask groups must not reach a shard-local Splash invocation.
     assert metadata
     assert all(aval.shape[0] == 1 for aval in metadata)
+
+
+@pytest.mark.tpu
+def test_real_tpu_splash_local_and_global_masks_match_reference():
+    if jax.default_backend() != "tpu":
+        pytest.skip("Splash attention requires a TPU backend.")
+
+    mesh = jax.sharding.Mesh(
+        np.asarray(jax.devices()).reshape(1, -1),
+        ("data", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit),
+    )
+    sharding = NamedSharding(mesh, P(None, None, "model", None))
+    q_key, k_key, v_key = jax.random.split(jax.random.PRNGKey(0), 3)
+    q = jax.device_put(jax.random.normal(q_key, (1, 256, 8, 128), dtype=jnp.float32) * 0.02, sharding)
+    k = jax.device_put(jax.random.normal(k_key, (1, 256, 8, 128), dtype=jnp.float32) * 0.02, sharding)
+    v = jax.device_put(jax.random.normal(v_key, (1, 256, 8, 128), dtype=jnp.float32) * 0.02, sharding)
+
+    expected_outputs = []
+    with jax.set_mesh(mesh):
+        for mask in (AttentionMask.causal(sliding_window=128), AttentionMask.causal()):
+            actual = jax.jit(lambda q, k, v: attention(q, k, v, mask, implementation="tpu_splash"))(q, k, v)
+            expected = jax.jit(lambda q, k, v: reference_attention(q, k, v, mask, logits_dtype=jnp.float32))(q, k, v)
+
+            np.testing.assert_allclose(actual, expected, atol=1e-3, rtol=1e-3)
+            expected_outputs.append(expected)
+
+    assert not np.allclose(expected_outputs[0], expected_outputs[1], atol=1e-3, rtol=1e-3)
 
 
 @pytest.mark.tpu
@@ -397,3 +439,50 @@ def test_xla_flash_attention_broadcasts_shared_segment_ids_across_the_batch():
     shared = jnp.where(jnp.arange(q.shape[1]) < 40, 0, 1)[None, :]  # one row of segment ids for a batch of 2
     mask = AttentionMask.causal(sliding_window=20).with_segment_ids(shared)
     _assert_matches_reference(q, k, v, mask, block_size=16)
+
+
+@pytest.mark.multidevice
+@pytest.mark.timeout(180)
+@pytest.mark.parametrize("window", [None, 128])
+def test_splash_packed_context_shards_match_unsharded_output(monkeypatch, window):
+    # Interpret the actual Pallas kernel on CPU; keep segment/mask lowering unchanged.
+    monkeypatch.setattr(
+        splash_attention_kernel,
+        "make_splash_mha",
+        functools.partial(splash_attention_kernel.make_splash_mha, interpret=True),
+    )
+    rng = np.random.default_rng(73)
+    q, k, v = [rng.standard_normal((1, 512, 2, 128), dtype=np.float32) * 0.2 for _ in range(3)]
+    # Document boundaries cross context shard boundaries at 128, 256, and 384.
+    segments = np.asarray([[0] * 96 + [1] * 204 + [2] * 148 + [3] * 64], dtype=np.int32)
+    outputs = {}
+    with use_cpu_devices(4):
+        for context, packed in ((1, True), (4, True), (4, False)):
+            mesh = Mesh(
+                np.asarray(jax.devices("cpu")[:context]).reshape(1, 1, 1, context, 1),
+                ("replica_dcn", "data", "expert", "context", "model"),
+                axis_types=(AxisType.Explicit,) * 5,
+            )
+            batch_axes = ("replica_dcn", "data", "expert")
+            with jax.set_mesh(mesh):
+                q_sharding = NamedSharding(mesh, P(batch_axes, "context" if context > 1 else None, None, None))
+                kv_sharding = NamedSharding(mesh, P(batch_axes, None, None, None))
+                segment_sharding = NamedSharding(mesh, P(batch_axes, None))
+                args = (
+                    jax.device_put(q, q_sharding),
+                    jax.device_put(k, kv_sharding),
+                    jax.device_put(v, kv_sharding),
+                    jax.device_put(segments, segment_sharding),
+                )
+
+                def forward(q, k, v, segment_ids):
+                    mask = AttentionMask(
+                        is_causal=True,
+                        sliding_window=window,
+                        segment_ids=(segment_ids, segment_ids) if packed else None,
+                    )
+                    return attention(q, k, v, mask, implementation="tpu_splash")
+
+                outputs[context, packed] = np.asarray(jax.jit(forward)(*args))
+    np.testing.assert_allclose(outputs[4, True], outputs[1, True], atol=1e-3, rtol=1e-3)
+    assert np.max(np.abs(outputs[4, True] - outputs[4, False])) > 1e-2

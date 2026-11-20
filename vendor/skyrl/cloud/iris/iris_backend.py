@@ -36,7 +36,7 @@ from iris.rpc import job_pb2
 from omegaconf import DictConfig, OmegaConf
 from rigging.config_discovery import find_project_root
 
-from cloud.iris.launch_config import SubmissionMode, load_launch_config
+from cloud.iris.launch_config import SubmissionMode, derive_launch_topology, load_launch_config
 from cloud.iris.launch import LaunchOutcome
 from cloud.iris.export_hf_checkpoint import export_terminal_policy
 from cloud.iris.ray_storage import (
@@ -282,6 +282,7 @@ def _iris_submission_state(config_path: Path, config: DictConfig) -> SimpleNames
         num_nodes=int(allocation["num_nodes"]),
         gpus_per_node=int(allocation["gpus_per_node"]),
         gpu_variant=allocation["gpu_variant"],
+        role_topology=derive_launch_topology(raw).role_topology,
         cpu=float(allocation["cpu"]),
         memory=allocation["memory"],
         disk=allocation["disk"],
@@ -644,10 +645,6 @@ def _resolve_daytona_rl_api_key() -> str:
     )
 
 
-def _effective_gdn_backend(args: SimpleNamespace) -> str:
-    return str(args.config.skyrl.get("generator", {}).get("gdn_backend", "torch")).lower()
-
-
 def _rl_config_uses_daytona(config: DictConfig) -> bool:
     """Return whether the configured task backend requires Daytona credentials."""
     uses_harbor = str(config.runtime.entrypoint) in {
@@ -738,7 +735,7 @@ def _build_task_shell(
     controller_cmd: list[str],
     pythonpath: str,
 ) -> list[str]:
-    """Wrap the node controller with per-pod storage and cache setup."""
+    """Wrap the node controller with per-pod storage setup."""
     ctrl = shlex.join(controller_cmd)
     # Run outside task_runtime so every pod establishes Ray's filesystem contract
     # before importing or starting any MarinSkyRL controller code. The controller
@@ -746,52 +743,20 @@ def _build_task_shell(
     spill_preflight = resolve_ray_spill_target(
         args.rendezvous_dir, args.ray_spill_backend, args.ray_spill_dir
     ).shell_preflight()
-    # TileLang JIT-cache warm-start shim for GDN/FlashQLA runs only.
-    # generator.gdn_backend=flashqla lazily JIT-compiles the FlashQLA GatedDeltaNet TileLang
-    # kernels on the first GPU forward into the node-local, ephemeral TileLang cache.
-    # This brackets the train command with a per-pod, per-NODE cache sync (the bash
-    # runs once per task pod / node, and
-    # TileLang's cache is node-local, so one --down warms all 8 local GPU workers):
-    #   --down BEFORE the controller -> pulls the keyed warm cache (seed cache.tgz +
-    #          incremental per-hash-dir objects) into TILELANG_CACHE_DIR so TileLang
-    #          hash-matches and skips the cold compile. A miss is a warn+continue no-op.
-    #   --up   at EXIT (bash EXIT trap; fires on normal completion AND a `set -e`/crash
-    #          exit) -> uploads NEWLY-compiled hash-dirs as per-hash objects (race-free
-    #          across the ~16 writers — content-addressed, no cache.tgz overwrite).
-    # The shim never fails the job (best-effort; exits 0 even on S3 error).
-    # TILELANG_CACHE_DIR is exported (defaulting to TileLang's own default) so the shim
-    # and the trainer's TileLang agree on the location; a config-set value wins.
-    # TILELANG_CACHE_MODEL_PATH lets the shim derive the model component of the key.
-    sync_py = "cloud/iris/tilelang_cache_sync.py"
-    tl_down = f"{RL_PYTHON} {sync_py} --down || true"
-    tl_up = f"{RL_PYTHON} {sync_py} --up || true"
-    # The controller is run as a BACKGROUND child + `wait` (not `exec`) so we can
-    # (a) run --up at exit via the bash EXIT trap and (b) FORWARD SIGTERM/SIGINT to
-    # the controller — preserving the old `exec` graceful-shutdown path (rank-0's Ray
-    # teardown + nonzero exit on preemption) that a plain child would lose. `wait` is
-    # interrupted by the trapped signal (rc>128); we re-`wait` to reap the child's
-    # real exit code after its forwarded-TERM shutdown.
-    flashqla_enabled = _effective_gdn_backend(args) == "flashqla"
-    gdn_branch = (
-        f'export TILELANG_CACHE_DIR="${{TILELANG_CACHE_DIR:-/root/.tilelang/cache}}"; '
-        f"export TILELANG_CACHE_MODEL_PATH={shlex.quote(args.model_path)}; "
-        f"{tl_down}; "
-        f"trap {shlex.quote(tl_up)} EXIT; "
-        f'trap \'[ -n "$_child" ] && kill -TERM "$_child" 2>/dev/null\' TERM INT; '
-        f"set +e; {ctrl} & _child=$!; "
-        f'wait "$_child"; _rc=$?; '
-        f'if [ $_rc -gt 128 ]; then wait "$_child" 2>/dev/null; _rc=$?; fi; '
-        f"exit $_rc"
+    gate_report_prefix = f"{args.rendezvous_dir.rstrip('/')}/interconnect-gate"
+    transport_gate = (
+        f"{RL_PYTHON} {APP_DIR}/experiments/post_training/nccl_transport_probe.py"
+        " --mode gate --gate-coverage all-gpus --pynccl-init"
+        f" --gate-report-prefix {shlex.quote(gate_report_prefix)}; "
     )
-    if not flashqla_enabled:
-        gdn_branch = f"exec {ctrl}"
     bash = (
         f"set -e; {spill_preflight}cd {SKYRL_HOME}; "
         f"export SKYRL_HOME={shlex.quote(SKYRL_HOME)}; "
         f"source {shlex.quote(MARINSKYRL_ACTIVATION_FILE)}; "
         f"export PYTHONPATH={shlex.quote(pythonpath)}:${{PYTHONPATH:-}}; "
         f"export VLLM_USE_V1=1; "
-        f"{gdn_branch}"
+        f"{transport_gate}"
+        f"exec {ctrl}"
     )
     return ["bash", "-c", bash]
 
@@ -902,11 +867,13 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
         disk=args.disk,
     )
 
-    # Multi-node gang: replicas=num_nodes; for GPUs with replicas>1 this returns
-    # CoschedulingConfig(group_by="leafgroup") — co-schedule all nodes on one IB
-    # leaf fabric, atomically (Kueue gang admission on cw-us-east-02a).
     replicas = args.num_nodes
-    coscheduling = _gpu_multinode(args.gpu_variant, args.gpus_per_node, replicas)
+    if args.role_topology is not None:
+        coscheduling = CoschedulingConfig(
+            group_by="nvlink.domain", group_sizes=args.role_topology.locality.group_sizes
+        )
+    else:
+        coscheduling = _gpu_multinode(args.gpu_variant, args.gpus_per_node, replicas)
 
     resources_proto = resources.to_proto()
     # --target-cluster (federated submission) appends a `cluster EQ <peer>` constraint

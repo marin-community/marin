@@ -1,4 +1,5 @@
 n_concurrent_trials: 16
+trial_attempt_timeout_sec: 5400
 n_attempts: 3
 release_trial_payloads_in_memory: true
 retry:
@@ -17,7 +18,6 @@ retry:
   - AgentSetupTimeoutError
   - DaytonaSandboxStopError
   - DaytonaProcessError
-  - TrialTimeoutError
   - ArtifactWriteTimeoutError
   - Tau3RuntimeInfrastructureError
   - Tau3TargetInfrastructureError

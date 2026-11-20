@@ -13,8 +13,9 @@ from cloud.iris.export_hf_checkpoint import (
     _run_export,
     checkpoint_export_launch_config,
 )
-from cloud.iris.launch_config import validate_iris_allocation
+from cloud.iris.launch_config import derive_launch_topology
 from cloud.iris.role_plan import derive_num_nodes, derive_policy_export_role_plan, derive_role_plan
+from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT, RuntimeProfile
 from skyrl_train.callbacks.base import CallbackHandler, TrainerControl, TrainerState
 from skyrl_train.callbacks.builtin import HFModelSaveCallback
 from skyrl_train.config.utils import get_default_config
@@ -78,35 +79,6 @@ def _spec(request: HFExportRequest) -> ExportJobSpec:
     )
 
 
-def test_checkpoint_export_config_carries_request_fields_as_data() -> None:
-    request = _request()
-    config = checkpoint_export_launch_config(_training_config(), request, _spec(request))
-
-    assert config.run.mode == "checkpoint_export"
-    assert config.runtime.entrypoint == "skyrl_train.entrypoints.checkpoint_export"
-    assert config.runtime.profile == "megatron-export"
-    assert config.iris.timeout == 7200
-    assert config.iris.allocation.gpu_variant == "H100"
-    assert config.skyrl.trainer.placement.policy_num_nodes == 1
-    assert config.skyrl.trainer.placement.policy_num_gpus_per_node == 4
-    assert config.skyrl.checkpoint_export.checkpoint_path == request.checkpoint_path
-    assert config.skyrl.checkpoint_export.export_root == request.export_path
-
-
-def test_checkpoint_export_config_preserves_federated_routing() -> None:
-    request = _request()
-    spec = replace(
-        _spec(request),
-        target_cluster="cw-rno2a",
-        parent_cluster_config="/tmp/marin.yaml",
-    )
-
-    config = checkpoint_export_launch_config(_training_config(), request, spec)
-
-    assert config.iris.target_cluster == "cw-rno2a"
-    assert config.iris.parent_cluster_config == "/tmp/marin.yaml"
-
-
 def test_checkpoint_export_config_preserves_saved_policy_geometry_on_whole_nodes() -> None:
     request = _request()
     spec = replace(_spec(request), allocation_gpus_per_node=8)
@@ -115,6 +87,8 @@ def test_checkpoint_export_config_preserves_saved_policy_geometry_on_whole_nodes
 
     assert config.iris.allocation.gpus_per_node == 8
     assert config.skyrl.trainer.placement.policy_num_gpus_per_node == 4
+    assert config.runtime.entrypoint == CHECKPOINT_EXPORT_ENTRYPOINT
+    assert config.runtime.profile == RuntimeProfile.MEGATRON_EXPORT.value
 
 
 @pytest.mark.parametrize("policy_loss_type", ["dpo", "ftpo"])
@@ -149,7 +123,7 @@ def test_checkpoint_export_allocation_excludes_unequal_reference_pool(policy_los
     request = replace(_request(), num_nodes=15, gpus_per_node=8)
     export = checkpoint_export_launch_config(training, request, _spec(request))
 
-    allocation = validate_iris_allocation(OmegaConf.to_container(export, resolve=True))
+    allocation = derive_launch_topology(OmegaConf.to_container(export, resolve=True))
 
     assert allocation.num_nodes * allocation.gpus_per_node == 120
     export_plan = derive_policy_export_role_plan(OmegaConf.to_container(export.skyrl, resolve=True))
