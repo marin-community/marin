@@ -187,8 +187,11 @@ def process_image_cache(directory: Path, authfile: Path | None, policy: Path | N
     return ImageCache(directory.resolve(), authfile=authfile, policy=policy)
 
 
-def _run(*args: str) -> bytes:
+def _run(*args: str, log_path: Path | None = None) -> bytes:
     result = subprocess.run(args, capture_output=True)
+    if log_path is not None:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_bytes(result.stdout + result.stderr)
     if result.returncode:
         raise RuntimeError(f"{' '.join(args[:2])} failed: {result.stderr.decode(errors='replace')[-2000:]}")
     return result.stdout
@@ -307,6 +310,7 @@ def prepare_image(
     *,
     authfile: Path | None = None,
     policy: Path | None = None,
+    build_log: Path | None = None,
 ) -> PreparedImage:
     """Copy or build an image and retain its selected platform by manifest digest.
 
@@ -315,6 +319,8 @@ def prepare_image(
     verified locally. Converted manifests and source indexes retain a digest-verified
     source chain with identical configuration and ordered layers. A signature policy
     requires a fresh verified copy instead.
+
+    ``build_log`` preserves complete Docker build output, including failed builds.
     """
     cache.mkdir(parents=True, exist_ok=True)
     if isinstance(source, RegistryImage) and ("://" in source.reference or not source.reference.strip()):
@@ -362,8 +368,11 @@ def prepare_image(
                     "-t",
                     tag,
                     str(source.context),
+                    log_path=build_log,
                 )
                 source_ref = f"docker-daemon:{tag}"
+                if daemon_host := os.environ.get("DOCKER_HOST"):
+                    skopeo_args.extend(("--src-daemon-host", daemon_host))
                 _run(*skopeo_args, source_ref, f"oci:{layout}:{OCI_TAG}")
             finally:
                 subprocess.run(("docker", "image", "rm", tag), capture_output=True)
