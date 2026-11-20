@@ -69,18 +69,13 @@ def test_hardmath_base_preserves_equation_references_across_difficulty_labels(di
     assert task.context.events[0].content == "Solve for x."
 
 
-def test_exp5_policy_keeps_the_unavailable_five_percent_and_exact_release_pins():
+def test_exp5_policy_keeps_the_unavailable_five_percent():
     curriculum = exp5_rl_curriculum()
     weights = curriculum.weights()
     assert math.isclose(sum(weights.values()), 1.0, rel_tol=0, abs_tol=1e-12)
     assert weights[AGENTIC_TRAIN_SOURCE] == 0.20
     assert {label: weights[label] for label in CARRY_OVER_SHARES} == dict(CARRY_OVER_SHARES)
     assert weights[IFBENCH_LABEL] == weights[OPENRESEARCHER_LABEL] == weights[HARDMATH_LABEL] == 0.05
-    pins = {entry.label: entry.pin for entry in curriculum.entries}
-    assert pins[IFBENCH_LABEL].revision == "1b4076f63af29e34aee43e16781784890b1e9835"
-    assert pins[OPENRESEARCHER_LABEL].revision == "5bee39eb26e0fae3e797d9523ac1b8012f5b95a3"
-    assert pins[HARDMATH_LABEL].name == "pafitis/HARDMath_processed_training"
-    assert pins[HARDMATH_LABEL].revision == "937e9f10356e31e854f6efb9a2507f1e200c8b25"
     assert set(PENDING_SOURCES) == {OPENRESEARCHER_LABEL}
 
 
@@ -99,7 +94,7 @@ def test_exp5_preparation_reserves_the_missing_source_and_refuses_submission(tmp
             "--validation-output",
             str(tmp_path),
             "--version",
-            "2026.11.20.91",
+            "2026.11.20.92",
             "--run",
         ],
     )

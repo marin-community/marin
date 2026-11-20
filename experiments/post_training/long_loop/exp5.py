@@ -188,10 +188,7 @@ def main(round_path: Path, source_revision: str, validation_output: Path) -> Art
             "remat_implementation": "Native Snowball applies jax.checkpoint to every scanned layer",
             "special_token_lr_reason": "Restore R1 sqrt(32); the 2026-11-20 user decision reverses the 1.0 ruling",
             "memory_fit": "Unmeasured; requires execution on the requested GPU mesh",
-            "native_forward_blocker": (
-                "R1 omits the expert axis; current native Snowball forward partition specs still name it. "
-                "Tiny CPU abstract forward fails before model execution."
-            ),
+            "native_axis_adaptation": "Explicit expert: 1 preserves R1 parallelism and satisfies native partition specs",
         },
         "initial_eval_inputs": {"prefix": INITIAL_EVAL_INPUTS, "files": [asdict(pin) for pin in INITIAL_EVAL_FILES]},
         "recipe_schema_migrations": [
