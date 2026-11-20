@@ -133,11 +133,12 @@ counts and native checkpoint metadata; check the completed HF export only when r
 A missing verifier result is an evaluation error, not a wrong answer; report coverage with scores.
 
 Record the source revision, selection identity, initializer, and run version.
-Report the quick-loop total as Iris coordinator submission-to-completion time
-minus baseline validation (`startup/eval_before_train` at step 0) and final
-validation (`timing/eval` at the last step). This total includes queueing,
-startup, training, and checkpointing. Record the raw Iris wall time and both
-validation durations alongside the total so the calculation can be checked.
+Use `elapsed_excluding_eval_seconds` from the SkyRL `Training run completed`
+log as the quick-loop total. It measures trainer setup through shutdown,
+including model initialization, training, and checkpointing, and subtracts
+validation time. The timer starts after Iris queueing and provisioning.
+For phase breakdowns, use `startup/eval_before_train` at step 0 and
+`timing/eval` at the last step.
 
 For image-backed tasks, use the selection's task and grader requirements to
 identify where Daytona runs. The quick loop can use the Daytona eval account

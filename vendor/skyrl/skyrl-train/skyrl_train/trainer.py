@@ -301,6 +301,7 @@ class RayPPOTrainer:
         self.all_metrics = {}
         self.all_timings = {}
         self.all_startup_timings = {}
+        self.evaluation_wall_time = 0.0
         self._checkpoint_save_failures = 0.0
         self._ftpo_stopped = False
         self._shutdown_complete = False
@@ -1631,6 +1632,7 @@ class RayPPOTrainer:
             self.context.resume()
 
     async def _evaluate_and_log(self, state: TrainerState, *, commit: bool) -> None:
+        started = time.monotonic()
         async with self._evaluation_session() as pool:
             async with asyncio.TaskGroup() as tasks:
                 native = tasks.create_task(self.eval(evaluation_pool=pool))
@@ -1649,6 +1651,7 @@ class RayPPOTrainer:
         self._log_metrics_stdout(eval_metrics, step=self.global_step, kind="eval")
         self.tracker.log(eval_metrics, step=self.global_step, commit=commit)
         self._last_evaluated_step = self.global_step
+        self.evaluation_wall_time += time.monotonic() - started
 
     async def _run_pretraining_evaluation(self, state: TrainerState) -> None:
         # Pre-step evaluation must not be mixed into the first optimizer step's inclusive timers.
