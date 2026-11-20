@@ -3,6 +3,7 @@
 
 import hashlib
 import json
+import re
 import sys
 from contextlib import nullcontext
 from dataclasses import replace
@@ -24,6 +25,7 @@ from transformers import PreTrainedTokenizerFast
 
 from experiments.evaluation.judge_config import MICRO210_JUDGE
 from experiments.evaluation.micro210 import (
+    PREPARED_INPUTS,
     PREPARED_INPUTS_VERSION,
     ServingProfileName,
     micro210_step,
@@ -31,6 +33,8 @@ from experiments.evaluation.micro210 import (
     validate_judge_availability,
 )
 from experiments.evaluation.micro210_policy import (
+    LEGACY_POLICY_REFERENCE,
+    POLICY_REFERENCE,
     Micro210Model,
     micro210_evaluation,
     runtime_policy_config,
@@ -44,6 +48,11 @@ def policy_reference(monkeypatch):
     reference = policy_fixture_reference()
     monkeypatch.setattr("experiments.evaluation.micro210_policy.POLICY_REFERENCE", reference)
     return reference
+
+
+def test_default_policy_references_pin_immutable_hugging_face_revisions():
+    for reference in (LEGACY_POLICY_REFERENCE, POLICY_REFERENCE):
+        assert re.fullmatch(r"hf://datasets/open-athena/micro210-policy@[0-9a-f]{40}/policy.json", reference.uri)
 
 
 @pytest.mark.parametrize(
@@ -295,6 +304,20 @@ def test_new_prepared_inputs_do_not_reuse_old_policy_provenance(
     assert old_record.config == {"sha256": previous_digest}
     assert new_record.source == str(new_inputs)
     assert new_record.config == {"sha256": "fixture-tasks"}
+
+
+def test_prepared_inputs_adopt_the_pinned_hugging_face_source(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    step = micro210_step(
+        Micro210Model("s3://fixture/model", "sha256:" + "a" * 64, "fixture/tokenizer", "b" * 40),
+        name="fixture/prepared-source",
+        version="2026.11.20",
+    )
+    prepared = next(dep for dep in step.deps if dep.name == "evaluation/micro210/prepared")
+    run(prepared)
+    record = read_record(str(tmp_path / "evaluation/micro210/prepared" / PREPARED_INPUTS_VERSION))
+    assert record.source == PREPARED_INPUTS
+    assert record.source.startswith("hf://datasets/open-athena/micro210-prepared-tasks@")
 
 
 @pytest.mark.parametrize("failure", [None, "unreachable", "model"])

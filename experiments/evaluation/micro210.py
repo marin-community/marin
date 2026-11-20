@@ -41,8 +41,8 @@ from transformers import AutoTokenizer
 from experiments.evaluation.judge_config import JudgeConfig
 from experiments.evaluation.micro210_policy import (
     MODEL_IDENTITY_PREFIX,
-    POLICY_REVISION,
-    POLICY_ROOT,
+    PREPARED_COMMIT,
+    PREPARED_REPO,
     Micro210Evaluation,
     Micro210Model,
     micro210_evaluation,
@@ -52,10 +52,12 @@ from experiments.evaluation.micro210_subset import Micro210Selection, Micro210Su
 from experiments.post_training.long_loop.launch_validation import validate_before_allocation
 from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 
-PREPARED_INPUTS = str(POLICY_ROOT / POLICY_REVISION / "ba099cbc869af0dd1c14f14586557e38a812d6b956442e8b1f406b36cc42c7a0")
+# The prepared table re-hosts benchmark items that must not be public; tasks read it
+# with the standard HF_TOKEN.
+PREPARED_INPUTS = f"hf://datasets/{PREPARED_REPO}@{PREPARED_COMMIT}"
 
 # Relocation needs a new adoption identity even though the prepared bytes are unchanged.
-PREPARED_INPUTS_VERSION = "2026.11.20.1"
+PREPARED_INPUTS_VERSION = "2026.11.20.2"
 
 STOP_TOKEN_CONTENT = {128001: "<|end_of_text|>", 128009: "<|eot_id|>"}
 JUDGE_API_KEY = "JUDGE_API_KEY"
