@@ -22,6 +22,7 @@ from skyrl_train.entrypoints.main_base import BasePPOExp, create_ray_wrapped_inf
 
 def launch_config(tmp_path, *, nodes=48, policy_nodes=16, engines=2, dp=64, width=4, variant="GB200", locality=True):
     raw = raw_launch_config()
+    raw["run"]["export_hf"] = False
     if locality:
         raw["iris"]["role_topology"] = "nvlink.domain"
     raw["iris"]["allocation"].update(num_nodes=nodes, gpus_per_node=width, gpu_variant=variant)

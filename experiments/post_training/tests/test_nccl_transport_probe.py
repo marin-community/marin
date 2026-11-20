@@ -42,14 +42,16 @@ def _gloo_a2a_rank(rank, world_size, buffer_bytes, init_file, done_dir):
 
 
 def test_parse_nccl_census_distinguishes_ib_and_socket():
+    device_line = "g853134:13596:14951 [0] NCCL INFO NET/IB : Using [0]ibp0:1/IB [1]mlx5_2:1/RoCE"
     ib_log = [
+        device_line,
         "g853134:13596:14951 [0] NCCL INFO Using network InfiniBand",
         "g853134:13596:14951 [0] NCCL INFO Channel 00 : 0[0] -> 1[0] via NET/IB/0/GDRDMA",
         "g853134:13596:14951 [0] NCCL INFO Channel 01 : 1[0] -> 0[0] via NET/IB/0/GDRDMA",
         "g853134:13596:14951 [0] NCCL INFO NCCL version 2.29.7+cuda13.2",
     ]
     census = parse_nccl_census(ib_log)
-    assert census == NcclCensus(nccl_version="2.29.7", transports=["NET/IB/0/GDRDMA"])
+    assert census == NcclCensus(nccl_version="2.29.7", transports=["NET/IB/0/GDRDMA"], ib_device_lines=[device_line])
 
     socket_log = [
         "g95c40:13657:14951 [0] NCCL INFO Channel 00 : 0[0] -> 2[0] via NET/Socket/0/0",

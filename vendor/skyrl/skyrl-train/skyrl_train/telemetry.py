@@ -10,7 +10,7 @@ from typing import Literal, Protocol
 import ray
 from loguru import logger
 
-from marinskyrl.environment_contract import TRAINING_TYPE_ENV, TrainingType
+from marinskyrl.environment_contract import RUN_MODEL_ENV, TRAINING_TYPE_ENV, TrainingType
 from skyrl_train.metric_names import ENVIRONMENT_METRIC_PREFIX
 
 from rigging import telemetry
@@ -153,6 +153,7 @@ class TelemetryConfig:
     execution_uid: str | None = None
     serving_job_id: str | None = None
     training_type: TrainingType | None = None
+    model: str | None = None
 
     @classmethod
     def from_environment(cls) -> "TelemetryConfig":
@@ -165,6 +166,7 @@ class TelemetryConfig:
             run_id=text("SKYRL_RUN_ID"),
             execution_uid=text("SKYRL_EXECUTION_UID") or _iris_execution_uid(),
             serving_job_id=text("SKYRL_SERVING_JOB_ID"),
+            model=text(RUN_MODEL_ENV),
             training_type=TrainingType(value) if (value := text(TRAINING_TYPE_ENV)) else None,
         )
 
@@ -236,6 +238,8 @@ def _resources(config: TelemetryConfig, role: str) -> dict[str, str]:
         "execution_uid": config.execution_uid or "",
         "role": role,
     }
+    if config.model is not None:
+        resources["model"] = config.model
     if config.serving_job_id:
         resources["serving_job_id"] = config.serving_job_id
     if config.training_type is not None:
