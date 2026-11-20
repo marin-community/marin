@@ -105,6 +105,7 @@ PENDING_MEASUREMENT_SOURCES = (
     *lean_proofs.sources(),
     *lean_numina.sources(),
     *prime_swe.sources(),
+    *swe_rebench_v2.sources(),
 )
 
 
@@ -132,7 +133,7 @@ def configured_sources() -> list[RlDataSource]:
         *tasktrove_nl2bash.sources(),
         *tasktrove_structured_outputs.sources(),
         *tasktrove_repositories.sources(),
-        *swe_rebench_v2.sources(),
+        *swe_rebench_v2.admitted_sources(),
         *tasktrove_math.sources(),
         *tasktrove_judged.sources(),
         *tasktrove_qa.sources(),

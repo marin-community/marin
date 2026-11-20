@@ -32,10 +32,15 @@ UPSTREAM_FILES = tuple(f"data/train-{i:05d}-of-00006.parquet" for i in range(6))
 
 
 def sources() -> list[RlDataSource[CurationRecipe]]:
-    """The repaired source declarations, registered only once their within-source dedup
-    census receipt exists in the atlas registry (the binding in ``sources.all_sources``
-    requires a measured receipt for every configured source). Until the census lands the
-    declaration is absent from the catalog and the landing stays green."""
+    """The declared repaired sources: always present. The pending-intake list and the
+    declaration audit's receipt families bind to the declaration itself."""
+    return _declare()
+
+
+def admitted_sources() -> list[RlDataSource[CurationRecipe]]:
+    """The registered subset: only sources whose within-source dedup census receipt exists
+    in the atlas registry (the catalog's all_sources binding requires a measured receipt per
+    configured source). Until the census lands the declaration stays pending intake."""
     registry_path = Path(__file__).parents[2] / "datasets" / "within_source_dedup.json"
 
     def _receipt_present(source: RlDataSource[CurationRecipe]) -> bool:
@@ -45,8 +50,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             return False
         return source.info.id in receipts
 
-    declared = _declare()
-    return [source for source in declared if _receipt_present(source)]
+    return [source for source in _declare() if _receipt_present(source)]
 
 
 def _declare() -> RlDataSource[CurationRecipe]:
