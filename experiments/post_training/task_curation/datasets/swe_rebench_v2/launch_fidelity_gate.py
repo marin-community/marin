@@ -24,7 +24,9 @@ BINDINGS_URI = f"{OUTPUT_ROOT}/base-image-bindings.json"
 DATASET_URI = "s3://marin-us-east-02a/marin/rl-data/inputs/swe-rebench-v2/v2-1-data"
 # The driver stages at a VERSIONED uri: a running wave job's retries pin the sha, so a
 # re-stage at a shared uri breaks every retry's bootstrap assert (the wave1-full post-mortem).
-DRIVER_URI = "s3://marin-us-east-02a/marin/rl-data/inputs/swe-rebench-v2/gate/2026.11.20.2/swe_rebench_fidelity_driver.py"
+DRIVER_URI = (
+    "s3://marin-us-east-02a/marin/rl-data/inputs/swe-rebench-v2/gate/2026.11.20.2/swe_rebench_fidelity_driver.py"
+)
 DRIVER_SHA256 = "d963497dd3878f32710a981bae357a50b6d4d5cfb4885c40dbb66649be6def3f"
 JOB_NAME = "swe-repair-swe-rebench-wave-v9-v2"
 
