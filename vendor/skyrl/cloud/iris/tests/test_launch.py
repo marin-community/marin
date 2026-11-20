@@ -18,7 +18,7 @@ from iris.cluster.types import JobName
 from omegaconf import OmegaConf
 from safetensors.numpy import save
 
-from cloud.iris import hf_model_cache, task_runtime
+from cloud.iris import export_hf_checkpoint, hf_model_cache, task_runtime
 from cloud.iris.artifacts import CHECKPOINT_MARKER_FILENAME
 from cloud.iris.task_runtime import prepare_draft_model
 from marinskyrl.speculative_decoding import SpeculatorModelConfig
@@ -29,7 +29,8 @@ from cloud.iris.tests.model_snapshot_fixtures import memory_model_snapshot
 from cloud.iris.iris_backend import supervise_iris_job
 from iris.resources.state import JobState
 from rigging.timing import Timestamp
-from marinskyrl.checkpoint_paths import policy_export_path
+from marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME, HF_EXPORT_REQUEST_FILENAME, policy_export_path
+from skyrl_train.trainer import RayPPOTrainer
 
 
 @dataclass
@@ -224,6 +225,44 @@ def test_launch_persists_attempt_result_and_exports_only_on_opt_in(
         assert backend.export_jobs == []
         assert result.model is None and terminal["result"]["model"] is None
         assert not (tmp_path / "exports/global_step_3").exists()
+
+
+def test_launch_reuses_the_initializer_when_step_zero_wins(tmp_path: Path):
+    path = _config_path(tmp_path)
+    config = yaml.safe_load(path.read_text())
+    initializer_uri = config["inputs"]["model"]["uri"]
+    config["skyrl"]["trainer"].update(max_steps=3, eval_interval=3, ckpt_interval=3, hf_export_checkpoint="best")
+    path.write_text(yaml.safe_dump(config))
+    checkpoint_root = tmp_path / "checkpoints"
+    checkpoint = checkpoint_root / "global_step_3"
+
+    class InitializerWinsBackend(LocalLaunchBackend):
+        def launch(self, config_path: Path) -> LaunchOutcome:
+            outcome = super().launch(config_path)
+            checkpoint.mkdir()
+            (checkpoint / "trainer_state.pt").write_bytes(b"complete")
+            (checkpoint_root / BEST_CHECKPOINT_FILENAME).write_text(
+                json.dumps({"step": 0, "model_format": "hf", "model_uri": initializer_uri})
+            )
+            trainer = RayPPOTrainer.__new__(RayPPOTrainer)
+            trainer.cfg = OmegaConf.load(config_path).skyrl
+            trainer.global_step = 3
+            trainer.all_timings = {}
+            trainer.handle_hf_export()
+            return outcome
+
+        def export_terminal_policy(self, config_path: Path) -> None:
+            export_hf_checkpoint.export_terminal_policy(config_path)
+
+    result = execute_launch(path, backend=InitializerWinsBackend())
+
+    assert result.state is LaunchState.SUCCEEDED, result.failure
+    assert result.model is not None and result.model.global_step == 0
+    terminal_model = json.loads((tmp_path / "terminal.json").read_text())["result"]["model"]
+    assert (terminal_model["global_step"], terminal_model["policy_export_uri"]) == (0, initializer_uri)
+    assert terminal_model["tokenizer_uri"] == config["inputs"]["model"]["tokenizer_uri"]
+    assert not list(checkpoint_root.glob(f"global_step_*/{HF_EXPORT_REQUEST_FILENAME}"))
+    assert not list((tmp_path / "exports").glob("global_step_*"))
 
 
 def _hub_config_path(tmp_path: Path, *, submission: str = "detach") -> Path:

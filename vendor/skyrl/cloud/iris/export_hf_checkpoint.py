@@ -18,7 +18,7 @@ runtime and a live process group at the saved parallel geometry.
 The task enters ``skyrl_train.entrypoints.checkpoint_export`` instead of an RL entrypoint.
 It creates only the saved policy worker group, restores only model tensors, invokes the
 strategy's existing HF converter, and exits. It does not create rollout engines, datasets,
-generators, tracking, reference models, critics, optimizers, or schedulers. ``--timeout``
+generators, tracking, reference models, optimizers, or schedulers. ``--timeout``
 belongs to this export job and is independent of the source training gang's process-group
 timeout.
 
@@ -38,7 +38,7 @@ from pathlib import Path
 from cloud.iris.launch_config import RunMode, SubmissionMode, load_launch_config, validate_launch_config
 from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT
 from cloud.iris.runtime_environment import RuntimeMode, runtime_profile_for_strategy
-from marinskyrl.checkpoint_paths import GLOBAL_STEP_PREFIX, policy_export_path, selected_export_step
+from marinskyrl.checkpoint_paths import GLOBAL_STEP_PREFIX, policy_export_path, selected_export_checkpoint
 from marinskyrl.resource_locator import ModelLocatorError
 from marinskyrl.resource_locator import join_resource_path
 from omegaconf import DictConfig, OmegaConf
@@ -148,16 +148,13 @@ def checkpoint_export_launch_config(
 
     # Export is policy-only. Keep the role-plan inputs internally consistent so
     # launch validation derives exactly the saved policy gang, without reserving
-    # rollout/reference/critic/teacher bundles that the export entrypoint never uses.
+    # rollout/reference/teacher bundles that the export entrypoint never uses.
     config.skyrl.trainer.placement.colocate_all = True
     config.skyrl.trainer.placement.colocate_policy_ref = True
     config.skyrl.trainer.offload_optimizer_during_rollouts = False
     algorithm = config.skyrl.trainer.setdefault("algorithm", {})
     algorithm["use_kl_loss"] = False
     algorithm["use_kl_in_reward"] = False
-    critic = config.skyrl.trainer.setdefault("critic", {})
-    critic["model"] = critic.get("model", {})
-    critic["model"]["path"] = None
     config.skyrl.pop("teachers", None)
     config.skyrl.pop("teacher_routing", None)
     if config.skyrl.generator.get("speculative_decoding") is not None:
@@ -445,12 +442,14 @@ def export_terminal_policy(training_config_path: Path, *, forward_env: tuple[str
 
     training_config = load_launch_config(training_config_path)
     checkpoint_root = str(training_config.artifacts.checkpoint_root)
-    step = selected_export_step(
+    selected = selected_export_checkpoint(
         checkpoint_root,
         str(training_config.skyrl.trainer.hf_export_checkpoint),
         terminal_checkpoint_step(checkpoint_root),
     )
-    checkpoint_path = join_resource_path(checkpoint_root, f"{GLOBAL_STEP_PREFIX}{step}")
+    if selected.initializer_uri is not None:
+        return
+    checkpoint_path = join_resource_path(checkpoint_root, f"{GLOBAL_STEP_PREFIX}{selected.step}")
     request = _read_hf_export_request(checkpoint_path)
     if request is None:
         raise ValueError(f"checkpoint {checkpoint_path} has no hf_export_request.json")

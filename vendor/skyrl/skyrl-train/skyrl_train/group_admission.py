@@ -37,7 +37,6 @@ BUILTIN_GROUP_ADVANTAGE_CONTRACTS: Mapping[str, GroupAdvantageContract] = Mappin
         AdvantageEstimator.RLOO: ExactPhysicalGroup(),
         AdvantageEstimator.RLOO_N: MinimumBaselineEligibleGroup(),
         "rloo_n_pbs": MinimumBaselineEligibleGroup(),
-        AdvantageEstimator.GAE: NoGroupAdvantage(),
         AdvantageEstimator.GRPO: ExactPhysicalGroup(),
     }
 )

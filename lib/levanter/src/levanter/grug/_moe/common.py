@@ -10,9 +10,10 @@ from typing import Literal, NamedTuple, TypeAlias, cast, get_args
 import jax
 import jax.numpy as jnp
 from haliax.jax_utils import named_call
-from jax.sharding import PartitionSpec as P
+from jax.sharding import NamedSharding, PartitionSpec as P
 from jaxtyping import Array, Bool, Float, Int, Key
 
+from levanter.grug.sharding import _current_mesh, _drop_absent_mesh_axes
 from levanter.utils.activation import ActivationFunctionEnum
 
 _DEFAULT_EP_CAPACITY_FACTOR = 1.25
@@ -219,8 +220,11 @@ def split_moe_w13_output(
     return gate, up
 
 
-def _init_weight(key: Key[Array, ""], shape: tuple[int, ...], std: float) -> Float[Array, "..."]:
-    return std * jax.random.truncated_normal(key, -3, 3, shape)
+def _init_weight(key: Key[Array, ""], shape: tuple[int, ...], std: float, spec: P) -> Float[Array, "..."]:
+    mesh = _current_mesh()
+    sharding = None if mesh.empty else NamedSharding(mesh, _drop_absent_mesh_axes(mesh, spec))
+    # Sharding only after sampling leaves full expert-bank RNG temporaries on each chip.
+    return std * jax.random.truncated_normal(key, -3, 3, shape, out_sharding=sharding)
 
 
 @named_call

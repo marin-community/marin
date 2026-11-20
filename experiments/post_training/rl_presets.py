@@ -193,21 +193,21 @@ class Training:
                 count = len(cohort["job"]["tasks"])
                 expected_tasks += count
                 minimum_scored_tasks += math.ceil(preset.harbor.minimum_coverage * count)
+        if initial_model_uri is not None:
+            callbacks.append(
+                BestCheckpointCallback(
+                    type="best_checkpoint",
+                    initial_model_uri=initial_model_uri,
+                    expected_tasks=expected_tasks,
+                    minimum_scored_tasks=minimum_scored_tasks,
+                )
+            )
         if preset.checkpoint_every:
-            assert initial_model_uri is not None
-            callbacks.extend(
-                (
-                    BestCheckpointCallback(
-                        type="best_checkpoint",
-                        initial_model_uri=initial_model_uri,
-                        expected_tasks=expected_tasks,
-                        minimum_scored_tasks=minimum_scored_tasks,
-                    ),
-                    HFModelSaveCallback(
-                        type="hf_model_save",
-                        save_steps=((preset.updates // preset.checkpoint_every) + 1) * preset.checkpoint_every,
-                        save_on_train_end=True,
-                    ),
+            callbacks.append(
+                HFModelSaveCallback(
+                    type="hf_model_save",
+                    save_steps=((preset.updates // preset.checkpoint_every) + 1) * preset.checkpoint_every,
+                    save_on_train_end=True,
                 )
             )
         if preset.export_hf and not preset.checkpoint_every:

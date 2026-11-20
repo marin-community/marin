@@ -386,7 +386,8 @@ def run_spec(
     workload = preset.recipe.layout.workload
     preset = preset.with_updates(config.trainer.max_steps)
     model = preset.model if init is None else init
-    initial_model_uri = model.step.path(artifact_prefix(preset.recipe.layout.cluster))
+    selects_best = preset.checkpoint_every or (preset.export_hf and config.trainer.hf_export_checkpoint == "best")
+    initial_model_uri = model.step.path(artifact_prefix(preset.recipe.layout.cluster)) if selects_best else None
     validation_data = ()
     evaluation_data = []
     profiles = {}
@@ -433,7 +434,7 @@ def run_spec(
                     chosen[0] if chosen else None,
                     profiles,
                     expected_tasks,
-                    initial_model_uri if preset.checkpoint_every else None,
+                    initial_model_uri,
                 ),
             )
         )
