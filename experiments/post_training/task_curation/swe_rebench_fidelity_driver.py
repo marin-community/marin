@@ -220,6 +220,10 @@ def row_variant_files(row: dict, variant: str, base_image: str) -> dict[str, byt
         for name, content in upstream_files.items():
             if name == "task.toml":
                 continue
+            if name.startswith("solution/"):
+                # The condensed variant's solve script runs in the uniform workspace; the
+                # upstream variant keeps the row's original paths (its image bakes them).
+                content = to_workspace(content, flat["workdir"])
             files[name] = content.encode()
     else:
         raise ValueError(f"Unknown variant {variant!r}")

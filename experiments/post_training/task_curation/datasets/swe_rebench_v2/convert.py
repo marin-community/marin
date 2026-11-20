@@ -340,6 +340,10 @@ def convert_row(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRej
         if name == "tests/config.json":
             files[name] = json.dumps(family_config(flat), indent=1, ensure_ascii=False).encode() + b"\n"
             continue
+        if name.startswith("solution/"):
+            # The vendored solve script hard-codes the row's per-repo workspace; the oracle's
+            # gold-patch delivery runs in the uniform /testbed workspace (ruling 2026-11-20).
+            content = to_workspace(content, flat["workdir"])
         files[name] = content.encode()
     contract = shared_source.harden_shared_source(
         files,

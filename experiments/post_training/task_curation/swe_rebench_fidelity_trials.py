@@ -42,6 +42,7 @@ from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert imp
     setup_command,
     swe_rebench_profile,
     task_toml,
+    to_workspace,
 )
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.upstream import task_files
 from experiments.post_training.task_curation.difficulty.runtime import worker_limits
@@ -89,6 +90,10 @@ def row_variant_files(row: dict, variant: str, base_image: str | None) -> dict[s
         for name, content in upstream_files.items():
             if name == "task.toml":
                 continue
+            if name.startswith("solution/"):
+                # The condensed variant's solve script runs in the uniform workspace; the
+                # upstream variant keeps the row's original paths (its image bakes them).
+                content = to_workspace(content, flat["workdir"])
             files[name] = content.encode()
     else:
         raise ValueError(f"Unknown variant {variant!r}")

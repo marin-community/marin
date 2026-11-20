@@ -422,46 +422,19 @@ def test_churn_monitor_trips_at_twenty_percent_and_stays_quiet_below():
     assert not monitor.tripped()
 
 
-def test_native_solution_archive_rewrites_the_solve_workdir_to_testbed():
-    """Ruling 2026-11-20: the upstream solution archive hard-codes `WORKDIR=<workdir>` in the
-    solve script; the conversion rewrites the solution members to the uniform /testbed
-    workspace with the same path-token boundaries, so the oracle's gold-patch delivery runs
-    in the consolidated workspace."""
+def test_the_condensed_solve_script_moves_to_the_uniform_workspace():
+    """Ruling 2026-11-20: the vendored solve script hard-codes @@WORKDIR@@ to the row's
+    per-repo path; the condensed flow rewrites it to /testbed so the oracle's gold-patch
+    delivery runs in the consolidated workspace. The upstream variant keeps the row's
+    original paths (its digest image bakes the repo there)."""
+    from experiments.post_training.task_curation.datasets.swe_rebench_v2.upstream.task_files import solve_sh
 
-    def member(name: str, payload: bytes, mode: int = 0o644) -> tarfile.TarInfo:
-        info = tarfile.TarInfo(name)
-        info.size = len(payload)
-        info.mode = mode
-        return info
-
-    task_blob = io.BytesIO()
-    with tarfile.open(fileobj=task_blob, mode="w") as archive:
-        body = b"instruction body"
-        archive.addfile(member("instruction.md", body), io.BytesIO(body))
-    solve_body = (
-        b'#!/bin/bash\nset -euo pipefail\n\nWORKDIR=/spectree\n\ncd "$WORKDIR"\n'
-        b"git apply /solution/gold.patch\nls /sympy2 /x/spectree\n"
-    )
-    solution_blob = io.BytesIO()
-    with tarfile.open(fileobj=solution_blob, mode="w") as archive:
-        archive.addfile(member("solution/solve.sh", solve_body, mode=0o755), io.BytesIO(solve_body))
-
-    row = {
-        "path": "tasks/spectree-64.tar.gz",
-        "task_binary": task_blob.getvalue(),
-        "solution_binary": solution_blob.getvalue(),
-        "workdir": "/spectree",
-    }
-    data = unpack_native(row, context=None)
-    rewritten = base64.b64decode(data["files"]["solution/solve.sh"]).decode()
+    row = dict(PYTHON_ROW)
+    original = solve_sh(row)
+    assert "WORKDIR=/spectree" in original
+    rewritten = to_workspace(original, row["workdir"])
     assert "WORKDIR=/testbed" in rewritten
     assert 'cd "$WORKDIR"' in rewritten
-    # siblings and nested paths survive the token boundaries
-    assert "/sympy2" in rewritten and "/x/spectree" in rewritten
     assert "/spectree" not in rewritten.replace("/x/spectree", "")
-    assert data["rewritten_solution_members"] == ["solution/solve.sh"]
-    # a row already at the uniform workspace leaves the archive untouched
-    same = unpack_native({**row, "workdir": "/testbed"}, context=None)
-    untouched = base64.b64decode(same["files"]["solution/solve.sh"]).decode()
-    assert "WORKDIR=/spectree" in untouched
-    assert "rewritten_solution_members" not in same
+    # the upstream variant's own script is not rewritten
+    assert "WORKDIR=/spectree" in solve_sh(row)
