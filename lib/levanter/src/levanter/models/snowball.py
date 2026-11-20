@@ -501,8 +501,14 @@ class SnowballAttention(eqx.Module):
                 rope=self.cfg.rope,
                 position_ids=position_ids,
             )
-            q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
-            k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
+            # RoPE broadcasting and channel slices can omit size-one mesh axes.
+            # Restore the head projection layout before joining both halves.
+            q_rot = reshard(q_rot, _activation_spec("model", None))
+            k_rot = reshard(k_rot, _activation_spec("model", None))
+            q_unrotated = reshard(q[..., half:], _activation_spec("model", None))
+            k_unrotated = reshard(k[..., half:], _activation_spec("model", None))
+            q = jnp.concatenate([q_rot, q_unrotated], axis=-1)
+            k = jnp.concatenate([k_rot, k_unrotated], axis=-1)
         q = q * self.cfg.qk_mult
         context = _context_axis()
         local_v = v

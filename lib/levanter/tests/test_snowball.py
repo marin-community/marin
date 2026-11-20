@@ -363,7 +363,7 @@ def test_snowball_fp32_activations_round_once():
     """On, GatedNorm and the shared MLP equal their activations computed in FP32 by hand and cast to BF16 once; off,
     they equal the BF16 activations, with no FP32 cast in the program."""
     k = iter(jax.random.split(jax.random.key(0), 8))
-    x = _bf16(next(k), (3, 5, 32), 2.0)
+    x = jnp.tile(_bf16(next(k), (3, 5, 32), 2.0), (jax.device_count(), 1, 1))
     w_down, w_up = _bf16(next(k), (32, 16), 0.5), _bf16(next(k), (16, 32), 0.5)
     w_gate, w_up2, w_down2 = (
         _bf16(next(k), (32, 24), 0.5),
@@ -377,9 +377,9 @@ def test_snowball_fp32_activations_round_once():
 
         hidden = act(jax.nn.silu, jnp.einsum("...d,dr->...r", x, w_down))
         gated = x * act(jax.nn.sigmoid, jnp.einsum("...r,rd->...d", hidden, w_up))
-        flat = x.reshape(15, 32)
+        flat = x.reshape(-1, 32)
         mlp = jnp.einsum("tm,md->td", act(jax.nn.silu, flat @ w_gate) * (flat @ w_up2), w_down2)
-        return gated, mlp.reshape(3, 5, 32)
+        return gated, mlp.reshape(x.shape)
 
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
         outputs = {}
@@ -484,14 +484,14 @@ def test_fp32_router_dot_preserves_a_route_lost_to_bfloat16_rounding():
         compute = with_field_dtype_overrides(
             jmp.get_policy("p=f32,c=bf16"), {"router_bias": jnp.dtype("float32")}
         ).cast_to_compute(model)
-        inputs = jnp.zeros((1, 1, cfg.hidden_dim), jnp.bfloat16).at[0, 0, :2].set(1)
+        inputs = jnp.zeros((jax.device_count(), 1, cfg.hidden_dim), jnp.bfloat16).at[:, 0, :2].set(1)
         # Keep primitive boundaries explicit: XLA may fuse the BF16 dot's
         # following FP32 conversion into a CPU dot with an FP32 accumulator.
         routes = lambda value: value.with_routes(inputs)[1]
         high = routes(compute)
         low = routes(replace(compute, cfg=replace(cfg, router_dot_fp32=False)))
-    np.testing.assert_array_equal(high, [[[0]]])
-    np.testing.assert_array_equal(low, [[[1]]])
+    np.testing.assert_array_equal(high, np.zeros((jax.device_count(), 1, 1), dtype=np.int32))
+    np.testing.assert_array_equal(low, np.ones((jax.device_count(), 1, 1), dtype=np.int32))
 
 
 @pytest.mark.parametrize(
