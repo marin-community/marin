@@ -38,6 +38,10 @@ These helpers do not import dataset declarations or the Atlas trial executor.
 Harbor runs the declared initialization command before actor access. The source
 adapter authorizes Git access to the declared workspace during that setup,
 because its build layer has already assigned the workspace to the actor UID.
+Use a Harbor build with task schema 1.3 support. Private bootstrap inputs are stored in a
+root-only image directory, and the image defaults to the actor UID. A runner
+that ignores initialization cannot read those inputs as the actor. Different
+private inputs produce different image contexts; generated images must stay private.
 
 Bootstrap saves private verifier files and a trusted test reference in a
 root-owned directory. The actor runs as UID 10001 and cannot read that private
@@ -57,9 +61,10 @@ Portable package regressions run with the normal affected-test runner.
 `tests/test_shared_pytest.py`, `tests/test_shared_source.py`, and
 `tests/test_shared_native.py` also execute real Linux UID transitions. Run them
 only inside an isolated Linux container as root, with pytest, pytest-json-report,
-pip, setuptools, and each selected native toolchain installed. The source and
-native matrices use the `manual` marker. Invoke their explicit file paths with
-`-o addopts=--import-mode=importlib` to run that isolated matrix, and run native
+pip, setuptools, and each selected native toolchain installed. These suites use
+the `docker` marker and run in the dedicated `shared-grader-unit` CPU workflow.
+Invoke their explicit file paths with `-m docker -o addopts=--import-mode=importlib`
+to run that isolated matrix, and run native
 projects only when their declared tools are installed. `--shared-source-python`
 selects a pytest-capable source interpreter; `--shared-verifyit-source` selects
 a pinned legacy Verifyit source directory for the single-manifest regression.

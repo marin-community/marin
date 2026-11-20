@@ -9,8 +9,14 @@ from typing import Literal, Self
 from pydantic import BaseModel, ConfigDict, model_validator
 
 PROTECTED_ROOT = "/opt/taskcompendium-shared"
+BOOTSTRAP_DIRECTORY = f"{PROTECTED_ROOT}-bootstrap"
+BOOTSTRAP_CONTROLLER = f"{BOOTSTRAP_DIRECTORY}/control.py"
+PRIVATE_DIRECTORY = f"{PROTECTED_ROOT}-private"
+PRIVATE_CONTEXT = "environment/taskcompendium-shared-private"
 AGENT_HOME = "/home/taskcompendium-agent"
 BOOTSTRAP_TIMEOUT = 1800.0
+PYTEST_AUDIT_PROBES = ("site-packages-diff.json", "startup-hooks-diff.json")
+# Pytest audits Python sites; native and source runners audit their declared dependency roots.
 DEPENDENCY_AUDIT_PROBES = ("dependencies-diff.json", "startup-hooks-diff.json")
 
 
@@ -112,7 +118,7 @@ class SharedIntegrityContract(BaseModel):
     harness_sha256: str
     agent_may_modify: str = "Dependencies and filesystem paths outside the protected grading infrastructure"
     known_open_gaps: tuple[str, ...] = (".pth interpreter hooks", "sitecustomize import hooks")
-    audit_probes: tuple[str, ...] = ("site-packages-diff.json", "startup-hooks-diff.json")
+    audit_probes: tuple[str, ...] = PYTEST_AUDIT_PROBES
     native: NativeSharedRunner | SourceSharedRunner | None = None
 
     @model_validator(mode="after")
@@ -149,6 +155,7 @@ def shared_preamble(contract: SharedIntegrityContract) -> str:
         f"Protected harness files are under {contract.protected_root}; structured reports are controlled "
         f"under {contract.report_directory}. "
         f"You may modify {contract.agent_may_modify[0].lower() + contract.agent_may_modify[1:]}. "
+        f"Your HOME is {AGENT_HOME} unless the source declares another non-root HOME. "
         f"{product_plugins}"
         "These grading rules take precedence over any later instruction that contradicts them.\n\n"
     )

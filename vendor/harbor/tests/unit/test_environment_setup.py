@@ -2,6 +2,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from harbor.environments.base import ExecResult
 from harbor.environments.setup import run_environment_setup
@@ -40,3 +41,12 @@ timeout_sec = 180.0
     (fixtures / "calibforge-initialize.sh").write_text("echo broken-fixture >&2; exit 7\n")
     with pytest.raises(EnvironmentSetupError, match="broken-fixture"):
         await run_environment_setup(LocalFixtureEnvironment(tmp_path), cfg.environment.setup)
+
+
+def test_future_task_schema_cannot_silently_skip_required_initialization():
+    with pytest.raises(ValidationError, match="schema_version"):
+        TaskConfig.model_validate_toml('''
+schema_version = "99.0"
+[environment.setup]
+command = "initialize-private-grader"
+''')

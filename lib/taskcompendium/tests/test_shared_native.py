@@ -21,7 +21,7 @@ from taskcompendium.runtime import shared_native, shared_pytest
 from .native_projects import PROJECTS
 
 pytestmark = [
-    pytest.mark.manual,
+    pytest.mark.docker,
     pytest.mark.skipif(sys.platform != "linux" or os.geteuid() != 0, reason="UID isolation requires Linux root"),
 ]
 
