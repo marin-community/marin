@@ -1145,6 +1145,106 @@ def test_empty_research_final_counts_in_both_metrics(tmp_path, unconfigured_judg
     assert result.detail["metrics"] == {"pass_rate": 0.0, "rubric_points": 0.0}
 
 
+ARENA_LABELS = {"A>>B": 1.0, "A>B": 1.0, "A=B": 0.5, "B>A": 0.0, "B>>A": 0.0}
+
+
+def _pairwise_spec(baseline: str = "baseline answer") -> JudgeSpec:
+    return JudgeSpec(
+        references=(baseline,),
+        question="Draft the memo.",
+        rubric="pairwise",
+        system_prompt="Compare two answers.",
+        prompt_template="Q: {question}\nA: {answer_a}\nB: {answer_b}",
+        label_scores=ARENA_LABELS,
+        label_weights={"A>>B": 3.0, "B>>A": 3.0},
+        verdict_patterns=(r"\[\[([AB<>=]+)\]\]", r"\[([AB<>=]+)\]"),
+        label_case="upper",
+    )
+
+
+def test_pairwise_judges_both_orders_and_weights_decisive_verdicts(fake_judge):
+    # Candidate as B wins decisively (3 games), then ties as A (1 game): (3 * 1 + 0.5) / 4.
+    fake_judge.replies = ["B is far better. [[B>>A]]", "Same. [[A=B]]"]
+    result = grade_judge.grade_judge_candidate(_pairwise_spec(), "candidate answer")
+    assert result.status is Status.SCORED
+    assert result.reward == 0.875
+    assert result.detail["metrics"] == {"win_rate": 0.875}
+    assert result.detail["metric_weights"] == {"win_rate": 4.0}
+    assert [request["messages"] for request in fake_judge.requests] == [
+        [
+            {"role": "system", "content": "Compare two answers."},
+            {"role": "user", "content": "Q: Draft the memo.\nA: baseline answer\nB: candidate answer"},
+        ],
+        [
+            {"role": "system", "content": "Compare two answers."},
+            {"role": "user", "content": "Q: Draft the memo.\nA: candidate answer\nB: baseline answer"},
+        ],
+    ]
+
+
+@pytest.mark.parametrize(
+    "reply,reward",
+    [
+        # The same verdict in both positions means the judge preferred position A each time.
+        ("[[a>b]]", 0.5),
+        ("mentions [[B>A]] early but concludes [[A>B]]", 0.5),
+        ("[B>A] then the official [[A=B]]", 0.5),
+        ("[[B>>A]]", 0.5),
+    ],
+)
+def test_pairwise_verdict_takes_last_match_of_first_matching_pattern(fake_judge, reply, reward):
+    fake_judge.replies = [reply]
+    result = grade_judge.grade_judge_candidate(_pairwise_spec(), "candidate")
+    assert (result.status, result.reward) == (Status.SCORED, reward)
+
+
+def test_pairwise_verdict_patterns_prefer_double_brackets(fake_judge):
+    # "[[A=B]]" also contains the single-bracket match "A=B"; a stray "[B>A]" must not win.
+    fake_judge.replies = ["[[A=B]] footnote [B>A]", "[[A=B]]"]
+    result = grade_judge.grade_judge_candidate(_pairwise_spec(), "candidate")
+    assert [game["verdict"] for game in result.detail["games"]] == ["A=B", "A=B"]
+
+
+@pytest.mark.parametrize("reply", ["no verdict at all", "[[A>>>B]]"])
+def test_pairwise_unrecognized_verdict_is_an_infrastructure_failure(fake_judge, reply):
+    fake_judge.replies = [reply]
+    with pytest.raises(GradingInfraError):
+        grade_judge.grade_judge_candidate(_pairwise_spec(), "candidate")
+
+
+def test_pairwise_grades_against_an_empty_baseline(fake_judge):
+    fake_judge.replies = ["[[B>A]]", "[[A>B]]"]
+    result = grade_judge.grade_judge_candidate(_pairwise_spec(baseline=""), "candidate")
+    assert result.reward == 1.0
+
+
+def test_pairwise_spec_roundtrips_through_toml():
+    spec = _pairwise_spec()
+    assert parse_spec(render_spec(spec)) == spec
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"verdict_patterns": ()},
+        {"verdict_patterns": (r"\[\[[AB<>=]+\]\]",)},
+        {"label_weights": {"A>>>B": 3.0}},
+        {"label_weights": {"A>>B": 0.0}},
+        {"prompt_template": "A: {answer_a}\nCandidate: {candidate}"},
+        {"references": ("one", "two")},
+    ],
+)
+def test_pairwise_rejects_invalid_contracts_before_calling_the_judge(unconfigured_judge, change):
+    with pytest.raises(InvalidTask):
+        grade_judge.grade_judge_candidate(replace(_pairwise_spec(), **change), "candidate")
+
+
+@pytest.mark.parametrize("change", [{"label_weights": {"PASS": 3.0}}, {"verdict_patterns": (r"\[\[(\w+)\]\]",)}])
+def test_pairwise_only_fields_are_rejected_on_label_judges(unconfigured_judge, change):
+    with pytest.raises(InvalidTask):
+        grade_judge.grade_judge_candidate(_label_spec(**change), "candidate")
+
+
 def test_judge_reply_sends_the_conversation_and_retries_transient_failures(fake_judge, monkeypatch):
     fake_judge.http_statuses = [503, 200]
     fake_judge.replies = ['{"sentence": "A.", "label": "supported"}\nAnything after the verdict.']

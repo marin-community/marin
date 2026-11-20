@@ -26,6 +26,7 @@ from megatron.core.optimizer.cpu_offloading import HybridDeviceOptimizer
 from megatron.core.optimizer.emerging_optimizers import EmergingOptimizerEntry, _EMERGING_OPTIMIZERS
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.core.utils import get_model_config
+from skyrl_train.config.validation import validate_muonh_geometry, validate_muonh_weight_decay
 from skyrl_train.distributed.megatron.grug_muonh import (
     MegatronGrugMuonH,
     megatron_grug_parameter_banks,
@@ -106,8 +107,6 @@ def _grug_muonh_extra(optim_config: Mapping) -> dict:
         raise TypeError("MuonH offload_momentum must be a bool")
     if extra.get("expert_normalization", "per_expert") not in ("per_expert", "all_experts"):
         raise ValueError("MuonH expert_normalization must be per_expert or all_experts")
-    if float(optim_config.get("weight_decay", 0.0)) != 0.0:
-        raise ValueError("MuonH requires weight_decay=0")
     return extra
 
 
@@ -129,13 +128,7 @@ def _register_grug_muonh(optim_config: Mapping) -> None:
 
     def config_to_kwargs(config, model_chunks, pg_collection):
         model_config = get_model_config(model_chunks[0])
-        if model_config.tensor_model_parallel_size != 1:
-            raise ValueError("Grug MuonH fused-matrix updates currently require tensor parallel size 1")
-        expert_tp_size = model_config.expert_tensor_parallel_size
-        if expert_tp_size is None:
-            expert_tp_size = model_config.tensor_model_parallel_size
-        if expert_tp_size != 1:
-            raise ValueError("Grug MuonH whole-matrix updates require expert tensor parallel size 1")
+        validate_muonh_geometry(model_config.tensor_model_parallel_size, model_config.expert_tensor_parallel_size)
         kv_rows = model_config.kv_channels
         query_rows = model_config.num_attention_heads // model_config.num_query_groups * kv_rows
         return {
@@ -205,8 +198,7 @@ def _init_megatron_optim_config(optim_config: Mapping, optimizer_config_kwargs: 
 
     if _optim_name == _GRUG_MUONH_NAME:
         extra = _grug_muonh_extra(optim_config)
-        if float(optim_args["weight_decay"]) != 0.0:
-            raise ValueError("MuonH requires weight_decay=0, including Megatron overrides")
+        validate_muonh_weight_decay(optim_config, optimizer_config_kwargs)
         if optimizer_config_kwargs.get("use_distributed_optimizer", False):
             raise ValueError("Grug MuonH uses Megatron's full-matrix optimizer path")
         if optim_args.get("optimizer_cpu_offload", False) or optim_args.get("optimizer_offload_fraction", 0.0):
