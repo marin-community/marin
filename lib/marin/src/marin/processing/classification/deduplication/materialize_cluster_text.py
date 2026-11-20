@@ -8,7 +8,6 @@ The split can separate duplicates. Documents retain at most 64 Mi characters.
 """
 
 import dataclasses
-import hashlib
 import json
 import logging
 from collections.abc import Iterator, Mapping, Sequence
@@ -129,7 +128,7 @@ def _join_shard(
     wanted = candidates.column("id").combine_chunks()
 
     emitted = 0
-    emitted_text_hashes: dict[str, bytes] = {}
+    emitted_text_hashes: dict[str, int] = {}
     with StoragePath(shard.normalized_path).open("rb") as handle:
         parquet = pq.ParquetFile(handle)
         for batch in parquet.iter_batches(columns=["id", "text"]):
@@ -140,7 +139,7 @@ def _join_shard(
                 texts = selected.column("text").to_pylist()
                 for record_id, text in zip(ids, texts, strict=True):
                     raw_text = text or ""
-                    text_hash = hashlib.sha256(raw_text.encode("utf-8", "surrogatepass")).digest()
+                    text_hash = dupekit.hash_xxh3_128(raw_text.encode("utf-8", "surrogatepass"))
                     cluster_id = attributes.pop(record_id, None)
                     if cluster_id is None:
                         if text_hash != emitted_text_hashes[record_id]:
@@ -184,9 +183,14 @@ def group_key_of(cluster_key: str, groups: int) -> int:
     return dupekit.hash_xxh3_64(cluster_key.encode("utf-8")) % groups
 
 
-def cluster_sort_key(record: Mapping[str, Any]) -> tuple[str, str]:
-    """Order by cluster and ID; ID breaks equal-length processing ties in the solver."""
-    return record["cluster_key"], record["id"]
+def cluster_sort_key(record: Mapping[str, Any]) -> tuple[str, str, str]:
+    """Order by cluster, ID and file; the order breaks equal-length processing ties in the solver.
+
+    IDs hash the text, so one text in two sources ties on cluster and ID. ``file_idx`` makes the
+    order total, so the solver keeps the same source's copy whatever order the shuffle delivers.
+    It is zero-padded because Zephyr stores the key as a list, which must hold a single type.
+    """
+    return record["cluster_key"], record["id"], f"{record['file_idx']:010d}"
 
 
 def _write_group(group: int, records: Iterator[dict[str, Any]], output_dir: str) -> dict[str, Any]:
