@@ -19,6 +19,8 @@ from levanter.checkpoint import CheckpointerConfig, discover_latest_checkpoint
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
 from levanter.eval import TaggedEvaluator
+from levanter.inference.jit_scheduler import SequenceTable
+from levanter.inference.page_table import PageTable
 from levanter.model_loading import load_levanter_checkpoint
 from levanter.models.loss import next_token_ids
 from levanter.trainer import ExplicitTrainingLayout, Trainer, TrainerConfig
@@ -238,3 +240,71 @@ def test_native_public_trainer_eval_step_checkpoint_resume_preserves_explicit_st
             assert actual.sharding == expected.sharding
             assert actual.dtype == expected.dtype
             np.testing.assert_allclose(actual, expected, atol=1e-5, rtol=1e-4)
+
+
+def test_native_keyed_paged_prefill_and_next_decode_match_dense_and_preserve_cache():
+    config = LlamaConfig(
+        hidden_dim=32,
+        intermediate_dim=48,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=2,
+        max_seq_len=6,
+        attn_backend=AttentionBackend.VANILLA,
+        scan_layers=True,
+        gradient_checkpointing=True,
+    )
+    native_config = NativeLlamaLmConfig(
+        **{field.name: getattr(config, field.name) for field in dataclasses.fields(config)}
+    )
+    Vocab = hax.Axis("vocab", 48)
+    mesh = Mesh(np.asarray(jax.devices()[:1]), ("data",), axis_types=(AxisType.Explicit,))
+    with jax.default_matmul_precision("highest"), jax.set_mesh(mesh), hax.axis_mapping({}):
+        named = LlamaLMHeadModel.init(Vocab, config, key=jax.random.PRNGKey(211))
+        native = native_config.build(Vocab, key=jax.random.PRNGKey(223)).from_state_dict(named.to_state_dict())
+        tokens = hax.named(jnp.array([5, 17, 29, 11, 7], dtype=jnp.int32), hax.Axis("position", 5))
+        forward_key = jax.random.PRNGKey(227)
+        dense = eqx.filter_jit(lambda model: model(tokens, AttentionMask.causal(), key=forward_key))(named)
+        native_dense = eqx.filter_jit(lambda model: model(tokens, AttentionMask.causal(), key=forward_key))(native)
+        np.testing.assert_allclose(native_dense.array, dense.array, atol=1e-5, rtol=1e-4)
+        table = PageTable.init(max_pages=4, max_seqs=1, page_size=2, max_pages_per_seq=3)
+        sequences = SequenceTable.init(table.max_seqs, table.pages_per_seq, table.page_size)
+        sequences, slot = sequences.reserve_slot()
+        native_cache = native.initial_cache(table.spec(), dtype=jnp.float32)
+        named_cache = named.initial_cache(table.spec(), dtype=jnp.float32)
+        prefix_pages = None
+        prefix_snapshots = None
+        for start, size in ((0, 4), (4, 1)):
+            chunk = tokens["position", hax.dslice(start, size)]
+            positions = hax.named(jnp.arange(start, start + size, dtype=jnp.int32), chunk.axes)
+            slots = hax.full(chunk.axes, slot, dtype=jnp.int32)
+            sequences, table, info = sequences.allocate_for_seq(table, slots, positions)
+            native_out, native_cache = eqx.filter_jit(
+                lambda model, cache: model.decode(chunk, cache, info, positions, key=forward_key)
+            )(native, native_cache)
+            named_out, named_cache = eqx.filter_jit(
+                lambda model, cache: model.decode(chunk, cache, info, positions, key=forward_key)
+            )(named, named_cache)
+            expected = dense["position", hax.dslice(start, size)].array
+            native_values, named_values, dense_values = (
+                np.asarray(native_out.array),
+                np.asarray(named_out.array),
+                np.asarray(expected),
+            )
+            max_absolute_errors = {
+                "native_paged_vs_dense": float(np.max(np.abs(native_values - dense_values))),
+                "named_paged_vs_dense": float(np.max(np.abs(named_values - dense_values))),
+                "native_paged_vs_named_paged": float(np.max(np.abs(native_values - named_values))),
+            }
+            diagnostics = f"start={start}, size={size}, max_absolute_errors={max_absolute_errors}"
+            np.testing.assert_allclose(native_out.array, expected, atol=1e-5, rtol=1e-4, err_msg=diagnostics)
+            np.testing.assert_allclose(named_out.array, expected, atol=1e-5, rtol=1e-4, err_msg=diagnostics)
+            for actual, reference in zip(native_cache, named_cache, strict=True):
+                np.testing.assert_allclose(actual.kv_pages.array, reference.kv_pages.array, atol=1e-5, rtol=1e-4)
+            if start == 0:
+                prefix_pages = np.asarray(info.page_indices.array[0, :2])
+                prefix_snapshots = [np.asarray(cache.kv_pages.array[prefix_pages]).copy() for cache in native_cache]
+            else:
+                assert prefix_pages is not None and prefix_snapshots is not None
+                for cache, previous in zip(native_cache, prefix_snapshots, strict=True):
+                    np.testing.assert_array_equal(cache.kv_pages.array[prefix_pages], previous)
