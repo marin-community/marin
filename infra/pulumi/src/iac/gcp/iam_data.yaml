@@ -334,6 +334,11 @@ custom_roles:
   permissions:
   - iam.roles.get
   - iam.roles.update
+- role_id: marinIrisHubMetadataWriter
+  title: Marin Iris hub metadata writer
+  description: Update the Iris hub controller VM startup metadata.
+  permissions:
+  - compute.instances.setMetadata
 - role_id: marinServiceAccountIamManager
   title: Marin service account IAM manager
   description: Manage IAM and metadata on an explicitly scoped Marin workflow service account.
@@ -914,6 +919,12 @@ project_grants:
 - role: projects/hai-gcp-models/roles/marinIapIamManager
   members:
   - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
+- role: projects/hai-gcp-models/roles/marinIrisHubMetadataWriter
+  members:
+  - principal: human-075
+  condition:
+    title: marin-iris-hub-controller-vm-only
+    expression: resource.type == "compute.googleapis.com/Instance" && resource.name == "projects/hai-gcp-models/zones/us-central1-a/instances/iris-controller-marin"
 - role: projects/hai-gcp-models/roles/marinPulumiAdmin
   members:
   - principal: human-076
@@ -1635,6 +1646,11 @@ artifact_repositories:
     members:
     - allUsers
 service_accounts:
+- email: 748532799086-compute@developer.gserviceaccount.com
+  grants:
+  - role: roles/iam.serviceAccountUser
+    members:
+    - serviceAccount:iris-controller@hai-gcp-models.iam.gserviceaccount.com
 - email: checkpoint-download@hai-gcp-models.iam.gserviceaccount.com
   grants:
   - role: roles/iam.serviceAccountUser
