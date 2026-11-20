@@ -82,7 +82,6 @@ class RolloutWorkerResources:
             start_interval_seconds=float(workers.start_interval_seconds),
         )
 
-
     def validate_node_capacity(self, cpus: float) -> None:
         """Reject a pool whose workers alone exceed their pinned node's CPU capacity."""
         required = self.num_workers * self.cpus_per_worker
