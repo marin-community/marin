@@ -84,6 +84,9 @@ storage:
 
 kubernetes_provider:
   namespace: iris-ci
+  # CoreWeave's gvisor RuntimeClass (deprecated by CoreWeave,
+  # https://docs.coreweave.com/products/cks/container-runtimes/reference).
+  sandbox_runtime_class: gvisor
   host_network: true
   cache_dir: /mnt/local/iris-cache
   cache_max_age:

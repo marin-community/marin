@@ -173,9 +173,10 @@ def _grants_cilium_policy_writes(rules: list[dict]) -> bool:
 
 
 class PrerequisitesNotProvisionedError(InfraError):
-    """Raised by verify_prerequisites() when one or more IaC-provisioned prerequisites are absent.
+    """Raised by verify_prerequisites() when one or more prerequisites are absent.
 
-    Message enumerates every missing object and prints the `pulumi up` remediation.
+    Message enumerates every missing object, with the `pulumi up` remediation for
+    IaC-provisioned objects and a separate one for the CoreWeave-owned RuntimeClass.
     """
 
 
@@ -936,10 +937,9 @@ class K8sControllerProvider:
         Checks the Namespace, iris-controller ServiceAccount, namespace-qualified
         ClusterRole/ClusterRoleBinding, one NodePool per non-skipped scale group,
         the configured sandbox RuntimeClass, the Kueue ClusterQueue and its
-        referenced ResourceFlavors, and (best-effort) the IngressClass. The 02a
-        RuntimeClass and other Iris-owned resources are provisioned by
-        `infra/pulumi`; the default gvisor class comes from CoreWeave. This
-        method creates nothing. Raises
+        referenced ResourceFlavors, and (best-effort) the IngressClass.
+        Iris-owned resources are provisioned by `infra/pulumi`; the sandbox
+        RuntimeClass is CoreWeave's. This method creates nothing. Raises
         PrerequisitesNotProvisionedError enumerating every missing object if any are absent.
         """
         missing: list[str] = []
@@ -965,8 +965,7 @@ class K8sControllerProvider:
             missing.append(f"RoleBinding/{self._namespace}/{TASK_SECRET_ROLE_NAME}")
 
         runtime_class = config.kubernetes_provider.sandbox_runtime_class
-        if self._kubectl.get_json(K8sResource.RUNTIME_CLASSES, runtime_class) is None:
-            missing.append(f"RuntimeClass/{runtime_class}")
+        runtime_class_missing = self._kubectl.get_json(K8sResource.RUNTIME_CLASSES, runtime_class) is None
 
         label_prefix = config.platform.label_prefix
         for name, sg in config.scale_groups.items():
@@ -995,12 +994,21 @@ class K8sControllerProvider:
         if ingress_class and self._kubectl.get_json(K8sResource.INGRESS_CLASSES, ingress_class) is None:
             missing.append(f"IngressClass/{ingress_class}")
 
+        problems = []
         if missing:
-            raise PrerequisitesNotProvisionedError(
+            problems.append(
                 "IaC-provisioned prerequisites missing: "
                 + ", ".join(missing)
-                + f". Run: cd infra/pulumi && pulumi stack select {config.name} && pulumi up"
+                + f". Run: cd infra/pulumi && pulumi stack select {config.name} && pulumi up."
             )
+        if runtime_class_missing:
+            # CoreWeave owns the sandbox RuntimeClass; Pulumi cannot create it.
+            problems.append(
+                f"Sandbox RuntimeClass/{runtime_class} not found. CoreWeave provides it: check "
+                "kubernetes_provider.sandbox_runtime_class, or ask CoreWeave to enable the class."
+            )
+        if problems:
+            raise PrerequisitesNotProvisionedError(" ".join(problems))
 
     # -- Kueue ------------------------------------------------------------------
 

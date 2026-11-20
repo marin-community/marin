@@ -81,6 +81,126 @@ rollout record to restore both the previous image and its pre-deploy checkpoint.
 An image-only rollback can leave an incompatible migrated schema. Jobs created
 after the checkpoint are lost. See the [rollout procedure](../../.agents/skills/use-iris/references/controller-rollout.md).
 
+### First deploy after a config-schema change
+
+A deploy whose rendered config adds a key the running image does not know cannot
+auto-roll back. `config_to_dict` renders defaults, and `extra="forbid"` makes the old
+image reject the new ConfigMap. Example: the first deploy from main onto a controller
+older than #11345, which added `sandbox_runtime_class`. The recovery steps below are
+for Kubernetes (CoreWeave) controllers.
+
+Before such a deploy, record from the running controller:
+- the pod's image ID (`status.containerStatuses[0].imageID`);
+- the exact image reference in the rollout record's `image`: `<repo>:<tag>` after a
+  source build, or `<repo>@sha256:<digest>` after a `--prebuilt-tag` deploy;
+- the image tag. After a source build, copy it literally from the record's `image`,
+  the part after the last `:`; do not recompute it from the tree hash, because the
+  tag can carry a suffix such as `-dirty` or `-amd64`, or be an explicit tag from
+  the cluster YAML. After a `--prebuilt-tag` deploy, take it from that deploy's
+  output line `controller: <repo>:<tag> -> <repo>@sha256:<digest>` and confirm
+  `docker buildx imagetools inspect <repo>:<tag>` resolves to the recorded digest;
+- the source, from the controller's startup log line `Initializing Iris controller (...)`:
+  a clean build prints its commit, and a dirty build prints
+  `<tree hash> (off of <commit>)`. Only the original source tree reproduces a dirty
+  build; keep it;
+- the operator-side cluster YAML that deployed it, saved as `<recorded YAML>`, and
+  its effective config compared with the saved `config.json`;
+- its `config.json`;
+- `<storage.remote_state_dir>/rollout-record.json`.
+
+Check that both prebuilt images for that tag exist with `linux/amd64` and
+`linux/arm64` manifests:
+`docker buildx imagetools inspect <controller repo>:<tag>` and the same for
+`<task repo>:<tag>`. `--prebuilt-tag` needs that one tag in both repositories, each
+with both architectures. A single-architecture tag (ending in `-amd64` or `-arm64`) or a
+task image under a different tag cannot be used; then recovery rebuilds the images
+from the recorded commit, or from the original source tree for a dirty build.
+
+Every Iris command below uses `--config <recorded YAML>`, not `--cluster=<name>`,
+which may resolve a different file (`~/.config/marin/clusters` is searched first).
+Check that the YAML's context, namespace and `storage.remote_state_dir` are this
+cluster's.
+
+Every `kubectl` command below binds the cluster's kubeconfig and context:
+`k=(kubectl --kubeconfig <platform.coreweave.kubeconfig_path> --context <platform.coreweave.kube_context> -n <namespace>)`.
+
+A manual `restart --rollback` after such a deploy must run from the checkout that
+built the previous image, with the recorded YAML:
+`uv run --package marin-iris --extra controller iris --config <recorded YAML> cluster controller restart --rollback`.
+It restarts the previous image with the caller's config, so from the new checkout
+it applies the new ConfigMap to the old image, which crashloops behind a
+`rollback_requested` record.
+
+After any failed restart, including a preflight failure, read the rollout record
+before anything else (`uv run fsutil cat <remote_state_dir>/rollout-record.json`).
+A `rollback_requested` record with a non-null `rollback_checkpoint` makes the next
+boot of any controller restore that checkpoint over its local DB; jobs created
+after that checkpoint are lost. With any other record the controller takes its
+normal boot path: it reuses a healthy local DB whose checkpoint matches the latest
+remote checkpoint, and otherwise restores the latest remote checkpoint, which the
+new image may have written. `restart --rollback` cannot help here: the auto-rollback
+wrote `previous_image: null`, and `--rollback` also needs a running controller
+(`_rollback_last_deploy` in `lib/iris/src/iris/cli/cluster.py`).
+
+The CLI writes the `pending` and `committed` records best-effort: a failed write
+prints `Warning: could not write rollout record` and the restart continues without
+a pause. If the `pending` write fails behind an older `rollback_requested` record,
+the restarted controller restores that record's checkpoint, and the CLI can still
+write `committed` naming this run's new checkpoint. A `committed` readback then
+passes although jobs were lost. Accept this risk before retrying a restart against
+a controller behind `rollback_requested`. If the write warning appears, treat it as
+a recovery incident: stop the rollout, check the controller log for
+`Rollback requested: restoring pre-deploy checkpoint`, check for jobs accepted
+after that checkpoint, and report any rewind.
+
+If the old controller still serves (the preflight failed before anything was
+applied, and the auto-rollback failed the same preflight), any involuntary pod
+restart rewinds it to the checkpoint until the record changes. Fix the cause and
+rerun the forward deploy promptly. If the cause cannot be fixed quickly, rerun the
+restart from the checkout that built the running image with `--config <recorded YAML>`,
+or with the config change reverted. Either run takes a new checkpoint and replaces
+the record with `pending`, then `committed`. When the output shows
+`Rollout record: pending` before the restart, read the record back afterwards and
+confirm `committed` with this run's checkpoint. When it shows the write warning
+instead, follow the recovery-incident steps above.
+
+If the controller pod crashloops (the new image failed its health check and the old
+image rejects the new ConfigMap, or a manual `--rollback` ran from the new
+checkout), recover by a forward start of the old image. The CLI takes its
+no-controller branch only when it cannot open a tunnel, and a crashlooping pod
+still accepts the port-forward. With approval:
+1. Read the rollout record. Continue only if its phase is `rollback_requested`, its
+   `image` is the recorded old image, and its `rollback_checkpoint` is non-null and
+   names the checkpoint this deploy took (the CLI printed `Checkpoint: <path>`). For
+   any other record, such as `pending` left by a deploy with no previous image,
+   stop and escalate to the cluster's controller owner for an approved checkpoint
+   recovery. Iris has no verified checkpoint-recovery procedure for Kubernetes
+   controllers; [manual checkpoint recovery](docs/controller-recovery.md) covers GCE
+   controllers only.
+2. Scale the controller to zero: `"${k[@]}" scale deployment iris-controller --replicas=0`.
+   Repeat `"${k[@]}" get pods -l app=iris-controller` until it reports no resources; a
+   Terminating pod still accepts the port-forward. Do not scale it back up; the
+   restart recreates the Deployment with one replica.
+3. Check out the commit that built the recorded image (or the original source tree
+   for a dirty build), then run
+   `uv run --package marin-iris --extra controller iris --config <recorded YAML> cluster controller restart --prebuilt-tag <recorded tag>`.
+   If the prebuilt image pair is unusable, omit `--prebuilt-tag`; the command builds
+   both images from that checkout.
+4. Wait about 90 seconds for the tunnel attempt to time out; do not interrupt it.
+   Confirm the command then prints `No existing controller found. Starting fresh...`.
+   This branch keeps the local DB; it is not `--fresh`. The old image boots,
+   restores the checkpoint from the `rollback_requested` record, and the CLI writes
+   `committed`. If the command prints `Taking checkpoint` instead, stop.
+5. Confirm the controller log names the checkpoint in `Rollback requested:
+   restoring pre-deploy checkpoint <path>`, and that a job submitted before the
+   deploy is present. A `committed` record alone does not prove the restore.
+
+Never pass `--skip-checkpoint` here: the forward path overwrites
+`rollback_requested` with a `pending` record that has no checkpoint, and the old
+image then boots on a DB the new image may have migrated. Never leave a
+`rollback_requested` record behind a healthy controller: its next boot rewinds
+state.
+
 ### Controller Checkpoint Rollback (wedged / OOM recovery)
 
 An unreachable controller may need [manual checkpoint recovery](docs/controller-recovery.md).
@@ -534,88 +654,31 @@ process and exits successfully; admission alone does not verify the runtime.
 
 ### CoreWeave sandbox RuntimeClass RBAC
 
-Before deploying this Iris revision to any CoreWeave cluster, apply the
-Pulumi-owned controller ClusterRole rule granting `get` on
-`runtimeclasses.node.k8s.io`. This includes clusters using the default `gvisor`
-class. `IrisRbac` in `infra/pulumi` owns the ClusterRole; the controller rollout
-does not update it. For each stack, review a targeted preview containing only
-this rule, then replace `preview` with `up` after approval:
+The controller preflight GETs the configured sandbox RuntimeClass as the
+deploying kubeconfig identity (`K8sControllerProvider.verify_prerequisites` in
+`lib/iris/src/iris/cluster/platforms/k8s/controller.py`). Before a deploy, check
+`kubectl --kubeconfig <kubeconfig_path> --context <ctx> get runtimeclass <class>`
+with that identity, where `<kubeconfig_path>` and `<ctx>` are the cluster's
+`platform.coreweave.kubeconfig_path` and `platform.coreweave.kube_context`.
+
+No in-cluster code path reads RuntimeClasses today, so the ServiceAccount's `get`
+rule is not required by any deploy. To keep the live ClusterRole matching Pulumi,
+reconcile the Pulumi-owned rule (`CLUSTER_ROLE_RULES` in
+`lib/iris/src/iris/cluster/platforms/k8s/rbac_manifests.py`): review a targeted
+preview containing only this rule, then replace `preview` with `up` after
+approval.
 
 ```bash
-stack=cw-us-east-08a # repeat for each CoreWeave stack before its controller rollout
+stack=cw-us-east-08a # repeat for each CoreWeave stack
 role_urn="urn:pulumi:${stack}::marin-iac::marin:coreweave:IrisRbac\$kubernetes:rbac.authorization.k8s.io/v1:ClusterRole::cluster-role"
 PULUMI_PYTHON_CMD="$PWD/.venv/bin/python" KUBECONFIG="$HOME/.kube/coreweave-iris" \
   pulumi -C infra/pulumi preview --stack "$stack" --target "$role_urn"
 ```
 
-The deployment preflight reads the RuntimeClass before creating the controller
-Deployment. A 403 on this GET raises a `KubectlError` with the API status and
-reason; only a 404 is reported as a missing class. On 02a, include the
-RuntimeClass target in the same preview and apply as shown below.
-
-### 02a sandbox runtime rollout
-
-The 02a sandbox RuntimeClass requests CoreWeave's `cw-gvisor-cpu` handler and
-selects `cpu-genoa` nodes labelled for gVisor and that handler. It does not
-install the handler. Require CoreWeave to enable it on the 02a CPU nodes.
-First apply [the CPU topology resources](https://github.com/marin-community/marin/pull/11515)
-for 02a so Kueue can admit CPU work through `iris-cpu`. Apply the RuntimeClass
-before deploying an Iris controller that selects it.
-
-Review a targeted Pulumi preview for the RuntimeClass and the controller
-ClusterRole's RuntimeClass `get` permission. Require only those two changes,
-with no NodePool, ClusterQueue, controller, or unrelated resource change. After
-approval for that exact preview, run the same command with `up`:
-
-```bash
-runtime_urn='urn:pulumi:cw-us-east-02a::marin-iac::kubernetes:node.k8s.io/v1:RuntimeClass::sandbox-runtime-class'
-role_urn='urn:pulumi:cw-us-east-02a::marin-iac::marin:coreweave:IrisRbac$kubernetes:rbac.authorization.k8s.io/v1:ClusterRole::cluster-role'
-PULUMI_PYTHON_CMD="$PWD/.venv/bin/python" KUBECONFIG="$HOME/.kube/coreweave-iris" \
-  pulumi -C infra/pulumi preview --stack cw-us-east-02a \
-    --target "$runtime_urn" --target "$role_urn"
-```
-
-Check the installed handler and eligible nodes with the configured 02a context:
-
-```bash
-kubectl --kubeconfig "$HOME/.kube/coreweave-iris" --context marin-gpu_US-EAST-02A \
-  get runtimeclass iris-gvisor-cpu \
-  -o jsonpath='{.handler}{"\n"}{.scheduling.nodeSelector}{"\n"}'
-kubectl --kubeconfig "$HOME/.kube/coreweave-iris" --context marin-gpu_US-EAST-02A \
-  get nodes -l 'iris-cw-use02a-scale-group=cpu-genoa,node.coreweave.cloud/gvisor=true,node.coreweave.cloud/container-runtime.cw-gvisor-cpu=true' \
-  -o custom-columns='NODE:.metadata.name,READY:.status.conditions[?(@.type=="Ready")].status,CPU:.status.allocatable.cpu,MEMORY:.status.allocatable.memory'
-```
-
-Before changing the Iris controller, start one bounded public-image sandbox Pod
-with `runtimeClassName: iris-gvisor-cpu` and a hostname selector on each eligible
-CPU node. The 02a pool has four `cpu-genoa` nodes; verify all four carry the
-handler label and pass the canary. Require each Pod to reach Running within
-600 seconds. Read Pod events and the kubelet, containerd, `cw-gvisor-cpu`, and
-`runsc` logs on any failed node;
-the `FailedCreatePodSandBox` event alone does not identify the cause. If the
-direct handler fails, repair it with CoreWeave before routing Iris sandbox work.
-
-After every node passes, deploy the Iris controller through its normal rollout
-procedure. Run an Iris CPU `SANDBOX` canary and confirm its Kueue assignment,
-RuntimeClass, selected node, and process exit. Check a 1 GiB sandbox disk limit
-with a 1152 MiB write: require eviction and Iris `RESOURCE_LIMIT_DISK` rather
-than a generic process failure. Record the expected peak Taskforge sandbox
-concurrency and compare its CPU and memory requests with the allocatable capacity
-and existing reservations on these four nodes. Run a bounded batch at that peak
-only if it fits with headroom. Require every admitted Pod to reach Running within
-600 seconds, without `FailedCreatePodSandBox` events. Runtime shim and cgroup
-counts must return to baseline after teardown.
-
-Fill the CPU pool with bounded canaries, then submit one more Iris `SANDBOX` task.
-Require the Workload to remain gated without an H100 assignment. Inspect its
-Kueue flavor and TAS hostname assignment. If `cw-tas`
-admits it to an H100 hostname, the RuntimeClass selector will keep the Pod
-unschedulable while it holds quota. Block normal sandbox traffic until admission
-prevents this spill. Release the filler canaries after the check. Record
-allocatable CPU and memory, Kueue quota, and each result in
-[#10090](https://github.com/marin-community/marin/issues/10090)
-and [#11343](https://github.com/marin-community/marin/issues/11343) before
-resuming normal 02a sandbox traffic.
+A 403 on the preflight GET raises a `KubectlError` with the API status and
+reason; only a 404 is reported as a missing class. Verify the ServiceAccount
+rule with
+`kubectl --kubeconfig <kubeconfig_path> --context <ctx> auth can-i get runtimeclasses.node.k8s.io --as=system:serviceaccount:<namespace>:iris-controller`.
 
 ### Public LoadBalancer reachability
 

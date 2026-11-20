@@ -126,6 +126,9 @@ auth:
 
 kubernetes_provider:
   namespace: iris
+  # CoreWeave's gvisor RuntimeClass (deprecated by CoreWeave,
+  # https://docs.coreweave.com/products/cks/container-runtimes/reference).
+  sandbox_runtime_class: gvisor
   node_health:
     storage:
       scratch: s3://marin-us-east-08a/tmp/ttl=1d/iris-node-health/cw-rno2a
