@@ -38,6 +38,7 @@ from transformers import AutoTokenizer
 from experiments.evaluation.judge_config import JudgeConfig
 from experiments.evaluation.micro210_policy import (
     MODEL_IDENTITY_PREFIX,
+    POLICY_VERSION,
     Micro210Evaluation,
     Micro210Model,
     micro210_evaluation,
@@ -200,7 +201,7 @@ def micro210_artifact_step(
     policy = frozen["evaluation"]
     inputs = ArtifactStep.adopt(
         "evaluation/micro210/prepared",
-        "2026.11.18",
+        POLICY_VERSION,
         PREPARED_INPUTS,
         config={"sha256": frozen["prepared_rollouts_sha256"]},
     )

@@ -8,11 +8,17 @@ from types import SimpleNamespace
 
 import pytest
 import yaml
-from marin.execution.lazy import StepContext, lower
+from marin.execution.artifact import read_record
+from marin.execution.lazy import ArtifactStep, StepContext, lower, run
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.micro210 import micro210_step, run_micro210
-from experiments.evaluation.micro210_policy import Micro210Model, micro210_evaluation, runtime_policy_config
+from experiments.evaluation.micro210_policy import (
+    POLICY_VERSION,
+    Micro210Model,
+    micro210_evaluation,
+    runtime_policy_config,
+)
 from experiments.post_training.long_loop.launch_validation import validate_launch
 from tests.rl.micro210_fixture import policy_fixture_reference
 
@@ -207,3 +213,30 @@ def test_canonical_evaluation_graph_lowers_with_its_final_run_binding():
     step = micro210_step(model, name="fixture/final-eval", version="2026.11.18.72")
     plan = lower(step)
     assert "fixture/final-eval@2026.11.18.72" in plan.fingerprint_payload
+
+
+def test_new_prepared_inputs_do_not_reuse_old_policy_provenance(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    old_inputs = tmp_path / "old-inputs"
+    new_inputs = tmp_path / "new-inputs"
+    old_inputs.mkdir()
+    new_inputs.mkdir()
+    run(
+        ArtifactStep.adopt(
+            "evaluation/micro210/prepared", "2026.11.18", str(old_inputs), config={"sha256": "old-task-digest"}
+        )
+    )
+    monkeypatch.setattr("experiments.evaluation.micro210.PREPARED_INPUTS", str(new_inputs))
+    step = micro210_step(
+        Micro210Model("s3://fixture/model", "sha256:" + "a" * 64, "fixture/tokenizer", "b" * 40),
+        name="fixture/new-policy",
+        version="2026.11.20",
+    )
+    prepared = next(dep for dep in step.deps if dep.name == "evaluation/micro210/prepared")
+    run(prepared)
+    old_record = read_record(str(tmp_path / "evaluation/micro210/prepared/2026.11.18"))
+    new_record = read_record(str(tmp_path / "evaluation/micro210/prepared" / POLICY_VERSION))
+    assert old_record.source == str(old_inputs)
+    assert old_record.config == {"sha256": "old-task-digest"}
+    assert new_record.source == str(new_inputs)
+    assert new_record.config == {"sha256": "fixture-tasks"}
