@@ -35,6 +35,9 @@ TOP_K = 50
 MAX_CACHE_PREPARATION_REQUESTS = 3
 HTTP_TIMEOUT = aiohttp.ClientTimeout(total=900)
 RANK_HEADER = "X-data-parallel-rank"
+_CHECKPOINT_CONFIG_FILENAME = "config.json"
+_CACHE_PROBE_SUFFIX_TOKENS = 17
+_SHORT_HISTORY_LIMIT = 4096
 
 
 def response_distribution(entries: dict) -> TokenDistribution:
@@ -226,11 +229,13 @@ async def verify_deployment(client: EndpointClient, fixture: ModelFixture, runti
         digest = hashlib.sha256(manifest_bytes).hexdigest()
         if digest != identity.revision:
             mismatches["export_manifest"] = {"actual": digest, "expected": identity.revision}
-        config_uri = prefix_join(identity.weights, "config.json")
+        config_uri = prefix_join(identity.weights, _CHECKPOINT_CONFIG_FILENAME)
     elif Path(identity.weights).is_absolute():
-        config_uri = str(Path(identity.weights) / "config.json")
+        config_uri = str(Path(identity.weights) / _CHECKPOINT_CONFIG_FILENAME)
     else:
-        config_uri = f"https://huggingface.co/{identity.weights}/resolve/{identity.revision}/config.json"
+        config_uri = (
+            f"https://huggingface.co/{identity.weights}/resolve/{identity.revision}/{_CHECKPOINT_CONFIG_FILENAME}"
+        )
     config_bytes = await asyncio.to_thread(read_bytes, config_uri)
     config_digest = hashlib.sha256(config_bytes).hexdigest()
     if config_digest != identity.config_sha256:
@@ -320,7 +325,10 @@ async def check_reference(client: EndpointClient, references: ReferenceLookup, f
 
 
 async def check_batch(client: EndpointClient, references: ReferenceLookup, fixture: ModelFixture) -> dict:
-    cases = sorted((case for case in references.cases if len(case.tokens) <= 4096), key=lambda case: len(case.tokens))
+    cases = sorted(
+        (case for case in references.cases if len(case.tokens) <= _SHORT_HISTORY_LIMIT),
+        key=lambda case: len(case.tokens),
+    )
     selected = cases[-fixture.policy.batch_size :]
     if len(selected) < fixture.policy.batch_size:
         raise ValueError("The suite has too few distinct cases for the engine batch")
@@ -428,7 +436,7 @@ async def check_cache(
         evidence.append(observed)
         try:
             prefix = source[:length]
-            branch = prefix + source[length : length + 17]
+            branch = prefix + source[length : length + _CACHE_PROBE_SUFFIX_TOKENS]
             if len(branch) <= len(prefix):
                 raise ValueError(f"The prompt suite cannot reach cache boundary {length}")
             await client.reset_cache()
@@ -537,7 +545,7 @@ async def check_cache(
     # An exact repeat of a warmed history supplies a matched-split control even if prefix
     # seeding and branching fill different numbers of blocks on this model.
     try:
-        branch = source[: max(fixture.policy.boundary_lengths) + 17]
+        branch = source[: max(fixture.policy.boundary_lengths) + _CACHE_PROBE_SUFFIX_TOKENS]
         await client.complete(branch, label="cache-matched-seed")
         a = await client.complete(branch, label="cache-matched-first")
         b = await client.complete(branch, label="cache-matched-second")
@@ -599,7 +607,9 @@ async def check_cache(
 
 
 async def check_decode(client: EndpointClient, references: ReferenceLookup, fixture: ModelFixture) -> dict:
-    cases = sorted((case for case in references.cases if len(case.tokens) < 4096), key=lambda case: len(case.tokens))
+    cases = sorted(
+        (case for case in references.cases if len(case.tokens) < _SHORT_HISTORY_LIMIT), key=lambda case: len(case.tokens)
+    )
     selected = [cases[0], cases[-1]]
     differences = []
     for index, case in enumerate(selected):

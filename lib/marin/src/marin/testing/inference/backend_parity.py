@@ -18,7 +18,7 @@ class TokenScore:
 
 @dataclass(frozen=True)
 class TokenDistribution:
-    """Finite token scores, ordered by decreasing probability."""
+    """Top-k scores in supplied order; ``from_logprob_map`` validates and sorts."""
 
     token_ids: tuple[int, ...]
     logprobs: tuple[float, ...]
@@ -36,9 +36,13 @@ class TokenDistribution:
 
 @dataclass(frozen=True)
 class DistributionDifference:
+    """Probability-error bounds over top-k lists, including missing tokens."""
+
     max_probability_error_lower_bound: float
+    # The report retains this field name for the conservative upper bound.
     max_probability_error: float
     shared_tokens: int
+    # A diagnostic comparison of the first listed IDs; supplied order breaks ties.
     same_greedy_token: bool
 
 

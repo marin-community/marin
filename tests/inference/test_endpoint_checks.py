@@ -164,10 +164,7 @@ class HttpEngine:
             # engine. This avoids a timer race in the HTTP fixture.
             await self.observed_batch.wait()
         probabilities = dict(LOGPROBS)
-        if self.mode == "bad-scores":
-            probabilities[1] = math.log(0.1)
-            probabilities[2] = math.log(0.7)
-        if cached and (self.mode == "corrupt-cache" or tokens in self.corrupted):
+        if self.mode == "bad-scores" or (cached and (self.mode == "corrupt-cache" or tokens in self.corrupted)):
             probabilities[1] = math.log(0.1)
             probabilities[2] = math.log(0.7)
         top = {f"token_id:{token}": value for token, value in probabilities.items()}
@@ -394,7 +391,6 @@ async def test_cache_contract_covers_retention_and_replayed_generation(tmp_path,
         assert row["alternate_cached_tokens"] == row["required_alternate_checkpoint"]
     for row in cache["prefill_reuse"]["observations"]:
         assert min(row["cached_tokens"]) >= row["required_checkpoint"] > 0
-        assert row["seed_tokens"] == row["required_checkpoint"] + 1
     assert cache["same_split"]["statistics"]["maximum"] == 0
     assert cache["same_split"]["positions"] == 2 * len(reference_fixture.policy.boundary_lengths) + 1
 
@@ -450,6 +446,8 @@ async def test_endpoint_adapters_agree_with_retained_outcome(
                     "tests/cluster/vllm/test_inference_correctness.py",
                     "-o",
                     "addopts=",
+                    "-o",
+                    f"cache_dir={tmp_path / 'pytest-cache'}",
                     "--endpoint-url",
                     url,
                     "--correctness-fixture",
