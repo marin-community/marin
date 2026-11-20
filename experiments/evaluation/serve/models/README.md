@@ -172,6 +172,24 @@ uv run marin-serve iris Qwen/Qwen3-0.6B --cluster cw-us-east-08a --gpu GB200x4 \
   --vllm-arg=--enable-prefix-caching
 ```
 
+Four replicas on one single-host TPU slice (`v6e-4`, TP1/DP4):
+
+```bash
+uv run marin-serve iris Qwen/Qwen3-0.6B --cluster marin --tpu v6e-4 \
+  --tensor-parallel-size 1 --data-parallel-size 4 \
+  --session-router --vllm-arg=--enable-prefix-caching
+```
+
+Single-host TPU serving with `--data-parallel-size > 1` uses `tpu-inference` multi-process DP
+(`TPU_MULTIPROCESS_DP=1`), which isolates physical chips per DP rank behind the same `vllm-router`
+consistent-hash frontend. Multi-host TPU serving does not support `--data-parallel-size > 1`.
+On pinned `tpu-inference` (`2f327d385a90`), `tpu_worker.py` sizes chips per rank using
+`get_num_cores_per_chip()` (`2` on `v5p`/`v4`), even though JAX runs `v5p`/`v4` in Megacore mode
+(one JAX device per chip); this breaks `TP > 1` with `DP > 1` on `v5p`/`v4` while single-core-per-chip
+slices (`v6e`, `v5litepod`) and `DP=1` work. `LMCache` is unsupported on TPU because `tpu-inference`
+only accepts `TPUConnector`, `TPUConnectorHMA`, `TPUOffloadConnector`, and `RaidenOffloadConnector`;
+use `TPUOffloadConnector` for TPU-native host-RAM prefix caching.
+
 `--vllm-release` reads `marin-vllm-gpu-manifest.json` from a [published release](https://github.com/marin-community/vllm/releases).
 Omitting it uses the normal runtime.
 The isolated `vllm-router==0.1.16` process uses vLLM's global internal DP frontend;

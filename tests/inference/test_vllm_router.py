@@ -27,6 +27,7 @@ from marin.inference.config import (
     ServedModelConfig,
     ServingGeometry,
     VllmEngineConfig,
+    VllmLauncherType,
     VllmRouterConfig,
 )
 from marin.inference.dashboard_server import bind_serving_socket, serve_app_background
@@ -361,3 +362,52 @@ def test_multitask_router_rejects_local_staging_before_submission():
                 ),
             ),
         )
+
+
+def test_tpu_iris_serving_routes_sessions_across_dp_ranks(monkeypatch, tmp_path):
+    argv_path = tmp_path / "argv.json"
+    monkeypatch.setattr(
+        "marin.inference.vllm_backend.vllm_launcher", lambda _: FakeVllmLauncher("record-args", str(argv_path))
+    )
+    registered_metadata = {}
+
+    @contextmanager
+    def registered(_name, address, metadata=None, **_kwargs):
+        if metadata is not None:
+            registered_metadata.update(metadata)
+            _assert_native_rank_affinity(f"{address}/v1", 4)
+        yield
+
+    context = SimpleNamespace(registry=SimpleNamespace(registered=registered))
+    monkeypatch.setattr("marin.inference.iris.iris_ctx", lambda: context)
+    service = IrisServiceConfig(
+        model=ServedModelConfig(
+            weights="fake",
+            tensor_parallel_size=1,
+            chat_template_content="{{ messages }}",
+        ),
+        engine=VllmEngineConfig(
+            launcher=VllmLauncherType.TPU,
+            router=VllmRouterConfig(),
+            extra_args=("--data-parallel-size", "4"),
+        ),
+        iris=IrisConfig(
+            worker_resources=ResourceConfig.with_tpu("v6e-4"),
+            worker_environment=create_environment(docker_image="test"),
+            cache_ttl_days=0,
+        ),
+        endpoint_name="/serve/tpu-router",
+        timeout_hours=0,
+        port_name=None,
+    )
+    context_token = set_context(None)
+    set_job_info(JobInfo(task_id=JobName.from_wire("/alice/tpu-router/0")))
+    try:
+        run_iris_service(service)
+    finally:
+        set_job_info(None)
+        reset_context(context_token)
+    native_argv = json.loads(argv_path.read_text())
+    assert "--data-parallel-size" in native_argv
+    assert native_argv[native_argv.index("--data-parallel-size") + 1] == "4"
+    assert int(registered_metadata["data_parallel_size"]) == 4
