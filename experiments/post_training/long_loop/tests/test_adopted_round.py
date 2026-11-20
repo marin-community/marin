@@ -131,7 +131,10 @@ def test_exact_graph_preflight_validates_judge_and_rollout_device_counts(adopted
     row = json.loads((output / "graph.json").read_bytes())[-1]
     assert row["judge"]["geometry"]["tensor_parallel_size"] == 8
     assert row["judge"]["resources"]["device"]["count"] == 8
-    assert row["judge"]["resources"]["target_cluster"] == "cw-rno2a"
+    assert row["judge"]["root_cluster"] == "cw-rno2a"
+    assert row["judge"]["resources"]["target_cluster"] is None
+    assert row["judge"]["resources"]["regions"] == ["RNO2A"]
+    assert row["judge"]["child_cluster_pin"] is None
     assert {role["role"]: (role["required_gpus"], role["allocated_gpus"]) for role in row["role_geometry"]} == {
         "policy": (16, 16),
         "rollout": (16, 16),

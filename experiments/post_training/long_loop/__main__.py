@@ -12,9 +12,10 @@ from pathlib import Path
 import click
 import draccus
 import yaml
-from fray.iris_backend import resolve_coscheduling
+from fray.iris_backend import convert_constraints, resolve_coscheduling
 from huggingface_hub import hf_hub_download
 from iris.cluster.client.job_info import get_job_info
+from iris.cluster.constraints import cluster_directive
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import graph_handles
@@ -66,6 +67,8 @@ def validate_graph(
                 "geometry": asdict(judge.iris.serving_geometry) if judge.iris.serving_geometry else None,
                 "resources": asdict(resources),
                 "coscheduling": coscheduling.group_by if coscheduling else None,
+                "root_cluster": config.serving_profile.judge_target_cluster if config.serving_profile else None,
+                "child_cluster_pin": cluster_directive(convert_constraints(resources)),
             }
         rows.append(row)
     directory.mkdir(parents=True, exist_ok=True)

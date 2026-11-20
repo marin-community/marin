@@ -8,10 +8,12 @@ import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
+from pathlib import Path
 
 import click
 import draccus
 import yaml
+from iris.cluster.config import load_config
 from iris.rpc.proto_display import priority_band_value
 from marin.evaluation.hardware import AcceleratorChoice, Platform, serving_geometry
 from marin.evaluation.model_config import ModelConfig
@@ -182,12 +184,19 @@ def micro210_judge_inference(config: Micro210Run) -> RemoteInferenceConfig:
         api_model=judge.location,
     )
     if config.serving_profile:
+        cluster = load_config(
+            Path(__file__).resolve().parents[2]
+            / "lib/iris/config"
+            / f"{config.serving_profile.judge_target_cluster}.yaml"
+        )
+        if cluster.platform.coreweave is None:
+            raise ValueError("The Mochi judge requires a regional CoreWeave controller")
         inference = replace(
             inference,
             iris=replace(
                 inference.iris,
                 worker_resources=replace(
-                    inference.iris.worker_resources, target_cluster=config.serving_profile.judge_target_cluster
+                    inference.iris.worker_resources, regions=[cluster.platform.coreweave.region], target_cluster=None
                 ),
             ),
         )

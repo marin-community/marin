@@ -401,14 +401,19 @@ separate production-priority Iris CPU root pinned to `cw-rno2a`. For the checked
 rounds:
 
 ```bash
-uv run iris --config lib/iris/config/marin.yaml job run \
-  --no-wait --target-cluster cw-rno2a \
+uv run python -m experiments.evaluation.micro210_judge \
+  --round experiments/post_training/long_loop/rounds/mochi-sft-eval.yaml \
+  --source-revision "$(git rev-parse HEAD)"
+
+uv run iris --config lib/iris/config/cw-rno2a.yaml job run \
+  --no-wait \
   --enable-extra-resources --cpu 4 --memory 16GB --disk 64GB \
-  --timeout 259200 --priority production --job-name mochi-micro210-judge-20261120-2 \
+  --timeout 259200 --priority production --job-name mochi-micro210-judge-20261120-3 \
   -e MARIN_PREFIX s3://marin-rno2a/marin/evaluation/mochi-micro210 \
   -e MARIN_TEMP_PREFIX s3://marin-rno2a/tmp \
   -- python -m experiments.evaluation.micro210_judge \
-  --round experiments/post_training/long_loop/rounds/mochi-sft-eval.yaml
+  --round experiments/post_training/long_loop/rounds/mochi-sft-eval.yaml \
+  --source-revision "$(git rev-parse HEAD)" --run
 ```
 
 The judge root uses the
@@ -418,8 +423,13 @@ named by `serving.judge_endpoint_receipt` in the round and stays alive to own th
 judge service. The base and SFT evaluation roots wait for that receipt, verify
 the policy and judge hashes and actual TP,
 then connect through the existing judge relay. Keep the judge root alive until
-both evaluations finish, then cancel its exact owned root ID. Use a fresh
-receipt path and round version for a replacement service.
+both evaluations finish, then cancel its exact owned root ID. Judge children
+carry the configured physical region, with no cluster routing pin: a regional
+controller cannot federate a child back to itself. The judge preflight records
+this wire constraint, and the root checks its worker region before serving.
+If a failed service never published its receipt, a replacement can use that
+still-missing receipt path so existing evaluations keep waiting. Otherwise use
+a fresh receipt path and round version.
 
 ## Pre-launch review
 
