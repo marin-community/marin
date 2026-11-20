@@ -315,8 +315,28 @@ def _hf_mirror_step(model_ref: str) -> ArtifactStep[LevanterCheckpoint] | None:
     return download_model(ModelConfig(hf_repo_id=repo, hf_revision=revision))
 
 
+@runtime_checkable
+class HFExportSource(Protocol):
+    """A model source that publishes a Hugging Face export relative to its training output."""
+
+    def hf_export_path(self, num_train_steps: int | None) -> str | None:
+        """A known relative path, or None when the final export is discovered at runtime."""
+        ...
+
+
+class _LevanterModelSource:
+    @property
+    def run(self) -> Callable[..., None]:
+        return train_job
+
+    def hf_export_path(self, num_train_steps: int | None) -> str | None:
+        if num_train_steps is None:
+            return None
+        return f"{DEFAULT_HF_CHECKPOINTS_PATH}/step-{num_train_steps - 1}"
+
+
 @dataclass(frozen=True)
-class HFModel:
+class HFModel(_LevanterModelSource):
     """Init from an HF checkpoint used verbatim: ``initialize_from_hf`` + ``use_hf_model_config``.
 
     ``model_ref`` is a Hub repo pinned to a commit (``org/model@<40-hex sha>``) or an object-store or
@@ -378,7 +398,7 @@ class HFModel:
 
 
 @dataclass(frozen=True)
-class PreparedModel:
+class PreparedModel(_LevanterModelSource):
     """Init from a base checkpoint produced by a preparation :class:`ArtifactStep` (Levanter backend).
 
     ``step`` builds the base (e.g. the Delphi reserved-slot rename + embedding reinit); ``sft_step``
@@ -397,10 +417,6 @@ class PreparedModel:
 
     def resolve_tokenizer(self, ctx: StepContext) -> str:
         return ctx.artifact_path(self.step)
-
-    @property
-    def run(self) -> Callable[..., None]:
-        return train_job
 
     def init_deps(self) -> tuple[ArtifactStep, ...]:
         return (self.step,)
@@ -460,7 +476,7 @@ def _native_init_pod_config(
 
 
 @dataclass(frozen=True)
-class ConvertedCheckpointModel:
+class ConvertedCheckpointModel(_LevanterModelSource):
     """Init a run's weights from a materialized HF->Levanter conversion (fresh optimizer, step 0).
 
     The conversion (:func:`~marin.experiment.checkpoints.hf_to_levanter`) carries the architecture and
@@ -478,10 +494,6 @@ class ConvertedCheckpointModel:
     def resolve_tokenizer(self, ctx: StepContext) -> str:
         # The conversion emits a tokenizer padded to the model vocab at its output root.
         return ctx.artifact_path(self.conversion.step)
-
-    @property
-    def run(self) -> Callable[..., None]:
-        return train_job
 
     def init_deps(self) -> tuple[ArtifactStep, ...]:
         return (self.conversion.step,)
@@ -509,7 +521,7 @@ class ConvertedCheckpointModel:
 
 
 @dataclass(frozen=True)
-class LevanterCheckpointModel:
+class LevanterCheckpointModel(_LevanterModelSource):
     """Initialize weights from a native checkpoint with a fresh optimizer at step zero.
 
     ``init_from`` accepts a checkpoint-series directory or a Levanter checkpoint
@@ -528,10 +540,6 @@ class LevanterCheckpointModel:
 
     def resolve_tokenizer(self, ctx: StepContext) -> str:
         return self.tokenizer_path
-
-    @property
-    def run(self) -> Callable[..., None]:
-        return train_job
 
     def init_deps(self) -> tuple[ArtifactStep, ...]:
         return (self.init_from,) if isinstance(self.init_from, ArtifactStep) else ()
@@ -612,6 +620,9 @@ class SFTSpec:
     Marin resolves permanent and temporary paths from the run's output directory at launch.
     """
 
+    timeout: Duration | None = None
+    """Time limit for the training task when the backend supports it."""
+
     def __post_init__(self) -> None:
         if self.per_device_parallelism != -1 and self.per_device_parallelism <= 0:
             raise ValueError("per_device_parallelism must be -1 or positive")
@@ -633,18 +644,17 @@ class SFTSpec:
     def trained(
         self, resources: ResourceConfig, *, coordinator_cluster: str | None = None, coordinator_prefix: str | None = None
     ) -> ArtifactHfModel:
-        """Build the Levanter training step and resolve its final Hugging Face export."""
-        if not isinstance(self.model, (HFModel, PreparedModel, ConvertedCheckpointModel, LevanterCheckpointModel)):
+        """Build the training step and resolve its final Hugging Face export."""
+        if not isinstance(self.model, HFExportSource):
             raise ValueError(f"Build a Hugging Face export for the {type(self.model).__name__} trainer")
         resources = sft_child_resources(resources, coordinator_cluster)
         _validate_gpu_mesh(self, resources)
-        steps = self.num_train_steps
         training = sft_step(self, resources)
         if coordinator_prefix is not None:
             training = replace(training, output_path_prefix=coordinator_prefix)
         return ArtifactHfModel(
             step=training,
-            relative_path=f"{DEFAULT_HF_CHECKPOINTS_PATH}/step-{steps - 1}" if steps is not None else None,
+            relative_path=self.model.hf_export_path(self.num_train_steps),
         )
 
 
@@ -947,7 +957,7 @@ def sft_step(spec: SFTSpec, resources: ResourceConfig) -> ArtifactStep[LevanterC
         name=spec.name,
         version=spec.version,
         artifact_type=LevanterCheckpoint,
-        run=model.run,
+        run=partial(model.run, timeout=spec.timeout) if spec.timeout is not None else model.run,
         build_config=build_config,
         deps=deps,
         runtime_args={_TRAIN_RESOURCES: resources},
