@@ -118,10 +118,18 @@ why it died (`OOMKilled`, preempted, did not start).
 
 Each workpiece publishes to `<output>/<capability>/<slot>/`:
 
-| file | contents |
+| path | contents |
 |---|---|
-| `journal.json` | the head: journal format (2), the owning writer, the chunks that make up the event stream and the bytes they cover, `status` (`terminal` is `accepted`, `abandoned`, `held`, or `null` while running), `published_at`, and once the workpiece ends the frozen `workpiece` (proposal, submission, evidence per round, decisions, terminal) |
-| `chunks/<writer>-<offset>.jsonl` | immutable slices of the effect log: every request, result, tool call, retry, scope; published after 25 events or 60 s, whichever comes first |
+| `journal.json` | the head: `format` (2); `writer`, the owning writer's random id; `chunks`, the chunk names in stream order; `size`, the bytes they hold; `status` (`stage`, `round`, `terminal`, which is `accepted`, `rejected`, `abandoned`, `held`, or `null` while running); `workpiece`, the terminal workpiece's object name or `null`; and `published_at`, the writer's clock at the swap |
+| `chunks/<sha256>.jsonl` | an immutable slice of the effect log (every request, result, tool call, retry, scope), ending at a line boundary and named by the SHA-256 of its bytes; published after 25 events or 60 s, whichever comes first |
+| `workpieces/<sha256>.json` | the immutable terminal workpiece (proposal, submission, evidence per round, decisions, terminal), named by the SHA-256 of its bytes; read it at `workpieces/<head.workpiece>` |
+
+The event stream is the head's `chunks`, concatenated in order, each read from `chunks/<name>`.
+A reader checks every chunk and workpiece against the digest in its name and fails with
+`CorruptJournal`, naming the path, when one is missing or altered or the head is malformed. A
+finished root is recognised from the head alone, with one GET. Chunks and workpieces that no head
+names (a writer that lost the head, or one that died before its swap) stay behind; nothing collects
+them.
 
 Events are recorded by stable kinds (`inference.request`, `env.run_command`, ...; the table is in
 `effects/events.py`), never by Python module path. Each driver claims `journal.json` by

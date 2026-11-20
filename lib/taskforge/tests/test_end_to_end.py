@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import hashlib
 import json
 import shutil
 import sys
@@ -9,6 +10,7 @@ from argparse import Namespace
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import cast, override
@@ -599,8 +601,10 @@ async def test_resume_decodes_published_history_before_claiming_and_leaves_it_un
     assert head["status"]["terminal"] == Terminal.HELD and head["workpiece"] is not None
     lines = b"".join((destination / "chunks" / name).read_bytes() for name in head["chunks"]).splitlines(True)
     events = b"".join((*lines[:-1], corrupt(lines[-1], corruption, len(lines))))
-    (destination / "chunks" / "rewritten.jsonl").write_bytes(events)
-    (destination / HEAD).write_text(json.dumps({**head, "chunks": ["rewritten.jsonl"], "size": len(events)}))
+    # Stored under its own digest, so the reader gets past content identity and must decode it.
+    name = hashlib.sha256(events).hexdigest() + ".jsonl"
+    (destination / "chunks" / name).write_bytes(events)
+    (destination / HEAD).write_text(json.dumps({**head, "chunks": [name], "size": len(events)}))
     before = tree(destination)
     monkeypatch.setattr(driver, "runtime", unexpected_runtime)
     driver_args.resume_held = True
@@ -665,6 +669,37 @@ async def test_a_writer_blocked_with_nothing_pending_stops_within_a_tick_of_a_ta
     assert inference.history == decode(journal.events())
 
 
+def in_process(monkeypatch: pytest.MonkeyPatch, command: list[str]) -> SimpleNamespace:
+    """Run a child's real entry point in this process, exiting as the interpreter would."""
+
+    def wait() -> int:
+        monkeypatch.setattr(sys, "argv", command[3:])
+        try:
+            driver.main()
+        except SystemExit as error:
+            return cast(int, error.code)
+        except Exception:
+            return 1
+        return 0
+
+    return SimpleNamespace(wait=wait, poll=lambda: 0)
+
+
+async def test_a_superseded_child_with_another_failure_fails_the_parent(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Only a child whose every failure is supersession is benign; a cleanup error beside it is a failure."""
+
+    async def superseded_then_cleanup_failed(_: Namespace) -> None:
+        raise ExceptionGroup("one", [Superseded("another writer took the head"), RuntimeError("cleanup failed")])
+
+    monkeypatch.setattr(driver, "one", superseded_then_cleanup_failed)
+    monkeypatch.setattr(driver.subprocess, "Popen", partial(in_process, monkeypatch))
+    with pytest.raises(RuntimeError, match="1 workpieces failed"):
+        await driver.run(driver_args)
+    assert "failed=1 skipped=0 superseded=0" in capsys.readouterr().out
+
+
 async def test_parent_summary_separates_superseded_and_corrupt_children_from_good_work(
     driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -677,9 +712,11 @@ async def test_parent_summary_separates_superseded_and_corrupt_children_from_goo
         path.write_bytes(Path(driver_args.proposals).read_bytes())
     driver_args.proposals, driver_args.concurrency = str(proposals), 1
     roots = {name: Path(driver_args.output) / driver.proposal_key(str(path)) for name, path in paths.items()}
+    torn = b'{"sequence": 1'
+    name = hashlib.sha256(torn).hexdigest() + ".jsonl"
     (roots["corrupt"] / "chunks").mkdir(parents=True)
-    (roots["corrupt"] / "chunks" / "torn.jsonl").write_bytes(b'{"sequence": 1')
-    head = Head(2, "earlier", ("torn.jsonl",), 14, Status(), None, 0.0)
+    (roots["corrupt"] / "chunks" / name).write_bytes(torn)
+    head = Head(2, "earlier", (name,), len(torn), Status(), None, 0.0)
     (roots["corrupt"] / HEAD).write_bytes(HEAD_JSON.dump_json(head))
     corrupt = tree(roots["corrupt"])
     workdir = Path(driver_args.work_dir) / driver.proposal_key(str(paths["superseded"]))
@@ -692,21 +729,8 @@ async def test_parent_summary_separates_superseded_and_corrupt_children_from_goo
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         yield build_config(policy, {}), next(built)
 
-    def child(command: list[str]) -> SimpleNamespace:
-        """Run the child's real entry point in this process, so its exit code is the one ``main`` chooses."""
-
-        def wait() -> int:
-            monkeypatch.setattr(sys, "argv", command[3:])
-            try:
-                driver.main()
-            except SystemExit as error:
-                return cast(int, error.code)
-            return 0
-
-        return SimpleNamespace(wait=wait, poll=lambda: 0)
-
     monkeypatch.setattr(driver, "runtime", fake_runtime)
-    monkeypatch.setattr(driver.subprocess, "Popen", child)
+    monkeypatch.setattr(driver.subprocess, "Popen", partial(in_process, monkeypatch))
     with pytest.raises(RuntimeError, match="1 workpieces failed") as raised:
         await driver.run(driver_args)
     assert str(paths["corrupt"]) in str(raised.value) and str(paths["superseded"]) not in str(raised.value)

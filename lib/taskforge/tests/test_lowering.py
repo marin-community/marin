@@ -14,7 +14,7 @@ from rolloutengine.machines import _machine_spec
 from rolloutengine.test_support import arithmetic_task, machine_runtime, rollout_limits
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, ExecutionRequirements, Machine, MachineFactory, MachineSpec
-from taskcompendium.grading_result import Outcome
+from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
     CommandSemantics,
     EnvironmentRequirements,
@@ -44,6 +44,7 @@ from taskforge.lowering import (
 from taskforge.model.controls import CONTROLS, Candidate, Control, ControlKind, RewardBand
 from taskforge.policy import GRADER_BASE_IMAGE, Policy, load_policy, resolution_lines
 from taskforge.resources.env import ReadFile
+from taskforge.resources.grading import GradeCandidate, GradingResource
 from taskforge.resources.rollouts import RolloutResource, SolverRollout
 from taskforge.resources.sandbox.factories import SANDBOX_SCHEDULING_TIMEOUT, shellsim_factory
 from taskforge.wiring import build_resources, submit_gate
@@ -218,4 +219,25 @@ async def test_a_completed_solver_trial_replays_unless_its_model_sampling_or_out
     log = EventLog()
     await log.record(Resolved(SolverRollout(spec, 0, 0), (rollouts(declared).fingerprint(),), "graded"))
     found = log.lookup(SolverRollout(spec, 0, 0), (rollouts(declared.overlaid(overlay)).fingerprint(),))
+    assert isinstance(found, Missing) is reruns
+
+
+@pytest.mark.parametrize(
+    "overlay, reruns", [({"provider.backoff_initial": 5.0}, False), ({"sandbox.output_budget_mb": 512}, True)]
+)
+async def test_a_cached_candidate_grade_replays_unless_the_output_cap_changes(
+    overlay: Mapping[str, object], reruns: bool
+) -> None:
+    """Candidate grading runs on the solver's machines, so a tighter ShellSim cap must regrade a control."""
+
+    def grading(policy: Policy) -> GradingResource:
+        clients = {role: ScriptedBackend(()) for role in ("author", "solver", "adversary")}
+        return build_resources(policy, clients, {}, FakeWeb({}, {})).grading
+
+    declared = load_policy(Path(__file__).parents[1] / "src/taskforge/policy/defaults")
+    spec = lower_with_settings(arithmetic_task(), lowering_settings(declared), {})
+    event = GradeCandidate(spec, Candidate("4"))
+    log = EventLog()
+    await log.record(Resolved(event, (grading(declared).fingerprint(),), GradeResult(Outcome.GRADED, 1.0)))
+    found = log.lookup(event, (grading(declared.overlaid(overlay)).fingerprint(),))
     assert isinstance(found, Missing) is reruns

@@ -65,8 +65,9 @@ async def report(root: str, since_hours: float | None = None) -> tuple[str, ...]
                 return
             status = journal.head.status
             records = await asyncio.to_thread(decode, await asyncio.to_thread(journal.events))
-            # A root claimed but not yet checkpointed counts as running from its claim.
-            if (records[-1].wall_time if records else journal.head.published_at) < cutoff:
+            # A running root is current from its latest claim or checkpoint, even when its newest event is old.
+            latest = records[-1].wall_time if records else -math.inf
+            if max(latest, -math.inf if status.terminal else journal.head.published_at) < cutoff:
                 return
             terminal = str(status.terminal or "running")
             counts[terminal] += 1

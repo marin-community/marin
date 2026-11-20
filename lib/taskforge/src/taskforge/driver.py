@@ -218,9 +218,10 @@ async def run(args: argparse.Namespace) -> None:
 
 
 def exit_code(error: Exception) -> int | None:
+    """The outcome code when every leaf of ``error`` is that one outcome; anything mixed is an ordinary failure."""
     group = error if isinstance(error, ExceptionGroup) else ExceptionGroup("one", [error])
     for code, issue in ((SUPERSEDED, Superseded), (NEEDS_MIGRATION, UnsupportedFormat), (CORRUPT, CorruptJournal)):
-        if group.subgroup(issue) is not None:
+        if group.split(issue)[1] is None:
             return code
     return None
 

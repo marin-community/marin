@@ -66,16 +66,15 @@ class Head:
 HEAD_JSON = TypeAdapter(Head)
 
 
-def _get(url: str) -> bytes:
-    with open_url(url, "rb") as source:
-        return source.read()
-
-
 def _put(directory: str, suffix: str, data: bytes) -> str:
-    """Write ``data`` under its content name in ``directory`` and return the name."""
+    """Create ``data`` under its content name in ``directory`` unless it is there already; return the name."""
     name = hashlib.sha256(data).hexdigest() + suffix
-    with open_url(prefix_join(directory, name), "wb") as target:
-        target.write(data)
+    target = conditional_object(prefix_join(directory, name))
+    try:
+        target.write(data, expected_version=None)
+    except ConditionalWriteError:
+        if (existing := target.read()) is None or existing.data != data:
+            raise CorruptJournal(f"{target.path} holds bytes other than those its name digests") from None
     return name
 
 
@@ -87,8 +86,20 @@ class Journal:
     head: Head
     version: str
 
+    def _fetch(self, directory: str, name: str) -> bytes:
+        """Fetch an object the head names; a missing or altered one is corruption, other I/O errors propagate."""
+        path = prefix_join(self.destination, f"{directory}/{name}")
+        try:
+            with open_url(path, "rb") as source:
+                data = source.read()
+        except FileNotFoundError as error:
+            raise CorruptJournal(f"{path} is missing; the head names it") from error
+        if hashlib.sha256(data).hexdigest() != name.split(".")[0]:
+            raise CorruptJournal(f"{path} does not hold the bytes its name digests")
+        return data
+
     def events(self) -> bytes:
-        events = b"".join(_get(prefix_join(self.destination, f"chunks/{name}")) for name in self.head.chunks)
+        events = b"".join(self._fetch("chunks", name) for name in self.head.chunks)
         if len(events) != self.head.size:
             raise CorruptJournal(f"{self.destination} chunks hold {len(events)} bytes; its head covers {self.head.size}")
         if events and not events.endswith(b"\n"):
@@ -98,7 +109,10 @@ class Journal:
     def workpiece(self) -> Workpiece | None:
         if self.head.workpiece is None:
             return None
-        return WORKPIECE.validate_json(_get(prefix_join(self.destination, f"workpieces/{self.head.workpiece}")))
+        try:
+            return WORKPIECE.validate_json(self._fetch("workpieces", self.head.workpiece))
+        except ValueError as error:
+            raise CorruptJournal(f"{self.destination}/workpieces/{self.head.workpiece} is no workpiece") from error
 
 
 def read_journal(destination: str) -> Journal | None:
@@ -109,10 +123,13 @@ def read_journal(destination: str) -> Journal | None:
         if found := sorted(FORMAT_1 & {PurePosixPath(path).name for path in fs.glob(prefix_join(root, "*"))}):
             raise UnsupportedFormat(f"{destination} holds journal format 1 ({', '.join(found)}); migrate it first")
         return None
-    found = json.loads(current.data).get("format")
-    if found != JOURNAL_FORMAT:
-        raise UnsupportedFormat(f"{destination}/{HEAD} has journal format {found!r}; this reader reads 2")
-    return Journal(destination, HEAD_JSON.validate_json(current.data), current.version)
+    try:
+        found = json.loads(current.data).get("format")
+        if isinstance(found, int) and found != JOURNAL_FORMAT:
+            raise UnsupportedFormat(f"{destination}/{HEAD} has journal format {found}; this reader reads 2")
+        return Journal(destination, HEAD_JSON.validate_json(current.data), current.version)
+    except (ValueError, AttributeError) as error:  # Not JSON, not an object, or not a format-2 head.
+        raise CorruptJournal(f"{destination}/{HEAD} is no format-2 head: {error}") from error
 
 
 class CheckpointSink(Sink):
@@ -135,8 +152,9 @@ class CheckpointSink(Sink):
             raise Superseded(f"Another writer advanced {self.destination}/{HEAD}; writer {self.writer} stops") from error
 
     def _claim(self, journal: Journal | None) -> tuple[Record, ...]:
+        events = journal.events() if journal else b""
         try:
-            records = self.local.start(journal.events() if journal else b"")
+            records = self.local.start(events)
         except LogFailure as error:
             raise CorruptJournal(f"{self.destination}: {error}") from error
         chunks, size = (journal.head.chunks, journal.head.size) if journal else ((), 0)

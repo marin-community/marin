@@ -3,6 +3,9 @@
 
 import asyncio
 import json
+import re
+import subprocess
+import sys
 import threading
 from pathlib import Path
 
@@ -13,7 +16,7 @@ from rigging.filesystem.conditional_object import ConditionalObject, VersionedBy
 from taskforge import checkpoint
 from taskforge.checkpoint import HEAD, CheckpointSink, Journal, read_journal
 from taskforge.effects.events import Note, StageCompleted
-from taskforge.effects.issues import LogFailure, Superseded
+from taskforge.effects.issues import CorruptJournal, Superseded
 from taskforge.effects.log import EventLog, Status, decode
 from taskforge.model.proposal import TaskProposal
 from taskforge.model.stage import Stage
@@ -211,22 +214,21 @@ async def test_a_late_chunk_put_cannot_overwrite_committed_history(
     sink = await claimed(tmp_path)
     log = EventLog(sink=sink)
     await log.record(Note("first"))
-    delayed: list[tuple[str, bytes]] = []
-    put = checkpoint.open_url
+    delayed: list[tuple[str, str, bytes]] = []
+    put = checkpoint._put
 
-    def time_out_first_put(url: str, mode: str = "rb") -> object:
-        if mode == "wb" and not delayed:
-            delayed.append((url, Path(sink.local.path).read_bytes()))
+    def time_out_first_put(directory: str, suffix: str, data: bytes) -> str:
+        if not delayed:
+            delayed.append((directory, suffix, data))
             raise TimeoutError("chunk PUT timed out")
-        return put(url, mode)
+        return put(directory, suffix, data)
 
-    monkeypatch.setattr(checkpoint, "open_url", time_out_first_put)
+    monkeypatch.setattr(checkpoint, "_put", time_out_first_put)
     with pytest.raises(TimeoutError):
         await sink._upload()
     await log.record(Note("second"))
     await sink._upload()
-    url, data = delayed[0]
-    Path(url).write_bytes(data)
+    put(*delayed[0])
     assert decode(journal(Path(sink.destination)).events()) == log.records
 
 
@@ -250,5 +252,111 @@ async def test_reader_fails_closed_on_chunks_short_of_the_head(tmp_path: Path) -
     head = json.loads((Path(sink.destination) / HEAD).read_text())
     chunk = Path(sink.destination) / "chunks" / head["chunks"][0]
     chunk.write_bytes(chunk.read_bytes()[:-5])
-    with pytest.raises(LogFailure, match="chunks hold"):
+    with pytest.raises(CorruptJournal, match=re.escape(str(chunk))):
         journal(Path(sink.destination)).events()
+
+
+REPUT = """
+import sys
+from pathlib import Path
+
+from taskforge import checkpoint
+
+directory, data = sys.argv[1], Path(sys.argv[2]).read_bytes()
+opened = False
+
+
+def audit(event, args):
+    global opened
+    if event == "open" and isinstance(args[0], str) and args[0].startswith(directory) and set("wxa") & set(str(args[1])):
+        opened = True
+
+
+def pause(frame, event, arg):
+    if opened and event == "c_call" and getattr(arg, "__name__", "") == "write":
+        sys.setprofile(None)
+        print("paused", flush=True)
+        sys.stdin.readline()
+
+
+sys.addaudithook(audit)
+sys.setprofile(pause)
+checkpoint._put(directory, ".jsonl", data)
+"""
+
+
+def test_re_putting_a_committed_object_never_exposes_or_leaves_a_partial_one(tmp_path: Path) -> None:
+    """A retry of identical bytes pauses on its first write into the store, a reader looks, then SIGTERM lands."""
+    directory, source = tmp_path.resolve() / "chunks", tmp_path / "data"
+    data = b'{"sequence": 1}\n' * 7
+    name = checkpoint._put(str(directory), ".jsonl", data)
+    source.write_bytes(data)
+    child = subprocess.Popen(
+        [sys.executable, "-c", REPUT, str(directory), str(source)], stdin=subprocess.PIPE, stdout=subprocess.PIPE
+    )
+    assert child.stdout is not None and child.stdout.readline() == b"paused\n"
+    assert (directory / name).read_bytes() == data
+    child.terminate()
+    assert child.wait(10) != 0
+    assert (directory / name).read_bytes() == data
+
+
+async def finished(tmp_path: Path, proposal: TaskProposal) -> Path:
+    sink = await claimed(tmp_path)
+    await EventLog(sink=sink).record(Note("first"))
+    await sink.finish(Status(terminal=Terminal.HELD), Workpiece(proposal.header.id, proposal, terminal=Terminal.HELD))
+    return Path(sink.destination)
+
+
+def tamper(destination: Path, case: str) -> Path:
+    """Damage one committed object as ``case`` names and return the path the reader must report."""
+    head = json.loads((destination / HEAD).read_bytes())
+    chunk, workpiece = destination / "chunks" / head["chunks"][0], destination / "workpieces" / head["workpiece"]
+    match case:
+        case "altered chunk":
+            chunk.write_bytes(chunk.read_bytes().replace(b"first", b"wrong"))
+            return chunk
+        case "missing chunk":
+            chunk.unlink()
+            return chunk
+        case "altered workpiece":
+            workpiece.write_bytes(workpiece.read_bytes().replace(b'"held"', b'"abandoned"'))
+            return workpiece
+        case "missing workpiece":
+            workpiece.unlink()
+            return workpiece
+        case "truncated head":
+            (destination / HEAD).write_bytes((destination / HEAD).read_bytes()[:-3])
+        case _:
+            (destination / HEAD).write_text(json.dumps({"format": 2, "writer": "w"}))
+    return destination / HEAD
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["altered chunk", "missing chunk", "altered workpiece", "missing workpiece", "truncated head", "head schema"],
+)
+async def test_damaged_committed_objects_read_as_corrupt_naming_the_path(
+    tmp_path: Path, proposal: TaskProposal, case: str
+) -> None:
+    destination = await finished(tmp_path, proposal)
+    damaged = tamper(destination, case)
+    before = {path: path.read_bytes() for path in destination.rglob("*") if path.is_file()}
+    with pytest.raises(CorruptJournal, match=re.escape(str(damaged))):
+        resumed = journal(destination)
+        resumed.workpiece()
+        await CheckpointSink(tmp_path / "resume", str(destination)).claim(resumed)
+    assert {path: path.read_bytes() for path in destination.rglob("*") if path.is_file()} == before
+
+
+async def test_transient_read_errors_stay_retryable(
+    tmp_path: Path, proposal: TaskProposal, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination = await finished(tmp_path, proposal)
+
+    def reset(url: str, mode: str = "rb") -> object:
+        raise ConnectionResetError("connection reset by peer")
+
+    monkeypatch.setattr(checkpoint, "open_url", reset)
+    with pytest.raises(ConnectionResetError):
+        journal(destination).events()

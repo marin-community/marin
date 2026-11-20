@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import time
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 
@@ -10,8 +11,8 @@ from rolloutengine.models import ConversationRecord, GradedRollout, ModelTurn, R
 from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grading_result import GradeResult, Outcome
 
-from taskforge.checkpoint import CheckpointSink
-from taskforge.effects.events import Event, Resolved, ScopeEntered, ScopeExited, StageCompleted
+from taskforge.checkpoint import CheckpointSink, read_journal
+from taskforge.effects.events import Event, Note, Resolved, ScopeEntered, ScopeExited, StageCompleted
 from taskforge.effects.log import Record, Status
 from taskforge.llm.policy import LLMPolicy
 from taskforge.lowering import lower_with_settings, lowering_settings
@@ -122,3 +123,16 @@ async def test_report_names_format_1_roots_and_counts_a_claimed_empty_root_as_ru
     lines = await report(str(tmp_path), 1)
     assert f"skipped journal_format=1 count=2 roots={tmp_path / 'old'}, {tmp_path / 'parts'}" in lines
     assert "workpieces=1 since_hours=1" in lines and "terminal=running count=1" in lines
+
+
+async def test_a_freshly_reclaimed_root_counts_as_running_in_a_short_window(tmp_path: Path) -> None:
+    """A held root resumed now is running now, though its newest event is a day old."""
+    destination = str(tmp_path / "reclaimed")
+    first = CheckpointSink(tmp_path / "work", destination)
+    await first.claim(None)
+    await first.local.write((Record(1, time.time() - 86400, Note("yesterday")),))
+    await asyncio.to_thread(first._publish, Status(terminal=Terminal.HELD), None)
+    await CheckpointSink(tmp_path / "work", destination).claim(read_journal(destination))
+    lines = await report(str(tmp_path), 1)
+    assert "workpieces=1 since_hours=1" in lines and "terminal=running count=1" in lines
+    assert "tokens role=author prompt=0 cached=0 completion=0" in lines
