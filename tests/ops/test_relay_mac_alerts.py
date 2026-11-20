@@ -8,6 +8,7 @@ from finelog.client import LogClient
 from finelog.client.log_client import DEFAULT_BATCH_ROWS, DEFAULT_MAX_BUFFER_BYTES
 from finelog.embedded import is_available, require_embedded_server
 from finelog.ops_feed import NAMESPACE, Severity, Subscription, poll
+
 from scripts.ops.relay_mac_alerts import MacSource, import_alerts
 
 
@@ -72,13 +73,18 @@ def test_mac_import_backlog_exceeding_queue_is_delivered_and_not_replayed(embedd
         with path.open("w") as stream:
             for index in range(rows):
                 record = {
-                    "entry": str(index), "kind": "JOB_FAILED", "severity": "critical", "state": "x" * state_bytes,
+                    "entry": str(index),
+                    "kind": "JOB_FAILED",
+                    "severity": "critical",
+                    "state": "x" * state_bytes,
                     "time_utc": "2026-11-20T10:00:00+00:00",
                 }
                 stream.write(json.dumps(record) + "\n")
         assert import_alerts(client, MacSource.JOB_WATCHDOG, path, destination="test", state=state) == rows
         assert import_alerts(client, MacSource.JOB_WATCHDOG, path, destination="test", state=state) == 0
-        counts = client.query(f'SELECT count(*) AS rows, count(DISTINCT event_id) AS unique_ids FROM "{NAMESPACE}"').to_pylist()
-        assert counts == [{"rows": rows, "unique_ids": rows}]
+        counts = client.query(
+            f'SELECT count(*) AS event_count, count(DISTINCT event_id) AS unique_ids FROM "{NAMESPACE}"'
+        ).to_pylist()
+        assert counts == [{"event_count": rows, "unique_ids": rows}]
     finally:
         client.close()

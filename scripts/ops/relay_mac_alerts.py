@@ -6,18 +6,17 @@
 import argparse
 import hashlib
 import json
-from pathlib import Path
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
-from finelog.deploy.config import load_finelog_config
-from finelog.deploy.connect import open_client
 from finelog.client import LogClient
 from finelog.client.log_client import DEFAULT_BATCH_ROWS, DEFAULT_MAX_BUFFER_BYTES
+from finelog.deploy.config import load_finelog_config
+from finelog.deploy.connect import open_client
 from finelog.ops_feed import DEFAULT_STATE, Event, Severity, event_dict, event_row, state_database, write_events
-
 
 IMPORT_BATCH_ROWS = DEFAULT_BATCH_ROWS // 2
 IMPORT_BATCH_BYTES = DEFAULT_MAX_BUFFER_BYTES // 2
@@ -92,8 +91,11 @@ def import_alerts(
         with state_database(state) as db:
             db.execute("CREATE TABLE IF NOT EXISTS imports (source TEXT, event_id TEXT, PRIMARY KEY (source, event_id))")
             pending = {
-                digest: event for digest, event in batch.items()
-                if not db.execute("SELECT 1 FROM imports WHERE source=? AND event_id=?", (import_scope, digest)).fetchone()
+                digest: event
+                for digest, event in batch.items()
+                if not db.execute(
+                    "SELECT 1 FROM imports WHERE source=? AND event_id=?", (import_scope, digest)
+                ).fetchone()
             }
             if pending:
                 write_events(client, pending.values())
