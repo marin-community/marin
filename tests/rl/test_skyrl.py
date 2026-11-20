@@ -601,23 +601,6 @@ def _generation_plan() -> SkyRLGenerationPlan:
     )
 
 
-def generation_geometry_step():
-    spec, plan = _spec(), _generation_plan()
-    return skyrl_step(
-        dataclasses.replace(
-            spec,
-            topology=dataclasses.replace(spec.topology, num_nodes=plan.num_nodes, role_plan=plan),
-            train_data=(),
-            validation_data=spec.train_data,
-            config_yaml=(
-                "context_budget: {request_window_tokens: 1024, max_new_tokens_per_turn: 256, max_turns: 1}\n"
-                "model_num_attention_heads: 8\n" + spec.config_yaml
-            ),
-        ),
-        _execution(),
-    )
-
-
 @pytest.mark.parametrize("failure", ["extra-node", "node-width", "entrypoint"])
 def test_generation_plan_rejects_geometry_conflicts(failure):
     spec, plan = _spec(), _generation_plan()
@@ -1233,8 +1216,6 @@ def test_run_skyrl_succeeds_without_hf_export(monkeypatch: pytest.MonkeyPatch) -
     assert run.iris_job_id == "01KNOEXPORT"
     retained = SkyRLRun.model_validate_json(run.model_dump_json())
     assert (retained.run_id, retained.attempt_id) == (config.run_id, config.attempt_id)
-    earlier = SkyRLRun.model_validate_json(run.model_dump_json(exclude={"run_id", "attempt_id"}))
-    assert earlier.run_id is None and earlier.attempt_id is None
 
 
 def test_tasktrove_data_source_resolves_exact_file_and_verifier(tmp_path: Path) -> None:

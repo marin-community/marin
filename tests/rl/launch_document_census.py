@@ -15,7 +15,17 @@ from fsspec.implementations.memory import MemoryFileSystem
 from marin.execution.artifact import write_artifact
 from marin.execution.build_context import BuildContext, VersionCodex, build_context
 from marin.execution.lazy import ArtifactStep, materialized_config
-from marin.rl.skyrl import SkyRLRun
+from marin.rl.skyrl import (
+    ArtifactDataSource,
+    ArtifactHfModel,
+    IrisSkyRLExecution,
+    SkyRLGenerationPlan,
+    SkyRLRetentionPolicy,
+    SkyRLRun,
+    SkyRLSpec,
+    SkyRLTopology,
+    skyrl_step,
+)
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 
@@ -43,6 +53,52 @@ class _MemoryObjectStore(MemoryFileSystem):
 
     def glob(self, path, **kwargs):
         return [match.lstrip("/") for match in super().glob(path, **kwargs)]
+
+
+def generation_geometry_step() -> ArtifactStep[SkyRLRun]:
+    plan = SkyRLGenerationPlan(
+        gpus_per_node=4,
+        num_inference_engines=4,
+        inference_engine_tensor_parallel_size=1,
+        inference_engine_pipeline_parallel_size=1,
+        inference_engine_data_parallel_size=1,
+        inference_engine_expert_parallel_size=1,
+        n_samples_per_prompt=4,
+    )
+    model = ArtifactStep.adopt("tests/generation-model", VERSION, "s3://test/generation-model", kind=LevanterCheckpoint)
+    data = ArtifactStep.adopt("tests/generation-data", VERSION, "s3://test/generation-data")
+    spec = SkyRLSpec(
+        name="tests/generation",
+        version=VERSION,
+        config_yaml=(
+            "context_budget: {request_window_tokens: 1024, max_new_tokens_per_turn: 256, max_turns: 1}\n"
+            "model_num_attention_heads: 8\n"
+            "trainer: {strategy: megatron, max_steps: 8, algorithm: {use_kl_loss: false}}\n"
+            "generator: {backend: vllm, run_engines_locally: true}\n"
+        ),
+        model=ArtifactHfModel(model, "Qwen/Qwen3-0.6B-Base", "da87bfb", relative_path="hf/global_step-32"),
+        train_data=(),
+        validation_data=(ArtifactDataSource(data, relative_path="train.parquet"),),
+        topology=SkyRLTopology(num_nodes=1, gpus_per_node=4, gpu_variant="GB200", role_plan=plan),
+        retention=SkyRLRetentionPolicy(),
+        seed=17,
+    )
+    return skyrl_step(
+        spec,
+        IrisSkyRLExecution(
+            cluster="cw-us-east-08a",
+            cluster_config="lib/iris/config/cw-us-east-08a.yaml",
+            cpu=128,
+            memory="800GB",
+            disk="4TB",
+            priority="interactive",
+            max_retries=3,
+            target_cluster=None,
+            parent_cluster_config=None,
+            coordinator_timeout_hours=12,
+            job_timeout_seconds=1800,
+        ),
+    )
 
 
 def _micro210_step(artifact_root):

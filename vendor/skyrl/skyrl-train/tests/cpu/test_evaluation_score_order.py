@@ -10,6 +10,8 @@ from dataclasses import replace
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from finestore.rl.run_records import read_evaluations
+from finestore.rl.strata import TaskEvaluationIdentity, TaskStrata
 from omegaconf import OmegaConf
 from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import AutoTokenizer
@@ -22,7 +24,7 @@ from skyrl_train.config.utils import get_default_config
 from skyrl_train.dataset.tasks import write_tasks
 from skyrl_train.entrypoints.main_base import BasePPOExp
 from skyrl_train.entrypoints.terminal_bench import TerminalBenchExp
-from skyrl_train.evaluate import _collect_evaluation_rollouts, _WholeTrajectoryAccumulator
+from skyrl_train.evaluate import evaluate
 from skyrl_train.evaluation_pool import EvaluationPool
 from skyrl_train.evaluation_profiles import resolve_evaluation_profiles
 from skyrl_train.rollouts.task_projections import StepTaskProjection, WholeTaskProjection
@@ -189,12 +191,19 @@ def test_evaluation_mean_survives_cancellation_and_completion_order(per_token):
 
 
 @pytest.mark.asyncio
-async def test_evaluation_collector_keeps_task_id_and_scoring_metadata():
+async def test_evaluation_collector_keeps_task_id_and_scoring_metadata(tmp_path):
     config = get_default_config()
+    config.trainer.export_path = str(tmp_path)
+    config.trainer.dump_eval_results = False
+    config.generator.eval_n_samples_per_prompt = 1
+    OmegaConf.update(config, "runtime", {"attempt_id": "eval-attempt", "model": "test-policy"}, force_add=True)
     task = text_task("validation-task")
     row = task_input(lowered_task(task), metric_class="script", data_source="validation")
+    identity = TaskEvaluationIdentity(strata=TaskStrata(family="math", source="fixture"))
+    row = replace(row, metadata=replace(row.metadata, evaluation_identity=identity))
     loader = StatefulDataLoader([{"input": row}], collate_fn=list)
-    projection = WholeTaskProjection(config.generator, SimpleNamespace(eos_token_id=2))
+    tokenizer = SimpleNamespace(eos_token_id=2, decode=lambda _tokens: "answer")
+    projection = WholeTaskProjection(config.generator, tokenizer)
     response = TrainingRollout(
         task_id="validation-task",
         messages=(),
@@ -210,13 +219,15 @@ async def test_evaluation_collector_keeps_task_id_and_scoring_metadata():
         return projection.project([response], request)
 
     async with EvaluationPool(concurrency=1) as pool:
-        rollouts = await _collect_evaluation_rollouts(
-            loader, SimpleNamespace(run=run), config, 0, None, _WholeTrajectoryAccumulator([], []), pool
-        )
+        await evaluate(loader, SimpleNamespace(run=run), config, 0, tokenizer, evaluation_pool=pool)
 
-    assert rollouts.batch["task_ids"] == ["validation-task"]
-    assert rollouts.env_classes == ["script"]
-    assert rollouts.data_sources == ["validation"]
+    [saved] = read_evaluations(str(tmp_path), attempt_id="eval-attempt", step=0, evaluation="eval/")
+    assert saved.task_id == task.id
+    assert saved.data_source == "validation"
+    assert saved.strata == identity.strata
+    assert saved.model == "test-policy"
+    [answer] = saved.answers
+    assert answer.response_token_count == 1
 
 
 def test_task_timings_survive_projection_concatenation_and_row_selection():
