@@ -195,12 +195,22 @@ SNOWBALL_ONE_RACK = replace(
     ),
     megatron=replace(MEGATRON, pipeline_model_parallel_size=2),
     patch=RecipePatch(
+        # Snowball's five KV heads cannot split across CP4 for a2a. All-gather
+        # supports its sliding windows without changing the four-group geometry.
+        trainer=sections.Trainer(
+            policy=sections.Policy(
+                megatron_config=sections.PolicyMegatronConfig(transformer_config_kwargs={"cp_comm_type": "all_gather"})
+            ),
+            ref=sections.Ref(
+                megatron_config=sections.RefMegatronConfig(transformer_config_kwargs={"cp_comm_type": "all_gather"})
+            ),
+        ),
         extra_env={
             "NCCL_BUFFSIZE": str(sections.Policy().nccl_buffer_size_bytes),
             "NCCL_NET": "IB",
             "NCCL_IB_DISABLE": "0",
             "NCCL_IB_HCA": SNOWBALL_INFINIBAND_PORTS,
-        }
+        },
     ),
 )
 SNOWBALL_THREE_RACK = replace(
@@ -212,12 +222,13 @@ SNOWBALL_THREE_RACK = replace(
     # the all-GPU launch gate checks the new allocation before model loading.
     patch=PROFILES["three-rack"].patch.merge(
         RecipePatch(
+            trainer=SNOWBALL_ONE_RACK.patch.trainer,
             extra_env={
                 "NCCL_BUFFSIZE": str(sections.Policy().nccl_buffer_size_bytes),
                 "NCCL_NET": "IB",
                 "NCCL_IB_DISABLE": "0",
                 "NCCL_IB_HCA": SNOWBALL_INFINIBAND_PORTS,
-            }
+            },
         )
     ),
 )

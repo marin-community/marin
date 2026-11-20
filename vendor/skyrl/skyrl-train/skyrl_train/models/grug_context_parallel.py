@@ -1,10 +1,9 @@
 """Context-parallel communication constraints for Grug's mixed attention layers."""
 
 
-def grug_cp_communication(long_layers: tuple[bool, ...]) -> list[str]:
-    # Ring CP cannot preserve sliding windows. KV all-gather supports packed
-    # sliding windows without requiring the KV head count to divide CP.
-    return ["p2p" if is_long else "all_gather" for is_long in long_layers]
+def grug_cp_communication(long_layers: tuple[bool, ...], *, hero: bool) -> list[str]:
+    """Return the bridge's per-layer defaults before launch overrides."""
+    return ["a2a" if hero and not is_long else "p2p" for is_long in long_layers]
 
 
 def validate_cp_attention(

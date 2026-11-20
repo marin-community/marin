@@ -106,3 +106,25 @@ def test_snowball_smoke_satisfies_runtime_batch_geometry(run_spec, tmp_path, mon
     validate_launch(output.read_text(), tmp_path / "compiled", model_config=b"{}")
     trainer = yaml.safe_load((tmp_path / "compiled/compiled.yaml").read_text())["skyrl"]["trainer"]
     assert sum(trainer["rollout_buffer"]["consumed_route_quotas"].values()) == trainer["train_batch_size"]
+
+
+@pytest.mark.parametrize("worker", ["policy", "ref"])
+@pytest.mark.parametrize("communication", [None, "p2p", "a2a"])
+def test_snowball_cp4_rejects_invalid_sliding_window_transport_before_allocation(
+    run_spec, tmp_path, monkeypatch, worker, communication
+):
+    monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
+    output = tmp_path / "launch.yaml"
+    with build_context(BuildContext(versions=VersionCodex(default="2026.11.20.305"))):
+        run_from_spec(run_spec, smoke=True, config_output=output)
+    document = yaml.safe_load(output.read_text())
+    model_config = (Path(__file__).parents[1] / "context-fixtures/config.json").read_bytes()
+    # First compose the profile through the actual frozen runtime validator.
+    validate_launch(yaml.safe_dump(document), tmp_path / "valid", model_config=model_config)
+    kwargs = document["skyrl"]["trainer"][worker]["megatron_config"]["transformer_config_kwargs"]
+    if communication is None:
+        kwargs.pop("cp_comm_type")
+    else:
+        kwargs["cp_comm_type"] = communication
+    with pytest.raises(ValueError, match=r"sliding-window|divisible by CP"):
+        validate_launch(yaml.safe_dump(document), tmp_path / "invalid", model_config=model_config)

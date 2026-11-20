@@ -44,20 +44,24 @@ def main(source: Path, destination: Path, model_config: Path | None = None) -> N
         model_dict = json.loads(model_bytes)
         if model_dict.get("model_type") == "grug_moe":
             model = GrugMoeConfig(**model_dict)
-            topology = config.skyrl.trainer.policy.megatron_config
             long_layers = grug_long_layer_flags(model.num_hidden_layers, model.global_every)
-            communications = topology.transformer_config_kwargs.get("cp_comm_type", grug_cp_communication(long_layers))
-            if isinstance(communications, str):
-                communications = [communications] * len(long_layers)
-            for is_long, communication in zip(long_layers, communications, strict=True):
-                validate_cp_attention(
-                    query_heads=model.num_attention_heads,
-                    kv_heads=(model.global_kv_heads if is_long else model.local_kv_heads) or model.num_key_value_heads,
-                    tensor_parallel=topology.tensor_model_parallel_size,
-                    context_parallel=topology.context_parallel_size,
-                    communication=communication,
-                    sliding_window=not is_long,
+            for worker in (config.skyrl.trainer.policy, config.skyrl.trainer.ref):
+                topology = worker.megatron_config
+                communications = topology.transformer_config_kwargs.get(
+                    "cp_comm_type", grug_cp_communication(long_layers, hero=model.uses_hero_architecture)
                 )
+                if isinstance(communications, str):
+                    communications = [communications] * len(long_layers)
+                for is_long, communication in zip(long_layers, communications, strict=True):
+                    validate_cp_attention(
+                        query_heads=model.num_attention_heads,
+                        kv_heads=(model.global_kv_heads if is_long else model.local_kv_heads)
+                        or model.num_key_value_heads,
+                        tensor_parallel=topology.tensor_model_parallel_size,
+                        context_parallel=topology.context_parallel_size,
+                        communication=communication,
+                        sliding_window=not is_long,
+                    )
     submitted = OmegaConf.load(source)
     expected_routes = OmegaConf.select(submitted, "skyrl.trainer.rollout_buffer.source_routes", default={})
     actual_routes = OmegaConf.select(config, "skyrl.trainer.rollout_buffer.source_routes", default={})
