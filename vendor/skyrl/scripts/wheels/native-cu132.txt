@@ -23,7 +23,7 @@ nvidia-curand==10.4.2.55
 nvidia-cusolver==12.2.0.1
 nvidia-cusparse==12.7.10.1
 nvidia-cusparselt-cu13==0.8.1
-nvidia-nccl-cu13==2.29.7
+nvidia-nccl-cu13==2.32.6
 nvidia-nvjitlink==13.4.52
 nvidia-nvshmem-cu13==3.4.5
 nvidia-nvtx==13.2.75

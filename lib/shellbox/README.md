@@ -43,7 +43,7 @@ addresses; `DENY` denies external traffic. Neither grants cluster access.
 Iris commands and file transfer use the existing `ExecInContainer` RPC and require
 `/bin/sh`, `base64`, `tar`, `head`, `tail` and `wc` in the task image.
 Daytona uses its filesystem API and requires `/bin/sh`, `tar`, `head` and `wc`
-for commands and directory transfer.
+for commands and directory transfer; `open_process` also needs Python 3.8 or newer.
 Daytona uploads each control wrapper into a private command directory before execution,
 so nested shell quoting does not enlarge the argument sent to its execution API.
 The original argv, stdin, environment and working directory are preserved;
@@ -171,7 +171,7 @@ The host handler receives bounded requests on that process's stdout and performs
 operations it authorizes. Model URLs and authentication stay with the host
 handler; a runtime service uses the group-local listener URL and a dummy API key.
 The group needs no route to a model server or cloud storage. The listener requires
-Python 3 in its member image. It supports bounded nonstreaming GET and POST
+Python 3.8 or newer in its member image. It supports bounded nonstreaming GET and POST
 requests, with no caller headers forwarded to the host handler. Request IDs allow
 concurrent calls; responses remain whole messages, without SSE or token streaming.
 There is no per-request exec or guest control endpoint.
@@ -282,6 +282,18 @@ reference or build-context contents and the requested resources. Use immutable
 image references. A mutable tag can select a snapshot built from an earlier image.
 Snapshot creation requires available organization quota.
 Machine cleanup deletes the sandbox and retains the snapshot for reuse.
+`DaytonaMachineFactory(auto_stop_interval=30)` sets the idle-stop interval in
+minutes and configures Daytona to delete sandboxes immediately on stop. An open
+machine renews activity at one-third of that interval because a running guest command does not
+reset Daytona's idle timer. Closing the machine stops renewal before deleting
+the sandbox. If the client process exits without cleanup, renewal stops and idle cleanup
+reclaims the sandbox. `auto_stop_interval=0` disables idle stop and renewal.
+`ttl_minutes` remains the hard wall-clock cap, defaulting to 360 minutes,
+including while activity is renewed.
+Pass `labels={"owner": "agent-eval", "lane": "eval", "job": "swe-rebench"}`
+to attach ownership metadata to every sandbox the factory creates. Use a job
+prefix and lane, without personal information or credentials. The default
+labels contain only `owner=shellbox`; callers supply the lane and job labels.
 The factory accepts `DaytonaNetworkPolicy` with `block_all`, `unrestricted`,
 `network_allow_list`, or `domain_allow_list`. The two allow-list modes require a
 `value`. Without a policy override, the factory uses `MachineSpec.network`.
