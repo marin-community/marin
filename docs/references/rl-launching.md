@@ -232,6 +232,14 @@ parallelism. An omitted or null ETP inherits the role's TP before these checks.
 Context-parallel ranks participate in the expert grid, so EP need not divide dense
 data parallelism.
 
+Set `trainer.rollout_buffer.groups_per_family` for fixed numbers of prompt groups per task family in
+each training batch. Each Parquet training row supplies its `family`. The counts must sum to
+`trainer.train_batch_size`. Use `batch_policy: full_batch` and leave `data.sampling.kind` unset.
+Each family needs its group count times `max_staleness_steps + 1` usable rows so that every batch in
+the rollout window can use distinct prompts. A rejected group releases a slot in its own family.
+Each family draws prompts from its own seeded passes. Checkpoints retain the position in each
+family’s order. Omit the family counts to use the configured prompt order, including curriculum sampling.
+
 ## Artifact and runtime boundaries
 
 Identity-bearing inputs belong in `SkyRLSpec`: model and tokenizer,

@@ -7,11 +7,15 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass, replace
 from enum import StrEnum
+from pathlib import Path
 from typing import Annotated, ClassVar, Literal
 
+import yaml
 from finestore.rl.rl_progress import Invariant
+from marin.evaluation.eval_env import DAYTONA_EVAL_API_KEY_ENV
 from marin.execution.lazy import ArtifactStep
 from marin.rl.skyrl import (
     ArtifactDataSource,
@@ -29,6 +33,8 @@ from skyrlrecipe.declared import (
     CheckpointCallback,
     EvaluationCallback,
     EvaluationProfile,
+    HarborEvaluationCallback,
+    HarborEvaluationCohort,
     HFModelSaveCallback,
 )
 
@@ -37,6 +43,32 @@ from experiments.post_training.task_curation.selection import TRAIN_FILENAME
 UPDATE_SECONDS_METRIC = "speed/update_seconds"
 GENERATE_WALL_SECONDS_METRIC = "generate/wall_seconds"
 MINIMUM_TASK_COVERAGE = 0.99
+
+
+def harbor_evaluation(path: Path) -> HarborEvaluationCallback:
+    """Load the pinned cohorts and job settings for in-training Harbor evaluation."""
+    config = yaml.safe_load(path.read_text())
+    cohorts = []
+    for cohort in config["cohorts"]:
+        job = deepcopy({**config["job"], **cohort.get("job", {})})
+        job["tasks"] = [
+            {
+                "git_url": cohort["git_url"],
+                "git_commit_id": cohort["git_commit_id"],
+                "path": task_path,
+                "source": cohort["name"],
+            }
+            for task_path in cohort["paths"]
+        ]
+        cohorts.append(HarborEvaluationCohort(name=cohort["name"], job=job, reward_key="reward"))
+    return HarborEvaluationCallback(
+        type="harbor_evaluation",
+        cohorts=tuple(cohorts),
+        timeout=config["timeout"],
+        minimum_coverage=config["minimum_coverage"],
+        minimum_native_coverage=MINIMUM_TASK_COVERAGE,
+        daytona_api_key_env=DAYTONA_EVAL_API_KEY_ENV,
+    )
 
 
 class WindowStatistic(StrEnum):
@@ -156,13 +188,20 @@ class Training:
                     **({"additional_evaluations": profiles} if profiles else {}),
                 )
             )
+        minimum_scored_tasks = math.ceil(MINIMUM_TASK_COVERAGE * expected_tasks)
+        if preset.harbor is not None:
+            callbacks.append(preset.harbor)
+            for cohort in preset.harbor.cohorts:
+                count = len(cohort.job["tasks"])
+                expected_tasks += count
+                minimum_scored_tasks += math.ceil(preset.harbor.minimum_coverage * count)
         if initial_model_uri is not None:
             callbacks.append(
                 BestCheckpointCallback(
                     type="best_checkpoint",
                     initial_model_uri=initial_model_uri,
                     expected_tasks=expected_tasks,
-                    minimum_scored_tasks=math.ceil(MINIMUM_TASK_COVERAGE * expected_tasks),
+                    minimum_scored_tasks=minimum_scored_tasks,
                 )
             )
         if preset.checkpoint_every:
@@ -295,6 +334,7 @@ class Preset:
     retention: SkyRLRetentionPolicy
     export_hf: bool = False
     held_out_tasks: str | None = None
+    harbor: HarborEvaluationCallback | None = None
     guards: tuple[Metric, ...] = ()
     objectives: tuple[Metric, ...] = ()
     gaps: tuple[str, ...] = ()
@@ -309,6 +349,12 @@ class Preset:
             raise ValueError("held-out evaluations require a held-out task selection")
         if self.checkpoint_every is not None and (self.checkpoint_every <= 0 or not self.evaluations):
             raise ValueError("checkpoint export requires a positive checkpoint interval and an evaluation")
+        if self.harbor is not None:
+            if not isinstance(self.recipe.layout.workload, Training) or not self.evaluations:
+                raise ValueError("Harbor evaluation requires a training preset with an evaluation")
+            generator = self.recipe.config.generator
+            if generator is not None and generator.to_skyrl().get("enable_http_endpoint") is False:
+                raise ValueError("Harbor evaluation requires generator.enable_http_endpoint")
         for evaluation in self.evaluations[1:]:
             if evaluation.every is not None or evaluation.at_start:
                 raise ValueError(f"non-primary evaluation {evaluation.name} accepts neither every nor at_start")

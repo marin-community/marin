@@ -30,6 +30,7 @@ from harbor.trial.hooks import (
     emit_trial_hooks,
 )
 from harbor.trial.trial import Trial
+from harbor.utils.artifact_writer import ArtifactPersistenceError
 from harbor.utils.logger import logger
 
 
@@ -240,8 +241,10 @@ class TrialQueue:
         trial_config: TrialConfig,
         attempt: int,
         result: TrialResult,
+        persisted: asyncio.Event,
     ) -> None:
         await persist_selected_result(trial_config, attempt, result)
+        persisted.set()
         await self._emit_hooks(
             TrialEvent.RESULT_PERSISTENCE_START,
             trial_config,
@@ -340,8 +343,9 @@ class TrialQueue:
 
         state.gate.active = False
         result = timeout_result(trial_config, attempt, state.trial, started_at)
+        persisted = asyncio.Event()
         publish_task = asyncio.create_task(
-            self._publish_timeout_result(trial_config, attempt, result)
+            self._publish_timeout_result(trial_config, attempt, result, persisted)
         )
         attempt_task.cancel()
         done, _ = await asyncio.wait(
@@ -353,6 +357,8 @@ class TrialQueue:
         else:
             publish_task.cancel()
             self._observe_task(publish_task)
+            if not persisted.is_set() and result.has_verifier_rewards:
+                raise ArtifactPersistenceError("Timed-out trial result did not finish persisting")
         return result
 
     async def _cancel_admitted_attempt(

@@ -38,6 +38,7 @@ from experiments.post_training.rl_presets import (
     Recipe,
     Training,
     WindowStatistic,
+    harbor_evaluation,
 )
 from experiments.post_training.task_curation.selection import (
     FULL_VALIDATION_FILENAME,
@@ -133,7 +134,6 @@ _DEFAULT_PATCH = RecipePatch(
         ),
         enable_chunked_prefill=True,
         enforce_eager=False,
-        enable_http_endpoint=False,
         chat_template=None,
         apply_overlong_filtering=False,
         engine_init_kwargs={"moe_backend": "triton", "enable_auto_tools": True, "tool_parser": "hermes"},
@@ -315,6 +315,24 @@ _LEARNING_MEDIUM = _snowball(
     budget="asynchronous runtime unmeasured",
 )
 
+
+_TRAIN_LONG = _snowball(
+    held_out_tasks=_DEFAULT_EVAL_LITE,
+    retention=SkyRLRetentionPolicy(resume_checkpoint_count=5),
+    export_hf=True,
+    name="train-long",
+    recipe=_EXPORT_BEST,
+    owned_keys=_BEST_EXPORT_KEYS,
+    updates=100,
+    measured=range(1, 101),
+    tasks_input="optional",
+    accepts_init=True,
+    publishes=True,
+    checkpoint_every=10,
+    data_settings=frozenset({"shuffle", "sampling"}),
+    evaluations=(replace(_TASK_SET, every=10, at_start=True),),
+)
+
 _PRESETS = (
     _snowball(
         held_out_tasks=_DEFAULT_EVAL_LITE,
@@ -388,21 +406,24 @@ _PRESETS = (
         control_preset=_LEARNING_MEDIUM.name,
         data_settings=frozenset(),
     ),
+    _TRAIN_LONG,
+    replace(
+        _TRAIN_LONG,
+        name="train-long-harbor",
+        revision="2026.11.20.6",
+        harbor=harbor_evaluation(Path(__file__).with_name("rl_harbor.yaml")),
+        gaps=(*_TRAIN_LONG.gaps, "harbor-on-daytona"),
+    ),
     _snowball(
         held_out_tasks=_DEFAULT_EVAL_LITE,
-        retention=SkyRLRetentionPolicy(resume_checkpoint_count=5),
-        export_hf=True,
-        name="train-long",
-        recipe=_EXPORT_BEST,
-        owned_keys=_BEST_EXPORT_KEYS,
-        updates=100,
-        measured=range(1, 101),
-        tasks_input="optional",
+        name="eval-short",
+        recipe=_GENERATING,
+        updates=0,
+        measured=range(1),
         accepts_init=True,
-        publishes=True,
-        checkpoint_every=10,
-        data_settings=frozenset({"shuffle", "sampling"}),
-        evaluations=(replace(_TASK_SET, every=10, at_start=True),),
+        owned_keys=_OWNED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
+        evaluations=(EVALUATIONS["eval_lite"],),
+        budget="8 min; 1.1 H100-h",
     ),
 )
 
