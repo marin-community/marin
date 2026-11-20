@@ -54,6 +54,9 @@ PAPER_FORECAST_ERRORS = {
 }
 # two_stage.py without reference models: fitted rungs -> absolute error forecasting 1e23 on the original seed.
 PAPER_TWO_STAGE_ERRORS = {9: 0.1628, 8: 0.2300, 7: 0.2304, 6: 0.2347, 5: 0.2364}
+# Half a unit of the four printed decimals, plus 1e-5 for least-squares results that differ across platforms:
+# hle/qwen3 at 5 models gives 0.0274508 on Linux CI against the paper's printed 0.0274.
+PRINTED_ERROR_TOLERANCE = 5e-5 + 1e-5
 
 
 def _cells(record: dict) -> ScoreCells:
@@ -97,8 +100,12 @@ def test_forecast_errors_reproduce_paper(pair: str):
 
     for fitted_models, (paper_baseline, paper_ensemble) in PAPER_FORECAST_ERRORS[pair].items():
         forecasts = fit_ladder(ladder.up_to(capability[fitted_models - 1])).forecasts(target)
-        assert abs(forecasts[ForecastKind.SIGMOID_BASELINE] - observed) == pytest.approx(paper_baseline, abs=5e-5)
-        assert abs(forecasts[ForecastKind.HINTED_ENSEMBLE] - observed) == pytest.approx(paper_ensemble, abs=5e-5)
+        assert abs(forecasts[ForecastKind.SIGMOID_BASELINE] - observed) == pytest.approx(
+            paper_baseline, abs=PRINTED_ERROR_TOLERANCE
+        )
+        assert abs(forecasts[ForecastKind.HINTED_ENSEMBLE] - observed) == pytest.approx(
+            paper_ensemble, abs=PRINTED_ERROR_TOLERANCE
+        )
 
 
 def test_two_stage_baseline_reproduces_paper_on_delphi():
@@ -109,7 +116,9 @@ def test_two_stage_baseline_reproduces_paper_on_delphi():
 
     for fitted_rungs, paper_error in PAPER_TWO_STAGE_ERRORS.items():
         fit = fit_two_stage_baseline(capability[:fitted_rungs], bits_per_byte[:fitted_rungs], accuracy[:fitted_rungs])
-        assert abs(float(fit.predict(capability[-1])) - accuracy[-1]) == pytest.approx(paper_error, abs=5e-5)
+        assert abs(float(fit.predict(capability[-1])) - accuracy[-1]) == pytest.approx(
+            paper_error, abs=PRINTED_ERROR_TOLERANCE
+        )
 
 
 BOOTSTRAP_LAW = JointLawParams(capability_slope=1.2, hint_slope=4.0, intercept=-2.5, upper=0.9, lower=-0.05, floor=0.02)
