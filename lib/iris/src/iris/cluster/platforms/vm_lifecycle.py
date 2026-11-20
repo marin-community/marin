@@ -437,9 +437,8 @@ def restart_controller(
 
         # A failed SSH probe proves the bootstrap script did not run and avoids
         # updating GCE startup metadata before authorization is checked.
-        probe = vm.run_command("true", timeout=Duration.from_seconds(30))
-        if probe.returncode != 0:
-            raise RuntimeError(f"SSH probe failed on {vm.vm_id}: {probe.stderr}")
+        if not vm.wait_for_connection(timeout=Duration.from_seconds(30)):
+            raise RuntimeError(f"SSH probe failed on {vm.vm_id}")
         bootstrap_script = build_controller_bootstrap_script_from_config(config, resolve_image=_resolve_image)
     except Exception as e:
         raise ControllerRestartNotStarted(f"Controller restart failed before VM bootstrap: {e}") from e
