@@ -207,3 +207,22 @@ def test_snowball_262k_mixture_binds_the_published_mixture(tmp_path, monkeypatch
     assert request.timeout == Duration.from_seconds(72_000)
     flags = request.environment.env_vars["XLA_FLAGS"].split()
     assert "--xla_gpu_shard_autotuning=false" in flags
+
+
+@pytest.mark.parametrize(
+    ("clusters", "coordinator", "error"),
+    [
+        (("cw-rno2a",), "cw-rno2a", None),
+        (("cw-rno2a",), "cw-us-east-02a", None),
+        ((), "cw-rno2a", "SFT targets cw-us-east-02a, but the RL coordinator targets cw-rno2a"),
+    ],
+)
+def test_sft_preset_runs_on_its_own_or_an_opted_in_rl_coordinator_cluster(clusters, coordinator, error):
+    preset = replace(MIXTURE_262K_32NODE, cross_region_clusters=clusters)
+    if error is not None:
+        with pytest.raises(ValueError, match=error):
+            preset.model(coordinator_cluster=coordinator)
+        return
+    resources = preset.model(coordinator_cluster=coordinator).step.runtime_args["train_resources"]
+    # No target cluster places the SFT job on the coordinator's own controller.
+    assert (resources.target_cluster, tuple(resources.regions or ())) == (None, ())

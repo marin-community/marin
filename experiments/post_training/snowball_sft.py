@@ -144,7 +144,8 @@ MIXTURE_SPEC = replace(
     per_device_parallelism=1,
     xla_flags=("--xla_gpu_shard_autotuning=false",),
 )
-MIXTURE_262K_32NODE = SFTPreset(_MIXTURE_NAME, MIXTURE_SPEC, MIXTURE_RESOURCES)
+# The mixture's caches live in s3://marin-us-east-02a; RL on cw-rno2a trains there and reads them across regions.
+MIXTURE_262K_32NODE = SFTPreset(_MIXTURE_NAME, MIXTURE_SPEC, MIXTURE_RESOURCES, cross_region_clusters=("cw-rno2a",))
 SNOWBALL_SFT = (OPENTHOUGHTS_32K_4NODE, MIXTURE_262K_32NODE)
 
 
