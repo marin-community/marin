@@ -591,7 +591,7 @@ class RolloutBuffer:
             self._family_order.rotate(-1)
             if occupied[family] < self.config.groups_per_family[family]:
                 return family
-        raise RuntimeError(f"No family quota slot remains in rollout batch {batch_id}")
+        raise RuntimeError(f"No group slot remains for this family in rollout batch {batch_id}")
 
     async def commit(self, lease_id: str, prompt: dict, verdict: RolloutVerdict, payload: PayloadReference) -> None:
         """Record a written group and release its lease."""

@@ -743,8 +743,8 @@ def test_cat_count_flipped_advantage_fails(tmp_path, cat_count_policy, cat_count
 @pytest.mark.nightly
 def test_cat_count_async_resumes_and_converges(tmp_path, cat_count_policy, cat_count_session, forkserver_context):
     root = tmp_path / "async"
-    quotas = {"odd": 4, "even": 4}
-    first = train(forkserver_context, root, cat_count_policy, steps=4, staleness=1, groups_per_family=quotas)
+    groups_per_family = {"odd": 4, "even": 4}
+    first = train(forkserver_context, root, cat_count_policy, steps=4, staleness=1, groups_per_family=groups_per_family)
     before_resume = len(cat_count_session)
     resumed = train(
         forkserver_context,
@@ -754,7 +754,7 @@ def test_cat_count_async_resumes_and_converges(tmp_path, cat_count_policy, cat_c
         staleness=1,
         resume=True,
         eval_interval=2,
-        groups_per_family=quotas,
+        groups_per_family=groups_per_family,
     )
     resumed_steps = {
         int(row["attributes"]["step"])
@@ -767,7 +767,7 @@ def test_cat_count_async_resumes_and_converges(tmp_path, cat_count_policy, cat_c
     training = [row for row in resumed if "policy/raw_grad_norm" in row]
     for row in (*first, *training):
         if "policy/raw_grad_norm" in row:
-            assert {family: row[f"async/consumed_family/{family}"] for family in quotas} == quotas
+            assert {family: row[f"async/consumed_family/{family}"] for family in groups_per_family} == groups_per_family
     assert [row["trainer/global_step"] for row in training] == list(range(1, 101))
     assert any(row["async/staleness_mean"] > 0 for row in training)
     # Responses in flight across a weight sync carry both steps.

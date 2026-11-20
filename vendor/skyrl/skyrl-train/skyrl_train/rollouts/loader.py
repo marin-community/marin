@@ -175,10 +175,9 @@ class PromptLoader:
         """Return an available prompt outside ``live`` in the requested family.
 
         Prompts awaiting regeneration come first, then up to two batches' worth of the prompt order's draws. If those
-        draws find only live or quarantined uids, a scan of the dataset from where the last scan stopped takes the
-        first other row, so an order that keeps drawing such rows cannot stall dispatch; the row may be one the order
-        weights at zero.
+        draws find no eligible uid, a scan starting after the previous match can pick a row the order weights at zero.
         """
+
         def eligible(uid: str) -> bool:
             return self._available(uid, live) and (family is None or self._families.get(uid) == family)
 

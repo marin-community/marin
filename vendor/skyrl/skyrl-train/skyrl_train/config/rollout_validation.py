@@ -24,41 +24,42 @@ class EntrypointOperation(StrEnum):
     GENERATE = "generate"
 
 
-def validate_family_quota_config(cfg: DictConfig) -> dict[str, int]:
-    """Read the batch quotas and check their interaction with training settings."""
-    quotas = OmegaConf.select(cfg, GROUPS_PER_FAMILY_KEY, default={})
-    if not isinstance(quotas, Mapping) or any(
+def validate_groups_per_family(cfg: DictConfig) -> dict[str, int]:
+    """Read the groups per family in each batch and validate the training settings."""
+    groups_per_family = OmegaConf.select(cfg, GROUPS_PER_FAMILY_KEY, default={})
+    if not isinstance(groups_per_family, Mapping) or any(
         not isinstance(family, str) or not family or type(count) is not int or count <= 0
-        for family, count in quotas.items()
+        for family, count in groups_per_family.items()
     ):
         raise ValueError(f"{GROUPS_PER_FAMILY_KEY} requires family names and positive integer counts")
-    if quotas:
+    if groups_per_family:
         if cfg.trainer.rollout_buffer.batch_policy != BatchPolicy.FULL_BATCH:
             raise ValueError(f"{GROUPS_PER_FAMILY_KEY} requires batch_policy={BatchPolicy.FULL_BATCH}")
         batch_size = cfg.trainer.train_batch_size
-        if sum(quotas.values()) != batch_size:
+        if sum(groups_per_family.values()) != batch_size:
             raise ValueError(
-                f"{GROUPS_PER_FAMILY_KEY} sums to {sum(quotas.values())}, expected train_batch_size={batch_size}"
+                f"{GROUPS_PER_FAMILY_KEY} sums to {sum(groups_per_family.values())}, "
+                f"expected train_batch_size={batch_size}"
             )
         if cfg.data.sampling.kind is not None:
             raise ValueError(f"{GROUPS_PER_FAMILY_KEY} requires data.sampling.kind to be null")
-    return dict(quotas)
+    return dict(groups_per_family)
 
 
 def validate_family_pools(
-    quotas: Mapping[str, int], family_counts: Mapping[str | None, int], max_staleness_steps: int
+    groups_per_family: Mapping[str, int], family_counts: Mapping[str | None, int], max_staleness_steps: int
 ) -> None:
     """Check that every family can supply its full window of distinct groups."""
     if family_counts.get(None, 0) or family_counts.get("", 0):
         raise ValueError(f"{GROUPS_PER_FAMILY_KEY} requires a family on every training row")
-    if family_counts.keys() != quotas.keys():
+    if family_counts.keys() != groups_per_family.keys():
         raise ValueError(
-            f"{GROUPS_PER_FAMILY_KEY} names {sorted(quotas)}, "
+            f"{GROUPS_PER_FAMILY_KEY} names {sorted(groups_per_family)}, "
             f"but training rows have families {sorted(map(str, family_counts))}"
         )
-    for family, quota in quotas.items():
+    for family, group_count in groups_per_family.items():
         available = family_counts[family]
-        needed = (max_staleness_steps + 1) * quota
+        needed = (max_staleness_steps + 1) * group_count
         if available < needed:
             raise ValueError(f"{GROUPS_PER_FAMILY_KEY} requires {needed} rows for family {family!r}, found {available}")
 

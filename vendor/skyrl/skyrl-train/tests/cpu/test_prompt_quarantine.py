@@ -75,6 +75,20 @@ def test_usable_group_resets_the_count():
     assert "0" in offered(prompts, 4)
 
 
+def test_family_dispatch_skips_quarantined_prompts():
+    prompts = PromptLoader(
+        Prompts(4),
+        SeededPasses(4, seed=0, shuffle=False),
+        batch_size=2,
+        max_stale_retries=1,
+        max_unusable_groups=1,
+        families={"0": "agentic", "1": "nonagentic", "2": "agentic", "3": "nonagentic"},
+    )
+    prompts.record_disposition("0", UNUSABLE)
+
+    assert prompts.next_prompt(live=(), family="agentic")["uid"] == "2"
+
+
 def test_quarantine_keeps_one_batch_of_prompts():
     # Every prompt fails, as in a sandbox outage: only the one spare prompt may leave the rotation.
     prompts = loader(num_rows=4, batch_size=3)

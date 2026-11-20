@@ -24,7 +24,7 @@ from skyrl_train.config.rollout_validation import (
     GROUPS_PER_FAMILY_KEY,
     BatchPolicy,
     validate_family_pools,
-    validate_family_quota_config,
+    validate_groups_per_family,
 )
 from skyrl_train.curriculum import CurriculumConfig, CurriculumOrder, SamplingKind
 from skyrl_train.dataset import PromptDataset
@@ -187,7 +187,7 @@ class TrainingContext:
         )
         batch_size = config.trainer.train_batch_size
         max_sample_batches = int(dynamic_sampling.max_sample_batches)
-        groups_per_family = validate_family_quota_config(config)
+        groups_per_family = validate_groups_per_family(config)
         buffer_config = RolloutBufferConfig(
             batch_size=batch_size,
             max_in_flight=config.trainer.rollout_buffer.max_in_flight,
