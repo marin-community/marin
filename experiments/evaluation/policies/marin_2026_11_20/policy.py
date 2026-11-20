@@ -9,6 +9,7 @@ them and the context, output limit and seed each runs with. README.md lists the 
 
 from pathlib import Path
 
+import yaml
 from evalrecords.records import EvaluationSelection, PromptFormat
 
 from experiments.evaluation.evals import EVALS, HarborDefinition
@@ -52,10 +53,17 @@ def _judged(name: str, *, seed: int | None = None) -> PolicyEvaluation:
     return PolicyEvaluation(definition=EVALS[name], context=SERVED_CONTEXT, max_output=None, seed=seed)
 
 
-def _harbor(name: str, *, context: int, max_output: int) -> PolicyEvaluation:
-    """A Harbor config of this policy; ``context`` and ``max_output`` repeat its agent ``model_info``."""
+def _harbor(name: str) -> PolicyEvaluation:
+    """A Harbor config of this policy, whose agent ``model_info`` states its context and output limit."""
     definition = HarborDefinition(name=name, config_path=_HARBOR_DIR / f"{name}.yaml")
-    return PolicyEvaluation(definition=definition, context=context, max_output=max_output, seed=None)
+    (agent,) = yaml.safe_load(definition.config_path.read_text())["agents"]
+    model_info = agent["kwargs"]["model_info"]
+    return PolicyEvaluation(
+        definition=definition,
+        context=model_info["max_input_tokens"],
+        max_output=model_info["max_output_tokens"],
+        seed=None,
+    )
 
 
 EVALUATIONS: tuple[PolicyEvaluation, ...] = (
@@ -82,14 +90,15 @@ EVALUATIONS: tuple[PolicyEvaluation, ...] = (
     _taskspec("truthfulqa"),
     _taskspec("winogrande"),
     # Agentic benchmarks on vendored Harbor.
-    _harbor("tb2-recovery", context=65_536, max_output=16_384),
-    _harbor("ot-tblite-recovery", context=32_768, max_output=8_192),
-    _harbor("swebench-verified", context=32_768, max_output=8_192),
-    _harbor("ds-1000-local", context=32_768, max_output=8_192),
+    _harbor("tb2-recovery"),
+    _harbor("ot-tblite-recovery"),
+    _harbor("swebench-verified"),
+    _harbor("ds-1000"),
 )
 
 # Not declared, because they do not run on main:
-# - τ³-bench and SOTOPIA-hard: #11080 removed their Harbor agents (the ACP relay and the SOTOPIA agent).
+# - τ³-bench and SOTOPIA-hard: vendored Harbor no longer has their agents (the ACP relay and the
+#   SOTOPIA agent).
 # - BixBench and BFCL with Pi: Harbor now requires Pi tasks to declare a prepared image with Pi
 #   installed (environment/shellbox-images.json), and their registry tasks install Pi at runtime.
 
