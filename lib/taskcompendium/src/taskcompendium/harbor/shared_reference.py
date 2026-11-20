@@ -17,25 +17,30 @@ from tomlkit.items import Table
 from verifyit.spec import PytestSpec
 
 from taskcompendium.harbor.shared_package import (
+    SharedExecutionPolicy,
     SharedPytestFormat,
+    SourceSetupPolicy,
+    apply_shared_task_config,
     render_shared_pytest_spec,
     shared_grader_script,
+    shared_private_image_layer,
     shared_source_spec,
+    shared_user_layer,
 )
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.integrity import SharedIntegrityContract, shared_preamble
+from taskcompendium.integrity import PRIVATE_CONTEXT, PRIVATE_DIRECTORY, SharedIntegrityContract, shared_preamble
 from taskcompendium.runtime import shared_pytest, shared_reference
 
-REFERENCE_INPUT = "setup_files/taskcompendium-frozen-reference.json"
-REFERENCE_BUNDLE = "setup_files/taskcompendium-frozen-reference.tar.gz"
-REFERENCE_INITIALIZER = "setup_files/taskcompendium-frozen-reference.py"
+REFERENCE_INPUT = f"{PRIVATE_CONTEXT}/reference.json"
+REFERENCE_BUNDLE = f"{PRIVATE_CONTEXT}/reference.tar.gz"
+REFERENCE_INITIALIZER = f"{PRIVATE_CONTEXT}/reference.py"
 
 ACTOR_PREFIX = "/opt/taskcompendium-agent"
 DEFAULT_SOURCE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 
 class ActorEnvironment(BaseModel):
-    """The declared agent-owned task Python environment; the spec is the whole truth."""
+    """The agent-owned Python environment declared by a trusted reference."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -115,8 +120,8 @@ def shared_actor_preamble(actor: ActorEnvironment) -> str:
         f"Agent environment (declared v{actor.version}): you run as UID {actor.uid} ({actor.group}) and own "
         f"{actor.prefix}. python and pip resolve to {actor.bin} first (PATH: {actor.path}). The captured baseline "
         f"packages are exposed read-only and unchanged; your installs land in {actor.python}. "
-        "This environment replaces the original root-owned task installation; every other part of the original "
-        "task is unchanged.\n\n"
+        "This environment replaces the original root-owned task installation. Follow the source setup "
+        "instructions in this environment.\n\n"
     )
 
 
@@ -198,43 +203,39 @@ def harden_shared_swe_reference(
     if any(name in files for name in (REFERENCE_INPUT, REFERENCE_BUNDLE, REFERENCE_INITIALIZER)):
         raise ValueError("Source package occupies protected reference resources")
     config = tomlkit.parse(files["task.toml"].decode())
-    environment = cast(Table, config.setdefault("environment", tomlkit.table()))
-    if environment.get("setup") is not None:
-        raise ValueError("Reference mode cannot reorder an existing source initialization command")
-    source_environment = dict(environment.get("env", {}))
     actor = reference.actor_environment
     files[REFERENCE_INPUT] = reference.model_dump_json().encode()
     files[REFERENCE_BUNDLE] = bundle
     files[REFERENCE_INITIALIZER] = Path(shared_reference.__file__).read_bytes()
-    environment["setup"] = {
-        "command": (
-            "set -euo pipefail\n"
-            'verifyit_path="$(readlink -f "$(command -v verifyit)")"\n'
-            'control_python="$(head -n 1 "$verifyit_path" | cut -c 3-)"\n'
-            '"$control_python" -I -S '
-            + shlex.quote("/" + REFERENCE_INITIALIZER)
-            + " "
-            + shlex.quote("/" + REFERENCE_INPUT)
-            + " "
-            + shlex.quote("/" + REFERENCE_BUNDLE)
-            + "\nrm "
-            + shlex.quote("/" + REFERENCE_INITIALIZER)
-            + "\n"
-        ),
-        "timeout_sec": host_init_timeout,
-    }
-    environment["env"] = {**source_environment, "PATH": actor.path}
-    cast(Table, config["agent"])["user"] = str(contract.agent_uid)
-    verifier = cast(Table, config["verifier"])
-    verifier["user"] = "root"
-    verifier["restart_environment"] = False
+    setup_command = (
+        "set -euo pipefail\n"
+        'verifyit_path="$(readlink -f "$(command -v verifyit)")"\n'
+        'control_python="$(head -n 1 "$verifyit_path" | cut -c 3-)"\n'
+        '"$control_python" -I -S '
+        + shlex.quote(f"{PRIVATE_DIRECTORY}/reference.py")
+        + " "
+        + shlex.quote(f"{PRIVATE_DIRECTORY}/reference.json")
+        + " "
+        + shlex.quote(f"{PRIVATE_DIRECTORY}/reference.tar.gz")
+        + "\nrm "
+        + shlex.quote(f"{PRIVATE_DIRECTORY}/reference.py")
+        + "\n"
+    )
+    apply_shared_task_config(
+        config,
+        contract,
+        setup_command,
+        setup_timeout=host_init_timeout,
+        source_setup_policy=SourceSetupPolicy.REJECT,
+        execution_policy=SharedExecutionPolicy.ACTOR_ENVIRONMENT,
+        actor_path=actor.path,
+    )
     metadata = cast(Table, config["metadata"])
-    metadata["integrity_contract"] = contract.model_dump(mode="json", exclude_none=True)
     metadata["actor_environment"] = actor.model_dump(mode="json", exclude_none=True)
-    metadata["execution_policy"] = "shared_actor_environment_v1"
     files["task.toml"] = tomlkit.dumps(config).encode()
     files["instruction.md"] = (shared_preamble(contract) + shared_actor_preamble(actor)).encode() + files[
         "instruction.md"
     ]
     files["tests/test.sh"] = shared_grader_script(contract)
+    files["environment/Dockerfile"] += (shared_user_layer(contract) + shared_private_image_layer(contract)).encode()
     return contract

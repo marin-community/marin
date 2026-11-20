@@ -4,6 +4,8 @@
 import hashlib
 import io
 import json
+import shlex
+import subprocess
 import tarfile
 import zlib
 from dataclasses import asdict, replace
@@ -15,7 +17,10 @@ from verifyit.spec import PytestSpec
 
 from taskcompendium.harbor.shared_package import (
     BOOTSTRAP_ARCHIVE,
+    SharedExecutionPolicy,
     SharedPytestFormat,
+    SourceSetupPolicy,
+    apply_shared_task_config,
     harden_shared_swe,
     render_shared_pytest_spec,
     shared_grader_script,
@@ -29,12 +34,19 @@ from taskcompendium.harbor.shared_reference import (
     shared_actor_preamble,
 )
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.integrity import SharedDependencyState, SharedIntegrityContract, shared_preamble
+from taskcompendium.integrity import (
+    AGENT_HOME,
+    PRIVATE_CONTEXT,
+    PRIVATE_DIRECTORY,
+    SharedDependencyState,
+    SharedIntegrityContract,
+    shared_preamble,
+)
 from taskcompendium.runtime import shared_pytest
 
 
-@pytest.fixture
-def source_reference():
+@pytest.fixture(params=[b"FROM original@sha256:" + b"a" * 64 + b"\n"])
+def source_reference(request):
     spec = PytestSpec(
         paths=("tests/test_value.py",),
         protected_paths_files=("trusted.txt",),
@@ -51,7 +63,7 @@ def source_reference():
         "instruction.md": (
             b"## Environment Setup (complete these steps first)\n\n```bash\ngit clone source .\n```\nRepair.\n"
         ),
-        "environment/Dockerfile": b"FROM original@sha256:" + b"a" * 64 + b"\n",
+        "environment/Dockerfile": request.param,
         "solution/solve.sh": b"#!/bin/bash\ngit clone original-fixed .\n",
         "tests/test.sh": b"#!/bin/bash\nexec verifyit /tests/verifier.toml\n",
         "tests/trusted.txt": b"tests/test_value.py\n",
@@ -100,6 +112,73 @@ def source_reference():
     return files, spec, reference, bundle
 
 
+def test_shared_config_preserves_source_initialization_and_replaces_root_home(tmp_path, source_reference):
+    _, _, reference, _ = source_reference
+    output = tmp_path / "initialization.txt"
+    config = tomlkit.document()
+    config["environment"] = {
+        "env": {"HOME": "/root"},
+        "setup": {"command": f"printf 'source:%s\\n' \"$HOME\" >> {shlex.quote(str(output))}"},
+    }
+    apply_shared_task_config(
+        config,
+        reference.contract,
+        f"printf 'bootstrap\\n' >> {shlex.quote(str(output))}",
+        setup_timeout=180,
+        source_setup_policy=SourceSetupPolicy.PREPEND,
+        execution_policy=SharedExecutionPolicy.MUTABLE,
+    )
+    environment = config["environment"]
+    subprocess.run(["/bin/bash", "-c", environment["setup"]["command"]], env=environment["env"].unwrap(), check=True)
+    assert output.read_text().splitlines() == [f"source:{AGENT_HOME}", "bootstrap"]
+
+
+@pytest.mark.docker
+@pytest.mark.parametrize("source_reference", [b"FROM ghcr.io/astral-sh/uv:python3.12-bookworm\n"], indirect=True)
+def test_built_image_keeps_private_reference_unreadable_without_initialization(tmp_path, source_reference):
+    files, spec, reference, bundle = source_reference
+    harden_shared_swe_reference(
+        files,
+        spec=spec,
+        reference=reference,
+        bundle=bundle,
+        pytest_format=SharedPytestFormat.SINGLE_PROTECTED_MANIFEST,
+        host_init_timeout=180,
+    )
+    for name, content in files.items():
+        if name.startswith("environment/"):
+            target = tmp_path / name.removeprefix("environment/")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+    built = subprocess.run(["docker", "build", "--quiet", str(tmp_path)], check=True, capture_output=True, text=True)
+    image = built.stdout.strip()
+    paths = [f"{PRIVATE_DIRECTORY}/{Path(name).name}" for name in files if name.startswith(PRIVATE_CONTEXT + "/")]
+    try:
+        root_probe = "import pathlib,sys,json;assert all(pathlib.Path(p).read_bytes() for p in json.loads(sys.argv[1]))"
+        subprocess.run(
+            ["docker", "run", "--rm", "--user", "0:0", image, "python", "-I", "-c", root_probe, json.dumps(paths)],
+            check=True,
+        )
+        actor_probe = (
+            "import pathlib,sys,json,os\n"
+            f"assert os.getuid() == {reference.contract.agent_uid}\n"
+            "for name in json.loads(sys.argv[1]):\n"
+            "    try:\n"
+            "        pathlib.Path(name).read_bytes()\n"
+            "    except PermissionError:\n"
+            "        continue\n"
+            "    raise AssertionError('actor read private image input')\n"
+        )
+        result = subprocess.run(
+            ["docker", "run", "--rm", image, "python", "-I", "-c", actor_probe, json.dumps(paths)],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+    finally:
+        subprocess.run(["docker", "image", "rm", image], check=True, capture_output=True)
+
+
 @pytest.mark.parametrize("custom_actor", [False, True])
 def test_reference_compilation_preserves_original_setup_oracle_image_and_source_clocks(source_reference, custom_actor):
     files, spec, reference, bundle = source_reference
@@ -139,9 +218,7 @@ def test_reference_compilation_preserves_original_setup_oracle_image_and_source_
     assert files["instruction.md"].endswith(original["instruction.md"])
     assert files["solution/solve.sh"] == original["solution/solve.sh"]
     assert files["tests/test.sh"] == shared_grader_script(reference.contract)
-    assert {k: v for k, v in files.items() if k.startswith("environment/")} == {
-        k: v for k, v in original.items() if k.startswith("environment/")
-    }
+    assert files["environment/Dockerfile"].startswith(original["environment/Dockerfile"])
     assert FrozenSharedReference.model_validate_json(files[REFERENCE_INPUT]) == reference
 
 

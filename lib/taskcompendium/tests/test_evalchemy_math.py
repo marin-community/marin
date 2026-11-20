@@ -12,8 +12,8 @@ from verifyit.grade import GradingInfraError
 
 from taskcompendium.importers.evalchemy.grader import DEPENDENCIES, scorer_files
 from taskcompendium.importers.evalchemy.scorers import minerva
-from taskcompendium.importers.evalchemy.scorers.fewshot import score
 from taskcompendium.importers.evalchemy.scorers.harness_generation import grade_harness_generation_candidate
+from taskcompendium.importers.evalchemy.scorers.main import score
 from taskcompendium.importers.evalchemy.scorers.math import grade_boxed_math
 from taskcompendium.importers.evalchemy.scorers.minerva import is_equiv
 from taskcompendium.importers.evalchemy.scorers.olympiad import grade_olympiad

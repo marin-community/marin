@@ -458,7 +458,7 @@ class MultiStepRewardStrategy(str, Enum):
 
 
 class TaskConfig(BaseModel):
-    schema_version: str = "1.2"
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3"] = "1.2"
     task: PackageInfo | None = Field(
         default=None,
         description="Package information for the task, parsed from the [task] section of task.toml.",

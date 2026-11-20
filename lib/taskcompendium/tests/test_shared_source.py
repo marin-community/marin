@@ -29,14 +29,16 @@ import tomlkit
 
 from taskcompendium.harbor.shared_source import (
     SCALE_SWE_PROFILE,
+    SOURCE_ARCHIVE,
+    SOURCE_PAYLOAD,
     SWE_LEGO_PROFILE,
     SWE_REBENCH_PROFILE,
     harden_shared_source,
 )
-from taskcompendium.integrity import SharedDependencyState
+from taskcompendium.integrity import AGENT_HOME, PRIVATE_CONTEXT, PRIVATE_DIRECTORY, SharedDependencyState
 
 pytestmark = [
-    pytest.mark.manual,
+    pytest.mark.docker,
     pytest.mark.skipif(sys.platform != "linux" or os.geteuid() != 0, reason="UID isolation requires Linux root"),
 ]
 
@@ -464,22 +466,39 @@ def package_files(family: str, base: str) -> tuple[dict[str, bytes], object]:
     return files, profile
 
 
-def stage_and_bootstrap(files: dict[str, bytes]) -> None:
+def stage_package(files: dict[str, bytes]) -> None:
     if BOOTSTRAP.exists():
         shutil.rmtree(BOOTSTRAP)
     BOOTSTRAP.mkdir(parents=True)
     (BOOTSTRAP / "control.py").write_bytes(files["environment/taskcompendium-shared/control.py"])
     (BOOTSTRAP / "shared_pytest.py").write_bytes(files["environment/taskcompendium-shared/shared_pytest.py"])
-    SETUP_FILES.mkdir(parents=True, exist_ok=True)
-    (SETUP_FILES / "taskcompendium-source-input.zlib").write_bytes(files["setup_files/taskcompendium-source-input.zlib"])
-    command = tomlkit.parse(files["task.toml"].decode())["environment"]["setup"]["command"]
+    private = Path(PRIVATE_DIRECTORY)
+    private.mkdir(mode=0o700, parents=True)
+    for name, content in files.items():
+        if name.startswith(PRIVATE_CONTEXT + "/"):
+            target = private / Path(name).name
+            target.write_bytes(content)
+            target.chmod(0o600)
+    home = Path(AGENT_HOME)
+    home.mkdir(parents=True, exist_ok=True)
+    os.chown(home, AGENT_UID, AGENT_UID)
+    for line in files["environment/Dockerfile"].decode().splitlines():
+        if line.startswith("RUN "):
+            subprocess.run(["/bin/sh", "-c", line.removeprefix("RUN ")], check=True)
+
+
+def stage_and_bootstrap(files: dict[str, bytes]) -> None:
+    stage_package(files)
+    environment = tomlkit.parse(files["task.toml"].decode())["environment"]
+    command = environment["setup"]["command"]
     subprocess.run(
         ["bash", "-c", command],
         cwd="/",
-        env={**os.environ, "PATH": SHIM + ":" + os.environ["PATH"]},
+        env={**os.environ, **environment["env"], "PATH": SHIM + ":" + os.environ["PATH"]},
         check=True,
         timeout=600,
     )
+    assert not Path(SOURCE_PAYLOAD).exists()
 
 
 def run_as_agent(program: str, timeout: float = 120) -> subprocess.CompletedProcess:
@@ -514,7 +533,7 @@ def run_grade(files: dict[str, bytes], timeout: float = 600) -> dict:
 
 
 def payload_of(files: dict[str, bytes]) -> dict:
-    return json.loads(zlib.decompress(files["setup_files/taskcompendium-source-input.zlib"]))
+    return json.loads(zlib.decompress(files[SOURCE_ARCHIVE]))
 
 
 def protected_tree_hash() -> str:
@@ -540,7 +559,7 @@ def apply_solution() -> None:
 
 
 def cleanup() -> None:
-    for path in (WORKSPACE, PROTECTED, BOOTSTRAP, LOGS, SETUP_FILES):
+    for path in (WORKSPACE, PROTECTED, BOOTSTRAP, Path(PRIVATE_DIRECTORY), LOGS, SETUP_FILES):
         if path.exists() or path.is_symlink():
             shutil.rmtree(path) if path.is_dir() and not path.is_symlink() else path.unlink()
     for leftover in (
@@ -571,8 +590,9 @@ def shim() -> None:
 
 @pytest.fixture()
 def source_image(shim, request, monkeypatch):
+    no_setup = request.param.endswith("-no-setup")
     preowned = request.param == "scale-preowned"
-    family = "scale" if preowned else request.param
+    family = "scale" if preowned else request.param.removesuffix("-no-setup")
     cleanup()
     base = build_repo()
     files, profile = package_files(family, base)
@@ -586,9 +606,29 @@ def source_image(shim, request, monkeypatch):
         subprocess.run(["chown", "-R", f"{AGENT_UID}:{AGENT_UID}", str(WORKSPACE)], check=True)
         monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(BOOTSTRAP / "source.gitconfig"))
     harden_shared_source(files, profile=profile, dependency_state=SharedDependencyState.AGENT_MUTABLE)
-    stage_and_bootstrap(files)
+    if no_setup:
+        stage_package(files)
+    else:
+        stage_and_bootstrap(files)
     yield SourceTask(family=family, files=files, base_commit=base)
     cleanup()
+
+
+@pytest.mark.parametrize("source_image", ["scale-no-setup", "lego-no-setup", "swe-rebench-no-setup"], indirect=True)
+def test_actor_cannot_read_bootstrap_payload_when_runner_skips_setup(source_image):
+    payload = Path(SOURCE_PAYLOAD)
+    assert payload.read_bytes()
+    probe = (
+        "from pathlib import Path\n"
+        "try:\n"
+        f"    Path({str(payload)!r}).read_bytes()\n"
+        "except PermissionError:\n"
+        "    pass\n"
+        "else:\n"
+        "    raise AssertionError('actor read private bootstrap payload')\n"
+    )
+    result = run_as_agent(probe)
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize("source_image", ["scale", "lego", "swe-rebench"], indirect=True)
@@ -899,7 +939,7 @@ def test_swe_rebench_reward_channel_and_test_files_scope(source_image):
 
 def contract_workspace_of(files: dict[str, bytes]) -> str:
     """Read the workspace the hardened contract published for this package."""
-    payload = json.loads(zlib.decompress(files["setup_files/taskcompendium-source-input.zlib"]))
+    payload = json.loads(zlib.decompress(files[SOURCE_ARCHIVE]))
     return payload["contract"]["workspace"]
 
 

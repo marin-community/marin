@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Ingestion-time SHARED SWE protection, independent of population-specific image builds."""
+"""Ingestion-time SHARED SWE protection for newly versioned Harbor task images."""
 
 import hashlib
 import json
@@ -19,8 +19,13 @@ from verifyit.spec import PytestSpec, ScriptSpec, render_spec
 
 from taskcompendium.harbor.native_shared import native_runner
 from taskcompendium.integrity import (
+    AGENT_HOME,
+    BOOTSTRAP_CONTROLLER,
+    BOOTSTRAP_DIRECTORY,
     BOOTSTRAP_TIMEOUT,
     DEPENDENCY_AUDIT_PROBES,
+    PRIVATE_CONTEXT,
+    PRIVATE_DIRECTORY,
     SharedDependencyState,
     SharedIntegrityContract,
     shared_preamble,
@@ -28,15 +33,63 @@ from taskcompendium.integrity import (
 from taskcompendium.native_integrity import TEST_PATTERNS
 from taskcompendium.runtime import shared_native, shared_pytest
 
-BOOTSTRAP = "/opt/taskcompendium-shared-bootstrap/control.py"
 BOOTSTRAP_INPUT = "/tmp/taskcompendium-shared-input.json"
-BOOTSTRAP_ARCHIVE = "setup_files/taskcompendium-shared-input.zlib"
+BOOTSTRAP_ARCHIVE = f"{PRIVATE_CONTEXT}/input.zlib"
+BOOTSTRAP_PAYLOAD = f"{PRIVATE_DIRECTORY}/input.zlib"
 SETUP_PREFIX = "## Environment Setup (complete these steps first)\n\n```bash\n"
 
 
 class SharedPytestFormat(StrEnum):
     CURRENT = "current"
     SINGLE_PROTECTED_MANIFEST = "single_protected_manifest"
+
+
+class SourceSetupPolicy(StrEnum):
+    PREPEND = "prepend"
+    INCLUDED = "included"
+    REJECT = "reject"
+
+
+class SharedExecutionPolicy(StrEnum):
+    MUTABLE = "shared_agent_mutable_v2"
+    ACTOR_ENVIRONMENT = "shared_actor_environment_v1"
+
+
+def apply_shared_task_config(
+    config: tomlkit.TOMLDocument,
+    contract: SharedIntegrityContract,
+    setup_command: str,
+    *,
+    setup_timeout: float,
+    source_setup_policy: SourceSetupPolicy,
+    execution_policy: SharedExecutionPolicy,
+    actor_path: str | None = None,
+    verifier_timeout: float | None = None,
+) -> None:
+    """Apply the UID boundary, safe actor HOME, and explicit initialization policy."""
+    environment = cast(Table, config.setdefault("environment", tomlkit.table()))
+    existing = environment.get("setup")
+    if source_setup_policy is SourceSetupPolicy.REJECT and existing is not None:
+        raise ValueError("Reference mode cannot reorder an existing source initialization command")
+    if source_setup_policy is SourceSetupPolicy.PREPEND and existing is not None:
+        setup_command = "set -euo pipefail\n" + str(existing["command"]) + "\n" + setup_command
+    environment["setup"] = {"command": setup_command, "timeout_sec": setup_timeout}
+    source_environment = dict(environment.get("env", {}))
+    if source_environment.get("HOME") in {None, "/root"}:
+        source_environment["HOME"] = AGENT_HOME
+    if actor_path is not None:
+        source_environment["PATH"] = actor_path
+    environment["env"] = source_environment
+    cast(Table, config.setdefault("agent", tomlkit.table()))["user"] = str(contract.agent_uid)
+    verifier = cast(Table, config.setdefault("verifier", tomlkit.table()))
+    verifier["user"] = "root"
+    verifier["restart_environment"] = False
+    if verifier_timeout is not None:
+        verifier["timeout_sec"] = verifier_timeout
+    metadata = cast(Table, config.setdefault("metadata", tomlkit.table()))
+    metadata["integrity_contract"] = contract.model_dump(mode="json", exclude_none=True)
+    metadata["execution_policy"] = execution_policy.value
+    config["schema_version"] = "1.3"
 
 
 def render_shared_pytest_spec(spec: PytestSpec, pytest_format: SharedPytestFormat) -> str:
@@ -100,7 +153,7 @@ def shared_grader_script(contract: SharedIntegrityContract) -> bytes:
         "#!/bin/bash\nset -euo pipefail\n"
         f'control_python="{contract.protected_root}-bootstrap/python"\n'
         f'exec "$control_python" -I -S {contract.harness} grade --contract {contract.protected_root}/contract.json '
-        "--verifyit /opt/taskcompendium-shared-bootstrap/verifyit\n"
+        f"--verifyit {BOOTSTRAP_DIRECTORY}/verifyit\n"
     ).encode()
 
 
@@ -156,38 +209,30 @@ def harden_shared_swe(
     files[BOOTSTRAP_ARCHIVE] = zlib.compress(encoded)
     config = tomlkit.parse(files["task.toml"].decode())
     setup, instruction = split_source_setup(files["instruction.md"].decode())
-    # Harbor uploads setup files before initialization and agent handoff. Keep
-    # per-task payloads out of both command arguments and the common image.
+    # Payloads are root-only in the task image even when a runner skips initialization.
     unpack = (
         "import pathlib,zlib; "
         f"pathlib.Path({BOOTSTRAP_INPUT!r}).write_bytes("
-        f"zlib.decompress(pathlib.Path('/{BOOTSTRAP_ARCHIVE}').read_bytes()))"
+        f"zlib.decompress(pathlib.Path({BOOTSTRAP_PAYLOAD!r}).read_bytes()))"
     )
-    control_python = "/opt/taskcompendium-shared-bootstrap/python"
+    control_python = f"{BOOTSTRAP_DIRECTORY}/python"
     bootstrap_command = (
         "set -euo pipefail\n"
         + setup
         + "\n"
         + f'control_python="{control_python}"\n'
         + f'"$control_python" -I -S -c {shlex.quote(unpack)}\n'
-        + f'"$control_python" -I -S {BOOTSTRAP} bootstrap {BOOTSTRAP_INPUT}\n'
-        + f"rm {BOOTSTRAP_INPUT} /{BOOTSTRAP_ARCHIVE}\n"
+        + f'"$control_python" -I -S {BOOTSTRAP_CONTROLLER} bootstrap {BOOTSTRAP_INPUT}\n'
+        + f"rm {BOOTSTRAP_INPUT} {BOOTSTRAP_PAYLOAD}\n"
     )
-    environment = cast(Table, config["environment"])
-    agent = cast(Table, config["agent"])
-    verifier = cast(Table, config["verifier"])
-    metadata = cast(Table, config["metadata"])
-    environment["setup"] = {"command": bootstrap_command, "timeout_sec": BOOTSTRAP_TIMEOUT}
-    source_user = str(agent.get("user", "root"))
-    source_environment = dict(environment.get("env", {}))
-    if source_user in {str(contract.agent_uid), "taskcompendium-agent"}:
-        source_environment.setdefault("HOME", "/home/taskcompendium-agent")
-    environment["env"] = source_environment
-    agent["user"] = str(contract.agent_uid)
-    verifier["user"] = "root"
-    verifier["restart_environment"] = False
-    metadata["integrity_contract"] = contract.model_dump(mode="json", exclude_none=True)
-    metadata["execution_policy"] = f"shared_agent_mutable_v{contract.version}"
+    apply_shared_task_config(
+        config,
+        contract,
+        bootstrap_command,
+        setup_timeout=BOOTSTRAP_TIMEOUT,
+        source_setup_policy=SourceSetupPolicy.PREPEND,
+        execution_policy=SharedExecutionPolicy.MUTABLE,
+    )
     files["task.toml"] = tomlkit.dumps(config).encode()
     files["instruction.md"] = shared_task_instruction(instruction, contract).encode()
     files["environment/taskcompendium-shared/control.py"] = source
@@ -198,26 +243,39 @@ def harden_shared_swe(
     return contract
 
 
-def shared_image_layer(contract: SharedIntegrityContract) -> str:
-    """Install the maintained controller without replacing the source image context."""
-    native = contract.native is not None
+def shared_user_layer(contract: SharedIntegrityContract) -> str:
+    """Create the actor and grading identities before installing private image inputs."""
     return (
         "\nUSER 0:0\n"
         f"RUN getent passwd {contract.agent_uid} >/dev/null || "
         f"useradd --create-home --uid {contract.agent_uid} --user-group taskcompendium-agent\n"
         f"RUN getent passwd {contract.grader_uid} >/dev/null || "
         f"useradd --create-home --uid {contract.grader_uid} --user-group taskcompendium-grade\n"
-        f"RUN mkdir -p /home/taskcompendium-agent && "
-        f"chown {contract.agent_uid}:{contract.agent_uid} /home/taskcompendium-agent\n"
-        f"COPY taskcompendium-shared/control.py {BOOTSTRAP}\n"
-        + (
-            "COPY taskcompendium-shared/shared_pytest.py /opt/taskcompendium-shared-bootstrap/shared_pytest.py\n"
-            if native
-            else ""
-        )
+        f"RUN mkdir -p {AGENT_HOME} && "
+        f"chown {contract.agent_uid}:{contract.agent_uid} {AGENT_HOME}\n"
+    )
+
+
+def shared_private_image_layer(contract: SharedIntegrityContract) -> str:
+    """Keep bootstrap inputs private even for runners that ignore the setup hook."""
+    return (
+        f"COPY taskcompendium-shared-private/ {PRIVATE_DIRECTORY}/\n"
+        f"RUN chown -R 0:0 {PRIVATE_DIRECTORY} && chmod 700 {PRIVATE_DIRECTORY} && "
+        f"chmod 600 {PRIVATE_DIRECTORY}/*\n"
+        f"USER {contract.agent_uid}:{contract.agent_uid}\n"
+    )
+
+
+def shared_image_layer(contract: SharedIntegrityContract) -> str:
+    """Install the maintained controller without replacing the source image context."""
+    native = contract.native is not None
+    return (
+        shared_user_layer(contract)
+        + f"COPY taskcompendium-shared/control.py {BOOTSTRAP_CONTROLLER}\n"
+        + (f"COPY taskcompendium-shared/shared_pytest.py {BOOTSTRAP_DIRECTORY}/shared_pytest.py\n" if native else "")
         + 'RUN verifyit_path="$(readlink -f "$(command -v verifyit)")"; '
         'python_path="$(head -n 1 "$verifyit_path" | cut -c 3-)"; '
-        'ln -s "$python_path" /opt/taskcompendium-shared-bootstrap/python; '
-        'ln -s "$verifyit_path" /opt/taskcompendium-shared-bootstrap/verifyit\n'
-        "RUN chmod -R go-w /opt/taskcompendium-shared-bootstrap\n"
+        f'ln -s "$python_path" {BOOTSTRAP_DIRECTORY}/python; '
+        f'ln -s "$verifyit_path" {BOOTSTRAP_DIRECTORY}/verifyit\n'
+        f"RUN chmod -R go-w {BOOTSTRAP_DIRECTORY}\n" + shared_private_image_layer(contract)
     )

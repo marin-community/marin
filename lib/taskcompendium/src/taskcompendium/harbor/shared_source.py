@@ -8,7 +8,7 @@ material instead of the SWE-rebench parser, so ``harden_shared_swe`` does not
 apply. This module repackages one converted native package so the original
 scorer runs unchanged behind the shared UID boundary:
 
-- every ``tests/`` file becomes private payload, uploaded before the agent and
+- every ``tests/`` file becomes a root-only image payload, installed before the agent and
   unpacked into the protected root; the shipped ``tests/test.sh`` only launches
   the controller;
 - bootstrap materializes the family's original test-restore scope, freezes it
@@ -32,11 +32,21 @@ import tomlkit
 from pydantic import BaseModel, ConfigDict, JsonValue
 from tomlkit.items import Table
 
-from taskcompendium.harbor.shared_package import shared_task_instruction
+from taskcompendium.harbor.shared_package import (
+    SharedExecutionPolicy,
+    SourceSetupPolicy,
+    apply_shared_task_config,
+    shared_private_image_layer,
+    shared_task_instruction,
+    shared_user_layer,
+)
 from taskcompendium.integrity import (
-    AGENT_HOME,
+    BOOTSTRAP_CONTROLLER,
+    BOOTSTRAP_DIRECTORY,
     BOOTSTRAP_TIMEOUT,
     DEPENDENCY_AUDIT_PROBES,
+    PRIVATE_CONTEXT,
+    PRIVATE_DIRECTORY,
     SharedDependencyState,
     SharedIntegrityContract,
     SharedSourceFamily,
@@ -45,10 +55,9 @@ from taskcompendium.integrity import (
 from taskcompendium.runtime import shared_pytest, shared_source
 from taskcompendium.runtime.shared_source import patch_paths
 
-BOOTSTRAP = "/opt/taskcompendium-shared-bootstrap/control.py"
-BOOTSTRAP_DIRECTORY = "/opt/taskcompendium-shared-bootstrap"
 BOOTSTRAP_INPUT = "/tmp/taskcompendium-source-input.json"
-SOURCE_ARCHIVE = "setup_files/taskcompendium-source-input.zlib"
+SOURCE_ARCHIVE = f"{PRIVATE_CONTEXT}/source-input.zlib"
+SOURCE_PAYLOAD = f"{PRIVATE_DIRECTORY}/source-input.zlib"
 
 COMMIT_PATTERN = re.compile(r"[0-9a-f]{7,40}")
 
@@ -240,14 +249,9 @@ def parse_source_config(files: dict[str, bytes], profile: SourceGraderProfile) -
 
 def source_image_layer(contract: SharedIntegrityContract) -> str:
     """Install the controller and grading identities without touching the source image."""
-    agent, grader = contract.agent_uid, contract.grader_uid
+    agent = contract.agent_uid
     return (
-        "\nUSER 0:0\n"
-        f"RUN getent passwd {agent} >/dev/null || "
-        f"useradd --create-home --uid {agent} --user-group taskcompendium-agent\n"
-        f"RUN getent passwd {grader} >/dev/null || "
-        f"useradd --create-home --uid {grader} --user-group taskcompendium-grade\n"
-        f"RUN mkdir -p {AGENT_HOME} && chown {agent}:{agent} {AGENT_HOME}\n"
+        shared_user_layer(contract)
         # UID handover at build time: the build daemon has the full capability
         # set, so workspace files whose owner the sandbox fs refuses to change
         # at runtime are converted here (image files are agent-owned before the
@@ -255,10 +259,10 @@ def source_image_layer(contract: SharedIntegrityContract) -> str:
         # covers families whose workspace is created by the per-task setup
         # (e.g. a repository cloned at task start on a shared base image) - the
         # bootstrap hands the cloned tree to the agent afterwards.
-        f"RUN mkdir -p {contract.workspace} && chown -R {agent}:{agent} {contract.workspace}\n"
-        f"COPY taskcompendium-shared/control.py {BOOTSTRAP}\n"
+        + f"RUN mkdir -p {contract.workspace} && chown -R {agent}:{agent} {contract.workspace}\n"
+        f"COPY taskcompendium-shared/control.py {BOOTSTRAP_CONTROLLER}\n"
         f"COPY taskcompendium-shared/shared_pytest.py {BOOTSTRAP_DIRECTORY}/shared_pytest.py\n"
-        f"RUN chmod -R go-w {BOOTSTRAP_DIRECTORY}\n"
+        f"RUN chmod -R go-w {BOOTSTRAP_DIRECTORY}\n" + shared_private_image_layer(contract)
     )
 
 
@@ -273,7 +277,7 @@ def source_bootstrap_command(setup: str, workspace: str) -> str:
     unpack = (
         "import pathlib,zlib; "
         f"pathlib.Path({BOOTSTRAP_INPUT!r}).write_bytes("
-        f"zlib.decompress(pathlib.Path('/{SOURCE_ARCHIVE}').read_bytes()))"
+        f"zlib.decompress(pathlib.Path({SOURCE_PAYLOAD!r}).read_bytes()))"
     )
     probe = "import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)"
     lines = [
@@ -297,8 +301,8 @@ def source_bootstrap_command(setup: str, workspace: str) -> str:
         'control_python="$(readlink -f "$control_python")"',
         f'ln -sfn "$control_python" {BOOTSTRAP_DIRECTORY}/python',
         f'"$control_python" -I -S -B -c {shlex.quote(unpack)}',
-        f'"$control_python" -I -S -B {BOOTSTRAP} bootstrap {BOOTSTRAP_INPUT}',
-        f"rm {BOOTSTRAP_INPUT} /{SOURCE_ARCHIVE}",
+        f'"$control_python" -I -S -B {BOOTSTRAP_CONTROLLER} bootstrap {BOOTSTRAP_INPUT}',
+        f"rm {BOOTSTRAP_INPUT} {SOURCE_PAYLOAD}",
     ]
     return "\n".join(lines) + "\n"
 
@@ -362,23 +366,15 @@ def harden_shared_source(
     environment = cast(Table, task_config.setdefault("environment", tomlkit.table()))
     setup_table = cast(Table, environment.setdefault("setup", tomlkit.table()))
     source_setup = str(setup_table.get("command", ""))
-    setup_table["command"] = source_bootstrap_command(source_setup, contract.workspace)
-    setup_table["timeout_sec"] = BOOTSTRAP_TIMEOUT
-    source_environment = dict(environment.get("env", {}))
-    if source_environment.get("HOME") in {None, "/root", AGENT_HOME}:
-        source_environment.setdefault("HOME", AGENT_HOME)
-    environment["env"] = source_environment
-    agent = cast(Table, task_config.setdefault("agent", tomlkit.table()))
-    verifier = cast(Table, task_config.setdefault("verifier", tomlkit.table()))
-    metadata = cast(Table, task_config.setdefault("metadata", tomlkit.table()))
-    agent["user"] = str(contract.agent_uid)
-    verifier["user"] = "root"
-    verifier["restart_environment"] = False
-    if declared_timeout is not None:
-        # The source's own deadline, verbatim; the controller enforces the same bound.
-        verifier["timeout_sec"] = declared_timeout
-    metadata["integrity_contract"] = contract.model_dump(mode="json", exclude_none=True)
-    metadata["execution_policy"] = f"shared_agent_mutable_v{contract.version}"
+    apply_shared_task_config(
+        task_config,
+        contract,
+        source_bootstrap_command(source_setup, contract.workspace),
+        setup_timeout=BOOTSTRAP_TIMEOUT,
+        source_setup_policy=SourceSetupPolicy.INCLUDED,
+        execution_policy=SharedExecutionPolicy.MUTABLE,
+        verifier_timeout=declared_timeout,
+    )
     files["task.toml"] = tomlkit.dumps(task_config).encode()
     instruction = files["instruction.md"].decode()
     if instruction.startswith("## Environment Setup (complete these steps first)\n\n```bash\n"):

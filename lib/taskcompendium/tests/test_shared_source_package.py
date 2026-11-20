@@ -14,6 +14,7 @@ import pytest
 
 from taskcompendium.harbor.shared_source import (
     SCALE_SWE_PROFILE,
+    SOURCE_ARCHIVE,
     SWE_LEGO_PROFILE,
     SWE_REBENCH_PROFILE,
     harden_shared_source,
@@ -83,7 +84,7 @@ def test_scale_package_keeps_body_and_hides_all_tests_material():
     assert instruction.endswith("Solve the issue.\n")
     assert sorted(name for name in files if name.startswith("tests/")) == ["tests/test.sh"]
     assert files["tests/test.sh"].decode().startswith('#!/bin/bash\nset -euo pipefail\nexec "')
-    payload = json.loads(zlib.decompress(files["setup_files/taskcompendium-source-input.zlib"]))
+    payload = json.loads(zlib.decompress(files[SOURCE_ARCHIVE]))
     assert sorted(payload["tests"]) == ["config.json", "grade.py", "native_scripts.py", "scale_score.py", "test.sh"]
     assert bytes.fromhex(payload["tests"]["config.json"]) == original_config
     assert payload["spec"] == {"timeout": None}
@@ -112,7 +113,7 @@ def test_lego_contract_captures_patch_paths_and_declares_its_policy():
         "Candidate-produced test-output injection",
     )
     assert "RUN mkdir -p /testbed && chown -R 10001:10001 /testbed" in files["environment/Dockerfile"].decode()
-    payload = json.loads(zlib.decompress(files["setup_files/taskcompendium-source-input.zlib"]))
+    payload = json.loads(zlib.decompress(files[SOURCE_ARCHIVE]))
     assert sorted(payload["tests"]) == ["config.json", "grade.py", "native_scripts.py", "test.sh"]
     task_toml = files["task.toml"].decode()
     assert payload["spec"] == {"timeout": 900.0}

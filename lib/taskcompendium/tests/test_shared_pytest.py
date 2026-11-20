@@ -33,7 +33,10 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.integrity import SharedDependencyState, SharedIntegrityContract
 from taskcompendium.runtime import shared_pytest, shared_reference
 
-pytestmark = pytest.mark.skipif(sys.platform != "linux" or os.geteuid() != 0, reason="UID isolation requires Linux root")
+pytestmark = [
+    pytest.mark.docker,
+    pytest.mark.skipif(sys.platform != "linux" or os.geteuid() != 0, reason="UID isolation requires Linux root"),
+]
 
 
 @dataclass(frozen=True)

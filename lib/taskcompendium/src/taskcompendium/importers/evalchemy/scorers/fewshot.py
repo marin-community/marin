@@ -66,7 +66,7 @@ def score(scorer: str, config: dict, response: str) -> Reward:
     if scorer == "bbh_cot":
         return grade_bbh_cot(config["document"], response)
     if scorer == "harness_generation":
-        from .harness_completion import grade_harness_generation_candidate  # noqa: PLC0415 - optional scorer
+        from .harness_generation import grade_harness_generation_candidate  # noqa: PLC0415 - optional scorer
 
         return grade_harness_generation_candidate(config["profile"], config["references"], response, config["question"])
     raise ValueError(f"Unknown completion scorer: {scorer}")
