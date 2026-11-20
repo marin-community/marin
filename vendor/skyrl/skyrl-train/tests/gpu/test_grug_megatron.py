@@ -993,7 +993,7 @@ def test_megatron_worker_batches_match_driver_update(tmp_path):
                 context=TrainingContext.from_config(current, dataset, runner),
                 callbacks=[],
             )
-            trainer.build_models(import_worker("megatron", "policy"), None, None, policy_pg=shared_pg)
+            trainer.build_models(import_worker("megatron", "policy"), None, policy_pg=shared_pg)
             trainer.global_step = 1
             policy = trainer.policy_model
             initial = parameter_hashes(policy)

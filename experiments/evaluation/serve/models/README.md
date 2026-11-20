@@ -148,3 +148,57 @@ Dry runs show per-task hardware and serving geometry. `record.json` retains requ
 and reports resolved settings under `serving` after endpoint startup; `serving.effective` is false
 when startup did not produce an endpoint. Multi-node support and context capacity depend on the
 pinned vLLM version and model architecture and must be checked on the target hardware.
+
+## Session routing for native vLLM DP
+
+`marin-serve local` and `marin-serve iris` accept `--session-router`. With prefix caching enabled,
+reuse `X-Session-ID` on later turns to reach the same DP rank and KV cache. Direct serving remains the default.
+
+Two local replicas:
+
+```bash
+uv run marin-serve local Qwen/Qwen3-0.6B --launcher cuda \
+  --tensor-parallel-size 1 --data-parallel-size 2 --session-router \
+  --vllm-arg=--enable-prefix-caching
+```
+
+16 replicas on four 4-GPU Iris tasks:
+
+```bash
+uv run marin-serve iris Qwen/Qwen3-0.6B --cluster cw-us-east-08a --gpu GB200x4 \
+  --tensor-parallel-size 1 --data-parallel-size 16 \
+  --session-router --proxy-timeout 14400 \
+  --vllm-source marin-fork --vllm-release marin-vllm-gpu-manifest.json \
+  --vllm-arg=--enable-prefix-caching
+```
+
+`--vllm-release` reads `marin-vllm-gpu-manifest.json` from a [published release](https://github.com/marin-community/vllm/releases).
+Omitting it uses the normal runtime.
+The isolated `vllm-router==0.1.16` process uses vLLM's global internal DP frontend;
+external/hybrid balancing is unsupported. `/metrics` reports vLLM worker counters.
+
+Without a session ID, [upstream hashing](https://github.com/vllm-project/router/blob/v0.1.16/docs/load_balancing/README.md#consistent-hash)
+applies; identical bodies can select the same busy rank.
+
+HTTP retries are disabled; client SDK retries are separate. The router timeout is 14,400 seconds.
+Iris `--proxy-timeout` defaults to 600 seconds and raises the router timeout when larger.
+Streaming disconnects are detected on the next upstream chunk; stalled streams wait for timeout.
+
+Rank failures can remap sessions and lose cached prefixes. If a worker or router exits, cancel
+with `iris --cluster CLUSTER job cancel JOB`, wait for tasks to stop, then resubmit.
+
+In Python, set `VllmEngineConfig(router=VllmRouterConfig())` and `IrisConfig.serving_geometry`:
+
+```python
+ServingGeometry(
+    tensor_parallel_size=1,
+    data_parallel_size=16,
+    pipeline_parallel_size=1,
+    gpus_per_task=4,
+)
+```
+
+This gives four tasks, four local ranks per task and 16 router targets. Omitted model TP uses
+geometry; explicit TP must match. Multi-task or routed geometry requires `instances=1`, `broker=None`.
+`ServedModelConfig.object_store_load_mode` defaults to `STREAM`, which multi-task GPU serving requires.
+Single-task serving also supports local weight staging.

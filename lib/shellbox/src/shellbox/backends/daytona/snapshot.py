@@ -39,7 +39,8 @@ from shellbox.machine import MachineSpec, UnsupportedMachineSpec
 SNAPSHOT_PREFIX = "shellbox-"
 SNAPSHOT_STALE_AFTER = timedelta(hours=1)
 SNAPSHOT_PAGE_SIZE = 100
-TRANSIENT_SNAPSHOT_STATUS = frozenset({502, 503, 504})
+# Gateway and availability statuses a Daytona API request may return transiently.
+TRANSIENT_DAYTONA_STATUS = frozenset({502, 503, 504})
 FAILED_SNAPSHOT_STATES = frozenset({SnapshotState.ERROR, SnapshotState.BUILD_FAILED, SnapshotState.INACTIVE})
 
 
@@ -173,7 +174,7 @@ async def _snapshot_metadata(client: AsyncDaytona, name: str) -> Snapshot:
             return await client.snapshot.get(name)
         except DaytonaError as error:
             attempts += 1
-            if error.status_code not in TRANSIENT_SNAPSHOT_STATUS or attempts == 3:
+            if error.status_code not in TRANSIENT_DAYTONA_STATUS or attempts == 3:
                 raise
             await asyncio.sleep(backoff.next_interval())
 

@@ -128,8 +128,8 @@ def validate_ftpo(cfg: DictConfig) -> None:
         config.auxiliary_weight is None and algorithm.off_policy_correction not in (None, "none")
     ) or algorithm.dynamic_sampling.type is not None:
         raise ValueError("FTPO requires off_policy_correction=none and no reward-based dynamic sampling")
-    if cfg.trainer.critic.model.path is not None or cfg.trainer.get("update_ref_every_epoch", False):
-        raise ValueError("FTPO requires a frozen reference and no critic")
+    if cfg.trainer.get("update_ref_every_epoch", False):
+        raise ValueError("FTPO requires a frozen reference")
     if any(callback.get("type") == "ref_model_update" for callback in (cfg.trainer.get("callbacks") or [])):
         raise ValueError("FTPO cannot use a reference-update callback")
     if cfg.generator.backend != "vllm" or not cfg.generator.run_engines_locally:

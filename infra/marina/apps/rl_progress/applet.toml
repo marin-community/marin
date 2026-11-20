@@ -1,0 +1,4 @@
+applet_id = "6c971887-1e22-45b1-9dcb-dd775829df57"
+title = "RL iteration progress"
+description = "Post-training experiment results and native attempt details."
+python_entrypoint = "server.app:create_api"
