@@ -220,10 +220,6 @@ class SkyRLLaunchConfig:
 
 def compose_launch_config(raw: Mapping[str, Any] | DictConfig) -> DictConfig:
     """Compose a raw mapping into the strict structured launch schema."""
-    if "sft_preset" in raw.get("run", {}):
-        raw = OmegaConf.create(raw)
-        with open_dict(raw.run):
-            del raw.run.sft_preset
     composed = OmegaConf.merge(OmegaConf.structured(SkyRLLaunchConfig), raw)
     OmegaConf.to_container(composed, resolve=True, throw_on_missing=True)
     if not composed.inputs.evaluation_data:
