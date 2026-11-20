@@ -112,7 +112,9 @@ class HarborTaskSettings:
         match self.environment.type:
             case EnvironmentType.DAYTONA:
                 policy = self.environment.kwargs.get("network_policy")
-                key_env = self.environment.kwargs.get("eval_api_key_env" if phase == "eval" else "api_key_env")
+                key_env = self.environment.kwargs.get("api_key_env")
+                if phase == "eval":
+                    key_env = self.environment.kwargs.get("eval_api_key_env", key_env)
                 client_factory = AsyncDaytona
                 if key_env is not None:
                     api_key = os.environ.get(key_env)
@@ -149,7 +151,7 @@ class HarborTaskSettings:
             if original.backend == Backend.DOCKER:
                 updates["backend"] = (
                     HARBOR_EVAL_MACHINE_BACKEND
-                    if phase == "eval" and self.environment.kwargs.get("eval_api_key_env")
+                    if phase == "eval"
                     else HARBOR_MACHINE_BACKEND
                 )
             if original.startup_timeout is not None:

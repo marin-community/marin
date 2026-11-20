@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from harbor.agents.factory import AgentFactory
 from harbor.agents.installed.base import BaseInstalledAgent
+from harbor.environments.model_relay import JudgeAccess
 from harbor.literal.native_api import NativeAPILimits
 from harbor.literal.proxy import RecordProxy
 from harbor.models.task.config import EnvironmentConfig, TaskConfig as PackageTaskConfig
@@ -181,6 +182,8 @@ class InstalledAgentRuntime:
             kwargs.update(model_endpoint=self.judge.base_url, model_name=self.settings.judge_model)
             authentication[self.judge.base_url] = self.judge.api_key
             protected = protected | protected_environment_values({"OPENAI_API_KEY": self.judge.api_key})
+            if model_api_url(package_config.environment.env) is not None:
+                kwargs["judge_access"] = JudgeAccess.RUNTIME.value
         host_capabilities = HostCapabilities(
             daytona=connection,
             model_authentication=authentication,
@@ -277,7 +280,7 @@ class InstalledAgentRuntime:
                         task_model_environment(self.settings.judge_model)
                         if self.judge is not None
                         and self.settings.judge_model is not None
-                        and config.environment.kwargs.get("model_endpoint") is not None
+                        and config.environment.kwargs.get("judge_access") == JudgeAccess.RUNTIME.value
                         else {}
                     ),
                 )
