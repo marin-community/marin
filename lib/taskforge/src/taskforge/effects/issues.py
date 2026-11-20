@@ -56,9 +56,10 @@ class CorruptJournal(LogFailure):
 
 
 class PublicationFailed(LogFailure):
-    """A checkpoint failed for a reason retrying cannot fix, such as denied access; the writer publishes nothing more.
+    """Storage refused a publication, such as by denied access, or the final one ran out of retries.
 
-    A hold would need the same storage, so the process fails for an operator to repair access and rerun.
+    The writer publishes nothing more and the head keeps its last checkpoint. A hold would need the same storage, so
+    the process fails; a relaunch replays the committed history and re-executes the effects after it.
     """
 
 

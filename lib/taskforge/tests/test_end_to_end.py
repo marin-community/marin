@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import errno
 import hashlib
 import json
 import shutil
@@ -13,13 +14,14 @@ from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
-from typing import cast, override
+from typing import Any, cast, override
 
 import pytest
 from botocore.exceptions import ClientError
 from lib.taskforge.tests.effect_fakes import local_records
 from lib.taskforge.tests.resource_doubles import FakeCommand, FakeEnv, FakeInference, FakeWeb
 from lib.taskforge.tests.stage_fakes import CandidateEngine, SolverEngine, solver_model
+from rigging.timing import ExponentialBackoff
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.models import GradedRollout, Model, Rollout, TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task
@@ -32,7 +34,7 @@ from taskforge.config import TaskforgeConfig
 from taskforge.coordinator import advance, run_workpiece
 from taskforge.effects.context import Context
 from taskforge.effects.events import Resolved, StageCompleted
-from taskforge.effects.issues import Hold, LogFailure, Restart, Superseded, Transient
+from taskforge.effects.issues import Hold, LogFailure, PublicationFailed, Restart, Superseded, Transient
 from taskforge.effects.log import EventLog, JsonlSink, Record, Status, decode, fold
 from taskforge.harness.protocol import Harness, Stopped, StopReason, Tool
 from taskforge.llm.glm_client import EndpointSource
@@ -685,40 +687,162 @@ async def test_a_collision_at_a_checkpoint_digest_exits_corrupt_and_publishes_no
     assert (head.chunks, head.status, head.workpiece) == ((), Status(), None)
 
 
-@pytest.mark.parametrize("code", ["SlowDown", "AccessDenied"])
-async def test_a_count_triggered_storage_error_retries_or_stops_without_a_bug_hold(
-    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, code: str
-) -> None:
-    """One exhausted throttle is retried from the committed offset; a refusal stops publication at once."""
-    monkeypatch.setattr(checkpoint, "CHECKPOINT_EVENTS", 1)
-    put, calls = checkpoint._put, []
-
-    def fail_first(directory: str, suffix: str, data: bytes) -> str:
-        calls.append(data)
-        if len(calls) == 1:
-            raise ClientError({"Error": {"Code": code, "Message": code}}, "PutObject")
-        return put(directory, suffix, data)
-
-    monkeypatch.setattr(checkpoint, "_put", fail_first)
-    built = resources(Envs(), script())
+def serve(monkeypatch: pytest.MonkeyPatch, *attempts: Resources) -> None:
+    """Each ``driver.one`` launch gets the next resources."""
+    remaining = iter(attempts)
 
     @asynccontextmanager
     async def fake_runtime(
         policy: Policy, _source: EndpointSource, _key: str
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
-        yield build_config(policy, {}), built
+        yield build_config(policy, {}), next(remaining)
 
     monkeypatch.setattr(driver, "runtime", fake_runtime)
+
+
+def executions(*attempts: Resources) -> tuple[int, int]:
+    """Inference requests and solver trials the attempts ran; replayed effects run nothing."""
+    inference = [attempt.inference for attempt in attempts]
+    solvers = [attempt.rollouts.engine for attempt in attempts]
+    assert all(isinstance(client, FakeInference) for client in inference)
+    assert all(isinstance(engine, SolverEngine) for engine in solvers)
+    return (
+        sum(len(cast(FakeInference, client).requests) for client in inference),
+        sum(len(cast(SolverEngine, engine).started) for engine in solvers),
+    )
+
+
+def fail_put_once(monkeypatch: pytest.MonkeyPatch, error: Exception, directory: str = "chunks") -> list[bytes]:
+    """Raise ``error`` on the first creation of an object under ``directory``; return every creation's bytes."""
+    put, calls, failed = checkpoint._put, [], []
+
+    def failing(target: str, suffix: str, data: bytes) -> str:
+        calls.append(data)
+        if Path(target).name == directory and not failed:
+            failed.append(error)
+            raise error
+        return put(target, suffix, data)
+
+    monkeypatch.setattr(checkpoint, "_put", failing)
+    return calls
+
+
+def s3_error(code: str, status: int) -> ClientError:
+    response: Any = {"Error": {"Code": code}, "ResponseMetadata": {"HTTPStatusCode": status}}
+    return ClientError(response, "PutObject")
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        s3_error("SlowDown", 503),
+        ConnectionResetError(errno.ECONNRESET, "Connection reset by peer"),
+        s3_error("BadGateway", 502),
+    ],
+    ids=["slowdown", "reset", "bad-gateway"],
+)
+async def test_a_recoverable_error_on_a_count_triggered_chunk_loses_no_paid_work(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    """The first checkpoint's chunk fails once; its lines stay pending, later events wait for the timer, and the final
+    publication carries them, so a relaunch executes nothing again."""
+    monkeypatch.setattr(checkpoint, "CHECKPOINT_EVENTS", 1)
+    calls = fail_put_once(monkeypatch, error)
+    first, relaunch = resources(Envs(), script()), resources(Envs(), script())
+    serve(monkeypatch, first, relaunch)
+    await driver.one(driver_args)
     destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
-    if code == "SlowDown":
-        await driver.one(driver_args)
-        assert published_workpiece(destination).terminal is Terminal.ACCEPTED
-        assert [record.sequence for record in history(destination)] == list(range(1, len(history(destination)) + 1))
-        return
+    assert published_workpiece(destination).terminal is Terminal.ACCEPTED
+    assert [record.sequence for record in history(destination)] == list(range(1, len(history(destination)) + 1))
+    # The failed chunk, then only the final chunk and workpiece: no count-triggered retry per later event.
+    assert len(calls) == 3
+    driver_args.work_dir = str(Path(driver_args.work_dir).parent / "relaunch")
+    await driver.one(driver_args)
+    assert executions(first) == (len(script()), 2) and executions(relaunch) == (0, 0)
+
+
+async def test_a_storage_refusal_on_a_count_triggered_chunk_stops_publication_without_a_bug_hold(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = fail_put_once(monkeypatch, s3_error("AccessDenied", 403))
+    serve(monkeypatch, resources(Envs(), script()))
     with pytest.raises(Exception) as raised:
         await driver.one(driver_args)
     assert driver.exit_code(raised.value) is None and len(calls) == 1
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
     assert published(destination).head.status == Status()
+
+
+def instant_final_retries(monkeypatch: pytest.MonkeyPatch, attempts: int = checkpoint.FINAL_ATTEMPTS) -> None:
+    monkeypatch.setattr(checkpoint, "FINAL_ATTEMPTS", attempts)
+    monkeypatch.setattr(checkpoint, "FINAL_BACKOFF", ExponentialBackoff(initial=0.001, maximum=0.001, jitter=0.0))
+
+
+@pytest.mark.parametrize("fault", ["workpiece", "head-lost", "head-applied"])
+async def test_a_transient_error_in_final_publication_retries_without_repeating_solver_work(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, fault: str
+) -> None:
+    """Periodic checkpoints succeed; one SlowDown hits the terminal workpiece's creation or the final head swap, which
+    may have been applied before its acknowledgment was lost. The final publication retries and reconciles."""
+    instant_final_retries(monkeypatch)
+    finals: list[Head] = []
+    if fault == "workpiece":
+        fail_put_once(monkeypatch, s3_error("SlowDown", 503), "workpieces")
+    else:
+        swap = CheckpointSink._swap
+
+        def flaky(sink: CheckpointSink, head: Head, expected: str | None) -> None:
+            if head.status.terminal is not None:
+                finals.append(head)
+                if len(finals) == 1:
+                    if fault == "head-applied":
+                        swap(sink, head, expected)
+                    raise s3_error("SlowDown", 503)
+            swap(sink, head, expected)
+
+        monkeypatch.setattr(CheckpointSink, "_swap", flaky)
+    first, relaunch = resources(Envs(), script()), resources(Envs(), script())
+    serve(monkeypatch, first, relaunch)
+    await driver.one(driver_args)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    assert published(destination).head.status.terminal is Terminal.ACCEPTED
+    assert published_workpiece(destination).terminal is Terminal.ACCEPTED
+    assert [record.sequence for record in history(destination)] == list(range(1, len(history(destination)) + 1))
+    # A lost swap is redone; an applied one is recognised from the observed head and not swapped again.
+    assert len(finals) == {"workpiece": 0, "head-lost": 2, "head-applied": 1}[fault]
+    driver_args.work_dir = str(Path(driver_args.work_dir).parent / "relaunch")
+    await driver.one(driver_args)
+    assert executions(first) == (len(script()), 2) and executions(relaunch) == (0, 0)
+
+
+async def test_a_final_publication_that_keeps_failing_exits_and_a_relaunch_resumes_from_the_last_checkpoint(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Exhausted retries fail the process as an ordinary failure; the head keeps the last checkpoint (here the claim),
+    and a relaunch replays the history it covers and re-executes every effect after it."""
+    monkeypatch.setattr(checkpoint, "CHECKPOINT_EVENTS", 1000)
+    instant_final_retries(monkeypatch, attempts=2)
+    put = checkpoint._put
+
+    def refuse_workpieces(target: str, suffix: str, data: bytes) -> str:
+        if Path(target).name == "workpieces":
+            raise s3_error("SlowDown", 503)
+        return put(target, suffix, data)
+
+    monkeypatch.setattr(checkpoint, "_put", refuse_workpieces)
+    first, relaunch = resources(Envs(), script()), resources(Envs(), script())
+    serve(monkeypatch, first, relaunch)
+    with pytest.raises(PublicationFailed) as raised:
+        await driver.one(driver_args)
+    assert driver.exit_code(raised.value) is None
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    head = published(destination).head
+    assert (head.status, head.workpiece, head.chunks) == (Status(), None, ())
+    monkeypatch.setattr(checkpoint, "_put", put)
+    driver_args.work_dir = str(Path(driver_args.work_dir).parent / "relaunch")
+    await driver.one(driver_args)
+    assert published_workpiece(destination).terminal is Terminal.ACCEPTED
+    assert executions(first) == executions(relaunch) == (len(script()), 2)
 
 
 class TakenOverWhileBlocked(FakeInference):
@@ -774,6 +898,42 @@ async def test_a_writer_blocked_with_nothing_pending_stops_within_a_tick_of_a_ta
     # The successor's private stream is exactly the committed history, and it resumes from all of it.
     assert Path(inference.successor.local.path).read_bytes() == journal.events()
     assert inference.history == decode(journal.events())
+
+
+def leaves(error: BaseException) -> list[BaseException]:
+    if not isinstance(error, BaseExceptionGroup):
+        return [error]
+    return [leaf for inner in error.exceptions for leaf in leaves(inner)]
+
+
+async def test_a_cleanup_error_after_a_takeover_stays_a_failure_and_appends_nothing(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The timer finds a successor and cancels the run; the runtime's own cleanup then fails independently."""
+    monkeypatch.setattr(checkpoint, "CHECKPOINT_EVENTS", 1)
+    monkeypatch.setattr(checkpoint, "CHECKPOINT_SECONDS", 0.01)
+    identity = driver.proposal_key(driver_args.proposals)
+    destination = Path(driver_args.output) / identity
+    inference = TakenOverWhileBlocked(script(), destination, Path(driver_args.work_dir) / identity)
+    first = replace(resources(Envs(), ()), inference=inference)
+
+    @asynccontextmanager
+    async def failing_cleanup(
+        policy: Policy, _source: EndpointSource, _key: str
+    ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
+        try:
+            yield build_config(policy, {}), first
+        finally:
+            raise RuntimeError("sandbox teardown failed")
+
+    monkeypatch.setattr(driver, "runtime", failing_cleanup)
+    with pytest.raises(ExceptionGroup) as raised:
+        await driver.one(driver_args)
+    # One leaf each: the stopped writer attempted no bug or hold record, which would raise its stop again.
+    assert sorted(map(type, leaves(raised.value)), key=str) == [RuntimeError, Superseded]
+    assert driver.exit_code(raised.value) is None
+    assert inference.successor is not None
+    assert published(destination).head.writer == inference.successor.writer
 
 
 def in_process(monkeypatch: pytest.MonkeyPatch, command: list[str]) -> SimpleNamespace:

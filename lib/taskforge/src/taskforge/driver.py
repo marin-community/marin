@@ -144,10 +144,14 @@ async def one(args: argparse.Namespace) -> None:
     except* (Superseded, CorruptJournal, PublicationFailed):
         raise  # The writer stopped; it publishes neither a hold nor a final head.
     except* (Hold, Restart, Transient, LogFailure) as error:
+        if checkpoints.stopped is not None:
+            raise  # A stopped writer records nothing more; the failure beside the stop keeps its identity.
         wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete(reasons(error))))
         await log.record(StageCompleted(None, "", "Held", wp.round, Terminal.HELD))
         logging.warning("Taskforge workpiece %s held: %s", proposal.header.id, reasons(error))
     except* Exception as error:
+        if checkpoints.stopped is not None:
+            raise
         detail = traceback.format_exc()
         wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete((f"bug: {detail}",))))
         await log.record(StageCompleted(None, "", "bug", wp.round, Terminal.HELD))

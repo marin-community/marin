@@ -18,14 +18,16 @@ import uuid
 from collections.abc import AsyncIterator, Coroutine, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path, PurePosixPath
 from typing import override
 
 from pydantic import TypeAdapter
 from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
 from rigging.filesystem.factory import open_url, url_to_fs
-from rigging.filesystem.s3_errors import is_transient_s3_error
+from rigging.filesystem.s3_errors import OBJECT_STORE_ERRORS, is_transient_s3_error
 from rigging.filesystem.storage_path import prefix_join
+from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 from taskforge.effects.issues import CorruptJournal, LogFailure, PublicationFailed, Superseded, UnsupportedFormat
 from taskforge.effects.log import JsonlSink, Record, Sink, Status
@@ -37,6 +39,9 @@ FORMAT_1 = frozenset({"events.jsonl", "events.jsonl.parts", "status.json", "work
 HEAD = "journal.json"
 CHECKPOINT_EVENTS = 25
 CHECKPOINT_SECONDS = 60
+FINAL_ATTEMPTS = 6
+FINAL_BACKOFF = ExponentialBackoff(initial=5.0, maximum=120.0, factor=2.0, jitter=0.25)
+"""The final publication outlasts a storage outage of several minutes beyond the adapters' own retries."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,6 +147,7 @@ class CheckpointSink(Sink):
         self.local, self.destination = JsonlSink(str(workdir / f"{self.writer}.jsonl")), destination
         self.head = conditional_object(prefix_join(destination, HEAD))
         self.pending = 0
+        self.deferred = False  # After a transient failure the timer retries, not every later event.
         self.lock = asyncio.Lock()
         self.timer: asyncio.Task[None] | None = None
         self.owner: asyncio.Task[object] | None = None
@@ -182,6 +188,8 @@ class CheckpointSink(Sink):
             return  # An idle checkpoint only confirms ownership.
         if workpiece is not None:
             name = _put(prefix_join(self.destination, "workpieces"), ".json", WORKPIECE.dump_json(workpiece))
+            if not events and (head.status, head.workpiece) == (status, name):
+                return  # A retried final swap whose lost acknowledgment had in fact been applied.
             head = replace(head, workpiece=name)
         self._swap(replace(head, status=status, published_at=time.time()), current.version)
 
@@ -194,34 +202,49 @@ class CheckpointSink(Sink):
 
     @override
     async def write(self, records: Sequence[Record]) -> None:
-        if self.stopped is not None:
-            raise self.stopped
         async with self.lock:
+            if self.stopped is not None:
+                raise self.stopped
             await _drained(self.local.write(records))
             self.pending += len(records)
-            if self.pending >= CHECKPOINT_EVENTS:
-                await self._upload()
+            if self.pending >= CHECKPOINT_EVENTS and not self.deferred:
+                await self._upload(Status(), None)
 
-    async def _upload(self) -> None:
-        """Publish the new lines; after a transient storage error they stay pending and the next upload resends them."""
+    async def _upload(self, status: Status, workpiece: Workpiece | None) -> None:
+        """Publish the new lines (finally with status and workpiece) under the lock, fenced against the head.
+
+        A transient error leaves a checkpoint's lines pending for the timer; the final publication retries itself,
+        each attempt rereading the head, so a storage hiccup never discards finished work.
+        """
+        if self.stopped is not None:
+            raise self.stopped
+        publish = asyncio.to_thread(
+            retry_with_backoff,
+            partial(self._publish, status, workpiece),
+            retryable=is_transient_s3_error,
+            max_attempts=1 if workpiece is None else FINAL_ATTEMPTS,
+            backoff=FINAL_BACKOFF,
+            operation=f"final publication of {self.destination}",
+        )
         try:
-            await _drained(asyncio.to_thread(self._publish, Status(), None))
+            await _drained(publish)
         except (Superseded, CorruptJournal) as error:
             self._stop(error)
             raise
-        except Exception as error:
-            if is_transient_s3_error(error):
-                logging.warning("Checkpoint upload to %s failed; retrying: %r", self.destination, error)
+        except OBJECT_STORE_ERRORS as error:
+            if workpiece is None and is_transient_s3_error(error):
+                logging.warning("Checkpoint upload to %s failed; the timer retries: %r", self.destination, error)
+                self.deferred = True
                 return
-            failure = PublicationFailed(f"Cannot publish a checkpoint of {self.destination}: {error!r}")
+            failure = PublicationFailed(f"Cannot publish {self.destination}; its head stays as it was: {error!r}")
             self._stop(failure)
             raise failure from error
-        self.pending = 0
+        self.pending, self.deferred = 0, False
 
     async def finish(self, status: Status, workpiece: Workpiece) -> None:
         """Publish the rest of the stream with the final status and workpiece."""
         async with self.lock:
-            await asyncio.to_thread(self._publish, status, workpiece)
+            await self._upload(status, workpiece)
 
     async def _periodic(self, stop: asyncio.Event) -> None:
         while True:
@@ -231,7 +254,7 @@ class CheckpointSink(Sink):
             except TimeoutError:
                 async with self.lock:
                     try:
-                        await self._upload()
+                        await self._upload(Status(), None)
                     except LogFailure:  # Stopped; the owner is cancelled.
                         return
 
@@ -244,8 +267,12 @@ class CheckpointSink(Sink):
         stop = asyncio.Event()
         self.owner = asyncio.current_task()
         self.timer = asyncio.create_task(self._periodic(stop))
+        failure: Exception | None = None
         try:
             yield
+        except Exception as error:  # Kept beside the stop unless it is a log failure, such as the stop itself.
+            failure = error
+            raise
         finally:
             owner, self.owner = self.owner, None
             stop.set()
@@ -253,4 +280,6 @@ class CheckpointSink(Sink):
             if self.stopped is not None:
                 if owner is not None and owner.cancelling():
                     owner.uncancel()
+                if failure is not None and ExceptionGroup("block", [failure]).split(LogFailure)[1] is not None:
+                    raise ExceptionGroup(f"{self.destination} stopped beside another failure", [self.stopped, failure])
                 raise self.stopped

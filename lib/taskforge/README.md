@@ -139,11 +139,14 @@ head; the first then fails with `Superseded` at its next checkpoint and publishe
 Readers follow only the chunks the head names. A root in any other journal format, including the
 format-1 layout (`events.jsonl`, `events.jsonl.parts/`, `status.json`), fails with an error naming
 the format found and is left untouched; such roots are converted once by a separate migration.
-A checkpoint upload that storage throttles, cannot reach, or fails internally (rigging's
-`is_transient_s3_error`) stays pending and is resent from the head's size on the next upload. Any
-other upload failure, such as denied access, stops the writer with `PublicationFailed`; a collision
-found while publishing is `CorruptJournal`. Neither publishes a hold, and the last committed head
-stays as it was.
+A checkpoint upload that storage throttles, resets, cannot reach, or fails with a 5xx (rigging's
+`is_transient_s3_error`) stays pending and is resent from the head's size on the next timer tick.
+The final publication retries such errors itself for several minutes, rereading the head on each
+attempt, so a lost acknowledgment of an applied swap is recognised rather than repeated. Any other
+failure, such as denied access, or final retries running out, stops the writer with
+`PublicationFailed`: the process fails, the head keeps its last checkpoint, and a relaunch replays
+that history and re-executes the effects after it. A collision found while publishing is
+`CorruptJournal`. Neither publishes a hold.
 
 A driver restarted against the same output resumes each workpiece from its journal and prints
 `SKIP <id>: published terminal=<state>` for every published terminal, `held` included. Held

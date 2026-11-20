@@ -95,12 +95,12 @@ async def test_checkpoints_publish_immutable_chunks_of_only_new_bytes(tmp_path: 
     sink = claimed(tmp_path)
     log = EventLog(sink=sink)
     await log.record(StageCompleted(Stage.AUTHOR, "", "draft"))
-    await sink._upload()
+    await sink._upload(Status(), None)
     chunks = Path(sink.destination) / "chunks"
     first = next(chunks.iterdir())
     original = first.read_bytes()
     await log.record(StageCompleted(Stage.VALIDATE, "", "ready"))
-    await sink._upload()
+    await sink._upload(Status(), None)
     assert len(list(chunks.iterdir())) == 2 and first.read_bytes() == original
     assert decode(journal(Path(sink.destination)).events()) == log.records
 
@@ -130,7 +130,7 @@ async def test_transient_timer_upload_failure_keeps_the_timer_and_republishes_fr
         assert await asyncio.to_thread(published.wait, 2)
         await log.record(StageCompleted(Stage.REVIEW, "", "accept"))
     assert local_records(sink.local) == log.records
-    await sink._upload()
+    await sink._upload(Status(), None)
     assert decode(journal(Path(sink.destination)).events()) == log.records
 
 
@@ -158,10 +158,42 @@ async def test_a_storage_refusal_stops_publication_on_either_trigger(
     assert len(calls) == 1
 
 
+async def test_a_tick_queued_behind_a_refused_checkpoint_publishes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A count-triggered checkpoint is refused while a timer tick waits on the lock; the stop holds for the tick."""
+    monkeypatch.setattr(checkpoint, "CHECKPOINT_EVENTS", 1)
+    sink = claimed(tmp_path)
+    publish, calls, gate = sink._publish, [], threading.Event()
+
+    def refuse_first(status: Status, workpiece: Workpiece | None) -> None:
+        calls.append(status)
+        if len(calls) == 1:
+            gate.wait(5)
+            raise ClientError({"Error": {"Code": "AccessDenied", "Message": "Access Denied"}}, "PutObject")
+        publish(status, workpiece)
+
+    async def tick() -> None:
+        async with sink.lock:  # As ``_periodic`` does.
+            await sink._upload(Status(), None)
+
+    monkeypatch.setattr(sink, "_publish", refuse_first)
+    foreground = asyncio.create_task(EventLog(sink=sink).record(Note("first")))
+    while not calls:
+        await asyncio.sleep(0.01)
+    queued = asyncio.create_task(tick())
+    await asyncio.sleep(0.01)
+    gate.set()
+    for task in (foreground, queued):
+        with pytest.raises(PublicationFailed):
+            await task
+    assert len(calls) == 1 and journal(Path(sink.destination)).head.size == 0
+
+
 async def test_two_writers_claiming_the_same_head_cannot_both_proceed(tmp_path: Path) -> None:
     first = claimed(tmp_path)
     await EventLog(sink=first).record(Note("first"))
-    await first._upload()
+    await first._upload(Status(), None)
     seen = journal(Path(first.destination))
     contenders = [CheckpointSink(tmp_path / "work", first.destination) for _ in range(2)]
     contenders[0].claim(seen)
@@ -177,7 +209,7 @@ async def test_a_superseded_writer_stops_and_cannot_publish_status_or_chunks(
     stale = claimed(tmp_path)
     log = EventLog(sink=stale)
     await log.record(Note("before takeover"))
-    await stale._upload()
+    await stale._upload(Status(), None)
     successor = CheckpointSink(tmp_path / "work", stale.destination)
     successor.claim(journal(Path(stale.destination)))
     await log.record(Note("after takeover"))
@@ -223,9 +255,9 @@ async def test_ambiguous_head_acknowledgement_is_reconciled_without_overlap(tmp_
     sink.head = AckLost(sink.head)
     log = EventLog(sink=sink)
     await log.record(Note("first"))
-    await sink._upload()
+    await sink._upload(Status(), None)
     await log.record(Note("second"))
-    await sink._upload()
+    await sink._upload(Status(), None)
     published = journal(Path(sink.destination))
     assert published.head.writer == sink.writer and len(published.head.chunks) == 2
     assert decode(published.events()) == log.records
@@ -248,9 +280,9 @@ async def test_a_late_chunk_put_cannot_overwrite_committed_history(
         return put(directory, suffix, data)
 
     monkeypatch.setattr(checkpoint, "_put", time_out_first_put)
-    await sink._upload()
+    await sink._upload(Status(), None)
     await log.record(Note("second"))
-    await sink._upload()
+    await sink._upload(Status(), None)
     put(*delayed[0])
     assert decode(journal(Path(sink.destination)).events()) == log.records
 
@@ -261,17 +293,17 @@ async def test_torn_local_tail_is_not_published(tmp_path: Path) -> None:
     await log.record(Note("complete"))
     with Path(sink.local.path).open("ab") as output:
         output.write(b'{"sequence": 2, "wall')
-    await sink._upload()
+    await sink._upload(Status(), None)
     assert [record.event for record in decode(journal(Path(sink.destination)).events())] == [Note("complete")]
     await log.record(Note("next"))
-    await sink._upload()
+    await sink._upload(Status(), None)
     assert decode(journal(Path(sink.destination)).events()) == log.records
 
 
 async def test_reader_fails_closed_on_chunks_short_of_the_head(tmp_path: Path) -> None:
     sink = claimed(tmp_path)
     await EventLog(sink=sink).record(Note("complete"))
-    await sink._upload()
+    await sink._upload(Status(), None)
     head = json.loads((Path(sink.destination) / HEAD).read_text())
     chunk = Path(sink.destination) / "chunks" / head["chunks"][0]
     chunk.write_bytes(chunk.read_bytes()[:-5])
