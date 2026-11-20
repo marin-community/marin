@@ -7,6 +7,7 @@ import os
 from daytona import AsyncDaytona, DaytonaConfig
 from omegaconf import DictConfig
 from rigging.task_errors import VERIFIER_OUTPUT_PARSE_ERROR
+from rigging.task_errors import ErrorIdentity
 from shellbox.backends.daytona.machine import DaytonaMachineFactory, DaytonaNetworkMode, DaytonaNetworkPolicy
 from shellbox.machine import Backend, MachineFactory
 from taskcompendium.models import NoGrader
