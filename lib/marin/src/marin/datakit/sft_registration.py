@@ -8,6 +8,7 @@ import json
 import sqlite3
 import tempfile
 from collections.abc import Iterable, Iterator
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -20,6 +21,7 @@ import pyarrow.parquet as pq
 from finestore.sft import (
     REQUIRED_SFT_EVAL_FAMILIES,
     DatasetVariantInput,
+    SftEvalFamily,
     SftEvidenceReference,
     SftPreparationReceipt,
     SftRecord,
@@ -31,6 +33,7 @@ from openai_harmony import Message
 from pydantic import Field
 from rigging.filesystem.step_status import STATUS_SUCCESS
 from rigging.filesystem.storage_path import StoragePath
+from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
 
 from marin.datakit.chat_normalize import ChatSourceData, validate_chat_messages, validate_tool_definitions
 from marin.datakit.chat_render import _inference_messages
@@ -41,11 +44,15 @@ from marin.datakit.decon import (
     _validate_best_effort_eval_manifest,
     _validate_required_eval_manifest,
 )
+from marin.datakit.low_value.model import read_pinned_bytes
 from marin.datakit.normalize import NormalizedData
-from marin.execution.artifact import ARTIFACT_LOAD_CONTEXT_KEY, ArtifactRecord
+from marin.execution.artifact import ARTIFACT_LOAD_CONTEXT_KEY, RECORD_FILENAME, ArtifactRecord
 from marin.execution.step_status import StatusFile
 
 SFT_NGRAM_LENGTH = 5
+SFT_MIN_MATCHED_FEATURES = 2
+TRAINING_MANIFEST_FILENAME = "training-manifest.json"
+DOWNLOAD_SUFFIXES = SUPPORTED_EXTENSIONS
 
 
 class SftFileManifest(SftRecord):
@@ -55,11 +62,13 @@ class SftFileManifest(SftRecord):
     rows: int = Field(ge=0)
 
 
-class SftFilterResult(SftRecord):
+class PreparedSftData(SftRecord):
     input: DatasetVariantInput
     output_manifest: SftEvidenceReference
     input_rows: int = Field(ge=0)
     filtered_rows: int = Field(ge=0)
+    input_manifest: SftEvidenceReference
+    stage_files: dict[SftStage, SftEvidenceReference]
 
 
 @dataclass(frozen=True)
@@ -94,24 +103,20 @@ class SftRegistrationPlan(SftRecord):
     input_manifest: SftEvidenceReference
     stages: dict[SftStage, SftEvidenceReference]
     stage_files: dict[SftStage, SftEvidenceReference]
-    evals: dict[str, SftEvalRequirement]
+    evals: dict[SftEvalFamily, SftEvalRequirement]
     output_manifest: SftEvidenceReference
     tokenizer: SftEvidenceReference
     chat_template: SftEvidenceReference
 
 
 def qualification_implementation_sha256() -> str:
-    """Pin the validator and its public receipt contract in the step identity."""
+    """Return the SHA-256 of the registration implementation and receipt schema."""
     return hashlib.sha256(Path(__file__).read_bytes() + Path(receipt_models.__file__).read_bytes()).hexdigest()
 
 
 def read_pinned(reference: SftEvidenceReference) -> bytes:
     """Read a small manifest or record only if its byte digest matches."""
-    with StoragePath(reference.uri).open("rb") as stream:
-        raw = stream.read()
-    if hashlib.sha256(raw).hexdigest() != reference.sha256:
-        raise ValueError(f"SFT evidence digest mismatch: {reference.uri}")
-    return raw
+    return read_pinned_bytes(reference.uri, reference.sha256)
 
 
 def _verify_file(reference: SftEvidenceReference) -> None:
@@ -170,6 +175,7 @@ def _encode_chat(row: dict[str, Any], processor: ChatProcessor, template: str) -
 
 
 def _validate_evals(plan: SftRegistrationPlan, bloom: ArtifactRecord) -> str:
+    """Validate corpus coverage and return its evidence-and-matching-policy digest."""
     evidence = EvalBloom.model_validate(bloom.result, context={ARTIFACT_LOAD_CONTEXT_KEY: True})
     if evidence.n_eval_records <= 0:
         raise ValueError("SFT Bloom has no measured eval records")
@@ -187,15 +193,15 @@ def _validate_evals(plan: SftRegistrationPlan, bloom: ArtifactRecord) -> str:
     )
     if any(key not in config or mark_config.get(key) != config[key] for key in policy_keys):
         raise ValueError("SFT decontamination marks and Bloom use different matching policies")
-    required = sorted(sorted(plan.evals[key].names) for key in ("aa", "uncheatable"))
+    required = sorted(sorted(plan.evals[key].names) for key in (SftEvalFamily.AA, SftEvalFamily.UNCHEATABLE))
     if config.get("ngram_length") != SFT_NGRAM_LENGTH or config.get("required_eval_suites") != required:
         raise ValueError("SFT Bloom does not bind the required suites and five-word policy")
-    if config.get("required_eval_corpus_version") != plan.evals["aa"].version:
+    if config.get("required_eval_corpus_version") != plan.evals[SftEvalFamily.AA].version:
         raise ValueError("SFT Bloom uses another eval corpus")
-    lmh = plan.evals["lm_eval"]
+    lmh = plan.evals[SftEvalFamily.LM_EVAL]
     if dict(config.get("best_effort_required_tasks", [])) != lmh.required_tasks or not lmh.required_tasks:
         raise ValueError("SFT Bloom lacks required lm-eval leaf-task coverage")
-    supplement = plan.evals["atlas_references"]
+    supplement = plan.evals[SftEvalFamily.ATLAS_REFERENCES]
     additional = config.get("additional_required_eval_manifests", [])
     expected = [supplement.manifest.uri, supplement.version, list(supplement.names), supplement.source_catalog_sha256]
     if (
@@ -206,7 +212,7 @@ def _validate_evals(plan: SftRegistrationPlan, bloom: ArtifactRecord) -> str:
         raise ValueError("SFT Bloom does not bind the pinned reference supplement and lm-eval version")
     for key, requirement in plan.evals.items():
         read_pinned(requirement.manifest)
-        if key == "lm_eval":
+        if key == SftEvalFamily.LM_EVAL:
             _validate_best_effort_eval_manifest(
                 requirement.manifest.uri, requirement.version, requirement.required_tasks
             )
@@ -215,7 +221,7 @@ def _validate_evals(plan: SftRegistrationPlan, bloom: ArtifactRecord) -> str:
                 requirement.manifest.uri,
                 requirement.version,
                 requirement.names,
-                text_field="text",
+                text_field=str(config["text_field"]),
                 ngram=NGramConfig(
                     ngram_length=SFT_NGRAM_LENGTH,
                     overlap_threshold=float(config["overlap_threshold"]),
@@ -245,13 +251,9 @@ def count_download_rows(files: tuple[SftEvidenceReference, ...]) -> int:
         if path.name.endswith(".parquet"):
             with path.open() as stream:
                 total += pq.ParquetFile(stream).metadata.num_rows
-        elif any(path.name.endswith(suffix) for suffix in (".jsonl", ".jsonl.gz", ".jsonl.zst")):
-            with path.open("rt", compression="infer") as stream:
-                for line in stream:
-                    json.loads(line)
-                    total += 1
         else:
-            raise ValueError(f"Unsupported SFT download row format: {path.name}")
+            with closing(load_file(reference.uri)) as reader:
+                total += sum(1 for _ in reader)
     return total
 
 
@@ -267,7 +269,7 @@ def _load_completed_stages(plan: SftRegistrationPlan) -> tuple[SftFileManifest, 
         raise ValueError("SFT preparation requires content-pinned stage manifests")
     records = {stage: ArtifactRecord.model_validate_json(read_pinned(ref)) for stage, ref in plan.stages.items()}
     for stage, record in records.items():
-        if plan.stages[stage].uri != str(StoragePath(record.output_path) / ".artifact.json"):
+        if plan.stages[stage].uri != str(StoragePath(record.output_path) / RECORD_FILENAME):
             raise ValueError("SFT stage record does not identify its pinned output")
         if not record.name or StatusFile(record.output_path, worker_id="sft-registration").status != STATUS_SUCCESS:
             raise ValueError("SFT qualification refuses incomplete stage records")
@@ -291,7 +293,7 @@ def _load_completed_stages(plan: SftRegistrationPlan) -> tuple[SftFileManifest, 
         if path in ancestors:
             continue
         ancestors.add(path)
-        artifact_path = StoragePath(path) / ".artifact.json"
+        artifact_path = StoragePath(path) / RECORD_FILENAME
         pinned = next((ref for ref in plan.stages.values() if StoragePath(ref.uri) == artifact_path), None)
         raw = read_pinned(pinned) if pinned is not None else artifact_path.read_bytes()
         record = ArtifactRecord.model_validate_json(raw)
@@ -312,12 +314,19 @@ def _load_processor(root: Path, files: SftFileManifest, template: str) -> ChatPr
     return ChatProcessor(load_tokenizer(str(root)), chat_template=template)
 
 
+def _contamination_marks(rows: Iterable[dict[str, Any]]) -> Iterator[tuple[str, bool]]:
+    for row in rows:
+        if not isinstance(row["contaminated"], bool):
+            raise ValueError("SFT decontamination contains an unmeasured row")
+        yield row["id"], row["contaminated"]
+
+
 def _audit_training(
     plan: SftRegistrationPlan,
     inputs: SftFileManifest,
     records: dict[SftStage, ArtifactRecord],
     output: SftFileManifest,
-    filtering: SftFilterResult,
+    filtering: PreparedSftData,
 ) -> TrainingSummary:
     template = read_pinned(plan.chat_template).decode("utf-8")
     tokenizer_files = SftFileManifest.model_validate_json(read_pinned(plan.tokenizer))
@@ -336,10 +345,10 @@ def _audit_training(
             chat_rows = db.execute("SELECT COUNT(*) FROM chat").fetchone()[0]
             for row in _stage_rows(plan, SftStage.NORMALIZE, records[SftStage.NORMALIZE], NormalizedData):
                 db.execute("INSERT INTO text VALUES (?,?)", (row["id"], row["source_id"]))
-            for row in _stage_rows(plan, SftStage.DECONTAM, records[SftStage.DECONTAM], DeconAttributes):
-                if not isinstance(row["contaminated"], bool):
-                    raise ValueError("SFT decontamination contains an unmeasured row")
-                db.execute("INSERT INTO marks VALUES (?,?)", (row["id"], bool(row["contaminated"])))
+            db.executemany(
+                "INSERT INTO marks VALUES (?,?)",
+                _contamination_marks(_stage_rows(plan, SftStage.DECONTAM, records[SftStage.DECONTAM], DeconAttributes)),
+            )
             if db.execute("SELECT COUNT(*) FROM text LEFT JOIN marks USING(id) WHERE marks.id IS NULL").fetchone() != (
                 0,
             ) or db.execute("SELECT COUNT(*) FROM marks LEFT JOIN text USING(id) WHERE text.id IS NULL").fetchone() != (
@@ -394,6 +403,8 @@ def qualify_sft_variant(plan: SftRegistrationPlan, output_path: str) -> SftPrepa
     inputs, records = _load_completed_stages(plan)
     policy_sha256 = _validate_evals(plan, records[SftStage.EVAL_BLOOM])
     filtering = PreparedSftData.model_validate(records[SftStage.FILTER].result)
+    if filtering.input_manifest != plan.input_manifest or filtering.stage_files != plan.stage_files:
+        raise ValueError("SFT measured selection differs from its pinned source manifests")
     if PreparedSftData.model_validate(records[SftStage.TRAINING].result) != filtering:
         raise ValueError("SFT training handoff differs from the measured selection")
     if filtering.input != plan.input or filtering.output_manifest != plan.output_manifest:
@@ -446,11 +457,6 @@ class SftPreparationInput(SftRecord):
     chat_template: SftEvidenceReference
 
 
-class PreparedSftData(SftFilterResult):
-    input_manifest: SftEvidenceReference
-    stage_files: dict[SftStage, SftEvidenceReference]
-
-
 def pin_file(path: StoragePath) -> SftEvidenceReference:
     with path.open() as stream:
         return SftEvidenceReference(uri=str(path), sha256=hashlib.file_digest(stream, "sha256").hexdigest())
@@ -468,7 +474,7 @@ class PreparationFiles:
     download_rows: int
     input_manifest: SftEvidenceReference
     stage_manifests: dict[SftStage, SftEvidenceReference]
-    stage_rows: dict[SftStage, SftFileManifest]
+    stage_datasets: dict[SftStage, SftFileManifest]
 
 
 def _measure_preparation_files(config: SftPreparationInput, root: StoragePath) -> PreparationFiles:
@@ -476,7 +482,7 @@ def _measure_preparation_files(config: SftPreparationInput, root: StoragePath) -
     files = [
         file
         for file in (download / "**/*").glob()
-        if any(file.name.endswith(suffix) for suffix in (".parquet", ".jsonl", ".jsonl.gz", ".jsonl.zst"))
+        if any(file.name.endswith(suffix) for suffix in DOWNLOAD_SUFFIXES)
         and not any(segment.startswith(".") for segment in file.relative_to(download).split("/"))
     ]
     if not files:
@@ -486,10 +492,10 @@ def _measure_preparation_files(config: SftPreparationInput, root: StoragePath) -
     input_manifest = write_file_manifest(root / "input-manifest.json", sorted(files, key=str), raw_count)
     schemas = {SftStage.CHAT: ChatSourceData, SftStage.NORMALIZE: NormalizedData, SftStage.DECONTAM: DeconAttributes}
     manifests = {}
-    rows_by_stage = {}
+    datasets_by_stage = {}
     for stage, schema in schemas.items():
         record = ArtifactRecord.model_validate_json(
-            (StoragePath(config.stage_paths[stage]) / ".artifact.json").read_bytes()
+            (StoragePath(config.stage_paths[stage]) / RECORD_FILENAME).read_bytes()
         )
         result = schema.model_validate(record.result, context={ARTIFACT_LOAD_CONTEXT_KEY: True})
         paths = sorted((StoragePath(result.main_output_dir) / "*.parquet").glob(), key=str)
@@ -498,12 +504,21 @@ def _measure_preparation_files(config: SftPreparationInput, root: StoragePath) -
             with path.open() as stream:
                 measured += pq.ParquetFile(stream).metadata.num_rows
         manifests[stage] = write_file_manifest(root / f"{stage.value}-files.json", paths, measured)
-        rows_by_stage[stage] = SftFileManifest.model_validate_json(read_pinned(manifests[stage]))
-    return PreparationFiles(raw_count, input_manifest, manifests, rows_by_stage)
+        datasets_by_stage[stage] = SftFileManifest.model_validate_json(read_pinned(manifests[stage]))
+    return PreparationFiles(raw_count, input_manifest, manifests, datasets_by_stage)
+
+
+def _append_training_batch(writer: pq.ParquetWriter | None, stream: Any, rows: list[dict]) -> pq.ParquetWriter:
+    table = pa.Table.from_pylist(rows)
+    if writer is None:
+        writer = pq.ParquetWriter(stream, table.schema)
+    writer.write_table(table)
+    rows.clear()
+    return writer
 
 
 def _write_selected_training(
-    config: SftPreparationInput, rows_by_stage: dict[SftStage, SftFileManifest], destination: StoragePath
+    config: SftPreparationInput, datasets_by_stage: dict[SftStage, SftFileManifest], destination: StoragePath
 ) -> int:
     template = read_pinned(config.chat_template).decode()
     tokenizer = SftFileManifest.model_validate_json(read_pinned(config.tokenizer))
@@ -515,16 +530,15 @@ def _write_selected_training(
             db.execute("CREATE TABLE texts(id TEXT PRIMARY KEY, chat_id TEXT UNIQUE)")
             db.execute("CREATE TABLE marks(id TEXT PRIMARY KEY, contaminated INTEGER)")
             db.execute("CREATE TABLE encodings(digest TEXT PRIMARY KEY)")
-            for row in _rows(rows_by_stage[SftStage.NORMALIZE].files):
+            for row in _rows(datasets_by_stage[SftStage.NORMALIZE].files):
                 db.execute("INSERT INTO texts VALUES (?,?)", (row["id"], row["source_id"]))
-            for row in _rows(rows_by_stage[SftStage.DECONTAM].files):
-                if not isinstance(row["contaminated"], bool):
-                    raise ValueError("SFT preparation refuses unmeasured marks")
-                db.execute("INSERT INTO marks VALUES (?,?)", (row["id"], row["contaminated"]))
+            db.executemany(
+                "INSERT INTO marks VALUES (?,?)", _contamination_marks(_rows(datasets_by_stage[SftStage.DECONTAM].files))
+            )
             writer = None
             batch = []
             try:
-                for row in _rows(rows_by_stage[SftStage.CHAT].files):
+                for row in _rows(datasets_by_stage[SftStage.CHAT].files):
                     mark = db.execute(
                         "SELECT texts.id,marks.contaminated FROM texts LEFT JOIN marks USING(id) WHERE chat_id=?",
                         (row["id"],),
@@ -549,16 +563,9 @@ def _write_selected_training(
                     )
                     selected_count += 1
                     if len(batch) == 256:
-                        table = pa.Table.from_pylist(batch)
-                        if writer is None:
-                            writer = pq.ParquetWriter(stream, table.schema)
-                        writer.write_table(table)
-                        batch.clear()
+                        writer = _append_training_batch(writer, stream, batch)
                 if batch:
-                    table = pa.Table.from_pylist(batch)
-                    if writer is None:
-                        writer = pq.ParquetWriter(stream, table.schema)
-                    writer.write_table(table)
+                    writer = _append_training_batch(writer, stream, batch)
             finally:
                 if writer is not None:
                     writer.close()
@@ -581,13 +588,13 @@ def prepare_sft_training(config: SftPreparationInput, output_path: str) -> Prepa
         task_specs_sha256=config.task_specs_sha256,
     )
     destination = root / "training.parquet"
-    selected_count = _write_selected_training(config, files.stage_rows, destination)
-    output_manifest = write_file_manifest(root / "training-manifest.json", [destination], selected_count)
+    selected_count = _write_selected_training(config, files.stage_datasets, destination)
+    output_manifest = write_file_manifest(root / TRAINING_MANIFEST_FILENAME, [destination], selected_count)
     return PreparedSftData(
         input=identity,
         output_manifest=output_manifest,
         input_rows=files.download_rows,
-        filtered_rows=files.stage_rows[SftStage.CHAT].rows - selected_count,
+        filtered_rows=files.stage_datasets[SftStage.CHAT].rows - selected_count,
         input_manifest=files.input_manifest,
         stage_files=files.stage_manifests,
     )

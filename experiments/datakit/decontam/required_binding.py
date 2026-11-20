@@ -4,6 +4,7 @@
 """One required evaluation-corpus binding for Datakit PT and SFT preparation."""
 
 from dataclasses import dataclass
+from typing import TypedDict
 
 from marin.datakit.decon import BestEffortEvalSuite, RequiredEvalManifest, RequiredEvalSuite
 from rigging.filesystem.cluster_config import marin_prefix
@@ -28,6 +29,13 @@ from experiments.datakit.decontam.prepare_eval_corpus import (
 )
 
 
+class BloomBindingOptions(TypedDict):
+    required_eval_suites: tuple[RequiredEvalSuite, ...]
+    required_eval_corpus_version: str
+    best_effort_eval_suite: BestEffortEvalSuite
+    additional_required_eval_manifests: tuple[RequiredEvalManifest, ...]
+
+
 @dataclass(frozen=True)
 class RequiredDatakitEvals:
     root: str
@@ -36,7 +44,7 @@ class RequiredDatakitEvals:
     lmh: BestEffortEvalSuite
     additional: tuple[RequiredEvalManifest, ...]
 
-    def bloom_options(self) -> dict:
+    def bloom_options(self) -> BloomBindingOptions:
         return {
             "required_eval_suites": self.core,
             "required_eval_corpus_version": self.version,

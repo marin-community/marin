@@ -6,10 +6,12 @@
 import argparse
 from functools import partial
 
-from finestore.sft import SftEvidenceReference, SftPreparationReceipt, SftRecord, SftStage
+from finestore.sft import SftEvalFamily, SftEvidenceReference, SftPreparationReceipt, SftRecord, SftStage
 from marin.datakit.decon import build_eval_bloom_step, decon_step
 from marin.datakit.sft_registration import (
+    SFT_MIN_MATCHED_FEATURES,
     SFT_NGRAM_LENGTH,
+    TRAINING_MANIFEST_FILENAME,
     PreparedSftData,
     SftEvalRequirement,
     SftPreparationInput,
@@ -20,7 +22,7 @@ from marin.datakit.sft_registration import (
     qualify_sft_variant,
 )
 from marin.datakit.sft_sources import DatakitChatSource, all_sft_sources
-from marin.execution.artifact import read_record
+from marin.execution.artifact import RECORD_FILENAME, read_record
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from rigging.filesystem.storage_path import StoragePath, prefix_join
@@ -45,15 +47,15 @@ def required_sft_evals() -> dict[str, SftEvalRequirement]:
         family: SftEvalRequirement(
             manifest=pin_file(StoragePath(suite.manifest_path)), version=binding.version, names=suite.names
         )
-        for family, suite in zip(("aa", "uncheatable"), binding.core, strict=True)
+        for family, suite in zip((SftEvalFamily.AA, SftEvalFamily.UNCHEATABLE), binding.core, strict=True)
     }
-    result["lm_eval"] = SftEvalRequirement(
+    result[SftEvalFamily.LM_EVAL] = SftEvalRequirement(
         manifest=pin_file(StoragePath(binding.lmh.manifest_path)),
         version=binding.lmh.corpus_version,
         required_tasks=binding.lmh.required_tasks,
     )
     supplement = binding.additional[0]
-    result["atlas_references"] = SftEvalRequirement(
+    result[SftEvalFamily.ATLAS_REFERENCES] = SftEvalRequirement(
         manifest=pin_file(StoragePath(supplement.path)),
         version=supplement.version,
         names=supplement.names,
@@ -81,7 +83,7 @@ def registered_download(source: DatakitChatSource, repository: str, revision: st
 
 def _training_output(filter_path: str, output_path: str) -> dict:
     prepared = PreparedSftData.model_validate(read_record(filter_path).result)
-    (StoragePath(output_path) / "training-manifest.json").write_bytes(
+    (StoragePath(output_path) / TRAINING_MANIFEST_FILENAME).write_bytes(
         StoragePath(prepared.output_manifest.uri).read_bytes(), auto_mkdir=True
     )
     return prepared.model_dump(mode="json")
@@ -95,7 +97,7 @@ def _register(
         input=prepared.input,
         registry_source=request.registry_source,
         input_manifest=prepared.input_manifest,
-        stages={stage: pin_file(StoragePath(step.output_path) / ".artifact.json") for stage, step in stages.items()},
+        stages={stage: pin_file(StoragePath(step.output_path) / RECORD_FILENAME) for stage, step in stages.items()},
         stage_files=prepared.stage_files,
         evals=required_sft_evals(),
         output_manifest=prepared.output_manifest,
@@ -118,7 +120,7 @@ def registration_step(request: SftRegistrationRequest, *, output_prefix: str | N
         name="datakit/sft-eval-bloom",
         eval_data_sources=[binding.root],
         ngram_length=SFT_NGRAM_LENGTH,
-        min_matched_features=2,
+        min_matched_features=SFT_MIN_MATCHED_FEATURES,
         **binding.bloom_options(),
         output_path_prefix=output_prefix,
     )
@@ -127,7 +129,7 @@ def registration_step(request: SftRegistrationRequest, *, output_prefix: str | N
         normalized=source.normalized,
         prebuilt_bloom=bloom,
         ngram_length=SFT_NGRAM_LENGTH,
-        min_matched_features=2,
+        min_matched_features=SFT_MIN_MATCHED_FEATURES,
         output_path_prefix=output_prefix,
     )
     stages.update({SftStage.EVAL_BLOOM: bloom, SftStage.DECONTAM: marks})

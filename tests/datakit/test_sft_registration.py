@@ -3,12 +3,19 @@
 
 import hashlib
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from finestore.sft import DatasetVariantInput, SftEvidenceReference, SftPreparationReceipt, SftStage
+from finestore.sft import (
+    REQUIRED_SFT_EVAL_FAMILIES,
+    DatasetVariantInput,
+    SftEvidenceReference,
+    SftPreparationReceipt,
+    SftStage,
+)
 from marin.datakit.chat_normalize import ChatChannel, _normalize_chat_record
 from marin.datakit.chat_render import render_chat_record
 from marin.datakit.normalize import _make_normalize_fn
@@ -53,6 +60,68 @@ def artifact(path: Path, value: dict | None, deps=(), config=None) -> SftEvidenc
     return json_file(path / ".artifact.json", record.model_dump(mode="json"))
 
 
+def _tokenizer_fixture(tmp_path: Path) -> tuple[SftEvidenceReference, SftEvidenceReference]:
+    token_dir = tmp_path / "tokenizer"
+    backend = Tokenizer(
+        WordLevel({"[UNK]": 0, "Question": 1, "Answer": 2, "Different": 3, "Excluded": 4}, unk_token="[UNK]")
+    )
+    backend.pre_tokenizer = Whitespace()
+    tokenizer = PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="[UNK]")
+    tokenizer.save_pretrained(token_dir)
+    template_path = tmp_path / "template.jinja"
+    template_path.write_text(
+        "{% for message in messages %}{% if message['role'] == 'assistant' %}"
+        "{% generation %}{{message['content']}}{% endgeneration %}"
+        "{% else %}{{message['content']}} {% endif %}{% endfor %}"
+    )
+    template = pin(template_path)
+    tokenizer_manifest = json_file(
+        tmp_path / "tokenizer.json", {"files": [pin(f).model_dump() for f in sorted(token_dir.iterdir())], "rows": 0}
+    )
+    return tokenizer_manifest, template
+
+
+def _eval_fixtures(tmp_path: Path) -> dict:
+    evals = {}
+    for family in sorted(REQUIRED_SFT_EVAL_FAMILIES):
+        root = tmp_path / "evals" / family
+        data = parquet(root / "data.parquet", [{"id": "reference", "text": "one two three four five six seven"}])
+        if family == "lm_eval":
+            manifest = json_file(
+                root / "manifest.json",
+                {
+                    "corpus_version": "fixture-v1",
+                    "required": False,
+                    "status": "complete",
+                    "included_leaf_tasks": ["core"],
+                    "required_tasks": {"core": ["core"]},
+                    "artifacts": [{"task": "core", "artifact": "data.parquet", "records": 1}],
+                },
+            )
+            evals[family] = SftEvalRequirement(manifest=manifest, version="fixture-v1", required_tasks={"core": 1})
+        else:
+            manifest = json_file(
+                root / "manifest.json",
+                {
+                    "corpus_version": "fixture-v1",
+                    "required": True,
+                    "status": "complete",
+                    "benchmarks": [
+                        {"name": family, "artifact": "data.parquet", "expected_records": 1, "sha256": data.sha256}
+                    ],
+                },
+            )
+            evals[family] = SftEvalRequirement(manifest=manifest, version="fixture-v1", names=(family,))
+    return evals
+
+
+@dataclass(frozen=True)
+class RegistrationFixture:
+    plan: SftRegistrationPlan
+    root: Path
+    training_row: dict
+
+
 @pytest.fixture(params=["parquet", "jsonl"])
 def registration(tmp_path, request):
     raw = parquet(
@@ -90,53 +159,8 @@ def registration(tmp_path, request):
     prepared = {**chats[0], "normalized_id": normalized[0]["id"], "input_ids": [1, 2], "assistant_masks": [0, 1]}
     training_file = parquet(tmp_path / "training/part-000.parquet", [prepared])
     output = json_file(tmp_path / "output.json", {"files": [training_file.model_dump()], "rows": 1})
-    token_dir = tmp_path / "tokenizer"
-    backend = Tokenizer(
-        WordLevel({"[UNK]": 0, "Question": 1, "Answer": 2, "Different": 3, "Excluded": 4}, unk_token="[UNK]")
-    )
-    backend.pre_tokenizer = Whitespace()
-    tokenizer = PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="[UNK]")
-    tokenizer.save_pretrained(token_dir)
-    template_path = tmp_path / "template.jinja"
-    template_path.write_text(
-        "{% for message in messages %}{% if message['role'] == 'assistant' %}"
-        "{% generation %}{{message['content']}}{% endgeneration %}"
-        "{% else %}{{message['content']}} {% endif %}{% endfor %}"
-    )
-    template = pin(template_path)
-    tokenizer_manifest = json_file(
-        tmp_path / "tokenizer.json", {"files": [pin(f).model_dump() for f in sorted(token_dir.iterdir())], "rows": 0}
-    )
-    evals = {}
-    for family in ("aa", "uncheatable", "atlas_references", "lm_eval"):
-        root = tmp_path / "evals" / family
-        data = parquet(root / "data.parquet", [{"id": "reference", "text": "one two three four five six seven"}])
-        if family == "lm_eval":
-            manifest = json_file(
-                root / "manifest.json",
-                {
-                    "corpus_version": "fixture-v1",
-                    "required": False,
-                    "status": "complete",
-                    "included_leaf_tasks": ["core"],
-                    "required_tasks": {"core": ["core"]},
-                    "artifacts": [{"task": "core", "artifact": "data.parquet", "records": 1}],
-                },
-            )
-            evals[family] = SftEvalRequirement(manifest=manifest, version="fixture-v1", required_tasks={"core": 1})
-        else:
-            manifest = json_file(
-                root / "manifest.json",
-                {
-                    "corpus_version": "fixture-v1",
-                    "required": True,
-                    "status": "complete",
-                    "benchmarks": [
-                        {"name": family, "artifact": "data.parquet", "expected_records": 1, "sha256": data.sha256}
-                    ],
-                },
-            )
-            evals[family] = SftEvalRequirement(manifest=manifest, version="fixture-v1", names=(family,))
+    tokenizer_manifest, template = _tokenizer_fixture(tmp_path)
+    evals = _eval_fixtures(tmp_path)
     paths = {stage: tmp_path / stage.name.lower() for stage in SftStage}
     paths[SftStage.CHAT] = tmp_path / "chat"
     paths[SftStage.NORMALIZE] = tmp_path / "normalize"
@@ -225,7 +249,6 @@ def registration(tmp_path, request):
             },
             [paths[SftStage.DECONTAM]],
         ),
-        SftStage.TRAINING: artifact(paths[SftStage.TRAINING], {"prepared": True}, [paths[SftStage.FILTER]]),
     }
     stages[SftStage.TRAINING] = artifact(
         paths[SftStage.TRAINING],
@@ -243,11 +266,11 @@ def registration(tmp_path, request):
         tokenizer=tokenizer_manifest,
         chat_template=template,
     )
-    return plan, tmp_path, prepared
+    return RegistrationFixture(plan, tmp_path, prepared)
 
 
 def test_registration_writes_only_content_bound_complete_receipt(registration):
-    plan, root, _ = registration
+    plan, root = registration.plan, registration.root
     result = qualify_sft_variant(plan, str(root / "receipt.json"))
     loaded = SftPreparationReceipt.model_validate_json((root / "receipt.json").read_text())
     assert loaded == result
@@ -280,7 +303,8 @@ def test_registration_writes_only_content_bound_complete_receipt(registration):
     ],
 )
 def test_incomplete_or_changed_preparation_never_writes_receipt(registration, defect):
-    plan, root, prepared = registration
+    plan, root = registration.plan, registration.root
+    prepared = dict(registration.training_row)
     if defect == "missing_stage":
         plan = plan.model_copy(update={"stages": {k: v for k, v in plan.stages.items() if k != SftStage.FILTER}})
     elif defect == "unfinished_stage":
@@ -332,13 +356,31 @@ def test_incomplete_or_changed_preparation_never_writes_receipt(registration, de
             {"files": [pin(root / "decontam/outputs/main/part-000.parquet").model_dump()], "rows": 2},
         )
         plan = plan.model_copy(update={"stage_files": stage_files})
-    with pytest.raises(ValueError):
+    if defect in {"wrong_mask", "unmeasured_row", "contaminated_row", "dropped_clean"}:
+        stages = dict(plan.stages)
+        record = json.loads(Path(stages[SftStage.FILTER].uri).read_text())
+        record["result"]["output_manifest"] = plan.output_manifest.model_dump(mode="json")
+        record["result"]["stage_files"] = {
+            stage.value: ref.model_dump(mode="json") for stage, ref in plan.stage_files.items()
+        }
+        stages[SftStage.FILTER] = json_file(Path(stages[SftStage.FILTER].uri), record)
+        training = json.loads(Path(stages[SftStage.TRAINING].uri).read_text())
+        training["result"] = record["result"]
+        stages[SftStage.TRAINING] = json_file(Path(stages[SftStage.TRAINING].uri), training)
+        plan = plan.model_copy(update={"stages": stages})
+    expected = {
+        "wrong_mask": "tokens or assistant masks",
+        "unmeasured_row": "unmeasured/contaminated text",
+        "contaminated_row": "unmeasured/contaminated text",
+        "dropped_clean": "discarded a distinct clean conversation",
+    }.get(defect)
+    with pytest.raises(ValueError, match=expected):
         qualify_sft_variant(plan, str(root / "receipt.json"))
     assert not (root / "receipt.json").exists()
 
 
 def test_preparation_produces_training_selection_and_qualifies_it(registration):
-    plan, root, _ = registration
+    plan, root = registration.plan, registration.root
     configuration = SftPreparationInput(
         source_id=plan.input.source_id,
         variant_id=plan.input.variant_id,
