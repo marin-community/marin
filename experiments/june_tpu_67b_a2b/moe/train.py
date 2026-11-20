@@ -56,11 +56,12 @@ from experiments.june_tpu_67b_a2b.moe.model import Block, GrugModelConfig, Trans
 logger = logging.getLogger(__name__)
 ATTENTION_FLOPS_PER_EXAMPLE_KEY = "throughput/attention_flops_per_example_analytic"
 CAUSAL_ATTENTION_FLOPS_PER_EXAMPLE_KEY = "throughput/causal_attention_flops_per_example_analytic"
-# Every step checks the state it hands to the checkpointer: the updated params (which the EMA follows) and the QB
-# betas applied to the router biases next step. A step whose update is non-finite still has a finite loss.
-_STATE_FINITE_KEYS = ("train/params_finite", "train/qb_betas_finite")
-# With diagnose_numerics, a failure also reports which stage of the update first went non-finite.
-_NUMERIC_DIAGNOSTIC_KEYS = ("train/grads_finite", "train/updates_finite", *_STATE_FINITE_KEYS)
+_NUMERIC_DIAGNOSTIC_KEYS = (
+    "train/grads_finite",
+    "train/updates_finite",
+    "train/params_finite",
+    "train/qb_betas_finite",
+)
 
 
 @dataclass(frozen=True)
@@ -409,6 +410,7 @@ def _make_train_step(
         metrics = {"train/loss": loss, **summarized_metrics}
         updates, opt_state = optimizer.update(grads, state.opt_state, qb_params)
         params = optax.apply_updates(qb_params, updates)
+        # Checked every step: a step whose update is non-finite still has a finite loss.
         metrics["train/params_finite"] = _tree_all_finite(params)
         metrics["train/qb_betas_finite"] = jnp.all(jnp.isfinite(metrics["qb_beta_per_layer"]))
         if diagnose_numerics:
@@ -469,12 +471,14 @@ def _tree_all_finite(tree: object) -> jax.Array:
 
 
 def _check_step_numerics(metrics: dict, step: int, diagnose_numerics: bool) -> None:
-    """Raise ``FloatingPointError`` if the step's loss or resulting state is non-finite, before it is checkpointed."""
-    finite_keys = _NUMERIC_DIAGNOSTIC_KEYS if diagnose_numerics else _STATE_FINITE_KEYS
-    diagnostic_keys = (*finite_keys, "train/supervised_tokens") if diagnose_numerics else finite_keys
-    diagnostics = {key: float(metrics[key]) for key in diagnostic_keys}
+    diagnostics = (
+        {key: float(metrics[key]) for key in (*_NUMERIC_DIAGNOSTIC_KEYS, "train/supervised_tokens")}
+        if diagnose_numerics
+        else {}
+    )
     if not bool(jnp.isfinite(metrics["train/loss"])):
         raise FloatingPointError(f"Non-finite Grug loss at step {step}: {diagnostics}")
+    finite_keys = _NUMERIC_DIAGNOSTIC_KEYS if diagnose_numerics else ("train/params_finite", "train/qb_betas_finite")
     if not all(bool(metrics[key]) for key in finite_keys):
         raise FloatingPointError(f"Non-finite Grug update at step {step}: {diagnostics}")
 
