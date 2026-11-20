@@ -21,7 +21,7 @@ from taskcompendium.models import NoGrader, Source, TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import RawRow
 
-from experiments.post_training.task_curation.calibration_inventory import inventory_source, task_blockers
+from experiments.post_training.task_curation.calibration_inventory import image_blockers, inventory_source, task_blockers
 from experiments.post_training.task_curation.datasets.native_harbor import native_task
 from experiments.post_training.task_curation.full_qc_artifacts import FullQCInputs
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
@@ -87,6 +87,16 @@ def test_mutable_native_environment_is_a_repair_even_with_executable_oracle():
     )
     assert isinstance(task, TaskSpec)
     assert task_blockers(task) == {"mutable_docker_base"}
+
+
+@pytest.mark.parametrize("mutable_final_stage", [False, True])
+def test_image_inventory_ignores_nested_shell_quoting_in_run(mutable_final_stage):
+    base = "ubuntu@sha256:" + "a" * 64
+    dockerfile = f"FROM {base} AS builder\n" r'''RUN printf "%s\n" "$(printf "%s" "a'b")"''' + "\n" + (
+        "FROM python:3.12\n" if mutable_final_stage else "FROM builder\n"
+    )
+    expected = {"mutable_docker_base"} if mutable_final_stage else set()
+    assert image_blockers(None, dockerfile.encode()) == expected
 
 
 def test_inventory_accounts_for_frozen_drops_and_rejects_changed_source_bytes(tmp_path):

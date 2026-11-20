@@ -55,9 +55,9 @@ def image_blockers(image: str | None, dockerfile: bytes | None) -> set[str]:
     stages: set[str] = set()
     found = False
     for line in dockerfile_lines(dockerfile.decode()):
-        tokens = shlex.split(line)
-        if tokens[0].upper() != "FROM":
+        if line.split(maxsplit=1)[0].upper() != "FROM":
             continue
+        tokens = shlex.split(line)
         found = True
         fields = [token for token in tokens[1:] if not token.startswith("--")]
         base = fields[0]
