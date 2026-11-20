@@ -156,6 +156,12 @@ other tasks nor the cloud metadata server. A task under either cannot launch
 child jobs, register endpoints, or fetch anything from the controller,
 whatever its profile.
 
+On Kubernetes, a job using `INTERNET` or `NONE` cannot stage a workspace bundle
+or a workdir file that Iris must fetch from the controller. Submission rejects
+these combinations. Use an image with the needed files already present, or a
+policy that reaches the controller. Workdir files of at most 10 KiB stay in a
+ConfigMap, so they do not require controller access.
+
 ### Allowlist
 
 An `ALLOWLIST` task stays a cluster citizen: it receives the cluster env and

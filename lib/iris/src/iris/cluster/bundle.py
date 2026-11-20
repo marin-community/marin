@@ -32,6 +32,8 @@ logger = logging.getLogger(__name__)
 # Maximum size (bytes) of a submitted workspace bundle. Enforced by the client
 # when creating the zip and re-checked by the controller when receiving it.
 MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
+# Larger workdir files are stored as blobs and fetched by the task at startup.
+WORKDIR_FILE_OFFLOAD_THRESHOLD = 10 * 1024
 BUNDLE_UPLOAD_TIMEOUT = Duration.from_seconds(30)
 
 

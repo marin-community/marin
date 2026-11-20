@@ -17,7 +17,7 @@ from rigging.server_auth import ANONYMOUS_ADMIN, VerifiedIdentity, get_verified_
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from sqlalchemy import Row, bindparam, func, select
 
-from iris.cluster.bundle import MAX_BUNDLE_SIZE_BYTES, BundleStore, BundleUploadError
+from iris.cluster.bundle import MAX_BUNDLE_SIZE_BYTES, WORKDIR_FILE_OFFLOAD_THRESHOLD, BundleStore, BundleUploadError
 from iris.cluster.config import user_admitted
 from iris.cluster.constraints import (
     Constraint,
@@ -77,7 +77,6 @@ from iris.version import client_revision_date
 
 logger = logging.getLogger(__name__)
 
-WORKDIR_FILE_OFFLOAD_THRESHOLD = 10 * 1024
 _JOB_REPLACEMENT_DRAIN_WAIT = Duration.from_seconds(120)
 _LOCAL_ADMIN_FEDERATION_DENIED = (
     "A local_admin (CIDR/loopback) identity cannot submit a federated job. "
