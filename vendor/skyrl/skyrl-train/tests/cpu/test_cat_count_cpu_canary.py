@@ -26,12 +26,11 @@ from taskcompendium.grading_result import Outcome
 from taskcompendium.grader import verifyit_package
 from verifyit.spec import ExactSpec
 from skyrl_train.evaluate import evaluation_dump_dir
-from skyrl_train.dataset.tasks import source_row_task, write_tasks
+from skyrl_train.dataset.tasks import TASK_SPEC_COLUMN, source_row_task, write_tasks
 from examples.cat_count.cpu_canary import PROMPT
 from skyrl_gym.envs.cat_count.reward import TARGET_WORD
 from skyrl_train.metric_names import CORRECTION_WEIGHT_MEAN_METRIC, TASK_TIMING_KEYS
 from skyrl_train.config.utils import get_default_config
-from skyrl_train.dataset.tasks import TASK_SPEC_COLUMN, source_row_task
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
 from skyrl_train.trajectory_runners.model_clients import DirectModelClient
 
@@ -749,7 +748,13 @@ def test_cat_count_async_resumes_and_converges(tmp_path, cat_count_policy, cat_c
     first = train(forkserver_context, root, cat_count_policy, steps=4, staleness=1, groups_per_family=groups_per_family)
     before_resume = len(cat_count_session)
     resumed = train(
-        forkserver_context, root, cat_count_policy, steps=100, staleness=1, resume=True, eval_interval=2,
+        forkserver_context,
+        root,
+        cat_count_policy,
+        steps=100,
+        staleness=1,
+        resume=True,
+        eval_interval=2,
         groups_per_family=groups_per_family,
     )
     resumed_steps = {
