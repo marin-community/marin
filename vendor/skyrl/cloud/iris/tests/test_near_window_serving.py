@@ -1,13 +1,12 @@
 import json
 
 import pytest
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
+from tokenizers.pre_tokenizers import Whitespace
+from transformers import PreTrainedTokenizerFast
 
 from marinskyrl.near_window_serving import run_near_window_probe
-
-
-class RenderedTokenizer:
-    def apply_chat_template(self, messages, *, tokenize, add_generation_prompt):
-        return [1, 2, *([3] * messages[-1]["content"].count(" x")), 4, 5]
 
 
 class CompletionServer:
@@ -29,6 +28,10 @@ class CompletionServer:
 @pytest.mark.parametrize("drop_prompt_token", [False, True])
 async def test_probe_certifies_server_rendered_length_and_persists_failed_gate(tmp_path, monkeypatch, drop_prompt_token):
     monkeypatch.setenv("IRIS_OUTPUT_DIR", str(tmp_path))
+    backend = Tokenizer(WordLevel({"[UNK]": 0, "a": 1, "b": 2, "x": 3, "c": 4, "d": 5}, unk_token="[UNK]"))
+    backend.pre_tokenizer = Whitespace()
+    tokenizer = PreTrainedTokenizerFast(tokenizer_object=backend)
+    tokenizer.chat_template = "a b {{ messages[-1]['content'].split('\\n')[0] }} c d"
     engines = [CompletionServer(drop_prompt_token=drop_prompt_token), CompletionServer()]
 
     async def memory_reader():
@@ -40,10 +43,10 @@ async def test_probe_certifies_server_rendered_length_and_persists_failed_gate(t
                     request_timeout=10, memory_sample_interval=2, receipt_uri=str(destination))
     if drop_prompt_token:
         with pytest.raises(ExceptionGroup) as failure:
-            await run_near_window_probe(engines, RenderedTokenizer(), settings, 3, memory_reader=memory_reader)
+            await run_near_window_probe(engines, tokenizer, settings, 3, memory_reader=memory_reader)
         assert any(isinstance(error, ValueError) for error in failure.value.exceptions)
     else:
-        await run_near_window_probe(engines, RenderedTokenizer(), settings, 3, memory_reader=memory_reader)
+        await run_near_window_probe(engines, tokenizer, settings, 3, memory_reader=memory_reader)
     receipt = json.loads(destination.read_bytes())
     assert receipt == json.loads((tmp_path / "near-window-serving-receipt.json").read_bytes())
     assert receipt["result"] == ("failed" if drop_prompt_token else "passed")

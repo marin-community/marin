@@ -24,7 +24,7 @@ class CompletionEngine(Protocol):
 
 
 class PromptTokenizer(Protocol):
-    def apply_chat_template(self, messages: list[dict], *, tokenize: bool, add_generation_prompt: bool) -> list[int]: ...
+    def apply_chat_template(self, messages: list[dict], *, tokenize: bool, add_generation_prompt: bool, return_dict: bool) -> list[int]: ...
 
 
 @dataclass(frozen=True)
@@ -74,7 +74,7 @@ def rendered_near_window_prompt(tokenizer: PromptTokenizer, settings: NearWindow
         {"role": "system", "content": "Read the input and continue with a short explanation."},
         {"role": "user", "content": " x" * settings.minimum_prompt_tokens + "\nExplain the final symbol."},
     ]
-    tokens = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True)
+    tokens = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True, return_dict=False)
     if not settings.minimum_prompt_tokens <= len(tokens) <= settings.context_tokens - settings.max_new_tokens:
         raise ValueError(f"Rendered prompt has {len(tokens)} tokens outside the declared near-window budget")
     return tokens
