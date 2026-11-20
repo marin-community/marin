@@ -105,6 +105,22 @@ def test_serving_profile_cannot_change_frozen_sampling(adopted_round, tmp_path):
         serving_config(frozen, profile)
 
 
+def test_serving_rejects_runai_options_without_matching_loader(adopted_round, tmp_path):
+    terminal = adopted_round_evaluation(adopted_round)
+    context = StepContext.for_run(
+        str(tmp_path / "evaluation"), str(tmp_path), runtime_args=terminal.runtime_args, deps=terminal.deps
+    )
+    run = terminal.build_config(dataclasses.replace(context, is_fingerprint=True))
+    config = yaml.safe_load(run.skyrl.launch_config_yaml)["skyrl"]["generator"]
+    assert config["engine_init_kwargs"]["load_format"] == "runai_streamer"
+    engine = dict(run.serving_profile.engine_init_kwargs)
+    del engine["load_format"]
+    profile = dataclasses.replace(run.serving_profile, engine_init_kwargs=engine)
+    frozen = json.loads(Path(policy_fixture_reference().uri).read_text())
+    with pytest.raises(ValueError, match="RunAI loader options"):
+        serving_config(frozen, profile)
+
+
 def test_exact_graph_preflight_records_all_local_allocations(adopted_round, tmp_path):
     roles = {**adopted_round.serving.role_plan, "colocate_all": False, "policy_num_nodes": 1}
     spec = dataclasses.replace(adopted_round, serving=dataclasses.replace(adopted_round.serving, role_plan=roles))

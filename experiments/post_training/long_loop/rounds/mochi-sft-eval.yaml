@@ -1,7 +1,7 @@
 # Evaluate the pinned Mochi SFT export with the repository runtime.
 schema: 1
 name: mochi-long-loop/sft-evaluation
-version: "2026.11.20.5"
+version: "2026.11.20.6"
 slug: mochi-sft-evaluation
 cluster: cw-us-east-08a
 storage:
@@ -10,7 +10,7 @@ storage:
 evaluation: frozen-micro210
 adopted_model:
   name: mochi-long-loop/adopted-sft
-  version: "2026.11.20.5"
+  version: "2026.11.20.6"
   uri: s3://marin-us-east-08a/marin/models/mochi-sft/hero-sft-fullab-step393k-v2/step-400407/2af3f828aa-cpu-a1
   export_manifest_sha256: 1a7886b05df25338a12642b25f25525c0eb6c5551384934a2f089d7ec5b4a88d
   config_sha256: 1a05f3dbaddd2c1aa28064dc0d4140d53d80cf5c25a7c8418b0e013c91b1a43e
@@ -63,6 +63,7 @@ serving:
     enable_prefix_caching: false
     vllm_v1_disable_multiproc: false
   engine_init_kwargs:
+    load_format: runai_streamer
     moe_backend: triton
     model_loader_extra_config:
       distributed: false
