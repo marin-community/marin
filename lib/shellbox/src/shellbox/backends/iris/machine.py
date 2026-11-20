@@ -39,10 +39,12 @@ from shellbox.machine import (
     LINUX_PROCESS_CAPABILITIES,
     Backend,
     Command,
+    CommandOutcomeUnknown,
     CommandSemantics,
     ExecSetupFailed,
     ExecutionRequirements,
     ExitReason,
+    GuestPathError,
     MachineCancelled,
     MachineResourceExhausted,
     MachineSpec,
@@ -61,11 +63,18 @@ from shellbox.machine import (
 TRANSFER_CHUNK_BYTES = 64 * 1024
 # Path probe exit statuses, above those sh and coreutils use for their own failures, and the errno each reports.
 PROBE_ERRNOS = {101: errno.EISDIR, 102: errno.ENOENT, 103: errno.ENOTDIR, 104: errno.EACCES}
-READ_PROBE = "test -d {path} && exit 101; test -e {path} || exit 102; test -r {path} || exit 104; "
-# The nearest existing ancestor must be a writable directory, or the target itself writable.
+# Neither probe sees a link loop: a dangling or looping symlink reads as missing.
+NEAREST_ANCESTOR = 'a=$(dirname {path}); while [ ! -e "$a" ]; do a=$(dirname "$a"); done; '
+# A missing target names the nearest existing ancestor's fault: a regular file, or a directory it cannot search.
+READ_PROBE = (
+    "test -d {path} && exit 101; if [ ! -e {path} ]; then "
+    + NEAREST_ANCESTOR
+    + 'test -d "$a" || exit 103; test -x "$a" || exit 104; exit 102; fi; test -r {path} || exit 104; '
+)
+# The nearest existing ancestor must be a searchable, writable directory, or the target itself writable.
 WRITE_PROBE = (
-    'test -d {path} && exit 101; a=$(dirname {path}); while [ ! -e "$a" ]; do a=$(dirname "$a"); done; '
-    'test -d "$a" || exit 103; if [ -e {path} ]; then test -w {path}; else test -w "$a"; fi || exit 104; '
+    "test -d {path} && exit 101; " + NEAREST_ANCESTOR + 'test -d "$a" || exit 103; test -x "$a" || exit 104; '
+    'if [ -e {path} ]; then test -w {path}; else test -w "$a"; fi || exit 104; '
 )
 DEFAULT_MEMORY_MB = 2048
 DEFAULT_DISK_MB = 10240
@@ -103,6 +112,16 @@ def _raise_if_unreachable(error: BaseException) -> None:
         error, (ConnectionError, httpx.ConnectError)
     ):
         raise MachineUnavailable(f"Iris controller unavailable: {error}") from error
+
+
+def _never_connected(error: BaseException) -> bool:
+    """The request failed to open a connection, so the controller never received it."""
+    cause: BaseException | None = error
+    while cause is not None:
+        if isinstance(cause, (httpx.ConnectError, ConnectionRefusedError)):
+            return True
+        cause = cause.__cause__
+    return False
 
 
 # The Kubernetes client parses the exec status channel as an integer; the controller reports a failure
@@ -287,16 +306,15 @@ class IrisMachine:
         return response.stdout
 
     async def _path_checked(self, path: str, script: str, probe: str) -> str:
-        """Run ``script`` on a caller-chosen ``path`` after ``probe``; a failure the path causes raises ``OSError``.
+        """Run ``script`` on a caller-chosen ``path`` after ``probe``; a refused path raises ``GuestPathError``.
 
-        Probed failures raise the errno subclass (``FileNotFoundError``, ``IsADirectoryError``,
-        ``NotADirectoryError``, ``PermissionError``); transport failures keep their own types.
+        Only probed failures carry an errno; a failing helper and transport failures keep their own types.
         """
         response = await self._script(probe.format(path=shlex.quote(path)) + script)
         if (code := PROBE_ERRNOS.get(response.exit_code)) is not None:
-            raise OSError(code, os.strerror(code), path)
+            raise GuestPathError(code, os.strerror(code), path)
         if response.exit_code:
-            raise OSError(f"Cannot access {path} ({response.exit_code}): {response.stderr or response.stdout}")
+            raise RuntimeError(f"Iris command failed ({response.exit_code}): {response.stderr or response.stdout}")
         return response.stdout
 
     async def _upload_bytes(self, data: bytes, target: str, *, caller_path: bool = False) -> None:
@@ -320,6 +338,11 @@ class IrisMachine:
             length = min(TRANSFER_CHUNK_BYTES, count - offset)
             encoded = await self._checked(f"tail -c +{offset + 1} {quoted} | head -c {length} | base64")
             chunks.append(base64.b64decode(encoded))
+            if len(chunks[-1]) != length:
+                # The pipeline reports only its encoder's status; a file that vanished reads as a short chunk.
+                if caller_path:
+                    await self._path_checked(source, "", READ_PROBE)
+                raise RuntimeError(f"Read {len(chunks[-1])} of {length} bytes at offset {offset} of {source}")
         return b"".join(chunks), size > count
 
     async def _user_identity(self) -> tuple[str, str]:
@@ -358,23 +381,31 @@ class IrisMachine:
             f"{shlex.join(command.argv)} < {shlex.quote(stdin_path) if command.stdin else '/dev/null'} "
             f"> {shlex.quote(stdout_path)} 2> {shlex.quote(stderr_path)}"
         )
+        executed = False
         try:
-            # An exec without a positive deadline falls back to the controller's short Kubernetes default.
-            response = await asyncio.wait_for(self._script(script, command.timeout), timeout=command.timeout)
-            stdout, stdout_truncated = await self._download_bytes(stdout_path, command.output_limit_bytes)
-            stderr, stderr_truncated = await self._download_bytes(stderr_path, command.output_limit_bytes)
-            return Result(response.exit_code, stdout, stderr, stdout_truncated, stderr_truncated, ExitReason.EXITED)
-        except TimeoutError:
-            await self.close()
-            return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
-        except asyncio.CancelledError:
-            await self.close()
-            raise
-        finally:
-            if not self._closed:
-                await self._script(
-                    f"rm -f {shlex.quote(stdin_path)} {shlex.quote(stdout_path)} {shlex.quote(stderr_path)}"
-                )
+            try:
+                # An exec without a positive deadline falls back to the controller's short Kubernetes default.
+                response = await asyncio.wait_for(self._script(script, command.timeout), timeout=command.timeout)
+                executed = True
+                stdout, stdout_truncated = await self._download_bytes(stdout_path, command.output_limit_bytes)
+                stderr, stderr_truncated = await self._download_bytes(stderr_path, command.output_limit_bytes)
+                return Result(response.exit_code, stdout, stderr, stdout_truncated, stderr_truncated, ExitReason.EXITED)
+            except TimeoutError:
+                await self.close()
+                return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
+            except asyncio.CancelledError:
+                await self.close()
+                raise
+            finally:
+                if not self._closed:
+                    await self._script(
+                        f"rm -f {shlex.quote(stdin_path)} {shlex.quote(stdout_path)} {shlex.quote(stderr_path)}"
+                    )
+        except MachineUnavailable as error:
+            # Only an exec that never reached the controller is safe to send again.
+            if isinstance(error, CommandOutcomeUnknown) or (not executed and _never_connected(error)):
+                raise
+            raise CommandOutcomeUnknown(f"The command may have run; its result was lost: {error}") from error
 
     async def reset(self) -> None:
         """Exclusively clear task roots and non-runtime processes; preserve mount points."""
