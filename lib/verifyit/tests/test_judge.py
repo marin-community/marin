@@ -242,6 +242,17 @@ def test_unparseable_reply_is_retried_once_then_masks_candidate(tmp_path, fake_j
     assert len(fake_judge.prompts) == 2
 
 
+@pytest.mark.parametrize("rubric", ["reference", "checklist"])
+def test_default_transport_recovers_from_transient_failure(tmp_path, fake_judge, rubric):
+    fake_judge.http_statuses = [503, 200]
+    fake_judge.retry_after = "0"
+    fake_judge.replies = ["SCORE: 1"]
+    spec = JudgeSpec(rubric=rubric, references=(REFERENCE,), criteria=("Be correct",), exact_gate=False)
+    reward = grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "candidate"))
+    assert (reward.status, reward.reward) == (Status.SCORED, 1)
+    assert len(fake_judge.requests) == 2
+
+
 def test_second_attempt_is_accepted(tmp_path, fake_judge):
     fake_judge.replies = ["I cannot grade this.", "Matches the reference.\nSCORE: 1"]
     spec = JudgeSpec(references=(REFERENCE,), exact_gate=False)
@@ -491,6 +502,8 @@ def test_malformed_final_judge_labels_never_award_reward(tmp_path, fake_judge, r
 def _label_spec(**overrides) -> JudgeSpec:
     values = dict(
         rubric="labels",
+        transport_attempts=1,
+        parse_attempts=1,
         references=("reference answer",),
         question="trusted question",
         system_prompt="Compare {reference} against {candidate} for {question}.",

@@ -43,11 +43,15 @@ def paths_matching(workspace: Path, patterns: list[str]) -> list[str]:
 
 
 def freeze_path(source: Path, pins: Path, entries: list[dict]) -> None:
-    source = source.resolve(strict=True)
+    source = source.absolute()
     if any(source.is_relative_to(Path(entry["source"])) for entry in entries):
         return
+    if source.is_symlink():
+        freeze_path(source.resolve(strict=True), pins, entries)
     destination = pins / str(len(entries))
-    if source.is_dir():
+    if source.is_symlink():
+        destination.symlink_to(os.readlink(source), target_is_directory=source.is_dir())
+    elif source.is_dir():
         shutil.copytree(source, destination, symlinks=True)
     else:
         shutil.copy2(source, destination)
@@ -264,12 +268,13 @@ def bootstrap(input_path: Path) -> None:
 
 
 def startup_inventory(contract: dict, roots: list[Path]) -> dict[str, str]:
-    selected = {}
-    for directory in [Path(contract["workspace"]), *roots]:
-        for name in paths_matching(directory, contract["native"]["startup_patterns"]):
-            path = directory / name
-            selected[str(path)] = hashlib.sha256(path.read_bytes()).hexdigest()
-    return selected
+    return shared_controller().inventory(
+        [
+            str(directory / name)
+            for directory in [Path(contract["workspace"]), *roots]
+            for name in paths_matching(directory, contract["native"]["startup_patterns"])
+        ]
+    )
 
 
 def prepare_grading(contract: dict) -> dict:
@@ -278,11 +283,7 @@ def prepare_grading(contract: dict) -> dict:
     common.stop_agent_processes(contract["grader_uid"])
     root, workspace = Path(contract["protected_root"]), Path(contract["workspace"])
     runtime = json.loads((root / "runtime.json").read_text())
-    reports = Path(contract["report_directory"])
-    reports.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if reports.is_symlink() or reports.stat().st_uid != 0:
-        raise ValueError("The structured report directory must be owned by root")
-    reports.chmod(0o700)
+    reports = common.reset_report_directory(contract, 0o700)
     common.write_json(
         reports / contract["audit_probes"][0],
         common.inventory_diff(
@@ -319,9 +320,9 @@ def prepare_grading(contract: dict) -> dict:
                     lock.chmod(0o660)
     for directory in runtime["startup_roots"]:
         for name in paths_matching(Path(directory), native["startup_patterns"]):
-            path = (Path(directory) / name).resolve()
+            path = Path(directory) / name
             if not any(path == Path(p["source"]) for p in runtime["pins"]):
-                common.remove_path(path)
+                common.remove_workspace_path(Path(directory), name)
     # Build caches may require explicit timestamp updates, which group write alone cannot grant.
     common.checked(
         ["chown", "-R", f"{contract['grader_uid']}:{contract['agent_uid']}", str(workspace)], cwd=root, timeout=120
@@ -357,10 +358,7 @@ def grade(contract_path: Path) -> None:
             os.killpg(process.pid, signal.SIGKILL)
             process.wait()
             common.stop_agent_processes(contract["grader_uid"])
-            common.write_json(
-                reports / "verdict.json", {"status": "scored", "reward": 0, "detail": {"reason": "timeout"}}
-            )
-            (reports / "reward.txt").write_text("0\n")
+            common.publish_verdict(contract, {"status": "scored", "reward": 0, "detail": {"reason": "timeout"}})
             return
     common.stop_agent_processes(contract["grader_uid"])
     # A fresh Python process imports only the pinned source parser and stdlib.
@@ -387,10 +385,7 @@ def grade(contract_path: Path) -> None:
         )
     )
     reward = int(report["resolved"] is True)
-    common.write_json(
-        reports / "verdict.json", {"status": "scored", "reward": reward, "detail": {"exit_code": code, **report}}
-    )
-    (reports / "reward.txt").write_text(f"{reward}\n")
+    common.publish_verdict(contract, {"status": "scored", "reward": reward, "detail": {"exit_code": code, **report}})
 
 
 def main() -> None:

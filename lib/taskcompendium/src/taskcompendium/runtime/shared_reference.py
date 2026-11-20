@@ -114,7 +114,7 @@ def materialize_actor_environment(actor: dict, interpreter: Path, source_sites: 
     )
     # The declared baseline: the captured source site directories, read-only, in import order.
     baseline = purelib / "taskcompendium-source-baseline.pth"
-    baseline.write_text("import site;" + "".join(f"site.addsitedir({site!r})" for site in source_sites) + "\n")
+    baseline.write_text("import site;" + ";".join(f"site.addsitedir({site!r})" for site in source_sites) + "\n")
     os.chown(baseline, uid, gid)
     baseline.chmod(int(actor["file_mode"]))
     probe = (

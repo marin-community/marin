@@ -265,7 +265,15 @@ def shared_runtime(request, monkeypatch):
         )
         verifyit.chmod(0o755)
         actor = None
-        if request.param == "frozen-reference":
+        if request.param.startswith("frozen-reference"):
+            if request.param == "frozen-reference-dual-site":
+                extra_site = base / "extra-site"
+                extra_site.mkdir()
+                (extra_site / "second_baseline.py").write_text("VALUE = 72\n")
+                runtime_path = root / "runtime.json"
+                captured_runtime = json.loads(runtime_path.read_text())
+                captured_runtime["sites"].append(str(extra_site))
+                runtime_path.write_text(json.dumps(captured_runtime))
             actor = actor_environment_for(contract, prefix=str(base / "agent-prefix"))
             files = {
                 "instruction.md": b"Keep the original clone and installation in the actor phase.\n",
@@ -595,9 +603,32 @@ def test_shared_controller_restores_contract_paths_and_preserves_other_files(sha
     (workspace / "candidate.py").write_text("VALUE = 1\n")
     (workspace / "extra_guard.py").write_text("tampered\n")
     (workspace / "editable.py").write_text("agent change\n")
+    reports = Path(runtime.contract.report_directory)
+    reports.mkdir(exist_ok=True)
+    reports.chmod(0o777)
+    baseline = Path(runtime.contract.protected_root) / "workspace-owned-baseline.json"
+    before = baseline.read_bytes()
+    planted = agent_command(
+        runtime,
+        "from pathlib import Path;"
+        f"Path({str(reports / 'site-packages-diff.json')!r}).symlink_to({str(baseline)!r});"
+        f"Path({str(reports / 'verifyit.stdout')!r}).symlink_to({str(reports / 'reward.json')!r})",
+    )
+    assert planted.returncode == 0, planted.stderr
     assert runtime.grade()["reward"] == 1
     assert (workspace / "extra_guard.py").read_text() == "reference\n"
     assert (workspace / "editable.py").read_text() == "agent change\n"
+    assert baseline.read_bytes() == before
+
+
+@pytest.mark.parametrize("shared_runtime", ["frozen-reference-dual-site"], indirect=True)
+def test_frozen_reference_exposes_all_captured_source_sites(shared_runtime):
+    python = Path(shared_runtime.actor.python) / "bin/python"
+    observed = subprocess.check_output(
+        [str(python), "-I", "-c", "import second_baseline;print(second_baseline.VALUE)"], text=True
+    )
+    assert observed.strip() == "72"
+    assert shared_runtime.grade()["reward"] == 0
 
 
 @pytest.mark.parametrize("destination", ["external", "protected"])

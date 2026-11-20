@@ -108,6 +108,11 @@ verdicts record them under each entry in `detail.criteria`. Each attempt contain
 and `completion_tokens` (`null` when the endpoint omits usage). An exhausted retry remains
 `infra_error`, with the available attempt diagnostics in `detail`.
 
+For each model reply, the judge allows up to three API attempts (one request plus two retries) for transient
+HTTP or connection failures. It stops when that count or the shared 180-second budget, including retry delays,
+is exhausted. Set `transport_attempts` and `transport_budget` (seconds) in the judge spec to change those
+limits. `parse_attempts` limits requests for another reply after a malformed score or label.
+
 The mode modules expose direct candidate graders for callers holding extracted values.
 `aggregate_rewards` combines required components with ALL, MEAN, MAX, MIN, or PRODUCT;
 invalid tasks and infrastructure errors discard partial credit. The judge and Reasoning Gym modes

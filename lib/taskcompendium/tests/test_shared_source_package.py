@@ -148,8 +148,15 @@ def test_patch_paths_cover_new_and_modified_files():
         "+++ b/tests/nested/test_new.py\n"
         "@@ -0,0 +1 @@\n"
         "+pass\n"
+        "--- a/query.sql\n"
+        "+++ b/query.sql\n"
+        "@@ -1,3 +1 @@\n"
+        "--- comment\n"
+        "--- \n"
+        "-select 0;\n"
+        "+select 1;\n"
     )
-    assert patch_paths(diff) == ["tests/test_old.py", "tests/nested/test_new.py"]
+    assert patch_paths(diff) == ["tests/test_old.py", "tests/nested/test_new.py", "query.sql"]
 
 
 def test_source_reward_validation_fails_closed(tmp_path):
