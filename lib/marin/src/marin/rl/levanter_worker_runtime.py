@@ -90,6 +90,120 @@ def _state_fingerprint(tree) -> dict:
     return {"sha256": digest.hexdigest(), "addressable_bytes": addressable_bytes}
 
 
+def _initialize_distributed(config: dict) -> None:
+    distributed = config["distributed"]
+    if distributed["num_processes"] > 1:
+        jax.distributed.initialize(
+            coordinator_address=distributed["coordinator_address"],
+            num_processes=distributed["num_processes"],
+            process_id=distributed["process_id"],
+            local_device_ids=list(range(distributed["local_device_count"])),
+            initialization_timeout=config["initialization_timeout_seconds"],
+        )
+    if jax.local_device_count() != distributed["local_device_count"]:
+        raise ValueError("JAX local device count differs from the reserved learner GPUs")
+
+
+def _projection_dtype(runtime: dict) -> jnp.dtype | None:
+    return {"float32": None, "bfloat16": jnp.dtype("bfloat16")}[runtime["projection_logits_dtype"]]
+
+
+def _create_trainer(config: dict) -> Trainer:
+    distributed = config["distributed"]
+    runtime = config["runtime"]
+    mesh_axes = dict(runtime["mesh_axes"])
+    dcn = {"replica_dcn": mesh_axes.pop("replica_dcn")}
+    train_batch_size = config["mini_batch_size"]
+    compute_dtype = "bfloat16" if config["bf16"] else "float32"
+    trainer_config = TrainerConfig(
+        id=config["run_id"],
+        seed=config["seed"],
+        train_batch_size=train_batch_size,
+        per_device_parallelism=config["micro_batch_size_per_device"],
+        num_train_steps=config["num_training_steps"],
+        mesh=MeshConfig(
+            axes=mesh_axes,
+            dcn_axes=dcn,
+            compute_mapping={"batch": ["replica_dcn", "data", "expert"], "position": "context"},
+            param_mapping={},
+        ),
+        use_explicit_mesh_axes=True,
+        mp=jmp.get_policy(f"params=float32,compute={compute_dtype},output=float32"),
+        field_dtype_overrides={"router": jnp.dtype("float32"), "router_bias": jnp.dtype("float32")},
+        distributed=DistributedConfig(initialize_jax_distributed=False),
+        tracker=NoopConfig(),
+        require_accelerator=config["require_accelerator"],
+        log_dir=f"{tempfile.gettempdir()}/levanter-policy/{config['run_id']}/process-{distributed['process_id']}",
+        log_jaxprs=False,
+        log_xla_hlo=False,
+        load_checkpoint=False,
+    )
+    trainer_config.initialize()
+    microbatch = trainer_config.microbatch_size
+    if microbatch is None or train_batch_size % microbatch:
+        raise ValueError("Policy optimizer batch must divide the native execution microbatch")
+    optimizer = config["optimizer"]
+    optimizer_transform = optax.chain(
+        optax.clip_by_global_norm(optimizer["max_grad_norm"]),
+        optax.adamw(
+            optimizer["lr"],
+            b1=optimizer["adam_betas"][0],
+            b2=optimizer["adam_betas"][1],
+            eps=optimizer["epsilon"],
+            weight_decay=optimizer["weight_decay"],
+        ),
+    )
+    projection_dtype = _projection_dtype(runtime)
+    loss = partial(
+        policy_model_loss,
+        config=ClippedPolicyConfig(config["eps_clip_low"], config["eps_clip_high"], 0.0),
+        accumulation_steps=train_batch_size // microbatch,
+        block_size=runtime["projection_block_size"],
+        logits_dtype=projection_dtype,
+    )
+    return Trainer(trainer_config, optimizer_transform, loss, add_default_hooks=False)
+
+
+def _load_model(config: dict, trainer: Trainer):
+    runtime = config["runtime"]
+    model_config = SnowballConfig()
+    source = config["model"]
+    reference = (
+        RepoRef(source["source_uri"], None) if source.get("source_uri") else RepoRef(source["path"], source["revision"])
+    )
+    converter = model_config.hf_checkpoint_converter(ref_checkpoint=reference)
+    # Streamed SkyRL model paths contain the exact staged metadata/tokenizer;
+    # the immutable object URI remains the authority for model tensor bytes.
+    converter = converter.replaced(tokenizer=source["path"])
+    model_config = converter.config_from_hf_checkpoint()
+    model_config = dataclasses.replace(
+        model_config,
+        **{
+            name: runtime[name]
+            for name in (
+                "attention_implementation",
+                "moe_implementation",
+                "router_dot_fp32",
+                "moe_capacity_factor",
+                "fp32_activations",
+                "head_gate_fp32",
+                "xsa_fp32",
+            )
+        },
+    )
+    if model_config.moe_capacity_factor < runtime["mesh_axes"]["expert"]:
+        raise ValueError("The SkyRL learner requires dropless expert dispatch")
+    # Load FP32 master parameters directly onto the native model's mesh. In
+    # particular, routing weights must not be rounded through a BF16 load.
+    model = converter.load_pretrained(
+        SnowballLMHeadModel,
+        config=model_config,
+        axis_mapping=trainer.parameter_axis_mapping,
+        dtype=jnp.float32,
+    )
+    return model
+
+
 class NativePolicyRuntime:
     """Own the native model, Adam state, RNG and publication snapshot."""
 
@@ -105,107 +219,18 @@ class NativePolicyRuntime:
         if self.trainer is not None:
             raise RuntimeError("Learner is already initialized")
         self.settings = config
-        distributed = config["distributed"]
-        if distributed["num_processes"] > 1:
-            jax.distributed.initialize(
-                coordinator_address=distributed["coordinator_address"],
-                num_processes=distributed["num_processes"],
-                process_id=distributed["process_id"],
-                local_device_ids=list(range(distributed["local_device_count"])),
-                initialization_timeout=config["initialization_timeout_seconds"],
-            )
-        if jax.local_device_count() != distributed["local_device_count"]:
-            raise ValueError("JAX local device count differs from the reserved learner GPUs")
-        runtime = config["runtime"]
-        mesh_axes = dict(runtime["mesh_axes"])
-        dcn = {"replica_dcn": mesh_axes.pop("replica_dcn")}
-        train_batch_size = config["mini_batch_size"]
-        compute_dtype = "bfloat16" if config["bf16"] else "float32"
-        trainer_config = TrainerConfig(
-            id=config["run_id"],
-            seed=config["seed"],
-            train_batch_size=train_batch_size,
-            per_device_parallelism=config["micro_batch_size_per_device"],
-            num_train_steps=config["num_training_steps"],
-            mesh=MeshConfig(
-                axes=mesh_axes,
-                dcn_axes=dcn,
-                compute_mapping={"batch": ["replica_dcn", "data", "expert"], "position": "context"},
-                param_mapping={},
-            ),
-            use_explicit_mesh_axes=True,
-            mp=jmp.get_policy(f"params=float32,compute={compute_dtype},output=float32"),
-            field_dtype_overrides={"router": jnp.dtype("float32"), "router_bias": jnp.dtype("float32")},
-            distributed=DistributedConfig(initialize_jax_distributed=False),
-            tracker=NoopConfig(),
-            require_accelerator=config["require_accelerator"],
-            log_dir=f"{tempfile.gettempdir()}/levanter-policy/{config['run_id']}/process-{distributed['process_id']}",
-            log_jaxprs=False,
-            log_xla_hlo=False,
-            load_checkpoint=False,
-        )
-        trainer_config.initialize()
-        microbatch = trainer_config.microbatch_size
-        if microbatch is None or train_batch_size % microbatch:
-            raise ValueError("Policy optimizer batch must divide the native execution microbatch")
-        optimizer = config["optimizer"]
-        optimizer_transform = optax.chain(
-            optax.clip_by_global_norm(optimizer["max_grad_norm"]),
-            optax.adamw(
-                optimizer["lr"],
-                b1=optimizer["adam_betas"][0],
-                b2=optimizer["adam_betas"][1],
-                eps=optimizer["epsilon"],
-                weight_decay=optimizer["weight_decay"],
-            ),
-        )
-        projection_dtype = {"float32": None, "bfloat16": jnp.dtype("bfloat16")}[runtime["projection_logits_dtype"]]
-        loss = partial(
-            policy_model_loss,
-            config=ClippedPolicyConfig(config["eps_clip_low"], config["eps_clip_high"], 0.0),
-            accumulation_steps=train_batch_size // microbatch,
-            block_size=runtime["projection_block_size"],
-            logits_dtype=projection_dtype,
-        )
-        self.trainer = Trainer(trainer_config, optimizer_transform, loss, add_default_hooks=False)
+        _initialize_distributed(config)
+        self.trainer = _create_trainer(config)
         self.trainer.__enter__()
-        model_config = SnowballConfig()
+        self._load_policy(config)
+        self.publisher = SnowballPublication(self.trainer.mp.cast_to_compute(self.state.model), self.trainer.device_mesh)
+        return self._initialization_receipt()
+
+    def _load_policy(self, config: dict) -> None:
+        runtime = config["runtime"]
         source = config["model"]
-        reference = (
-            RepoRef(source["source_uri"], None)
-            if source.get("source_uri")
-            else RepoRef(source["path"], source["revision"])
-        )
-        converter = model_config.hf_checkpoint_converter(ref_checkpoint=reference)
-        # Streamed SkyRL model paths contain the exact staged metadata/tokenizer;
-        # the immutable object URI remains the authority for model tensor bytes.
-        converter = converter.replaced(tokenizer=source["path"])
-        model_config = converter.config_from_hf_checkpoint()
-        model_config = dataclasses.replace(
-            model_config,
-            **{
-                name: runtime[name]
-                for name in (
-                    "attention_implementation",
-                    "moe_implementation",
-                    "router_dot_fp32",
-                    "moe_capacity_factor",
-                    "fp32_activations",
-                    "head_gate_fp32",
-                    "xsa_fp32",
-                )
-            },
-        )
-        if model_config.moe_capacity_factor < mesh_axes["expert"]:
-            raise ValueError("The SkyRL learner requires dropless expert dispatch")
-        # Load FP32 master parameters directly onto the native model's mesh. In
-        # particular, routing weights must not be rounded through a BF16 load.
-        model = converter.load_pretrained(
-            SnowballLMHeadModel,
-            config=model_config,
-            axis_mapping=self.trainer.parameter_axis_mapping,
-            dtype=jnp.float32,
-        )
+        projection_dtype = _projection_dtype(runtime)
+        model = _load_model(config, self.trainer)
         self.state = self.trainer.initial_state(
             jax.random.PRNGKey(config["seed"]), model=model, is_trainable=_trainable_filter(model)
         )
@@ -220,7 +245,13 @@ class NativePolicyRuntime:
             else {"path": source["path"], "revision": source["revision"]}
         )
         self.frozen_router_bias = _router_bias_fingerprint(self.state.model)
-        self.publisher = SnowballPublication(self.trainer.mp.cast_to_compute(self.state.model), self.trainer.device_mesh)
+
+    def _initialization_receipt(self) -> dict:
+        model_config = self.state.model.config
+        source = self.settings["model"]
+        train_batch_size = self.settings["mini_batch_size"]
+        microbatch = self.trainer.config.microbatch_size
+        assert microbatch is not None
         return {
             "process_id": jax.process_index(),
             "global_devices": jax.device_count(),
