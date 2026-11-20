@@ -16,6 +16,7 @@ from rolloutengine.test_support import arithmetic_task, rollout_limits
 from shellbox.backends.iris.machine import ExecOutput, IrisMachine
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from verifyit.spec import NumericSpec
 
@@ -46,6 +47,7 @@ from taskforge.lowering import GRADING_MACHINE, LoweringSettings, requirements, 
 from taskforge.model.controls import CONTROLS, Candidate, Control, ControlKind, RewardBand
 from taskforge.model.llm import Completion, FinishReason, Message, Role, ToolCall, Usage
 from taskforge.model.workpiece import Conversation, Submission
+from taskforge.policy import GRADER_BASE_IMAGE
 from taskforge.resources.env import (
     CommandResult,
     ReadFile,
@@ -275,6 +277,23 @@ async def test_grade_reports_a_missing_draft_but_propagates_grading_infrastructu
     await ctx.emit(RunCommand("task", 30))
     with pytest.raises(ConnectionError, match="unreachable"):
         await tool(ctx, {"reply": "12"})
+
+
+async def test_grade_holds_when_the_host_cannot_lower_a_valid_draft() -> None:
+    ctx = Context(log=EventLog())
+    environment(ctx)
+    container = arithmetic_task().model_copy(
+        update={
+            "environment_requirements": EnvironmentRequirements(
+                docker_image=GRADER_BASE_IMAGE, command_semantics=CommandSemantics.LINUX_PROCESS, capabilities=("shell",)
+            )
+        }
+    )
+    await ctx.emit(WriteFile(PurePosixPath("/workspace/task.json"), container.model_dump_json().encode()))
+    tool = GradeTool("/workspace/task.json", {}, LoweringSettings(GRADING_MACHINE, GRADING_MACHINE, rollout_limits()))
+    with pytest.raises(Hold, match="Unknown Shellbox factory"):
+        await tool(ctx, {"reply": "12"})
+    await ctx.drain()
 
 
 @pytest.mark.parametrize("fails", [False, True])

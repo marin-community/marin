@@ -47,7 +47,7 @@ class CheckpointSink(Sink):
                 raise
             self.pending += len(records)
             if self.pending >= CHECKPOINT_EVENTS:
-                await self._upload()
+                await self._try_upload()
 
     def _publish(self, events: bytes) -> None:
         status = json.dumps({"terminal": None, "upload_started_at": time.time()}).encode()
@@ -73,6 +73,17 @@ class CheckpointSink(Sink):
         self.offset += len(events)
         self.pending = 0
 
+    async def _try_upload(self) -> None:
+        """Publish pending events; a failure is logged and the next upload republishes from the same offset.
+
+        The local log is already complete, so an upload error must not reach ``EventLog.record``: its retry
+        would append the batch locally a second time.
+        """
+        try:
+            await self._upload()
+        except UPLOAD_ERRORS as error:
+            logging.warning("Checkpoint upload to %s failed; retrying on the next upload: %r", self.destination, error)
+
     async def _periodic(self, stop: asyncio.Event) -> None:
         while True:
             try:
@@ -80,13 +91,7 @@ class CheckpointSink(Sink):
                 return
             except TimeoutError:
                 async with self.lock:
-                    try:
-                        await self._upload()
-                    except UPLOAD_ERRORS as error:
-                        # The local log stays complete; the next tick republishes from the unadvanced offset.
-                        logging.warning(
-                            "Checkpoint upload to %s failed; retrying next tick: %r", self.destination, error
-                        )
+                    await self._try_upload()
 
     @asynccontextmanager
     async def running(self) -> AsyncIterator[None]:

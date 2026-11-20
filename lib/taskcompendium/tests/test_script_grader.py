@@ -418,7 +418,6 @@ jq -n --arg collected "$(cat /grader/collected.txt)" \
     )
 
     if wrong_path:
-        # Pilot k2: optional /results probe fails despite valid solver outputs in /app.
         assert result.failure is GradingFailure.GRADER_EXIT and result.diagnostics["exit_code"] == 2
         assert result.diagnostics["stderr"] == ""
         assert (await agent.run(Command(("cat", "/app/out/a.txt")))).stdout == b"a"
@@ -486,7 +485,6 @@ DETAIL = {"cases": [{"passed": True}]}
         (FileReward(files=NUMBER_FILE), "candidate", None, (Outcome.INFRA_ERROR, None, GradingFailure.GRADER_TIMEOUT)),
         (ExitCodeReward(), "preparation", None, (Outcome.INFRA_ERROR, None, GradingFailure.TIMEOUT)),
         (ExitCodeReward(), "preparation", 1, (Outcome.INFRA_ERROR, None, GradingFailure.EXECUTION)),
-        # Pilot k2: authored collection exits are distinct from signal/unknown infrastructure failure.
         (StdoutReward(), "collect", 2, (Outcome.INFRA_ERROR, None, GradingFailure.GRADER_EXIT)),
         (StdoutReward(), "collect", 137, (Outcome.INFRA_ERROR, None, GradingFailure.EXECUTION)),
         (StdoutReward(), "collect", -9, (Outcome.INFRA_ERROR, None, GradingFailure.EXECUTION)),
