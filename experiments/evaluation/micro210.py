@@ -33,7 +33,7 @@ from marin.rl.skyrl import (
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
-from rigging.secrets import resolve_secret_spec
+from rigging.secrets import require_secret
 from transformers import AutoTokenizer
 
 from experiments.evaluation.judge_config import JudgeConfig
@@ -54,6 +54,7 @@ PREPARED_INPUTS = (
 )
 
 STOP_TOKEN_CONTENT = {128001: "<|end_of_text|>", 128009: "<|eot_id|>"}
+JUDGE_API_KEY = "JUDGE_API_KEY"
 SERVING_GENERATOR_FIELDS = {
     "max_num_seqs",
     "max_num_batched_tokens",
@@ -185,9 +186,9 @@ def run_micro210(config: Micro210Run) -> SkyRLRun:
     )
     policy = config.evaluation.policy()["evaluation"]
     judge = draccus.decode(JudgeConfig, policy["judge"])
-    api_key = resolve_secret_spec((judge.credential,)).value
+    api_key = require_secret(JUDGE_API_KEY)
     validate_judge_availability(judge, api_key)
-    return run_skyrl(config.skyrl, env_vars={"JUDGE_API_KEY": api_key, "OPENAI_API_KEY": api_key})
+    return run_skyrl(config.skyrl, env_vars={JUDGE_API_KEY: api_key, "OPENAI_API_KEY": api_key})
 
 
 def micro210_step(model: Micro210Model, *, name: str, version: str, **overrides) -> ArtifactStep[SkyRLRun]:
@@ -242,7 +243,9 @@ def micro210_artifact_step(
         execution = serving_profile.execution
         gpu_variant = serving_profile.gpu_variant
         config = serving_config(frozen, serving_profile)
-    config = judge_runtime_config(config, draccus.decode(JudgeConfig, policy["judge"]))
+    judge = draccus.decode(JudgeConfig, policy["judge"])
+    execution = replace(execution, coordinator_secret_sources=((JUDGE_API_KEY, judge.credential),))
+    config = judge_runtime_config(config, judge)
     step = skyrl_step(
         SkyRLSpec(
             name=name,

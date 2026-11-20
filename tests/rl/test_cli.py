@@ -86,6 +86,30 @@ def test_coordinator_request_requires_a_skyrl_step() -> None:
         _coordinator_request([_step()], "experiments.test_rl", ("--run",), 8, Path("/workspace/marin"), {})
 
 
+def test_rl_launch_resolves_explicit_credentials_before_remote_submission(tmp_path, monkeypatch) -> None:
+    source = tmp_path / "versioned-judge-key"
+    source.write_text("pinned-judge-key")
+    client = MagicMock(spec=IrisClient)
+    monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **_kwargs: nullcontext(client))
+    monkeypatch.delenv("IRIS_TASK_ID", raising=False)
+    monkeypatch.setenv("TOGETHER_API_KEY", "unrelated-ambient-key")
+
+    @click.command()
+    @rl_build_options
+    def main() -> ArtifactStep[Artifact]:
+        return _step(
+            dataclasses.replace(_execution(), coordinator_secret_sources=(("JUDGE_API_KEY", f"file:{source}"),))
+        )
+
+    result = CliRunner().invoke(main, ["--version", "2026.11.20", "--run"])
+
+    assert result.exit_code == 0, result.output
+    environment = client.submit.call_args.kwargs["environment"]
+    assert environment.secrets["JUDGE_API_KEY"] == "pinned-judge-key"
+    assert "JUDGE_API_KEY" not in environment.env_vars
+    assert "pinned-judge-key" not in result.output
+
+
 @pytest.mark.parametrize("missing_name", [None, "JUDGE_KEY", "EVAL_KEY"])
 def test_rl_launch_requires_and_forwards_credentials_before_submission(
     monkeypatch: pytest.MonkeyPatch, missing_name: str | None
