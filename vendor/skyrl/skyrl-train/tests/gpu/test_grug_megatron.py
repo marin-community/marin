@@ -34,6 +34,7 @@ from transformers import AutoConfig, AutoTokenizer
 from safetensors import safe_open
 
 import skyrl_train.models.grug_megatron_bridge  # noqa: F401  # registers the Grug bridge
+from skyrl_train.config.driver_validation import validate_cfg
 from skyrl_train.distributed.megatron.grug_muonh import MegatronGrugMuonH, _offloaded_muon_direction_in_grad_
 from skyrl_train.distributed.megatron.megatron_utils import load_megatron_optimizer, offload_megatron_optimizer
 from skyrl_train.distributed.megatron.optimizer import HybridDeviceOptimizer
@@ -43,7 +44,7 @@ from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 from skyrl_train.models.grug_moe import GrugMoeConfig, GrugMoeForCausalLM
 from skyrl_train.workers.megatron.bridge_provider_config import configure_bridge_provider
 from skyrl_train.training_batch import TrainingInputBatch
-from skyrl_train.utils import initialize_ray, validate_cfg
+from skyrl_train.utils import initialize_ray
 from skyrl_train.dataset.tasks import SourceTaskDataset
 from skyrl_train.rollouts.buffer import RolloutGroup
 from skyrl_train.rollouts.context import TrainingContext
