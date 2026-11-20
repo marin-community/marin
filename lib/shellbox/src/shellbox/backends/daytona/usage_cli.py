@@ -7,16 +7,20 @@ import argparse
 import asyncio
 import json
 import os
+from collections.abc import Mapping
 from enum import StrEnum
-from typing import Any
+from types import MappingProxyType
+from typing import TypedDict
 
 from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.backends.daytona.usage import (
     DEFAULT_HEADROOM,
     OrganizationLimits,
     SandboxProfile,
+    UsageReport,
     account_usage,
     usage_report,
+    validate_headroom,
 )
 
 
@@ -26,18 +30,32 @@ class Account(StrEnum):
     DATA = "data"
 
 
-# Owner-provided limits from experiments/active/DAYTONA-QUOTAS.md (2026-11-19).
+# Maintain these presets with the organization quota table in .agents/ops/daytona.md.
+QUOTA_SOURCE = "account-owner limits (2026-11-19), .agents/ops/daytona.md"
 PER_SANDBOX_MAXIMUM = SandboxProfile(cpu=4, memory_gib=8, disk_gib=10)
-ACCOUNT_LIMITS = {
-    Account.EVAL: OrganizationLimits(2500, 7500, 25000, PER_SANDBOX_MAXIMUM),
-    Account.RL: OrganizationLimits(6000, 12000, 20000, PER_SANDBOX_MAXIMUM),
-    Account.DATA: OrganizationLimits(2000, 4000, 10000, PER_SANDBOX_MAXIMUM),
-}
-ACCOUNT_KEY_ENVS = {
-    Account.EVAL: "DAYTONA_EVAL_API_KEY",
-    Account.RL: "DAYTONA_RL_API_KEY",
-    Account.DATA: "DAYTONA_DATA_API_KEY",
-}
+ACCOUNT_LIMITS = MappingProxyType(
+    {
+        Account.EVAL: OrganizationLimits(2500, 7500, 25000, PER_SANDBOX_MAXIMUM),
+        Account.RL: OrganizationLimits(6000, 12000, 20000, PER_SANDBOX_MAXIMUM),
+        Account.DATA: OrganizationLimits(2000, 4000, 10000, PER_SANDBOX_MAXIMUM),
+    }
+)
+ACCOUNT_KEY_ENVS = MappingProxyType(
+    {
+        Account.EVAL: "DAYTONA_EVAL_API_KEY",
+        Account.RL: "DAYTONA_RL_API_KEY",
+        Account.DATA: "DAYTONA_DATA_API_KEY",
+    }
+)
+
+
+class SkippedAccount(TypedDict):
+    skipped: str
+
+
+class AccountReport(UsageReport):
+    account: str
+    quota_source: str
 
 
 def _profile(arguments: argparse.Namespace) -> SandboxProfile | None:
@@ -49,7 +67,7 @@ def _profile(arguments: argparse.Namespace) -> SandboxProfile | None:
     return SandboxProfile(arguments.cpu, arguments.memory_gib, arguments.disk_gib)
 
 
-def _selected_accounts(arguments: argparse.Namespace) -> dict[Account, str]:
+def _selected_accounts(arguments: argparse.Namespace) -> Mapping[Account, str]:
     if arguments.all:
         if arguments.limits is not None:
             raise SystemExit("--limits applies to a single --api-key-env selection")
@@ -62,7 +80,7 @@ def _selected_accounts(arguments: argparse.Namespace) -> dict[Account, str]:
     return {Account(account): arguments.api_key_env}
 
 
-def _print_report(report: dict[str, Any]) -> None:
+def _print_report(report: AccountReport) -> None:
     print(f"account {report['account']}  organization {report['organization_id'] or 'empty inventory'}")
     print(
         f"  sandboxes {report['sandboxes']['total']}  started {report['sandboxes']['started']}"
@@ -87,10 +105,9 @@ def _print_report(report: dict[str, Any]) -> None:
 
 
 async def _run(arguments: argparse.Namespace) -> None:
-    if not 0 <= arguments.headroom < 1:
-        raise SystemExit("Headroom must be in [0, 1)")
+    validate_headroom(arguments.headroom)
     profile = _profile(arguments)
-    reports: dict[str, Any] = {}
+    reports: dict[str, AccountReport | SkippedAccount] = {}
     for account, key_env in _selected_accounts(arguments).items():
         api_key = os.environ.get(key_env)
         if not api_key:
@@ -102,7 +119,11 @@ async def _run(arguments: argparse.Namespace) -> None:
             continue
         connection = DaytonaConnection(api_key=api_key)
         usage = await account_usage(connection, ACCOUNT_LIMITS[account])
-        report = {"account": account, **usage_report(usage, profile, headroom=arguments.headroom)}
+        report: AccountReport = {
+            **usage_report(usage, profile, headroom=arguments.headroom),
+            "account": account,
+            "quota_source": QUOTA_SOURCE,
+        }
         reports[account] = report
         if not arguments.json:
             _print_report(report)
@@ -128,7 +149,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--memory-gib", type=int, help="Per-sandbox RAM allocation in whole GiB.")
     parser.add_argument("--disk-gib", type=int, help="Per-sandbox disk allocation in whole GiB.")
     parser.add_argument(
-        "--headroom", type=float, default=DEFAULT_HEADROOM, help="Fraction of total quota to keep free (default 0.2)."
+        "--headroom",
+        type=float,
+        default=DEFAULT_HEADROOM,
+        help=f"Fraction of total quota to keep free (default {DEFAULT_HEADROOM}).",
     )
     return parser
 
