@@ -1132,7 +1132,7 @@ def test_answers_judge_scores_strictly_with_one_verdict_per_reference(
     result = run(spec_path, _workspace(tmp_path, "Answers:\n(a) T = 2\\pi\\sqrt{l/g}\n(b) 3 J"))
     assert (result.status, result.reward) == (status, reward)
     if status is Status.SCORED:
-        assert result.detail["metrics"] == {"accuracy": reward, "partial_credit": partial}
+        assert result.detail["partial_credit"] == partial
         assert [answer["correct"] for answer in result.detail["answers"]] == [True, partial == 1.0]
     assert "temperature" not in fake_judge.requests[0]
     assert fake_judge.requests[0]["messages"] == [

@@ -527,7 +527,7 @@ def _judge_answers(
     detail.update(
         answers=[asdict(answer) for answer in answers],
         confidence=confidence,
-        metrics={"accuracy": strict, "partial_credit": sum(correct) / len(correct)},
+        partial_credit=sum(correct) / len(correct),
     )
     return scored(strict, **detail)
 

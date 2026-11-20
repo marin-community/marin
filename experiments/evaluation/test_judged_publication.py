@@ -195,6 +195,6 @@ def test_physics_verified_drops_figure_rows_and_judges_each_labelled_answer(tmp_
     result = grade_remote_judge_answer(case.task, judged_attempt(case.task, "Answers:\n(a) 10 cm\n(b) 1.4"), connection)
     assert result.status is Outcome.GRADED
     assert result.reward == 0
-    assert result.detail["metrics"] == {"accuracy": 0.0, "partial_credit": 0.5}
+    assert result.detail["partial_credit"] == 0.5
     prompt = state["requests"][-1]["messages"][-1]["content"]
     assert "[reference_answers]:\n0. label (a): f = 10 \\text{ cm}\n1. label (b): n = 1.5\n" in prompt

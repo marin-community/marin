@@ -6,15 +6,14 @@
 The population is the 602 test problems without figures from ``yale-nlp/physics-verified``, the
 authors' audited release (MIT). Prompts and grading follow its Humanity's Last Exam style harness: the
 model answers in an Explanation/Answers/Confidence format, and one judge call returns a verdict per
-labelled reference answer. Accuracy counts a problem only when every answer is correct; partial credit
-is the mean fraction correct. The judge is the authors' GLM-5.3-Flash, served by Together; on the authors'
-published Qwen3.5-122B-A10B responses it matches their verdicts on 97% of answers.
+labelled reference answer. Accuracy counts a problem only when every answer is correct; each grade also
+records the fraction of correct answers as ``partial_credit`` in its detail. The judge is the authors'
+GLM-5.3-Flash, served by Together; on the authors' published Qwen3.5-122B-A10B responses it matches
+their verdicts on 97% of answers.
 """
 
 from taskcompendium.evaluation.spec import (
     EvaluationProtocol,
-    Metric,
-    MetricKind,
     Metrics,
     OperationKind,
     Sampling,
@@ -34,8 +33,7 @@ from experiments.post_training.task_curation.pipeline import HfSource
 
 PHYSICS_VERIFIED_REVISION = "724170025e3541c9b877285b2d577a1257796f0b"
 PHYSICS_VERIFIED_POPULATION = 602
-PARTIAL_CREDIT = Metric(name="partial_credit", kind=MetricKind.CONTINUOUS, higher_is_better=True)
-VERSION = "2026.11.19.2"
+VERSION = "2026.11.20"
 
 
 def benchmarks() -> list[EvaluationBenchmark]:
@@ -53,7 +51,7 @@ def benchmarks() -> list[EvaluationBenchmark]:
             chat_template_kwargs={"enable_thinking": True},
         ),
         trials=TrialPolicy(count=1, seed=None),
-        metrics=(Metrics.ACCURACY, PARTIAL_CREDIT),
+        metrics=(Metrics.ACCURACY,),
         primary_metric="accuracy",
         summary=SummaryKind.MEAN,
         expected_population=PHYSICS_VERIFIED_POPULATION,
