@@ -100,6 +100,7 @@ from marinskyrl.process_diagnostics import (
 )
 from cloud.iris.paths import resolve_repo_path
 from cloud.iris.ray_ports import RayPort, allocated_ray_port, resolve_ray_ports
+from iris.cluster.platforms.k8s.coreweave_topology import NVL72_GPUS_PER_NODE
 from cloud.iris.role_topology import RoleTopology, node_physical_labels, validate_role_nodes
 from cloud.iris.ray_storage import (
     RaySpillBackend,
@@ -1310,12 +1311,8 @@ def wait_for_nodes(
     expected_nodes: int,
     timeout: int,
     rewrite_cb=None,
-    *,
-    role_topology: RoleTopology | None = None,
-    gpus_per_node: int = 0,
-    report_directory: Path | None = None,
 ) -> None:
-    """Wait for alive nodes; with role topology, validate and publish physical placement.
+    """Wait for alive nodes to join the Ray cluster.
 
     ``rewrite_cb`` (head only) re-publishes the rendezvous at most once per ``RENDEZVOUS_REWRITE_INTERVAL`` seconds
     so ``written_at`` stays fresh. A worker pod on a cold node can start >RENDEZVOUS_FRESHNESS_SLACK (60s) after the
@@ -1345,17 +1342,26 @@ def wait_for_nodes(
                 _log(f"Ray nodes alive: {count}/{expected_nodes}")
                 last_count = count
             if count >= expected_nodes:
-                if role_topology is not None:
-                    if report_directory is None:
-                        raise ValueError("Physical role validation requires a report directory")
-                    rows = validate_role_nodes(alive, topology=role_topology, gpus_per_node=gpus_per_node)
-                    report = json.dumps({"role_topology": "nvlink.domain", "nodes": rows}, sort_keys=True)
-                    (report_directory / "role-topology.json").write_text(report + "\n")
-                    _log(f"Verified physical role placement before model actors: {report}")
                 _log(f"All {expected_nodes} Ray node(s) joined. Resources: {ray.cluster_resources()}")
                 return
             time.sleep(STARTUP_POLL_INTERVAL)
         raise TimeoutError(f"Only {last_count}/{expected_nodes} Ray nodes joined within {timeout}s.")
+    finally:
+        ray.shutdown()
+
+
+def verify_role_placement(ray_address: str, topology: RoleTopology, report_directory: Path) -> None:
+    """Audit single-node and multi-node allocations before starting model actors."""
+    import ray
+
+    ray.init(address=ray_address, ignore_reinit_error=True)
+    try:
+        nodes = ray.nodes()
+        _log(f"Observed Ray placement before physical audit: {nodes}")
+        rows = validate_role_nodes(nodes, topology=topology, gpus_per_node=NVL72_GPUS_PER_NODE)
+        report = json.dumps({"role_topology": "nvlink.domain", "nodes": [asdict(row) for row in rows]}, sort_keys=True)
+        (report_directory / "role-topology.json").write_text(report + "\n")
+        _log(f"Verified physical role placement before model actors: {report}")
     finally:
         ray.shutdown()
 
@@ -2013,12 +2019,12 @@ def run_head(
             num_tasks,
             args.cluster_join_timeout,
             rewrite_cb=lambda: write_rendezvous(args.rendezvous_dir, head_ip, ray_port, gang_epoch),
-            role_topology=args.role_topology,
-            gpus_per_node=args.gpus_per_node,
-            report_directory=Path(os.environ["IRIS_OUTPUT_DIR"]) if args.role_topology is not None else None,
         )
     else:
         _log("Single-node slice: skipping rendezvous and multi-node wait.")
+
+    if args.role_topology is not None:
+        verify_role_placement(ray_address, args.role_topology, Path(os.environ["IRIS_OUTPUT_DIR"]))
 
     with ray_metrics_telemetry(head_ip, allocated_ray_port(RayPort.METRICS), CONTROLLER_ROLE):
         env = training_driver_env(derived_gloo_ifname)
@@ -2203,7 +2209,6 @@ def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
     prestage_model = model_uri if not is_cloud_uri(model_uri) and (model.chat_template or offline) else ""
     return argparse.Namespace(
         role_topology=derive_launch_topology(_container(config)).role_topology,
-        gpus_per_node=int(config.iris.allocation.gpus_per_node),
         ray_labels={},
         ray_spill_dir=validate_ray_spill_dir(str(config.ray.spill_dir)),
         ray_spill_backend=RaySpillBackend(str(config.ray.spill_backend)),
