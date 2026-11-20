@@ -115,6 +115,8 @@ SPECIAL_TOKEN_ANCHORS = (
     (128009, "<|end_of_text|>"),
 )
 EXPECTED_ANCHOR_IDS = (3560, 1984, 1781, 4320, 5507, 842, 128001)
+# The pretraining checkpoint step the hero SFT starts from. A later checkpoint has trained chat-token columns.
+HERO_SFT_BASE_STEP = 393_491
 
 
 @dataclass(frozen=True)
@@ -310,7 +312,32 @@ def checkpoint_metadata(checkpoint: str) -> dict:
 
 def checkpoint_step(checkpoint: str) -> int:
     """The step recorded in a complete checkpoint's ``metadata.json``."""
-    metadata = checkpoint_metadata(checkpoint)
+    return _recorded_step(checkpoint, checkpoint_metadata(checkpoint))
+
+
+def start_step_for(initialize_from: str, *, reseed_special_tokens: bool) -> int:
+    """The start step ``initialize_from`` records; refuses a reseed of a checkpoint that already trained SFT.
+
+    A checkpoint past the hero base step, or one that records an expert placement, comes from an SFT run, so
+    reseeding would overwrite its trained chat-token columns. Continue such a checkpoint without the reseed.
+    """
+    metadata = checkpoint_metadata(initialize_from)
+    step = _recorded_step(initialize_from, metadata)
+    if reseed_special_tokens:
+        if step > HERO_SFT_BASE_STEP:
+            raise ValueError(
+                f"{initialize_from} is past the hero base step {HERO_SFT_BASE_STEP}; "
+                "continue it with --no-special-token-reseed"
+            )
+        if ExpertPlacement.recorded_in(metadata) is not None:
+            raise ValueError(
+                f"{initialize_from} records an expert placement, so it is an SFT save; "
+                "continue it with --no-special-token-reseed"
+            )
+    return step
+
+
+def _recorded_step(checkpoint: str, metadata: dict) -> int:
     if metadata.get("is_temporary"):
         raise ValueError(f"{checkpoint} is a temporary checkpoint")
     step = int(metadata["step"])
@@ -774,7 +801,7 @@ def main(
     return build_sft_run(
         run_id=run_id,
         initialize_from=initialize_from,
-        start_step=checkpoint_step(initialize_from),
+        start_step=start_step_for(initialize_from, reseed_special_tokens=special_token_reseed),
         muon_lr=muon_lr,
         adam_lr=adam_lr,
         max_grad_norm=_grad_norm(max_grad_norm),

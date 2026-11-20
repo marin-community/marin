@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import hashlib
 import json
 import math
 from types import SimpleNamespace
@@ -27,6 +28,7 @@ from experiments.grug.moe_hero_ep.expert_placement import (
     source_order_loads,
 )
 from experiments.grug.moe_hero_ep.launch_hero_sft import (
+    HERO_SFT_BASE_STEP,
     SFT_COMPONENT_PREFIX,
     SFT_POOLED_COMPONENT,
     SFT_TOKENIZER,
@@ -36,6 +38,7 @@ from experiments.grug.moe_hero_ep.launch_hero_sft import (
     one_epoch_weight_stages,
     plan_sft_mixture,
     sft_components,
+    start_step_for,
 )
 from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_hero_ep.train import (
@@ -496,13 +499,28 @@ def test_start_placement_accepts_the_source_or_a_save_recording_the_same_placeme
             check_start_placement(placement, checkpoint)
 
 
-def test_eval_only_writes_the_dropless_metrics_of_the_loaded_parameters(tmp_path, monkeypatch):
+class _SequenceSet:
+    def __init__(self, length: int):
+        self.length = length
+
+    def as_sync_dataset(self):
+        return range(self.length)
+
+
+def test_eval_only_records_the_dropless_metrics_and_the_checkpoint_it_scored(tmp_path, monkeypatch):
     mesh = _one_device_mesh()
+    checkpoint = tmp_path / "step-400407"
+    checkpoint.mkdir()
+    metadata = json.dumps({"step": 400407, "is_temporary": False}).encode()
+    (checkpoint / "metadata.json").write_bytes(metadata)
     output = tmp_path / "scores.json"
     # The writer reads only the run's eval settings.
     config = SimpleNamespace(
         eval=GrugEvalConfig(eval_current=False, eval_ema=False, dropless_eval=True),
-        eval_only=HeldOutEvalOnly(output=str(output), weights_checkpoint="s3://bucket/step-400407"),
+        eval_only=HeldOutEvalOnly(output=str(output), weights_checkpoint=str(checkpoint)),
+    )
+    dropless = SimpleNamespace(
+        dataset=SimpleNamespace(datasets=[(_SequenceSet(8), ["sft", "sft/pooled"]), (_SequenceSet(9), ["c13q3"])])
     )
     scored = []
 
@@ -518,11 +536,37 @@ def test_eval_only_writes_the_dropless_metrics_of_the_loaded_parameters(tmp_path
             config,
             mesh,
             evaluator=None,
-            dropless_evaluator="dropless",
+            dropless_evaluator=dropless,
             dropless_eval_mesh=train.expert_collapsed_eval_mesh(mesh),
         )
 
-    assert scored == [("dropless", "eval_dropless")]
+    assert scored == [(dropless, "eval_dropless")]
     record = json.loads(output.read_text())
-    assert record["weights_checkpoint"] == "s3://bucket/step-400407"
+    assert record["weights_checkpoint"] == str(checkpoint)
+    assert record["checkpoint_step"] == 400407
+    assert record["checkpoint_metadata_sha256"] == hashlib.sha256(metadata).hexdigest()
+    assert record["sequences_per_set"] == {"sft/pooled": 8, "c13q3": 9}
     assert record["metrics"] == {"eval_dropless/loss": 1.5}
+
+
+def _write_step_metadata(path, step: int, placement: ExpertPlacement | None) -> str:
+    path.mkdir(parents=True)
+    recorded = {} if placement is None else placement.checkpoint_metadata()
+    (path / "metadata.json").write_text(json.dumps({"step": step, "is_temporary": False, **recorded}))
+    return str(path)
+
+
+def test_launch_refuses_to_reseed_a_checkpoint_that_already_trained_sft(tmp_path):
+    base = _write_step_metadata(tmp_path / "base" / f"step-{HERO_SFT_BASE_STEP}", HERO_SFT_BASE_STEP, None)
+    later = _write_step_metadata(tmp_path / "later" / "step-400407", 400_407, None)
+    placed = _write_step_metadata(
+        tmp_path / "placed" / f"step-{HERO_SFT_BASE_STEP}", HERO_SFT_BASE_STEP, _placement([[1, 0, 3, 2]])
+    )
+
+    assert start_step_for(base, reseed_special_tokens=True) == HERO_SFT_BASE_STEP
+    with pytest.raises(ValueError, match="past the hero base step"):
+        start_step_for(later, reseed_special_tokens=True)
+    with pytest.raises(ValueError, match="records an expert placement"):
+        start_step_for(placed, reseed_special_tokens=True)
+    assert start_step_for(later, reseed_special_tokens=False) == 400_407
+    assert start_step_for(placed, reseed_special_tokens=False) == HERO_SFT_BASE_STEP

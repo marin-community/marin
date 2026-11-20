@@ -4,6 +4,7 @@
 import dataclasses
 import functools
 import gc
+import hashlib
 import importlib.metadata
 import itertools
 import json
@@ -447,7 +448,8 @@ class HeldOutEvalOnly:
     """Score a checkpoint's parameters once on the configured evaluation sets, then exit without a train step.
 
     Only ``params`` and ``pending_qb_betas`` are read from ``weights_checkpoint``; the optimizer state is not.
-    The scores go to ``output`` as JSON, with the same metric names the training-time evals log.
+    The scores go to ``output`` as JSON, with the same metric names the training-time evals log, the step and
+    ``metadata.json`` SHA-256 of the checkpoint, and the number of sequences scored in each set.
     """
 
     output: str
@@ -794,8 +796,15 @@ def _write_held_out_scores(
     levanter.tracker.log(metrics, step=0)
     if jax.process_index() != 0:
         return
+    metadata = (StoragePath(config.eval_only.weights_checkpoint) / "metadata.json").read_bytes()
+    scored = dropless_evaluator if dropless_evaluator is not None else evaluator
+    assert scored is not None
     record = {
         "weights_checkpoint": config.eval_only.weights_checkpoint,
+        "checkpoint_step": int(json.loads(metadata)["step"]),
+        "checkpoint_metadata_sha256": hashlib.sha256(metadata).hexdigest(),
+        # `tagged_eval_sets` names each set by its last tag. Token counts stay inside the evaluator.
+        "sequences_per_set": {tags[-1]: len(dataset.as_sync_dataset()) for dataset, tags in scored.dataset.datasets},
         "mesh": dict(mesh.shape),
         "eval": dataclasses.asdict(config.eval),
         "metrics": {key: float(value) for key, value in metrics.items()},
