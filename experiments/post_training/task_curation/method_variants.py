@@ -13,7 +13,6 @@ from rigging.filesystem.storage_path import StoragePath
 
 from infra.marina.apps.rl_data_catalog.server.methods import (
     DatasetVariant,
-    ManifestReference,
     manifest_bytes,
     require_receipt_bytes,
     variant_projection,
@@ -31,8 +30,7 @@ def read_variants(path: Path) -> dict[str, list[dict]]:
             if variant.sft_receipt_reference is not None:
                 require_receipt_bytes(variant, StoragePath(variant.sft_receipt_reference.uri).read_bytes())
             if variant.conversion is not None:
-                reference = ManifestReference.model_validate(variant.conversion.receipt.model_dump())
-                receipt = ConversionReceipt.model_validate_json(manifest_bytes(reference))
+                receipt = ConversionReceipt.model_validate_json(manifest_bytes(variant.conversion.receipt))
                 if receipt.parent != variant.conversion.parent or receipt.output != variant.conversion.output:
                     raise ValueError("Conversion receipt belongs to another parent or output variant")
     return records

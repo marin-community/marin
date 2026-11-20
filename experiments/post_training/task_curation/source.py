@@ -322,7 +322,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             notes=info.notes,
             dataset_id=dataset.name if dataset else None,
             dataset_revision=dataset.revision if dataset else None,
-            url=dataset.url if dataset else None,
+            url=info.upstream_url or (dataset.url if dataset else None),
             type=next(
                 (
                     label

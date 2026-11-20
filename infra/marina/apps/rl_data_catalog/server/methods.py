@@ -7,19 +7,13 @@ import hashlib
 from typing import Any, Literal, Self
 
 from finestore.sft import DatasetVariantInput, SftEvidenceReference, SftPreparationReceipt, SftRecord, Sha256
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import Field, model_validator
 from rigging.filesystem.storage_path import StoragePath
 
 from .source_identity import canonical_source_id
 
 
-class ManifestReference(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-    uri: str
-    sha256: str
-
-
-def manifest_bytes(reference: ManifestReference) -> bytes:
+def manifest_bytes(reference: SftEvidenceReference) -> bytes:
     payload = StoragePath(reference.uri).read_bytes()
     if hashlib.sha256(payload).hexdigest() != reference.sha256:
         raise ValueError(f"Pinned artifact hash differs: {reference.uri}")
