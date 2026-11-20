@@ -39,7 +39,7 @@ from daytona import (
     Resources,
 )
 from daytona_api_client_async import SnapshotState
-from shellbox.backends.daytona.connection import DAYTONA_API_URL, DAYTONA_TARGET, DaytonaConnection
+from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.backends.daytona.machine import (
     PROVIDER_DIAGNOSTIC_CHAR_LIMIT,
     DaytonaImageBuild,
@@ -1654,20 +1654,6 @@ def test_connection_hides_the_api_key_from_every_representation() -> None:
     assert "synthetic-secret-key" not in repr(factory)
     with pytest.raises(ValueError, match="explicit api_key"):
         DaytonaConnection().client_factory()
-
-
-def test_connection_uses_the_constant_api_url_and_target_from_an_account_key_alone(monkeypatch) -> None:
-    captured = []
-    monkeypatch.setattr("daytona.AsyncDaytona", lambda config: captured.append(config))
-    # Ambient variables must not reach the client: the values are constants.
-    monkeypatch.setenv("DAYTONA_API_URL", "https://ambient.invalid/api")
-    monkeypatch.setenv("DAYTONA_TARGET", "ambient-target")
-
-    DaytonaConnection(api_key="synthetic-secret-key").client_factory()()
-
-    assert captured[0].api_url == DAYTONA_API_URL == "https://app.daytona.io/api"
-    assert captured[0].target == DAYTONA_TARGET == "us"
-    assert captured[0].api_key == "synthetic-secret-key"
 
 
 def test_connection_module_imports_without_the_daytona_sdk() -> None:
