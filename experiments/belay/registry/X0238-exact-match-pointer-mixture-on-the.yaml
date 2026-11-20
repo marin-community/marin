@@ -95,6 +95,19 @@ trials:
   commit: 1b69d4840c
   priority: batch
   note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
+- id: t006
+  variant: exact-match pointer mixture, 8 candidates
+  rung: competitive-d1280
+  protocol: equal_steps
+  batch: X0238
+  date: '2026-11-20'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0238
+  wandb: []
+  settings:
+    pointer_mixture: 'true'
+  commit: c4e16839c5
+  priority: batch
+  note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
 potential:
   score: 7
   rationale: −0.0123 at equal data, −0.0096 at equal time (+1% s/step); ladder and MFU not run → 7
