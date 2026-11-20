@@ -111,20 +111,14 @@ def _declare() -> RlDataSource[CurationRecipe]:
                     SourceFormat.PARQUET,
                 ),
                 # The staged conversion inputs: the digest-pinned base-image bindings and the
-                # admission receipts (the upstream_image_defect labels), pinned by sha256.
-                # They are committed reference configs fetched over HTTP by the UrlSource
-                # staging (the pipeline's staging cannot read object storage).
+                # admission receipts (the upstream_image_defect labels), pinned at an exact
+                # HF dataset revision (the pipeline stages HfSource files; the census tools
+                # expect repo/revision sources).
                 inputs={
-                    IMAGE_BINDINGS_INPUT: UrlSource(
-                        url="https://raw.githubusercontent.com/marin-community/marin/be8aa40d334eaaa7e7c4c84f8c43ee66ae1efa2e/experiments/post_training/task_curation/datasets/swe_rebench_v2/inputs/base-image-bindings.json",
-                        sha256="b8f1719feefb4df78bec0638a082f470799dd16c77a0ea0a92bf75c5f2e08ff6",
-                        filename="base-image-bindings.json",
-                        format=SourceFormat.JSON,
-                    ),
-                    ADMISSION_RECEIPTS_INPUT: UrlSource(
-                        url="https://raw.githubusercontent.com/marin-community/marin/be8aa40d334eaaa7e7c4c84f8c43ee66ae1efa2e/experiments/post_training/task_curation/datasets/swe_rebench_v2/inputs/admission-receipts.json",
-                        sha256="7db8c9c19b42d149f9bef89dd7ae74e010f416a9f37dd9b69e40fc2d896af52a",
-                        filename="admission-receipts.json",
+                    IMAGE_BINDINGS_INPUT: HfSource(
+                        repo="open-athena/marin-rl-data-swe-repair-inputs",
+                        revision="07ab2022c3f8de5d8ca50b7c03119d48bc0b3a84",
+                        files=("base-image-bindings.json", "admission-receipts.json"),
                         format=SourceFormat.JSON,
                     ),
                 },
