@@ -202,3 +202,84 @@ This gives four tasks, four local ranks per task and 16 router targets. Omitted 
 geometry; explicit TP must match. Multi-task or routed geometry requires `instances=1`, `broker=None`.
 `ServedModelConfig.object_store_load_mode` defaults to `STREAM`, which multi-task GPU serving requires.
 Single-task serving also supports local weight staging.
+
+## RAM LMCache for vLLM
+
+`marin-serve local` and `marin-serve iris` accept `--lmcache-ram-gib`. In Python, set
+`VllmEngineConfig(lmcache_ram_gib=8)`. LMCache stores prompt KV data in host RAM for reuse.
+The default `None` disables LMCache RAM caching.
+Each Iris task owns one LMCache RAM pool shared by its local vLLM workers, including on
+headless followers. Two tasks with a budget of 8 GiB each have 16 GiB of cache capacity in total.
+A local launch also owns one pool shared by its workers.
+`--memory` remains the total RAM allocation for each task: allow room for the cache, model-loading
+buffers, worker processes and cache metadata. Enabling LMCache does not increase that allocation.
+
+The CUDA launcher installs `lmcache==0.5.7.post1` alongside vLLM in its isolated environment;
+the cache server uses the same requirements. Preinstalled serving requires matching CUDA vLLM,
+PyTorch and LMCache packages in the Python environment on `PATH`. A native CUDA-module import
+check rejects incompatible builds before vLLM starts. The published LMCache wheel fails this check
+with stock vLLM 0.25.1 / PyTorch 2.11; use the validated Marin release below. See upstream's
+[ABI compatibility guidance](https://docs.lmcache.ai/getting_started/compatibility.html).
+
+The integration uses the upstream external `LMCacheMPConnector` with one local RAM server per task.
+It passes `--disable-hybrid-kv-cache-manager`; hybrid or sliding-window models can therefore need
+more GPU KV memory. Cache data lasts for the task's lifetime. The cache starts before vLLM and stops
+after its workers. Session routing is optional and uses the existing `--session-router` flag.
+
+These examples use BF16 Snowball with TP1 and expert parallelism. Expert parallelism distributes
+expert weights across the DP ranks; Snowball's 20 attention heads and 5 KV heads stay local.
+Obtain `marin-vllm-gpu-manifest.json` from
+[release `marin-vllm-gpu-20261118-47a8e415bff1`](https://github.com/marin-community/vllm/releases/tag/marin-vllm-gpu-20261118-47a8e415bff1).
+The validated runtime is vLLM `0.0.0.dev20261118+marin.47a8e415bff1.cu132`,
+PyTorch `2.14.1+cu132`, LMCache `0.5.7.post1` and Python 3.12 on x86-64 H100 hosts
+and ARM64 GB200 hosts. Keep the default model-cache preparation enabled for the pinned
+`MODEL@REVISION` syntax below.
+
+Direct serving on two 8-H100 tasks, with an 8 GiB RAM pool on each:
+
+```bash
+SNOWBALL_MODEL='open-athena/Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026.10.12'
+SNOWBALL_REVISION='4eeb756b404db25bc04e4daf49dfb9817bceb741'
+uv run marin-serve iris "$SNOWBALL_MODEL@$SNOWBALL_REVISION" \
+  --cluster cw-rno2a --gpu H100x8 --tensor-parallel-size 1 --data-parallel-size 16 \
+  --vllm-source marin-fork --vllm-release marin-vllm-gpu-manifest.json \
+  --cpu 16 --memory 256g --max-model-len 4096 --max-num-batched-tokens 2048 \
+  --lmcache-ram-gib 8 --timeout-hours 0.75 \
+  --vllm-arg=--max-num-seqs=4 --vllm-arg=--enable-prefix-caching \
+  --vllm-arg=--gpu-memory-utilization=0.8 \
+  --vllm-arg=--enable-expert-parallel \
+  --vllm-arg=--all2all-backend=allgather_reducescatter
+```
+
+Session-routed serving on two 4-GB200 tasks uses the same model and revision:
+
+```bash
+uv run marin-serve iris "$SNOWBALL_MODEL@$SNOWBALL_REVISION" \
+  --cluster cw-us-east-08a --gpu GB200x4 --tensor-parallel-size 1 --data-parallel-size 8 \
+  --vllm-source marin-fork --vllm-release marin-vllm-gpu-manifest.json \
+  --cpu 16 --memory 256g --max-model-len 4096 --max-num-batched-tokens 2048 \
+  --session-router --lmcache-ram-gib 8 --timeout-hours 0.75 \
+  --vllm-arg=--max-num-seqs=4 --vllm-arg=--enable-prefix-caching \
+  --vllm-arg=--gpu-memory-utilization=0.8 \
+  --vllm-arg=--enable-expert-parallel \
+  --vllm-arg=--all2all-backend=allgather_reducescatter
+```
+
+Reuse `X-Session-ID` across turns with the routed endpoint. Each task retains its own cache;
+a session moved to a different task can require a fresh prefill. The pinned model ID, including
+`@REVISION`, is the API model name for these CLI examples.
+
+Both two-host recipes restored 1,536 tokens of a 1,563-token prompt from the follower's RAM
+after a GPU-only cache reset, with zero GPU-prefix-hit increase. The native control reused
+1,552 GPU-cached tokens. Cold, native-warm and RAM-warm requests each produced the same first
+16 decoded tokens; both warm responses used streaming. H100 also restored the prefix from
+a second worker sharing the follower's pool. Single-GPU pilots used `Qwen/Qwen3-0.6B` at
+revision `c1899de289a04d12100db370d81485cdf75e47ca` on both architectures with 1 GiB pools.
+
+Validation covers BF16, TP1, PP1 and full-attention NHD KV layouts (token, KV-head, head-dimension
+order). Test servers used a 4,096-token context limit and `max_num_seqs=4` per DP rank; requests
+were serial. Quantized models, TP greater than one, cross-task
+pipeline parallelism and hybrid/recurrent cache layouts remain untested. Compilation and CUDA
+graphs remain enabled. A new launch can compile again because its local cache port is part of
+the managed compilation-cache identity. These functional checks do not establish an
+inference-throughput gain.
