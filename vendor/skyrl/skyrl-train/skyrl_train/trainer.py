@@ -1619,6 +1619,7 @@ class RayPPOTrainer:
 
     @asynccontextmanager
     async def _evaluation_session(self):
+        started = time.perf_counter()
         try:
             with Timer("eval_drain", self.all_timings if self.global_step else None):
                 await self.context.pause_and_drain()
@@ -1630,9 +1631,14 @@ class RayPPOTrainer:
                 yield pool
         finally:
             self.context.resume()
+        if self.cfg.trainer.get("dump_grader_report", False):
+            write_grader_report(
+                str(self.cfg.trainer.grader_report_dir),
+                str(self.global_step),
+                {"evaluation_duration_seconds": time.perf_counter() - started},
+            )
 
     async def _evaluate_and_log(self, state: TrainerState, *, commit: bool) -> None:
-        started = time.perf_counter()
         async with self._evaluation_session() as pool:
             async with asyncio.TaskGroup() as tasks:
                 native = tasks.create_task(self.eval(evaluation_pool=pool))
@@ -1651,12 +1657,6 @@ class RayPPOTrainer:
         self._log_metrics_stdout(eval_metrics, step=self.global_step, kind="eval")
         self.tracker.log(eval_metrics, step=self.global_step, commit=commit)
         self._last_evaluated_step = self.global_step
-        if self.cfg.trainer.get("dump_grader_report", False):
-            write_grader_report(
-                str(self.cfg.trainer.grader_report_dir),
-                str(self.global_step),
-                {"evaluation_duration_seconds": time.perf_counter() - started},
-            )
 
     async def _run_pretraining_evaluation(self, state: TrainerState) -> None:
         # Pre-step evaluation must not be mixed into the first optimizer step's inclusive timers.
