@@ -29,7 +29,7 @@ from taskforge.effects.issues import Restart, Transient
 from taskforge.effects.log import EventLog, JsonlSink, fold
 from taskforge.harness.protocol import Stopped, StopReason
 from taskforge.llm.glm_client import EndpointSource
-from taskforge.model.controls import CONTROL, Candidate, Control, ControlKind, RewardBand
+from taskforge.model.controls import CONTROL, CONTROLS, Candidate, Control, ControlKind, RewardBand
 from taskforge.model.llm import Completion, FinishReason, ToolCall
 from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal
 from taskforge.model.review import Abandon, Accept, BandRules, Budget, Cause, Decision, Incomplete, Modify, Retry
@@ -760,3 +760,37 @@ async def test_driver_repairs_source_task_without_proposal(
     assert not any(
         path.name == "proposal.json" for env in bundle.envs.created for path in env.files
     ), "a source task has no proposal to hydrate"
+
+
+async def test_driver_validates_source_task_with_its_own_controls(
+    driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "arithmetic.task.json"
+    source.write_text(arithmetic_task().model_dump_json())
+    controls = (
+        Control(Candidate("12"), RewardBand(Outcome.GRADED, 1, 1), ControlKind.POSITIVE),
+        Control(Candidate("9"), RewardBand(Outcome.GRADED, 0, 0), ControlKind.NEGATIVE),
+    )
+    (tmp_path / "arithmetic.controls.json").write_bytes(CONTROLS.dump_json(controls))
+    driver_args.proposals = str(source)
+    bundle = resources(Envs(), ())
+
+    @asynccontextmanager
+    async def fake_runtime(
+        policy: Policy, arm: str, _source: EndpointSource, _key: str
+    ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
+        yield config(arm), bundle
+
+    monkeypatch.setattr(driver, "runtime", fake_runtime)
+    await driver.one(driver_args)
+
+    destination = tmp_path / "out" / driver.proposal_key(str(source))
+    wp = WORKPIECE.validate_json((destination / "workpiece.json").read_bytes())
+    assert wp.terminal == Terminal.ACCEPTED
+    assert wp.submission is not None and wp.submission.controls == controls
+    (evidence,) = wp.evidence
+    assert [control.met for control in evidence.controls] == [True, True]
+    records = await JsonlSink(str(destination / "events.jsonl")).read()
+    stages = [record.event.stage for record in records if isinstance(record.event, StageCompleted)]
+    assert stages == ["validate", "review"]
+    assert isinstance(bundle.inference, FakeInference) and not bundle.inference.requests

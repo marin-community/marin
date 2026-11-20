@@ -46,10 +46,12 @@ default adds none). Only the author sees them; a file reaches solvers or graders
 ## Repairing tasks from another source
 
 A workpiece starts from a proposal or from an existing `TaskSpec` written elsewhere (the conversion
-into a `TaskSpec` happens outside Taskforge). A source task has no proposal and no controls. It
-starts at **validate** rather than author, so its first round measures the task as the source wrote
-it. Review then decides as for any task, and a source task without controls always gets *modify*,
-since controls are how review checks the grader. On *modify*, a new author session opens with the
+into a `TaskSpec` happens outside Taskforge). A source task has no proposal. Its controls come
+from the source when it supplies them, and otherwise it has none. It starts at **validate** rather
+than author, so its first round measures the task and any supplied controls as the source wrote them. A task whose
+controls meet their expected grades and whose solver pass rate is in the band is accepted without
+an author session. Review otherwise decides as for any task, and a source task without controls
+always gets *modify*, since controls are how review checks the grader. On *modify*, a new author session opens with the
 `author.repair` prompt and the review findings. The workspace is seeded with the task, its
 resources and the validation evidence; there is no `proposal.json`. Later rounds run as in the
 chosen arm, with the same budgets, band and solver trials as generation.
@@ -83,7 +85,9 @@ command line; the driver reads them from Iris secret files.
   carries `environment` (`reasoning`, `shellsim`, `container`). The driver skips environments not
   in `proposals.environments` (default: reasoning and shellsim) and prints `SKIP <id>: environment=container`.
 - **Source tasks**: a `*.task.json` file holding a `TaskSpec` JSON object, in place of a proposal
-  file. `--proposals` accepts either kind of file, as well as a manifest or a prefix that lists them. A source task
+  file. Its controls go beside it in `<name>.controls.json`, a JSON list of `Control` values in the
+  format the author writes `controls.json`; the file is optional, and a candidate file on a task
+  without a machine fails the input. `--proposals` accepts either kind of file, as well as a manifest or a prefix that lists them. A source task
   keeps its file name, without the suffix, as its output identity, and the proposal filters
   (`proposals.environments`, `proposals.verifications`) do not apply to it.
 - **Policy overlay**: a JSON object of `key: value` pairs layered over

@@ -29,6 +29,8 @@ from taskforge.coordinator import reasons, run_workpiece
 from taskforge.effects.events import StageCompleted
 from taskforge.effects.issues import Hold, LogFailure, Restart, Transient
 from taskforge.effects.log import EventLog, JsonlSink, Status, fold
+from taskforge.lowering import check_candidates
+from taskforge.model.controls import CONTROLS, Control
 from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal
 from taskforge.model.review import Incomplete
 from taskforge.model.stage import Stage
@@ -48,6 +50,9 @@ class SampleEntry:
 PROPOSAL_SUFFIX = ".proposal.json"
 TASK_SUFFIX = ".task.json"
 """A ``TaskSpec`` JSON written by another source, repaired without a proposal."""
+CONTROLS_SUFFIX = ".controls.json"
+"""Beside a source task, optionally: the JSON list of ``Control`` values its source supplies, as an author's
+``controls.json`` holds them."""
 SOURCE_TASK_NOTES = "source task"
 
 
@@ -141,15 +146,32 @@ def seed(path: str, policy: Policy) -> Workpiece | None:
     """The new workpiece for an input file, or ``None`` when the policy skips its proposal.
 
     A ``TASK_SUFFIX`` file holds a task from another source: the workpiece starts from it as the
-    submission, with no proposal and no controls.
+    submission, with no proposal and the controls of its ``source_controls``.
     """
     with open_url(path, "rt") as source:
         text = source.read()
     if path.endswith(TASK_SUFFIX):
         task = TaskSpec.model_validate_json(text)
-        return Workpiece(task.id, submission=Submission(task, (), SOURCE_TASK_NOTES))
+        return Workpiece(task.id, submission=Submission(task, source_controls(path, task), SOURCE_TASK_NOTES))
     proposal = TASK_PROPOSAL.validate_json(text)
     return Workpiece(proposal.header.id, proposal) if eligible(proposal, policy) else None
+
+
+def source_controls(task_path: str, task: TaskSpec) -> tuple[Control, ...]:
+    """The controls in the ``CONTROLS_SUFFIX`` file beside ``task_path``, or none when the source supplied none.
+
+    Raises:
+        ValueError: the file does not hold valid controls for ``task``.
+    """
+    path = task_path.removesuffix(TASK_SUFFIX) + CONTROLS_SUFFIX
+    try:
+        with open_url(path, "rb") as source:
+            controls = CONTROLS.validate_json(source.read())
+    except FileNotFoundError:
+        logging.info("%s has no %s; review will ask the author for controls", task_path, CONTROLS_SUFFIX)
+        return ()
+    check_candidates(task, tuple(control.candidate for control in controls))
+    return controls
 
 
 def first_stage(seed: Workpiece) -> Stage:
