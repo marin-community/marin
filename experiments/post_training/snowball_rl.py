@@ -371,6 +371,7 @@ _CAMPAIGN_PATCH = RecipePatch(
 _TRAIN_LONG_AGENTIC = agentic(
     replace(
         _TRAIN_LONG.with_updates(10_000),
+        revision="2026.11.20.1",
         data_settings=frozenset({"shuffle"}),
         checkpoints="best",
         export="best",
