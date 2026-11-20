@@ -205,7 +205,7 @@ def test_backend_timeout_removes_prior_positive_reward(monkeypatch, tmp_path, op
 
 def test_math_deadline_verdicts_carry_their_phase(monkeypatch):
     """Reference-parse deadlines are a task property; candidate-parse and comparison
-    deadlines follow the reply. The verdict tags which step ran out (#11511)."""
+    deadlines follow the reply. The verdict tags which step ran out."""
 
     spec = MathSpec(expected="y=x+1", math_type=MathType.EQUATION)
     original_parse = math_verify.parse

@@ -335,7 +335,7 @@ def grade(contract_path: Path) -> None:
     contract = json.loads(contract_path.read_text())
     runtime = prepare_grading(contract)
     root, reports = Path(contract["protected_root"]), Path(contract["report_directory"])
-    for name in ("verdict.json", "reward.json", "reward.txt", "test_output.log"):
+    for name in common.REPORT_FILES:
         common.remove_path(reports / name)
     timeout = json.loads((root / "spec.json").read_text())["timeout"]
     output = reports / "test_output.log"

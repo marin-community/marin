@@ -621,7 +621,7 @@ def render_spec(spec: Spec) -> str:
     if isinstance(spec, StructuredExactSpec):
         table["expected"] = json.dumps(spec.expected, allow_nan=False)
     # Rendering is host-side staging; the grader machine never imports this, so the
-    # writer dependency stays off the machine's interpreter (issue #11721).
+    # writer dependency stays off the machine's interpreter.
     import tomli_w  # noqa: PLC0415
 
     return tomli_w.dumps(table)

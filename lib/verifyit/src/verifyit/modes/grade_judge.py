@@ -462,7 +462,7 @@ def _retry_after(error: openai.APIStatusError) -> float:
         return max(0.0, float(value))
     except ValueError:
         try:
-            # datetime.UTC is 3.11+; the grader machines run 3.10 (issue #11721).
+            # datetime.UTC is 3.11+; the grader machines run 3.10.
             return max(0.0, (parsedate_to_datetime(value) - datetime.now(timezone.utc)).total_seconds())  # noqa: UP017
         except (TypeError, ValueError):
             return 0.0

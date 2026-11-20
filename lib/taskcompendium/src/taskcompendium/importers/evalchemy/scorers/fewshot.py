@@ -4,7 +4,6 @@
 """Score canonical completion benchmarks independently of retained catalog packages."""
 
 # Optional scorer dependencies load only for the selected environment.
-# ruff: noqa: PLC0415
 
 import json
 import re
@@ -35,10 +34,10 @@ def grade_gsm8k_cot(document: dict, response: str) -> Reward:
 
 
 def grade_minerva_completion(document: dict, response: str) -> Reward:
-    from math_verify import parse, verify
+    from math_verify import parse, verify  # noqa: PLC0415 - optional math scorer dependencies
 
-    from .amc import last_boxed_answer
-    from .minerva import is_equiv, normalize_final_answer
+    from .amc import last_boxed_answer  # noqa: PLC0415 - optional math scorer resources
+    from .minerva import is_equiv, normalize_final_answer  # noqa: PLC0415 - optional math scorer resources
 
     matches = re.findall(
         r"Final Answer: The final answer is(.*?). I hope it is correct.", response + "I hope it is correct."
@@ -67,7 +66,7 @@ def score(scorer: str, config: dict, response: str) -> Reward:
     if scorer == "bbh_cot":
         return grade_bbh_cot(config["document"], response)
     if scorer == "harness_generation":
-        from .harness_completion import grade_harness_generation_candidate
+        from .harness_completion import grade_harness_generation_candidate  # noqa: PLC0415 - optional scorer
 
         return grade_harness_generation_candidate(config["profile"], config["references"], response, config["question"])
     raise ValueError(f"Unknown completion scorer: {scorer}")

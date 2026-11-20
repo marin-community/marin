@@ -18,7 +18,13 @@ from tomlkit.items import Table
 from verifyit.spec import PytestSpec, ScriptSpec, render_spec
 
 from taskcompendium.harbor.native_shared import native_runner
-from taskcompendium.integrity import SharedDependencyState, SharedIntegrityContract, shared_preamble
+from taskcompendium.integrity import (
+    BOOTSTRAP_TIMEOUT,
+    DEPENDENCY_AUDIT_PROBES,
+    SharedDependencyState,
+    SharedIntegrityContract,
+    shared_preamble,
+)
 from taskcompendium.native_integrity import TEST_PATTERNS
 from taskcompendium.runtime import shared_native, shared_pytest
 
@@ -127,7 +133,7 @@ def harden_shared_swe(
                 "id": "shared-native",
                 "native": native,
                 "protected_test_patterns": TEST_PATTERNS,
-                "audit_probes": ("dependencies-diff.json", "startup-hooks-diff.json"),
+                "audit_probes": DEPENDENCY_AUDIT_PROBES,
                 "known_open_gaps": ("Candidate-produced test-output injection", "Mutable dependency startup hooks"),
             }
         )
@@ -171,7 +177,7 @@ def harden_shared_swe(
     agent = cast(Table, config["agent"])
     verifier = cast(Table, config["verifier"])
     metadata = cast(Table, config["metadata"])
-    environment["setup"] = {"command": bootstrap_command, "timeout_sec": 1800.0}
+    environment["setup"] = {"command": bootstrap_command, "timeout_sec": BOOTSTRAP_TIMEOUT}
     source_user = str(agent.get("user", "root"))
     source_environment = dict(environment.get("env", {}))
     if source_user in {str(contract.agent_uid), "taskcompendium-agent"}:

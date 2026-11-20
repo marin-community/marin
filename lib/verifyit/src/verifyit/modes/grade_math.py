@@ -351,8 +351,7 @@ def _deadline_phase(phase: str):
     """Re-raise a math-verify deadline from one grading step with its phase tagged.
 
     The reference parse is a property of the task; the candidate parse and the
-    comparison follow the reply (the community replay on #11511: references parse in
-    under 0.5 s while wrong or regrouped equation replies run into the deadline).
+    comparison follow the reply.
     """
     from math_verify.errors import TimeoutException  # noqa: PLC0415
 

@@ -15,6 +15,7 @@ state, then executes the original ``tests/test.sh`` bytes as the grading UID.
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import importlib.util
 import json
@@ -25,10 +26,9 @@ import signal
 import stat
 import subprocess
 import sys
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
-REPORT_FILES = ("verdict.json", "reward.txt", "reward.json", "test_output.log")
 NATIVE_SCRIPTS = "native_scripts.py"
 
 
@@ -211,7 +211,9 @@ def quarantine_remove(common, path: Path, quarantine_root: str | None) -> None:
     except OSError:
         if quarantine_root is None:
             raise
-        destination = Path(quarantine_root) / datetime.now(UTC).strftime("quarantine-%Y%m%d%H%M%S%f")
+        destination = Path(quarantine_root) / datetime.now(timezone.utc).strftime(  # noqa: UP017 - guest Python 3.9
+            "quarantine-%Y%m%d%H%M%S%f"
+        )
         destination.parent.mkdir(parents=True, exist_ok=True)
         os.rename(path, destination)
 
@@ -257,8 +259,10 @@ def remove_entries(
             parent = parent.parent
             try:
                 parent.rmdir()
-            except OSError:
-                break
+            except OSError as error:
+                if error.errno in {errno.ENOTEMPTY, errno.EEXIST, errno.ENOENT}:
+                    break
+                raise
 
 
 def pin_git(root: Path, workspace: Path) -> None:
@@ -292,7 +296,7 @@ def ensure_verifier_directory(common, contract: dict) -> None:
         reports.mkdir(mode=0o770, parents=True)
     os.chown(reports, 0, contract["grader_uid"])
     reports.chmod(0o770)
-    for name in REPORT_FILES:
+    for name in common.REPORT_FILES:
         common.remove_path(reports / name)
 
 
@@ -507,7 +511,7 @@ def parse_source_reward(reward_file: Path) -> float | None:
         return None
     try:
         reward = float(reward_file.read_text().strip())
-    except (OSError, ValueError):
+    except ValueError:
         return None
     # The declared reward domain of these source scorers is a finite [0, 1] float.
     if not math.isfinite(reward) or reward < 0.0 or reward > 1.0:

@@ -23,6 +23,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+REPORT_FILES = ("verdict.json", "reward.txt", "reward.json", "test_output.log")
+
 SOURCE_DIRECTORY_EXCLUSIONS = {
     ".git",
     ".tox",

@@ -35,6 +35,9 @@ protects Verifyit pytest graders and source-declared native language runners.
 SWE-Lego, or SWE-rebench source scorer behind the same UID boundary. Callers
 supply the original package files and an explicit `SharedDependencyState`.
 These helpers do not import dataset declarations or the Atlas trial executor.
+Harbor runs the declared initialization command before actor access. The source
+adapter authorizes Git access to the declared workspace during that setup,
+because its build layer has already assigned the workspace to the actor UID.
 
 Bootstrap saves private verifier files and a trusted test reference in a
 root-owned directory. The actor runs as UID 10001 and cannot read that private
