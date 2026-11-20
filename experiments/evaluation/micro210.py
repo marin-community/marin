@@ -62,6 +62,7 @@ SERVING_GENERATOR_FIELDS = {
     "vllm_attention_backend",
 }
 SERVING_ENGINE_FIELDS = {"compilation_config", "model_loader_extra_config", "moe_backend"}
+SERVING_NCCL_ENV_FIELDS = {"NCCL_NET", "NCCL_IB_DISABLE", "NCCL_IB_HCA"}
 
 
 @dataclass(frozen=True)
@@ -75,14 +76,19 @@ class Micro210ServingProfile:
     engine_init_kwargs: dict
     cuda_allocator_config: str
     judge_gpu_count: int
+    nccl_env: dict[str, str]
+    nccl_buffer_size_bytes: int
 
 
 def serving_config(frozen: dict, profile: Micro210ServingProfile) -> dict:
     config = runtime_policy_config(frozen).config
     unknown = set(profile.generator) - SERVING_GENERATOR_FIELDS
     unknown_engine = set(profile.engine_init_kwargs) - SERVING_ENGINE_FIELDS
-    if unknown or unknown_engine:
-        raise ValueError(f"Serving profile cannot override protocol fields: {sorted(unknown | unknown_engine)}")
+    unknown_env = set(profile.nccl_env) - SERVING_NCCL_ENV_FIELDS
+    if unknown or unknown_engine or unknown_env:
+        raise ValueError(
+            f"Serving profile cannot override protocol fields: {sorted(unknown | unknown_engine | unknown_env)}"
+        )
     if profile.role_plan.n_samples_per_prompt != frozen["evaluation"]["role_plan"]["n_samples_per_prompt"]:
         raise ValueError("Serving profile cannot change protocol samples per prompt")
     compilation = profile.engine_init_kwargs["compilation_config"]
@@ -96,6 +102,8 @@ def serving_config(frozen: dict, profile: Micro210ServingProfile) -> dict:
         **profile.engine_init_kwargs,
     }
     config["extra_env"]["PYTORCH_CUDA_ALLOC_CONF"] = profile.cuda_allocator_config
+    config["extra_env"].update(profile.nccl_env)
+    config["trainer"].setdefault("policy", {})["nccl_buffer_size_bytes"] = profile.nccl_buffer_size_bytes
     return config
 
 
