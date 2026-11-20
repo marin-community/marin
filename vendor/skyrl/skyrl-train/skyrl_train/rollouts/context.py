@@ -226,7 +226,7 @@ class TrainingContext:
             workers,
             ObjectStorePayloads(object_store_root) if object_store_root is not None else MemoryPayloads(),
             rollout_spans=config.trainer.rollout_spans,
-            grader_report_path=str(config.trainer.export_path) if report_graders else None,
+            grader_report_path=str(config.trainer.grader_report_dir) if report_graders else None,
         )
 
     def start(self) -> None:

@@ -28,7 +28,7 @@ def test_terminal_quick_loop_record_uses_coordinator_time_and_preserves_grader_s
     monkeypatch.setattr(ingest, "run_root", resolve_fixture)
     entry = {
         "run_id": "users/user/checkpoints/snowball-inventory-2026.11.19",
-        "attempt_id": "a123",
+        "attempt_id": "a12345678901",
         "coordinator_job_id": "/user/quick-rl-coordinator",
         "terminal_manifest_uri": terminal_uri,
         "expected_step": 3,
@@ -42,7 +42,7 @@ def test_terminal_quick_loop_record_uses_coordinator_time_and_preserves_grader_s
         {
             "result": {
                 "run_id": entry["run_id"],
-                "attempt_id": "a123",
+                "attempt_id": entry["attempt_id"],
                 "state": "succeeded",
                 "iris_job_id": "/user/child",
             }
@@ -58,7 +58,8 @@ def test_terminal_quick_loop_record_uses_coordinator_time_and_preserves_grader_s
         },
         "evaluation_duration_seconds": {"0": 8.0, "3": 12.0},
     }
-    write("exports/grader_report.json", report)
+    report_path = f"exports/grader_reports/{entry['attempt_id']}/grader_report.json"
+    write(report_path, report)
     coordinator = job_pb2.JobStatus(state=job_pb2.JOB_STATE_SUCCEEDED)
     coordinator.submitted_at.epoch_ms = 100_000
     coordinator.started_at.epoch_ms = 110_000
@@ -74,12 +75,21 @@ def test_terminal_quick_loop_record_uses_coordinator_time_and_preserves_grader_s
     assert result["final"]["reward"] == 0.75
     assert comparison_fields(result)["pareto_eligible"] is True
 
-    stale_attempt = ingest.terminal_record(entry | {"attempt_id": "a456"}, coordinator)
+    other_attempt_id = "a45678901234"
+    stale_attempt = ingest.terminal_record(entry | {"attempt_id": other_attempt_id}, coordinator)
     assert stale_attempt["status"] == "failed"
     assert stale_attempt["grader_report"] is None
     assert comparison_fields(stale_attempt)["pareto_eligible"] is False
 
+    partial_report = {"training": {"execution": [{"data_source": "code", "grader_failures": {"timeout": 4}}]}}
+    write(f"exports/grader_reports/{other_attempt_id}/grader_report.json", partial_report)
+    coordinator.state = job_pb2.JOB_STATE_FAILED
+    failed_attempt = ingest.terminal_record(entry | {"attempt_id": other_attempt_id}, coordinator)
+    assert failed_attempt["status"] == "failed"
+    assert failed_attempt["grader_report"] == partial_report
+    coordinator.state = job_pb2.JOB_STATE_SUCCEEDED
+
     report["evaluation_metadata"]["3"]["identity"] = identity | {"membership_sha256": "different-panel"}
-    write("exports/grader_report.json", report)
+    write(report_path, report)
     different_panel = ingest.terminal_record(entry, coordinator)
     assert comparison_fields(different_panel)["pareto_eligible"] is False

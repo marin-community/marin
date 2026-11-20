@@ -123,7 +123,7 @@ Local graders require the privileged container profile; image graders and host j
 
 ### Grader report
 
-`exports/grader_report.json` groups rollouts by environment class and task source.
+`exports/grader_reports/<attempt_id>/grader_report.json` groups rollouts by environment class and task source.
 The evaluation section includes step 0 and the final evaluation step.
 The training section holds a cumulative snapshot for each trainer attempt and
 includes completed groups the optimizer discards. Training snapshots update
@@ -136,7 +136,6 @@ outside grading are counted by execution stage. Grading latency includes output
 capture and grader setup and execution. The count, mean, p95, and max use only
 rollouts that entered this phase. For an individual eval response, check
 `verification.diagnostics` in the per-dataset JSONL.
-
 
 The [RL iteration progress dashboard](https://applets.marina.oa.dev/a/6c971887-1e22-45b1-9dcb-dd775829df57/)
 imports terminal attempts automatically. Select a run or chart point to open

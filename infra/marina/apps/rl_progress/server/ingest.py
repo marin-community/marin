@@ -34,7 +34,7 @@ def _digest(value: Any) -> str:
 
 
 def read_object(path: StoragePath) -> dict | None:
-    """Read one bounded Quick RL evidence object."""
+    """Read one bounded Quick RL evidence object, or None if it is absent."""
     try:
         with path.open("rb") as source:
             raw = source.read(EVIDENCE_LIMIT + 1)
@@ -50,10 +50,11 @@ def read_object(path: StoragePath) -> dict | None:
 
 def run_root(terminal_uri: str) -> StoragePath:
     """Restrict registrations to the Quick RL artifact directory."""
-    root, marker, suffix = terminal_uri.rpartition("/terminal.json")
-    if not marker or suffix or not RUN_ROOT.fullmatch(root) or root.rsplit("/", 1)[-1] in {".", ".."}:
+    terminal = StoragePath(terminal_uri)
+    root = terminal.parent
+    if terminal.name != "terminal.json" or not RUN_ROOT.fullmatch(str(root)) or root.name in {".", ".."}:
         raise ValueError("Expected a CoreWeave Quick RL terminal manifest")
-    return StoragePath(root)
+    return root
 
 
 class EvaluationScore(TypedDict):
@@ -107,12 +108,15 @@ def _registration_filename(run_id: str, attempt_id: str) -> str:
 def terminal_record(entry: dict, job: job_pb2.JobStatus) -> dict:
     """Build one display record against the coordinator's actual terminal timestamps."""
     root = run_root(entry["terminal_manifest_uri"])
+    attempt_id = entry["attempt_id"]
+    if not re.fullmatch(r"a[0-9a-f]{11}", attempt_id):
+        raise ValueError("Expected a native Quick RL attempt ID")
     terminal = read_object(root / "terminal.json") or {}
     native = terminal.get("result") or {}
-    has_current_manifest = native.get("run_id") == entry["run_id"] and native.get("attempt_id") == entry["attempt_id"]
+    has_current_manifest = native.get("run_id") == entry["run_id"] and native.get("attempt_id") == attempt_id
     succeeded = job.state == job_pb2.JOB_STATE_SUCCEEDED and has_current_manifest and native["state"] == "succeeded"
-    grader_uri = root / "exports" / "grader_report.json"
-    grader_report = read_object(grader_uri) if has_current_manifest else None
+    grader_uri = root / "exports" / "grader_reports" / attempt_id / "grader_report.json"
+    grader_report = read_object(grader_uri)
     baseline = _evaluation_measurement(grader_report or {}, 0)
     final = _evaluation_measurement(grader_report or {}, int(entry["expected_step"]))
     submitted = job.submitted_at.epoch_ms
@@ -131,7 +135,7 @@ def terminal_record(entry: dict, job: job_pb2.JobStatus) -> dict:
     )
     return {
         "run_id": entry["run_id"],
-        "attempt_id": entry["attempt_id"],
+        "attempt_id": attempt_id,
         "label": entry["run_id"].rsplit("/", 1)[-1],
         "coordinator_job_id": entry["coordinator_job_id"],
         "iris_job_id": native.get("iris_job_id") if has_current_manifest else None,

@@ -237,6 +237,10 @@ def _compose_source_recipe(config: DictConfig) -> DictConfig:
         },
         config.iris.allocation,
     )
+    if compiled.config.trainer.dump_grader_report:
+        compiled.config.trainer.grader_report_dir = join_resource_path(
+            str(config.artifacts.export_root), "grader_reports", str(config.run.attempt_id)
+        )
     OmegaConf.resolve(compiled.config)
     resolved = OmegaConf.create(OmegaConf.to_container(config, resolve=False))
     OmegaConf.set_struct(resolved, False)

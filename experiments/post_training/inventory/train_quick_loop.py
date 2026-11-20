@@ -4,6 +4,7 @@
 """Train Datakit SFT on the Snowball 100k selection and evaluate before and after RL."""
 
 from dataclasses import replace
+from functools import partial
 
 import click
 import pyarrow.parquet as pq
@@ -218,7 +219,7 @@ def build_run(
         ),
         export_hf=export_hf,
     )
-    return replace(training, run=run_dashboard_attempt)
+    return replace(training, run=partial(run_dashboard_attempt, run=training.run))
 
 
 @click.command(help=__doc__)

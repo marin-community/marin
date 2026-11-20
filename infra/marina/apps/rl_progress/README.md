@@ -71,4 +71,5 @@ Historical rows retain their original timing and evaluation groups.
 Run names and chart points open a separate grader page for the selected native
 attempt. The page uses the imported grader report, including per-environment
 success rates, verifier coverage, failure counts, and latency for training and
-evaluation. Historical attempts without a report show an empty state.
+evaluation. Failed attempts show any report they collected before termination.
+Historical attempts without a report show an empty state.

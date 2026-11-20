@@ -231,7 +231,7 @@ def _dump_eval_results(
         stats = GraderStats()
         stats.add(rollouts.batch, zip(rollouts.env_classes, data_sources, strict=True))
         key = "eval_only" if global_step is None else str(global_step)
-        export_path = str(cfg.trainer.export_path)
+        report_dir = str(cfg.trainer.grader_report_dir)
         metadata = {
             "identity": {
                 "membership_sha256": hashlib.sha256(json.dumps(sorted(rollouts.uids)).encode()).hexdigest(),
@@ -244,7 +244,7 @@ def _dump_eval_results(
             "scored": metrics.get("eval/all/num_scored"),
             "reward": metrics.get("eval/all/avg_verifier_score"),
         }
-        write_grader_report(export_path, key, {"evaluation": stats.summary(), "evaluation_metadata": metadata})
+        write_grader_report(report_dir, key, {"evaluation": stats.summary(), "evaluation_metadata": metadata})
     if not cfg.trainer.dump_eval_results:
         return
     with Timer("dump_eval_results"):

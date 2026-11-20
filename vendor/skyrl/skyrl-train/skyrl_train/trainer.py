@@ -1653,7 +1653,7 @@ class RayPPOTrainer:
         self._last_evaluated_step = self.global_step
         if self.cfg.trainer.get("dump_grader_report", False):
             write_grader_report(
-                str(self.cfg.trainer.export_path),
+                str(self.cfg.trainer.grader_report_dir),
                 str(self.global_step),
                 {"evaluation_duration_seconds": time.perf_counter() - started},
             )
