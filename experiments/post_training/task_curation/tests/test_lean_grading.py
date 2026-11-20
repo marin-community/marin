@@ -15,16 +15,23 @@ from taskcompendium.pipeline.controls import run_controls
 from taskcompendium.pipeline.models import CheckStatus, Reply
 from taskcompendium.runtime.resources import inline_resource
 
+from experiments.evaluation.benchmarks import lean as lean_evals
 from experiments.post_training.task_curation.datasets.lean.numina import NUMINA_CONTROLS
 from experiments.post_training.task_curation.datasets.lean.proofs import LEAN_GRADER_MEMORY_MB, LEAN_PROOF_CONTROLS
 from experiments.post_training.task_curation.tests.conversion import converted_task
 from experiments.post_training.task_curation.tests.lean_rows import (
+    MINIF2F_TEST_LEAN,
     NUMINA,
     NUMINA_ROWS,
     PROOFNET,
     REAL_PROOFS,
+    StagedFile,
+    imo_bench_fixture_rows,
+    imo_bench_row,
     prime_inputs,
     proofnet_row,
+    putnam_file,
+    putnambench_files,
 )
 from experiments.post_training.task_curation.tests.local_grader import grade, with_verifier_file
 
@@ -142,3 +149,64 @@ def test_a_numina_human_proof_is_a_golden_control_that_scores_one(row, lean_kern
     report = run_controls(task, controls=NUMINA_CONTROLS, machines=lean_kernel_machines)
     statuses = {check.check: check.status for check in report.checks}
     assert statuses == {"golden": CheckStatus.PASS}, report
+
+
+def minif2f_eval_task(name: str) -> TaskSpec:
+    rows = {row["name"]: row for row in lean_evals.minif2f_rows(StagedFile(MINIF2F_TEST_LEAN.encode()))}
+    return converted_task(lean_evals.minif2f("greedy").config.recipe, rows[name])
+
+
+def putnam_eval_task(name: str, answer: str | None = None, answer_type: str = "Nat") -> TaskSpec:
+    row = {"name": name, "text": putnam_file(name, answer, answer_type)}
+    return converted_task(lean_evals.putnambench("greedy").config.recipe, row)
+
+
+@pytest.mark.parametrize(
+    ("make_task", "block", "reward"),
+    [
+        (lambda: minif2f_eval_task("mathd_numbertheory_66"), "by\n  decide", 1.0),
+        (lambda: minif2f_eval_task("mathd_numbertheory_66"), "by\n  sorry", 0.0),
+        (lambda: putnam_eval_task("putnam_2000_a1", "4"), "by\n  rfl", 1.0),
+        (lambda: putnam_eval_task("putnam_2000_a1", "4"), "by\n  sorry", 0.0),
+        (lambda: putnam_eval_task("putnam_2004_b5", "2 / Real.exp 1", "Real"), "by\n  sorry", 0.0),
+        (
+            lambda: converted_task(lean_evals.imo_lean_proof_bench("greedy").config.recipe, imo_bench_row()),
+            "by\n  decide",
+            1.0,
+        ),
+        (
+            lambda: converted_task(lean_evals.imo_lean_proof_bench("greedy").config.recipe, imo_bench_row()),
+            "by\n  sorry",
+            0.0,
+        ),
+        (
+            lambda: converted_task(
+                lean_evals.imo_lean_proof_bench("greedy").config.recipe, imo_bench_fixture_rows()["PB-Advanced-023"]
+            ),
+            "by\n  sorry",
+            0.0,
+        ),
+        (
+            lambda: converted_task(
+                lean_evals.putnambench("greedy").config.recipe,
+                {"name": "putnam_2025_a3", "text": putnambench_files()["putnam_2025_a3"]},
+            ),
+            "by\n  sorry",
+            0.0,
+        ),
+    ],
+    ids=[
+        "minif2f_proof",
+        "minif2f_sorry",
+        "putnam_answer_given_proof",
+        "putnam_sorry",
+        "putnam_noncomputable_answer",
+        "imo_bench_proof",
+        "imo_bench_sorry",
+        "imo_bench_ported_statement",
+        "putnam_ported_statement",
+    ],
+)
+def test_lean_eval_tasks_score_proofs_of_their_frozen_statement(make_task, block, reward, lean_kernel_machines):
+    result = grade(make_task(), reply(block), lean_kernel_machines, LEAN_GRADER_MEMORY_MB)
+    assert (result.status, result.reward) == (Outcome.GRADED, reward), result
