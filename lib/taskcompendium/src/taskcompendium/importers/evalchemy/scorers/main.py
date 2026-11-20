@@ -76,6 +76,10 @@ def score(scorer: str, config: dict[str, Any], response: str) -> Reward:
         from .zeroeval import grade_zeroeval_mcqa
 
         return grade_zeroeval_mcqa(config["expected"], response)
+    if scorer == "lexam_mcq":
+        from .lexam import grade_lexam_mcq
+
+        return grade_lexam_mcq(config["expected"], response)
     if scorer in {"mrcr", "graphwalks"}:
         from .long_context import grade_graphwalks, grade_nonce_similarity
 
