@@ -272,7 +272,7 @@ def build_run(
             cpu=32,
             memory=SNOWBALL_RECIPE.host_memory,
             disk="2TB",
-            priority="interactive",
+            priority="batch",
             max_retries=0,
             target_cluster=CLUSTER if coordinator_route == "hub" else None,
             parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG if coordinator_route == "hub" else None,
