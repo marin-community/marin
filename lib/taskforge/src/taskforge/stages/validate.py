@@ -33,6 +33,7 @@ from taskforge.model.review import (
     AdversaryStatus,
     Cause,
     ControlResult,
+    SearchLimit,
     TrialResult,
     ValidationResult,
 )
@@ -79,9 +80,14 @@ async def adversary_result(
             result = AdversaryResult(name, AdversaryStatus.FAILED, (), failure_reasons(error))
         if result is not None:
             return result
-    return AdversaryResult(
-        name, AdversaryStatus.EXHAUSTED, (), ("output budget exhausted twice without a report; counted as passed",)
+    return exhausted(name, SearchLimit.OUTPUT_BUDGET)
+
+
+def exhausted(name: str, limit: SearchLimit) -> AdversaryResult:
+    reason = (
+        f"ran out of its {limit} without reporting a defect; its search budget ran out, it did not validate the task"
     )
+    return AdversaryResult(name, AdversaryStatus.EXHAUSTED, (), (reason,), limit)
 
 
 def failure_reasons(error: BaseException) -> tuple[str, ...]:
@@ -148,8 +154,7 @@ async def run_adversary(
             )
             outcome = await config.adversaries[name].run(ctx, session, resources.inference_for("adversary"), tools)
             if isinstance(outcome, Stopped) and outcome.reason is StopReason.CONTEXT_LIMIT:
-                reason = "context window exhausted without a report; counted as passed"
-                return AdversaryResult(name, AdversaryStatus.EXHAUSTED, (), (reason,))
+                return exhausted(name, SearchLimit.CONTEXT_WINDOW)
             if (
                 not isinstance(outcome, Returned)
                 or outcome.tool != "report"

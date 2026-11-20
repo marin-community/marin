@@ -38,6 +38,11 @@ Both arms run the same stages; they differ in one transition table.
   result is written to `.validation/<n>.json` in the workspace. Submit then goes through review
   as in S.
 
+On every author entry, including revision rounds, the workspace holds the proposal, the previous
+submission's `task.json`, `controls.json` and resources, and any validation results. A caller can add
+its own files, such as reference data, with `TaskforgeConfig.workspace` (a `WorkspaceHydration`; the
+default adds none). Only the author sees them; a file reaches solvers or graders only through the task.
+
 ## Running on the cluster
 
 Everything runs as Iris jobs on `cw-rno2a`. The entry point is the launcher, which submits one
@@ -167,7 +172,9 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
 - **Budgets**: `budget.max_modify_rounds`, `budget.max_validation_retries`.
 - **Adversary**: `adversary.roster` (names of adversary harnesses; empty by default),
   `adversary.image`. A finding is a demonstrated claim with a candidate and an expected grade;
-  the review counts only claims the grader confirms, re-graded on a fresh machine.
+  the review counts only claims the grader confirms, re-graded on a fresh machine. An adversary
+  whose context window or output budget runs out before it reports is `exhausted`: the task can
+  still be accepted, and the Accept's reasons say the search budget ran out, not that it validated the task.
 - **Sandboxes**: `author.image`, `author.workdir`, `sandbox.memory_mb`, `grader.timeout`,
   `solver.*` timeouts (the turn and attempt timeouts are raised to cover `provider.unavailable_wait`).
 - **Provider**: `provider.unavailable_wait` (a busy provider is waited out, with

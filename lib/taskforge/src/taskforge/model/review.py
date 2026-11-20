@@ -143,19 +143,38 @@ class AdversaryFinding:
 
 
 class AdversaryStatus(StrEnum):
-    """How an adversary search ended. ``EXHAUSTED`` counts as passed: a full budget found no defect."""
+    """How an adversary search ended.
+
+    ``EXHAUSTED`` means the search budget ran out before a report. Review accepts on it, because a
+    full session without a demonstrated defect is evidence of a strong task, but the record says the
+    budget ran out, not that the adversary validated the task.
+    """
 
     REPORTED = "reported"
     EXHAUSTED = "exhausted"
     FAILED = "failed"
 
 
+class SearchLimit(StrEnum):
+    """The budget that ended an ``EXHAUSTED`` adversary search."""
+
+    CONTEXT_WINDOW = "context window"
+    OUTPUT_BUDGET = "output budget"
+
+
 @dataclass(frozen=True, slots=True)
 class AdversaryResult:
+    """One adversary's search; ``limit`` is set exactly when ``status`` is ``EXHAUSTED``.
+
+    The adversary's conversation is not kept here; a continuation of an exhausted search would need
+    it added as a session field, as the author's ``Workpiece.session`` is kept.
+    """
+
     name: str
     status: AdversaryStatus
     findings: tuple[AdversaryFinding, ...]
     reasons: tuple[str, ...] = ()
+    limit: SearchLimit | None = None
 
 
 @dataclass(frozen=True, slots=True)
