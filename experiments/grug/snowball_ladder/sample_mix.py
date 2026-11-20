@@ -92,6 +92,8 @@ READ_BATCH_DOCS = 2_000
 # Expected output tokens per item, summed over caches. Bounds the file count of the copied caches.
 PART_TOKENS = 500_000_000
 SELECT_THREADS = 16
+# Threads for listing cell ledgers and reading item sidecars, which are small object-store reads.
+METADATA_THREADS = 32
 
 
 @dataclass(frozen=True)
@@ -259,7 +261,7 @@ def plan_recipe(
         raise ValueError(f"--target names unknown caches {sorted(unknown)}")
 
     cells = recipe_cells(recipe)
-    with ThreadPoolExecutor(32) as pool:
+    with ThreadPoolExecutor(METADATA_THREADS) as pool:
         listed = dict(zip(cells, pool.map(lambda c: _cell_shards(store, c), cells), strict=True))
     cell_tokens = {cell: tokens for cell, (tokens, _) in listed.items()}
     cell_weights = {c.name: resolve_cell_weights(c.weights, recipe.groups, cell_tokens) for c in caches}
@@ -427,11 +429,9 @@ def _init_item_process() -> None:
 
 
 def sample(out: str, num_tasks: int, task_index: int) -> None:
-    """Sample this task's items, each in a fresh process.
-
-    Resident memory grows with the tokens a process reads and writes, about 4 bytes per token on
-    an 8 GB worker, so a long-lived process runs out of memory after a few items.
-    """
+    """Sample this task's items, each in a fresh process. Items with a done sidecar are skipped."""
+    # Resident memory grows with the tokens a process reads and writes, about 4 bytes per token on
+    # an 8 GB worker, so a long-lived process runs out of memory after a few items.
     the_plan = load_plan(out)
     indices = range(task_index, len(the_plan["items"]), num_tasks)
     logger.info("sample task %d/%d: %d items", task_index, num_tasks, len(indices))
@@ -450,7 +450,7 @@ def _load_sidecars(out: str, count: int) -> list[dict]:
     missing = [p for p in paths if not StoragePath(p).exists()]
     if missing:
         raise FileNotFoundError(f"{len(missing)} of {count} items not done, e.g. {missing[0]}")
-    with ThreadPoolExecutor(32) as pool:
+    with ThreadPoolExecutor(METADATA_THREADS) as pool:
         return list(pool.map(lambda p: json.loads(StoragePath(p).read_text()), paths))
 
 
