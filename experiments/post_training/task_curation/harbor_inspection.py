@@ -5,7 +5,7 @@
 
 import json
 import subprocess
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -34,25 +34,32 @@ def native_task_checksums(tasks: Iterable[TaskSpec]) -> dict[str, str]:
         return {task_id: inspected[path]["task_checksum"] for task_id, path in paths.items()}
 
 
-def harbor_inspection(kind: str, paths: list[str]) -> dict:
+def harbor_inspection(kind: str, paths: list[str], *, archive_roots: Mapping[str, str] | None = None) -> dict:
     """Validate in Harbor's locked runtime without importing it into the curation environment."""
-    result = subprocess.run(
-        [
-            "uv",
-            "run",
-            "--project",
-            str(HARBOR_PROJECT),
-            "--frozen",
-            "--extra",
-            "taskcompendium",
-            "python",
-            "-m",
-            "harbor.cli.curation_inspect",
-            kind,
-        ],
-        input=json.dumps(paths),
-        text=True,
-        capture_output=True,
-        check=True,
-    )
+    with TemporaryDirectory(prefix="curation-inspection-") as scratch:
+        options = []
+        if archive_roots:
+            index = Path(scratch) / "archive-roots.json"
+            index.write_text(json.dumps(dict(archive_roots)))
+            options = ["--archive-roots", str(index)]
+        result = subprocess.run(
+            [
+                "uv",
+                "run",
+                "--project",
+                str(HARBOR_PROJECT),
+                "--frozen",
+                "--extra",
+                "taskcompendium",
+                "python",
+                "-m",
+                "harbor.cli.curation_inspect",
+                kind,
+                *options,
+            ],
+            input=json.dumps(paths),
+            text=True,
+            capture_output=True,
+            check=True,
+        )
     return json.loads(result.stdout)

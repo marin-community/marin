@@ -29,6 +29,7 @@ from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.execution_applicability import is_nonagentic_task
 from taskcompendium.grading_environment import GradingEnvironmentMode
 from taskcompendium.harbor.adapter import TASK_SPEC_FILE, declared_execution_limits
+from taskcompendium.harbor.archive_paths import resolve_archive_path
 from taskcompendium.harbor.execution import native_execution_limits
 from taskcompendium.harbor.oracle import read_oracle_command
 from taskcompendium.harbor.protected_runtime import read_runtime_binding
@@ -237,9 +238,13 @@ def receipt_from_trial(
     native_grade: NativeVerifierGrade | None = None,
     *,
     recollection: RecollectionWaiver | None = None,
+    archive_roots: Mapping[str, str] | None = None,
 ) -> OracleTrialReceipt:
     """Read a trial's evidence against its measured native checksum."""
-    native = Path(document["config"]["task"]["path"])
+    recorded_path = path
+    roots = archive_roots or {}
+    path = resolve_archive_path(path, roots)
+    native = resolve_archive_path(Path(document["config"]["task"]["path"]), roots)
     if recollection is None:
         if native_checksum != document["task_checksum"]:
             raise ValueError(f"Native task changed after its oracle trial: {native}")
@@ -266,7 +271,7 @@ def receipt_from_trial(
                 stream.seek(max(0, log.stat().st_size - FAILURE_LOG_BYTES))
                 logs.append(stream.read().decode(errors="replace"))
     return OracleTrialReceipt(
-        path=str(path),
+        path=str(recorded_path),
         result=document,
         verdict=verdict,
         oracle_exit_code=int(exit_path.read_text()) if exit_path.exists() else None,
@@ -370,15 +375,27 @@ def trial_result_paths(jobs: Path) -> list[Path]:
 
 
 def collect_trials(
-    jobs: Path, *, additional_inputs: tuple[Path, ...] = (), recollection: RecollectionWaiver | None = None
+    jobs: Path,
+    *,
+    additional_inputs: tuple[Path, ...] = (),
+    recollection: RecollectionWaiver | None = None,
+    archive_roots: Mapping[str, str] | None = None,
 ) -> dict[tuple[str, str], list[OracleTrialReceipt]]:
     trials: dict[tuple[str, str], list[OracleTrialReceipt]] = {}
     seen = {}
-    paths = sorted({path for source in (jobs, *additional_inputs) for path in trial_result_paths(source)})
-    validated = harbor_inspection("results", [str(path) for path in paths])
+    roots = archive_roots or {}
+    reverse = {restored: original for original, restored in roots.items()}
+    paths = sorted(
+        {
+            resolve_archive_path(path, reverse)
+            for source in (jobs, *additional_inputs)
+            for path in trial_result_paths(resolve_archive_path(source, roots))
+        }
+    )
+    validated = harbor_inspection("results", [str(path) for path in paths], archive_roots=roots)
     documents = {}
     for path in paths:
-        document = decode_json_value(path.read_text())
+        document = decode_json_value(resolve_archive_path(path, roots).read_text())
         if str(path) not in validated:
             continue
         digest = canonical_sha256(document)
@@ -391,8 +408,10 @@ def collect_trials(
             raise ValueError(f"Non-oracle trial in filter job: {path}")
         documents[path] = document
     native_paths = sorted({document["config"]["task"]["path"] for document in documents.values()})
-    packages = harbor_inspection("tasks", native_paths) if native_paths else {}
-    native_grades = harbor_inspection("native-grades", [str(path) for path in documents]) if documents else {}
+    packages = harbor_inspection("tasks", native_paths, archive_roots=roots) if native_paths else {}
+    native_grades = (
+        harbor_inspection("native-grades", [str(path) for path in documents], archive_roots=roots) if documents else {}
+    )
     for path, document in documents.items():
         native = document["config"]["task"]["path"]
         grade = native_grades.get(str(path))
@@ -402,6 +421,7 @@ def collect_trials(
             packages[native]["task_checksum"],
             NativeVerifierGrade.model_validate(grade) if grade is not None else None,
             recollection=recollection,
+            archive_roots=roots,
         )
         trials.setdefault((document["task_name"], document["task_checksum"]), []).append(receipt)
     return trials
@@ -481,6 +501,7 @@ def filter_cohort(
     legacy_producer_1485_qualification_evidence: LegacyProducer1485QualificationEvidence | None = None,
     source_verifier_errors: Path | None = None,
     recollection: RecollectionWaiver | None = None,
+    archive_roots: Mapping[str, str] | None = None,
 ) -> OracleFilterReceipt:
     """Filter exact converted bytes; missing tasks, stale maps and incomplete populations fail closed."""
     for path in (
@@ -541,7 +562,8 @@ def filter_cohort(
             if task_id in source_errors or task_id not in mappings:
                 raise ValueError(f"Duplicate or unknown source-verifier exception: {task_id}")
             source_errors[task_id] = SourceVerifierError.model_validate(record["receipt"])
-    trials = collect_trials(jobs, additional_inputs=additional_trial_inputs, recollection=recollection)
+    roots = archive_roots or {}
+    trials = collect_trials(jobs, additional_inputs=additional_trial_inputs, recollection=recollection, archive_roots=roots)
     controls = {}
     if executability_runs is not None:
         for line in executability_runs.read_text().splitlines():
@@ -575,7 +597,9 @@ def filter_cohort(
                 raise ValueError(f"Duplicate mechanical/trial outcome: {task_id}")
             mechanical[task_id] = MechanicalOracleTaskReceipt.model_validate(record["receipt"])
     original_packages = (
-        harbor_inspection("tasks", [mapping["task_path"] for mapping in mappings.values()]) if mappings else {}
+        harbor_inspection("tasks", [mapping["task_path"] for mapping in mappings.values()], archive_roots=roots)
+        if mappings
+        else {}
     )
     paths = sorted(cohort.glob("*.parquet")) if cohort.is_dir() else [cohort]
     cohort_hash = cohort_sha256(cohort)
@@ -654,14 +678,20 @@ def filter_cohort(
                     if "calibration" in mapping
                     else ResourceCalibrationReceipt(
                         declared_requirements=task.execution_requirements,
-                        preserved_requirements=declared_native_requirements(Path(mapping["task_path"]), source_binding),
-                        verifier=native_verifier_profile(Path(mapping["task_path"]), source_binding),
+                        preserved_requirements=declared_native_requirements(
+                            resolve_archive_path(Path(mapping["task_path"]), roots), source_binding
+                        ),
+                        verifier=native_verifier_profile(
+                            resolve_archive_path(Path(mapping["task_path"]), roots), source_binding
+                        ),
                         oracle_kind="original" if oracle else "calibration_only",
                         attempts=tuple(task_trials),
                     )
                 )
-                original = Path(mapping["task_path"])
-                if original_packages[str(original)]["task_checksum"] != mapping.get("source_task_checksum", checksum):
+                original = resolve_archive_path(Path(mapping["task_path"]), roots)
+                if original_packages[mapping["task_path"]]["task_checksum"] != mapping.get(
+                    "source_task_checksum", checksum
+                ):
                     raise ValueError(f"Source package changed after Harbor export: {task.id}")
                 if not is_nonagentic_task(task) and calibration.preserved_requirements != declared_native_requirements(
                     original, source_binding
@@ -697,7 +727,7 @@ def filter_cohort(
                     )
                     if collected_attempt not in trials.get(key, []):
                         raise ValueError(f"Calibration trial missing from production jobs: {task.id}")
-                    package = Path(attempt.result["config"]["task"]["path"])
+                    package = resolve_archive_path(Path(attempt.result["config"]["task"]["path"]), roots)
                     if calibration_package_identity(package, calibration.oracle_kind) != package_identity:
                         raise ValueError(f"Calibration changed the task environment or scripts: {task.id}")
                 requirements = calibration.execution_requirements
@@ -723,7 +753,9 @@ def filter_cohort(
                     and verifier_requirements is None
                 ):
                     raise ValueError(f"Separate-role allocation is unqualified without verifier evidence: {task.id}")
-                final_package = Path(calibration.attempts[-1].result["config"]["task"]["path"])
+                final_package = resolve_archive_path(
+                    Path(calibration.attempts[-1].result["config"]["task"]["path"]), roots
+                )
                 # Physical NoP receipts bind the calibrated packet even when the oracle fails.
                 if (qualification is not None or not is_nonagentic_task(task)) and (
                     not scored_failure or task.id in negative

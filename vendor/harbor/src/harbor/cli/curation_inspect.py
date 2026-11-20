@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from taskcompendium.harbor.adapter import TASK_SPEC_FILE
+from taskcompendium.harbor.archive_paths import resolve_archive_path
 from taskcompendium.identity import canonical_sha256
 
 from harbor.models.task.task import Task
@@ -19,11 +20,13 @@ from harbor.verifier.verifier import resolve_verifier_rewards
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("kind", choices=("results", "tasks", "native-grades", "native-rewards"))
+    parser.add_argument("--archive-roots", type=Path)
     args = parser.parse_args()
+    roots = json.loads(args.archive_roots.read_text()) if args.archive_roots is not None else {}
     paths = json.load(sys.stdin)
     inspected = {}
     for name in paths:
-        path = Path(name)
+        path = resolve_archive_path(Path(name), roots)
         if args.kind == "tasks":
             if Task.is_valid_dir(path):
                 task = Task(path)
@@ -46,7 +49,7 @@ def main() -> None:
             inspected[name] = None
             if result.exception_info is not None or result.finished_at is None or result.verifier_result is None:
                 continue
-            native = Path(result.config.task.path)
+            native = resolve_archive_path(Path(result.config.task.path), roots)
             trial_paths = TrialPaths(path.parent)
             if (native / TASK_SPEC_FILE).is_file() or (trial_paths.verifier_dir / "verdict.json").exists():
                 continue
@@ -61,7 +64,7 @@ def main() -> None:
                 digest = hashlib.file_digest(stream, "sha256").hexdigest()
             inspected[name] = {
                 "rewards": rewards,
-                "artifact_path": str(grade.artifact),
+                "artifact_path": str(resolve_archive_path(grade.artifact, {restored: original for original, restored in roots.items()})),
                 "artifact_sha256": digest,
                 "result_sha256": canonical_sha256(document),
                 "task_checksum": result.task_checksum,

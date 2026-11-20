@@ -2846,6 +2846,14 @@ execution admission, calibration result or publication evidence.
 
 ### Full-population oracle filter
 
+When restoring trial archives into another filesystem, pass
+`archive_roots={"/original/job/root": "/restored/job/root"}` to the Python
+`filter_cohort` or `collect_trials` API. Paths beneath each original root resolve beneath its restored root with the
+same relative paths. Harbor inspection and evidence reads use the restored
+location; Results, receipt paths, checksums and grades retain their recorded
+values. Restore directory entries too: a native task with a digest-pinned image
+can have an empty `environment/` directory that Harbor still requires.
+
 Catalog bindings for oracle filtration use `OracleFilteredReleaseReceipt` and
 `OracleFiltrationEvidence`. They bind the original release and full cohort, the
 canonical oracle-filter receipt, the read-back PRIVATE output pin, and typed
