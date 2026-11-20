@@ -185,13 +185,15 @@ class SpecialTokenInit:
     At ``start_step`` each ``token_ids`` column of ``output_proj`` is copied from the matching
     ``anchor_ids`` column, and the optimizer moments of those columns are zeroed; input embeddings
     and their moments are kept. Every step scales the optimizer updates of the same
-    ``token_embed`` rows and ``output_proj`` columns by ``lr_multiplier``.
+    ``token_embed`` rows and ``output_proj`` columns by ``lr_multiplier``. ``reseed=False`` keeps the
+    multiplier but skips the copy, for a run that continues from a checkpoint whose rows are already trained.
     """
 
     token_ids: tuple[int, ...]
     anchor_ids: tuple[int, ...]
     start_step: int
     lr_multiplier: float
+    reseed: bool = True
 
     def __post_init__(self):
         if not self.token_ids or len(set(self.token_ids)) != len(self.token_ids):
@@ -393,12 +395,17 @@ class GrugTrainerConfig:
     special_tokens: SpecialTokenInit | None = None
     # Renumber the routed experts of the placement's source checkpoint once, when the run restores it.
     expert_placement: ExpertPlacement | None = None
+    # Replace the restored optimizer state with a fresh one when the restored step equals this step: weights
+    # carry over, moments and the schedule count start from zero. A resumed save of the same run is later.
+    fresh_optimizer_state_at_step: int | None = None
 
     def __post_init__(self):
         if self.gc_interval is not None and self.gc_interval <= 0:
             raise ValueError("GC interval must be positive")
         if self.special_tokens is not None and self.master_param_mode != MasterParamMode.DEVICE:
             raise ValueError("special-token reseeding supports only MasterParamMode.DEVICE")
+        if self.fresh_optimizer_state_at_step is not None and self.master_param_mode != MasterParamMode.DEVICE:
+            raise ValueError("a fresh optimizer state supports only MasterParamMode.DEVICE")
 
 
 def grug_trainer_mesh_config(context_axis_size: int) -> MeshConfig:
@@ -1191,6 +1198,52 @@ def scale_special_token_updates(updates: Transformer, token_ids: tuple[int, ...]
     return eqx.tree_at(lambda m: (m.token_embed, m.output_proj), updates, (token_embed, output_proj))
 
 
+def prepare_start_state(
+    state: "GrugTrainState",
+    optimizer: optax.GradientTransformation,
+    *,
+    special_tokens: SpecialTokenInit | None,
+    fresh_optimizer_state_at_step: int | None,
+    offload_opt_state: bool,
+) -> "GrugTrainState":
+    """Apply the start-step changes to a restored state: a fresh optimizer state, then the special-token reseed.
+
+    Both fire only when the restored step is the run's start step, so a restart that restores a later save of
+    the same run keeps its trained state.
+    """
+    step = int(state.step)
+    if fresh_optimizer_state_at_step is not None and step == fresh_optimizer_state_at_step:
+        state = fresh_optimizer_state(state, optimizer)
+        logger.info("Replaced the optimizer state restored at step %d with a fresh one", step)
+    # Reseeding at the start step is idempotent, so a restart that restores a save from that step stays exact.
+    if special_tokens is not None and special_tokens.reseed and step == special_tokens.start_step:
+        state = reseed_special_token_columns(state, special_tokens, offload_opt_state=offload_opt_state)
+        logger.info(
+            "Reseeded %d LM-head special-token columns from anchors %s",
+            len(special_tokens.token_ids),
+            dict(zip(special_tokens.token_ids, special_tokens.anchor_ids, strict=True)),
+        )
+    return state
+
+
+def fresh_optimizer_state(state: "GrugTrainState", optimizer: optax.GradientTransformation) -> "GrugTrainState":
+    """Keep the weights and replace the optimizer state with ``optimizer.init`` of them (zero moments and counts).
+
+    The restored state's buffers are freed first, and the fresh state is built directly in their shardings and
+    memory kinds, so at no point do two optimizer states coexist and the layout matches a carried state.
+    """
+    if state.master_params is not None:
+        raise ValueError("a fresh optimizer state supports only MasterParamMode.DEVICE")
+    restored = state.opt_state
+    if not all(isinstance(leaf, jax.Array) for leaf in jax.tree.leaves(restored)):
+        raise TypeError("a fresh optimizer state needs a restored optimizer state made only of jax.Array leaves")
+    shardings = jax.tree.map(lambda leaf: leaf.sharding, restored)
+    for leaf in jax.tree.leaves(restored):
+        leaf.delete()
+    opt_state = jax.jit(optimizer.init, out_shardings=shardings)(state.params)
+    return dataclasses.replace(state, opt_state=opt_state)
+
+
 def reseed_special_token_columns(
     state: GrugTrainState, special_tokens: SpecialTokenInit, *, offload_opt_state: bool
 ) -> GrugTrainState:
@@ -1483,17 +1536,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             state = _init_state(model_key)
         if loaded_checkpoint is not None and not restored_nothing:
             state = _place_restored_experts(state, expert_placement, loaded_checkpoint=loaded_checkpoint)
-        special_tokens = config.trainer.special_tokens
-        # Reseeding at the start step is idempotent, so a restart that restores a save from that step stays exact.
-        if special_tokens is not None and int(state.step) == special_tokens.start_step:
-            state = reseed_special_token_columns(
-                state, special_tokens, offload_opt_state=config.trainer.offload_opt_state
-            )
-            logger.info(
-                "Reseeded %d LM-head special-token columns from anchors %s",
-                len(special_tokens.token_ids),
-                dict(zip(special_tokens.token_ids, special_tokens.anchor_ids, strict=True)),
-            )
+        state = prepare_start_state(
+            state,
+            optimizer,
+            special_tokens=config.trainer.special_tokens,
+            fresh_optimizer_state_at_step=config.trainer.fresh_optimizer_state_at_step,
+            offload_opt_state=config.trainer.offload_opt_state,
+        )
         dump_grug_state_sharding_run_artifact(
             state,
             log_dir=trainer.log_dir,

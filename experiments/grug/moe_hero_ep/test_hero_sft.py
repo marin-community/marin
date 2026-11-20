@@ -28,9 +28,13 @@ from experiments.grug.moe_hero_ep.launch_hero_sft import (
     SFT_COMPONENT_PREFIX,
     SFT_POOLED_COMPONENT,
     SftStore,
+    load_sft_stores,
     one_epoch_weight_stages,
+    placement_applies,
     plan_sft_mixture,
     sft_components,
+    sft_data_config,
+    sft_optimizer_config,
 )
 from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_hero_ep.train import (
@@ -40,6 +44,7 @@ from experiments.grug.moe_hero_ep.train import (
     _place_restored_experts,
     initial_state,
     permute_experts,
+    prepare_start_state,
     reseed_special_token_columns,
     scale_special_token_updates,
 )
@@ -427,3 +432,179 @@ def test_restore_places_only_the_source_and_trusts_only_a_matching_record(tmp_pa
             _place_restored_experts(state, placement, loaded_checkpoint=other_save)
         with pytest.raises(ValueError, match="this run uses no expert placement"):
             _place_restored_experts(state, None, loaded_checkpoint=placed_save)
+
+
+# Continuing a finished SFT checkpoint: each start-step change is a flag whose default keeps today's behaviour.
+
+
+def _with_counts(state, count: int):
+    """A restored-looking state whose optimizer counts are ``count``, as a checkpoint saved at that step has."""
+    opt_state = jax.tree.map(
+        lambda x: jnp.full_like(x, count) if jnp.issubdtype(x.dtype, jnp.integer) else x, state.opt_state
+    )
+    return state.__class__(**{**vars(state), "opt_state": opt_state})
+
+
+def _assert_trees_equal(left, right):
+    for a, b in zip(jax.tree.leaves(left), jax.tree.leaves(right), strict=True):
+        np.testing.assert_array_equal(np.asarray(a), np.asarray(b))
+
+
+def test_continuation_without_reseed_keeps_the_trained_head_and_its_moments():
+    mesh = _one_device_mesh()
+    optimizer = _optimizer()
+    reseed = SpecialTokenInit(token_ids=(5, 7), anchor_ids=(1, 2), start_step=0, lr_multiplier=2.0)
+    keep = dataclasses.replace(reseed, reseed=False)
+    with jax.set_mesh(mesh):
+        state = _trained_state(_tiny_config(), optimizer, mesh)
+        kept = prepare_start_state(
+            state, optimizer, special_tokens=keep, fresh_optimizer_state_at_step=None, offload_opt_state=False
+        )
+        reseeded = prepare_start_state(
+            state, optimizer, special_tokens=reseed, fresh_optimizer_state_at_step=None, offload_opt_state=False
+        )
+        updates = jax.tree.map(jnp.ones_like, state.params)
+        scaled = scale_special_token_updates(updates, keep.token_ids, keep.lr_multiplier)
+
+    _assert_trees_equal(kept.params, state.params)
+    _assert_trees_equal(kept.opt_state, state.opt_state)
+    # The default still reseeds, so the flag is what keeps the rows.
+    head = np.asarray(state.params.output_proj)
+    np.testing.assert_array_equal(np.asarray(reseeded.params.output_proj)[:, [5, 7]], head[:, [1, 2]])
+    assert not np.array_equal(head[:, [5, 7]], head[:, [1, 2]])
+    # The faster learning rate for those rows does not depend on the reseed.
+    np.testing.assert_array_equal(np.asarray(scaled.output_proj)[0, [5, 7]], 2.0)
+
+
+def test_placement_applies_to_its_source_and_to_saves_that_record_it(tmp_path):
+    source = str(tmp_path / "source")
+    placement = dataclasses.replace(_placement([[2, 0, 3, 1], [1, 3, 0, 2]]), source_checkpoint=source)
+    other = dataclasses.replace(placement, order=((0, 1, 2, 3), (0, 1, 2, 3)))
+    _write_checkpoint_metadata(tmp_path / "source", None)
+    placed_save = _write_checkpoint_metadata(tmp_path / "placed" / "step-5", placement)
+    other_save = _write_checkpoint_metadata(tmp_path / "other" / "step-5", other)
+    unrecorded_save = _write_checkpoint_metadata(tmp_path / "unrecorded" / "step-5", None)
+
+    assert placement_applies(placement, source)
+    assert placement_applies(placement, placed_save)
+    assert not placement_applies(placement, other_save)
+    assert not placement_applies(placement, unrecorded_save)
+
+
+def test_fresh_optimizer_state_keeps_weights_and_zeroes_moments_and_counts_at_the_start_step_only():
+    mesh = _one_device_mesh()
+    optimizer = _optimizer()
+
+    def restored():
+        state = _with_counts(_trained_state(_tiny_config(), optimizer, mesh), 400_407)
+        return state.__class__(**{**vars(state), "step": jnp.array(400_407, dtype=jnp.int32)})
+
+    def host(tree):
+        return jax.tree.map(np.asarray, tree)
+
+    with jax.set_mesh(mesh):
+        state = restored()
+        trained = host(state.opt_state)
+        carried = prepare_start_state(
+            state, optimizer, special_tokens=None, fresh_optimizer_state_at_step=None, offload_opt_state=False
+        )
+        # A restart that restores a later save of the same run keeps that save's optimizer state.
+        resumed = prepare_start_state(
+            state, optimizer, special_tokens=None, fresh_optimizer_state_at_step=400_000, offload_opt_state=False
+        )
+        _assert_trees_equal(carried.opt_state, trained)
+        _assert_trees_equal(resumed.opt_state, trained)
+
+        state = restored()
+        params = host(state.params)
+        expected = host(optimizer.init(state.params))
+        old_leaves = jax.tree.leaves(state.opt_state)
+        old_shardings = [leaf.sharding for leaf in old_leaves]
+        fresh = prepare_start_state(
+            state, optimizer, special_tokens=None, fresh_optimizer_state_at_step=400_407, offload_opt_state=False
+        )
+
+    _assert_trees_equal(fresh.params, params)
+    _assert_trees_equal(fresh.opt_state, expected)
+    counts = [leaf for leaf in jax.tree.leaves(fresh.opt_state) if jnp.issubdtype(leaf.dtype, jnp.integer)]
+    assert counts and all(int(c) == 0 for c in counts)
+    assert any(np.any(leaf != 0) for leaf in jax.tree.leaves(trained) if leaf.dtype.kind == "f")
+    # The restored buffers are freed before the fresh state is built, and the fresh state takes their layout.
+    assert all(leaf.is_deleted() for leaf in old_leaves)
+    assert [leaf.sharding for leaf in jax.tree.leaves(fresh.opt_state)] == old_shardings
+
+
+def test_fresh_optimizer_state_rebuilds_the_hero_muonh_state_tree():
+    # The SFT optimizer itself, not the small test optimizer: its state tree is what a real restore holds.
+    config = dataclasses.replace(sft_optimizer_config(muon_lr=1.32e-5, adam_lr=1.32e-5, decay_steps=692), use_syrk=False)
+    optimizer = config.build(400_407 + 6_916)
+    mesh = _one_device_mesh()
+    with jax.set_mesh(mesh):
+        state = _with_counts(_trained_state(_tiny_config(), optimizer, mesh), 400_407)
+        state = state.__class__(**{**vars(state), "step": jnp.array(400_407, dtype=jnp.int32)})
+        structure = jax.tree.structure(state.opt_state)
+        shardings = [leaf.sharding for leaf in jax.tree.leaves(state.opt_state)]
+        expected = jax.tree.map(np.asarray, optimizer.init(state.params))
+        fresh = prepare_start_state(
+            state, optimizer, special_tokens=None, fresh_optimizer_state_at_step=400_407, offload_opt_state=False
+        )
+
+    assert jax.tree.structure(fresh.opt_state) == structure
+    assert [leaf.sharding for leaf in jax.tree.leaves(fresh.opt_state)] == shardings
+    _assert_trees_equal(fresh.opt_state, expected)
+    assert int(fresh.opt_state.count) == 0
+
+
+@pytest.mark.parametrize("dp_racks", [2, 11])
+def test_sft_schedule_is_the_same_flat_lr_for_carried_and_fresh_counts_over_a_short_continuation(dp_racks):
+    # The step-400407 checkpoint records step 400407 and optimizer counts 400407 (read from its arrays).
+    start, updates, lr = 400_407, 15, 1.32e-5
+    plan = plan_sft_mixture(load_sft_stores(), batch_size=16 * dp_racks, replay_fraction=0.2035)
+    config = sft_optimizer_config(muon_lr=lr, adam_lr=lr, decay_steps=plan.decay_steps)
+    # The schedule spans the whole epoch even when `stop_after_steps` ends the run after 15 updates.
+    muon = config.lr_scheduler(start + plan.steps)
+    adam = config.lr_scheduler(start + plan.steps, override_lr=config.adam_lr)
+    carried = [float(muon(count)) for count in range(start, start + updates)]
+    fresh = [float(muon(count)) for count in range(updates)]
+    assert carried == fresh == [pytest.approx(lr, rel=1e-6)] * updates
+    assert [float(adam(count)) for count in range(start, start + updates)] == carried
+    # The decay sits at the end of the absolute schedule.
+    assert float(muon(start + plan.steps)) == pytest.approx(0.1 * lr, rel=1e-5)
+    assert plan.steps - plan.decay_steps > updates
+
+
+def test_sft_schedule_follows_the_update_count():
+    start, epoch, decay = 400_407, 6_916, 692
+    config = sft_optimizer_config(muon_lr=1.32e-5, adam_lr=1.32e-5, decay_steps=decay)
+    muon = config.lr_scheduler(start + epoch)
+    # The schedule input is the optimizer's own count, which grows by one per trainer step from its initial value.
+    # GrugMoeMuonH wraps its transform in `optax.inject_hyperparams` (optimizer.py); the tiny CPU mesh cannot run
+    # Muon-H's sharded Newton-Schulz, so the same wrapper drives Adam here with the SFT schedule.
+    mesh = _one_device_mesh()
+    optimizer = optax.inject_hyperparams(optax.adam)(learning_rate=muon)
+    config_model = _tiny_config()
+    tokens = jnp.asarray(np.random.default_rng(0).integers(0, config_model.vocab_size, size=(4, 8), dtype=np.int32))
+    batch = GrugLmExample(tokens=tokens, loss_weight=jnp.ones((4, 8), jnp.float32).at[:, -1].set(0.0))
+    step = _make_train_step(optimizer, _FP32, z_loss_weight=1e-4, ema_beta=None, router_bias_mode=RouterBiasMode.FROZEN)
+    with jax.set_mesh(mesh):
+        state = initial_state(config_model, optimizer=optimizer, mp=_FP32, key=jax.random.key(0), ema_beta=None)
+        for update in range(1, 4):
+            state, _, _ = step(state, batch)
+            assert int(state.step) == update
+            assert int(state.opt_state.count) == update
+            learning_rate = float(state.opt_state.hyperparams["learning_rate"])
+            assert learning_rate == pytest.approx(float(muon(update - 1)), rel=1e-6)
+
+
+def test_continuation_reads_the_sft_epoch_from_its_first_block():
+    stores = {"a": _store(600_000), "b": _store(200_000), "c": _store(50)}
+    plan = plan_sft_mixture(stores, batch_size=32, replay_fraction=0.2)
+    components, _ = sft_components(stores, plan)
+    replay_component = next(iter(components.values()))
+    replay = LmDataConfig(components={"x": replay_component}, train_weights={"x": 1.0})
+    first = sft_data_config(stores, plan, start_step=393_491, replay=replay, validation={})
+    continued = sft_data_config(stores, plan, start_step=400_407, replay=replay, validation={})
+
+    assert continued.mixture_start_step == 400_407
+    assert continued.train_weights == first.train_weights
+    assert continued.train_weights[0][0] == 0

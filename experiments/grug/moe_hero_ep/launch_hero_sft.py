@@ -16,7 +16,7 @@ from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
-from levanter.checkpoint import CheckpointerConfig
+from levanter.checkpoint import CheckpointerConfig, load_checkpoint_metadata
 from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.data.mixture import StopStrategy
 from levanter.data.text.datasets import (
@@ -72,6 +72,7 @@ from experiments.grug.moe_hero_ep.launch_scaling_ladder import (
     RESUME_CHECKPOINT_TTL_DAYS,
     RESUME_SAVE_INTERVAL,
 )
+from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_hero_ep.train import (
     GrugEvalConfig,
     GrugRunConfig,
@@ -285,7 +286,7 @@ def sft_data_config(
     )
 
 
-def special_token_init(start_step: int, tokenizer_path: str = SFT_TOKENIZER) -> SpecialTokenInit:
+def special_token_init(start_step: int, tokenizer_path: str = SFT_TOKENIZER, *, reseed: bool = True) -> SpecialTokenInit:
     """The seven chat-token reseeds, checked against the SFT tokenizer."""
     tokenizer = load_tokenizer(tokenizer_path)
     anchors = tuple(tuple(tokenizer.encode(text, add_special_tokens=False)) for _, text in SPECIAL_TOKEN_ANCHORS)
@@ -296,7 +297,43 @@ def special_token_init(start_step: int, tokenizer_path: str = SFT_TOKENIZER) -> 
         anchor_ids=EXPECTED_ANCHOR_IDS,
         start_step=start_step,
         lr_multiplier=SPECIAL_TOKEN_LR_MULTIPLIER,
+        reseed=reseed,
     )
+
+
+def sft_optimizer_config(*, muon_lr: float, adam_lr: float, decay_steps: int) -> GrugMoeMuonHConfig:
+    """The hero's pretraining optimizer with the SFT schedule: constant, then linear decay over ``decay_steps``.
+
+    The restored optimizer state comes from the hero's pretraining recipe, which fixes beta2 and epsilon. The
+    schedule is indexed by the optimizer's own update count, not by the trainer step.
+    """
+    _, pretrain_optimizer = build_hero_configs(
+        num_train_steps=HERO_SCHEDULE_STEPS,
+        batch_size=hero_rack_batch_size(HERO_MODEL_CONFIG.max_seq_len) * LADDER_RACKS["d6144"],
+    )
+    return dataclasses.replace(
+        pretrain_optimizer,
+        learning_rate=muon_lr,
+        adam_lr=adam_lr,
+        warmup=0,
+        decay=decay_steps,
+        min_lr_ratio=SFT_MIN_LR_RATIO,
+        weight_decay=0.0,
+        gate_router_weight_decay=0.0,
+        schedule_extension=None,
+    )
+
+
+def placement_applies(placement: ExpertPlacement, checkpoint: str) -> bool:
+    """Whether a run may start from ``checkpoint`` with ``placement``.
+
+    True for the placement's source checkpoint, which the trainer renumbers, and for a checkpoint that a run
+    with this placement saved, which the trainer restores as already placed.
+    """
+    if placement.permutes(checkpoint):
+        return True
+    recorded = ExpertPlacement.recorded_in(load_checkpoint_metadata(checkpoint))
+    return recorded is not None and recorded.fingerprint == placement.fingerprint
 
 
 def checkpoint_step(checkpoint: str) -> int:
@@ -326,6 +363,8 @@ def build_sft_run(
     eval_every: int = 0,
     checkpoint_root: str | None = None,
     expert_placement: ExpertPlacement | None = None,
+    special_token_reseed: bool = True,
+    fresh_optimizer_state: bool = False,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build the hero SFT run that continues ``initialize_from`` at ``start_step``.
@@ -336,13 +375,19 @@ def build_sft_run(
     the trainer's first-step eval never fires on a restored run. ``capacity_factor`` replaces the hero's routed
     expert capacity; with a frozen bias, SFT data overflows the hero's 1.5. ``expert_placement`` renumbers the
     routed experts of ``initialize_from`` so each capacity block carries a similar load.
+    ``special_token_reseed=False`` and ``fresh_optimizer_state`` continue a finished SFT checkpoint: the first keeps
+    its trained special-token rows, the second keeps its weights but starts the optimizer state (moments and the
+    schedule count) from zero.
     """
     if dp_racks <= 0:
         raise ValueError(f"dp_racks must be positive, got {dp_racks}")
     if muon_lr <= 0 or adam_lr <= 0:
         raise ValueError("learning rates must be positive")
-    if expert_placement is not None and not expert_placement.permutes(initialize_from):
-        raise ValueError(f"the expert placement permutes {expert_placement.source_checkpoint}, not {initialize_from}")
+    if expert_placement is not None and not placement_applies(expert_placement, initialize_from):
+        raise ValueError(
+            f"the expert placement permutes {expert_placement.source_checkpoint}, not {initialize_from}, "
+            "and is not the placement recorded in it"
+        )
     if capacity_factor <= 0:
         raise ValueError(f"capacity_factor must be positive, got {capacity_factor}")
     model = with_transport_remat_mode(dataclasses.replace(HERO_MODEL_CONFIG, capacity_factor=capacity_factor))
@@ -361,22 +406,7 @@ def build_sft_run(
     if stop_step > num_train_steps:
         raise ValueError(f"stop_after_steps={stop_after_steps} is past the {plan.steps}-step epoch")
 
-    # The restored optimizer state comes from the hero's pretraining recipe, which fixes beta2 and epsilon.
-    _, pretrain_optimizer = build_hero_configs(
-        num_train_steps=HERO_SCHEDULE_STEPS,
-        batch_size=hero_rack_batch_size(model.max_seq_len) * LADDER_RACKS["d6144"],
-    )
-    optimizer = dataclasses.replace(
-        pretrain_optimizer,
-        learning_rate=muon_lr,
-        adam_lr=adam_lr,
-        warmup=0,
-        decay=plan.decay_steps,
-        min_lr_ratio=SFT_MIN_LR_RATIO,
-        weight_decay=0.0,
-        gate_router_weight_decay=0.0,
-        schedule_extension=None,
-    )
+    optimizer = sft_optimizer_config(muon_lr=muon_lr, adam_lr=adam_lr, decay_steps=plan.decay_steps)
     batch_axes = validated_batch_axis_size(
         device_count=HERO_RACK_GPUS * dp_racks,
         dp_racks=dp_racks,
@@ -398,7 +428,8 @@ def build_sft_run(
             gc_interval=100,
         ),
         router_bias_mode=router_bias_mode,
-        special_tokens=special_token_init(start_step),
+        special_tokens=special_token_init(start_step, reseed=special_token_reseed),
+        fresh_optimizer_state_at_step=start_step if fresh_optimizer_state else None,
         expert_placement=expert_placement,
     )
     train_resources = ResourceConfig.with_gpu(
@@ -605,6 +636,21 @@ def _grad_norm(value: str) -> float | None:
     default=None,
     help="Expert placement JSON from `expert_placement.py`; renumbers the start checkpoint's routed experts.",
 )
+@click.option(
+    "--special-token-reseed/--no-special-token-reseed",
+    default=True,
+    show_default=True,
+    help=(
+        "Reseed the chat special-token LM-head columns at the start step. Turn off to continue a finished SFT; "
+        "the special-token learning-rate multiplier applies either way."
+    ),
+)
+@click.option(
+    "--fresh-optimizer-state",
+    is_flag=True,
+    default=False,
+    help="Start from the checkpoint's weights with a fresh optimizer state instead of its restored one.",
+)
 @build_options
 def main(
     run_id: str,
@@ -620,6 +666,8 @@ def main(
     eval_every: int,
     checkpoint_root: str | None,
     expert_placement_path: Path | None,
+    special_token_reseed: bool,
+    fresh_optimizer_state: bool,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_sft_run(
         run_id=run_id,
@@ -638,6 +686,8 @@ def main(
         expert_placement=(
             None if expert_placement_path is None else ExpertPlacement.from_json(expert_placement_path.read_text())
         ),
+        special_token_reseed=special_token_reseed,
+        fresh_optimizer_state=fresh_optimizer_state,
     )
 
 
