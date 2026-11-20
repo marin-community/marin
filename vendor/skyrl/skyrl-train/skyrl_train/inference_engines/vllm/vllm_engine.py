@@ -1092,7 +1092,7 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
         self._policy_steps.forget_unclaimed(live)
 
     def get_served_model_name(self) -> str:
-        return self.served_model_name
+        return self.model_name
 
     def tp_size(self):
         return self._tp_size
@@ -1320,8 +1320,8 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
         served_model_name = kwargs.get("served_model_name")
         model_name = served_model_name if served_model_name else model_path
 
-        self.served_model_name = model_name
-        base_model_paths = [BaseModelPath(name=self.served_model_name, model_path=model_path)]
+        self.model_name = model_name
+        base_model_paths = [BaseModelPath(name=self.model_name, model_path=model_path)]
 
         models = OpenAIServingModels(
             engine_client=engine,

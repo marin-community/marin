@@ -452,6 +452,12 @@ def populate_engine_max_model_lens(
     )
     for engine, max_model_len in zip(engines, ray.get(limit_refs), strict=True):
         engine.max_model_len = max_model_len
+    name_refs = [actor.get_served_model_name.remote() for actor in actor_handles]
+    wait_for_inference_engine_startup(
+        name_refs, actor_handles, timeout_seconds=timeout_seconds, kill_on_failure=kill_on_failure
+    )
+    for engine, model_name in zip(engines, ray.get(name_refs), strict=True):
+        engine.model_name = model_name
 
 
 def _release_node_local_gang(actors: list, placement_groups: list) -> None:

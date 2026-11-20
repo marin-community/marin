@@ -36,6 +36,8 @@ async def test_chat_completion_retry_keeps_exact_ids_and_optional_routes(capture
         return base64.b64encode(buffer.getvalue()).decode("ascii")
 
     class Engine:
+        model_name = "dummy-model"
+
         def __init__(self):
             self.requests = []
             self.responses = [
@@ -92,3 +94,23 @@ async def test_chat_completion_retry_keeps_exact_ids_and_optional_routes(capture
             normalize_routed_experts(choice["routed_experts"], response["prompt_token_ids"], choice["token_ids"]),
             [[[2]], [[3]], [[4]]],
         )
+
+
+@pytest.mark.parametrize("registered_name", ["configured-alias", "/regional/streamed-model-cache"])
+@pytest.mark.asyncio
+async def test_completion_routes_through_the_registered_engine_name(registered_name):
+    class Engine:
+        model_name = registered_name
+
+        async def completion(self, request):
+            assert request["json"]["model"] == registered_name
+            return {
+                "model": registered_name,
+                "choices": [{"text": "ok", "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }
+
+    client = InferenceEngineClient([Engine()], object(), _make_min_cfg())
+    assert client.model_name == registered_name
+    response = await client.completion({"json": {"model": client.model_name, "prompt": [1], "max_tokens": 1}})
+    assert response["model"] == registered_name

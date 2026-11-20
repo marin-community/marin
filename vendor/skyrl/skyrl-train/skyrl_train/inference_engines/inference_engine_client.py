@@ -94,13 +94,10 @@ class InferenceEngineClient(InferenceEngineInterface):
         """
         self.engines = engines
         self.tokenizer = tokenizer
-        # Use served_model_name if configured (for Harbor/LiteLLM compatibility),
-        # otherwise fall back to the full model path.
-        # See https://github.com/NovaSky-AI/SkyRL/pull/238#discussion_r2326561295
-        served_model_name = None
-        if hasattr(full_config.generator, "engine_init_kwargs"):
-            served_model_name = getattr(full_config.generator.engine_init_kwargs, "served_model_name", None)
-        self.model_name = served_model_name if served_model_name else full_config.trainer.policy.model.path
+        names = {engine.model_name for engine in engines}
+        if len(names) > 1 or (names and not next(iter(names))):
+            raise ValueError(f"Inference engines disagree on the registered model name: {names}")
+        self.model_name = next(iter(names)) if names else full_config.trainer.policy.model.path
         self.max_model_len = next((getattr(engine, "max_model_len", None) for engine in engines), None)
         self.backend = full_config.generator.backend
         self.enable_http_endpoint = full_config.generator.enable_http_endpoint

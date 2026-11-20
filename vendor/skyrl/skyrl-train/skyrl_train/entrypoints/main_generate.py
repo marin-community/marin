@@ -3,17 +3,14 @@ Main entrypoint for evaluation-only.
 """
 
 import asyncio
-import os
-import time
 from pathlib import Path
 from typing import Any, Protocol
 
 import ray
 from ray.util.queue import Queue
 from loguru import logger
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 from marinskyrl.runtime_options import EvaluationRunner
-from marinskyrl.near_window_serving import NearWindowProbeSettings, run_near_window_probe
 
 from skyrl_train.config.rollout_validation import EntrypointOperation
 from skyrl_train.entrypoints.main_base import BasePPOExp
@@ -55,18 +52,7 @@ class EvalOnlyEntrypoint(BasePPOExp):
     async def _evaluate(self) -> dict[str, Any]:
         assert self.eval_dataset is not None, "The evaluation only entrypoint requires an eval dataset is provided"
 
-        probe = self.cfg.generator.engine_init_kwargs.pop("marin_near_window_serving_probe", None)
-        started = time.monotonic()
         inference_engine_client = self.create_inference_engine_client(operation=EntrypointOperation.GENERATE)
-        if probe is not None:
-            try:
-                return await run_near_window_probe(
-                    inference_engine_client.engines, self.tokenizer,
-                    NearWindowProbeSettings(**OmegaConf.to_container(probe, resolve=True)), time.monotonic() - started,
-                    receipt_directory=Path(os.environ["IRIS_OUTPUT_DIR"]),
-                )
-            finally:
-                inference_engine_client.shutdown_http_endpoint()
         await load_initial_policy_adapter(inference_engine_client, self.cfg)
         evaluation_runner = EvaluationRunner(self.cfg.trainer.evaluation_runner)
         trajectory_runner = (
