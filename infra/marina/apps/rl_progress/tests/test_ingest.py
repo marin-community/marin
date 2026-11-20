@@ -81,7 +81,7 @@ def test_terminal_quick_loop_record_uses_coordinator_time_and_preserves_grader_s
     assert stale_attempt["grader_report"] is None
     assert comparison_fields(stale_attempt)["pareto_eligible"] is False
 
-    partial_report = {"training": {"execution": [{"data_source": "code", "grader_failures": {"timeout": 4}}]}}
+    partial_report = {"training": {"execution": [{"data_source": "code", "grading_failures": {"timeout": 4}}]}}
     write(f"exports/grader_reports/{other_attempt_id}/grader_report.json", partial_report)
     coordinator.state = job_pb2.JOB_STATE_FAILED
     failed_attempt = ingest.terminal_record(entry | {"attempt_id": other_attempt_id}, coordinator)

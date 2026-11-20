@@ -230,6 +230,9 @@ def _compose_source_recipe(config: DictConfig) -> DictConfig:
             "val_data": list(config.inputs.validation_data),
             "checkpoint_root": str(config.artifacts.checkpoint_root),
             "export_root": str(config.artifacts.export_root),
+            "grader_report_dir": join_resource_path(
+                str(config.artifacts.export_root), "grader_reports", str(config.run.attempt_id)
+            ),
             "resume_checkpoint_count": int(config.artifacts.resume_checkpoint_count),
             "trajectory_root": join_resource_path(str(config.artifacts.attempts_root), "trajectories"),
             "export_hf_artifact": bool(config.run.export_hf),
@@ -237,10 +240,6 @@ def _compose_source_recipe(config: DictConfig) -> DictConfig:
         },
         config.iris.allocation,
     )
-    if compiled.config.trainer.dump_grader_report:
-        compiled.config.trainer.grader_report_dir = join_resource_path(
-            str(config.artifacts.export_root), "grader_reports", str(config.run.attempt_id)
-        )
     OmegaConf.resolve(compiled.config)
     resolved = OmegaConf.create(OmegaConf.to_container(config, resolve=False))
     OmegaConf.set_struct(resolved, False)

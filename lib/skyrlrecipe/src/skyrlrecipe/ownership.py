@@ -15,6 +15,7 @@ LAUNCH_PATHS = frozenset(
     {
         "trainer.ckpt_path",
         "trainer.export_path",
+        "trainer.grader_report_dir",
         "trainer.seed",
         "trainer.max_ckpts_to_keep",
         "trainer.export_hf_artifact",
