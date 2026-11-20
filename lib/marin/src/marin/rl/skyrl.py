@@ -54,11 +54,9 @@ def skyrl_temporary_run_path(output_path: str, *, ttl_days: int) -> str:
     """Return the lifecycle-managed storage path for a SkyRL run."""
     temporary_root = StoragePath(marin_temp_bucket(ttl_days=ttl_days, source_prefix=output_path))
     output = StoragePath(output_path)
-    try:
-        output.relative_to(temporary_root)
-    except ValueError:
-        return str(temporary_root / _TEMPORARY_OUTPUT_PREFIX / output.key)
-    return str(output)
+    if output.is_relative_to(temporary_root):
+        return str(output)
+    return str(temporary_root / _TEMPORARY_OUTPUT_PREFIX / output.key)
 
 
 @dataclass(frozen=True)
