@@ -7,12 +7,17 @@ import json
 from dataclasses import replace
 
 import pytest
+from daytona import DaytonaValidationError
 from omegaconf import OmegaConf
-from rigging.task_errors import ErrorCategory, ErrorIdentity, RetryDisposition
+from rigging.task_errors import ErrorCategory, ErrorIdentity, RetryDisposition, RetrySettings, retry_delay
 from rolloutengine.models import GradedRolloutInterrupted, Rollout, RolloutOperation
+from shellbox.backends.daytona.machine import SandboxCapacityError
+from skyrl_train.error_treatment import ErrorTreatment
+from skyrl_train.rollouts.machines import MachineOperation, TaskMachineError
 from skyrl_train.rollouts.task_projections import WholeTaskProjection
-from skyrl_train.rollouts.task_worker import _interruption_identity
+from skyrl_train.rollouts.task_worker import _failed_rollout, _interruption_identity
 from skyrl_train.rollouts.training_record import TrainingRollout
+from skyrl_train.task_error_handling import ErrorHandlingConfig, classify_failure
 from skyrl_train.task_errors import TIMED_OUT_DIAGNOSTIC
 from skyrl_train.trajectory_runners.trajectory_processing import normalize_trajectory_batches
 from skyrl_train.trajectory_runners.types import BatchFields, TaskRequestBatch
@@ -53,6 +58,27 @@ def test_engine_timeout_identity_survives_serialization(exception_type, operatio
     assert persisted.category is category
     expected = RetryDisposition.PERMANENT if cause is PermissionError else disposition
     assert persisted.retry_disposition is expected
+
+
+def test_daytona_capacity_failure_is_masked_and_retryable():
+    validation_error = DaytonaValidationError("Total CPU limit exceeded", status_code=400)
+    capacity_error = SandboxCapacityError("Daytona sandbox capacity exhausted", status_code=400)
+    capacity_error.__cause__ = validation_error
+    machine_error = TaskMachineError("Task-machine creation failed", MachineOperation.CREATE)
+    machine_error.__cause__ = capacity_error
+    interruption = GradedRolloutInterrupted(
+        Rollout("trial", (), "error"), RolloutOperation.START, GradeResult(Outcome.UNAVAILABLE, None)
+    )
+    interruption.__cause__ = machine_error
+
+    result = _failed_rollout(interruption, lowered_task(text_task()))
+
+    assert result.failure is not None
+    assert result.failure.exception_type == "SandboxCapacityError"
+    assert result.failure.category is ErrorCategory.INFRASTRUCTURE
+    assert result.failure.retry_disposition is RetryDisposition.TRANSIENT
+    assert retry_delay(result.failure, RetrySettings(max_retries=1), retries=0) is not None
+    assert classify_failure(result.failure, ErrorHandlingConfig()) is ErrorTreatment.MASK
 
 
 class EvidenceTokenizer:

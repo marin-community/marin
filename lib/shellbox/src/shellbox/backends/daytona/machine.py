@@ -34,6 +34,7 @@ from daytona import (
     DaytonaNotFoundError,
     DaytonaRateLimitError,
     DaytonaTimeoutError,
+    DaytonaValidationError,
     ExecuteResponse,
     SandboxState,
 )
@@ -84,6 +85,7 @@ CLAIMED_MARKER = "SHELLBOX_CLAIMED"
 CLIPPED_OUTPUT_SUFFIX = ".limited"
 PROVIDER_DIAGNOSTIC_CHAR_LIMIT = 4096
 DISK_FULL_MESSAGE = os.strerror(errno.ENOSPC)
+CPU_CAPACITY_ERROR = "Total CPU limit exceeded"
 # The exit trap records the command's status, so a request that lost its connection can still read it.
 RUN_COMMAND = (
     'pidfile=$1; completed=$2; shift 2; echo $$ > "$pidfile"; '
@@ -109,38 +111,66 @@ def _control_command(script: str) -> str:
     )
 
 
+class SandboxCapacityError(DaytonaError):
+    """The account could not admit a sandbox before its creation deadline."""
+
+
 async def _create_sandbox(
-    client: AsyncDaytona, params: CreateSandboxFromSnapshotParams | CreateSandboxFromImageParams, timeout: float
+    client: AsyncDaytona,
+    params: CreateSandboxFromSnapshotParams | CreateSandboxFromImageParams,
+    timeout: float,
+    deadline: asyncio.Timeout,
 ) -> AsyncSandbox:
-    """Retry throttling using a caller-owned name to recover an accepted creation.
+    """Retry transient creation failures using the caller-owned sandbox name.
 
     Raises:
         MachineUnavailable: Daytona removed the sandbox before it started.
     """
     assert params.name is not None
+    deadline_at = deadline.when()
+    assert deadline_at is not None
     backoff = ExponentialBackoff(initial=1, maximum=30, factor=2, jitter=0.5)
-    while True:
-        try:
+    last_capacity_error: DaytonaValidationError | None = None
+    try:
+        while True:
             try:
-                return await client.create(params, timeout=timeout)
-            except DaytonaConflictError:
-                sandbox = await client.get(params.name)
-                await sandbox.wait_for_sandbox_start(timeout=timeout)
-                return sandbox
-        except DaytonaNotFoundError as error:
-            raise MachineUnavailable(f"Daytona removed sandbox {params.name} before it started") from error
-        except DaytonaRateLimitError as error:
-            retry_after = max(
-                (
-                    int(value)
-                    for name, value in (error.headers or {}).items()
-                    if name.lower().startswith("retry-after") and str(value).isdecimal()
-                ),
-                default=0,
-            )
-            delay = max(retry_after, backoff.next_interval())
-            logger.warning("Retrying throttled Daytona creation: delay=%.3f", delay)
-            await sleep(delay)
+                try:
+                    return await client.create(params, timeout=timeout)
+                except DaytonaConflictError:
+                    last_capacity_error = None
+                    sandbox = await client.get(params.name)
+                    await sandbox.wait_for_sandbox_start(timeout=timeout)
+                    return sandbox
+            except DaytonaNotFoundError as error:
+                raise MachineUnavailable(f"Daytona removed sandbox {params.name} before it started") from error
+            except DaytonaRateLimitError as error:
+                last_capacity_error = None
+                retry_after = max(
+                    (
+                        int(value)
+                        for name, value in (error.headers or {}).items()
+                        if name.lower().startswith("retry-after") and str(value).isdecimal()
+                    ),
+                    default=0,
+                )
+                delay = max(retry_after, backoff.next_interval())
+                logger.warning("Retrying throttled Daytona creation: delay=%.3f", delay)
+                await sleep(delay)
+            except DaytonaValidationError as error:
+                if CPU_CAPACITY_ERROR not in error.message:
+                    raise
+                last_capacity_error = error
+                delay = backoff.next_interval()
+                if asyncio.get_running_loop().time() + delay >= deadline_at:
+                    raise SandboxCapacityError("Daytona sandbox capacity exhausted", status_code=error.status_code) from error
+                logger.warning("Retrying Daytona creation after account CPU cap: delay=%.3f", delay)
+                await sleep(delay)
+    except asyncio.CancelledError:
+        if last_capacity_error is not None and deadline.expired():
+            raise SandboxCapacityError(
+                "Daytona sandbox capacity exhausted", status_code=last_capacity_error.status_code
+            ) from last_capacity_error
+        raise
 
 
 async def _keep_active(sandbox: AsyncSandbox, interval: float) -> None:
@@ -831,7 +861,7 @@ class DaytonaMachineFactory:
                         image=daytona_image(request.source), resources=request.resources, **sandbox_fields
                     )
                 lifetime.push_async_callback(_delete_named_sandbox, client, name)
-                sandbox = await _create_sandbox(client, params, timeout=timeout)
+                sandbox = await _create_sandbox(client, params, timeout=timeout, deadline=deadline)
             if self.auto_stop_interval:
                 keepalive = asyncio.create_task(_keep_active(sandbox, self.auto_stop_interval * 60 / 3))
                 lifetime.push_async_callback(_stop_keepalive, keepalive)

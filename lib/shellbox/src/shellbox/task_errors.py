@@ -24,6 +24,7 @@ SHELLBOX_ERROR_CATEGORIES = MappingProxyType(
         DAYTONA_OUTPUT_UNAVAILABLE: ErrorCategory.INFRASTRUCTURE,
         DAYTONA_PROCESS_ERROR: ErrorCategory.INFRASTRUCTURE,
         "DaytonaSandboxStopError": ErrorCategory.INFRASTRUCTURE,
+        "SandboxCapacityError": ErrorCategory.INFRASTRUCTURE,
         MACHINE_TERMINATED: ErrorCategory.INFRASTRUCTURE,
         "SnapshotQuotaExceeded": ErrorCategory.INFRASTRUCTURE,
     }

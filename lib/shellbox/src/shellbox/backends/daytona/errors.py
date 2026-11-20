@@ -16,6 +16,8 @@ DAYTONA_DELETE_OPERATION = "delete"
 def daytona_error_identity(error: Exception, *, operation: str) -> ErrorIdentity:
     """Classify SDK failures and eligible deletion conflicts."""
     identity = exception_identity(error, operation=operation, categories=ERROR_CATEGORIES)
+    if identity.exception_type == "SandboxCapacityError":
+        return identity.model_copy(update={"retry_disposition": RetryDisposition.TRANSIENT})
     if identity.retry_disposition is RetryDisposition.PERMANENT:
         return identity
     if (isinstance(error, DaytonaConnectionError) and identity.provider_status_code is None) or (
