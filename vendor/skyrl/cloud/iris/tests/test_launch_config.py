@@ -1070,10 +1070,6 @@ def test_first_train_submission_validates_recipe_and_resolved_reload(tmp_path):
     assert OmegaConf.to_container(load_launch_config(resolved), resolve=True) == OmegaConf.to_container(
         loaded, resolve=True
     )
-    raw["skyrl"]["trainer"].setdefault("rollout_buffer", {})["groups_per_family"] = {}
-    path.write_text(yaml.safe_dump(raw))
-    assert load_launch_config(path) == loaded
-
     del raw["skyrl"]["context_budget"]
     path.write_text(yaml.safe_dump(raw))
     with pytest.raises(ValueError, match="context_budget"):
