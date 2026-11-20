@@ -23,7 +23,16 @@ WORKDIR="${WORKDIR:-/workspace}"
 
 mkdir -p "$WORKDIR"
 cd "$WORKDIR"
-curl -fsSL "https://github.com/marin-community/marin/archive/$REVISION.tar.gz" | tar xz
+# The GitHub archive endpoint 302-redirects to codeload: -L is required. Download to a file
+# first (a partial download is detectable), verify the archive parses, then extract and
+# confirm the tree before running anything.
+curl -fsSL --retry 5 --retry-delay 5 \
+  -o "marin-$REVISION.tar.gz" \
+  "https://github.com/marin-community/marin/archive/$REVISION.tar.gz"
+tar -tzf "marin-$REVISION.tar.gz" > /dev/null
+tar -xzf "marin-$REVISION.tar.gz" -C "$WORKDIR"
+test -f "marin-$REVISION/experiments/post_training/task_curation/datasets/swe_rebench_v2/run_intake_conversion.sh" \
+  || { echo "intake conversion: the extracted tree is missing the intake script" >&2; exit 1; }
 cd "marin-$REVISION"
 
 STAGER=experiments.post_training.task_curation.datasets.swe_rebench_v2.stage_intake_inputs
