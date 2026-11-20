@@ -3,9 +3,10 @@
 
 """The repaired agentic SWE-rebench V2 source, built from the author's V2.1 release."""
 
+from taskcompendium.pipeline.inputs import SourceFormat
+from taskcompendium.pipeline.models import IntendedUse
+
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert import (
-    IMAGE_BINDINGS_FILENAME,
-    IMAGE_BINDINGS_INPUT,
     VERSION,
     convert_row,
 )
@@ -15,8 +16,6 @@ from experiments.post_training.task_curation.datasets.swe_rebench_v2.groups impo
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
-from taskcompendium.pipeline.inputs import SourceFormat
-from taskcompendium.pipeline.models import IntendedUse
 
 REPAIR_RUBRIC = """
 Compare the public problem statement with the hidden test patch, restored trusted test files, and the
