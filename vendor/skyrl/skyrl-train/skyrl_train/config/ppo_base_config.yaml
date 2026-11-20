@@ -275,8 +275,8 @@ trainer:
     # fills each batch in commit order and regenerates groups that miss the staleness window, so a slow rollout never
     # blocks training, but quick rollouts train more often and at lower staleness.
     batch_policy: full_batch
-    # Prompt groups of each task family per batch, keyed by the rows' family column. Quotas require full_batch and
-    # the counts must sum to train_batch_size. An empty map leaves the mix to the prompt order.
+    # Prompt groups of each task family per batch, keyed by the rows' family column. Nonempty counts require
+    # full_batch and must sum to train_batch_size. An empty map leaves the mix to the prompt order.
     groups_per_family: {}
     # How many times in a row rolling regenerates a prompt whose group missed the staleness window; after that the
     # prompt waits until the prompt order offers it again.

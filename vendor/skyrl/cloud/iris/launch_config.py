@@ -18,7 +18,7 @@ from skyrl_train.config.rollout_validation import (
     FAMILY_COLUMN,
     GROUPS_PER_FAMILY_KEY,
     validate_family_pools,
-    validate_family_quota_config,
+    validate_groups_per_family,
 )
 from skyrlrecipe import RLEntrypoint
 
@@ -325,7 +325,7 @@ def _validate_inputs(inputs: dict[str, Any]) -> None:
 
 
 def _validate_launch_family_pools(
-    inputs: dict[str, Any], quotas: dict[str, int], max_staleness_steps: int
+    inputs: dict[str, Any], groups_per_family: dict[str, int], max_staleness_steps: int
 ) -> None:
     sources = [data_source(entry) for entry in inputs["train_data"]]
     if inputs["data_kind"] != "parquet" or any(not isinstance(source, DirectoryDataSource) for source in sources):
@@ -340,7 +340,7 @@ def _validate_launch_family_pools(
                 raise ValueError(f"{GROUPS_PER_FAMILY_KEY} requires a {FAMILY_COLUMN} column in {uri}")
             for batch in rows.iter_batches(columns=[FAMILY_COLUMN]):
                 counts.update(batch.column(0).to_pylist())
-    validate_family_pools(quotas, counts, max_staleness_steps)
+    validate_family_pools(groups_per_family, counts, max_staleness_steps)
 
 
 def derive_launch_topology(config: dict[str, Any]) -> LaunchTopology:
@@ -409,7 +409,7 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
     if run["mode"] == RunMode.TRAIN:
         validate_objective(config.skyrl)
         validate_hf_export_config(config.skyrl)
-        validate_family_quota_config(config.skyrl)
+        validate_groups_per_family(config.skyrl)
     runtime = raw["runtime"]
     entrypoint = runtime["entrypoint"]
     registered_rl_entrypoint_module(entrypoint)
