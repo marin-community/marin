@@ -431,6 +431,39 @@ def test_run_seed_defaults_only_where_the_backend_accepts_request_seeds(tmp_path
     assert seeds == expected
 
 
+@pytest.mark.parametrize(
+    "launch_choice, expected",
+    [
+        (None, {"code": TaskEvidence.REFERENCE, "math": TaskEvidence.EMBEDDED}),
+        (TaskEvidence.EMBEDDED, {"code": TaskEvidence.EMBEDDED, "math": TaskEvidence.EMBEDDED}),
+    ],
+)
+def test_task_evidence_follows_the_benchmark_unless_the_launch_chooses(tmp_path, launch_choice, expected):
+    config = tmp_path / "custom.yaml"
+    config.write_text("evaluations:\n  code:\n    benchmark: livecodebench\n  math:\n    benchmark: gsm8k\n")
+    spec = LaunchSpec(
+        evals=load_evaluations(config),
+        model=models()["qwen3-8b"],
+        platform=Platform.GPU,
+        accelerator="H100x1",
+        limit=None,
+        task_evidence=launch_choice,
+        records_prefix=str(tmp_path / "records"),
+        submission_cluster="marin",
+        federated_cluster="cw-rno2a",
+        priority_band=0,
+        run_id="task-evidence",
+    )
+
+    batch = prepare_evaluation_batch(spec)
+
+    modes = {
+        evaluation.identity.eval_ref.name: evaluation.identity.eval_ref.curated.settings.task_evidence
+        for evaluation in batch.evaluations
+    }
+    assert modes == expected
+
+
 def _pipeline_spec(tmp_path):
     return LaunchSpec(
         evals=resolve_evaluations("gsm8k-smoke,arc-easy"),

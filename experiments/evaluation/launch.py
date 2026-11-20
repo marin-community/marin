@@ -172,7 +172,7 @@ class LaunchSpec:
     judge_model: ModelConfig | None = None
     judge_accelerator: str | None = None
     seed: int | None = None
-    task_evidence: TaskEvidence = TaskEvidence.EMBEDDED
+    task_evidence: TaskEvidence | None = None
     retry_unscored_harbor_trials: bool = False
     version: str | None = None
     description: str | None = None
@@ -277,7 +277,7 @@ def _resolve_definitions(
     limit: int | None,
     seed: int | None,
     default_seed: int | None,
-    task_evidence: TaskEvidence,
+    task_evidence: TaskEvidence | None,
     retry_unscored_harbor_trials: bool,
     judge_model: ModelConfig | None,
     task_machine_backend: TaskMachineBackend | None,
@@ -407,7 +407,7 @@ def build_evaluation_batch(
     model = spec.model
     requested_definitions = _evaluation_definitions(spec)
     has_curated_definitions = any(isinstance(definition, EvaluationSelection) for _, definition in requested_definitions)
-    if spec.task_evidence is not TaskEvidence.EMBEDDED and not has_curated_definitions:
+    if spec.task_evidence is not None and not has_curated_definitions:
         raise ValueError("--task-evidence applies only to curated evaluations")
     if spec.version in RUNTIME_COMMITS and has_curated_definitions:
         raise ValueError(
