@@ -9,7 +9,7 @@ from safetensors.torch import load_file, save_file
 from skyrl_train.io import io
 from skyrl_train.models.grug_moe import GrugMoeConfig
 from skyrl_train.utils import initialize_ray
-from skyrl_train.utils.utils import validate_cfg
+from skyrl_train.config.driver_validation import validate_cfg
 from transformers import AutoTokenizer
 
 from cloud.iris.hf_model_cache import stage_model_metadata

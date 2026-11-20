@@ -15,7 +15,7 @@ from shellbox.machine import Machine
 from taskcompendium.models import TaskSpec
 
 from rolloutengine.cleanup import _Cleanup
-from rolloutengine.harness.core import Harness, HarnessContext
+from rolloutengine.harness.core import OUTPUT_LIMIT_OPTION_KEYS, Harness, HarnessContext, reply_options_match
 from rolloutengine.models import (
     BUDGET_STOP_REASON,
     LENGTH_STOP_REASON,
@@ -236,7 +236,11 @@ class _Recorder:
         return await self._send(request, conversation.request((), prompt.token_ids))
 
     async def reply(
-        self, observations: tuple[dict[str, Any], ...], *, token_ids: tuple[int, ...] | None = None
+        self,
+        observations: tuple[dict[str, Any], ...],
+        *,
+        token_ids: tuple[int, ...] | None = None,
+        options: dict[str, Any] | None = None,
     ) -> ModelTurn:
         await self._enter()
         conversation = self.conversation
@@ -244,6 +248,8 @@ class _Recorder:
             raise RuntimeError("A harness replies only after a model turn")
         if self.step_observations:
             raise RuntimeError("A turn has recorded final observations, so the harness cannot reply to it")
+        if options is not None and not reply_options_match(conversation.options, options):
+            raise ValueError(f"A reply can change only {', '.join(sorted(OUTPUT_LIMIT_OPTION_KEYS))}")
         if (
             self.stop_reason == LENGTH_STOP_REASON
             or self.budget_reached
@@ -258,7 +264,12 @@ class _Recorder:
             self.model_error = RolloutContractError("Pinned prompt tokens must start with the tokens served so far")
             raise RolloutEnded("The pinned prompt broke the token contract") from self.model_error
         request = _Request(observations, token_ids, None, self._waited())
-        return await self._send(request, conversation.request(observations, token_ids))
+        model_request = conversation.request(observations, token_ids)
+        if options is not None:
+            model_request = replace(model_request, options=options)
+        turn = await self._send(request, model_request)
+        conversation.options = model_request.options
+        return turn
 
     def record(
         self,
