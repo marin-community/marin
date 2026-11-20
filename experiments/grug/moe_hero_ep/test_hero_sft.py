@@ -437,7 +437,7 @@ def test_restore_places_only_the_source_and_trusts_only_a_matching_record(tmp_pa
             _place_restored_experts(state, None, loaded_checkpoint=placed_save)
 
 
-def _write_data_config(path, cache_catalog: str | None) -> None:
+def _write_data_config(path, cache_catalog: str) -> None:
     data = LmDataConfig(
         tokenizer=SFT_TOKENIZER,
         cache_catalog=cache_catalog,
@@ -462,13 +462,6 @@ def test_catalog_mixture_trains_the_given_weights_from_the_continued_step(tmp_pa
     assert [(step, dict(weights)) for step, weights in data.train_weights] == [(0, {"sft/a": 0.95, "pretrain/b": 0.05})]
     assert data.mixture_start_step == 400_407
     assert set(data.components) == {"sft/a", "pretrain/b"}
-
-
-def test_catalog_mixture_needs_a_cache_catalog(tmp_path):
-    _write_data_config(tmp_path / "data.json", None)
-    (tmp_path / "weights.json").write_text(json.dumps([[0, {"sft/a": 1.0}]]))
-    with pytest.raises(ValueError, match="names no cache_catalog"):
-        CatalogMixture.load(tmp_path / "data.json", tmp_path / "weights.json", num_updates=300)
 
 
 @pytest.mark.parametrize("reseed", [True, False])

@@ -7,7 +7,7 @@ import dataclasses
 import json
 import logging
 import math
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -401,7 +401,8 @@ def build_sft_run(
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build the hero SFT run that continues ``initialize_from`` at ``start_step``.
 
-    ``stop_after_steps`` bounds a smoke test to that many updates of the full one-epoch schedule.
+    ``stop_after_steps`` bounds a smoke test to that many updates of the full schedule: one epoch of the stores,
+    or ``catalog_mixture.num_updates``.
     ``checkpoint_root`` puts every checkpoint, permanent ones included, below one lifecycle-managed prefix.
     ``checkpoints`` selects periodic saves, a single final save, or training without checkpoint writes.
     ``eval_every`` counts absolute steps, so the first eval lands on the first multiple after ``start_step``;
@@ -422,6 +423,7 @@ def build_sft_run(
     eval_only = eval_only_output is not None
     if eval_only:
         checkpoints = "none"
+    evaluates = eval_every > 0 or eval_only
     if capacity_factor <= 0:
         raise ValueError(f"capacity_factor must be positive, got {capacity_factor}")
     model = sft_model_config(capacity_factor)
@@ -433,15 +435,54 @@ def build_sft_run(
             num_layers=model.num_layers, num_experts=model.num_experts, expert_axis_size=expert_axis_size
         )
     batch_size = hero_rack_batch_size(model.max_seq_len) * dp_racks
+    # The data source: one epoch of the stores with Harrier replay and Paloma validation, or a catalog mixture
+    # that carries its own replay share and validation sets.
+    data_for: Callable[[StepContext], LmDataConfig]
     if catalog_mixture is None:
-        stores = load_sft_stores()
         if replay_fraction is None:
             raise ValueError("the stores mixture needs a replay fraction")
+        stores = load_sft_stores()
         plan = plan_sft_mixture(stores, batch_size=batch_size, replay_fraction=replay_fraction)
         steps, decay_steps = plan.steps, plan.decay_steps
+        validation = validation_datasets() if evaluates else []
+        length_statistics = harrier_length_statistics()
+        deps: tuple = (HARRIER_MIX_2026_08_18_STORE, length_statistics, *validation)
+        logger.info(
+            "Hero SFT %s: %d updates of %d sequences, %d blocks of %d, replay %.4f, decay over the last %d updates, "
+            "router bias %s, capacity factor %g",
+            run_id,
+            plan.steps,
+            plan.batch_size,
+            plan.num_blocks,
+            plan.block_size,
+            plan.replay_fraction,
+            plan.decay_steps,
+            router_bias_mode.value,
+            capacity_factor,
+        )
+
+        def data_for(ctx: StepContext) -> LmDataConfig:
+            replay = harrier_long_context_data_config(
+                ctx=ctx,
+                start_step=0,
+                max_seq_len=model.max_seq_len,
+                validation=[],
+                stats_path=ctx.artifact_path(length_statistics),
+            )
+            return sft_data_config(
+                stores, plan, start_step=start_step, replay=replay, validation=validation_components(ctx, validation)
+            )
+
     else:
+        if replay_fraction is not None:
+            raise ValueError("a catalog mixture sets its replay share through its train_weights")
         steps = catalog_mixture.num_updates
         decay_steps = max(2, round(steps * SFT_DECAY_FRACTION))
+        deps = ()
+
+        def data_for(ctx: StepContext) -> LmDataConfig:
+            return catalog_mixture.data_config(start_step)
+
     num_train_steps = start_step + steps
     stop_step = num_train_steps if stop_after_steps is None else start_step + stop_after_steps
     if stop_step > num_train_steps:
@@ -490,23 +531,6 @@ def build_sft_run(
     train_resources = allocation if resources is None else resources
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
-    evaluates = eval_every > 0 or eval_only
-    validation = validation_datasets() if evaluates and catalog_mixture is None else []
-    length_statistics = harrier_length_statistics()
-    if catalog_mixture is None:
-        logger.info(
-            "Hero SFT %s: %d updates of %d sequences, %d blocks of %d, replay %.4f, decay over the last %d updates, "
-            "router bias %s, capacity factor %g",
-            run_id,
-            plan.steps,
-            plan.batch_size,
-            plan.num_blocks,
-            plan.block_size,
-            plan.replay_fraction,
-            plan.decay_steps,
-            router_bias_mode.value,
-            capacity_factor,
-        )
 
     def build_config(ctx: StepContext) -> GrugRunConfig:
         # A placed run keeps its checkpoints under its placement's fingerprint, so a relaunch with another
@@ -572,22 +596,9 @@ def build_sft_run(
             ),
             context_axis_size=context_axis_size,
         )
-        if catalog_mixture is None:
-            replay = harrier_long_context_data_config(
-                ctx=ctx,
-                start_step=0,
-                max_seq_len=model.max_seq_len,
-                validation=[],
-                stats_path=ctx.artifact_path(length_statistics),
-            )
-            data = sft_data_config(
-                stores, plan, start_step=start_step, replay=replay, validation=validation_components(ctx, validation)
-            )
-        else:
-            data = catalog_mixture.data_config(start_step)
         return GrugRunConfig(
             model=model,
-            data=data,
+            data=data_for(ctx),
             resources=ctx.runtime_arg("train_resources"),
             tensorstore_cache_bytes=HERO_TENSORSTORE_CACHE_BYTES,
             optimizer=optimizer,
@@ -619,7 +630,7 @@ def build_sft_run(
         artifact_type=HeroThroughputResult,
         run=run_grug,
         build_config=build_config,
-        deps=() if catalog_mixture is not None else (HARRIER_MIX_2026_08_18_STORE, length_statistics, *validation),
+        deps=deps,
         runtime_args={"train_resources": train_resources},
     )
 

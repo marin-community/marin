@@ -196,7 +196,7 @@ def test_mochi_sft_three_rack_training_plan(monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central2")
     monkeypatch.delenv("MARIN_TEMP_PREFIX", raising=False)
     monkeypatch.setattr(sft_recipe, "checkpoint_step", lambda _: 393491)
-    monkeypatch.setattr(launch_hero_sft, "special_token_init", lambda _: None)
+    monkeypatch.setattr(launch_hero_sft, "special_token_init", lambda _, **__: None)
 
     preset = MIXTURE_262K_48NODE
     step = preset.recipe.train_artifact(preset.resources)
@@ -233,7 +233,7 @@ def test_mochi_sft_exports_the_planned_final_checkpoint_for_skyrl(tmp_path, monk
     placement = MOCHI_SFT.expert_placement
     assert placement is not None
     placement = dataclasses.replace(placement, source_checkpoint=str(initializer))
-    monkeypatch.setattr(launch_hero_sft, "special_token_init", lambda _: None)
+    monkeypatch.setattr(launch_hero_sft, "special_token_init", lambda _, **__: None)
     monkeypatch.setattr(sft_recipe, "configure_coreweave_s3", lambda: None)
     recipe = dataclasses.replace(
         MIXTURE_262K_16NODE.recipe,
