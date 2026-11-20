@@ -287,9 +287,10 @@ Checkpoint selection requires 99% native coverage and 90% coverage in each Harbo
 `eval/all` pools native and Harbor rewards. Per-cohort metrics use `eval/harbor/<cohort>/`, and
 `eval/harbor/wall_seconds` measures the complete Harbor callback. The agents use the engine's
 serving window as their total context limit, with the reply cap inside it. SWE-bench uses
-the pinned harness's 3,000-second verifier timeout. A trial can retry once after phase
-cancellation, a sandbox command timeout or a Daytona conflict. Teardown errors after
-verification retain the reward and are recorded alongside it.
+the pinned harness's 3,000-second verifier timeout. OpenThoughts-TBLite uses each pinned
+verifier's timeout, capped at 3,600 seconds. A trial can retry once after phase cancellation
+or a Daytona sandbox setup, command transport or cleanup error. A verifier timeout ends that
+trial. Teardown errors after verification retain the reward and are recorded alongside it.
 
 Trial artifacts are under `exports/inline_harbor/`. A Harbor error stops training. Repeat the same
 command to resume from the latest retained checkpoint. The separate

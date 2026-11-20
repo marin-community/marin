@@ -292,10 +292,10 @@ for launch in (config, changed):
         assert model_info["max_input_tokens"] == window, model_info
         assert model_info["max_output_tokens"] < window
         agent = job.agents[0]
-        assert (
-            agent.override_setup_timeout_sec + agent.override_timeout_sec + job.verifier.override_timeout_sec
-            < job.trial_attempt_timeout_sec
-        )
+        verifier_budget = job.verifier.override_timeout_sec or job.verifier.max_timeout_sec
+        assert verifier_budget is not None
+        agent_budget = agent.override_setup_timeout_sec + agent.override_timeout_sec
+        assert agent_budget + verifier_budget < job.trial_attempt_timeout_sec
         attempt_budget = job.trial_attempt_timeout_sec + job.trial_cleanup_grace_sec
         assert 2 * attempt_budget + job.retry.min_wait_sec < harbor.timeout
 assert windows[0] != windows[1]
@@ -526,6 +526,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
             "2026.11.19.1": "3f50c3ec",
             "2026.11.20.2": "b4ff4b10",
             "2026.11.20.4": "90aefa3b",
+            "2026.11.20.5": "e1f1635a",
         },
     }
     configs = assert_revisioned_native_configs(
