@@ -175,7 +175,6 @@ def main(round_path: Path, source_revision: str, validation_output: Path) -> Art
         ],
     }
     # The current trainer has no tis_splice option; this frozen key was unused.
-    # Recovery rounds apply the same explicit recipe migration.
     del resolved["rl"]["config"]["trainer"]["algorithm"]["tis_splice"]
     harbor = resolved["rl"]["config"]["terminal_bench"]["harbor"]
     harbor["daytona_image_build"] = harbor.pop("daytona_provisioning")
