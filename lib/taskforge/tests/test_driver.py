@@ -153,13 +153,13 @@ def test_relay_reresolves_by_job_and_model_without_exposing_token(monkeypatch: p
         return resolver
 
     monkeypatch.setattr(wiring, "iris_ctx", lambda: SimpleNamespace(client=SimpleNamespace(resolver_for_job=for_job)))
-    source = wiring.endpoint_source(None, "/muchanem/relay", "secret-token", "glm-5.3", pool)
+    source = wiring.endpoint_source(None, "/user/relay", "secret-token", "glm-5.3", pool)
     endpoint = source.current()
     assert endpoint.base_url == "http://first:8000/v1"
     assert endpoint.pool.value == pool
     resolver.url = "http://replacement:8000/v1/"
     assert source.current().base_url == "http://replacement:8000/v1"
-    assert jobs == ["/muchanem/relay", "/muchanem/relay"]
+    assert jobs == ["/user/relay", "/user/relay"]
     assert resolver.models == ["glm-5.3", "glm-5.3"]
     assert wiring.endpoint_source("http://fixed/v1", None, "secret-token", "glm-5.3", pool).current().pool.value == pool
     assert "secret-token" not in repr(source)
@@ -168,6 +168,6 @@ def test_relay_reresolves_by_job_and_model_without_exposing_token(monkeypatch: p
         == "http://fixed/v1"
     )
     with pytest.raises(ValueError, match="exactly one"):
-        wiring.endpoint_source("http://fixed/v1", "/muchanem/relay", "secret-token", "glm-5.3", pool)
+        wiring.endpoint_source("http://fixed/v1", "/user/relay", "secret-token", "glm-5.3", pool)
     with pytest.raises(ValueError, match="exactly one"):
         wiring.endpoint_source(None, None, "secret-token", "glm-5.3", pool)
